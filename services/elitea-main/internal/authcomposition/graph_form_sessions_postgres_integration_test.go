@@ -12,29 +12,23 @@ package authcomposition
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 
 	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
 	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 	sessionstate "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/session"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsession"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
-	bootstrapschema "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrations"
-	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authstatetest"
 )
 
 func TestAnExistingFormSessionStopsAuthorizingWhenFormSignInIsDisabled(t *testing.T) {
@@ -101,7 +95,6 @@ func newGraphWithSession(
 ) (*FormGraph, Config, string) {
 	t.Helper()
 	config := writeMaterialFixture(t)
-	server := miniredis.RunT(t)
 	graph, err := newFormGraph(
 		context.Background(),
 		config,
@@ -110,24 +103,18 @@ func newGraphWithSession(
 			FormSignInEnabled:    formSignInEnabled,
 			MainRoutePublicRules: []forwardapp.PublicRule{},
 		},
-		func(context.Context, Config, *materializedFiles) (*redis.Client, error) {
-			return redis.NewClient(&redis.Options{Addr: server.Addr()}), nil
-		},
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = graph.Close() })
 
-	// The same store, prefix and TTL newFormGraph composes, so the session is
-	// exactly one a pre-upgrade sign-in left behind.
-	store, err := authsession.NewRedisStore(
-		redis.NewClient(&redis.Options{Addr: server.Addr()}),
-		authsession.Config{
-			KeyPrefix: config.Redis.KeyPrefix + "session:",
-			TTL:       time.Duration(config.Cookie.LifetimeSeconds) * time.Second,
-		},
-	)
+	// The same store and lifetimes newFormGraph composes, on the same table,
+	// so the session is exactly one an earlier sign-in left behind.
+	store, err := authsession.NewPostgresStore(pool, authsession.Config{
+		TTL:         time.Duration(config.Cookie.LifetimeSeconds) * time.Second,
+		PreLoginTTL: preLoginSessionLifetime,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,56 +137,7 @@ func newGraphWithSession(
 // way cmd/elitea-migrate does on a first install.
 func newFormSessionGraphPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	const environment = "ELITEA_TEST_DATABASE_URL"
-	databaseURL := os.Getenv(environment)
-	if databaseURL == "" {
-		t.Skipf("set %s to run the PostgreSQL integration test", environment)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	adminConfig, err := pgxpool.ParseConfig(databaseURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	adminConfig.MaxConns = 2
-	adminPool, err := pgxpool.NewWithConfig(ctx, adminConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	databaseName := fmt.Sprintf("elitea_form_sessions_%d_%d", os.Getpid(), time.Now().UnixNano())
-	quoted := pgx.Identifier{databaseName}.Sanitize()
-	if _, err := adminPool.Exec(ctx, "CREATE DATABASE "+quoted); err != nil {
-		adminPool.Close()
-		t.Fatal(err)
-	}
-	testConfig := adminConfig.Copy()
-	testConfig.ConnConfig.Database = databaseName
-	testConfig.MaxConns = 4
-	pool, err := pgxpool.NewWithConfig(ctx, testConfig)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		pool.Close()
-		dropCtx, dropCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer dropCancel()
-		if _, err := adminPool.Exec(dropCtx, "DROP DATABASE "+quoted+" WITH (FORCE)"); err != nil {
-			t.Errorf("drop isolated database: %v", err)
-		}
-		adminPool.Close()
-	})
-
-	if _, err := pool.Exec(ctx, `CREATE EXTENSION IF NOT EXISTS vector`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := migrate.Bootstrap(ctx, pool, bootstrapschema.Initial); err != nil {
-		t.Fatal(err)
-	}
-	if err := migrate.New(pool, platformmigrations.Files).ApplyShared(ctx); err != nil {
-		t.Fatal(err)
-	}
-	return pool
+	return authstatetest.Pool(t, 8)
 }
 
 // With Form sign-in off, the Form handler the graph composes must refuse the
@@ -221,7 +159,6 @@ func TestTheComposedFormHandlerRefusesConfiguredPasswordsWhenDisabled(t *testing
 		t.Run(test.name, func(t *testing.T) {
 			pool := newFormSessionGraphPool(t)
 			config := writeMaterialFixture(t)
-			server := miniredis.RunT(t)
 			graph, err := newFormGraph(
 				context.Background(),
 				config,
@@ -230,14 +167,11 @@ func TestTheComposedFormHandlerRefusesConfiguredPasswordsWhenDisabled(t *testing
 					FormSignInEnabled:    test.enabled,
 					MainRoutePublicRules: []forwardapp.PublicRule{},
 				},
-				func(context.Context, Config, *materializedFiles) (*redis.Client, error) {
-					return redis.NewClient(&redis.Options{Addr: server.Addr()}), nil
-				},
+				nil,
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { _ = graph.Close() })
 
 			begin := formExchangeRequest(http.MethodGet, browserapi.LoginPath, nil)
 			beginResponse := httptest.NewRecorder()
@@ -256,6 +190,17 @@ func TestTheComposedFormHandlerRefusesConfiguredPasswordsWhenDisabled(t *testing
 			if target == "" || sessionCookie == nil {
 				t.Fatalf("begin set no transaction or session: location=%q cookies=%v",
 					location, beginResponse.Result().Cookies())
+			}
+			// Begin wrote its state to PostgreSQL: one pre-login session that
+			// lives five minutes, not the cookie's day, and one transaction.
+			var preLoginSeconds float64
+			if err := pool.QueryRow(context.Background(), `
+				SELECT extract(epoch FROM max(expires_at) - now()) FROM elitea_auth.form_sessions`,
+			).Scan(&preLoginSeconds); err != nil || preLoginSeconds <= 240 || preLoginSeconds > 300 {
+				t.Fatalf("pre-login session lifetime = %.0fs, %v; want five minutes", preLoginSeconds, err)
+			}
+			if count := formStateRows(t, pool, "form_login_transactions"); count != 1 {
+				t.Fatalf("login transactions after begin = %d, want 1", count)
 			}
 
 			form := url.Values{
@@ -284,6 +229,25 @@ func TestTheComposedFormHandlerRefusesConfiguredPasswordsWhenDisabled(t *testing
 			if !test.enabled && submitResponse.Code != http.StatusFound {
 				t.Fatalf("a refused Form sign-in must send the browser back to login, got %d", submitResponse.Code)
 			}
+			// Both stages were admitted through the PostgreSQL limiter: the
+			// global window, form_begin's client window, and form_credential's
+			// client and login windows.
+			if count := formStateRows(t, pool, "browser_attempt_windows"); count != 4 {
+				t.Fatalf("attempt windows = %d, want 4", count)
+			}
+			if test.enabled {
+				// The one-time transaction is consumed, and the authenticated
+				// session (rotated to a fresh ID) lives the cookie lifetime.
+				if count := formStateRows(t, pool, "form_login_transactions"); count != 0 {
+					t.Fatalf("login transactions after sign-in = %d, want 0", count)
+				}
+				var authenticatedSeconds float64
+				if err := pool.QueryRow(context.Background(), `
+					SELECT extract(epoch FROM max(expires_at) - now()) FROM elitea_auth.form_sessions`,
+				).Scan(&authenticatedSeconds); err != nil || authenticatedSeconds <= float64(config.Cookie.LifetimeSeconds-60) {
+					t.Fatalf("authenticated session lifetime = %.0fs, %v; want the cookie lifetime", authenticatedSeconds, err)
+				}
+			}
 		})
 	}
 }
@@ -295,4 +259,14 @@ func formExchangeRequest(method, path string, body io.Reader) *http.Request {
 	request.Header.Set("X-Forwarded-Proto", "https")
 	request.Header.Set("X-Forwarded-Host", "elitea.example")
 	return request
+}
+
+func formStateRows(t *testing.T, pool *pgxpool.Pool, table string) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(context.Background(),
+		"SELECT count(*) FROM elitea_auth."+pgx.Identifier{table}.Sanitize()).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
 }

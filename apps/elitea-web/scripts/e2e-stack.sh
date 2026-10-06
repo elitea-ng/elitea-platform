@@ -25,7 +25,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 # -p elitea-e2e: explicit project name avoids clashing with the deploy- project.
 #
 # E2E_PROJECT overrides it so a second stack can run beside the first — set it
-# together with E2E_PORT, E2E_PG_PORT, E2E_REDIS_PORT and E2E_OIDC_PORT, all of
+# together with E2E_PORT, E2E_PG_PORT and E2E_OIDC_PORT, all of
 # which must differ. It is a variable rather than a constant because the
 # container lookups below GREP for it: with a hardcoded name and a differently
 # named stack running, those greps fell through to their "any container called

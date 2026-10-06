@@ -10,7 +10,8 @@ Two delivery paths, deliberately not one:
 > This machine uses **podman**: `podman compose up -d`, not `docker compose`.
 
 Agent execution (the chat send path) is gated on `ELITEA_RUNTIME_ENABLED`, which
-is a provisioning exercise rather than a flag — TLS Redis, three mTLS listeners,
+is a provisioning exercise rather than a flag — the NATS JetStream command bus
+(and its two NATS client identities), three mTLS listeners,
 a SAN-bearing workload certificate, an Ed25519 signing keyring, production auth
 and a workload-session row. [`runtime/README.md`](runtime/README.md) documents
 that contract and the permission rules its material must satisfy.
@@ -169,16 +170,17 @@ address. Those copies had already drifted apart.
 
 | Chart (`deploy/helm/`) | ArgoCD Application | Wave | Namespace | Status |
 |---|---|---|---|---|
-| `nats` | `applications/nats.yaml` | -2 | `elitea-gateway` | **Production reference.** scale-1 profile by default; `values-ha.yaml` for HA. |
-| `nats-bootstrap` | `applications/nats-bootstrap.yaml` | -1 | `elitea-gateway` | **Production reference.** Idempotent Helm hook Job; HA needs `replicas=3`. |
-| `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform.** One release: elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the runtime Redis, the OTel collector, the `dbInit` Job, and the DeepWiki provider service with its own migration Job. |
+| `nats` | `applications/nats.yaml` | -2 | `elitea` | **Production reference.** scale-1 profile by default; `values-ha.yaml` for HA. mTLS-only with its own CA Issuer (#1076), so it shares the platform's namespace. |
+| `nats-bootstrap` | `applications/nats-bootstrap.yaml` | -1 | `elitea` | **Production reference.** Idempotent Helm hook Job that owns every stream and KV bucket; HA needs `replicas=3`. |
+| `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform.** One release: elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the `dbInit` Job, and the DeepWiki provider service with its own migration Job. |
 
 Components of the `elitea` chart are switched by `<component>.enabled`, and
 `deploy/helm/elitea/values.yaml` holds every one of them. Ordering inside the
 platform is Helm hook ordering, not a sync wave: the migration runs
 `pre-install,pre-upgrade` and Helm blocks the release until it finishes, the
-workload-session Job follows it, and the Redis consumer groups are created
-`post-install`. A failed migration aborts the release, and the previous pods
+workload-session Job follows it, and the runtime command bus's JetStream
+streams and durable consumers are created by the `nats-bootstrap` hook
+(docs/runtime-command-bus.md). A failed migration aborts the release, and the previous pods
 keep serving.
 
 Three charts, and that is all of them: `helm lint`, the template matrix and
@@ -244,7 +246,7 @@ where every value comes from, and this table is that answer.
 | `llmGateway.env.GATEWAY_SELF_LLM_ORIGINS` | `spec.source.helm.parameters`, **empty in git** | **the operator** |
 | `llmGateway.egressPosture` | `spec.source.helm.parameters`, **empty in git** | **the operator** |
 | the database password itself | the Kubernetes Secret that `postgresql.existingSecret` names | **the operator**, out of band |
-| the runtime material (CA, certificates, signing keyring, Redis password, spool key) | the Kubernetes Secrets that `main.runtime.material.secretName`, `worker.materialSecretName` and `runtimeRedis.materialSecretName` name | **the operator**, out of band — see [`runtime/README.md`](runtime/README.md) |
+| the runtime material (CA, certificates, signing keyring, spool key) | the Kubernetes Secrets that `main.runtime.material.secretName` and `worker.materialSecretName` name (the NATS client certificates come from cert-manager) | **the operator**, out of band — see [`runtime/README.md`](runtime/README.md) |
 
 **The two empty parameters are fields, not defaults.** Neither can get a chart
 default: both name addresses that only the operator knows, and a guessed origin
@@ -452,7 +454,7 @@ file whose capability set matches `docker-compose.standalone-full.yml`.
 | `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` | off | off | `ELITEA_CONFIGURATIONS_ENABLED` **and** `runtime.enabled` — read below |
 | `ELITEA_INDEX_TYPES_ENABLED` | off | **on** | production authentication |
 | `ELITEA_APPLICATION_SKILLS_ENABLED` | off | **on** | production authentication |
-| `REDIS_URL` | empty | **set at install** | a Redis the cluster can reach |
+| `ELITEA_EVENTS_NATS_URL` | **derived** from `nats` (`tls://`) | derived | the shared NATS, with JetStream and the bootstrap's assets; main presents its own client certificate (`nats.tls`, #1076) |
 | `ADMIN_UI_STATIC_DIR` | **set** | set | the image ships the bundle at it |
 | `ELITEA_RUNTIME_ENABLED` and its block | off | **on** | production authentication **and** runtime material — read below |
 
@@ -499,14 +501,11 @@ configuration write path, and that path decides `status_ok` in the request
 (#457), which is what makes a saved credential visible to the gateway.
 
 `deploy/helm/elitea/values-auth-minimal.yaml` is that shape:
-`fileConfig.authConfig` + `runtimeRedis`, **no runtime plane**, and
+`fileConfig.authConfig`, **no runtime plane**, and
 `ELITEA_CONFIGURATIONS_ENABLED` + the public project (`platform.aiProjectId`)
-on top.
-`templates/guards.yaml` ties the worker to the runtime plane and to
-`runtimeRedis`; it does not tie `runtimeRedis` to the runtime plane, so this
-combination renders. The TLS Redis is not optional even so — production Form
-authentication keeps its session store there and
-`internal/authcomposition/config.go` accepts a `rediss://` URL only.
+on top. Production Form authentication keeps its sign-in state (sessions,
+login transactions, attempt windows) in PostgreSQL (elitea-main shared
+migration 0153), so the database is its only dependency.
 
 Two things it does **not** change:
 
@@ -518,7 +517,7 @@ Two things it does **not** change:
 
 It is also no longer the **only** way to reach the configuration write path.
 An OIDC-only install reaches it by naming `env.ELITEA_AI_PROJECT_ID`, with no
-Form document and no TLS Redis at all. This file stays the recipe for an
+Form document at all. This file stays the recipe for an
 install that wants the Form plane itself, and it says so with
 `ELITEA_FORM_LOGIN_ENABLED: "true"`: Form (local username/password) sign-in is
 OFF by default in `values.yaml`, and with it off the users file is read and
@@ -682,23 +681,31 @@ directory and one SDK thread. The chart sizes the pod for 32 at once:
 `worker.resources` requests 2 CPU and 4 Gi, and limits 8 CPU and 16 Gi.
 The measured worker CPU was about 0.4 at cap 2.
 
-`redis_read_batch` stays at 4. The KEDA scaler targets one delivery cap of
-pending entries per replica: `targetPendingEntries` is 32. One replica holds
-32 in-flight and 64 queued entries. The scaler adds a replica only when one
-cannot drain the backlog.
+`nats_fetch_batch` stays at 4. A worker pulls only for its free delivery
+slots plus at most those 4 of prefetch, and a pull returns on its first
+message, so commands it cannot start stay in the stream for another replica.
+The KEDA `nats-jetstream` scaler reads `num_pending + num_ack_pending` of the
+worker's durable (KEDA v2.10 through v2.21, `getMaxMsgLag`): commands waiting
+AND commands a replica holds. `lagThreshold` therefore defaults to one
+replica's `delivery_max_concurrency` (32), and the chart refuses a value
+above `delivery_max_concurrency + nats_fetch_batch`; `activationLagThreshold`
+is 1. The scaler reads the NATS chart's HEADLESS service on 8222: on the HA
+cluster it must reach the consumer leader's `/jsz`, and its fallback when
+servers advertise no client URLs is `<server_name>.<endpoint host>`, a pod
+DNS name only the headless service has.
 
 The default `maxReplicas` of 10 caps a KEDA fleet at 320 concurrent flows.
 A manual fleet has no such ceiling. Raise `maxReplicas` when you serve more.
 
-Its material — the signing key, the verification keyring, the Redis password,
-the Redis CA and the three listener keypairs — comes from a **plain Kubernetes
+Its material — the signing key, the verification keyring and the three
+listener keypairs with their CA — comes from a **plain Kubernetes
 Secret**. Set `runtime.material.secretName`, and give the Secret one key for
 each of these names, which are the names `deploy/scripts/gen-runtime-certs.sh`
 writes:
 
 ```
 runtime-ca.crt                command-signing-key.pem
-command-signing-keyring.json  redis-producer-password
+command-signing-keyring.json
 control-server.crt   control-server.key
 output-server.crt    output-server.key
 content-server.crt   content-server.key
@@ -757,11 +764,17 @@ still works without it, and it is the larger half of the gap.
 
 ### The authentication material (issue #444)
 
-Production authentication reads **five more files** through the same
-`securefile`: the Auth Redis password, the Auth Redis CA, the browser-attempt
-key, the PAT signing key and the Form users JSON. `runtime.enabled` requires
-production authentication, so every Kubernetes install of the runtime plane
-needs them.
+Production authentication reads **three more files** through the same
+`securefile`: the browser-attempt key, the PAT signing key and the Form users
+JSON. `runtime.enabled` requires production authentication, so every Kubernetes
+install of the runtime plane needs them.
+
+The authentication document is `elitea.auth.form.v2`. It has **no `redis`
+block**: the Form sign-in state (sessions, one-time login transactions, attempt
+windows) is in PostgreSQL, in the `elitea_auth` tables of elitea-main shared
+migration 0153, and elitea-scheduler's `authstateretention` sweep removes the
+expired rows. The attempt key is `credentials.attempt_key_file`. The chart, the
+init container and elitea-main all refuse a v1 document.
 
 Their paths are **not** chart values. They come from the authentication
 configuration document, which is the operator's. So the chart could not know
@@ -770,16 +783,18 @@ the chart alone.
 
 **Put the document in the chart.** `fileConfig.authConfig.document` takes the
 whole authentication configuration. The chart then renders the ConfigMap for
-you, reads the five paths out of it, and refuses — while it renders — a path
+you, reads the three paths out of it, and refuses — while it renders — a path
 that `fileConfig.authConfig.material.mountPath` cannot serve.
 `fileConfig.authConfig.configMapName` still points at a ConfigMap you provision
 yourself, and the two are mutually exclusive. With the external ConfigMap the
 chart cannot read the paths, so only the init container can check them.
 
-The five files arrive in a **plain Kubernetes Secret**, named by
+The three files arrive in a **plain Kubernetes Secret**, named by
 `fileConfig.authConfig.material.secretName`. **Its keys are yours, not the
-chart's**: each key is the last component of one of the five paths in the
-document. Unlike the runtime material, no script fixes those names.
+chart's**: each key is the last component of one of the three paths in the
+document. A Secret that still carries the retired `redis-auth-password` and
+Redis CA keys installs: the init container copies them and nothing reads them.
+Delete them when convenient. Unlike the runtime material, no script fixes those names.
 
 The mechanism is the one issue #404 built, and there is only one copy of it —
 `internal/security/materialinstall`. The init container `auth-material` runs the
@@ -789,17 +804,16 @@ carry, and reads every file back through `securefile` before it exits.
 
 One difference decides its arguments. The chart owns every runtime file name, so
 `elitea-runtime-material` derives its whole destination from the ConfigMap. The
-five authentication paths belong to the operator's document, so
+three authentication paths belong to the operator's document, so
 `elitea-auth-material` **reads that document**: `-config` gives it the file the
-service reads, and it derives the five paths and their directory from it.
+service reads, and it derives the three paths and their directory from it.
 `-mount` states what the pod mounts, and the command refuses a disagreement by
 name.
 
 `fileConfig.authConfig.material.mountPath` must differ from
 `runtime.material.mountPath`, and the chart refuses one shared directory. Each
 install container removes anything in its directory that its own Secret does not
-carry, so one directory would make the two delete each other's files. Put a copy
-of any shared file, such as the Redis CA, in both Secrets.
+carry, so one directory would make the two delete each other's files.
 
 `fileConfig.authConfig.material.secretDefaultMode` and `.sizeLimit` behave
 exactly like their `runtime.material` counterparts, and
@@ -999,13 +1013,14 @@ fails with `sorry, too many clients already`.
 
 ## Scaling order with live workers (#968)
 
-The agent worker consumes commands from the Redis command stream. The worker
+The agent worker consumes commands from the JetStream command bus. The worker
 has no consumption-pause. Its only drain is SIGTERM. On SIGTERM the worker
 stops intake and finishes in-flight work up to its 30 second shutdown
 deadline.
 
-It creates no shutdown ACK. Unfinished stream entries stay PENDING and
-remain reclaimable. Stopping the worker fleet loses no durable work.
+It creates no shutdown ACK or NAK. Unfinished messages stay un-acked and are
+redelivered after the consumer's 60s AckWait. Stopping the worker fleet loses
+no durable work.
 PostgreSQL stays the source of truth for execution state.
 
 Recreating one `elitea-main` replica drops the execution streams that
@@ -1096,8 +1111,8 @@ instead.
 ### Scale-up: raise main first, then the workers
 
 Adding a main replica adds stream capacity. It does not drop existing
-streams. Raise `elitea-main` first. Raise the worker fleet when the pending
-queue depth needs it. An install without the pooler must read
+streams. Raise `elitea-main` first. Raise the worker fleet when the consumer
+lag needs it. An install without the pooler must read
 [The Postgres pooler and the connection budget (#964)](#the-postgres-pooler-and-the-connection-budget-964)
 before it raises the main replica count. With the pooler in the path, the
 same scale-up stays within the connection budget.
@@ -1117,9 +1132,15 @@ the Application values instead. The order is the same.
 
 Stated plainly, because the gap between compose and Helm is where deploys break:
 
-- **No PostgreSQL and no Redis.** No chart here provisions them. The migration
-  hook fails against a cluster where they do not already exist, and against one
-  where `postgresql.existingSecret` and `redis` have not been pointed at them.
+- **No PostgreSQL and no NATS.** No chart here provisions them. (No Redis is
+  needed at all: `runtimeRedis` is removed and the chart refuses values that
+  still set it; see `docs/UPGRADING.md`.) The migration hook fails against a cluster where PostgreSQL does not already
+  exist or `postgresql.existingSecret` has not been pointed at it, and
+  elitea-main stops at startup when the NATS named by `nats` (its
+  `ELITEA_EVENTS_NATS_URL`) is unreachable, has no JetStream, or lacks the
+  presence bucket the `nats-bootstrap` Job creates. The NATS chart in this
+  directory is the reference server; it requires cert-manager (its own CA
+  Issuer, #1076), and every NATS client presents a certificate from it.
   The table in [Values an operator supplies](#values-an-operator-supplies-and-where-each-one-goes-475)
   names both.
   The database itself may be **empty**. `elitea-migrate` embeds the pylon-era
@@ -1140,26 +1161,22 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   it must stay in step with `deploy/traefik/dynamic.yml`. Both are walked by
   `services/elitea-main/tests/deployedge/`, so a new root-mounted family fails
   CI until every edge routes it (#568).
-- **Cross-namespace DNS.** NATS and the gateway live in `elitea-gateway`; the
-  rest live in `elitea`. Short names do not resolve across namespaces, so
-  `LLM_GATEWAY_URL` and `GATEWAY_NATS_URL` must be FQDNs
-  (`…​.elitea-gateway.svc.cluster.local`).
-- **Cross-namespace *Secrets*, which DNS advice does not solve.** The gateway
-  chart's cert-manager `Certificate` for the edge issues Secret
-  `elitea-main-gateway-client-tls` **into the gateway's own namespace**
-  (`elitea-gateway`), and its comment says elitea-main mounts it. Secrets are
-  namespace-scoped, so elitea-main running in `elitea` **cannot read it**. To
-  wire the elitea-main → gateway mTLS hop you must do one of:
-  1. install elitea-main into `elitea-gateway` (override the Application's
-     `destination.namespace`), or
-  2. replicate the Secret into `elitea` (reflector/kubed, external-secrets, or
-     a second `Certificate` in `elitea` from the same `elitea-internal-ca`
-     ClusterIssuer — the issuer is cluster-scoped, so this works), or
-  3. there is no third option: plain HTTP is **not** one.
-     `internal/llmproxy/proxy.go` builds an mTLS transport whenever
-     `Config.Transport` is nil, and nothing binds that field to an environment
-     variable, so an `http://` gateway URL still loads a client keypair and
-     still fails at boot without one.
+- **One namespace for NATS and the platform.** The Argo CD sample installs
+  NATS, its bootstrap and the platform into `elitea`. That is not a
+  convenience: the NATS chart's CA is a NAMESPACED cert-manager Issuer
+  (`elitea-nats-ca`), and the platform's NATS client Certificates are issued
+  by it, so they must live in its namespace (#1076); the platform chart
+  refuses `nats.namespace` other than its own while `nats.tls.issuerRef` is a
+  namespaced `Issuer`. It also means whoever may create Certificates or read Secrets in that namespace can
+  mint a NATS identity — restrict both (`deploy/helm/nats/README.md`, "Who
+  can mint a NATS identity"). To run NATS in another namespace, back a
+  `ClusterIssuer` with a CA used for NATS only, point
+  `nats.tls.issuerRef` (platform), `tls.certificate.issuerRef` (bootstrap) and
+  `security.issuerRef` + `security.ca.create=false` (NATS) at it, set
+  `nats.namespace`, and add the platform's namespace to the NATS chart's
+  `networkPolicy.clients` and, with approver-policy installed, to
+  `security.approverPolicy.clientNamespaces` (otherwise no policy approves
+  the platform's client certificates).
   The mount itself is no longer missing. `LLM_GATEWAY_CLIENT_CERT` and its two
   siblings are *file paths* (`llmproxy.Config.ClientCertFile`), and issue #463
   moved them out of the `secrets:` block — where a `secretKeyRef` had been

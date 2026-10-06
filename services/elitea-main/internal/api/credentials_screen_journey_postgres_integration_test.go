@@ -172,14 +172,7 @@ func TestTheCredentialScreenWorksForASeededMemberAndForNoOtherProject(t *testing
 		"/api/v2/events/prompt_lib/1/", nil); status != http.StatusOK {
 		t.Fatalf("the project event stream answered %d for a seeded member", status)
 	}
-	select {
-	case channel := <-source.asked:
-		if channel != "project:1:events" {
-			t.Fatalf("the admitted stream subscribed to %q, want project:1:events", channel)
-		}
-	default:
-		t.Fatal("the admitted stream subscribed to nothing")
-	}
+	assertSubscribedToOwnProject(t, source, 1)
 
 	// ── the refused direction: the same sequence, another project ──────────
 	//

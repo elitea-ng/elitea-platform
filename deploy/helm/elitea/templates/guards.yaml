@@ -10,6 +10,17 @@
 */ -}}
 
 {{- include "elitea.compiledSnapshots.validate" . }}
+{{- /*
+  The runtime Redis (`runtimeRedis`: Deployment, Service, ConfigMap, PVC and
+  the elitea-runtime-redis-material Secret) is removed. Nothing has read it
+  since the command bus moved to NATS JetStream and the Form sign-in state
+  moved to PostgreSQL. A values file that still carries the block — even with
+  enabled=false — is refused rather than silently ignored, so the operator
+  sees the removal and deletes the leftover objects (docs/UPGRADING.md).
+*/ -}}
+{{- if hasKey .Values "runtimeRedis" }}
+{{- fail "runtimeRedis is removed: the platform runs without Redis (the runtime command bus is NATS JetStream, Form sign-in state is in PostgreSQL). Delete the runtimeRedis block from your values, then delete the leftover elitea-runtime-redis Deployment, Service, ConfigMap, PVC and the elitea-runtime-redis-material Secret. See docs/UPGRADING.md, \"runtime-redis removed\"." }}
+{{- end }}
 
 {{- if and .Values.worker.enabled (not .Values.main.runtime.enabled) }}
 {{- fail "worker.enabled=true needs main.runtime.enabled=true. The worker dials elitea-main's control, output and content listeners, and those exist only when the runtime plane is composed. Without them every chat turn is admitted over HTTP, never claimed, and durably quarantined by the worker — with nothing logged on either side. Set main.runtime.enabled=true (and its fileConfig.authConfig), or set worker.enabled=false." }}
@@ -35,8 +46,20 @@
 {{- end }}
 {{- end }}
 
-{{- if and .Values.worker.enabled (not .Values.runtimeRedis.enabled) }}
-{{- fail "worker.enabled=true needs runtimeRedis.enabled=true, unless you are pointing worker.runtime.redisUrl at a runtime Redis outside this release. The worker reads its commands from that bus and nothing else; with no bus it starts, reports Ready, and consumes nothing forever. Set runtimeRedis.enabled=true, or point worker.runtime.redisUrl elsewhere and set this guard's expectation by disabling the worker." }}
+{{- if .Values.worker.enabled }}
+{{- range $legacy := list "redisUrl" "redisStream" "redisGroup" }}
+{{- if hasKey $.Values.worker.runtime $legacy }}
+{{- fail (printf "worker.runtime.%s is gone: the worker reads its commands from the NATS JetStream command bus (docs/runtime-command-bus.md). Use worker.runtime.natsUrl (empty: the top-level nats block), natsStream and natsConsumer." $legacy) }}
+{{- end }}
+{{- end }}
+{{- range $legacy := list "redis_read_batch" "redis_block_millis" "redis_reclaim_idle_millis" "redis_reclaim_interval_millis" }}
+{{- if hasKey ($.Values.worker.runtime.limits | default dict) $legacy }}
+{{- fail (printf "worker.runtime.limits.%s is gone with the Redis command bus; the worker refuses unknown limits. Use nats_fetch_batch, nats_fetch_expires_millis, nats_in_progress_interval_millis and nats_retry_delay_millis." $legacy) }}
+{{- end }}
+{{- end }}
+{{- if not (or .Values.worker.runtime.natsUrl .Values.nats.service) }}
+{{- fail "worker.enabled=true needs a NATS: worker.runtime.natsUrl, or the top-level nats.service. The worker reads its commands from the JetStream command bus and nothing else; with no bus it starts, reports Ready, and consumes nothing forever." }}
+{{- end }}
 {{- end }}
 
 {{- if and .Values.worker.enabled (not .Values.dbInit.enabled) (not .Values.dbInit.externallyManaged) }}

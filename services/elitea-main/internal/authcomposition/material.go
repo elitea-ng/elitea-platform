@@ -2,7 +2,6 @@ package authcomposition
 
 import (
 	"bytes"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -13,19 +12,14 @@ import (
 )
 
 const (
-	maxRedisPasswordFileBytes = int64(514)
-	maxRedisPasswordBytes     = 512
-	minAttemptKeyBytes        = 32
-	maxAttemptKeyBytes        = 64
-	maxPATSigningKeyBytes     = int64(64 << 10)
-	maxRedisCAFileBytes       = int64(1 << 20)
+	minAttemptKeyBytes    = 32
+	maxAttemptKeyBytes    = 64
+	maxPATSigningKeyBytes = int64(64 << 10)
 )
 
 // The purpose names. Each one appears in the load failure message for its file,
 // so an operator reads the purpose when a file is wrong.
 const (
-	purposeRedisPassword = "Redis password"
-	purposeRedisCA       = "Redis CA"
 	purposeAttemptKey    = "browser-attempt key"
 	purposePATSigningKey = "PAT signing key"
 	purposeFormUsers     = "Form users JSON"
@@ -61,12 +55,10 @@ func (config Config) MaterialFiles() ([]MaterialFile, error) {
 
 // materialFiles is the list itself. Validate refuses a configuration whose
 // paths are empty, relative or repeated, so every caller inside this package
-// gets five distinct absolute paths.
+// gets three distinct absolute paths.
 func (config Config) materialFiles() []MaterialFile {
 	return []MaterialFile{
-		{purposeRedisPassword, config.Redis.PasswordFile, maxRedisPasswordFileBytes, securefile.PrivateMaterial},
-		{purposeRedisCA, config.Redis.CAFile, maxRedisCAFileBytes, securefile.PublicMaterial},
-		{purposeAttemptKey, config.Redis.AttemptKeyFile, maxAttemptKeyBytes, securefile.PrivateMaterial},
+		{purposeAttemptKey, config.Credentials.AttemptKeyFile, maxAttemptKeyBytes, securefile.PrivateMaterial},
 		{purposePATSigningKey, config.Credentials.PATSigningKeyFile, maxPATSigningKeyBytes, securefile.PrivateMaterial},
 		{purposeFormUsers, config.Provider.Form.UsersJSONFile, browserapp.MaxFormConfigurationBytes, securefile.PrivateMaterial},
 	}
@@ -105,8 +97,6 @@ func (config Config) MaterialDirectory() (string, error) {
 // after constructors have snapshotted the required material. FormProvider
 // retains only keyed password digests; raw Form JSON is never retained here.
 type materializedFiles struct {
-	redisPassword []byte
-	redisRoots    *x509.CertPool
 	attemptKey    []byte
 	patSigningKey []byte
 	formProvider  *browserapp.FormProvider
@@ -146,16 +136,10 @@ func materialize(config Config) (*materializedFiles, error) {
 		return nil, err
 	}
 
-	redisPasswordFile := snapshotFor(references, purposeRedisPassword)
-	redisCAFile := snapshotFor(references, purposeRedisCA)
 	attemptKeyFile := snapshotFor(references, purposeAttemptKey)
 	patKeyFile := snapshotFor(references, purposePATSigningKey)
 	formUsersFile := snapshotFor(references, purposeFormUsers)
 
-	redisPassword, ok := normalizeRedisPassword(redisPasswordFile.Contents)
-	if !ok {
-		return nil, fmt.Errorf("%w: Redis password", ErrInvalidMaterial)
-	}
 	if len(attemptKeyFile.Contents) < minAttemptKeyBytes || len(attemptKeyFile.Contents) > maxAttemptKeyBytes {
 		return nil, fmt.Errorf("%w: browser-attempt key", ErrInvalidMaterial)
 	}
@@ -164,22 +148,12 @@ func materialize(config Config) (*materializedFiles, error) {
 	if !utf8.Valid(patKeyFile.Contents) || bytes.IndexByte(patKeyFile.Contents, 0) >= 0 {
 		return nil, fmt.Errorf("%w: PAT signing key", ErrInvalidMaterial)
 	}
-	if !separateEffectiveSecrets(redisPassword, attemptKeyFile.Contents, patKeyFile.Contents) {
-		return nil, fmt.Errorf("%w: effective secret purpose separation", ErrInvalidMaterial)
-	}
-
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(redisCAFile.Contents) {
-		return nil, fmt.Errorf("%w: Redis CA", ErrInvalidMaterial)
-	}
 	provider, err := browserapp.NewFormProvider(formUsersFile.Contents)
 	if err != nil {
 		return nil, fmt.Errorf("%w: Form users JSON", ErrInvalidMaterial)
 	}
 
 	return &materializedFiles{
-		redisPassword: append([]byte(nil), redisPassword...),
-		redisRoots:    roots,
 		attemptKey:    append([]byte(nil), attemptKeyFile.Contents...),
 		patSigningKey: append([]byte(nil), patKeyFile.Contents...),
 		formProvider:  provider,
@@ -222,42 +196,13 @@ func validateMaterialReferences(references []materialReference) error {
 	return nil
 }
 
-func separateEffectiveSecrets(values ...[]byte) bool {
-	for left := range values {
-		for right := left + 1; right < len(values); right++ {
-			if bytes.Equal(values[left], values[right]) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-func normalizeRedisPassword(raw []byte) ([]byte, bool) {
-	value := raw
-	if len(value) > 0 && value[len(value)-1] == '\n' {
-		value = value[:len(value)-1]
-		if len(value) > 0 && value[len(value)-1] == '\r' {
-			value = value[:len(value)-1]
-		}
-	}
-	if len(value) == 0 || len(value) > maxRedisPasswordBytes ||
-		bytes.ContainsAny(value, "\r\n\x00") || !utf8.Valid(value) {
-		return nil, false
-	}
-	return value, true
-}
-
 func (material *materializedFiles) destroy() {
 	if material == nil {
 		return
 	}
-	clear(material.redisPassword)
 	clear(material.attemptKey)
 	clear(material.patSigningKey)
-	material.redisPassword = nil
 	material.attemptKey = nil
 	material.patSigningKey = nil
-	material.redisRoots = nil
 	material.formProvider = nil
 }

@@ -21,7 +21,18 @@ on:
       # still trigger it — the whole point is catching drift introduced from
       # either side.
       - "deploy/helm/elitea-main/**"
+      - "deploy/helm/elitea/**"
       - "services/elitea-llm-gateway/scripts/env-drift-check.sh"
+      # The secured NATS permission tests (#1076) run elitea-main's and the
+      # scheduler's real NATS paths against the nats.conf the NATS chart
+      # renders, after the real bootstrap.sh. A change to the permission
+      # table, the bootstrap or the render script must run them.
+      - "deploy/helm/nats/**"
+      - "deploy/helm/nats-bootstrap/**"
+      - "scripts/nats/**"
+      # internal/transport/commandbus pins its constants to the command bus
+      # contract document.
+      - "docs/runtime-command-bus.md"
       # The vet and test steps below run scripts/go/workspace-run.sh. A change
       # to that script, or to the Taskfile that calls it, must run this
       # workflow. A gate that does not trigger on the file it guards is the
@@ -48,7 +59,18 @@ on:
       - "go.work.sum"
       - ".github/workflows/ci-go.yml"
       - "deploy/helm/elitea-main/**"
+      - "deploy/helm/elitea/**"
       - "services/elitea-llm-gateway/scripts/env-drift-check.sh"
+      # The secured NATS permission tests (#1076) run elitea-main's and the
+      # scheduler's real NATS paths against the nats.conf the NATS chart
+      # renders, after the real bootstrap.sh. A change to the permission
+      # table, the bootstrap or the render script must run them.
+      - "deploy/helm/nats/**"
+      - "deploy/helm/nats-bootstrap/**"
+      - "scripts/nats/**"
+      # internal/transport/commandbus pins its constants to the command bus
+      # contract document.
+      - "docs/runtime-command-bus.md"
       # The vet and test steps below run scripts/go/workspace-run.sh. A change
       # to that script, or to the Taskfile that calls it, must run this
       # workflow. A gate that does not trigger on the file it guards is the
@@ -192,21 +214,6 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
-      # Backs ELITEA_TEST_REDIS_ADDR below (#423). Twelve tests across
-      # internal/transport/redisdispatch, internal/infra/db/repos,
-      # internal/infra/authsvc and internal/infra/redis want a real Redis.
-      # Every one of them skipped itself on every run, so the transport that
-      # carries every worker command had no service-backed coverage at all.
-      # A Redis container costs a few seconds.
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd="redis-cli ping"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -278,6 +285,51 @@ jobs:
       - name: Start storage emulators
         run: docker compose -f deploy/docker-compose.storage-test.yml up -d --wait
 
+      # Backs ELITEA_TEST_NATS_URL below: elitea-main's live-update plane
+      # (internal/api/v2/canvaspresence's JetStream KV store and the boot
+      # path in cmd/elitea-main). A step rather than a `services:` entry
+      # because JetStream needs the `-js` argument and a service container
+      # cannot take one. The undeclared-skip gate fails the run if those
+      # tests skip, so losing this container cannot read as green.
+      - name: Start NATS (JetStream)
+        run: |
+          set -euo pipefail
+          docker run -d --name ci-nats -p 4222:4222 -p 8222:8222 nats:2.12.0-alpine -js -m 8222
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:8222/healthz?js-enabled-only=true" >/dev/null; then
+              # The same server binary, out of the container, for the
+              # restart test (TestNATSStoreFollowsTheBucketAcrossAServerRestart
+              # stops and starts its own server). Its path is read from the
+              # image, not assumed.
+              bin=$(docker exec ci-nats sh -c 'command -v nats-server')
+              docker cp "ci-nats:${bin}" "${RUNNER_TEMP}/nats-server"
+              chmod +x "${RUNNER_TEMP}/nats-server"
+              "${RUNNER_TEMP}/nats-server" --version
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs ci-nats
+          exit 1
+
+      # The secured NATS permission tests (#1076): libs/go/natsconn/natstest
+      # starts nats-server on the nats.conf `helm template deploy/helm/nats`
+      # renders and runs elitea-main's and the scheduler's real NATS paths as
+      # their certificate identities, after the real bootstrap.sh. The script
+      # renders that config (helm + the upstream subchart), fetches the pinned
+      # nats CLI the bootstrap runs, and sets ELITEA_REQUIRE_NATS_SECURE_TEST,
+      # so a missing piece fails those tests instead of skipping them. The
+      # plaintext ci-nats container above still backs the plaintext suites.
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.16.0
+
+      - name: Provision the secured NATS permission tests
+        env:
+          ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
+        run: bash scripts/nats/ci-secure-test-env.sh
+
       - name: Run tests (workspace)
         env:
           S3_ENDPOINT_URL: "http://127.0.0.1:19000"
@@ -327,22 +379,24 @@ jobs:
           # under us. That must read as a failure, not as silence (#423).
           ELITEA_REQUIRE_PGVECTOR_POSTGRES_TEST: "true"
 
-          # The Redis service above.
-          ELITEA_TEST_REDIS_ADDR: "localhost:6379"
+          # The NATS (JetStream) container started above.
+          ELITEA_TEST_NATS_URL: "nats://127.0.0.1:4222"
+          ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
 
           # Opt-in real-service reliability tests. Each needs only the
-          # PostgreSQL and Redis services this job already runs. Measured
-          # locally: backlog 19 s, visibility repair 41 s, three Redis
-          # capacity rounds under 2 s.
+          # PostgreSQL service and the secured NATS server (natstest, on the
+          # chart's own permissions) this job already provisions. Measured
+          # locally: backlog 19 s, visibility repair 3 s, three JetStream
+          # capacity rounds under 10 s.
           ELITEA_RUNTIME_POSTGRES_RELIABILITY_TEST: "1"
           ELITEA_RUNTIME_VISIBILITY_REPAIR_TEST: "1"
-          ELITEA_RUNTIME_REDIS_RELIABILITY_ROUNDS: "3"
+          ELITEA_RUNTIME_NATS_RELIABILITY_ROUNDS: "3"
 
           # tests/system/index_v2_preflight_binary_system_test.go starts its
-          # own PostgreSQL and TLS Redis containers and builds the shipped
+          # own PostgreSQL container and secured NATS server and builds the shipped
           # binaries, so it needs no service from this job. It is the only one
-          # of the nine tests/system files that CI can run; the rest want a
-          # bootstrapped Centry compose profile or the Python SDK, and
+          # of the tests/system files that CI can run; the rest want the
+          # Python SDK, and
           # scripts/go/declared-skips.txt names each with its reason.
           ELITEA_INDEX_V2_PREFLIGHT_SYSTEM_TEST: "1"
 
@@ -351,7 +405,7 @@ jobs:
           ELITEA_REQUIRE_CLIENT_CONTRACT_BASE: "1"
 
           # A skip that nothing declares FAILS this job. Locally the ledger
-          # only reports, so a developer with no PostgreSQL or Redis can still
+          # only reports, so a developer with no PostgreSQL or NATS can still
           # run `task test`. Same shape as CONTRACT_REQUIRE_PARITY.
           ELITEA_REQUIRE_DECLARED_SKIPS: "1"
         # One aggregation for CI and for `task test`. The inline loop that used
@@ -363,28 +417,6 @@ jobs:
         # this run did NOT cover, so a green step cannot be read as
         # "the whole repository was tested".
         run: bash scripts/go/workspace-run.sh coverage --race
-
-      # Split out of the step above on purpose. Two different suites in one
-      # step give one step name for two different failures, and a step name
-      # that does not match the thing that failed costs real diagnosis time.
-      #
-      # `python3 -m unittest discover` exits 0 when it discovers NOTHING. A
-      # renamed directory or a changed pattern would therefore turn this gate
-      # into a green no-op. The count is asserted first (#409).
-      - name: Run index reliability tests (Python)
-        run: |
-          python3 - <<'PY'
-          import sys, unittest
-
-          start = "services/elitea-main/tests/reliability/index_5681"
-          suite = unittest.defaultTestLoader.discover(start, pattern="test_*.py", top_level_dir=start)
-          count = suite.countTestCases()
-          print(f"discovered {count} test(s) in {start}")
-          if count == 0:
-              sys.exit(f"no test discovered in {start}; the gate would pass without running anything")
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          sys.exit(0 if result.wasSuccessful() else 1)
-          PY
 
       - name: Stop storage emulators
         if: always()

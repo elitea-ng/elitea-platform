@@ -93,9 +93,8 @@ spec:
       {{- end }}
       {{- if $authMaterialInit }}
         # Install the AUTHENTICATION material where securefile can read it
-        # (issue #444). internal/authcomposition/material.go opens five files:
-        # the Auth Redis password, the Auth Redis CA, the browser-attempt key,
-        # the PAT signing key and the Form users JSON.
+        # (issue #444). internal/authcomposition/material.go opens three files:
+        # the browser-attempt key, the PAT signing key and the Form users JSON.
         #
         # Same defect as the runtime material above, so the SAME mechanism.
         # There is one copy engine, internal/security/materialinstall, and both
@@ -103,10 +102,10 @@ spec:
         #
         # One difference, and it decides the arguments below. The chart owns
         # every runtime file NAME, so the runtime command derives its whole
-        # destination from the ConfigMap. The five authentication paths belong
+        # destination from the ConfigMap. The three authentication paths belong
         # to the operator's authentication document instead. So this command
         # READS THAT DOCUMENT: -config gives it the very file the service reads,
-        # and it derives the five paths and their directory from it. -mount
+        # and it derives the three paths and their directory from it. -mount
         # states what the pod mounts, and the command refuses a disagreement by
         # name. Neither value can drift into silence.
         - name: auth-material
@@ -228,12 +227,12 @@ spec:
               mountPath: {{ .Values.main.fileConfig.authConfig.mountPath }}
               subPath: {{ .Values.main.fileConfig.authConfig.key }}
               readOnly: true
-            # The five files that the authentication configuration above names
-            # (issue #444): the Auth Redis password, the Auth Redis CA, the
-            # browser-attempt key, the PAT signing key and the Form users JSON.
+            # The three files that the authentication configuration above names
+            # (issue #444): the browser-attempt key, the PAT signing key and the
+            # Form users JSON.
             # A WHOLE-DIRECTORY mount, deliberately, for the same reason as the
             # runtime material below: securefile refuses a path that resolves
-            # through a symlink, so the five must be real files in one
+            # through a symlink, so the three must be real files in one
             # directory.
             #
             # This container never mounts the raw Secret. With
@@ -274,6 +273,18 @@ spec:
               mountPath: {{ .Values.main.fileConfig.inventoryClientMaterial.mountPath }}
               readOnly: true
             {{- end }}
+            {{- if and .Values.nats.tls.enabled (include "elitea-main.usesNats" .) }}
+            # The live-update plane's NATS client certificate
+            # (templates/natsClient.yaml).
+            {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
+            {{- end }}
+            {{- if and .Values.nats.tls.enabled (.Values.main.runtime | default dict).enabled }}
+            # The runtime plane's NATS identity, elitea-main-runtime: the
+            # command bus producer (templates/natsClient.yaml).
+            - name: runtime-nats-client-tls
+              mountPath: {{ include "elitea-main.runtimeNatsMountPath" . }}
+              readOnly: true
+            {{- end }}
             {{- if .Values.main.fileConfig.brandPack.enabled }}
             # BRAND_PACK_PATH is "one pack file per deployment" (branding
             # package doc), read with os.ReadFile — a subPath mount, same as
@@ -285,7 +296,7 @@ spec:
             {{- end }}
             {{- if .Values.main.runtime.enabled }}
             # The runtime material (issue #382): signing key, verification
-            # keyring, Redis password, Redis CA and the three server keypairs.
+            # keyring, the runtime CA and the three server keypairs.
             # A WHOLE-DIRECTORY mount, deliberately — not the per-file subPath
             # mounts used above. internal/security/securefile also rejects any
             # path that resolves through a symlink, and the file names are
@@ -392,6 +403,14 @@ spec:
             secretName: {{ required "fileConfig.inventoryClientMaterial.enabled=true needs secretName or volume" .Values.main.fileConfig.inventoryClientMaterial.secretName }}
             defaultMode: {{ .Values.main.fileConfig.inventoryClientMaterial.defaultMode }}
           {{- end }}
+        {{- end }}
+        {{- if and .Values.nats.tls.enabled (include "elitea-main.usesNats" .) }}
+        {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-main.fullname" .))) | nindent 8 }}
+        {{- end }}
+        {{- if and .Values.nats.tls.enabled (.Values.main.runtime | default dict).enabled }}
+        - name: runtime-nats-client-tls
+          secret:
+            secretName: {{ printf "%s-runtime-nats-client-tls" (include "elitea-main.fullname" .) }}
         {{- end }}
         {{- if .Values.main.fileConfig.brandPack.enabled }}
         - name: brand-pack

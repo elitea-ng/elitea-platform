@@ -155,7 +155,9 @@ func TestNATSConnectedAndClosedOnShutdown(t *testing.T) {
 	cfg := testConfig()
 	cfg.NATSURL = "nats://nats:4222"
 	cfg.ServiceName = "gw-test"
-	cfg.NATSReplicas = 3
+	cfg.NATSTLSCAFile = "/etc/nats-client/ca.crt"
+	cfg.NATSTLSCertFile = "/etc/nats-client/tls.crt"
+	cfg.NATSTLSKeyFile = "/etc/nats-client/tls.key"
 	cfg.CBFailureThreshold = 5
 	cfg.CBOpenDuration = 20 * time.Second
 
@@ -166,7 +168,9 @@ func TestNATSConnectedAndClosedOnShutdown(t *testing.T) {
 	}
 	// Config threads through to the nats client verbatim.
 	if gotCfg.URL != "nats://nats:4222" || gotCfg.Name != "gw-test" ||
-		gotCfg.Replicas != 3 || gotCfg.CBFailureThreshold != 5 || gotCfg.CBOpenDuration != 20*time.Second {
+		gotCfg.TLSCAFile != "/etc/nats-client/ca.crt" || gotCfg.TLSCertFile != "/etc/nats-client/tls.crt" ||
+		gotCfg.TLSKeyFile != "/etc/nats-client/tls.key" ||
+		gotCfg.CBFailureThreshold != 5 || gotCfg.CBOpenDuration != 20*time.Second {
 		t.Errorf("connector cfg = %+v, not threaded through", gotCfg)
 	}
 

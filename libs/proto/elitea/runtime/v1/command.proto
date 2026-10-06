@@ -25,8 +25,8 @@ enum WorkerCommandTypeV1 {
   WORKER_COMMAND_TYPE_V1_TOOLKIT_EXECUTE_READ = 11;
 }
 
-// WorkerCommandV1 is the immutable, reference-only command body allowed on a
-// Redis Stream. It must never contain settings, prompts, files, results,
+// WorkerCommandV1 is the immutable, reference-only command body allowed on the
+// command bus. It must never contain settings, prompts, files, results,
 // credentials, grant material, exceptions, or other bulk/protected content.
 // Protocol-v1 consumers reject unknown tags and duplicate singular/oneof tags
 // at the bounded wire layer; ordinary protobuf last-value-wins parsing is not

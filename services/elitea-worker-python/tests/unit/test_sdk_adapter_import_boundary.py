@@ -51,16 +51,19 @@ def test_only_sdk_adapter_imports_elitea_sdk() -> None:
     assert sorted(importers) == sorted(_SDK_IMPORT_BOUNDARY)
 
 
-def test_only_command_transport_modules_may_import_redis_client() -> None:
+def test_only_the_command_bus_module_may_import_the_nats_client() -> None:
+    """One module knows the NATS API, so one module can publish, and it does not.
+
+    Nothing may import ``redis`` at all: the Redis Streams transport is
+    deleted (docs/runtime-command-bus.md), and a stray import would bring the
+    dependency back silently.
+    """
+
     source_root = Path(__file__).parents[2] / "src" / "elitea_worker"
-    allowed = {
-        Path("transport/redis_asyncio.py"),
-        Path("transport/redis_commands.py"),
-    }
-    offenders: list[Path] = []
+    allowed = {Path("transport/nats_jetstream.py")}
+    nats_offenders: list[Path] = []
+    redis_importers: list[Path] = []
     for path in source_root.rglob("*.py"):
-        if path.relative_to(source_root) in allowed:
-            continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
@@ -70,9 +73,13 @@ def test_only_command_transport_modules_may_import_redis_client() -> None:
             else:
                 continue
             if any(name == "redis" or name.startswith("redis.") for name in names):
-                offenders.append(path.relative_to(source_root))
-                break
-    assert offenders == []
+                redis_importers.append(path.relative_to(source_root))
+            if path.relative_to(source_root) not in allowed and any(
+                name == "nats" or name.startswith("nats.") for name in names
+            ):
+                nats_offenders.append(path.relative_to(source_root))
+    assert nats_offenders == []
+    assert redis_importers == []
 
 
 def test_sdk_configuration_import_failures_are_rejected_without_error_text() -> None:

@@ -46,7 +46,7 @@ func (p *dispatchProducer) AppendPrepared(_ context.Context, _ string, e executi
 	p.appended = append(p.appended, bytes.Clone(e.Bytes))
 	if p.fail {
 		p.fail = false
-		return errors.New("uncertain Redis acknowledgement")
+		return errors.New("uncertain bus acknowledgement")
 	}
 	return nil
 }
@@ -66,6 +66,6 @@ func TestDiscoveryDispatchRetriesExactDurableBytes(t *testing.T) {
 	}
 	store.stored.Envelope.Bytes[0] = '!'
 	if err := dispatcher.Dispatch(context.Background(), dispatch); !errors.Is(err, executionapp.ErrInvalidPreparedEnvelope) || len(producer.appended) != 2 {
-		t.Fatal("corrupt envelope reached Redis")
+		t.Fatal("corrupt envelope reached the command bus")
 	}
 }

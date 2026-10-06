@@ -26,8 +26,8 @@ set -euo pipefail
 # "the Deployment" or "the ConfigMap" from the render. The single chart renders
 # every component, so the suite narrows the render to its subject instead of
 # teaching twenty selectors to disambiguate.
-ONLY_SCHEDULER="--set main.enabled=false --set web.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false --set runtimeRedis.enabled=false"
-ONLY_GATEWAY="--set main.enabled=false --set web.enabled=false --set scheduler.enabled=false --set otelCollector.enabled=false --set worker.enabled=false --set runtimeRedis.enabled=false"
+ONLY_SCHEDULER="--set main.enabled=false --set web.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false"
+ONLY_GATEWAY="--set main.enabled=false --set web.enabled=false --set scheduler.enabled=false --set otelCollector.enabled=false --set worker.enabled=false"
 # Chooses the narrowing for one case. A case that states a gateway value is a
 # gateway case, and is left to supply (or withhold) the postures itself — the
 # suite asserts that withholding them is refused, which a blanket injection
@@ -39,7 +39,7 @@ narrow_for() {
     *) echo "$ONLY_MAIN $GATEWAY_RENDER_POSTURE" ;;
   esac
 }
-ONLY_MAIN="--set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false --set runtimeRedis.enabled=false"
+ONLY_MAIN="--set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false"
 GATEWAY_RENDER_POSTURE="--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -506,11 +506,13 @@ if [ -z "$nats_url" ]; then
   fail "a default scheduler install renders GATEWAY_NATS_URL empty, so the write-back consumer never starts whatever BUDGET_WRITEBACK_ENABLED says"
 else
   pass "a default scheduler install renders GATEWAY_NATS_URL=\"$nats_url\""
-  # NATS is installed into a DIFFERENT namespace from this workload, and a
-  # short name does not resolve across namespaces.
+  # The chart renders the FQDN (nats.namespace may name another namespace
+  # when the NATS issuer is a ClusterIssuer, and a short name does not
+  # resolve across namespaces), over tls:// with the scheduler's client
+  # certificate (#1076).
   case "$nats_url" in
-    *.svc.cluster.local:*) pass "GATEWAY_NATS_URL is an FQDN, so it resolves from another namespace" ;;
-    *) fail "GATEWAY_NATS_URL is \"$nats_url\", which is not an FQDN; NATS runs in elitea-gateway and this workload does not" ;;
+    tls://*.svc.cluster.local:*) pass "GATEWAY_NATS_URL is a tls:// FQDN" ;;
+    *) fail "GATEWAY_NATS_URL is \"$nats_url\", not a tls:// FQDN; the NATS chart requires TLS, and a short name resolves only in this workload's own namespace" ;;
   esac
 fi
 

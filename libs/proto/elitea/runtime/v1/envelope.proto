@@ -35,7 +35,7 @@ message SignedWorkerCommandEnvelopeV1 {
 
 // WorkerExecutionEnvelopeV1 is the offline execution fixture and the logical
 // post-claim worker input. Production obtains the fence from authenticated
-// control gRPC; the Redis entry contains only signed_command.
+// control gRPC; the bus message contains only signed_command.
 message WorkerExecutionEnvelopeV1 {
   SignedWorkerCommandEnvelopeV1 signed_command = 1;
   ExecutionFenceV1 fence = 2;

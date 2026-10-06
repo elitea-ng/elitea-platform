@@ -14,7 +14,7 @@ metadata:
 spec:
   backoffLimit: 6
   # Bounded so a wedged Job (e.g. NATS never comes up) does not hang the release.
-  activeDeadlineSeconds: 600
+  activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
   template:
     metadata:
       labels:
@@ -27,14 +27,31 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/bin/sh", "/scripts/bootstrap.sh"]
           env:
-            # The bootstrap script reaches NATS via NATS_ARGS --server; using an
-            # explicit URL avoids depending on an in-pod nats context.
+            # Connection and identity. bootstrap.sh builds the nats CLI's
+            # --server/--tls*/--inbox-prefix flags from these, and refuses a
+            # half-configured set.
+            - name: NATS_URL
+              value: {{ .Values.natsUrl | quote }}
+            # One certificate per account under NATS_TLS_DIR/<account>; the
+            # script connects to each account as that account's bootstrap
+            # identity, with its own inbox prefix
+            # (_INBOX_elitea-nats-bootstrap-<account>).
+            - name: NATS_TLS_DIR
+              value: {{ .Values.tls.mountPath | quote }}
+            - name: NATS_BOOTSTRAP_ACCOUNTS
+              value: {{ join " " .Values.accounts | quote }}
             - name: NATS_ARGS
-              value: "--server {{ .Values.natsUrl }} {{ .Values.extraNatsArgs }}"
+              value: {{ .Values.extraNatsArgs | quote }}
+            - name: NATS_CONNECT_WAIT
+              value: {{ .Values.connectWait | quote }}
             - name: NATS_REPLICAS
               value: {{ .Values.replicas | quote }}
             - name: NATS_ALERT_COOLDOWN
               value: {{ .Values.alertCooldown | quote }}
+            - name: NATS_BUDGET_DUPE_WINDOW
+              value: {{ .Values.budget.duplicateWindow | quote }}
+            - name: NATS_RATELIMIT_MAX_AGE
+              value: {{ .Values.rateLimit.maxAge | quote }}
             - name: NATS_DELTAS_DUPE_WINDOW
               value: {{ .Values.deltas.duplicateWindow | quote }}
             - name: NATS_DELTAS_MAX_AGE
@@ -43,9 +60,34 @@ spec:
               value: {{ .Values.deltas.maxBytes | quote }}
             - name: NATS_DELTAS_MAX_MSGS
               value: {{ .Values.deltas.maxMsgs | quote }}
+            - name: NATS_WRITEBACK_ACK_WAIT
+              value: {{ .Values.deltas.writeback.ackWait | quote }}
+            - name: NATS_WRITEBACK_MAX_DELIVER
+              value: {{ .Values.deltas.writeback.maxDeliver | quote }}
+            - name: NATS_PRESENCE_TTL
+              value: {{ .Values.presence.ttl | quote }}
+            - name: NATS_RT_VALIDATE_MAX_MSGS
+              value: {{ .Values.runtime.validate.maxMsgs | quote }}
+            - name: NATS_RT_VALIDATE_MAX_AGE
+              value: {{ .Values.runtime.validate.maxAge | quote }}
+            - name: NATS_RT_AGENT_MAX_MSGS
+              value: {{ .Values.runtime.agent.maxMsgs | quote }}
+            - name: NATS_RT_AGENT_MAX_AGE
+              value: {{ .Values.runtime.agent.maxAge | quote }}
+            - name: NATS_RT_INDEX_MAX_MSGS
+              value: {{ .Values.runtime.index.maxMsgs | quote }}
+            - name: NATS_RT_INDEX_MAX_AGE
+              value: {{ .Values.runtime.index.maxAge | quote }}
+            - name: NATS_RT_DEADLETTER_TTL
+              value: {{ .Values.runtime.deadLetterTtl | quote }}
           volumeMounts:
             - name: scripts
               mountPath: /scripts
+            {{- range $acct := .Values.accounts }}
+            - name: nats-client-tls-{{ $acct }}
+              mountPath: {{ printf "%s/%s" (trimSuffix "/" $.Values.tls.mountPath) $acct }}
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
@@ -53,3 +95,11 @@ spec:
           configMap:
             name: {{ include "nats-bootstrap.fullname" . }}
             defaultMode: 0755
+        # Each account's bootstrap certificate (templates/certificate.yaml).
+        # The pod waits in ContainerCreating until cert-manager has written
+        # every Secret.
+        {{- range $acct := .Values.accounts }}
+        - name: nats-client-tls-{{ $acct }}
+          secret:
+            secretName: {{ include "nats-bootstrap.secretName" (dict "account" $acct "ctx" $) }}
+        {{- end }}

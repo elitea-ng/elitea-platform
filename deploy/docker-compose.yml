@@ -33,17 +33,40 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
+  # The live-update plane (elitea-main's ELITEA_EVENTS_NATS_URL): the project
+  # SSE stream and canvas presence (its publish and its JetStream KV
+  # bucket); domain events go to webhooks only. It replaced the plain Redis
+  # that sat at REDIS_URL. JetStream (-js)
+  # is required — elitea-main refuses to start without it; -m serves the
+  # healthcheck. Not published to the host: only elitea-main dials it.
+  nats:
+    image: nats:2.12.0-alpine
+    command: ["-c", "/etc/nats-config/nats.conf"]
     volumes:
-      - redis_data:/data
+      - ./runtime/nats-local.conf:/etc/nats-config/nats.conf:ro
+      - nats_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz?js-enabled-only=true"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+
+  # Creates every JetStream asset, with the same script the cluster's
+  # nats-bootstrap hook Job runs (deploy/helm/nats-bootstrap/files/bootstrap.sh).
+  # elitea-main only BINDS to its presence bucket and refuses to start when it
+  # is missing (#1076), so it waits for this to complete. Plaintext and no
+  # client identity, like the server above: compose's posture. The secured
+  # posture is the opt-in overlay docker-compose.nats-secure.yml.
+  nats-bootstrap:
+    image: docker.io/natsio/nats-box:0.19.7
+    command: ["sh", "/bootstrap/bootstrap.sh"]
+    environment:
+      NATS_URL: "nats://nats:4222"
+    volumes:
+      - ./helm/nats-bootstrap/files/bootstrap.sh:/bootstrap/bootstrap.sh:ro
+    depends_on:
+      nats:
+        condition: service_healthy
 
   # S3-compatible local object store (see docs/plans/storage-migration-plan.md
   # S4/S17). Not yet wired into elitea-main's environment — the factory that
@@ -133,7 +156,7 @@ services:
     image: ghcr.io/elitea-ng/elitea-main:dev
     environment:
       DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
-      REDIS_URL: "redis:6379"
+      ELITEA_EVENTS_NATS_URL: "nats://nats:4222"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       APPLICATION_SECRET_KEY: "changeme"
       SKIP_MIGRATIONS: "1"
@@ -218,8 +241,10 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      nats:
         condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
       oidc-mock:
         condition: service_healthy
       otel-collector:
@@ -331,9 +356,6 @@ services:
     image: ghcr.io/elitea-ng/elitea-scheduler:dev
     environment:
       DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
-      REDIS_URL: "redis:6379"
-      RPC_CHANNEL: "elitea_rpc"
-      RPC_HMAC_KEY: ""
       HTTP_ADDR: ":8081"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
       # Audit-event retention sweep (issue #619). centry.audit_events gained a
@@ -351,8 +373,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
-        condition: service_healthy
       otel-collector:
         condition: service_started
     # No container healthcheck: the image is distroless (no shell/wget/curl) and the
@@ -362,5 +382,5 @@ services:
 
 volumes:
   postgres_data:
-  redis_data:
   rustfs_data:
+  nats_data:

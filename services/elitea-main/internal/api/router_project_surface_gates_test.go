@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -11,7 +14,7 @@ import (
 
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/redis"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
 )
 
 // ---------------------------------------------------------------------------
@@ -163,12 +166,12 @@ func (emptyWebhookRepo) Delete(context.Context, string, string) error { return n
 // A REFUSED one never reaches it, and channelAsked records which.
 type closedEventSource struct{ asked chan string }
 
-func (s closedEventSource) Raw(_ context.Context, channel string) (<-chan redis.Event, func(), error) {
+func (s closedEventSource) Raw(_ context.Context, channel string) (<-chan natsbus.Event, func(), error) {
 	select {
 	case s.asked <- channel:
 	default:
 	}
-	events := make(chan redis.Event)
+	events := make(chan natsbus.Event)
 	close(events)
 	return events, func() {}, nil
 }
@@ -335,13 +338,32 @@ func TestTheEntitledStreamSubscribesToItsOwnProject(t *testing.T) {
 	if status := serveStatus(t, router, http.MethodGet, "/api/v2/events/prompt_lib/7/"); status != http.StatusOK {
 		t.Fatalf("status = %d for an entitled member, want 200", status)
 	}
-	select {
-	case channel := <-source.asked:
-		if channel != "project:7:events" {
-			t.Fatalf("subscribed to %q, want project:7:events", channel)
+	assertSubscribedToOwnProject(t, source, 7)
+}
+
+// drainAsked returns every channel the stream asked the source for, in order.
+func drainAsked(source closedEventSource) []string {
+	var channels []string
+	for {
+		select {
+		case channel := <-source.asked:
+			channels = append(channels, channel)
+		default:
+			return channels
 		}
-	default:
-		t.Fatal("the admitted stream subscribed to nothing")
+	}
+}
+
+// assertSubscribedToOwnProject requires the admitted stream to have subscribed
+// to exactly its own project's two families — the project events and the
+// canvas presence rosters — and to nothing else.
+func assertSubscribedToOwnProject(t *testing.T, source closedEventSource, projectID int) {
+	t.Helper()
+	got := drainAsked(source)
+	sort.Strings(got)
+	want := []string{fmt.Sprintf("project:%d:events", projectID), fmt.Sprintf("project:%d:presence", projectID)}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the admitted stream subscribed to %q, want %q", got, want)
 	}
 }
 

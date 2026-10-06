@@ -364,7 +364,7 @@ func TestAPartlyFilledConfigGetsBounds(t *testing.T) {
 // constructs. Every test above would pass on a binary that never calls New.
 //
 // cmd/elitea-scheduler has no seam a test can call, so the source is read. It
-// is the same instrument internal/scheduler/maintenance_test.go uses on
+// is the same instrument internal/maintenance/maintenance_test.go uses on
 // elitea-main's platformconfig, and it fails on the change that matters —
 // deleting the wiring — rather than on formatting.
 func TestTheSweeperIsStartedByTheDaemon(t *testing.T) {
@@ -381,7 +381,7 @@ func TestTheSweeperIsStartedByTheDaemon(t *testing.T) {
 		"the sweeper is never constructed":                   "auditretention.New(",
 		"the sweeper is constructed and never run":           "auditSweeper.Run(ctx)",
 		"the sweeper reads its own switch instead of config": "cfg.AuditRetentionDays",
-		"the sweeper does not share the dispatch gate":       "sched.MaintenanceActive",
+		"the sweeper does not share the maintenance switch":  "maintenanceSwitch.Active",
 	} {
 		if !strings.Contains(text, fragment) {
 			t.Errorf("%s: %q no longer appears in %s", defect, fragment, mainPath)

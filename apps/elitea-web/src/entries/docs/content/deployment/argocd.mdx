@@ -26,11 +26,13 @@ flowchart LR
 
 | Application | Chart | Wave | Namespace | Why this order |
 |---|---|---|---|---|
-| `elitea-nats` | `deploy/helm/nats` | -2 | `elitea-gateway` | Must be healthy before its JetStream assets are created. |
-| `elitea-nats-bootstrap` | `deploy/helm/nats-bootstrap` | -1 | `elitea-gateway` | Creates the KV buckets and budget-deltas stream the gateway's counters and the scheduler both dial; the hook Job is idempotent, safe on every sync. |
+| `elitea-nats` | `deploy/helm/nats` | -2 | `elitea` | Must be healthy before its JetStream assets are created. mTLS-only, with its own namespaced CA `Issuer` that also signs the platform's NATS client certificates — which is why it shares the platform's namespace. |
+| `elitea-nats-bootstrap` | `deploy/helm/nats-bootstrap` | -1 | `elitea` | Creates every stream, KV bucket and the scheduler's consumer, in each plane's NATS account; the hook Job is idempotent, safe on every sync, and its certificates exist only while it runs. |
 | `elitea` | `deploy/helm/elitea` | 0 | `elitea` | The platform release. |
 
-Ordering **within** the `elitea` Application is Helm hook ordering, not a further sync wave — the migration Job runs `pre-install,pre-upgrade` and Helm blocks the release on it, the workload-session Job follows, and the runtime Redis consumer groups are created `post-install`. A failed migration aborts the release and the previous pods keep serving.
+cert-manager is a prerequisite. An install that ran NATS in `elitea-gateway` before moves it to `elitea` on the next sync: that is a **new, empty JetStream volume**, so budget counters and rate-limit windows restart at zero for the current period (`docs/UPGRADING.md` has the steps, including the old volume Argo CD does not prune).
+
+Ordering **within** the `elitea` Application is Helm hook ordering, not a further sync wave — the migration Job runs `pre-install,pre-upgrade` and Helm blocks the release on it, and the workload-session Job follows. A failed migration aborts the release and the previous pods keep serving.
 
 ## Where each value comes from
 

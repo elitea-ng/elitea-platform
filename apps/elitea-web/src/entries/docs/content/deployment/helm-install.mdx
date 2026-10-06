@@ -10,7 +10,7 @@ This walks a Kubernetes install of the `elitea` chart end to end. Read [Producti
 <CardGroup cols={2}>
   <Card title="Cluster access" icon="server">A Kubernetes cluster with `helm` v3 and `kubectl` configured against it.</Card>
   <Card title="PostgreSQL" icon="database">Reachable, with a superuser DSN available for the database-preparation Job (`CREATE DATABASE`, `CREATE EXTENSION vector`).</Card>
-  <Card title="Redis" icon="server">A general-purpose Redis reachable from the cluster; a second, mutually authenticated TLS Redis if you turn on the runtime plane.</Card>
+  <Card title="NATS JetStream" icon="server">The `nats` and `nats-bootstrap` charts, installed first. The platform needs no Redis: the runtime command bus, live updates and presence are on NATS, and the chart refuses values that still set `runtimeRedis`.</Card>
   <Card title="Object storage" icon="package">An S3-compatible bucket, created ahead of the first sync and named by `main.env.STORAGE_CONTAINER`.</Card>
   <Card title="cert-manager" icon="shield-check">A `ClusterIssuer` for the internal mTLS hops (LLM gateway, DeepWiki/Inventory), if you enable those components.</Card>
 </CardGroup>
@@ -32,7 +32,7 @@ Agent-execution signing keys and listener certificates (from `deploy/scripts/gen
 </Accordion>
 
 <Accordion title="fileConfig.authConfig.material.secretName (production auth)">
-Auth Redis password, CA, browser-attempt key, PAT signing key, Form users JSON. Required if using Form or mixed authentication. The Form users JSON is a sign-in path only when `main.env.ELITEA_FORM_LOGIN_ENABLED` is `"true"`; Form sign-in is off by default.
+Three files: the browser-attempt key, the PAT signing key and the Form users JSON. Required if using Form or mixed authentication. The auth document is `elitea.auth.form.v2`: it has no `redis` block, because the Form sign-in state is in PostgreSQL, and the attempt key is `credentials.attempt_key_file`. The Form users JSON is a sign-in path only when `main.env.ELITEA_FORM_LOGIN_ENABLED` is `"true"`; Form sign-in is off by default.
 </Accordion>
 
 <Accordion title="Gateway identity secret (GATEWAY_IDENTITY_SECRET)">
@@ -60,32 +60,36 @@ The chart's own defaults: a **default install has no production authentication**
 The full capability set, matching `docker-compose.standalone-full.yml` — every capability flag on, the runtime plane on (agent execution, index ingest), sized for `postgresql.maxConnections: 200` across up to `main.autoscaling.maxReplicas: 4`. Needs both the runtime material Secret and the auth material Secret. This is the reference production shape.
 </Tab>
 <Tab title="values-auth-minimal.yaml">
-The cheapest install that can seed an AI provider credential through the product's own API instead of hand-written SQL: production (Form) authentication plus `ELITEA_CONFIGURATIONS_ENABLED`, **no runtime plane** — no agent execution, no chat. Needs the auth material Secret and a TLS Redis (`runtimeRedis.enabled: true`), but no runtime material Secret and no worker.
+The cheapest install that can seed an AI provider credential through the product's own API instead of hand-written SQL: production (Form) authentication plus `ELITEA_CONFIGURATIONS_ENABLED`, **no runtime plane** — no agent execution, no chat. Needs the auth material Secret, but no Redis, no runtime material Secret and no worker: the Form sign-in state is in PostgreSQL.
 </Tab>
 <Tab title="values-staging.yaml">
-A minimal single-replica shape (image tag `shadow-v0.1`, `DATABASE_URL`/`REDIS_URL` inlined for a throwaway environment, autoscaling and the pod disruption budget both off). Use it for a disposable smoke/shadow environment, not as a production starting point.
+A minimal single-replica shape (image tag `shadow-v0.1`, `DATABASE_URL` inlined for a throwaway environment, autoscaling and the pod disruption budget both off). Use it for a disposable smoke/shadow environment, not as a production starting point.
 </Tab>
 </Tabs>
 
-## Install order: nats, nats-bootstrap, elitea
+## Install order: nats, nats-bootstrap, elitea — one namespace
 
-Whether you install by hand or through ArgoCD (sync waves `-2`, `-1`, `0` — see [GitOps with ArgoCD](/deployment/argocd)), the order matters: the LLM gateway's budget counters and the scheduler both dial NATS, and its JetStream assets (KV buckets, the budget-deltas stream) must exist first.
+Whether you install by hand or through ArgoCD (sync waves `-2`, `-1`, `0` — see [GitOps with ArgoCD](/deployment/argocd)), the order matters: elitea-main, the LLM gateway's budget counters and the scheduler all dial NATS, and its JetStream assets (KV buckets, streams, the scheduler's consumer) must exist first.
+
+All three go into **one namespace**. NATS requires TLS and a client certificate from every client (mTLS, no anonymous or password access), and those certificates come from the NATS chart's own CA, a *namespaced* cert-manager `Issuer` that signs only in its own namespace. The platform chart refuses a render that points `nats.namespace` elsewhere while it uses that Issuer. **cert-manager must be installed first.**
 
 <Steps>
 <Step title="NATS">
+TLS-only server with its own CA, one NATS account per plane, and an ingress NetworkPolicy that admits only the platform's NATS clients:
 ```bash
+helm dependency build deploy/helm/nats
 helm install elitea-nats deploy/helm/nats \
   -f deploy/helm/nats/values-scale1.yaml \
-  -n elitea-gateway --create-namespace
+  -n elitea --create-namespace
 ```
 </Step>
 <Step title="NATS bootstrap">
-Idempotent hook Job that creates the KV buckets and stream:
+Idempotent hook Job that creates every stream, KV bucket and consumer, connecting to each account with a short-lived certificate of its own:
 ```bash
 helm install elitea-nats-bootstrap deploy/helm/nats-bootstrap \
-  --set natsUrl=nats://elitea-nats:4222 \
+  --set natsUrl=tls://elitea-nats:4222 \
   --set replicas=1 \
-  -n elitea-gateway
+  -n elitea
 ```
 </Step>
 <Step title="elitea">
@@ -96,8 +100,9 @@ helm install elitea deploy/helm/elitea \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.example.com/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted \
   --set-string platform.aiProjectId=1 \
-  -n elitea --create-namespace
+  -n elitea
 ```
+The chart issues each NATS client (elitea-main, the LLM gateway, the scheduler) its own certificate and renders `tls://elitea-nats.elitea.svc.cluster.local:4222` for it — no NATS credential goes in any value.
 </Step>
 </Steps>
 
@@ -170,14 +175,17 @@ See [Troubleshooting](/support/troubleshooting#operator-checks) for what each en
 ## What a Kubernetes install does NOT give you
 
 <AccordionGroup>
-<Accordion title="No PostgreSQL and no Redis">
-No chart provisions either. The migration hook fails against a cluster where they do not already exist or where the Secret/host settings have not been pointed at them.
+<Accordion title="No PostgreSQL and no NATS">
+The platform chart provisions neither. NATS comes from its own chart (`deploy/helm/nats`, above); elitea-main's live updates — the project SSE stream and canvas presence — need it with JetStream (`ELITEA_EVENTS_NATS_URL`, derived from the top-level `nats` block), and so does the runtime plane: its command bus is JetStream in the NATS chart's RUNTIME account (`ELITEA_RUNTIME_NATS_URL`, as the `elitea-main-runtime` identity), consumed by the workers from their own WORKER account. The chart refuses `main.runtime.enabled` with no NATS to publish to. The migration hook fails against a cluster where PostgreSQL does not already exist or where the Secret/host settings have not been pointed at it.
 </Accordion>
 <Accordion title="No ingress by default">
 No Ingress renders until `main.ingress.enabled: true`. A cluster serving the web app needs per-route rules to avoid the SPA backend swallowing them.
 </Accordion>
-<Accordion title="Cross-namespace DNS">
-NATS and the gateway live in `elitea-gateway`; the rest live in `elitea`. `LLM_GATEWAY_URL` and `GATEWAY_NATS_URL` must be fully qualified (`....elitea-gateway.svc.cluster.local`) — short names do not resolve across namespaces.
+<Accordion title="NATS in another namespace">
+The reference install puts NATS in the platform's namespace. To run it elsewhere, back a cert-manager `ClusterIssuer` with a CA used for NATS only, point the NATS chart (`security.ca.create=false`, `security.issuerRef`), the bootstrap (`tls.certificate.issuerRef`) and the platform (`nats.tls.issuerRef`, `nats.namespace`) at it, and add the platform's namespace to the NATS chart's `networkPolicy.clients` — and, where cert-manager's approver-policy is installed, to `security.approverPolicy.clientNamespaces`, or the platform's certificates are never approved. The platform chart renders fully qualified `tls://` URLs from `nats.namespace`.
+</Accordion>
+<Accordion title="Who can mint a NATS identity">
+Anyone who may create a cert-manager `Certificate` in the NATS namespace, or read its Secrets (the CA key is one), can obtain any NATS client identity. Restrict both with RBAC; the NATS chart's optional approver-policy limits what its issuers sign. See `deploy/helm/nats/README.md`.
 </Accordion>
 <Accordion title="Cross-namespace Secrets">
 Gateway cert issues into `elitea-gateway`; main runs in `elitea`. Either colocate or replicate via reflector or external-secrets.
@@ -189,4 +197,4 @@ Every sensitive value is a Kubernetes Secret you provision out of band — see "
 
 Continue to [GitOps with ArgoCD](/deployment/argocd) to run this same install declaratively, or [Configuration](/deployment/configuration) for the operator-facing settings after the pods are Ready.
 
-{/* source: deploy/README.md:232-341 (values table, first admin), deploy/README.md:389-431 (distribution), deploy/README.md:433-605 (capability flags), deploy/README.md:607-730 (runtime + auth material), deploy/README.md:859-918 (what K8s does not give you); deploy/helm/elitea/values-standalone.yaml:1-30, 105-260; deploy/helm/elitea/values-auth-minimal.yaml:1-70; deploy/helm/elitea/values-staging.yaml:1-25; deploy/helm/elitea/values.yaml:344-360, 2306-2358 (secrets); deploy/argocd/applications/elitea.yaml:11-18 (hook ordering); deploy/helm/elitea/templates/main/migrate-job.yaml, templates/worker/runtime-session-job.yaml, templates/dbInit/job.yaml, templates/runtimeRedis/bootstrap-job.yaml (hook weights) */}
+{/* source: deploy/README.md:232-341 (values table, first admin), deploy/README.md:389-431 (distribution), deploy/README.md:433-605 (capability flags), deploy/README.md:607-730 (runtime + auth material), deploy/README.md:859-918 (what K8s does not give you); deploy/helm/elitea/values-standalone.yaml:1-30, 105-260; deploy/helm/elitea/values-auth-minimal.yaml:1-70; deploy/helm/elitea/values-staging.yaml:1-25; deploy/helm/elitea/values.yaml:344-360, 2306-2358 (secrets); deploy/argocd/applications/elitea.yaml:11-18 (hook ordering); deploy/helm/elitea/templates/main/migrate-job.yaml, templates/worker/runtime-session-job.yaml, templates/dbInit/job.yaml (hook weights) */}

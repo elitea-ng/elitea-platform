@@ -59,9 +59,8 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// it would have traded an immediate 404 for a 30s timeout and a 500.
 		//
 		// They were deleted rather than repaired because the replacement
-		// transport already ships (runtimecomposition + the Redis command
-		// stream + services/elitea-worker-python, deployed in
-		// deploy/centry-hybrid/pov-compose.yml), and elitea-docs'
+		// transport already ships (runtimecomposition + the runtime command
+		// bus + services/elitea-worker-python), and elitea-docs'
 		// spec-transport-implementation.mdx lists indexersvc/rpc.go under
 		// "Delete after bounded dispatch/control/output adapters land".
 		//
@@ -97,17 +96,14 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// alternative backend behind the same Auth+Project middleware — see
 		// router.go's "/llm has one composed backend" comment.
 		"LLMProxy": "optional by design: the LLM data plane is a separate deployment (services/elitea-llm-gateway), reached via GatewayProxy",
-		// EventSource is the NATS arm of the project-SSE fallback pair. It is
-		// genuinely optional — but ONLY because RedisClient, the other arm, is
-		// now wired (see the fallback-pair check below, which is what makes
-		// this entry safe). No elitea-main deployment is given a NATS endpoint:
-		// deploy/helm/nats is the LLM gateway's broker and elitea-main's only
-		// NATS-shaped variable is GATEWAY_NATS_URL, the gateway *client*.
-		//
-		// The previous pair of entries here read "falls back to RedisClient"
-		// and "the EventSource fallback" — each justified by the other, so both
-		// being nil satisfied the allowlist while the route they gate was
-		// entirely absent (#152). That is the hole the check below closes.
+		// EventSource used to be listed here as "the NATS arm" of a two-arm
+		// project-SSE fallback whose other arm was RedisClient. The entries for
+		// the two arms once justified each other, so both being nil satisfied
+		// the allowlist while the route was absent everywhere (#152) — the hole
+		// the fallback-pair check below closes. The Redis arm and its field are
+		// deleted; EventSource is now assigned in main.go from the live-update
+		// NATS bus (ELITEA_EVENTS_NATS_URL), so its entry is gone and the
+		// stale-entry check fails if anyone re-adds it.
 		// Shadow, ShadowMetrics, CutoverRouter and CutoverTracker are gone
 		// from RouterConfig entirely (#383). Their entries here read "cutover
 		// machinery, enabled per-deployment" — a reason that was never true:
@@ -120,7 +116,6 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 		// comparator behind them, and the internal-admin token that gated
 		// their routes, are all deleted. TestNoPylonBridgeWiringReturns fails
 		// if any of it comes back.
-		"EventSource": "#152 — the NATS arm; no elitea-main deployment runs NATS, and the Redis arm of this pair IS wired",
 	}
 
 	root := repoRootFrom(t)
@@ -167,6 +162,9 @@ func TestNilGatedRouterFieldsAreWiredOrDeclared(t *testing.T) {
 	//
 	//	if cfg.EventSource != nil      { r.Mount("/events/…", …) }
 	//	else if cfg.RedisClient != nil { r.Mount("/events/…", …) }
+	//
+	// (That was the project SSE stream's gate until its Redis arm was
+	// deleted; GatewayProxy/LLMProxy is the chain this block reads today.)
 	//
 	// Each arm is individually "optional" — either one alone registers the
 	// route — so each got an allowlist entry justified by the other, and the

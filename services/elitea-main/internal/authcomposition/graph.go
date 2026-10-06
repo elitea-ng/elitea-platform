@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 
 	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
@@ -23,7 +21,13 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/identityrepo"
 )
 
-const defaultBrowserTransactionTTL = 5 * time.Minute
+const (
+	defaultBrowserTransactionTTL = 5 * time.Minute
+	// preLoginSessionLifetime bounds the unauthenticated session a login
+	// begin creates. It is useful only for the one login transaction bound
+	// to it, which lives defaultBrowserTransactionTTL.
+	preLoginSessionLifetime = 5 * time.Minute
+)
 
 var ErrInvalidGraph = errors.New("invalid authentication composition graph")
 
@@ -53,8 +57,9 @@ type FormGraphDependencies struct {
 }
 
 // FormGraph owns the Form browser routes and the separate current-Main gateway
-// authorization edge. It owns only its dedicated Auth Redis client; the
-// injected PostgreSQL pool remains caller-owned.
+// authorization edge. Its sign-in state (sessions, login transactions, attempt
+// windows) lives in the injected PostgreSQL pool (shared migration 0153),
+// which remains caller-owned. The graph owns no connection of its own.
 type FormGraph struct {
 	routes            http.Handler
 	browserRoutes     http.Handler
@@ -65,31 +70,29 @@ type FormGraph struct {
 	patValidator      *authsvc.LocalValidator
 	patSigningKey     []byte
 	proxyResolver     *browserapi.TrustedProxyResolver
-	redis             *redis.Client
 	formUsers         FormUserReport
 	formSignInEnabled bool
-	closeOnce         sync.Once
-	closeErr          error
 }
-
-type redisOpener func(context.Context, Config, *materializedFiles) (*redis.Client, error)
 
 func NewFormGraph(
 	ctx context.Context,
 	config Config,
 	dependencies FormGraphDependencies,
 ) (*FormGraph, error) {
-	return newFormGraph(ctx, config, dependencies, newAuthRedisClient)
+	return newFormGraph(ctx, config, dependencies, nil)
 }
 
+// newFormGraph is NewFormGraph with a test seam: observe, when not nil, sees
+// the materialized snapshot before composition uses it. Tests use it to prove
+// the snapshot is wiped when composition returns.
 func newFormGraph(
 	ctx context.Context,
 	config Config,
 	dependencies FormGraphDependencies,
-	openRedis redisOpener,
+	observe func(*materializedFiles),
 ) (*FormGraph, error) {
 	if ctx == nil || dependencies.PostgreSQL == nil ||
-		dependencies.MainRoutePublicRules == nil || openRedis == nil {
+		dependencies.MainRoutePublicRules == nil {
 		return nil, ErrInvalidGraph
 	}
 	if err := ctx.Err(); err != nil {
@@ -100,41 +103,25 @@ func newFormGraph(
 		return nil, err
 	}
 	defer material.destroy()
-
-	redisClient, err := openRedis(ctx, config, material)
-	if err != nil {
-		if redisClient != nil {
-			_ = redisClient.Close()
-		}
-		return nil, fmt.Errorf("%w: open Auth Redis: %w", ErrInvalidGraph, err)
+	if observe != nil {
+		observe(material)
 	}
-	if redisClient == nil {
-		return nil, fmt.Errorf("%w: Auth Redis client", ErrInvalidGraph)
-	}
-	committed := false
-	defer func() {
-		if !committed {
-			_ = redisClient.Close()
-		}
-	}()
 
 	cookieLifetime := time.Duration(config.Cookie.LifetimeSeconds) * time.Second
-	sessions, err := authsession.NewRedisStore(redisClient, authsession.Config{
-		KeyPrefix: config.Redis.KeyPrefix + "session:",
-		TTL:       cookieLifetime,
+	sessions, err := authsession.NewPostgresStore(dependencies.PostgreSQL, authsession.Config{
+		TTL:         cookieLifetime,
+		PreLoginTTL: min(preLoginSessionLifetime, cookieLifetime),
 	})
 	if err != nil {
 		return nil, composeError("browser session store", err)
 	}
-	transactions, err := authflow.NewRedisStore(redisClient, authflow.Config{
-		KeyPrefix: config.Redis.KeyPrefix + "transaction:",
-	})
+	transactions, err := authflow.NewPostgresStore(dependencies.PostgreSQL)
 	if err != nil {
 		return nil, composeError("browser transaction store", err)
 	}
-	attempts, err := authattempt.NewRedisAdmitter(
-		redisClient,
-		compiledAttemptConfig(config.Redis.KeyPrefix+"attempt:", material.attemptKey),
+	attempts, err := authattempt.NewPostgresAdmitter(
+		dependencies.PostgreSQL,
+		compiledAttemptConfig(material.attemptKey),
 	)
 	if err != nil {
 		return nil, composeError("browser attempt admission", err)
@@ -294,13 +281,11 @@ func newFormGraph(
 		// SAME key patValidator reads it back with. See SignPAT.
 		patSigningKey: append([]byte(nil), material.patSigningKey...),
 		proxyResolver: proxyResolver,
-		redis:         redisClient,
 		formUsers: FormUserReport{
 			Configured:          material.formProvider.UserCount(),
 			MisconfiguredLogins: material.formProvider.MisconfiguredLogins(),
 		},
 	}
-	committed = true
 	return graph, nil
 }
 
@@ -367,15 +352,6 @@ func (graph *FormGraph) MainEdgeAuth() http.Handler {
 	return graph.mainEdgeAuth
 }
 
-// Ping reports the dedicated Auth Redis dependency to the public readiness
-// endpoint. It does not transfer client ownership to the health package.
-func (graph *FormGraph) Ping(ctx context.Context) error {
-	if graph == nil || graph.redis == nil {
-		return ErrInvalidGraph
-	}
-	return graph.redis.Ping(ctx).Err()
-}
-
 // AuthorizeMain fixes current Main traversal semantics at the composition
 // boundary. A future Main HTTP adapter supplies normalized credentials/session
 // data but cannot accidentally select Direct traversal.
@@ -440,18 +416,6 @@ func (graph *FormGraph) IssueProjectToken(
 	return graph.projectPATIssuer.IssueProjectToken(ctx, projectID)
 }
 
-func (graph *FormGraph) Close() error {
-	if graph == nil {
-		return nil
-	}
-	graph.closeOnce.Do(func() {
-		if graph.redis != nil {
-			graph.closeErr = graph.redis.Close()
-		}
-	})
-	return graph.closeErr
-}
-
 // formSessionsRefused answers a Form-provider session as unauthenticated.
 // It decorates the session authorizer both edge kernels use while Form
 // sign-in is disabled; every other provider's session passes through.
@@ -470,20 +434,18 @@ func (r formSessionsRefused) Authorize(ctx context.Context, sessionID string) (b
 	return authorization, nil
 }
 
-func compiledAttemptConfig(prefix string, key []byte) authattempt.Config {
-	// These named security defaults intentionally remain code-owned in Form-v1
-	// to avoid another collection of lightly understood knobs. Production mount
-	// still requires capacity/load evidence and an explicit reviewed change if
-	// the measured workload cannot use these exact limits.
+func compiledAttemptConfig(key []byte) authattempt.Config {
+	// These named security defaults intentionally remain code-owned to avoid
+	// another collection of lightly understood knobs. Production mount still
+	// requires capacity/load evidence and an explicit reviewed change if the
+	// measured workload cannot use these exact limits. Global counts
+	// credential attempts only, never a login begin (authattempt.Config.Global).
 	return authattempt.Config{
-		KeyPrefix:            prefix,
 		KeySecret:            append([]byte(nil), key...),
 		Global:               authattempt.Policy{MaxAttempts: 1000, Window: time.Minute},
 		FormBegin:            authattempt.Policy{MaxAttempts: 20, Window: time.Minute},
 		FormCredentialClient: authattempt.Policy{MaxAttempts: 5, Window: time.Minute},
 		FormCredentialLogin:  authattempt.Policy{MaxAttempts: 25, Window: time.Minute},
-		OIDCBegin:            authattempt.Policy{MaxAttempts: 20, Window: time.Minute},
-		OIDCCallback:         authattempt.Policy{MaxAttempts: 30, Window: time.Minute},
 	}
 }
 

@@ -1,13 +1,14 @@
 {{- if .Values.scheduler.enabled }}
 {{- /*
-  Shared connection addresses, computed once from the top-level `nats` and
-  `redis` blocks and namespace-relative by default. An explicit env entry
+  Shared connection addresses, computed once from the top-level `nats`
+  block and namespace-relative by default. An explicit env entry
   under this component still wins. These are the settings that drifted when
   each chart carried its own default.
 */ -}}
 {{- $env := .Values.scheduler.env | default dict }}
-{{- if not (get $env "GATEWAY_NATS_URL") }}{{- $env = merge (deepCopy $env) (dict "GATEWAY_NATS_URL" (printf "nats://%s" (include "elitea.serviceAddr" (dict "svc" $.Values.nats "ctx" $)))) }}{{- end }}
-{{- if not (get $env "REDIS_URL") }}{{- $env = merge (deepCopy $env) (dict "REDIS_URL" (include "elitea.serviceAddr" (dict "svc" $.Values.redis "ctx" $))) }}{{- end }}
+{{- if not (get $env "GATEWAY_NATS_URL") }}{{- $env = merge (deepCopy $env) (dict "GATEWAY_NATS_URL" (include "elitea.natsUrl" $)) }}{{- end }}
+{{- /* The chart owns GATEWAY_NATS_TLS_* when it mounts the certificate (data below). */ -}}
+{{- if .Values.nats.tls.enabled }}{{- $env = omit $env "GATEWAY_NATS_TLS_CA_FILE" "GATEWAY_NATS_TLS_CERT_FILE" "GATEWAY_NATS_TLS_KEY_FILE" }}{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -21,5 +22,11 @@ data:
   # paths gated on such a var stay silently inert in every Helm deployment.
   {{- range $key, $value := $env }}
   {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- if .Values.nats.tls.enabled }}
+  # The scheduler's NATS identity (#1076), mounted by deployment.yaml.
+  GATEWAY_NATS_TLS_CA_FILE: {{ include "elitea.natsClientFile" (dict "file" "ca.crt" "ctx" $) }}
+  GATEWAY_NATS_TLS_CERT_FILE: {{ include "elitea.natsClientFile" (dict "file" "tls.crt" "ctx" $) }}
+  GATEWAY_NATS_TLS_KEY_FILE: {{ include "elitea.natsClientFile" (dict "file" "tls.key" "ctx" $) }}
   {{- end }}
 {{- end }}

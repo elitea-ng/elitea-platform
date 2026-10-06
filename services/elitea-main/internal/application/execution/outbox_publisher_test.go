@@ -88,7 +88,7 @@ func (s *boundedDispatcherStub) Dispatch(ctx context.Context, outboxID string) e
 }
 
 func TestOutboxPublisherRunOnceBoundsConcurrencyAndIsolatesItemFailure(t *testing.T) {
-	dispatchFailure := errors.New("redis unavailable")
+	dispatchFailure := errors.New("dependency unavailable")
 	outboxIDs := []string{"outbox-1", "outbox-2", "outbox-3", "outbox-4", "outbox-5"}
 	outbox := &publisherOutboxStub{responses: []publisherListResponse{{ids: outboxIDs}}}
 	dispatcher := &boundedDispatcherStub{

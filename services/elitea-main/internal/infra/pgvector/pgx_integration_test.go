@@ -15,7 +15,7 @@ import (
 // TestPGXProvisionerRealPgVector crosses direct pgx connections, PostgreSQL
 // catalogs, session advisory locking, database/role DDL and the vector
 // extension. It does not exercise configuration lookup, the encrypted vault,
-// lifecycle outbox delivery, HTTP/gRPC, Redis, or a Python worker.
+// lifecycle outbox delivery, HTTP/gRPC, the command bus, or a Python worker.
 func TestPGXProvisionerRealPgVector(t *testing.T) {
 	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
 	if databaseURL == "" {

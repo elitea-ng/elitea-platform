@@ -44,7 +44,28 @@ from elitea_worker.transport.input_content import (
 )
 from elitea_worker.transport.output_grpc import OutputGrpcSession
 from elitea_worker.transport.output_spool import EncryptedOutputSpool
-from elitea_worker.transport.redis_commands import RedisCommandDelivery
+from elitea_worker.transport.nats_jetstream import CommandDelivery
+
+def _command_delivery(
+    stream: str,
+    entry_id: str,
+    fields: dict[str, bytes],
+) -> CommandDelivery:
+    """A delivered command as the JetStream consumer hands it over.
+
+    The processors read only the signed envelope; the coordinates are what
+    the serve loop and the acker key on.
+    """
+
+    assert set(fields) == {"signed_envelope"}
+    return CommandDelivery(
+        stream="ELITEA_RT_V1_VALIDATE",
+        consumer="elitea-configuration-worker-v1",
+        subject=f"elitea.rt.v1.validate.d.{hashlib.sha256(f'{stream}/{entry_id}'.encode()).hexdigest()}",
+        stream_sequence=int(entry_id.split("-")[0]) if entry_id.split("-")[0].isdigit() else 1,
+        num_delivered=1,
+        signed_envelope=fields["signed_envelope"],
+    )
 
 
 _ROOT = Path(__file__).parents[4]
@@ -89,12 +110,12 @@ class BlockingHandler(_BindingAwareHandler):
 
 class Acker:
     def __init__(self) -> None:
-        self.acked: list[RedisCommandDelivery] = []
+        self.acked: list[CommandDelivery] = []
         self.stable_delivery_ids: list[str] = []
 
     async def ack_after_settlement(
         self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         stable_delivery_id: str,
     ) -> None:
         signed = envelope_pb2.SignedWorkerCommandEnvelopeV1.FromString(
@@ -714,7 +735,7 @@ def _valid_delivery_case():
     manifest = input_pb2.ExecutionInputBundleV1.FromString(
         (fixture / "input-bundle.pb").read_bytes()
     )
-    delivery = RedisCommandDelivery(
+    delivery = _command_delivery(
         "configuration-validation.v1",
         "sync-executor-1-0",
         {
@@ -861,7 +882,7 @@ def test_same_golden_corpus_crosses_claim_content_output_and_settlement(
                 output_call.write_gate.set()
 
             unblock = asyncio.create_task(exercise_independent_receive())
-            delivery = RedisCommandDelivery(
+            delivery = _command_delivery(
                 stream="configuration-validation.v1",
                 entry_id="1-0",
                 fields={
@@ -898,7 +919,7 @@ def test_same_golden_corpus_crosses_claim_content_output_and_settlement(
     asyncio.run(run())
 
 
-def test_redis_redelivery_resumes_same_fence_spool_before_input_or_sdk(
+def test_bus_redelivery_resumes_same_fence_spool_before_input_or_sdk(
     tmp_path: Path,
 ) -> None:
     async def run() -> None:
@@ -955,7 +976,7 @@ def test_redis_redelivery_resumes_same_fence_spool_before_input_or_sdk(
             producer_id=_PRODUCER,
             clock_unix_millis=lambda: CONFORMANCE_OCCURRED_AT_UNIX_MILLIS,
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "2-0",
             {
@@ -1051,7 +1072,7 @@ def test_replacement_fence_spool_fails_closed_before_input_sdk_or_output(
             producer_id=_PRODUCER,
             clock_unix_millis=lambda: CONFORMANCE_OCCURRED_AT_UNIX_MILLIS,
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "2-0",
             {
@@ -1108,7 +1129,7 @@ def test_active_lease_without_spool_never_reexecutes_business_logic() -> None:
             producer_id=_PRODUCER,
             clock_unix_millis=lambda: CONFORMANCE_OCCURRED_AT_UNIX_MILLIS,
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "2-0",
             {
@@ -1188,7 +1209,7 @@ def test_slow_fetch_renews_lease_and_observes_cancellation_before_sdk() -> None:
             clock_unix_millis=lambda: CONFORMANCE_OCCURRED_AT_UNIX_MILLIS,
             lease_poll_interval_seconds=0.005,
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "1-0",
             {
@@ -1724,7 +1745,7 @@ def test_output_stream_crash_replays_exact_spooled_frame_without_business_reexec
             clock_unix_millis=lambda: CONFORMANCE_OCCURRED_AT_UNIX_MILLIS,
             max_output_sessions=2,
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             stream="configuration-validation.v1",
             entry_id="1-0",
             fields={
@@ -1882,7 +1903,7 @@ def test_output_cancellation_winner_replaces_only_the_exact_spooled_result(
             clock_unix_millis=lambda: CONFORMANCE_OCCURRED_AT_UNIX_MILLIS,
             max_output_sessions=1,
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "3-0",
             {
@@ -1979,7 +2000,7 @@ def test_output_deadline_winner_replaces_first_success_before_durable_ack(
             clock_unix_millis=lambda: CONFORMANCE_OCCURRED_AT_UNIX_MILLIS,
             max_output_sessions=2,
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "3-deadline-0",
             {
@@ -2079,7 +2100,7 @@ def test_recovery_replays_original_before_bound_cancellation_replacement(
             clock_unix_millis=lambda: CONFORMANCE_OCCURRED_AT_UNIX_MILLIS + 1_000,
             max_output_sessions=1,
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "4-0",
             {
@@ -2168,7 +2189,7 @@ def test_recovery_replaces_late_success_spool_after_bound_deadline_winner(
             clock_unix_millis=lambda: CONFORMANCE_OCCURRED_AT_UNIX_MILLIS + 1_000,
             max_output_sessions=2,
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "4-deadline-0",
             {
@@ -2270,7 +2291,7 @@ def test_expired_cross_pod_claim_recovers_durable_cancellation_without_spool_or_
 
         control.prepare_settlement = capture_prepare  # type: ignore[method-assign]
         acker = Acker()
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "7-0",
             {
@@ -2379,7 +2400,7 @@ def test_recovery_replays_cancellation_frame_left_by_crash_after_atomic_cas(
             clock_unix_millis=lambda: CONFORMANCE_OCCURRED_AT_UNIX_MILLIS,
             max_output_sessions=1,
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "5-0",
             {
@@ -2471,7 +2492,7 @@ def test_generic_stale_output_rejection_never_rewrites_the_spool(
             clock_unix_millis=lambda: CONFORMANCE_OCCURRED_AT_UNIX_MILLIS,
             max_output_sessions=1,
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "6-0",
             {
@@ -2511,7 +2532,7 @@ def test_redelivery_recovers_after_terminal_ack_without_rerunning_business_logic
         manifest = input_pb2.ExecutionInputBundleV1.FromString(
             (fixture / "input-bundle.pb").read_bytes()
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             stream="configuration-validation.v1",
             entry_id="1-0",
             fields={
@@ -2605,7 +2626,7 @@ def test_cancellation_before_start_is_obsolete_acked_without_business_planes() -
         command = command_pb2.WorkerCommandV1.FromString(
             envelope.signed_command.worker_command_bytes
         )
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "1-0",
             {"signed_envelope": envelope.signed_command.SerializeToString(deterministic=True)},
@@ -2647,7 +2668,7 @@ def test_cancellation_before_start_is_obsolete_acked_without_business_planes() -
     asyncio.run(run())
 
 
-def test_mismatched_claim_fence_fails_before_input_output_or_redis_ack() -> None:
+def test_mismatched_claim_fence_fails_before_input_output_or_bus_ack() -> None:
     async def run() -> None:
         fixture = _FIXTURES / "valid"
         envelope = envelope_pb2.WorkerExecutionEnvelopeV1.FromString(
@@ -2660,7 +2681,7 @@ def test_mismatched_claim_fence_fails_before_input_output_or_redis_ack() -> None
             envelope.SerializeToString(deterministic=True)
         )
         mismatched.fence.producer_id = "another-producer"
-        delivery = RedisCommandDelivery(
+        delivery = _command_delivery(
             "configuration-validation.v1",
             "1-0",
             {"signed_envelope": envelope.signed_command.SerializeToString(deterministic=True)},

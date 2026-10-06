@@ -12,20 +12,20 @@ import (
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 )
 
 const (
-	threeMiB      = 3 << 20
-	thirtyTwoMiB  = 32 << 20
-	maxRedisBytes = (64 << 10) - 1
+	threeMiB     = 3 << 20
+	thirtyTwoMiB = 32 << 20
+	maxBusBytes  = (64 << 10) - 1
 )
 
 type testSigner struct{}
 
-func (testSigner) SignWorkerCommand(_ context.Context, command []byte) (redisdispatch.Signature, error) {
+func (testSigner) SignWorkerCommand(_ context.Context, command []byte) (commandbus.Signature, error) {
 	digest := sha256.Sum256(command)
-	return redisdispatch.Signature{
+	return commandbus.Signature{
 		Profile: runtimev1.SignatureProfileV1_SIGNATURE_PROFILE_V1_TEST_ONLY_HMAC_SHA256,
 		KeyID:   "confluence-parity",
 		Value:   digest[:],
@@ -36,33 +36,33 @@ type recordingAppender struct {
 	value []byte
 }
 
-func (a *recordingAppender) Append(_ context.Context, _, _, _ string, value []byte) (string, error) {
+func (a *recordingAppender) Append(_ context.Context, _, _ string, value []byte) (string, error) {
 	a.value = append([]byte(nil), value...)
 	return "1-0", nil
 }
 
-func TestConfluenceBulkAndImageBytesNeverEnterRedis(t *testing.T) {
+func TestConfluenceBulkAndImageBytesNeverEnterTheCommandBus(t *testing.T) {
 	t.Parallel()
 
 	payloadDigest, canaries := confluenceProductionScaleDigest()
 	appender := &recordingAppender{}
-	producer, err := redisdispatch.NewIndexIngestProducer(
-		redisdispatch.IndexIngestProducerConfig{
+	producer, err := commandbus.NewIndexIngestProducer(
+		commandbus.IndexIngestProducerConfig{
 			Stream:                 "commands.v1.index.ingest.parity",
-			ConsumerGroup:          "workers.v1.index.ingest.parity",
+			Consumer:               "workers.v1.index.ingest.parity",
 			ValidationStream:       "commands.v1.configuration.validate",
 			ProtocolRevision:       "runtime.v1",
 			EnvelopeSchemaRevision: "signed-worker-command.v1",
 			CapabilityVersion:      "1",
 			AllowTestOnlyHMAC:      true,
-			Limits: redisdispatch.Limits{
-				Revision:               "parity-limits-v1",
-				MaxWorkerCommandBytes:  16 << 10,
-				MaxSignedEnvelopeBytes: 32 << 10,
-				MaxRedisFieldBytes:     48 << 10,
-				MaxRedisEntryBytes:     maxRedisBytes,
-				MaxSignatureBytes:      256,
-				MaxStringBytes:         4096,
+			Limits: commandbus.Limits{
+				Revision:                 "parity-limits-v1",
+				MaxWorkerCommandBytes:    16 << 10,
+				MaxSignedEnvelopeBytes:   32 << 10,
+				MaxTransportPayloadBytes: 48 << 10,
+				MaxTransportMessageBytes: maxBusBytes,
+				MaxSignatureBytes:        256,
+				MaxStringBytes:           4096,
 			},
 		},
 		testSigner{},
@@ -108,12 +108,12 @@ func TestConfluenceBulkAndImageBytesNeverEnterRedis(t *testing.T) {
 	if err := producer.AppendPrepared(context.Background(), dispatch.OutboxID, prepared); err != nil {
 		t.Fatal(err)
 	}
-	if len(appender.value) == 0 || len(appender.value) >= maxRedisBytes {
-		t.Fatalf("unexpected Redis envelope size: %d", len(appender.value))
+	if len(appender.value) == 0 || len(appender.value) >= maxBusBytes {
+		t.Fatalf("unexpected bus envelope size: %d", len(appender.value))
 	}
 	for _, canary := range canaries {
 		if bytes.Contains(appender.value, canary) {
-			t.Fatalf("Redis envelope contains Confluence data-plane canary %q", canary)
+			t.Fatalf("bus envelope contains Confluence data-plane canary %q", canary)
 		}
 	}
 	for _, fragment := range [][]byte{
@@ -123,7 +123,7 @@ func TestConfluenceBulkAndImageBytesNeverEnterRedis(t *testing.T) {
 		[]byte("release notes from the text attachment"),
 	} {
 		if bytes.Contains(appender.value, fragment) {
-			t.Fatalf("Redis envelope contains forbidden Confluence fragment %q", fragment)
+			t.Fatalf("bus envelope contains forbidden Confluence fragment %q", fragment)
 		}
 	}
 	if got := dispatch.InputBundleByteLength; got != 62<<20 {

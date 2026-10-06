@@ -19,6 +19,7 @@ func TestParseAcceptsOneCompleteFormSnapshot(t *testing.T) {
 	if config.SchemaVersion != FormSchemaVersion || config.Provider.Kind != "form" ||
 		config.Provider.Form == nil || config.Provider.Form.UsersJSONFile != "/run/secrets/auth/form-users.json" ||
 		config.Credentials.PATSigningKeyFile != "/run/secrets/auth/pat-hs512-key" ||
+		config.Credentials.AttemptKeyFile != "/run/secrets/auth/attempt-hmac-key" ||
 		len(config.TrustedProxyCIDRs) != 2 || config.Cookie.LifetimeSeconds != 604800 ||
 		config.Credentials.Headers == nil || config.Mappers.Contract != browserapi.MapperContractTrackedV1 ||
 		len(config.Authorization.MainConfiguredPublicRules) != 4 ||
@@ -85,7 +86,7 @@ func TestParseRejectsAmbiguousOrExecutableYAML(t *testing.T) {
 	tests := map[string]string{
 		"empty":              "",
 		"multiple documents": validConfigYAML + "\n---\n{}\n",
-		"duplicate field":    validConfigYAML + "\nschema_version: elitea.auth.form.v1\n",
+		"duplicate field":    validConfigYAML + "\nschema_version: elitea.auth.form.v2\n",
 		"unknown field":      strings.Replace(validConfigYAML, "public_origin:", "unknown_field: value\npublic_origin:", 1),
 		"dormant provider": strings.Replace(
 			validConfigYAML,
@@ -141,7 +142,13 @@ func TestParseRejectsAmbiguousOrExecutableYAML(t *testing.T) {
 			"        - field: uri\n          field: host\n          pattern: '/auth/.*'",
 			1,
 		),
-		"JSON duplicate field": `{"schema_version":"elitea.auth.form.v1","schema_version":"duplicate"}`,
+		"JSON duplicate field": `{"schema_version":"elitea.auth.form.v2","schema_version":"duplicate"}`,
+		"a redis block": strings.Replace(
+			validConfigYAML,
+			"credentials:\n",
+			"redis:\n  url: rediss://auth@redis.example:6379/0\ncredentials:\n",
+			1,
+		),
 		"noncanonical integer": strings.Replace(validConfigYAML, "lifetime_seconds: 604800", "lifetime_seconds: 0604800", 1),
 	}
 	for name, raw := range tests {
@@ -225,14 +232,10 @@ func TestConfigValidateRejectsUnsafeOrIncompleteValues(t *testing.T) {
 		"cookie name":              func(config *Config) { config.Cookie.Name = "bad cookie" },
 		"cookie same site":         func(config *Config) { config.Cookie.SameSite = "none" },
 		"cookie lifetime":          func(config *Config) { config.Cookie.LifetimeSeconds = 1 },
-		"Redis topology":           func(config *Config) { config.Redis.Topology = "cluster" },
-		"plaintext Redis":          func(config *Config) { config.Redis.URL = "redis://auth@redis.example:6379/0" },
-		"Redis URL password":       func(config *Config) { config.Redis.URL = "rediss://auth:secret@redis.example:6379/0" },
-		"Redis database":           func(config *Config) { config.Redis.URL = "rediss://auth@redis.example:6379/1" },
-		"Redis empty port":         func(config *Config) { config.Redis.URL = "rediss://auth@redis.example:/0" },
-		"Redis prefix":             func(config *Config) { config.Redis.KeyPrefix = "auth:{shared}" },
-		"relative secret path":     func(config *Config) { config.Redis.PasswordFile = "redis-password" },
-		"dynamic secret path":      func(config *Config) { config.Redis.PasswordFile = "/run/secrets/${REDIS_PASSWORD}" },
+		"retired schema version":   func(config *Config) { config.SchemaVersion = RetiredFormSchemaVersion },
+		"relative secret path":     func(config *Config) { config.Credentials.AttemptKeyFile = "attempt-key" },
+		"dynamic secret path":      func(config *Config) { config.Credentials.AttemptKeyFile = "/run/secrets/${ATTEMPT_KEY}" },
+		"missing attempt key":      func(config *Config) { config.Credentials.AttemptKeyFile = "" },
 		"missing PAT key":          func(config *Config) { config.Credentials.PATSigningKeyFile = "" },
 		"implicit credential list": func(config *Config) { config.Credentials.Headers = nil },
 		"authorization alias": func(config *Config) {
@@ -275,8 +278,10 @@ func TestConfigValidateRejectsUnsafeOrIncompleteValues(t *testing.T) {
 		},
 		"provider kind":         func(config *Config) { config.Provider.Kind = "oidc" },
 		"missing Form block":    func(config *Config) { config.Provider.Form = nil },
-		"reused private secret": func(config *Config) { config.Redis.AttemptKeyFile = config.Credentials.PATSigningKeyFile },
-		"reused CA reference":   func(config *Config) { config.Redis.CAFile = config.Credentials.PATSigningKeyFile },
+		"reused private secret": func(config *Config) { config.Credentials.AttemptKeyFile = config.Credentials.PATSigningKeyFile },
+		"reused users reference": func(config *Config) {
+			config.Provider.Form.UsersJSONFile = config.Credentials.AttemptKeyFile
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -284,6 +289,48 @@ func TestConfigValidateRejectsUnsafeOrIncompleteValues(t *testing.T) {
 			mutate(&config)
 			if err := config.Validate(); !errors.Is(err, ErrInvalidConfiguration) {
 				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
+// A v1 document is refused, not migrated in place, and the refusal names the
+// change the operator must make. It is refused whatever else it holds: a v1
+// document that is otherwise a perfect v2 document (no redis block) too.
+func TestParseRefusesTheRetiredV1SchemaWithAnActionableError(t *testing.T) {
+	v1WithRedis := strings.Replace(
+		strings.Replace(validConfigYAML, "schema_version: "+FormSchemaVersion, "schema_version: "+RetiredFormSchemaVersion, 1),
+		"credentials:\n  attempt_key_file: /run/secrets/auth/attempt-hmac-key\n",
+		`redis:
+  topology: single_primary_endpoint
+  url: rediss://elitea-auth@redis.example:6379/0
+  password_file: /run/secrets/auth/redis-password
+  ca_file: /run/config/auth/redis-ca.pem
+  key_prefix: "centry:auth:v1:"
+  attempt_key_file: /run/secrets/auth/attempt-hmac-key
+credentials:
+`,
+		1,
+	)
+	v1WithoutRedis := strings.Replace(validConfigYAML,
+		"schema_version: "+FormSchemaVersion, "schema_version: "+RetiredFormSchemaVersion, 1)
+	for name, raw := range map[string]string{
+		"v1 with its redis block":  v1WithRedis,
+		"v1 without a redis block": v1WithoutRedis,
+		"v1 as JSON":               `{"schema_version":"elitea.auth.form.v1","redis":{}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if !strings.Contains(raw, RetiredFormSchemaVersion) {
+				t.Fatal("fixture lost its schema version")
+			}
+			_, err := Parse([]byte(raw))
+			if !errors.Is(err, ErrRetiredSchema) || !errors.Is(err, ErrInvalidConfiguration) {
+				t.Fatalf("error = %v, want %v", err, ErrRetiredSchema)
+			}
+			for _, instruction := range []string{FormSchemaVersion, "redis block", "credentials.attempt_key_file"} {
+				if !strings.Contains(err.Error(), instruction) {
+					t.Fatalf("refusal %q does not name %q", err, instruction)
+				}
 			}
 		})
 	}
@@ -300,6 +347,7 @@ func TestProjectEnrollmentMayBeDisabled(t *testing.T) {
 func FuzzParseNeverPanics(f *testing.F) {
 	f.Add([]byte(validConfigYAML))
 	f.Add([]byte("schema_version: elitea.auth.form.v1"))
+	f.Add([]byte("schema_version: elitea.auth.form.v2"))
 	f.Add([]byte("&anchor [*anchor]"))
 	f.Fuzz(func(t *testing.T, raw []byte) {
 		_, _ = Parse(raw)
@@ -320,7 +368,7 @@ func indent(value string, spaces int) string {
 	return prefix + strings.ReplaceAll(value, "\n", "\n"+prefix)
 }
 
-const validConfigYAML = `schema_version: elitea.auth.form.v1
+const validConfigYAML = `schema_version: elitea.auth.form.v2
 public_origin: https://elitea.example
 trusted_proxy_cidrs:
   - 10.0.0.0/8
@@ -334,14 +382,8 @@ cookie:
   name: centry_auth_session
   same_site: lax
   lifetime_seconds: 604800
-redis:
-  topology: single_primary_endpoint
-  url: rediss://elitea-auth@redis.example:6379/0
-  password_file: /run/secrets/auth/redis-password
-  ca_file: /run/config/auth/redis-ca.pem
-  key_prefix: "centry:auth:v1:"
-  attempt_key_file: /run/secrets/auth/attempt-hmac-key
 credentials:
+  attempt_key_file: /run/secrets/auth/attempt-hmac-key
   pat_signing_key_file: /run/secrets/auth/pat-hs512-key
   credential_headers: []
 mappers:

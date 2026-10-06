@@ -8,12 +8,12 @@ import (
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"time"
 )
 
-func newCurrentToolkitDiscoveryRuntime(pool *pgxpool.Pool, toolkits indexingapp.CurrentToolkitReader, settings indexingapp.CurrentToolkitSettingsValidator, catalogue *CurrentToolkitCatalogueSnapshot, capability *WorkerToolkitCapability, producer *redisdispatch.ToolkitAvailableToolsProducer, policy repos.ToolkitAvailableToolsDispatchPolicy, artifacts *repos.ToolkitDiscoveryArtifactRepository) (*currentToolkitDiscoveryRuntime, error) {
+func newCurrentToolkitDiscoveryRuntime(pool *pgxpool.Pool, toolkits indexingapp.CurrentToolkitReader, settings indexingapp.CurrentToolkitSettingsValidator, catalogue *CurrentToolkitCatalogueSnapshot, capability *WorkerToolkitCapability, producer *commandbus.ToolkitAvailableToolsProducer, policy repos.ToolkitAvailableToolsDispatchPolicy, artifacts *repos.ToolkitDiscoveryArtifactRepository) (*currentToolkitDiscoveryRuntime, error) {
 	if toolkits == nil || settings == nil || artifacts == nil {
 		return nil, fmt.Errorf("toolkit discovery requires shared toolkit input services")
 	}

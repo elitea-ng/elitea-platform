@@ -25,8 +25,6 @@ type BrowserAttemptStage string
 const (
 	BrowserAttemptFormBegin      BrowserAttemptStage = "form_begin"
 	BrowserAttemptFormCredential BrowserAttemptStage = "form_credential"
-	BrowserAttemptOIDCBegin      BrowserAttemptStage = "oidc_begin"
-	BrowserAttemptOIDCCallback   BrowserAttemptStage = "oidc_callback"
 )
 
 // BrowserAttempt contains only the bounded material needed for shared
@@ -51,7 +49,7 @@ func (attempt BrowserAttempt) Validate() error {
 		if zeroDigest {
 			return ErrInvalidBrowserAttempt
 		}
-	case BrowserAttemptFormBegin, BrowserAttemptOIDCBegin, BrowserAttemptOIDCCallback:
+	case BrowserAttemptFormBegin:
 		if !zeroDigest {
 			return ErrInvalidBrowserAttempt
 		}

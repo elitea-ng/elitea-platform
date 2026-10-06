@@ -11,7 +11,7 @@ import (
 
 // advisoryLockKey is the pg_try_advisory_xact_lock key that serialises price
 // sync across scheduler replicas (design §8.8 multi-replica safety). Distinct
-// from the scheduler's Redis tick lock and any app-level advisory lock.
+// from any app-level advisory lock.
 const advisoryLockKey int64 = 0x4c4c4d5052494345 // "LLMPRICE" ascii, arbitrary-but-stable
 
 // driftThreshold is the relative input-price disagreement (fraction) above which

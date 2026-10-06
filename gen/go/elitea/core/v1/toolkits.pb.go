@@ -74,7 +74,7 @@ func (ToolkitUpdatedEvent_UpdateType) EnumDescriptor() ([]byte, []int) {
 	return file_elitea_core_v1_toolkits_proto_rawDescGZIP(), []int{0, 0}
 }
 
-// ToolkitUpdatedEvent is published (via Redis pub/sub or future event bus) when
+// ToolkitUpdatedEvent is published (via the NATS event bus) when
 // a toolkit's configuration or tool list has changed. elitea-indexer subscribes
 // to invalidate its in-process toolkit cache.
 type ToolkitUpdatedEvent struct {

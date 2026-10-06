@@ -63,7 +63,7 @@ For `apps/elitea-web`, run `npm run typecheck`, `npm run lint`, and `npm run tes
 
 ## Guardrails
 
-The repository's `AGENTS.md` sets the architectural rules for the replatform: prefer explicit constructor dependencies over service locators; add or version a cross-language contract in `libs/proto/` before depending on an unversioned map or event name; keep API errors typed, logging internal causes with trace and execution identifiers rather than returning raw errors across a trust boundary; enforce authentication, project authorization, and tenant context before mounting product, admin, or storage handlers; use Redis Streams for durable asynchronous worker commands and an authenticated mTLS HTTP/JSON API for identity, credential, catalog, and health calls — introduce gRPC only once profiling proves it is needed; treat PostgreSQL as the source of truth for execution state, with Redis as transport only; and never add credentials, private URLs, or development defaults that act as secrets. Read the full document before touching `services/elitea-main` or the runtime plane.
+The repository's `AGENTS.md` sets the architectural rules for the replatform: prefer explicit constructor dependencies over service locators; add or version a cross-language contract in `libs/proto/` before depending on an unversioned map or event name; keep API errors typed, logging internal causes with trace and execution identifiers rather than returning raw errors across a trust boundary; enforce authentication, project authorization, and tenant context before mounting product, admin, or storage handlers; use the NATS JetStream command bus for durable asynchronous worker commands and an authenticated mTLS HTTP/JSON API for identity, credential, catalog, and health calls — introduce gRPC only once profiling proves it is needed; treat PostgreSQL as the source of truth for execution state, with the command bus as transport only; and never add credentials, private URLs, or development defaults that act as secrets. Read the full document before touching `services/elitea-main` or the runtime plane.
 
 ## One-host stack topology
 
@@ -76,11 +76,11 @@ flowchart LR
     Traefik --> Main[elitea-main]
     Traefik --> OIDC[oidc-mock]
     Main -->|mTLS| Gateway[elitea-llm-gateway]
-    Main -->|Redis Streams| Worker[agent worker: python or rust]
+    Main -->|NATS JetStream| Worker[agent worker: python or rust]
     Gateway --> Worker
     Gateway --> LLMMock[llm-mock / a real model]
     Main --> DB[(postgres)]
-    Main --> Redis[(redis)]
+    Main -->|live updates| NATS[(nats)]
     Worker --> DB
 ```
 

@@ -1038,7 +1038,7 @@ def test_kernel_uses_bounded_sync_executor_and_keeps_bulk_off_wire() -> None:
             isolation_class="shared",
             priority=1,
             deadline_unix_millis=1,
-            limits_revision="elitea.runtime.limits.conformance.v2",
+            limits_revision="elitea.runtime.limits.conformance.v3",
             index_ingest=command,
         )
         command_bytes = wire_command.SerializeToString(deterministic=True)

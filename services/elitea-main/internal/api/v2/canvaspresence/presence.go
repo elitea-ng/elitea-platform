@@ -7,8 +7,9 @@
 // mount, on a timer, when the tab is hidden or shown again, and once with
 // `state: "left"` on unmount. The answer is the current roster, and the same
 // roster is published as a `canvas.editors` event on
-// events.ProjectChannel(projectID) so every OTHER subscriber of that project's
-// stream learns about it without polling.
+// events.PresenceChannel(projectID) — elitea-main's own subject, which the
+// project SSE stream reads beside the gateway's — so every OTHER subscriber of
+// that project's stream learns about it without polling.
 //
 // WHY NOT A SOCKET SERVER. #615 and #622 record the decision in full. The short
 // form: every control on this surface — authentication, project resolution,
@@ -18,7 +19,7 @@
 // deleted 332-line prototype got the room name, the field name and the presence
 // identity wrong in ~40 lines of canvas handling.
 //
-// THE ROOM IS THE PROJECT CHANNEL. events.ProjectChannel is derived SERVER-SIDE
+// THE ROOM IS THE PROJECT. events.PresenceChannel is derived SERVER-SIDE
 // from the {projectID} segment of the mount pattern, which
 // apimw.RequireResolvedPermissions has already gated. No part of the channel
 // name comes from the request body. This is the specific defect the prototype
@@ -85,6 +86,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -164,8 +166,8 @@ type Editor struct {
 // deadline, so List never returns an editor whose last heartbeat is older than
 // the TTL, with no sweeper and no cron.
 //
-// Implementations: NewRedisStore (shared across replicas) and NewMemoryStore
-// (single replica; see NewHandler's degrade note).
+// Implementations: NewNATSStore (a JetStream KV bucket shared across
+// replicas) and NewMemoryStore (single replica; see NewHandler's degrade note).
 type Store interface {
 	// Touch records or refreshes one editor under key, expiring after ttl.
 	Touch(ctx context.Context, key string, editor Editor, ttl time.Duration) error
@@ -188,7 +190,7 @@ type CanvasResolver interface {
 
 // Emitter publishes the roster on the project channel. *events.Publisher
 // satisfies it; a nil Emitter means "publish nothing", which is the state a
-// deployment with no Redis is in.
+// deployment with no live-update plane (ELITEA_EVENTS_NATS_URL unset) is in.
 type Emitter interface {
 	Emit(ctx context.Context, projectID, eventType string, payload any)
 }
@@ -220,13 +222,45 @@ func WithStore(store Store) Option {
 // WithEmitter supplies the publisher. A nil Emitter (the default) still serves
 // the route: the caller gets the roster back in the response body, so a single
 // tab's own presence is correct even with no bus. What is lost is the push to
-// the OTHER tabs, and that is exactly what a deployment with no Redis loses on
-// every other surface too.
+// the OTHER tabs, and that is exactly what a deployment with no live-update
+// plane loses on every other surface too.
 func WithEmitter(emitter Emitter) Option {
 	return func(h *Handler) {
 		if emitter != nil {
 			h.emitter = emitter
 		}
+	}
+}
+
+// Backend is the PRODUCTION wiring: a roster store every replica shares, and
+// the bus the roster is published on (the live-update NATS bus). The zero
+// value means "neither" — the route serves on the in-process store and
+// publishes nothing.
+//
+// It is one value rather than a Store option and an Emitter option because
+// the two must not be able to drift apart. A roster shared across replicas
+// whose event is published nowhere is a heartbeat only the beating tab can
+// see; an event published from a per-replica roster tells the other tabs a
+// roster that is missing half its editors. #152 is this repository's record
+// of what happens when the two arms of one surface are configured separately.
+type Backend struct {
+	Store Store
+	Bus   events.Bus
+}
+
+// WithBackend installs b. A Backend missing EITHER half is a no-op, so the
+// route keeps serving on the in-process store (see NewHandler). This is what
+// lets router.go call it unconditionally instead of branching on a config
+// field — a nil-comparison there is read by
+// TestNilGatedRouterFieldsAreWiredOrDeclared as a gate that decides
+// REGISTRATION, which this is not: the route registers either way.
+func WithBackend(b Backend) Option {
+	return func(h *Handler) {
+		if b.Store == nil || b.Bus == nil {
+			return
+		}
+		h.store = b.Store
+		h.emitter = events.NewPresencePublisher(b.Bus)
 	}
 }
 
@@ -243,12 +277,11 @@ func WithClock(now func() time.Time) Option {
 // NewHandler builds the heartbeat handler.
 //
 // The DEFAULT store is in-process. That is a real degrade and it is stated
-// rather than hidden: with more than one replica and no Redis store injected,
+// rather than hidden: with more than one replica and no shared store injected,
 // two editors served by different replicas do not see each other. The
-// production wiring passes NewRedisStore (router.go), and every elitea-main
-// deployment in this repository runs Redis — the same fact
-// cmd/elitea-main/event_stream_redis.go relies on for the SSE stream this route
-// publishes onto.
+// production wiring passes a Backend over NewNATSStore and the live-update
+// NATS bus (cmd/elitea-main), which is also the bus the SSE stream this route
+// publishes onto reads from.
 func NewHandler(resolver CanvasResolver, opts ...Option) *Handler {
 	h := &Handler{
 		resolver: resolver,
@@ -365,9 +398,9 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.emitter != nil {
-		// projectID is the RESOLVED mount segment. events.Publisher.Emit turns
-		// it into events.ProjectChannel(projectID) itself, so no caller of this
-		// package ever names a channel.
+		// projectID is the RESOLVED mount segment. The presence Publisher
+		// turns it into events.PresenceChannel(projectID) itself, so no
+		// caller of this package ever names a channel.
 		h.emitter.Emit(r.Context(), projectID, EventType, response)
 	}
 
@@ -376,7 +409,7 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 
 // RosterKey is the store key for one canvas's roster. Both components are
 // server-derived: projectID is the gated mount segment and canvasUUID is what
-// the resolver read out of schema(projectID). Exported so the Redis store's
+// the resolver read out of schema(projectID). Exported so the shared store's
 // tests and the router's wiring name the same thing.
 func RosterKey(projectID, canvasUUID string) string {
 	return "canvas_presence:" + projectID + ":" + canvasUUID

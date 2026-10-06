@@ -140,7 +140,7 @@ func TestBeginLoginAdmitsBeforeWritesAndRevokesExistingSession(t *testing.T) {
 
 	t.Run("uncertain revocation fails closed", func(t *testing.T) {
 		handler, dependencies := newTestHandler(t)
-		dependencies.flow.logoutErr = errors.New("redis unavailable for secret-canary")
+		dependencies.flow.logoutErr = errors.New("store unavailable for secret-canary")
 		request := httptest.NewRequest(http.MethodGet, BasePath+LoginPath, nil)
 		request.AddCookie(sessionCookie(canonicalSessionID(9)))
 		recorder := httptest.NewRecorder()
@@ -615,7 +615,7 @@ func TestFormAuthorizeMapsCredentialAndDependencyFailuresGenerically(t *testing.
 
 	t.Run("dependency", func(t *testing.T) {
 		handler, dependencies := newTestHandler(t)
-		dependencies.flow.completeErr = errors.New("redis unavailable for secret-canary")
+		dependencies.flow.completeErr = errors.New("store unavailable for secret-canary")
 		recorder := authorize(t, handler, dependencies, "admin", "secret-canary")
 		if recorder.Code != http.StatusServiceUnavailable || strings.Contains(recorder.Body.String(), "secret-canary") {
 			t.Fatalf("status = %d body = %q", recorder.Code, recorder.Body.String())
@@ -773,7 +773,7 @@ func TestLogoutPreservesProviderRouteAndFailsClosedOnUncertainRevocation(t *test
 
 	t.Run("revocation dependency outage", func(t *testing.T) {
 		handler, dependencies := newTestHandler(t)
-		dependencies.flow.logoutErr = errors.New("redis unavailable for secret-canary")
+		dependencies.flow.logoutErr = errors.New("store unavailable for secret-canary")
 		request := httptest.NewRequest(http.MethodGet, BasePath+FormLogoutPath, nil)
 		request.AddCookie(sessionCookie(dependencies.flow.completeResult.SessionID))
 		recorder := httptest.NewRecorder()

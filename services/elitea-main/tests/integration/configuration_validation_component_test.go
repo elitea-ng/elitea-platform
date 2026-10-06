@@ -26,7 +26,7 @@ import (
 	configurationdomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/configurations"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	controltransport "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/control"
 	outputtransport "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc/output"
 	"github.com/go-chi/chi/v5"
@@ -36,7 +36,7 @@ import (
 
 // This is a deterministic in-process vertical integration test over the exact
 // checked Python/Go corpus. It intentionally does not claim networked
-// PostgreSQL, Redis, or gRPC-listener coverage; those adapters require a
+// PostgreSQL, NATS, or gRPC-listener coverage; those adapters require a
 // separately activated service-backed suite.
 func TestConfigurationValidationVerticalComponentAgainstCheckedCorpus(t *testing.T) {
 	for _, fixture := range []string{"valid", "invalid", "unsupported"} {
@@ -407,10 +407,10 @@ func (s *verticalStore) MarkValidationPublished(_ context.Context, outboxID stri
 
 type corpusSigner struct{}
 
-func (corpusSigner) SignWorkerCommand(_ context.Context, exact []byte) (redisdispatch.Signature, error) {
+func (corpusSigner) SignWorkerCommand(_ context.Context, exact []byte) (commandbus.Signature, error) {
 	mac := hmac.New(sha256.New, []byte("ELITEA_RUNTIME_V1_TEST_ONLY_NOT_A_SECRET"))
 	_, _ = mac.Write(exact)
-	return redisdispatch.Signature{
+	return commandbus.Signature{
 		Profile: runtimev1.SignatureProfileV1_SIGNATURE_PROFILE_V1_TEST_ONLY_HMAC_SHA256,
 		KeyID:   "elitea-runtime-v1-conformance-hmac",
 		Value:   mac.Sum(nil),
@@ -419,16 +419,14 @@ func (corpusSigner) SignWorkerCommand(_ context.Context, exact []byte) (redisdis
 
 type captureAppender struct {
 	stream     string
-	field      string
 	deliveryID string
 	value      []byte
 	count      int
 }
 
-func (a *captureAppender) Append(_ context.Context, stream, field, deliveryID string, value []byte) (string, error) {
+func (a *captureAppender) Append(_ context.Context, stream, deliveryID string, value []byte) (string, error) {
 	a.count++
 	a.stream = stream
-	a.field = field
 	a.deliveryID = deliveryID
 	a.value = append([]byte(nil), value...)
 	return "1-0", nil
@@ -540,19 +538,19 @@ func admitAndDispatchCorpus(t *testing.T, command *runtimev1.WorkerCommandV1, ma
 	}
 
 	appender := &captureAppender{}
-	producer, err := redisdispatch.NewProducer(redisdispatch.ProducerConfig{
+	producer, err := commandbus.NewProducer(commandbus.ProducerConfig{
 		Stream:                 "commands.v1.configuration.validate.short-validation.conformance.1.0",
 		ProtocolRevision:       "elitea.runtime.v1",
 		EnvelopeSchemaRevision: "elitea.runtime.signed-worker-command.v1",
 		AllowTestOnlyHMAC:      true,
-		Limits: redisdispatch.Limits{
-			Revision:               "elitea.runtime.limits.conformance.v2",
-			MaxWorkerCommandBytes:  32 * 1024,
-			MaxSignedEnvelopeBytes: 48 * 1024,
-			MaxRedisFieldBytes:     48 * 1024,
-			MaxRedisEntryBytes:     64 * 1024,
-			MaxSignatureBytes:      256,
-			MaxStringBytes:         256,
+		Limits: commandbus.Limits{
+			Revision:                 "elitea.runtime.limits.conformance.v3",
+			MaxWorkerCommandBytes:    32 * 1024,
+			MaxSignedEnvelopeBytes:   48 * 1024,
+			MaxTransportPayloadBytes: 48 * 1024,
+			MaxTransportMessageBytes: 64 * 1024,
+			MaxSignatureBytes:        256,
+			MaxStringBytes:           256,
 		},
 	}, corpusSigner{}, appender)
 	if err != nil {
@@ -565,8 +563,8 @@ func admitAndDispatchCorpus(t *testing.T, command *runtimev1.WorkerCommandV1, ma
 	if err := dispatcher.Dispatch(context.Background(), command.GetIdempotencyKey()); err != nil {
 		t.Fatal(err)
 	}
-	if appender.count != 1 || appender.field != "signed_envelope" || appender.deliveryID != command.GetIdempotencyKey() || store.publishedDigest != runtimedomain.SHA256(appender.value) {
-		t.Fatalf("durable outbox did not publish one bounded Redis reference: count=%d field=%q", appender.count, appender.field)
+	if appender.count != 1 || appender.deliveryID != command.GetIdempotencyKey() || store.publishedDigest != runtimedomain.SHA256(appender.value) {
+		t.Fatalf("durable outbox did not publish one bounded command reference: count=%d", appender.count)
 	}
 	if !bytes.Equal(appender.value, mustMarshal(t, expectedSigned)) {
 		t.Fatal("Go admission/dispatcher produced bytes different from the checked cross-language signed command")
@@ -938,7 +936,7 @@ func newCorpusVerifier(t *testing.T) *controltransport.ConformanceCommandVerifie
 		EnvelopeSchemaRevision: "elitea.runtime.signed-worker-command.v1",
 		ProtocolRevision:       "elitea.runtime.v1",
 		CapabilityVersion:      "1",
-		LimitsRevision:         "elitea.runtime.limits.conformance.v2",
+		LimitsRevision:         "elitea.runtime.limits.conformance.v3",
 		KeyID:                  "elitea-runtime-v1-conformance-hmac",
 		HMACKey:                []byte("ELITEA_RUNTIME_V1_TEST_ONLY_NOT_A_SECRET"),
 		MaxWorkerCommandBytes:  32 * 1024,

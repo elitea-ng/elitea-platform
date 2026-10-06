@@ -26,9 +26,10 @@ const (
 	EventMessageCreated = "message.created"
 
 	// EventBudgetSoftAlert is the LLM-gateway 80%-threshold soft-alert event
-	// (design §8.3). It flows on the gateway.events.* subject when the NATS
-	// EventBus (internal/infra/natsbus) is wired; the gateway emits it and
-	// elitea-main subscribers (and the project SSE stream) receive it.
+	// (design §8.3). It flows on gateway.events.project.<id>.events
+	// (ProjectChannel), exported from the gateway's NATS account to
+	// elitea-main's; the gateway emits it and the project SSE stream relays
+	// it.
 	EventBudgetSoftAlert = "budget.soft_alert"
 
 	// The five events below were added for #876's second half: wiring the
@@ -143,9 +144,9 @@ type Bus interface {
 }
 
 // NoopBus discards every publish. It is the composition root's fallback Bus
-// when no Redis (and no NATS) EventBus is configured, so a deployment with
-// neither still gets a working domain-events Publisher: the project SSE
-// stream simply has nothing to read (it is nil-gated separately in
+// when no live-update NATS bus is configured (ELITEA_EVENTS_NATS_URL unset),
+// so such a deployment still gets a working domain-events Publisher: the
+// project SSE stream is not registered at all (it is nil-gated separately in
 // router.go), but webhook delivery — which reaches this Publisher's Sinks,
 // not its Bus — still works, because Emit calls both regardless of whether
 // the Bus publish succeeds.
@@ -167,6 +168,8 @@ type Sink interface {
 type Publisher struct {
 	bus   Bus
 	sinks []Sink
+	// channel maps a project to the logical channel Emit publishes on.
+	channel func(projectID string) string
 }
 
 // NewPublisher builds a Publisher over bus, additionally fanning out every
@@ -174,11 +177,21 @@ type Publisher struct {
 // be empty — every existing caller that built a presence-only Publisher over
 // its own EventBus keeps working unchanged.
 func NewPublisher(bus Bus, sinks ...Sink) *Publisher {
-	return &Publisher{bus: bus, sinks: sinks}
+	return &Publisher{bus: bus, sinks: sinks, channel: ProjectChannel}
+}
+
+// NewPresencePublisher builds the Publisher canvas presence emits its roster
+// through: onto PresenceChannel, elitea-main's own subject, and to no sink.
+func NewPresencePublisher(bus Bus) *Publisher {
+	return &Publisher{bus: bus, channel: PresenceChannel}
 }
 
 func (p *Publisher) Emit(ctx context.Context, projectID, eventType string, payload any) {
-	channel := ProjectChannel(projectID)
+	channelFor := p.channel
+	if channelFor == nil {
+		channelFor = ProjectChannel
+	}
+	channel := channelFor(projectID)
 	if err := p.bus.Publish(ctx, channel, eventType, payload); err != nil {
 		slog.Error("events: publish failed", "type", eventType, "project", projectID, "err", err)
 	}
@@ -195,8 +208,21 @@ func (p *Publisher) Emit(ctx context.Context, projectID, eventType string, paylo
 	}
 }
 
+// ProjectChannel is the logical channel of the LLM gateway's events for one
+// project. The live-update bus maps it to the NATS subject
+// gateway.events.project.<id>.events (internal/infra/natsbus, subjectFor),
+// which the gateway publishes budget.soft_alert on in its own NATS account
+// and which elitea-main imports (#1076). elitea-main does not publish on it.
 func ProjectChannel(projectID string) string {
 	return fmt.Sprintf("project:%s:events", projectID)
+}
+
+// PresenceChannel is the logical channel of one project's canvas presence
+// rosters: NATS subject elitea.events.project.<id>.presence, in elitea-main's
+// own NATS account, published by elitea-main alone (#1076). A separate
+// family from ProjectChannel so neither producer can speak for the other.
+func PresenceChannel(projectID string) string {
+	return fmt.Sprintf("project:%s:presence", projectID)
 }
 
 type DomainEvent struct {

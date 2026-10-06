@@ -3,7 +3,7 @@ title: "Install Elitea"
 description: "Deploy Elitea with Docker Compose or Kubernetes, sign in as the first administrator, and configure your first AI provider."
 ---
 
-Elitea ships two deployment paths: a one-host Compose stack for evaluation and small teams, and a Helm chart for Kubernetes. Neither path bundles PostgreSQL, Redis, NATS, object storage or an ingress controller — you bring your own.
+Elitea ships two deployment paths: a one-host Compose stack for evaluation and small teams, and a Helm chart for Kubernetes. Neither path bundles PostgreSQL, NATS, object storage or an ingress controller — you bring your own.
 
 ## Choose a deployment path
 
@@ -35,8 +35,8 @@ Two values must be supplied by you — the chart refuses to render while either 
 You also point the chart at Kubernetes Secrets you create out of band, rather than putting anything secret in a values file:
 
 - `postgresql.existingSecret` / `postgresql.key` — the database connection string.
-- `runtime.material.secretName` — the runtime's signing keys, certificates and Redis credentials (only if you enable the runtime plane, below).
-- `fileConfig.authConfig.material.secretName` — the authentication plane's Redis credentials and signing keys.
+- `runtime.material.secretName` — the runtime's signing keys and certificates (only if you enable the runtime plane, below).
+- `fileConfig.authConfig.material.secretName` — the authentication plane's attempt key, PAT signing key and Form users file.
 
 Pick a values file to start from: `values.yaml` (base, minimal capabilities), `values-standalone.yaml` (the full capability set, sized for roughly 200 PostgreSQL connections across up to four replicas), `values-auth-minimal.yaml` (the cheapest install that can still seed an AI provider through the UI), or `values-staging.yaml`.
 
@@ -112,6 +112,6 @@ flowchart LR
     Main --> Worker[Agent worker]
     Gateway --> Worker
     Main --> DB[(PostgreSQL)]
-    Main --> Redis[(Redis)]
+    Main --> NATS[(NATS)]
     Worker --> DB
 ```

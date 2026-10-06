@@ -21,9 +21,7 @@ import (
 func agentDispatchEnvironment() map[string]string {
 	environment := validEnvironment()
 	environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "commands.v1.agent.execute.agents.shared.1.0"
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP"] = "elitea-agent-worker-v1"
-	environment["ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES"] = "64"
+	environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	return environment
 }
 
@@ -81,7 +79,7 @@ func TestSelfCallOriginRefusesHTTPSOnTheProcessOwnCleartextPort(t *testing.T) {
 }
 
 func TestSelfCallOriginKeepsTheExplicitEdgeOrigin(t *testing.T) {
-	// centry-hybrid does not serve this route from this process: it aims the
+	// A mixed deployment (the retired centry-hybrid was one) does not serve this route from this process: it aims the
 	// call at the edge, which routes the path to legacy Centry. An explicit
 	// https origin must still be honoured verbatim.
 	environment := agentDispatchEnvironment()

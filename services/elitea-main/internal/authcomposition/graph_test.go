@@ -9,12 +9,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
 
 	browserapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	browserapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
@@ -24,7 +22,6 @@ import (
 func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
 	config := writeMaterialFixture(t)
 	pool := newUnconnectedPool(t)
-	var client *redis.Client
 	var temporaryPAT []byte
 	graph, err := newFormGraph(
 		context.Background(),
@@ -39,11 +36,7 @@ func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
 				}},
 			}},
 		},
-		func(_ context.Context, _ Config, material *materializedFiles) (*redis.Client, error) {
-			temporaryPAT = material.patSigningKey
-			client = redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
-			return client, nil
-		},
+		func(material *materializedFiles) { temporaryPAT = material.patSigningKey },
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -100,22 +93,9 @@ func TestNewFormGraphComposesSeparateDirectAndMainPolicies(t *testing.T) {
 		mainResponse.Header().Get(browserapi.MainAvatarHeader) != "-" {
 		t.Fatalf("Main response = %d headers=%v body=%q", mainResponse.Code, mainResponse.Header(), mainResponse.Body.String())
 	}
-
-	if err := graph.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := graph.Ping(context.Background()); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("closed graph readiness = %v", err)
-	}
-	if err := graph.Close(); err != nil {
-		t.Fatalf("second Close() = %v", err)
-	}
-	if err := client.Ping(context.Background()).Err(); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("owned Redis client remained open: %v", err)
-	}
 }
 
-func TestNewFormGraphRejectsIncompleteDependenciesAndClosesOnFailure(t *testing.T) {
+func TestNewFormGraphRejectsIncompleteDependenciesAndWipesMaterialOnFailure(t *testing.T) {
 	config := writeMaterialFixture(t)
 	pool := newUnconnectedPool(t)
 	validDependencies := FormGraphDependencies{
@@ -127,31 +107,28 @@ func TestNewFormGraphRejectsIncompleteDependenciesAndClosesOnFailure(t *testing.
 	for name, test := range map[string]struct {
 		ctx          context.Context
 		dependencies FormGraphDependencies
-		opener       redisOpener
 		want         error
 	}{
-		"nil context":      {ctx: nil, dependencies: validDependencies, opener: unusedRedisOpener, want: ErrInvalidGraph},
-		"canceled context": {ctx: canceled, dependencies: validDependencies, opener: unusedRedisOpener, want: context.Canceled},
+		"nil context":      {ctx: nil, dependencies: validDependencies, want: ErrInvalidGraph},
+		"canceled context": {ctx: canceled, dependencies: validDependencies, want: context.Canceled},
 		"nil PostgreSQL": {
 			ctx:          context.Background(),
 			dependencies: FormGraphDependencies{MainRoutePublicRules: []forwardapp.PublicRule{}},
-			opener:       unusedRedisOpener,
 			want:         ErrInvalidGraph,
 		},
 		"implicit route rules": {
-			ctx: context.Background(), dependencies: FormGraphDependencies{PostgreSQL: pool}, opener: unusedRedisOpener, want: ErrInvalidGraph,
+			ctx: context.Background(), dependencies: FormGraphDependencies{PostgreSQL: pool}, want: ErrInvalidGraph,
 		},
-		"nil opener": {ctx: context.Background(), dependencies: validDependencies, want: ErrInvalidGraph},
 	} {
 		t.Run(name, func(t *testing.T) {
-			_, err := newFormGraph(test.ctx, config, test.dependencies, test.opener)
+			_, err := newFormGraph(test.ctx, config, test.dependencies, unusedObserver)
 			if !errors.Is(err, test.want) {
 				t.Fatalf("error = %v, want %v", err, test.want)
 			}
 		})
 	}
 
-	var opened *redis.Client
+	var temporaryPAT []byte
 	invalidRules := validDependencies
 	invalidRules.MainRoutePublicRules = []forwardapp.PublicRule{{
 		Name:       "config.edge_auth",
@@ -161,46 +138,13 @@ func TestNewFormGraphRejectsIncompleteDependenciesAndClosesOnFailure(t *testing.
 		context.Background(),
 		config,
 		invalidRules,
-		func(context.Context, Config, *materializedFiles) (*redis.Client, error) {
-			opened = redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
-			return opened, nil
-		},
+		func(material *materializedFiles) { temporaryPAT = material.patSigningKey },
 	)
 	if !errors.Is(err, ErrInvalidGraph) {
 		t.Fatalf("invalid Main rules error = %v", err)
 	}
-	if err := opened.Ping(context.Background()).Err(); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("Redis client was not closed after composition failure: %v", err)
-	}
-
-	_, err = newFormGraph(
-		context.Background(),
-		config,
-		validDependencies,
-		func(context.Context, Config, *materializedFiles) (*redis.Client, error) { return nil, nil },
-	)
-	if !errors.Is(err, ErrInvalidGraph) {
-		t.Fatalf("nil Redis client error = %v", err)
-	}
-
-	wantOpenError := errors.New("Redis unavailable")
-	var temporaryPAT []byte
-	var failedClient *redis.Client
-	_, err = newFormGraph(
-		context.Background(),
-		config,
-		validDependencies,
-		func(_ context.Context, _ Config, material *materializedFiles) (*redis.Client, error) {
-			temporaryPAT = material.patSigningKey
-			failedClient = redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1})
-			return failedClient, wantOpenError
-		},
-	)
-	if !errors.Is(err, ErrInvalidGraph) || !errors.Is(err, wantOpenError) || !allZero(temporaryPAT) {
-		t.Fatalf("Redis open failure = %v, temporary PAT cleared=%v", err, allZero(temporaryPAT))
-	}
-	if err := failedClient.Ping(context.Background()).Err(); err == nil || !strings.Contains(err.Error(), "closed") {
-		t.Fatalf("Redis opener error leaked ownership: %v", err)
+	if len(temporaryPAT) == 0 || !allZero(temporaryPAT) {
+		t.Fatalf("a failed composition left the PAT key in memory: cleared=%v", allZero(temporaryPAT))
 	}
 }
 
@@ -222,12 +166,11 @@ func TestDerivedPoliciesPreserveTypedBaselineAndSecurityCorrections(t *testing.T
 	}
 
 	key := bytes.Repeat([]byte("k"), minAttemptKeyBytes)
-	attempts := compiledAttemptConfig("centry:auth:v1:attempt:", key)
+	attempts := compiledAttemptConfig(key)
 	clear(key)
 	if allZero(attempts.KeySecret) || attempts.Global.MaxAttempts != 1000 || attempts.Global.Window != time.Minute ||
 		attempts.FormBegin.MaxAttempts != 20 || attempts.FormCredentialClient.MaxAttempts != 5 ||
-		attempts.FormCredentialLogin.MaxAttempts != 25 || attempts.OIDCBegin.MaxAttempts != 20 ||
-		attempts.OIDCCallback.MaxAttempts != 30 {
+		attempts.FormCredentialLogin.MaxAttempts != 25 {
 		t.Fatalf("unexpected compiled attempt policy: %+v", attempts)
 	}
 
@@ -273,11 +216,8 @@ func TestCookiePolicyIsHostOnlySecureAndSeparateFromMainSession(t *testing.T) {
 
 func TestNilFormGraphMethodsFailSafely(t *testing.T) {
 	var graph *FormGraph
-	if graph.Routes() != nil || graph.BrowserRoutes() != nil || graph.MainEdgeAuth() != nil || graph.Close() != nil {
+	if graph.Routes() != nil || graph.BrowserRoutes() != nil || graph.MainEdgeAuth() != nil {
 		t.Fatal("nil graph did not fail safely")
-	}
-	if err := graph.Ping(context.Background()); !errors.Is(err, ErrInvalidGraph) {
-		t.Fatalf("nil graph Ping error = %v", err)
 	}
 	if _, err := graph.AuthorizeMain(context.Background(), publicMainRequest("/health")); !errors.Is(err, ErrInvalidGraph) {
 		t.Fatalf("AuthorizeMain error = %v", err)
@@ -316,8 +256,8 @@ func publicMainRequest(uri string) forwardapp.Request {
 	}}
 }
 
-func unusedRedisOpener(context.Context, Config, *materializedFiles) (*redis.Client, error) {
-	panic("Redis opener called for invalid dependencies")
+func unusedObserver(*materializedFiles) {
+	panic("material read for invalid dependencies")
 }
 
 // The boot log names the Form users whose sign-in will be refused because
@@ -334,14 +274,11 @@ func TestNewFormGraphReportsFormUsersWithoutEmail(t *testing.T) {
 		context.Background(),
 		config,
 		FormGraphDependencies{PostgreSQL: newUnconnectedPool(t), MainRoutePublicRules: []forwardapp.PublicRule{}},
-		func(context.Context, Config, *materializedFiles) (*redis.Client, error) {
-			return redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1}), nil
-		},
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = graph.Close() }()
 	report := graph.FormUsers()
 	if report.Configured != 2 || !reflect.DeepEqual(report.MisconfiguredLogins, []string{"no-address"}) {
 		t.Fatalf("Form user report = %+v", report)
@@ -362,14 +299,11 @@ func TestNewFormGraphWithFormSignInDisabledAcceptsNoPassword(t *testing.T) {
 			PostgreSQL:           newUnconnectedPool(t),
 			MainRoutePublicRules: []forwardapp.PublicRule{},
 		},
-		func(context.Context, Config, *materializedFiles) (*redis.Client, error) {
-			return redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1}), nil
-		},
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = graph.Close() }()
 	if graph.BrowserRoutes() != nil {
 		t.Fatal("Form sign-in is disabled, yet the graph exposes browser routes")
 	}

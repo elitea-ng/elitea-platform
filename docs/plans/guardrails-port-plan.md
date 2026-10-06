@@ -65,7 +65,7 @@ Every consumer.
   checks `map[string]any` and nothing about the values.
 - The sensitive-tool policy reaches the worker only through container env vars
   (`ELITEA_SENSITIVE_TOOLS`, set statically in
-  `deploy/docker-compose.standalone-full.yml` and `deploy/centry-hybrid/pov-compose.yml`).
+  `deploy/docker-compose.standalone-full.yml`; the retired `deploy/centry-hybrid/pov-compose.yml` set it too).
 
 ## 4. Design decisions
 

@@ -31,6 +31,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/sony/gobreaker/v2"
+
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
 )
 
 const (
@@ -81,8 +83,9 @@ var ErrUnavailable = errors.New("nats: unavailable")
 
 // Config is the resolved NATS wiring for the gateway.
 type Config struct {
-	// URL is the NATS server URL (nats://host:4222). Empty disables NATS wiring
-	// (the gateway then runs without budget enforcement — dev/test only).
+	// URL is the NATS server URL. Empty disables NATS wiring (the gateway
+	// then runs without budget enforcement — dev/test only). With client
+	// material it must be tls:// and carry no credential.
 	URL string
 	// Name identifies this client in NATS monitoring.
 	Name string
@@ -92,10 +95,11 @@ type Config struct {
 	// CBOpenDuration is how long the breaker stays open before probing half-open
 	// (design §8.5, LLM_BUDGET_CB_OPEN_DURATION_SEC, default 10s).
 	CBOpenDuration time.Duration
-	// Replicas is the KV/stream replica count (1 scale-1, ≥3 HA). Applied when
-	// this client creates the assets; a mismatch with an existing asset is left
-	// untouched (bootstrap owns the authoritative config).
-	Replicas int
+	// TLSCAFile, TLSCertFile and TLSKeyFile are the gateway's NATS client
+	// identity (GATEWAY_NATS_TLS_*; #1076). All three or none.
+	TLSCAFile   string
+	TLSCertFile string
+	TLSKeyFile  string
 }
 
 // withDefaults fills zero values with the design §8.5 defaults.
@@ -109,11 +113,23 @@ func (c Config) withDefaults() Config {
 	if c.CBOpenDuration <= 0 {
 		c.CBOpenDuration = 10 * time.Second
 	}
-	if c.Replicas <= 0 {
-		c.Replicas = 1
-	}
 	return c
 }
+
+// material reads the TLS settings through natsconn, which names the
+// GATEWAY_NATS_TLS_* variables in its errors.
+func (c Config) material() (natsconn.Material, error) {
+	names := natsconn.EnvNames(envPrefix)
+	vals := map[string]string{names[0]: c.TLSCAFile, names[1]: c.TLSCertFile, names[2]: c.TLSKeyFile}
+	return natsconn.FromEnv(envPrefix, func(k string) (string, bool) {
+		v, ok := vals[k]
+		return v, ok
+	})
+}
+
+// envPrefix is the gateway's NATS environment prefix (GATEWAY_NATS_URL,
+// GATEWAY_NATS_TLS_*).
+const envPrefix = "GATEWAY"
 
 // conn is the minimal surface of *nats.Conn the client uses; it lets tests
 // substitute a fake without a live server.
@@ -148,13 +164,12 @@ type kvCreator interface {
 	Create(ctx context.Context, key string, value []byte, opts ...jetstream.KVCreateOpt) (uint64, error)
 }
 
-// assetProvisioner is the JetStream admin surface ensureAssets needs. The real
-// jetstream.JetStream satisfies it; tests inject a fake so asset provisioning is
-// verifiable without a live server.
-type assetProvisioner interface {
-	CreateOrUpdateStream(ctx context.Context, cfg jetstream.StreamConfig) (jetstream.Stream, error)
-	CreateOrUpdateKeyValue(ctx context.Context, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error)
+// assetBinder is the JetStream surface bindAssets needs: look a stream or a
+// bucket up, never create one. The real jetstream.JetStream satisfies it;
+// tests inject a fake so the verification is checkable without a server.
+type assetBinder interface {
 	Stream(ctx context.Context, stream string) (jetstream.Stream, error)
+	KeyValue(ctx context.Context, bucket string) (jetstream.KeyValue, error)
 }
 
 // Client is the hardened JetStream client. It is safe for concurrent use.
@@ -179,19 +194,45 @@ type Client struct {
 	onStateChange func(from, to gobreaker.State)
 }
 
-// Connect dials NATS with the hardened timeout and ensures the budget counter
-// stream, cooldown KV bucket, and write-behind deltas stream exist.
+// Connect dials NATS with the hardened timeout and binds to the budget
+// counter stream, the rate-limit counter stream, the write-behind deltas
+// stream and the cooldown KV bucket. It creates none of them: the
+// nats-bootstrap Job owns every asset (#1076), and the permission table does
+// not let the gateway's identity create or update a stream. A missing or
+// misconfigured asset fails here with the asset and the fix named.
 func Connect(ctx context.Context, cfg Config) (*Client, error) {
 	cfg = cfg.withDefaults()
 	if cfg.URL == "" {
 		return nil, fmt.Errorf("nats: empty URL")
 	}
-	nc, err := nats.Connect(cfg.URL,
+	material, err := cfg.material()
+	if err != nil {
+		return nil, err
+	}
+	if err := material.CheckURL(cfg.URL); err != nil {
+		return nil, err
+	}
+	if err := material.Check(); err != nil {
+		return nil, err
+	}
+	opts := []nats.Option{
 		nats.Name(cfg.Name),
 		nats.Timeout(ConnectTimeout),
 		nats.MaxReconnects(-1),
-		nats.ReconnectWait(500*time.Millisecond),
-	)
+		nats.ReconnectWait(500 * time.Millisecond),
+		// The permission table lets this identity subscribe to its own
+		// inbox prefix only.
+		nats.CustomInboxPrefix(natsconn.InboxPrefix(natsconn.IdentityGateway)),
+	}
+	if material.Enabled() {
+		opts = append(opts,
+			nats.Secure(natsconn.BaseTLSConfig()),
+			// Both callbacks re-read their files on every handshake, so a
+			// renewed certificate is presented on the next reconnect.
+			nats.ClientTLSConfig(material.ClientCertificate, material.RootCAs),
+		)
+	}
+	nc, err := nats.Connect(cfg.URL, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("nats: connect: %w", err)
 	}
@@ -209,7 +250,7 @@ func Connect(ctx context.Context, cfg Config) (*Client, error) {
 			fn(from, to)
 		}
 	})
-	if err := c.ensureAssets(ctx, js); err != nil {
+	if err := c.bindAssets(ctx, js); err != nil {
 		nc.Close()
 		return nil, err
 	}
@@ -266,79 +307,132 @@ func (c *Client) OnBreakerStateChange(fn func(from, to gobreaker.State)) {
 // BreakerState reports the current circuit-breaker state (design §8.5 FSM input).
 func (c *Client) BreakerState() gobreaker.State { return c.breaker.State() }
 
-// ensureAssets idempotently creates the counter stream, cooldown KV bucket, and
-// deltas stream. It is safe to run on every startup; an existing asset with a
-// compatible config is reused (CreateOrUpdateStream), and the bootstrap chart
-// remains the authoritative owner of retention/replica tuning.
-func (c *Client) ensureAssets(ctx context.Context, prov assetProvisioner) error {
+// errAssetMissing is wrapped by every "asset does not exist" bind error.
+var errAssetMissing = errors.New("created by the nats-bootstrap Job (deploy/helm/nats-bootstrap; compose: the nats-bootstrap service) — run it, then restart the gateway")
+
+// bindAssets looks up every asset the gateway uses and verifies the settings
+// its code depends on. It never creates or updates one (#1076): before, the
+// gateway's CreateOrUpdate overwrote the bootstrap's retention on every boot.
+// Only the properties the gateway's correctness rests on are checked; the
+// rest (retention, replicas) is the bootstrap's to decide.
+func (c *Client) bindAssets(ctx context.Context, b assetBinder) error {
 	sctx, cancel := context.WithTimeout(ctx, ConnectTimeout)
 	defer cancel()
 
-	// Budget counter stream: AllowMsgCounter enables Nats-Incr running totals.
-	if _, err := prov.CreateOrUpdateStream(sctx, jetstream.StreamConfig{
-		Name:            BudgetStream,
-		Subjects:        []string{budgetSubjectRoot + ".>"},
-		Storage:         jetstream.FileStorage,
-		Replicas:        c.cfg.Replicas,
-		Retention:       jetstream.LimitsPolicy,
-		AllowMsgCounter: true,
-		// Only the running total matters; keep a single message per subject.
-		MaxMsgsPerSubject: 1,
-		// Duplicate window: recovery reconciliation (§8.5) replays outage-window
-		// spend onto the counter with a reused Nats-Msg-Id so an in-process retry
-		// (e.g. after a transient Postgres error between replay and finalize) is
-		// deduped instead of double-counted. Without a window the counter stream
-		// applies every increment unconditionally.
-		Duplicates: RecoveryDedupeWindow,
-	}); err != nil {
-		return fmt.Errorf("nats: ensure budget counter stream: %w", err)
-	}
-
-	// Alert-cooldown KV bucket (real KV; SETNX via kv.Create + bucket TTL).
-	// TTL expires cooldown keys automatically so the 80% soft-alert can re-fire
-	// after the cooldown window; without a TTL the key lives forever and the
-	// alert fires at most once per scope+period (§8.3).
-	kv, err := prov.CreateOrUpdateKeyValue(sctx, jetstream.KeyValueConfig{
-		Bucket:   AlertCooldownBucket,
-		Storage:  jetstream.FileStorage,
-		Replicas: c.cfg.Replicas,
-		History:  1,
-		TTL:      4 * time.Hour,
+	// Budget counter stream: Nats-Incr needs AllowMsgCounter, and the
+	// recovery replay's reused Nats-Msg-Id needs the duplicate window to
+	// cover RecoveryDedupeWindow (§8.5 step 2) or a retried replay is
+	// counted twice.
+	budget, err := bindStream(sctx, b, BudgetStream, func(cfg jetstream.StreamConfig) error {
+		if !cfg.AllowMsgCounter {
+			return errors.New("AllowMsgCounter is off, so Nats-Incr cannot increment it")
+		}
+		if !hasSubject(cfg.Subjects, budgetSubjectRoot+".>") {
+			return fmt.Errorf("subjects %v do not include %s.>", cfg.Subjects, budgetSubjectRoot)
+		}
+		if cfg.Duplicates < RecoveryDedupeWindow {
+			return fmt.Errorf("duplicate window %v is shorter than the %v recovery replay window, so a retried replay would be counted twice", cfg.Duplicates, RecoveryDedupeWindow)
+		}
+		return requireDirect(cfg)
 	})
 	if err != nil {
-		return fmt.Errorf("nats: ensure cooldown kv: %w", err)
+		return err
 	}
-	c.cooldown = kv
+	c.budget = budget
 
-	// Write-behind deltas stream (§8.6): the scheduler consumer drains this.
-	// A dedup window matches the budget stream so a retry within the same
-	// outage window is deduplicated at the publish side. MaxMsgs/MaxBytes cap
-	// unbounded growth if the scheduler is lagging.
-	if _, err := prov.CreateOrUpdateStream(sctx, jetstream.StreamConfig{
-		Name:       DeltasStream,
-		Subjects:   []string{DeltaSubject},
-		Storage:    jetstream.FileStorage,
-		Replicas:   c.cfg.Replicas,
-		Retention:  jetstream.LimitsPolicy,
-		Duplicates: RecoveryDedupeWindow,
-		MaxMsgs:    500_000,
-		MaxBytes:   512 * 1024 * 1024, // 512 MiB
+	// Rate-limit counter stream (ratelimit.go).
+	rl, err := bindStream(sctx, b, RateLimitStream, func(cfg jetstream.StreamConfig) error {
+		if !cfg.AllowMsgCounter {
+			return errors.New("AllowMsgCounter is off, so Nats-Incr cannot increment it")
+		}
+		if !hasSubject(cfg.Subjects, rateLimitSubjectRoot+".>") {
+			return fmt.Errorf("subjects %v do not include %s.>", cfg.Subjects, rateLimitSubjectRoot)
+		}
+		if cfg.MaxAge <= 0 {
+			return errors.New("MaxAge is unset, so one subject per minute per scope grows without bound")
+		}
+		if cfg.MaxAge <= RateLimitWindow {
+			return fmt.Errorf("MaxAge %v does not outlive one %v window, so a counter could expire while its window is open", cfg.MaxAge, RateLimitWindow)
+		}
+		return requireDirect(cfg)
+	})
+	if err != nil {
+		return err
+	}
+	c.ratelimit = rl
+
+	// Write-behind deltas stream (§8.6): PublishDelta's Nats-Msg-Id dedup
+	// needs a duplicate window.
+	if _, err := bindStream(sctx, b, DeltasStream, func(cfg jetstream.StreamConfig) error {
+		if !hasSubject(cfg.Subjects, DeltaSubject) {
+			return fmt.Errorf("subjects %v do not include %s", cfg.Subjects, DeltaSubject)
+		}
+		if cfg.Duplicates <= 0 {
+			return errors.New("no duplicate window, so a re-published delta is applied twice")
+		}
+		return nil
 	}); err != nil {
-		return fmt.Errorf("nats: ensure deltas stream: %w", err)
-	}
-
-	// Governance rate-limit counter stream (ratelimit.go).
-	if err := c.ensureRateLimitAssets(sctx, prov); err != nil {
 		return err
 	}
 
-	// Bind the budget counter stream handle for reads/increments.
-	st, err := prov.Stream(sctx, BudgetStream)
+	// Alert-cooldown KV: kv.Create is SETNX only while the key lives, so the
+	// bucket needs a TTL or an alert fires once per scope and period forever.
+	kv, err := b.KeyValue(sctx, AlertCooldownBucket)
 	if err != nil {
-		return fmt.Errorf("nats: bind budget stream: %w", err)
+		if errors.Is(err, jetstream.ErrBucketNotFound) {
+			return fmt.Errorf("nats: KV bucket %s does not exist; it is %w", AlertCooldownBucket, errAssetMissing)
+		}
+		return fmt.Errorf("nats: bind KV bucket %s: %w", AlertCooldownBucket, err)
 	}
-	c.budget = st
+	status, err := kv.Status(sctx)
+	if err != nil {
+		return fmt.Errorf("nats: read KV bucket %s: %w", AlertCooldownBucket, err)
+	}
+	if status.TTL() <= 0 {
+		return fmt.Errorf("nats: KV bucket %s has no TTL, so a soft alert could never re-fire; re-run the nats-bootstrap Job", AlertCooldownBucket)
+	}
+	c.cooldown = kv
 	return nil
+}
+
+// bindStream looks a stream up and runs verify on its configuration.
+func bindStream(ctx context.Context, b assetBinder, name string, verify func(jetstream.StreamConfig) error) (jetstream.Stream, error) {
+	st, err := b.Stream(ctx, name)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrStreamNotFound) {
+			return nil, fmt.Errorf("nats: stream %s does not exist; it is %w", name, errAssetMissing)
+		}
+		return nil, fmt.Errorf("nats: bind stream %s: %w", name, err)
+	}
+	info := st.CachedInfo()
+	if info == nil {
+		return nil, fmt.Errorf("nats: bind stream %s: no stream info", name)
+	}
+	if err := verify(info.Config); err != nil {
+		return nil, fmt.Errorf("nats: stream %s: %w; it is configured by the nats-bootstrap Job — re-run it", name, err)
+	}
+	return st, nil
+}
+
+// requireDirect: the gateway reads a counter with GetLastMsgForSubject, which
+// nats.go serves with a direct get on an allow_direct stream. The NATS
+// permission table grants the gateway $JS.API.DIRECT.GET on its counter
+// streams and not the stream API's MSG.GET, so a stream without allow_direct
+// would fail every read with a permissions violation.
+func requireDirect(cfg jetstream.StreamConfig) error {
+	if !cfg.AllowDirect {
+		return errors.New("allow_direct is off, so the gateway's reads (direct get) are not the ones its NATS permissions grant")
+	}
+	return nil
+}
+
+func hasSubject(subjects []string, want string) bool {
+	for _, s := range subjects {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 // BudgetSubject builds the counter subject for a budget scope/period. The

@@ -34,8 +34,8 @@ func hasRoute(patterns []string, method, prefix string) bool {
 
 // newProductionRouter (what NewRouter always builds; see production_router.go's
 // NewRouter doc comment, #243) is the one EVERY deployment gets. Both routes
-// below were unreachable there — the project stream because its two-arm
-// gate had no arm wired, the notification stream because only
+// below were unreachable there — the project stream because its then two-arm
+// (NATS/Redis) gate had no arm wired, the notification stream because only
 // production_router.go's now-deleted dead branch mounted it — so both
 // answered 404 everywhere while their handlers, clients and tests all
 // existed (#152).
@@ -52,21 +52,19 @@ func TestPrototypeRouterRegistersTheSSEStreamsWhenTheirSourcesAreWired(t *testin
 	)
 
 	prototypeTrigger := http.NotFoundHandler()
-	// Never dialled: the route registration is what is under test, and go-redis
-	// connects lazily.
-	redisClient := newUnreachableRedisClient()
-	t.Cleanup(func() { _ = redisClient.Close() })
+	// Never read: the route registration is what is under test.
+	source := newEventSource()
 	notificationEvents := http.NotFoundHandler()
 
 	wired := routePatterns(t, NewRouter(RouterConfig{
 		LLMProxy:                  prototypeTrigger,
-		RedisClient:               redisClient,
+		EventSource:               source,
 		CurrentNotificationEvents: notificationEvents,
 	}))
 	if !hasRoute(wired, http.MethodGet, projectStream) {
-		t.Errorf("%s is not registered even with RedisClient wired.\n"+
-			"  Its gate is `if cfg.EventSource != nil … else if cfg.RedisClient != nil …`; "+
-			"with neither arm assigned the route exists in no deployment (#152).\n  registered: %v",
+		t.Errorf("%s is not registered even with EventSource wired.\n"+
+			"  Its gate is `if cfg.EventSource != nil`; with it unassigned the route "+
+			"exists in no deployment (#152).\n  registered: %v",
 			projectStream, wired)
 	}
 	if !hasRoute(wired, http.MethodGet, notificationStream) {
@@ -81,7 +79,7 @@ func TestPrototypeRouterRegistersTheSSEStreamsWhenTheirSourcesAreWired(t *testin
 	// registers everything unconditionally.
 	bare := routePatterns(t, NewRouter(RouterConfig{LLMProxy: prototypeTrigger}))
 	if hasRoute(bare, http.MethodGet, projectStream) {
-		t.Errorf("%s is registered with no EventSource and no RedisClient", projectStream)
+		t.Errorf("%s is registered with no EventSource", projectStream)
 	}
 	if hasRoute(bare, http.MethodGet, notificationStream) {
 		t.Errorf("%s is registered with no CurrentNotificationEvents", notificationStream)

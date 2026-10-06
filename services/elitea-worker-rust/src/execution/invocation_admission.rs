@@ -93,7 +93,7 @@ impl InvocationAdmissionError {
         }
     }
 
-    /// Every runtime admission failure leaves the Redis command untouched and
+    /// Every runtime admission failure leaves the bus command untouched and
     /// is eligible for another worker; invalid process configuration is not.
     #[must_use]
     pub const fn retryable(self) -> bool {

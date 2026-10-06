@@ -12,7 +12,7 @@ import (
 )
 
 // Mount under the existing execution/generation mTLS content route.
-// No source or binary payload passes through Redis or a public control route.
+// No source or binary payload passes through the command bus or a public control route.
 func (s *RuntimeCodeDebugArtifactService) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Use(s.boundedHTTP)

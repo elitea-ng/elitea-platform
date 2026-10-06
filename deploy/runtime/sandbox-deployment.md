@@ -198,19 +198,22 @@ Use a target hostname present in the supervisor certificate. A Service name alon
 Set `worker.runtime.agentModelCheckpointRecovery=true` for the verified checkpoint recovery deployment.
 The chart rejects these Rust-only options when the Python worker is selected.
 
-For Minikube, set `runtimeRedis.persistence.storageClassName=standard` when deploying the isolated runtime Redis.
-The chart default uses `ceph-rbd`, which requires a separate Ceph provisioner.
-Keep persistent storage enabled and complete the authenticated Redis bootstrap Job before starting workers.
-A separate Redis does not inherit existing browser sessions or queued commands.
-Drain active executions and verify dispatch state before changing application ownership.
+The runtime command bus is NATS JetStream (docs/runtime-command-bus.md), so
+the workers need no runtime Redis. Install the NATS chart and run the
+`nats-bootstrap` Job before starting workers: the bootstrap creates the
+command streams, their durables and the workers' dead-letter bucket, and a
+worker refuses to start against a durable that is absent or drifted.
+Drain active executions and verify dispatch state (`cmd/index-v2-preflight`
+reports the durable's pending and ack-pending counts) before changing
+application ownership.
 
 
 ### Preserve certificate names during rehearsal migration
 
 Inspect certificate SANs before moving existing runtime material to Kubernetes.
-Match the Redis URL hostname to the server certificate, including the authentication and worker configuration.
+Match the NATS URL hostname to the NATS server certificate (the chart renders fully qualified `tls://` URLs from `nats.namespace`), including the worker configuration.
 Use a matching Service alias or issue a certificate for the intended Service name.
 Never disable certificate verification to accommodate a different chart default.
 Stage Main and worker with zero replicas, then verify their material initialization before changing ownership.
-Verify no live claims, pending commands, or group lag before switching to a separate runtime Redis.
+Verify no live claims, pending commands, or consumer lag on the worker durable before switching NATS installs.
 Keep the prior containers and data volumes available until application and browser verification pass.

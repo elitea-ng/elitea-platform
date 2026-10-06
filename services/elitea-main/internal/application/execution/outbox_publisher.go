@@ -13,7 +13,7 @@ const (
 	// MaxOutboxPublisherBatchSize bounds one database scan and the memory held
 	// while its results are dispatched.
 	MaxOutboxPublisherBatchSize = 256
-	// MaxOutboxPublisherConcurrency bounds concurrent Redis publications from
+	// MaxOutboxPublisherConcurrency bounds concurrent command bus publications from
 	// one publisher instance.
 	MaxOutboxPublisherConcurrency = 32
 	// maxOutboxPublisherFailureBackoff bounds the delay between failed cycles.

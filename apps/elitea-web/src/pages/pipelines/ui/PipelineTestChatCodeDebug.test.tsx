@@ -15,6 +15,12 @@ import { toParticipant } from '@/widgets/chat-box/ui/ChatBox.helpers';
 import { PersistedMessageTrace } from '@/features/chat-messages/ui/chat-box/PersistedMessageTrace';
 import { server } from '@/test/setup';
 
+// Each case renders a whole chat (router, CodeMirror, SSE replay, dialog and a
+// download) and takes ~1.2 s under coverage on an idle machine; a loaded CI
+// coverage shard ran one past the 5 s default (CI — Web run 37502767313).
+// Same budget as the other integration-sized suites here.
+const INTEGRATION_TIMEOUT_MS = 20_000;
+
 import replay from '../__tests__/fixtures/code-debug-live-replay.jsonl?raw';
 import snapshot from '../__tests__/fixtures/code-debug-live-snapshot.json?raw';
 import { renderPipelinesRoute } from '../__tests__/testRouter';
@@ -144,7 +150,7 @@ it.each(['editor', 'main'] as const)('opens and downloads the exact live replay 
   expect(admissions).toBe(1);
   await openGroupedExport(user);
   await verifyDownload(user);
-});
+}, INTEGRATION_TIMEOUT_MS);
 
 it('opens the same grouped receipt after persisted trace restoration without admitting a new run', async () => {
   const user = userEvent.setup();
@@ -164,7 +170,7 @@ it('opens the same grouped receipt after persisted trace restoration without adm
   await openGroupedExport(user);
   await verifyDownload(user);
   expect(admissions).toBe(0);
-});
+}, INTEGRATION_TIMEOUT_MS);
 
 it('downloads the same receipt through the persisted trace detail fallback', async () => {
   const user = userEvent.setup();
@@ -181,4 +187,4 @@ it('downloads the same receipt through the persisted trace detail fallback', asy
   expect(artifactReads).toBe(0);
   await verifyDownload(user);
   expect(admissions).toBe(0);
-});
+}, INTEGRATION_TIMEOUT_MS);

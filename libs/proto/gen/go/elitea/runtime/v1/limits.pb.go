@@ -29,14 +29,21 @@ type ProtocolLimitsV1 struct {
 	LimitsRevision         string                 `protobuf:"bytes,1,opt,name=limits_revision,json=limitsRevision,proto3" json:"limits_revision,omitempty"`
 	MaxWorkerCommandBytes  uint64                 `protobuf:"varint,2,opt,name=max_worker_command_bytes,json=maxWorkerCommandBytes,proto3" json:"max_worker_command_bytes,omitempty"`
 	MaxSignedEnvelopeBytes uint64                 `protobuf:"varint,3,opt,name=max_signed_envelope_bytes,json=maxSignedEnvelopeBytes,proto3" json:"max_signed_envelope_bytes,omitempty"`
-	MaxRedisFieldBytes     uint64                 `protobuf:"varint,4,opt,name=max_redis_field_bytes,json=maxRedisFieldBytes,proto3" json:"max_redis_field_bytes,omitempty"`
-	MaxRedisEntryBytes     uint64                 `protobuf:"varint,5,opt,name=max_redis_entry_bytes,json=maxRedisEntryBytes,proto3" json:"max_redis_entry_bytes,omitempty"`
-	MaxInputManifestBytes  uint64                 `protobuf:"varint,6,opt,name=max_input_manifest_bytes,json=maxInputManifestBytes,proto3" json:"max_input_manifest_bytes,omitempty"`
-	MaxInputEntries        uint32                 `protobuf:"varint,7,opt,name=max_input_entries,json=maxInputEntries,proto3" json:"max_input_entries,omitempty"`
-	MaxInputContentBytes   uint64                 `protobuf:"varint,8,opt,name=max_input_content_bytes,json=maxInputContentBytes,proto3" json:"max_input_content_bytes,omitempty"`
-	MaxOutputFrameBytes    uint64                 `protobuf:"varint,9,opt,name=max_output_frame_bytes,json=maxOutputFrameBytes,proto3" json:"max_output_frame_bytes,omitempty"`
-	MaxValidationIssues    uint32                 `protobuf:"varint,10,opt,name=max_validation_issues,json=maxValidationIssues,proto3" json:"max_validation_issues,omitempty"`
-	MaxSafeStringBytes     uint32                 `protobuf:"varint,11,opt,name=max_safe_string_bytes,json=maxSafeStringBytes,proto3" json:"max_safe_string_bytes,omitempty"`
+	// The command-bus transport bounds (ADR-0010 amendment: NATS JetStream).
+	// max_transport_payload_bytes bounds the message body, which is exactly the
+	// SignedWorkerCommandEnvelopeV1 bytes. max_transport_message_bytes bounds the
+	// whole message the server stores (body plus headers) and is the stream's
+	// MaxMsgSize. Before limits revision conformance.v3 these were
+	// max_redis_field_bytes and max_redis_entry_bytes; the field numbers and
+	// wire encoding are unchanged.
+	MaxTransportPayloadBytes uint64 `protobuf:"varint,4,opt,name=max_transport_payload_bytes,json=maxTransportPayloadBytes,proto3" json:"max_transport_payload_bytes,omitempty"`
+	MaxTransportMessageBytes uint64 `protobuf:"varint,5,opt,name=max_transport_message_bytes,json=maxTransportMessageBytes,proto3" json:"max_transport_message_bytes,omitempty"`
+	MaxInputManifestBytes    uint64 `protobuf:"varint,6,opt,name=max_input_manifest_bytes,json=maxInputManifestBytes,proto3" json:"max_input_manifest_bytes,omitempty"`
+	MaxInputEntries          uint32 `protobuf:"varint,7,opt,name=max_input_entries,json=maxInputEntries,proto3" json:"max_input_entries,omitempty"`
+	MaxInputContentBytes     uint64 `protobuf:"varint,8,opt,name=max_input_content_bytes,json=maxInputContentBytes,proto3" json:"max_input_content_bytes,omitempty"`
+	MaxOutputFrameBytes      uint64 `protobuf:"varint,9,opt,name=max_output_frame_bytes,json=maxOutputFrameBytes,proto3" json:"max_output_frame_bytes,omitempty"`
+	MaxValidationIssues      uint32 `protobuf:"varint,10,opt,name=max_validation_issues,json=maxValidationIssues,proto3" json:"max_validation_issues,omitempty"`
+	MaxSafeStringBytes       uint32 `protobuf:"varint,11,opt,name=max_safe_string_bytes,json=maxSafeStringBytes,proto3" json:"max_safe_string_bytes,omitempty"`
 	// Authority timing is part of the selected limits revision. Runtimes may
 	// poll more frequently but must never admit a slower interval.
 	ClaimLeaseTtlMillis        uint64 `protobuf:"varint,12,opt,name=claim_lease_ttl_millis,json=claimLeaseTtlMillis,proto3" json:"claim_lease_ttl_millis,omitempty"`
@@ -102,16 +109,16 @@ func (x *ProtocolLimitsV1) GetMaxSignedEnvelopeBytes() uint64 {
 	return 0
 }
 
-func (x *ProtocolLimitsV1) GetMaxRedisFieldBytes() uint64 {
+func (x *ProtocolLimitsV1) GetMaxTransportPayloadBytes() uint64 {
 	if x != nil {
-		return x.MaxRedisFieldBytes
+		return x.MaxTransportPayloadBytes
 	}
 	return 0
 }
 
-func (x *ProtocolLimitsV1) GetMaxRedisEntryBytes() uint64 {
+func (x *ProtocolLimitsV1) GetMaxTransportMessageBytes() uint64 {
 	if x != nil {
-		return x.MaxRedisEntryBytes
+		return x.MaxTransportMessageBytes
 	}
 	return 0
 }
@@ -190,13 +197,13 @@ var File_elitea_runtime_v1_limits_proto protoreflect.FileDescriptor
 
 const file_elitea_runtime_v1_limits_proto_rawDesc = "" +
 	"\n" +
-	"\x1eelitea/runtime/v1/limits.proto\x12\x11elitea.runtime.v1\"\xb8\x06\n" +
+	"\x1eelitea/runtime/v1/limits.proto\x12\x11elitea.runtime.v1\"\xd0\x06\n" +
 	"\x10ProtocolLimitsV1\x12'\n" +
 	"\x0flimits_revision\x18\x01 \x01(\tR\x0elimitsRevision\x127\n" +
 	"\x18max_worker_command_bytes\x18\x02 \x01(\x04R\x15maxWorkerCommandBytes\x129\n" +
-	"\x19max_signed_envelope_bytes\x18\x03 \x01(\x04R\x16maxSignedEnvelopeBytes\x121\n" +
-	"\x15max_redis_field_bytes\x18\x04 \x01(\x04R\x12maxRedisFieldBytes\x121\n" +
-	"\x15max_redis_entry_bytes\x18\x05 \x01(\x04R\x12maxRedisEntryBytes\x127\n" +
+	"\x19max_signed_envelope_bytes\x18\x03 \x01(\x04R\x16maxSignedEnvelopeBytes\x12=\n" +
+	"\x1bmax_transport_payload_bytes\x18\x04 \x01(\x04R\x18maxTransportPayloadBytes\x12=\n" +
+	"\x1bmax_transport_message_bytes\x18\x05 \x01(\x04R\x18maxTransportMessageBytes\x127\n" +
 	"\x18max_input_manifest_bytes\x18\x06 \x01(\x04R\x15maxInputManifestBytes\x12*\n" +
 	"\x11max_input_entries\x18\a \x01(\rR\x0fmaxInputEntries\x125\n" +
 	"\x17max_input_content_bytes\x18\b \x01(\x04R\x14maxInputContentBytes\x123\n" +

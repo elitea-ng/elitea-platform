@@ -18,7 +18,8 @@
 #
 #   PostgreSQL          `postgresql` names its secret. The operator's lifecycle
 #                       is not this application's — see that block.
-#   Redis, NATS         `redis` / `nats` name them. Commodity infrastructure.
+#   NATS                `nats` names it. Commodity infrastructure. It is
+#                       also the runtime command bus; there is no Redis.
 #   Object storage      An S3-compatible endpoint, configured under `main.env`.
 #   Ingress             The cluster's own edge. `worker.platformEdge` is NOT it:
 #                       that one is internal, has no route from any gateway, and
@@ -58,7 +59,7 @@
 # ever express a mistake. The release stamps this field; the working tree keeps
 # the placeholder.
 #
-# Third-party images (the runtime Redis, the OTel collector) keep their own
+# Third-party images (the OTel collector) keep their own
 # deliberate pins under their component keys — a release number means nothing
 # to those registries.
 image:
@@ -242,7 +243,11 @@ pgbouncer:
 #
 # The gateway's budget counters and the scheduler both dial it, and they MUST
 # name the same one: two components on two clusters of a shared counter enforce
-# nothing. Externalized — commodity infrastructure.
+# nothing. elitea-main's live-update plane (ELITEA_EVENTS_NATS_URL: the project
+# SSE stream and canvas presence's KV bucket) dials it too — or, when
+# llmGateway.env.GATEWAY_NATS_URL overrides it, whatever the gateway names.
+# It must run JetStream — deploy/helm/nats does. Externalized — commodity
+# infrastructure.
 #
 # `namespace` empty means this release's own namespace. Do not hardcode a
 # namespace here: a chart installable anywhere that names one silently couples
@@ -252,21 +257,59 @@ nats:
   namespace: ""
   port: 4222
 
-# ── Redis (general purpose) ─────────────────────────────────────────────────
-#
-# Sessions, project SSE, scheduler coordination. Plaintext, and NOT the same
-# instance as the runtime dispatch bus under `worker`/`runtimeRedis` — that one
-# is mutually authenticated with an ACL user and a file-backed password, and
-# merging the two would be a security regression, not a simplification.
-#
-# A host/port pair rather than a string because both consumers want bare
-# host:port — the value goes straight to goredis Options.Addr, not to a URL
-# parser. The two charts previously defaulted it to "" and to "redis:6379",
-# neither of which resolves in a real namespace.
-redis:
-  service: "elitea-valkey"
-  namespace: ""
-  port: 6379
+  # ── Client identity (#1076) ──────────────────────────────────────────────
+  #
+  # The NATS server (deploy/helm/nats) requires TLS and a client certificate
+  # whose URI SAN, spiffe://<trustDomain>/nats/<identity>, names a user in its
+  # permission table. With `enabled` this chart:
+  #   * issues one Certificate per client from the NATS CA:
+  #       elitea-main        -> Secret elitea-main-nats-client-tls
+  #       elitea-llm-gateway -> Secret elitea-llm-gateway-nats-client-tls
+  #       elitea-scheduler   -> Secret elitea-scheduler-nats-client-tls
+  #   * mounts it at mountPath and sets <PREFIX>_NATS_TLS_{CA,CERT,KEY}_FILE
+  #     (ELITEA_EVENTS_ for main, GATEWAY_ for the gateway and scheduler);
+  #   * renders every derived URL as tls://<service>.<ns>.svc.cluster.local:4222
+  #     — no credential, so the ConfigMaps hold nothing secret.
+  # The services re-read the certificate files on every TLS handshake, so a
+  # cert-manager renewal is picked up on the next reconnect.
+  #
+  # templates/natsClient.yaml refuses: a nats:// URL (or a tls:// one with
+  # TLS off), and user:password@ or token@ in any NATS URL this chart renders
+  # into a ConfigMap. Plaintext is compose's posture; to render it in a cluster
+  # anyway set enabled: false AND allowPlaintext: true, and accept that any pod
+  # that reaches the server can read every tenant's events and reset budget
+  # counters.
+  tls:
+    enabled: true
+    allowPlaintext: false
+    # The NATS CA issuer deploy/helm/nats renders (security.ca.name). It is a
+    # NAMESPACED Issuer, so it signs only in the namespace both releases share;
+    # templates/natsClient.yaml refuses nats.namespace other than this
+    # release's while kind is Issuer. With NATS elsewhere, name a
+    # ClusterIssuer backed by a CA used for NATS only.
+    issuerRef:
+      name: elitea-nats-ca
+      kind: Issuer
+    # Must match the URI SANs the NATS chart's permission table names.
+    trustDomain: elitea.internal
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+    mountPath: /etc/elitea/nats-client
+
+  # The NATS chart's NetworkPolicy admits 4222 from pods labelled
+  # app.kubernetes.io/name=elitea-main / elitea-llm-gateway / elitea-scheduler
+  # (deploy/helm/nats networkPolicy.clients). A main/llmGateway/scheduler
+  # nameOverride changes that label, so templates/natsClient.yaml refuses it
+  # unless this is true — set it only after adding the new name to the NATS
+  # chart's networkPolicy.clients.
+  networkPolicyClientNamesManaged: false
+
+# The top-level `redis` block (the plaintext "general purpose" Redis, service
+# elitea-valkey, rendered into REDIS_URL for elitea-main and the scheduler) is
+# GONE. Its three uses moved or were deleted: the project SSE stream to NATS
+# core pub/sub, canvas presence to a NATS KV bucket,
+# and the scheduler's Redis tick lock went with the legacy pylon RPC dispatcher
+# it guarded. A values file that still sets `redis:` is ignored.
 
 # ── Database preparation ────────────────────────────────────────────────────
 #
@@ -588,21 +631,21 @@ main:
 
       # THE AUTHENTICATION CONFIGURATION ITSELF (issue #444).
       #
-      # internal/authcomposition/material.go opens FIVE files, and their paths
+      # internal/authcomposition/material.go opens THREE files, and their paths
       # come from this document. Before issue #444 the document was always
       # external — the chart knew a ConfigMap name and nothing more — so the
-      # chart could not know the five paths, rendered no volume for them, and
+      # chart could not know the three paths, rendered no volume for them, and
       # every Kubernetes install of the runtime plane had to place the files by
       # some other method.
       #
       # Put the document here and the chart:
       #   * renders the ConfigMap for you;
-      #   * checks that all five paths sit in material.mountPath below, while it
+      #   * checks that all three paths sit in material.mountPath below, while it
       #     renders, and names the offending path when one does not;
       #   * mounts the material where the service opens it.
       #
       # Leave it empty and set configMapName instead to keep the document
-      # outside the chart. The chart then cannot see the five paths, and
+      # outside the chart. The chart then cannot see the three paths, and
       # cmd/elitea-auth-material is the only gate: it reads the same document in
       # the init container and stops the pod when the paths and the mount
       # disagree.
@@ -611,21 +654,24 @@ main:
       #
       # Read internal/authcomposition/config.go for the schema, and
       # deploy/runtime/auth.form.yml for a complete example with comments.
+      # The schema is elitea.auth.form.v2. The chart refuses a v1 document and
+      # any `redis:` block: the Form sign-in state is in PostgreSQL (elitea-main
+      # shared migration 0153), and the attempt key is
+      # credentials.attempt_key_file.
       document: {}
 
       configMapName: ""
       key: auth-config.json
       mountPath: /etc/elitea/auth-config.json
 
-      # The five files that the document names: the Auth Redis password, the
-      # Auth Redis CA, the browser-attempt key, the PAT signing key and the Form
-      # users JSON.
+      # The three files that the document names: the browser-attempt key, the
+      # PAT signing key and the Form users JSON.
       #
       # THE KEY NAMES ARE THE OPERATOR'S. Unlike the runtime material, the chart
       # does not fix them: each name is the last component of a path in the
       # document above. The Secret must carry one key for each of those names.
       material:
-        # Where the service reads the five files. Every path in the document must
+        # Where the service reads the three files. Every path in the document must
         # sit in this directory, because one volume mount serves one directory.
         #
         # It must differ from runtime.material.mountPath. Each install container
@@ -634,10 +680,11 @@ main:
         # files.
         mountPath: /run/elitea-auth
 
-        # A Kubernetes Secret whose keys are the five file names, for example:
+        # A Kubernetes Secret whose keys are the three file names, for example:
         #
         #   kubectl create secret generic elitea-main-auth-material \
-        #     --from-file=redis-auth-password --from-file=auth-redis-ca.crt ...
+        #     --from-file=auth-attempt-key --from-file=auth-pat-signing-key \
+        #     --from-file=auth-form-users.json
         #
         # The chart cannot mount that Secret straight at mountPath.
         # internal/security/securefile refuses a path that resolves through a
@@ -780,8 +827,8 @@ main:
     #      only from fileConfig.authConfig (off by default). Shipping "true" with
     #      authentication off would turn a working default install into a
     #      CrashLoopBackOff.
-    #   2. An operator must choose a public project id and a Redis endpoint. The
-    #      chart cannot guess either.
+    #   2. An operator must choose a public project id. The chart cannot guess
+    #      it.
     #
     # Read values-standalone.yaml for the values file that turns the set on. The
     # chart checks every prerequisite at `helm template` time, so a wrong
@@ -903,16 +950,47 @@ main:
     ELITEA_INDEX_TYPES_ENABLED: ""
     ELITEA_APPLICATION_SKILLS_ENABLED: ""
 
-    # --- Project event stream (#152) -------------------------------------------
-    # Transport for GET /api/v2/events/prompt_lib/{projectID}. The router has a
-    # two-arm fallback and BOTH arms were unassigned in this chart, so the route
-    # was never registered and answered 404 — indistinguishable from a typo.
+    # --- Live-update plane (#152) ----------------------------------------------
+    # NATS core pub/sub for GET /api/v2/events/prompt_lib/{projectID}, which
+    # reads two subject families (#1076): canvas presence rosters on
+    # elitea.events.project.<id>.presence, which elitea-main publishes in its
+    # own NATS account, and the gateway's budget.soft_alert on
+    # gateway.events.project.<id>.events, imported from the gateway's account.
+    # Plus canvas presence's JetStream KV bucket ELITEA_CANVAS_PRESENCE. The
+    # server needs JetStream. Domain events (conversation.created, …) do NOT
+    # travel here — they go to webhooks only.
     #
-    # Host:port of the general-purpose Redis, e.g. "elitea-redis-master:6379".
-    # This is NOT the runtime plane's Redis: that one is separate, mutually
-    # authenticated, and configured under runtime.redis below.
-    REDIS_URL: ""
-    REDIS_USERNAME: ""
+    # Empty means the gateway's effective NATS: an explicit
+    # llmGateway.env.GATEWAY_NATS_URL if set, else the top-level `nats` block
+    # (resolved in this namespace unless nats.namespace says otherwise) — the
+    # same server the gateway and the scheduler use. An unreachable or
+    # JetStream-less server STOPS elitea-main at startup rather than booting
+    # with the SSE route unregistered (a 404 indistinguishable from a typo,
+    # which is what #152 was). With nothing naming a NATS, nothing is rendered
+    # and elitea-main runs with no live-update plane (route unregistered,
+    # presence per-replica), which it logs at startup.
+    #
+    # NO CREDENTIALS, and with nats.tls.enabled (the default) tls:// only: the
+    # client certificate the chart mounts is main's identity (#1076), and
+    # templates/natsClient.yaml refuses user:password@/token@ here because
+    # this map is rendered into a ConfigMap. An externally managed NATS whose
+    # URL must stay private can still come from a Secret through
+    # `main.secrets` (rendered as valueFrom.secretKeyRef; the ConfigMap then
+    # carries no such key):
+    #
+    #   main:
+    #     secrets:
+    #       ELITEA_EVENTS_NATS_URL:
+    #         secretName: elitea-nats-url
+    #         key: url
+    #
+    # The chart refuses to render when the gateway reads GATEWAY_NATS_URL from
+    # a Secret (llmGateway.secrets) and elitea-main names no URL of its own,
+    # because it cannot then tell which NATS the gateway uses.
+    #
+    # The presence KV bucket's replicas are the nats-bootstrap Job's to set
+    # (deploy/helm/nats-bootstrap `replicas`); main binds to it.
+    ELITEA_EVENTS_NATS_URL: ""
 
     # --- Admin console ---------------------------------------------------------
     # Directory the admin single-page application is served from. The published
@@ -1535,13 +1613,6 @@ main:
     # and a secretKeyRef sets the variable to the CONTENT of the Secret key. The
     # pod then tried to open a file whose name was a PEM block. They are now plain
     # path entries in the `env:` map above; mount the material as a volume.
-    # Password for the general-purpose Redis named by env.REDIS_URL above — the
-    # project event stream's transport (issue #382). Optional, because a Redis
-    # with no authentication needs no password and the pod must still start.
-    REDIS_PASSWORD:
-      secretName: elitea-main-redis-secrets
-      key: redis-password
-      optional: true
 
   # --- Runtime plane (issue #382) ----------------------------------------------
   # Agent execution, the execution-events stream, index ingest, index scheduling
@@ -1566,7 +1637,7 @@ main:
   # internal/security/securefile, which applies three rules:
   #   1. The path must be canonical and its final component must NOT be a
   #      symlink.
-  #   2. Private material (command-signing-key.pem, redis-producer-password and
+  #   2. Private material (command-signing-key.pem and
   #      the three server .key files) must carry OWNER BITS ONLY — at most 0600.
   #   3. The file must be readable by the process owner.
   # A plain Kubernetes `secret:` volume breaks rule 1: it is a symlink farm, so
@@ -1588,9 +1659,9 @@ main:
   # the volume must present exactly these names:
   #   runtime-ca.crt                 command-signing-key.pem
   #   control-server.crt             command-signing-keyring.json
-  #   control-server.key             redis-producer-password
-  #   output-server.crt              content-server.crt
-  #   output-server.key              content-server.key
+  #   control-server.key             content-server.crt
+  #   output-server.crt              content-server.key
+  #   output-server.key
   runtime:
     # OFF by default, because turning it on requires production Form
     # authentication, and that needs `fileConfig.authConfig.document.public_origin`
@@ -1602,16 +1673,29 @@ main:
     # none of it — silently, with nothing in any log. templates/guards.yaml
     # refuses that combination at render time rather than letting it install.
     #
-    # To turn chat on, set all three together:
-    #   main.runtime.enabled, worker.enabled, runtimeRedis.enabled
-    # plus fileConfig.authConfig (see below).
+    # To turn chat on, set both together:
+    #   main.runtime.enabled, worker.enabled
+    # plus fileConfig.authConfig (see below), and run the nats-bootstrap chart:
+    # it creates the command bus's streams and durable consumers
+    # (docs/runtime-command-bus.md), which elitea-main and the worker only bind.
     enabled: false
 
     # The base plane: configuration validation. Always required when enabled.
-    # The stream name must differ from every dispatch stream below.
+    # One of the command bus's streams — ELITEA_RT_V1_VALIDATE in every shipped
+    # profile — and different from every dispatch stream below. A stream's
+    # capacity is the nats-bootstrap chart's runtime.<route>.maxMsgs.
     commandStream: ""
     maxOutstanding: 64
-    streamMaxEntries: 1024
+
+    # The runtime plane's NATS connection: the command bus producer and the
+    # execution-replay wake-up, as its OWN NATS identity, elitea-main-runtime
+    # (spiffe://<nats.tls.trustDomain>/nats/elitea-main-runtime), whose
+    # certificate templates/natsClient.yaml issues into Secret
+    # <main fullname>-runtime-nats-client-tls and the pod mounts at mountPath.
+    nats:
+      # Empty: the top-level `nats` block (tls://<service>.<ns>...:4222).
+      url: ""
+      mountPath: /etc/elitea/runtime-nats-client
 
     # The execution-event SSE streams this replica admits (issue #963). The
     # cap is process-local by design: every main replica admits its own share,
@@ -1636,16 +1720,15 @@ main:
     # The four agent turn routes — the chat send path.
     agentExecutionDispatch:
       enabled: false
+      # ELITEA_RT_V1_AGENT. Its durable consumer is fixed by the stream.
       commandStream: ""
-      consumerGroup: ""
-      streamMaxEntries: 1024
       # OPTIONAL. The origin elitea-main calls for the next-input-suggestion
       # policy. Empty is the normal value: the call is a SELF call and this
       # process serves cleartext, so the origin is derived from its own listener
       # (http://127.0.0.1:<port of ELITEA_HTTP_ADDRESS>).
       #
-      # Set it only where another server answers that path — centry-hybrid aims
-      # it at the edge, which routes the path to legacy Centry. It must then be
+      # Set it only where another server answers that path (the retired
+      # centry-hybrid stack aimed it at an edge that routed it to legacy Centry). It must then be
       # an https ORIGIN, with no path, query or fragment, on an address that
       # TERMINATES TLS. An https origin on elitea-main's own cleartext port is
       # refused at boot.
@@ -1656,21 +1739,14 @@ main:
     # Configurations dependency, and the embedding binding resolves from the same
     # configuration rows.
     #
-    # Giving this the SAME commandStream AND the SAME consumerGroup as
-    # agentExecutionDispatch is supported, and it is what the standalone compose
+    # Giving this the SAME commandStream as agentExecutionDispatch
+    # (ELITEA_RT_V1_AGENT) is supported, and it is what the standalone compose
     # stack does: one worker then serves both capabilities, because the worker
-    # dispatches on the command's capability id rather than on its stream. Doing
-    # that costs no second worker, no second consumer group and no extra Redis
-    # ACL grant. Sharing the stream with a DIFFERENT group is refused.
+    # dispatches on the command's capability id rather than on its stream, and
+    # one stream has one durable consumer. Otherwise ELITEA_RT_V1_INDEX.
     indexIngestDispatch:
-      # The SAME stream and group as agentExecutionDispatch on purpose: the
-      # worker dispatches on the command's capability id, not on its stream, so
-      # one worker serves both and this costs no second consumer group and no
-      # extra Redis ACL grant.
       enabled: false
       commandStream: ""
-      consumerGroup: ""
-      streamMaxEntries: 1024
 
     # Saved toolkit discovery requires an active worker dispatch.
     toolkitDiscovery:
@@ -1682,17 +1758,6 @@ main:
       # Lowercase letters, digits, dot, underscore and hyphen; it must start with
       # a letter or a digit.
       instanceId: ""
-
-    # The runtime's OWN Redis — mutually authenticated, and separate from the
-    # general-purpose Redis in env.REDIS_URL above.
-    redis:
-      # Must be a rediss:// URL that carries an ACL USERNAME and NO password, and
-      # it must select database zero explicitly, e.g.
-      #   "rediss://producer@elitea-runtime-redis:6380/0"
-      # The password comes from the redis-producer-password file in the material
-      # volume, never from the URL.
-      url: ""
-      poolSize: 8
 
     # Must equal the key id inside command-signing-keyring.json. The composition
     # cross-checks the two and refuses to start on a mismatch.
@@ -1756,11 +1821,10 @@ main:
     # file path from mountPath plus one of these names, and they are the names
     # deploy/scripts/gen-runtime-certs.sh writes:
     #
-    #   runtime-ca.crt                the trust root: the Redis CA, and the
-    #                                 client CA of all three listeners
+    #   runtime-ca.crt                the trust root: the client CA of all
+    #                                 three listeners
     #   command-signing-key.pem       Ed25519 PKCS#8, signs dispatch envelopes
     #   command-signing-keyring.json  its public half, keyed by signingKeyId
-    #   redis-producer-password       the runtime Redis ACL password
     #   control-server.crt / .key     the control listener keypair
     #   output-server.crt / .key      the output listener keypair
     #   content-server.crt / .key     the content listener keypair
@@ -1831,8 +1895,8 @@ main:
     # and provision that ServiceAccount outside this chart so it exists when the
     # hook runs.
     serviceAccountName: ""
-    # -all-tenants mirrors deploy/centry-hybrid/pov-compose.yml's elitea-migrate
-    # invocation: apply the shared history, then the tenant history for every
+    # -all-tenants mirrors the elitea-migrate invocation of the retired
+    # centry-hybrid PoV stack: apply the shared history, then the tenant history for every
     # existing legacy project. Both cmd/elitea-migrate flags are idempotent —
     # already-applied migration files are skipped — so re-running on every
     # upgrade is safe.
@@ -2031,15 +2095,11 @@ scheduler:
   # Service: nothing calls in, the process polls and consumes.
   #
   # READ services/elitea-scheduler/RETIREMENT.md AND THIS CHART'S README BEFORE
-  # INSTALLING. In short: this binary carries FOUR independent responsibilities
-  # and the three that matter are not the scheduler loop —
-  #   1. the legacy centry.schedule poller (NOT the owner of product schedule
-  #      occurrences; elitea-main's scheduling kernel is). It starts
-  #      UNCONDITIONALLY — there is no env flag to turn it off (main.go always
-  #      calls sched.Run). Which jobs it acts on is decided by DATA: the enabled
-  #      flag on centry.schedule rows. Installing this chart against a database
-  #      whose rows for a job elitea-main also registers are still enabled gives
-  #      you TWO CLOCKS for that job, which RETIREMENT.md forbids.
+  # INSTALLING. In short: this binary carries independent background workers
+  # and dispatches no schedules — the legacy centry.schedule poller that
+  # PUBLISHed Pylon RPC over Redis was deleted (nothing consumed it, issue
+  # #305), and with it this component's only use of Redis:
+  #   1. (removed) the legacy centry.schedule poller;
   #   2. the price-catalog sync worker (PRICE_SYNC_ENABLED, off by default);
   #   3. the budget write-back consumer (BUDGET_WRITEBACK_ENABLED, off by
   #      default) that drains GATEWAY_BUDGET_DELTAS into
@@ -2051,10 +2111,8 @@ scheduler:
   # (2), (3) and (4) are the reason the image cannot simply be deleted; they
   # have no relocation decision yet.
 
-  # Single replica. The poller's mutual exclusion is a Redis tick lock, so extra
-  # replicas are not incorrect, but they buy nothing: every tick is executed once
-  # regardless, and the price-sync/write-back workers are likewise
-  # single-consumer shaped. The retention sweep takes no lock at all — its
+  # Single replica. The price-sync/write-back workers are single-consumer
+  # shaped, so extra replicas are not incorrect but buy nothing. The retention sweep takes no lock at all — its
   # batches use FOR UPDATE SKIP LOCKED, so two sweepers take disjoint rows.
   # Scale out only with a specific measured reason.
   replicaCount: 1
@@ -2065,8 +2123,7 @@ scheduler:
     pullPolicy: IfNotPresent
 
   # Recreate, not RollingUpdate: two generations overlapping during a rollout
-  # would both hold pollers contending for the same Redis tick lock and the same
-  # durable NATS consumer. A few seconds of no scheduler is cheaper than that.
+  # would both bind the same durable NATS consumer. A few seconds of no scheduler is cheaper than that.
   strategy:
     type: Recreate
 
@@ -2090,11 +2147,6 @@ scheduler:
     # Empty means the binary's own default (localhost) — never correct in a
     # cluster. Set this.
     DATABASE_URL: ""
-    # host:port, NOT a redis:// URL — the value is passed straight to
-    # goredis.Options.Addr.
-    # Empty means the top-level `redis` block, resolved in this namespace.
-    REDIS_URL: ""
-    RPC_CHANNEL: "elitea_rpc"
     # Must match .Values.healthPort below; the chart does not derive one from the
     # other so that an operator changing one and not the other fails loudly at
     # probe time rather than silently listening on the wrong port.
@@ -2124,13 +2176,11 @@ scheduler:
     PRICE_SYNC_LITELLM_URL: ""
 
     # Budget write-back consumer (design §8.6). Requires BOTH the flag AND
-    # GATEWAY_NATS_URL; with either unset the consumer never starts.
-    #
-    # CROSS-NAMESPACE: NATS is installed by deploy/helm/nats into the
-    # `elitea-gateway` namespace (deploy/argocd/applications/nats.yaml) while this
-    # chart's ArgoCD Application targets `elitea`. The short name `nats` does NOT
-    # resolve across namespaces — use the FQDN below if you enable this.
-    # ON by default since issue #464, with the FQDN filled in.
+    # a NATS URL; with either unset the consumer never starts. ON by default
+    # since issue #464. NATS is installed by deploy/helm/nats into THIS
+    # release's namespace (the Argo CD sample: `elitea`, #1076), and the URL
+    # comes from the top-level `nats` block unless GATEWAY_NATS_URL below
+    # overrides it.
     #
     # WHY THIS IS NOT AN OPTIONAL EXTRA. gateway.llm_budget_accumulators is not
     # only the table the budget screens read. The gateway's fail-mode FSM reads it
@@ -2148,20 +2198,23 @@ scheduler:
     # spend_available=false, which is the honest "no figure was collected" signal
     # rather than a zero.
     BUDGET_WRITEBACK_ENABLED: "true"
-    # CROSS-NAMESPACE, so this is an FQDN and not the short name `nats`. NATS is
-    # installed by deploy/helm/nats into `elitea-gateway`
-    # (deploy/argocd/applications/nats.yaml) while this chart's Application
-    # targets `elitea`. Change it if your topology differs.
+    # Empty (the default) renders tls://<nats.service>.<namespace>.svc.cluster.local:4222
+    # from the top-level `nats` block — the FQDN, with nats.namespace (empty =
+    # this release's) — next to the scheduler's client certificate
+    # (GATEWAY_NATS_TLS_*). An override must be tls:// and carry no
+    # credential (templates/natsClient.yaml).
     #
-    # A NATS that does not answer is NOT fatal: cmd/elitea-scheduler logs
-    # "budget write-back: NATS connect failed; consumer disabled" and keeps
-    # running its other jobs. So this default degrades loudly instead of
-    # preventing a deployment that has no NATS from starting.
-    # Empty means the top-level `nats` block, resolved in this namespace.
+    # A NATS that does not answer, or a consumer the nats-bootstrap Job has
+    # not created yet, is NOT fatal and NOT final: cmd/elitea-scheduler keeps
+    # running its other jobs and keeps attaching with backoff (one WARN per
+    # outage), and GET /readyz/budget-writeback on its health port reports
+    # attached / waiting (503) / disabled / misconfigured (503). Deltas wait
+    # in GATEWAY_BUDGET_DELTAS meanwhile, for up to its MaxAge (72h).
     GATEWAY_NATS_URL: ""
     BUDGET_WRITEBACK_BATCH_SIZE: "500"
-    BUDGET_WRITEBACK_ACK_WAIT: "30s"
-    BUDGET_WRITEBACK_MAX_DELIVER: "10"
+    # The consumer's AckWait and MaxDeliver are the consumer's own
+    # configuration, set by the nats-bootstrap Job that creates it
+    # (deploy/helm/nats-bootstrap deltas.writeback); the scheduler only binds.
 
     # Audit-event retention sweep (issue #619).
     #
@@ -2219,20 +2272,10 @@ scheduler:
 
   # Sensitive vars from Kubernetes Secrets (rendered as valueFrom.secretKeyRef),
   # never plaintext in the ConfigMap above — same shape as
-  # the `llmGateway:` block and this chart's `main:` block.
-  #
-  # RPC_HMAC_KEY signs the Pylon/Arbiter RPC payloads the poller publishes on
-  # RPC_CHANNEL. `optional: true` because the binary tolerates an empty key (it
-  # then publishes unsigned) — which is exactly why you should set it: an absent
-  # Secret does not fail, it downgrades.
-  #
-  #   kubectl create secret generic elitea-scheduler-secrets \
-  #     --from-literal=rpc-hmac-key=...
-  secrets:
-    RPC_HMAC_KEY:
-      secretName: elitea-scheduler-secrets
-      key: rpc-hmac-key
-      optional: true
+  # the `llmGateway:` block and this chart's `main:` block. The binary reads
+  # none today (RPC_HMAC_KEY went with the legacy RPC dispatcher), so the map
+  # is empty; an operator may still add entries.
+  secrets: {}
 
   # Port the in-process health server listens on (must equal the port in
   # env.HTTP_ADDR above).
@@ -2273,8 +2316,8 @@ scheduler:
       failureThreshold: 3
 
   # No HorizontalPodAutoscaler template in this chart, deliberately. Every unit of
-  # work here is serialised behind a Redis tick lock or a single durable consumer,
-  # so added replicas raise cost and lock contention without raising throughput —
+  # work here is a single durable consumer or a SKIP LOCKED sweep, so added
+  # replicas raise cost without raising throughput —
   # an HPA would be a control that cannot help. Set replicaCount by hand if a
   # measured reason ever appears.
 
@@ -3311,7 +3354,7 @@ worker:
   # Scale-out is now CORRECT, and this stays at 1 because correct is not the
   # same as needed.
   #
-  # Each replica gets its own Redis consumer name — the init container
+  # Each replica gets its own NATS connection name — the init container
   # substitutes the pod's own name into consumer_id, see
   # templates/worker/deployment.yaml. Everything else stays shared: one
   # workload session row, one producer_id, one client certificate. That is not
@@ -3321,7 +3364,7 @@ worker:
   # identify themselves.
   #
   # Raise this, or put an autoscaler on it, with a measured reason. The bound
-  # to measure first is the Redis consumer group's read rate, not CPU.
+  # to measure first is the JetStream consumer's pending count, not CPU.
   #
   # IGNORED when autoscaling below is on: the Deployment then omits `replicas`
   # entirely, because a value there is rewritten on every `helm upgrade` and
@@ -3339,26 +3382,43 @@ worker:
   # WHY NOT A NATIVE HPA. The other three autoscalers in this chart scale on
   # CPU and memory. An agent execution spends most of its life waiting on a
   # model, so a backlog of thousands of unclaimed commands raises neither. The
-  # depth of the Redis consumer group is the signal, and no native HPA reads
-  # it.
+  # lag of the worker's JetStream durable consumer is the signal, and no
+  # native HPA reads it.
   #
-  # BEFORE YOU ENABLE IT: the runtime Redis uses a private CA, and KEDA
-  # verifies against the operator pod's own trust store. Install the KEDA
-  # operator with that CA mounted, or the scaler cannot connect — and a scaler
-  # that cannot connect reports no depth, which scales the fleet DOWN while the
-  # backlog grows. The chart cannot check this for you.
+  # KEDA's nats-jetstream scaler reads /jsz on the NATS monitoring port (8222,
+  # plain HTTP, no credential). deploy/helm/nats admits the KEDA operator there
+  # (networkPolicy.monitoringFrom); a scaler that cannot reach it reports no
+  # lag, which scales the fleet DOWN while the backlog grows.
   autoscaling:
     enabled: false
     minReplicas: 1
     maxReplicas: 10
 
-    # Entries pending in the consumer group, per replica. KEDA divides the
-    # observed depth by this to get a replica count.
-    #
-    # 32 = limits.delivery_max_concurrency: one replica drains a full cap of
-    # pending entries before the scaler wants a second. A smaller target adds
-    # replicas while the first still has free delivery slots.
-    targetPendingEntries: 32
+    # The per-replica target of KEDA's nats-jetstream metric, which is
+    # num_pending + num_ack_pending of the durable (KEDA v2.10..v2.21
+    # getMaxMsgLag): commands waiting AND commands a replica has pulled and not
+    # yet acked. A worker pulls only for its free delivery slots plus at most
+    # nats_fetch_batch of prefetch, so one replica holds about
+    # delivery_max_concurrency; empty (the default) uses exactly that, and KEDA
+    # asks for enough replicas to run everything waiting or running. The chart
+    # refuses a value above delivery_max_concurrency + nats_fetch_batch.
+    lagThreshold: ""
+    # Lag that wakes a fleet scaled to zero (minReplicas 0); 1 = any waiting
+    # command.
+    activationLagThreshold: 1
+    # The NATS monitoring endpoint (host:port) the scaler reads. Empty: the
+    # top-level `nats` block's HEADLESS service (<nats.service>-headless) on
+    # port 8222. On the HA cluster the scaler must reach the consumer leader:
+    # it follows /varz connect_urls, and when servers advertise none it builds
+    # <server_name>.<this host>, a pod DNS name that exists only under the
+    # headless service. A plain ClusterIP Service name breaks that fallback.
+    natsMonitoringEndpoint: ""
+    # The NATS account the command bus streams live in, as /jsz reports it
+    # (the scaler asks /jsz?acc=<this> and matches account_details[].name).
+    # deploy/helm/nats declares one account per plane; the command bus is
+    # RUNTIME. A wrong name reads as zero lag, so the fleet would never scale
+    # up — libs/go/natsconn/natstest pins what /jsz answers for it.
+    natsAccount: "RUNTIME"
 
     pollingIntervalSeconds: 15
 
@@ -3371,8 +3431,10 @@ worker:
   # One Secret carrying every file the worker reads. Keys:
   #   runtime-ca.crt                 agent-worker-client.crt
   #   agent-worker-client.key        command-signing-keyring.json
-  #   redis-worker-password          worker-output-spool-key
-  #   agent-checkpoint-connection
+  #   worker-output-spool-key        agent-checkpoint-connection
+  # The worker's NATS identity (elitea-worker) is NOT in this Secret: it is a
+  # cert-manager Certificate from the dedicated NATS CA
+  # (templates/natsClient.yaml), mounted at nats.tls.mountPath.
   materialSecretName: elitea-worker-material
 
   # elitea_worker/config.py applies the same permission contract as the Go side:
@@ -3486,11 +3548,15 @@ worker:
     workloadSessionId: elitea-agent-worker-1
     producerId: elitea-agent-worker-1
     consumerId: elitea-agent-worker-1-consumer
-    # rediss:// with an ACL username and NO password in the URL — the password
-    # comes from redis_password_path. The database must be spelled out.
-    redisUrl: "rediss://worker@elitea-runtime-redis:6380/0"
-    redisStream: "commands.v1.agent.execute.agent.shared.1.0"
-    redisGroup: "elitea-agent-worker-v1"
+    # The runtime command bus (docs/runtime-command-bus.md). natsUrl empty:
+    # the top-level `nats` block (tls:// with the elitea-worker certificate).
+    # The stream is one of ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}; the durable is
+    # the one the nats-bootstrap chart creates for it. The standalone profile
+    # runs agent AND index commands on ELITEA_RT_V1_AGENT, so one fleet serves
+    # both.
+    natsUrl: ""
+    natsStream: "ELITEA_RT_V1_AGENT"
+    natsConsumer: "elitea-agent-worker-v1"
     # The three mTLS listeners, dialled through elitea-main's Service. These
     # names must appear as SANs on control/output/content-server.crt.
     controlTarget: "elitea-main:9443"
@@ -3514,13 +3580,16 @@ worker:
     sensitiveTools: '{"*":["delete_file"]}'
     # The delivery cap and the synchronous SDK pool cap the same executions in
     # series. Raise delivery_max_concurrency together with sync_max_workers and
-    # sync_max_in_flight, or the pool bounds the delivery cap. The queue holds
-    # one item per delivery slot. redis_read_batch stays at 4.
+    # sync_max_in_flight, or the pool bounds the delivery cap. A worker pulls
+    # only for free delivery slots plus at most nats_fetch_batch (4) of
+    # prefetch, so the queue behind running work stays short and another
+    # replica can take what this one cannot start; delivery_queue_capacity is
+    # the upper bound of that queue.
     limits:
-      redis_read_batch: 4
-      redis_block_millis: 1000
-      redis_reclaim_idle_millis: 60000
-      redis_reclaim_interval_millis: 5000
+      nats_fetch_batch: 4
+      nats_fetch_expires_millis: 5000
+      nats_in_progress_interval_millis: 5000
+      nats_retry_delay_millis: 60000
       dependency_retry_millis: 250
       delivery_max_concurrency: 32
       delivery_queue_capacity: 64
@@ -3583,108 +3652,6 @@ worker:
   securityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: false
-    capabilities:
-      drop: ["ALL"]
-
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-
-runtimeRedis:
-  # The runtime dispatch bus the worker reads. Pairs with worker.
-  enabled: false
-  # TLS Redis for the runtime dispatch plane and production Form authentication.
-  #
-  # This is a SECOND Redis, deliberately separate from `elitea-valkey`, which
-  # stays plaintext and keeps serving elitea-main's REDIS_URL (sessions, project
-  # SSE). It exists because two consumers accept nothing else:
-  #
-  #   - internal/runtimecomposition/config.go  — rediss:// only, ACL username,
-  #     file-backed password, dialled at MinVersion TLS 1.3
-  #   - internal/authcomposition/config.go:469 — the same, for the auth session
-  #     store
-  #
-  # Cleartext is off entirely (`port 0`). A runtime plane reachable without TLS
-  # would let anything on the pod network XADD signed-envelope commands.
-
-  image:
-    repository: docker.io/library/redis
-    tag: "7-alpine"
-    pullPolicy: IfNotPresent
-
-  # Server certificate, CA and the ACL file all arrive in ONE Secret, minted by
-  # deploy/scripts/gen-runtime-certs.sh (the only material-minting script this
-  # repo ships). Keys: runtime-ca.crt, redis-server.crt, redis-server.key,
-  # redis-users.acl, redis-bootstrap-password.
-  #
-  # Unlike elitea-main's material, redis enforces no permission bits of its own,
-  # so a plain Secret volume is enough — no copy-into-emptyDir init container.
-  materialSecretName: elitea-runtime-redis-material
-
-  tlsPort: 6380
-
-  service:
-    # The name is load-bearing: it is the host in every rediss:// URL, and
-    # deploy/scripts/gen-runtime-certs.sh bakes it in as a SAN on
-    # redis-server.crt alongside the compose service name `runtime-redis` (so
-    # the same material serves both stacks). Renaming it away from what the
-    # script issues silently breaks the TLS handshake with a message that
-    # reads like a trust problem.
-    name: elitea-runtime-redis
-
-  # XGROUP CREATE ... MKSTREAM for the dispatch streams, run as a Helm hook on
-  # every install and upgrade. Idempotent: BUSYGROUP means a previous run did it.
-  #
-  # The worker's ACL user deliberately has no XGROUP: a consumer that can create
-  # its own group can, after losing one, recreate it at the stream head and
-  # silently skip every command in flight. So the group is created here, from
-  # 0-0, by a bootstrap user that can do nothing else.
-  bootstrap:
-    enabled: true
-    agentStream: "commands.v1.agent.execute.agent.shared.1.0"
-    agentGroup: "elitea-agent-worker-v1"
-    configurationStream: "commands.v1.configuration.validate.v1.validation-small.shared-credential-free.1.0"
-    configurationGroup: "elitea-configuration-worker-v1"
-
-  # Persistence. The compose stack turns this off and calls the keys disposable,
-  # which is true of a laptop stack and false here: this instance keeps browser
-  # SESSIONS under the auth key prefix and in-flight DISPATCH COMMANDS in the
-  # streams. Without an AOF a pod restart — a drain, an image bump, an OOM —
-  # logs every user out and strands every command that was XADDed but not yet
-  # acknowledged, silently, because the consumer groups themselves come back
-  # from the bootstrap Job.
-  #
-  # Set enabled=false to accept that, on a stack where losing both is cheap.
-  persistence:
-    enabled: true
-    size: 8Gi
-    storageClassName: ceph-rbd
-    # everysec, not always: the fsync-per-write cost is not worth it for a
-    # dispatch bus whose worst case is one second of commands, and `always`
-    # would put an fsync in the path of every XADD.
-    appendfsync: everysec
-
-  resources:
-    requests:
-      cpu: 50m
-      memory: 128Mi
-    limits:
-      cpu: "1"
-      memory: 512Mi
-
-  # uid/gid 999 is the `redis` user in the official image. fsGroup makes the
-  # Secret volume readable after the entrypoint drops privileges.
-  podSecurityContext:
-    runAsNonRoot: true
-    runAsUser: 999
-    runAsGroup: 999
-    fsGroup: 999
-    seccompProfile:
-      type: RuntimeDefault
-
-  securityContext:
-    allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: true
     capabilities:
       drop: ["ALL"]
 

@@ -40,8 +40,8 @@ use crate::toolkits::{
     DirectToolkitRequest, DirectToolkitRequestErrorCode, DirectToolkitRuntime,
     DirectToolkitRuntimeErrorCode,
 };
-use crate::transport::redis_commands::{
-    RedisCommandDelivery, RedisCommandError, RedisCommandRetirer, RedisRetirementClient,
+use crate::transport::command_bus::{
+    CommandBusError, CommandDelivery, CommandRetirementClient, CommandRetirer,
 };
 use crate::transport::{ControlRpc, InputContentError};
 
@@ -49,7 +49,7 @@ pub(super) struct ToolkitDeliveryProcessor<R, RC, T, K, I> {
     router: ToolkitDeliveryRouter<R, RC>,
     output: AgentOutputPreflight,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     replay: Arc<T>,
     input: Arc<I>,
     clock: Arc<K>,
@@ -62,7 +62,7 @@ pub(super) struct ToolkitDeliveryProcessor<R, RC, T, K, I> {
 impl<R, RC, T, K, I> ToolkitDeliveryProcessor<R, RC, T, K, I>
 where
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     T: ToolkitTerminalReplay + 'static,
     K: UnixMillisClock,
     I: AgentInputMaterializer + 'static,
@@ -71,7 +71,7 @@ where
     pub(super) fn new(
         output: AgentOutputPreflight,
         control: Arc<AgentControlClient<R>>,
-        retirer: Arc<RedisCommandRetirer<RC>>,
+        retirer: Arc<CommandRetirer<RC>>,
         replay: Arc<T>,
         input: Arc<I>,
         clock: Arc<K>,
@@ -97,7 +97,7 @@ where
 
     pub(super) async fn process_verified(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedToolkitExecuteReadCommand,
     ) -> Result<ToolkitProcessOutcome, ToolkitProcessError> {
         let route = self
@@ -242,7 +242,7 @@ where
 
     async fn execute_preparing(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedToolkitExecuteReadCommand,
         execution: LeaseMonitoredAgentExecution,
         output: PreparedAgentOutput,
@@ -628,7 +628,7 @@ where
     #[allow(clippy::too_many_arguments)]
     async fn publish_fresh_terminal(
         &self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         verified: VerifiedToolkitExecuteReadCommand,
         output_authority: AgentExecutionOutputAuthority,
         output: PreparedAgentOutput,
@@ -672,7 +672,7 @@ where
             self.retirer
                 .retire_toolkit_execute_read_command(delivery, &verified, receipt.into())
                 .await
-                .map_err(ToolkitProcessError::Redis)
+                .map_err(ToolkitProcessError::CommandBus)
         }
         .await;
         if let Err(error) = lease.close().await {
@@ -722,7 +722,7 @@ where
             self.retirer
                 .retire_toolkit_execute_read_command(delivery, &verified, receipt.into())
                 .await
-                .map_err(ToolkitProcessError::Redis)
+                .map_err(ToolkitProcessError::CommandBus)
         }
         .await;
         if let Err(error) = lease.close().await {
@@ -786,7 +786,7 @@ where
             self.retirer
                 .retire_toolkit_execute_read_command(delivery, &verified, receipt.into())
                 .await
-                .map_err(ToolkitProcessError::Redis)
+                .map_err(ToolkitProcessError::CommandBus)
         }
         .await;
         if let Err(error) = lease.close().await {
@@ -1140,7 +1140,7 @@ pub(super) enum ToolkitProcessError {
     Protocol(ProtocolError),
     Output(crate::transport::OutputGrpcError),
     Terminal(ToolkitTerminalError),
-    Redis(RedisCommandError),
+    CommandBus(CommandBusError),
     Clock,
 }
 
@@ -1160,7 +1160,7 @@ impl ToolkitProcessError {
             Self::Output(error) if output_retryable(error) => "toolkit_delivery.output_unavailable",
             Self::Output(_) => "toolkit_delivery.output_rejected",
             Self::Terminal(error) => error.code(),
-            Self::Redis(error) => error.code(),
+            Self::CommandBus(error) => error.code(),
             Self::Clock => "toolkit_delivery.invalid_clock",
         }
     }
@@ -1173,7 +1173,7 @@ impl ToolkitProcessError {
             Self::Control(error) => error.retryable(),
             Self::Lease(error) => error.retryable(),
             Self::Terminal(error) => error.retryable(),
-            Self::Redis(error) => error.retryable(),
+            Self::CommandBus(error) => error.retryable(),
             Self::Output(error) => output_retryable(error),
             Self::Protocol(_) | Self::Clock => false,
         }
@@ -1204,11 +1204,11 @@ impl std::error::Error for ToolkitProcessError {}
 
 pub(super) async fn process_toolkit_verified<R, RC, T, K, I>(
     processor: &ToolkitDeliveryProcessor<R, RC, T, K, I>,
-    delivery: RedisCommandDelivery,
+    delivery: CommandDelivery,
     verified: VerifiedToolkitExecuteReadCommand,
 ) where
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     T: ToolkitTerminalReplay + 'static,
     K: UnixMillisClock,
     I: AgentInputMaterializer + 'static,
@@ -1224,8 +1224,8 @@ pub(super) async fn process_toolkit_verified<R, RC, T, K, I>(
         resource_project_id = %command.resource_project_id,
         projection_project_id = %command.projection_project_id,
         capability_id = %command.capability_id,
-        redis_stream = %delivery.stream(),
-        redis_entry_id = %delivery.entry_id(),
+        nats_stream = %delivery.stream(),
+        nats_stream_sequence = delivery.stream_sequence(),
     );
     Box::pin(
         async move {

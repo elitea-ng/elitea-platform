@@ -1,10 +1,10 @@
 """One delivered ``configuration.validate.v1`` execution transaction.
 
-The processor keeps transport ownership explicit: Redis carries only the
-signed reference command, control gRPC claims and settles, HTTPS retrieves the
-claim-bound settings, and output gRPC carries the result. Redis is acknowledged
-only after a server-proven no-authority terminal receipt or a terminal output
-ACK and settlement receipt.
+The processor keeps transport ownership explicit: the JetStream command bus
+carries only the signed reference command, control gRPC claims and settles,
+HTTPS retrieves the claim-bound settings, and output gRPC carries the result.
+The command message is acknowledged only after a server-proven no-authority
+terminal receipt or a terminal output ACK and settlement receipt.
 """
 
 from __future__ import annotations
@@ -150,7 +150,7 @@ from elitea_worker.transport.input_content import (
     ClaimBoundInputRequestBuilder,
     ScopedInputContentClient,
 )
-from elitea_worker.transport.redis_commands import RedisCommandDelivery
+from elitea_worker.transport.nats_jetstream import CommandDelivery
 
 
 _TERMINAL_OUTCOMES = frozenset(
@@ -218,7 +218,7 @@ class ControlPlane(Protocol):
 class CommandSettlementAcker(Protocol):
     async def ack_after_settlement(
         self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         stable_delivery_id: str,
     ) -> None: ...
 
@@ -774,7 +774,7 @@ async def _await_with_lease_state(
 
 
 class ConfigurationValidationDeliveryProcessor:
-    """Processes one Redis delivery without adding retry or business policy."""
+    """Processes one command-bus delivery without adding retry or business policy."""
 
     def __init__(
         self,
@@ -820,19 +820,19 @@ class ConfigurationValidationDeliveryProcessor:
         self._max_output_sessions = max_output_sessions
         self._lease_poll_interval = lease_poll_interval_seconds
 
-    async def process(self, delivery: RedisCommandDelivery) -> DeliveryResult:
+    async def process(self, delivery: CommandDelivery) -> DeliveryResult:
         try:
             return await self._supervisor.run(
                 lambda: self._process_admitted(delivery)
             )
         except SyncExecutorAdmissionRejected:
             # Admission is decided before parsing, claim, input, output, or ACK.
-            # The untouched Redis delivery can be retried on another worker.
+            # The untouched command message can be retried on another worker.
             return DeliveryResult(DeliveryDisposition.RETRY_LATER_NOACK)
 
     async def _process_admitted(
         self,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
     ) -> DeliveryResult:
         signed, command = parse_and_verify_signed_command(
             delivery.signed_envelope,
@@ -1112,7 +1112,7 @@ class ConfigurationValidationDeliveryProcessor:
                             )
                         except SyncExecutorAdmissionRejected:
                             # No business callable was submitted. Leave the claim
-                            # and Redis delivery unacknowledged so the lease can
+                            # and command message unacknowledged so the lease can
                             # expire and the scheduler can admit it elsewhere.
                             return DeliveryResult(
                                 DeliveryDisposition.RETRY_LATER_NOACK
@@ -1303,7 +1303,7 @@ class ConfigurationValidationDeliveryProcessor:
     async def _recover_pending_output(
         self,
         *,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         frame: output_pb2.ExecutionOutputFrameV1,
         output: OutputSession,
         receipt: control_pb2.ClaimReceiptV1,
@@ -1368,7 +1368,7 @@ class ConfigurationValidationDeliveryProcessor:
         lease.start()
         try:
             # A non-terminal replay has no settlement proposal and never ACKs
-            # the Redis command. Future redelivery remains recovery-only, so
+            # the command message. Future redelivery remains recovery-only, so
             # the SDK cannot be invoked twice.
             await self._publish_output(frame, initial_output=output)
             return DeliveryResult(
@@ -1381,7 +1381,7 @@ class ConfigurationValidationDeliveryProcessor:
     async def _recover_cancelled_running(
         self,
         *,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         frame: output_pb2.ExecutionOutputFrameV1 | None,
         output: OutputSession,
         receipt: control_pb2.ClaimReceiptV1,
@@ -1411,7 +1411,7 @@ class ConfigurationValidationDeliveryProcessor:
     async def _recover_ambiguous_running(
         self,
         *,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         output: OutputSession,
         receipt: control_pb2.ClaimReceiptV1,
         verified: VerifiedWorkerCommand,
@@ -1475,7 +1475,7 @@ class ConfigurationValidationDeliveryProcessor:
     async def _recover_cancelled_running_under_lease(
         self,
         *,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         frame: output_pb2.ExecutionOutputFrameV1 | None,
         output: OutputSession,
         receipt: control_pb2.ClaimReceiptV1,
@@ -1580,7 +1580,7 @@ class ConfigurationValidationDeliveryProcessor:
     async def _settle_cancelled_recovery(
         self,
         *,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         receipt: control_pb2.ClaimReceiptV1,
         verified: VerifiedWorkerCommand,
         sequence: int,
@@ -1631,7 +1631,7 @@ class ConfigurationValidationDeliveryProcessor:
     async def _recover_local_output(
         self,
         *,
-        delivery: RedisCommandDelivery,
+        delivery: CommandDelivery,
         frame: output_pb2.ExecutionOutputFrameV1,
         output: OutputSession,
         receipt: control_pb2.ClaimReceiptV1,

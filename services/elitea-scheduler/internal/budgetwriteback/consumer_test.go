@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 func quietLogger() *slog.Logger {
@@ -366,31 +368,39 @@ func TestRun_StopsImmediatelyIfCtxAlreadyCancelled(t *testing.T) {
 	}
 }
 
-func TestConsumerConfig_MatchesDesign(t *testing.T) {
-	cfg := Config{AckWait: 42 * time.Second, MaxDeliver: 7}
-	cc := consumerConfig(cfg)
-	if cc.Durable != DurableName {
-		t.Errorf("Durable = %q, want %q", cc.Durable, DurableName)
+func TestVerifyConsumer(t *testing.T) {
+	good := jetstream.ConsumerConfig{Durable: DurableName, FilterSubject: DeltaSubject, AckPolicy: jetstream.AckExplicitPolicy}
+	if err := verifyConsumer(good); err != nil {
+		t.Fatalf("the bootstrap's consumer was refused: %v", err)
 	}
-	if cc.FilterSubject != DeltaSubject {
-		t.Errorf("FilterSubject = %q, want %q", cc.FilterSubject, DeltaSubject)
+	multi := good
+	multi.FilterSubject, multi.FilterSubjects = "", []string{DeltaSubject}
+	if err := verifyConsumer(multi); err != nil {
+		t.Errorf("FilterSubjects=[%s] was refused: %v", DeltaSubject, err)
 	}
-	if cc.AckWait != 42*time.Second {
-		t.Errorf("AckWait = %v, want 42s", cc.AckWait)
-	}
-	if cc.MaxDeliver != 7 {
-		t.Errorf("MaxDeliver = %d, want 7", cc.MaxDeliver)
+	for name, mutate := range map[string]func(*jetstream.ConsumerConfig){
+		"push":         func(c *jetstream.ConsumerConfig) { c.DeliverSubject = "gateway.events.project.1.events" },
+		"wider filter": func(c *jetstream.ConsumerConfig) { c.FilterSubject = "gateway.>" },
+		"no filter":    func(c *jetstream.ConsumerConfig) { c.FilterSubject = "" },
+		"two filters":  func(c *jetstream.ConsumerConfig) { c.FilterSubjects = []string{"x"} },
+		"ack none":     func(c *jetstream.ConsumerConfig) { c.AckPolicy = jetstream.AckNonePolicy },
+		"ack all":      func(c *jetstream.ConsumerConfig) { c.AckPolicy = jetstream.AckAllPolicy },
+	} {
+		c := good
+		mutate(&c)
+		if err := verifyConsumer(c); err == nil {
+			t.Errorf("%s: verifyConsumer accepted it", name)
+		}
 	}
 }
 
 func TestConfigWithDefaults(t *testing.T) {
 	got := Config{}.withDefaults()
-	if got.BatchSize != defaultBatchSize || got.FetchWait != defaultFetchWait ||
-		got.AckWait != defaultAckWait || got.MaxDeliver != defaultMaxDeliver {
+	if got.BatchSize != defaultBatchSize || got.FetchWait != defaultFetchWait {
 		t.Errorf("zero Config did not fill defaults: %+v", got)
 	}
 	// Non-zero values are preserved.
-	custom := Config{BatchSize: 10, FetchWait: time.Second, AckWait: time.Second, MaxDeliver: 3}
+	custom := Config{BatchSize: 10, FetchWait: time.Second}
 	if custom.withDefaults() != custom {
 		t.Error("non-zero Config must be preserved by withDefaults")
 	}

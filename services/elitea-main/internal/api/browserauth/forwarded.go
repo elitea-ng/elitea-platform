@@ -158,12 +158,35 @@ func (r *TrustedProxyResolver) Resolve(request *http.Request) (ForwardedRequest,
 // ResolveClientKey shares the exact trusted-hop interpretation used by the
 // EdgeAuth source. Login attempt limiting therefore cannot be bypassed by a
 // second, weaker X-Forwarded-For parser.
+//
+// The key is the client's address for IPv4 and its /64 for IPv6. One IPv6
+// subscriber is routinely given a whole /64 (SLAAC, privacy addresses) and
+// can rotate through it at will, so a per-/128 key would give one client 2^64
+// independent limits. An IPv4-mapped IPv6 address is already unmapped by
+// resolveClientIP and keys as the IPv4 address it is.
 func (r *TrustedProxyResolver) ResolveClientKey(request *http.Request) (string, error) {
 	clientIP, err := r.resolveClientIP(request)
 	if err != nil {
 		return "", err
 	}
-	return clientIP.String(), nil
+	return attemptClientKey(clientIP), nil
+}
+
+// ipv6ClientPrefixBits is the IPv6 grouping of attemptClientKey: the
+// smallest prefix one end site is normally assigned (RFC 6177).
+const ipv6ClientPrefixBits = 64
+
+func attemptClientKey(address netip.Addr) string {
+	address = address.Unmap()
+	if address.Is4() {
+		return address.String()
+	}
+	prefix, err := address.WithZone("").Prefix(ipv6ClientPrefixBits)
+	if err != nil {
+		// Unreachable for a valid IPv6 address; the full address still keys.
+		return address.String()
+	}
+	return prefix.String()
 }
 
 // VerifyForwardedIdentityPeer proves only that the immediate socket peer is a

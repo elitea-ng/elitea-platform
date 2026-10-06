@@ -17,7 +17,7 @@ package pipelinetriggers_test
 //     settings tab reads, and only a DISPATCH moves `last_run`.
 //
 // The start use case is faked. Admitting a turn for real needs the whole
-// runtime plane — outbox, Redis stream, a worker — which is not what this file
+// runtime plane — outbox, command bus, a worker — which is not what this file
 // is about: the seam under test is everything on THIS side of
 // `StartCurrentApplication`.
 

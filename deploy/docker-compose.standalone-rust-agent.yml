@@ -12,8 +12,6 @@ services:
     environment:
       ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "false"
       ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: ""
-      ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP: ""
-      ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES: ""
       # This overlay is what selects the native worker, so it is also what tells
       # elitea-main which toolkit types the running worker can build. The native
       # worker materializes 22 families and SKIPS anything else with a warning,

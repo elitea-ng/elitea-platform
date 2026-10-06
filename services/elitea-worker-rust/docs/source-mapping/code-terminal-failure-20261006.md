@@ -56,11 +56,29 @@ These checks use in-process doubles on macOS ARM64.
 The existing native compact-unwind linker warning remains recorded.
 They do not prove Linux, live PostgreSQL, mTLS, sandbox processes, or deployed UI acceptance.
 
+## Deployed acceptance, 2026-10-06
+
+Worker image `3a86177965a1` uses source `d6568bae8`.
+Main and Web remain unchanged during these browser checks.
+The isolated pipeline has an empty source variable and a second Code node that must not run.
+
+Both ephemeral chat 826 and persistent chat 827 show `PIPELINE_CODE_FAILED` with actionable guidance and a support reference.
+Persistent reload retains the exact error code, message, and reference.
+Each execution saves its failed journal before Main admits the failure.
+Both executions have zero sandbox dispatches and zero later-node executions.
+The failure journal retains revision two, one attempt, and the validated `invalid_input` class.
+
+The negative runtime proof SHA256 is `6d8fc0b424fd07702384f33b723b6deb7d5fa7af86539beb69a448f843c60843`.
+The fresh positive run in chat 825 completes Python, JavaScript, TypeScript, and Rust.
+Eight unique platform reads commit, seven sandbox dispatches resolve, and five graph checkpoints remain.
+The final answer matches after browser reload.
+The positive runtime proof SHA256 is `619cc7933f3641d1b064c3ed015bfaae7e878314153888bf42be61db2d420d11`.
+These browser checks use the deployed Redis revision. They do not prove the later NATS integration.
+
 ## Remaining acceptance
 
-Deploy the corrected Worker and Main after the separate migration-preservation gate passes.
-Verify an isolated valid pipeline whose source variable is empty at runtime.
-Require the exact Code error, zero sandbox dispatches, no later node execution, and the same persisted error after reload.
+Deploy the integrated Main and Worker cohort with NATS after its migration and transport checks pass.
+Verify the three exact preparation messages through Main admission and the browser.
 Browser reload alone does not prove journal replay.
 Actual replay requires an authorized current-claim continuation before public settlement.
 

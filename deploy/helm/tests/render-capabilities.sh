@@ -29,7 +29,7 @@ set -euo pipefail
 # "the Deployment" or "the ConfigMap" from the render. The single chart renders
 # every component, so the suite narrows the render to its subject instead of
 # teaching twenty selectors to disambiguate.
-ONLY_MAIN="--set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false --set runtimeRedis.enabled=false"
+ONLY_MAIN="--set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false"
 GATEWAY_RENDER_POSTURE="--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -285,11 +285,73 @@ case "$allow_own_llms" in
     ;;
 esac
 
-if yq eval-all 'select(.kind == "ConfigMap") | .data | has("REDIS_URL")' \
-  "$WORK/default.yaml" | grep -qx true; then
-  pass "the chart exposes REDIS_URL, the project event stream transport"
+# The live-update plane (project SSE stream, canvas presence) rides the SAME
+# NATS the gateway and the scheduler use. A default install must
+# render it from the top-level `nats` block as an FQDN, or the SSE route stays
+# unregistered (#152); and the retired plain Redis must not come back.
+events_nats="$(data ELITEA_EVENTS_NATS_URL "$WORK/default.yaml")"
+case "$events_nats" in
+  tls://elitea-nats.*.svc.cluster.local:4222)
+    # tls:// since #1076: the NATS chart requires TLS and a client certificate.
+    pass "ELITEA_EVENTS_NATS_URL renders \"$events_nats\" from the top-level nats block"
+    ;;
+  *)
+    fail "ELITEA_EVENTS_NATS_URL renders \"$events_nats\"; the project event stream and canvas presence need the shared NATS"
+    ;;
+esac
+# ...and it follows the GATEWAY's effective NATS, not just the `nats` block:
+# the gateway publishes budget.soft_alert onto the subject the stream reads,
+# and an explicit llmGateway.env.GATEWAY_NATS_URL used to leave elitea-main on
+# the derived (possibly non-existent) host. These renders keep the gateway ON.
+main_events_nats() {
+  yq eval-all 'select(.kind == "ConfigMap") | select(.metadata.name == "elitea-main-config") | .data.ELITEA_EVENTS_NATS_URL // ""' "$1"
+}
+helm template ${GATEWAY_RENDER_POSTURE} test-release "$CHART" \
+  --set-string llmGateway.env.GATEWAY_NATS_URL=tls://nats.elitea-gateway.svc.cluster.local:4222 \
+  >"$WORK/gateway-nats.yaml"
+if [ "$(main_events_nats "$WORK/gateway-nats.yaml")" = "tls://nats.elitea-gateway.svc.cluster.local:4222" ]; then
+  pass "ELITEA_EVENTS_NATS_URL follows an explicit llmGateway.env.GATEWAY_NATS_URL"
 else
-  fail "the chart does not expose REDIS_URL, so the project event stream stays unregistered"
+  fail "ELITEA_EVENTS_NATS_URL renders \"$(main_events_nats "$WORK/gateway-nats.yaml")\" while the gateway names tls://nats.elitea-gateway.svc.cluster.local:4222"
+fi
+helm template ${GATEWAY_RENDER_POSTURE} test-release "$CHART" \
+  --set-string llmGateway.env.GATEWAY_NATS_URL=tls://nats.elitea-gateway.svc.cluster.local:4222 \
+  --set-string main.env.ELITEA_EVENTS_NATS_URL=tls://main-own.example.invalid:4222 \
+  >"$WORK/main-explicit-nats.yaml"
+if [ "$(main_events_nats "$WORK/main-explicit-nats.yaml")" = "tls://main-own.example.invalid:4222" ]; then
+  pass "an explicit main.env.ELITEA_EVENTS_NATS_URL still wins"
+else
+  fail "an explicit main.env.ELITEA_EVENTS_NATS_URL was overridden"
+fi
+# A gateway URL from a Secret is invisible to the chart: the render must
+# refuse rather than guess main's URL from the `nats` block.
+if helm template ${GATEWAY_RENDER_POSTURE} test-release "$CHART" \
+  --set llmGateway.secrets.GATEWAY_NATS_URL.secretName=gw-nats --set llmGateway.secrets.GATEWAY_NATS_URL.key=url \
+  >"$WORK/gateway-secret-nats.yaml" 2>"$WORK/gateway-secret-nats.err"; then
+  fail "the chart rendered with GATEWAY_NATS_URL from a Secret and no ELITEA_EVENTS_NATS_URL for elitea-main"
+elif grep -q "main.secrets.ELITEA_EVENTS_NATS_URL" "$WORK/gateway-secret-nats.err"; then
+  pass "a Secret-backed GATEWAY_NATS_URL without main's own URL is refused with the fix named"
+else
+  fail "the Secret-backed GATEWAY_NATS_URL render failed for another reason: $(tail -1 "$WORK/gateway-secret-nats.err")"
+fi
+# The Secret-backed path for main itself (credentials never in a ConfigMap):
+# a main.secrets entry renders as secretKeyRef and the ConfigMap carries no
+# ELITEA_EVENTS_NATS_URL at all.
+helm template ${GATEWAY_RENDER_POSTURE} test-release "$CHART" \
+  --set llmGateway.secrets.GATEWAY_NATS_URL.secretName=gw-nats --set llmGateway.secrets.GATEWAY_NATS_URL.key=url \
+  --set main.secrets.ELITEA_EVENTS_NATS_URL.secretName=gw-nats --set main.secrets.ELITEA_EVENTS_NATS_URL.key=url \
+  >"$WORK/main-secret-nats.yaml"
+if [ "$(yq eval-all 'select(.kind == "ConfigMap") | select(.metadata.name == "elitea-main-config") | .data | has("ELITEA_EVENTS_NATS_URL")' "$WORK/main-secret-nats.yaml")" = "false" ] \
+  && [ "$(yq eval-all 'select(.kind == "Deployment") | select(.metadata.name == "elitea-main") | .spec.template.spec.containers[] | select(.name == "elitea-main") | .env[] | select(.name == "ELITEA_EVENTS_NATS_URL") | .valueFrom.secretKeyRef.name' "$WORK/main-secret-nats.yaml")" = "gw-nats" ]; then
+  pass "main.secrets.ELITEA_EVENTS_NATS_URL renders as a secretKeyRef and stays out of the ConfigMap"
+else
+  fail "main.secrets.ELITEA_EVENTS_NATS_URL did not render as a secretKeyRef only"
+fi
+if yq eval-all 'select(.kind == "ConfigMap") | .data | (has("REDIS_URL") or has("REDIS_USERNAME"))' \
+  "$WORK/default.yaml" | grep -qx true; then
+  fail "a ConfigMap still renders REDIS_URL/REDIS_USERNAME; nothing reads the plain Redis any more"
+else
+  pass "no ConfigMap renders the retired plain-Redis REDIS_URL"
 fi
 
 # ---------------------------------------------------------------------------
@@ -376,6 +438,9 @@ else
   pass "the Deployment mounts the runtime material at $mount_path"
   while read -r key; do
     case "$key" in
+      # The runtime NATS identity is its own cert-manager Secret, mounted on
+      # its own (templates/natsClient.yaml), not runtime material.
+      ELITEA_RUNTIME_NATS_TLS_*) : ;;
       *_FILE)
         value="$(data "$key" "$WORK/all-planes-render.yaml")"
         case "$value" in
@@ -598,12 +663,12 @@ fi
 # ---------------------------------------------------------------------------
 # 4c. The authentication material — issue #444.
 #
-# internal/authcomposition/material.go opens five files. Their paths come from
+# internal/authcomposition/material.go opens three files. Their paths come from
 # the operator's authentication document, not from a chart value, so the chart
 # rendered no volume and no mount for them at all.
 #
-# The five expected KEY NAMES are EXTRACTED FROM THE GO SOURCE. config.go is
-# the authority on which fields are file references, so a sixth one makes this
+# The three expected KEY NAMES are EXTRACTED FROM THE GO SOURCE. config.go is
+# the authority on which fields are file references, so a fourth one makes this
 # section fail until the chart mounts it too. Every PATH is read out of the
 # rendered ConfigMap, and every mount point out of the rendered Deployment.
 # Nothing here repeats a path that a template also writes.
@@ -613,7 +678,7 @@ AUTH_CONFIG_GO="$REPO/services/elitea-main/internal/authcomposition/config.go"
 grep -oE 'yaml:"[a-z_0-9]+_file"' "$AUTH_CONFIG_GO" |
   sed -E 's/yaml:"//; s/"//' | sort -u >"$WORK/auth-file-keys.txt"
 auth_key_count="$(wc -l <"$WORK/auth-file-keys.txt" | tr -d ' ')"
-if [ "$auth_key_count" -lt 5 ]; then
+if [ "$auth_key_count" -lt 3 ]; then
   fail "extracted only $auth_key_count authentication file keys from config.go — the extraction stopped matching, so this section would gate nothing"
 else
   pass "extracted $auth_key_count authentication file keys from internal/authcomposition/config.go"
@@ -623,7 +688,7 @@ auth_init_name="$(deployment '.initContainers[]? | select(has("command")) | sele
 if [ -n "$auth_init_name" ]; then
   pass "the pod runs the authentication material init container ($auth_init_name)"
 else
-  fail "the pod runs no init container that installs the authentication material, so the five files internal/authcomposition/material.go opens never reach it"
+  fail "the pod runs no init container that installs the authentication material, so the three files internal/authcomposition/material.go opens never reach it"
 fi
 
 if [ -n "$auth_init_name" ]; then
@@ -651,7 +716,7 @@ if [ -n "$auth_init_name" ]; then
   fi
 
   # The SAME configuration file the service reads. This is the whole design:
-  # the init container derives the five paths from the operator's document,
+  # the init container derives the three paths from the operator's document,
   # rather than from a second list that could disagree with it.
   auth_config_env="$(yq eval-all \
     'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "ELITEA_AUTH_CONFIG_FILE") | .value' \
@@ -665,7 +730,7 @@ if [ -n "$auth_init_name" ]; then
   if [ "$auth_config_argument" = "$auth_config_env" ]; then
     pass "the init container reads the same authentication configuration as the service"
   else
-    fail "the init container reads '$auth_config_argument' and the service reads '$auth_config_env'; the init container would derive the five paths from another document"
+    fail "the init container reads '$auth_config_argument' and the service reads '$auth_config_env'; the init container would derive the three paths from another document"
   fi
   auth_init_config_key="$(auth_init ".volumeMounts[] | select(.mountPath == \"$auth_config_argument\") | .subPath")"
   auth_service_config_key="$(deployment ".containers[0].volumeMounts[] | select(.mountPath == \"$auth_config_env\") | .subPath" "$WORK/standalone.yaml")"
@@ -675,7 +740,7 @@ if [ -n "$auth_init_name" ]; then
     fail "the init container mounts key '$auth_init_config_key' and the service mounts key '$auth_service_config_key'"
   fi
 
-  # The document itself, out of the render. The five paths come from it.
+  # The document itself, out of the render. The three paths come from it.
   auth_config_volume="$(deployment ".containers[0].volumeMounts[] | select(.mountPath == \"$auth_config_env\") | .name" "$WORK/standalone.yaml")"
   auth_config_map="$(deployment ".volumes[] | select(.name == \"$auth_config_volume\") | .configMap.name" "$WORK/standalone.yaml")"
   yq eval-all \
@@ -898,6 +963,12 @@ refuses "a material Secret set while the runtime is off" \
   "runtime.enabled" \
   --set main.runtime.material.secretName=elitea-runtime-material
 
+# #1081 review G1: with no runtime.nats.url and no nats.service the runtime
+# URL rendered as tls://.<namespace>.svc.cluster.local:4222 without a word.
+refuses "the runtime with no NATS to publish commands to" \
+  "main.runtime.enabled=true needs a NATS" \
+  -f "$CHART/values-standalone.yaml" --set-string nats.service=
+
 refuses "the runtime without production authentication" \
   "fileConfig.authConfig.enabled" \
   -f "$CHART/values-standalone.yaml" --set main.fileConfig.authConfig.enabled=false
@@ -941,10 +1012,32 @@ refuses "toolkit discovery without worker dispatch" \
   --set main.runtime.agentExecutionDispatch.enabled=false \
   --set main.runtime.indexIngestDispatch.enabled=false
 
-refuses "two dispatch planes sharing a stream with different consumer groups" \
-  "consumer group" \
+refuses "a Redis-era consumerGroup on a dispatch plane" \
+  "consumerGroup is gone" \
   -f "$CHART/values-standalone.yaml" \
   --set main.runtime.indexIngestDispatch.consumerGroup=elitea-index-worker-v1
+
+refuses "a Redis-era runtime.redis block" \
+  "runtime.redis is gone" \
+  -f "$CHART/values-standalone.yaml" \
+  --set main.runtime.redis.url=rediss://producer@elitea-runtime-redis:6380/0
+
+# The runtime Redis is removed (docs/UPGRADING.md, "runtime-redis removed").
+# A values file that still carries the block is refused, even disabled, so the
+# operator learns to delete the leftover objects instead of the key being
+# silently ignored.
+refuses "a values file that still enables runtimeRedis" \
+  "runtimeRedis is removed" \
+  --set runtimeRedis.enabled=true
+
+refuses "a values file that still carries a disabled runtimeRedis block" \
+  "runtimeRedis is removed" \
+  --set runtimeRedis.enabled=false
+
+refuses "a command stream outside the command bus contract" \
+  "not one of the command bus's streams" \
+  -f "$CHART/values-standalone.yaml" \
+  --set main.runtime.agentExecutionDispatch.commandStream=commands.v1.agent.execute.agent.shared.1.0
 
 refuses "a runtime name set through the env map" \
   "ELITEA_RUNTIME_COMMAND_STREAM" \
@@ -990,7 +1083,20 @@ refuses "production authentication with no document at all" \
 refuses "a material path outside the mounted directory" \
   "outside fileConfig.authConfig.material.mountPath" \
   -f "$CHART/values-standalone.yaml" \
-  --set main.fileConfig.authConfig.document.redis.password_file=/etc/elsewhere/redis-auth-password
+  --set main.fileConfig.authConfig.document.credentials.attempt_key_file=/etc/elsewhere/auth-attempt-key
+
+# The retired schema. The Form sign-in state is in PostgreSQL (elitea-main
+# shared migration 0153), so a document that still carries the auth Redis
+# block, or names elitea.auth.form.v1, is refused while the chart renders.
+refuses "an authentication document that still carries a redis block" \
+  "has a redis block" \
+  -f "$CHART/values-standalone.yaml" \
+  --set main.fileConfig.authConfig.document.redis.url=rediss://auth@elitea-runtime-redis:6380/0
+
+refuses "the retired elitea.auth.form.v1 schema" \
+  "accepts only elitea.auth.form.v2" \
+  -f "$CHART/values-standalone.yaml" \
+  --set main.fileConfig.authConfig.document.schema_version=elitea.auth.form.v1
 
 refuses "a material file name no Secret key can carry" \
   "Kubernetes Secret key" \

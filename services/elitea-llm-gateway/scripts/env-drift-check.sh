@@ -309,7 +309,7 @@ else
 
   echo
   # elitea-main reads env in both internal/ and cmd/ (the composition root sets
-  # up DB/Redis/shadow wiring there), so both dirs are scanned. Its allowlist
+  # up DB/NATS/runtime wiring there), so both dirs are scanned. Its allowlist
   # lives next to the chart because the chart is the artifact under test.
   CHART_VALUES_PREFIX=main check_target "elitea-main" \
     "$REPO/deploy/helm/elitea" \

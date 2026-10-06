@@ -13,17 +13,13 @@
 # absolute paths, no symlinks, and exact permission bits (private material must
 # be owner-only 0600/0400; public trust material must not be group/other
 # writable or executable). Enabling the runtime therefore is not "set a flag" —
-# it is provisioning three mTLS listeners, a TLS Redis, an Ed25519 command
-# signing keypair, and the production Form auth plane that
+# it is provisioning three mTLS listeners, an Ed25519 command signing keypair, and the production Form auth plane that
 # cmd/elitea-main/main.go:686-688 hard-requires alongside it.
 #
 # Output (gitignored — deploy/certs/ is in .gitignore; keep it that way):
 #
 #   deploy/certs/runtime/
 #     runtime-ca.{crt,key}            trust root for everything below
-#     redis-server.{crt,key}          served by runtime-redis (SAN: runtime-redis,
-#                                      elitea-runtime-redis — the compose and
-#                                      Kubernetes Service names)
 #     control-server.{crt,key}        elitea-main control gRPC   :9443
 #     output-server.{crt,key}         elitea-main output gRPC    :9444
 #     content-server.{crt,key}        elitea-main content HTTPS  :9445
@@ -32,8 +28,6 @@
 #     agent-checkpoint-connection     DSN for native agent session checkpoints
 #     command-signing-key.pem         Ed25519 PKCS#8, signs dispatch envelopes
 #     command-signing-keyring.json    its public half, keyed by ELITEA_RUNTIME_SIGNING_KEY_ID
-#     redis-{producer,worker,bootstrap,auth}-password
-#     redis-users.acl                 ACL file consumed by runtime-redis
 #     auth-attempt-key                browser-attempt HMAC key (32 raw bytes)
 #     auth-pat-signing-key            PAT HS512 key
 #     auth-form-users.json            Form provider users (unused in practice — the
@@ -76,7 +70,6 @@ mkdir -p -m 700 "$RUNTIME_DIR"
 
 material=(
   runtime-ca.crt runtime-ca.key
-  redis-server.crt redis-server.key
   control-server.crt control-server.key
   output-server.crt output-server.key
   content-server.crt content-server.key
@@ -84,9 +77,6 @@ material=(
   agent-worker-client.crt agent-worker-client.key
   agent-checkpoint-connection
   command-signing-key.pem command-signing-keyring.json
-  redis-producer-password redis-worker-password
-  redis-bootstrap-password redis-auth-password
-  redis-users.acl
   auth-attempt-key auth-pat-signing-key auth-form-users.json
   vault-master-key worker-output-spool-key
 )
@@ -95,8 +85,22 @@ needs_regen=0
 for name in "${material[@]}"; do
   [ -f "$RUNTIME_DIR/$name" ] || needs_regen=1
 done
+# A tree minted while the platform still ran a runtime Redis holds that
+# server's keypair, its ACL file and its passwords. Nothing reads them any
+# more, so drop just those files in place and leave everything else alone: a
+# full rotation would also rotate vault-master-key, auth-pat-signing-key and
+# the Form users, and every vault secret already stored would become
+# unreadable. Idempotent: a tree without them is left alone.
+for retired in redis-server.crt redis-server.key redis-users.acl \
+               redis-producer-password redis-worker-password \
+               redis-bootstrap-password redis-auth-password; do
+  if [ -e "$RUNTIME_DIR/$retired" ]; then
+    rm -f "$RUNTIME_DIR/$retired"
+    echo "→ Removed retired runtime-Redis material: $RUNTIME_DIR/$retired"
+  fi
+done
 if [ "$needs_regen" -eq 0 ]; then
-  for name in runtime-ca.crt redis-server.crt control-server.crt output-server.crt \
+  for name in runtime-ca.crt control-server.crt output-server.crt \
               content-server.crt platform-edge.crt agent-worker-client.crt; do
     openssl x509 -checkend 86400 -noout -in "$RUNTIME_DIR/$name" >/dev/null 2>&1 || needs_regen=1
   done
@@ -109,8 +113,8 @@ fi
 echo "→ Generating runtime-plane material in $RUNTIME_DIR …"
 # Rotation is all-or-nothing on purpose: a keyring that no longer matches its
 # signing key, or a worker cert signed by a retired CA, fails at boot with an
-# error that points at the wrong file. prepare-runtime.sh refuses to guess at a
-# partial tree for the same reason; here the tree is disposable, so rotate it.
+# error that points at the wrong file. Here the tree is disposable, so rotate
+# it.
 rm -f "$RUNTIME_DIR"/*
 
 # ── CA ───────────────────────────────────────────────────────────────────────
@@ -131,15 +135,6 @@ issue_server() {
     -extfile <(printf 'subjectAltName=%s\nextendedKeyUsage=serverAuth\nkeyUsage=critical,digitalSignature,keyEncipherment\n' "$sans") 2>/dev/null
 }
 
-# go-redis derives ServerName from the rediss:// hostname, so the Redis cert
-# must cover every hostname a consumer dials it by. `runtime-redis` is the
-# compose service name; `elitea-runtime-redis` is the Kubernetes Service name
-# (deploy/helm/elitea/templates/runtimeRedis/_helpers.tpl, values.yaml
-# runtimeRedis.service.name) that every rediss:// URL in values-standalone.yaml
-# dials — both must be present so the same cert material serves both stacks.
-# `localhost` is here so the ACL/stream bootstrap can also talk to it from
-# inside the container over 127.0.0.1.
-issue_server redis-server   runtime-redis "DNS:runtime-redis,DNS:elitea-runtime-redis,DNS:localhost,IP:127.0.0.1"
 # The three private listeners all live in the elitea-main container; the worker
 # dials them as elitea-main:9443/9444/9445.
 issue_server control-server elitea-main   "DNS:elitea-main"
@@ -204,15 +199,7 @@ document = {
 PY
 
 # ── secrets ──────────────────────────────────────────────────────────────────
-# Redis passwords are read by loadPassword()/normalizeRedisPassword(), which
-# strip exactly one trailing newline and reject \r, \n and NUL anywhere else —
-# so base64 without padding-free tricks is fine, and a trailing newline is not.
 random_token() { openssl rand -base64 32 | tr -d '\n=' ; }
-
-for name in redis-producer-password redis-worker-password \
-            redis-bootstrap-password redis-auth-password; do
-  printf '%s' "$(random_token)" > "$RUNTIME_DIR/$name"
-done
 
 # materialize() rejects two auth material files that share a byte value, so these
 # must be independently random — not derived from one seed.
@@ -249,66 +236,6 @@ document = {"users": [{"login": "standalone-runtime-unused",
 (runtime_dir / "auth-form-users.json").write_text(
     json.dumps(document, indent=2) + "\n", encoding="ascii")
 PY
-
-# ── Redis ACL ────────────────────────────────────────────────────────────────
-# Four users, one per role, each scoped to the keys it owns:
-#
-#   producer   elitea-main: XADD onto both command streams and their delivery
-#              index hashes, plus the replay wake channel.
-#   worker     elitea-worker-python (#282): consumer-group reads on the agent
-#              stream. Deliberately WITHOUT xgroup — the group is created by
-#              bootstrap, so a worker cannot silently recreate a group it has
-#              lost and skip undelivered commands. Mirrors prepare-runtime.sh.
-#   bootstrap  seed-only: creates the consumer group from 0-0.
-#   auth       the production Form auth plane's session/attempt store, scoped to
-#              its own key prefix.
-#
-# `user default off` is what makes the ACL meaningful: without it every client
-# that skips AUTH lands on an unrestricted default user.
-CONFIGURATION_STREAM='commands.v1.configuration.validate.v1.validation-small.shared-credential-free.1.0'
-AGENT_STREAM='commands.v1.agent.execute.agent.shared.1.0'
-REPLAY_WAKE_CHANNEL='elitea:runtime:execution-replay:wake:v1'
-# The consumer group's shared record of command entries that must not be run
-# again (see services/elitea-worker-python/src/elitea_worker/execution/
-# quarantine.py). One hash per (stream, group).
-#
-# The GROUP is a wildcard and the STREAM is pinned. Pinning both would be
-# tighter by one segment and would add a sixth place that has to agree with
-# `deploy/runtime/worker-runtime.json`'s `redis_group`; when those drift the
-# grant stops matching, the shared store answers NOPERM, and the worker silently
-# falls back to its per-filesystem record — a downgrade with no failing gate.
-# The namespace holds nothing but these records, so the wildcard grants no
-# access the pinned form would have withheld.
-QUARANTINE_KEY_PREFIX="elitea:runtime:v1:quarantine:${AGENT_STREAM}"
-
-producer_password="$(<"$RUNTIME_DIR/redis-producer-password")"
-worker_password="$(<"$RUNTIME_DIR/redis-worker-password")"
-bootstrap_password="$(<"$RUNTIME_DIR/redis-bootstrap-password")"
-auth_password="$(<"$RUNTIME_DIR/redis-auth-password")"
-
-{
-  printf 'user default off\n'
-  printf 'user producer on >%s -@all +@connection +ping +eval +evalsha +xlen +xadd +xrange +xpending +hget +hset +hdel +hlen +publish +subscribe +unsubscribe ~%s ~%s:delivery-index.v1 ~%s ~%s:delivery-index.v1 &%s\n' \
-    "$producer_password" "$CONFIGURATION_STREAM" "$CONFIGURATION_STREAM" \
-    "$AGENT_STREAM" "$AGENT_STREAM" "$REPLAY_WAKE_CHANNEL"
-  # `+hset +hkeys +hlen +expire` and the quarantine key are the ONLY widening of
-  # this user, and they are confined to that one key pattern: nothing here adds
-  # any capability against the command streams themselves. The worker previously
-  # held no write primitive of its own at all (`+xack +xdel +hget +hdel` mutate
-  # only the stream it consumes and that stream's delivery index), which is why
-  # the quarantine record could not be shared between replicas before.
-  #
-  # `+hlen` and `+hexists` are required because the cap is enforced INSIDE the
-  # Lua script rather than by the client, and `eval` runs under this user's own
-  # permissions — a command missing here fails the script at runtime with
-  # "ACL failure in script", which no fake client can reproduce.
-  printf 'user worker on >%s -@all +@connection +ping +eval +evalsha +xreadgroup +xclaim +xautoclaim +xrange +xpending +xack +xdel +hget +hdel +hset +hkeys +hlen +hexists +expire ~%s ~%s:delivery-index.v1 ~%s:*\n' \
-    "$worker_password" "$AGENT_STREAM" "$AGENT_STREAM" "$QUARANTINE_KEY_PREFIX"
-  printf 'user bootstrap on >%s -@all +@connection +ping +xgroup +xinfo +xlen ~%s ~%s\n' \
-    "$bootstrap_password" "$AGENT_STREAM" "$CONFIGURATION_STREAM"
-  printf 'user auth on >%s -@all +@connection +@string +@hash +@keyspace +@scripting +@transaction ~elitea-standalone-auth:*\n' \
-    "$auth_password"
-} > "$RUNTIME_DIR/redis-users.acl"
 
 # Host-side modes. The compose init service re-applies per-consumer ownership and
 # mode inside the volume; these bits only keep the working copy from being

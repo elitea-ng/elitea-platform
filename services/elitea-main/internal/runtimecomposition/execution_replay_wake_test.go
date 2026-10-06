@@ -8,10 +8,59 @@ import (
 	"testing"
 	"time"
 
+	"sync"
+
 	outputapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/output"
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 )
+
+// fakeWakeBroker is an in-memory core-NATS stand-in: every subscriber on a
+// subject receives every publish. The real-server path is
+// TestRuntimeNATSPlaneOnTheChartsPermissions (nats_secured_test.go).
+type fakeWakeBroker struct {
+	mu          sync.Mutex
+	subscribers map[int]func([]byte)
+	next        int
+	failSub     bool
+}
+
+func (b *fakeWakeBroker) Publish(_ string, data []byte) error {
+	b.mu.Lock()
+	subscribers := make([]func([]byte), 0, len(b.subscribers))
+	for _, deliver := range b.subscribers {
+		subscribers = append(subscribers, deliver)
+	}
+	b.mu.Unlock()
+	for _, deliver := range subscribers {
+		deliver(append([]byte(nil), data...))
+	}
+	return nil
+}
+
+func (b *fakeWakeBroker) Subscribe(_ string, deliver func([]byte)) (func() error, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.failSub {
+		return nil, errors.New("subscription unavailable")
+	}
+	if b.subscribers == nil {
+		b.subscribers = map[int]func([]byte){}
+	}
+	b.next++
+	id := b.next
+	b.subscribers[id] = deliver
+	return func() error {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		delete(b.subscribers, id)
+		return nil
+	}, nil
+}
+
+func (b *fakeWakeBroker) count() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.subscribers)
+}
 
 type nodeEventIngestorStub struct {
 	outcome outputapp.ProjectionOutcome
@@ -32,7 +81,7 @@ func (s agentExecutionIngestorStub) IngestAgent(context.Context, outputapp.Agent
 }
 
 func TestExecutionReplayWakeTargetsExactExecutionAndRetainsHighWater(t *testing.T) {
-	bus := newTestReplayWakeBus(t, redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"}))
+	bus := newTestReplayWakeBus(t, &fakeWakeBroker{})
 
 	matching := make(chan error, 1)
 	go func() {
@@ -76,21 +125,15 @@ func TestExecutionReplayWakeTargetsExactExecutionAndRetainsHighWater(t *testing.
 }
 
 func TestExecutionReplayWakeCrossReplicaSignal(t *testing.T) {
-	server := miniredis.RunT(t)
-	firstClient := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	secondClient := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	t.Cleanup(func() {
-		_ = firstClient.Close()
-		_ = secondClient.Close()
-	})
-	first := newTestReplayWakeBus(t, firstClient)
-	second := newTestReplayWakeBus(t, secondClient)
+	broker := &fakeWakeBroker{}
+	first := newTestReplayWakeBus(t, broker)
+	second := newTestReplayWakeBus(t, broker)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	results := make(chan error, 2)
 	go func() { results <- first.Run(ctx) }()
 	go func() { results <- second.Run(ctx) }()
-	waitForReplaySubscribers(t, server, 2)
+	waitForReplaySubscribers(t, broker, 2)
 
 	woken := make(chan error, 1)
 	go func() {
@@ -116,12 +159,7 @@ func TestExecutionReplayWakeCrossReplicaSignal(t *testing.T) {
 }
 
 func TestExecutionReplayWakePublisherDrainsWhenSubscriptionIsUnavailable(t *testing.T) {
-	client := redis.NewClient(&redis.Options{
-		Addr:        "127.0.0.1:1",
-		MaxRetries:  0,
-		DialTimeout: 5 * time.Millisecond,
-	})
-	bus := newTestReplayWakeBus(t, client)
+	bus := newTestReplayWakeBus(t, &fakeWakeBroker{failSub: true})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go bus.runPublisher(ctx)
@@ -144,7 +182,7 @@ func TestExecutionReplayWakePublisherDrainsWhenSubscriptionIsUnavailable(t *test
 }
 
 func TestWakingNodeEventIngestorDefersTerminalUntilAgentProjection(t *testing.T) {
-	bus := newTestReplayWakeBus(t, redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"}))
+	bus := newTestReplayWakeBus(t, &fakeWakeBroker{})
 	ingestor := wakingNodeEventIngestor{
 		next: nodeEventIngestorStub{outcome: outputapp.ProjectionOutcome{Cursor: 7}},
 		wake: bus,
@@ -171,7 +209,7 @@ func TestWakingNodeEventIngestorDefersTerminalUntilAgentProjection(t *testing.T)
 }
 
 func TestWakingAgentExecutionIngestorSignalsOnlyCommittedProjection(t *testing.T) {
-	bus := newTestReplayWakeBus(t, redis.NewClient(&redis.Options{Addr: "127.0.0.1:1"}))
+	bus := newTestReplayWakeBus(t, &fakeWakeBroker{})
 	frame := outputapp.AgentExecutionFrame{ProjectionProjectID: "42"}
 	frame.Fence.ExecutionID = "execution-1"
 
@@ -199,20 +237,19 @@ func TestWakingAgentExecutionIngestorSignalsOnlyCommittedProjection(t *testing.T
 	}
 }
 
-func newTestReplayWakeBus(t *testing.T, client *redis.Client) *redisExecutionReplayWakeBus {
+func newTestReplayWakeBus(t *testing.T, transport replayWakeTransport) *natsExecutionReplayWakeBus {
 	t.Helper()
-	bus, err := newRedisExecutionReplayWakeBus(
-		client,
+	bus, err := newExecutionReplayWakeBus(
+		transport,
 		slog.New(slog.NewTextHandler(io.Discard, nil)),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = client.Close() })
 	return bus
 }
 
-func waitForReplayWaiters(t *testing.T, bus *redisExecutionReplayWakeBus, count int) {
+func waitForReplayWaiters(t *testing.T, bus *natsExecutionReplayWakeBus, count int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -230,11 +267,11 @@ func waitForReplayWaiters(t *testing.T, bus *redisExecutionReplayWakeBus, count 
 	t.Fatalf("waiter count did not reach %d", count)
 }
 
-func waitForReplaySubscribers(t *testing.T, server *miniredis.Miniredis, count int) {
+func waitForReplaySubscribers(t *testing.T, broker *fakeWakeBroker, count int) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if server.PubSubNumSub(executionReplayWakeChannel)[executionReplayWakeChannel] == count {
+		if broker.count() == count {
 			return
 		}
 		time.Sleep(time.Millisecond)
@@ -242,7 +279,7 @@ func waitForReplaySubscribers(t *testing.T, server *miniredis.Miniredis, count i
 	t.Fatalf("subscriber count did not reach %d", count)
 }
 
-func replayWakeHighWater(bus *redisExecutionReplayWakeBus, projectID, executionID string) uint64 {
+func replayWakeHighWater(bus *natsExecutionReplayWakeBus, projectID, executionID string) uint64 {
 	key := executionReplayWake{ProjectID: projectID, ExecutionID: executionID}.key()
 	bus.mu.Lock()
 	defer bus.mu.Unlock()

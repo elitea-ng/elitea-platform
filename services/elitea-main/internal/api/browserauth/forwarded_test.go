@@ -71,6 +71,41 @@ func TestTrustedProxyResolverUsesNearestUntrustedForwardedHop(t *testing.T) {
 	}
 }
 
+// One IPv6 subscriber holds at least a /64 and can rotate through it, so the
+// attempt limiter keys IPv6 clients by /64. IPv4 keys the address; an
+// IPv4-mapped IPv6 address keys as its IPv4 address.
+func TestTrustedProxyResolverGroupsIPv6ClientKeysByPrefix64(t *testing.T) {
+	resolver := newTestTrustedProxyResolver(t)
+	for _, test := range []struct {
+		forwarded string
+		want      string
+	}{
+		{forwarded: "2001:db8:1:2:aaaa:bbbb:cccc:dddd", want: "2001:db8:1:2::/64"},
+		{forwarded: "2001:db8:1:2::1", want: "2001:db8:1:2::/64"},
+		{forwarded: "2001:db8:1:2:ffff:ffff:ffff:ffff", want: "2001:db8:1:2::/64"},
+		{forwarded: "2001:db8:1:3::1", want: "2001:db8:1:3::/64"},
+		{forwarded: "198.51.100.44", want: "198.51.100.44"},
+		{forwarded: "::ffff:198.51.100.44", want: "198.51.100.44"},
+	} {
+		request := forwardedTestRequest("/auth/check")
+		request.Header.Set("X-Forwarded-For", test.forwarded)
+		clientKey, err := resolver.ResolveClientKey(request)
+		if err != nil || clientKey != test.want {
+			t.Fatalf("ResolveClientKey(%s) = %q, %v; want %q", test.forwarded, clientKey, err, test.want)
+		}
+		// The forwarded identity keeps the full address; only the limiter
+		// key is grouped.
+		forwarded, err := resolver.Resolve(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(test.forwarded, ":") && !strings.HasPrefix(test.forwarded, "::ffff:") &&
+			forwarded.ClientIP == test.want {
+			t.Fatalf("Resolve(%s).ClientIP = %q, want the full address", test.forwarded, forwarded.ClientIP)
+		}
+	}
+}
+
 func TestTrustedProxyResolverVerifiesOnlyConfiguredImmediatePeerForIdentity(t *testing.T) {
 	resolver := newTestTrustedProxyResolver(t)
 	trusted := httptest.NewRequest(http.MethodGet, "/projects/project/default/1", nil)

@@ -1,6 +1,6 @@
 //! Claim-bound, bounded HTTP/2 input materialization.
 //!
-//! The content channel is distinct from control gRPC and Redis. Production
+//! The content channel is distinct from control gRPC and the command bus. Production
 //! construction requires the private CA and worker identity, then creates its
 //! own tonic [`Channel`] from the same validated origin used for hostname
 //! verification.

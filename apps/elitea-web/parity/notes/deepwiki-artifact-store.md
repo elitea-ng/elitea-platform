@@ -51,7 +51,7 @@ believed without checking the checker:
 
 ## Why it works today and where it does not
 
-`deploy/centry-hybrid/traefik/index-routes.yml` routes only
+The retired `deploy/centry-hybrid/traefik/index-routes.yml` routed only
 `^/api/v2/artifacts/buckets/[1-9][0-9]*$` and `^/artifacts/s3/…` to the Go
 service. Everything else under `/api/v2/` falls through to pylon — which is
 where this path family is implemented.

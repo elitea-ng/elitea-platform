@@ -24,6 +24,16 @@ on:
       # that matrix and touches nothing under deploy/helm/ never runs the gate
       # that exists to catch it — the #429/#518 shape again.
       - ".github/workflows/publish.yml"
+      # render-nats-security.sh reads the NATS env prefixes the services pass
+      # to libs/go/natsconn (the names are built by concatenation, so the
+      # env-drift gate cannot see them) and asserts the chart renders all
+      # three <PREFIX>_NATS_TLS_*_FILE names for each. A change to a caller
+      # must run it.
+      - "libs/go/natsconn/**"
+      - "services/elitea-main/cmd/elitea-main/event_stream_nats*.go"
+      - "services/elitea-main/cmd/cutover-ctl/budgetcheck*.go"
+      - "services/elitea-llm-gateway/internal/infra/nats/**"
+      - "services/elitea-scheduler/internal/budgetwriteback/**"
   push:
     branches:
       - main
@@ -37,6 +47,11 @@ on:
       - "scripts/runtime/*code*"
       - "services/elitea-code-runner/Containerfile.code-platform"
       - ".github/workflows/publish.yml"
+      - "libs/go/natsconn/**"
+      - "services/elitea-main/cmd/elitea-main/event_stream_nats*.go"
+      - "services/elitea-main/cmd/cutover-ctl/budgetcheck*.go"
+      - "services/elitea-llm-gateway/internal/infra/nats/**"
+      - "services/elitea-scheduler/internal/budgetwriteback/**"
       # This workflow's own file. The pull_request arm above names it and this
       # arm did not, so a push that edited only the gate could not start the
       # gate it edited (#518).
@@ -183,14 +198,14 @@ jobs:
       - name: Workload-session renewal cannot be switched off silently
         run: bash deploy/helm/tests/render-workload-session.sh
 
-      # Every worker replica must get its own Redis consumer name (O2a). The
+      # Every worker replica must get its own NATS connection name (O2a). The
       # mechanism has three parts and one of them fails invisibly: if the
       # worker mounts the ConfigMap instead of the rendered document, every
       # replica reads a consumer name containing the literal placeholder —
       # identical across the fleet, with nothing in any log saying so. The
       # suite also runs the substitution the manifest carries, so that wiring
       # which looks right but substitutes nothing is caught too.
-      - name: Every worker replica gets its own Redis consumer name
+      - name: Every worker replica gets its own NATS connection name
         run: bash deploy/helm/tests/render-worker-consumer-identity.sh
 
       # The worker's KEDA autoscaling (O2c). The refusal is the important half:
@@ -262,6 +277,39 @@ jobs:
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-bf0-2b.sh
 
+      # The NATS security posture (#1076), on the rendered output of the three
+      # charts that must agree about it: every client certificate the platform
+      # and the bootstrap issue names a user in the NATS chart's permission
+      # table and comes from the NATS CA Issuer, every client pod is
+      # one the NATS NetworkPolicy admits, every rendered URL is tls:// with no
+      # credential, and each refusal (TLS off, verify_and_map off,
+      # no_auth_user, plaintext routes, nats:// or credential URLs, plaintext
+      # without the acknowledgement) still fires. It vendors the upstream nats
+      # subchart with `helm dependency build`, which needs network access the
+      # template matrix below does not take. Whether each grant is RIGHT is the
+      # secured permission tests' job (ci-go.yml, ci-gateway.yml).
+      #
+      # It also runs kubeconform on the nats (scale-1, HA, HA with
+      # approver-policy) and nats-bootstrap renders: the template matrix below
+      # excludes those two charts because templating them needs the vendored
+      # subchart, and this step is where their renders exist.
+      # NATS_REQUIRE_KUBECONFORM makes a missing binary a failure, not a skip.
+      - name: Install kubeconform (for the NATS renders)
+        run: |
+          curl -sSL -o /tmp/kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
+          kubeconform -v
+
+      - name: NATS security — the charts agree on identities, issuer and policy
+        env:
+          KUBECONFORM: kubeconform
+          NATS_REQUIRE_KUBECONFORM: "1"
+        run: |
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-nats-security.sh
+
       # `helm lint` covers every chart. The `template` job below covers only the
       # charts its matrix names, and a chart in neither list is never rendered
       # and never schema-checked, with nothing reporting the hole.
@@ -276,7 +324,8 @@ jobs:
           # Charts `helm template` cannot cover on this runner, with the reason:
           # nats/ vendors an upstream subchart, so templating it needs
           # `helm dependency build` and network access to the upstream repo,
-          # and nats-bootstrap/ is its companion hook chart.
+          # and nats-bootstrap/ is its companion hook chart. Both ARE rendered
+          # and schema-checked (kubeconform) by the NATS security step above.
           excluded="nats nats-bootstrap"
           matrix="$(grep -oE '^ +- chart: [a-z0-9-]+' .github/workflows/helm-lint.yml \
                       | awk '{print $3}' | tr '\n' ' ')"
@@ -522,13 +571,12 @@ jobs:
 
       # The auth-minimal capability set. It is the combination NO other pass
       # renders: production authentication and the Configurations write path ON
-      # with the runtime plane OFF, plus a runtimeRedis that no worker reads.
+      # with the runtime plane OFF (the Form sign-in state is in PostgreSQL,
+      # elitea-main shared migration 0153).
       #
-      # That combination is exactly the one templates/guards.yaml could grow an
-      # edge against by accident — worker->runtime and worker->runtimeRedis are
-      # guarded, runtimeRedis->runtime deliberately is not — so a guard added
-      # without this pass would break the cheapest supported install with every
-      # other gate in this file still green.
+      # A guard that tied production authentication to the runtime plane by
+      # accident would break the cheapest supported install with every other
+      # gate in this file still green.
       - name: helm template + kubeconform (auth-minimal capability values)
         if: matrix.chart == 'elitea'
         run: |

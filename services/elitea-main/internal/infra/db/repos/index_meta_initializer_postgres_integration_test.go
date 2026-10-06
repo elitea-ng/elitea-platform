@@ -32,7 +32,7 @@ func (c postgresFrozenToolkitClaimer) ClaimFrozenToolkitConfiguration(
 // PostgreSQL transaction, the actual pgx PgVector writer in a separate
 // transaction/connection, the idempotent recovery seam, and every dispatch
 // gate. The two logical stores share the isolated test database server; this is
-// not a multi-cluster, Redis, worker, TLS, load, or browser E2E.
+// not a multi-cluster, command-bus, worker, TLS, load, or browser E2E.
 func TestPostgresPgvectorIndexMetaInitializationConvergence(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -459,7 +459,7 @@ WHERE j.execution_id = $1
 
 	// Simulate the winning process dying with its lease. A later replica takes
 	// ownership, permanently quarantines the exact pre-authority row, and the
-	// target becomes admissible again without publishing to Redis.
+	// target becomes admissible again without publishing to the command bus.
 	if _, err := pool.Exec(ctx, `
 UPDATE elitea_runtime.index_ingest_jobs
 SET index_meta_initialization_claim_expires_at =

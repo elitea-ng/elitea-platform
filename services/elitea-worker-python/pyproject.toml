@@ -41,9 +41,13 @@ dependencies = [
   # httpx2 — not before, or the conflict simply returns.
   "langsmith>=0.3.45,<0.12",
   "langgraph==1.0.7",
+  # The runtime command bus client (docs/runtime-command-bus.md): a JetStream
+  # pull consumer over mTLS. A tight range, not a floor: the worker's bind
+  # check reads ConsumerConfig/StreamConfig field names and the TLS reload
+  # replaces the client's per-connect SSL context, and both are 2.16 shapes.
+  "nats-py>=2.16.0,<2.17",
   "protobuf>=5.29,<7",
   "pydantic>=2.10,<3",
-  "redis>=6.2,<8.2",
 ]
 
 [project.optional-dependencies]

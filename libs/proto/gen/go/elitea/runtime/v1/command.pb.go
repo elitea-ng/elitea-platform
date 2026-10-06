@@ -97,8 +97,8 @@ func (WorkerCommandTypeV1) EnumDescriptor() ([]byte, []int) {
 	return file_elitea_runtime_v1_command_proto_rawDescGZIP(), []int{0}
 }
 
-// WorkerCommandV1 is the immutable, reference-only command body allowed on a
-// Redis Stream. It must never contain settings, prompts, files, results,
+// WorkerCommandV1 is the immutable, reference-only command body allowed on the
+// command bus. It must never contain settings, prompts, files, results,
 // credentials, grant material, exceptions, or other bulk/protected content.
 // Protocol-v1 consumers reject unknown tags and duplicate singular/oneof tags
 // at the bounded wire layer; ordinary protobuf last-value-wins parsing is not

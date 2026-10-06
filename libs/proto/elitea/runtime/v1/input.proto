@@ -6,7 +6,7 @@ import "elitea/runtime/v1/common.proto";
 
 option go_package = "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1";
 
-// ExecutionInputBundleReferenceV1 is safe for the bounded Redis command. It
+// ExecutionInputBundleReferenceV1 is safe for the bounded bus command. It
 // identifies content but cannot itself redeem or fetch that content.
 message ExecutionInputBundleReferenceV1 {
   string input_bundle_id = 1;

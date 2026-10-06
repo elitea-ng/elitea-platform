@@ -293,7 +293,7 @@ def check_limits_profile() -> None:
     )
     assert proto == limits_pb2.ProtocolLimitsV1(**CONFORMANCE_LIMITS)
     assert proto.max_worker_command_bytes < proto.max_signed_envelope_bytes
-    assert proto.max_signed_envelope_bytes <= proto.max_redis_entry_bytes
+    assert proto.max_signed_envelope_bytes <= proto.max_transport_message_bytes
     assert proto.max_signed_envelope_bytes < proto.max_grpc_request_bytes
     assert proto.max_output_frame_bytes <= proto.max_grpc_request_bytes
     assert proto.max_input_manifest_bytes < proto.max_grpc_response_bytes

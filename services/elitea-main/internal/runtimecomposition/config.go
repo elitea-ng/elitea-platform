@@ -13,17 +13,36 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+
 	executionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/executions"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/runtimegrpc"
 )
 
 const (
-	maxConfigPathBytes       = 4096
-	maxRedisURLBytes         = 2048
-	maxRedisPoolSize         = 64
-	maxRuntimeOutstanding    = 1024
-	maxRuntimeStreamEntries  = 1024
-	productionRedisEntrySize = 64 * 1024
+	maxConfigPathBytes    = 4096
+	maxNATSURLBytes       = 2048
+	maxRuntimeOutstanding = 1024
+	// productionTransportMessageBytes is the validation route's message
+	// bound: max_transport_message_bytes, the streams' MaxMsgSize.
+	productionTransportMessageBytes = commandbus.MaxMessageBytes
+)
+
+// The runtime plane's NATS connection (docs/runtime-command-bus.md): the
+// command bus producer and the execution-replay wake-up. The URL is tls://
+// with the elitea-main-runtime client identity below in a cluster, nats://
+// without it in compose; natsconn.Material.CheckURL refuses any other pairing
+// and any credential in the URL.
+const (
+	runtimeNATSURLEnv = "ELITEA_RUNTIME_NATS_URL"
+	runtimeNATSPrefix = "ELITEA_RUNTIME"
+	// The three files natsconn.FromEnv(runtimeNATSPrefix) reads, named
+	// literally so the env-drift gate sees that the chart sets what the code
+	// reads (TestRuntimeNATSTLSNamesAreNatsconns pins them).
+	runtimeNATSTLSCAFileEnv   = "ELITEA_RUNTIME_NATS_TLS_CA_FILE"
+	runtimeNATSTLSCertFileEnv = "ELITEA_RUNTIME_NATS_TLS_CERT_FILE"
+	runtimeNATSTLSKeyFileEnv  = "ELITEA_RUNTIME_NATS_TLS_KEY_FILE"
 )
 
 type LookupEnv func(string) (string, bool)
@@ -32,30 +51,29 @@ type Config struct {
 	Enabled                 bool
 	ToolkitDiscoveryEnabled bool
 
-	CommandStream    string
-	MaxOutstanding   int64
-	StreamMaxEntries int64
+	// CommandStream is the configuration-validation route's JetStream stream
+	// (commandbus.StreamValidate in every shipped profile).
+	CommandStream  string
+	MaxOutstanding int64
 
 	// SSEStreamLimits bounds the execution-event SSE streams this replica
 	// serves. ConfigFromEnv parses it from ELITEA_RUNTIME_SSE_*; the defaults
 	// stay built in when the variables are unset.
 	SSEStreamLimits executionapi.SSEStreamLimits
 
-	IndexIngestDispatchEnabled     bool
-	IndexSchedulingEnabled         bool
-	SchedulerInstanceID            string
-	IndexIngestCommandStream       string
-	IndexIngestConsumerGroup       string
-	IndexIngestStreamMaxEntries    int64
-	AgentExecutionDispatchEnabled  bool
-	AgentExecutionCommandStream    string
-	AgentExecutionConsumerGroup    string
-	AgentExecutionStreamMaxEntries int64
-	CurrentMainBaseURL             string
-	RedisURL                       string
-	RedisPasswordFile              string
-	RedisCAFile                    string
-	RedisPoolSize                  int
+	IndexIngestDispatchEnabled    bool
+	IndexSchedulingEnabled        bool
+	SchedulerInstanceID           string
+	IndexIngestCommandStream      string
+	AgentExecutionDispatchEnabled bool
+	AgentExecutionCommandStream   string
+	CurrentMainBaseURL            string
+
+	// NATSURL and NATSMaterial: the runtime plane's own NATS connection, as
+	// the elitea-main-runtime identity (ELITEA_RUNTIME_NATS_URL,
+	// ELITEA_RUNTIME_NATS_TLS_{CA,CERT,KEY}_FILE).
+	NATSURL      string
+	NATSMaterial natsconn.Material
 
 	// Empty keeps sandbox grant issuance disabled. Values are exact identities.
 	SandboxAudiences        []string
@@ -138,13 +156,10 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	if config.MaxOutstanding, err = integer("ELITEA_RUNTIME_MAX_OUTSTANDING"); err != nil {
 		return Config{}, err
 	}
-	if config.StreamMaxEntries, err = integer("ELITEA_RUNTIME_STREAM_MAX_ENTRIES"); err != nil {
-		return Config{}, err
-	}
 	indexIngestEnabled, _ := lookup("ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED")
 	switch indexIngestEnabled {
 	case "", "false":
-		for _, name := range []string{"ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM", "ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP", "ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES"} {
+		for _, name := range []string{"ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"} {
 			if value, ok := lookup(name); ok && value != "" {
 				return Config{}, errors.New("runtime index ingest dispatch settings require explicit enablement")
 			}
@@ -152,12 +167,6 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	case "true":
 		config.IndexIngestDispatchEnabled = true
 		if config.IndexIngestCommandStream, err = required("ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"); err != nil {
-			return Config{}, err
-		}
-		if config.IndexIngestConsumerGroup, err = required("ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP"); err != nil {
-			return Config{}, err
-		}
-		if config.IndexIngestStreamMaxEntries, err = integer("ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES"); err != nil {
 			return Config{}, err
 		}
 	default:
@@ -168,8 +177,6 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	case "", "false":
 		for _, name := range []string{
 			"ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM",
-			"ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP",
-			"ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES",
 			"ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL",
 		} {
 			if value, ok := lookup(name); ok && value != "" {
@@ -179,12 +186,6 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	case "true":
 		config.AgentExecutionDispatchEnabled = true
 		if config.AgentExecutionCommandStream, err = required("ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"); err != nil {
-			return Config{}, err
-		}
-		if config.AgentExecutionConsumerGroup, err = required("ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP"); err != nil {
-			return Config{}, err
-		}
-		if config.AgentExecutionStreamMaxEntries, err = integer("ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES"); err != nil {
 			return Config{}, err
 		}
 		if config.CurrentMainBaseURL, err = currentMainBaseURL(lookup); err != nil {
@@ -230,23 +231,12 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 			"ELITEA_RUNTIME_INDEX_SCHEDULING_ENABLED must be true or false",
 		)
 	}
-	if config.RedisURL, err = required("ELITEA_RUNTIME_REDIS_URL"); err != nil {
+	if config.NATSURL, err = required(runtimeNATSURLEnv); err != nil {
 		return Config{}, err
 	}
-	if config.RedisPasswordFile, err = required("ELITEA_RUNTIME_REDIS_PASSWORD_FILE"); err != nil {
+	if config.NATSMaterial, err = natsconn.FromEnv(runtimeNATSPrefix, func(name string) (string, bool) { return lookup(name) }); err != nil {
 		return Config{}, err
 	}
-	if config.RedisCAFile, err = required("ELITEA_RUNTIME_REDIS_CA_FILE"); err != nil {
-		return Config{}, err
-	}
-	poolSize, err := integer("ELITEA_RUNTIME_REDIS_POOL_SIZE")
-	if err != nil {
-		return Config{}, err
-	}
-	if poolSize > int64(maxRedisPoolSize) {
-		return Config{}, errors.New("runtime Redis pool size is invalid")
-	}
-	config.RedisPoolSize = int(poolSize)
 	if raw, ok := lookup("ELITEA_RUNTIME_SANDBOX_AUDIENCES"); ok && raw != "" {
 		if len(raw) > 16*257 {
 			return Config{}, errors.New("runtime sandbox audiences exceed the configuration bound")
@@ -346,56 +336,33 @@ func (c Config) Validate() error {
 	if c.MaxOutstanding <= 0 || c.MaxOutstanding > maxRuntimeOutstanding {
 		return errors.New("runtime durable admission capacity is invalid")
 	}
-	if c.StreamMaxEntries <= 0 || c.StreamMaxEntries > maxRuntimeStreamEntries {
-		return errors.New("runtime Redis stream capacity is invalid")
+	if err := commandbus.ValidateRoute(c.CommandStream, ""); err != nil {
+		return fmt.Errorf("runtime configuration-validation stream: %w", err)
 	}
 	if c.IndexIngestDispatchEnabled {
-		if c.IndexIngestCommandStream == "" || len(c.IndexIngestCommandStream) > 256 || strings.ContainsAny(c.IndexIngestCommandStream, " \r\n\x00") {
-			return errors.New("runtime index ingest command stream is invalid")
+		if err := commandbus.ValidateRoute(c.IndexIngestCommandStream, ""); err != nil {
+			return fmt.Errorf("runtime index ingest command stream: %w", err)
 		}
-		if c.IndexIngestCommandStream == c.CommandStream ||
-			c.IndexIngestCommandStream == c.CommandStream+":delivery-index.v1" ||
-			c.IndexIngestCommandStream+":delivery-index.v1" == c.CommandStream {
+		if c.IndexIngestCommandStream == c.CommandStream {
 			return errors.New("runtime index ingest requires a dedicated command stream")
 		}
-		if c.IndexIngestConsumerGroup == "" || len(c.IndexIngestConsumerGroup) > 256 || strings.ContainsAny(c.IndexIngestConsumerGroup, " \r\n\x00") {
-			return errors.New("runtime index ingest consumer group is invalid")
-		}
-		if c.IndexIngestStreamMaxEntries <= 0 || c.IndexIngestStreamMaxEntries > maxRuntimeStreamEntries {
-			return errors.New("runtime index ingest Redis stream capacity is invalid")
-		}
-	} else if c.IndexIngestCommandStream != "" || c.IndexIngestConsumerGroup != "" || c.IndexIngestStreamMaxEntries != 0 {
+	} else if c.IndexIngestCommandStream != "" {
 		return errors.New("runtime index ingest dispatch settings require explicit enablement")
 	}
 	if c.AgentExecutionDispatchEnabled {
-		if c.AgentExecutionCommandStream == "" || len(c.AgentExecutionCommandStream) > 256 || strings.ContainsAny(c.AgentExecutionCommandStream, " \r\n\x00") {
-			return errors.New("runtime agent execution command stream is invalid")
+		// Sharing the index stream is allowed (the standalone profile runs
+		// index ingest on the agent stream): one stream, one durable, so one
+		// worker fleet serves both capabilities.
+		if err := commandbus.ValidateRoute(c.AgentExecutionCommandStream, ""); err != nil {
+			return fmt.Errorf("runtime agent execution command stream: %w", err)
 		}
-		if c.AgentExecutionCommandStream == c.CommandStream ||
-			c.AgentExecutionCommandStream == c.CommandStream+":delivery-index.v1" ||
-			c.AgentExecutionCommandStream+":delivery-index.v1" == c.CommandStream {
+		if c.AgentExecutionCommandStream == c.CommandStream {
 			return errors.New("runtime agent execution cannot share the configuration-validation stream")
-		}
-		if c.IndexIngestCommandStream != "" &&
-			(c.AgentExecutionCommandStream == c.IndexIngestCommandStream+":delivery-index.v1" ||
-				c.AgentExecutionCommandStream+":delivery-index.v1" == c.IndexIngestCommandStream) {
-			return errors.New("runtime agent execution command stream overlaps the index delivery index")
-		}
-		if c.AgentExecutionConsumerGroup == "" || len(c.AgentExecutionConsumerGroup) > 256 || strings.ContainsAny(c.AgentExecutionConsumerGroup, " \r\n\x00") {
-			return errors.New("runtime agent execution consumer group is invalid")
-		}
-		if c.AgentExecutionCommandStream == c.IndexIngestCommandStream &&
-			c.AgentExecutionConsumerGroup != c.IndexIngestConsumerGroup {
-			return errors.New("runtime agent execution sharing the index stream must share its consumer group")
-		}
-		if c.AgentExecutionStreamMaxEntries <= 0 || c.AgentExecutionStreamMaxEntries > maxRuntimeStreamEntries {
-			return errors.New("runtime agent execution Redis stream capacity is invalid")
 		}
 		if err := validateCurrentMainBaseURL(c.CurrentMainBaseURL); err != nil {
 			return err
 		}
-	} else if c.AgentExecutionCommandStream != "" || c.AgentExecutionConsumerGroup != "" ||
-		c.AgentExecutionStreamMaxEntries != 0 || c.CurrentMainBaseURL != "" {
+	} else if c.AgentExecutionCommandStream != "" || c.CurrentMainBaseURL != "" {
 		return errors.New("runtime agent execution dispatch settings require explicit enablement")
 	}
 	if c.IndexSchedulingEnabled {
@@ -410,14 +377,21 @@ func (c Config) Validate() error {
 			"runtime scheduler instance ID requires explicit index scheduling",
 		)
 	}
-	if c.RedisPoolSize <= 0 || c.RedisPoolSize > maxRedisPoolSize {
-		return errors.New("runtime Redis pool size is invalid")
+	if c.NATSURL == "" || len(c.NATSURL) > maxNATSURLBytes || strings.ContainsAny(c.NATSURL, " \r\n\t\x00") {
+		return errors.New("runtime NATS URL is invalid")
 	}
-	if err := validateRedisURL(c.RedisURL); err != nil {
-		return err
+	if err := c.NATSMaterial.CheckURL(c.NATSURL); err != nil {
+		return fmt.Errorf("%s: %w", runtimeNATSURLEnv, err)
+	}
+	if c.NATSMaterial.Enabled() {
+		for _, path := range []string{c.NATSMaterial.CAFile, c.NATSMaterial.CertFile, c.NATSMaterial.KeyFile} {
+			if !validConfigPath(path) {
+				return errors.New("runtime NATS TLS file path is invalid")
+			}
+		}
 	}
 	for _, path := range []string{
-		c.RedisPasswordFile, c.RedisCAFile, c.SigningKeyFile, c.VerificationKeyringFile,
+		c.SigningKeyFile, c.VerificationKeyringFile,
 		c.ControlTLS.CertificateChainPath, c.ControlTLS.PrivateKeyPath, c.ControlTLS.ClientCAPath,
 		c.OutputTLS.CertificateChainPath, c.OutputTLS.PrivateKeyPath, c.OutputTLS.ClientCAPath,
 		c.ContentTLS.CertificateChainPath, c.ContentTLS.PrivateKeyPath, c.ContentTLS.ClientCAPath,
@@ -466,9 +440,9 @@ func (c Config) Validate() error {
 //
 // # Why the variable still exists
 //
-// The centry-hybrid stack does not serve this route from this process. It aims
-// the call at the edge (`https://elitea-gateway`), which routes the path to
-// legacy Centry — `deploy/centry-hybrid/traefik/index-routes.yml`. An explicit
+// The retired centry-hybrid stack did not serve this route from this process. It aimed
+// the call at the edge (`https://elitea-gateway`), which routed the path to
+// legacy Centry. Any mixed deployment has the same shape, so an explicit
 // origin has to stay possible for that topology.
 func currentMainBaseURL(lookup LookupEnv) (string, error) {
 	listenPort, err := publicListenPort(lookup)
@@ -577,58 +551,6 @@ func validSchedulerInstanceID(value string) bool {
 			character != '_' && character != '-' {
 			return false
 		}
-	}
-	return true
-}
-
-func validateRedisURL(raw string) error {
-	if raw == "" || len(raw) > maxRedisURLBytes || !canonicalRedisURLText(raw) {
-		return errors.New("runtime Redis URL is invalid")
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "rediss" || parsed.Host == "" || parsed.Fragment != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.RawPath != "" || parsed.User == nil || parsed.User.Username() == "" {
-		return errors.New("runtime Redis URL must be a rediss URL with an ACL username")
-	}
-	if _, passwordPresent := parsed.User.Password(); passwordPresent {
-		return errors.New("runtime Redis password must come from its configured file")
-	}
-	username := parsed.User.Username()
-	if !validRedisACLUsername(username) || parsed.User.String() != username {
-		return errors.New("runtime Redis ACL username is not canonical")
-	}
-	port, err := strconv.ParseUint(parsed.Port(), 10, 16)
-	if parsed.Hostname() == "" || err != nil || port == 0 || strconv.FormatUint(port, 10) != parsed.Port() {
-		return errors.New("runtime Redis URL must include a numeric TCP port")
-	}
-	if parsed.Path != "/0" {
-		return errors.New("runtime Redis URL must select database zero explicitly")
-	}
-	return nil
-}
-
-func canonicalRedisURLText(raw string) bool {
-	for index := 0; index < len(raw); index++ {
-		character := raw[index]
-		if character < '!' || character > '~' || character == '%' || character == '?' || character == '#' {
-			return false
-		}
-	}
-	return true
-}
-
-func validRedisACLUsername(username string) bool {
-	if username == "" || len(username) > 256 {
-		return false
-	}
-	for index := 0; index < len(username); index++ {
-		character := username[index]
-		if (character >= 'a' && character <= 'z') ||
-			(character >= 'A' && character <= 'Z') ||
-			(character >= '0' && character <= '9') ||
-			character == '.' || character == '_' || character == '-' {
-			continue
-		}
-		return false
 	}
 	return true
 }

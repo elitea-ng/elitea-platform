@@ -39,14 +39,14 @@ use crate::protocol::elitea::runtime::v1::NodeEventV1;
 use crate::protocol::node_event::encode_current_node_event_json;
 use crate::protocol::output::{RuntimeFailureKind, model_failure};
 use crate::transport::ControlRpc;
-use crate::transport::redis_commands::{RedisCommandRetirer, RedisRetirementClient};
+use crate::transport::command_bus::{CommandRetirementClient, CommandRetirer};
 
 /// Capability-disabled concrete lifecycle shared by both native runtime modes.
 pub(super) struct NativeAuthorizedAgentLifecycle<A, C, R, RC, K> {
     native_factory: Arc<A>,
     connector: C,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     clock: Arc<K>,
     max_output_sessions: usize,
     terminal_recovery: AgentTerminalRecoveryConfig,
@@ -58,7 +58,7 @@ impl<A, C, R, RC, K> NativeAuthorizedAgentLifecycle<A, C, R, RC, K> {
         native_factory: Arc<A>,
         connector: C,
         control: Arc<AgentControlClient<R>>,
-        retirer: Arc<RedisCommandRetirer<RC>>,
+        retirer: Arc<CommandRetirer<RC>>,
         clock: Arc<K>,
         max_output_sessions: usize,
         terminal_recovery: AgentTerminalRecoveryConfig,
@@ -80,7 +80,7 @@ where
     A: NativeAgentAssembler,
     C: AgentProgressConnector + AgentTerminalReplay + Clone + Send + Sync + 'static,
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     K: UnixMillisClock,
 {
     fn inspect_checkpoint<'a>(
@@ -194,7 +194,7 @@ async fn execute_owned<A, C, R, RC, K>(
     native_factory: Arc<A>,
     connector: C,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     clock: Arc<K>,
     max_output_sessions: usize,
     terminal_recovery: AgentTerminalRecoveryConfig,
@@ -203,7 +203,7 @@ where
     A: NativeAgentAssembler,
     C: AgentProgressConnector + AgentTerminalReplay + Send + Sync + 'static,
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     K: UnixMillisClock,
 {
     tracing::info!(event = "agent_native_lifecycle_started");
@@ -449,7 +449,7 @@ where
 fn execute_started<C, S, R, RC, K>(
     started: StartedAuthorizedAgentRun<C, S>,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     clock: Arc<K>,
     terminal_recovery: AgentTerminalRecoveryConfig,
 ) -> std::pin::Pin<Box<impl std::future::Future<Output = AgentAuthorizedLifecycleCompletion>>>
@@ -457,7 +457,7 @@ where
     C: AgentProgressConnector + AgentTerminalReplay,
     S: crate::agents::runtime::NativeAgentCompletionSelector,
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     K: UnixMillisClock,
 {
     Box::pin(execute_started_owned(
@@ -473,7 +473,7 @@ where
 async fn execute_started_owned<C, S, R, RC, K>(
     started: StartedAuthorizedAgentRun<C, S>,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     clock: Arc<K>,
     terminal_recovery: AgentTerminalRecoveryConfig,
 ) -> AgentAuthorizedLifecycleCompletion
@@ -481,7 +481,7 @@ where
     C: AgentProgressConnector + AgentTerminalReplay,
     S: crate::agents::runtime::NativeAgentCompletionSelector,
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     K: UnixMillisClock,
 {
     let (mut run, mut native, mut projector, completion_selector) = started.into_parts();
@@ -1151,14 +1151,14 @@ fn finish_after_stream<C, R, RC, K>(
     failure: Option<RuntimeFailureKind>,
     successful_terminal: FreshAgentTerminalSelection,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     clock: Arc<K>,
     terminal_recovery: AgentTerminalRecoveryConfig,
 ) -> std::pin::Pin<Box<impl Future<Output = AgentAuthorizedLifecycleCompletion>>>
 where
     C: AgentProgressConnector + AgentTerminalReplay,
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     K: UnixMillisClock,
 {
     Box::pin(finish_after_stream_owned(
@@ -1177,14 +1177,14 @@ async fn finish_after_stream_owned<C, R, RC, K>(
     mut failure: Option<RuntimeFailureKind>,
     successful_terminal: FreshAgentTerminalSelection,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     clock: Arc<K>,
     terminal_recovery: AgentTerminalRecoveryConfig,
 ) -> AgentAuthorizedLifecycleCompletion
 where
     C: AgentProgressConnector + AgentTerminalReplay,
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     K: UnixMillisClock,
 {
     tracing::info!(event = "agent_terminal_publication_started");
@@ -1224,14 +1224,14 @@ async fn finish_lease_boundary<C, R, RC, K>(
     run: CursorBoundAuthorizedAgentRun<C>,
     error: ClaimLeaseError,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     clock: Arc<K>,
     terminal_recovery: AgentTerminalRecoveryConfig,
 ) -> AgentAuthorizedLifecycleCompletion
 where
     C: AgentProgressConnector + AgentTerminalReplay,
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     K: UnixMillisClock,
 {
     match error {
@@ -1257,14 +1257,14 @@ async fn finalize<C, R, RC, K>(
     run: CursorBoundAuthorizedAgentRun<C>,
     failure: RuntimeFailureKind,
     control: Arc<AgentControlClient<R>>,
-    retirer: Arc<RedisCommandRetirer<RC>>,
+    retirer: Arc<CommandRetirer<RC>>,
     clock: Arc<K>,
     terminal_recovery: AgentTerminalRecoveryConfig,
 ) -> AgentAuthorizedLifecycleCompletion
 where
     C: AgentProgressConnector + AgentTerminalReplay,
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     K: UnixMillisClock,
 {
     finish_after_stream(

@@ -219,7 +219,7 @@ func (h *Handler) listTools(r *http.Request, schema string, s scope, message rpc
 //
 //   - an AGENT tool runs `do_predict`, the pylon prediction entry point. The
 //     transport that reached it from Go was removed in issue 126 and its
-//     replacement — the Redis command stream and a worker — is not
+//     replacement — the runtime command bus and a worker — is not
 //     running at all on such a deployment.
 //   - a TOOLKIT tool runs `do_runtool`, which dispatches into the SDK toolkit
 //     the worker holds. The native replacement uses the same durable transport

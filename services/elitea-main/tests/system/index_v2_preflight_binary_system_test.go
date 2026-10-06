@@ -15,12 +15,23 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn/natstest"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 )
 
 const indexV2PreflightSystemTestOptIn = "ELITEA_INDEX_V2_PREFLIGHT_SYSTEM_TEST"
 
+// preflightStream is the index route's command stream the preflight reads.
+const preflightStream = commandbus.StreamIndex
+
 // TestIndexV2PreflightShippedBinary crosses the built operator binary, real
-// PostgreSQL, TLS/ACL Redis, and a private spool directory. Repository-level
+// PostgreSQL, the secured NATS server from the chart's own permission table
+// (as the elitea-main-runtime identity, after the real bootstrap.sh), and a
+// private spool directory. Repository-level
 // integration tests separately prove that the settled fixture shape is
 // produced by the production claim/output/PrepareSettlement path.
 func TestIndexV2PreflightShippedBinary(t *testing.T) {
@@ -34,12 +45,10 @@ func TestIndexV2PreflightShippedBinary(t *testing.T) {
 	root := canonicalTempDir(t)
 	spoolRoot := filepath.Join(root, "output-spool")
 	mustMkdir(t, spoolRoot, 0o700)
-	pki := generateRuntimePKI(t, root)
-	observerPasswordPath := filepath.Join(root, "observer.password")
-	writeFile(t, observerPasswordPath, []byte(observerPassword), 0o600)
+	natsServer := natstest.Start(t)
+	natsServer.Bootstrap(t, nil)
 
 	postgresPort := freePort(t)
-	controlRedisPort := freePort(t)
 	containers := &containerSet{}
 	t.Cleanup(containers.stopAll)
 	postgresName := containers.start(t,
@@ -50,17 +59,6 @@ func TestIndexV2PreflightShippedBinary(t *testing.T) {
 			"-e", "POSTGRES_DB=elitea",
 			"-p", fmt.Sprintf("127.0.0.1:%d:5432", postgresPort),
 		},
-	)
-	redisConfigDir := filepath.Join(root, "redis")
-	mustMkdir(t, redisConfigDir, 0o755)
-	prepareTLSRedisConfig(t, redisConfigDir, pki)
-	controlRedisName := containers.start(t,
-		"preflight-redis", "redis:7-alpine",
-		[]string{
-			"-p", fmt.Sprintf("127.0.0.1:%d:6379", controlRedisPort),
-			"-v", redisConfigDir + ":/runtime:ro",
-		},
-		"redis-server", "/runtime/redis.conf",
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
@@ -86,29 +84,16 @@ func TestIndexV2PreflightShippedBinary(t *testing.T) {
 	)
 	seedSettledRetainedIndexV1(t, ctx, pool)
 
-	observer := newControlRedisClient(
-		t, controlRedisPort, "observer", observerPassword, pki.caPath,
-	)
-	defer func() { _ = observer.Close() }()
-	waitForRedis(t, ctx, observer, containers, controlRedisName)
-	if err := observer.XGroupCreateMkStream(
-		ctx, commandStream, consumerGroup, "0-0",
-	).Err(); err != nil {
-		t.Fatalf("create empty version-1 consumer group: %v", err)
-	}
-
+	material := natsServer.Material(natsconn.IdentityMainRuntime)
 	environment := []string{
 		"DATABASE_URL=" + databaseURL,
 		"ELITEA_RUNTIME_ENABLED=true",
 		"ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED=true",
-		"ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM=" + commandStream,
-		"ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP=" + consumerGroup,
-		fmt.Sprintf(
-			"ELITEA_RUNTIME_REDIS_URL=rediss://observer@localhost:%d/0",
-			controlRedisPort,
-		),
-		"ELITEA_RUNTIME_REDIS_PASSWORD_FILE=" + observerPasswordPath,
-		"ELITEA_RUNTIME_REDIS_CA_FILE=" + pki.caPath,
+		"ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM=" + preflightStream,
+		"ELITEA_RUNTIME_NATS_URL=" + natsServer.URL(),
+		"ELITEA_RUNTIME_NATS_TLS_CA_FILE=" + material.CAFile,
+		"ELITEA_RUNTIME_NATS_TLS_CERT_FILE=" + material.CertFile,
+		"ELITEA_RUNTIME_NATS_TLS_KEY_FILE=" + material.KeyFile,
 	}
 	status, report, stderr := runIndexV2PreflightBinary(
 		t, preflightBinary, environment, spoolRoot,
@@ -127,6 +112,16 @@ func TestIndexV2PreflightShippedBinary(t *testing.T) {
 			status, report, stderr,
 		)
 	}
+
+	// A live command on the stream blocks the cutover even with PostgreSQL
+	// drained: the bus is not empty.
+	live := publishPreflightCommand(t, ctx, natsServer)
+	status, report, stderr = runIndexV2PreflightBinary(t, preflightBinary, environment, spoolRoot)
+	if status != 1 || report.Control.StreamEntries != 1 || report.Control.PendingEntries != 1 || report.Control.DeliveryMappings != 1 {
+		t.Fatalf("a live command did not block shipped preflight: status=%d report=%+v stderr=%q", status, report, stderr)
+	}
+	ackPreflightCommand(t, ctx, natsServer, live)
+	natsServer.RequireNoViolations(t, natsconn.IdentityMainRuntime)
 
 	if _, err := pool.Exec(ctx, `
 UPDATE elitea_runtime.command_outbox
@@ -268,7 +263,7 @@ INSERT INTO elitea_runtime.command_outbox (
     clock_timestamp() + interval '1 hour', 'preflight-limits-v1',
     $2, $3, 1, 'preflight-key', clock_timestamp(),
     clock_timestamp(), $3, clock_timestamp(), 1
-)`, commandStream, envelope, envelopeDigest[:]); err != nil {
+)`, preflightStream, envelope, envelopeDigest[:]); err != nil {
 		t.Fatalf("seed settled retained outbox: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `
@@ -307,5 +302,60 @@ INSERT INTO elitea_runtime.execution_settlements (
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatalf("commit settled retained version-1 cutover fixture: %v", err)
+	}
+}
+
+func preflightJetStream(t *testing.T, server *natstest.Server, identity string) jetstream.JetStream {
+	t.Helper()
+	m := server.Material(identity)
+	conn, err := nats.Connect(server.URL(),
+		nats.CustomInboxPrefix(natsconn.InboxPrefix(identity)),
+		nats.Secure(natsconn.BaseTLSConfig()),
+		nats.ClientTLSConfig(m.ClientCertificate, m.RootCAs),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(conn.Close)
+	// The worker binds RUNTIME's durables from WORKER through the imported
+	// API prefix, as both workers do.
+	newJS := func() (jetstream.JetStream, error) { return jetstream.New(conn) }
+	if identity == natsconn.IdentityWorker {
+		newJS = func() (jetstream.JetStream, error) {
+			return jetstream.NewWithAPIPrefix(conn, natsconn.WorkerRuntimeJSAPIPrefix)
+		}
+	}
+	js, err := newJS()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return js
+}
+
+func publishPreflightCommand(t *testing.T, ctx context.Context, server *natstest.Server) string {
+	t.Helper()
+	subject, err := commandbus.DeliverySubject(preflightStream, "preflight-live-outbox")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := preflightJetStream(t, server, natsconn.IdentityMainRuntime).PublishMsg(ctx,
+		commandbus.NewCommandMessage(subject, "preflight-live-outbox", []byte("preflight live envelope"))); err != nil {
+		t.Fatalf("publish a live command: %v", err)
+	}
+	return subject
+}
+
+func ackPreflightCommand(t *testing.T, ctx context.Context, server *natstest.Server, subject string) {
+	t.Helper()
+	consumer, err := preflightJetStream(t, server, natsconn.IdentityWorker).Consumer(ctx, preflightStream, commandbus.KnownStreams[preflightStream])
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := consumer.Next(jetstream.FetchMaxWait(5 * time.Second))
+	if err != nil || msg.Subject() != subject {
+		t.Fatalf("take the live command: %v", err)
+	}
+	if err := msg.DoubleAck(ctx); err != nil {
+		t.Fatal(err)
 	}
 }

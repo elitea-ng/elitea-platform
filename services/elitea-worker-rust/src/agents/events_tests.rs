@@ -781,6 +781,60 @@ fn a_terminal_delta_after_partials_appends_even_when_it_repeats_the_prefix() {
     assert_eq!(step["text"], "aab");
 }
 
+/// #1082: after partial deltas, ADK's Runner fills a terminal that arrived
+/// with no content with every streamed part. That event restates the turn and
+/// must not stream again — while a terminal delta of its own still appends.
+#[test]
+fn a_runner_filled_terminal_restating_the_streamed_parts_is_not_a_delta() {
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    projector.start(timestamp(0)).expect("start");
+    let parts = |words: &[&str]| -> Vec<Part> {
+        words
+            .iter()
+            .map(|word| Part::Text {
+                text: (*word).to_owned(),
+            })
+            .collect()
+    };
+    let mut streamed = String::new();
+    for (second, word) in [(1, "said "), (2, "ok "), (3, "ok ")] {
+        for projected in projector
+            .project(&event("llm-filled", second, true, false, parts(&[word])))
+            .expect("partial")
+        {
+            let value = current(&projected);
+            if value["type"] == "agent_llm_chunk" {
+                streamed.push_str(value["content"].as_str().unwrap_or_default());
+            }
+        }
+    }
+    let completed: Vec<_> = projector
+        .project(&event(
+            "llm-filled",
+            4,
+            false,
+            true,
+            parts(&["said ", "ok ", "ok "]),
+        ))
+        .expect("terminal")
+        .into_iter()
+        .map(|event| current(&event))
+        .collect();
+    assert!(
+        completed
+            .iter()
+            .all(|event| event["type"] != "agent_llm_chunk"),
+        "the restated turn streamed again: {completed:?}"
+    );
+    let step = completed
+        .iter()
+        .find_map(|event| event["response_metadata"]["thinking_steps"].get(0))
+        .expect("completed step");
+    assert_eq!(streamed, "said ok ok ");
+    assert_eq!(step["text"], "said ok ok ");
+}
+
 /// A single non-partial event with nothing streamed before it (ADK's
 /// non-streaming mode) is the whole turn, and is projected as such.
 #[test]

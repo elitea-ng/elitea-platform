@@ -11,7 +11,7 @@ An in-cluster service address, namespace-relative by default.
 chart installable into any namespace can honestly have. A hardcoded namespace
 in a shipped default is worse than a missing one: installing into `elitea-prod`
 while the default still says `.elitea.svc` silently points the new release at
-another environment's NATS or Redis — sharing its budget counters and rate
+another environment's NATS — sharing its budget counters and rate
 limits — and nothing reports it as a misconfiguration.
 
 Usage: {{ include "elitea.serviceHost" (dict "svc" .Values.nats "ctx" .) }}
@@ -25,6 +25,89 @@ Usage: {{ include "elitea.serviceHost" (dict "svc" .Values.nats "ctx" .) }}
 {{- define "elitea.serviceAddr" -}}
 {{- $svc := .svc -}}
 {{- printf "%s:%v" (include "elitea.serviceHost" .) $svc.port -}}
+{{- end }}
+
+{{/*
+elitea.eventsNatsUrl — the NATS URL elitea-main's live-update plane
+(ELITEA_EVENTS_NATS_URL) gets when main.env does not state one: the SAME
+effective NATS the LLM gateway uses, because the gateway publishes
+budget.soft_alert onto the subject the project SSE stream reads. Deriving it
+from the top-level `nats` block alone, while the gateway honours an explicit
+llmGateway.env.GATEWAY_NATS_URL, sent main to a host that may not exist
+(CrashLoop: a configured but unreachable NATS stops elitea-main) and split
+soft alerts onto a broker nobody streams from.
+
+Order: llmGateway.env.GATEWAY_NATS_URL (gateway enabled), then
+scheduler.env.GATEWAY_NATS_URL (scheduler enabled), then the `nats` block.
+Empty when none names a NATS — elitea-main then runs with no live-update plane.
+
+A GATEWAY_NATS_URL the gateway reads from a Secret (llmGateway.secrets) is not
+visible here, so elitea-main.validateEventsNats refuses that shape unless main
+names its own URL too.
+*/}}
+{{- define "elitea.eventsNatsUrl" -}}
+{{- $gw := .Values.llmGateway.env | default dict -}}
+{{- $sched := .Values.scheduler.env | default dict -}}
+{{- if and .Values.llmGateway.enabled (get $gw "GATEWAY_NATS_URL") -}}
+{{- get $gw "GATEWAY_NATS_URL" -}}
+{{- else if and .Values.scheduler.enabled (get $sched "GATEWAY_NATS_URL") -}}
+{{- get $sched "GATEWAY_NATS_URL" -}}
+{{- else if .Values.nats.service -}}
+{{- include "elitea.natsUrl" . -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea.natsUrl — the URL every component gets from the top-level `nats` block:
+tls:// when nats.tls.enabled (the NATS chart requires TLS, #1076), nats://
+only in the acknowledged plaintext posture. Never a credential.
+*/}}
+{{- define "elitea.natsUrl" -}}
+{{- printf "%s://%s" (ternary "tls" "nats" (.Values.nats.tls.enabled | default false)) (include "elitea.serviceAddr" (dict "svc" .Values.nats "ctx" .)) -}}
+{{- end }}
+
+{{/*
+elitea.natsClientFile — one file of the mounted NATS client certificate
+(ca.crt, tls.crt or tls.key). Each component writes its three
+<PREFIX>_NATS_TLS_*_FILE names literally in its own template. The code does
+NOT name them literally: libs/go/natsconn builds them by concatenation
+(EnvNames(prefix)), which the env-drift gate
+(services/elitea-llm-gateway/scripts/env-drift-check.sh) cannot see. So
+deploy/helm/tests/render-nats-security.sh reads every prefix the code passes
+to natsconn and asserts the rendered chart sets all three names for it.
+*/}}
+{{- define "elitea.natsClientFile" -}}
+{{- printf "%s/%s" (trimSuffix "/" .ctx.Values.nats.tls.mountPath) .file | quote -}}
+{{- end }}
+
+{{/*
+elitea.natsClientVolumeMount / elitea.natsClientVolume — the client
+certificate Secret (tls.crt, tls.key, ca.crt) cert-manager writes for one
+component. A whole-directory mount: natsconn reads the files with
+tls.LoadX509KeyPair / os.ReadFile on every handshake, so the Secret volume's
+symlink swap on renewal is exactly what it should see.
+*/}}
+{{- define "elitea.natsClientVolumeMount" -}}
+- name: nats-client-tls
+  mountPath: {{ .Values.nats.tls.mountPath }}
+  readOnly: true
+{{- end }}
+
+{{- define "elitea.natsClientVolume" -}}
+- name: nats-client-tls
+  secret:
+    secretName: {{ .secretName }}
+{{- end }}
+
+{{/*
+elitea-main.usesNats — "true" when elitea-main dials NATS at all: a URL from
+its own env, from a Secret, or derived from the gateway / the `nats` block.
+*/}}
+{{- define "elitea-main.usesNats" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- if or (get $env "ELITEA_EVENTS_NATS_URL") (hasKey (.Values.main.secrets | default dict) "ELITEA_EVENTS_NATS_URL") (include "elitea.eventsNatsUrl" .) -}}
+true
+{{- end -}}
 {{- end }}
 
 {{/*

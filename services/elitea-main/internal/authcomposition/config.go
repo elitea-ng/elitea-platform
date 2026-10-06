@@ -26,42 +26,52 @@ import (
 )
 
 const (
-	FormSchemaVersion = "elitea.auth.form.v1"
-	MaxConfigBytes    = int64(1 << 20)
+	FormSchemaVersion = "elitea.auth.form.v2"
+	// RetiredFormSchemaVersion is the schema that carried a `redis:` block.
+	// Parse refuses it with a message that names the change; it does not
+	// guess. See ErrRetiredSchema.
+	RetiredFormSchemaVersion = "elitea.auth.form.v1"
+	MaxConfigBytes           = int64(1 << 20)
 
-	maxConfigDepth              = 24
-	maxConfigNodes              = 4096
-	maxScalarBytes              = 64 << 10
-	maxCollectionEntries        = 512
-	maxPathBytes                = 4096
-	maxPublicOriginBytes        = 2048
-	maxRedisURLBytes            = 2048
-	maxRedisPrefixBytes         = 128
-	maxTrustedProxyCIDRs        = 64
-	maxInitialAdmins            = 256
-	maxProjectRoles             = 64
-	maxAllowedDomainsBytes      = 4096
-	maxAllowedDomains           = 64
-	maxRoleBytes                = 128
-	minCookieLifetimeSeconds    = int64(time.Minute / time.Second)
-	maxCookieLifetimeSeconds    = int64((30 * 24 * time.Hour) / time.Second)
-	formProviderKind            = "form"
-	singleEndpointRedisTopology = "single_primary_endpoint"
+	maxConfigDepth           = 24
+	maxConfigNodes           = 4096
+	maxScalarBytes           = 64 << 10
+	maxCollectionEntries     = 512
+	maxPathBytes             = 4096
+	maxPublicOriginBytes     = 2048
+	maxTrustedProxyCIDRs     = 64
+	maxInitialAdmins         = 256
+	maxProjectRoles          = 64
+	maxAllowedDomainsBytes   = 4096
+	maxAllowedDomains        = 64
+	maxRoleBytes             = 128
+	minCookieLifetimeSeconds = int64(time.Minute / time.Second)
+	maxCookieLifetimeSeconds = int64((30 * 24 * time.Hour) / time.Second)
+	formProviderKind         = "form"
 )
 
 var ErrInvalidConfiguration = errors.New("invalid authentication composition configuration")
 
+// ErrRetiredSchema is the refusal of an elitea.auth.form.v1 document. It wraps
+// ErrInvalidConfiguration, and its text tells the operator the exact change:
+// the sign-in state moved from the auth Redis to PostgreSQL, so v2 has no
+// `redis:` block, and the attempt key moved under `credentials:`.
+var ErrRetiredSchema = fmt.Errorf(
+	"%w: schema_version %s is no longer accepted: set schema_version to %s, "+
+		"delete the redis block (Form sign-in state is in PostgreSQL), and move "+
+		"redis.attempt_key_file to credentials.attempt_key_file",
+	ErrInvalidConfiguration, RetiredFormSchemaVersion, FormSchemaVersion,
+)
+
 // Config is one complete startup snapshot. It contains references to private
-// files, never secret values. This first schema intentionally supports only
-// the Form provider; OIDC and SAML receive their own versioned schemas when
-// their complete production contracts are ready.
+// files, never secret values. The schema supports only the Form provider; the
+// OIDC and SAML planes are configured outside this document.
 type Config struct {
 	SchemaVersion     string              `yaml:"schema_version"`
 	PublicOrigin      string              `yaml:"public_origin"`
 	TrustedProxyCIDRs []string            `yaml:"trusted_proxy_cidrs"`
 	Redirects         RedirectConfig      `yaml:"redirects"`
 	Cookie            CookieConfig        `yaml:"cookie"`
-	Redis             RedisConfig         `yaml:"redis"`
 	Credentials       CredentialConfig    `yaml:"credentials"`
 	Mappers           MapperConfig        `yaml:"mappers"`
 	Authorization     AuthorizationConfig `yaml:"authorization"`
@@ -88,19 +98,11 @@ type CookieConfig struct {
 	LifetimeSeconds int64  `yaml:"lifetime_seconds"`
 }
 
-// RedisConfig v1 intentionally models one TLS primary endpoint, including a
-// managed highly-available endpoint. Sentinel and Cluster/Ring clients require
-// separate discriminated schemas and remain production-mount gates.
-type RedisConfig struct {
-	Topology       string `yaml:"topology"`
-	URL            string `yaml:"url"`
-	PasswordFile   string `yaml:"password_file"`
-	CAFile         string `yaml:"ca_file"`
-	KeyPrefix      string `yaml:"key_prefix"`
-	AttemptKeyFile string `yaml:"attempt_key_file"`
-}
-
 type CredentialConfig struct {
+	// AttemptKeyFile holds 32 to 64 private bytes. They key the HMAC that
+	// names every stored attempt window, so a database dump does not give
+	// client addresses or logins back.
+	AttemptKeyFile    string `yaml:"attempt_key_file"`
 	PATSigningKeyFile string `yaml:"pat_signing_key_file"`
 	// Headers are only current other_auth_headers aliases. Authorization
 	// Bearer and Basic are mandatory built-ins assembled independently.
@@ -197,6 +199,9 @@ func Parse(raw []byte) (Config, error) {
 	if err := validateDocument(&document); err != nil {
 		return Config{}, err
 	}
+	if documentSchemaVersion(&document) == RetiredFormSchemaVersion {
+		return Config{}, ErrRetiredSchema
+	}
 
 	decoder := yaml.NewDecoder(bytes.NewReader(raw))
 	decoder.KnownFields(true)
@@ -235,9 +240,6 @@ func (config Config) Validate() error {
 	if !validCookie(config.Cookie) {
 		return invalid("cookie policy")
 	}
-	if !validRedis(config.Redis) {
-		return invalid("Redis policy")
-	}
 	if !validCredentials(config.Credentials) {
 		return invalid("credential policy")
 	}
@@ -255,9 +257,7 @@ func (config Config) Validate() error {
 		return invalid("Form provider")
 	}
 	materialPaths := []string{
-		config.Redis.PasswordFile,
-		config.Redis.CAFile,
-		config.Redis.AttemptKeyFile,
+		config.Credentials.AttemptKeyFile,
 		config.Credentials.PATSigningKeyFile,
 		config.Provider.Form.UsersJSONFile,
 	}
@@ -283,6 +283,21 @@ func (config Config) MainConfiguredPublicRules() ([]forwardapp.PublicRule, error
 		return nil, invalid("authorization policy")
 	}
 	return rules, nil
+}
+
+// documentSchemaVersion reads the root `schema_version` scalar of a document
+// validateDocument accepted, or "" when there is none.
+func documentSchemaVersion(document *yaml.Node) string {
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return ""
+	}
+	for index := 0; index+1 < len(root.Content); index += 2 {
+		if root.Content[index].Value == "schema_version" && root.Content[index+1].Kind == yaml.ScalarNode {
+			return root.Content[index+1].Value
+		}
+	}
+	return ""
 }
 
 func validateDocument(document *yaml.Node) error {
@@ -456,66 +471,8 @@ func validCookie(config CookieConfig) bool {
 	return probe.Valid() == nil
 }
 
-func validRedis(config RedisConfig) bool {
-	if config.Topology != singleEndpointRedisTopology || !validRedisURL(config.URL) ||
-		!validFilePath(config.PasswordFile) || !validFilePath(config.CAFile) ||
-		!validFilePath(config.AttemptKeyFile) || !validRedisKeyPrefix(config.KeyPrefix) {
-		return false
-	}
-	return true
-}
-
-func validRedisURL(raw string) bool {
-	if raw == "" || len(raw) > maxRedisURLBytes || !canonicalASCII(raw) {
-		return false
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Scheme != "rediss" || parsed.Host == "" || parsed.User == nil ||
-		parsed.User.Username() == "" || parsed.Path != "/0" || parsed.RawPath != "" ||
-		parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery || parsed.Opaque != "" ||
-		!httpguts.ValidHostHeader(parsed.Host) || !canonicalHostPort(parsed) {
-		return false
-	}
-	if _, passwordPresent := parsed.User.Password(); passwordPresent {
-		return false
-	}
-	username := parsed.User.Username()
-	return validACLUsername(username) && parsed.User.String() == username
-}
-
-func validACLUsername(value string) bool {
-	if value == "" || len(value) > 256 {
-		return false
-	}
-	for index := range len(value) {
-		character := value[index]
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
-			character >= '0' && character <= '9' || character == '.' || character == '_' || character == '-' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
-func validRedisKeyPrefix(value string) bool {
-	if value == "" || len(value) > maxRedisPrefixBytes || !strings.HasSuffix(value, ":") {
-		return false
-	}
-	for index := range len(value) {
-		character := value[index]
-		if character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
-			character >= '0' && character <= '9' || character == ':' || character == '.' ||
-			character == '_' || character == '-' {
-			continue
-		}
-		return false
-	}
-	return true
-}
-
 func validCredentials(config CredentialConfig) bool {
-	if !validFilePath(config.PATSigningKeyFile) || config.Headers == nil ||
+	if !validFilePath(config.AttemptKeyFile) || !validFilePath(config.PATSigningKeyFile) || config.Headers == nil ||
 		len(config.Headers) >= forwardapp.MaxCredentials {
 		return false
 	}

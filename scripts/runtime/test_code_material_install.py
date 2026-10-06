@@ -11,10 +11,10 @@ ROOT = Path(__file__).resolve().parents[2]
 BASE_FILES = (
     "runtime-ca.crt control-server.crt output-server.crt content-server.crt "
     "command-signing-keyring.json control-server.key output-server.key content-server.key "
-    "command-signing-key.pem redis-producer-password redis-auth-password auth-attempt-key "
-    "auth-pat-signing-key auth-form-users.json vault-master-key redis-server.crt redis-server.key "
-    "redis-users.acl redis-bootstrap-password agent-worker-client.crt agent-worker-client.key "
-    "redis-worker-password worker-output-spool-key agent-checkpoint-connection "
+    "command-signing-key.pem auth-attempt-key "
+    "auth-pat-signing-key auth-form-users.json vault-master-key "
+    "agent-worker-client.crt agent-worker-client.key "
+    "worker-output-spool-key agent-checkpoint-connection "
     "platform-edge.crt platform-edge.key"
 ).split()
 CODE_FILES = ("code-owner-client.crt", "code-owner-client.key", "code-platform-content-keys.json")
@@ -70,7 +70,7 @@ class InstallerTests(unittest.TestCase):
             mode = 0o644 if name.endswith(".crt") else 0o600
             self.assertEqual(path.stat().st_mode & 0o777, mode)
             self.assertIn("65532:65532 " + str(path), log)
-        for consumer in ("worker", "redis", "edge"):
+        for consumer in ("worker", "edge"):
             for name in CODE_FILES:
                 self.assertFalse((root / "dst" / consumer / name).exists())
 

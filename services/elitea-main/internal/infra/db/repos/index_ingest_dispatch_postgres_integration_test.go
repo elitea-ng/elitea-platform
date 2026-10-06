@@ -14,14 +14,14 @@ import (
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/protobuf/proto"
 )
 
 // TestPostgresServiceBackedIndexIngestDispatch is a real PostgreSQL 16-18
-// service-integration gate. Redis failures are injected at the StreamAppender
-// boundary; the existing real-Redis test separately proves atomic capacity and
+// service-integration gate. Command-bus failures are injected at the StreamAppender
+// boundary; the real-NATS tests separately prove atomic capacity and
 // delivery-index behavior.
 func TestPostgresServiceBackedIndexIngestDispatch(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
@@ -45,7 +45,7 @@ func TestPostgresServiceBackedIndexIngestDispatch(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	redisOutage := errors.New("test Redis unavailable")
+	busOutage := errors.New("test command bus unavailable")
 
 	for _, test := range []struct {
 		name       string
@@ -54,20 +54,20 @@ func TestPostgresServiceBackedIndexIngestDispatch(t *testing.T) {
 		errorMatch func(error) bool
 	}{
 		{
-			name:      "Redis outage retains exact durable bytes",
+			name:      "command-bus outage retains exact durable bytes",
 			prefix:    "outage",
-			appendErr: redisOutage,
+			appendErr: busOutage,
 			errorMatch: func(err error) bool {
-				return errors.Is(err, redisOutage)
+				return errors.Is(err, busOutage)
 			},
 		},
 		{
 			name:   "capacity retains exact durable bytes",
 			prefix: "capacity",
-			appendErr: &redisdispatch.ControlStreamSaturatedError{
-				CurrentEntries:  8,
-				CurrentMappings: 8,
-				MaxEntries:      8,
+			appendErr: &commandbus.ControlStreamSaturatedError{
+				Stream:          "ELITEA_RT_V1_INDEX",
+				CurrentMessages: 8,
+				MaxMessages:     8,
 			},
 			errorMatch: func(err error) bool {
 				return errors.Is(err, executionapp.ErrDispatchBackpressured)
@@ -307,8 +307,8 @@ func newPostgresIndexPublisher(
 	t *testing.T,
 	policy IndexIngestDispatchPolicy,
 	outbox *CommandOutboxRepository,
-	signer redisdispatch.CommandSigner,
-	appender redisdispatch.StreamAppender,
+	signer commandbus.CommandSigner,
+	appender commandbus.StreamAppender,
 ) *executionapp.OutboxPublisher {
 	t.Helper()
 	producer := newPostgresIndexProducer(t, policy, signer, appender)
@@ -329,23 +329,23 @@ func newPostgresIndexPublisher(
 	return publisher
 }
 
-func newPostgresIndexProducer(t *testing.T, policy IndexIngestDispatchPolicy, signer redisdispatch.CommandSigner, appender redisdispatch.StreamAppender) *redisdispatch.IndexIngestProducer {
+func newPostgresIndexProducer(t *testing.T, policy IndexIngestDispatchPolicy, signer commandbus.CommandSigner, appender commandbus.StreamAppender) *commandbus.IndexIngestProducer {
 	t.Helper()
-	producer, err := redisdispatch.NewIndexIngestProducer(redisdispatch.IndexIngestProducerConfig{
+	producer, err := commandbus.NewIndexIngestProducer(commandbus.IndexIngestProducerConfig{
 		Stream:                 policy.StreamName,
-		ConsumerGroup:          "elitea-indexer-worker-v1",
+		Consumer:               "elitea-indexer-worker-v1",
 		ValidationStream:       "elitea:runtime:validation:commands",
 		ProtocolRevision:       "runtime-v1",
 		EnvelopeSchemaRevision: "signed-worker-command-v1",
 		CapabilityVersion:      policy.CapabilityVersion,
-		Limits: redisdispatch.Limits{
-			Revision:               policy.LimitsRevision,
-			MaxWorkerCommandBytes:  8 * 1024,
-			MaxSignedEnvelopeBytes: 12 * 1024,
-			MaxRedisFieldBytes:     12 * 1024,
-			MaxRedisEntryBytes:     16 * 1024,
-			MaxSignatureBytes:      128,
-			MaxStringBytes:         512,
+		Limits: commandbus.Limits{
+			Revision:                 policy.LimitsRevision,
+			MaxWorkerCommandBytes:    8 * 1024,
+			MaxSignedEnvelopeBytes:   12 * 1024,
+			MaxTransportPayloadBytes: 12 * 1024,
+			MaxTransportMessageBytes: 16 * 1024,
+			MaxSignatureBytes:        128,
+			MaxStringBytes:           512,
 		},
 		AllowTestOnlyHMAC: true,
 	}, signer, appender)
@@ -393,7 +393,7 @@ type postgresIndexDispatchSigner struct {
 	calls int
 }
 
-func (s *postgresIndexDispatchSigner) SignWorkerCommand(ctx context.Context, exact []byte) (redisdispatch.Signature, error) {
+func (s *postgresIndexDispatchSigner) SignWorkerCommand(ctx context.Context, exact []byte) (commandbus.Signature, error) {
 	s.mu.Lock()
 	s.calls++
 	s.mu.Unlock()
@@ -401,19 +401,19 @@ func (s *postgresIndexDispatchSigner) SignWorkerCommand(ctx context.Context, exa
 		select {
 		case s.started <- struct{}{}:
 		case <-ctx.Done():
-			return redisdispatch.Signature{}, ctx.Err()
+			return commandbus.Signature{}, ctx.Err()
 		}
 	}
 	if s.release != nil {
 		select {
 		case <-s.release:
 		case <-ctx.Done():
-			return redisdispatch.Signature{}, ctx.Err()
+			return commandbus.Signature{}, ctx.Err()
 		}
 	}
 	material := append([]byte(s.keyID+":"), exact...)
 	signature := sha256.Sum256(material)
-	return redisdispatch.Signature{
+	return commandbus.Signature{
 		Profile: runtimev1.SignatureProfileV1_SIGNATURE_PROFILE_V1_TEST_ONLY_HMAC_SHA256,
 		KeyID:   s.keyID,
 		Value:   signature[:],
@@ -432,7 +432,7 @@ type postgresIndexDispatchAppender struct {
 	calls [][]byte
 }
 
-func (a *postgresIndexDispatchAppender) Append(_ context.Context, _, _, deliveryID string, value []byte) (string, error) {
+func (a *postgresIndexDispatchAppender) Append(_ context.Context, _, deliveryID string, value []byte) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.calls = append(a.calls, bytes.Clone(value))

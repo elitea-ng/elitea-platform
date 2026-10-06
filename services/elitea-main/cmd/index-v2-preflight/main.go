@@ -6,24 +6,31 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/cutover"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/runtimecomposition"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// runtimeNATSPrefix selects ELITEA_RUNTIME_NATS_TLS_{CA,CERT,KEY}_FILE, the
+// runtime plane's NATS identity (elitea-main-runtime), the same names
+// elitea-main reads.
+const runtimeNATSPrefix = "ELITEA_RUNTIME"
+
 const (
-	exitReady              = 0
-	exitBlocked            = 1
-	exitInvalidUsage       = 2
-	preflightTimeout       = 30 * time.Second
-	preflightRedisPoolSize = 2
+	exitReady        = 0
+	exitBlocked      = 1
+	exitInvalidUsage = 2
+	preflightTimeout = 30 * time.Second
 )
 
 type stringList []string
@@ -31,8 +38,7 @@ type stringList []string
 type preflightRuntimeConfig struct {
 	databaseURL   string
 	commandStream string
-	consumerGroup string
-	redis         runtimecomposition.CutoverRedisConfig
+	nats          runtimecomposition.NATSConnConfig
 }
 
 func (values *stringList) String() string {
@@ -96,25 +102,27 @@ func run(
 		return exitBlocked
 	}
 
-	redisClient, err := runtimecomposition.NewCutoverControlRedisClient(ctx, runtimeConfig.redis)
+	// The preflight dials as elitea-main's runtime identity, whose grants
+	// include the stream and consumer INFO it reads and nothing it could
+	// change (deploy/helm/nats/values.yaml).
+	natsConn, err := runtimecomposition.NewRuntimeNATSConn(runtimeConfig.nats, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		writeMessage(stderr, "runtime index cutover control store is unavailable\n")
 		return exitBlocked
 	}
-	defer func() {
-		_ = redisClient.Close()
-	}()
+	defer natsConn.Close()
+	js, err := runtimecomposition.NewRuntimeJetStream(natsConn)
+	if err != nil {
+		writeMessage(stderr, "runtime index cutover control store is unavailable\n")
+		return exitBlocked
+	}
 
 	persisted, err := repos.NewCurrentIndexV2CutoverRepository(pool)
 	if err != nil {
 		writeMessage(stderr, "runtime index cutover persisted-state reader is unavailable\n")
 		return exitBlocked
 	}
-	control, err := redisdispatch.NewIndexV2CutoverReader(
-		redisClient,
-		runtimeConfig.commandStream,
-		runtimeConfig.consumerGroup,
-	)
+	control, err := commandbus.NewIndexV2CutoverReader(js, runtimeConfig.commandStream)
 	if err != nil {
 		writeMessage(stderr, "runtime index cutover control-state reader is unavailable\n")
 		return exitBlocked
@@ -169,31 +177,24 @@ func preflightConfigFromEnv(lookup runtimecomposition.LookupEnv) (preflightRunti
 	if err != nil {
 		return preflightRuntimeConfig{}, err
 	}
-	consumerGroup, err := required("ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP")
+	natsURL, err := required("ELITEA_RUNTIME_NATS_URL")
 	if err != nil {
 		return preflightRuntimeConfig{}, err
 	}
-	redisURL, err := required("ELITEA_RUNTIME_REDIS_URL")
+	material, err := natsconn.FromEnv(runtimeNATSPrefix, func(name string) (string, bool) { return lookup(name) })
 	if err != nil {
 		return preflightRuntimeConfig{}, err
 	}
-	redisPasswordFile, err := required("ELITEA_RUNTIME_REDIS_PASSWORD_FILE")
-	if err != nil {
-		return preflightRuntimeConfig{}, err
-	}
-	redisCAFile, err := required("ELITEA_RUNTIME_REDIS_CA_FILE")
-	if err != nil {
+	if err := material.CheckURL(natsURL); err != nil {
 		return preflightRuntimeConfig{}, err
 	}
 	return preflightRuntimeConfig{
 		databaseURL:   databaseURL,
 		commandStream: commandStream,
-		consumerGroup: consumerGroup,
-		redis: runtimecomposition.CutoverRedisConfig{
-			URL:          redisURL,
-			PasswordFile: redisPasswordFile,
-			CAFile:       redisCAFile,
-			PoolSize:     preflightRedisPoolSize,
+		nats: runtimecomposition.NATSConnConfig{
+			URL:      natsURL,
+			Material: material,
+			Name:     "elitea-main-runtime/index-v2-preflight",
 		},
 	}, nil
 }

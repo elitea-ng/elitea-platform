@@ -1,6 +1,6 @@
 """Legacy-compatible ``toolkit.available_tools.v1`` handler kernel.
 
-This file prepares a data-plane artifact only. It does not publish a Redis
+This file prepares a data-plane artifact only. It does not publish a command-bus
 message, emit a gRPC output frame, or persist an artifact. Production content
 storage and delivery are intentionally a later composition slice.
 """

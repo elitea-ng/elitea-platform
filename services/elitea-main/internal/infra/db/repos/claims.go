@@ -176,7 +176,7 @@ FOR UPDATE OF j, o`, request.ExecutionID, int64(request.Generation), request.Cap
 		}
 		if desired == runtimedomain.DesiredCancelled && state == executiondomain.JobCancelled {
 			// The terminal state is already durable, so no worker authority or
-			// immutable input is required to retire this Redis delivery.
+			// immutable input is required to retire this bus delivery.
 			decision = executionapp.ClaimDecision{
 				Disposition:  executionapp.ClaimObsoleteACK,
 				DesiredState: runtimedomain.DesiredCancelled,

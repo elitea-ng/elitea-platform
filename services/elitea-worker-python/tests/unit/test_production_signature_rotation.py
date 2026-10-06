@@ -68,7 +68,7 @@ def test_python_verifier_authenticates_immutable_replay_but_rejects_cross_comman
     )
     signed = _signed("active", private, b"worker-command")
 
-    # Authentication is stateless, so an exact Redis redelivery verifies
+    # Authentication is stateless, so an exact command-bus redelivery verifies
     # again. Durable command/claim/fence state owns replay safety.
     authenticator.authenticate(signed)
     authenticator.authenticate(signed)

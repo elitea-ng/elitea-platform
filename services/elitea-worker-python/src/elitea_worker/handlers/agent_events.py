@@ -36,7 +36,7 @@ from elitea_worker.protocol.node_event import (
 # read perfectly well (its agent-path cap is 200,000 characters, three times
 # this frame). The frame bound is not this module's to raise: it is
 # `max_output_frame_bytes` in the runtime limits conformance document, itself
-# under the Redis field bound every hop is sized against.
+# under the transport payload bound every hop is sized against.
 #
 # So an oversized result is emitted as an ORDERED SEQUENCE of ordinary node
 # events that elitea-main reassembles onto the stored tool call. The contract

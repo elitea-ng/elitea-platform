@@ -25,9 +25,9 @@ func TestAgentExecutionUsesOneReferenceOnlyCommandForTwoCurrentSemantics(t *test
 		t.Fatal("configured and ad-hoc agent semantics must remain distinguishable")
 	}
 	if command.GetAgentExecution().ProtoReflect().Descriptor().Fields().ByName("llm") != nil {
-		t.Fatal("model settings must not be present on the Redis command")
+		t.Fatal("model settings must not be present on the bus command")
 	}
 	if command.GetAgentExecution().ProtoReflect().Descriptor().Fields().ByName("tools") != nil {
-		t.Fatal("tool settings must not be present on the Redis command")
+		t.Fatal("tool settings must not be present on the bus command")
 	}
 }

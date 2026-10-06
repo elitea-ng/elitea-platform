@@ -77,7 +77,7 @@ main:
   # KEY NAMES are the contract:
   #
   #   PRIVATE:
-  #     command-signing-key.pem  redis-producer-password
+  #     command-signing-key.pem
   #     control-server.key       output-server.key       content-server.key
   #   PUBLIC:
   #     runtime-ca.crt           command-signing-keyring.json
@@ -101,27 +101,25 @@ main:
   # this chart builds both only from an auth configuration file.
   #
   # The document is a CHART VALUE here (issue #444), not an external ConfigMap.
-  # internal/authcomposition/material.go opens five files, and only this document
-  # names them. With the document outside the chart, the chart cannot know the
-  # five paths and therefore cannot mount them, so no Kubernetes install of the
-  # runtime plane could start from the chart alone.
+  # internal/authcomposition/material.go opens three files, and only this
+  # document names them. With the document outside the chart, the chart cannot
+  # know the three paths and therefore cannot mount them, so no Kubernetes
+  # install of the runtime plane could start from the chart alone.
   #
   # It is the same document as deploy/runtime/auth.form.yml, which the compose
   # stack reads. Read that file for the reason behind each field.
   #
-  # The five files themselves arrive in a Kubernetes Secret. Create it from the
+  # The three files themselves arrive in a Kubernetes Secret. Create it from the
   # output of deploy/scripts/gen-runtime-certs.sh:
   #
   #   kubectl create secret generic elitea-main-auth-material \
-  #     --from-file=deploy/certs/runtime/redis-auth-password \
-  #     --from-file=deploy/certs/runtime/runtime-ca.crt \
   #     --from-file=deploy/certs/runtime/auth-attempt-key \
   #     --from-file=deploy/certs/runtime/auth-pat-signing-key \
   #     --from-file=deploy/certs/runtime/auth-form-users.json
   #
-  # runtime-ca.crt appears in this Secret AND in elitea-runtime-material. The two
-  # planes read it from two directories, because each material install container
-  # removes anything in its own directory that its own Secret does not carry.
+  # The Form sign-in state (sessions, login transactions, attempt windows) is in
+  # PostgreSQL (elitea-main shared migration 0153), so this plane needs no Redis
+  # password and no Redis CA.
   fileConfig:
     # The /llm hop's client material. The three LLM_GATEWAY_* paths below are
     # under /run/certs, so a volume has to serve that directory — compose
@@ -138,7 +136,7 @@ main:
         secretName: elitea-main-auth-material
 
       document:
-        schema_version: elitea.auth.form.v1
+        schema_version: elitea.auth.form.v2
 
         # NOT the browser's origin. TrustedProxyResolver.Resolve refuses a
         # edge-auth call whose X-Forwarded-Proto and X-Forwarded-Host do not
@@ -165,18 +163,11 @@ main:
           same_site: lax
           lifetime_seconds: 86400
 
-        redis:
-          topology: single_primary_endpoint
-          # The same TLS Redis the runtime dispatch plane uses, under its own ACL
-          # user and key prefix. go-redis takes the password from password_file,
-          # so the URL carries a username and no password by contract.
-          url: rediss://auth@elitea-runtime-redis:6380/0
-          password_file: /run/elitea-auth/redis-auth-password
-          ca_file: /run/elitea-auth/runtime-ca.crt
-          key_prefix: "elitea-standalone-auth:"
-          attempt_key_file: /run/elitea-auth/auth-attempt-key
-
         credentials:
+          # 32 to 64 private bytes. They key the HMAC that names each stored
+          # attempt window, so a database dump does not give back client
+          # addresses or logins.
+          attempt_key_file: /run/elitea-auth/auth-attempt-key
           pat_signing_key_file: /run/elitea-auth/auth-pat-signing-key
           # Authorization Bearer and Basic are mandatory built-ins. They are not
           # configured here.
@@ -200,11 +191,11 @@ main:
             users_json_file: /run/elitea-auth/auth-form-users.json
 
   env:
-    # Endpoints the chart cannot guess. Override both at install time.
+    # The endpoint the chart cannot guess. Override it at install time.
     DATABASE_URL: ""
-    # The general-purpose Redis that carries the project event stream. Without
-    # it the events route is never registered and answers 404.
-    REDIS_URL: ""
+    # The live-update plane (project event stream, canvas presence) dials the
+    # top-level `nats` block unless ELITEA_EVENTS_NATS_URL is set here; see
+    # values.yaml.
 
     # --- Current-compatibility plane -------------------------------------------
     # Eight configuration and model-catalogue routes, and the dependency that
@@ -311,16 +302,13 @@ main:
     enabled: true
 
     # The base plane: configuration validation.
-    commandStream: "commands.v1.configuration.validate.v1.validation-small.shared-credential-free.1.0"
+    commandStream: "ELITEA_RT_V1_VALIDATE"
     maxOutstanding: 64
-    streamMaxEntries: 1024
 
     # The four agent turn routes — the chat send path.
     agentExecutionDispatch:
       enabled: true
-      commandStream: "commands.v1.agent.execute.agent.shared.1.0"
-      consumerGroup: "elitea-agent-worker-v1"
-      streamMaxEntries: 1024
+      commandStream: "ELITEA_RT_V1_AGENT"
       # DELIBERATELY empty. elitea-main calls itself for the next-input-suggestion
       # policy, and it serves cleartext, so the origin is derived from its own
       # listener: http://127.0.0.1:<port>. This used to be
@@ -331,28 +319,18 @@ main:
 
     # Index start, index cancel and index metadata.
     #
-    # DELIBERATELY the same stream AND the same consumer group as the agent plane
-    # above, exactly as the compose stack sets them. The worker dispatches on the
-    # command's capability id rather than on its stream, so one worker serves
-    # both capabilities: no second worker, no second consumer group, no extra
-    # Redis ACL grant. Sharing the stream with a DIFFERENT group is refused.
+    # DELIBERATELY the same stream as the agent plane above, exactly as the
+    # compose stack sets it. The worker dispatches on the command's capability
+    # id rather than on its stream, and one stream has one durable consumer, so
+    # one worker serves both capabilities.
     indexIngestDispatch:
       enabled: true
-      commandStream: "commands.v1.agent.execute.agent.shared.1.0"
-      consumerGroup: "elitea-agent-worker-v1"
-      streamMaxEntries: 1024
+      commandStream: "ELITEA_RT_V1_AGENT"
 
     # Left OFF, as the compose stack leaves it. Turn it on to serve the index
     # schedule write and delete routes, and give it an instanceId.
     indexScheduling:
       enabled: false
-
-    # The runtime's own mutually authenticated Redis, separate from the
-    # general-purpose one in env.REDIS_URL above. The password comes from the
-    # redis-producer-password file in the material volume, never from this URL.
-    redis:
-      url: "rediss://producer@elitea-runtime-redis:6380/0"
-      poolSize: 8
 
     # Must equal the key id inside command-signing-keyring.json. The composition
     # cross-checks the two and refuses to start on a mismatch.
@@ -372,7 +350,6 @@ main:
       #     --from-file=deploy/certs/runtime/runtime-ca.crt \
       #     --from-file=deploy/certs/runtime/command-signing-key.pem \
       #     --from-file=deploy/certs/runtime/command-signing-keyring.json \
-      #     --from-file=deploy/certs/runtime/redis-producer-password \
       #     --from-file=deploy/certs/runtime/control-server.crt \
       #     --from-file=deploy/certs/runtime/control-server.key \
       #     --from-file=deploy/certs/runtime/output-server.crt \

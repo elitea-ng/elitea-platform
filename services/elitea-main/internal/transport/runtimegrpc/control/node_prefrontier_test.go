@@ -58,7 +58,7 @@ func TestNodeRecoveryPreFrontierNodeOnlyWireUsesActualClaimServiceAndFrozenInput
 			observed := lease.ExpiresAt.Add(-10 * time.Second)
 			command := validVerifierAgentCommand(executiondomain.AgentApplicationCapability, runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_AGENT_EXECUTE_APPLICATION)
 			command.ProtocolRevision = "elitea.runtime.v1"
-			command.LimitsRevision = "elitea.runtime.limits.conformance.v2"
+			command.LimitsRevision = "elitea.runtime.limits.conformance.v3"
 			command.CommandId = lease.Fence.CommandID
 			command.IdempotencyKey = "outbox-1"
 			command.ExecutionId = lease.Fence.ExecutionID

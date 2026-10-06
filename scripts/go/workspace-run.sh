@@ -69,7 +69,7 @@
 #   ELITEA_REQUIRE_DECLARED_SKIPS 1 makes an undeclared skip FAIL the run.
 #                                 CI sets it. Locally the ledger only reports,
 #                                 because a developer without PostgreSQL,
-#                                 Redis or the storage emulators should still
+#                                 NATS or the storage emulators should still
 #                                 be able to run `task test`. Same shape as
 #                                 CONTRACT_REQUIRE_PARITY in ci-contract.yml.
 #

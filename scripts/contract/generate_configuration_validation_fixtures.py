@@ -47,14 +47,14 @@ TEST_KEY = b"ELITEA_RUNTIME_V1_TEST_ONLY_NOT_A_SECRET"
 PROTOCOL_REVISION = "elitea.runtime.v1"
 ENVELOPE_SCHEMA_REVISION = "elitea.runtime.signed-worker-command.v1"
 OUTPUT_SCHEMA_REVISION = "elitea.runtime.execution-output.v1"
-LIMITS_REVISION = "elitea.runtime.limits.conformance.v2"
+LIMITS_REVISION = "elitea.runtime.limits.conformance.v3"
 TEST_OCCURRED_AT_UNIX_MILLIS = 1700000000000
 CONFORMANCE_LIMITS = {
     "limits_revision": LIMITS_REVISION,
     "max_worker_command_bytes": 32768,
     "max_signed_envelope_bytes": 49152,
-    "max_redis_field_bytes": 49152,
-    "max_redis_entry_bytes": 65536,
+    "max_transport_payload_bytes": 49152,
+    "max_transport_message_bytes": 65536,
     "max_input_manifest_bytes": 65536,
     "max_input_entries": 16,
     "max_input_content_bytes": 262144,

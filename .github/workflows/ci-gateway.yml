@@ -33,6 +33,14 @@ on:
       # Containerfile. Both subjects are already named above; this line adds
       # the gate's OWN file, so an edit to the checker runs the checker (#518).
       - "scripts/ci/check-gateway-toolchain.sh"
+      # The secured NATS permission test (#1076): the gateway imports
+      # libs/go/natsconn through a replace, and its test runs the gateway's
+      # real NATS client against the nats.conf the NATS chart renders, after
+      # the real bootstrap.sh. A change to any of them must run it.
+      - "libs/go/natsconn/**"
+      - "deploy/helm/nats/**"
+      - "deploy/helm/nats-bootstrap/**"
+      - "scripts/nats/**"
   push:
     branches:
       - main
@@ -44,6 +52,10 @@ on:
       - ".github/workflows/ci-gateway.yml"
       - "services/elitea-worker-python/elitea-sdk.lock.json"
       - "scripts/ci/check-gateway-toolchain.sh"
+      - "libs/go/natsconn/**"
+      - "deploy/helm/nats/**"
+      - "deploy/helm/nats-bootstrap/**"
+      - "scripts/nats/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -100,6 +112,22 @@ jobs:
 
       - name: Go vet
         run: go vet ./...
+
+      # internal/infra/nats/secured_test.go runs the gateway's real NATS client
+      # (Connect, the bind, every counter, KV and publish) as its certificate
+      # identity on a nats-server started from the NATS chart's own rendered
+      # nats.conf, after the real bootstrap.sh (#1076). The script renders the
+      # config, fetches the pinned nats CLI and the nats-server binary, and
+      # sets ELITEA_REQUIRE_NATS_SECURE_TEST so a missing piece FAILS the test
+      # rather than skipping it.
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.16.0
+
+      - name: Provision the secured NATS permission test
+        working-directory: .
+        run: bash scripts/nats/ci-secure-test-env.sh
 
       - name: Run tests
         run: go test -race -count=1 -coverprofile=coverage.out ./...

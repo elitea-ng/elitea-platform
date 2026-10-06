@@ -3,7 +3,7 @@
 //! This boundary joins the already validated request, one-use runtime-context
 //! redemption, the existing Main OpenAI-compatible endpoint and one fresh ADK
 //! session. Application and ad-hoc differ only in their admitted frozen input;
-//! claim, lease, output, settlement and Redis ownership stay in the shared
+//! claim, lease, output, settlement and command-bus ownership stay in the shared
 //! execution lifecycle.
 
 #![allow(dead_code)] // Capability registration remains intentionally disabled.

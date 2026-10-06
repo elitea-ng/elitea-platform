@@ -60,7 +60,7 @@ installed cert-manager are reused, and the chart install is a
    tree a compose stack already minted is reused untouched — and puts it into
    the two Secrets the chart names;
 5. applies `manifests/infra.yaml` — PostgreSQL (`pgvector/pgvector:0.8.5-pg16`,
-   with `CREATE EXTENSION vector` in its initdb), Redis and an S3-compatible
+   with `CREATE EXTENSION vector` in its initdb) and an S3-compatible
    object store (rustfs) — and the four other Secrets the chart names by name;
 6. creates the artifact bucket **before** elitea-main starts, because
    `configureObjectStoreRetentionLifecycle` has no tolerance for a missing one
@@ -140,9 +140,8 @@ this stack started. It cannot satisfy check 3, and the chain is short:
   a credential reader plus a principal validator. Either plane answers now
   (`cmd/elitea-main/production_authentication.go`), so an OIDC-only install
   satisfies it too; this file uses the Form plane;
-* the Form graph keeps its session and attempt store in a **mutually
-  authenticated** Redis (`internal/authcomposition/redis.go` always builds a
-  TLS config), which is why `runtimeRedis` is on.
+* the Form graph keeps its session and attempt store in PostgreSQL
+  (elitea-main shared migration 0153), so no Redis is involved.
 
 So the DeepWiki facade needs none of this, and proving that the facade
 REGISTERED its provider does. The runtime dispatch plane, the worker and the
@@ -177,7 +176,7 @@ LLM gateway stay off throughout.
 | `kind-stack.sh` | `up` / `verify` / `down` |
 | `values-kind.yaml` | the minimal chart values |
 | `manifests/ca-issuer.yaml` | the self-signed CA and the `elitea-internal-ca` ClusterIssuer |
-| `manifests/infra.yaml` | PostgreSQL, Redis, rustfs |
+| `manifests/infra.yaml` | PostgreSQL, rustfs |
 | `seed.sql` | the wiki toolkit, its credential, the bucket row, the PAT |
 
 ## The real engine

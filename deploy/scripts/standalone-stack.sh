@@ -157,7 +157,7 @@ PORT="${STANDALONE_PORT:-8084}"
 # `model is not configured for this project` without its own rows.
 SEED_EXTRA_PROJECTS="${SEED_EXTRA_PROJECTS:-}"
 
-# How long `check` waits for the agent worker to join its Redis consumer group.
+# How long `check` waits for the agent worker to connect to the command bus.
 # The worker has no healthcheck, so `compose up -d --wait` returns before it has
 # finished starting; see the wait in the "agent worker" assertion.
 WORKER_JOIN_TIMEOUT="${STANDALONE_WORKER_JOIN_TIMEOUT:-90}"
@@ -197,7 +197,7 @@ WORKER_JOIN_TIMEOUT="${STANDALONE_WORKER_JOIN_TIMEOUT:-90}"
 # COMPLETELY healthy. `--wait` waits for every container to become healthy OR to
 # exit, and it counts an exit — any exit, including 0 — as a failure. This stack
 # has NINE one-shot jobs (db-init, elitea-migrate, elitea-agentstate-migrate,
-# rustfs-bucket-init, runtime-material, runtime-bootstrap, runtime-session-init,
+# rustfs-bucket-init, runtime-material, nats-bootstrap, runtime-session-init,
 # worker-spool-init, mcp-mock-trust), so a perfect `up` ends with:
 #
 #   Container elitea-standalone-elitea-agentstate-migrate-1  Healthy
@@ -1615,7 +1615,7 @@ PY
     RUNTIME_CERTS="${REPO_ROOT}/deploy/certs/runtime"
     probe() {
       # postgres:18 rather than the alpine-based images: this needs the openssl
-      # CLI, and neither alpine:3.20 nor redis:7-alpine ships one.
+      # CLI, and alpine:3.20 does not ship one.
       $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" \
         --entrypoint sh docker.io/library/postgres:18 -c "$1" 2>&1 || true
     }
@@ -1635,20 +1635,17 @@ PY
       esac
     done
 
-    echo "→ dispatch streams:"
-    STREAM="commands.v1.agent.execute.agent.shared.1.0"
-    GROUP="elitea-agent-worker-v1"
-    # Read the group over TLS as the bootstrap ACL user. XINFO GROUPS naming the
-    # group proves the stream exists AND the group was created — a plain
-    # EXISTS check would pass on a stream that XADD created with no consumer.
-    groups="$($ENGINE run --rm --network "$NETWORK" \
-                -v "${RUNTIME_CERTS}:/m:ro" --entrypoint sh docker.io/library/redis:7-alpine -c \
-                "redis-cli --tls --cacert /m/runtime-ca.crt -h runtime-redis -p 6380 \
-                   --user bootstrap --pass \"\$(cat /m/redis-bootstrap-password)\" \
-                   --no-auth-warning XINFO GROUPS '${STREAM}'" 2>&1 || true)"
-    case "$groups" in
-      *"$GROUP"*) ok "${STREAM} has consumer group ${GROUP}" ;;
-      *) fail "${STREAM} has no ${GROUP} group — runtime-bootstrap did not run" ;;
+    echo "→ command bus (JetStream):"
+    STREAM="ELITEA_RT_V1_AGENT"
+    DURABLE="elitea-agent-worker-v1"
+    NATS_CONTAINER="$($ENGINE ps --format '{{.Names}}' | grep -m1 "${PROJECT}.*-nats-[0-9]" || true)"
+    # /jsz?consumers=true from the server's own monitoring port, read inside
+    # its container: it names the stream AND its durable, so a stream the
+    # bootstrap created without the consumer does not pass.
+    jsz="$($ENGINE exec "$NATS_CONTAINER" wget -qO- 'http://127.0.0.1:8222/jsz?consumers=true' 2>&1 || true)"
+    case "$jsz" in
+      *"${STREAM}"*"${DURABLE}"*) ok "${STREAM} has its durable consumer ${DURABLE}" ;;
+      *) fail "${STREAM} or its durable ${DURABLE} is missing — nats-bootstrap did not run" ;;
     esac
 
     echo "→ runtime composition:"
@@ -1695,55 +1692,37 @@ PY
     fi
 
     echo "→ agent worker:"
-    # A consumer registered on the group is the discriminating signal. "Container
-    # is running" is not: the worker restarts on failure, so a crash-looping one
-    # still shows as up between attempts, and its own logs are not proof it got
-    # as far as Redis. XINFO CONSUMERS reports only consumers that actually
-    # joined the group, so a name here means TLS, the ACL user, the stream and
-    # the group all worked.
+    # A NATS connection named with the worker's consumer_id is the
+    # discriminating signal. "Container is running" is not: the worker restarts
+    # on failure, so a crash-looping one still shows as up between attempts.
+    # The worker connects only after binding its durable (it refuses to start
+    # without it), so a named connection here means the URL, the stream and
+    # the durable all worked.
     #
-    # WAITED FOR, not sampled once. The worker has no healthcheck, so
-    # `compose up -d --wait` does not wait for it, and it joins the group only
-    # after a Python start-up that imports the whole SDK — seconds after the
-    # stack reports healthy. A single sample here reads a race: CI has failed
-    # this assertion in a run whose chat critical path then streamed its events
-    # from this very group, which cannot happen unless the worker joined. The
-    # wait costs nothing when the worker is already there and does not weaken
-    # the check: a worker that never joins still fails, just later.
-    #
-    # The poll runs INSIDE one container rather than spawning one per attempt:
-    # a `run --rm` costs about as much as the interval itself on a loaded
-    # runner, which would make the real timeout something other than the one
-    # named here. The last reply is printed either way, so a failure still shows
-    # what Redis actually answered.
-    consumers="$($ENGINE run --rm --network "$NETWORK" \
-      -v "${RUNTIME_CERTS}:/m:ro" --entrypoint sh docker.io/library/redis:7-alpine -c \
+    # WAITED FOR, not sampled once: the worker has no healthcheck, so
+    # `compose up -d --wait` does not wait for it, and it connects only after a
+    # start-up that imports the whole SDK. The poll runs inside the NATS
+    # container; the last reply is printed either way.
+    connz="$($ENGINE exec "$NATS_CONTAINER" sh -c \
       "deadline=\$(( \$(date +%s) + ${WORKER_JOIN_TIMEOUT} ))
        while : ; do
-         reply=\$(redis-cli --tls --cacert /m/runtime-ca.crt -h runtime-redis -p 6380 \
-                    --user bootstrap --pass \"\$(cat /m/redis-bootstrap-password)\" \
-                    --no-auth-warning XINFO CONSUMERS '${STREAM}' '${GROUP}' 2>&1 || true)
+         reply=\$(wget -qO- 'http://127.0.0.1:8222/connz?limit=1024' 2>&1 || true)
          case \"\$reply\" in *standalone-agent-worker*) break ;; esac
          [ \$(date +%s) -lt \$deadline ] || break
          sleep 2
        done
        printf '%s' \"\$reply\"" 2>&1 || true)"
-    case "$consumers" in
-      *standalone-agent-worker*) worker_joined="yes" ;;
-      *) worker_joined="" ;;
+    case "$connz" in
+      *standalone-agent-worker*) ok "worker connected to the command bus" ;;
+      *)
+        fail "no worker connection on NATS after ${WORKER_JOIN_TIMEOUT}s — the worker never reached the command bus"
+        WORKER_CONTAINER="$($ENGINE ps -a --format '{{.Names}}' | grep -m1 "${PROJECT}.*elitea-worker" || true)"
+        if [ -n "$WORKER_CONTAINER" ]; then
+          echo "    ── last 40 lines of ${WORKER_CONTAINER} ──" >&2
+          $ENGINE logs --tail 40 "$WORKER_CONTAINER" 2>&1 | sed 's/^/    /' >&2 || true
+        fi
+        ;;
     esac
-    if [ -n "$worker_joined" ]; then
-      ok "worker joined ${GROUP}"
-    else
-      # "check its logs" is not something CI can act on, so print them here.
-      fail "no consumer on ${GROUP} after ${WORKER_JOIN_TIMEOUT}s — the worker never reached Redis"
-      echo "    redis answered: ${consumers}" >&2
-      WORKER_CONTAINER="$($ENGINE ps -a --format '{{.Names}}' | grep -m1 "${PROJECT}.*elitea-worker" || true)"
-      if [ -n "$WORKER_CONTAINER" ]; then
-        echo "    ── last 40 lines of ${WORKER_CONTAINER} ──" >&2
-        $ENGINE logs --tail 40 "$WORKER_CONTAINER" 2>&1 | sed 's/^/    /' >&2 || true
-      fi
-    fi
 
     # The worker's platform_origin must terminate TLS with the runtime CA's
     # edge certificate; the SDK verifies it against that CA alone. A plain

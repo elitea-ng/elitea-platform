@@ -29,6 +29,9 @@ target "elitea-migrate" {
 target "elitea-agentstate-migrate" {
   cache-from = ["type=gha,scope=elitea-main-linux-amd64"]
 }
+target "elitea-scheduler" {
+  cache-from = ["type=gha,scope=elitea-scheduler-linux-amd64"]
+}
 target "elitea-llm-gateway" {
   cache-from = ["type=gha,scope=elitea-llm-gateway-linux-amd64"]
 }
@@ -83,7 +86,7 @@ group "e2e" {
 // deploy/docker-compose.standalone-full.yml (+ the rust overlay)
 group "standalone" {
   targets = [
-    "elitea-migrate", "elitea-agentstate-migrate", "elitea-main",
+    "elitea-migrate", "elitea-agentstate-migrate", "elitea-main", "elitea-scheduler",
     "elitea-llm-gateway", "llm-mock", "elitea-deepwiki", "elitea-deepwiki-engine",
     "elitea-inventory", "elitea-inventory-engine",
     "elitea-web", "elitea-worker", "mcp-mock", "mcp-mock-trust", "worker-trust", "qtest-mock",

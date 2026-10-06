@@ -354,7 +354,7 @@ const fn malformed_restored_output() -> ProtocolError {
 /// Bind one validated current `NodeEvent` to the exact claimed agent stream.
 ///
 /// The control service issues `fence` after claim; it is deliberately supplied
-/// separately from the Redis signed command. The returned frame has no
+/// separately from the signed bus command. The returned frame has no
 /// settlement proposal and is never terminal.
 ///
 /// # Errors

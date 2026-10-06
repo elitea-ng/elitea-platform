@@ -1,8 +1,8 @@
 # Traefik DYNAMIC config for the worker's platform_origin.
 #
 # One route, no carve-outs: everything the SDK asks for is forwarded to
-# elitea-main as-is. That is deliberately unlike deploy/centry-hybrid, where the
-# equivalent edge splits worker traffic between Go and pylon —
+# elitea-main as-is. That is deliberately unlike the retired deploy/centry-hybrid, where the
+# equivalent edge split worker traffic between Go and pylon —
 # `tools_list`, `application`/`version` and the artifact APIs are routed to
 # pylon there because Go does not serve them (Go's tools_list is a different
 # path and answers 501 by design). This stack has no pylon, so an agent that
@@ -30,7 +30,7 @@ http:
     # PAT that admitted the turn cannot read the turn's own stream. It is
     # reachable exclusively through a auth edge that authenticates the
     # caller and projects verified identity headers, which is what the two
-    # middlewares below do and what deploy/centry-hybrid does for the same
+    # middlewares below do and what the retired deploy/centry-hybrid did for the same
     # routes.
     #
     # Scoped to this exact path rather than applied to the catch-all: every

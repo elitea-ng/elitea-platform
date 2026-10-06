@@ -204,7 +204,7 @@ message AgentExecutionAttachmentContentV1 {
 
 // AgentExecutionResultV1 references the exact current task result. Thinking,
 // token, tool, HITL, MCP and child events are separate non-terminal NodeEventV1
-// frames; a large final task result is never materialized on Redis or gRPC.
+// frames; a large final task result is never materialized on the command bus or gRPC.
 message AgentExecutionResultV1 {
   string input_bundle_id = 1;
   DigestV1 input_bundle_digest = 2;

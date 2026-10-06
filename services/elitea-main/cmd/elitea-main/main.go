@@ -31,10 +31,12 @@ import (
 	v2analytics "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/analytics"
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
+	v2canvaspresence "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
 	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
+	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
 	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indextypesapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
@@ -70,12 +72,12 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
 	dbrepos "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/llmproxy"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/facade"
@@ -285,15 +287,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// would mean two independent dispatch paths that could disagree about
 	// what already fired.
 	//
-	// Its Bus is events.NoopBus{}: the project SSE stream's own bus
-	// (eventStreamRedis, built later in this function once RedisConfig is
-	// read) is not yet open at this point in composition, and re-ordering
-	// that construction earlier is a change this fix does not also make. The
-	// PRACTICAL effect is scoped to these five NEW event types only — they do
-	// not additionally appear on the project SSE stream in this change — and
-	// does not touch the SSE stream's existing traffic (budget.soft_alert and
-	// the rest), which is unaffected. Webhook delivery itself does not need
-	// the Bus at all: it reaches the Dispatcher Sink below regardless.
+	// Its Bus is events.NoopBus{} — ALWAYS, including when the live-update
+	// NATS bus below is configured. Domain events are a WEBHOOK contract
+	// (the per-project, owner-configured, signed sinks), not a project-feed
+	// one: their payloads carry data the project SSE stream's gate
+	// (models.project_context.view, which viewers hold) does not cover — a
+	// conversation.created carries a private conversation's name and
+	// creator — and no web client listens for them. See
+	// newDomainEventsPublisher, whose signature takes no Bus so this cannot
+	// drift back by accident, and the SSE handler's own type allowlist
+	// (internal/api/v2/events, forwardedEventTypes) as the second layer.
 	//
 	// Its one Sink is the webhook Dispatcher, wired only when the webhooks
 	// table's repository composes (webhooksRepository never returns nil, but
@@ -334,7 +337,38 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 
 	webhookDeliveries := webhookDeliveriesRepository(pool)
 	webhookDispatcher := webhook.NewDispatcher(webhooksRepository(pool), webhookDeliveries, webhook.WithGuard(webhookDestinationGuard))
-	domainEvents := events.NewPublisher(events.NoopBus{}, webhookDispatcher)
+
+	// The live-update plane: NATS core pub/sub (internal/infra/natsbus). One
+	// connection carries the project SSE stream (EventSource) and canvas
+	// presence's roster (KV) and publish. Domain events are NOT on it — see
+	// domainEvents above.
+	// Unset ELITEA_EVENTS_NATS_URL leaves the plane absent; a configured but
+	// unreachable server stops startup — see newEventsNATSConn for both.
+	//
+	// eventSource stays a nil INTERFACE when there is no bus: assigning a nil
+	// *natsbus.EventBus to RouterConfig.EventSource would box a typed nil,
+	// read as non-nil by router.go's gate, and mount the SSE route over a nil
+	// bus (#86).
+	eventsNATS, err := newEventsNATSConn(os.LookupEnv, logger)
+	if err != nil {
+		return fmt.Errorf("compose live-update plane: %w", err)
+	}
+	var (
+		eventSource v2events.EventSource
+		liveNATSBus *natsbus.EventBus
+	)
+	if eventsNATS != nil {
+		liveNATSBus = natsbus.NewFromConn(eventsNATS, "elitea-main", natsbus.WithBufferedPublish())
+		// Flush then drain, both bounded: buffered publishes reach the
+		// server before exit (natsbus.EventBus.Close).
+		defer liveNATSBus.Close()
+		eventSource = liveNATSBus
+		logger.Info("live-update plane enabled (nats transport)", "server", eventsNATS.ConnectedUrlRedacted())
+	} else {
+		logger.Warn("live-update plane disabled: " + eventsNATSURLEnv + " is unset, so " +
+			"/api/v2/events/prompt_lib/{projectID} is not registered and canvas presence is per-replica")
+	}
+	domainEvents := newDomainEventsPublisher(webhookDispatcher)
 
 	// public.pipeline_runs' repository (migrations/shared/0124) — the write
 	// half (pipelinetriggers.WithRunTracker, below) and the read half
@@ -389,7 +423,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentNotificationStore notificationapp.Store
 	var currentNotificationEvents *notificationsapi.CurrentNotificationEventsRoute
 	var formGraph *authcomposition.FormGraph
-	var authReadiness health.Checker
 	var principalValidator apimw.PrincipalValidator
 	var forwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier
 	// firstLoginPolicy travels OUT of the authEnabled block below, because the
@@ -516,11 +549,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("compose production Form authentication: %w", err)
 		}
-		defer func() {
-			if err := formGraph.Close(); runErr == nil && err != nil {
-				runErr = fmt.Errorf("close production Form authentication: %w", err)
-			}
-		}()
 		if formGraph.FormSignInEnabled() {
 			logFormUserConfiguration(logger, formGraph.FormUsers())
 			productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes(), formGraph.MainEdgeAuth())
@@ -533,7 +561,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		principalValidator = authsvc.NewPrincipalValidator(pool)
 		forwardedIdentityVerifier = formGraph.ForwardedIdentityVerifier()
-		authReadiness = formGraph
 		logger.Info("production Form authentication enabled", "form_sign_in", formGraph.FormSignInEnabled())
 	}
 
@@ -2212,22 +2239,22 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 	}
 
-	// Project SSE stream transport (#152). Without this, router.go's
-	// `if cfg.EventSource != nil { … } else if cfg.RedisClient != nil { … }`
-	// falls through on both arms and /api/v2/events/prompt_lib/{projectID} is
-	// never registered — a 404 indistinguishable from a typo'd path. See
-	// newEventStreamRedisClient for why Redis is the correct arm here.
-	eventStreamRedis, err := newEventStreamRedisClient(ctx, os.LookupEnv)
-	if err != nil {
-		return fmt.Errorf("compose project event stream: %w", err)
-	}
-	if eventStreamRedis != nil {
-		defer func() {
-			if err := eventStreamRedis.Close(); runErr == nil && err != nil {
-				runErr = fmt.Errorf("close project event stream: %w", err)
-			}
-		}()
-		logger.Info("project SSE stream enabled (redis transport)")
+	// Canvas presence's cross-replica wiring: the roster in a JetStream KV
+	// bucket on the live-update NATS server, published on the live-update
+	// bus. Both halves or neither — see v2canvaspresence.Backend. A server
+	// without JetStream, or without the bucket the nats-bootstrap Job creates
+	// (main binds, it does not create — #1076), fails startup here, like an
+	// unreachable one does.
+	var canvasPresence v2canvaspresence.Backend
+	if eventsNATS != nil {
+		presenceStore, err := newCanvasPresenceStore(ctx, eventsNATS)
+		if err != nil {
+			return fmt.Errorf("compose canvas presence store: %w", err)
+		}
+		// Stops the bucket watcher. Deferred after liveNATSBus.Close, so it
+		// runs first: the watcher is gone before the connection drains.
+		defer presenceStore.Close()
+		canvasPresence = v2canvaspresence.Backend{Store: presenceStore, Bus: liveNATSBus}
 	}
 
 	// The toolkit TYPE catalogue (GET /elitea_core/toolkits/prompt_lib/
@@ -2298,9 +2325,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ToolkitRegistry:              toolkitArgumentSchemas,
 		DelegatedAuthToolkitSettings: delegatedAuthToolkitSettings,
 		WorkerImplementation:         workerImplementation,
+		// Readiness is the database alone. The Form graph's sign-in state is
+		// in this same database (shared migration 0153), so it adds no
+		// dependency of its own; the auth Redis it once pinged is gone.
 		HealthDeps: health.Deps{
-			DB:    &poolChecker{pool: pool},
-			Redis: authReadiness,
+			DB: &poolChecker{pool: pool},
 		},
 		AuthValidator:      apiGroupAuth.Validator,
 		PrincipalValidator: apiGroupAuth.PrincipalValidator,
@@ -2415,13 +2444,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// returns zero, and it looked like a field that gated nothing. The five
 		// routes are declared in the handler's own Routes() method.
 		WebhookRepo: webhooksRepository(pool),
-		// The project SSE stream's transport. Nil-gated in router.go behind a
-		// two-arm fallback (EventSource → RedisClient) whose members were BOTH
-		// unassigned, so the endpoint 404'd everywhere (#152).
-		RedisClient: eventStreamRedis,
+		// The project SSE stream's transport: the live-update NATS bus, or a
+		// nil interface when ELITEA_EVENTS_NATS_URL is unset (the route is
+		// then deliberately unregistered and startup logs it). Its former
+		// Redis arm is deleted; #152 is the record of that two-arm fallback
+		// shipping with both arms nil.
+		EventSource: eventSource,
+		// Cross-replica canvas presence: roster store + live-update bus.
+		// The zero value keeps the in-process roster and publishes nothing.
+		CanvasPresence: canvasPresence,
 		// #876's second half — see this variable's own composition comment,
-		// above, for why its Bus is a no-op and its one Sink is the webhook
-		// Dispatcher.
+		// above, for its Bus and its one Sink, the webhook Dispatcher.
 		DomainEvents:                domainEvents,
 		WebhookDeliveries:           webhookDeliveries,
 		WebhookDispatcher:           webhookDispatcher,

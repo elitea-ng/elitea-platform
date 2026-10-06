@@ -75,7 +75,7 @@ func (p *agentProducerStub) AppendPrepared(_ context.Context, _ string, envelope
 	return err
 }
 
-func TestAgentDispatcherRetriesTheExactDurableEnvelopeAfterRedisFailure(t *testing.T) {
+func TestAgentDispatcherRetriesTheExactDurableEnvelopeAfterBusFailure(t *testing.T) {
 	dispatch := validAgentDispatch()
 	store := &agentDispatchStoreStub{dispatch: dispatch}
 	producer := &agentProducerStub{

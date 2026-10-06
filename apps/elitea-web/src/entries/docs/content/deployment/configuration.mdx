@@ -75,7 +75,7 @@ Governs where elitea-main may dial for a Remote MCP server: **Load Tools**, the 
 
 ## Budgets need GATEWAY_NATS_URL
 
-Admin → Budgets writes spend-ceiling rows, but the LLM gateway is what **enforces** them, through a NATS JetStream counter — `GATEWAY_NATS_URL` names that cluster (in Kubernetes, the `nats` block resolved in-namespace by default; cross-namespace deployments need the fully qualified `....elitea-gateway.svc.cluster.local` form).
+Admin → Budgets writes spend-ceiling rows, but the LLM gateway is what **enforces** them, through a NATS JetStream counter — `GATEWAY_NATS_URL` names that server. In Kubernetes the chart derives it from the top-level `nats` block as `tls://elitea-nats.<namespace>.svc.cluster.local:4222`, in the platform's own namespace, and mounts the gateway's NATS client certificate beside it; an override must also be `tls://` and carry no credential.
 
 <Warning>
 Leave it unset and the gateway starts, logs a warning, and serves `/llm` with **no budget enforcement**: every budget write still answers 200, every limit reads back exactly as authored, Settings → Usage still reports accrued spend — and no call is ever refused. `GET /governance/status`'s `rate_limits_enforceable` is `false` exactly when this is the case, and Admin → Budgets raises its own warning banner from that field once any budget row exists. The Compose standalone stack runs no NATS service and leaves this unset deliberately, for the same reason.

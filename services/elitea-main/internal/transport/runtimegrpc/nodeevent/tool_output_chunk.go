@@ -14,7 +14,7 @@ import (
 // THE PROBLEM THIS SOLVES. A node event is one output frame, and the frame is
 // bounded at 64 KiB by the runtime limits conformance document
 // (`testdata/proto/runtime/v1/configuration-validation/conformance-limits.json`,
-// `max_output_frame_bytes`, itself under the 48 KiB `max_redis_field_bytes`).
+// `max_output_frame_bytes`, itself under the 48 KiB `max_transport_payload_bytes`).
 // Both workers enforce that bound on the WHOLE event — the Python worker at
 // 60 KiB (`MAX_CURRENT_NODE_EVENT_JSON_BYTES`) and the native worker at 40 KiB
 // for a tool value (`MAX_TOOL_EVENT_VALUE_BYTES`) — so a tool result larger
@@ -24,7 +24,7 @@ import (
 // `RESOURCE_EXHAUSTED: The agent event exceeds its output limit`.
 //
 // WHY NOT RAISE THE FRAME. The frame bound is not a local constant; it is the
-// conformance limit every transport hop is sized against, Redis field bound
+// conformance limit every transport hop is sized against, bus message bound
 // included. Raising it to fit the largest tool result a toolkit may legally
 // return (200k characters, which is ~800 KiB of worst-case UTF-8 and more once
 // JSON-escaped) would move a bound that four components agree on, to a number

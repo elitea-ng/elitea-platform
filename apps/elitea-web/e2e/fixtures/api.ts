@@ -1733,10 +1733,21 @@ export async function expectStoredAssistantAnswer(
         );
         if (!stored.ok()) return '';
         const body = (await stored.json()) as {
-          items?: readonly { role?: string; content?: string; metadata?: { is_error?: boolean } }[];
+          items?: readonly {
+            role?: string;
+            content?: string;
+            is_streaming?: boolean;
+            metadata?: { is_error?: boolean };
+          }[];
         };
         const assistant = body.items?.find((item) => item.role === 'assistant');
         if (assistant?.metadata?.is_error === true) return `IS_ERROR:${assistant.content ?? ''}`;
+        // A CONTINUED turn is not settled by `is_error` alone (#1082). A
+        // HITL pause finalizes the row with `is_error: false`, and resuming
+        // keeps that key while the continuation streams, so a row read here
+        // can still be the provisional text. `is_streaming` is the store's
+        // own "not landed yet" flag; the route omits it once finalized.
+        if (assistant?.is_streaming === true) return '';
         // NOT YET FINISHED. `is_error` is written ONLY by a terminal
         // projection — FinalizeCurrentAgentFullMessage and its HITL and
         // authorization twins each set it explicitly

@@ -41,7 +41,7 @@ func TestOutboxPublisherFailureDelayIsBoundedAndJittered(t *testing.T) {
 }
 
 func TestOutboxPublisherFailureBackoffResetsAfterSuccessAndCancels(t *testing.T) {
-	dependencyFailure := errors.New("Redis unavailable")
+	dependencyFailure := errors.New("command bus unavailable")
 	outbox := &publisherOutboxStub{responses: []publisherListResponse{
 		{err: dependencyFailure},
 		{},
@@ -111,7 +111,7 @@ func TestOutboxPublisherSustainedFailureHasConstantPerCycleWorkAndConcurrency(t 
 		batchSize     = 64
 		maxConcurrent = 8
 	)
-	dependencyFailure := errors.New("Redis unavailable")
+	dependencyFailure := errors.New("command bus unavailable")
 	ids := make([]string, batchSize)
 	for index := range ids {
 		ids[index] = fmt.Sprintf("outbox-%03d", index)

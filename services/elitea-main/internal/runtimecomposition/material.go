@@ -22,8 +22,12 @@ type MaterialFile struct {
 // tools use it to place the material, and to prove that the material is
 // readable before the service starts.
 //
+// The runtime NATS client identity (ELITEA_RUNTIME_NATS_TLS_*) is not runtime
+// material: it is a cert-manager Secret mounted on its own, issued by the
+// dedicated NATS CA, and natsconn reads it again on every handshake.
+//
 // One path can serve more than one reader. The runtime CA is the trust root for
-// the Redis client and for all three listeners. Such a path keeps the stricter
+// all three listeners and the current-Main policy client. Such a path keeps the stricter
 // profile, because the stricter profile also satisfies the other one: a file
 // with owner-only bits passes the public-material check as well.
 func (c Config) MaterialFiles() ([]MaterialFile, error) {
@@ -40,8 +44,6 @@ func (c Config) MaterialFiles() ([]MaterialFile, error) {
 		}
 		byPath[path] = permissions
 	}
-	add(c.RedisPasswordFile, securefile.PrivateMaterial)
-	add(c.RedisCAFile, securefile.PublicMaterial)
 	add(c.SigningKeyFile, securefile.PrivateMaterial)
 	add(c.VerificationKeyringFile, securefile.PublicMaterial)
 	if c.CodeOwnerRecovery != nil {

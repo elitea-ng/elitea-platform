@@ -17,7 +17,7 @@ import (
 )
 
 // This failure test exercises the in-process crash-recovery contract over the
-// checked cross-language corpus. It does not claim networked Redis/PostgreSQL
+// checked cross-language corpus. It does not claim networked NATS/PostgreSQL
 // failover coverage; service-backed fault injection remains a deployment gate.
 func TestCrashAfterTerminalACKRecoversSettlementWithoutInputOrBusinessReplay(t *testing.T) {
 	envelope := &runtimev1.WorkerExecutionEnvelopeV1{}
@@ -213,7 +213,7 @@ func newRecoveryVerifier(t *testing.T) *controltransport.ConformanceCommandVerif
 		EnvelopeSchemaRevision: "elitea.runtime.signed-worker-command.v1",
 		ProtocolRevision:       "elitea.runtime.v1",
 		CapabilityVersion:      "1",
-		LimitsRevision:         "elitea.runtime.limits.conformance.v2",
+		LimitsRevision:         "elitea.runtime.limits.conformance.v3",
 		KeyID:                  "elitea-runtime-v1-conformance-hmac",
 		HMACKey:                []byte("ELITEA_RUNTIME_V1_TEST_ONLY_NOT_A_SECRET"),
 		MaxWorkerCommandBytes:  32 * 1024,

@@ -1,11 +1,12 @@
 # Rust worker remaining gates
 
-Updated: 2026-10-06. Main integration baseline: `e79c277bd` (PR 1014 merged).
+Updated: 2026-10-06. Incoming Main integration baseline: `22403f640` (NATS replacement merged).
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
 [Prior main integration](source-mapping/main-integration-20260923.md) records earlier conflict decisions and rehearsal deployment.
 [Current integration](source-mapping/main-integration-20261001.md) records the migration collision, CI repairs, and preserved Point 5 checkpoint.
+[NATS integration](source-mapping/main-nats-integration-20261006.md) records transport conflict resolution and separates earlier Code evidence from new deployment requirements.
 Current-platform code defines business behavior, not a requirement to copy its implementation or security defects.
 
 ## Progression status
@@ -110,12 +111,18 @@ The same execution and original JavaScript runtime complete all four languages, 
 All seven preparation and execution containers are removed. No owned sandbox lease remains active.
 The browser displays one final result, which matches persisted output after reload. No Stop control remains.
 This closes the exact Worker-loss Code recovery boundary. Supervisor/Main replacement and Kubernetes recovery remain separate gates.
-Typed Code failure display and complete-cohort acceptance remain open. Point 5 remains open.
+Generic Code failure display passes in ephemeral chat 826 and persistent chat 827, including persistent reload.
+Both failed journals commit before publication. No sandbox or later node runs.
+The fresh positive run in chat 825 completes all four languages and retains its exact answer after reload.
+These checks use deployed Worker `d6568bae8` with unchanged Main and Web.
+NATS complete-cohort acceptance remains open. Point 5 remains open.
 The [typed Code correction](source-mapping/code-terminal-failure-20261006.md) passes 50 Rust tests and 109 Main cases, with strict Clippy and vet.
 It preserves finite categories after durable commit and projects restored failure classes without re-execution or journal mutation.
-Corrected Worker/Main deployment and live negative UI acceptance remain open.
+Main preparation-message deployment and actual failed-journal replay remain open.
 The [empty-document editor correction](../../../apps/elitea-web/docs/source-mapping/point5-web-empty-document-ci-20261006.md) passes 110 focused tests and real-backend first-node browser checks.
-The completed prior CI has one failed visual job and two configured skips. The replacement-head visual result remains required.
+CI at `d6568bae8` completes without failed jobs, including the visual and image-scan jobs.
+Two configured skips remain: live toolkit lanes and documentation screenshot capture.
+The integrated NATS revision requires its own CI and runtime checks.
 
 Code-node backend selection is tracked in the [isolation assessment](source-mapping/code-node-isolation-assessment-20260928.md).
 The deployed Docker path passes Python/Pyodide, JavaScript, TypeScript, and Rust execution through the pipeline test chat.
@@ -531,7 +538,7 @@ The selected copied-skill and credential lifecycle cases have deployed evidence;
 Preserve complete history across replacement and verify the wider durability requirements independently.
 Keep detailed diagnostics under `OBS-RUST-01`.
 
-Production activation requires replacement, reclaim, lost-acknowledgement, Redis TLS/ACL, load, soak, and Kubernetes proofs.
+Production activation requires replacement, reclaim, lost-acknowledgement, NATS JetStream (mTLS, permission table, server restart/leader change), load, soak, and Kubernetes proofs.
 Another worker must continue unfinished work without the original process or its local spool.
 Do not count skipped tests, mocks, or a matching final answer as system proof.
 

@@ -56,7 +56,7 @@ func TestNewFormRoutesOwnsExactChildSurfaceWithoutDuplicates(t *testing.T) {
 			t.Fatalf("methods for %s = %v, want %v", route, gotMethods, wantMethods)
 		}
 	}
-	if _, exposed := observed[OIDCLoginPath]; exposed {
+	if _, exposed := observed["/oidc/login"]; exposed {
 		t.Fatal("Form-selected routes exposed the unselected OIDC provider")
 	}
 }
@@ -175,8 +175,8 @@ func TestFormRoutesDoNotExposeUnselectedOrUnknownChildren(t *testing.T) {
 	routes, _, dependencies := newTestFormRoutes(t)
 	router := mountFormRoutes(routes)
 	for _, path := range []string{
-		BasePath + OIDCLoginPath,
-		BasePath + OIDCLoginCallbackPath,
+		BasePath + "/oidc/login",
+		BasePath + "/oidc/login_callback",
 		BasePath + "/info",
 		BasePath + "/unknown",
 	} {

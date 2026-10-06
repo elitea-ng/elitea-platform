@@ -77,7 +77,7 @@ func TestTheDaemonRunsTheSweeperAndTheStacksDeclareItsKnob(t *testing.T) {
 		return string(raw)
 	}
 	main := read(filepath.Join("..", "..", "cmd", "elitea-scheduler", "main.go"))
-	for _, fragment := range []string{"syncretention.New(pool, sched.MaintenanceActive", "syncSweeper.Run(ctx)", "cfg.SyncTombstoneRetentionDays"} {
+	for _, fragment := range []string{"syncretention.New(pool, maintenanceSwitch.Active", "syncSweeper.Run(ctx)", "cfg.SyncTombstoneRetentionDays"} {
 		if !strings.Contains(main, fragment) {
 			t.Errorf("cmd/elitea-scheduler/main.go no longer contains %q", fragment)
 		}

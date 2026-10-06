@@ -12,7 +12,7 @@ package canvaspresence_test
 // RED BEFORE GREEN, recorded rather than claimed:
 //   - TestPresenceOfOneProjectNeverReachesAnother fails if the channel is built
 //     from anything but the resolved mount segment; replacing
-//     events.ProjectChannel(projectID) with a constant makes both projects
+//     events.PresenceChannel(projectID) with a constant makes both projects
 //     publish to one channel and the subscriber count assertion fails.
 //   - TestHeartbeatRefusesACanvasOutsideTheProject fails if the resolver call is
 //     dropped: the handler then answers 200 and publishes for an id that means
@@ -41,7 +41,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
-// errRosterUnavailable stands in for a Redis that is down.
+// errRosterUnavailable stands in for a shared store that is down.
 var errRosterUnavailable = errors.New("roster store unavailable")
 
 // ---------------------------------------------------------------------------
@@ -152,11 +152,11 @@ func twoProjectResolver() *schemaResolver {
 // join
 // ---------------------------------------------------------------------------
 
-func TestHeartbeatPublishesTheRosterOnTheProjectChannel(t *testing.T) {
+func TestHeartbeatPublishesTheRosterOnThePresenceChannel(t *testing.T) {
 	bus := &recordingBus{}
 	handler := v2canvaspresence.NewHandler(
 		twoProjectResolver(),
-		v2canvaspresence.WithEmitter(events.NewPublisher(bus)),
+		v2canvaspresence.WithEmitter(events.NewPresencePublisher(bus)),
 	)
 
 	recorder := post(t, route(handler), "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "42", "ada@example.com")
@@ -182,7 +182,7 @@ func TestHeartbeatPublishesTheRosterOnTheProjectChannel(t *testing.T) {
 		t.Fatalf("ttl_seconds = %d, want %d", response.TTLSeconds, int(v2canvaspresence.TTL/time.Second))
 	}
 
-	channel := events.ProjectChannel("7")
+	channel := events.PresenceChannel("7")
 	published := bus.onChannel(channel)
 	if len(published) != 1 {
 		t.Fatalf("published on %s = %d events, want 1 (all: %#v)", channel, len(published), bus.published)
@@ -291,7 +291,7 @@ func TestPresenceOfOneProjectNeverReachesAnother(t *testing.T) {
 	bus := &recordingBus{}
 	handler := v2canvaspresence.NewHandler(
 		twoProjectResolver(),
-		v2canvaspresence.WithEmitter(events.NewPublisher(bus)),
+		v2canvaspresence.WithEmitter(events.NewPresencePublisher(bus)),
 	)
 	router := route(handler)
 
@@ -300,8 +300,8 @@ func TestPresenceOfOneProjectNeverReachesAnother(t *testing.T) {
 	post(t, router, "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "1", "ada@example.com")
 	post(t, router, "/canvas/prompt_lib/8/1/presence", `{"state":"editing"}`, "2", "mallory@example.com")
 
-	sevens := bus.onChannel(events.ProjectChannel("7"))
-	eights := bus.onChannel(events.ProjectChannel("8"))
+	sevens := bus.onChannel(events.PresenceChannel("7"))
+	eights := bus.onChannel(events.PresenceChannel("8"))
 	if len(sevens) != 1 || len(eights) != 1 {
 		t.Fatalf("channels 7/8 saw %d/%d events, want 1 each — one channel per project (all: %#v)", len(sevens), len(eights), bus.published)
 	}
@@ -328,7 +328,7 @@ func TestPresenceOfOneProjectNeverReachesAnother(t *testing.T) {
 func TestHeartbeatRefusesACanvasOutsideTheProject(t *testing.T) {
 	resolver := twoProjectResolver()
 	bus := &recordingBus{}
-	handler := v2canvaspresence.NewHandler(resolver, v2canvaspresence.WithEmitter(events.NewPublisher(bus)))
+	handler := v2canvaspresence.NewHandler(resolver, v2canvaspresence.WithEmitter(events.NewPresencePublisher(bus)))
 
 	// Canvas 99 exists in neither project.
 	recorder := post(t, route(handler), "/canvas/prompt_lib/7/99/presence", `{"state":"editing"}`, "1", "ada@example.com")
@@ -353,7 +353,7 @@ func TestHeartbeatRefusesACanvasOutsideTheProject(t *testing.T) {
 // state that middleware is built around.
 func TestHeartbeatFailsClosedWithoutThePermission(t *testing.T) {
 	bus := &recordingBus{}
-	handler := v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithEmitter(events.NewPublisher(bus)))
+	handler := v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithEmitter(events.NewPresencePublisher(bus)))
 
 	router := chi.NewRouter()
 	router.With(apimw.RequireResolvedPermissions(nil, auth.PermissionModeDefault, v2canvaspresence.Permission)).
@@ -382,7 +382,7 @@ func TestHeartbeatRefusesAnUnauthenticatedCaller(t *testing.T) {
 
 func TestTheBodyCannotNameTheProjectOrTheCanvas(t *testing.T) {
 	bus := &recordingBus{}
-	handler := v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithEmitter(events.NewPublisher(bus)))
+	handler := v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithEmitter(events.NewPresencePublisher(bus)))
 
 	// Every field the prototype trusted, sent at once.
 	body := `{"state":"editing","project_id":"8","canvas_uuid":"bbbbbbbb-0000-4000-8000-000000000002",` +
@@ -405,7 +405,7 @@ func TestTheBodyCannotNameTheProjectOrTheCanvas(t *testing.T) {
 	if response.Editors[0].UserID != "1" || response.Editors[0].UserName != "ada@example.com" {
 		t.Fatalf("editor = %#v; identity must come from the authenticated principal", response.Editors[0])
 	}
-	if bus.published[0].channel != events.ProjectChannel("7") {
+	if bus.published[0].channel != events.PresenceChannel("7") {
 		t.Fatalf("channel = %q, want project 7's", bus.published[0].channel)
 	}
 }
@@ -443,7 +443,7 @@ func TestAnOversizedBodyIsRefused(t *testing.T) {
 // an id nothing has checked.
 func TestAHandlerWithNoResolverRefuses(t *testing.T) {
 	bus := &recordingBus{}
-	handler := v2canvaspresence.NewHandler(nil, v2canvaspresence.WithEmitter(events.NewPublisher(bus)))
+	handler := v2canvaspresence.NewHandler(nil, v2canvaspresence.WithEmitter(events.NewPresencePublisher(bus)))
 	recorder := post(t, route(handler), "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "1", "ada@example.com")
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 when no canvas resolver is composed", recorder.Code)
@@ -542,7 +542,7 @@ func TestAStoreFailureIsRefusedRatherThanAnsweredEmpty(t *testing.T) {
 			handler := v2canvaspresence.NewHandler(
 				twoProjectResolver(),
 				v2canvaspresence.WithStore(testCase.store),
-				v2canvaspresence.WithEmitter(events.NewPublisher(bus)),
+				v2canvaspresence.WithEmitter(events.NewPresencePublisher(bus)),
 			)
 			recorder := post(t, route(handler), "/canvas/prompt_lib/7/1/presence", testCase.body, "1", "ada@example.com")
 			if recorder.Code != http.StatusInternalServerError {
@@ -567,5 +567,58 @@ func TestNilOptionsLeaveTheDefaultsInPlace(t *testing.T) {
 	recorder := post(t, route(handler), "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "1", "ada@example.com")
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 from the in-process defaults", recorder.Code)
+	}
+}
+
+// A Backend missing either half is a no-op: router.go calls WithBackend
+// unconditionally, and a deployment without a live-update plane must still
+// serve the route on the in-process roster.
+func TestAHalfBackendKeepsServingLocally(t *testing.T) {
+	for name, backend := range map[string]v2canvaspresence.Backend{
+		"zero":       {},
+		"store only": {Store: v2canvaspresence.NewMemoryStore()},
+		"bus only":   {Bus: &recordingBus{}},
+	} {
+		handler := v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithBackend(backend))
+		recorder := post(t, route(handler), "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "1", "ada@example.com")
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200 from the in-process default", name, recorder.Code)
+		}
+	}
+	// "bus only" must not have published: a roster from the per-replica
+	// store is exactly the half-wired state Backend exists to rule out.
+	bus := &recordingBus{}
+	handler := v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithBackend(v2canvaspresence.Backend{Bus: bus}))
+	post(t, route(handler), "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "1", "ada@example.com")
+	if len(bus.published) != 0 {
+		t.Fatalf("a bus-only Backend published %d event(s), want none", len(bus.published))
+	}
+}
+
+// The PRODUCTION wiring end to end: WithBackend is the single option router.go
+// calls, and it has to give the handler BOTH a shared roster and a live
+// publisher. Two handlers stand in for two replicas over one store.
+func TestWithBackendSharesTheRosterAndPublishes(t *testing.T) {
+	shared := v2canvaspresence.NewMemoryStore()
+	bus := &recordingBus{}
+	backend := v2canvaspresence.Backend{Store: shared, Bus: bus}
+
+	replicaA := route(v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithBackend(backend)))
+	replicaB := route(v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithBackend(backend)))
+
+	post(t, replicaA, "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "1", "ada@example.com")
+	second := post(t, replicaB, "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "2", "grace@example.com")
+
+	if roster := decodeResponse(t, second).Editors; len(roster) != 2 {
+		t.Fatalf("roster = %#v, want both editors out of the shared store", roster)
+	}
+	published := bus.onChannel(events.PresenceChannel("7"))
+	if len(published) != 2 {
+		t.Fatalf("published %d frames on project 7's channel, want 2", len(published))
+	}
+	for _, frame := range published {
+		if frame.eventType != v2canvaspresence.EventType {
+			t.Fatalf("event type = %q, want %q", frame.eventType, v2canvaspresence.EventType)
+		}
 	}
 }

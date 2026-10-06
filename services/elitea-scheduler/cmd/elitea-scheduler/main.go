@@ -11,20 +11,17 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
-	goredis "github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/EliteaAI/elitea-platform/libs/go/observability"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/auditretention"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/authstateretention"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/budgetwriteback"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/config"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/health"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/maintenance"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/nativeauthretention"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/pricesync"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/rpc"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/scheduler"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/syncretention"
 )
 
@@ -67,20 +64,21 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Redis
-	rdb := goredis.NewClient(&goredis.Options{Addr: cfg.RedisURL})
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		slog.Error("redis unreachable", "err", err)
-		os.Exit(1)
-	}
-	defer func() { _ = rdb.Close() }()
-
-	rpcClient := rpc.New(rdb, cfg.RPCChannel, cfg.RPCHMACKey)
-	sched := scheduler.New(pool, rdb, rpcClient, cfg)
+	// The maintenance switch the retention sweepers share. The legacy
+	// centry.schedule → `elitea_rpc` Redis dispatcher that used to live here
+	// was deleted: nothing in the Go stack consumed that channel (issue #305),
+	// and with it went this daemon's only use of Redis.
+	maintenanceSwitch := maintenance.New(pool)
 
 	// Health server
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", health.New(pool))
+	// The budget write-back consumer's state (attached / waiting / disabled /
+	// misconfigured). Not the pod's probe: a NATS outage must not restart a
+	// scheduler whose other jobs are fine; it is what an operator reads to
+	// tell "draining" from "silently not draining".
+	writeBackStatus := budgetwriteback.NewStatus()
+	mux.Handle("/readyz/budget-writeback", writeBackStatus)
 
 	srv := &http.Server{
 		Addr:        cfg.HTTPAddr,
@@ -94,9 +92,6 @@ func main() {
 			slog.Error("health server error", "err", err)
 		}
 	}()
-
-	slog.Info("starting scheduler", "instance", cfg.InstanceID, "rpc_channel", cfg.RPCChannel)
-	go sched.Run(ctx)
 
 	// Price-catalog sync worker (design §8.8): refreshes gateway.gateway_models
 	// from ordered PriceSources on a ~24h cadence, off the /llm hot path.
@@ -126,9 +121,9 @@ func main() {
 	// leave the table unbounded and look exactly like one that is running with
 	// nothing to remove.
 	//
-	// sched.MaintenanceActive is the SAME gate the dispatch tick consults, not
-	// a second reading of the switch — see internal/scheduler/maintenance.go.
-	auditSweeper, auditErr := auditretention.New(pool, sched.MaintenanceActive, auditretention.Config{
+	// maintenanceSwitch.Active is the SAME gate the sync sweep consults, not
+	// a second reading of the switch — see internal/maintenance.
+	auditSweeper, auditErr := auditretention.New(pool, maintenanceSwitch.Active, auditretention.Config{
 		RetentionDays:     cfg.AuditRetentionDays,
 		Interval:          cfg.AuditRetentionInterval,
 		BatchSize:         cfg.AuditRetentionBatchSize,
@@ -141,8 +136,8 @@ func main() {
 			"audit_retention_days", cfg.AuditRetentionDays)
 	case auditErr != nil:
 		// A refused window is a configuration mistake, not a reason to take the
-		// whole daemon down: the schedule poller, price sync and budget
-		// write-back are unrelated to it and an operator needs them running
+		// whole daemon down: price sync, budget write-back and the other
+		// sweepers are unrelated to it and an operator needs them running
 		// while they correct the value.
 		slog.Error("audit retention sweep did not start; centry.audit_events grows without bound",
 			"err", auditErr, "audit_retention_days", cfg.AuditRetentionDays)
@@ -157,7 +152,7 @@ func main() {
 	// the window elitea-main still serves a `changes_since` cursor for. The
 	// window can only be raised above that floor. Gated on maintenance like
 	// the audit sweep, since it writes to every tenant schema.
-	if syncSweeper, raised, syncErr := syncretention.New(pool, sched.MaintenanceActive, syncretention.Config{
+	if syncSweeper, raised, syncErr := syncretention.New(pool, maintenanceSwitch.Active, syncretention.Config{
 		RetentionDays: cfg.SyncTombstoneRetentionDays,
 	}, logger); syncErr != nil {
 		slog.Error("sync tombstone retention sweep did not start; tombstone tables grow without bound", "err", syncErr)
@@ -182,41 +177,57 @@ func main() {
 		go nativeSweeper.Run(ctx)
 	}
 
-	// Budget write-back consumer (design §8.6): durable pull consumer draining
-	// GATEWAY_BUDGET_DELTAS into gateway.llm_budget_accumulators. Disabled unless
-	// both the flag and a NATS URL are set, so environments without NATS are
-	// unaffected. A NATS blip at boot is non-fatal (the scheduler keeps running
-	// its other jobs); the consumer resumes when NATS recovers on next restart.
-	var natsConn *nats.Conn
+	// Browser sign-in state retention (elitea-main shared 0153 and 0117):
+	// bounded batched deletes of expired Form sessions, Form login
+	// transactions and attempt windows, and of expired OIDC/SAML browser
+	// sessions, whose store had a DeleteExpired that nothing called.
+	// Correctness never depends on it: elitea-main filters on expiry at read
+	// time. Gated on maintenance like the audit and sync sweeps.
+	if authStateSweeper, authStateErr := authstateretention.New(
+		pool, maintenanceSwitch.Active, authstateretention.Config{}, logger,
+	); authStateErr != nil {
+		slog.Error("auth state retention sweep did not start; the sign-in state tables grow without bound",
+			"err", authStateErr)
+	} else {
+		go authStateSweeper.Run(ctx)
+	}
+
+	// Budget write-back consumer (design §8.6): drains GATEWAY_BUDGET_DELTAS
+	// into gateway.llm_budget_accumulators through the durable pull consumer
+	// the nats-bootstrap Job creates. Disabled unless both the flag and a NATS
+	// URL are set. A NATS that is down, or a consumer the bootstrap has not
+	// created yet, is NOT a reason to give up: the Supervisor keeps
+	// attaching with backoff (one WARN per outage) and re-attaches when the
+	// consumer is lost, and /readyz/budget-writeback reports the state. A
+	// refused configuration is the one permanent failure.
+	var natsConn *budgetwriteback.Connector
 	if cfg.BudgetWriteBackEnabled && cfg.BudgetWriteBackNATSURL != "" {
-		nc, err := nats.Connect(cfg.BudgetWriteBackNATSURL,
-			nats.Name("elitea-scheduler-budget-writeback"),
-			nats.Timeout(time.Second),
-			nats.MaxReconnects(-1),
-			nats.ReconnectWait(500*time.Millisecond),
-		)
-		if err != nil {
-			slog.Warn("budget write-back: NATS connect failed; consumer disabled", "err", err)
-		} else if js, jerr := jetstream.New(nc); jerr != nil {
-			slog.Warn("budget write-back: JetStream init failed; consumer disabled", "err", jerr)
-			nc.Close()
+		dialCfg := budgetwriteback.DialConfig{
+			URL:         cfg.BudgetWriteBackNATSURL,
+			TLSCAFile:   cfg.BudgetWriteBackNATSTLSCAFile,
+			TLSCertFile: cfg.BudgetWriteBackNATSTLSCertFile,
+			TLSKeyFile:  cfg.BudgetWriteBackNATSTLSKeyFile,
+		}
+		if err := budgetwriteback.CheckDialConfig(dialCfg); err != nil {
+			slog.Error("budget write-back: the NATS settings are refused; consumer disabled", "err", err)
+			writeBackStatus.SetMisconfigured(err)
 		} else {
-			wbCfg := budgetwriteback.Config{
-				BatchSize:  cfg.BudgetWriteBackBatchSize,
-				AckWait:    cfg.BudgetWriteBackAckWait,
-				MaxDeliver: cfg.BudgetWriteBackMaxDeliver,
+			natsConn = &budgetwriteback.Connector{Config: dialCfg, Logger: logger}
+			wbCfg := budgetwriteback.Config{BatchSize: cfg.BudgetWriteBackBatchSize}
+			db := budgetwriteback.NewPoolDB(pool)
+			supervisor := &budgetwriteback.Supervisor{
+				Bind: func(ctx context.Context) (*budgetwriteback.Consumer, error) {
+					js, err := natsConn.JetStream()
+					if err != nil {
+						return nil, err
+					}
+					return budgetwriteback.Bind(ctx, js, db, wbCfg, logger)
+				},
+				Status: writeBackStatus,
+				Logger: logger,
 			}
-			bindCtx, bc := context.WithTimeout(ctx, 5*time.Second)
-			consumer, berr := budgetwriteback.Bind(bindCtx, js, budgetwriteback.NewPoolDB(pool), wbCfg, logger)
-			bc()
-			if berr != nil {
-				slog.Warn("budget write-back: bind consumer failed; consumer disabled", "err", berr)
-				nc.Close()
-			} else {
-				natsConn = nc
-				slog.Info("starting budget write-back consumer", "batch", wbCfg.BatchSize)
-				go consumer.Run(ctx)
-			}
+			slog.Info("starting budget write-back consumer", "batch", wbCfg.BatchSize)
+			go supervisor.Run(ctx)
 		}
 	}
 
@@ -232,5 +243,4 @@ func main() {
 	if err := srv.Shutdown(shutCtx); err != nil {
 		slog.Error("health server shutdown error", "err", err)
 	}
-	sched.Stop()
 }

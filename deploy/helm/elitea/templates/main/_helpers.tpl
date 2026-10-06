@@ -135,6 +135,24 @@ false
 {{- end -}}
 
 {{/*
+elitea-main.validateEventsNats — refuse a render where elitea-main cannot know
+the NATS the gateway uses. When the gateway reads GATEWAY_NATS_URL from a Secret
+(llmGateway.secrets), the chart cannot see the value, so deriving main's URL
+from the `nats` block could point it at a different broker: soft alerts would
+never reach the project stream, or main would crash on a host that does not
+exist. The operator names main's URL as well — main.secrets (preferred when it
+carries credentials) or main.env.
+*/}}
+{{- define "elitea-main.validateEventsNats" -}}
+{{- $mainEnv := .Values.main.env | default dict -}}
+{{- $mainSecrets := .Values.main.secrets | default dict -}}
+{{- $gwSecrets := .Values.llmGateway.secrets | default dict -}}
+{{- if and .Values.llmGateway.enabled (hasKey $gwSecrets "GATEWAY_NATS_URL") (not (get $mainEnv "ELITEA_EVENTS_NATS_URL")) (not (hasKey $mainSecrets "ELITEA_EVENTS_NATS_URL")) -}}
+{{- fail "llmGateway.secrets supplies GATEWAY_NATS_URL from a Secret, so the chart cannot derive elitea-main's ELITEA_EVENTS_NATS_URL from it, and the `nats` block may name a different broker (budget soft alerts would never reach the project stream, or elitea-main would refuse to start on an unreachable host). Set main.secrets.ELITEA_EVENTS_NATS_URL to the same Secret and key." -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 elitea-main.validateCapabilities — issue #382.
 
 The composition root gates whole capabilities on environment variables, and it
@@ -275,7 +293,7 @@ configuration document.
 Two shapes, and exactly one of them (issue #444):
 
   * fileConfig.authConfig.document — the document is a chart value, so this
-    chart renders the ConfigMap and KNOWS the five material paths. It checks
+    chart renders the ConfigMap and KNOWS the three material paths. It checks
     them while it renders.
   * fileConfig.authConfig.configMapName — the document stays outside the
     chart. The chart cannot read it, so cmd/elitea-auth-material is the only
@@ -308,25 +326,22 @@ the Secret; the service reads the copies.
 {{- end }}
 
 {{/*
-elitea-main.authMaterialPaths — the five file paths, one per line.
+elitea-main.authMaterialPaths — the three file paths, one per line.
 
-internal/authcomposition/material.go opens exactly these five, and
-Config.MaterialFiles is the Go list of the same five. Keep the two in step: a
-sixth file added there must appear here, or the chart mounts a directory that
+internal/authcomposition/material.go opens exactly these three, and
+Config.MaterialFiles is the Go list of the same three. Keep the two in step: a
+fourth file added there must appear here, or the chart mounts a directory that
 misses it.
 
 An absent key produces an empty line. validateAuthMaterial below refuses that,
-so every other caller of this helper receives five usable paths.
+so every other caller of this helper receives three usable paths.
 */}}
 {{- define "elitea-main.authMaterialPaths" -}}
 {{- $document := .Values.main.fileConfig.authConfig.document | default dict -}}
-{{- $redis := get $document "redis" | default dict -}}
 {{- $credentials := get $document "credentials" | default dict -}}
 {{- $form := get (get $document "provider" | default dict) "form" | default dict -}}
 {{- $paths := list
-  (get $redis "password_file" | toString)
-  (get $redis "ca_file" | toString)
-  (get $redis "attempt_key_file" | toString)
+  (get $credentials "attempt_key_file" | toString)
   (get $credentials "pat_signing_key_file" | toString)
   (get $form "users_json_file" | toString) -}}
 {{- join "\n" $paths -}}
@@ -335,7 +350,7 @@ so every other caller of this helper receives five usable paths.
 {{/*
 elitea-main.validateAuthMaterial — the authentication material (issue #444).
 
-internal/authcomposition/material.go reads five files through
+internal/authcomposition/material.go reads three files through
 internal/security/securefile. Their paths come from the operator's
 authentication-configuration document, NOT from a chart value. So the chart
 rendered no volume and no mount for them, and a Kubernetes install of the
@@ -344,10 +359,10 @@ runtime plane could not start from the chart alone.
 The answer has two halves, and this helper is the first one:
 
   1. RENDER TIME, here. With the document as a chart value the chart reads the
-     five paths, and it refuses a path that the mounted directory cannot serve.
+     three paths, and it refuses a path that the mounted directory cannot serve.
      The operator reads the reason on the terminal.
   2. POD START, in cmd/elitea-auth-material. It reads the SAME document the
-     service reads, it derives the same five paths, and it refuses a
+     service reads, it derives the same three paths, and it refuses a
      disagreement with the mounted directory. That half is the only one
      available while the document stays in an external ConfigMap.
 
@@ -363,7 +378,7 @@ here would drift from it.
 {{- if not $auth.enabled -}}
 {{/*
   Authentication OFF. cmd/elitea-main composes no FormGraph, so it opens none
-  of the five files, and a setting here is silently dead rather than active.
+  of the three files, and a setting here is silently dead rather than active.
   That is the failure class this chart exists to end, so say it now.
 */}}
 {{- if $auth.document -}}
@@ -379,16 +394,33 @@ here would drift from it.
 
 {{/* One document, from one place. */}}
 {{- if and $auth.document $auth.configMapName -}}
-{{- fail "set fileConfig.authConfig.document OR fileConfig.authConfig.configMapName, not both. The first makes this chart render the ConfigMap and check the five material paths while it renders. The second points at a ConfigMap you provision, and this chart cannot read its contents." -}}
+{{- fail "set fileConfig.authConfig.document OR fileConfig.authConfig.configMapName, not both. The first makes this chart render the ConfigMap and check the three material paths while it renders. The second points at a ConfigMap you provision, and this chart cannot read its contents." -}}
 {{- end -}}
 {{- if not (or $auth.document $auth.configMapName) -}}
 {{- fail "fileConfig.authConfig.enabled=true needs fileConfig.authConfig.document, the authentication configuration itself. Read internal/authcomposition/config.go for the schema, and deploy/runtime/auth.form.yml for an example. Use fileConfig.authConfig.configMapName instead to keep the document in a ConfigMap that you provision." -}}
 {{- end -}}
 
-{{/* The directory that carries the five files. */}}
+{{/*
+  The retired schema. elitea.auth.form.v1 carried a `redis:` block for the
+  auth Redis that held the Form sign-in state. That state is in PostgreSQL
+  now (elitea-main shared migration 0153), and cmd/elitea-main refuses a v1
+  document at boot. Refuse it here, while the operator is at the terminal. A
+  v1 document in an external ConfigMap is still caught at pod start by
+  cmd/elitea-auth-material, which uses the same loader.
+*/}}
+{{- if $auth.document -}}
+{{- if hasKey $auth.document "redis" -}}
+{{- fail "fileConfig.authConfig.document has a redis block, and the auth Redis is gone: the Form sign-in state is in PostgreSQL (elitea-main shared migration 0153). Delete document.redis, move document.redis.attempt_key_file to document.credentials.attempt_key_file, and set document.schema_version to elitea.auth.form.v2. Remove the redis-auth-password and Redis CA keys from the material Secret; they are not read." -}}
+{{- end -}}
+{{- if ne (get $auth.document "schema_version" | toString) "elitea.auth.form.v2" -}}
+{{- fail (printf "fileConfig.authConfig.document.schema_version is %q, and cmd/elitea-main accepts only elitea.auth.form.v2. A v1 document must drop its redis block and move redis.attempt_key_file to credentials.attempt_key_file." (get $auth.document "schema_version" | toString)) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The directory that carries the three files. */}}
 {{- $mountPath := $material.mountPath | toString | trimSuffix "/" -}}
 {{- if not $mountPath -}}
-{{- fail "fileConfig.authConfig.enabled=true needs fileConfig.authConfig.material.mountPath. internal/authcomposition/material.go reads five files from that directory: the Auth Redis password, the Auth Redis CA, the browser-attempt key, the PAT signing key and the Form users JSON." -}}
+{{- fail "fileConfig.authConfig.enabled=true needs fileConfig.authConfig.material.mountPath. internal/authcomposition/material.go reads three files from that directory: the browser-attempt key, the PAT signing key and the Form users JSON." -}}
 {{- end -}}
 {{- if not (hasPrefix "/" $mountPath) -}}
 {{- fail (printf "fileConfig.authConfig.material.mountPath must be absolute. internal/security/securefile refuses a relative path. Got %q." ($material.mountPath | toString)) -}}
@@ -401,7 +433,7 @@ here would drift from it.
 {{- if $runtime.enabled -}}
 {{- $runtimeMount := (($runtime.material | default dict).mountPath | toString | trimSuffix "/") -}}
 {{- if eq $mountPath $runtimeMount -}}
-{{- fail (printf "fileConfig.authConfig.material.mountPath and runtime.material.mountPath are both %q, and they must differ. Each material install container removes anything in its directory that its own Secret does not carry, so one shared directory makes the two delete each other's files. Give the authentication material its own directory, and put a copy of any shared file, such as the Redis CA, in both Secrets." $mountPath) -}}
+{{- fail (printf "fileConfig.authConfig.material.mountPath and runtime.material.mountPath are both %q, and they must differ. Each material install container removes anything in its directory that its own Secret does not carry, so one shared directory makes the two delete each other's files. Give the authentication material its own directory." $mountPath) -}}
 {{- end -}}
 {{- end -}}
 {{- if eq $mountPath ($auth.mountPath | toString | trimSuffix "/") -}}
@@ -417,7 +449,7 @@ here would drift from it.
 {{- fail "set fileConfig.authConfig.material.secretName OR fileConfig.authConfig.material.volume, not both. The first makes the chart copy a Kubernetes Secret into an emptyDir; the second mounts a volume that you supply. Two sources for one mount path cannot both apply." -}}
 {{- end -}}
 {{- if not (or $material.secretName $material.volume) -}}
-{{- fail "fileConfig.authConfig.enabled=true needs fileConfig.authConfig.material.secretName, a Kubernetes Secret that carries the five authentication files. Its keys are the last component of each of the five paths in the authentication configuration. Use fileConfig.authConfig.material.volume instead only when another mechanism already writes those files as real, owner-owned files." -}}
+{{- fail "fileConfig.authConfig.enabled=true needs fileConfig.authConfig.material.secretName, a Kubernetes Secret that carries the three authentication files. Its keys are the last component of each of the three paths in the authentication configuration. Use fileConfig.authConfig.material.volume instead only when another mechanism already writes those files as real, owner-owned files." -}}
 {{- end -}}
 {{- if $material.secretName -}}
 {{/*
@@ -439,7 +471,7 @@ here would drift from it.
 {{- end -}}
 
 {{/*
-  The five paths. They are reachable only with the document in this values
+  The three paths. They are reachable only with the document in this values
   file. An external ConfigMap keeps them out of reach, and
   cmd/elitea-auth-material checks them at pod start instead.
 */}}
@@ -447,7 +479,7 @@ here would drift from it.
 {{- $names := list -}}
 {{- range $path := splitList "\n" (include "elitea-main.authMaterialPaths" .) -}}
 {{- if not $path -}}
-{{- fail "fileConfig.authConfig.document must name all five material files: redis.password_file, redis.ca_file, redis.attempt_key_file, credentials.pat_signing_key_file and provider.form.users_json_file. internal/authcomposition/config.go refuses a document without them, and cmd/elitea-main then exits at boot." -}}
+{{- fail "fileConfig.authConfig.document must name all three material files: credentials.attempt_key_file, credentials.pat_signing_key_file and provider.form.users_json_file. internal/authcomposition/config.go refuses a document without them, and cmd/elitea-main then exits at boot." -}}
 {{- end -}}
 {{- if ne (dir $path | trimSuffix "/") $mountPath -}}
 {{- fail (printf "the authentication configuration reads %s, which is outside fileConfig.authConfig.material.mountPath %s. One volume mount serves one directory, so the chart would render cleanly and the pod would then fail to open that file. Move the path into %s, or set the mount path to %s." $path $mountPath $mountPath (dir $path | trimSuffix "/")) -}}
@@ -846,10 +878,11 @@ and the term that actually moves is the one this counts.
 {{- $ingest := $runtime.indexIngestDispatch | default dict -}}
 {{- $discovery := $runtime.toolkitDiscovery | default dict -}}
 {{- $scheduling := $runtime.indexScheduling | default dict -}}
-{{- $redis := $runtime.redis | default dict -}}
+{{- $runtimeNats := $runtime.nats | default dict -}}
 {{- $listeners := $runtime.listeners | default dict -}}
 {{- $material := $runtime.material | default dict -}}
 {{- $env := .Values.main.env | default dict -}}
+{{- $streams := list "ELITEA_RT_V1_VALIDATE" "ELITEA_RT_V1_AGENT" "ELITEA_RT_V1_INDEX" -}}
 
 {{- if not $runtime.enabled -}}
 {{/*
@@ -862,8 +895,8 @@ and the term that actually moves is the one this counts.
 {{- fail (printf "runtime.%s is set but runtime.enabled is false, so the runtime plane stays dark and the setting does nothing. Set runtime.enabled=true, or clear runtime.%s." $field $field) -}}
 {{- end -}}
 {{- end -}}
-{{- if get $redis "url" -}}
-{{- fail "runtime.redis.url is set but runtime.enabled is false, so the runtime plane stays dark and the setting does nothing. Set runtime.enabled=true, or clear runtime.redis.url." -}}
+{{- if get $runtimeNats "url" -}}
+{{- fail "runtime.nats.url is set but runtime.enabled is false, so the runtime plane stays dark and the setting does nothing. Set runtime.enabled=true, or clear runtime.nats.url." -}}
 {{- end -}}
 {{- if get $material "secretName" -}}
 {{- fail "runtime.material.secretName is set but runtime.enabled is false. Set runtime.enabled=true, or clear runtime.material.secretName." -}}
@@ -883,15 +916,22 @@ and the term that actually moves is the one this counts.
 {{- fail "runtime.enabled=true needs production authentication. Set fileConfig.authConfig.enabled=true and point fileConfig.authConfig.configMapName at an auth configuration ConfigMap. cmd/elitea-main refuses to compose the runtime without a PrincipalValidator and a ForwardedIdentityVerifier, and both are built from that file." -}}
 {{- end -}}
 
-{{/* The base plane. config.go asks for all three unconditionally. */}}
+{{/* The base plane. config.go asks for both unconditionally. The stream is
+     one of the command bus's three (docs/runtime-command-bus.md); its
+     capacity is the nats-bootstrap chart's runtime.*.maxMsgs, not main's. */}}
 {{- if not $runtime.commandStream -}}
 {{- fail "runtime.enabled=true needs runtime.commandStream (ELITEA_RUNTIME_COMMAND_STREAM). internal/runtimecomposition/config.go requires it and the process exits without it." -}}
+{{- end -}}
+{{- if not (has ($runtime.commandStream | toString) $streams) -}}
+{{- fail (printf "runtime.commandStream is %q. The command bus has three streams, %v, created by the nats-bootstrap chart and named in the NATS permission table; config.go refuses any other name." ($runtime.commandStream | toString) $streams) -}}
 {{- end -}}
 {{- if not $runtime.maxOutstanding -}}
 {{- fail "runtime.enabled=true needs runtime.maxOutstanding (ELITEA_RUNTIME_MAX_OUTSTANDING), a positive integer no greater than 1024." -}}
 {{- end -}}
-{{- if not $runtime.streamMaxEntries -}}
-{{- fail "runtime.enabled=true needs runtime.streamMaxEntries (ELITEA_RUNTIME_STREAM_MAX_ENTRIES), a positive integer no greater than 1024." -}}
+{{- range $legacy := list "streamMaxEntries" "redis" -}}
+{{- if hasKey $runtime $legacy -}}
+{{- fail (printf "runtime.%s is gone: the runtime command bus is NATS JetStream (docs/runtime-command-bus.md). A stream's capacity is the nats-bootstrap chart's runtime.<route>.maxMsgs, and the connection is runtime.nats (default: the top-level nats block). Remove runtime.%s." $legacy $legacy) -}}
+{{- end -}}
 {{- end -}}
 
 {{/* The SSE stream caps. Optional: the built-in defaults (16/4/8) stay when
@@ -911,19 +951,15 @@ and the term that actually moves is the one this counts.
 {{- fail (printf "runtime.sse.maxStreamsPerProject (%d) exceeds runtime.sse.maxStreams (%d). internal/runtimecomposition/config.go refuses it at boot: \"ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT must not exceed ELITEA_RUNTIME_SSE_MAX_STREAMS\"." $sseProject $sseGlobal) -}}
 {{- end -}}
 
-{{/* Redis. config.go demands a rediss:// URL that carries an ACL username, no
-     password, and an explicit /0 database. A redis:// URL is refused. */}}
-{{- if not $redis.url -}}
-{{- fail "runtime.enabled=true needs runtime.redis.url (ELITEA_RUNTIME_REDIS_URL)." -}}
+{{/* The runtime plane's NATS connection (ELITEA_RUNTIME_NATS_URL), as the
+     elitea-main-runtime identity. Empty means the top-level `nats` block;
+     templates/natsClient.yaml issues the certificate and refuses a URL that
+     disagrees with nats.tls. */}}
+{{- if not (or (get $runtimeNats "url") .Values.nats.service) -}}
+{{- fail "main.runtime.enabled=true needs a NATS: main.runtime.nats.url, or the top-level nats.service. The runtime plane publishes every command onto the JetStream command bus; with neither, ELITEA_RUNTIME_NATS_URL would render as tls://.<namespace>.svc.cluster.local:4222 and elitea-main would fail to start (or, worse, dial whatever that resolves to)." -}}
 {{- end -}}
-{{- if not (hasPrefix "rediss://" ($redis.url | toString)) -}}
-{{- fail (printf "runtime.redis.url must be a rediss:// URL. internal/runtimecomposition/config.go refuses anything else: \"runtime Redis URL must be a rediss URL with an ACL username\". Got %q." ($redis.url | toString)) -}}
-{{- end -}}
-{{- if not (hasSuffix "/0" ($redis.url | toString)) -}}
-{{- fail (printf "runtime.redis.url must select database zero explicitly, so it must end with \"/0\". Got %q." ($redis.url | toString)) -}}
-{{- end -}}
-{{- if not $redis.poolSize -}}
-{{- fail "runtime.enabled=true needs runtime.redis.poolSize (ELITEA_RUNTIME_REDIS_POOL_SIZE), a positive integer no greater than 64." -}}
+{{- if and (get $runtimeNats "url") (contains "@" (get $runtimeNats "url" | toString)) -}}
+{{- fail "runtime.nats.url carries user information. With mTLS the client certificate is the identity, and this URL is rendered into a ConfigMap." -}}
 {{- end -}}
 
 {{/* Command signing. composition.go cross-checks the key id against the
@@ -997,16 +1033,21 @@ and the term that actually moves is the one this counts.
 {{- fail "runtime.toolkitDiscovery.enabled=true needs an active agentExecutionDispatch or indexIngestDispatch." -}}
 {{- end -}}
 
+{{- range $block := list (list "agentExecutionDispatch" $agent) (list "indexIngestDispatch" $ingest) -}}
+{{- range $legacy := list "consumerGroup" "streamMaxEntries" -}}
+{{- if hasKey (index $block 1) $legacy -}}
+{{- fail (printf "runtime.%s.%s is gone: a command stream's durable consumer is fixed by the stream (docs/runtime-command-bus.md) and its capacity is the nats-bootstrap chart's runtime.<route>.maxMsgs. Remove it." (index $block 0) $legacy) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Agent-execution dispatch: the four agent turn routes. */}}
 {{- if $agent.enabled -}}
 {{- if not $agent.commandStream -}}
 {{- fail "runtime.agentExecutionDispatch.enabled=true needs runtime.agentExecutionDispatch.commandStream." -}}
 {{- end -}}
-{{- if not $agent.consumerGroup -}}
-{{- fail "runtime.agentExecutionDispatch.enabled=true needs runtime.agentExecutionDispatch.consumerGroup." -}}
-{{- end -}}
-{{- if not $agent.streamMaxEntries -}}
-{{- fail "runtime.agentExecutionDispatch.enabled=true needs runtime.agentExecutionDispatch.streamMaxEntries." -}}
+{{- if not (has ($agent.commandStream | toString) $streams) -}}
+{{- fail (printf "runtime.agentExecutionDispatch.commandStream is %q, not one of the command bus's streams %v." ($agent.commandStream | toString) $streams) -}}
 {{- end -}}
 {{/*
   currentMainBaseUrl is OPTIONAL. Empty means "call my own listener": elitea-main
@@ -1024,7 +1065,7 @@ and the term that actually moves is the one this counts.
 {{- fail "runtime.agentExecutionDispatch.commandStream must differ from runtime.commandStream. config.go: \"runtime agent execution cannot share the configuration-validation stream\"." -}}
 {{- end -}}
 {{- else -}}
-{{- if or $agent.commandStream $agent.consumerGroup $agent.currentMainBaseUrl -}}
+{{- if or $agent.commandStream $agent.currentMainBaseUrl -}}
 {{- fail "runtime.agentExecutionDispatch settings are present but runtime.agentExecutionDispatch.enabled is false. config.go refuses that combination: \"runtime agent execution dispatch settings require explicit enablement\"." -}}
 {{- end -}}
 {{- end -}}
@@ -1042,27 +1083,19 @@ and the term that actually moves is the one this counts.
 {{- if not $ingest.commandStream -}}
 {{- fail "runtime.indexIngestDispatch.enabled=true needs runtime.indexIngestDispatch.commandStream." -}}
 {{- end -}}
-{{- if not $ingest.consumerGroup -}}
-{{- fail "runtime.indexIngestDispatch.enabled=true needs runtime.indexIngestDispatch.consumerGroup." -}}
-{{- end -}}
-{{- if not $ingest.streamMaxEntries -}}
-{{- fail "runtime.indexIngestDispatch.enabled=true needs runtime.indexIngestDispatch.streamMaxEntries." -}}
+{{- if not (has ($ingest.commandStream | toString) $streams) -}}
+{{- fail (printf "runtime.indexIngestDispatch.commandStream is %q, not one of the command bus's streams %v." ($ingest.commandStream | toString) $streams) -}}
 {{- end -}}
 {{- if eq ($ingest.commandStream | toString) ($runtime.commandStream | toString) -}}
 {{- fail "runtime.indexIngestDispatch.commandStream must differ from runtime.commandStream. config.go: \"runtime index ingest requires a dedicated command stream\"." -}}
 {{- end -}}
 {{/*
   Sharing ONE stream with the agent plane is supported, and the standalone
-  compose stack does exactly that so a single worker serves both capabilities.
-  config.go allows it only when the consumer group matches too.
+  compose stack does exactly that so a single worker serves both capabilities:
+  one stream has one durable consumer, so they share it by construction.
 */}}
-{{- if and $agent.enabled (eq ($ingest.commandStream | toString) ($agent.commandStream | toString)) -}}
-{{- if ne ($ingest.consumerGroup | toString) ($agent.consumerGroup | toString) -}}
-{{- fail "runtime.indexIngestDispatch and runtime.agentExecutionDispatch share a command stream but not a consumer group. config.go: \"runtime agent execution sharing the index stream must share its consumer group\". Give them the same consumerGroup, or give each its own commandStream." -}}
-{{- end -}}
-{{- end -}}
 {{- else -}}
-{{- if or $ingest.commandStream $ingest.consumerGroup -}}
+{{- if $ingest.commandStream -}}
 {{- fail "runtime.indexIngestDispatch settings are present but runtime.indexIngestDispatch.enabled is false. config.go: \"runtime index ingest dispatch settings require explicit enablement\"." -}}
 {{- end -}}
 {{- end -}}
@@ -1099,7 +1132,7 @@ carries the material must use those names as its keys.
 {{- $agent := $runtime.agentExecutionDispatch | default dict -}}
 {{- $ingest := $runtime.indexIngestDispatch | default dict -}}
 {{- $scheduling := $runtime.indexScheduling | default dict -}}
-{{- $redis := $runtime.redis | default dict -}}
+{{- $runtimeNats := $runtime.nats | default dict -}}
 {{- $listeners := $runtime.listeners | default dict -}}
 {{- $dir := $runtime.material.mountPath | toString | trimSuffix "/" -}}
 {{- $sse := $runtime.sse | default dict -}}
@@ -1119,7 +1152,6 @@ ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_{{ $suffix }}: {{ include "elitea.compile
 ELITEA_RUNTIME_ENABLED: "true"
 ELITEA_RUNTIME_COMMAND_STREAM: {{ $runtime.commandStream | quote }}
 ELITEA_RUNTIME_MAX_OUTSTANDING: {{ $runtime.maxOutstanding | toString | quote }}
-ELITEA_RUNTIME_STREAM_MAX_ENTRIES: {{ $runtime.streamMaxEntries | toString | quote }}
 ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED: {{ ((get $runtime "toolkitDiscovery" | default dict).enabled | default false) | toString | quote }}
 {{/* The SSE stream caps. Optional: the built-in defaults (16/4/8) stay when
      runtime.sse is absent. The cap is process-local, so the cluster admits
@@ -1130,8 +1162,6 @@ ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT: {{ $sse.maxStreamsPerProject | defau
 {{- if $agent.enabled }}
 ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
 ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: {{ $agent.commandStream | quote }}
-ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP: {{ $agent.consumerGroup | quote }}
-ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES: {{ $agent.streamMaxEntries | toString | quote }}
 {{- if $agent.currentMainBaseUrl }}
 ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: {{ $agent.currentMainBaseUrl | quote }}
 {{- end }}
@@ -1139,17 +1169,19 @@ ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: {{ $agent.currentMainBaseUrl | quote }}
 {{- if $ingest.enabled }}
 ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "true"
 ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: {{ $ingest.commandStream | quote }}
-ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP: {{ $ingest.consumerGroup | quote }}
-ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES: {{ $ingest.streamMaxEntries | toString | quote }}
 {{- end }}
 {{- if $scheduling.enabled }}
 ELITEA_RUNTIME_INDEX_SCHEDULING_ENABLED: "true"
 ELITEA_RUNTIME_SCHEDULER_INSTANCE_ID: {{ $scheduling.instanceId | quote }}
 {{- end }}
-ELITEA_RUNTIME_REDIS_URL: {{ $redis.url | quote }}
-ELITEA_RUNTIME_REDIS_POOL_SIZE: {{ $redis.poolSize | toString | quote }}
-ELITEA_RUNTIME_REDIS_PASSWORD_FILE: {{ printf "%s/redis-producer-password" $dir | quote }}
-ELITEA_RUNTIME_REDIS_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | quote }}
+{{/* The runtime command bus (docs/runtime-command-bus.md), as the
+     elitea-main-runtime NATS identity (templates/natsClient.yaml). */}}
+ELITEA_RUNTIME_NATS_URL: {{ include "elitea-main.runtimeNatsUrl" . | quote }}
+{{- if .Values.nats.tls.enabled }}
+ELITEA_RUNTIME_NATS_TLS_CA_FILE: {{ printf "%s/ca.crt" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
+ELITEA_RUNTIME_NATS_TLS_CERT_FILE: {{ printf "%s/tls.crt" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
+ELITEA_RUNTIME_NATS_TLS_KEY_FILE: {{ printf "%s/tls.key" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
+{{- end }}
 ELITEA_RUNTIME_SANDBOX_AUDIENCES: {{ join "," ($runtime.sandboxAudiences | default list) | quote }}
 ELITEA_RUNTIME_SIGNING_KEY_ID: {{ $runtime.signingKeyId | quote }}
 ELITEA_RUNTIME_SIGNING_KEY_FILE: {{ printf "%s/command-signing-key.pem" $dir | quote }}
@@ -1194,4 +1226,24 @@ reads the Secret; the service reads the copies.
 */}}
 {{- define "elitea-main.runtimeMaterialSourcePath" -}}
 {{- printf "%s-source" (.Values.main.runtime.material.mountPath | toString | trimSuffix "/") -}}
+{{- end }}
+
+{{/*
+elitea-main.runtimeNatsUrl — the runtime plane's NATS URL: runtime.nats.url,
+else the top-level `nats` block (the same broker as every other client; the
+runtime is a separate identity, not a separate server).
+*/}}
+{{- define "elitea-main.runtimeNatsUrl" -}}
+{{- $runtimeNats := (.Values.main.runtime | default dict).nats | default dict -}}
+{{- get $runtimeNats "url" | default (include "elitea.natsUrl" .) -}}
+{{- end }}
+
+{{/*
+elitea-main.runtimeNatsMountPath — where elitea-main-runtime's client
+certificate Secret is mounted. A directory of its own: the live-update plane's
+identity sits at nats.tls.mountPath in the same pod.
+*/}}
+{{- define "elitea-main.runtimeNatsMountPath" -}}
+{{- $runtimeNats := (.Values.main.runtime | default dict).nats | default dict -}}
+{{- get $runtimeNats "mountPath" | default "/etc/elitea/runtime-nats-client" | trimSuffix "/" -}}
 {{- end }}

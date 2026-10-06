@@ -1223,7 +1223,7 @@ type softAlertPayload struct {
 	CostJustBilledNano int64 `json:"cost_just_billed_nano"`
 }
 
-// softAlertEnvelope mirrors elitea-main's redis.Event envelope (the shape
+// softAlertEnvelope mirrors elitea-main's natsbus Event envelope (the shape
 // natsbus subscribers decode): {type, source, payload, timestamp}.
 type softAlertEnvelope struct {
 	Type      string          `json:"type"`

@@ -24,7 +24,7 @@ spec:
       {{- include "elitea-scheduler.selectorLabels" . | nindent 6 }}
   strategy:
     # Recreate by default (values.yaml): overlapping generations would contend
-    # for the same Redis tick lock and the same durable NATS consumer.
+    # for the same durable NATS consumer.
     {{- toYaml .Values.scheduler.strategy | nindent 4 }}
   template:
     metadata:
@@ -90,6 +90,15 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.scheduler.resources | nindent 12 }}
+          {{- if .Values.nats.tls.enabled }}
+          volumeMounts:
+            # The scheduler's NATS client certificate (templates/natsClient.yaml).
+            {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
+          {{- end }}
+      {{- if .Values.nats.tls.enabled }}
+      volumes:
+        {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-scheduler.fullname" .))) | nindent 8 }}
+      {{- end }}
       {{- with .Values.scheduler.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

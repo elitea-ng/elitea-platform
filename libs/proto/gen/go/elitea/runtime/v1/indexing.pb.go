@@ -141,7 +141,7 @@ func (IndexIngestTerminalStateV1) EnumDescriptor() ([]byte, []int) {
 
 // IndexIngestCommandV1 is the reference-only command for index.ingest.v1. Toolkit,
 // tool, model and token values are immutable input-bundle entries fetched only
-// after an authorized claim. They are never embedded in Redis.
+// after an authorized claim. They are never embedded in the command bus.
 type IndexIngestCommandV1 struct {
 	state                       protoimpl.MessageState `protogen:"open.v1"`
 	ToolkitConfigurationEntryId string                 `protobuf:"bytes,1,opt,name=toolkit_configuration_entry_id,json=toolkitConfigurationEntryId,proto3" json:"toolkit_configuration_entry_id,omitempty"`
@@ -153,7 +153,7 @@ type IndexIngestCommandV1 struct {
 	ClientMessageId             string                 `protobuf:"bytes,7,opt,name=client_message_id,json=clientMessageId,proto3" json:"client_message_id,omitempty"`
 	SioEvent                    string                 `protobuf:"bytes,8,opt,name=sio_event,json=sioEvent,proto3" json:"sio_event,omitempty"`
 	// Exact non-secret embedding metadata stays in the input data plane.
-	// Redis carries only this immutable entry reference and digest.
+	// The command bus carries only this immutable entry reference and digest.
 	EmbeddingBinding *IndexIngestInputBindingV1 `protobuf:"bytes,9,opt,name=embedding_binding,json=embeddingBinding,proto3" json:"embedding_binding,omitempty"`
 	// Durable admission origin. Consumers accept only user, llm, or schedule.
 	Initiator     string `protobuf:"bytes,16,opt,name=initiator,proto3" json:"initiator,omitempty"`
@@ -412,7 +412,7 @@ func (x *IndexIngestArtifactReferenceV1) GetClassification() string {
 
 // IndexIngestSummaryV1 is the bounded, typed inline form of the current
 // index_data terminal result. It is carried only on the authenticated output
-// gRPC data plane and is forbidden on Redis and control gRPC.
+// gRPC data plane and is forbidden on the command bus and control gRPC.
 type IndexIngestSummaryV1 struct {
 	state         protoimpl.MessageState     `protogen:"open.v1"`
 	Status        IndexIngestStatusV1        `protobuf:"varint,1,opt,name=status,proto3,enum=elitea.runtime.v1.IndexIngestStatusV1" json:"status,omitempty"`

@@ -90,19 +90,25 @@ assert d["container"]["image"]["tag"].startswith("2.12"), "NATS Server must be 2
 assert "topologySpreadConstraints" in d["podTemplate"], "HA must spread the quorum across nodes"
 PY
 
-echo "== KV/stream bootstrap (design §8.6, §9.5) =="
+echo "== KV/stream bootstrap owns every asset (design §8.6, §9.5; #1076) =="
 BS="$DIR/helm/nats-bootstrap/files/bootstrap.sh"
-grep -qE 'kv add GATEWAY_BUDGET\b'          "$BS" && ok "creates GATEWAY_BUDGET KV"          || bad "GATEWAY_BUDGET KV"
-grep -q  'kv add GATEWAY_ALERT_COOLDOWN'    "$BS" && ok "creates GATEWAY_ALERT_COOLDOWN KV"  || bad "GATEWAY_ALERT_COOLDOWN KV"
-grep -q  'stream add GATEWAY_BUDGET_DELTAS' "$BS" && ok "creates GATEWAY_BUDGET_DELTAS stream" || bad "GATEWAY_BUDGET_DELTAS stream"
+grep -q  'ensure_stream GATEWAY_BUDGET file'        "$BS" && ok "creates the GATEWAY_BUDGET counter stream"     || bad "GATEWAY_BUDGET stream"
+grep -q  'ensure_stream GATEWAY_RATELIMIT file'     "$BS" && ok "creates the GATEWAY_RATELIMIT counter stream"  || bad "GATEWAY_RATELIMIT stream"
+grep -q  'ensure_stream GATEWAY_BUDGET_DELTAS file' "$BS" && ok "creates the GATEWAY_BUDGET_DELTAS stream"       || bad "GATEWAY_BUDGET_DELTAS stream"
+grep -q  'ensure_kv GATEWAY_ALERT_COOLDOWN'         "$BS" && ok "creates the GATEWAY_ALERT_COOLDOWN KV"         || bad "GATEWAY_ALERT_COOLDOWN KV"
+grep -q  'ensure_kv ELITEA_CANVAS_PRESENCE'         "$BS" && ok "creates the ELITEA_CANVAS_PRESENCE KV"         || bad "ELITEA_CANVAS_PRESENCE KV"
+[ "$(grep -cE -- '^ +--allow-counter \\$' "$BS")" -eq 2 ]       && ok "both counter streams are AllowMsgCounter"      || bad "counter streams must set --allow-counter"
 grep -q  'gateway.budget.delta'             "$BS" && ok "stream subject gateway.budget.delta" || bad "stream subject"
-grep -q  -- '--dupe-window'                 "$BS" && ok "sets duplicate_window"               || bad "duplicate_window"
-grep -q  -- '--max-age'                     "$BS" && ok "sets retention MaxAge"               || bad "MaxAge retention"
-grep -q  -- '--max-bytes'                   "$BS" && ok "sets retention MaxBytes"             || bad "MaxBytes retention"
-grep -q  -- '--max-msgs'                    "$BS" && ok "sets retention MaxMsgs"              || bad "MaxMsgs retention"
+grep -q  -- '--dupe-window "${DELTAS_DUPE_WINDOW}"' "$BS" && ok "sets the deltas duplicate_window" || bad "duplicate_window"
+grep -q  -- '--max-age "${DELTAS_MAX_AGE}"'  "$BS" && ok "sets retention MaxAge"               || bad "MaxAge retention"
+grep -q  -- '--max-bytes "${DELTAS_MAX_BYTES}"' "$BS" && ok "sets retention MaxBytes"          || bad "MaxBytes retention"
+grep -q  -- '--max-msgs "${DELTAS_MAX_MSGS}"' "$BS" && ok "sets retention MaxMsgs"             || bad "MaxMsgs retention"
 grep -q  -- '--replicas "${REPLICAS}"'      "$BS" && ok "replicas parameterised per profile"  || bad "replicas param"
+grep -q  'stream edit'                      "$BS" && ok "reconciles an existing stream instead of skipping it" || bad "existing streams must be edited, not skipped"
 # big-bang migration => NO cutover bucket is ever *created* (a comment saying so is fine)
 if grep -qE 'kv add +GATEWAY_CUTOVER' "$BS"; then bad "must NOT create GATEWAY_CUTOVER (big-bang)"; else ok "no GATEWAY_CUTOVER bucket created"; fi
+# The dead GATEWAY_BUDGET KV (stream KV_GATEWAY_BUDGET) nothing read.
+if grep -qE '(ensure_kv|kv add) +GATEWAY_BUDGET( |$)' "$BS"; then bad "must NOT create the dead GATEWAY_BUDGET KV bucket"; else ok "no GATEWAY_BUDGET KV bucket"; fi
 
 echo "== gateway Service: mTLS-only ClusterIP, port 8083 (design §9.1) =="
 "$HELM" template gw "$DIR/helm/elitea" "${GATEWAY_RENDER_VALUES[@]}" > "$TMP/gw.yaml"

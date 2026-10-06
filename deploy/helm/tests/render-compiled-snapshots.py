@@ -30,7 +30,6 @@ def setting(path):
 
 def values():
     return {
-        'runtimeRedis': {'enabled': True},
         'postgresql': {'maxConnections': 250},
         'main': {'runtime': {'sandboxAudiences': ['dns:rust', 'dns:python'], 'rustCompiledSnapshots': dict(enabled=True, profilesSha256=PIN, **QUOTAS)}},
         'worker': {'enabled': True, 'implementation': 'rust', 'runtime': {'sandboxRuntimes': [
@@ -430,10 +429,10 @@ class Installer(unittest.TestCase):
         names = (
             'runtime-ca.crt control-server.crt output-server.crt content-server.crt '
             'command-signing-keyring.json control-server.key output-server.key content-server.key '
-            'command-signing-key.pem redis-producer-password redis-auth-password auth-attempt-key '
-            'auth-pat-signing-key auth-form-users.json vault-master-key redis-server.crt redis-server.key '
-            'redis-users.acl redis-bootstrap-password agent-worker-client.crt agent-worker-client.key '
-            'redis-worker-password worker-output-spool-key agent-checkpoint-connection '
+            'command-signing-key.pem auth-attempt-key '
+            'auth-pat-signing-key auth-form-users.json vault-master-key '
+            'agent-worker-client.crt agent-worker-client.key '
+            'worker-output-spool-key agent-checkpoint-connection '
             'platform-edge.crt platform-edge.key'
         ).split()
         for name in names:

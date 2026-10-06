@@ -6,9 +6,8 @@
 #                                      file CI runs Playwright against.
 #   THIS FILE                          the same eight services + elitea-llm-gateway
 #                                      (Bifrost), wired into elitea-main's /llm.
-#   centry-hybrid/                     legacy mixed deployment. Not needed here.
 #
-# The postgres/redis/rustfs/rustfs-bucket-init/oidc-mock blocks below are
+# The postgres/nats/rustfs/rustfs-bucket-init/oidc-mock blocks below are
 # hand-duplicated from docker-compose.e2e-standalone.yml rather than layered
 # with `-f base -f overlay`: this file's postgres also needs an explicit PGDATA
 # mount and elitea-main/elitea-web need the gateway's extra env/volumes, so a
@@ -43,10 +42,9 @@
 #   Turning that flag on is not a one-liner. runtimecomposition/config.go takes
 #   the runtime env block all-or-nothing and refuses to boot on a partial one,
 #   and each piece drags in real provisioning:
-#     * TLS Redis. Agent dispatch is Redis Streams, not NATS: the outbox drains
-#       through internal/transport/redisdispatch/agent.go (XADD). The URL must
-#       be rediss:// with an ACL username and a file-backed password, so the
-#       plaintext `redis` service above cannot serve it — hence `runtime-redis`.
+#     * The runtime command bus: NATS JetStream on the `nats` service, streams
+#       and durables created by `nats-bootstrap` (docs/runtime-command-bus.md).
+#       There is no Redis (Form auth is on PostgreSQL).
 #     * Three mTLS listeners, not one: control gRPC :9443, output gRPC :9444,
 #       content HTTPS :9445, each with its own cert/key/client-CA.
 #     * An Ed25519 command-signing keypair whose public half must appear in the
@@ -76,7 +74,8 @@
 #       contain a locally minted CA — hence ELITEA_DISABLE_SYSTEM_CA plus
 #       REQUESTS_CA_BUNDLE/SSL_CERT_FILE on the worker service.
 #   The worker has NO env-var configuration: one JSON file, deploy/runtime/
-#   worker-runtime.json, whose stream/group must match elitea-main's env below.
+#   worker-runtime.json, whose nats_stream/nats_consumer must match elitea-main's
+#   env below.
 #
 # ── The mock LLM (issue #283) ────────────────────────────────────────────────
 #   `seed-llm` now defaults to an OFFLINE mock when no provider key is present,
@@ -97,8 +96,8 @@
 #
 # ── What still does NOT work, and why ────────────────────────────────────────
 #     * Toolkit-bearing agents fail regardless: the SDK resolves toolkits via
-#       /api/v2/elitea_core/tools_list/{project_id}, which centry-hybrid routes
-#       to PYLON — Go's equivalent is a different path and answers 501 by
+#       /api/v2/elitea_core/tools_list/{project_id}, which the retired
+#       centry-hybrid stack routed to PYLON — Go's equivalent is a different path and answers 501 by
 #       design. Same for nested application references and the artifact toolkit.
 #       A plain adhoc turn touches none of them.
 #
@@ -124,17 +123,16 @@
 #   8084  traefik (entry point)     STANDALONE_PORT
 #   8085  gateway, direct (debug)   STANDALONE_GATEWAY_PORT
 #   15433 postgres                  STANDALONE_PG_PORT
-#   16380 redis                     STANDALONE_REDIS_PORT
 #   8090  llm-mock journal          STANDALONE_MOCK_PORT — see the llm-mock comment
 #   8096  qtest-mock journal        STANDALONE_QTEST_PORT
 #   8097  ado-mock journal          STANDALONE_ADO_PORT — see the ado-mock comment
 #   (llm-real, the `real-llm` profile, publishes nothing — see its comment)
 #   9400  oidc-provider-mock        E2E_OIDC_PORT — see the oidc-mock comment
 #
-#   The runtime plane is NOT published to the host. runtime-redis:6380 and
-#   elitea-main:9443/9444/9445 are reachable only on the compose network, which
-#   is where the worker (#282) runs. Publishing them would expose three mTLS
-#   listeners and a command bus on the developer's LAN for no test benefit.
+#   The runtime plane is NOT published to the host. elitea-main:9443/9444/9445
+#   are reachable only on the compose network, which is where the worker (#282)
+#   runs. Publishing them would expose three mTLS listeners on the developer's
+#   LAN for no test benefit.
 #
 # NOTE: oidc-mock's published port must equal its container port, so it is
 # pinned at 9400 and CANNOT be remapped. This stack therefore cannot run at the
@@ -222,8 +220,8 @@ services:
     # leaks onto; the 2026-09-01 measurement is recorded in
     # deploy/helm/elitea/values.yaml.
     #
-    # The config is committed at deploy/runtime/pgbouncer.ini (the redis.conf
-    # precedent); the entrypoint uses the file as-is when it exists.
+    # The config is committed at deploy/runtime/pgbouncer.ini; the entrypoint
+    # uses the file as-is when it exists.
     #
     # No host port: the pooler is an internal hop, and pgbouncer's own console
     # (SHOW POOLS / SHOW SERVERS) is reached through podman exec when needed.
@@ -240,19 +238,45 @@ services:
       timeout: 5s
       retries: 10
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "${STANDALONE_REDIS_PORT:-16380}:6379"
+  # The live-update plane (elitea-main's ELITEA_EVENTS_NATS_URL): the project
+  # SSE stream and canvas presence (its publish and its JetStream KV
+  # bucket); domain events go to webhooks only. It replaced the plain Redis
+  # that sat at REDIS_URL. JetStream (-js)
+  # is required — elitea-main refuses to start without it; -m serves the
+  # healthcheck. Not published to the host: only elitea-main dials it. The
+  # gateway does NOT use it (GATEWAY_NATS_URL stays unset, see below).
+  nats:
+    image: nats:2.12.0-alpine
+    command: ["-c", "/etc/nats-config/nats.conf"]
+    volumes:
+      - ./runtime/nats-local.conf:/etc/nats-config/nats.conf:ro
+      - standalone_nats_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz?js-enabled-only=true"]
       interval: 5s
       timeout: 5s
       retries: 10
 
-  # ── Runtime plane: material, TLS Redis, stream bootstrap (issue #281) ───────
+  # Creates every JetStream asset, with the same script the cluster's
+  # nats-bootstrap hook Job runs (deploy/helm/nats-bootstrap/files/bootstrap.sh).
+  # elitea-main only BINDS to its presence bucket and refuses to start when it
+  # is missing (#1076), so it waits for this to complete. Plaintext and no
+  # client identity, like the server above: compose's posture. The secured
+  # posture is the opt-in overlay docker-compose.nats-secure.yml.
+  nats-bootstrap:
+    image: docker.io/natsio/nats-box:0.19.7
+    command: ["sh", "/bootstrap/bootstrap.sh"]
+    environment:
+      NATS_URL: "nats://nats:4222"
+    volumes:
+      - ./helm/nats-bootstrap/files/bootstrap.sh:/bootstrap/bootstrap.sh:ro
+    depends_on:
+      nats:
+        condition: service_healthy
 
-  # Installs deploy/certs/runtime/ into three per-consumer named volumes with
+  # ── Runtime plane: material (issue #281) ────────────────────────────────────
+
+  # Installs deploy/certs/runtime/ into per-consumer named volumes with
   # the uid and mode each reader needs. See deploy/runtime/install-material.sh
   # for why a bind mount cannot do this job: securefile demands exactly 0600 on
   # private material, and under rootless podman a bind-mounted host file arrives
@@ -264,51 +288,8 @@ services:
       - ./runtime/install-material.sh:/opt/install-material.sh:ro
       - ./certs/runtime:/src:ro
       - standalone_runtime_main:/dst/main
-      - standalone_runtime_redis:/dst/redis
       - standalone_runtime_worker:/dst/worker
       - standalone_runtime_edge:/dst/edge
-    restart: "no"
-
-  # The runtime dispatch bus. Separate from the plaintext `redis` above because
-  # runtimecomposition/config.go accepts only rediss:// with an ACL username,
-  # and dials at MinVersion TLS 1.3. Config: deploy/runtime/redis.conf.
-  runtime-redis:
-    image: redis:7-alpine
-    command: ["redis-server", "/etc/redis/redis.conf"]
-    volumes:
-      - ./runtime/redis.conf:/etc/redis/redis.conf:ro
-      - standalone_runtime_redis:/run/elitea-runtime:ro
-      - standalone_runtime_redis_data:/data
-    depends_on:
-      runtime-material:
-        condition: service_completed_successfully
-    healthcheck:
-      # `redis-cli ping` cannot work here: cleartext is off (`port 0`) and the
-      # default user is disabled, so the probe must speak TLS and AUTH as a real
-      # ACL user. A PONG therefore proves the cert, the ACL file and the TLS
-      # listener are all good — which is exactly what dependents need to know.
-      test: ["CMD-SHELL", "redis-cli --tls --cacert /run/elitea-runtime/runtime-ca.crt -h runtime-redis -p 6380 --user bootstrap --pass \"$$(cat /run/elitea-runtime/redis-bootstrap-password)\" --no-auth-warning ping | grep -q PONG"]
-      interval: 3s
-      timeout: 5s
-      retries: 20
-      start_period: 5s
-
-  # Creates the dispatch streams and their consumer groups from 0-0. The worker's
-  # ACL has no XGROUP on purpose, so this cannot be left to the consumer.
-  runtime-bootstrap:
-    image: redis:7-alpine
-    entrypoint: ["/bin/sh", "/opt/bootstrap-streams.sh"]
-    environment:
-      AGENT_STREAM: "commands.v1.agent.execute.agent.shared.1.0"
-      AGENT_GROUP: "elitea-agent-worker-v1"
-      CONFIGURATION_STREAM: "commands.v1.configuration.validate.v1.validation-small.shared-credential-free.1.0"
-      CONFIGURATION_GROUP: "elitea-configuration-worker-v1"
-    volumes:
-      - ./runtime/bootstrap-streams.sh:/opt/bootstrap-streams.sh:ro
-      - standalone_runtime_redis:/run/elitea-runtime:ro
-    depends_on:
-      runtime-redis:
-        condition: service_healthy
     restart: "no"
 
   # ── Schema bootstrap ────────────────────────────────────────────────────────
@@ -467,7 +448,7 @@ services:
     #
     # DEFAULT 9400 — unset, this stack behaves exactly as it always has, and CI
     # (which sets nothing) is unchanged. Set it only to run this stack beside
-    # another one, together with STANDALONE_PORT/PG/REDIS/MOCK.
+    # another one, together with STANDALONE_PORT/PG/MOCK.
     command: ["--port", "${E2E_OIDC_PORT:-9400}"]
     ports:
       - "${E2E_OIDC_PORT:-9400}:${E2E_OIDC_PORT:-9400}"
@@ -489,7 +470,6 @@ services:
   #            opt-out explicitly with LLM_BUDGET_REQUIRE_ENFORCEMENT below
   #            (issue #304): without it, the gateway refuses to start as soon as
   #            somebody authors a budget row in this database.
-  #   Redis  — not a dependency at all; the module does not import a redis client.
   #   Vault  — SECRETS_MASTER_KEY is optional as long as seeded credentials carry
   #            a literal api_key rather than a {{secret.NAME}} reference.
   #   PG     — pgxpool.New only parses the DSN, never dials, so an unreachable
@@ -516,8 +496,9 @@ services:
       # X-Elitea-Project-Id / X-Elitea-User-Id / X-Elitea-Tenant-Id headers that
       # elitea-main signs and the gateway verifies.
       GATEWAY_IDENTITY_SECRET: "${GATEWAY_IDENTITY_SECRET:-standalone-dev-identity-secret}"
-      # ISSUE #304 — the documented local-development opt-out. This stack runs
-      # no NATS on purpose, so the budget gate is never wired and no ceiling in
+      # ISSUE #304 — the documented local-development opt-out. The gateway is
+      # given no NATS on purpose (the `nats` service is elitea-main's
+      # live-update plane only), so the budget gate is never wired and no ceiling in
       # gateway.project_budget or gateway.user_budget applies. The default
       # "auto" posture refuses to start in exactly that state, once a budget row
       # exists. That is right for a cluster and wrong for a laptop.
@@ -606,7 +587,7 @@ services:
       # egress-facing service; ./certs is also the parent of ./certs/runtime,
       # which holds the PAT signing key, the command signing key + keyring, the
       # worker client key, the content/control/output server keys, the vault
-      # master key and all four Redis passwords — plus ca.key at the top level,
+      # master key — plus ca.key at the top level,
       # which would let a compromised gateway mint its own elitea-main client
       # certificate. None of that is gateway material.
       #
@@ -878,7 +859,7 @@ services:
       # Keep the gateway and Main on one vault-key source. Empty preserves the
       # unwrapped E2E seed; a restored deployment can supply its existing key.
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY-}"
-      REDIS_URL: "redis:6379"
+      ELITEA_EVENTS_NATS_URL: "nats://nats:4222"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       APPLICATION_SECRET_KEY: "changeme-standalone"
       OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
@@ -1131,20 +1112,18 @@ services:
       ELITEA_RUNTIME_ENABLED: "true"
 
       # Configuration-validation dispatch: the base plane, always required.
-      ELITEA_RUNTIME_COMMAND_STREAM: "commands.v1.configuration.validate.v1.validation-small.shared-credential-free.1.0"
+      # The runtime command bus (docs/runtime-command-bus.md): JetStream on the
+      # same `nats` service, streams created by `nats-bootstrap` above.
+      ELITEA_RUNTIME_COMMAND_STREAM: "ELITEA_RT_V1_VALIDATE"
       # A restored database can already carry the cluster-wide admission
       # policy. All Main replicas must use that persisted value; the runtime
       # deliberately rejects a mismatch instead of silently changing capacity.
       ELITEA_RUNTIME_MAX_OUTSTANDING: "${ELITEA_RUNTIME_MAX_OUTSTANDING:-64}"
-      ELITEA_RUNTIME_STREAM_MAX_ENTRIES: "1024"
 
-      # Agent-execution dispatch: the chat send path. The stream name must not
-      # collide with the base plane's stream or its `:delivery-index.v1`
-      # sibling — config.go:286-310 rejects overlap explicitly.
+      # Agent-execution dispatch: the chat send path. Its own stream; config.go
+      # refuses sharing the configuration-validation stream.
       ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
-      ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: "commands.v1.agent.execute.agent.shared.1.0"
-      ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP: "elitea-agent-worker-v1"
-      ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES: "1024"
+      ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
       # Workers use this HTTPS origin for internal MCP tools.
       # The platform edge terminates TLS and forwards requests to Main.
       # Main also uses this origin for next-input-suggestion policy calls.
@@ -1162,27 +1141,17 @@ services:
       # Bifrost gateway reads, so the only remaining requirement is
       # ELITEA_CONFIGURATIONS_ENABLED, set above.
       ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "true"
-      # DELIBERATELY the same stream AND the same consumer group as the agent
-      # plane above. runtimecomposition/config.go:303-306 makes that an
-      # explicitly supported configuration (it only rejects sharing the stream
-      # with a DIFFERENT group), and the worker dispatches on the command's
-      # capability_id rather than on which stream it came from
-      # (elitea_worker/serve.py:545). So the one running worker consumes both
-      # capabilities and this needs no second worker container, no extra Redis
-      # ACL grant, no extra consumer group and no second workload_sessions row.
-      #
-      # A dedicated index stream is the alternative shape; it costs a second
-      # worker instance with its own runtime.json, ACL entries for the new
-      # stream and its `:delivery-index.v1` sibling, an XGROUP in
-      # runtime/bootstrap-streams.sh, and a second authorized workload session.
-      ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: "commands.v1.agent.execute.agent.shared.1.0"
-      ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP: "elitea-agent-worker-v1"
-      ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES: "1024"
+      # DELIBERATELY the same stream as the agent plane above: one stream has
+      # one durable consumer, and the worker dispatches on the command's
+      # capability_id rather than on which stream it came from, so the one
+      # running worker consumes both capabilities — no second worker container
+      # and no second workload_sessions row. ELITEA_RT_V1_INDEX (with a worker
+      # on elitea-index-worker-v1) is the alternative shape.
+      ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
 
-      ELITEA_RUNTIME_REDIS_URL: "rediss://producer@runtime-redis:6380/0"
-      ELITEA_RUNTIME_REDIS_PASSWORD_FILE: /run/elitea-runtime/redis-producer-password
-      ELITEA_RUNTIME_REDIS_CA_FILE: /run/elitea-runtime/runtime-ca.crt
-      ELITEA_RUNTIME_REDIS_POOL_SIZE: "8"
+      # Plaintext here (compose posture; docker-compose.nats-secure.yml layers
+      # the elitea-main-runtime identity on).
+      ELITEA_RUNTIME_NATS_URL: "nats://nats:4222"
 
       # composition.go cross-checks this key id against the keyring entry and
       # refuses to start on a mismatch, so it must equal the id baked into
@@ -1213,7 +1182,7 @@ services:
       # ./certs directory. Bind-mounting the parent handed elitea-main the whole
       # of ./certs/runtime, which is exactly the material
       # deploy/runtime/install-material.sh deliberately withholds from it (the
-      # worker client key, redis-worker-password, runtime-ca.key) plus ca.key.
+      # worker client key, runtime-ca.key) plus ca.key.
       # Same defect class as the gateway's mount above (#327); the named volume
       # below stays the only source of runtime material.
       - ./certs/client.crt:/run/certs/client.crt:ro
@@ -1230,17 +1199,21 @@ services:
       # postgres. The schema is guaranteed by elitea-migrate below.
       pgbouncer:
         condition: service_healthy
+      # The runtime material (signing key, keyring, listener keypairs, the
+      # files auth.form.yml names) is installed into standalone_runtime_main
+      # by runtime-material; main must not start on a missing or half-copied
+      # tree. runtime-redis used to carry this ordering transitively.
+      runtime-material:
+        condition: service_completed_successfully
       elitea-deepwiki:
         condition: service_healthy
       elitea-inventory:
         condition: service_healthy
-      redis:
+      nats:
         condition: service_healthy
-      elitea-migrate:
+      nats-bootstrap:
         condition: service_completed_successfully
-      runtime-redis:
-        condition: service_healthy
-      runtime-bootstrap:
+      elitea-migrate:
         condition: service_completed_successfully
       oidc-mock:
         condition: service_healthy
@@ -1256,6 +1229,44 @@ services:
       timeout: 5s
       retries: 6
       start_period: 15s
+
+  # The scheduler runs the database housekeeping elitea-main relies on but does
+  # not do itself. In THIS stack the load-bearing one is the browser sign-in
+  # state sweep (internal/authstateretention): this is the stack that mounts
+  # deploy/runtime/auth.form.yml, so Form sessions, login transactions and
+  # attempt windows (shared migration 0153) land in PostgreSQL, and without a
+  # scheduler expired rows are never removed. Correctness does not depend on
+  # it (every read filters on expiry); table growth does. It also runs the
+  # audit and sync-tombstone retention sweeps with the docker-compose.yml
+  # defaults. Price sync and budget write-back stay off (their defaults): the
+  # gateway here does not publish budget deltas (GATEWAY_NATS_URL is unset).
+  #
+  # Direct to postgres, not through pgbouncer, like the migration jobs: its
+  # sweeps are short batched statements, and the pooler budget is main's.
+  elitea-scheduler:
+    image: ghcr.io/elitea-ng/elitea-scheduler:standalone
+    build:
+      # Repo root: the Containerfile COPYs libs/go/observability from there.
+      context: ..
+      dockerfile: services/elitea-scheduler/Containerfile
+    environment:
+      DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
+      HTTP_ADDR: ":8081"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      AUDIT_RETENTION_DAYS: "365"
+      SYNC_TOMBSTONE_RETENTION_DAYS: "97"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # The tables it sweeps exist only after the shared history ran.
+      elitea-migrate:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+    # No container healthcheck: the image is distroless and the binary has no
+    # -healthcheck flag (see docker-compose.yml). /healthz is on :8081 inside
+    # the network; no host port.
+    restart: unless-stopped
 
   # ── The DeepWiki provider, SPI shell over the FIXTURE runner ─────────────
   # ELITEA_DEEPWIKI_RUNNER=fixture is the real LegacyToolRunner with its tools
@@ -1633,9 +1644,7 @@ services:
         condition: service_completed_successfully
       worker-spool-init:
         condition: service_completed_successfully
-      runtime-redis:
-        condition: service_healthy
-      runtime-bootstrap:
+      nats-bootstrap:
         condition: service_completed_successfully
       runtime-session-init:
         condition: service_completed_successfully
@@ -1724,7 +1733,7 @@ services:
       - standalone_mcp_mock_trust:/trust
       - standalone_runtime_worker:/runtime:ro
     depends_on:
-      runtime-bootstrap:
+      runtime-material:
         condition: service_completed_successfully
     restart: "no"
 
@@ -1792,12 +1801,10 @@ volumes:
   inventory-engine-sock:
   standalone_pg_data:
   standalone_rustfs_data:
-  # Runtime Redis AOF data. Preserve it during scoped service replacement.
-  standalone_runtime_redis_data:
+  standalone_nats_data:
   # Runtime material, split per consumer so no service holds a key it does not
   # use. Populated by runtime-material from deploy/certs/runtime.
   standalone_runtime_main:
-  standalone_runtime_redis:
   standalone_runtime_worker:
   standalone_runtime_edge:
   # The worker's output spool. Private (0700, uid 10001) — prepared by

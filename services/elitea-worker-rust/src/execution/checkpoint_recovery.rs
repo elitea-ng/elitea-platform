@@ -23,11 +23,11 @@ use crate::agents::session::AuthorizedNativeCommandBinding;
 use crate::protocol::control::AgentControlClient;
 use crate::protocol::output::RuntimeFailureKind;
 use crate::transport::ControlRpc;
-use crate::transport::redis_commands::{RedisCommandRetirer, RedisRetirementClient};
+use crate::transport::command_bus::{CommandRetirementClient, CommandRetirer};
 
 pub(super) struct CheckpointRecoveryServices<R, RC, T, K, D, I> {
     pub control: Arc<AgentControlClient<R>>,
-    pub retirer: Arc<RedisCommandRetirer<RC>>,
+    pub retirer: Arc<CommandRetirer<RC>>,
     pub replay: Arc<T>,
     pub clock: Arc<K>,
     pub authorized: Arc<D>,
@@ -39,7 +39,7 @@ pub(super) struct CheckpointRecoveryServices<R, RC, T, K, D, I> {
 impl<R, RC, T, K, D, I> CheckpointRecoveryServices<R, RC, T, K, D, I>
 where
     R: ControlRpc + 'static,
-    RC: RedisRetirementClient + 'static,
+    RC: CommandRetirementClient + 'static,
     T: AgentTerminalReplay + 'static,
     K: UnixMillisClock,
     D: AuthorizedAgentLifecycle,

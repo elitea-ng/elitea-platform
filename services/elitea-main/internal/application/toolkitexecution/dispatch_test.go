@@ -90,7 +90,7 @@ func (p *toolkitReadProducerStub) AppendPrepared(
 	return err
 }
 
-func TestToolkitReadDispatcherRetriesExactDurableEnvelopeAfterRedisFailure(t *testing.T) {
+func TestToolkitReadDispatcherRetriesExactDurableEnvelopeAfterBusFailure(t *testing.T) {
 	dispatch := validToolkitReadDispatch()
 	store := &toolkitReadDispatchStoreStub{dispatch: dispatch}
 	producer := &toolkitReadProducerStub{

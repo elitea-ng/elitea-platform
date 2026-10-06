@@ -3,18 +3,11 @@ package authcomposition
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 )
@@ -25,34 +18,24 @@ func TestMaterializeLoadsExactPurposeSeparatedSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	redisCAPEM, err := os.ReadFile(config.Redis.CAFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectedRedisRoots := x509.NewCertPool()
-	if !expectedRedisRoots.AppendCertsFromPEM(redisCAPEM) {
-		t.Fatal("test Redis CA PEM was not accepted")
-	}
-	if string(material.redisPassword) != " redis password " ||
-		!bytes.Equal(material.attemptKey, bytes.Repeat([]byte{0xa5}, minAttemptKeyBytes)) ||
-		string(material.patSigningKey) != "päss-signing-key\n" || material.redisRoots == nil ||
-		!material.redisRoots.Equal(expectedRedisRoots) || material.formProvider == nil {
-		t.Fatalf("unexpected materialized snapshot: password=%q attempt=%x PAT=%q roots=%v provider=%v",
-			material.redisPassword,
+	if !bytes.Equal(material.attemptKey, bytes.Repeat([]byte{0xa5}, minAttemptKeyBytes)) ||
+		string(material.patSigningKey) != "päss-signing-key\n" || material.formProvider == nil {
+		t.Fatalf("unexpected materialized snapshot: attempt=%x PAT=%q provider=%v",
 			material.attemptKey,
 			material.patSigningKey,
-			material.redisRoots,
 			material.formProvider,
 		)
 	}
+	files, err := config.MaterialFiles()
+	if err != nil || len(files) != 3 {
+		t.Fatalf("material files = %d, %v; want the attempt key, the PAT key and the Form users", len(files), err)
+	}
 
-	password := material.redisPassword
 	attemptKey := material.attemptKey
 	patKey := material.patSigningKey
 	material.destroy()
-	if material.redisPassword != nil || material.attemptKey != nil || material.patSigningKey != nil ||
-		material.redisRoots != nil || material.formProvider != nil || !allZero(password) ||
-		!allZero(attemptKey) || !allZero(patKey) {
+	if material.attemptKey != nil || material.patSigningKey != nil ||
+		material.formProvider != nil || !allZero(attemptKey) || !allZero(patKey) {
 		t.Fatalf("destroy did not clear material: %+v", material)
 	}
 }
@@ -63,7 +46,7 @@ func TestMaterializeRejectsAliasedOrReusedPurposes(t *testing.T) {
 		if err := os.Remove(config.Credentials.PATSigningKeyFile); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Link(config.Redis.AttemptKeyFile, config.Credentials.PATSigningKeyFile); err != nil {
+		if err := os.Link(config.Credentials.AttemptKeyFile, config.Credentials.PATSigningKeyFile); err != nil {
 			t.Fatal(err)
 		}
 		assertInvalidMaterial(t, config)
@@ -71,7 +54,7 @@ func TestMaterializeRejectsAliasedOrReusedPurposes(t *testing.T) {
 
 	t.Run("equal raw content", func(t *testing.T) {
 		config := writeMaterialFixture(t)
-		attemptKey, err := os.ReadFile(config.Redis.AttemptKeyFile)
+		attemptKey, err := os.ReadFile(config.Credentials.AttemptKeyFile)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -80,39 +63,24 @@ func TestMaterializeRejectsAliasedOrReusedPurposes(t *testing.T) {
 		}
 		assertInvalidMaterial(t, config)
 	})
-
-	t.Run("equal effective content after password newline convention", func(t *testing.T) {
-		config := writeMaterialFixture(t)
-		key := bytes.Repeat([]byte("p"), minAttemptKeyBytes)
-		if err := os.WriteFile(config.Redis.PasswordFile, append(append([]byte(nil), key...), '\n'), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(config.Credentials.PATSigningKeyFile, key, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		assertInvalidMaterial(t, config)
-	})
 }
 
 func TestMaterializeRejectsInvalidFilesWithoutLeakingContents(t *testing.T) {
 	tests := map[string]func(Config) error{
-		"Redis password controls": func(config Config) error {
-			return os.WriteFile(config.Redis.PasswordFile, []byte("do-not-leak\ninside"), 0o600)
-		},
 		"short attempt key": func(config Config) error {
-			return os.WriteFile(config.Redis.AttemptKeyFile, bytes.Repeat([]byte("a"), minAttemptKeyBytes-1), 0o600)
+			return os.WriteFile(config.Credentials.AttemptKeyFile, bytes.Repeat([]byte("a"), minAttemptKeyBytes-1), 0o600)
+		},
+		"long attempt key": func(config Config) error {
+			return os.WriteFile(config.Credentials.AttemptKeyFile, bytes.Repeat([]byte("a"), maxAttemptKeyBytes+1), 0o600)
 		},
 		"PAT NUL": func(config Config) error {
 			return os.WriteFile(config.Credentials.PATSigningKeyFile, []byte("do-not-leak\x00key"), 0o600)
-		},
-		"invalid CA": func(config Config) error {
-			return os.WriteFile(config.Redis.CAFile, []byte("do-not-leak-certificate"), 0o644)
 		},
 		"invalid Form JSON": func(config Config) error {
 			return os.WriteFile(config.Provider.Form.UsersJSONFile, []byte(`{"users":[{"login":"admin","password":"do-not-leak"}],"unknown":true}`), 0o600)
 		},
 		"broad private permissions": func(config Config) error {
-			return os.Chmod(config.Redis.AttemptKeyFile, 0o640)
+			return os.Chmod(config.Credentials.AttemptKeyFile, 0o640)
 		},
 	}
 	for name, mutate := range tests {
@@ -146,7 +114,7 @@ func TestMaterializeDoesNotExposeDeploymentPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.Redis.PasswordFile = filepath.Join(root, "sensitive-deployment-path")
+	config.Credentials.AttemptKeyFile = filepath.Join(root, "sensitive-deployment-path")
 	_, err = materialize(config)
 	if !errors.Is(err, ErrInvalidMaterial) {
 		t.Fatalf("error = %v", err)
@@ -197,9 +165,7 @@ func writeMaterialFixture(t *testing.T) Config {
 		t.Fatal(err)
 	}
 	config := parsedValidConfig(t)
-	config.Redis.PasswordFile = filepath.Join(root, "redis-password")
-	config.Redis.CAFile = filepath.Join(root, "redis-ca.pem")
-	config.Redis.AttemptKeyFile = filepath.Join(root, "attempt-key")
+	config.Credentials.AttemptKeyFile = filepath.Join(root, "attempt-key")
 	config.Credentials.PATSigningKeyFile = filepath.Join(root, "pat-key")
 	config.Provider.Form.UsersJSONFile = filepath.Join(root, "form-users.json")
 
@@ -208,9 +174,7 @@ func writeMaterialFixture(t *testing.T) Config {
 		raw  []byte
 		mode os.FileMode
 	}{
-		{config.Redis.PasswordFile, []byte(" redis password \r\n"), 0o600},
-		{config.Redis.CAFile, testCAPEM(t), 0o644},
-		{config.Redis.AttemptKeyFile, bytes.Repeat([]byte{0xa5}, minAttemptKeyBytes), 0o600},
+		{config.Credentials.AttemptKeyFile, bytes.Repeat([]byte{0xa5}, minAttemptKeyBytes), 0o600},
 		{config.Credentials.PATSigningKeyFile, []byte("päss-signing-key\n"), 0o600},
 		{config.Provider.Form.UsersJSONFile, []byte(`{"users":[{"login":"admin","password":"correct horse battery staple","attributes":{"email":"admin@example.test"}}]}`), 0o600},
 	}
@@ -223,28 +187,6 @@ func writeMaterialFixture(t *testing.T) Config {
 		}
 	}
 	return config
-}
-
-func testCAPEM(t *testing.T) []byte {
-	t.Helper()
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "auth Redis test CA"},
-		NotBefore:             time.Now().Add(-time.Minute),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
 func assertInvalidMaterial(t *testing.T, config Config) {

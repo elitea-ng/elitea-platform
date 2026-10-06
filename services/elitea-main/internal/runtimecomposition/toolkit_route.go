@@ -6,10 +6,9 @@ import (
 )
 
 type standaloneToolkitRoute struct {
-	enabled                                              bool
-	rust                                                 bool
-	stream, consumerGroup, resourceClass, isolationClass string
-	maxEntries                                           int64
+	enabled                                         bool
+	rust                                            bool
+	stream, consumer, resourceClass, isolationClass string
 }
 
 // A worker consumes one configured command stream. Standalone toolkit commands
@@ -18,10 +17,10 @@ func configuredToolkitRoute(config Config, capability *WorkerToolkitCapability) 
 	route := standaloneToolkitRoute{}
 	if capability != nil && capability.Implementation() == RustWorkerImplementation {
 		route = standaloneToolkitRoute{enabled: config.AgentExecutionDispatchEnabled, rust: true, stream: config.AgentExecutionCommandStream,
-			consumerGroup: config.AgentExecutionConsumerGroup, maxEntries: config.AgentExecutionStreamMaxEntries, resourceClass: agentResourceClass, isolationClass: agentIsolationClass}
+			consumer: consumerFor(config.AgentExecutionCommandStream), resourceClass: agentResourceClass, isolationClass: agentIsolationClass}
 	} else {
 		route = standaloneToolkitRoute{enabled: config.IndexIngestDispatchEnabled, stream: config.IndexIngestCommandStream,
-			consumerGroup: config.IndexIngestConsumerGroup, maxEntries: config.IndexIngestStreamMaxEntries, resourceClass: toolkitCallToolResourceClass, isolationClass: toolkitCallToolIsolationClass}
+			consumer: consumerFor(config.IndexIngestCommandStream), resourceClass: toolkitCallToolResourceClass, isolationClass: toolkitCallToolIsolationClass}
 	}
 	if config.ToolkitDiscoveryEnabled && !route.enabled {
 		return standaloneToolkitRoute{}, errors.New("toolkit discovery requires the configured worker command stream")

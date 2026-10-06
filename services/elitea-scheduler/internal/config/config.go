@@ -9,11 +9,7 @@ import (
 // Config holds all scheduler configuration from environment variables.
 type Config struct {
 	DatabaseURL string
-	RedisURL    string
-	RPCChannel  string
-	RPCHMACKey  string
 	HTTPAddr    string
-	InstanceID  string
 
 	// Price-sync worker (design §8.8). Disabled by default so environments that
 	// have not yet provisioned gateway.gateway_models are unaffected.
@@ -27,11 +23,17 @@ type Config struct {
 	// drains GATEWAY_BUDGET_DELTAS into gateway.llm_budget_accumulators. Disabled
 	// by default (empty NATS URL) so environments without NATS are unaffected;
 	// enabling requires GATEWAY_NATS_URL, matching the gateway's NATS env name.
-	BudgetWriteBackEnabled    bool
-	BudgetWriteBackNATSURL    string
-	BudgetWriteBackBatchSize  int
-	BudgetWriteBackAckWait    time.Duration
-	BudgetWriteBackMaxDeliver int
+	BudgetWriteBackEnabled bool
+	BudgetWriteBackNATSURL string
+	// The scheduler's NATS client identity (#1076), the same variable names
+	// the gateway reads (GATEWAY_NATS_TLS_*), because the scheduler already
+	// shares GATEWAY_NATS_URL with it. A certificate from the NATS
+	// CA whose URI SAN spiffe://elitea.internal/nats/elitea-scheduler the
+	// server maps to the scheduler's user. All three or none.
+	BudgetWriteBackNATSTLSCAFile   string
+	BudgetWriteBackNATSTLSCertFile string
+	BudgetWriteBackNATSTLSKeyFile  string
+	BudgetWriteBackBatchSize       int
 
 	// Audit-event retention sweep (issue #619). `centry.audit_events` got its
 	// first product writer in issue #615 and no bound on its growth, so the
@@ -63,11 +65,7 @@ type Config struct {
 func FromEnv() Config {
 	return Config{
 		DatabaseURL: envOr("DATABASE_URL", "postgres://elitea:elitea@localhost:5432/elitea?sslmode=disable"),
-		RedisURL:    envOr("REDIS_URL", "localhost:6379"),
-		RPCChannel:  envOr("RPC_CHANNEL", "elitea_rpc"),
-		RPCHMACKey:  os.Getenv("RPC_HMAC_KEY"),
 		HTTPAddr:    envOr("HTTP_ADDR", ":8081"),
-		InstanceID:  envOr("SCHEDULER_INSTANCE_ID", hostname()),
 
 		PriceSyncEnabled:  boolEnv("PRICE_SYNC_ENABLED", false),
 		PriceSyncInterval: durationEnv("PRICE_SYNC_INTERVAL", 24*time.Hour),
@@ -75,11 +73,13 @@ func FromEnv() Config {
 		PriceSyncSeed:     boolEnv("PRICE_SYNC_SEED", true),
 		PriceSyncURL:      os.Getenv("PRICE_SYNC_LITELLM_URL"),
 
-		BudgetWriteBackEnabled:    boolEnv("BUDGET_WRITEBACK_ENABLED", false),
-		BudgetWriteBackNATSURL:    os.Getenv("GATEWAY_NATS_URL"),
-		BudgetWriteBackBatchSize:  intEnv("BUDGET_WRITEBACK_BATCH_SIZE", 500),
-		BudgetWriteBackAckWait:    durationEnv("BUDGET_WRITEBACK_ACK_WAIT", 30*time.Second),
-		BudgetWriteBackMaxDeliver: intEnv("BUDGET_WRITEBACK_MAX_DELIVER", 10),
+		BudgetWriteBackEnabled: boolEnv("BUDGET_WRITEBACK_ENABLED", false),
+		BudgetWriteBackNATSURL: os.Getenv("GATEWAY_NATS_URL"),
+
+		BudgetWriteBackNATSTLSCAFile:   os.Getenv("GATEWAY_NATS_TLS_CA_FILE"),
+		BudgetWriteBackNATSTLSCertFile: os.Getenv("GATEWAY_NATS_TLS_CERT_FILE"),
+		BudgetWriteBackNATSTLSKeyFile:  os.Getenv("GATEWAY_NATS_TLS_KEY_FILE"),
+		BudgetWriteBackBatchSize:       intEnv("BUDGET_WRITEBACK_BATCH_SIZE", 500),
 
 		// 365 days, and ON by default.
 		//
@@ -150,12 +150,4 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-func hostname() string {
-	h, _ := os.Hostname()
-	if h == "" {
-		return "scheduler-0"
-	}
-	return h
 }

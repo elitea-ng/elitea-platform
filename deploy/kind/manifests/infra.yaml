@@ -1,9 +1,8 @@
 # The commodity infrastructure the chart deliberately does NOT create
 # (see the "What this chart does NOT create" block in values.yaml):
-# PostgreSQL, Redis and an S3-compatible object store. The runtime Redis the
-# Form authentication plane needs is NOT here — the chart renders that one
-# (runtimeRedis.enabled in values-kind.yaml). Nothing here is production
-# shaped: single replicas, emptyDir storage, passwords in plain manifests.
+# PostgreSQL and an S3-compatible object store. The Form authentication
+# plane keeps its sign-in state in PostgreSQL, so there is no Redis. Nothing
+# here is production shaped: single replicas, emptyDir storage, passwords in plain manifests.
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -64,40 +63,6 @@ metadata:
 spec:
   selector: { app: postgres }
   ports: [{ port: 5432, targetPort: 5432 }]
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: redis
-  namespace: elitea
-spec:
-  replicas: 1
-  selector:
-    matchLabels: { app: redis }
-  template:
-    metadata:
-      labels: { app: redis }
-    spec:
-      containers:
-        - name: redis
-          image: docker.io/library/redis:7-alpine
-          imagePullPolicy: IfNotPresent
-          ports: [{ containerPort: 6379 }]
-          readinessProbe:
-            exec: { command: ["redis-cli", "ping"] }
-            periodSeconds: 3
-            failureThreshold: 30
-          resources:
-            requests: { cpu: 50m, memory: 64Mi }
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: redis
-  namespace: elitea
-spec:
-  selector: { app: redis }
-  ports: [{ port: 6379, targetPort: 6379 }]
 ---
 apiVersion: apps/v1
 kind: Deployment

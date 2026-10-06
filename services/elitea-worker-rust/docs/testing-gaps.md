@@ -46,7 +46,7 @@ The focused [discovery](source-mapping/toolkit-discovery-authorization.md) and [
 | TG-09 | Observed warning: Rust | `agent_session_terminal_completion_unavailable` during the real SharePoint resume. | Determine whether the event needs streamed text. Prove durable history remains complete across a subsequent turn and worker replacement. |
 | TG-10 | Verification: Main, Rust | External MCP saved-agent and pipeline completion, failure, mixed guards, resume, and replay. | Correlate the external result with durable terminal state. A settled authorization-pause job is not completed agent work. |
 | TG-11 | Implementation: UI | Unrelated expired grants still trigger refresh failures during token collection. | Isolate grant failure to its credential and avoid unnecessary refresh work. Preserve valid grant reuse. |
-| TG-12 | Verification: runtime and deployment | Process replacement, claim reclaim, lost acknowledgements, Redis TLS/ACL, load, and Kubernetes. | Prove another worker can continue durable work without the original process or local spool. Keep activation closed until these proofs pass. |
+| TG-12 | Verification: runtime and deployment | Process replacement, claim reclaim, lost acknowledgements, NATS JetStream restart/leader change, load, and Kubernetes. `execution/nats_live_tests.rs` covers the secured single-server transport path. | Prove another worker can continue durable work without the original process or local spool. Keep activation closed until these proofs pass. |
 | TG-13 | Verification and UI parity: UI, Main | Participant editing, guard placement, history rendering, and regeneration under collaborative use. | Retain toolkit and owning-agent labels. Prove correct action routing separately from visual parity. Do not attribute a runtime defect to appearance alone. |
 | TG-14 | Accepted for gate 3 progression: Rust, Main, UI | Standalone `toolkit.available_tools.v1` and saved-instance discovery have deployed evidence. Wider provider coverage remains separate. | Retain actor authority and fenced results; use the focused discovery and recovery ledgers for covered cases. |
 | TG-15 | Verification: Main, Rust, UI | Chat-driven entity building with the three newly exposed typed configuration operations. | Select a real model and verify the endpoint project's saved default. Confirm denied permissions cause no mutation. Component and MCP protocol fixtures are not deployed proof. |
@@ -98,9 +98,13 @@ The [Supervisor ownership mapping](source-mapping/code-supervisor-task-ownership
 The deployed v7 Worker-only restart retains its execution and original runtime, then completes all four languages.
 Eight unique reads commit. Runtime cleanup, one final browser result, and browser reload all pass.
 This exact Worker-loss boundary closes. Supervisor/Main replacement and Kubernetes restart recovery retain separate acceptance requirements.
-Keep typed failure display and complete-cohort acceptance open until their proofs pass.
+Generic typed failure display passes in ephemeral chat 826 and persistent chat 827, including persistent reload.
+Both failures save their journals before publication, with zero sandbox dispatches and no later-node execution.
+The fresh four-language positive run passes in chat 825, including exact answer persistence after reload.
+These proofs use deployed Worker `d6568bae8`; they do not prove the later NATS replacement.
+Keep NATS complete-cohort acceptance and preparation-message display open until their proofs pass.
 The [typed failure source correction](source-mapping/code-terminal-failure-20261006.md) passes 50 Rust tests and 109 Main cases.
-Strict Clippy and vet pass. Deployment, live negative UI acceptance, and actual failed-journal replay remain separate proofs.
+Strict Clippy and vet pass. Main preparation-message deployment and actual failed-journal replay remain separate proofs.
 State rename reference rewriting remains a separate editor gap.
 Workspaces remain outside this register in the post-worker backlog.
 

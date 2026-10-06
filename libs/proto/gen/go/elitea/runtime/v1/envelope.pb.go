@@ -167,7 +167,7 @@ func (x *SignedWorkerCommandEnvelopeV1) GetSignature() []byte {
 
 // WorkerExecutionEnvelopeV1 is the offline execution fixture and the logical
 // post-claim worker input. Production obtains the fence from authenticated
-// control gRPC; the Redis entry contains only signed_command.
+// control gRPC; the bus message contains only signed_command.
 type WorkerExecutionEnvelopeV1 struct {
 	state         protoimpl.MessageState         `protogen:"open.v1"`
 	SignedCommand *SignedWorkerCommandEnvelopeV1 `protobuf:"bytes,1,opt,name=signed_command,json=signedCommand,proto3" json:"signed_command,omitempty"`

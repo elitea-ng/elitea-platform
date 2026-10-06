@@ -30,7 +30,6 @@ worker:
         timeout_seconds: 120
 YAML
 args=(-f deploy/helm/elitea/values-standalone.yaml -f "$work/profiles.yaml"
-  --set runtimeRedis.enabled=true
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
   --set llmGateway.egressPosture=public-unrestricted)
 helm template test deploy/helm/elitea "${args[@]}" \

@@ -5,7 +5,7 @@ name: CI — Web E2E
 #
 # These two jobs share a runtime surface that nothing in ci-web.yml has: they
 # build two container images from source, stand up the seven-service compose
-# stack in deploy/docker-compose.e2e-standalone.yml (postgres, redis, rustfs,
+# stack in deploy/docker-compose.e2e-standalone.yml (postgres, nats, rustfs,
 # an OIDC mock, traefik, elitea-main, elitea-web) and drive real browsers at
 # it. Six-to-seven minutes per E2E leg, and a failure mode set that has nothing
 # in common with a lint error. Keeping them here means:

@@ -1,0 +1,243 @@
+{{- /*
+Render-time refusals (#1076). The chart has no "security off" switch, so a
+values file that turns a piece of it off is a mistake, and an install that
+renders anyway runs a NATS any pod can read and write. Each refusal names the
+value and says why.
+*/ -}}
+{{- $n := .Values.nats -}}
+{{- if not $n.config.nats.tls.enabled -}}
+{{- fail "nats.config.nats.tls.enabled is false. This chart serves NATS to a cluster, where TLS with client certificates is the identity every client is authorised by (#1076). The plaintext posture is compose's (deploy/docker-compose.yml), not this chart's." -}}
+{{- end -}}
+{{- if not $n.config.nats.tls.secretName -}}
+{{- fail "nats.config.nats.tls.secretName is empty; templates/server-certificate.yaml writes the server certificate into it and the server mounts it." -}}
+{{- end -}}
+{{- if ne (toString (get ($n.config.nats.tls.merge | default dict) "verify_and_map")) "true" -}}
+{{- fail "nats.config.nats.tls.merge.verify_and_map must be true: it is what maps a client certificate's URI SAN to a user in the permission table. Without it every client is anonymous." -}}
+{{- end -}}
+{{- if not (and $n.tlsCA.enabled (eq $n.tlsCA.secretName $n.config.nats.tls.secretName)) -}}
+{{- fail "nats.tlsCA must be enabled and name the server certificate's Secret (nats.config.nats.tls.secretName): its ca.crt is the NATS CA client certificates are verified against." -}}
+{{- end -}}
+{{- $merge := $n.config.merge | default dict -}}
+{{- range $k := list "no_auth_user" "allow_non_tls" "authorization" -}}
+{{- if hasKey $merge $k -}}
+{{- fail (printf "nats.config.merge.%s is set. no_auth_user and allow_non_tls let a connection in without a mapped certificate, and a top-level authorization block puts users in the global account, outside the per-plane accounts that keep one plane's streams out of another's reach (#1076). Users belong in nats.config.merge.accounts.<MAIN|GATEWAY|SCHEDULER|RUNTIME|WORKER>.users." $k) -}}
+{{- end -}}
+{{- end -}}
+{{- /* The planes, each its own account (#1076 F1). */ -}}
+{{- $accounts := dict -}}
+{{- range $k, $v := (get $merge "accounts" | default dict) -}}
+{{- if $v }}{{ $_ := set $accounts $k $v }}{{ end -}}
+{{- end -}}
+{{- $want := list "GATEWAY" "MAIN" "RUNTIME" "SCHEDULER" "WORKER" -}}
+{{- if ne (keys $accounts | sortAlpha | join ",") ($want | join ",") -}}
+{{- fail (printf "nats.config.merge.accounts must declare exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER, and declares [%s]. Each plane is its own account so that a consumer's deliver subject or a request's reply subject (which the server does not check against permissions) can only land inside its sender's own plane (#1076)." (keys $accounts | sortAlpha | join ", ")) -}}
+{{- end -}}
+{{- /* SCHEDULER holds no streams: it has no JetStream, and so no bootstrap. */ -}}
+{{- $streamless := list "SCHEDULER" -}}
+{{- $seen := dict -}}
+{{- range $acct := $want -}}
+{{- $a := get $accounts $acct | default dict -}}
+{{- $hasJS := has $acct (list "GATEWAY" "MAIN" "RUNTIME" "WORKER") -}}
+{{- if eq $acct "WORKER" -}}
+{{- /* WORKER's JetStream holds the dead-letter bucket and nothing else. */ -}}
+{{- $wjs := get $a "jetstream" -}}
+{{- if or (not (kindIs "map" $wjs)) (ne (toString (get ($wjs | default dict) "max_streams")) "1") -}}
+{{- fail (printf "nats.config.merge.accounts.WORKER.jetstream is %v, and must be a limits block with max_streams: 1. WORKER's JetStream holds the worker's dead-letter bucket and nothing else, so a request whose reply subject the worker chooses can store nowhere but the records it may write anyway (#1081)." $wjs) -}}
+{{- end -}}
+{{- else if and $hasJS (ne (toString (get $a "jetstream")) "enabled") -}}
+{{- fail (printf "nats.config.merge.accounts.%s.jetstream must be \"enabled\": every plane that owns streams keeps them in its own account's JetStream." $acct) -}}
+{{- end -}}
+{{- if and (not $hasJS) (hasKey $a "jetstream") (ne (toString (get $a "jetstream")) "disabled") -}}
+{{- fail (printf "nats.config.merge.accounts.%s.jetstream is %v. %s holds NO streams — that is what makes a reply subject its client chooses harmless — so it has no JetStream (#1076)." $acct (get $a "jetstream") $acct) -}}
+{{- end -}}
+{{- $users := get $a "users" | default list -}}
+{{- $bootstrap := printf "/nats/elitea-nats-bootstrap-%s" (lower $acct) -}}
+{{- $bootstraps := 0 -}}
+{{- range $u := $users -}}
+{{- $name := $u.user | toString -}}
+{{- if not (hasPrefix "spiffe://" $name) -}}
+{{- fail (printf "account %s user %q is not a URI SAN (spiffe://...). Users are certificate identities; a name or password user would be a second, unmanaged credential." $acct $name) -}}
+{{- end -}}
+{{- range $k := list "password" "nkey" "token" -}}
+{{- if hasKey $u $k -}}
+{{- fail (printf "account %s user %q carries a %s. Identity is the client certificate." $acct $name $k) -}}
+{{- end -}}
+{{- end -}}
+{{- if hasKey $seen $name -}}
+{{- fail (printf "user %q is declared in accounts %s and %s. An identity belongs to exactly one plane." $name (get $seen $name) $acct) -}}
+{{- end -}}
+{{- $_ := set $seen $name $acct -}}
+{{- if and (hasSuffix "/nats/elitea-scheduler" $name) (ne $acct "SCHEDULER") -}}
+{{- fail (printf "user %q is declared in account %s. The scheduler belongs in SCHEDULER, which holds no streams: in an account with streams, a pull or info request whose reply subject names a stream's subject makes the server store the answer there, because a reply subject is not checked against permissions (#1076)." $name $acct) -}}
+{{- end -}}
+{{- if and (eq $acct "SCHEDULER") (not (hasSuffix "/nats/elitea-scheduler" $name)) -}}
+{{- fail (printf "user %q is declared in account SCHEDULER, which is elitea-scheduler's alone." $name) -}}
+{{- end -}}
+{{- if and (hasSuffix "/nats/elitea-worker" $name) (ne $acct "WORKER") -}}
+{{- fail (printf "user %q is declared in account %s. The worker belongs in WORKER, which holds no command stream: in RUNTIME, a pull or info request whose reply subject names elitea.rt.v1.<route>.d.<token> makes the server store the answer in that command stream, because a reply subject is not checked against permissions (#1081)." $name $acct) -}}
+{{- end -}}
+{{- if and (eq $acct "WORKER") (not (hasSuffix "/nats/elitea-worker" $name)) (not (hasSuffix "/nats/elitea-nats-bootstrap-worker" $name)) -}}
+{{- fail (printf "user %q is declared in account WORKER, which holds elitea-worker and its bootstrap only." $name) -}}
+{{- end -}}
+{{- $isBootstrap := hasSuffix $bootstrap $name -}}
+{{- if $isBootstrap }}{{ $bootstraps = add1 $bootstraps }}{{ end -}}
+{{- if and (contains "/nats/elitea-nats-bootstrap" $name) (not $isBootstrap) -}}
+{{- fail (printf "user %q is a bootstrap identity in account %s, whose bootstrap is ...%s. Each account's assets are administered by that account's own bootstrap only." $name $acct $bootstrap) -}}
+{{- end -}}
+{{- $sub := (($u.permissions | default dict).subscribe | default dict).allow | default list -}}
+{{- range $s := $sub -}}
+{{- if or (eq $s ">") (hasPrefix "_INBOX." $s) (eq $s "_INBOX.>") (hasPrefix "$JS.API" $s) -}}
+{{- fail (printf "user %q may subscribe to %q: every client subscribes to its own _INBOX_<identity> prefix only, so it cannot read another client's replies." $name $s) -}}
+{{- end -}}
+{{- end -}}
+{{- $pub := (($u.permissions | default dict).publish | default dict).allow | default list -}}
+{{- range $p := $pub -}}
+{{- if or (eq $p ">") (eq $p "$JS.API.>") (eq $p "$JS.API.STREAM.>") (hasPrefix "$JS.API.STREAM.DELETE" $p) (hasPrefix "$JS.API.STREAM.PURGE" $p) (hasPrefix "$JS.API.STREAM.MSG.DELETE" $p) (hasPrefix "$JS.API.ACCOUNT.PURGE" $p) -}}
+{{- fail (printf "user %q may publish %q. Nobody deletes or purges a stream, and no identity gets the whole JetStream API (#1076)." $name $p) -}}
+{{- end -}}
+{{- $watcher := and (hasSuffix "/nats/elitea-main" $name) (hasPrefix "$JS.API.CONSUMER.CREATE.KV_ELITEA_CANVAS_PRESENCE." $p) -}}
+{{- if and (not $isBootstrap) (not $watcher) (or (hasPrefix "$JS.API.CONSUMER.CREATE" $p) (hasPrefix "$JS.API.CONSUMER.DURABLE.CREATE" $p) (eq $p "$JS.API.CONSUMER.>")) -}}
+{{- fail (printf "user %q may publish %q. A consumer-create grant is also the right to point a push consumer's deliveries at any subject in the account (the server does not check a deliver subject against permissions), so only the account's bootstrap creates consumers; the one exception is elitea-main's presence watcher on its own bucket (#1076)." $name $p) -}}
+{{- end -}}
+{{- if and (not $isBootstrap) (or (hasPrefix "$JS.API.STREAM.CREATE" $p) (hasPrefix "$JS.API.STREAM.UPDATE" $p)) -}}
+{{- fail (printf "user %q may publish %q. Only the account's bootstrap identity (...%s) creates or updates a stream (#1076)." $name $p $bootstrap) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and $hasJS (ne $bootstraps 1) -}}
+{{- fail (printf "account %s must have exactly one bootstrap user (spiffe://<trust domain>%s) and has %d: the bootstrap Job connects to each account as that account's own identity." $acct $bootstrap $bootstraps) -}}
+{{- end -}}
+{{- if and (eq $acct "WORKER") (ne (len $users) 2) -}}
+{{- fail (printf "account WORKER must declare exactly elitea-worker and elitea-nats-bootstrap-worker, and declares %d users." (len $users)) -}}
+{{- end -}}
+{{- if and (not $hasJS) (ne (len $users) 1) -}}
+{{- fail (printf "account %s must declare exactly one user, elitea-scheduler, and declares %d." $acct (len $users)) -}}
+{{- end -}}
+{{- if and (not $hasJS) (ne $bootstraps 0) -}}
+{{- fail (printf "account %s has a bootstrap user, but it holds no streams for one to administer." $acct) -}}
+{{- end -}}
+{{- end -}}
+{{- /*
+The two cross-account flows, and nothing else (#1076):
+  * GATEWAY's soft alerts, a STREAM export to MAIN only;
+  * GATEWAY's budget-writeback consumer, three SERVICE exports to SCHEDULER
+    only — its INFO and MSG.NEXT API subjects (imported under the
+    JS.GATEWAY.API prefix) and its ack subjects.
+*/ -}}
+{{- $alerts := "gateway.events.project.*.events" -}}
+{{- $wb := "GATEWAY_BUDGET_DELTAS.budget-writeback" -}}
+{{- $services := dict (printf "$JS.API.CONSUMER.INFO.%s" $wb) "" (printf "$JS.API.CONSUMER.MSG.NEXT.%s" $wb) "stream" (printf "$JS.ACK.%s.>" $wb) "" -}}
+{{- $serviceTo := dict (printf "$JS.API.CONSUMER.INFO.%s" $wb) (printf "JS.GATEWAY.API.CONSUMER.INFO.%s" $wb) (printf "$JS.API.CONSUMER.MSG.NEXT.%s" $wb) (printf "JS.GATEWAY.API.CONSUMER.MSG.NEXT.%s" $wb) (printf "$JS.ACK.%s.>" $wb) "" -}}
+{{- range $acct := list "MAIN" "SCHEDULER" "WORKER" -}}
+{{- if get (get $accounts $acct) "exports" -}}
+{{- fail (printf "account %s exports subjects. GATEWAY (its soft alerts to MAIN, its budget-writeback drain to SCHEDULER) and RUNTIME (its worker durables to WORKER) are the only exporters; any other export turns a plane boundary back into a shared subject space (#1076)." $acct) -}}
+{{- end -}}
+{{- end -}}
+{{- range $acct := list "GATEWAY" "RUNTIME" -}}
+{{- if get (get $accounts $acct) "imports" -}}
+{{- fail (printf "account %s imports subjects. The only imports are MAIN's of GATEWAY's %s, SCHEDULER's of GATEWAY's budget-writeback services and WORKER's of RUNTIME's worker-durable services (#1076)." $acct $alerts) -}}
+{{- end -}}
+{{- end -}}
+{{- $exports := get (get $accounts "GATEWAY") "exports" | default list -}}
+{{- $exported := dict -}}
+{{- range $e := $exports -}}
+{{- $okAlert := and (hasKey $e "stream") (not (hasKey $e "service")) (eq (toString (get $e "stream")) $alerts) (eq ((get $e "accounts") | default list | join ",") "MAIN") (eq (len (keys $e)) 2) -}}
+{{- $svc := toString (get $e "service") -}}
+{{- $okService := and (hasKey $e "service") (not (hasKey $e "stream")) (hasKey $services $svc) (eq ((get $e "accounts") | default list | join ",") "SCHEDULER") (eq (toString (get $e "response_type" | default "")) (get $services $svc)) -}}
+{{- if $okService -}}
+{{- range $k := keys $e -}}
+{{- if not (has $k (list "service" "accounts" "response_type")) -}}{{- $okService = false -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not (or $okAlert $okService) -}}
+{{- fail (printf "GATEWAY export %v is neither the soft-alert stream %s to accounts [MAIN] nor one of the budget-writeback services (%s) to accounts [SCHEDULER] with its response type. Another subject, another account or an unrestricted export would let another plane reach the gateway's subjects (#1076)." $e $alerts (keys $services | sortAlpha | join ", ")) -}}
+{{- end -}}
+{{- if $okService }}{{ $_ := set $exported $svc true }}{{ end -}}
+{{- end -}}
+{{- $imports := get (get $accounts "MAIN") "imports" | default list -}}
+{{- range $i := $imports -}}
+{{- $st := get $i "stream" | default dict -}}
+{{- if or (hasKey $i "service") (ne (toString (get $st "account")) "GATEWAY") (ne (toString (get $st "subject")) $alerts) (hasKey $st "to") (hasKey $i "to") -}}
+{{- fail (printf "MAIN import %v is not GATEWAY's soft-alert stream %s, unmapped. Anything else widens what MAIN receives from another plane (#1076)." $i $alerts) -}}
+{{- end -}}
+{{- end -}}
+{{- $simports := get (get $accounts "SCHEDULER") "imports" | default list -}}
+{{- range $i := $simports -}}
+{{- $sv := get $i "service" | default dict -}}
+{{- $subj := toString (get $sv "subject") -}}
+{{- $to := toString (get $i "to" | default "") -}}
+{{- if or (hasKey $i "stream") (ne (toString (get $sv "account")) "GATEWAY") (not (hasKey $services $subj)) (ne $to (get $serviceTo $subj)) (not (hasKey $exported $subj)) -}}
+{{- fail (printf "SCHEDULER import %v is not one of GATEWAY's exported budget-writeback services, mapped as the scheduler's JetStream API prefix (JS.GATEWAY.API) expects. Anything else widens what the scheduler reaches in GATEWAY (#1076)." $i) -}}
+{{- end -}}
+{{- end -}}
+{{- /*
+RUNTIME -> WORKER (#1081): for each of the three worker durables, its INFO
+and MSG.NEXT API subjects (imported under the JS.RUNTIME.API prefix) and its
+ack subjects, as SERVICE exports to WORKER only; and WORKER imports exactly
+those, mapped as the workers' JetStream API prefix expects.
+*/ -}}
+{{- $rtServices := dict -}}
+{{- $rtServiceTo := dict -}}
+{{- range $pair := list "ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1" "ELITEA_RT_V1_AGENT.elitea-agent-worker-v1" "ELITEA_RT_V1_INDEX.elitea-index-worker-v1" -}}
+{{- $_ := set $rtServices (printf "$JS.API.CONSUMER.INFO.%s" $pair) "" -}}
+{{- $_ := set $rtServices (printf "$JS.API.CONSUMER.MSG.NEXT.%s" $pair) "stream" -}}
+{{- $_ := set $rtServices (printf "$JS.ACK.%s.>" $pair) "" -}}
+{{- $_ := set $rtServiceTo (printf "$JS.API.CONSUMER.INFO.%s" $pair) (printf "JS.RUNTIME.API.CONSUMER.INFO.%s" $pair) -}}
+{{- $_ := set $rtServiceTo (printf "$JS.API.CONSUMER.MSG.NEXT.%s" $pair) (printf "JS.RUNTIME.API.CONSUMER.MSG.NEXT.%s" $pair) -}}
+{{- $_ := set $rtServiceTo (printf "$JS.ACK.%s.>" $pair) "" -}}
+{{- end -}}
+{{- $rtExported := dict -}}
+{{- range $e := (get (get $accounts "RUNTIME") "exports" | default list) -}}
+{{- $svc := toString (get $e "service") -}}
+{{- $ok := and (hasKey $e "service") (not (hasKey $e "stream")) (hasKey $rtServices $svc) (eq ((get $e "accounts") | default list | join ",") "WORKER") (eq (toString (get $e "response_type" | default "")) (get $rtServices $svc)) -}}
+{{- range $k := keys $e -}}
+{{- if not (has $k (list "service" "accounts" "response_type")) -}}{{- $ok = false -}}{{- end -}}
+{{- end -}}
+{{- if not $ok -}}
+{{- fail (printf "RUNTIME export %v is not one of the worker-durable services (%s) to accounts [WORKER] with its response type. Another subject, another account or an unrestricted export would let another plane reach the command streams (#1081)." $e (keys $rtServices | sortAlpha | join ", ")) -}}
+{{- end -}}
+{{- $_ := set $rtExported $svc true -}}
+{{- end -}}
+{{- if ne (len $rtExported) (len $rtServices) -}}
+{{- fail (printf "RUNTIME exports %d of the %d worker-durable services; the worker cannot bind, pull or ack the missing ones." (len $rtExported) (len $rtServices)) -}}
+{{- end -}}
+{{- $wimports := get (get $accounts "WORKER") "imports" | default list -}}
+{{- $wimported := dict -}}
+{{- range $i := $wimports -}}
+{{- $sv := get $i "service" | default dict -}}
+{{- $subj := toString (get $sv "subject") -}}
+{{- $to := toString (get $i "to" | default "") -}}
+{{- if or (hasKey $i "stream") (ne (toString (get $sv "account")) "RUNTIME") (not (hasKey $rtServices $subj)) (ne $to (get $rtServiceTo $subj)) (not (hasKey $rtExported $subj)) -}}
+{{- fail (printf "WORKER import %v is not one of RUNTIME's exported worker-durable services, mapped as the workers' JetStream API prefix (JS.RUNTIME.API) expects. Anything else widens what the worker reaches in RUNTIME (#1081)." $i) -}}
+{{- end -}}
+{{- $_ := set $wimported $subj true -}}
+{{- end -}}
+{{- if ne (len $wimported) (len $rtServices) -}}
+{{- fail (printf "WORKER imports %d of the %d worker-durable services RUNTIME exports." (len $wimported) (len $rtServices)) -}}
+{{- end -}}
+{{- if dig "config" "cluster" "enabled" false $n -}}
+{{- if not (dig "config" "cluster" "tls" "enabled" false $n) -}}
+{{- fail "nats.config.cluster.enabled with cluster.tls.enabled false: the routes between servers would carry every message in plaintext. values-ha.yaml enables it." -}}
+{{- end -}}
+{{- /* The route identity (#1076 F5): its own Secret, verified against its own CA. */ -}}
+{{- $rtls := dig "config" "cluster" "tls" dict $n -}}
+{{- if or (not $rtls.secretName) (eq $rtls.secretName $n.config.nats.tls.secretName) -}}
+{{- fail "nats.config.cluster.tls.secretName must name the ROUTE certificate's own Secret (values-ha.yaml: elitea-nats-route-tls), not the client-port certificate's. Routes have their own identity, from their own CA." -}}
+{{- end -}}
+{{- $rmerge := $rtls.merge | default dict -}}
+{{- if ne (toString (get $rmerge "verify")) "true" -}}
+{{- fail "nats.config.cluster.tls.merge.verify must be true: a route that does not verify its peer's certificate accepts any TLS client as a cluster peer." -}}
+{{- end -}}
+{{- if ne (toString (get $rmerge "ca_file")) "/etc/nats-certs/cluster/ca.crt" -}}
+{{- fail "nats.config.cluster.tls.merge.ca_file must be /etc/nats-certs/cluster/ca.crt, the ROUTE CA cert-manager writes into the route certificate's Secret. Without it the upstream chart verifies routes against nats.tlsCA — the CLIENT CA — and any service's client certificate joins the cluster as a peer (#1076)." -}}
+{{- end -}}
+{{- if and (not .Values.security.ca.create) (eq .Values.security.routeIssuerRef.name .Values.security.issuerRef.name) -}}
+{{- fail "security.routeIssuerRef names the same issuer as security.issuerRef. The route CA must be a different CA from the one that signs client identities, or a client certificate can join the cluster as a peer." -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.alerts.enabled (not (dig "promExporter" "enabled" false $n)) -}}
+{{- fail "alerts.enabled is true and nats.promExporter.enabled is false. The command-bus alerts (templates/prometheusrule.yaml) read the exporter's nats_stream_* series; without the exporter they would never fire. Turn the exporter on, or set alerts.enabled=false and watch the workers' worker_command.dead_lettered log line instead (#1081)." -}}
+{{- end -}}
+{{- if and (not .Values.networkPolicy.enabled) (not .Values.networkPolicy.externallyManaged) -}}
+{{- fail "networkPolicy.enabled is false. The ingress policy is the half of #1076 that keeps pods without a NATS identity off the port; mTLS alone still lets any pod hold a connection open to the TLS handshake. If your own policy already does this, say so with networkPolicy.externallyManaged=true." -}}
+{{- end -}}

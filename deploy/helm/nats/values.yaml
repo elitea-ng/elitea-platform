@@ -1,0 +1,739 @@
+# NATS wrapper chart — the defaults every profile shares (#1076).
+#
+# values-scale1.yaml and values-ha.yaml layer the topology on top of this file;
+# Helm always reads this one first. What lives here is the SECURITY of the
+# server, because it must not differ between profiles:
+#
+#   * TLS is required on the client port, with a server certificate issued by
+#     a SEPARATE NATS CA (templates/ca.yaml), not by elitea-internal-ca, so a
+#     Certificate against the platform's internal issuer is not a NATS
+#     identity. That separation is all it buys. The NATS CA's Issuer is
+#     namespaced, so anyone who may create a cert-manager Certificate (or
+#     CertificateRequest) in this namespace can obtain ANY NATS identity from
+#     it — a service's, a bootstrap's, a route certificate — and anyone who may
+#     read Secrets here can read the CA key (Secret elitea-nats-ca) and mint
+#     offline. Restrict both with RBAC; security.approverPolicy pins what each
+#     issuer will sign; a ClusterIssuer whose key lives outside the namespace
+#     (security.ca.create: false) takes the key out of reach. README: "Who can
+#     mint a NATS identity".
+#   * Every client presents a certificate from that CA. `verify_and_map` maps
+#     its URI SAN, spiffe://elitea.internal/nats/<identity>, to a user in one
+#     of the `accounts` below, and the user's permissions decide what it may
+#     publish and subscribe to. There is no `no_auth_user` and no
+#     `allow_non_tls`: a connection without a mapped certificate is refused.
+#   * One account per plane (MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER), each
+#     with its own subject space, so nothing one plane's identities can do —
+#     including a consumer's deliver subject or a request's reply subject,
+#     neither of which the server checks against permissions — reaches
+#     another plane's streams. Every account's only writer is its owner.
+#     The cross-account flows are GATEWAY's soft-alert stream export to MAIN,
+#     its budget write-back service exports to SCHEDULER, and RUNTIME's
+#     worker-durable service exports to WORKER.
+#   * templates/networkpolicy.yaml admits only the named clients to 4222.
+#
+# There is no "security off" switch. The chart ships for clusters, and the
+# plaintext posture belongs to compose (deploy/docker-compose.yml), where only
+# compose services can reach the server. templates/guards.yaml refuses a render
+# that turns TLS, verify_and_map or the accounts off.
+
+security:
+  # The NATS CA. With `create: true` this chart renders the chain
+  # cert-manager needs, all NAMESPACED in this release's namespace:
+  #   Issuer <name>-selfsigned -> Certificate <name> (isCA) -> Issuer <name>
+  # The server certificate below, the bootstrap Job's certificate and every
+  # platform client certificate are issued by Issuer <name>. A namespaced
+  # Issuer signs only Certificates in its own namespace, so install the
+  # platform (deploy/helm/elitea) in the same namespace as this release — or
+  # set create: false and point every chart at a ClusterIssuer backed by a
+  # dedicated CA you manage (issuerRef below, nats.tls.issuerRef in the elitea
+  # chart, tls.issuerRef in nats-bootstrap).
+  ca:
+    create: true
+    name: elitea-nats-ca
+    # The CA's own lifetime. A renewed CA has a NEW key, and certificates
+    # signed by the old one stop verifying against the new ca.crt, so this is
+    # long on purpose; plan a CA rotation as a maintenance window.
+    duration: 87600h   # 10y
+    renewBefore: 8760h # 1y
+  # Used only when ca.create is false: the issuer that signs the server
+  # certificate and every client identity. It MUST be backed by a CA that
+  # signs nothing but NATS identities, and its key should live outside this
+  # namespace (that is the point of choosing it over create: true).
+  issuerRef:
+    name: ""
+    kind: ClusterIssuer
+  # The ROUTE CA (HA only). Cluster routes are verified against their own CA,
+  # not the client CA: a route TLS block that trusted the client CA would
+  # admit ANY client certificate (any service's NATS identity) as a cluster
+  # peer, and a peer sees every account's traffic. With ca.create the chain is
+  #   Issuer <ca.name>-selfsigned -> Certificate <routeCA.name> (isCA) -> Issuer <routeCA.name>
+  # and it signs only the route certificate (templates/route-certificate.yaml).
+  routeCA:
+    name: elitea-nats-route-ca
+  # Used only when ca.create is false and the cluster is enabled: the issuer
+  # of the route certificate. It MUST NOT be the client issuer above.
+  routeIssuerRef:
+    name: ""
+    kind: ClusterIssuer
+  # The server certificate. Its secret name is nats.config.nats.tls.secretName
+  # below (one value, so the mount and the Certificate cannot disagree).
+  serverCertificate:
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+  # cert-manager approver-policy (templates/approver-policy.yaml): pins what
+  # each NATS issuer will sign — the permission table's URI SANs for client
+  # identities, the Service names for the server, the headless names for
+  # routes, the two CAs for the self-signed issuer. "auto" renders the
+  # CertificateRequestPolicies when the cluster serves
+  # policy.cert-manager.io/v1alpha1; true requires it; false never renders.
+  # Effective only with cert-manager's built-in approver disabled. It limits
+  # WHAT can be minted, not WHO may ask: see the README's "Who can mint a NATS
+  # identity" for the RBAC that decides that.
+  approverPolicy:
+    enabled: auto
+    # Longest client certificate the client-identity policy signs.
+    maxClientDuration: 2160h
+    # Namespaces besides this release's whose CertificateRequests the
+    # client-identity policy approves. Needed when the platform runs in
+    # another namespace against a ClusterIssuer ("NATS in another namespace"):
+    # without its namespace here, approver-policy matches no policy for the
+    # platform's client certificates, approves none of them, and elitea-main,
+    # the gateway and the scheduler never get a NATS identity. The server,
+    # route and CA policies stay scoped to this namespace.
+    clientNamespaces: []
+    # cert-manager's controller, which submits every CertificateRequest and
+    # must be allowed to `use` the policies.
+    certManagerServiceAccount:
+      name: cert-manager
+      namespace: cert-manager
+  # The route certificate (HA only). Its secret name is
+  # nats.config.cluster.tls.secretName (values-ha.yaml).
+  routeCertificate:
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+
+# Ingress to the NATS pods. 4222 (clients) is admitted only from the pods
+# named here; 6222 (cluster routes, HA) only from the NATS pods themselves;
+# 7777 (prometheus exporter) from `metricsFrom`, and 8222 (monitoring, /jsz)
+# from `monitoringFrom` only — the KEDA operator. The exporter sidecar scrapes
+# 8222 over localhost, and kubelet probes are not subject to NetworkPolicy on
+# the CNIs this chart is tested with.
+networkPolicy:
+  enabled: true
+  # Set true ONLY when `enabled` is false because your own NetworkPolicy (or
+  # an equivalent CNI policy) already admits nothing but the five clients to
+  # 4222. templates/guards.yaml refuses `enabled: false` without it: the chart
+  # cannot see your policy, so this is a statement, not a probe.
+  externallyManaged: false
+  # Each entry admits pods labelled app.kubernetes.io/name=<name> in
+  # <namespace> ("" = this release's namespace). elitea-main's pods present
+  # two identities (elitea-main in MAIN, elitea-main-runtime in RUNTIME); the
+  # worker pods (Rust or Python image, both labelled elitea-worker-python)
+  # present elitea-worker. The names are the platform chart's and the
+  # bootstrap chart's DEFAULT pod names: both refuse a nameOverride on a NATS
+  # client unless the operator says this list was changed to match
+  # (nats.networkPolicyClientNamesManaged / networkPolicyClientNameManaged).
+  clients:
+    - name: elitea-main
+      namespace: ""
+    - name: elitea-worker-python
+      namespace: ""
+    - name: elitea-llm-gateway
+      namespace: ""
+    - name: elitea-scheduler
+      namespace: ""
+    - name: nats-bootstrap
+      namespace: ""
+  # Raw NetworkPolicyPeer entries appended to the 4222 rule, for a client the
+  # list above cannot describe.
+  extraFrom: []
+  # Who may scrape the exporter on 7777. Metrics carry connection and stream
+  # counts, not message data. Narrow this to your Prometheus namespace.
+  metricsFrom:
+    - namespaceSelector: {}
+  # Who may read the monitoring port 8222 (/jsz) directly: the KEDA operator,
+  # whose nats-jetstream scaler sizes the worker fleet on consumer lag
+  # (docs/runtime-command-bus.md). /jsz carries stream and consumer counters,
+  # not message data. Empty means no rule (the exporter sidecar and kubelet
+  # probes need none).
+  monitoringFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: keda
+      podSelector:
+        matchLabels:
+          app: keda-operator
+
+# Prometheus alerts on the runtime command bus (templates/prometheusrule.yaml):
+# a dead-lettered command, and a command stream nearly at capacity. Rendered
+# only where monitoring.coreos.com/v1 is served AND nats.promExporter is on
+# (the series come from the exporter; templates/guards.yaml refuses
+# alerts.enabled with the exporter off rather than render a rule that cannot
+# fire).
+alerts:
+  enabled: true
+  # The nearly-full threshold, in live messages (the streams hold at most
+  # 1024; the nats-bootstrap chart's runtime.<route>.maxMsgs).
+  streamFullMessages: 900
+
+nats:
+  # The Prometheus exporter sidecar (-jsz=all -prefix=nats on 7777, scraping
+  # 8222 over localhost). ON by default: templates/prometheusrule.yaml reads
+  # its nats_stream_* series, and without it the command-bus alerts render
+  # into a rule that can never fire. networkPolicy.metricsFrom says who may
+  # scrape 7777. The PodMonitor needs the Prometheus Operator's CRDs, so it
+  # stays a profile choice (values-scale1.yaml, values-ha.yaml enable it).
+  promExporter:
+    enabled: true
+
+  # The CA bundle the server verifies client certificates against. cert-manager
+  # writes ca.crt (the NATS CA) into the server certificate's Secret.
+  tlsCA:
+    enabled: true
+    secretName: elitea-nats-server-tls
+    key: ca.crt
+
+  config:
+    nats:
+      tls:
+        enabled: true
+        # Issued by templates/server-certificate.yaml.
+        secretName: elitea-nats-server-tls
+        merge:
+          # Require a client certificate and map its URI SAN to a user below.
+          verify_and_map: true
+          # TLS handshake timeout, seconds.
+          timeout: 3
+
+    # Every JetStream write is synced to disk before it is acknowledged
+    # (owner decision Q2, docs/runtime-command-bus.md): a runtime command
+    # publish, its ack, and — server-wide, every account — the gateway's
+    # counters too. The default (2 minutes) would let a node crash lose
+    # acknowledged commands and acks.
+    jetstream:
+      merge:
+        sync_interval: always
+
+    # The upstream monitor port stays plain HTTP on 8222: the exporter sidecar
+    # scrapes it over localhost, kubelet probes read /healthz, and the
+    # NetworkPolicy admits the KEDA operator (networkPolicy.monitoringFrom).
+
+    merge:
+      # ── THE ACCOUNTS AND THE PERMISSION TABLE ────────────────────────────
+      #
+      # One NATS ACCOUNT PER PLANE. An account is a separate subject space
+      # and a separate JetStream: a subject published in one account reaches
+      # subscribers in that account only, and a stream in one account cannot
+      # be read, written or bound from another. That is the boundary the
+      # per-user permissions below cannot draw on their own. A JetStream push
+      # consumer delivers to a DeliverSubject the server does NOT check
+      # against its creator's publish permissions (nats-server consumer.go),
+      # so in one shared account a user allowed to create any consumer could
+      # deliver messages onto any subject — elitea-main's presence watcher
+      # grant was enough to write into GATEWAY_BUDGET_DELTAS. With accounts a
+      # redirected delivery can only land inside its creator's own account.
+      #
+      #   MAIN     elitea-main's live-update plane: the canvas presence KV
+      #            (ELITEA_CANVAS_PRESENCE), the presence rosters it publishes
+      #            on elitea.events.project.<id>.presence, and the project
+      #            event relay. Imports the gateway's soft alerts from GATEWAY.
+      #   GATEWAY  the LLM gateway's budget plane: the counter streams
+      #            (GATEWAY_BUDGET, GATEWAY_RATELIMIT), the write-behind deltas
+      #            (GATEWAY_BUDGET_DELTAS) the scheduler drains, and the
+      #            soft-alert cooldown KV (GATEWAY_ALERT_COOLDOWN). Its only
+      #            client is the gateway (and its bootstrap).
+      #   SCHEDULER  elitea-scheduler alone, with NO JetStream. It drains
+      #            GATEWAY's budget-writeback consumer through service
+      #            imports, so it is not in the account that holds the
+      #            streams: the server answers a JetStream API request on the
+      #            requester's reply subject WITHOUT checking it against the
+      #            requester's permissions (only $JS.ACK. and _GR_. replies
+      #            are refused), so a client in GATEWAY allowed to pull could
+      #            name gateway.budget.delta (or a counter or KV subject) as
+      #            the reply and have the server store the answer there —
+      #            copying deltas back into GATEWAY_BUDGET_DELTAS. Across a
+      #            service import, the answer goes to the reply subject in
+      #            SCHEDULER, where nothing stores anything.
+      #   RUNTIME  the runtime command bus (elitea.rt.v1.>,
+      #            docs/runtime-command-bus.md): the ELITEA_RT_V1_* WorkQueue
+      #            streams, their durable pull consumers and the
+      #            execution-replay wake-up. elitea-main's producer identity
+      #            (and its bootstrap) only.
+      #   WORKER   the command bus CONSUMER, both workers' elitea-worker
+      #            identity, for the same reason SCHEDULER exists: in RUNTIME
+      #            a pull or info request whose reply named a command subject
+      #            made the server store the answer in that command stream.
+      #            Its JetStream holds the ELITEA_RT_V1_DEADLETTER bucket and
+      #            nothing else.
+      #
+      # Every account's sole WRITER is its owner: MAIN's is elitea-main,
+      # GATEWAY's the gateway, RUNTIME's its producer, WORKER's (the
+      # dead-letter bucket) the worker; SCHEDULER stores nothing. The ONLY
+      # cross-account flows:
+      #   * GATEWAY exports the stream of its per-project soft-alert subject
+      #     to MAIN, and MAIN imports it, so the project SSE relay can forward
+      #     budget.soft_alert;
+      #   * GATEWAY exports, as services, the INFO / MSG.NEXT / ACK subjects
+      #     of exactly the budget-writeback consumer to SCHEDULER;
+      #   * RUNTIME exports, as services, the INFO / MSG.NEXT / ACK subjects
+      #     of exactly its three worker durables to WORKER.
+      # Nothing else crosses.
+      #
+      # Each account with JetStream has its own bootstrap identity
+      # (elitea-nats-bootstrap-<plane>): the only user in that account that
+      # may create or update a stream or create a consumer. Nobody may delete
+      # or purge a stream. The bootstrap Job connects once per such account;
+      # SCHEDULER has no JetStream and no bootstrap.
+      #
+      # One user per client identity; a user name is the URI SAN its
+      # certificate carries, and verify_and_map finds it in whichever account
+      # declares it. Each user may subscribe to its own inbox prefix only
+      # (natsconn.InboxPrefix), so no client reads another's JetStream API
+      # replies or acks.
+      #
+      # Every grant here is exercised by a test that runs the service's real
+      # code against a nats-server started from THIS rendered config
+      # (libs/go/natsconn/natstest, run by ci-go.yml and ci-gateway.yml). A
+      # grant that is missing fails that test; a grant nothing uses is noise
+      # to be removed. templates/guards.yaml refuses a render without the
+      # five accounts, with a user outside them, with an export or import
+      # other than the three flows above, or with a grant that lets anyone
+      # delete or purge a stream.
+      accounts:
+        MAIN:
+          jetstream: enabled
+          imports:
+            # The gateway's per-project soft alerts, from GATEWAY's export.
+            - stream:
+                account: GATEWAY
+                subject: "gateway.events.project.*.events"
+          users:
+            # elitea-main: the project SSE relay, the canvas presence roster
+            # it publishes, and the presence KV bucket it reads and writes.
+            - user: "spiffe://elitea.internal/nats/elitea-main"
+              permissions:
+                publish:
+                  allow:
+                    # canvas.editors rosters onto the project's PRESENCE
+                    # subject: elitea-main's own family, which nothing else
+                    # can publish on. The SSE route accepts canvas.editors
+                    # from this family only, and budget.soft_alert from the
+                    # gateway's imported subject only.
+                    - "elitea.events.project.*.presence"
+                    # Presence Put/Delete.
+                    - "$KV.ELITEA_CANVAS_PRESENCE.>"
+                    # Bind (js.KeyValue) and the bucket status check.
+                    - "$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE"
+                    # The mirror's watcher is an ordered consumer: created
+                    # with a name and filter, deleted and re-created on every
+                    # resync. Its deliver subject stays in MAIN (see above).
+                    - "$JS.API.CONSUMER.CREATE.KV_ELITEA_CANVAS_PRESENCE.>"
+                    - "$JS.API.CONSUMER.DELETE.KV_ELITEA_CANVAS_PRESENCE.*"
+                    # Its flow-control replies. The server only asks for them
+                    # when a watcher falls behind, so no test exercises this
+                    # grant; without it a slow replica's watcher stalls.
+                    - "$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>"
+                  deny:
+                    # The gateway's family, imported: elitea-main reads it and
+                    # never speaks for the gateway on it.
+                    - "gateway.>"
+                    - "$JS.API.STREAM.CREATE.>"
+                    - "$JS.API.STREAM.UPDATE.>"
+                    - "$JS.API.STREAM.DELETE.>"
+                    - "$JS.API.STREAM.PURGE.>"
+                    - "$JS.API.STREAM.MSG.DELETE.>"
+                    - "$JS.API.ACCOUNT.PURGE.>"
+                subscribe:
+                  allow:
+                    # The two families the project SSE route reads.
+                    - "elitea.events.project.*.presence"
+                    - "gateway.events.project.*.events"
+                    - "_INBOX_elitea-main.>"
+
+            # elitea-nats-bootstrap-main: creates and reconciles MAIN's one
+            # bucket. Publishes no data.
+            - user: "spiffe://elitea.internal/nats/elitea-nats-bootstrap-main"
+              permissions:
+                publish:
+                  allow:
+                    - "$JS.API.INFO"
+                    - "$JS.API.STREAM.NAMES"
+                    - "$JS.API.STREAM.LIST"
+                    - "$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE"
+                    - "$JS.API.STREAM.CREATE.KV_ELITEA_CANVAS_PRESENCE"
+                    - "$JS.API.STREAM.UPDATE.KV_ELITEA_CANVAS_PRESENCE"
+                subscribe:
+                  allow:
+                    - "_INBOX_elitea-nats-bootstrap-main.>"
+
+        GATEWAY:
+          jetstream: enabled
+          exports:
+            # The soft alert (budget.soft_alert), per project, to MAIN only.
+            # gateway.events.ops.> (the operator-only loss record) is NOT
+            # exported.
+            - stream: "gateway.events.project.*.events"
+              accounts:
+                - MAIN
+            # The budget write-back drain, to SCHEDULER only: exactly the
+            # three JetStream subjects a bound pull consumer uses, on exactly
+            # the one durable the GATEWAY bootstrap creates. Service exports,
+            # so each answer goes back to the requester's reply subject IN
+            # SCHEDULER — where no stream lives — and never onto a GATEWAY
+            # subject of the requester's choosing.
+            #   Bind (js.Consumer) and the readiness check.
+            - service: "$JS.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
+              accounts:
+                - SCHEDULER
+            #   The pull: one request, a batch of deliveries (plus status
+            #   messages), hence response_type stream.
+            - service: "$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"
+              response_type: stream
+              accounts:
+                - SCHEDULER
+            #   Ack/nak/term on what was delivered (each delivery's reply
+            #   subject). An AckSync gets one answer.
+            - service: "$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
+              accounts:
+                - SCHEDULER
+          users:
+            # elitea-llm-gateway: the budget and rate-limit counter streams
+            # (Nats-Incr), the write-behind delta stream, the soft-alert
+            # cooldown bucket, and the events it publishes.
+            - user: "spiffe://elitea.internal/nats/elitea-llm-gateway"
+              permissions:
+                publish:
+                  allow:
+                    - "gateway.budget.counter.>"
+                    - "gateway.ratelimit.counter.>"
+                    - "gateway.budget.delta"
+                    - "gateway.events.project.*.events"
+                    - "gateway.events.ops.>"
+                    - "$KV.GATEWAY_ALERT_COOLDOWN.>"
+                    - "$JS.API.STREAM.INFO.GATEWAY_BUDGET"
+                    - "$JS.API.STREAM.INFO.GATEWAY_RATELIMIT"
+                    - "$JS.API.STREAM.INFO.GATEWAY_BUDGET_DELTAS"
+                    - "$JS.API.STREAM.INFO.KV_GATEWAY_ALERT_COOLDOWN"
+                    # ReadBudget / ReadRateLimit (GetLastMsgForSubject). The
+                    # bootstrap creates the counter streams with allow_direct,
+                    # so nats.go reads them with a direct get.
+                    - "$JS.API.DIRECT.GET.GATEWAY_BUDGET.>"
+                    - "$JS.API.DIRECT.GET.GATEWAY_RATELIMIT.>"
+                    # kv.Create on a key that exists reads it back to tell a
+                    # live key from a delete marker (TryAlertCooldown's second
+                    # crossing inside the cooldown).
+                    - "$JS.API.DIRECT.GET.KV_GATEWAY_ALERT_COOLDOWN.>"
+                  deny:
+                    - "$JS.API.STREAM.CREATE.>"
+                    - "$JS.API.STREAM.UPDATE.>"
+                    - "$JS.API.STREAM.DELETE.>"
+                    - "$JS.API.STREAM.PURGE.>"
+                    - "$JS.API.STREAM.MSG.DELETE.>"
+                    - "$JS.API.ACCOUNT.PURGE.>"
+                    - "$JS.API.CONSUMER.>"
+                subscribe:
+                  allow:
+                    - "_INBOX_elitea-llm-gateway.>"
+
+            # elitea-nats-bootstrap-gateway: creates and reconciles GATEWAY's
+            # four assets and the scheduler's budget-writeback pull consumer.
+            # Publishes no data.
+            - user: "spiffe://elitea.internal/nats/elitea-nats-bootstrap-gateway"
+              permissions:
+                publish:
+                  allow:
+                    - "$JS.API.INFO"
+                    - "$JS.API.STREAM.NAMES"
+                    - "$JS.API.STREAM.LIST"
+                    - "$JS.API.STREAM.INFO.GATEWAY_BUDGET"
+                    - "$JS.API.STREAM.CREATE.GATEWAY_BUDGET"
+                    - "$JS.API.STREAM.UPDATE.GATEWAY_BUDGET"
+                    - "$JS.API.STREAM.INFO.GATEWAY_RATELIMIT"
+                    - "$JS.API.STREAM.CREATE.GATEWAY_RATELIMIT"
+                    - "$JS.API.STREAM.UPDATE.GATEWAY_RATELIMIT"
+                    - "$JS.API.STREAM.INFO.GATEWAY_BUDGET_DELTAS"
+                    - "$JS.API.STREAM.CREATE.GATEWAY_BUDGET_DELTAS"
+                    - "$JS.API.STREAM.UPDATE.GATEWAY_BUDGET_DELTAS"
+                    - "$JS.API.STREAM.INFO.KV_GATEWAY_ALERT_COOLDOWN"
+                    - "$JS.API.STREAM.CREATE.KV_GATEWAY_ALERT_COOLDOWN"
+                    - "$JS.API.STREAM.UPDATE.KV_GATEWAY_ALERT_COOLDOWN"
+                    - "$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
+                    - "$JS.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
+                subscribe:
+                  allow:
+                    - "_INBOX_elitea-nats-bootstrap-gateway.>"
+
+        SCHEDULER:
+          # NO JetStream and no streams: the scheduler's account holds nothing
+          # it could write into. It reaches GATEWAY's budget-writeback
+          # consumer only through the three service imports below. The pull
+          # API arrives under the JetStream API prefix JS.GATEWAY.API
+          # (natsconn.SchedulerGatewayJSAPIPrefix; the scheduler opens
+          # JetStream with it), because an account without JetStream answers
+          # every $JS.API request itself with "JetStream not enabled". The
+          # ack subjects keep their own name: they are what each delivery's
+          # reply subject says.
+          imports:
+            - service:
+                account: GATEWAY
+                subject: "$JS.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
+              to: "JS.GATEWAY.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
+            - service:
+                account: GATEWAY
+                subject: "$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"
+              to: "JS.GATEWAY.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"
+            - service:
+                account: GATEWAY
+                subject: "$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
+          users:
+            # elitea-scheduler: BINDS to the budget write-back durable pull
+            # consumer on GATEWAY_BUDGET_DELTAS, which the GATEWAY bootstrap
+            # creates. It reads the consumer's info, pulls and acks — and can
+            # do nothing else to GATEWAY: no consumer create (which would let
+            # it redefine budget-writeback as a push consumer delivering spend
+            # deltas onto any subject), and no request whose answer the server
+            # publishes inside GATEWAY. In the GATEWAY account a pull request
+            # with reply subject gateway.budget.delta made the server copy
+            # deltas back into GATEWAY_BUDGET_DELTAS (the server checks a
+            # publisher's permissions on the subject, not on its reply); here
+            # that reply subject is SCHEDULER's, where nothing stores it.
+            - user: "spiffe://elitea.internal/nats/elitea-scheduler"
+              permissions:
+                publish:
+                  allow:
+                    - "JS.GATEWAY.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
+                    - "JS.GATEWAY.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"
+                    - "$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
+                subscribe:
+                  allow:
+                    - "_INBOX_elitea-scheduler.>"
+
+        RUNTIME:
+          jetstream: enabled
+          exports:
+            # The command bus's consumer side, to WORKER only: exactly the
+            # three JetStream subjects a bound pull consumer uses, on exactly
+            # the three durables the RUNTIME bootstrap creates. Service
+            # exports, so each answer goes back to the requester's reply
+            # subject IN WORKER — whose only stream is the worker's own
+            # dead-letter bucket — and never onto a RUNTIME subject of the
+            # requester's choosing (a command stream's subject, before #1081's
+            # review: MSG.NEXT copied a signed command across routes and
+            # INFO answers filled ELITEA_RT_V1_AGENT to its MaxMsgs).
+            - service: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+              response_type: stream
+              accounts:
+                - WORKER
+            - service: "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+              response_type: stream
+              accounts:
+                - WORKER
+            - service: "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+              response_type: stream
+              accounts:
+                - WORKER
+            - service: "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
+              accounts:
+                - WORKER
+          users:
+            # elitea-main-runtime: elitea-main's SECOND identity, the PRODUCER
+            # of the command bus (ELITEA_RUNTIME_NATS_URL,
+            # ELITEA_RUNTIME_NATS_TLS_*). It publishes a command on its
+            # per-delivery subject, reads a live copy back for the idempotent
+            # re-offer compare, verifies the streams it publishes into at boot,
+            # reads the consumers for the "drained" preflight, and carries the
+            # advisory execution-replay wake-up between main replicas. It
+            # creates nothing and never pulls or acks.
+            - user: "spiffe://elitea.internal/nats/elitea-main-runtime"
+              permissions:
+                publish:
+                  allow:
+                    - "elitea.rt.v1.validate.d.*"
+                    - "elitea.rt.v1.agent.d.*"
+                    - "elitea.rt.v1.index.d.*"
+                    - "elitea.rt.v1.replay.wake"
+                    - "$JS.API.STREAM.INFO.ELITEA_RT_V1_VALIDATE"
+                    - "$JS.API.STREAM.INFO.ELITEA_RT_V1_AGENT"
+                    - "$JS.API.STREAM.INFO.ELITEA_RT_V1_INDEX"
+                    # The re-offer conflict check: DIRECT.GET last_by_subj.
+                    - "$JS.API.DIRECT.GET.ELITEA_RT_V1_VALIDATE.>"
+                    - "$JS.API.DIRECT.GET.ELITEA_RT_V1_AGENT.>"
+                    - "$JS.API.DIRECT.GET.ELITEA_RT_V1_INDEX.>"
+                    # The drained preflight (cmd/index-v2-preflight) and the
+                    # boot check that the durable exists.
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+                  deny:
+                    - "$KV.>"
+                    - "$JS.ACK.>"
+                    - "$JS.API.CONSUMER.MSG.NEXT.>"
+                    - "$JS.API.STREAM.CREATE.>"
+                    - "$JS.API.STREAM.UPDATE.>"
+                    - "$JS.API.STREAM.DELETE.>"
+                    - "$JS.API.STREAM.PURGE.>"
+                    - "$JS.API.STREAM.MSG.DELETE.>"
+                    - "$JS.API.ACCOUNT.PURGE.>"
+                    - "$JS.API.CONSUMER.CREATE.>"
+                    - "$JS.API.CONSUMER.DURABLE.CREATE.>"
+                    - "$JS.API.CONSUMER.DELETE.>"
+                subscribe:
+                  allow:
+                    - "_INBOX_elitea-main-runtime.>"
+                    - "elitea.rt.v1.replay.wake"
+
+            # elitea-nats-bootstrap-runtime: creates and reconciles RUNTIME's
+            # three command streams and their per-route durable pull
+            # consumers. Publishes no data.
+            - user: "spiffe://elitea.internal/nats/elitea-nats-bootstrap-runtime"
+              permissions:
+                publish:
+                  allow:
+                    - "$JS.API.INFO"
+                    - "$JS.API.STREAM.NAMES"
+                    - "$JS.API.STREAM.LIST"
+                    - "$JS.API.STREAM.INFO.ELITEA_RT_V1_VALIDATE"
+                    - "$JS.API.STREAM.CREATE.ELITEA_RT_V1_VALIDATE"
+                    - "$JS.API.STREAM.UPDATE.ELITEA_RT_V1_VALIDATE"
+                    - "$JS.API.STREAM.INFO.ELITEA_RT_V1_AGENT"
+                    - "$JS.API.STREAM.CREATE.ELITEA_RT_V1_AGENT"
+                    - "$JS.API.STREAM.UPDATE.ELITEA_RT_V1_AGENT"
+                    - "$JS.API.STREAM.INFO.ELITEA_RT_V1_INDEX"
+                    - "$JS.API.STREAM.CREATE.ELITEA_RT_V1_INDEX"
+                    - "$JS.API.STREAM.UPDATE.ELITEA_RT_V1_INDEX"
+                    - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
+                    - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
+                    - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+                subscribe:
+                  allow:
+                    - "_INBOX_elitea-nats-bootstrap-runtime.>"
+
+        WORKER:
+          # The command bus CONSUMER's own account. Its JetStream holds ONE
+          # stream, the dead-letter bucket ELITEA_RT_V1_DEADLETTER (its
+          # bootstrap creates it; max_streams keeps anything else out, a
+          # stream a steered reply could otherwise try to create included).
+          # It reaches RUNTIME's three durables only through the service
+          # imports below. The pull and info API arrive under the JetStream
+          # API prefix JS.RUNTIME.API (natsconn.WorkerRuntimeJSAPIPrefix; the
+          # workers open their command-bus JetStream context with it when
+          # they present an identity), because WORKER's own $JS.API is its
+          # own JetStream's. The ack subjects keep their name: they are what
+          # each delivery's reply subject says.
+          jetstream:
+            max_streams: 1
+            max_file: 134217728
+            max_mem: 0
+          imports:
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+              to: "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+              to: "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+              to: "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+              to: "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+              to: "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+              to: "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
+          users:
+            # elitea-worker: the CONSUMER of the command bus, presented by the
+            # Rust and the Python worker alike. It binds to the durables the
+            # RUNTIME bootstrap created, pulls, sends in-progress heartbeats,
+            # acks after settlement, naks with a delay or terminates, and
+            # records a poison command in its own account's dead-letter
+            # bucket. It cannot publish a command or the wake-up (those
+            # subjects are RUNTIME's, and nothing imports them here), create a
+            # consumer, read a command stream's info, or touch a stream's
+            # configuration; and a reply subject it names lands in WORKER,
+            # where nothing stores it but the dead letters it may write anyway.
+            - user: "spiffe://elitea.internal/nats/elitea-worker"
+              permissions:
+                publish:
+                  allow:
+                    # Bind (CONSUMER.INFO) and pull (MSG.NEXT), imported.
+                    - "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+                    - "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
+                    - "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
+                    - "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
+                    # The dead-letter record: KV put, and the bucket bind, in
+                    # WORKER's own JetStream.
+                    - "$KV.ELITEA_RT_V1_DEADLETTER.>"
+                    - "$JS.API.STREAM.INFO.KV_ELITEA_RT_V1_DEADLETTER"
+                  deny:
+                    # Nothing in WORKER would store it; denied so a worker
+                    # that tries is a logged violation, not silence.
+                    - "elitea.rt.v1.>"
+                    - "$JS.API.STREAM.CREATE.>"
+                    - "$JS.API.STREAM.UPDATE.>"
+                    - "$JS.API.STREAM.DELETE.>"
+                    - "$JS.API.STREAM.PURGE.>"
+                    - "$JS.API.STREAM.MSG.DELETE.>"
+                    - "$JS.API.ACCOUNT.PURGE.>"
+                    - "$JS.API.CONSUMER.CREATE.>"
+                    - "$JS.API.CONSUMER.DURABLE.CREATE.>"
+                    - "$JS.API.CONSUMER.DELETE.>"
+                subscribe:
+                  allow:
+                    - "_INBOX_elitea-worker.>"
+
+            # elitea-nats-bootstrap-worker: creates and reconciles WORKER's one
+            # asset, the dead-letter bucket. Publishes no data.
+            - user: "spiffe://elitea.internal/nats/elitea-nats-bootstrap-worker"
+              permissions:
+                publish:
+                  allow:
+                    - "$JS.API.INFO"
+                    - "$JS.API.STREAM.NAMES"
+                    - "$JS.API.STREAM.LIST"
+                    - "$JS.API.STREAM.INFO.KV_ELITEA_RT_V1_DEADLETTER"
+                    - "$JS.API.STREAM.CREATE.KV_ELITEA_RT_V1_DEADLETTER"
+                    - "$JS.API.STREAM.UPDATE.KV_ELITEA_RT_V1_DEADLETTER"
+                subscribe:
+                  allow:
+                    - "_INBOX_elitea-nats-bootstrap-worker.>"

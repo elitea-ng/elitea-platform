@@ -241,7 +241,7 @@ func (r *ToolkitCallToolJobsRepository) MarkToolkitCallToolPublished(
 }
 
 // ReclaimExpiredToolkitCallToolRuns retires the outbox rows a crash between
-// admission and the Redis append would otherwise leave holding admission
+// admission and the command-bus publish would otherwise leave holding admission
 // capacity forever. It touches ONLY work past its deadline that no worker ever
 // claimed, so a live run is never affected.
 func (r *ToolkitCallToolJobsRepository) ReclaimExpiredToolkitCallToolRuns(

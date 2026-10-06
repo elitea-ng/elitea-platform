@@ -21,7 +21,7 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// ExecutionInputBundleReferenceV1 is safe for the bounded Redis command. It
+// ExecutionInputBundleReferenceV1 is safe for the bounded bus command. It
 // identifies content but cannot itself redeem or fetch that content.
 type ExecutionInputBundleReferenceV1 struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`

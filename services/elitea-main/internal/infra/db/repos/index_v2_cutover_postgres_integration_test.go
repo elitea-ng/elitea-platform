@@ -52,7 +52,7 @@ WHERE execution_id = $1
 		IsolationClass:    "shared",
 		Priority:          1,
 		DeadlineTTL:       time.Hour,
-		LimitsRevision:    "elitea.runtime.limits.conformance.v2",
+		LimitsRevision:    "elitea.runtime.limits.conformance.v3",
 		MaxOutstanding:    16,
 	})
 	if err != nil {

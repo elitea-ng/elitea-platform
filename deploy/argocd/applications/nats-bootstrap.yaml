@@ -1,7 +1,10 @@
-# ArgoCD Application: JetStream asset bootstrap (KV buckets + write-behind
-# stream), BF0.2b. Sync-wave -1 so it runs after NATS (-2) is healthy and before
-# the gateway (0). The Helm hook Job inside is idempotent — safe on every sync.
-# HA operators MUST set replicas=3 to match the HA NATS profile.
+# ArgoCD Application: the JetStream asset bootstrap, BF0.2b. It OWNS every
+# stream and KV bucket (#1076): the services only bind, and only this Job's
+# NATS identity may create, update, delete or purge a stream. Sync-wave -1 so
+# it runs after NATS (-2) is healthy and before the platform (0), whose pods
+# refuse to start while an asset is missing. The hook Job is idempotent and
+# reconciles drifted settings — safe on every sync. HA operators MUST set
+# replicas=3 to match the HA NATS profile.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -19,14 +22,18 @@ spec:
     path: deploy/helm/nats-bootstrap
     helm:
       parameters:
+        # applications/nats.yaml installs NATS as release `elitea-nats`, so its
+        # Service is elitea-nats, in this same namespace. tls:// and no
+        # credential: the Job presents its own client certificate, issued by
+        # the NATS chart's elitea-nats-ca Issuer (this chart's default).
         - name: natsUrl
-          value: "nats://nats:4222"
+          value: "tls://elitea-nats:4222"
         # scale-1 default. HA: set to "3" (or "5") to match values-ha.yaml.
         - name: replicas
           value: "1"
   destination:
     server: https://kubernetes.default.svc
-    namespace: elitea-gateway
+    namespace: elitea
   syncPolicy:
     automated:
       prune: true

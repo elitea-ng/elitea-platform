@@ -19,7 +19,7 @@ use crate::protocol::output::{
     build_toolkit_execute_read_terminal_output_frame,
 };
 use crate::spool::SpoolError;
-use crate::transport::redis_commands::RedisCommandDelivery;
+use crate::transport::command_bus::CommandDelivery;
 use crate::transport::{
     DurablyAckedTerminal, OutputGrpcError, OutputProtocolError, PreparedOutputSpool,
 };
@@ -49,7 +49,7 @@ impl EmptyToolkitOutputRecovery {
     pub(super) fn into_parts(
         self,
     ) -> (
-        RedisCommandDelivery,
+        CommandDelivery,
         VerifiedToolkitExecuteReadCommand,
         AgentOutputRecovery,
         PreparedAgentOutput,
@@ -60,7 +60,7 @@ impl EmptyToolkitOutputRecovery {
 }
 
 pub(super) struct ToolkitTerminalRecovery {
-    pub(super) delivery: RedisCommandDelivery,
+    pub(super) delivery: CommandDelivery,
     pub(super) verified: VerifiedToolkitExecuteReadCommand,
     pub(super) claim: AcceptedTerminalClaimRecovery,
     pub(super) spool: PreparedOutputSpool,

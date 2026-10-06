@@ -3,7 +3,7 @@
 # files, with a bounded retry and exponential backoff.
 #
 # Why: three CI runs in one day died before any test ran with a Docker Hub
-# connection reset while `compose up` pulled a base image (redis:7-alpine,
+# connection reset while `compose up` pulled a base image (e.g.
 # postgres:18) inline, on the chat-stream shards of ci-web-e2e.yml. Pulling
 # up front, with retries, turns a transient registry hiccup into a clearly
 # named, retried step instead of an opaque `compose up` failure deep inside a

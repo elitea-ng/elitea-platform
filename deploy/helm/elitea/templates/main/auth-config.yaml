@@ -2,25 +2,25 @@
 {{/*
 The authentication configuration document (issue #444).
 
-internal/authcomposition/material.go opens five files, and their paths come
+internal/authcomposition/material.go opens three files, and their paths come
 from this document. While the document lived only in a ConfigMap that the
 operator provisioned, the chart could not read those paths, so it rendered no
-volume for the five files and a Kubernetes install of the runtime plane could
+volume for the three files and a Kubernetes install of the runtime plane could
 not start from the chart alone.
 
 With fileConfig.authConfig.document set, the document is a chart value. The
-chart renders it here, and templates/_helpers.tpl checks the five paths while
-it renders.
+chart renders it here, and templates/_helpers.tpl checks the three paths
+while it renders. It also refuses a retired elitea.auth.form.v1 document: the
+Form sign-in state is in PostgreSQL now, so the document has no redis block.
 
 The document holds file REFERENCES, never secret values —
 internal/authcomposition/config.go says so in the Config comment — so a
-ConfigMap is the right object for it. The five files it points at arrive in a
+ConfigMap is the right object for it. The three files it points at arrive in a
 Secret; read fileConfig.authConfig.material in values.yaml.
 
 JSON, not YAML. JSON is the subset of YAML that the loader accepts, the
-default key name is auth-config.json, and JSON quotes every scalar. That last
-point matters: redis.key_prefix must end with ':', and an unquoted YAML scalar
-that ends with ':' is a nested mapping key rather than a string.
+default key name is auth-config.json, and JSON quotes every scalar, so no
+value can turn into a nested mapping key.
 */}}
 {{- if and .Values.main.fileConfig.authConfig.enabled .Values.main.fileConfig.authConfig.document }}
 apiVersion: v1

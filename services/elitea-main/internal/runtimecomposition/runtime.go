@@ -7,7 +7,7 @@ import (
 	"os"
 	"sync"
 
-	"github.com/redis/go-redis/v9"
+	"github.com/nats-io/nats.go"
 
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 )
@@ -21,14 +21,14 @@ type privateServerRunner interface {
 	Shutdown(context.Context) error
 }
 
-// Runtime owns only the new runtime's control Redis client and background
+// Runtime owns only the new runtime's NATS connection and background
 // components. The caller owns Run's context, waits for Run to drain, and calls
 // Close after Run returns.
 type Runtime struct {
 	codeOwnerClient        interface{ Close() }
 	publisher              publisherRunner
 	private                privateServerRunner
-	controlRedis           *redis.Client
+	runtimeNATS            *nats.Conn
 	sandboxSpoolDir        string
 	publicRoutes           PublicRoutes
 	configurationValidator configurationapp.CurrentSDKConfigurationValidator
@@ -144,7 +144,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 
 // Shutdown stops publication immediately, drains private listeners through the
 // caller-owned deadline, then waits until Run has released every runtime
-// goroutine. Returning from this method means Redis and database dependencies
+// goroutine. Returning from this method means NATS and database dependencies
 // may be closed safely.
 func (r *Runtime) Shutdown(ctx context.Context) error {
 	if ctx == nil {
@@ -198,8 +198,13 @@ func (r *Runtime) Close() error {
 		if r.codeOwnerClient != nil {
 			r.codeOwnerClient.Close()
 		}
-		if r.controlRedis != nil {
-			r.closeErr = r.controlRedis.Close()
+		if r.runtimeNATS != nil {
+			// Drain flushes queued publishes (replay wakes) and ends the
+			// subscription; it is bounded by the connection's DrainTimeout.
+			if err := r.runtimeNATS.Drain(); err != nil && !errors.Is(err, nats.ErrConnectionClosed) {
+				r.closeErr = err
+				r.runtimeNATS.Close()
+			}
 		}
 		if r.sandboxSpoolDir != "" {
 			r.closeErr = errors.Join(r.closeErr, os.RemoveAll(r.sandboxSpoolDir))

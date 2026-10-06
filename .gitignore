@@ -25,6 +25,7 @@ deploy/data/production/
 /services/*/cmd/*/__debug_bin*
 /services/elitea-llm-gateway/elitea-llm-gateway
 /services/elitea-main/cutover-ctl
+/services/elitea-main/cmd/cutover-ctl/cutover-ctl
 /services/elitea-main/elitea-auth-material
 /services/elitea-main/elitea-auth-validate
 /services/elitea-main/elitea-main
@@ -42,7 +43,6 @@ fake-artifact.bin
 
 # Generated mixed-deployment credentials, PKI, rendered Compose models and
 # other machine-local runtime material.
-/deploy/centry-hybrid/.runtime/
 
 # Agent-loop working state (task tracker, learnings, run history) — local only
 .ralph/
