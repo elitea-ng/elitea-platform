@@ -110,7 +110,9 @@ class DeliveryConsumer(Protocol):
 
     async def park(self, delivery: CommandDelivery) -> None: ...
 
-    async def dead_letter(self, delivery: CommandDelivery, *, reason: str) -> None: ...
+    async def record_dead_letter(
+        self, delivery: CommandDelivery, *, reason: str
+    ) -> None: ...
 
 
 #: Claim answers that leave the command for a later delivery. Each is answered
@@ -127,6 +129,11 @@ _RETRY_LATER_DISPOSITIONS = frozenset(
 #: The ERROR log line the dead-letter alert pairs with the bucket being
 #: non-empty (docs/runtime-command-bus.md, "Dead letter").
 DEAD_LETTERED_EVENT = "worker_command.dead_lettered"
+#: The ERROR line for a poison whose dead-letter record could not be written.
+#: The poison is then NOT parked: it is nak'd with the retry delay, so the
+#: next delivery retries the record (without running the command again).
+DEAD_LETTER_WRITE_FAILED_EVENT = "worker_command.dead_letter_write_failed"
+_ERROR_EVENTS = frozenset({DEAD_LETTERED_EVENT, DEAD_LETTER_WRITE_FAILED_EVENT})
 
 
 @dataclass(slots=True)
@@ -250,6 +257,13 @@ class WorkerServeLoop:
         #: Poison deliveries this process dead-lettered (an in-process count;
         #: the worker has no metrics endpoint, the alert is the bucket).
         self.dead_lettered = 0
+        #: Dead-letter records the bucket refused (in-process; carried on every
+        #: DEAD_LETTER_WRITE_FAILED_EVENT line as the running total).
+        self.dead_letter_write_failures = 0
+        # Poison this process decided on but could not record yet: the next
+        # delivery of the key retries the record instead of being parked.
+        # Bounded like the quarantine it belongs to.
+        self._unrecorded: dict[str, WorkerError] = {}
 
     async def run(self, stop: asyncio.Event) -> None:
         if stop.is_set():
@@ -506,7 +520,12 @@ class WorkerServeLoop:
         self._release_delivery_capacity(reserved - len(deliveries))
 
         for delivery in parked:
-            await self._answer(self._consumer.park, delivery, "nats_park")
+            error = self._unrecorded.get(delivery.dead_letter_key)
+            if error is not None:
+                # Decided, never recorded: retry the record, not the command.
+                await self._dispose_poison(delivery, error, owned=False)
+            else:
+                await self._answer(self._consumer.park, delivery, "nats_park")
 
         queued = 0
         try:
@@ -538,11 +557,15 @@ class WorkerServeLoop:
             self._event_sink(f"{event}_unavailable", DependencyUnavailable())
 
     async def _dead_letter(self, delivery: CommandDelivery, error: WorkerError) -> None:
-        """Poison: NakWithDelay(24h), a dead-letter record, an ERROR line.
+        """Poison: one dead-letter record, then NakWithDelay(24h), an ERROR line.
 
         Never Term: that frees the delivery subject and PostgreSQL re-offers
         the poison every 30 seconds. The message stays PENDING and the server
         keeps it away for the poison delay.
+
+        The record comes FIRST. A poison parked without a record is invisible
+        to the alert, so a failed write is answered with the ordinary retry
+        delay instead (see :meth:`_dispose_poison`).
         """
         if delivery.is_settled:
             # The processor already acknowledged it after a terminal receipt;
@@ -556,22 +579,59 @@ class WorkerServeLoop:
                 # Announced rather than silently widened: past the cap this
                 # process forgets the decision; the server's delay still holds.
                 self._event_sink("delivery_quarantine_full", error)
+        await self._dispose_poison(delivery, error, owned=True)
+
+    async def _dispose_poison(
+        self,
+        delivery: CommandDelivery,
+        error: WorkerError,
+        *,
+        owned: bool,
+    ) -> None:
+        """Record, then park; or, when the record fails, retry later."""
+
+        key = delivery.dead_letter_key
+        try:
+            await self._consumer.record_dead_letter(delivery, reason=error.code)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.dead_letter_write_failures += 1
+            if key in self._unrecorded or len(self._unrecorded) < self._quarantine_cap:
+                self._unrecorded[key] = error
+            self._event_sink(
+                DEAD_LETTER_WRITE_FAILED_EVENT,
+                _dead_letter_write_failure_notice(
+                    error,
+                    delivery,
+                    total=self.dead_letter_write_failures,
+                    cause=exc,
+                ),
+            )
+            await self._answer_poison(
+                self._consumer.retry_later, delivery, "nats_nak", owned=owned
+            )
+            return
+        self._unrecorded.pop(key, None)
         self.dead_lettered += 1
         self._event_sink(DEAD_LETTERED_EVENT, _dead_letter_notice(error, delivery))
-        async with self._answer_lock:
-            # The 24h nak inside dead_letter must not be crossed by a +WPI.
-            current = self._disown((delivery.stream, delivery.stream_sequence))
-            try:
-                await self._consumer.dead_letter(current or delivery, reason=error.code)
-            except asyncio.CancelledError:
-                raise
-            except WorkerError as exc:
-                self._event_sink("dead_letter_write_rejected", exc)
-            except Exception:
-                self._event_sink(
-                    "dead_letter_write_unavailable", DependencyUnavailable()
-                )
+        await self._answer_poison(
+            self._consumer.park, delivery, "nats_park", owned=owned
+        )
         await self._persist_quarantine(key, error)
+
+    async def _answer_poison(
+        self,
+        answer: Callable[[CommandDelivery], Awaitable[None]],
+        delivery: CommandDelivery,
+        event: str,
+        *,
+        owned: bool,
+    ) -> None:
+        if owned:
+            await self._answer_owned(answer, delivery, event)
+        else:
+            await self._answer(answer, delivery, event)
 
     async def _worker(self) -> None:
         while True:
@@ -639,6 +699,31 @@ def _dead_letter_notice(
             f"in {DEAD_LETTER_BUCKET} under {delivery.dead_letter_key}. Re-running "
             f"it cannot change the outcome; the execution's own output is lost. "
             f"Clearing it requires the server-side recovery named above."
+        ),
+        exit_code=error.exit_code,
+        retryable=error.retryable,
+    )
+
+
+def _dead_letter_write_failure_notice(
+    error: WorkerError,
+    delivery: CommandDelivery,
+    *,
+    total: int,
+    cause: BaseException,
+) -> WorkerError:
+    """The operator-facing statement that a poison could not be recorded."""
+
+    reason = cause.code if isinstance(cause, WorkerError) else "DEPENDENCY_UNAVAILABLE"
+    return WorkerError(
+        code=error.code,
+        safe_message=(
+            f"Message {delivery.entry_id} (delivery {delivery.num_delivered}) is "
+            f"poison, but its record under {delivery.dead_letter_key} could not be "
+            f"written to {DEAD_LETTER_BUCKET} ({reason}). It is NOT parked: it is "
+            f"nak'd with the retry delay so its next delivery retries the record, "
+            f"without running the command again in this process. "
+            f"dead_letter_write_failures_total={total}."
         ),
         exit_code=error.exit_code,
         retryable=error.retryable,
@@ -1356,7 +1441,7 @@ def _install_signal_handlers(stop: asyncio.Event) -> Callable[[], None]:
 
 def _emit_runtime_event(event: str, error: WorkerError | None) -> None:
     diagnostic: dict[str, object] = {"event": event}
-    if event == DEAD_LETTERED_EVENT:
+    if event in _ERROR_EVENTS:
         diagnostic["level"] = "error"
     if error is not None:
         diagnostic.update(

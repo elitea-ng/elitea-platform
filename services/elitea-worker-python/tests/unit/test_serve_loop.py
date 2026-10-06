@@ -77,6 +77,7 @@ class FakeConsumer:
         self.parked: list[CommandDelivery] = []
         self.dead_lettered: list[tuple[CommandDelivery, str]] = []
         self.dead_letter_error: Exception | None = None
+        self.dead_letter_failures: list[tuple[CommandDelivery, str]] = []
 
     @property
     def delivery_batch_size(self) -> int:
@@ -116,10 +117,11 @@ class FakeConsumer:
     async def park(self, delivery: CommandDelivery) -> None:
         self.parked.append(delivery)
 
-    async def dead_letter(self, delivery: CommandDelivery, *, reason: str) -> None:
-        self.dead_lettered.append((delivery, reason))
+    async def record_dead_letter(self, delivery: CommandDelivery, *, reason: str) -> None:
         if self.dead_letter_error is not None:
+            self.dead_letter_failures.append((delivery, reason))
             raise self.dead_letter_error
+        self.dead_lettered.append((delivery, reason))
 
 
 def _runtime(consumer: FakeConsumer, process, **overrides) -> WorkerServeLoop:
@@ -466,38 +468,67 @@ def test_a_poison_transport_shape_is_dead_lettered_without_processing() -> None:
     asyncio.run(run())
 
 
-def test_an_unwritable_dead_letter_is_reported_and_still_quarantined() -> None:
+def test_an_unwritable_dead_letter_is_retried_never_parked_without_a_record(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """D3: no poison is parked (or terminated) without its record.
+
+    The failed write is counted and announced on its own ERROR line, the
+    poison is nak'd with the ordinary retry delay instead of 24h, and its next
+    delivery retries the RECORD without running the command again.
+    """
+
     async def run() -> None:
-        consumer = FakeConsumer((_delivery(1),), redeliver=True)
+        delivery = _delivery(1)
+        consumer = FakeConsumer((delivery,), redeliver=True)
         consumer.dead_letter_error = DependencyUnavailable("bucket unreachable")
         stop = asyncio.Event()
         calls = 0
-        events: list[str] = []
+        events: list[tuple[str, WorkerError | None]] = []
 
         async def process(_: CommandDelivery) -> DeliveryResult:
             nonlocal calls
             calls += 1
             raise InvalidInput("The signed command is malformed.")
 
-        async def stop_after_park() -> None:
+        async def heal_then_stop() -> None:
+            while len(consumer.dead_letter_failures) < 2:
+                await asyncio.sleep(0)
+            consumer.dead_letter_error = None
             while not consumer.parked:
                 await asyncio.sleep(0)
             stop.set()
 
         runtime = _runtime(
-            consumer, process, event_sink=lambda event, _error: events.append(event)
+            consumer, process, event_sink=lambda event, error: events.append((event, error))
         )
-        watcher = asyncio.create_task(stop_after_park())
+        watcher = asyncio.create_task(heal_then_stop())
         try:
             await asyncio.wait_for(runtime.run(stop), timeout=1.0)
         finally:
             watcher.cancel()
 
-        assert calls == 1
-        assert "dead_letter_write_rejected" in events
-        assert DEAD_LETTERED_EVENT in events
+        assert calls == 1, "a poison whose record failed ran again"
+        # Every failed write was answered with the retry delay, not parked.
+        assert len(consumer.retried) >= 2
+        assert runtime.dead_letter_write_failures >= 2
+        failed = [error for event, error in events if event == serve_module.DEAD_LETTER_WRITE_FAILED_EVENT]
+        assert len(failed) == runtime.dead_letter_write_failures
+        assert failed[-1] is not None
+        assert f"dead_letter_write_failures_total={len(failed)}" in failed[-1].safe_message
+        # Healed: the record is written and only THEN the poison is parked
+        # and announced, once.
+        assert consumer.dead_lettered and consumer.dead_lettered[0][1] == "INVALID_INPUT"
+        assert [event for event, _ in events].count(DEAD_LETTERED_EVENT) == 1
+        assert runtime.dead_lettered == 1
 
     asyncio.run(run())
+    serve_module._emit_runtime_event(
+        serve_module.DEAD_LETTER_WRITE_FAILED_EVENT, InvalidInput("x")
+    )
+    line = json.loads(capsys.readouterr().err.strip().splitlines()[-1])
+    assert line["event"] == "worker_command.dead_letter_write_failed"
+    assert line["level"] == "error"
 
 
 class FakeQuarantineStore:
@@ -1076,9 +1107,9 @@ class OrderedConsumer(FakeConsumer):
         self._redeliver = False
         await super().retry_later(delivery)
 
-    async def dead_letter(self, delivery: CommandDelivery, *, reason: str) -> None:
+    async def park(self, delivery: CommandDelivery) -> None:
         self.wire.append(("-NAK24h", delivery.stream_sequence, delivery.num_delivered))
-        await super().dead_letter(delivery, reason=reason)
+        await super().park(delivery)
 
 
 def _no_wpi_after_nak(wire: list[tuple[str, int, int]], sequence: int) -> None:

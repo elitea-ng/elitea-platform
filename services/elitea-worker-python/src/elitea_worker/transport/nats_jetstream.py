@@ -248,6 +248,13 @@ class SubjectTokenMismatch(WorkerError):
         )
 
 
+class DeadLetterUnrecorded(DependencyUnavailable):
+    """The dead-letter bucket did not take the record."""
+
+    def __init__(self) -> None:
+        super().__init__("The dead-letter record could not be written.")
+
+
 class TransportMessageRejected(WorkerError):
     def __init__(self, code: str, safe_message: str) -> None:
         super().__init__(code, safe_message, exit_code=2)
@@ -423,35 +430,26 @@ class JetStreamCommandConsumer:
 
         await self._nak(delivery, POISON_DELAY_SECONDS)
 
-    async def dead_letter(self, delivery: CommandDelivery, *, reason: str) -> None:
-        """Poison: ``NakWithDelay(24h)`` and one dead-letter record.
+    async def record_dead_letter(
+        self, delivery: CommandDelivery, *, reason: str
+    ) -> None:
+        """Write the one dead-letter record for a poison delivery.
 
-        The nak comes first, so the message stops being redelivered even when
-        the bucket is unreachable; both failures are reported, as one error,
-        after both were attempted. The record says where to look, never what
-        the command said: no envelope bytes, delivery ID or command field.
+        The record says where to look, never what the command said: no
+        envelope bytes, delivery ID or command field. It is written BEFORE the
+        poison is answered: a poison parked or terminated without a record
+        would be invisible to the alert, so the caller answers a failed write
+        with the ordinary retry delay instead and the next delivery retries
+        the record.
         """
 
-        nak_error: BaseException | None = None
-        try:
-            await self.park(delivery)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            nak_error = exc
         record = self.dead_letter_record(delivery, reason=reason)
         try:
             await self._dead_letters.put(delivery.dead_letter_key, record)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            raise DependencyUnavailable(
-                "The dead-letter record could not be written."
-            ) from exc
-        if nak_error is not None:
-            raise DependencyUnavailable(
-                "JetStream refused the poison delay."
-            ) from nak_error
+            raise DeadLetterUnrecorded() from exc
 
     def dead_letter_record(self, delivery: CommandDelivery, *, reason: str) -> bytes:
         if not isinstance(reason, str) or _REASON_RE.fullmatch(reason) is None:
@@ -941,6 +939,7 @@ __all__ = [
     "DEAD_LETTER_BUCKET",
     "DEAD_LETTER_SCHEMA",
     "DEFAULT_API_PREFIX",
+    "DeadLetterUnrecorded",
     "INBOX_PREFIX",
     "JetStreamCommandConsumer",
     "KNOWN_STREAMS",

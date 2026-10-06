@@ -480,15 +480,16 @@ def test_retry_later_naks_with_the_configured_delay_and_park_with_24h() -> None:
     asyncio.run(run())
 
 
-def test_dead_letter_naks_24h_and_records_where_to_look_never_what_it_said() -> None:
+def test_record_dead_letter_records_where_to_look_never_what_it_said() -> None:
     async def run() -> None:
         kv = FakeKV()
         consumer = _consumer(kv=kv)
         message = _message("outbox-secret-id", sequence=42, num_delivered=3, data=b"ENVELOPE")
 
-        await consumer.dead_letter(_delivery_of(message), reason="AUTHORIZATION_FAILED")
+        await consumer.record_dead_letter(_delivery_of(message), reason="AUTHORIZATION_FAILED")
 
-        assert message.calls == [("nak", 86_400)]
+        # The record only: answering the poison is the serve loop's next step.
+        assert message.calls == []
         key = f"index.{_token('outbox-secret-id')}"
         assert list(kv.records) == [key]
         raw = kv.records[key]
@@ -516,25 +517,15 @@ def test_dead_letter_reason_is_a_low_cardinality_code() -> None:
     assert json.loads(record)["reason"] == "UNCLASSIFIED"
 
 
-def test_an_unreachable_bucket_still_parks_the_poison_and_says_so() -> None:
+def test_an_unreachable_bucket_is_a_typed_failure_and_answers_nothing() -> None:
     async def run() -> None:
         message = _message()
-        with pytest.raises(DependencyUnavailable):
-            await _consumer(kv=FakeKV(fail=True)).dead_letter(
+        with pytest.raises(bus.DeadLetterUnrecorded) as caught:
+            await _consumer(kv=FakeKV(fail=True)).record_dead_letter(
                 _delivery_of(message), reason="INVALID_INPUT"
             )
-        assert message.calls == [("nak", 86_400)]
-
-    asyncio.run(run())
-
-
-def test_a_lost_poison_nak_still_writes_the_record_and_says_so() -> None:
-    async def run() -> None:
-        kv = FakeKV()
-        message = _message(fail={"nak"})
-        with pytest.raises(DependencyUnavailable):
-            await _consumer(kv=kv).dead_letter(_delivery_of(message), reason="INVALID_INPUT")
-        assert len(kv.records) == 1
+        assert caught.value.retryable is True
+        assert message.calls == []
 
     asyncio.run(run())
 
