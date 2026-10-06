@@ -69,6 +69,12 @@ pub const QUERY_TOOLS: [&str; 3] = ["ask", "deep_research", "resolve_wiki"];
 pub const ASK_MAX_TOOL_CALLS: usize = 8;
 /// `ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS`' default.
 pub const RESEARCH_MAX_ITERATIONS: usize = 15;
+/// The largest step limit: a larger value is lowered to it (Python had no
+/// upper bound and enforced no limit).
+pub const MAX_STEP_LIMIT: usize = 1_000;
+/// The largest `DEEPWIKI_MAX_DOC_RESULTS` (`search_codebase`'s own `k`
+/// limit).
+pub const MAX_DOC_RESULTS_LIMIT: usize = 100;
 const NO_OVERVIEW: &str = "No repository overview available.";
 
 /// The step limits.
@@ -80,6 +86,9 @@ pub struct Limits {
     /// Deep research's tool-calling steps
     /// (`ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS`).
     pub research_iterations: usize,
+    /// `search_codebase`'s documentation results at most
+    /// (`DEEPWIKI_MAX_DOC_RESULTS`, default 3; 0 searches no documents).
+    pub doc_results: usize,
 }
 
 impl Default for Limits {
@@ -87,40 +96,87 @@ impl Default for Limits {
         Self {
             ask_tool_calls: ASK_MAX_TOOL_CALLS,
             research_iterations: RESEARCH_MAX_ITERATIONS,
+            doc_results: tools::MAX_DOC_RESULTS,
         }
     }
+}
+
+/// `int(text)` as Python parses an environment value: an optional sign,
+/// digits with single `_` between them, blanks around.
+fn python_int(text: &str) -> Option<i64> {
+    let text = text.trim();
+    let digits = text.strip_prefix(['+', '-']).unwrap_or(text);
+    if digits.is_empty()
+        || digits.starts_with('_')
+        || digits.ends_with('_')
+        || digits.contains("__")
+        || !digits.chars().all(|c| c.is_ascii_digit() || c == '_')
+    {
+        return None;
+    }
+    let clean: String = text.chars().filter(|c| *c != '_').collect();
+    // A number too large for i64 is still a number: beyond every bound.
+    Some(clean.parse::<i64>().unwrap_or(if clean.starts_with('-') {
+        i64::MIN
+    } else {
+        i64::MAX
+    }))
 }
 
 impl Limits {
     /// The limits from `env` (a lookup, so tests need no process state).
     ///
+    /// Python read these with `int(...)` and accepted every whole number.
+    /// A whole number outside the range this engine can use is moved into
+    /// it, with a warning: the step limits into 1..=[`MAX_STEP_LIMIT`],
+    /// the document results into 0..=[`MAX_DOC_RESULTS_LIMIT`].
+    ///
     /// # Errors
     ///
-    /// A `ValueError` for a value that is not a whole number in 1..=100.
+    /// A `ValueError` for a value that is not a whole number (Python's
+    /// `int()` failed there too, and every query failed).
     pub fn from_lookup(env: impl Fn(&str) -> Option<String>) -> Result<Self, EngineError> {
-        let read = |key: &str, default: usize| -> Result<usize, EngineError> {
-            match env(key)
-                .map(|v| v.trim().to_owned())
-                .filter(|v| !v.is_empty())
-            {
-                None => Ok(default),
-                Some(text) => text
-                    .parse::<usize>()
-                    .ok()
-                    .filter(|n| (1..=100).contains(n))
-                    .ok_or_else(|| {
-                        EngineError::new(
-                            ErrorType::Value,
-                            format!("{key} must be a whole number from 1 to 100"),
-                        )
-                    }),
+        let read = |key: &str, default: usize, low: usize, high: usize| {
+            let Some(text) = env(key).filter(|v| !v.trim().is_empty()) else {
+                return Ok(default);
+            };
+            let value = python_int(&text).ok_or_else(|| {
+                EngineError::new(
+                    ErrorType::Value,
+                    format!("{key} must be a whole number, got '{text}'"),
+                )
+            })?;
+            let low_i = i64::try_from(low).unwrap_or(i64::MAX);
+            let high_i = i64::try_from(high).unwrap_or(i64::MAX);
+            let used = usize::try_from(value.clamp(low_i, high_i)).unwrap_or(low);
+            if i64::try_from(used).ok() != Some(value) {
+                tracing::warn!(
+                    key,
+                    value,
+                    used,
+                    "the value is out of range; using the nearest one"
+                );
             }
+            Ok(used)
         };
         Ok(Self {
-            ask_tool_calls: read("DEEPWIKI_ASK_MAX_ITERATIONS", ASK_MAX_TOOL_CALLS)?,
+            ask_tool_calls: read(
+                "DEEPWIKI_ASK_MAX_ITERATIONS",
+                ASK_MAX_TOOL_CALLS,
+                1,
+                MAX_STEP_LIMIT,
+            )?,
             research_iterations: read(
                 "ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS",
                 RESEARCH_MAX_ITERATIONS,
+                1,
+                MAX_STEP_LIMIT,
+            )?,
+            doc_results: read(
+                "DEEPWIKI_MAX_DOC_RESULTS",
+                tools::MAX_DOC_RESULTS,
+                0,
+                MAX_DOC_RESULTS_LIMIT,
             )?,
         })
     }
@@ -299,6 +355,7 @@ pub fn ask_spec(
         streaming,
         max_tokens: request.max_tokens.unwrap_or(4096),
         budget: limits.ask_tool_calls,
+        doc_results: limits.doc_results,
         // A streamed answer reports no usage to scale by.
         policy: Policy::for_model(model, anthropic, !streaming),
         summary_prompt: prompts::SUMMARY,
@@ -346,6 +403,7 @@ pub fn research_spec(
         streaming: false,
         max_tokens: request.max_tokens.unwrap_or(8192),
         budget: limits.research_iterations,
+        doc_results: limits.doc_results,
         policy: Policy::for_model(model, anthropic, true),
         summary_prompt: prompts::SUMMARY_DEEPAGENTS,
         clock,
@@ -601,12 +659,41 @@ mod tests {
     }
 
     #[test]
-    fn limits_are_strict() {
+    fn limits_accept_what_python_accepted() {
         let none = |_: &str| None;
         assert_eq!(Limits::from_lookup(none), Ok(Limits::default()));
-        let set = |key: &str| (key == "DEEPWIKI_ASK_MAX_ITERATIONS").then(|| "3".to_owned());
-        assert_eq!(Limits::from_lookup(set).map(|l| l.ask_tool_calls), Ok(3));
-        let bad = |_: &str| Some("0".to_owned());
-        assert!(Limits::from_lookup(bad).is_err());
+        let one = |key: &'static str, value: &'static str| {
+            move |k: &str| (k == key).then(|| value.to_owned())
+        };
+        let ask = |value| {
+            Limits::from_lookup(one("DEEPWIKI_ASK_MAX_ITERATIONS", value)).map(|l| l.ask_tool_calls)
+        };
+        assert_eq!(ask("3"), Ok(3));
+        // Above the old 1..=100 range: Python accepted it, so does this.
+        assert_eq!(ask(" 150 "), Ok(150));
+        assert_eq!(ask("1_000"), Ok(1_000));
+        // Out of range: moved into it.
+        assert_eq!(ask("0"), Ok(1));
+        assert_eq!(ask("-4"), Ok(1));
+        assert_eq!(ask("5000"), Ok(MAX_STEP_LIMIT));
+        assert_eq!(ask("99999999999999999999999"), Ok(MAX_STEP_LIMIT));
+        // Not a whole number: Python's int() raised ValueError.
+        for bad in ["eight", "1.5", "1__0", "_1", "+"] {
+            assert_eq!(
+                ask(bad).map_err(|e| e.error_type),
+                Err(ErrorType::Value),
+                "{bad}"
+            );
+        }
+        let research = Limits::from_lookup(one("ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS", "40"));
+        assert_eq!(research.map(|l| l.research_iterations), Ok(40));
+        let docs = |value| {
+            Limits::from_lookup(one("DEEPWIKI_MAX_DOC_RESULTS", value)).map(|l| l.doc_results)
+        };
+        assert_eq!(docs("5"), Ok(5));
+        assert_eq!(docs("0"), Ok(0));
+        assert_eq!(docs("-2"), Ok(0));
+        assert_eq!(docs("500"), Ok(MAX_DOC_RESULTS_LIMIT));
+        assert!(docs("x").is_err());
     }
 }

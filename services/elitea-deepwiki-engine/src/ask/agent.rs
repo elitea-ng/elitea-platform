@@ -149,6 +149,8 @@ pub struct AgentSpec {
     pub max_tokens: u32,
     /// `ask`: tool calls; deep research: tool-calling steps.
     pub budget: usize,
+    /// `search_codebase`'s documentation results at most.
+    pub doc_results: usize,
     pub policy: Policy,
     pub summary_prompt: &'static str,
     pub clock: Clock,
@@ -436,6 +438,7 @@ pub async fn run<S: IndexStore, M: Model>(
             store,
             embedder,
             stop,
+            doc_results: spec.doc_results,
         },
         known: &spec.known_tools,
         mode: spec.mode,

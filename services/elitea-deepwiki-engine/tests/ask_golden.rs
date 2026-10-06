@@ -237,6 +237,7 @@ async fn every_tool_gives_the_python_text() {
         store: &index,
         embedder: &embedder,
         stop: &stop,
+        doc_results: Limits::default().doc_results,
     };
     let mut compared = 0;
     for record in common::jsonl("ask/ref/tools.jsonl") {

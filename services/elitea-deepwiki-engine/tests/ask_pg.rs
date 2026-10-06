@@ -154,6 +154,7 @@ async fn the_tools_over_postgresql_match_python() {
         store: &index,
         embedder: &embedder,
         stop: &stop,
+        doc_results: Limits::default().doc_results,
     };
     let mut identical = 0;
     let mut differing: Vec<(String, String)> = Vec::new();

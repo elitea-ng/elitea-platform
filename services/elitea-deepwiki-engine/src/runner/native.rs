@@ -96,9 +96,10 @@ pub struct NativeRunner {
     pool: PgPool,
     /// The query tools' reads ([`Settings::query_pool_size`] connections).
     query_pool: PgPool,
-    /// The query tools' step limits, read once at start so a bad value
-    /// fails the start rather than a request.
-    query_limits: crate::ask::Limits,
+    /// The query tools' limits, read once at start. A value that is not a
+    /// whole number fails `ask` and `deep_research` (as Python's `int()`
+    /// did), never the start: `generate_wiki` does not read it.
+    query_limits: Result<crate::ask::Limits, EngineError>,
     /// This process's cgroup (v2), whose OOM-kill count explains a SIGKILL
     /// this runner did not send.
     cgroup: Option<Arc<Cgroup>>,
@@ -270,8 +271,10 @@ impl NativeRunner {
             crate::storage::lazy_pool(url.expose(), 2).map_err(|e| ConfigError(e.to_string()))?;
         let query_pool = crate::storage::lazy_pool(url.expose(), settings.query_pool_size)
             .map_err(|e| ConfigError(e.to_string()))?;
-        let query_limits =
-            crate::ask::Limits::from_env().map_err(|e| ConfigError(e.message.clone()))?;
+        let query_limits = crate::ask::Limits::from_env();
+        if let Err(error) = &query_limits {
+            tracing::warn!(error = %error.message, "ask and deep_research will fail until the setting is fixed");
+        }
         Ok(Self {
             settings: Arc::new(settings),
             worker: Arc::new(worker),
@@ -302,11 +305,17 @@ impl NativeRunner {
     ) -> Result<Value, EngineError> {
         let transport =
             crate::llm::Transport::new(&crate::llm::TransportSettings::from(&self.settings.model))?;
+        // `resolve_wiki` reads no limit.
+        let limits = match &self.query_limits {
+            Ok(limits) => *limits,
+            Err(_) if tool == "resolve_wiki" => crate::ask::Limits::default(),
+            Err(error) => return Err(error.clone()),
+        };
         let deps = crate::ask::QueryDeps {
             pool: self.query_pool.clone(),
             transport,
             embedding_options: crate::llm::EmbeddingOptions::from(&self.settings.model),
-            limits: self.query_limits,
+            limits,
             clock: crate::ask::agent::Clock::System,
         };
         crate::ask::run_tool(tool, arguments, &deps, None, context).await
@@ -324,7 +333,7 @@ impl NativeRunner {
         arguments: Map<String, Value>,
         context: &Context,
     ) -> Result<Value, EngineError> {
-        if matches!(tool, "ask" | "deep_research" | "resolve_wiki") {
+        if crate::ask::QUERY_TOOLS.contains(&tool) {
             let arguments = prepare_arguments(tool, arguments)?;
             context.checkpoint()?;
             return self.query(tool, &arguments, context).await;
@@ -831,6 +840,30 @@ mod tests {
             runner.query_pool.options().get_max_connections(),
             crate::config::DEFAULT_QUERY_POOL_SIZE
         );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_bad_query_limit_fails_only_the_agents() {
+        // The worker answers at once: generate_wiki does not read the
+        // query limits.
+        let (mut runner, root) = scripted("#!/bin/sh\necho '{\"result\": {\"ok\": true}}'\n");
+        let refused = EngineError::new(
+            ErrorType::Value,
+            "DEEPWIKI_ASK_MAX_ITERATIONS must be a whole number, got 'x'",
+        );
+        runner.query_limits = Err(refused.clone());
+        let (context, _receiver, _stop) = context();
+        for tool in ["ask", "deep_research"] {
+            let mut arguments = Map::new();
+            arguments.insert("question".to_owned(), Value::String("q".to_owned()));
+            let outcome = runner.run(tool, arguments, &context).await;
+            assert_eq!(outcome.err(), Some(refused.clone()), "{tool}");
+        }
+        let resolved = runner.run("resolve_wiki", Map::new(), &context).await;
+        assert_ne!(resolved.err(), Some(refused.clone()));
+        let generated = runner.run("generate_wiki", Map::new(), &context).await;
+        assert_ne!(generated.err(), Some(refused));
         let _ = std::fs::remove_dir_all(&root);
     }
 

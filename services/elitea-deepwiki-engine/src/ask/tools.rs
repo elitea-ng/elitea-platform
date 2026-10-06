@@ -35,7 +35,7 @@ use crate::errors::EngineError;
 use crate::runner::StopSignal;
 use std::collections::HashSet;
 
-/// `DEEPWIKI_MAX_DOC_RESULTS`' default.
+/// `DEEPWIKI_MAX_DOC_RESULTS`' default (see [`super::Limits`]).
 pub const MAX_DOC_RESULTS: usize = 3;
 
 /// The ask tool set, in the order the model is offered it.
@@ -78,6 +78,9 @@ pub struct Codebase<'a, S: IndexStore> {
     pub store: &'a S,
     pub embedder: &'a Embedder,
     pub stop: &'a StopSignal,
+    /// `search_codebase`'s documentation results at most
+    /// ([`super::Limits::doc_results`]).
+    pub doc_results: usize,
 }
 
 impl<S: IndexStore> Codebase<'_, S> {
@@ -398,9 +401,13 @@ impl<S: IndexStore> Codebase<'_, S> {
     async fn search_codebase(&self, args: &Args) -> Result<String, EngineError> {
         let query = args.str("query");
         let k = clamp(args.int("k"), 1, 100);
-        let k_doc = k.min(MAX_DOC_RESULTS);
-        let docs = self.repository_docs(query, (k_doc * 4).min(20)).await?;
-        let mut all = self.rerank(query, docs, k_doc).await?;
+        let k_doc = k.min(self.doc_results);
+        let mut all = if k_doc == 0 {
+            Vec::new()
+        } else {
+            let docs = self.repository_docs(query, (k_doc * 4).min(20)).await?;
+            self.rerank(query, docs, k_doc).await?
+        };
         let k_code = k.max(10);
         let graph: Vec<Doc> = self
             .store

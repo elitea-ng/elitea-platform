@@ -347,6 +347,53 @@ async fn a_stop_ends_the_loop_at_the_next_checkpoint() {
 }
 
 #[tokio::test]
+async fn the_document_results_follow_the_limit() {
+    // No recorded fused search: a search of the documents fails the tool,
+    // and the failure names the pool it asked for (`min(k_doc * 4, 20)`).
+    let mut index = common::replay_index();
+    index.hybrid.clear();
+    let embedder = Embedder::Fixed(stand_in_embedding);
+    let stop = StopSignal::default();
+    let raw = json!({"query": "note store save"});
+    let raw = raw.as_object().cloned().unwrap_or_default();
+    let parsed =
+        args::validate(args::params("search_codebase").expect("tool"), &raw).expect("valid");
+    let mut texts = Vec::new();
+    for doc_results in [Limits::default().doc_results, 2, 0] {
+        let codebase = Codebase {
+            store: &index,
+            embedder: &embedder,
+            stop: &stop,
+            doc_results,
+        };
+        texts.push(
+            codebase
+                .run("search_codebase", &parsed)
+                .await
+                .expect("runs")
+                .expect("a text"),
+        );
+    }
+    assert!(
+        texts[0].contains(r#"["note store save",12,30,30]"#),
+        "{}",
+        texts[0]
+    );
+    assert!(
+        texts[1].contains(r#"["note store save",8,30,30]"#),
+        "{}",
+        texts[1]
+    );
+    // 0: no document search at all, only the code results.
+    assert!(
+        texts[2].starts_with("## Search Results for: note store save\n\nFound 10 relevant items:"),
+        "{}",
+        texts[2]
+    );
+    assert!(!texts[2].contains("(vectorstore)"));
+}
+
+#[tokio::test]
 async fn arguments_a_model_steers_are_checked() {
     let index = common::replay_index();
     let embedder = Embedder::Fixed(stand_in_embedding);
@@ -355,6 +402,7 @@ async fn arguments_a_model_steers_are_checked() {
         store: &index,
         embedder: &embedder,
         stop: &stop,
+        doc_results: Limits::default().doc_results,
     };
     let run = |name: &'static str, raw: Value| {
         let codebase = &codebase;

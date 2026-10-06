@@ -876,8 +876,10 @@ ADR-0026 phase 6 (decision 8). The native runner serves these three tools in
 its own process — they are I/O-bound and stop at every model and tool step —
 through `ask::run_tool(tool, &arguments, &QueryDeps { pool, transport,
 embedding_options, limits, clock: Clock::System }, None, context)` after
-`runner::prepare_arguments`. The step limits are read once at start, so a bad
-value fails the start, not a request. Their reads share their own pool of
+`runner::prepare_arguments`. Their limits are read once at start; a value
+that is not a whole number fails every `ask` and `deep_research` with a
+`ValueError` (as Python's `int()` did) and never the start, so
+`generate_wiki` and `resolve_wiki` keep working. Their reads share their own pool of
 `ELITEA_DEEPWIKI_QUERY_POOL_SIZE` connections (default 8, 1 to 256; another
 value fails the start); a query waits up to 30 s for a free connection, so
 the pool also caps their concurrent reads. The delete of a killed worker's
@@ -927,7 +929,11 @@ the parity gate drives.
 * **Limits** (Python enforced none): `DEEPWIKI_ASK_MAX_ITERATIONS`
   (default 8, the budget the ask prompt states) tool calls for `ask`;
   `ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS` (default 15) tool-calling steps
-  and 25 calls per step for deep research; then `tool_choice: none`.
+  and 25 calls per step for deep research; then `tool_choice: none`. Every
+  whole number is accepted, as Python did; one outside 1..=1000 is moved
+  into it, with a warning. `DEEPWIKI_MAX_DOC_RESULTS` (default 3, Python's;
+  moved into 0..=100, 0 searches no documents) caps the documentation
+  results of `search_codebase`.
   Arguments are validated as pydantic did (lax coercions, the same error
   text) and then clamped (`k`, `max_depth`, `max_lines`, JQL `limit`); file
   paths cannot leave the virtual root; the file system holds at most 1 000
