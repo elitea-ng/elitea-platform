@@ -383,3 +383,38 @@ async fn the_shortest_name_ties_break_on_node_id() {
     let shortest = index.shortest_like("box").await.expect("shortest");
     assert_eq!(shortest.map(|n| n.node_id).as_deref(), Some("a-box"));
 }
+
+/// An embedding of the wrong length: pgvector refuses the vector search.
+fn wrong_length_embedding(_: &str) -> Vec<f64> {
+    vec![1.0, 0.0, 0.0]
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_document_search_keeps_the_keyword_results() {
+    let Some(index) = published("ask_doc_search_fails").await else {
+        return;
+    };
+    let embedder = Embedder::Fixed(wrong_length_embedding);
+    let stop = StopSignal::default();
+    let codebase = Codebase {
+        store: &index,
+        embedder: &embedder,
+        stop: &stop,
+        doc_results: Limits::default().doc_results,
+    };
+    let mut raw = serde_json::Map::new();
+    raw.insert(
+        "query".to_owned(),
+        Value::String("note store save".to_owned()),
+    );
+    let parsed =
+        args::validate(args::params("search_codebase").expect("tool"), &raw).expect("valid");
+    let text = codebase
+        .run("search_codebase", &parsed)
+        .await
+        .expect("runs")
+        .unwrap_or_default();
+    assert!(!text.starts_with("Search failed"), "{text}");
+    assert!(text.contains("(unified_db_fts)"), "{text}");
+    assert!(text.contains("`save` (method)"), "{text}");
+}

@@ -442,18 +442,38 @@ async fn a_stop_ends_the_loop_at_the_next_checkpoint() {
 
 #[tokio::test]
 async fn the_document_results_follow_the_limit() {
-    // No recorded fused search: a search of the documents fails the tool,
-    // and the failure names the pool it asked for (`min(k_doc * 4, 20)`).
+    // The fused search answers only for the pool the limit asks for
+    // (`min(k_doc * 4, 20)`): another pool finds no recording, the
+    // document search fails, and only the keyword results remain.
     let mut index = common::replay_index();
+    let recorded = index
+        .hybrid
+        .values()
+        .find(|rows| !rows.is_empty())
+        .cloned()
+        .expect("a recorded fused search");
     index.hybrid.clear();
-    let embedder = Embedder::Fixed(stand_in_embedding);
+    for pool in [12, 8] {
+        index.hybrid.insert(
+            elitea_deepwiki_engine::ask::store::ReplayIndex::hybrid_key(
+                "note store save",
+                pool,
+                30,
+                30,
+            ),
+            recorded.clone(),
+        );
+    }
+    // No embedder: the first `k` documents are kept, so they show.
+    let embedder = Embedder::None;
     let stop = StopSignal::default();
     let raw = json!({"query": "note store save"});
     let raw = raw.as_object().cloned().unwrap_or_default();
     let parsed =
         args::validate(args::params("search_codebase").expect("tool"), &raw).expect("valid");
     let mut texts = Vec::new();
-    for doc_results in [Limits::default().doc_results, 2, 0] {
+    // 3 → pool 12, 2 → pool 8, 1 → pool 4 (not recorded), 0 → no search.
+    for doc_results in [Limits::default().doc_results, 2, 1, 0] {
         let codebase = Codebase {
             store: &index,
             embedder: &embedder,
@@ -468,23 +488,16 @@ async fn the_document_results_follow_the_limit() {
                 .expect("a text"),
         );
     }
-    assert!(
-        texts[0].contains(r#"["note store save",12,30,30]"#),
-        "{}",
-        texts[0]
-    );
-    assert!(
-        texts[1].contains(r#"["note store save",8,30,30]"#),
-        "{}",
-        texts[1]
-    );
-    // 0: no document search at all, only the code results.
-    assert!(
-        texts[2].starts_with("## Search Results for: note store save\n\nFound 10 relevant items:"),
-        "{}",
-        texts[2]
-    );
-    assert!(!texts[2].contains("(vectorstore)"));
+    assert!(texts[0].contains("(vectorstore)"), "{}", texts[0]);
+    assert!(texts[1].contains("(vectorstore)"), "{}", texts[1]);
+    // A failed document search keeps the keyword results, as in Python.
+    for text in &texts[2..] {
+        assert!(
+            text.starts_with("## Search Results for: note store save\n\nFound 10 relevant items:"),
+            "{text}"
+        );
+        assert!(!text.contains("(vectorstore)"), "{text}");
+    }
 }
 
 #[tokio::test]

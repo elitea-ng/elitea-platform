@@ -405,8 +405,17 @@ impl<S: IndexStore> Codebase<'_, S> {
         let mut all = if k_doc == 0 {
             Vec::new()
         } else {
-            let docs = self.repository_docs(query, (k_doc * 4).min(20)).await?;
-            self.rerank(query, docs, k_doc).await?
+            // A failed document search leaves the keyword search below, as
+            // in Python (`research_tools.py` catches each branch); a stop
+            // still ends the tool.
+            match self.repository_docs(query, (k_doc * 4).min(20)).await {
+                Ok(docs) => self.rerank(query, docs, k_doc).await?,
+                Err(error) if error == EngineError::cancelled() => return Err(error),
+                Err(error) => {
+                    tracing::warn!(error = %error, "document search failed; using the keyword search only");
+                    Vec::new()
+                }
+            }
         };
         let k_code = k.max(10);
         let graph: Vec<Doc> = self

@@ -945,7 +945,9 @@ the parity gate drives.
   whole number is accepted, as Python did; one outside 1..=1000 is moved
   into it, with a warning. `DEEPWIKI_MAX_DOC_RESULTS` (default 3, Python's;
   moved into 0..=100, 0 searches no documents) caps the documentation
-  results of `search_codebase`.
+  results of `search_codebase`; a failed document search (for example a
+  query embedding of another length than the wiki's) leaves the keyword
+  results, as in Python.
   Arguments are validated as pydantic did (lax coercions, the same error
   text) and then clamped (`k`, `max_depth`, `max_lines`, JQL `limit`); file
   paths cannot leave the virtual root; the file system holds at most 1 000
@@ -953,6 +955,8 @@ the parity gate drives.
   turn counted (they apply only after the turn). A large result that cannot
   be saved because the file system is full reaches the model cut to the
   eviction size, with a note, never whole.
+  An `edit_file` whose result would pass the byte bound is refused before
+  the result is built.
 * **Stop**: a checkpoint before every model call and every tool; a model
   call aborts at once.
 
