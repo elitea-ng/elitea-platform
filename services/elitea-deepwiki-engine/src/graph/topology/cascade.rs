@@ -67,7 +67,8 @@ impl OrphanStats {
 ///
 /// # Errors
 ///
-/// The store's or the embedder's.
+/// The store's, including a `get_embeddings` answer with the wrong length.
+/// An embedder failure is not an error: that orphan has no vector.
 pub fn resolve_orphans(ctx: &mut Ctx<'_>) -> Result<Value, StoreError> {
     let orphans = find_orphans(ctx.graph, ctx.profile, false);
     let mut stats = OrphanStats {
@@ -91,9 +92,7 @@ pub fn resolve_orphans(ctx: &mut Ctx<'_>) -> Result<Value, StoreError> {
         .collect();
     if !pending.is_empty() {
         // `collect_orphan_embeddings`, then Pass 2 per orphan.
-        let embeddings = ctx.store.get_embeddings(&pending)?;
-        let embeddings: HashMap<&str, Option<Vec<f64>>> =
-            pending.iter().copied().zip(embeddings).collect();
+        let embeddings = stored_embeddings(ctx, &pending)?;
         for &id in &pending {
             let stored = embeddings.get(id).cloned().flatten();
             let hits = super::hybrid::resolve_orphan_hybrid(ctx, id, stored)?;
@@ -174,6 +173,24 @@ pub fn resolve_orphans(ctx: &mut Ctx<'_>) -> Result<Value, StoreError> {
     stats.orphans_remaining = find_orphans(ctx.graph, CalibrationProfile::Legacy, true).len();
     stats.resolved = stats.orphans_found.saturating_sub(stats.orphans_remaining);
     Ok(stats.to_value())
+}
+
+/// `collect_orphan_embeddings`: the stored vector of each of `ids`. An
+/// answer of the wrong length is an error, as in [`Ctx::fetch_rows`]:
+/// pairing it with the ids would shift or drop vectors.
+fn stored_embeddings<'i>(
+    ctx: &mut Ctx<'_>,
+    ids: &[&'i str],
+) -> Result<HashMap<&'i str, Option<Vec<f64>>>, StoreError> {
+    let embeddings = ctx.store.get_embeddings(ids)?;
+    if embeddings.len() != ids.len() {
+        return Err(StoreError::new(format!(
+            "get_embeddings returned {} vectors for {} ids",
+            embeddings.len(),
+            ids.len()
+        )));
+    }
+    Ok(ids.iter().copied().zip(embeddings).collect())
 }
 
 /// One explicit-reference hit (`{"node_id", "_matcher", "_raw_score"}`).
@@ -423,6 +440,216 @@ fn resolve_by_directory(ctx: &mut Ctx<'_>, orphans: &[String]) -> Result<usize, 
 #[allow(clippy::float_cmp)] // bit-exact parity is the point
 mod tests {
     use super::*;
+
+    use crate::graph::topology::{SearchHit, StoredNode, TextEmbedder, TopologyStore};
+    use crate::graph::{CodeGraph, EdgeData, EdgeRow, NodeData};
+
+    /// An index that knows three rows and finds `t` for every search.
+    #[derive(Default)]
+    struct FakeStore {
+        /// `get_embeddings` answers one vector fewer than asked.
+        short_embeddings: bool,
+        /// `search_dense` fails.
+        dense_fails: bool,
+    }
+
+    impl TopologyStore for FakeStore {
+        fn get_nodes(&mut self, ids: &[&str]) -> Result<Vec<Option<StoredNode>>, StoreError> {
+            Ok(ids
+                .iter()
+                .map(|id| {
+                    (["o", "t", "x"].contains(id)).then(|| StoredNode {
+                        symbol_name: if *id == "o" { "Widget" } else { "x" }.to_owned(),
+                        rel_path: format!("src/{id}.py"),
+                        source_text: Some("def widget(): return 42".to_owned()),
+                        ..StoredNode::default()
+                    })
+                })
+                .collect())
+        }
+
+        fn node_count(&mut self) -> Result<u64, StoreError> {
+            Ok(10)
+        }
+
+        fn count_phrase_matches(&mut self, _query: &str) -> Result<u64, StoreError> {
+            Ok(1)
+        }
+
+        fn search_lexical(
+            &mut self,
+            _query: &str,
+            _path_prefix: Option<&str>,
+            _limit: usize,
+        ) -> Result<Vec<SearchHit>, StoreError> {
+            Ok(vec![SearchHit {
+                node_id: "t".to_owned(),
+                rel_path: "src/t.py".to_owned(),
+                fts_rank: Some(-1.0),
+                score_norm: Some(0.9),
+                ..SearchHit::default()
+            }])
+        }
+
+        fn get_embeddings(&mut self, ids: &[&str]) -> Result<Vec<Option<Vec<f64>>>, StoreError> {
+            let answered = ids.len() - usize::from(self.short_embeddings && !ids.is_empty());
+            Ok(vec![None; answered])
+        }
+
+        fn search_dense(
+            &mut self,
+            _embedding: &[f64],
+            _k: usize,
+            _path_prefix: Option<&str>,
+        ) -> Result<Vec<SearchHit>, StoreError> {
+            if self.dense_fails {
+                return Err(StoreError::new("vector index down"));
+            }
+            Ok(vec![SearchHit {
+                node_id: "t".to_owned(),
+                vec_distance: Some(0.1),
+                ..SearchHit::default()
+            }])
+        }
+
+        fn set_hubs(&mut self, _hubs: &[&str]) -> Result<(), StoreError> {
+            Ok(())
+        }
+
+        fn replace_edges(
+            &mut self,
+            _rows: &mut dyn Iterator<Item = EdgeRow>,
+        ) -> Result<u64, StoreError> {
+            Ok(0)
+        }
+
+        fn set_meta(&mut self, _key: &str, _value: &Value) -> Result<(), StoreError> {
+            Ok(())
+        }
+    }
+
+    /// An embedder that always fails, counting the calls.
+    #[derive(Default)]
+    struct FailingEmbedder {
+        calls: usize,
+    }
+
+    impl TextEmbedder for FailingEmbedder {
+        fn embed(&mut self, _text: &str) -> Result<Vec<f64>, StoreError> {
+            self.calls += 1;
+            Err(StoreError::new("model unavailable"))
+        }
+    }
+
+    /// `o` is an orphan with no stored vector; `x → t` makes `t` a target.
+    fn orphan_graph() -> CodeGraph {
+        let mut graph = CodeGraph::new();
+        graph.add_node(
+            "o",
+            NodeData {
+                symbol_name: "Widget".to_owned(),
+                rel_path: "src/o.py".into(),
+                ..NodeData::default()
+            },
+        );
+        for id in ["t", "x"] {
+            graph.add_node(
+                id,
+                NodeData {
+                    symbol_name: id.to_owned(),
+                    rel_path: format!("src/{id}.py").as_str().into(),
+                    ..NodeData::default()
+                },
+            );
+        }
+        graph.add_edge("x", "t", EdgeData::default());
+        graph
+    }
+
+    /// The embedder a run gets.
+    #[derive(Clone, Copy)]
+    enum Model {
+        Absent,
+        Failing,
+        Standin,
+    }
+
+    /// What one `resolve_orphans` run gave.
+    #[derive(Debug, PartialEq)]
+    struct Run {
+        stats: Value,
+        edges: Vec<(String, String, String)>,
+        embed_calls: usize,
+    }
+
+    fn resolve(store: &mut FakeStore, model: Model) -> Result<Run, StoreError> {
+        let mut graph = orphan_graph();
+        let mut failing = FailingEmbedder::default();
+        let mut standin = super::super::replay::StandinEmbedder;
+        let stats = {
+            let embedder: Option<&mut dyn TextEmbedder> = match model {
+                Model::Absent => None,
+                Model::Failing => Some(&mut failing),
+                Model::Standin => Some(&mut standin),
+            };
+            let mut ctx = Ctx::new(&mut graph, store, embedder, CalibrationProfile::Calibrated);
+            resolve_orphans(&mut ctx)?
+        };
+        let edges = graph
+            .edges()
+            .map(|e| {
+                (
+                    e.source.to_owned(),
+                    e.target.to_owned(),
+                    e.data.rel_type.to_string(),
+                )
+            })
+            .collect();
+        Ok(Run {
+            stats,
+            edges,
+            embed_calls: failing.calls,
+        })
+    }
+
+    #[test]
+    fn a_failing_embedder_leaves_the_orphan_without_a_vector() {
+        let failed = resolve(&mut FakeStore::default(), Model::Failing).unwrap();
+        assert!(failed.embed_calls > 0, "the fallback embedding was tried");
+        // The same as having no embedder at all, as in Python.
+        let without = resolve(&mut FakeStore::default(), Model::Absent).unwrap();
+        assert_eq!(
+            (&failed.stats, &failed.edges),
+            (&without.stats, &without.edges)
+        );
+        assert_eq!(failed.stats["hybrid"], 0);
+        // A working embedder does add the hybrid edge.
+        let working = resolve(&mut FakeStore::default(), Model::Standin).unwrap();
+        assert_eq!(working.stats["hybrid"], 1);
+    }
+
+    #[test]
+    fn a_store_failure_still_fails_the_phase() {
+        let mut store = FakeStore {
+            dense_fails: true,
+            ..FakeStore::default()
+        };
+        let error = resolve(&mut store, Model::Standin).unwrap_err();
+        assert_eq!(error, StoreError::new("vector index down"));
+    }
+
+    #[test]
+    fn get_embeddings_of_the_wrong_length_is_an_error() {
+        let mut store = FakeStore {
+            short_embeddings: true,
+            ..FakeStore::default()
+        };
+        let error = resolve(&mut store, Model::Absent).unwrap_err();
+        assert_eq!(
+            error,
+            StoreError::new("get_embeddings returned 1 vectors for 2 ids")
+        );
+    }
 
     #[test]
     fn prefixes_climb_to_the_root() {

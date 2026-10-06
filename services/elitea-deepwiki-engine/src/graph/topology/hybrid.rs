@@ -115,11 +115,13 @@ fn fallback_text(ctx: &Ctx<'_>, id: &str) -> Option<String> {
 }
 
 /// `resolve_orphans_hybrid` for one orphan. `stored` is the orphan's
-/// stored vector (`collect_orphan_embeddings`).
+/// stored vector (`collect_orphan_embeddings`). When there is none and the
+/// embedder fails, the orphan has no vector (a warning is logged) and no
+/// hybrid hits, as in Python.
 ///
 /// # Errors
 ///
-/// The store's or the embedder's.
+/// The store's.
 pub fn resolve_orphan_hybrid(
     ctx: &mut Ctx<'_>,
     id: &str,
@@ -140,7 +142,16 @@ pub fn resolve_orphan_hybrid(
     let embedding = match stored {
         Some(vector) => Some(vector),
         None => match (fallback_text(ctx, id), ctx.embedder.as_deref_mut()) {
-            (Some(text), Some(embedder)) => Some(embedder.embed(&text)?),
+            (Some(text), Some(embedder)) => {
+                let vector = embedder.embed(&text).ok();
+                if vector.is_none() {
+                    // Python's `embedding_fn` failing meant "no vector": the
+                    // orphan goes on to the lexical pass. The error text is
+                    // not logged: a model error can quote its request.
+                    tracing::warn!(node_id = %id, "orphan embedding failed; no vector for it");
+                }
+                vector
+            }
             _ => None,
         },
     };

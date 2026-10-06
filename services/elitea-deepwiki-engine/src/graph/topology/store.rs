@@ -179,7 +179,8 @@ pub trait TextEmbedder {
     ///
     /// # Errors
     ///
-    /// A [`StoreError`] when the model cannot answer. (Python treated a
-    /// failure as "no vector" and went on.)
+    /// A [`StoreError`] when the model cannot answer. Phase 2 then treats
+    /// the orphan as having no vector, logs a warning and goes on, as
+    /// Python did; only index failures fail the phase.
     fn embed(&mut self, text: &str) -> Result<Vec<f64>, StoreError>;
 }
