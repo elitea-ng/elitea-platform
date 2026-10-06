@@ -150,7 +150,14 @@ caller. Each call checks the stop first.
 `elitea-deepwiki-engine worker` (ADR-0026 decision 10). The parent:
 
 - makes `{ELITEA_DEEPWIKI_SCRATCH_PATH}/jobs/job-…` (mode 0700) and removes
-  it after the child ends;
+  it after the child ends, also when the request's reader went away and
+  the supervising task was dropped (a drop guard removes the directory and
+  schedules the build's delete). At `serve` startup it removes every
+  `jobs/*` entry an earlier process left: on Linux their workers died with
+  it (`PR_SET_PDEATHSIG`); on macOS, which has no such signal, an orphaned
+  worker only stops at its next checkpoint (its stdin closed), so the
+  startup clean-up can remove a directory under a worker that is still
+  ending;
 - starts the child with `RAYON_NUM_THREADS` and `MALLOC_ARENA_MAX=2` and
   sends the request on its STDIN (the arguments carry credentials, so never
   `argv` or the environment); stdin stays open and its end stops the child;

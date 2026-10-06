@@ -115,6 +115,96 @@ fn runtime(message: impl Into<String>) -> EngineError {
     EngineError::new(ErrorType::Runtime, message)
 }
 
+/// Remove every entry of `{scratch}/jobs`; see
+/// [`NativeRunner::remove_stale_jobs`]. Returns how many were removed.
+fn remove_stale_jobs(scratch: &Path) -> usize {
+    let jobs = scratch.join("jobs");
+    let Ok(entries) = std::fs::read_dir(&jobs) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let outcome = if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        match outcome {
+            Ok(()) => removed += 1,
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "could not remove a stale job directory");
+            }
+        }
+    }
+    if removed > 0 {
+        tracing::info!(removed, jobs = %jobs.display(), "removed the job directories an earlier run left");
+    }
+    removed
+}
+
+/// One job's clean-up: its scratch directory and, once the child named
+/// it, its build. [`JobGuard::finish`] removes the directory on the normal
+/// path; `Drop` covers a supervising future that was dropped mid-run.
+struct JobGuard {
+    directory: Option<PathBuf>,
+    /// The build the child reported and the parent has not deleted yet.
+    build: Option<String>,
+    pool: PgPool,
+}
+
+impl JobGuard {
+    /// Remove the directory (off the runtime's threads).
+    async fn finish(mut self) {
+        let Some(directory) = self.directory.take() else {
+            return;
+        };
+        let removed = directory.clone();
+        match tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&removed)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                tracing::warn!(directory = %directory.display(), %error, "could not remove the job's scratch directory");
+            }
+            Err(error) => tracing::warn!(%error, "the scratch clean-up task failed"),
+        }
+    }
+}
+
+impl Drop for JobGuard {
+    fn drop(&mut self) {
+        if let Some(directory) = self.directory.take()
+            && let Err(error) = std::fs::remove_dir_all(&directory)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(directory = %directory.display(), %error, "could not remove the job's scratch directory");
+        }
+        if let Some(build) = self.build.take() {
+            match tokio::runtime::Handle::try_current() {
+                Ok(handle) => {
+                    let pool = self.pool.clone();
+                    handle.spawn(async move { delete_left_build(&pool, &build).await });
+                }
+                Err(_) => {
+                    tracing::warn!(build = %build, "no runtime to delete the wiki worker's build; the sweep removes it");
+                }
+            }
+        }
+    }
+}
+
+/// Delete the build a child left, logging the outcome.
+async fn delete_left_build(pool: &PgPool, build_id: &str) {
+    match delete_build(pool, build_id).await {
+        Ok(true) => {
+            tracing::info!(build = %build_id, "deleted the build the wiki worker left");
+        }
+        Ok(false) => {}
+        Err(error) => {
+            tracing::warn!(build = %build_id, %error, "could not delete the wiki worker's build; the sweep removes it");
+        }
+    }
+}
+
 /// The error of a child whose output cannot be read.
 fn unreadable(error: &str) -> EngineError {
     runtime(format!("The wiki worker's output is unreadable: {error}"))
@@ -204,16 +294,30 @@ impl NativeRunner {
                     self.settings.ingest.scratch_path.display()
                 ))
             })?;
-        let outcome = self.supervise(&directory, arguments, context).await;
-        let removed = directory.clone();
-        match tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&removed)).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(directory = %directory.display(), %error, "could not remove the job's scratch directory");
-            }
-            Err(error) => tracing::warn!(%error, "the scratch clean-up task failed"),
-        }
+        // Cleans up also when this future is dropped (the reader went
+        // away mid-run): the child is killed (`kill_on_drop`), the guard
+        // removes the directory and schedules the build's delete.
+        let mut guard = JobGuard {
+            directory: Some(directory.clone()),
+            build: None,
+            pool: self.pool.clone(),
+        };
+        let outcome = self
+            .supervise(&directory, arguments, context, &mut guard)
+            .await;
+        guard.finish().await;
         outcome
+    }
+
+    /// Remove the job directories a previous process of this engine left
+    /// under `{scratch}/jobs` (it was killed before it could). Called once
+    /// at `serve` startup, before any job starts. Their workers are gone:
+    /// on Linux a worker gets SIGKILL when its parent dies
+    /// (`PR_SET_PDEATHSIG`); on macOS an orphaned worker stops at its next
+    /// checkpoint when its stdin closes, so a directory removed under it
+    /// fails it there.
+    pub fn remove_stale_jobs(&self) {
+        remove_stale_jobs(&self.settings.ingest.scratch_path);
     }
 
     fn command(&self) -> Command {
@@ -256,6 +360,7 @@ impl NativeRunner {
         directory: &Path,
         arguments: Map<String, Value>,
         context: &Context,
+        guard: &mut JobGuard,
     ) -> Result<Value, EngineError> {
         let mut child = self
             .command()
@@ -297,7 +402,6 @@ impl NativeRunner {
         let mut stopped = false;
         let mut kill_at: Option<tokio::time::Instant> = None;
         let mut lines_open = true;
-        let mut build_id: Option<String> = None;
         let mut last: Option<Result<Value, EngineError>> = None;
         let mut killed_by_parent = false;
         let mut cut_off: Option<String> = None;
@@ -306,7 +410,7 @@ impl NativeRunner {
                 message = lines.recv(), if lines_open => match message {
                     None => lines_open = false,
                     Some(Ok(line)) => {
-                        relay(line, context, stopped, &mut build_id, &mut last);
+                        relay(line, context, stopped, &mut guard.build, &mut last);
                     }
                     Some(Err(ReadFailure::Unreadable(error))) => {
                         tracing::error!(%error, "the wiki worker's output is unreadable; killing it");
@@ -340,7 +444,7 @@ impl NativeRunner {
             let drain = async {
                 while let Some(message) = lines.recv().await {
                     match message {
-                        Ok(line) => relay(line, context, stopped, &mut build_id, &mut last),
+                        Ok(line) => relay(line, context, stopped, &mut guard.build, &mut last),
                         // The same as in the loop above (the child has
                         // ended, so there is nothing to kill).
                         Err(ReadFailure::Unreadable(error)) => {
@@ -378,16 +482,8 @@ impl NativeRunner {
                 Err(exit_failure(&self.settings.worker, status, &facts))
             }
         };
-        if let Some(build_id) = build_id {
-            match delete_build(&self.pool, &build_id).await {
-                Ok(true) => {
-                    tracing::info!(build = %build_id, "deleted the build the wiki worker left");
-                }
-                Ok(false) => {}
-                Err(error) => {
-                    tracing::warn!(build = %build_id, %error, "could not delete the wiki worker's build; the sweep removes it");
-                }
-            }
+        if let Some(build_id) = guard.build.take() {
+            delete_left_build(&self.pool, &build_id).await;
         }
         outcome
     }
@@ -767,6 +863,49 @@ exit 0
             &ExitFacts::default(),
         );
         assert!(error.message.contains("ended without a result"), "{error}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_dropped_run_removes_its_scratch_directory() {
+        let (runner, root) = scripted(
+            "#!/bin/sh\necho '{\"build\": \"b-dropped\"}'\necho '{\"thinking\": \"working\"}'\nexec sleep 60\n",
+        );
+        let (context, mut receiver, _stop) = context();
+        let task = {
+            let runner = runner.clone();
+            tokio::spawn(async move { runner.run("generate_wiki", Map::new(), &context).await })
+        };
+        loop {
+            match receiver.recv().await {
+                Some(super::super::Line::Thinking(text)) if text == "working" => break,
+                Some(_) => {}
+                None => panic!("the run ended before the worker spoke"),
+            }
+        }
+        let jobs = root.join("scratch/jobs");
+        assert_eq!(std::fs::read_dir(&jobs).map_or(0, Iterator::count), 1);
+        // The reader went away: the supervising future is dropped.
+        task.abort();
+        let _ = task.await;
+        assert_eq!(std::fs::read_dir(&jobs).map_or(0, Iterator::count), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn stale_jobs_are_removed_at_startup() {
+        let root =
+            std::env::temp_dir().join(format!("dw-stale-{}-{}", std::process::id(), new_boot_id()));
+        let jobs = root.join("jobs");
+        std::fs::create_dir_all(jobs.join("job-old/clone/src")).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(jobs.join("job-old/clone/src/a.py"), "x").unwrap_or_else(|e| panic!("{e}"));
+        std::fs::create_dir_all(jobs.join("job-older")).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(jobs.join("stray"), "x").unwrap_or_else(|e| panic!("{e}"));
+        std::fs::write(root.join("keep"), "x").unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(remove_stale_jobs(&root), 3);
+        assert_eq!(std::fs::read_dir(&jobs).map_or(9, Iterator::count), 0);
+        assert!(root.join("keep").exists(), "only the jobs are removed");
+        assert_eq!(remove_stale_jobs(&root.join("missing")), 0);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]
