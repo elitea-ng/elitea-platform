@@ -1,9 +1,11 @@
 import { useState } from 'react';
-import { FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Spacing } from '@/constants/theme';
+import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
 import type { AgentOption } from '@/features/chat/messageModel';
+import { LockAwareModal } from '@/security/lock/LockAwareModal';
 
 /**
  * "To: Research Agent ▾" above the composer when the conversation has more
@@ -30,14 +32,14 @@ export function TargetChip({
         accessibilityHint="Chooses which agent answers"
         onPress={() => setOpen(true)}
         style={[styles.chip, { borderColor: palette.border, backgroundColor: palette.backgroundElement }]}>
-        <Text numberOfLines={1} style={[styles.chipText, { color: palette.text }]}>
-          To: <Text style={styles.bold}>{name(current)}</Text> ▾
+        <Text maxFontSizeMultiplier={FONT_SCALE.control} numberOfLines={1} style={[styles.chipText, { color: palette.text }]}>
+          To: <Text maxFontSizeMultiplier={FONT_SCALE.control} style={styles.bold}>{name(current)}</Text> ▾
         </Text>
       </Pressable>
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+      <LockAwareModal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <Pressable accessibilityLabel="Close" style={styles.backdrop} onPress={() => setOpen(false)}>
           <View style={[styles.sheet, { backgroundColor: palette.background, borderColor: palette.border }]}>
-            <Text accessibilityRole="header" style={[styles.title, { color: palette.text }]}>
+            <Text maxFontSizeMultiplier={FONT_SCALE.control} accessibilityRole="header" style={[styles.title, { color: palette.text }]}>
               Send to
             </Text>
             <FlatList
@@ -54,15 +56,15 @@ export function TargetChip({
                       setOpen(false);
                     }}
                     style={styles.row}>
-                    <Text style={[styles.rowText, { color: palette.text, fontWeight: selected ? '700' : '400' }]}>{name(item)}</Text>
-                    {selected ? <Text style={{ color: palette.accent }}>✓</Text> : null}
+                    <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.rowText, { color: palette.text, fontWeight: selected ? '700' : '400' }]}>{name(item)}</Text>
+                    {selected ? <Text maxFontSizeMultiplier={FONT_SCALE.control} style={{ color: palette.accent }}>✓</Text> : null}
                   </Pressable>
                 );
               }}
             />
           </View>
         </Pressable>
-      </Modal>
+      </LockAwareModal>
     </>
   );
 }

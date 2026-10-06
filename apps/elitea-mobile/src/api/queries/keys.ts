@@ -14,4 +14,8 @@ export const queryKeys = {
   notifications: (projectId: number) => ['p', projectId, 'notifications'] as const,
   /** Persisted tool calls of a project's conversations (listMessageTraces), keyed below by conversation and groups. */
   traces: (projectId: number) => ['p', projectId, 'traces'] as const,
+  /** The caller's like/dislike per answer (client contract 1.3), keyed below by message uuid. */
+  feedback: (projectId: number) => ['p', projectId, 'feedback'] as const,
+  /** Recommended agents for the empty new-chat screen (client contract 1.3). */
+  recommendations: (projectId: number) => ['p', projectId, 'recommendations'] as const,
 };

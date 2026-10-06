@@ -1,9 +1,10 @@
-import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { extensionOf } from '@/features/chat/attachments/prepare';
 import type { ChatAttachment } from '@/features/chat/messageModel';
+import { LockAwareModal } from '@/security/lock/LockAwareModal';
 
 /** How many thumbnails show before "+n". */
 export const VISIBLE_THUMBNAILS = 4;
@@ -77,14 +78,14 @@ export function AttachmentStrip({
 /** A full-screen view of a downloaded image; its temporary file is deleted on close. */
 export function ImageViewer({ uri, name, onClose }: { uri: string | null; name: string; onClose: () => void }) {
   return (
-    <Modal visible={uri !== null} animationType="fade" onRequestClose={onClose} presentationStyle="fullScreen">
+    <LockAwareModal visible={uri !== null} animationType="fade" onRequestClose={onClose} presentationStyle="fullScreen">
       <View style={styles.viewer}>
         {uri ? <Image source={{ uri }} style={styles.full} resizeMode="contain" accessibilityLabel={`Image ${name}`} /> : null}
         <Pressable accessibilityRole="button" accessibilityLabel="Close" onPress={onClose} style={styles.close} hitSlop={12}>
           <Text style={styles.closeText}>Done</Text>
         </Pressable>
       </View>
-    </Modal>
+    </LockAwareModal>
   );
 }
 

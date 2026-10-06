@@ -5,6 +5,8 @@ import type { ReactNode } from 'react';
 
 import { ToolActivity, formatDuration, groupByAgent, toolLabel, toolsSummary } from '@/features/chat/ToolCalls';
 import { ToolDetailSheet } from '@/features/chat/ToolDetailSheet';
+import { resetPolicy, setPolicy, STRICT_DEFAULTS } from '@/security/policy';
+import { selectableTexts } from '@/test/selectable';
 import type { ToolStep } from '@/features/chat/toolActivity';
 
 jest.mock('expo-clipboard', () => ({ setStringAsync: jest.fn(async () => true) }));
@@ -97,6 +99,19 @@ describe('ToolDetailSheet', () => {
     expect(screen.getByText('{\n  "items": 2\n}')).toBeTruthy();
     await fireEvent.press(screen.getByLabelText('Copy output'));
     expect(Clipboard.setStringAsync).toHaveBeenCalledWith('{\n  "items": 2\n}');
+  });
+
+  it('allow_share_out off: no Copy, and the text is not selectable', async () => {
+    setPolicy({ ...STRICT_DEFAULTS, allow_share_out: false }, 'server');
+    try {
+      await render(<ToolDetailSheet step={step('a')} projectId={7} onClose={jest.fn()} />, { wrapper });
+      expect(screen.getByText('{\n  "state": "open"\n}')).toBeTruthy();
+      expect(screen.queryByLabelText('Copy input')).toBeNull();
+      expect(selectableTexts(screen.toJSON())).toEqual([]);
+    } finally {
+      screen.unmount();
+      resetPolicy();
+    }
   });
 
   it('says when the output was cut or did not all arrive', async () => {

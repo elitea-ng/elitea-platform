@@ -4,6 +4,7 @@ import { useMarkdown } from 'react-native-marked';
 
 import { usePalette } from '@/constants/use-palette';
 import { SafeRenderer } from '@/features/markdown/SafeRenderer';
+import { useShareOut } from '@/security/policy';
 import type { LinkOpener } from '@/features/markdown/links';
 
 export interface MarkdownProps {
@@ -42,9 +43,10 @@ export function Markdown({ value, streaming = false, throttleMs = 50, openLink }
   const palette = usePalette();
   const colorScheme = useColorScheme();
   const shown = useThrottled(value, throttleMs, streaming);
+  const selectable = useShareOut();
   const renderer = useMemo(
-    () => new SafeRenderer({ openLink, chipStyle: { color: palette.accent, fontSize: 14 } }),
-    [openLink, palette.accent],
+    () => new SafeRenderer({ openLink, chipStyle: { color: palette.accent, fontSize: 14 }, selectable }),
+    [openLink, palette.accent, selectable],
   );
   const nodes = useMarkdown(shown, {
     renderer,

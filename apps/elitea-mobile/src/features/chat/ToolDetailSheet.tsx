@@ -1,13 +1,16 @@
 import * as Clipboard from 'expo-clipboard';
 import { useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { useMessageTraceDetail, type PersistedToolStep } from '@/api/queries/messageTraces';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
+import { useModalAnimation } from '@/features/a11y/motion';
 import { toolLabel } from '@/features/chat/ToolCalls';
 import { prettyJson, type ToolStep } from '@/features/chat/toolActivity';
 import { MONOSPACE_FONT } from '@/features/markdown/Markdown';
+import { useShareOut } from '@/security/policy';
+import { LockAwareModal } from '@/security/lock/LockAwareModal';
 
 type Tab = 'input' | 'output';
 
@@ -17,7 +20,8 @@ function isPersisted(step: ToolStep): step is PersistedToolStep {
 
 /**
  * One tool call's inputs and output, in a sheet: Input/Output tabs,
- * selectable monospace text (JSON pretty-printed), Copy, and a banner when
+ * selectable monospace text (JSON pretty-printed), Copy (both only when the
+ * workspace allows sharing out), and a banner when
  * the text was cut to the in-memory cap or the output is incomplete. A
  * persisted call's I/O is fetched only now (getMessageTrace).
  */
@@ -30,10 +34,11 @@ export function ToolDetailSheet({
   projectId: number | null;
   onClose: () => void;
 }) {
+  const animation = useModalAnimation('slide');
   return (
-    <Modal visible={step !== null} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+    <LockAwareModal visible={step !== null} animationType={animation} presentationStyle="pageSheet" onRequestClose={onClose}>
       {step ? <SheetBody step={step} projectId={projectId} onClose={onClose} /> : null}
-    </Modal>
+    </LockAwareModal>
   );
 }
 
@@ -63,6 +68,8 @@ function SheetBody({ step, projectId, onClose }: { step: ToolStep; projectId: nu
       : null,
   ].filter((b): b is string => b !== null);
   const loading = isPersisted(step) && detail.isLoading;
+  // allow_share_out off: no Copy, and no system selection menu either.
+  const shareOut = useShareOut();
   const empty = loading ? null : detail.error ? "Couldn't load this tool call." : remote === null && isPersisted(step) ? 'Not available on this workspace.' : 'Nothing to show.';
 
   return (
@@ -103,14 +110,14 @@ function SheetBody({ step, projectId, onClose }: { step: ToolStep; projectId: nu
       {loading ? <ActivityIndicator style={styles.loading} color={palette.accent} /> : null}
       <ScrollView style={[styles.body, { borderColor: palette.border }]} contentContainerStyle={styles.bodyContent}>
         {shown !== null && shown !== '' ? (
-          <Text selectable style={[styles.code, { color: palette.text }]}>
+          <Text selectable={shareOut} style={[styles.code, { color: palette.text }]}>
             {shown}
           </Text>
         ) : empty ? (
           <Text style={[styles.sub, { color: palette.textSecondary }]}>{empty}</Text>
         ) : null}
       </ScrollView>
-      {shown ? (
+      {shown && shareOut ? (
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={tab === 'input' ? 'Copy input' : 'Copy output'}

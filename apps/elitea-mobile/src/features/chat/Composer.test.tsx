@@ -83,3 +83,57 @@ describe('peopleSuggestions', () => {
     expect(peopleSuggestions([], '')).toEqual([]);
   });
 });
+
+// Client contract 1.3: while an answer streams, Send becomes Stop (server cancel).
+describe('Composer Stop', () => {
+  it('replaces Send with Stop while busy, and shows why a stop failed', async () => {
+    const onStop = jest.fn(async () => ({ problem: "Couldn't stop the answer. Try again.", restoreText: null }));
+    await render(<Composer busy onSend={() => null} onStop={onStop} />);
+    expect(screen.queryByLabelText('Send')).toBeNull();
+    await fireEvent.press(screen.getByRole('button', { name: 'Stop answer' }));
+    expect(onStop).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent("Couldn't stop the answer. Try again."));
+  });
+
+  it('a stop before any output removed the question on the server: its text comes back to the composer', async () => {
+    const onStop = jest.fn(async () => ({ problem: null, restoreText: 'Hello there show me code' }));
+    const view = await render(<Composer busy onSend={() => null} onStop={onStop} />);
+    await fireEvent.press(screen.getByRole('button', { name: 'Stop answer' }));
+    await waitFor(() => expect(screen.getByLabelText('Message').props.value).toBe('Hello there show me code'));
+    expect(screen.getByText(/Stopped before an answer/)).toBeTruthy();
+    // The answer has ended: Send is back, with the restored text.
+    await view.rerender(<Composer busy={false} onSend={() => null} onStop={onStop} />);
+    expect(screen.getByRole('button', { name: 'Send' })).not.toBeDisabled();
+  });
+
+  it('files that went with the removed question are named: they must be attached again', async () => {
+    const onStop = jest.fn(async () => ({ problem: null, restoreText: 'see attached', lostAttachments: ['report.pdf', 'chart.png'] }));
+    await render(<Composer busy onSend={() => null} onStop={onStop} />);
+    await fireEvent.press(screen.getByRole('button', { name: 'Stop answer' }));
+    await waitFor(() => expect(screen.getByLabelText('Message').props.value).toBe('see attached'));
+    expect(screen.getByRole('alert')).toHaveTextContent('Stopped before an answer. Your message is back here; attach report.pdf and chart.png again to send them.');
+  });
+
+  it('an attachment-only message: nothing to put back but the files to attach again', async () => {
+    const onStop = jest.fn(async () => ({ problem: null, restoreText: '', lostAttachments: ['scan.jpg'] }));
+    await render(<Composer busy onSend={() => null} onStop={onStop} />);
+    await fireEvent.press(screen.getByRole('button', { name: 'Stop answer' }));
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Stopped before an answer. The message was removed; attach scan.jpg again to send it.'));
+    expect(screen.getByLabelText('Message').props.value).toBe('');
+  });
+
+  it('never overwrites what the user typed meanwhile', async () => {
+    const onStop = jest.fn(async () => ({ problem: null, restoreText: 'old question' }));
+    await render(<Composer busy onSend={() => null} onStop={onStop} />);
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'new draft');
+    await fireEvent.press(screen.getByRole('button', { name: 'Stop answer' }));
+    await waitFor(() => expect(onStop).toHaveBeenCalled());
+    expect(screen.getByLabelText('Message').props.value).toBe('new draft');
+  });
+
+  it('keeps a disabled Send while busy when stopping is not offered (a server before 1.3)', async () => {
+    await render(<Composer busy onSend={() => null} onStop={null} />);
+    expect(screen.queryByRole('button', { name: 'Stop answer' })).toBeNull();
+    expect(screen.getByLabelText('Send')).toBeDisabled();
+  });
+});

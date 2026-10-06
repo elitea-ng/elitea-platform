@@ -48,6 +48,11 @@ function mark<T extends object>(value: T): T {
   return value;
 }
 
+/** Tests: make `value` look like a device copy served in place of the workspace's answer. */
+export function __markOfflineCopyForTests<T extends object>(value: T): T {
+  return mark(value);
+}
+
 export function isOfflineCopy(value: unknown): boolean {
   return typeof value === 'object' && value !== null && offlineCopies.has(value);
 }

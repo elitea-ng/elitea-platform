@@ -7,10 +7,11 @@ import { migrate } from '@/db/migrations';
 import { offlineStore } from '@/db/offlineStore';
 import { Db } from '@/db/sql';
 import { clearLiveTurns, getLiveTurn, setLiveTurn, turnKey, type TurnController } from '@/features/chat/turnController';
-import { useTurn } from '@/features/chat/useTurn';
+import { ATTACHMENT_ONLY_TEXT, useTurn } from '@/features/chat/useTurn';
 import { __setOnlineForTests } from '@/lib/network';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
 import { outboxDrainer } from '@/sync/appOutbox';
+import { __markOfflineCopyForTests } from '@/sync/offlineReads';
 import { enqueue, listOutbox } from '@/sync/outbox';
 import { FAKE_ORIGIN, fakeServer } from '@/test/fakeServer';
 import { openNodeSqlite } from '@/test/nodeSqlite';
@@ -183,5 +184,156 @@ describe('useTurn settling', () => {
 
     expect(queries!.getQueryState(conversation)?.isInvalidated).toBe(true);
     expect(queries!.getQueryState(traces)?.isInvalidated).toBe(true);
+  });
+});
+
+describe('useTurn.stop', () => {
+  const Q = '3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b';
+  const conversation = ['p', P, 'conversation', '42'];
+  function streaming(groupsAfterStop: { uuid: string }[] | ((c: QueryClient) => void), extra: Record<string, unknown> = {}) {
+    const snapshot = {
+      questionId: Q,
+      userText: 'stop me',
+      settled: false,
+      queued: false,
+      continuation: false,
+      regeneration: null,
+      execution: { responseMessageId: 'aa5ea578-4aae-55a8-a361-08dae0136a9e' },
+      turn: { phase: 'streaming', content: '' },
+      attachmentNames: [],
+      ...extra,
+    };
+    const c = {
+      getSnapshot: () => snapshot,
+      subscribe: () => () => {},
+      reattach: async () => {},
+      detach: () => {},
+      // The server stop, then the transcript as the refetch reads it.
+      stop: async () => {
+        if (typeof groupsAfterStop === 'function') groupsAfterStop(queries!);
+        else queries!.setQueryData(conversation, { id: 42, message_groups: groupsAfterStop });
+        return 'stopped';
+      },
+    } as unknown as TurnController;
+    setLiveTurn(turnKey(P, UUID), c);
+  }
+
+  it('a run stopped before any output loses its question on the server: the text is handed back', async () => {
+    streaming([]);
+    const { result } = await renderTurn();
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.stop();
+    });
+    expect(outcome).toEqual({ problem: null, restoreText: 'stop me', lostAttachments: [] });
+  });
+
+  it('a question that is still in the transcript (partial output kept) is not handed back', async () => {
+    streaming([{ uuid: Q }, { uuid: 'aa5ea578-4aae-55a8-a361-08dae0136a9e' }]);
+    const { result } = await renderTurn();
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.stop();
+    });
+    expect(outcome).toEqual({ problem: null, restoreText: null, lostAttachments: [] });
+  });
+
+  // The question is missing from the cache, but the cache is not the server's answer
+  // after the stop: never conclude "removed" (the user would send it twice).
+  async function stopOutcome() {
+    const { result } = await renderTurn();
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.stop();
+    });
+    return outcome;
+  }
+
+  it('the transcript refetch after the stop failed (5xx, connection lost): nothing is handed back', async () => {
+    queries!.setQueryData(conversation, { id: 42, message_groups: [] });
+    streaming((c) => {
+      c.getQueryCache().find({ queryKey: conversation })!.setState({ status: 'error', error: new Error('503'), fetchStatus: 'idle' });
+    });
+    expect(await stopOutcome()).toEqual({ problem: null, restoreText: null, lostAttachments: [] });
+  });
+
+  it('the refetch fell back to the device copy: nothing is handed back', async () => {
+    streaming((c) => {
+      c.setQueryData(conversation, __markOfflineCopyForTests({ id: 42, message_groups: [] }));
+    });
+    expect(await stopOutcome()).toEqual({ problem: null, restoreText: null, lostAttachments: [] });
+  });
+
+  it('the cached transcript predates the stop (no refetch ran): nothing is handed back', async () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+    queries!.setQueryData(conversation, { id: 42, message_groups: [] });
+    now.mockReturnValue(2_000);
+    streaming(() => {});
+    expect(await stopOutcome()).toEqual({ problem: null, restoreText: null, lostAttachments: [] });
+  });
+
+  it('files sent with the stopped question are named, so the composer can ask for them again', async () => {
+    streaming([], { attachmentNames: ['report.pdf', 'chart.png'] });
+    expect(await stopOutcome()).toEqual({ problem: null, restoreText: 'stop me', lostAttachments: ['report.pdf', 'chart.png'] });
+  });
+
+  it('an attachment-only message is handed back as no text (not the "(attachment)" placeholder) plus its files', async () => {
+    streaming([], { userText: ATTACHMENT_ONLY_TEXT, attachmentNames: ['scan.jpg'] });
+    expect(await stopOutcome()).toEqual({ problem: null, restoreText: '', lostAttachments: ['scan.jpg'] });
+  });
+
+  it('a continuation has no message of its own to hand back', async () => {
+    streaming([], { continuation: true, userText: '' });
+    const { result } = await renderTurn();
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.stop();
+    });
+    expect(outcome).toEqual({ problem: null, restoreText: null, lostAttachments: [] });
+  });
+});
+
+describe('useTurn.canStop', () => {
+  function live(extra: Record<string, unknown>) {
+    const snapshot = {
+      questionId: '3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b',
+      userText: '',
+      settled: false,
+      queued: false,
+      continuation: false,
+      regeneration: null,
+      execution: { responseMessageId: 'aa5ea578-4aae-55a8-a361-08dae0136a9e' },
+      turn: { phase: 'streaming', content: '' },
+      attachmentNames: [],
+      ...extra,
+    };
+    setLiveTurn(turnKey(P, UUID), {
+      getSnapshot: () => snapshot,
+      subscribe: () => () => {},
+      reattach: async () => {},
+      detach: () => {},
+    } as unknown as TurnController);
+  }
+  const REGEN = { answerUuid: 'aa5ea578-4aae-55a8-a361-08dae0136a9e', regenerationId: '1b7e5d3a-1c2f-4e6a-8b9d-0a1b2c3d4e5f' };
+
+  it('a send can be stopped as soon as it streams', async () => {
+    live({});
+    const { result } = await renderTurn();
+    expect(result.current.canStop).toBe(true);
+  });
+
+  // On the server a regeneration stopped before any output is removed with
+  // its question, and that deletes the original exchange (question and the
+  // old answer), captured on zefir-wave main d6f572dbd.
+  it('a regeneration cannot be stopped before its first output', async () => {
+    live({ regeneration: REGEN });
+    const { result } = await renderTurn();
+    expect(result.current.canStop).toBe(false);
+  });
+
+  it('a regeneration can be stopped once it has written something (the partial answer is kept)', async () => {
+    live({ regeneration: REGEN, turn: { phase: 'streaming', content: 'MOCK: par' } });
+    const { result } = await renderTurn();
+    expect(result.current.canStop).toBe(true);
   });
 });

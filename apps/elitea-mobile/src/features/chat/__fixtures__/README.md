@@ -5,7 +5,21 @@ These `.sse` files are test **data**: byte streams in the server's
 blank line; `: heartbeat` comments). The chat reducer and the stream tests are
 driven from them.
 
-## Provenance (read this before trusting them)
+## Captured transcripts
+
+`regenerate-answer.sse` and `cancelled.sse` are **captured**, verbatim, from
+the zefir-wave stack on 2026-10-06 (elitea-platform main `22403f640`, the
+Python worker, the offline mock LLM that echoes the prompt as `MOCK: …`):
+
+- `regenerate-answer.sse`: the stream of a `regenerateChatMessage`. Every
+  frame carries `execution_generation` equal to the request's
+  `regeneration_id`, and so does the rewritten answer's `meta` afterwards.
+- `cancelled.sse`: a `[[mock:slow]]` answer stopped with `DELETE
+  /elitea_core/task/prompt_lib/{project_id}/{response_message_id}` (204)
+  after a few chunks. The stream ends with `execution.failed`
+  `{"code":"CANCELLED", "retryable": false}`.
+
+## Provenance of the synthesised ones (read this before trusting them)
 
 They are **synthesised, not captured**. When they were written (2026-10-04)
 no Elitea stack with a model was running on the authoring machine, so the

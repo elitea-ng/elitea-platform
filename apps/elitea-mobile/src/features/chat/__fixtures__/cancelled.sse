@@ -1,0 +1,42 @@
+: fixture cancelled.sse: CAPTURED 2026-10-06 from the zefir-wave stack (main 22403f640): a [[mock:slow]] answer stopped with DELETE /elitea_core/task/prompt_lib/{project}/{response_message_id} (204) after a few chunks; the stream ends with execution.failed CANCELLED
+
+: connected
+
+id: 90
+event: execution.node_event
+data: {"type":"agent_start","stream_id":"9bb96505-d0fb-4473-be67-4884de5047d3","message_id":"aa5ea578-4aae-55a8-a361-08dae0136a9e","question_id":null,"content":null,"thinking":null,"response_metadata":{"invoked_skills":[]},"references":[],"sio_event":"chat_predict","created_at":"2026-10-06T21:00:28.848107+00:00","parent_message_id":null,"agent_name":null,"execution_generation":"f6624e9f-552a-4a26-95a4-d0ceaf87d74c"}
+
+id: 91
+event: execution.node_event
+data: {"type":"agent_on_transitional_edge","stream_id":"9bb96505-d0fb-4473-be67-4884de5047d3","message_id":"aa5ea578-4aae-55a8-a361-08dae0136a9e","question_id":null,"content":null,"thinking":null,"response_metadata":{"name":"on_transitional_edge","run_id":"01a11304-975d-7eb3-91ec-724661ff454c","tool_run_id":"01a11304-975d-7eb3-91ec-724661ff454c","metadata":{"thread_id":"9bb96505-d0fb-4473-be67-4884de5047d3"},"datetime":"2026-10-06T21:00:30.429289+00:00","next_step":"END","state":{"input":"Show me code:\n```python\nprint('hi')\n```\nthanks","state_types":{"messages":"list"},"context_info":{"message_count":0,"token_count":0,"summarized":false},"hitl_decisions":[],"parallel_tasks":{}},"state_projection":{"omitted_duplicate_fields":["messages"]}},"references":[],"sio_event":"chat_predict","created_at":"2026-10-06T21:00:30.429328+00:00","parent_message_id":null,"agent_name":null,"execution_generation":"f6624e9f-552a-4a26-95a4-d0ceaf87d74c"}
+
+id: 92
+event: execution.node_event
+data: {"type":"agent_on_transitional_edge","stream_id":"9bb96505-d0fb-4473-be67-4884de5047d3","message_id":"aa5ea578-4aae-55a8-a361-08dae0136a9e","question_id":null,"content":null,"thinking":null,"response_metadata":{"name":"on_transitional_edge","run_id":"01a11304-9794-7180-a6e0-25e7ed475f9c","tool_run_id":"01a11304-9794-7180-a6e0-25e7ed475f9c","metadata":{"thread_id":"9bb96505-d0fb-4473-be67-4884de5047d3"},"datetime":"2026-10-06T21:00:30.484211+00:00","next_step":"END","state":{"context_info":null,"input":"Show me code:\n```python\nprint('hi')\n```\nthanks","state_types":{"messages":"list"},"hitl_decisions":[],"parallel_tasks":{}},"state_projection":{"omitted_duplicate_fields":["messages"]}},"references":[],"sio_event":"chat_predict","created_at":"2026-10-06T21:00:30.484253+00:00","parent_message_id":null,"agent_name":null,"execution_generation":"f6624e9f-552a-4a26-95a4-d0ceaf87d74c"}
+
+id: 93
+event: execution.node_event
+data: {"type":"agent_on_transitional_edge","stream_id":"9bb96505-d0fb-4473-be67-4884de5047d3","message_id":"aa5ea578-4aae-55a8-a361-08dae0136a9e","question_id":null,"content":null,"thinking":null,"response_metadata":{"name":"on_transitional_edge","run_id":"01a11304-97c1-71e3-9eb4-85f23b6e2924","tool_run_id":"01a11304-97c1-71e3-9eb4-85f23b6e2924","metadata":{"thread_id":"9bb96505-d0fb-4473-be67-4884de5047d3","checkpoint_ns":"StateDefaultNode:829fefaa-4f17-4e86-5ea3-0afacebb7ab4","langgraph_node":"StateDefaultNode"},"datetime":"2026-10-06T21:00:30.529747+00:00","next_step":"agent","state":{"input":"[[mock:slow]] stop me","state_types":{"messages":"list"},"context_info":null,"hitl_decisions":[],"parallel_tasks":{}},"state_projection":{"omitted_duplicate_fields":["messages"]}},"references":[],"sio_event":"chat_predict","created_at":"2026-10-06T21:00:30.529845+00:00","parent_message_id":null,"agent_name":null,"execution_generation":"f6624e9f-552a-4a26-95a4-d0ceaf87d74c"}
+
+id: 94
+event: execution.node_event
+data: {"type":"agent_llm_start","stream_id":"9bb96505-d0fb-4473-be67-4884de5047d3","message_id":"aa5ea578-4aae-55a8-a361-08dae0136a9e","question_id":null,"content":null,"thinking":null,"response_metadata":{"tool_name":"agent","tool_run_id":"01a11304-97e5-72e3-840d-3e10e6b4d708","metadata":{"ls_model_name":"vllm/E2E-MOCK-MODEL","thread_id":"9bb96505-d0fb-4473-be67-4884de5047d3","checkpoint_ns":"agent:e049a156-4605-31fb-3a59-49734df38d10","langgraph_node":"agent"},"timestamp_start":"2026-10-06T21:00:30.565619+00:00","model_name":"vllm/E2E-MOCK-MODEL","thread_id":"9bb96505-d0fb-4473-be67-4884de5047d3","checkpoint_ns":"agent:e049a156-4605-31fb-3a59-49734df38d10","langgraph_node":"agent"},"references":[],"sio_event":"chat_predict","created_at":"2026-10-06T21:00:30.565628+00:00","parent_message_id":null,"agent_name":null,"execution_generation":"f6624e9f-552a-4a26-95a4-d0ceaf87d74c"}
+
+id: 95
+event: execution.node_event
+data: {"type":"agent_llm_chunk","stream_id":"9bb96505-d0fb-4473-be67-4884de5047d3","message_id":"aa5ea578-4aae-55a8-a361-08dae0136a9e","question_id":null,"content":"MOCK: ","thinking":null,"response_metadata":{"tool_run_id":"01a11304-97e5-72e3-840d-3e10e6b4d708"},"references":[],"sio_event":"chat_predict","created_at":"2026-10-06T21:00:30.603588+00:00","parent_message_id":null,"agent_name":null,"execution_generation":"f6624e9f-552a-4a26-95a4-d0ceaf87d74c"}
+
+id: 96
+event: execution.node_event
+data: {"type":"agent_llm_chunk","stream_id":"9bb96505-d0fb-4473-be67-4884de5047d3","message_id":"aa5ea578-4aae-55a8-a361-08dae0136a9e","question_id":null,"content":"[[mock:slow]] ","thinking":null,"response_metadata":{"tool_run_id":"01a11304-97e5-72e3-840d-3e10e6b4d708"},"references":[],"sio_event":"chat_predict","created_at":"2026-10-06T21:00:30.853888+00:00","parent_message_id":null,"agent_name":null,"execution_generation":"f6624e9f-552a-4a26-95a4-d0ceaf87d74c"}
+
+id: 97
+event: execution.node_event
+data: {"type":"agent_llm_chunk","stream_id":"9bb96505-d0fb-4473-be67-4884de5047d3","message_id":"aa5ea578-4aae-55a8-a361-08dae0136a9e","question_id":null,"content":"stop ","thinking":null,"response_metadata":{"tool_run_id":"01a11304-97e5-72e3-840d-3e10e6b4d708"},"references":[],"sio_event":"chat_predict","created_at":"2026-10-06T21:00:31.104163+00:00","parent_message_id":null,"agent_name":null,"execution_generation":"f6624e9f-552a-4a26-95a4-d0ceaf87d74c"}
+
+: heartbeat
+
+id: 98
+event: execution.failed
+data: {"code":"CANCELLED","safe_message":"Execution was cancelled.","retryable":false}
+

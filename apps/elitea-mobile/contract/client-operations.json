@@ -29,6 +29,13 @@
     "listToolkitAvailableTools",
     "listMessageTraces",
     "getMessageTrace",
-    "getCurrentAuthor"
+    "getCurrentAuthor",
+    "cancelChatExecution",
+    "regenerateChatMessage",
+    "getMessageFeedback",
+    "setMessageFeedback",
+    "deleteMessageFeedback",
+    "exportConversation",
+    "getRecommendations"
   ]
 }

@@ -41,6 +41,14 @@ export interface ChatMessage {
   attachments: ChatAttachment[];
   /** Why the answer failed (`meta.is_error`), else null. A failed turn is stored with no text. */
   error: string | null;
+  /** The group this one answers (`reply_to_id`): an answer's question. */
+  replyToGroupId: number | null;
+  /**
+   * The run that wrote this answer (`meta.execution_generation`): the
+   * question's id for the first answer, the `regeneration_id` after a
+   * regeneration. How the app proves a regeneration replaced the answer.
+   */
+  generation: string | null;
 }
 
 /** One file of a message. */
@@ -224,6 +232,8 @@ export function toChatMessages(
       hasUnsupportedItems: unsupported,
       attachments,
       error: groupError(group),
+      replyToGroupId: asInt(group.reply_to_id),
+      generation: asString((asRecord(group.meta) ?? asRecord(group.metadata))?.execution_generation),
     });
   }
   // Oldest first; equal or missing times keep the server's id order.
@@ -373,4 +383,24 @@ export function chatTarget(detail: Pick<ConversationDetail, 'participants'> | un
     name: participantName(dummy),
     model: savedModel(dummy),
   };
+}
+
+/**
+ * Did a regeneration replace this answer? The persisted group (same uuid)
+ * must carry the regeneration's id as `meta.execution_generation`; the first
+ * answer carries its question's id, and a server that only acknowledged the
+ * call (an older stub answered `{ok: true}` and ran nothing) leaves it so.
+ */
+export function answerRegenerated(
+  detail: Pick<ConversationDetail, 'message_groups'> | undefined,
+  answerUuid: string,
+  regenerationId: string,
+): boolean {
+  for (const raw of Array.isArray(detail?.message_groups) ? detail.message_groups : []) {
+    const group = asRecord(raw);
+    if (group?.uuid !== answerUuid) continue;
+    const meta = asRecord(group.meta) ?? asRecord(group.metadata);
+    return asString(meta?.execution_generation)?.toLowerCase() === regenerationId.toLowerCase();
+  }
+  return false;
 }

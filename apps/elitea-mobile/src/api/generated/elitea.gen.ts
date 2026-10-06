@@ -6,8 +6,8 @@
  * native-gap overlay and pruned to contract/client-operations.json.
  *
  * upstream sha256:    a0c2a7009c5350f1d84b67a914add32dcd65ad683256088a981ab33701fa1f08
- * overlay sha256:     db6509ce6a3543256938693e0904d4e58538e491cf565c4a2cf05b7524102b72
- * operations sha256:  f0ff688cb0d79ca18ad2948ddeb878bc123231e1377e930701873d155414ee39
+ * overlay sha256:     3017febbed2220117b862458b3b9e724c438a1852d569432173b8cf02cef2752
+ * operations sha256:  524e54724928d5818b5f3c9294fff880c25dad900fe7635b8cc2ae34afed6a70
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -398,6 +398,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/elitea_core/conversation_export/prompt_lib/{project_id}/{conversation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID. Both resolve, the same way the conversation detail read resolves them. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Download one conversation's transcript as a document
+         * @description The rail's row menu offers this as "Export", with one entry per format.
+         *     Both answers carry `Content-Disposition: attachment` and a filename
+         *     derived from the conversation's own name, so a browser saves the
+         *     response rather than rendering it.
+         *
+         *     The document is the WHOLE transcript, oldest message first, never a
+         *     page of it. A conversation with more messages than the server will
+         *     assemble in one document is refused with 400 rather than exported
+         *     truncated: a partial file that looks complete is the failure this
+         *     refusal exists to prevent.
+         *
+         *     Reading an export needs the same permission as reading the messages
+         *     (`models.chat.messages.list`). There is no separate export right.
+         */
+        get: operations["exportConversation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}": {
         parameters: {
             query?: never;
@@ -474,6 +511,48 @@ export interface paths {
          */
         post: operations["createConversation"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/message_feedback/prompt_lib/{project_id}/{message_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The message-GROUP uuid — the same `{messageID}` GetMessage and DeleteMessage share (internal/api/v2/conversations/handler.go). */
+                message_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Aggregate like/dislike counts for one message, plus the caller's own vote
+         * @description internal/api/v2/conversations/handler.go's GetMessageFeedback (#880).
+         *     Reads p_{project_id}.chat_message_feedback
+         *     (tenant/0135_chat_message_feedback.sql). `mine` is absent when the
+         *     caller has not rated this message.
+         */
+        get: operations["getMessageFeedback"];
+        put?: never;
+        /**
+         * Like or dislike a message, with an optional comment
+         * @description internal/api/v2/conversations/handler.go's SetMessageFeedback (#880).
+         *     Upserts into p_{project_id}.chat_message_feedback — a second call
+         *     from the same user REPLACES their rating and comment rather than
+         *     adding a second row (UNIQUE(message_group_uuid, user_id)). Returns
+         *     the updated aggregate, same shape as the GET.
+         */
+        post: operations["setMessageFeedback"];
+        /**
+         * Retract the caller's own like/dislike on a message
+         * @description internal/api/v2/conversations/handler.go's DeleteMessageFeedback
+         *     (#880). Removes only the CALLER's own row; other users' feedback on
+         *     the same message is untouched. Returns the updated aggregate.
+         */
+        delete: operations["deleteMessageFeedback"];
         options?: never;
         head?: never;
         patch?: never;
@@ -709,6 +788,86 @@ export interface paths {
          */
         post: operations["addConversationParticipants"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/recommendations/prompt_lib/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Get recommended applications for a project
+         * @description NOTE(W2): internal/api/v2/eliteacore/handler.go:1705-1734 —
+         *     {applications, total} envelope (NOT a bare array); limit/days are
+         *     accepted but not read (hard LIMIT 10).
+         */
+        get: operations["getRecommendations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/regenerate/prompt_lib/{project_id}/{message_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The assistant answer to regenerate (its `uid`, the send's `response_message_id`). */
+                message_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Regenerate an answer, optionally from an edited question
+         * @description Starts a turn that rewrites the answer in place and answers like the
+         *     send. `regeneration_id` (client generated, lowercase canonical UUID)
+         *     is the idempotency key: the same id replays the admission, so a retry
+         *     reuses it. While the previous answer is still being finalised the
+         *     route answers 409 `agent_regeneration_pending` with `Retry-After: 1`
+         *     and `retryable: true`.
+         */
+        post: operations["regenerateChatMessage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/task/prompt_lib/{project_id}/{response_message_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+                /** @description The answer to stop (the send's or the regeneration's `response_message_id`). */
+                response_message_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Stop a running answer on the server
+         * @description Client contract 1.3. Asks the server to stop the run writing this answer (closing the event stream alone does not stop it). 204 also when this caller already stopped it; 409 when the answer is no longer running (it completed or failed) or is not this caller's to stop. After a 204, close the stream and read the transcript again: a run stopped before any output is removed with its question, partial output is kept.
+         */
+        delete: operations["cancelChatExecution"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1162,6 +1321,51 @@ export interface components {
             /** @description Equal to `execution_id` (legacy name). */
             task_id: string;
         };
+        /** @description NOTE(W2): internal/api/v2/agentexecution/route.go:183 (`currentRegenerationBody`). `message_id` and `stream_id` must both equal the path's message id. */
+        ChatRegenerateRequest: {
+            /** Format: uuid */
+            conversation_uuid: string;
+            /**
+             * Format: uuid
+             * @description The answer being regenerated; equals the path's message id.
+             */
+            message_id: string;
+            /** Format: int64 */
+            participant_id?: number;
+            payload: {
+                llm_settings?: {
+                    [key: string]: unknown;
+                };
+                mcp_tokens?: {
+                    [key: string]: unknown;
+                };
+                user_input: string;
+            };
+            /** Format: int64 */
+            project_id: number;
+            /**
+             * Format: uuid
+             * @description The question being re-answered (lowercase canonical UUID).
+             */
+            question_id: string;
+            /**
+             * Format: uuid
+             * @description Client generated, lowercase canonical UUID: the idempotency key of this regeneration. A retry with the same id replays it.
+             */
+            regeneration_id: string;
+            /**
+             * Format: uuid
+             * @description Equals `message_id`.
+             */
+            stream_id: string;
+            /** @description Absent or empty for a plain retry. One `text_message` item to regenerate from an EDITED question. */
+            updated_items?: {
+                content: string;
+                /** @description Must be `text_message`. */
+                item_type: string;
+                uuid?: string;
+            }[];
+        };
         /** @description The body of a chat send. NOTE(W2): internal/api/v2/agentexecution/route.go:143 (`currentApplicationStartBody`). The body must be ONE JSON value of at most 512 KiB. */
         ChatSendRequest: {
             /**
@@ -1251,8 +1455,20 @@ export interface components {
         };
         /** @description The public subset of the native client policy (ADR-0025 decision 5); the full policy travels with every token response. NOTE(W2): internal/api/v2/discovery/document.go:65 (`PublicPolicy`). */
         ClientPublicPolicy: {
+            /** @description Dictation may use a recogniser that sends audio off the device. Absent or false means on-device recognition only. */
+            allow_cloud_stt?: boolean;
+            /** @description A notification may offer actions; a decision still needs the app unlocked. Absent means allowed. */
+            allow_notification_actions?: boolean;
+            /** @description The system share sheet may hand text, links, files and photos to the app. Absent means allowed. */
+            allow_share_in?: boolean;
+            /** @description Copy, share and export of messages and transcripts are allowed. Absent (a server before 1.3) means allowed. */
+            allow_share_out?: boolean;
+            /** @description Widgets, quick actions and other surfaces outside the app may show titles. Absent or false means counts only. */
+            allow_system_surfaces?: boolean;
             /** @description Deployment-wide minimum client version; empty means none. The document's per-client `min_client_version` entry, when present, is never lower than this. */
             min_client_version: string;
+            /** @description What a notification shows on the lock screen: `none` (generic text) or `title`. Absent or any other value reads as `none`. */
+            notification_preview?: string;
             /** @description Offline storage is allowed. */
             offline_enabled: boolean;
             /** @description The client must refuse to run without a device passcode or biometric lock. */
@@ -1389,6 +1605,42 @@ export interface components {
             updated_at: string;
             /** Format: uuid */
             uuid?: string;
+        };
+        /** @description The `format=json` body. The Markdown document is rendered from this same model, so the two formats cannot describe different conversations. */
+        ConversationExport: {
+            /** Format: date-time */
+            created_at: string;
+            description?: string;
+            /**
+             * Format: date-time
+             * @description When this document was produced, in UTC.
+             */
+            exported_at: string;
+            id: string;
+            /** @description The number of messages in `messages`, which is the whole transcript. */
+            message_count: number;
+            messages: components["schemas"]["ConversationExportMessage"][];
+            name: string;
+            project_id: string;
+            /** Format: date-time */
+            updated_at: string;
+            uuid?: string;
+        };
+        ConversationExportMessage: {
+            /** @description The display name of the participant that wrote the message, when the participant list resolves one. Absent for a message whose author cannot be named; the Markdown document then falls back to the role. */
+            author?: string;
+            content: string;
+            content_type?: string;
+            /** Format: date-time */
+            created_at: string;
+            id: string;
+            metadata?: {
+                [key: string]: unknown;
+            };
+            /** @description `user` or `assistant` as the transcript stored it. Passed through rather than normalised, so an export records what was written. */
+            role: string;
+            /** @description The message group's UUID, when it has one. */
+            uid?: string;
         };
         /** @description The legacy page carries `total` and `rows` only. With `changes_since` (ADR-0025 WP6) the same two keys keep their meaning — the rows are the legacy row shape, oldest change first, and `total` is the size of the caller's whole filtered list now — and `tombstones`, `next_cursor` and `has_more` are added. */
         ConversationListing: {
@@ -1626,6 +1878,30 @@ export interface components {
             summary_trigger_ratio?: number;
             target_summary_tokens?: number;
         };
+        /** @description One user's like/dislike + optional comment on a message (#880). `rating` is never `0` — the stored row's own CHECK constraint refuses it (tenant/0135_chat_message_feedback.sql) — only its ABSENCE (no `mine` on the summary) means "not rated". */
+        MessageFeedback: {
+            comment?: string;
+            /**
+             * @description -1 = dislike, 1 = like.
+             * @enum {integer}
+             */
+            rating: -1 | 1;
+        };
+        MessageFeedbackRequest: {
+            /** @description Optional. Refused with a 400 past 2000 characters (messageFeedbackCommentMaxLen). */
+            comment?: string;
+            /**
+             * @description -1 = dislike, 1 = like. Any other value is a 400.
+             * @enum {integer}
+             */
+            rating: -1 | 1;
+        };
+        /** @description What every message-feedback endpoint answers: the aggregate like/dislike counts across every user who has rated this message, plus the CALLING user's own feedback. The client's hover tooltip reads the counts; the thumbs buttons' highlighted state reads `mine`. */
+        MessageFeedbackSummary: {
+            dislikes: number;
+            likes: number;
+            mine?: components["schemas"]["MessageFeedback"] | null;
+        };
         MessageTraceListing: {
             rows: components["schemas"]["MessageTraceStep"][];
             /** @description Null unless include_total=true was requested. */
@@ -1710,8 +1986,18 @@ export interface components {
         };
         /** @description The server-driven native client policy (ADR-0025 decision 5), the `native_client_policy` admin Configuration section. The device-side fields are enforced by the client; the server refuses versions below `min_client_version` with 426. Adding a field is additive; renaming or removing one bumps `client_contract`. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:43 (`NativeClientPolicy`). */
         NativeClientPolicy: {
+            /** @description Dictation may use a recogniser that sends audio off the device. Absent or false means on-device recognition only. */
+            allow_cloud_stt?: boolean;
+            /** @description A notification may offer actions; a decision still needs the app unlocked. Absent means allowed. */
+            allow_notification_actions?: boolean;
             /** @description When false, block screenshots and screen recording where the platform allows it. */
             allow_screenshots: boolean;
+            /** @description The system share sheet may hand text, links, files and photos to the app. Absent means allowed. */
+            allow_share_in?: boolean;
+            /** @description Copy, share and export of messages and transcripts are allowed. Absent (a server before 1.3) means allowed. */
+            allow_share_out?: boolean;
+            /** @description Widgets, quick actions and other surfaces outside the app may show titles. Absent or false means counts only. */
+            allow_system_surfaces?: boolean;
             /**
              * Format: int64
              * @description Lock the app after this many seconds in the background; 0 never locks. 0 to 86400.
@@ -1719,6 +2005,8 @@ export interface components {
             idle_lock_seconds: number;
             /** @description The lowest version this deployment serves this client; empty means none. MAJOR.MINOR.PATCH with an optional -prerelease. */
             min_client_version: string;
+            /** @description What a notification shows on the lock screen: `none` (generic text) or `title`. Absent or any other value reads as `none`. */
+            notification_preview?: string;
             /** @description Whether attachments may be stored offline, or only messages. */
             offline_attachments: boolean;
             /**
@@ -1876,6 +2164,16 @@ export interface components {
             owner_id: number;
             plugins: string[];
             suspended: boolean;
+        };
+        /** @description NOTE(W2): internal/api/v2/eliteacore/handler.go:1729-1734. The limit/days query params are accepted but not read by the handler. */
+        RecommendationsResponse: {
+            applications: {
+                description: string;
+                id: string;
+                likes: number;
+                name: string;
+            }[];
+            total: number;
         };
         /** @description Opaque selected-tools blob (object or null) — see marker. */
         SelectedTools: unknown;
@@ -2719,6 +3017,50 @@ export interface operations {
             };
         };
     };
+    exportConversation: {
+        parameters: {
+            query?: {
+                /** @description `md` (the default) is the readable document — a title, a short header block and one section per message. `json` is the faithful one, carrying every field the transcript read returns. Any other value is a 400 rather than a silent fallback, because a client that asked for a format it did not get would save the wrong extension. */
+                format?: "md" | "markdown" | "json";
+            };
+            header?: never;
+            path: {
+                /** @description The conversation's numeric id or its UUID. Both resolve, the same way the conversation detail read resolves them. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The transcript document. `text/markdown` for `format=md`, `application/json` for `format=json`. */
+            200: {
+                headers: {
+                    /** @description `attachment` plus the derived filename. Exposed to browser fetch through Access-Control-Expose-Headers, because the web client names the saved file from it. */
+                    "Content-Disposition"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationExport"];
+                    "text/markdown": string;
+                };
+            };
+            /** @description An unsupported format, or a conversation too long to export in one document. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            500: components["responses"]["500"];
+        };
+    };
     getConversation: {
         parameters: {
             query?: {
@@ -2878,6 +3220,112 @@ export interface operations {
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    getMessageFeedback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The message-GROUP uuid — the same `{messageID}` GetMessage and DeleteMessage share (internal/api/v2/conversations/handler.go). */
+                message_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Feedback summary for the message. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageFeedbackSummary"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            500: components["responses"]["500"];
+        };
+    };
+    setMessageFeedback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The message-GROUP uuid — the same `{messageID}` GetMessage and DeleteMessage share (internal/api/v2/conversations/handler.go). */
+                message_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MessageFeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Feedback recorded; the updated summary. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageFeedbackSummary"];
+                };
+            };
+            /** @description rating was not 1 or -1, or the comment exceeded the length limit. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            /** @description No such message in this project. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            500: components["responses"]["500"];
+        };
+    };
+    deleteMessageFeedback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The message-GROUP uuid — the same `{messageID}` GetMessage and DeleteMessage share (internal/api/v2/conversations/handler.go). */
+                message_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Feedback retracted; the updated summary. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageFeedbackSummary"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
             500: components["responses"]["500"];
         };
     };
@@ -3279,6 +3727,195 @@ export interface operations {
             404: components["responses"]["404"];
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
+        };
+    };
+    getRecommendations: {
+        parameters: {
+            query?: {
+                /** @description Old-SPA parameter; accepted but not read. */
+                days?: number;
+                /** @description Maximum number of items to return */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Recommended applications */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecommendationsResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+        };
+    };
+    regenerateChatMessage: {
+        parameters: {
+            query: {
+                execution_contract: "agent.regenerate.v1";
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The assistant answer to regenerate (its `uid`, the send's `response_message_id`). */
+                message_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatRegenerateRequest"];
+            };
+        };
+        responses: {
+            /** @description The regeneration was admitted or replayed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionStarted"];
+                };
+            };
+            /** @description A malformed request. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            /** @description `agent_regeneration_pending` (retry), or an idempotency conflict. */
+            409: {
+                headers: {
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            /** @description The body is larger than 512 KiB. */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            /** @description Content-Type is not application/json. */
+            415: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            /** @description `unsupported_agent_execution`. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+            /** @description Admission capacity is full; retry after `Retry-After`. */
+            503: {
+                headers: {
+                    "Retry-After"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatExecutionError"];
+                };
+            };
+        };
+    };
+    cancelChatExecution: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+                /** @description The answer to stop (the send's or the regeneration's `response_message_id`). */
+                response_message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stopped */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An invalid answer id or client version. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            /** @description The answer is not running, or this caller may not stop it. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+            /** @description The stop could not be recorded; retry. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The stop timed out; retry. */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
     listToolkitAvailableTools: {

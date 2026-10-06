@@ -24,6 +24,9 @@ const identity = {
 
 export type AppIdentity = typeof identity;
 
+/** NSMicrophoneUsageDescription: the microphone is used only for on-device dictation. */
+const MICROPHONE_USAGE = `${identity.displayName} uses the microphone only while you dictate a message. Speech is recognised on this device.`;
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: identity.displayName,
@@ -88,14 +91,25 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // no SQLCipher, and the store refuses to run without it (src/db/open.ts).
     ['expo-sqlite', { useSQLCipher: true }],
     // Attachments: the photo library and the camera, asked for only when the user picks.
-    // No microphone (photos only), so RECORD_AUDIO is blocked on Android. On Android 13+
-    // the system photo picker needs no media permission at all.
+    // The picker takes photos only; the microphone text is the dictation one (the same
+    // NSMicrophoneUsageDescription; `false` here would block RECORD_AUDIO for dictation too).
+    // On Android 13+ the system photo picker needs no media permission at all.
     [
       'expo-image-picker',
       {
         photosPermission: `${identity.displayName} attaches the photos you choose to a message.`,
         cameraPermission: `${identity.displayName} uses the camera to take a photo you attach to a message.`,
-        microphonePermission: false,
+        microphonePermission: MICROPHONE_USAGE,
+      },
+    ],
+    // Dictation into the composer, ON THE DEVICE ONLY (src/features/speech/dictation.ts asks
+    // for requiresOnDeviceRecognition; Apple's server recogniser is never used). Both
+    // permissions are asked for the first time the user taps the microphone.
+    [
+      'expo-speech-recognition',
+      {
+        microphonePermission: MICROPHONE_USAGE,
+        speechRecognitionPermission: `${identity.displayName} turns your speech into text on this device while you dictate. Audio is not sent to Apple or to your workspace.`,
       },
     ],
     // No plaintext URL cache: responses (tokens, transcripts) are never written to

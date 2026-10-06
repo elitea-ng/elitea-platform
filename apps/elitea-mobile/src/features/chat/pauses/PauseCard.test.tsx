@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react-nativ
 import { goldenData, nodeOf } from '@/features/chat/__fixtures__/clientFrames';
 import { PauseCard, jsonObjectError } from '@/features/chat/pauses/PauseCard';
 import { pauseOf, type TurnPause } from '@/features/chat/toolActivity';
+import { resetPolicy, setPolicy, STRICT_DEFAULTS } from '@/security/policy';
+import { copyableTexts } from '@/test/selectable';
 
 const CONV = '0b6c1f8e-1d2a-4f3b-8c4d-5e6f7a8b9c0d';
 const target = { projectId: 7, conversationUuid: CONV, messageId: 'resp-1', threadId: 'thread-1' };
@@ -47,6 +49,31 @@ describe('HITL card', () => {
     expect(onContinue.mock.calls[0][1]).toMatchObject({
       hitl_decisions: [{ action: 'edit', value: '{"branch":"main"}' }],
     });
+  });
+
+  it('allow_share_out off: the Edit editor still edits, but its prefilled tool arguments cannot be copied or shared', async () => {
+    setPolicy({ ...STRICT_DEFAULTS, allow_share_out: false }, 'server');
+    try {
+      await renderCard(golden('python', 'hitl_interrupt'));
+      await fireEvent.press(await screen.findByRole('button', { name: 'Edit' }));
+      const editor = await screen.findByLabelText('Edited value');
+      expect(editor.props.value).toContain('"branch"');
+      expect(editor.props.contextMenuHidden).toBe(true);
+      expect(copyableTexts(screen.toJSON())).toEqual([]);
+    } finally {
+      resetPolicy();
+    }
+  });
+
+  it('allow_share_out on: the Edit editor keeps the system menu (copy, paste)', async () => {
+    setPolicy({ ...STRICT_DEFAULTS, allow_share_out: true }, 'server');
+    try {
+      await renderCard(golden('python', 'hitl_interrupt'));
+      await fireEvent.press(await screen.findByRole('button', { name: 'Edit' }));
+      expect((await screen.findByLabelText('Edited value')).props.contextMenuHidden).toBe(false);
+    } finally {
+      resetPolicy();
+    }
   });
 
   it('cannot be answered offline', async () => {

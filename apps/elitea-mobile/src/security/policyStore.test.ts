@@ -1,7 +1,9 @@
 import {
   FIXTURE_ORIGIN,
   clientPolicy,
+  dataControls,
   discoveryDocument,
+  discoveryDocument13,
   discoveryWithoutNativeAuth,
   tokenResponse,
 } from '@/api/__fixtures__/nativeClient';
@@ -77,6 +79,61 @@ describe('policyFrom', () => {
         offline_max_mb: 1.5,
       }),
     ).toEqual({});
+  });
+});
+
+describe('data controls (client contract 1.3)', () => {
+  it('a server before 1.3 sends none: the server defaults apply (share out on, cloud speech and titles off)', async () => {
+    await applyServerPolicy(clientPolicy());
+    expect(getPolicy()).toMatchObject({
+      allow_share_out: true,
+      allow_share_in: true,
+      allow_cloud_stt: false,
+      notification_preview: 'none',
+      allow_notification_actions: true,
+      allow_system_surfaces: false,
+    });
+  });
+
+  it('reads every key of a 1.3 token response; an unknown preview reads as none', async () => {
+    await applyServerPolicy(
+      clientPolicy(dataControls({ allow_share_out: false, allow_cloud_stt: true, notification_preview: 'title', allow_system_surfaces: true })),
+    );
+    expect(getPolicy()).toMatchObject({
+      allow_share_out: false,
+      allow_cloud_stt: true,
+      notification_preview: 'title',
+      allow_system_surfaces: true,
+    });
+    await applyServerPolicy(clientPolicy(dataControls({ notification_preview: 'full_text', allow_share_in: 'no' })));
+    expect(getPolicy()).toMatchObject({ notification_preview: 'none', allow_share_in: true });
+  });
+
+  it('discovery applies its data controls before sign-in', () => {
+    applyDiscoveryPolicy(discovery(discoveryDocument13({}, { allow_share_out: false })), '0.1.0');
+    expect(getPolicyState()).toMatchObject({ source: 'discovery', policy: { allow_share_out: false } });
+  });
+
+  it('a discovery document only tightens them after sign-in, and the next token response decides again', async () => {
+    await applyServerPolicy(clientPolicy(dataControls({ notification_preview: 'title', allow_system_surfaces: true })));
+    // A looser document changes nothing.
+    applyDiscoveryPolicy(discovery(discoveryDocument13({}, { allow_cloud_stt: true, notification_preview: 'title', allow_system_surfaces: true })), '0.1.0');
+    expect(getPolicy()).toMatchObject({ allow_cloud_stt: false, notification_preview: 'title', allow_share_out: true });
+    // A stricter one turns share out off and the preview to none at once.
+    applyDiscoveryPolicy(discovery(discoveryDocument13({}, { allow_share_out: false, notification_preview: 'none', allow_system_surfaces: true })), '0.1.0');
+    expect(getPolicy()).toMatchObject({ allow_share_out: false, notification_preview: 'none', allow_system_surfaces: true });
+    // It is persisted with the server policy, so the next launch starts tightened.
+    const stored = JSON.parse((await getSecureItemIn(TEST_WORKSPACE, SECURE_KEYS.policy))!);
+    expect(stored.policy).toMatchObject({ allow_share_out: false, notification_preview: 'none' });
+    // A token response is the server's word again.
+    await applyServerPolicy(clientPolicy(dataControls()));
+    expect(getPolicy().allow_share_out).toBe(true);
+  });
+
+  it('a malformed data control in discovery does not cost the document', () => {
+    const parsed = discovery(discoveryDocument13({}, { allow_share_out: 'nope', notification_preview: 7 }));
+    expect(parsed.client_policy.allow_share_out).toBeUndefined();
+    expect(parsed.client_policy.notification_preview).toBeUndefined();
   });
 });
 

@@ -1,6 +1,7 @@
 import { ActivityIndicator, ActionSheetIOS, Alert, Image, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Spacing } from '@/constants/theme';
+import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
 import { extensionOf, formatBytes } from '@/features/chat/attachments/prepare';
 import type { TrayItem } from '@/features/chat/attachments/tray';
@@ -43,26 +44,26 @@ export function AttachmentTrayView({
               <Image source={{ uri: item.previewUri }} style={styles.thumb} accessibilityIgnoresInvertColors />
             ) : (
               <View style={[styles.thumb, styles.icon, { backgroundColor: palette.border }]}>
-                <Text style={[styles.iconText, { color: palette.text }]}>{(extensionOf(item.name).slice(1) || 'file').slice(0, 4).toUpperCase()}</Text>
+                <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.iconText, { color: palette.text }]}>{(extensionOf(item.name).slice(1) || 'file').slice(0, 4).toUpperCase()}</Text>
               </View>
             )}
             <View style={styles.texts}>
-              <Text numberOfLines={1} style={[styles.name, { color: palette.text }]}>
+              <Text maxFontSizeMultiplier={FONT_SCALE.control} numberOfLines={1} style={[styles.name, { color: palette.text }]}>
                 {item.name}
               </Text>
-              <Text numberOfLines={1} style={[styles.meta, { color: failed ? palette.danger : palette.textSecondary }]}>
+              <Text maxFontSizeMultiplier={FONT_SCALE.control} numberOfLines={1} style={[styles.meta, { color: failed ? palette.danger : palette.textSecondary }]}>
                 {failed ? (item.error ?? 'Failed') : item.state === 'uploading' && item.progress !== null ? `${Math.round(item.progress * 100)}%` : item.size !== null ? formatBytes(item.size) : ''}
               </Text>
             </View>
             {item.state === 'preparing' || item.state === 'uploading' ? <ActivityIndicator size="small" color={palette.accent} /> : null}
             {failed && item.ready ? (
               <Pressable accessibilityRole="button" accessibilityLabel={`Retry ${item.name}`} hitSlop={8} onPress={() => onRetry(item.id)}>
-                <Text style={[styles.action, { color: palette.accent }]}>↻</Text>
+                <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.action, { color: palette.accent }]}>↻</Text>
               </Pressable>
             ) : null}
             {item.state !== 'uploading' ? (
               <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name}`} hitSlop={8} onPress={() => onRemove(item.id)}>
-                <Text style={[styles.action, { color: palette.textSecondary }]}>✕</Text>
+                <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.action, { color: palette.textSecondary }]}>✕</Text>
               </Pressable>
             ) : null}
           </View>
@@ -111,7 +112,7 @@ export function AttachButton({
       accessibilityState={{ disabled: disabledReason !== null }}
       onPress={open}
       style={[styles.clip, { borderColor: palette.border, opacity: disabledReason ? 0.4 : 1 }]}>
-      <Text style={[styles.clipText, { color: palette.accent }]}>+</Text>
+      <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.clipText, { color: palette.accent }]}>+</Text>
     </Pressable>
   );
 }

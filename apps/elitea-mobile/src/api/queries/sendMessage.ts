@@ -401,3 +401,99 @@ export async function continueTurn(
   }
   return readStarted(result);
 }
+
+export const REGENERATE_CONTRACT = 'agent.regenerate.v1';
+export type ChatRegenerateRequest = components['schemas']['ChatRegenerateRequest'];
+
+/** A plain retry of the newest answer (regenerateChatMessage). */
+export interface RegenerationRequest {
+  projectId: number;
+  conversationUuid: string;
+  /** The answer's author participant (the agent, or the model participant); 0 lets the server use the answer's. */
+  participantId: number;
+  /** The question's group uuid (the send's `question_id`). */
+  questionUuid: string;
+  /** The answer's group uuid (the send's `response_message_id`). */
+  answerUuid: string;
+  /**
+   * The question's text. Required non-empty by the route; for a plain retry
+   * the server answers the question as stored.
+   */
+  questionText: string;
+  /** Set for a plain model conversation: the same `llm_settings` as the send. */
+  model?: TurnModel | null;
+  /** Client generated, lowercase: the idempotency key (a retry reuses it). */
+  regenerationId: string;
+}
+
+const UUID_ANY = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/** The body every attempt of one regeneration sends (byte-identical, like a send). */
+export function prepareRegeneration(request: RegenerationRequest): { request: RegenerationRequest; bodyJson: string } {
+  if (!QUESTION_ID_RE.test(request.regenerationId)) throw new TurnInputError('question_id');
+  if (!Number.isSafeInteger(request.projectId) || request.projectId <= 0) throw new TurnInputError('invalid');
+  if (!Number.isSafeInteger(request.participantId) || request.participantId < 0) throw new TurnInputError('invalid');
+  for (const id of [request.conversationUuid, request.questionUuid, request.answerUuid]) {
+    if (!UUID_ANY.test(id)) throw new TurnInputError('invalid');
+  }
+  const model = request.model ?? null;
+  const questionText = request.questionText.trim() === '' ? '(regenerate)' : request.questionText;
+  const body: ChatRegenerateRequest = {
+    payload: {
+      user_input: questionText,
+      ...(model === null
+        ? {}
+        : {
+            llm_settings: {
+              model_name: model.name,
+              ...(model.projectId !== null ? { model_project_id: model.projectId } : {}),
+              stream: true,
+            },
+          }),
+    },
+    project_id: request.projectId,
+    participant_id: request.participantId,
+    conversation_uuid: request.conversationUuid,
+    question_id: request.questionUuid,
+    message_id: request.answerUuid,
+    stream_id: request.answerUuid,
+    regeneration_id: request.regenerationId,
+  };
+  const bodyJson = JSON.stringify(body);
+  if (utf8Bytes(bodyJson) > MAX_TURN_BODY_BYTES) throw new TurnInputError('too_large');
+  return { request, bodyJson };
+}
+
+/**
+ * POSTs a regeneration (`regenerateChatMessage`). Answers like the send: the
+ * execution to stream (the same `response_message_id`, rewritten in place).
+ * 409 `agent_regeneration_pending` (`retryable: true`, `Retry-After: 1`)
+ * while the previous answer is still being finalised: the caller retries
+ * with the SAME body.
+ */
+export async function startRegeneration(
+  prepared: { request: RegenerationRequest; bodyJson: string },
+  options: { client?: ApiClient; signal?: AbortSignal } = {},
+): Promise<StartedTurn> {
+  const client = options.client ?? sessionApiClient();
+  const { request, bodyJson } = prepared;
+  let result;
+  try {
+    result = await client.POST('/elitea_core/regenerate/prompt_lib/{project_id}/{message_id}', {
+      params: {
+        path: { project_id: String(request.projectId), message_id: request.answerUuid },
+        query: { execution_contract: REGENERATE_CONTRACT },
+      },
+      body: JSON.parse(bodyJson) as ChatRegenerateRequest,
+      bodySerializer: () => bodyJson,
+      headers: { 'Content-Type': 'application/json' },
+      signal: options.signal,
+    });
+  } catch (error) {
+    if (error instanceof ApiError && (error.kind === 'network' || error.kind === 'timeout')) {
+      throw new TurnStartError({ kind: 'transient' }, error);
+    }
+    throw error;
+  }
+  return readStarted(result);
+}

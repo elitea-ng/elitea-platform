@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Spacing } from '@/constants/theme';
+import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
 import type { ToolStep } from '@/features/chat/toolActivity';
 
@@ -93,7 +94,7 @@ export function ToolActivity({
         accessibilityHint={open ? 'Hides the tool calls' : 'Shows the tool calls'}
         disabled={streaming}
         onPress={() => setExpanded((v) => !v)}>
-        <Text style={[styles.summary, { color: palette.textSecondary }]}>
+        <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.summary, { color: palette.textSecondary }]}>
           {summary} {streaming ? '' : open ? '▾' : '›'}
         </Text>
       </Pressable>
@@ -101,7 +102,7 @@ export function ToolActivity({
         ? groupByAgent(steps).map((group) => (
             <View key={group.agent ?? '-'} style={styles.group}>
               {group.agent ? (
-                <Text style={[styles.agent, { color: palette.textSecondary }]} numberOfLines={1}>
+                <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.agent, { color: palette.textSecondary }]} numberOfLines={1}>
                   {group.agent}
                 </Text>
               ) : null}
@@ -120,13 +121,13 @@ export function ToolActivity({
                         backgroundColor: palette.background,
                       },
                     ]}>
-                    <Text numberOfLines={1} style={[styles.chipText, { color: palette.text }]}>
+                    <Text maxFontSizeMultiplier={FONT_SCALE.control} numberOfLines={1} style={[styles.chipText, { color: palette.text }]}>
                       {toolLabel(step)}
                     </Text>
                     {step.status === 'running' ? (
                       <ActivityIndicator size="small" color={palette.accent} />
                     ) : (
-                      <Text
+                      <Text maxFontSizeMultiplier={FONT_SCALE.control}
                         style={[
                           styles.mark,
                           { color: step.status === 'error' || step.status === 'needs_auth' ? palette.danger : palette.accent },

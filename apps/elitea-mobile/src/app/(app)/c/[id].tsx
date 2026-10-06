@@ -19,6 +19,7 @@ import type { TurnModel } from '@/api/queries/sendMessage';
 import { OfflineNotice } from '@/components/OfflineNotice';
 import { StatusScreen } from '@/components/StatusScreen';
 import { Spacing } from '@/constants/theme';
+import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
 import { Composer } from '@/features/chat/Composer';
 import { MessageBubble } from '@/features/chat/MessageBubble';
@@ -70,8 +71,16 @@ import { pauseFromGroup } from '@/features/chat/pauses/continueBodies';
 import { appActivity } from '@/lib/appActivity';
 import { network, useOnline } from '@/lib/network';
 import { useWorkspaceInfo } from '@/state/workspaceInfo';
-import type { LiveTurn } from '@/features/chat/turnController';
-import { useTurn } from '@/features/chat/useTurn';
+import { MessageActionsSheet } from '@/features/chat/actions/MessageActionsSheet';
+import { planActions } from '@/features/chat/actions/messageActions';
+import { usePolicy } from '@/security/policy';
+import { useTurnAnnouncements } from '@/features/a11y/turnAnnouncements';
+import { canDictateOnDevice } from '@/features/speech/dictation';
+import { canReadAloud, readAloud, stopReading, useReading } from '@/features/speech/readAloud';
+import { exportErrorText } from '@/api/queries/exportConversation';
+import { shareTranscript } from '@/features/chat/export/shareTranscript';
+import { answerHiddenByRegeneration, type LiveTurn } from '@/features/chat/turnController';
+import { ATTACHMENT_ONLY_TEXT, useTurn } from '@/features/chat/useTurn';
 import { Markdown } from '@/features/markdown/Markdown';
 import { useSelfUserId } from '@/state/selfIdentity';
 import { useSession } from '@/state/session';
@@ -98,6 +107,14 @@ export default function ThreadScreen() {
   const messages = toChatMessages(detail, { selfUserId: me });
   const workspace = useWorkspaceInfo();
   const contract11 = speaksContract(workspace?.discovery, 1, 1);
+  // Client contract 1.3: feedback, server stop, export, suggested agents.
+  const contract13 = speaksContract(workspace?.discovery, 1, 3);
+  const { policy } = usePolicy();
+  const [actionsFor, setActionsFor] = useState<ChatMessage | null>(null);
+  // On-device speech: dictation into the composer, and reading an answer aloud.
+  const [dictation] = useState(canDictateOnDevice);
+  const reading = useReading();
+  useEffect(() => () => stopReading(), []);
   // The people "@" offers: every other person in the conversation.
   const people = useMemo<MentionCandidate[]>(() => {
     const out: MentionCandidate[] = [];
@@ -137,6 +154,8 @@ export default function ThreadScreen() {
     model: target.ok && target.kind === 'model' ? model : null,
   });
   const { live, dismiss } = turn;
+  // VoiceOver hears when the answer is done, stopped, failed or waits for the user.
+  useTurnAnnouncements(live, target.ok ? target.name : null);
   const highlight = {
     people: [...people.map((p) => p.name), ...(detail?.participants ?? []).filter((p) => p?.entity_name === 'user').map((p) => participantName(p) ?? '').filter(Boolean)],
     agents: agentOptions(detail).map((a) => a.name ?? '').filter(Boolean),
@@ -191,10 +210,54 @@ export default function ThreadScreen() {
     people.length > 0 && target.ok && target.kind === 'model' && !contract11 ? 'Mentions notify only in agent chats.' : null;
   const outbox = useOutboxItems(projectId, conversationUuid);
 
+  // A note above the composer (a regeneration that could not start, or did not land).
+  const [threadNote, setThreadNote] = useState<string | null>(null);
   // Once the persisted copy is back from the server, the live bubbles go.
   useEffect(() => {
     if (live?.settled) dismiss();
   }, [live?.settled, dismiss]);
+
+  // Regenerate: the newest message, a persisted answer, with its question.
+  const newestAnswer = newest?.role === 'assistant' && newest.uuid !== null && !newest.isStreaming ? newest : null;
+  const regenerateQuestion = newestAnswer
+    ? (messages.find((m) => m.role === 'user' && newestAnswer.replyToGroupId !== null && m.groupId === newestAnswer.replyToGroupId) ??
+      [...messages].reverse().find((m) => m.role === 'user' && (m.createdAt ?? 0) <= (newestAnswer.createdAt ?? Infinity)) ??
+      null)
+    : null;
+  const canRegenerate = (message: ChatMessage | null): boolean =>
+    message !== null &&
+    newestAnswer !== null &&
+    message.key === newestAnswer.key &&
+    regenerateQuestion?.uuid != null &&
+    contract11 &&
+    online &&
+    !isOfflineCopy(detail) &&
+    !turn.busy &&
+    pause === null &&
+    target.ok &&
+    conversationUuid !== null;
+  const regenerate = async (message: ChatMessage) => {
+    if (!canRegenerate(message) || !regenerateQuestion?.uuid || !message.uuid) return;
+    setThreadNote(null);
+    const problem = await turn.regenerate({
+      answerUuid: message.uuid,
+      questionUuid: regenerateQuestion.uuid,
+      questionText: regenerateQuestion.text,
+      participantId: message.authorParticipantId ?? 0,
+      // Proven once the transcript is read again: the rewritten answer must
+      // carry the regeneration's id as its generation.
+      // Unknown (the transcript could not be read again): say nothing.
+      onSettled: (replaced) => setThreadNote(replaced === false ? "The workspace didn't replace this answer. Try again." : null),
+    });
+    if (problem !== null) setThreadNote(problem);
+  };
+  const actionPlan = planActions(actionsFor ?? { role: 'user', text: '', uuid: null, isStreaming: false }, {
+    shareOut: policy.allow_share_out,
+    contract13,
+    online: online && !isOfflineCopy(detail),
+    canSpeak: canReadAloud(),
+    canRegenerate: canRegenerate(actionsFor),
+  });
 
   // Attachments (contract 1.1 limits, else the server defaults): picked and
   // prepared now, uploaded on send. Online only; an agent must take files.
@@ -243,7 +306,7 @@ export default function ThreadScreen() {
     // Every file first: a message with files is sent (or queued) only once all are stored.
     const uploaded = await tray.uploadAll();
     if (!uploaded.ok) return uploaded.error;
-    const problem = await turn.send(text.trim() === '' ? '(attachment)' : text, { mentions, attachments: uploaded.attachments });
+    const problem = await turn.send(text.trim() === '' ? ATTACHMENT_ONLY_TEXT : text, { mentions, attachments: uploaded.attachments });
     if (problem === null) tray.clear(uploaded.ids);
     return problem;
   };
@@ -349,6 +412,21 @@ export default function ThreadScreen() {
     }
   };
   const [peopleOpen, setPeopleOpen] = useState(false);
+  // Export (1.3, allow_share_out): the whole transcript to the share sheet.
+  const canExport = contract13 && policy.allow_share_out && online && !isOfflineCopy(detail) && conversationNumericId !== null && projectId !== null;
+  const [exporting, setExporting] = useState(false);
+  const exportTranscript = async () => {
+    if (!canExport || exporting || projectId === null || conversationNumericId === null) return;
+    setExporting(true);
+    setThreadNote(null);
+    try {
+      await shareTranscript(projectId, conversationNumericId);
+    } catch (error) {
+      setThreadNote(exportErrorText(error));
+    } finally {
+      setExporting(false);
+    }
+  };
 
   if (!isConversationRef(ref)) return <StatusScreen title="Conversation not found" />;
   if (conversation.isLoading) {
@@ -378,7 +456,12 @@ export default function ThreadScreen() {
       rows.push({ kind: 'live_user', key: `live-user-${live.questionId}`, text: live.userText, files: live.attachmentNames });
     }
   }
-  for (const message of [...messages].reverse()) rows.push({ kind: 'persisted', key: message.key, message });
+  // A regenerated answer is rewritten in place: its old text hides while the new one streams.
+  const replacing = answerHiddenByRegeneration(live);
+  for (const message of [...messages].reverse()) {
+    if (replacing !== null && message.uuid === replacing) continue;
+    rows.push({ kind: 'persisted', key: message.key, message });
+  }
 
   const pauseBlocks = pause !== null && pause.kind !== 'output_limit' && !(pause.kind === 'hitl' && pause.shape === 'fanout');
   const disabledReason = pauseBlocks
@@ -408,11 +491,30 @@ export default function ThreadScreen() {
         options={{
           title: detail?.name || 'Conversation',
           headerRight:
-            contract11 && conversationNumericId !== null
+            (contract11 && conversationNumericId !== null) || canExport
               ? () => (
-                  <Pressable accessibilityRole="button" accessibilityLabel="Participants" onPress={() => setPeopleOpen(true)} hitSlop={10}>
-                    <Text style={[styles.action, { color: palette.accent }]}>People</Text>
-                  </Pressable>
+                  <View style={styles.headerActions}>
+                    {canExport ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Export conversation"
+                        accessibilityState={{ busy: exporting, disabled: exporting }}
+                        disabled={exporting}
+                        onPress={() => void exportTranscript()}
+                        hitSlop={10}>
+                        <Text maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.action, { color: palette.accent, opacity: exporting ? 0.5 : 1 }]}>
+                          Export
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                    {contract11 && conversationNumericId !== null ? (
+                      <Pressable accessibilityRole="button" accessibilityLabel="Participants" onPress={() => setPeopleOpen(true)} hitSlop={10}>
+                        <Text maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.action, { color: palette.accent }]}>
+                          People
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
                 )
               : undefined,
         }}
@@ -453,6 +555,7 @@ export default function ThreadScreen() {
                       : []
                   }
                   onOpenTool={setOpenStep}
+                  onActions={() => setActionsFor(item.message)}
                 />
               );
             case 'live_user':
@@ -495,6 +598,31 @@ export default function ThreadScreen() {
       ) : null}
       <ImageViewer uri={opener.viewer?.uri ?? null} name={opener.viewer?.name ?? ''} onClose={opener.closeViewer} />
       <ToolDetailSheet step={openStep} projectId={projectId} onClose={() => setOpenStep(null)} />
+      <MessageActionsSheet
+        message={actionsFor}
+        plan={actionPlan}
+        projectId={projectId}
+        onClose={() => setActionsFor(null)}
+        onRegenerate={(message) => void regenerate(message)}
+        onReadAloud={(message) => readAloud(message.key, message.text)}
+      />
+      {reading !== null ? (
+        <View style={[styles.reading, { borderTopColor: palette.border, backgroundColor: palette.backgroundElement }]}>
+          <Text accessibilityLiveRegion="polite" style={[styles.readingText, { color: palette.textSecondary }]}>
+            Reading aloud…
+          </Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="Stop reading aloud" onPress={stopReading} hitSlop={10}>
+            <Text style={[styles.actionSmall, { color: palette.accent }]}>Stop</Text>
+          </Pressable>
+        </View>
+      ) : null}
+      {threadNote ? (
+        <Pressable accessibilityRole="button" accessibilityHint="Dismisses the note" onPress={() => setThreadNote(null)}>
+          <Text accessibilityRole="alert" style={[styles.note, { color: palette.danger }]}>
+            {threadNote}
+          </Text>
+        </Pressable>
+      ) : null}
       <Composer
         disabledReason={disabledReason}
         busy={turn.busy}
@@ -515,6 +643,8 @@ export default function ThreadScreen() {
         allowEmptyText={trayItems.length > 0}
         leading={<AttachButton disabledReason={gateReason} onPick={(source) => void pickInto(source)} />}
         onSend={({ text, mentions }) => sendWithFiles(text, mentions)}
+        onStop={contract13 && online && turn.canStop ? turn.stop : null}
+        dictation={dictation}
       />
     </KeyboardAvoidingView>
   );
@@ -527,8 +657,10 @@ function PersistedMessage({
   highlight,
   opening,
   onOpenFile,
+  onActions,
 }: {
   message: ChatMessage;
+  onActions: () => void;
   highlight: { people: string[]; agents: string[] };
   opening: string | null;
   onOpenFile: ((attachment: ChatAttachment) => void) | null;
@@ -548,6 +680,7 @@ function PersistedMessage({
       status={status}
       error={message.error}
       highlight={message.role === 'user' ? highlight : null}
+      onActions={message.text.trim() !== '' || message.role === 'assistant' ? onActions : null}
       footer={
         message.attachments.length > 0 || tools.length > 0 ? (
           <>
@@ -643,7 +776,9 @@ function LiveReply({
   const waiting = turn.phase === 'sending' || (turn.phase === 'streaming' && turn.content === '');
   const status =
     turn.status ??
-    (turn.phase === 'paused'
+    (turn.stopped
+      ? 'Stopped.'
+      : turn.phase === 'paused'
       ? turn.pause
         ? 'Waiting for you.'
         : 'Paused. Continue it in the web app.'
@@ -693,4 +828,15 @@ const styles = StyleSheet.create({
   action: { fontSize: 16, fontWeight: '600' },
   actions: { flexDirection: 'row', gap: Spacing.three, marginTop: Spacing.one },
   actionSmall: { fontSize: 14, fontWeight: '600' },
+  note: { fontSize: 14, paddingHorizontal: Spacing.three, paddingVertical: Spacing.one },
+  reading: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: Spacing.three,
+    paddingVertical: Spacing.one,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  readingText: { fontSize: 14 },
+  headerActions: { flexDirection: 'row', gap: Spacing.three, alignItems: 'center' },
 });

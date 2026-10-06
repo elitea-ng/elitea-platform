@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Spacing } from '@/constants/theme';
+import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
 import {
   EVERYONE,
@@ -15,6 +16,8 @@ import {
   type TriggerChar,
 } from '@/features/chat/mentions/mentions';
 import { SuggestionStrip, type Suggestion, type SuggestionState } from '@/features/chat/SuggestionStrip';
+import { DictationButton } from '@/features/speech/DictationButton';
+import { dictationProblemText, joinDictation } from '@/features/speech/dictation';
 
 /** What the composer hands over on send. */
 export interface ComposerSend {
@@ -50,6 +53,29 @@ export interface ComposerProps {
   leading?: ReactNode;
   /** Sending is allowed with empty text (files attached). */
   allowEmptyText?: boolean;
+  /**
+   * While an answer streams: stops it on the server (the Send button
+   * becomes Stop). Resolves to an error text (or null), and the message to
+   * put back when the server removed it with the stopped answer. Absent:
+   * Send stays, disabled, until the answer ends.
+   */
+  onStop?: (() => Promise<{ problem: string | null; restoreText: string | null; lostAttachments?: string[] }>) | null;
+  /** Offer on-device dictation (the screen checks the device can). */
+  dictation?: boolean;
+}
+
+function listNames(names: string[]): string {
+  if (names.length <= 1) return names.join('');
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/** What the composer says after a Stop removed the user's question on the server. */
+export function stoppedNote(restoreText: string, lostAttachments: string[]): string {
+  if (lostAttachments.length === 0) return 'Stopped before an answer. Your message is back here to edit or send again.';
+  const files = listNames(lostAttachments);
+  const them = lostAttachments.length === 1 ? 'it' : 'them';
+  if (restoreText.trim() === '') return `Stopped before an answer. The message was removed; attach ${files} again to send ${them}.`;
+  return `Stopped before an answer. Your message is back here; attach ${files} again to send ${them}.`;
 }
 
 /** The "@" rows for a query: Everyone first, then names starting with it, then names containing it. */
@@ -79,6 +105,8 @@ export function Composer({
   accessory,
   leading,
   allowEmptyText = false,
+  onStop = null,
+  dictation = false,
 }: ComposerProps) {
   const palette = usePalette();
   const [text, setText] = useState('');
@@ -88,6 +116,9 @@ export function Composer({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [picking, setPicking] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  /** The text typed before the current dictation; the words heard go after it. */
+  const dictationBase = useRef<string | null>(null);
   /** A token whose pick failed; its strip stays hidden until the token changes. */
   const [dismissed, setDismissed] = useState<string | null>(null);
 
@@ -116,6 +147,26 @@ export function Composer({
   }
 
   const canSend = !busy && !submitting && !picking && (text.trim() !== '' || allowEmptyText);
+  const showStop = busy && onStop !== null;
+  const stop = () => {
+    if (!onStop || stopping) return;
+    setStopping(true);
+    setError(null);
+    onStop()
+      .then(({ problem, restoreText, lostAttachments = [] }) => {
+        if (restoreText !== null) {
+          // The server removed the question with the stopped answer: hand it
+          // back, unless the user has typed something new meanwhile. Its files
+          // cannot come back (the tray let go of them): name them.
+          setText((current) => (current.trim() === '' ? restoreText : current));
+          setError(stoppedNote(restoreText, lostAttachments));
+          return;
+        }
+        setError(problem);
+      })
+      .catch(() => setError("Couldn't stop the answer. Try again."))
+      .finally(() => setStopping(false));
+  };
 
   const settle = (sent: string, problem: string | null) => {
     setError(problem);
@@ -199,6 +250,23 @@ export function Composer({
       ) : null}
       <View style={styles.row}>
         {leading}
+        {dictation ? (
+          <DictationButton
+            disabled={submitting}
+            onStart={() => {
+              dictationBase.current = text;
+              setError(null);
+            }}
+            onText={(heard, final) => {
+              const base = dictationBase.current ?? '';
+              const next = joinDictation(base, heard);
+              setText(next);
+              setSelection({ start: next.length, end: next.length });
+              if (final) dictationBase.current = next;
+            }}
+            onProblem={(problem) => setError(dictationProblemText(problem))}
+          />
+        ) : null}
         <TextInput
           value={text}
           selection={forcedSelection}
@@ -218,21 +286,38 @@ export function Composer({
           placeholder="Message"
           placeholderTextColor={palette.textSecondary}
           multiline
+          maxFontSizeMultiplier={FONT_SCALE.input}
           accessibilityLabel="Message"
           style={[
             styles.input,
             { color: palette.text, backgroundColor: palette.backgroundElement, borderColor: palette.border },
           ]}
         />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Send"
-          accessibilityState={{ disabled: !canSend, busy }}
-          disabled={!canSend}
-          onPress={submit}
-          style={[styles.send, { backgroundColor: palette.accent, opacity: canSend ? 1 : 0.4 }]}>
-          <Text style={[styles.sendText, { color: palette.onAccent }]}>Send</Text>
-        </Pressable>
+        {showStop ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Stop answer"
+            accessibilityState={{ disabled: stopping, busy: stopping }}
+            disabled={stopping}
+            onPress={stop}
+            style={[styles.send, { backgroundColor: palette.danger, opacity: stopping ? 0.5 : 1 }]}>
+            <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.sendText, { color: palette.onAccent }]}>
+              {stopping ? 'Stopping…' : 'Stop'}
+            </Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Send"
+            accessibilityState={{ disabled: !canSend, busy }}
+            disabled={!canSend}
+            onPress={submit}
+            style={[styles.send, { backgroundColor: palette.accent, opacity: canSend ? 1 : 0.4 }]}>
+            <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.sendText, { color: palette.onAccent }]}>
+              Send
+            </Text>
+          </Pressable>
+        )}
       </View>
       {hint ? <Text style={[styles.hint, { color: palette.textSecondary }]}>{hint}</Text> : null}
     </View>

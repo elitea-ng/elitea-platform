@@ -27,6 +27,10 @@ after unlock and only when the workspace policy allows offline data, kept curren
 with `changes_since` sync, read when the workspace cannot be reached, with an
 outbox for messages written offline. Attachments are not stored offline yet (see
 [docs/open-questions.md](docs/open-questions.md)).
+Chat quick wins (client contract 1.3): a message actions sheet (copy, copy code,
+share, read aloud, like/dislike with a comment, regenerate), Stop on the server,
+on-device dictation, transcript export to the share sheet, suggested agents, and
+VoiceOver announcements, all behind the workspace's data-control policy.
 Native behaviour is verified by hand with
 [docs/device-verification.md](docs/device-verification.md).
 See [docs/design.md](docs/design.md) for the planned product and

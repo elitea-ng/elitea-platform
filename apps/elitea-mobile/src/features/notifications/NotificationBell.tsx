@@ -1,6 +1,7 @@
 import { Link } from 'expo-router';
 import { useEffect } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
+import { FONT_SCALE } from '@/constants/typeScale';
 
 import { useInvalidateNotifications, useUnseenCount } from '@/api/queries/notifications';
 import { usePalette } from '@/constants/use-palette';
@@ -34,10 +35,10 @@ export function NotificationBell() {
       href="/notifications"
       accessibilityLabel={count > 0 ? `Notifications, ${count} unread` : 'Notifications'}>
       <View style={styles.wrap}>
-        <Text style={[styles.bell, { color: palette.accent }]}>🔔</Text>
+        <Text maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.bell, { color: palette.accent }]}>🔔</Text>
         {count > 0 ? (
           <View style={[styles.badge, { backgroundColor: palette.danger }]}>
-            <Text style={styles.badgeText}>{label}</Text>
+            <Text maxFontSizeMultiplier={FONT_SCALE.chrome} style={styles.badgeText}>{label}</Text>
           </View>
         ) : null}
       </View>

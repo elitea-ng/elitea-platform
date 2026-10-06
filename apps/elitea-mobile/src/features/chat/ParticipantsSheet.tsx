@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { useAgents } from '@/api/queries/agents';
 import {
@@ -12,7 +12,9 @@ import {
 } from '@/api/queries/participants';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
+import { useModalAnimation } from '@/features/a11y/motion';
 import { participantName, participantUserId } from '@/features/chat/messageModel';
+import { LockAwareModal } from '@/security/lock/LockAwareModal';
 
 const KIND_LABEL: Record<string, string> = {
   user: 'Person',
@@ -55,10 +57,11 @@ export interface ParticipantsSheetProps {
  * the server) and "Add agent". Online only.
  */
 export function ParticipantsSheet(props: ParticipantsSheetProps) {
+  const animation = useModalAnimation('slide');
   return (
-    <Modal visible={props.visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={props.onClose}>
+    <LockAwareModal visible={props.visible} animationType={animation} presentationStyle="pageSheet" onRequestClose={props.onClose}>
       {props.visible ? <SheetBody {...props} /> : null}
-    </Modal>
+    </LockAwareModal>
   );
 }
 

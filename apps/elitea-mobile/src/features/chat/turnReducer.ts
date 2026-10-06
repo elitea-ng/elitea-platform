@@ -56,6 +56,12 @@ export interface TurnState {
    * goes on.
    */
   pause: TurnPause | null;
+  /**
+   * The run was stopped (client contract 1.3 stop, from this device or
+   * another): the server ends the stream with `execution.failed`
+   * `CANCELLED`. It settles like a finished answer, keeping its partial text.
+   */
+  stopped: boolean;
 }
 
 export const INITIAL_TURN: TurnState = {
@@ -68,7 +74,10 @@ export const INITIAL_TURN: TurnState = {
   paragraphPending: false,
   tools: [],
   pause: null,
+  stopped: false,
 };
+/** The `execution.failed` code of a run that was stopped. */
+export const CANCELLED_CODE = 'CANCELLED';
 export const GENERIC_FAILURE = 'The agent could not finish this reply.';
 const MAX_ERROR_TEXT = 300;
 
@@ -123,6 +132,9 @@ export function reduceTurn(state: TurnState, frame: Frame): TurnState {
 
   switch (frame.kind) {
     case 'failed':
+      if (frame.failure.code === CANCELLED_CODE) {
+        return { ...state, phase: 'done', status: null, error: null, stopped: true };
+      }
       return {
         ...state,
         phase: 'failed',

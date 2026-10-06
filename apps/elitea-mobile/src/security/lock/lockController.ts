@@ -95,6 +95,14 @@ export class LockController {
 
   getState = (): LockState => this.state;
 
+  /**
+   * True while a guarded session is behind the lock (deciding, locked, or no
+   * device security): anything drawn in its own native window (a Modal) or
+   * heard (read aloud, dictation) must not outlive it. False when unlocked
+   * and when not guarding at all (signed out).
+   */
+  covers = (): boolean => this.appSub !== null && this.state.status !== 'unlocked';
+
   subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener);
     return () => {

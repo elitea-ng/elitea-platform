@@ -6,7 +6,12 @@ import { ActivityIndicator, Pressable, SectionList, StyleSheet, Text, TextInput,
 import { StartConversationError, startConversationWithAgent, useAgents, type Agent } from '@/api/queries/agents';
 import { queryKeys } from '@/api/queries/keys';
 import { startConversationWithModel, useModels, type ChatModel } from '@/api/queries/models';
+import { speaksContract } from '@/api/discovery';
+import { useRecommendations } from '@/api/queries/recommendations';
 import { StatusScreen } from '@/components/StatusScreen';
+import { FONT_SCALE } from '@/constants/typeScale';
+import { SuggestionStrip } from '@/features/chat/SuggestionStrip';
+import { useWorkspaceInfo } from '@/state/workspaceInfo';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { useSession } from '@/state/session';
@@ -25,6 +30,10 @@ export default function NewConversationScreen() {
   const agents = useAgents(projectId, search);
   const models = useModels(projectId);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  // Suggested agents (client contract 1.3) on the empty screen: no search typed.
+  const workspace = useWorkspaceInfo();
+  const contract13 = speaksContract(workspace?.discovery, 1, 3);
+  const suggested = useRecommendations(projectId, contract13);
   const [error, setError] = useState<string | null>(null);
 
   const start = async (choice: Choice) => {
@@ -59,6 +68,7 @@ export default function NewConversationScreen() {
     ...(agentChoices.length > 0 ? [{ title: 'Agents', data: agentChoices }] : []),
     ...(modelChoices.length > 0 ? [{ title: 'Chat with a model', data: modelChoices }] : []),
   ];
+  const suggestions = needle === '' ? (suggested.data ?? []) : [];
   const loading = agents.isLoading || models.isLoading;
   const failed = agents.error && models.error;
 
@@ -96,6 +106,33 @@ export default function NewConversationScreen() {
           keyExtractor={(choice) => choice.key}
           keyboardShouldPersistTaps="handled"
           stickySectionHeadersEnabled={false}
+          ListHeaderComponent={
+            suggestions.length > 0 ? (
+              <View style={styles.suggested}>
+                <Text accessibilityRole="header" maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.header, { color: palette.textSecondary }]}>
+                  Suggested
+                </Text>
+                <View style={styles.suggestedStrip}>
+                  <SuggestionStrip
+                    inline
+                    label="Suggested agents"
+                    state={{
+                      items: suggestions.map((agent) => ({
+                        key: `suggested:${agent.id}`,
+                        title: agent.name,
+                        subtitle: agent.description || 'Agent',
+                        badge: busyKey === `suggested:${agent.id}` ? 'Starting…' : null,
+                      })),
+                    }}
+                    onPick={(item) => {
+                      const agent = suggestions.find((a) => `suggested:${a.id}` === item.key);
+                      if (agent) void start({ kind: 'agent', key: item.key, agent });
+                    }}
+                  />
+                </View>
+              </View>
+            ) : undefined
+          }
           ListEmptyComponent={
             <Text style={[styles.empty, { color: palette.textSecondary }]}>No agents or models found.</Text>
           }
@@ -151,6 +188,8 @@ const styles = StyleSheet.create({
   header: { fontSize: 13, fontWeight: '600', paddingHorizontal: Spacing.three, paddingTop: Spacing.three, paddingBottom: Spacing.one },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: Spacing.three },
   row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, padding: Spacing.three },
+  suggested: { paddingBottom: Spacing.two },
+  suggestedStrip: { paddingHorizontal: Spacing.three },
   name: { fontSize: 16, fontWeight: '500' },
   description: { fontSize: 13, marginTop: 2 },
 });

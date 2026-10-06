@@ -9,6 +9,8 @@ export interface SafeRendererOptions {
   allowHttp?: boolean;
   /** Style of the chip that stands in for an image. */
   chipStyle?: TextStyle;
+  /** Text can be selected (the system Copy/Share menu); false when the workspace forbids sharing out. Default true. */
+  selectable?: boolean;
 }
 
 /**
@@ -24,10 +26,12 @@ export class SafeRenderer extends Renderer {
   private readonly openLink: LinkOpener;
   private readonly allowHttp: boolean | undefined;
   private readonly chipStyle: TextStyle | undefined;
+  private readonly textSelectable: boolean;
   private keyCounter = 0;
 
   constructor(options: SafeRendererOptions = {}) {
-    super({ selectable: true });
+    super({ selectable: options.selectable ?? true });
+    this.textSelectable = options.selectable ?? true;
     this.openLink = options.openLink ?? confirmAndOpenLink;
     this.allowHttp = options.allowHttp;
     this.chipStyle = options.chipStyle;
@@ -47,7 +51,7 @@ export class SafeRenderer extends Renderer {
     const onPress = this.onPressFor(href);
     if (!onPress) {
       return (
-        <Text key={this.nextKey('text-link')} selectable style={styles ? { ...styles, textDecorationLine: 'none' } : undefined}>
+        <Text key={this.nextKey('text-link')} selectable={this.textSelectable} style={styles ? { ...styles, textDecorationLine: 'none' } : undefined}>
           {children}
         </Text>
       );
@@ -55,7 +59,7 @@ export class SafeRenderer extends Renderer {
     return (
       <Text
         key={this.nextKey('link')}
-        selectable
+        selectable={this.textSelectable}
         accessibilityRole="link"
         accessibilityLabel={title || undefined}
         accessibilityHint="Opens in your browser after you confirm"

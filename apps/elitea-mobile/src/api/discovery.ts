@@ -39,10 +39,20 @@ const NativeAuthSchema = z.looseObject({
   code_challenge_methods_supported: z.array(z.string().max(32)).max(16),
 });
 
+// Client contract 1.3 data controls: a server before 1.3 has none, and a
+// malformed value reads as absent (the documented default applies).
+const optionalFlag = z.boolean().optional().catch(undefined);
+
 const PublicPolicySchema = z.looseObject({
   require_device_lock: z.boolean(),
   offline_enabled: z.boolean(),
   min_client_version: VERSION_TEXT,
+  allow_share_out: optionalFlag,
+  allow_share_in: optionalFlag,
+  allow_cloud_stt: optionalFlag,
+  notification_preview: z.string().max(32).optional().catch(undefined),
+  allow_notification_actions: optionalFlag,
+  allow_system_surfaces: optionalFlag,
 });
 
 const BYTES = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);

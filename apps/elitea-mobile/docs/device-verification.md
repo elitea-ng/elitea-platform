@@ -220,3 +220,42 @@ Set `native_client_policy.offline_retention_days` > 0 on the workspace first; wi
       appears), with no duplicate turns in the web app. Kill the app while one is
       "Sending…" and relaunch online: it is sent once (the server replays the same
       `question_id`).
+
+## 10. Chat quick wins (client contract 1.3: `src/features/chat/actions/*`, `src/features/speech/*`, `src/features/a11y/*`)
+
+Needs a 1.3 workspace (discovery `client_contract` 1.3) for feedback, Stop, export and
+suggestions; copy, share, read aloud, dictation and regenerate also work on 1.2.
+
+- [ ] **Actions sheet.** Long-press an answer with a code block, and tap its "•••": Copy and
+      "Copy python code" put the text on the clipboard (paste it in Notes); Share opens the
+      system sheet with the text.
+- [ ] **Share out off.** With `allow_share_out: false` in the admin policy (after the next
+      token refresh, or at once via discovery): no Copy, Share or Export; the sheet says the
+      workspace does not allow it.
+- [ ] **Feedback.** Bad with a comment, then Good: the web app shows the like (and no
+      dislike); tapping Good again removes it.
+- [ ] **Stop.** Send `[[mock:slow]] tell me a story` (mock LLM) or a long prompt: Stop appears
+      instead of Send; tap it: the stream stops at once, the partial answer stays, and the web
+      app shows the run as stopped (no more tokens billed).
+- [ ] **Regenerate.** On the newest answer: the old text is replaced by the new stream, and
+      no "didn't replace this answer" note appears. The web app shows one answer, not two.
+- [ ] **Dictation, on the device.** First tap on the microphone asks for the microphone and
+      speech recognition (the texts say on-device). With airplane mode ON, dictation still
+      works (proof that no server recogniser is used); on a device or language without an
+      on-device model, the composer says dictation is not available and asks nothing.
+      iOS with a region/language whose on-device model is missing (Settings → General →
+      Language & Region, then a language not downloaded for dictation): tapping the microphone
+      ends with "not available", never with words (proof the patched library refuses rather
+      than using Apple's server recogniser).
+- [ ] **Read aloud.** Reads the answer with "Code block." in place of code; Stop in the bar
+      ends it; leaving the thread ends it; logout ends it.
+- [ ] **Export (iOS).** Export → share sheet with `<conversation name>.md`; after the sheet closes,
+      the app container's `Library/Caches/export-tmp` is empty.
+- [ ] **Export (Android).** Export → chooser; send to Gmail or Drive: the target gets the `.md`
+      FILE (not empty text). The file stays in `cache/export-tmp` until the next export.
+- [ ] **Suggested agents.** New chat with no search shows "Suggested"; tapping one starts the
+      chat with that agent.
+- [ ] **VoiceOver.** With VoiceOver on, send a message: "<agent> answered." is spoken once at
+      the end (not while it streams); a sensitive tool pause says "Approval needed to run …".
+- [ ] **Dynamic Type and Reduce Motion.** At the largest accessibility size the composer,
+      chips and sheet rows stay usable; with Reduce Motion on, sheets fade in.

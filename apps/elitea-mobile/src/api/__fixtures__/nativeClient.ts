@@ -182,3 +182,31 @@ export function attachmentPolicy(overrides: Record<string, unknown> = {}) {
 export function discoveryDocument11(overrides: Record<string, unknown> = {}) {
   return discoveryDocument({ server_version: '4.2', client_contract: '1.1', attachments: attachmentPolicy(), ...overrides });
 }
+
+/**
+ * The client contract 1.3 data controls with the server's defaults for an
+ * unsaved policy (elitea-platform 507a13b0c, platformconfig
+ * nativeclientpolicy.go): the same keys in the token response's full policy
+ * and in discovery's public subset (discovery/document.go `PublicPolicy`).
+ */
+export function dataControls(overrides: Record<string, unknown> = {}) {
+  return {
+    allow_share_out: true,
+    allow_share_in: true,
+    allow_cloud_stt: false,
+    notification_preview: 'none',
+    allow_notification_actions: true,
+    allow_system_surfaces: false,
+    ...overrides,
+  };
+}
+
+/** A client contract 1.3 discovery document (server branch feat/client-contract-1-3, 507a13b0c). */
+export function discoveryDocument13(overrides: Record<string, unknown> = {}, controls: Record<string, unknown> = {}) {
+  return discoveryDocument11({
+    server_version: '4.7',
+    client_contract: '1.3',
+    client_policy: { require_device_lock: false, offline_enabled: true, min_client_version: '', ...dataControls(controls) },
+    ...overrides,
+  });
+}

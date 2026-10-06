@@ -10,7 +10,7 @@ this repository.
 | `elitea-v2.yaml.sha256` | `shasum -a 256` of the copy; `npm run contract:verify` fails on any change. |
 | `LICENSE.elitea` | The upstream Apache-2.0 license text and NOTICE, required to redistribute the copy. |
 | `client-operations.json` | The app's declared API surface: the operationIds kept in the generated client. |
-| `overlay/native-gap.yaml` | **Our own** OpenAPI fragment for REST operations the pinned contract does not define yet, plus `x-zefir-extend` additions to upstream operations and schemas. Each entry records where its shape was observed (`x-zefir-source`) and what will replace it (`x-zefir-until`). **Empty** since the pin moved to v4.2.0 (client contract 1.1; still empty at 1.2): upstream now defines every operation the app uses. |
+| `overlay/native-gap.yaml` | **Our own** OpenAPI fragment for REST operations the pinned contract does not define yet, plus `x-zefir-extend` additions to upstream operations and schemas. Each entry records where its shape was observed (`x-zefir-source`) and what will replace it (`x-zefir-until`). Empty from v4.2.0 (1.1) to v4.3.2 (1.2); it now carries the unreleased client contract 1.3 gap (see below). |
 
 ## Generated client
 
@@ -82,6 +82,31 @@ user, not a failure) and documents the pause `finish_reason`s on trace steps.
 The route and the trace fields exist on a 1.1 server too; a 1.1 server sends
 `agent_tool_error` with the interrupt's repr for a pause, which the app still
 recognises.
+
+## Client contract 1.3 (overlay, not released yet)
+
+The server's 1.3 work is elitea-platform PR #1090 (branch
+`feat/client-contract-1-3`, commit `507a13b0c1fc2cf2cebe7a42ba2516c101c49221`,
+2026-10-06). It is not in a release, so the pin stays at v4.3.2 (1.2) and the
+gap goes through the overlay:
+
+| Overlay entry | What it is |
+|---|---|
+| `DELETE /elitea_core/task/prompt_lib/{project_id}/{response_message_id}` (`cancelChatExecution`) | Server-side stop of a running answer. 204 (also when this caller already stopped it), 409 when the answer is no longer running or not the caller's. |
+| `x-zefir-extend` on `NativeClientPolicy` and `ClientPublicPolicy` | The six data controls: `allow_share_out`, `allow_share_in`, `allow_cloud_stt`, `notification_preview`, `allow_notification_actions`, `allow_system_surfaces`. |
+
+The other 1.3 operations the app uses are already defined (untagged) in the
+1.2 pin and are listed in `client-operations.json`: `getMessageFeedback`,
+`setMessageFeedback`, `deleteMessageFeedback`, `exportConversation`,
+`getRecommendations`. `regenerateChatMessage` was already tagged `client`.
+
+The app calls the 1.3 operations only when discovery says `client_contract`
+>= 1.3 (`speaksContract(document, 1, 3)`); on an older server the feature is
+hidden. The data controls default to the server's own defaults when a server
+sends none (src/security/policy.ts `DATA_CONTROL_DEFAULTS`).
+
+When a release carries 1.3: copy its `v2.yaml` verbatim (steps below), delete
+the overlay entries the build names, regenerate, and update this section.
 
 `GET /api/v2/auth/native/authorize` is a browser navigation, not an API call,
 so it is not typed; the app builds that URL itself (`src/auth/nativeAuth.ts`).

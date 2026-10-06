@@ -7,13 +7,17 @@ import {
   QUESTION_ID_RE,
   TurnStartError,
   continueTurn,
+  prepareRegeneration,
   prepareTurn,
+  startRegeneration,
   startTurn,
+  type RegenerationRequest,
   type ContinueContract,
   type PreparedTurn,
   type StartedTurn,
   type TurnRequest,
 } from '@/api/queries/sendMessage';
+import { stopTurn, type StopOutcome } from '@/api/queries/stopTurn';
 import { backoffDelay, ResumableStream, type ResumableStreamOptions, type StreamStatus } from '@/api/sse/stream';
 import type { StreamTransport } from '@/api/sse/transport';
 import { projectScope } from '@/lib/abortRegistry';
@@ -67,6 +71,26 @@ export interface LiveTurn {
   continuation: boolean;
   /** The names of the files the message carries. */
   attachmentNames: string[];
+  /**
+   * A regeneration of a persisted answer: it is rewritten in place, so the
+   * thread hides the old text while this turn is live, and after it settles
+   * checks that the answer's `generation` is this `regenerationId`.
+   */
+  regeneration: { answerUuid: string; regenerationId: string } | null;
+}
+
+/**
+ * The persisted answer a live regeneration rewrites, which the thread hides
+ * while the new one streams; null when nothing should be hidden. A
+ * regeneration that failed while SENDING with nothing written (a refused
+ * 400/409/422, the send attempts used up) never touched the answer on the
+ * server, so the original shows again, next to the failed bubble, instead of
+ * staying hidden until the user taps Dismiss.
+ */
+export function answerHiddenByRegeneration(live: LiveTurn | null): string | null {
+  if (!live || live.settled || !live.regeneration) return null;
+  if (live.turn.phase === 'failed' && live.failure === 'send' && live.turn.content === '') return null;
+  return live.regeneration.answerUuid;
 }
 
 export interface TurnDeps {
@@ -93,6 +117,10 @@ export interface TurnDeps {
   handOff?: (prepared: PreparedTurn, hint: HandOffHint) => Promise<boolean>;
   /** Starts the execution instead of a chat send (a continuation). */
   start?: (signal: AbortSignal) => Promise<StartedTurn>;
+  /** Set by `TurnController.regeneration`. */
+  regeneration?: { answerUuid: string; regenerationId: string };
+  /** The server stop (client contract 1.3); injectable for tests. */
+  stopOnServer?: (projectId: number, responseMessageId: string) => Promise<StopOutcome>;
   /** The pause was answered elsewhere (409 `*_already_resolved`). */
   onAlreadyResolved?: () => void;
 }
@@ -190,6 +218,7 @@ export class TurnController {
       queued: false,
       continuation: deps.start !== undefined,
       attachmentNames: (prepared.request.attachments ?? []).map((a) => a.name),
+      regeneration: deps.regeneration ?? null,
     };
   }
 
@@ -217,6 +246,36 @@ export class TurnController {
       ...deps,
       maxSendAttempts: 1,
       start: (signal) => continueTurn(contract, body, { client: deps.client, signal }),
+    });
+  }
+
+  /**
+   * Regenerates the newest answer (regenerateChatMessage): one body, sent
+   * again unchanged on a retry (the `regeneration_id` makes it idempotent;
+   * 409 `agent_regeneration_pending` is retried after its Retry-After), then
+   * the answer's stream like a send. Never queued: online only.
+   */
+  static regeneration(
+    request: Omit<RegenerationRequest, 'regenerationId'> & { regenerationId?: string },
+    deps: Omit<TurnDeps, 'start' | 'handOff' | 'regeneration'> = {},
+  ): TurnController {
+    const regenerationId = request.regenerationId ?? newQuestionId();
+    const prepared = prepareRegeneration({ ...request, regenerationId });
+    const turn: PreparedTurn = {
+      request: {
+        projectId: request.projectId,
+        conversationUuid: request.conversationUuid,
+        participantId: request.participantId,
+        questionId: regenerationId,
+        userInput: '',
+        model: request.model ?? null,
+      },
+      bodyJson: prepared.bodyJson,
+    };
+    return new TurnController(turn, {
+      ...deps,
+      regeneration: { answerUuid: request.answerUuid, regenerationId },
+      start: (signal) => startRegeneration(prepared, { client: deps.client, signal }),
     });
   }
 
@@ -274,6 +333,33 @@ export class TurnController {
   /** Re-attach after a remount or a failure: same body, same question_id. */
   reattach(): Promise<void> {
     return this.start();
+  }
+
+  /**
+   * Stops the run on the server (client contract 1.3). Possible once the
+   * send is admitted (the answer's `response_message_id` is known) and while
+   * the turn streams. After a 204 the stream is closed and the transcript
+   * read again (partial output is kept); the turn settles as stopped.
+   * 'not_running': the answer had already ended; its own stream settles it.
+   * Throws StopError when the stop could not be recorded.
+   */
+  async stop(): Promise<StopOutcome | 'not_ready'> {
+    const responseMessageId = this.state.execution?.responseMessageId ?? null;
+    if (!this.isActive || this.state.turn.phase !== 'streaming' || responseMessageId === null) return 'not_ready';
+    const stopOnServer = this.deps.stopOnServer ?? ((projectId: number, id: string) => stopTurn(projectId, id, this.deps.client));
+    const outcome = await stopOnServer(this.prepared.request.projectId, responseMessageId);
+    if (outcome !== 'stopped') return outcome;
+    // The stream would still deliver the CANCELLED frame; it is not needed.
+    const generation = ++this.generation;
+    this.stopNetwork();
+    this.update({ turn: { ...this.state.turn, phase: 'done', status: null, error: null, stopped: true }, canReconnect: false });
+    try {
+      await this.deps.onSettle?.();
+    } catch (error) {
+      log.warn('refetch after the stop failed', { error });
+    }
+    if (generation === this.generation) this.update({ settled: true });
+    return 'stopped';
   }
 
   /** After the stream gave up: try again now. */

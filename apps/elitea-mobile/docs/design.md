@@ -234,3 +234,65 @@ Several workspaces can be connected at once (`src/security/workspaceRegistry.ts`
   no new sign-in, same project, same database file and key.
 - **Limits.** At most 8 workspaces. Only the active workspace syncs and drains its outbox
   (no background execution); the others catch up when opened.
+
+## Chat quick wins (client contract 1.3)
+
+The server's 1.3 work is not released yet (elitea-platform PR #1090, `507a13b0c`), so
+the pin stays at 1.2 and the gap goes through the overlay (`contract/README.md`). Every
+1.3 feature is shown only when discovery says `client_contract` >= 1.3; on an older
+server it is hidden, not broken.
+
+- **Data controls.** The policy carries `allow_share_out`, `allow_share_in`,
+  `allow_cloud_stt`, `notification_preview` (`none`|`title`), `allow_notification_actions`
+  and `allow_system_surfaces`. With none sent (a server before 1.3) they take the server's
+  own defaults (owner decision, SaaS behaviour): share out/in and actions on, cloud speech
+  and system-surface titles off, preview `none` (`src/security/policy.ts`
+  `DATA_CONTROL_DEFAULTS`). An enterprise admin turns each off; a discovery document can
+  only tighten them after sign-in, and the tightening is persisted with the server policy.
+- **Message actions.** A long press on a message, or its "•••" button (VoiceOver's way in),
+  opens a sheet: Copy, Copy code (each fenced block, by language), Share, Read aloud,
+  Good / Bad (with an optional comment, at most 2000 characters; tapping your rating again
+  retracts it) and Regenerate. Copy, code copy, share and export need `allow_share_out`;
+  with it off the sheet says the workspace does not allow it. Feedback needs 1.3, a
+  persisted answer and the network.
+- **Stop.** While an answer streams, Send becomes Stop: `cancelChatExecution` (DELETE
+  `/elitea_core/task/prompt_lib/{project}/{response_message_id}`), then the stream is
+  closed and the transcript read again, so the partial text stays. 204 also for a second
+  stop by the same user; 409 means the answer had already ended. A stream that ends with
+  `execution.failed` `CANCELLED` (a stop from another device too) settles as stopped, not
+  failed.
+- **Regenerate.** On the newest answer: `regenerateChatMessage` with a client
+  `regeneration_id` (byte-identical retries; `agent_regeneration_pending` 409 waits for its
+  Retry-After). The new answer streams in place of the old one. Afterwards the app checks
+  that the persisted answer's `meta.execution_generation` is the regeneration id (the first
+  answer carries its question's id); if not, the thread says the answer was not replaced.
+  Proven on the zefir-wave stack: same uuid, new task id and item, generation = the id.
+- **Speech, on the device only.** Dictation uses expo-speech-recognition with
+  `requiresOnDeviceRecognition`: no audio leaves the device, and a device or language
+  without an on-device model has no dictation rather than a server fallback. Apple's
+  server recogniser is never used; `allow_cloud_stt` is reserved for the workspace's own
+  transcription model (later). Read aloud uses expo-speech (the device synthesiser):
+  Markdown marks are dropped and code blocks announced, one reading at a time, stopped with
+  the thread and the session. Each speech module has one facade (lint). The on-device
+  guarantee is native: expo-speech-recognition is pinned to exactly 57.1.0 and patched
+  (`patches/`, applied on install) so `start()` refuses a language whose recogniser has no
+  on-device model and the request always carries `requiresOnDeviceRecognition`; unpatched,
+  a language other than the system default fell back to Apple's servers silently. Android
+  dictates only from API 33, where the library has a real on-device recogniser.
+- **Export.** "Export" in the thread header (1.3, `allow_share_out`, online) reads the whole
+  transcript as Markdown (`exportConversation`), re-checks share-out and the workspace once
+  it has arrived, writes it to a random folder under the caches directory and shares the
+  FILE through expo-sharing (react-native's Share drops `url` on Android). iOS deletes it
+  when the sheet closes; on Android the target may read it after the chooser returns, so it
+  stays until the next export's sweep or the cache wipe. A conversation too long for one
+  document is refused by the server (400) and sent to the web app, never exported
+  truncated.
+- **Behind the device lock.** Every sheet is a `LockAwareModal` (a React Native Modal is its
+  own native window, above LockGate's cover): hidden while the lock covers the app, back
+  after the unlock. Read aloud stops and dictation aborts when the app locks.
+- **Suggested agents.** The empty new-chat screen lists the project's recommended agents
+  (`getRecommendations`, at most 10) until a search is typed.
+- **Accessibility.** VoiceOver hears phase changes of the live answer (done, stopped,
+  failed, waiting for approval, a question or a sign-in), debounced and never per token.
+  Text follows Dynamic Type up to caps where rows have a fixed size
+  (`src/constants/typeScale.ts`). With Reduce Motion on, sheets fade instead of sliding.

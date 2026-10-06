@@ -1,8 +1,10 @@
 import { useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { Spacing } from '@/constants/theme';
+import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
+import { useModalAnimation } from '@/features/a11y/motion';
 import {
   AUTHORIZATION_CONTRACT,
   ContinueBodyError,
@@ -22,6 +24,8 @@ import {
 } from '@/features/chat/pauses/continueBodies';
 import type { HitlInterrupt, TurnPause } from '@/features/chat/toolActivity';
 import { MONOSPACE_FONT } from '@/features/markdown/Markdown';
+import { useShareOut } from '@/security/policy';
+import { LockAwareModal } from '@/security/lock/LockAwareModal';
 
 export interface PauseCardProps {
   pause: TurnPause;
@@ -100,12 +104,12 @@ function Frame({ title, children, note }: { title: string; children: React.React
     <View
       accessibilityRole="summary"
       style={[styles.card, { borderColor: palette.accent, backgroundColor: palette.backgroundElement }]}>
-      <Text accessibilityRole="header" style={[styles.title, { color: palette.text }]}>
+      <Text maxFontSizeMultiplier={FONT_SCALE.body} accessibilityRole="header" style={[styles.title, { color: palette.text }]}>
         {title}
       </Text>
       {children}
       {note ? (
-        <Text accessibilityRole="alert" style={[styles.note, { color: palette.danger }]}>
+        <Text maxFontSizeMultiplier={FONT_SCALE.body} accessibilityRole="alert" style={[styles.note, { color: palette.danger }]}>
           {note}
         </Text>
       ) : null}
@@ -126,7 +130,7 @@ function Button({ label, onPress, disabled, primary }: { label: string; onPress:
         primary ? { backgroundColor: palette.accent, borderColor: palette.accent } : { borderColor: palette.border },
         { opacity: disabled ? 0.45 : 1 },
       ]}>
-      <Text style={[styles.buttonText, { color: primary ? palette.onAccent : palette.accent }]}>{label}</Text>
+      <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.buttonText, { color: primary ? palette.onAccent : palette.accent }]}>{label}</Text>
     </Pressable>
   );
 }
@@ -198,22 +202,22 @@ function InterruptBody({
   return (
     <View style={styles.interrupt}>
       {showTitle ? (
-        <Text style={[styles.subtitle, { color: palette.text, fontWeight: '600' }]}>
+        <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.subtitle, { color: palette.text, fontWeight: '600' }]}>
           {interrupt.actionLabel ?? interrupt.toolName ?? 'Approval'}
           {interrupt.parentAgentName ? ` (${interrupt.parentAgentName})` : ''}
         </Text>
       ) : null}
-      {subtitle ? <Text style={[styles.subtitle, { color: palette.textSecondary }]}>{subtitle}</Text> : null}
-      {interrupt.policyMessage ? <Text style={[styles.body, { color: palette.textSecondary }]}>{interrupt.policyMessage}</Text> : null}
+      {subtitle ? <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.subtitle, { color: palette.textSecondary }]}>{subtitle}</Text> : null}
+      {interrupt.policyMessage ? <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.textSecondary }]}>{interrupt.policyMessage}</Text> : null}
       {/* The Python worker sends the policy text as the message as well: say it once. */}
       {interrupt.message && !isAskUser(interrupt) && interrupt.message.trim() !== interrupt.policyMessage?.trim() ? (
-        <Text style={[styles.body, { color: palette.text }]}>{interrupt.message}</Text>
+        <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.text }]}>{interrupt.message}</Text>
       ) : null}
       {interrupt.toolArgs ? <MaskedArgs args={interrupt.toolArgs} /> : null}
       {isAskUser(interrupt) ? (
         <AskUser interrupt={interrupt} disabled={disabled} onAnswer={(value) => onDecide({ interrupt, action: 'answer', value })} />
       ) : decided ? (
-        <Text style={[styles.subtitle, { color: palette.textSecondary }]}>Chosen: {ACTION_LABEL[decided.action] ?? decided.action}</Text>
+        <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.subtitle, { color: palette.textSecondary }]}>Chosen: {ACTION_LABEL[decided.action] ?? decided.action}</Text>
       ) : (
         <View style={styles.buttons}>
           {interrupt.availableActions
@@ -252,12 +256,13 @@ export function MaskedArgs({ args }: { args: Record<string, unknown> }) {
   const palette = usePalette();
   const [open, setOpen] = useState(false);
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+  const shareOut = useShareOut();
   const keys = Object.keys(args).slice(0, 50);
   if (keys.length === 0) return null;
   return (
     <View>
       <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => setOpen((v) => !v)}>
-        <Text style={[styles.subtitle, { color: palette.accent }]}>
+        <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.subtitle, { color: palette.accent }]}>
           Arguments ({keys.length}) {open ? '▾' : '›'}
         </Text>
       </Pressable>
@@ -271,7 +276,7 @@ export function MaskedArgs({ args }: { args: Record<string, unknown> }) {
                 accessibilityRole="button"
                 accessibilityLabel={revealed[key] ? `${key}: ${text}` : `${key}, hidden. Tap to show.`}
                 onPress={() => setRevealed((r) => ({ ...r, [key]: !r[key] }))}>
-                <Text selectable={revealed[key]} style={[styles.arg, { color: palette.text }]}>
+                <Text maxFontSizeMultiplier={FONT_SCALE.body} selectable={shareOut && revealed[key]} style={[styles.arg, { color: palette.text }]}>
                   {key}: {revealed[key] ? text : '••••••'}
                 </Text>
               </Pressable>
@@ -298,7 +303,7 @@ function AskUser({ interrupt, disabled, onAnswer }: { interrupt: HitlInterrupt; 
     <View style={styles.interrupt}>
       {questions.map((q) => (
         <View key={q.key} style={styles.question}>
-          <Text style={[styles.body, { color: palette.text }]}>
+          <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.text }]}>
             {q.question}
             {q.optional ? ' (optional)' : ''}
           </Text>
@@ -315,7 +320,7 @@ function AskUser({ interrupt, disabled, onAnswer }: { interrupt: HitlInterrupt; 
                     disabled={disabled}
                     onPress={() => toggle(q.key, o.label, q.multiSelect)}
                     style={[styles.chip, { borderColor: on ? palette.accent : palette.border, backgroundColor: on ? palette.accent : 'transparent' }]}>
-                    <Text style={{ color: on ? palette.onAccent : palette.text, fontSize: 14 }}>{o.label}</Text>
+                    <Text maxFontSizeMultiplier={FONT_SCALE.body} style={{ color: on ? palette.onAccent : palette.text, fontSize: 14 }}>{o.label}</Text>
                   </Pressable>
                 );
               })}
@@ -358,10 +363,11 @@ function TextEditor({
   onCancel: () => void;
   onDone: (text: string) => void;
 }) {
+  const animation = useModalAnimation('slide');
   return (
-    <Modal visible={mode !== null} animationType="slide" presentationStyle="pageSheet" onRequestClose={onCancel}>
+    <LockAwareModal visible={mode !== null} animationType={animation} presentationStyle="pageSheet" onRequestClose={onCancel}>
       {mode !== null ? <EditorBody mode={mode} initial={initial} jsonObject={jsonObject} onCancel={onCancel} onDone={onDone} /> : null}
-    </Modal>
+    </LockAwareModal>
   );
 }
 
@@ -389,19 +395,22 @@ function EditorBody({
   onDone: (text: string) => void;
 }) {
   const palette = usePalette();
+  // The edit mode is prefilled with the agent's tool arguments: with share-out
+  // off, the field still edits but offers no Select All / Copy / Share.
+  const shareOut = useShareOut();
   const [text, setText] = useState(initial);
   const problem = text.trim() === '' ? 'Fill this in first.' : jsonObject ? jsonObjectError(text) : null;
   return (
     <View style={[styles.editor, { backgroundColor: palette.background }]}>
       <View style={styles.editorHeader}>
         <Pressable accessibilityRole="button" onPress={onCancel}>
-          <Text style={[styles.buttonText, { color: palette.accent }]}>Cancel</Text>
+          <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.buttonText, { color: palette.accent }]}>Cancel</Text>
         </Pressable>
-        <Text accessibilityRole="header" style={[styles.title, { color: palette.text }]}>
+        <Text maxFontSizeMultiplier={FONT_SCALE.body} accessibilityRole="header" style={[styles.title, { color: palette.text }]}>
           {mode === 'edit' ? 'Edit' : 'Block with comment'}
         </Text>
         <Pressable accessibilityRole="button" accessibilityState={{ disabled: problem !== null }} disabled={problem !== null} onPress={() => onDone(text)}>
-          <Text style={[styles.buttonText, { color: palette.accent, opacity: problem ? 0.4 : 1 }]}>Send</Text>
+          <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.buttonText, { color: palette.accent, opacity: problem ? 0.4 : 1 }]}>Send</Text>
         </Pressable>
       </View>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.editorBody}>
@@ -411,11 +420,12 @@ function EditorBody({
           autoFocus
           autoCapitalize="none"
           autoCorrect={mode !== 'edit'}
+          contextMenuHidden={!shareOut}
           value={text}
           onChangeText={setText}
           style={[styles.editorInput, { color: palette.text, borderColor: palette.border }, jsonObject ? { fontFamily: MONOSPACE_FONT } : null]}
         />
-        {problem && text !== '' ? <Text style={[styles.note, { color: palette.danger }]}>{problem}</Text> : null}
+        {problem && text !== '' ? <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.note, { color: palette.danger }]}>{problem}</Text> : null}
       </ScrollView>
     </View>
   );
@@ -431,7 +441,7 @@ function AuthCard(props: PauseCardProps & { pause: Extract<TurnPause, { kind: 'a
   const title = names.length === 1 ? `${names[0]} needs sign-in` : `${names.length} toolkits need sign-in`;
   return (
     <Frame title={title} note={error ?? offlineNote(props)}>
-      <Text style={[styles.body, { color: palette.textSecondary }]}>
+      <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.textSecondary }]}>
         The tool has not run. Skip it to let the agent continue without it, or sign in from the web app.
       </Text>
       <View style={styles.buttons}>
@@ -453,7 +463,7 @@ function OutputLimitCard(props: PauseCardProps) {
   const label = props.pause.kind === 'output_limit' && props.pause.action ? props.pause.action : 'Continue';
   return (
     <Frame title="The answer reached its length limit" note={error ?? offlineNote(props)}>
-      <Text style={[styles.body, { color: palette.textSecondary }]}>Continue to get the rest of it.</Text>
+      <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.textSecondary }]}>Continue to get the rest of it.</Text>
       <Button label={busy ? 'Continuing…' : label} primary disabled={disabled} onPress={() => submit(OUTPUT_LIMIT_CONTRACT, buildOutputLimitBody)} />
     </Frame>
   );

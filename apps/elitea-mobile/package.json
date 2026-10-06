@@ -21,6 +21,9 @@
     "expo-router": "~58.0.16",
     "expo-screen-capture": "~58.0.5",
     "expo-secure-store": "~58.0.2",
+    "expo-sharing": "~58.0.15",
+    "expo-speech": "~58.0.3",
+    "expo-speech-recognition": "57.1.0",
     "expo-splash-screen": "~58.0.6",
     "expo-sqlite": "~58.0.10",
     "expo-status-bar": "~58.0.3",
@@ -50,11 +53,13 @@
     "jest": "~30.5.2",
     "jest-expo": "~58.0.8",
     "openapi-typescript": "7.13.0",
+    "patch-package": "8.0.1",
     "test-renderer": "1.3.0",
     "typescript": "~6.0.3",
     "yaml": "^2.9.1"
   },
   "scripts": {
+    "postinstall": "patch-package",
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",

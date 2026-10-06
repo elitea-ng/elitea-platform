@@ -12,9 +12,12 @@ import {
   type TurnMentions,
   type TurnModel,
 } from '@/api/queries/sendMessage';
+import { stopErrorText } from '@/api/queries/stopTurn';
+import { answerRegenerated } from '@/features/chat/messageModel';
 import { log } from '@/lib/log';
 import { network } from '@/lib/network';
 import { handOffToOutbox, mustQueueBehindOutbox, queueSend, shouldQueue } from '@/sync/appOutbox';
+import { isOfflineCopy } from '@/sync/offlineReads';
 import {
   TurnController,
   newQuestionId,
@@ -80,6 +83,55 @@ export interface UseTurn {
   /** Forget a failed or settled turn. */
   dismiss: () => void;
   busy: boolean;
+  /**
+   * Stops the streaming answer on the server (client contract 1.3; the
+   * caller checks the contract). See `StopResult`.
+   */
+  stop: () => Promise<StopResult>;
+  /** The answer streams and is admitted, so it can be stopped now. */
+  canStop: boolean;
+  /**
+   * Regenerates the newest answer in place and streams the new one. Online
+   * only, never queued; resolves to an error text when it cannot start.
+   */
+  regenerate: (target: RegenerateTarget) => Promise<string | null>;
+}
+
+/**
+ * What a Stop came to: `problem` is an error text, or null; `restoreText` is
+ * the user's message when the server removed it with the stopped answer (a
+ * run stopped before any output is removed together with its question,
+ * cancelChatExecution), so the composer can hand it back instead of the
+ * message silently disappearing.
+ */
+export interface StopResult {
+  problem: string | null;
+  restoreText: string | null;
+  /**
+   * The names of the files that went with a removed question: they were
+   * uploaded for it and the tray let go of them, so the composer asks for
+   * them to be attached again. Empty otherwise.
+   */
+  lostAttachments: string[];
+}
+
+/** The text a message with files and no words is sent with (the server needs some). */
+export const ATTACHMENT_ONLY_TEXT = '(attachment)';
+
+/** The persisted answer to regenerate and the question it answers. */
+export interface RegenerateTarget {
+  answerUuid: string;
+  questionUuid: string;
+  questionText: string;
+  /** The answer's author participant; 0 lets the server use the answer's own. */
+  participantId: number;
+  /**
+   * After the new answer settled and the transcript was read again: true when
+   * the persisted answer is the regenerated one (`answerRegenerated`), false
+   * when the workspace's fresh transcript still holds the old one, null when
+   * the transcript could not be read again (nothing is known).
+   */
+  onSettled?: (replaced: boolean | null) => void;
 }
 
 /**
@@ -94,6 +146,22 @@ export async function refreshTranscript(queryClient: QueryClient, projectId: num
     queryClient.invalidateQueries({ queryKey: queryKeys.conversation(projectId, conversationRef) }),
     queryClient.invalidateQueries({ queryKey: queryKeys.traces(projectId) }),
   ]);
+}
+
+/**
+ * The conversation as the WORKSPACE answered it at or after `since`, or null
+ * when the cache cannot say: the refetch failed (React Query keeps the old
+ * data and never throws from invalidateQueries), did not run (no observer),
+ * or answered with the encrypted device copy (offline fallback). Anything
+ * concluded from what the transcript lacks ("the server removed the
+ * question", "the answer was not replaced") must come from this, never from
+ * whatever happens to be cached.
+ */
+export function freshConversation<T>(queryClient: QueryClient, projectId: number, conversationRef: string, since: number): T | null {
+  const state = queryClient.getQueryState(queryKeys.conversation(projectId, conversationRef));
+  if (!state || state.status !== 'success' || state.dataUpdatedAt < since) return null;
+  if (state.data === undefined || state.data === null || isOfflineCopy(state.data)) return null;
+  return state.data as T;
 }
 
 /**
@@ -215,12 +283,85 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
     [projectId, conversationUuid, key, queryClient, conversationRef],
   );
 
+  const regenerate = useCallback(
+    async (target: RegenerateTarget): Promise<string | null> => {
+      if (projectId === null || !conversationUuid || key === null) return 'This answer cannot be regenerated from mobile.';
+      if (!network.isOnline()) return "You're offline.";
+      if (getLiveTurn(key)?.isActive) return 'Wait for the current answer to finish.';
+      const refetch = () => refreshTranscript(queryClient, projectId, conversationRef);
+      const { onSettled, ...request } = target;
+      let next: TurnController;
+      try {
+        next = TurnController.regeneration(
+          { projectId, conversationUuid, model, ...request },
+          {
+            onSettle: async () => {
+              const since = Date.now();
+              await refetch();
+              const detail = freshConversation<Parameters<typeof answerRegenerated>[0]>(queryClient, projectId, conversationRef, since);
+              const regeneration = next.getSnapshot().regeneration;
+              if (regeneration) onSettled?.(detail === null ? null : answerRegenerated(detail, regeneration.answerUuid, regeneration.regenerationId));
+            },
+            onRefreshNeeded: () => void refetch(),
+          },
+        );
+      } catch (error) {
+        if (error instanceof TurnInputError) return 'This answer cannot be regenerated from mobile.';
+        throw error;
+      }
+      setLiveTurn(key, next);
+      return null;
+    },
+    [projectId, conversationUuid, key, model, queryClient, conversationRef],
+  );
+
   const retry = useCallback(() => void controller?.reattach(), [controller]);
   const reconnect = useCallback(() => controller?.reconnect(), [controller]);
   const dismiss = useCallback(() => {
     if (key) setLiveTurn(key, null);
   }, [key]);
 
+  const stop = useCallback(async (): Promise<StopResult> => {
+    const result = (problem: string | null, restoreText: string | null = null, lostAttachments: string[] = []): StopResult => ({
+      problem,
+      restoreText,
+      lostAttachments,
+    });
+    if (!controller) return result(null);
+    if (!network.isOnline()) return result("You're offline. The answer keeps running on the workspace.");
+    const before = controller.getSnapshot();
+    const since = Date.now();
+    try {
+      const outcome = await controller.stop();
+      if (outcome === 'not_ready') return result('The answer has not started yet. Try again in a moment.');
+      if (outcome !== 'stopped' || projectId === null) return result(null);
+      // The transcript was read again by the stop: is the question still there?
+      // Only the workspace's fresh answer can say it is gone.
+      const files = before.attachmentNames ?? [];
+      const ownMessage = !before.continuation && before.regeneration === null && (before.userText.trim() !== '' || files.length > 0);
+      if (!ownMessage) return result(null);
+      const detail = freshConversation<{ message_groups?: unknown }>(queryClient, projectId, conversationRef, since);
+      const groups = Array.isArray(detail?.message_groups) ? (detail.message_groups as { uuid?: unknown }[]) : null;
+      const removed = groups !== null && !groups.some((group) => group?.uuid === before.questionId);
+      if (!removed) return result(null);
+      const text = files.length > 0 && before.userText === ATTACHMENT_ONLY_TEXT ? '' : before.userText;
+      return result(null, text, [...files]);
+    } catch (error) {
+      log.info('stop failed', { error });
+      return result(stopErrorText(error));
+    }
+  }, [controller, projectId, queryClient, conversationRef]);
+
   const busy = live !== null && (live.turn.phase === 'sending' || live.turn.phase === 'streaming');
-  return { live, send, continueWith, retry, reconnect, dismiss, busy };
+  // A regeneration stopped before its first output is removed on the server
+  // with its question, which deletes the original exchange (the question and
+  // the old answer): it can be stopped only once it has written something.
+  const regenerationUnstoppable = live !== null && live.regeneration !== null && live.turn.content === '';
+  const canStop =
+    live !== null &&
+    !live.queued &&
+    live.turn.phase === 'streaming' &&
+    (live.execution?.responseMessageId ?? null) !== null &&
+    !regenerationUnstoppable;
+  return { live, send, continueWith, retry, reconnect, dismiss, busy, stop, canStop, regenerate };
 }

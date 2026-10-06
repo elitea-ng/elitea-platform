@@ -25,6 +25,17 @@ const RESTRICTED_MODULES = [
     allowedIn: ['src/lib/network.ts'],
   },
   {
+    name: 'expo-speech-recognition',
+    message:
+      'Use src/features/speech/dictation.ts: dictation must stay on the device (requiresOnDeviceRecognition), never Apple server recognition.',
+    allowedIn: ['src/features/speech/dictation.ts', 'src/features/speech/dictation.test.tsx'],
+  },
+  {
+    name: 'expo-speech',
+    message: 'Use src/features/speech/readAloud.ts (one utterance at a time, stopped with the session).',
+    allowedIn: ['src/features/speech/readAloud.ts', 'src/features/speech/readAloud.test.ts', 'src/features/chat/actions/messageActions.screen.test.tsx'],
+  },
+  {
     name: 'expo/fetch',
     message:
       'Only src/api/sse/transport.ts (streams) and src/api/noRedirectFetch.ts (token endpoints) use expo/fetch; REST goes through the API client in src/api/.',

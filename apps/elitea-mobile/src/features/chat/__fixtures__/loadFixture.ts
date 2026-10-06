@@ -19,6 +19,9 @@ export const FIXTURE_NAMES = [
   'hitl-fanout-child',
   'mcp-authorization',
   'replay-reset',
+  // Captured from a real stack (2026-10-06, see README.md).
+  'regenerate-answer',
+  'cancelled',
 ] as const;
 
 export type FixtureName = (typeof FIXTURE_NAMES)[number];

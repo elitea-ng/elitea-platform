@@ -2,6 +2,7 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { AppState } from 'react-native';
 
 import { appActivity } from '@/lib/appActivity';
+import { log } from '@/lib/log';
 import { isEndingSession, isSuspendingWorkspace } from '@/security/endSession';
 import { deviceAuth } from '@/security/lock/deviceAuth';
 import { LockController, type LockState } from '@/security/lock/lockController';
@@ -28,6 +29,36 @@ onWorkspaceSwitch((event) => {
   if (event.phase === 'before') lockController.markSwitch();
   else if (!event.signedIn) lockController.consumeSwitch();
 });
+
+/**
+ * Work that must stop the moment the app locks (audio that would read the
+ * workspace out loud, a microphone left listening). Registered by the
+ * feature modules, like the wipe hooks.
+ */
+const lockHooks = new Map<string, () => void>();
+let wasCovered = false;
+lockController.subscribe(() => {
+  const covered = lockController.covers();
+  if (covered && !wasCovered) {
+    for (const [name, hook] of lockHooks) {
+      try {
+        hook();
+      } catch (error) {
+        log.warn('lock hook failed', { name, error });
+      }
+    }
+  }
+  wasCovered = covered;
+});
+
+export function registerLockHook(name: string, hook: () => void): void {
+  lockHooks.set(name, hook);
+}
+
+/** True while the lock covers the app (see LockController.covers). */
+export function useLockCovers(): boolean {
+  return useSyncExternalStore(lockController.subscribe, lockController.covers, lockController.covers);
+}
 
 /**
  * Binds the lock to the session: guarding starts when a session is signed in

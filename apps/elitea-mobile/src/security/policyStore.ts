@@ -7,7 +7,14 @@ import { onTokenGrant } from '@/auth/nativeSession';
 import { log } from '@/lib/log';
 import { isBelowMinimum } from '@/lib/semver';
 import { registerWipeHook } from '@/security/endSession';
-import { getPolicyState, setPolicy, type ClientPolicy } from '@/security/policy';
+import {
+  dataControlsFrom,
+  getPolicyState,
+  setPolicy,
+  tightenControls,
+  type ClientPolicy,
+  type DataControls,
+} from '@/security/policy';
 import { SECURE_KEYS, getSecureItem, setSecureItem } from '@/security/secureStorage';
 import { getSession, setSession } from '@/state/session';
 import { onDiscovery, refreshWorkspaceInfo } from '@/state/workspaceInfo';
@@ -36,7 +43,9 @@ import { onDiscovery, refreshWorkspaceInfo } from '@/state/workspaceInfo';
  * idle_lock_seconds; changes apply at once), the privacy hook
  * (allow_screenshots), and the minimum version (`min_client_version` from the
  * token response or discovery → the blocking update screen; the server also
- * answers 426), and the encrypted offline store (offline_*: src/db/, opened
+ * answers 426), the 1.3 data controls (share out, dictation, and later the
+ * system surfaces; a discovery document turns them off as a tightening), and
+ * the encrypted offline store (offline_*: src/db/, opened
  * only when the server policy keeps `offline_retention_days > 0`; a discovery
  * document's `offline_enabled: false` turns it off, as a tightening).
  */
@@ -57,7 +66,7 @@ export function policyFrom(raw: Record<string, unknown>): Partial<ClientPolicy> 
   if (retention !== undefined) out.offline_retention_days = retention;
   const maxMb = int(raw.offline_max_mb, 102_400);
   if (maxMb !== undefined) out.offline_max_mb = maxMb;
-  return out;
+  return { ...out, ...dataControlsFrom(raw) };
 }
 
 /**
@@ -87,18 +96,30 @@ let serverRaw: Record<string, unknown> | null = null;
 let discoveryLock = false;
 /** The discovery document says `offline_enabled: false`: no offline store, whatever the server policy says. */
 let discoveryOfflineOff = false;
+/** The 1.3 data controls of the last discovery document: they only tighten a server policy. */
+let discoveryControls: Partial<DataControls> = {};
 
 function publish(): void {
   if (serverPolicy !== null) {
     setPolicy(
       {
         ...serverPolicy,
+        ...tightenControls(dataControlsOnly(serverPolicy), discoveryControls),
         require_device_lock: serverPolicy.require_device_lock === true || discoveryLock,
         ...(discoveryOfflineOff ? { offline_retention_days: 0 } : {}),
       },
       'server',
     );
   }
+}
+
+function dataControlsOnly(policy: Partial<ClientPolicy>): Partial<DataControls> {
+  return dataControlsFrom(policy as Record<string, unknown>);
+}
+
+/** True when `by` turns off (or hides) something `base` allows. */
+function controlsTighten(base: Partial<DataControls>, by: Partial<DataControls>): boolean {
+  return JSON.stringify(tightenControls(base, by)) !== JSON.stringify(base);
 }
 
 /** A token response's `client_policy` (absent: keep the last one). */
@@ -111,6 +132,7 @@ export async function applyServerPolicy(
   serverRaw = raw;
   discoveryLock = false;
   discoveryOfflineOff = false;
+  discoveryControls = {};
   publish();
   enforceMinimum(raw.min_client_version, options.clientVersion ?? getClientVersion());
   const origin = options.origin ?? getSession().serverOrigin;
@@ -134,6 +156,7 @@ function persistTightening(): void {
     ...serverRaw,
     ...(discoveryLock ? { require_device_lock: true } : {}),
     ...(discoveryOfflineOff ? { offline_retention_days: 0 } : {}),
+    ...tightenControls(dataControlsFrom(serverRaw), discoveryControls),
   });
 }
 
@@ -142,8 +165,14 @@ export function applyDiscoveryPolicy(document: DiscoveryDocument, clientVersion:
   enforceMinimum(minimumVersionFor(document), clientVersion);
   const requireLock = document.client_policy.require_device_lock;
   const offlineOff = document.client_policy.offline_enabled === false;
+  const controls = dataControlsFrom(document.client_policy);
   if (serverPolicy !== null) {
     let tightened = false;
+    const before = tightenControls(dataControlsOnly(serverPolicy), discoveryControls);
+    if (controlsTighten(before, controls)) {
+      discoveryControls = tightenControls(discoveryControls, controls);
+      tightened = true;
+    }
     if (requireLock && !discoveryLock) {
       discoveryLock = true;
       tightened = true;
@@ -159,7 +188,7 @@ export function applyDiscoveryPolicy(document: DiscoveryDocument, clientVersion:
     return;
   }
   if (getPolicyState().source === 'server') return;
-  setPolicy({ require_device_lock: requireLock }, 'discovery');
+  setPolicy({ require_device_lock: requireLock, ...controls }, 'discovery');
 }
 
 const Persisted = z.object({ v: z.literal(1), origin: z.string(), policy: RawPolicy });
@@ -216,6 +245,7 @@ export function resetPolicySources(): void {
   serverRaw = null;
   discoveryLock = false;
   discoveryOfflineOff = false;
+  discoveryControls = {};
 }
 
 registerWipeHook('policy_sources', resetPolicySources);
