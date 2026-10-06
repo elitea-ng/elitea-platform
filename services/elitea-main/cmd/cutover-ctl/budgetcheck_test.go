@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -247,5 +248,29 @@ func TestBudgetCheckNATSRefusesPartialTLSMaterial(t *testing.T) {
 	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
 	if _, err := connectBudgetCheckNATS("tls://127.0.0.1:1", lookup); err == nil {
 		t.Fatal("partial TLS material was accepted")
+	}
+}
+
+// In an elitea-main pod, budget-check dials the pod's own live-update NATS
+// URL by default: the identity and the NetworkPolicy label it needs are
+// already there (#1076).
+func TestBudgetCheckDefaultsToThePodsNATSURL(t *testing.T) {
+	pod := func(k string) (string, bool) {
+		if k == "ELITEA_EVENTS_NATS_URL" {
+			return " tls://elitea-nats.elitea.svc.cluster.local:4222 ", true
+		}
+		return "", false
+	}
+	if got := defaultBudgetCheckNATSURL(pod); got != "tls://elitea-nats.elitea.svc.cluster.local:4222" {
+		t.Errorf("default in an elitea-main pod = %q", got)
+	}
+	none := func(string) (string, bool) { return "", false }
+	if got := defaultBudgetCheckNATSURL(none); got != "nats://localhost:4222" {
+		t.Errorf("default elsewhere = %q, want the compose URL", got)
+	}
+	for _, want := range []string{"app.kubernetes.io/name=elitea-main", "ELITEA_EVENTS_NATS_TLS_CERT_FILE", "tls://"} {
+		if !strings.Contains(budgetCheckNATSHelp, want) {
+			t.Errorf("the NATS help does not say %q", want)
+		}
 	}
 }

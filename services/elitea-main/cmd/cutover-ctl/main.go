@@ -72,7 +72,10 @@ Options:
   --k6-bin <path>            (overhead-check) k6 binary to invoke (default k6)
   --benchmark-out <path>     (overhead-check) benchmark record output (default testdata/p99_overhead_benchmark.json; "" disables)
   --alert-latency-s <N>      (budget-check) max seconds from 80%% crossing to soft-alert observation (default 10)
-  --nats-url <url>           (budget-check) NATS URL for the gateway.events.* subscription (default nats://localhost:4222)
+  --nats-url <url>           (budget-check) NATS URL for the soft-alert subscription (default $ELITEA_EVENTS_NATS_URL, else
+                             nats://localhost:4222). On a secured cluster: tls://, elitea-main's certificate
+                             (ELITEA_EVENTS_NATS_TLS_*), from a pod labelled app.kubernetes.io/name=elitea-main
+                             (the NATS NetworkPolicy) — e.g. kubectl exec deploy/elitea-main -- /cutover-ctl budget-check
   --identity-secret <s>      (budget-check) edge identity HMAC secret (default $GATEWAY_IDENTITY_SECRET)
   --deploy <name>            (cutover-verify) deployment name to inspect (live mode, default elitea-main)
   --port <N>                 (cutover-verify) gateway port for HTTP probe (live mode, default 8083)
