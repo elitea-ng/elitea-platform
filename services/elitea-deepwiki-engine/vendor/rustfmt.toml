@@ -1,0 +1,4 @@
+# The vendored crates are kept byte for byte as published (their digests
+# are pinned in vendor/README.md), so `cargo fmt --all`, which also formats
+# path dependencies, must leave them alone.
+disable_all_formatting = true

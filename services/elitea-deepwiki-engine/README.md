@@ -198,6 +198,48 @@ module that reproduces it: text sliced by code point at byte offsets, files
 dropped on one bad UTF-8 byte, doubled visits, and names that collide across
 packages with the last file winning.
 
+## Phase 2: graph topology (`src/graph/topology/`)
+
+A port of `graph_topology.run_phase2` and what it reaches
+(`graph_orphan_cascade_v2`, `graph_orphan_hybrid`, `graph_lexical_v2`).
+Not wired to a runner yet; the native runner calls
+`graph::topology::run_phase2(graph, store, embedder, config)` after Phase 1c.
+
+1. Orphan resolution (`cascade.rs`), Python's Mode A: explicit references
+   (markdown links, backtick names, imports), hybrid lexical + vector RRF
+   (k 60, threshold 0.02, top 20 — only a node BOTH searches find can
+   pass), tiered lexical T1–T4 behind the IDF gate, directory proximity.
+2. Doc edges (`docs.rs`): hyperlinks, and directory proximity with the
+   md5-picked anchors for repository-root docs.
+3. Component bridging (`bridge.rs`).
+4. Weights (`weights.rs`): `1 / ln(structural_in_degree + 2)`; synthetic
+   edges floored per class (`DEEPWIKI_WEIGHT_CALIBRATION_PROFILE`,
+   `calibrated` by default, or `legacy`).
+5. Hubs: in-degree z-score above 3.0 (numpy's mean and std, bit for bit).
+6. The index's edges are replaced by the graph's.
+
+Every index access is a method of the `TopologyStore` trait (`store.rs`):
+`get_nodes`, `node_count`, `count_phrase_matches`, `search_lexical`,
+`get_embeddings`, `search_dense`, `set_hubs`, `replace_edges`,
+`set_meta`. The PostgreSQL build space implements it; the parity gate uses
+`ReplayStore`, which answers from a recording of the Python run. The model
+fallback for an orphan without a stored vector is a `TextEmbedder`.
+
+Phase 3 consumes the graph (weights, edge classes, the synthetic edges, and
+the `rest_endpoint` re-typing the lexical pass makes in the GRAPH only) and
+the hub list. Python's indexer passes Phase 3 only the first 20 hubs in id
+order (`stats["hubs"]["node_ids"]`); `Phase2Outcome::hubs_for_phase3` is
+that list, `Phase2Outcome::hubs` all of them.
+
+Not ported, on purpose: Modes B and C of `resolve_orphans` (Python
+hard-codes `orphan_cascade_v2` on; they are its kill switch), and with them
+`DEEPWIKI_VEC_PREFIX_DEPTH` and `DEEPWIKI_VEC_CONCURRENCY`, which only they
+read. Deliberate differences: a storage or embedding failure fails the phase
+(Python logged it at debug level and published a poorer graph); a
+component's representative among equal degrees is the first in id order
+(Python's `max()` over a `set` followed the hash seed); an unknown
+calibration profile is an error (Python fell back to `calibrated`).
+
 ## Model client (`src/llm/`)
 
 ADR-0026 decision 8: one small OpenAI-compatible client on `reqwest` 0.13
@@ -481,6 +523,89 @@ legacy plugins (Python), and a tricky-construct fixture set per language. Two
 known single-file differences: one Newtonsoft.Json file where tree-sitter
 0.27's error recovery inside an `#if`-split `switch` differs, and eleven Go
 signatures where the language pack's grammar misreads unnamed parameters.
+
+### Phase 3 clustering (`src/graph/clustering/`)
+
+The live Python path (`hierarchical_leiden` is hard-coded on): hubs out,
+sections by Leiden on the file-contracted graph (γ = `max(0.3, 1 −
+0.2·log10(files))`), pages by Leiden per section (γ = 1), consolidation to
+`clamp(5..20, ⌈1.2·log2 files⌉)` sections and `clamp(8..200, ⌈√(nodes/7)⌉)`
+pages, hub re-integration, the `macro_cluster` / `micro_cluster` / `is_hub` /
+`hub_assignment` columns. Leiden is vendored `leiden-rs` 0.8.1
+(`vendor/README.md`) behind the `Partitioner` trait, one thread, seed 42.
+Note: the live caller hands Phase 3 only the first 20 sorted hub ids
+(`run_phase2` caps `node_ids`); the port keeps that contract.
+
+```bash
+# Python: Phase 1 + 1c + Phase 2 (stand-in SHA-256 embeddings) + Phase 3, every leidenalg call recorded
+PYTHONHASHSEED=0 PYTHONPATH=services/elitea-deepwiki/src python services/elitea-deepwiki-engine/parity/python_phase3_dump.py <repo> <dump>
+cargo run --release --bin deepwiki-cluster-parity -- replay <dump>          # recorded memberships: must be identical
+cargo run --release --bin deepwiki-cluster-parity -- leiden <dump> <out>    # vendored Leiden
+python parity/compare_phase3.py <dump> <out>                                # modularity, ARI/NMI, seed spread, targets
+```
+
+Replay (non-Leiden logic): identical cluster columns and stats on all five
+corpora and the three synthetic fixtures in `tests/fixtures/phase3`
+(`parity/python_phase3_fixture.py`, checked by `cargo test`). Vendored
+Leiden vs leidenalg on the same inputs, modularity by igraph for both
+(gate: ≥ leidenalg − 0.01), with leidenalg's seed 1–5 ARI as the noise
+floor (1–3 on elitea-platform):
+
+| Corpus | Sections Q py / rs | ARI (floor) | Pages Q py / rs | ARI (floor) | Final sections / pages py, rs (target) | Python / Rust Phase 3 |
+| --- | --- | --- | --- | --- | --- | --- |
+| elitea-platform | 0.8869 / 0.8877 | 0.98 (0.96–0.98) | 0.8019 / 0.8031 | 0.67 (0.68–0.71) | 17/147, 17/147 (17/147) | 479 s / 0.99 s |
+| spring-petclinic | 0.7400 / 0.7348 | 0.92 (0.64–1.0) | 0.6683 / 0.6667 | 0.96 (0.93–0.96) | 5/9, 5/9 (9/9) | 0.04 s / 0.9 ms |
+| CleanArchitecture | 0.8930 / 0.8923 | 0.91 (0.78–1.0) | 0.4095 / 0.4093 | 0.85 (0.89–0.93) | 10/15, 10/15 (10/15) | 0.66 s / 5.9 ms |
+| leveldb | 0.6153 / 0.6174 | 0.69 (0.32–0.84) | 0.7414 / 0.7422 | 0.74 (0.69–0.80) | 4/20, 5/20 (9/20) | 1.5 s / 9.5 ms |
+| express | 0.6968 / 0.6952 | 0.85 (0.83–0.96) | 0.7566 / 0.7552 | 0.85 (0.93–0.96) | 10/13, 10/13 (10/13) | 0.38 s / 2.8 ms |
+
+Python's time includes its SQLite writes (395 s without them on
+elitea-platform; the page-merge loop re-sorts every page per merge). End to
+end on elitea-platform, Rust vs Python section ARI is 0.97 against a
+Python seed-to-seed 0.95–0.97, page ARI 0.47 against 0.47–0.49.
+
+### Phase 2
+
+```bash
+# Python: Phase 2 over its own .wiki.db, stand-in embedding, every index read recorded
+PYTHONPATH=services/elitea-deepwiki/src python services/elitea-deepwiki-engine/parity/python_reference.py <repo> <ref-dir> --through phase2
+# Rust: the same phase, the index answering from the recording
+cargo run --release --bin deepwiki-parity -- graph-dump <repo> <out-dir> --through phase2 --replay <ref-dir>/recording.jsonl
+cmp <ref-dir>/edges.jsonl <out-dir>/edges.jsonl && cmp <ref-dir>/stats.json <out-dir>/stats.json
+# The accepted difference: Phase 2 reads on a PostgreSQL build-space emulation
+python_reference.py <repo> <pg-dir> --through phase2 --search-dsn <dsn> [--dense-postfilter]
+python3 parity/compare_phase2.py <ref-dir> <pg-out-dir>
+```
+
+Replay, measured 2026-10-05: edges (weights, classes, raw similarity, the
+new edges), `is_hub` and the stats dict are byte-identical on all five
+corpora. On elitea-platform, 11 node rows differ in `signature` only; these
+are the known Go parser rows above, which Phase 2 does not write. Phase 2
+on elitea-platform (83,038 orphans, 97,262 new edges, 313 hubs): Python
+585 s (FTS5 + sqlite-vec), Rust 2.5 s against the replay store.
+
+PostgreSQL search path (`--search-dsn`), against the FTS5 run, edges
+reference → PostgreSQL (Jaccard of the edge sets). elitea-platform is not
+measured.
+
+| Corpus | lexical | semantic | directory | bridge | doc | hubs J |
+| --- | --- | --- | --- | --- | --- | --- |
+| spring-petclinic | 15 → 4 (0.27) | 6 → 53 (0.11) | 98 → 79 (0.39) | 6 → 10 (0.00) | 59 → 60 (0.98) | 1.0 |
+| CleanArchitecture | 69 → 23 (0.33) | 9 → 372 (0.02) | 834 → 635 (0.10) | 182 → 206 (0.00) | 396 → 397 (0.99) | 0.0 |
+| leveldb | 472 → 480 (0.73) | 104 → 1345 (0.07) | 1158 → 771 (0.65) | 22 → 138 (0.11) | 550 → 550 (1.00) | 1.0 |
+| express | 54 → 47 (0.87) | 307 → 787 (0.17) | 581 → 521 (0.15) | 76 → 70 (0.01) | 202 → 202 (1.00) | 0.5 |
+
+The main cause is the vector search with a path prefix. sqlite-vec took
+the 20 nearest of ALL vectors and then dropped the ones outside the
+directory; pgvector filters first. More same-directory nodes then appear in
+both searches, which the RRF threshold needs, so more hybrid edges are
+made. With `--dense-postfilter` (sqlite-vec's order) spring-petclinic is
+identical. The rest (CleanArchitecture semantic 9 → 82, leveldb 104 → 1257,
+express 307 → 647) is lexical: FTS5 read a symbol name as a query
+expression and returned nothing for `a::b`, `a.b` or `a-b`;
+`plainto_tsquery` folds such a name and matches it. Directory, bridge and
+hub changes follow from those edges: anchors and components move.
+Structural edges and every weight of an edge both sides have are equal.
 
 ## Running
 

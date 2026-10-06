@@ -31,6 +31,7 @@
 pub mod api_surface;
 pub mod attributes;
 pub mod builder;
+pub mod clustering;
 pub mod constants;
 pub mod contraction;
 pub mod cross_language;
@@ -47,6 +48,7 @@ pub mod repo_files;
 pub mod shared_str;
 pub mod sql;
 pub mod test_linker;
+pub mod topology;
 
 use crate::parsers::model::Symbol;
 pub use attributes::Attributes;
@@ -676,6 +678,31 @@ impl CodeGraph {
         let u = *self.index.get(source)?;
         let v = *self.index.get(target)?;
         self.slot_mut(u)?.succ.get_mut(v)?.get_mut(key)
+    }
+
+    /// Visit every edge mutably, in [`CodeGraph::edges`] order, with its
+    /// source and target ids (Phase 2 rewrites every edge's weight).
+    pub fn for_each_edge_mut(&mut self, mut visit: impl FnMut(&str, &str, &mut EdgeData)) {
+        for index in 0..self.slots.len() {
+            // Taken out so the other slots' ids can be read meanwhile.
+            let Some(mut slot) = self.slots.get_mut(index).and_then(Option::take) else {
+                continue;
+            };
+            let Slot { id, succ, .. } = &mut *slot;
+            // Only the keydicts change, never the targets, so the position
+            // index stays valid.
+            for (target, keys) in &mut succ.items {
+                let target_id = if *target == index {
+                    id.as_str()
+                } else {
+                    self.slot(*target).map_or("", |t| t.id.as_str())
+                };
+                for (_, data) in &mut keys.0 {
+                    visit(id, target_id, data);
+                }
+            }
+            self.slots[index] = Some(slot);
+        }
     }
 
     /// Remove one edge; when it was the last from `source` to `target`, the

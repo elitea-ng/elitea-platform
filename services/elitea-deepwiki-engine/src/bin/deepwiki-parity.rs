@@ -3,6 +3,7 @@
 //! ```text
 //! deepwiki-parity parse-dump <language> <repo> <files.txt> <out.jsonl>
 //! deepwiki-parity graph-dump <repo> <out-dir> [--parses-from <dir>] [--no-phase1c]
+//!                             [--through phase2 --replay <recording.jsonl>]
 //! deepwiki-parity index-dump <repo> <wiki-id> [--embeddings <dim>]
 //! ```
 //!
@@ -33,24 +34,35 @@
 //! paths repository-relative); they are re-absolutised to `<repo>/<rel>`,
 //! the form the Python builder saw. Any difference is then a BUILDER
 //! difference. Without it, this engine's own parsers run.
+//!
+//! `--through phase2 --replay <recording.jsonl>` goes on to Phase 2
+//! (`graph::topology::run_phase2`) with the index answering from the
+//! recording `parity/python_reference.py --through phase2` wrote, and the
+//! stand-in embedding as the model. The rows are then the index's after
+//! Phase 2 — the persisted edges (weights, the new edges) and `is_hub` —
+//! and `stats.json` is the stats dict, as the reference writes them.
 
 use elitea_deepwiki_engine::graph::builder::{self, ParseResultsByLanguage};
 use elitea_deepwiki_engine::graph::discover;
 use elitea_deepwiki_engine::graph::flags::Phase1cFlags;
-use elitea_deepwiki_engine::graph::{CodeGraph, EdgeRef, NodeData, edge_row, node_row};
+use elitea_deepwiki_engine::graph::topology::replay::{ReplayStore, StandinEmbedder};
+use elitea_deepwiki_engine::graph::topology::{self, CalibrationProfile, Phase2Config};
+use elitea_deepwiki_engine::graph::{CodeGraph, EdgeRef, EdgeRow, NodeData, edge_row, node_row};
 use elitea_deepwiki_engine::parsers::model::ParseResult;
 use elitea_deepwiki_engine::parsers::parser_for;
+use elitea_deepwiki_engine::pyjson;
 use elitea_deepwiki_engine::storage;
 use elitea_deepwiki_engine::storage::build::{BuildSpace, WikiRecord};
 use elitea_deepwiki_engine::storage::search::IndexReader;
 use serde::Serialize;
 use serde_json::Value;
+use std::collections::HashSet;
 use std::io::{BufRead, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
-const USAGE: &str = "usage: deepwiki-parity parse-dump <language> <repo> <files.txt> <out.jsonl>\n       deepwiki-parity graph-dump <repo> <out-dir> [--parses-from <dir>] [--no-phase1c]\n       deepwiki-parity index-dump <repo> <wiki-id> [--embeddings <dim>]";
+const USAGE: &str = "usage: deepwiki-parity parse-dump <language> <repo> <files.txt> <out.jsonl>\n       deepwiki-parity graph-dump <repo> <out-dir> [--parses-from <dir>] [--no-phase1c] [--through phase2 --replay <recording.jsonl>]\n       deepwiki-parity index-dump <repo> <wiki-id> [--embeddings <dim>]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -77,25 +89,64 @@ fn main() -> ExitCode {
     }
 }
 
-fn graph_dump(args: &[String]) -> Result<(), String> {
+/// The options of `graph-dump`.
+struct GraphDumpArgs {
+    repo: String,
+    out_dir: String,
+    parses_from: Option<PathBuf>,
+    phase1c: bool,
+    /// `--through phase2 --replay <recording>`.
+    replay: Option<PathBuf>,
+}
+
+fn parse_graph_dump_args(args: &[String]) -> Result<GraphDumpArgs, String> {
     let mut positional = Vec::new();
     let mut parses_from: Option<PathBuf> = None;
     let mut phase1c = true;
+    let mut phase2 = false;
+    let mut replay: Option<PathBuf> = None;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if arg == "--no-phase1c" {
             phase1c = false;
+        } else if arg == "--through" {
+            match iter.next().map(String::as_str) {
+                Some("phase2") => phase2 = true,
+                Some("phase1c") => phase2 = false,
+                _ => return Err(USAGE.to_owned()),
+            }
+        } else if arg == "--replay" {
+            replay = Some(PathBuf::from(iter.next().ok_or(USAGE)?));
         } else if arg == "--parses-from" {
             parses_from = Some(PathBuf::from(iter.next().ok_or(USAGE)?));
         } else {
-            positional.push(arg);
+            positional.push(arg.clone());
         }
     }
-    let [repo, out_dir] = positional.as_slice() else {
-        return Err(USAGE.to_owned());
-    };
+    let [repo, out_dir] = <[String; 2]>::try_from(positional).map_err(|_| USAGE.to_owned())?;
+    match (phase2, &replay) {
+        (true, None) => Err("--through phase2 needs --replay <recording.jsonl>".to_owned()),
+        (false, Some(_)) => Err("--replay needs --through phase2".to_owned()),
+        _ => Ok(GraphDumpArgs {
+            repo,
+            out_dir,
+            parses_from,
+            phase1c,
+            replay,
+        }),
+    }
+}
+
+fn graph_dump(args: &[String]) -> Result<(), String> {
+    let GraphDumpArgs {
+        repo,
+        out_dir,
+        parses_from,
+        phase1c,
+        replay,
+    } = parse_graph_dump_args(args)?;
     // `Path.resolve()`, as the reference harness does.
-    let repo = std::fs::canonicalize(repo).map_err(|e| format!("{repo}: {e}"))?;
+    let repo = std::fs::canonicalize(&repo).map_err(|e| format!("{repo}: {e}"))?;
     let repo = repo
         .to_str()
         .ok_or("the repository path is not UTF-8")?
@@ -128,8 +179,13 @@ fn graph_dump(args: &[String]) -> Result<(), String> {
     };
     let build_time = build_started.elapsed();
     rss("built");
+    let mut graph = graph;
+    let persisted = match &replay {
+        Some(recording) => Some(run_phase2_replayed(&mut graph, recording, &out_dir)?),
+        None => None,
+    };
     let write_started = Instant::now();
-    let (nodes, edges) = write_rows(&graph, &out_dir)?;
+    let (nodes, edges) = write_rows(&graph, &out_dir, persisted.as_ref())?;
     let write_time = write_started.elapsed();
     rss("written");
 
@@ -438,11 +494,86 @@ fn absolutise(result: &mut ParseResult, repo: &str) {
     }
 }
 
+/// What Phase 2 wrote to the (replayed) index: the hubs and the edges.
+struct Persisted {
+    hubs: HashSet<String>,
+    edges: Vec<EdgeRow>,
+}
+
+/// Run Phase 2 against the recording; write `stats.json`.
+fn run_phase2_replayed(
+    graph: &mut CodeGraph,
+    recording: &Path,
+    out_dir: &Path,
+) -> Result<Persisted, String> {
+    let text =
+        std::fs::read_to_string(recording).map_err(|e| format!("{}: {e}", recording.display()))?;
+    let mut store = ReplayStore::from_jsonl(&text).map_err(|e| e.to_string())?;
+    let config = Phase2Config {
+        profile: CalibrationProfile::from_env()?,
+        ..Phase2Config::default()
+    };
+    let mut embedder = StandinEmbedder;
+    let started = Instant::now();
+    let outcome = topology::run_phase2(graph, &mut store, Some(&mut embedder), &config)
+        .map_err(|e| format!("phase 2: {e}"))?;
+    let took = started.elapsed();
+    // The index row keeps the type the tiered lexical pass re-typed in the
+    // graph only: put it back for the row dump.
+    for (id, previous) in outcome.retyped {
+        if let Some(node) = graph.node_mut(&id) {
+            node.symbol_type = previous;
+        }
+    }
+    let stats = format!("{}\n", pyjson::dumps(&outcome.stats));
+    std::fs::write(out_dir.join("stats.json"), stats).map_err(|e| e.to_string())?;
+    eprintln!(
+        "phase 2 {:.3}s: {} hubs, {} edges persisted; {} recorded calls not made",
+        took.as_secs_f64(),
+        store.hubs.len(),
+        store.edges.len(),
+        store.unused_calls(),
+    );
+    Ok(Persisted {
+        hubs: std::mem::take(&mut store.hubs).into_iter().collect(),
+        edges: std::mem::take(&mut store.edges),
+    })
+}
+
 /// Write the rows one at a time, in the reference's order: only the sort
-/// order (references into the graph) is held, not every row.
-fn write_rows(graph: &CodeGraph, out_dir: &Path) -> Result<(usize, usize), String> {
+/// order (references into the graph) is held, not every row. After Phase 2
+/// the edges are the rows Phase 2 persisted, and the hubs are flagged.
+fn write_rows(
+    graph: &CodeGraph,
+    out_dir: &Path,
+    persisted: Option<&Persisted>,
+) -> Result<(usize, usize), String> {
     let mut nodes: Vec<(&str, &NodeData)> = graph.nodes().collect();
     nodes.sort_by(|a, b| a.0.cmp(b.0));
+    write_jsonl(
+        &out_dir.join("nodes.jsonl"),
+        nodes.iter().map(|(id, data)| {
+            let mut row = node_row(id, data);
+            if persisted.is_some_and(|p| p.hubs.contains(*id)) {
+                row.is_hub = 1;
+            }
+            row
+        }),
+    )?;
+    if let Some(persisted) = persisted {
+        let mut edges: Vec<&EdgeRow> = persisted.edges.iter().collect();
+        // Stable: ties keep persist order, the reference's row id order.
+        edges.sort_by(|a, b| {
+            (&a.source_id, &a.target_id, &a.rel_type, &a.edge_class).cmp(&(
+                &b.source_id,
+                &b.target_id,
+                &b.rel_type,
+                &b.edge_class,
+            ))
+        });
+        write_jsonl(&out_dir.join("edges.jsonl"), edges.into_iter())?;
+        return Ok((nodes.len(), persisted.edges.len()));
+    }
     let mut edges: Vec<EdgeRef<'_>> = graph.edges().collect();
     // Stable: ties keep graph order, which is the reference's row id order.
     edges.sort_by(|a, b| {
@@ -453,10 +584,6 @@ fn write_rows(graph: &CodeGraph, out_dir: &Path) -> Result<(usize, usize), Strin
             &b.data.edge_class,
         ))
     });
-    write_jsonl(
-        &out_dir.join("nodes.jsonl"),
-        nodes.iter().map(|(id, data)| node_row(id, data)),
-    )?;
     write_jsonl(
         &out_dir.join("edges.jsonl"),
         edges.iter().map(|edge| edge_row(*edge)),

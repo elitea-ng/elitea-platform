@@ -1,0 +1,4 @@
+["py::pkg0/m0.py::X0", "py::hub.py::H", 0.5]
+["py::pkg0/m2.py::X0", "py::pkg0/m2.py::X1", 1.0]
+["py::pkg0/m2.py::X1", "py::pkg0/m2.py::X2", 1.0]
+["py::pkg0/m4.py::X0", "py::pkg0/m4.py::X1", 1.0]
