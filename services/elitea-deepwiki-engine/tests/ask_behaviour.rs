@@ -296,6 +296,51 @@ async fn the_ask_budget_is_enforced() {
         "{}",
         error.message
     );
+
+    // Told to answer, a reasoning model that wanted one more tool sends a
+    // blank line and no calls (seen with Qwen3.8 in the benchmark): also a
+    // failure, not a success with "\n\n".
+    let script = json!([
+        {"tool_calls": [think("a"), think("b"), think("c")]},
+        {"content": "\n\n"},
+    ]);
+    let model = common::ScriptedModel::new(&script);
+    let (context, _receiver, _) = common::context();
+    let failed = agent::run(&spec, &model, &index, &Embedder::None, &context).await;
+    let error = failed.expect_err("a blank forced turn is a failure");
+    assert_eq!(error.error_type, ErrorType::Runtime);
+    assert!(
+        error.message.contains("DEEPWIKI_ASK_MAX_ITERATIONS=2"),
+        "{}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn a_blank_answer_is_a_failure() {
+    // No tools at all, and only whitespace: never a success.
+    let script = json!([{"content": "  \n"}]);
+    let spec = ask::ask_spec(
+        &request(),
+        None,
+        "gpt-4o",
+        false,
+        false,
+        Limits::default(),
+        clock(),
+    )
+    .expect("spec");
+    let model = common::ScriptedModel::new(&script);
+    let (context, _receiver, _) = common::context();
+    let index = common::replay_index();
+    let failed = agent::run(&spec, &model, &index, &Embedder::None, &context).await;
+    let error = failed.expect_err("a blank answer is a failure");
+    assert_eq!(error.error_type, ErrorType::Runtime);
+    assert!(
+        error.message.contains("without an answer"),
+        "{}",
+        error.message
+    );
 }
 
 #[tokio::test]
