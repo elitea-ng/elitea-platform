@@ -72,6 +72,21 @@ DEAD_LETTER_SCHEMA = "elitea.runtime.dead-letter.v1"
 #: The only inbox prefix the permission table grants the elitea-worker user.
 INBOX_PREFIX = "_INBOX_elitea-worker"
 
+#: The JetStream API prefix of the worker's OWN account. With a client
+#: identity that account is WORKER, which holds the dead-letter bucket and
+#: nothing else; in compose's plaintext posture it is the one global account.
+DEFAULT_API_PREFIX = "$JS.API"
+#: The prefix under which the WORKER account imports the RUNTIME account's
+#: consumer API (CONSUMER.INFO and CONSUMER.MSG.NEXT of the three durables).
+#: The worker is NOT a RUNTIME user: the server publishes a JetStream API
+#: answer on the requester's reply subject without checking it against the
+#: requester's permissions, so a RUNTIME user allowed to pull could name a
+#: command subject as the reply and have the server store the answer in a
+#: command stream. Across the service import the answer lands in WORKER.
+#: deploy/helm/nats/values.yaml maps the imports to this prefix, and
+#: libs/go/natsconn (WorkerRuntimeJSAPIPrefix) holds the same string.
+RUNTIME_API_PREFIX = "JS.RUNTIME.API"
+
 ACK_WAIT_SECONDS = 60
 #: NakWithDelay for poison. Never Term: see the module docstring.
 POISON_DELAY_SECONDS = 24 * 60 * 60
@@ -119,6 +134,18 @@ def delivery_subject(stream: str, delivery_id: str) -> str:
 
 def dead_letter_key(stream: str, delivery_id: str) -> str:
     return f"{route_token(stream)}.{delivery_token(delivery_id)}"
+
+
+def runtime_api_prefix(tls: "NatsTlsPaths | None") -> str:
+    """The JetStream API prefix that reaches the command streams' durables.
+
+    With a client identity (the chart's posture) the worker is in the WORKER
+    account and reaches RUNTIME's consumer API through the imports mapped to
+    :data:`RUNTIME_API_PREFIX`. Without one (compose's plaintext posture, one
+    global account) the streams are in the worker's own account.
+    """
+
+    return RUNTIME_API_PREFIX if tls is not None else DEFAULT_API_PREFIX
 
 
 def validate_route(stream: str, consumer: str) -> None:
@@ -554,21 +581,23 @@ async def verify_command_bus(
     fetch_batch: int,
     fetch_expires_millis: int,
     timeout_seconds: float,
+    api_prefix: str = DEFAULT_API_PREFIX,
 ) -> None:
-    """Refuse to start unless the stream and durable are the contract's.
+    """Refuse to start unless the durable is the contract's.
 
-    Raw JetStream API reads, so every field the contract names is compared as
-    the server reports it, including the ones nats-py's dataclasses drop.
+    A raw JetStream API read, so every field the contract names is compared as
+    the server reports it, including the ones nats-py's dataclasses drop. The
+    STREAM is not read: the worker has no STREAM.INFO grant (elitea-main, the
+    stream's writer, verifies its shape at boot), and the durable's filter
+    subject already names the stream's subjects.
     """
 
     validate_route(stream, consumer)
-    stream_info = await _api_read(
-        client, f"$JS.API.STREAM.INFO.{stream}", timeout_seconds, f"stream {stream}"
-    )
-    verify_stream_config(stream_info.get("config"), stream=stream)
+    if api_prefix not in (DEFAULT_API_PREFIX, RUNTIME_API_PREFIX):
+        raise ValueError("the JetStream API prefix is not one the command bus uses")
     consumer_info = await _api_read(
         client,
-        f"$JS.API.CONSUMER.INFO.{stream}.{consumer}",
+        f"{api_prefix}.CONSUMER.INFO.{stream}.{consumer}",
         timeout_seconds,
         f"consumer {stream}/{consumer}",
     )
@@ -579,30 +608,6 @@ async def verify_command_bus(
         fetch_batch=fetch_batch,
         fetch_expires_millis=fetch_expires_millis,
     )
-
-
-def verify_stream_config(config: Any, *, stream: str) -> None:
-    if not isinstance(config, dict):
-        raise CommandBusDrift(f"The stream {stream} reported no configuration.")
-    problems: list[str] = []
-    if config.get("name") != stream:
-        problems.append("name")
-    if config.get("subjects") != [filter_subject(stream)]:
-        problems.append("subjects")
-    if config.get("retention") != "workqueue":
-        problems.append("retention")
-    max_msg_size = config.get("max_msg_size")
-    if (
-        not isinstance(max_msg_size, int)
-        or isinstance(max_msg_size, bool)
-        or not 1 <= max_msg_size <= MAX_TRANSPORT_MESSAGE_BYTES
-    ):
-        problems.append("max_msg_size")
-    if problems:
-        raise CommandBusDrift(
-            f"The stream {stream} is not the command-bus contract's shape "
-            f"({', '.join(problems)})."
-        )
 
 
 def verify_consumer_config(
@@ -703,8 +708,16 @@ async def bind_command_consumer(
     ack_timeout_seconds: float,
     max_message_bytes: int = MAX_TRANSPORT_MESSAGE_BYTES,
     max_payload_bytes: int = MAX_TRANSPORT_PAYLOAD_BYTES,
+    api_prefix: str = DEFAULT_API_PREFIX,
 ) -> JetStreamCommandConsumer:
-    """Verify the durable and the dead-letter bucket, then bind to both."""
+    """Verify the durable and the dead-letter bucket, then bind to both.
+
+    Two JetStream contexts: the durable through ``api_prefix`` (the RUNTIME
+    import when the worker presents an identity, see
+    :func:`runtime_api_prefix`), and the dead-letter bucket through the
+    worker's own account's default ``$JS.API``. Ack subjects are each
+    delivery's reply subject either way.
+    """
 
     await verify_command_bus(
         client,
@@ -713,10 +726,12 @@ async def bind_command_consumer(
         fetch_batch=fetch_batch,
         fetch_expires_millis=fetch_expires_millis,
         timeout_seconds=ack_timeout_seconds,
+        api_prefix=api_prefix,
     )
-    jetstream = client.jetstream(timeout=ack_timeout_seconds)
+    commands = client.jetstream(prefix=api_prefix, timeout=ack_timeout_seconds)
+    own = client.jetstream(timeout=ack_timeout_seconds)
     try:
-        dead_letters = await jetstream.key_value(DEAD_LETTER_BUCKET)
+        dead_letters = await own.key_value(DEAD_LETTER_BUCKET)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -728,7 +743,7 @@ async def bind_command_consumer(
         raise DependencyUnavailable(
             f"The dead-letter bucket {DEAD_LETTER_BUCKET} could not be bound."
         ) from exc
-    subscription = await jetstream.pull_subscribe_bind(consumer, stream=stream)
+    subscription = await commands.pull_subscribe_bind(consumer, stream=stream)
     return JetStreamCommandConsumer(
         subscription,
         stream=stream,
@@ -925,12 +940,14 @@ __all__ = [
     "CommandDelivery",
     "DEAD_LETTER_BUCKET",
     "DEAD_LETTER_SCHEMA",
+    "DEFAULT_API_PREFIX",
     "INBOX_PREFIX",
     "JetStreamCommandConsumer",
     "KNOWN_STREAMS",
     "NatsCommandBusConnection",
     "NatsTlsPaths",
     "POISON_DELAY_SECONDS",
+    "RUNTIME_API_PREFIX",
     "SubjectTokenMismatch",
     "bind_command_consumer",
     "dead_letter_key",
@@ -940,6 +957,7 @@ __all__ = [
     "nats_client_context",
     "require_subject_names_command",
     "route_token",
+    "runtime_api_prefix",
     "validate_route",
     "verify_command_bus",
 ]

@@ -5,7 +5,10 @@ NATS chart's own rendered nats.conf, the test PKI and the real bootstrap.sh,
 and writes the environment document this test reads from
 ``ELITEA_TEST_NATS_SECURE_ENV``. Every worker-side call here is presented as
 the ``elitea-worker`` certificate identity, under the chart's permission
-table; the producer side is ``elitea-main-runtime``. The last test reads the
+table: the worker is in its own WORKER account, reaches the RUNTIME durables
+through the service imports mapped to ``JS.RUNTIME.API`` and owns the
+dead-letter bucket in WORKER. The producer side is ``elitea-main-runtime``
+(RUNTIME). The last test reads the
 server log and fails on any permission violation by the worker identity.
 
 Without ``ELITEA_TEST_NATS_SECURE_ENV`` the module skips, unless
@@ -43,6 +46,7 @@ from elitea_worker.transport.nats_jetstream import (
     JetStreamCommandConsumer,
     NatsCommandBusConnection,
     NatsTlsPaths,
+    RUNTIME_API_PREFIX,
     bind_command_consumer,
     delivery_subject,
     delivery_token,
@@ -58,6 +62,10 @@ _VALIDATE_DURABLE = "elitea-configuration-worker-v1"
 _WORKER = "elitea-worker"
 _PRODUCER = "elitea-main-runtime"
 _BOOTSTRAP = "elitea-nats-bootstrap-runtime"
+#: The WORKER account's bootstrap: it owns the dead-letter bucket.
+_WORKER_BOOTSTRAP = "elitea-nats-bootstrap-worker"
+#: The account each identity is mapped into (deploy/helm/nats/values.yaml).
+_ACCOUNT = {_WORKER: "WORKER", _PRODUCER: "RUNTIME"}
 
 
 def _environment() -> dict[str, Any]:
@@ -154,6 +162,9 @@ async def _bind(
         fetch_expires_millis=500,
         retry_delay_millis=retry_delay_millis,
         ack_timeout_seconds=5.0,
+        # The worker presents an identity, so it is in WORKER and reaches the
+        # RUNTIME durables through the mapped imports.
+        api_prefix=RUNTIME_API_PREFIX,
     )
 
 
@@ -313,7 +324,7 @@ def test_poison_is_dead_lettered_and_left_pending_with_the_real_serve_loop(
         events: list[tuple[str, Any]] = []
         async with (
             _client(environment, _PRODUCER) as producer,
-            _client(environment, _BOOTSTRAP) as bootstrap,
+            _client(environment, _WORKER_BOOTSTRAP) as bootstrap,
             _worker(environment) as connection,
         ):
             consumer = await _bind(connection, worker_name=worker_name)
@@ -374,8 +385,9 @@ def test_poison_is_dead_lettered_and_left_pending_with_the_real_serve_loop(
             assert delivery_id.encode() not in recorded[0][1]
             assert any(event == DEAD_LETTERED_EVENT for event, _ in events)
 
-            # The record is in the bucket (read with the bootstrap identity's
-            # stream info, the only read any identity holds on it).
+            # The record is in the bucket, in the WORKER account (read with the
+            # WORKER bootstrap identity's stream info, the only read any
+            # identity holds on it).
             info = await bootstrap.request(
                 f"$JS.API.STREAM.INFO.KV_{DEAD_LETTER_BUCKET}",
                 json.dumps({"subjects_filter": f"$KV.{DEAD_LETTER_BUCKET}.{key}"}).encode(),
@@ -401,7 +413,7 @@ def test_bind_refuses_a_drifted_durable(
     bootstrap, bind, re-create) cannot run on the chart's permissions any
     more: since #1076 no identity may delete or purge a stream. The mapping of
     a missing stream or durable to CommandBusAbsent is covered by
-    tests/unit/test_nats_jetstream.py::test_bind_refuses_an_absent_stream_or_durable.
+    tests/unit/test_nats_jetstream.py::test_bind_refuses_an_absent_durable.
     """
 
     async def run() -> None:
@@ -464,10 +476,11 @@ def test_the_worker_identity_hit_no_permission_violation(
     asyncio.run(violate_as_producer())
 
     def violations(identity: str) -> list[str]:
-        # The server prefixes the mapped user with its account: both command
-        # bus identities live in RUNTIME (deploy/helm/nats/values.yaml), so a
-        # line under any other account would be a mis-mapped identity.
-        marker = f'"RUNTIME/user:{environment["identities"][identity]["user"]}"'
+        # The server prefixes the mapped user with its account: the producer
+        # lives in RUNTIME and the worker in WORKER
+        # (deploy/helm/nats/values.yaml), so a line under any other account
+        # would be a mis-mapped identity.
+        marker = f'"{_ACCOUNT[identity]}/user:{environment["identities"][identity]["user"]}"'
         log = Path(environment["log"]).read_text(encoding="utf-8", errors="replace")
         return [
             line

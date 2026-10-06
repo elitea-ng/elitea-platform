@@ -82,6 +82,7 @@ from elitea_worker.transport.nats_jetstream import (
     NatsCommandBusConnection,
     bind_command_consumer,
     require_subject_names_command,
+    runtime_api_prefix,
 )
 from elitea_worker.transport.runtime_context import ClaimBoundEliteaTokenClient
 
@@ -922,6 +923,10 @@ async def _serve_deployment_inner(
             ack_timeout_seconds=limits.grpc_deadline_millis / 1000,
             max_message_bytes=limits.max_transport_message_bytes,
             max_payload_bytes=limits.max_transport_payload_bytes,
+            # With an identity the worker is in the WORKER account and reaches
+            # the RUNTIME durables through the imports mapped to
+            # JS.RUNTIME.API; without one (compose) through $JS.API.
+            api_prefix=runtime_api_prefix(config.nats_tls),
         )
         # The shared, alertable record is the dead-letter bucket. This file
         # keeps a parked delivery from running again after its 24h delay; see

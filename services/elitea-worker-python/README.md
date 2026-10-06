@@ -97,6 +97,20 @@ compose only; `tls://` requires all three paths, and user information in the URL
 is refused. The TLS material is read from disk again before every reconnect, so
 a rotated certificate is presented without a restart.
 
+With an identity the worker is in its own NATS account, `WORKER`, not in the
+`RUNTIME` account that holds the command streams: the server answers a
+JetStream API request on the requester's reply subject without checking it
+against the requester's permissions, so a pull or info request naming a command
+subject as its reply would make the server store the answer in a command
+stream. `RUNTIME` exports to `WORKER` only `CONSUMER.INFO` and
+`CONSUMER.MSG.NEXT` of the three durables, imported under the JetStream API
+prefix `JS.RUNTIME.API`, and their ack subjects. So the worker opens two
+JetStream contexts: the durable through `JS.RUNTIME.API`, and the dead-letter
+bucket — which lives in `WORKER` — through the default `$JS.API`. It reads no
+stream information (elitea-main verifies the streams it writes); the bind
+checks the durable's configuration only. Without an identity (compose's
+plaintext posture, one global account) both use `$JS.API`.
+
 ## Production serve composition
 
 Run the standalone process with an absolute, regular JSON configuration file:

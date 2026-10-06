@@ -542,27 +542,8 @@ def test_a_lost_poison_nak_still_writes_the_record_and_says_so() -> None:
 # ── Bind ────────────────────────────────────────────────────────────────────
 
 
-# Exactly what nats-server 2.12 reports for the bootstrap's assets (measured
+# Exactly what nats-server 2.12 reports for the bootstrap's durable (measured
 # against the chart's own secured server and bootstrap.sh).
-_STREAM_CONFIG = {
-    "name": STREAM,
-    "subjects": ["elitea.rt.v1.index.d.*"],
-    "retention": "workqueue",
-    "max_consumers": -1,
-    "max_msgs": 1024,
-    "max_bytes": 67108864,
-    "max_age": 93600000000000,
-    "max_msgs_per_subject": 1,
-    "max_msg_size": 65536,
-    "discard": "new",
-    "storage": "file",
-    "num_replicas": 1,
-    "duplicate_window": 120000000000,
-    "allow_direct": True,
-    "discard_new_per_subject": True,
-    "deny_delete": True,
-    "deny_purge": True,
-}
 _CONSUMER_CONFIG = {
     "durable_name": CONSUMER,
     "name": CONSUMER,
@@ -592,13 +573,10 @@ class FakeApi:
         return SimpleNamespace(data=json.dumps(value).encode())
 
 
-def _api(stream: Any = None, consumer: Any = None) -> FakeApi:
+def _api(consumer: Any = None, *, prefix: str = "$JS.API") -> FakeApi:
     return FakeApi(
         {
-            f"$JS.API.STREAM.INFO.{STREAM}": stream
-            if stream is not None
-            else {"config": dict(_STREAM_CONFIG)},
-            f"$JS.API.CONSUMER.INFO.{STREAM}.{CONSUMER}": consumer
+            f"{prefix}.CONSUMER.INFO.{STREAM}.{CONSUMER}": consumer
             if consumer is not None
             else {"config": dict(_CONSUMER_CONFIG)},
         }
@@ -613,36 +591,92 @@ async def _verify(api: FakeApi, **kwargs: Any) -> None:
         fetch_batch=kwargs.get("fetch_batch", 8),
         fetch_expires_millis=kwargs.get("fetch_expires_millis", 1000),
         timeout_seconds=1.0,
+        api_prefix=kwargs.get("api_prefix", "$JS.API"),
     )
 
 
-def test_bind_accepts_the_bootstrap_shape_through_read_only_api_calls() -> None:
+def test_bind_accepts_the_bootstrap_shape_through_one_read_only_api_call() -> None:
     api = _api()
     asyncio.run(_verify(api))
-    assert api.subjects == [
-        f"$JS.API.STREAM.INFO.{STREAM}",
-        f"$JS.API.CONSUMER.INFO.{STREAM}.{CONSUMER}",
-    ]
+    # The durable only: the worker has no STREAM.INFO grant on a command
+    # stream (S1); elitea-main, the stream's writer, verifies its shape.
+    assert api.subjects == [f"$JS.API.CONSUMER.INFO.{STREAM}.{CONSUMER}"]
     # filter_subjects (the multi-filter form) with the one filter is the same.
     config = dict(_CONSUMER_CONFIG, filter_subjects=["elitea.rt.v1.index.d.*"])
     del config["filter_subject"]
     asyncio.run(_verify(_api(consumer={"config": config})))
 
 
-@pytest.mark.parametrize(
-    ("field_name", "value"),
-    [
-        ("subjects", ["elitea.rt.v1.index.d.>"]),
-        ("retention", "limits"),
-        ("max_msg_size", -1),
-        ("max_msg_size", 65537),
-        ("name", "ELITEA_RT_V1_AGENT"),
-    ],
-)
-def test_bind_refuses_a_drifted_stream(field_name: str, value: Any) -> None:
-    config = dict(_STREAM_CONFIG, **{field_name: value})
-    with pytest.raises(CommandBusDrift):
-        asyncio.run(_verify(_api(stream={"config": config})))
+def test_bind_reads_the_durable_through_the_runtime_import_prefix() -> None:
+    api = _api(prefix=bus.RUNTIME_API_PREFIX)
+    asyncio.run(_verify(api, api_prefix=bus.RUNTIME_API_PREFIX))
+    assert api.subjects == [f"JS.RUNTIME.API.CONSUMER.INFO.{STREAM}.{CONSUMER}"]
+    with pytest.raises(ValueError):
+        asyncio.run(_verify(_api(), api_prefix="$JS.OTHER.API"))
+
+
+def test_the_runtime_prefix_is_used_exactly_when_the_worker_presents_an_identity() -> None:
+    assert bus.RUNTIME_API_PREFIX == "JS.RUNTIME.API"
+    assert bus.runtime_api_prefix(_TLS) == "JS.RUNTIME.API"
+    assert bus.runtime_api_prefix(None) == "$JS.API"
+    # The Go side (natsconn) and the chart's import mapping hold the same
+    # string; a drift there answers every bind "JetStream not enabled".
+    natsconn = (_ROOT / "libs/go/natsconn/natsconn.go").read_text()
+    match = re.search(r'WorkerRuntimeJSAPIPrefix\s*=\s*"([^"]+)"', natsconn)
+    if match is not None:
+        assert match.group(1) == bus.RUNTIME_API_PREFIX
+
+
+class FakeJetStream:
+    def __init__(self, owner: "FakeBindClient", prefix: str) -> None:
+        self.owner = owner
+        self.prefix = prefix
+
+    async def key_value(self, bucket: str) -> Any:
+        self.owner.kv_prefixes.append(self.prefix)
+        return FakeKV()
+
+    async def pull_subscribe_bind(self, consumer: str, *, stream: str) -> Any:
+        self.owner.pull_prefixes.append(self.prefix)
+        return FakeSubscription([])
+
+
+class FakeBindClient(FakeApi):
+    def __init__(self, prefix: str) -> None:
+        super().__init__(
+            {f"{prefix}.CONSUMER.INFO.{STREAM}.{CONSUMER}": {"config": dict(_CONSUMER_CONFIG)}}
+        )
+        self.kv_prefixes: list[str] = []
+        self.pull_prefixes: list[str] = []
+
+    def jetstream(self, *, prefix: str = "$JS.API", timeout: float = 5.0) -> FakeJetStream:
+        return FakeJetStream(self, prefix)
+
+
+@pytest.mark.parametrize("prefix", ["$JS.API", "JS.RUNTIME.API"])
+def test_bind_pulls_through_the_prefix_and_dead_letters_through_the_own_account(
+    prefix: str,
+) -> None:
+    client = FakeBindClient(prefix)
+    consumer = asyncio.run(
+        bus.bind_command_consumer(
+            client,
+            stream=STREAM,
+            consumer=CONSUMER,
+            worker_name="worker-1",
+            fetch_batch=8,
+            fetch_expires_millis=1000,
+            retry_delay_millis=60_000,
+            ack_timeout_seconds=1.0,
+            api_prefix=prefix,
+        )
+    )
+    assert consumer.consumer == CONSUMER
+    assert client.subjects == [f"{prefix}.CONSUMER.INFO.{STREAM}.{CONSUMER}"]
+    assert client.pull_prefixes == [prefix]
+    # The dead-letter bucket lives in the worker's OWN account (WORKER, or
+    # compose's global one): always the default API prefix.
+    assert client.kv_prefixes == ["$JS.API"]
 
 
 @pytest.mark.parametrize(
@@ -668,15 +702,12 @@ def test_bind_refuses_a_drifted_consumer(field_name: str, value: Any) -> None:
     assert caught.value.retryable is False
 
 
-def test_bind_refuses_an_absent_stream_or_durable() -> None:
-    missing = {"error": {"code": 404, "err_code": 10059, "description": "stream not found"}}
-    with pytest.raises(CommandBusAbsent):
-        asyncio.run(_verify(_api(stream=missing)))
+def test_bind_refuses_an_absent_durable() -> None:
     missing = {"error": {"code": 404, "err_code": 10014, "description": "consumer not found"}}
     with pytest.raises(CommandBusAbsent):
         asyncio.run(_verify(_api(consumer=missing)))
     with pytest.raises(DependencyUnavailable):
-        asyncio.run(_verify(_api(stream=TimeoutError())))
+        asyncio.run(_verify(_api(consumer=TimeoutError())))
 
 
 # ── Connection ──────────────────────────────────────────────────────────────
