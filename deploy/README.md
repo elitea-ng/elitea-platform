@@ -142,6 +142,14 @@ demo now that the sidecar's fixture is populated by default.
 
 ### Upgrade notes
 
+**One OS family for every container (2026-10).** Every image this repository
+builds, and every helper container it runs, is on Debian 13 (trixie):
+distroless `*-debian13` runtimes, `*-trixie` builders, `debian:trixie-slim`
+helpers. NATS runs the `scratch` image `nats:2.12.0` (no OS), with a
+`nats-health` sidecar for its compose health check. One documented
+exception: the short-lived `nats-bootstrap` job keeps `natsio/nats-box`,
+which NATS publishes on Alpine only (owner decision, 2026-10-06).
+
 **Debian 13 PostgreSQL image (2026-10).** The `postgres` service moved from
 `pgvector/pgvector:0.8.1-pg18` (Debian 12) to `pgvector/pgvector:0.8.1-pg18-trixie`.
 The PostgreSQL major is the same, so the `standalone_pg_data` volume is reused
