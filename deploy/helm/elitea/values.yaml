@@ -245,8 +245,9 @@ pgbouncer:
 # The gateway's budget counters and the scheduler both dial it, and they MUST
 # name the same one: two components on two clusters of a shared counter enforce
 # nothing. elitea-main's live-update plane (ELITEA_EVENTS_NATS_URL: the project
-# SSE stream, domain-event publishes, canvas presence's KV bucket) dials it
-# too. It must run JetStream — deploy/helm/nats does. Externalized — commodity
+# SSE stream and canvas presence's KV bucket) dials it too — or, when
+# llmGateway.env.GATEWAY_NATS_URL overrides it, whatever the gateway names.
+# It must run JetStream — deploy/helm/nats does. Externalized — commodity
 # infrastructure.
 #
 # `namespace` empty means this release's own namespace. Do not hardcode a
@@ -259,8 +260,8 @@ nats:
 
 # The top-level `redis` block (the plaintext "general purpose" Redis, service
 # elitea-valkey, rendered into REDIS_URL for elitea-main and the scheduler) is
-# GONE. Its three uses moved or were deleted: the project SSE stream and every
-# event publisher to NATS core pub/sub, canvas presence to a NATS KV bucket,
+# GONE. Its three uses moved or were deleted: the project SSE stream to NATS
+# core pub/sub, canvas presence to a NATS KV bucket,
 # and the scheduler's Redis tick lock went with the legacy pylon RPC dispatcher
 # it guarded. A values file that still sets `redis:` is ignored.
 
@@ -902,17 +903,34 @@ main:
     # --- Live-update plane (#152) ----------------------------------------------
     # NATS core pub/sub for GET /api/v2/events/prompt_lib/{projectID} (subject
     # gateway.events.project.<id>.events, shared with the gateway's
-    # budget.soft_alert), every domain-event publish, and canvas presence's
-    # JetStream KV bucket ELITEA_CANVAS_PRESENCE. The server needs JetStream.
+    # budget.soft_alert) and canvas presence (its publish and its JetStream KV
+    # bucket ELITEA_CANVAS_PRESENCE). The server needs JetStream. Domain events
+    # (conversation.created, …) do NOT travel here — they go to webhooks only.
     #
-    # Empty means the top-level `nats` block, resolved in this namespace (the
-    # same server the gateway and the scheduler use). An unreachable or
+    # Empty means the gateway's effective NATS: an explicit
+    # llmGateway.env.GATEWAY_NATS_URL if set, else the top-level `nats` block
+    # (resolved in this namespace unless nats.namespace says otherwise) — the
+    # same server the gateway and the scheduler use. An unreachable or
     # JetStream-less server STOPS elitea-main at startup rather than booting
     # with the SSE route unregistered (a 404 indistinguishable from a typo,
-    # which is what #152 was). It may carry credentials (nats://user:pass@…) or
-    # use tls://. With this empty AND `nats.service` empty, nothing is rendered
+    # which is what #152 was). With nothing naming a NATS, nothing is rendered
     # and elitea-main runs with no live-update plane (route unregistered,
     # presence per-replica), which it logs at startup.
+    #
+    # CREDENTIALS DO NOT GO HERE: this map is rendered into a ConfigMap. For a
+    # NATS that needs user:password, a token or an nkey, leave this empty and
+    # supply the whole URL from a Secret through `main.secrets` (rendered as
+    # valueFrom.secretKeyRef; the ConfigMap then carries no such key):
+    #
+    #   main:
+    #     secrets:
+    #       ELITEA_EVENTS_NATS_URL:
+    #         secretName: elitea-nats-credentials
+    #         key: url        # e.g. tls://user:pass@nats.example:4222
+    #
+    # The chart refuses to render when the gateway reads GATEWAY_NATS_URL from
+    # a Secret (llmGateway.secrets) and elitea-main names no URL of its own,
+    # because it cannot then tell which NATS the gateway uses.
     ELITEA_EVENTS_NATS_URL: ""
     # Replica count of the presence KV bucket. Empty means 1 (the scale-1 NATS
     # profile); set "3" on the HA profile. Presence is ephemeral either way.

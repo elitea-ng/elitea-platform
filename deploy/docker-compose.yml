@@ -34,8 +34,9 @@ services:
       retries: 5
 
   # The live-update plane (elitea-main's ELITEA_EVENTS_NATS_URL): the project
-  # SSE stream, domain-event publishes and canvas presence's JetStream KV
-  # bucket. It replaced the plain Redis that sat at REDIS_URL. JetStream (-js)
+  # SSE stream and canvas presence (its publish and its JetStream KV
+  # bucket); domain events go to webhooks only. It replaced the plain Redis
+  # that sat at REDIS_URL. JetStream (-js)
   # is required — elitea-main refuses to start without it; -m serves the
   # healthcheck. Not published to the host: only elitea-main dials it.
   nats:

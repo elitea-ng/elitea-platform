@@ -96,6 +96,18 @@ spec:
         - name: postgresql.key
           value: "database-url"
 
+        # NATS. applications/nats.yaml installs it as release `elitea-nats`
+        # (Service elitea-nats) in the `elitea-gateway` namespace, not in
+        # this Application's `elitea` namespace, and the chart resolves an
+        # empty nats.namespace to its OWN namespace. Name it, so the gateway,
+        # the scheduler and elitea-main's live-update plane
+        # (ELITEA_EVENTS_NATS_URL, derived from the same block) all resolve
+        # nats://elitea-nats.elitea-gateway.svc.cluster.local:4222.
+        - name: nats.service
+          value: "elitea-nats"
+        - name: nats.namespace
+          value: "elitea-gateway"
+
         # ── YOU MUST FILL THESE IN ────────────────────────────────────────
         #
         # Both are empty on purpose. They are FIELDS, not defaults: a guessed

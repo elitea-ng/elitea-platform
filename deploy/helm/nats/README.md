@@ -8,7 +8,7 @@ JetStream** (design §8.1.1), *not* Redis/Valkey. NATS hosts:
 | `GATEWAY_BUDGET` | KV bucket | int64 nano-USD budget counters (`Nats-Incr`) |
 | `GATEWAY_ALERT_COOLDOWN` | KV bucket | 80% soft-alert cooldown (`kv.Create` = SETNX-with-TTL) |
 | `GATEWAY_BUDGET_DELTAS` | stream | write-behind deltas (subject `gateway.budget.delta`) drained by the `budget-writeback` consumer in `elitea-scheduler` |
-| `gateway.events.*` | subject | EventBus (re-pointed from Redis pub/sub). `gateway.events.project.<id>.events` carries the gateway's `budget.soft_alert` AND elitea-main's domain events; elitea-main's project SSE stream subscribes to it (`ELITEA_EVENTS_NATS_URL`) |
+| `gateway.events.*` | subject | EventBus (re-pointed from Redis pub/sub). `gateway.events.project.<id>.events` carries the gateway's `budget.soft_alert` AND elitea-main's canvas presence rosters (`canvas.editors`); elitea-main's project SSE stream subscribes to it and forwards only those two types — domain events go to webhooks, never here (`ELITEA_EVENTS_NATS_URL`) |
 | `ELITEA_CANVAS_PRESENCE` | KV bucket | elitea-main canvas presence rosters; created by elitea-main at startup, MaxAge 120s, History 1, file storage, replicas `ELITEA_EVENTS_NATS_REPLICAS` (default 1) |
 
 There is **no `GATEWAY_CUTOVER` bucket** — the migration is big-bang with no
