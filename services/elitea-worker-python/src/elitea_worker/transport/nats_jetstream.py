@@ -308,6 +308,7 @@ class JetStreamCommandConsumer:
         max_message_bytes: int = MAX_TRANSPORT_MESSAGE_BYTES,
         max_payload_bytes: int = MAX_TRANSPORT_PAYLOAD_BYTES,
         clock_unix_millis: Callable[[], int] | None = None,
+        event_sink: Callable[[str, WorkerError | None], None] | None = None,
     ) -> None:
         validate_route(stream, consumer)
         if not worker_name:
@@ -334,6 +335,8 @@ class JetStreamCommandConsumer:
         self._max_message_bytes = max_message_bytes
         self._max_payload_bytes = max_payload_bytes
         self._clock = clock_unix_millis or (lambda: int(time.time() * 1_000))
+        self._events = event_sink or (lambda _event, _error: None)
+        self._ack_prefix = f"$JS.ACK.{stream}.{consumer}."
 
     @property
     def stream(self) -> str:
@@ -372,7 +375,45 @@ class JetStreamCommandConsumer:
                     await message.nak()
                 except Exception:
                     continue
-        return tuple(self._decode(message) for message in messages)
+        # Per message: one undecodable message must not discard the batch it
+        # arrived in (the others would sit unheartbeated until AckWait).
+        deliveries: list[CommandDelivery] = []
+        for message in messages:
+            try:
+                deliveries.append(self._decode(message))
+            except InvalidInput as exc:
+                await self._dispose_undecodable(message, exc)
+        return tuple(deliveries)
+
+    async def _dispose_undecodable(self, message: Any, error: InvalidInput) -> None:
+        """Answer only what this durable may answer; skip the rest.
+
+        A reply subject of THIS durable with unreadable metadata can never
+        decode: it is terminated. A reply of another stream or consumer (or
+        none) cannot be answered by this identity at all — the permission
+        table grants it this durable's ack subjects only — so it is reported
+        and left to its own consumer's AckWait.
+        """
+
+        reply = getattr(message, "reply", None)
+        if isinstance(reply, str) and reply.startswith(self._ack_prefix):
+            try:
+                metadata = message.metadata
+                foreign = (
+                    metadata.stream != self._stream or metadata.consumer != self._consumer
+                )
+            except Exception:
+                foreign = False
+            if not foreign:
+                self._events("nats_delivery_undecodable_terminated", error)
+                try:
+                    await message.term()
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    self._events("nats_term_unavailable", DependencyUnavailable())
+                return
+        self._events("nats_delivery_foreign_skipped", error)
 
     async def in_progress(self, deliveries: Sequence[CommandDelivery]) -> int:
         """``+WPI`` for every owned, unanswered message; resets AckWait.
@@ -746,6 +787,7 @@ async def bind_command_consumer(
     max_message_bytes: int = MAX_TRANSPORT_MESSAGE_BYTES,
     max_payload_bytes: int = MAX_TRANSPORT_PAYLOAD_BYTES,
     api_prefix: str = DEFAULT_API_PREFIX,
+    event_sink: Callable[[str, WorkerError | None], None] | None = None,
 ) -> JetStreamCommandConsumer:
     """Verify the durable and the dead-letter bucket, then bind to both.
 
@@ -793,6 +835,7 @@ async def bind_command_consumer(
         ack_timeout_seconds=ack_timeout_seconds,
         max_message_bytes=max_message_bytes,
         max_payload_bytes=max_payload_bytes,
+        event_sink=event_sink,
     )
 
 

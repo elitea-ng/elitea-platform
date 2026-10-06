@@ -302,11 +302,45 @@ def test_messages_beyond_the_reservation_go_straight_back() -> None:
     asyncio.run(run())
 
 
-def test_a_message_of_another_consumer_fails_the_pull() -> None:
+def test_a_message_of_another_consumer_is_skipped_alone_not_the_batch() -> None:
+    """D5: the good messages of the same pull are still delivered."""
+
     async def run() -> None:
-        stray = _message(consumer="elitea-agent-worker-v1")
-        with pytest.raises(InvalidInput):
-            await _consumer(FakeSubscription([[stray]])).fetch()
+        good_before, good_after = _message("a", sequence=1), _message("b", sequence=3)
+        stray = _message("c", sequence=2, consumer="elitea-agent-worker-v1")
+        events: list[str] = []
+        consumer = _consumer(
+            FakeSubscription([[good_before, stray, good_after]]),
+            event_sink=lambda event, _error: events.append(event),
+        )
+        deliveries = await consumer.fetch()
+        assert [delivery.stream_sequence for delivery in deliveries] == [1, 3]
+        # Another durable's reply subject: this identity may not answer it.
+        assert stray.calls == []
+        assert events == ["nats_delivery_foreign_skipped"]
+
+    asyncio.run(run())
+
+
+class _UnreadableMetadata(FakeMsg):
+    @property
+    def metadata(self) -> Any:
+        raise ValueError("unparsable reply")
+
+
+def test_an_undecodable_message_of_this_durable_is_terminated_alone() -> None:
+    async def run() -> None:
+        good = _message("a", sequence=1)
+        broken = _UnreadableMetadata(subject=good.subject, data=b"x", sequence=2)
+        events: list[str] = []
+        consumer = _consumer(
+            FakeSubscription([[broken, good]]),
+            event_sink=lambda event, _error: events.append(event),
+        )
+        deliveries = await consumer.fetch()
+        assert [delivery.stream_sequence for delivery in deliveries] == [1]
+        assert broken.calls == [("term", None)]
+        assert events == ["nats_delivery_undecodable_terminated"]
 
     asyncio.run(run())
 

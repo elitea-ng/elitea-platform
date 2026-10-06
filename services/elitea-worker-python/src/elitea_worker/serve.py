@@ -1107,6 +1107,7 @@ async def _serve_deployment_inner(
         # to start.
         consumer = await bind_command_consumer(
             nats.client,
+            event_sink=_emit_runtime_event,
             stream=config.nats_stream,
             consumer=config.nats_consumer,
             worker_name=config.consumer_id,
