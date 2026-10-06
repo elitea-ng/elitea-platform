@@ -250,6 +250,63 @@ else
   note "containers: $solo_containers"
 fi
 
+# ── 5. The native runner (ADR-0026 phase 7) ──────────────────────────────────
+#
+# One switch, deepwiki.engine.runner=native: the Rust image as the sidecar,
+# the host's runner rendered native, the binary as the probe, the pod name as
+# the build owner, the database secret, and the migrate Job on the same image.
+
+echo "== the native runner renders the Rust sidecar =="
+native="$(render $COMPLETE --set deepwiki.engine.runner=native --set image.tag=9.9.9)" \
+  || fail "runner=native does not render: $native"
+dw() { printf '%s' "$native" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+job() { printf '%s' "$native" | yq eval-all "select(.kind == \"Job\" and .metadata.name == \"elitea-deepwiki-migrate\") | $1" -; }
+expect() {
+  local what="$1" got="$2" want="$3"
+  if [ "$got" != "$want" ]; then fail "$what is '$got', expected '$want'"; else note "$what: $got"; fi
+}
+expect "native containers" "$(dw '.spec.template.spec.containers[].name' | tr '\n' ' ')" "elitea-deepwiki engine "
+expect "native engine image" "$(dw '.spec.template.spec.containers[1].image')" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
+expect "native engine command (the image's own ENTRYPOINT/CMD)" "$(dw '.spec.template.spec.containers[1].command')" "null"
+expect "host runner" "$(dw '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "native"
+expect "engine runner" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value')" "native"
+for probe in livenessProbe readinessProbe; do
+  expect "native $probe" "$(dw ".spec.template.spec.containers[1].$probe.exec.command | join(\" \")")" "/usr/local/bin/elitea-deepwiki-engine healthcheck"
+done
+expect "build owner" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_BUILD_OWNER") | .valueFrom.fieldRef.fieldPath')" "metadata.name"
+expect "engine database URL secret" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_DATABASE_URL") | .valueFrom.secretKeyRef.name')" "elitea-main-db"
+expect "engine git allowlist" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_GIT_ALLOWLIST") | .value')" "github.com"
+expect "worker memory cap = limits.memory 16Gi" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES") | .value')" "17179869184"
+expect "container memory limit" "$(dw '.spec.template.spec.containers[1].resources.limits.memory')" "16Gi"
+expect "worker CPU seconds" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_CPU_SECONDS") | .value')" "14400"
+expect "engine scratch mount" "$(dw '.spec.template.spec.containers[1].volumeMounts[] | select(.name == "scratch") | .mountPath')" "/var/scratch/deepwiki"
+expect "engine socket mount" "$(dw '.spec.template.spec.containers[1].volumeMounts[] | select(.name == "engine-socket") | .mountPath')" "/run/deepwiki"
+expect "native migrate image" "$(job '.spec.template.spec.containers[0].image')" "ghcr.io/elitea-ng/elitea-deepwiki-engine-native:9.9.9"
+expect "native migrate args" "$(job '.spec.template.spec.containers[0].args | join(" ")')" "migrate"
+expect "native migrate command" "$(job '.spec.template.spec.containers[0].command')" "null"
+expect "a smaller limit moves the cap with it" \
+  "$(render $COMPLETE --set deepwiki.engine.runner=native --set deepwiki.engine.native.resources.limits.memory=6144Mi \
+      | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES") | .value' -)" \
+  "6442450944"
+
+if render $COMPLETE --set deepwiki.engine.runner=native --set deepwiki.engine.image.tag=1.2.3 >/dev/null 2>&1; then
+  note "runner=native ignores the Python -engine tag guard"
+else
+  fail "runner=native is refused by the Python image's -engine tag guard, which it does not use"
+fi
+
+echo "== the native runner's refusals =="
+refuses "native with no database URL"            --set deepwiki.engine.runner=native --set postgresql.existingSecret=
+refuses "host runner native, Python sidecar"     --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=native
+refuses "an unknown engine runner"               --set deepwiki.engine.runner=rust
+refuses "native memory limit below 1Gi"          --set deepwiki.engine.runner=native --set deepwiki.engine.native.resources.limits.memory=512Mi
+refuses "native memory limit not in Gi or Mi"    --set deepwiki.engine.runner=native --set deepwiki.engine.native.resources.limits.memory=16G
+
+echo "== the fixture runner keeps the Python sidecar =="
+fixture="$(render $COMPLETE --set deepwiki.engine.runner=fixture)" || fail "runner=fixture does not render"
+expect "fixture engine runner" "$(printf '%s' "$fixture" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value' -)" "fixture"
+expect "fixture host runner" "$(printf '%s' "$fixture" | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_RUNNER") | .value' -)" "legacy"
+
 if [ "$failures" -ne 0 ]; then
   echo "render-deepwiki: $failures assertion(s) failed" >&2
   exit 1

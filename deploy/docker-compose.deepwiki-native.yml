@@ -4,18 +4,54 @@
 # deploy/scripts/standalone-stack.sh). It replaces the PYTHON engine sidecar
 # with the Rust one on the same socket and volume, and tells the Go host it
 # is talking to the native engine, so GET /health reports `runner: native`.
-# Nothing else in the stack changes — that is the claim being tested.
-#
-# Phase 1 of ADR-0026 serves the fixture engine only, so the DeepWiki
-# browser journeys run against canned results exactly as they do with the
-# Python sidecar:
 #
 #   STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native.yml \
 #     deploy/scripts/standalone-stack.sh up
+#
+# THE RUNNER. `native` (the default since ADR-0026 phase 7) runs the engine:
+# generate_wiki in a worker child process, ask / deep_research /
+# resolve_wiki in process, every index in PostgreSQL. It needs the database
+# below, which the one-shot `elitea-deepwiki-migrate` service migrates with
+# the image's own `migrate` subcommand before the engine starts.
+#
+# The FIXTURE browser journeys (scripts/deepwiki-e2e.sh) expect canned
+# results; run them on this overlay with the native binary's fixture runner:
+#
+#   DEEPWIKI_NATIVE_RUNNER=fixture STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native.yml \
+#     deploy/scripts/standalone-stack.sh up
+#
+# THE DATABASE is the stack's own PostgreSQL (pgvector/pgvector:pg18) and its
+# `elitea` database, directly and NOT through pgbouncer: the migration and the
+# publish hold session-level advisory locks, which a transaction-mode pooler
+# does not keep on one backend. The service owns its tables there, as the
+# Helm chart's default (postgresql.existingSecret) makes the platform database
+# the service database too.
+#
+# The real-engine journey (DWIKI-014) does NOT run on this overlay yet: see
+# "Real-engine journey" in services/elitea-deepwiki-engine/README.md.
 services:
   elitea-deepwiki:
     environment:
       ELITEA_DEEPWIKI_RUNNER: "native"
+
+  # The service migrations, from the native image (the binary embeds the SQL
+  # files and writes the Python runner's schema_migrations ledger). Exits 0
+  # at the newest migration; the engine waits for it.
+  elitea-deepwiki-migrate:
+    image: ghcr.io/elitea-ng/elitea-deepwiki-engine-native:standalone
+    # The same build as the engine below (a cache hit after the first), so
+    # compose never tries to PULL a tag that only exists locally.
+    build:
+      context: ..
+      dockerfile: services/elitea-deepwiki-engine/Containerfile
+    # The image's ENTRYPOINT is the binary; this replaces its CMD (`serve`).
+    command: ["migrate"]
+    environment:
+      ELITEA_DEEPWIKI_DATABASE_URL: "postgresql://elitea:elitea@postgres:5432/elitea"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
 
   elitea-deepwiki-engine:
     image: ghcr.io/elitea-ng/elitea-deepwiki-engine-native:standalone
@@ -26,9 +62,31 @@ services:
     # base file's Python entrypoint is reset.
     entrypoint: !reset null
     environment:
-      ELITEA_DEEPWIKI_RUNNER: "fixture"
+      ELITEA_DEEPWIKI_RUNNER: "${DEEPWIKI_NATIVE_RUNNER:-native}"
       ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS: "${DEEPWIKI_FIXTURE_STEP_SECONDS:-1}"
       ELITEA_DEEPWIKI_ENGINE_SOCKET: /run/deepwiki/engine.sock
+      ELITEA_DEEPWIKI_DATABASE_URL: "postgresql://elitea:elitea@postgres:5432/elitea"
+      # The build-space owner. A container's hostname is its id, which
+      # changes on every recreate; the startup reconciliation deletes this
+      # owner's earlier builds, so the owner must survive a recreate. One
+      # engine on this stack, so one fixed name. (Helm uses the pod name.)
+      ELITEA_DEEPWIKI_BUILD_OWNER: "standalone-deepwiki-engine"
+      # The same allowlist the Go host checks (base file); the engine checks
+      # it again before it clones.
+      ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+      ELITEA_DEEPWIKI_SCRATCH_PATH: /tmp/deepwiki
+      # A generation worker's limits, at the engine defaults, stated so a
+      # reader of this file sees them: 16 GiB of address space, 4 h of CPU.
+      # There is no ELITEA_DEEPWIKI_MODEL_ALLOWLIST: the native engine
+      # downloads no model; every model call goes to the invocation's
+      # llm_settings.api_base (the platform's /llm/v1).
+      ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES: "17179869184"
+      ELITEA_DEEPWIKI_WORKER_CPU_SECONDS: "14400"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elitea-deepwiki-migrate:
+        condition: service_completed_successfully
     healthcheck:
       # Distroless: no shell, no python. The binary probes its own socket
       # with GET /engine/health.

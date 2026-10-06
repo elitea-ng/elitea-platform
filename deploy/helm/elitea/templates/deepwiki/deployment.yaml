@@ -14,6 +14,9 @@
 */ -}}
 {{- $secrets := fromJson (include "elitea.provider.databaseSecret" (dict "ctx" . "provider" "deepwiki" "urlKey" "ELITEA_DEEPWIKI_DATABASE_URL")) }}
 {{- include "elitea-deepwiki.validateGuards" . -}}
+{{- $sidecar := include "elitea-deepwiki.sidecar" . }}
+{{- /* The host's runner follows the sidecar: native when the Rust engine runs. */ -}}
+{{- $hostEnv := merge (dict "ELITEA_DEEPWIKI_RUNNER" (include "elitea-deepwiki.hostRunner" .)) $env }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -60,7 +63,7 @@ spec:
               containerPort: 8080
               protocol: TCP
           env:
-            {{- range $key, $value := $env }}
+            {{- range $key, $value := $hostEnv }}
             {{- if not (hasKey $secrets $key) }}
             # Skipped when the same name is secret-backed below: emitting both
             # puts one name twice in this list, and only ordering decides which
@@ -125,7 +128,7 @@ spec:
             - name: engine-socket
               mountPath: {{ .Values.deepwiki.engine.socketDir }}
             {{- with (include "elitea.provider.mtlsVolumeMount" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 12 }}{{- end }}
-        {{- if eq (get $env "ELITEA_DEEPWIKI_RUNNER" | toString) "legacy" }}
+        {{- if eq $sidecar "python" }}
         # The engine sidecar (ADR-0023 H2): the Python tool layer and its
         # dependency closure, reached by the host over the shared socket. No
         # port, no TLS, no identity — the socket directory is the only way in.
@@ -167,6 +170,67 @@ spec:
             # publishing it. That is ephemeral pod storage by design (ADR-0022
             # decision 4): nothing durable lives here, and a replica that dies
             # mid-generation loses only work that is being redone anyway.
+            - name: scratch
+              mountPath: {{ .Values.deepwiki.scratch.mountPath }}
+            - name: engine-socket
+              mountPath: {{ .Values.deepwiki.engine.socketDir }}
+        {{- else if eq $sidecar "native" }}
+        # The Rust-native engine sidecar (ADR-0026): the same socket protocol
+        # on the same socket, one distroless binary. The image's own
+        # ENTRYPOINT/CMD (`elitea-deepwiki-engine serve`) is the sidecar, so no
+        # command is set.
+        - name: engine
+          image: "{{ .Values.deepwiki.engine.native.image.repository }}:{{ include "elitea-deepwiki.nativeTag" . }}"
+          imagePullPolicy: {{ .Values.deepwiki.engine.native.image.pullPolicy }}
+          {{- with .Values.deepwiki.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- $nativeEnv := merge (dict
+                  "ELITEA_DEEPWIKI_RUNNER" "native"
+                  "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES" (include "elitea-deepwiki.nativeWorkerMemoryBytes" .)
+                  "ELITEA_DEEPWIKI_WORKER_CPU_SECONDS" (.Values.deepwiki.engine.native.workerCpuSeconds | int64 | toString)
+                ) (omit $env "ELITEA_DEEPWIKI_BUILD_OWNER") }}
+            {{- range $key, $value := $nativeEnv }}
+            {{- if not (hasKey $secrets $key) }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+            # The build-space owner: the POD name. The startup reconciliation
+            # deletes this owner's builds from earlier runs, so the owner must
+            # differ between replicas and survive a restart of the container;
+            # the engine refuses the shared default when a database is set.
+            # A replaced pod's builds are left to the stale sweep
+            # (ELITEA_DEEPWIKI_BUILD_STALE_SECONDS).
+            - name: ELITEA_DEEPWIKI_BUILD_OWNER
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # ELITEA_DEEPWIKI_DATABASE_URL, from the secret the migrate Job
+            # reads (validateGuards refuses a native install without one).
+            {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
+          # Distroless: no shell, no python. The binary connects to its own
+          # socket and asks GET /engine/health.
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/elitea-deepwiki-engine", "healthcheck"]
+            periodSeconds: {{ .Values.deepwiki.probes.liveness.periodSeconds }}
+            failureThreshold: {{ .Values.deepwiki.probes.liveness.failureThreshold }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/elitea-deepwiki-engine", "healthcheck"]
+            periodSeconds: {{ .Values.deepwiki.probes.readiness.periodSeconds }}
+            failureThreshold: {{ .Values.deepwiki.probes.readiness.failureThreshold }}
+          resources:
+            {{- toYaml .Values.deepwiki.engine.native.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            # Clones and the worker's job directories (mode 0700, removed when
+            # the worker ends). Ephemeral by design: an index lives in
+            # PostgreSQL, never here.
             - name: scratch
               mountPath: {{ .Values.deepwiki.scratch.mountPath }}
             - name: engine-socket

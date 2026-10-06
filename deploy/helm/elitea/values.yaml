@@ -2862,8 +2862,16 @@ deepwiki:
       # tool would fail at invocation time.
       tag: ""
       pullPolicy: IfNotPresent
-    # What the SIDECAR runs: legacy (the engine) or fixture (canned results,
-    # for a stack that proves the hop without the engine).
+    # What the SIDECAR runs:
+    #   legacy  the Python engine (`image` above, the -engine variant);
+    #   fixture the Python image's canned results, for a stack that proves
+    #           the hop without the engine;
+    #   native  the Rust-native engine (ADR-0026, `native.image` below). This
+    #           one switch also renders the host's ELITEA_DEEPWIKI_RUNNER as
+    #           native, and needs ELITEA_DEEPWIKI_DATABASE_URL (the secret the
+    #           migrate Job uses); the chart refuses to render without it.
+    # The Python engine stays available behind `legacy` until the native
+    # engine's parity sign-off.
     runner: legacy
     socketDir: /run/deepwiki
     resources:
@@ -2872,6 +2880,37 @@ deepwiki:
         memory: 512Mi
       limits:
         memory: 4Gi
+    # The Rust-native engine (services/elitea-deepwiki-engine), used when
+    # runner is native. One distroless binary: its probe is the binary itself
+    # (`elitea-deepwiki-engine healthcheck`), and the migrate Job runs its
+    # `migrate` subcommand, so a native install pulls no Python image at all.
+    native:
+      image:
+        repository: ghcr.io/elitea-ng/elitea-deepwiki-engine-native
+        # Empty means the chart-wide image.tag (no suffix: its own repository).
+        tag: ""
+        pullPolicy: IfNotPresent
+      # A generation runs in a worker child process with its own limits
+      # (ADR-0026 decision 10).
+      #
+      # limits.memory IS the worker's address-space cap: the chart renders
+      # ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES from it (Gi or Mi only, at least
+      # 1Gi), so a runaway generation ends as an engine MemoryError the caller
+      # can read rather than an OOM-killed sidecar. 16Gi is the engine's own
+      # default cap. It counts reserved address space, not resident memory
+      # (1.3–3.2 GB resident measured on a large repository), so the request
+      # is far below it.
+      #
+      # No CPU limit, as elsewhere in this chart. CPU is bounded per
+      # generation by workerCpuSeconds below (RLIMIT_CPU, CPU time, not a
+      # rate): the engine's default, 4 h of CPU.
+      resources:
+        requests:
+          cpu: 500m
+          memory: 2Gi
+        limits:
+          memory: 16Gi
+      workerCpuSeconds: 14400
 
   service:
     # Named explicitly, not release-derived: the server certificate's SANs name
@@ -2892,10 +2931,10 @@ deepwiki:
     # from the git allowlist — a deployment may well allow an internal model
     # mirror and no public git host — and fail-closed in the same way.
     ELITEA_DEEPWIKI_MODEL_ALLOWLIST: ""
-    # "unavailable" (the default) refuses every tool and says so; "legacy" runs
-    # the ported engine and needs the -engine image tag above.
     # The host's runner: legacy reaches the engine sidecar over the socket
     # below; unavailable refuses every tool (no sidecar is rendered then).
+    # engine.runner: native renders this as "native" (the Rust sidecar on the
+    # same socket); writing "native" here without it is refused.
     ELITEA_DEEPWIKI_RUNNER: "legacy"
     ELITEA_DEEPWIKI_ENGINE_SOCKET: /run/deepwiki/engine.sock
     ELITEA_SUBAPP: deepwiki

@@ -71,10 +71,109 @@ go read logs for, and this is a message in the terminal that ran the command.
   would tell them.
 */}}
 {{- $runner := get $env "ELITEA_DEEPWIKI_RUNNER" | toString -}}
+{{- $sidecar := include "elitea-deepwiki.sidecar" . -}}
 {{- $engineTag := include "elitea-deepwiki.engineTag" . -}}
-{{- if and (eq $runner "legacy") (not (contains "-engine" $engineTag)) -}}
+{{- if and (eq $sidecar "python") (eq $runner "legacy") (not (contains "-engine" $engineTag)) -}}
 {{- fail (printf "deepwiki.env.ELITEA_DEEPWIKI_RUNNER is \"legacy\" but the engine sidecar's image tag (%s) does not end in \"-engine\". The plain elitea-deepwiki image carries the engine SOURCE and not its ~92-package closure (torch, transformers, faiss-cpu, tree-sitter), so the sidecar cannot import it and every tool fails at invocation time rather than at start. Set deepwiki.engine.image.tag to the -engine variant (the default derives it from the chart-wide tag), or set the runner to unavailable." $engineTag) -}}
 {{- end -}}
+
+{{/*
+  Guard #3: the native engine's database.
+
+  The Rust engine stages and publishes every index in the deepwiki PostgreSQL
+  database (ADR-0026 decision 5) and has no other index storage, so it
+  REFUSES to start without ELITEA_DEEPWIKI_DATABASE_URL. Without this guard
+  that refusal is a sidecar in CrashLoopBackOff and a host that never becomes
+  ready. The URL comes from the same place the migrate Job reads it:
+  deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL, else postgresql.existingSecret.
+*/}}
+{{- if eq $sidecar "native" -}}
+{{- $secrets := fromJson (include "elitea.provider.databaseSecret" (dict "ctx" . "provider" "deepwiki" "urlKey" "ELITEA_DEEPWIKI_DATABASE_URL")) -}}
+{{- if not (or (hasKey $secrets "ELITEA_DEEPWIKI_DATABASE_URL") (get $env "ELITEA_DEEPWIKI_DATABASE_URL")) -}}
+{{- fail "deepwiki.engine.runner is \"native\" but no ELITEA_DEEPWIKI_DATABASE_URL reaches the engine: neither deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL nor postgresql.existingSecret is set. The native engine stages and publishes every index in the deepwiki PostgreSQL database and has no other storage, so it refuses to start without one, and the pod would never become ready. Name the secret that holds the database URL (the one the migrate Job uses), or use runner legacy or fixture." -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-deepwiki.sidecar — which engine sidecar the pod runs, from the two
+runner settings:
+
+  none    deepwiki.env.ELITEA_DEEPWIKI_RUNNER is anything but legacy or native
+          (unavailable: the host refuses every tool; fixture: the host's own
+          canned results). No sidecar is rendered.
+  native  deepwiki.engine.runner is native: the Rust engine
+          (elitea-deepwiki-engine-native, ADR-0026). The host's runner is
+          rendered as native whatever env says, so the one switch cannot
+          leave the host dialling a Python engine that is not there.
+  python  otherwise: the Python -engine image, its runner the
+          deepwiki.engine.runner value (legacy or fixture).
+
+A host runner of native with a Python sidecar is refused: it names the
+native engine and would talk to the Python one.
+*/}}
+{{- define "elitea-deepwiki.sidecar" -}}
+{{- $runner := get (.Values.deepwiki.env | default dict) "ELITEA_DEEPWIKI_RUNNER" | toString -}}
+{{- $engineRunner := .Values.deepwiki.engine.runner | toString -}}
+{{- if not (has $engineRunner (list "legacy" "fixture" "native")) -}}
+{{- fail (printf "deepwiki.engine.runner must be legacy, fixture or native, got %q" $engineRunner) -}}
+{{- end -}}
+{{- if not (has $runner (list "legacy" "native")) -}}
+none
+{{- else if eq $engineRunner "native" -}}
+native
+{{- else if eq $runner "native" -}}
+{{- fail (printf "deepwiki.env.ELITEA_DEEPWIKI_RUNNER is \"native\" but deepwiki.engine.runner is %q, which runs the PYTHON sidecar. Set deepwiki.engine.runner to native: that one switch selects the native image and renders the host's runner." $engineRunner) -}}
+{{- else -}}
+python
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-deepwiki.hostRunner — the host's ELITEA_DEEPWIKI_RUNNER: native when
+the native sidecar runs, else the env value as written.
+*/}}
+{{- define "elitea-deepwiki.hostRunner" -}}
+{{- if eq (include "elitea-deepwiki.sidecar" .) "native" -}}
+native
+{{- else -}}
+{{- get (.Values.deepwiki.env | default dict) "ELITEA_DEEPWIKI_RUNNER" | toString -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea-deepwiki.nativeTag — the native engine's image tag: the value set,
+else the chart-wide tag. It is its own repository, so no suffix.
+*/}}
+{{- define "elitea-deepwiki.nativeTag" -}}
+{{- .Values.deepwiki.engine.native.image.tag | default .Values.image.tag | toString -}}
+{{- end }}
+
+{{/*
+elitea-deepwiki.nativeWorkerMemoryBytes — ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES
+for the native engine, DERIVED from the container's memory limit so the two
+cannot disagree. The worker child's RLIMIT_AS counts address space, which is
+never below resident memory, so with the cap equal to the limit a runaway
+generation fails inside the engine as MemoryError / out_of_memory (a result
+the caller can read) before the kubelet OOM-kills the container (a sidecar
+restart and a lost invocation). The default limit, 16Gi, is the engine's own
+default cap. Only Gi and Mi quantities are accepted, and at least 1Gi (the
+engine refuses a smaller cap).
+*/}}
+{{- define "elitea-deepwiki.nativeWorkerMemoryBytes" -}}
+{{- $limit := (((.Values.deepwiki.engine.native.resources | default dict).limits | default dict).memory | default "") | toString -}}
+{{- $bytes := 0 -}}
+{{- if regexMatch "^[0-9]+Gi$" $limit -}}
+{{- $bytes = mul (trimSuffix "Gi" $limit | atoi) 1073741824 -}}
+{{- else if regexMatch "^[0-9]+Mi$" $limit -}}
+{{- $bytes = mul (trimSuffix "Mi" $limit | atoi) 1048576 -}}
+{{- else -}}
+{{- fail (printf "deepwiki.engine.native.resources.limits.memory must be a whole number of Gi or Mi (it sets the generation worker's address-space cap, ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES), got %q" $limit) -}}
+{{- end -}}
+{{- if lt (int64 $bytes) 1073741824 -}}
+{{- fail (printf "deepwiki.engine.native.resources.limits.memory is %s, below 1Gi: the engine refuses a worker address-space cap under 1 GiB, because a generation worker cannot start its thread pools in less" $limit) -}}
+{{- end -}}
+{{- $bytes -}}
 {{- end }}
 
 {{/*
