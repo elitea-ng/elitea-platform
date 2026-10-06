@@ -1,6 +1,9 @@
 # Test fixture only. Keep TLS verification enabled in all consumers.
-FROM docker.io/library/alpine:3.20 AS tls
-RUN apk add --no-cache openssl
+# debian:trixie-slim is the base of python:3.12.14-slim-trixie below.
+FROM docker.io/library/debian:trixie-slim AS tls
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssl \
+ && rm -rf /var/lib/apt/lists/*
 RUN mkdir -p /out \
  && openssl req -x509 -newkey rsa:2048 -nodes \
       -keyout /out/ca.key -out /out/ca.crt -days 365 \
@@ -16,7 +19,7 @@ RUN mkdir -p /out \
       -out /out/server.crt -days 365 -sha256 -extfile /out/leaf.ext \
  && cat /out/server.crt /out/ca.crt > /out/server-chain.crt
 
-FROM docker.io/library/python:3.12.10-slim
+FROM docker.io/library/python:3.12.14-slim-trixie
 RUN useradd --system --uid 10103 --home-dir /nonexistent --shell /usr/sbin/nologin oauthemulator
 COPY --from=tls --chown=10103:10103 /out/server.key /opt/oauth-emulator/tls/server.key
 COPY --from=tls /out/server-chain.crt /opt/oauth-emulator/tls/server-chain.crt

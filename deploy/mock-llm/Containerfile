@@ -1,10 +1,10 @@
 # Deterministic OpenAI-compatible mock upstream (issue #283).
 #
 # python:3.12-slim is already in this stack's build graph — services/
-# elitea-worker-python builds from python:3.12.10-slim — so this pulls no new
+# elitea-worker-python builds from python:3.12.14-slim-trixie — so this pulls no new
 # base image family. The server is standard library only: no pip install, and
 # therefore no network access at build or run time.
-FROM python:3.12.10-slim
+FROM python:3.12.14-slim-trixie
 
 # Non-root, and a uid that collides with nothing else in the stack (elitea-main
 # is 65532, the worker 10001).
