@@ -19,8 +19,14 @@
 //!   (default 15) tool-calling steps, then `tool_choice: none`; at most
 //!   [`MAX_CALLS_PER_STEP`] calls in one step.
 //!
-//! A model that still calls tools after `tool_choice: none` ends the loop
-//! with the answer written so far.
+//! A model that still calls tools after `tool_choice: none` ends the loop:
+//! the text of that reply is the answer (its calls run nowhere), and a
+//! reply without text fails the run (`RuntimeError`), as a Python run that
+//! hit `LangGraph`'s recursion limit failed.
+//!
+//! A tool call without an id gets `call_{step}`, the id its progress line
+//! names, once: the call in the conversation, its result line and its tool
+//! message carry the same id.
 //!
 //! Deliberate differences, besides the limits: arguments that are not a
 //! JSON object get an error result and the loop goes on (`LangChain` left
@@ -230,11 +236,8 @@ impl<'c> Events<'c> {
 
     fn tool_call(&mut self, call: &Call) {
         self.step += 1;
-        let id = if call.id.is_empty() {
-            format!("call_{}", self.step)
-        } else {
-            call.id.clone()
-        };
+        // `run` gave an id-less call `call_{step}` already.
+        let id = call.id.clone();
         let input = match &call.args {
             Some(args) => pyfmt::repr(&Value::Object(args.clone())),
             None => call.raw.clone(),
@@ -465,12 +468,24 @@ pub async fn run<S: IndexStore, M: Model>(
             model.call(&chat, streaming, stop, &mut on_text).await?
         };
         context.checkpoint()?;
+        // An id-less call gets the id its announcement will name
+        // (`call_{step}`, one step per call), here, once.
         let calls: Vec<Call> = response
             .tool_calls
             .iter()
-            .map(Call::from_tool_call)
+            .enumerate()
+            .map(|(index, tool_call)| {
+                let mut call = Call::from_tool_call(tool_call);
+                if call.id.is_empty() {
+                    call.id = format!("call_{}", events.step + index + 1);
+                }
+                call
+            })
             .collect();
-        if calls.is_empty() && !response.content.is_empty() {
+        // The last turn: no calls, or calls past the limit, which run
+        // nowhere, so the reply's text is the answer.
+        let last = calls.is_empty() || exhausted;
+        if last && !response.content.is_empty() {
             if spec.mode == Mode::Ask && !streaming {
                 fragments.push(response.content.clone());
                 context.token(response.content.clone());
@@ -490,6 +505,19 @@ pub async fn run<S: IndexStore, M: Model>(
         }
         if exhausted {
             tracing::warn!(mode = ?spec.mode, "the model called tools after its step limit; ending the run");
+            if crate::graph::pystr::strip(&response.content).is_empty() {
+                let setting = match spec.mode {
+                    Mode::Ask => "DEEPWIKI_ASK_MAX_ITERATIONS",
+                    Mode::Research => "ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS",
+                };
+                return Err(EngineError::new(
+                    ErrorType::Runtime,
+                    format!(
+                        "The model gave no answer after its step limit ({setting}={}): it still called tools when told to answer.",
+                        spec.budget
+                    ),
+                ));
+            }
             break;
         }
         for call in &calls {
@@ -527,12 +555,7 @@ pub async fn run<S: IndexStore, M: Model>(
                 updates.extend(writes);
                 text
             };
-            let tool_call_id = if call.id.is_empty() {
-                format!("call_{}", events.step)
-            } else {
-                call.id.clone()
-            };
-            events.tool_result(&tool_call_id, &call.name, &text);
+            events.tool_result(&call.id, &call.name, &text);
             messages.push(Msg::Tool {
                 call_id: call.id.clone(),
                 name: call.name.clone(),

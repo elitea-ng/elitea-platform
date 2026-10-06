@@ -937,7 +937,11 @@ the parity gate drives.
 * **Limits** (Python enforced none): `DEEPWIKI_ASK_MAX_ITERATIONS`
   (default 8, the budget the ask prompt states) tool calls for `ask`;
   `ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS` (default 15) tool-calling steps
-  and 25 calls per step for deep research; then `tool_choice: none`. Every
+  and 25 calls per step for deep research; then `tool_choice: none`. A
+  reply that still calls tools then ends the run: its text is the answer
+  and its calls run nowhere; with no text the run fails (`RuntimeError`,
+  naming the setting), as a Python run past `LangGraph`'s recursion limit
+  failed. Every
   whole number is accepted, as Python did; one outside 1..=1000 is moved
   into it, with a warning. `DEEPWIKI_MAX_DOC_RESULTS` (default 3, Python's;
   moved into 0..=100, 0 searches no documents) caps the documentation

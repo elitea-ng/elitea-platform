@@ -15,7 +15,7 @@ use elitea_deepwiki_engine::ask::embed::{Embedder, stand_in_embedding};
 use elitea_deepwiki_engine::ask::summarize::Msg;
 use elitea_deepwiki_engine::ask::tools::Codebase;
 use elitea_deepwiki_engine::ask::{self, Limits, args, resolve};
-use elitea_deepwiki_engine::errors::EngineError;
+use elitea_deepwiki_engine::errors::{EngineError, ErrorType};
 use elitea_deepwiki_engine::llm::transport::Backoff;
 use elitea_deepwiki_engine::llm::{
     ChatClient, ModelSettings, Timeouts, Transport, TransportSettings,
@@ -240,7 +240,7 @@ async fn the_ask_budget_is_enforced() {
     let think = |id: &str| call(id, "think", json!({"reflection": id}));
     let script = json!([
         {"tool_calls": [think("a"), think("b"), think("c")]},
-        {"tool_calls": [think("d")]},
+        {"content": "Found it: d.", "tool_calls": [think("d")]},
     ]);
     let spec =
         ask::ask_spec(&request(), None, "gpt-4o", false, false, limits, clock()).expect("spec");
@@ -249,7 +249,7 @@ async fn the_ask_budget_is_enforced() {
         "the prompt states the enforced budget"
     );
     let model = common::ScriptedModel::new(&script);
-    let (context, _receiver, _) = common::context();
+    let (context, mut receiver, _) = common::context();
     let index = common::replay_index();
     let outcome = agent::run(&spec, &model, &index, &Embedder::None, &context)
         .await
@@ -270,8 +270,102 @@ async fn the_ask_budget_is_enforced() {
     assert!(bodies[0].get("tool_choice").is_none());
     assert_eq!(bodies[1]["tool_choice"], json!("none"));
     // A model that ignores `tool_choice: none` ends the run: its calls ran
-    // nowhere.
+    // nowhere, and its text is the answer.
     assert!(matches!(outcome.messages.last(), Some(Msg::Ai { .. })));
+    assert_eq!(outcome.answer, "Found it: d.");
+    let tokens: Vec<String> = std::iter::from_fn(|| receiver.try_recv().ok())
+        .filter_map(|line| match line {
+            Line::Token(text) => Some(text),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tokens, ["Found it: d."]);
+
+    // The same reply without text: a failure, not an empty answer.
+    let script = json!([
+        {"tool_calls": [think("a"), think("b"), think("c")]},
+        {"tool_calls": [think("d")]},
+    ]);
+    let model = common::ScriptedModel::new(&script);
+    let (context, _receiver, _) = common::context();
+    let failed = agent::run(&spec, &model, &index, &Embedder::None, &context).await;
+    let error = failed.expect_err("no answer is a failure");
+    assert_eq!(error.error_type, ErrorType::Runtime);
+    assert!(
+        error.message.contains("DEEPWIKI_ASK_MAX_ITERATIONS=2"),
+        "{}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn tool_calls_without_ids_keep_one_id_each() {
+    let think =
+        |reflection: &str| json!({"name": "think", "arguments": {"reflection": reflection}});
+    let script = json!([
+        {"tool_calls": [think("one"), think("two")]},
+        {"content": "done"},
+    ]);
+    let spec = ask::ask_spec(
+        &request(),
+        None,
+        "gpt-4o",
+        false,
+        false,
+        Limits::default(),
+        clock(),
+    )
+    .expect("spec");
+    let model = common::ScriptedModel::new(&script);
+    let (context, _receiver, _) = common::context();
+    let outcome = agent::run(
+        &spec,
+        &model,
+        &common::replay_index(),
+        &Embedder::None,
+        &context,
+    )
+    .await
+    .expect("runs");
+    let ids = |kind: &str| -> Vec<String> {
+        outcome
+            .thinking_steps
+            .iter()
+            .filter(|s| s["type"] == kind)
+            .map(|s| s["tool_call_id"].as_str().unwrap_or_default().to_owned())
+            .collect()
+    };
+    // Announced as call_1 and call_2 (steps 1 and 2); each result names
+    // its own call, not the step it happens at.
+    assert_eq!(ids("tool_call"), ["call_1", "call_2"]);
+    assert_eq!(ids("tool_result"), ["call_1", "call_2"]);
+    let called: Vec<&str> = outcome
+        .messages
+        .iter()
+        .flat_map(|m| match m {
+            Msg::Ai { calls, .. } => calls.iter().map(|c| c.id.as_str()).collect(),
+            _ => Vec::new(),
+        })
+        .collect();
+    let answered: Vec<&str> = outcome
+        .messages
+        .iter()
+        .filter_map(|m| match m {
+            Msg::Tool { call_id, .. } => Some(call_id.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(called, ["call_1", "call_2"]);
+    assert_eq!(answered, ["call_1", "call_2"]);
+    // The model saw the same ids in the next request.
+    let second = &model.bodies()[1]["messages"];
+    let sent: Vec<&str> = second
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| m["tool_call_id"].as_str())
+        .collect();
+    assert_eq!(sent, ["call_1", "call_2"]);
 }
 
 #[tokio::test]
