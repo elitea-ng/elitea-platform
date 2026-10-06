@@ -141,7 +141,7 @@ this stack started. It cannot satisfy check 3, and the chain is short:
   (`cmd/elitea-main/production_authentication.go`), so an OIDC-only install
   satisfies it too; this file uses the Form plane;
 * the Form graph keeps its session and attempt store in PostgreSQL
-  (elitea-main shared migration 0145), so no Redis is involved.
+  (elitea-main shared migration 0153), so no Redis is involved.
 
 So the DeepWiki facade needs none of this, and proving that the facade
 REGISTERED its provider does. The runtime dispatch plane, the worker and the
