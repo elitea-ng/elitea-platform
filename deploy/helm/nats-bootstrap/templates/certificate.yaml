@@ -1,0 +1,28 @@
+{{- if .Values.tls.certificate.create }}
+# The bootstrap identity (#1076): a client certificate from the dedicated NATS
+# CA whose URI SAN the server maps to the one user that may create streams.
+# A regular resource, not a hook, so it exists before the post-install Job.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "nats-bootstrap.fullname" . }}-nats-client
+  labels:
+    {{- include "nats-bootstrap.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.tls.secretName }}
+  duration: {{ .Values.tls.certificate.duration }}
+  renewBefore: {{ .Values.tls.certificate.renewBefore }}
+  isCA: false
+  usages:
+    - client auth
+  commonName: elitea-nats-bootstrap
+  uris:
+    - spiffe://{{ .Values.tls.certificate.trustDomain }}/nats/elitea-nats-bootstrap
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Values.tls.certificate.issuerRef.name }}
+    kind: {{ .Values.tls.certificate.issuerRef.kind }}
+    group: cert-manager.io
+{{- end }}

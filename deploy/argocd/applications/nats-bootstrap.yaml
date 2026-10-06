@@ -23,7 +23,7 @@ spec:
         # Service is elitea-nats (the upstream chart names it after a release
         # name that contains "nats"), in this same elitea-gateway namespace.
         - name: natsUrl
-          value: "nats://elitea-nats:4222"
+          value: "tls://elitea-nats:4222"
         # scale-1 default. HA: set to "3" (or "5") to match values-ha.yaml.
         - name: replicas
           value: "1"

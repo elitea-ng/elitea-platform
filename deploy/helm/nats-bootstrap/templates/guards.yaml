@@ -1,0 +1,19 @@
+{{- /*
+Render-time refusals (#1076). The NATS server requires a client certificate
+mapped to a user, so a plaintext or credential-bearing URL here is not a
+weaker posture — it is a Job that fails on every sync with a TLS or
+authorization error.
+*/ -}}
+{{- $url := .Values.natsUrl | toString -}}
+{{- range $one := splitList "," $url -}}
+{{- $one = trim $one -}}
+{{- if not (hasPrefix "tls://" $one) -}}
+{{- fail (printf "natsUrl %q is not tls://. The NATS server (deploy/helm/nats) requires TLS with a client certificate; the bootstrap Job presents tls.secretName." $one) -}}
+{{- end -}}
+{{- if contains "@" $one -}}
+{{- fail "natsUrl carries user information. The client certificate is the identity, and a credential in a value is rendered into the Job spec." -}}
+{{- end -}}
+{{- end -}}
+{{- if not .Values.tls.secretName -}}
+{{- fail "tls.secretName is empty: the Job has no client certificate to present, and the NATS server refuses a connection without one." -}}
+{{- end -}}

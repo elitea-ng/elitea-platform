@@ -27,14 +27,31 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["/bin/sh", "/scripts/bootstrap.sh"]
           env:
-            # The bootstrap script reaches NATS via NATS_ARGS --server; using an
-            # explicit URL avoids depending on an in-pod nats context.
+            # Connection and identity. bootstrap.sh builds the nats CLI's
+            # --server/--tls*/--inbox-prefix flags from these, and refuses a
+            # half-configured set.
+            - name: NATS_URL
+              value: {{ .Values.natsUrl | quote }}
+            - name: NATS_TLS_CA_FILE
+              value: "{{ .Values.tls.mountPath }}/ca.crt"
+            - name: NATS_TLS_CERT_FILE
+              value: "{{ .Values.tls.mountPath }}/tls.crt"
+            - name: NATS_TLS_KEY_FILE
+              value: "{{ .Values.tls.mountPath }}/tls.key"
+            # The permission table lets this identity subscribe to its own
+            # inbox prefix only.
+            - name: NATS_INBOX_PREFIX
+              value: "_INBOX_elitea-nats-bootstrap"
             - name: NATS_ARGS
-              value: "--server {{ .Values.natsUrl }} {{ .Values.extraNatsArgs }}"
+              value: {{ .Values.extraNatsArgs | quote }}
             - name: NATS_REPLICAS
               value: {{ .Values.replicas | quote }}
             - name: NATS_ALERT_COOLDOWN
               value: {{ .Values.alertCooldown | quote }}
+            - name: NATS_BUDGET_DUPE_WINDOW
+              value: {{ .Values.budget.duplicateWindow | quote }}
+            - name: NATS_RATELIMIT_MAX_AGE
+              value: {{ .Values.rateLimit.maxAge | quote }}
             - name: NATS_DELTAS_DUPE_WINDOW
               value: {{ .Values.deltas.duplicateWindow | quote }}
             - name: NATS_DELTAS_MAX_AGE
@@ -43,9 +60,14 @@ spec:
               value: {{ .Values.deltas.maxBytes | quote }}
             - name: NATS_DELTAS_MAX_MSGS
               value: {{ .Values.deltas.maxMsgs | quote }}
+            - name: NATS_PRESENCE_TTL
+              value: {{ .Values.presence.ttl | quote }}
           volumeMounts:
             - name: scripts
               mountPath: /scripts
+            - name: nats-client-tls
+              mountPath: {{ .Values.tls.mountPath }}
+              readOnly: true
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
@@ -53,3 +75,8 @@ spec:
           configMap:
             name: {{ include "nats-bootstrap.fullname" . }}
             defaultMode: 0755
+        # The bootstrap identity's certificate (templates/certificate.yaml).
+        # The pod waits in ContainerCreating until cert-manager has written it.
+        - name: nats-client-tls
+          secret:
+            secretName: {{ .Values.tls.secretName }}
