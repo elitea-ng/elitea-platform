@@ -37,9 +37,9 @@
 # wants to stop writing SQL should not have to stand all of that up.
 #
 # WHAT THIS FILE IS
-# authConfig + runtimeRedis, and NO runtime plane. templates/guards.yaml ties
-# the worker to the runtime plane and to runtimeRedis; it does NOT tie
-# runtimeRedis to the runtime plane. So this shape renders, and it is the
+# authConfig, and NO runtime plane and NO Redis. The Form sign-in state
+# (sessions, login transactions, attempt windows) is in PostgreSQL (elitea-main
+# shared migration 0145), so this shape needs only the database. It is the
 # cheapest one that composes the Configurations write path.
 #
 # It is ADDITIVE. values.yaml still ships every OTHER capability flag "false".
@@ -76,34 +76,23 @@
 # (#467/#473): the chart refuses to render until an operator states both
 # postures. They are not specific to this file.
 #
-# THE TWO SECRETS THIS FILE ASSUMES
-# Both are the same ones values-standalone.yaml documents at length — read that
-# file for the reasoning behind every field of the document below.
+# THE ONE SECRET THIS FILE ASSUMES
+# The same one values-standalone.yaml documents at length — read that file for
+# the reasoning behind every field of the document below.
 #
-#   1. elitea-main-auth-material — the five files
-#      internal/authcomposition/material.go opens through
-#      internal/security/securefile. An init container copies them out of the
-#      Secret into a memory-backed emptyDir at mode 0600, owned by the pod's own
-#      user, because a `secret:` volume is a symlink farm and securefile refuses
-#      a path that resolves through a symlink.
+#   elitea-main-auth-material — the three files
+#   internal/authcomposition/material.go opens through
+#   internal/security/securefile. An init container copies them out of the
+#   Secret into a memory-backed emptyDir at mode 0600, owned by the pod's own
+#   user, because a `secret:` volume is a symlink farm and securefile refuses a
+#   path that resolves through a symlink.
 #
-#        kubectl create secret generic elitea-main-auth-material \
-#          --from-file=deploy/certs/runtime/redis-auth-password \
-#          --from-file=deploy/certs/runtime/runtime-ca.crt \
-#          --from-file=deploy/certs/runtime/auth-attempt-key \
-#          --from-file=deploy/certs/runtime/auth-pat-signing-key \
-#          --from-file=deploy/certs/runtime/auth-form-users.json
+#     kubectl create secret generic elitea-main-auth-material \
+#       --from-file=deploy/certs/runtime/auth-attempt-key \
+#       --from-file=deploy/certs/runtime/auth-pat-signing-key \
+#       --from-file=deploy/certs/runtime/auth-form-users.json
 #
-#      Generate them with deploy/scripts/gen-runtime-certs.sh.
-#
-#   2. elitea-runtime-redis-material — the TLS Redis below. Keys:
-#      runtime-ca.crt, redis-server.crt, redis-server.key, redis-users.acl,
-#      redis-bootstrap-password. Mint them with scripts/mint-elitea-secrets.sh.
-#
-# WHY A TLS REDIS IS NOT OPTIONAL HERE
-# internal/authcomposition/config.go:469 accepts a `rediss://` URL only, with an
-# ACL username, no password in the URL, and path `/0`. The session store of the
-# Form provider is that Redis. There is no cleartext configuration of it.
+#   Generate them with deploy/scripts/gen-runtime-certs.sh.
 main:
   fileConfig:
     authConfig:
@@ -114,7 +103,7 @@ main:
         secretName: elitea-main-auth-material
 
       document:
-        schema_version: elitea.auth.form.v1
+        schema_version: elitea.auth.form.v2
 
         # NOT the browser's origin. TrustedProxyResolver.Resolve refuses a
         # edge-auth call whose X-Forwarded-Proto and X-Forwarded-Host do not
@@ -145,18 +134,9 @@ main:
           same_site: lax
           lifetime_seconds: 86400
 
-        redis:
-          topology: single_primary_endpoint
-          # The runtimeRedis instance this file enables below, under its own ACL
-          # user and key prefix. go-redis takes the password from password_file,
-          # so the URL carries a username and no password by contract.
-          url: rediss://auth@elitea-runtime-redis:6380/0
-          password_file: /run/elitea-auth/redis-auth-password
-          ca_file: /run/elitea-auth/runtime-ca.crt
-          key_prefix: "elitea-auth-minimal:"
-          attempt_key_file: /run/elitea-auth/auth-attempt-key
-
         credentials:
+          # 32 to 64 private bytes: the HMAC key of the stored attempt windows.
+          attempt_key_file: /run/elitea-auth/auth-attempt-key
           pat_signing_key_file: /run/elitea-auth/auth-pat-signing-key
           # Authorization Bearer and Basic are mandatory built-ins. They are not
           # configured here.
@@ -239,21 +219,6 @@ main:
     # instead of being stored and looping on first use. Set it to the real
     # public base URL of your deployment.
     DEPLOYMENT_URL: "https://elitea.example.com"
-
-# The TLS Redis. It is here because the Form session store above has no other
-# shape, NOT because the runtime plane is on — it is off.
-#
-# templates/guards.yaml ties worker -> main.runtime and worker -> runtimeRedis.
-# Neither edge runs from runtimeRedis to main.runtime, which is what makes this
-# file's combination a renderable one.
-runtimeRedis:
-  enabled: true
-
-  # The consumer-group bootstrap Job. OFF here: it creates the groups for the
-  # DISPATCH streams, and this install composes no dispatch plane and runs no
-  # worker to read them. Turn it on together with main.runtime.enabled.
-  bootstrap:
-    enabled: false
 
 # No agent worker. It would be refused anyway: guards.yaml requires
 # main.runtime.enabled=true beside it, and this file deliberately leaves the

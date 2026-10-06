@@ -90,7 +90,7 @@ install_files "$MAIN" 65532:65532 0644 \
 install_files "$MAIN" 65532:65532 0600 \
   control-server.key output-server.key content-server.key \
   command-signing-key.pem \
-  redis-producer-password redis-auth-password \
+  redis-producer-password \
   auth-attempt-key auth-pat-signing-key auth-form-users.json \
   vault-master-key
 

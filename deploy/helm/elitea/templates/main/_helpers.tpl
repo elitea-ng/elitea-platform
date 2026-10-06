@@ -293,7 +293,7 @@ configuration document.
 Two shapes, and exactly one of them (issue #444):
 
   * fileConfig.authConfig.document — the document is a chart value, so this
-    chart renders the ConfigMap and KNOWS the five material paths. It checks
+    chart renders the ConfigMap and KNOWS the three material paths. It checks
     them while it renders.
   * fileConfig.authConfig.configMapName — the document stays outside the
     chart. The chart cannot read it, so cmd/elitea-auth-material is the only
@@ -326,25 +326,22 @@ the Secret; the service reads the copies.
 {{- end }}
 
 {{/*
-elitea-main.authMaterialPaths — the five file paths, one per line.
+elitea-main.authMaterialPaths — the three file paths, one per line.
 
-internal/authcomposition/material.go opens exactly these five, and
-Config.MaterialFiles is the Go list of the same five. Keep the two in step: a
-sixth file added there must appear here, or the chart mounts a directory that
+internal/authcomposition/material.go opens exactly these three, and
+Config.MaterialFiles is the Go list of the same three. Keep the two in step: a
+fourth file added there must appear here, or the chart mounts a directory that
 misses it.
 
 An absent key produces an empty line. validateAuthMaterial below refuses that,
-so every other caller of this helper receives five usable paths.
+so every other caller of this helper receives three usable paths.
 */}}
 {{- define "elitea-main.authMaterialPaths" -}}
 {{- $document := .Values.main.fileConfig.authConfig.document | default dict -}}
-{{- $redis := get $document "redis" | default dict -}}
 {{- $credentials := get $document "credentials" | default dict -}}
 {{- $form := get (get $document "provider" | default dict) "form" | default dict -}}
 {{- $paths := list
-  (get $redis "password_file" | toString)
-  (get $redis "ca_file" | toString)
-  (get $redis "attempt_key_file" | toString)
+  (get $credentials "attempt_key_file" | toString)
   (get $credentials "pat_signing_key_file" | toString)
   (get $form "users_json_file" | toString) -}}
 {{- join "\n" $paths -}}
@@ -353,7 +350,7 @@ so every other caller of this helper receives five usable paths.
 {{/*
 elitea-main.validateAuthMaterial — the authentication material (issue #444).
 
-internal/authcomposition/material.go reads five files through
+internal/authcomposition/material.go reads three files through
 internal/security/securefile. Their paths come from the operator's
 authentication-configuration document, NOT from a chart value. So the chart
 rendered no volume and no mount for them, and a Kubernetes install of the
@@ -362,10 +359,10 @@ runtime plane could not start from the chart alone.
 The answer has two halves, and this helper is the first one:
 
   1. RENDER TIME, here. With the document as a chart value the chart reads the
-     five paths, and it refuses a path that the mounted directory cannot serve.
+     three paths, and it refuses a path that the mounted directory cannot serve.
      The operator reads the reason on the terminal.
   2. POD START, in cmd/elitea-auth-material. It reads the SAME document the
-     service reads, it derives the same five paths, and it refuses a
+     service reads, it derives the same three paths, and it refuses a
      disagreement with the mounted directory. That half is the only one
      available while the document stays in an external ConfigMap.
 
@@ -381,7 +378,7 @@ here would drift from it.
 {{- if not $auth.enabled -}}
 {{/*
   Authentication OFF. cmd/elitea-main composes no FormGraph, so it opens none
-  of the five files, and a setting here is silently dead rather than active.
+  of the three files, and a setting here is silently dead rather than active.
   That is the failure class this chart exists to end, so say it now.
 */}}
 {{- if $auth.document -}}
@@ -397,16 +394,33 @@ here would drift from it.
 
 {{/* One document, from one place. */}}
 {{- if and $auth.document $auth.configMapName -}}
-{{- fail "set fileConfig.authConfig.document OR fileConfig.authConfig.configMapName, not both. The first makes this chart render the ConfigMap and check the five material paths while it renders. The second points at a ConfigMap you provision, and this chart cannot read its contents." -}}
+{{- fail "set fileConfig.authConfig.document OR fileConfig.authConfig.configMapName, not both. The first makes this chart render the ConfigMap and check the three material paths while it renders. The second points at a ConfigMap you provision, and this chart cannot read its contents." -}}
 {{- end -}}
 {{- if not (or $auth.document $auth.configMapName) -}}
 {{- fail "fileConfig.authConfig.enabled=true needs fileConfig.authConfig.document, the authentication configuration itself. Read internal/authcomposition/config.go for the schema, and deploy/runtime/auth.form.yml for an example. Use fileConfig.authConfig.configMapName instead to keep the document in a ConfigMap that you provision." -}}
 {{- end -}}
 
-{{/* The directory that carries the five files. */}}
+{{/*
+  The retired schema. elitea.auth.form.v1 carried a `redis:` block for the
+  auth Redis that held the Form sign-in state. That state is in PostgreSQL
+  now (elitea-main shared migration 0145), and cmd/elitea-main refuses a v1
+  document at boot. Refuse it here, while the operator is at the terminal. A
+  v1 document in an external ConfigMap is still caught at pod start by
+  cmd/elitea-auth-material, which uses the same loader.
+*/}}
+{{- if $auth.document -}}
+{{- if hasKey $auth.document "redis" -}}
+{{- fail "fileConfig.authConfig.document has a redis block, and the auth Redis is gone: the Form sign-in state is in PostgreSQL (elitea-main shared migration 0145). Delete document.redis, move document.redis.attempt_key_file to document.credentials.attempt_key_file, and set document.schema_version to elitea.auth.form.v2. Remove the redis-auth-password and Redis CA keys from the material Secret; they are not read." -}}
+{{- end -}}
+{{- if ne (get $auth.document "schema_version" | toString) "elitea.auth.form.v2" -}}
+{{- fail (printf "fileConfig.authConfig.document.schema_version is %q, and cmd/elitea-main accepts only elitea.auth.form.v2. A v1 document must drop its redis block and move redis.attempt_key_file to credentials.attempt_key_file." (get $auth.document "schema_version" | toString)) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The directory that carries the three files. */}}
 {{- $mountPath := $material.mountPath | toString | trimSuffix "/" -}}
 {{- if not $mountPath -}}
-{{- fail "fileConfig.authConfig.enabled=true needs fileConfig.authConfig.material.mountPath. internal/authcomposition/material.go reads five files from that directory: the Auth Redis password, the Auth Redis CA, the browser-attempt key, the PAT signing key and the Form users JSON." -}}
+{{- fail "fileConfig.authConfig.enabled=true needs fileConfig.authConfig.material.mountPath. internal/authcomposition/material.go reads three files from that directory: the browser-attempt key, the PAT signing key and the Form users JSON." -}}
 {{- end -}}
 {{- if not (hasPrefix "/" $mountPath) -}}
 {{- fail (printf "fileConfig.authConfig.material.mountPath must be absolute. internal/security/securefile refuses a relative path. Got %q." ($material.mountPath | toString)) -}}
@@ -419,7 +433,7 @@ here would drift from it.
 {{- if $runtime.enabled -}}
 {{- $runtimeMount := (($runtime.material | default dict).mountPath | toString | trimSuffix "/") -}}
 {{- if eq $mountPath $runtimeMount -}}
-{{- fail (printf "fileConfig.authConfig.material.mountPath and runtime.material.mountPath are both %q, and they must differ. Each material install container removes anything in its directory that its own Secret does not carry, so one shared directory makes the two delete each other's files. Give the authentication material its own directory, and put a copy of any shared file, such as the Redis CA, in both Secrets." $mountPath) -}}
+{{- fail (printf "fileConfig.authConfig.material.mountPath and runtime.material.mountPath are both %q, and they must differ. Each material install container removes anything in its directory that its own Secret does not carry, so one shared directory makes the two delete each other's files. Give the authentication material its own directory." $mountPath) -}}
 {{- end -}}
 {{- end -}}
 {{- if eq $mountPath ($auth.mountPath | toString | trimSuffix "/") -}}
@@ -435,7 +449,7 @@ here would drift from it.
 {{- fail "set fileConfig.authConfig.material.secretName OR fileConfig.authConfig.material.volume, not both. The first makes the chart copy a Kubernetes Secret into an emptyDir; the second mounts a volume that you supply. Two sources for one mount path cannot both apply." -}}
 {{- end -}}
 {{- if not (or $material.secretName $material.volume) -}}
-{{- fail "fileConfig.authConfig.enabled=true needs fileConfig.authConfig.material.secretName, a Kubernetes Secret that carries the five authentication files. Its keys are the last component of each of the five paths in the authentication configuration. Use fileConfig.authConfig.material.volume instead only when another mechanism already writes those files as real, owner-owned files." -}}
+{{- fail "fileConfig.authConfig.enabled=true needs fileConfig.authConfig.material.secretName, a Kubernetes Secret that carries the three authentication files. Its keys are the last component of each of the three paths in the authentication configuration. Use fileConfig.authConfig.material.volume instead only when another mechanism already writes those files as real, owner-owned files." -}}
 {{- end -}}
 {{- if $material.secretName -}}
 {{/*
@@ -457,7 +471,7 @@ here would drift from it.
 {{- end -}}
 
 {{/*
-  The five paths. They are reachable only with the document in this values
+  The three paths. They are reachable only with the document in this values
   file. An external ConfigMap keeps them out of reach, and
   cmd/elitea-auth-material checks them at pod start instead.
 */}}
@@ -465,7 +479,7 @@ here would drift from it.
 {{- $names := list -}}
 {{- range $path := splitList "\n" (include "elitea-main.authMaterialPaths" .) -}}
 {{- if not $path -}}
-{{- fail "fileConfig.authConfig.document must name all five material files: redis.password_file, redis.ca_file, redis.attempt_key_file, credentials.pat_signing_key_file and provider.form.users_json_file. internal/authcomposition/config.go refuses a document without them, and cmd/elitea-main then exits at boot." -}}
+{{- fail "fileConfig.authConfig.document must name all three material files: credentials.attempt_key_file, credentials.pat_signing_key_file and provider.form.users_json_file. internal/authcomposition/config.go refuses a document without them, and cmd/elitea-main then exits at boot." -}}
 {{- end -}}
 {{- if ne (dir $path | trimSuffix "/") $mountPath -}}
 {{- fail (printf "the authentication configuration reads %s, which is outside fileConfig.authConfig.material.mountPath %s. One volume mount serves one directory, so the chart would render cleanly and the pod would then fail to open that file. Move the path into %s, or set the mount path to %s." $path $mountPath $mountPath (dir $path | trimSuffix "/")) -}}

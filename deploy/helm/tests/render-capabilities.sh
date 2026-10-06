@@ -659,12 +659,12 @@ fi
 # ---------------------------------------------------------------------------
 # 4c. The authentication material — issue #444.
 #
-# internal/authcomposition/material.go opens five files. Their paths come from
+# internal/authcomposition/material.go opens three files. Their paths come from
 # the operator's authentication document, not from a chart value, so the chart
 # rendered no volume and no mount for them at all.
 #
-# The five expected KEY NAMES are EXTRACTED FROM THE GO SOURCE. config.go is
-# the authority on which fields are file references, so a sixth one makes this
+# The three expected KEY NAMES are EXTRACTED FROM THE GO SOURCE. config.go is
+# the authority on which fields are file references, so a fourth one makes this
 # section fail until the chart mounts it too. Every PATH is read out of the
 # rendered ConfigMap, and every mount point out of the rendered Deployment.
 # Nothing here repeats a path that a template also writes.
@@ -674,7 +674,7 @@ AUTH_CONFIG_GO="$REPO/services/elitea-main/internal/authcomposition/config.go"
 grep -oE 'yaml:"[a-z_0-9]+_file"' "$AUTH_CONFIG_GO" |
   sed -E 's/yaml:"//; s/"//' | sort -u >"$WORK/auth-file-keys.txt"
 auth_key_count="$(wc -l <"$WORK/auth-file-keys.txt" | tr -d ' ')"
-if [ "$auth_key_count" -lt 5 ]; then
+if [ "$auth_key_count" -lt 3 ]; then
   fail "extracted only $auth_key_count authentication file keys from config.go — the extraction stopped matching, so this section would gate nothing"
 else
   pass "extracted $auth_key_count authentication file keys from internal/authcomposition/config.go"
@@ -684,7 +684,7 @@ auth_init_name="$(deployment '.initContainers[]? | select(has("command")) | sele
 if [ -n "$auth_init_name" ]; then
   pass "the pod runs the authentication material init container ($auth_init_name)"
 else
-  fail "the pod runs no init container that installs the authentication material, so the five files internal/authcomposition/material.go opens never reach it"
+  fail "the pod runs no init container that installs the authentication material, so the three files internal/authcomposition/material.go opens never reach it"
 fi
 
 if [ -n "$auth_init_name" ]; then
@@ -712,7 +712,7 @@ if [ -n "$auth_init_name" ]; then
   fi
 
   # The SAME configuration file the service reads. This is the whole design:
-  # the init container derives the five paths from the operator's document,
+  # the init container derives the three paths from the operator's document,
   # rather than from a second list that could disagree with it.
   auth_config_env="$(yq eval-all \
     'select(.kind == "Deployment") | .spec.template.spec.containers[0].env[] | select(.name == "ELITEA_AUTH_CONFIG_FILE") | .value' \
@@ -726,7 +726,7 @@ if [ -n "$auth_init_name" ]; then
   if [ "$auth_config_argument" = "$auth_config_env" ]; then
     pass "the init container reads the same authentication configuration as the service"
   else
-    fail "the init container reads '$auth_config_argument' and the service reads '$auth_config_env'; the init container would derive the five paths from another document"
+    fail "the init container reads '$auth_config_argument' and the service reads '$auth_config_env'; the init container would derive the three paths from another document"
   fi
   auth_init_config_key="$(auth_init ".volumeMounts[] | select(.mountPath == \"$auth_config_argument\") | .subPath")"
   auth_service_config_key="$(deployment ".containers[0].volumeMounts[] | select(.mountPath == \"$auth_config_env\") | .subPath" "$WORK/standalone.yaml")"
@@ -736,7 +736,7 @@ if [ -n "$auth_init_name" ]; then
     fail "the init container mounts key '$auth_init_config_key' and the service mounts key '$auth_service_config_key'"
   fi
 
-  # The document itself, out of the render. The five paths come from it.
+  # The document itself, out of the render. The three paths come from it.
   auth_config_volume="$(deployment ".containers[0].volumeMounts[] | select(.mountPath == \"$auth_config_env\") | .name" "$WORK/standalone.yaml")"
   auth_config_map="$(deployment ".volumes[] | select(.name == \"$auth_config_volume\") | .configMap.name" "$WORK/standalone.yaml")"
   yq eval-all \
@@ -1051,7 +1051,20 @@ refuses "production authentication with no document at all" \
 refuses "a material path outside the mounted directory" \
   "outside fileConfig.authConfig.material.mountPath" \
   -f "$CHART/values-standalone.yaml" \
-  --set main.fileConfig.authConfig.document.redis.password_file=/etc/elsewhere/redis-auth-password
+  --set main.fileConfig.authConfig.document.credentials.attempt_key_file=/etc/elsewhere/auth-attempt-key
+
+# The retired schema. The Form sign-in state is in PostgreSQL (elitea-main
+# shared migration 0145), so a document that still carries the auth Redis
+# block, or names elitea.auth.form.v1, is refused while the chart renders.
+refuses "an authentication document that still carries a redis block" \
+  "has a redis block" \
+  -f "$CHART/values-standalone.yaml" \
+  --set main.fileConfig.authConfig.document.redis.url=rediss://auth@elitea-runtime-redis:6380/0
+
+refuses "the retired elitea.auth.form.v1 schema" \
+  "accepts only elitea.auth.form.v2" \
+  -f "$CHART/values-standalone.yaml" \
+  --set main.fileConfig.authConfig.document.schema_version=elitea.auth.form.v1
 
 refuses "a material file name no Secret key can carry" \
   "Kubernetes Secret key" \

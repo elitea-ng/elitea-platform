@@ -499,14 +499,11 @@ configuration write path, and that path decides `status_ok` in the request
 (#457), which is what makes a saved credential visible to the gateway.
 
 `deploy/helm/elitea/values-auth-minimal.yaml` is that shape:
-`fileConfig.authConfig` + `runtimeRedis`, **no runtime plane**, and
+`fileConfig.authConfig`, **no runtime plane and no Redis**, and
 `ELITEA_CONFIGURATIONS_ENABLED` + the public project (`platform.aiProjectId`)
-on top.
-`templates/guards.yaml` ties the worker to the runtime plane and to
-`runtimeRedis`; it does not tie `runtimeRedis` to the runtime plane, so this
-combination renders. The TLS Redis is not optional even so — production Form
-authentication keeps its session store there and
-`internal/authcomposition/config.go` accepts a `rediss://` URL only.
+on top. Production Form authentication keeps its sign-in state (sessions,
+login transactions, attempt windows) in PostgreSQL (elitea-main shared
+migration 0145), so the database is its only dependency.
 
 Two things it does **not** change:
 
@@ -518,7 +515,7 @@ Two things it does **not** change:
 
 It is also no longer the **only** way to reach the configuration write path.
 An OIDC-only install reaches it by naming `env.ELITEA_AI_PROJECT_ID`, with no
-Form document and no TLS Redis at all. This file stays the recipe for an
+Form document at all. This file stays the recipe for an
 install that wants the Form plane itself, and it says so with
 `ELITEA_FORM_LOGIN_ENABLED: "true"`: Form (local username/password) sign-in is
 OFF by default in `values.yaml`, and with it off the users file is read and
@@ -757,11 +754,17 @@ still works without it, and it is the larger half of the gap.
 
 ### The authentication material (issue #444)
 
-Production authentication reads **five more files** through the same
-`securefile`: the Auth Redis password, the Auth Redis CA, the browser-attempt
-key, the PAT signing key and the Form users JSON. `runtime.enabled` requires
-production authentication, so every Kubernetes install of the runtime plane
-needs them.
+Production authentication reads **three more files** through the same
+`securefile`: the browser-attempt key, the PAT signing key and the Form users
+JSON. `runtime.enabled` requires production authentication, so every Kubernetes
+install of the runtime plane needs them.
+
+The authentication document is `elitea.auth.form.v2`. It has **no `redis`
+block**: the Form sign-in state (sessions, one-time login transactions, attempt
+windows) is in PostgreSQL, in the `elitea_auth` tables of elitea-main shared
+migration 0145, and elitea-scheduler's `authstateretention` sweep removes the
+expired rows. The attempt key is `credentials.attempt_key_file`. The chart, the
+init container and elitea-main all refuse a v1 document.
 
 Their paths are **not** chart values. They come from the authentication
 configuration document, which is the operator's. So the chart could not know
@@ -770,16 +773,18 @@ the chart alone.
 
 **Put the document in the chart.** `fileConfig.authConfig.document` takes the
 whole authentication configuration. The chart then renders the ConfigMap for
-you, reads the five paths out of it, and refuses — while it renders — a path
+you, reads the three paths out of it, and refuses — while it renders — a path
 that `fileConfig.authConfig.material.mountPath` cannot serve.
 `fileConfig.authConfig.configMapName` still points at a ConfigMap you provision
 yourself, and the two are mutually exclusive. With the external ConfigMap the
 chart cannot read the paths, so only the init container can check them.
 
-The five files arrive in a **plain Kubernetes Secret**, named by
+The three files arrive in a **plain Kubernetes Secret**, named by
 `fileConfig.authConfig.material.secretName`. **Its keys are yours, not the
-chart's**: each key is the last component of one of the five paths in the
-document. Unlike the runtime material, no script fixes those names.
+chart's**: each key is the last component of one of the three paths in the
+document. A Secret that still carries the retired `redis-auth-password` and
+Redis CA keys installs: the init container copies them and nothing reads them.
+Delete them when convenient. Unlike the runtime material, no script fixes those names.
 
 The mechanism is the one issue #404 built, and there is only one copy of it —
 `internal/security/materialinstall`. The init container `auth-material` runs the
@@ -789,17 +794,16 @@ carry, and reads every file back through `securefile` before it exits.
 
 One difference decides its arguments. The chart owns every runtime file name, so
 `elitea-runtime-material` derives its whole destination from the ConfigMap. The
-five authentication paths belong to the operator's document, so
+three authentication paths belong to the operator's document, so
 `elitea-auth-material` **reads that document**: `-config` gives it the file the
-service reads, and it derives the five paths and their directory from it.
+service reads, and it derives the three paths and their directory from it.
 `-mount` states what the pod mounts, and the command refuses a disagreement by
 name.
 
 `fileConfig.authConfig.material.mountPath` must differ from
 `runtime.material.mountPath`, and the chart refuses one shared directory. Each
 install container removes anything in its directory that its own Secret does not
-carry, so one directory would make the two delete each other's files. Put a copy
-of any shared file, such as the Redis CA, in both Secrets.
+carry, so one directory would make the two delete each other's files.
 
 `fileConfig.authConfig.material.secretDefaultMode` and `.sizeLimit` behave
 exactly like their `runtime.material` counterparts, and

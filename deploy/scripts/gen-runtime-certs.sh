@@ -32,7 +32,7 @@
 #     agent-checkpoint-connection     DSN for native agent session checkpoints
 #     command-signing-key.pem         Ed25519 PKCS#8, signs dispatch envelopes
 #     command-signing-keyring.json    its public half, keyed by ELITEA_RUNTIME_SIGNING_KEY_ID
-#     redis-{producer,worker,bootstrap,auth}-password
+#     redis-{producer,worker,bootstrap}-password
 #     redis-users.acl                 ACL file consumed by runtime-redis
 #     auth-attempt-key                browser-attempt HMAC key (32 raw bytes)
 #     auth-pat-signing-key            PAT HS512 key
@@ -85,7 +85,7 @@ material=(
   agent-checkpoint-connection
   command-signing-key.pem command-signing-keyring.json
   redis-producer-password redis-worker-password
-  redis-bootstrap-password redis-auth-password
+  redis-bootstrap-password
   redis-users.acl
   auth-attempt-key auth-pat-signing-key auth-form-users.json
   vault-master-key worker-output-spool-key
@@ -95,6 +95,11 @@ needs_regen=0
 for name in "${material[@]}"; do
   [ -f "$RUNTIME_DIR/$name" ] || needs_regen=1
 done
+# A tree minted before the Form sign-in state moved to PostgreSQL still grants
+# the retired `auth` Redis user. Rotate it, so no unused credential stays live.
+if [ -f "$RUNTIME_DIR/redis-users.acl" ] && grep -q '^user auth ' "$RUNTIME_DIR/redis-users.acl"; then
+  needs_regen=1
+fi
 if [ "$needs_regen" -eq 0 ]; then
   for name in runtime-ca.crt redis-server.crt control-server.crt output-server.crt \
               content-server.crt platform-edge.crt agent-worker-client.crt; do
@@ -210,7 +215,7 @@ PY
 random_token() { openssl rand -base64 32 | tr -d '\n=' ; }
 
 for name in redis-producer-password redis-worker-password \
-            redis-bootstrap-password redis-auth-password; do
+            redis-bootstrap-password; do
   printf '%s' "$(random_token)" > "$RUNTIME_DIR/$name"
 done
 
@@ -260,8 +265,9 @@ PY
 #              bootstrap, so a worker cannot silently recreate a group it has
 #              lost and skip undelivered commands. Mirrors prepare-runtime.sh.
 #   bootstrap  seed-only: creates the consumer group from 0-0.
-#   auth       the production Form auth plane's session/attempt store, scoped to
-#              its own key prefix.
+#
+# There is no `auth` user. The production Form auth plane keeps its sign-in
+# state in PostgreSQL (elitea-main shared migration 0145).
 #
 # `user default off` is what makes the ACL meaningful: without it every client
 # that skips AUTH lands on an unrestricted default user.
@@ -284,7 +290,6 @@ QUARANTINE_KEY_PREFIX="elitea:runtime:v1:quarantine:${AGENT_STREAM}"
 producer_password="$(<"$RUNTIME_DIR/redis-producer-password")"
 worker_password="$(<"$RUNTIME_DIR/redis-worker-password")"
 bootstrap_password="$(<"$RUNTIME_DIR/redis-bootstrap-password")"
-auth_password="$(<"$RUNTIME_DIR/redis-auth-password")"
 
 {
   printf 'user default off\n'
@@ -306,8 +311,6 @@ auth_password="$(<"$RUNTIME_DIR/redis-auth-password")"
     "$worker_password" "$AGENT_STREAM" "$AGENT_STREAM" "$QUARANTINE_KEY_PREFIX"
   printf 'user bootstrap on >%s -@all +@connection +ping +xgroup +xinfo +xlen ~%s ~%s\n' \
     "$bootstrap_password" "$AGENT_STREAM" "$CONFIGURATION_STREAM"
-  printf 'user auth on >%s -@all +@connection +@string +@hash +@keyspace +@scripting +@transaction ~elitea-standalone-auth:*\n' \
-    "$auth_password"
 } > "$RUNTIME_DIR/redis-users.acl"
 
 # Host-side modes. The compose init service re-applies per-consumer ownership and

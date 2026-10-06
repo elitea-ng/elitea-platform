@@ -585,21 +585,21 @@ main:
 
       # THE AUTHENTICATION CONFIGURATION ITSELF (issue #444).
       #
-      # internal/authcomposition/material.go opens FIVE files, and their paths
+      # internal/authcomposition/material.go opens THREE files, and their paths
       # come from this document. Before issue #444 the document was always
       # external — the chart knew a ConfigMap name and nothing more — so the
-      # chart could not know the five paths, rendered no volume for them, and
+      # chart could not know the three paths, rendered no volume for them, and
       # every Kubernetes install of the runtime plane had to place the files by
       # some other method.
       #
       # Put the document here and the chart:
       #   * renders the ConfigMap for you;
-      #   * checks that all five paths sit in material.mountPath below, while it
+      #   * checks that all three paths sit in material.mountPath below, while it
       #     renders, and names the offending path when one does not;
       #   * mounts the material where the service opens it.
       #
       # Leave it empty and set configMapName instead to keep the document
-      # outside the chart. The chart then cannot see the five paths, and
+      # outside the chart. The chart then cannot see the three paths, and
       # cmd/elitea-auth-material is the only gate: it reads the same document in
       # the init container and stops the pod when the paths and the mount
       # disagree.
@@ -608,21 +608,24 @@ main:
       #
       # Read internal/authcomposition/config.go for the schema, and
       # deploy/runtime/auth.form.yml for a complete example with comments.
+      # The schema is elitea.auth.form.v2. The chart refuses a v1 document and
+      # any `redis:` block: the Form sign-in state is in PostgreSQL (elitea-main
+      # shared migration 0145), and the attempt key is
+      # credentials.attempt_key_file.
       document: {}
 
       configMapName: ""
       key: auth-config.json
       mountPath: /etc/elitea/auth-config.json
 
-      # The five files that the document names: the Auth Redis password, the
-      # Auth Redis CA, the browser-attempt key, the PAT signing key and the Form
-      # users JSON.
+      # The three files that the document names: the browser-attempt key, the
+      # PAT signing key and the Form users JSON.
       #
       # THE KEY NAMES ARE THE OPERATOR'S. Unlike the runtime material, the chart
       # does not fix them: each name is the last component of a path in the
       # document above. The Secret must carry one key for each of those names.
       material:
-        # Where the service reads the five files. Every path in the document must
+        # Where the service reads the three files. Every path in the document must
         # sit in this directory, because one volume mount serves one directory.
         #
         # It must differ from runtime.material.mountPath. Each install container
@@ -631,10 +634,11 @@ main:
         # files.
         mountPath: /run/elitea-auth
 
-        # A Kubernetes Secret whose keys are the five file names, for example:
+        # A Kubernetes Secret whose keys are the three file names, for example:
         #
         #   kubectl create secret generic elitea-main-auth-material \
-        #     --from-file=redis-auth-password --from-file=auth-redis-ca.crt ...
+        #     --from-file=auth-attempt-key --from-file=auth-pat-signing-key \
+        #     --from-file=auth-form-users.json
         #
         # The chart cannot mount that Secret straight at mountPath.
         # internal/security/securefile refuses a path that resolves through a
@@ -3586,16 +3590,16 @@ worker:
 runtimeRedis:
   # The runtime dispatch bus the worker reads. Pairs with worker.
   enabled: false
-  # TLS Redis for the runtime dispatch plane and production Form authentication.
+  # TLS Redis for the runtime dispatch plane.
   #
   # It is the chart's ONLY Redis now: the plaintext `elitea-valkey` that served
   # elitea-main's REDIS_URL (project SSE, canvas presence) was retired in
-  # favour of NATS. It exists because two consumers accept nothing else:
+  # favour of NATS, and production Form authentication keeps its sign-in state
+  # in PostgreSQL (elitea-main shared migration 0145). Its one consumer accepts
+  # nothing but TLS:
   #
-  #   - internal/runtimecomposition/config.go  — rediss:// only, ACL username,
+  #   - internal/runtimecomposition/config.go — rediss:// only, ACL username,
   #     file-backed password, dialled at MinVersion TLS 1.3
-  #   - internal/authcomposition/config.go:469 — the same, for the auth session
-  #     store
   #
   # Cleartext is off entirely (`port 0`). A runtime plane reachable without TLS
   # would let anything on the pod network XADD signed-envelope commands.
@@ -3640,14 +3644,13 @@ runtimeRedis:
     configurationGroup: "elitea-configuration-worker-v1"
 
   # Persistence. The compose stack turns this off and calls the keys disposable,
-  # which is true of a laptop stack and false here: this instance keeps browser
-  # SESSIONS under the auth key prefix and in-flight DISPATCH COMMANDS in the
-  # streams. Without an AOF a pod restart — a drain, an image bump, an OOM —
-  # logs every user out and strands every command that was XADDed but not yet
-  # acknowledged, silently, because the consumer groups themselves come back
+  # which is true of a laptop stack and false here: this instance keeps
+  # in-flight DISPATCH COMMANDS in the streams. Without an AOF a pod restart — a
+  # drain, an image bump, an OOM — strands every command that was XADDed but not
+  # yet acknowledged, silently, because the consumer groups themselves come back
   # from the bootstrap Job.
   #
-  # Set enabled=false to accept that, on a stack where losing both is cheap.
+  # Set enabled=false to accept that, on a stack where losing them is cheap.
   persistence:
     enabled: true
     size: 8Gi

@@ -24,7 +24,7 @@
 # requires absolute canonical non-symlink paths and exact permission bits, and
 # rejects two references that resolve to one file or carry equal bytes — which
 # is why the generator mints each one independently at random.
-schema_version: elitea.auth.form.v1
+schema_version: elitea.auth.form.v2
 
 # This is NOT decoration, and it is not the browser's origin.
 #
@@ -62,21 +62,14 @@ cookie:
   same_site: lax
   lifetime_seconds: 86400
 
-redis:
-  topology: single_primary_endpoint
-  # The same TLS Redis the runtime dispatch plane uses, under its own ACL user
-  # and key prefix. go-redis takes the password from password_file, so the URL
-  # carries a username and no password by contract.
-  url: rediss://auth@runtime-redis:6380/0
-  password_file: /run/elitea-runtime/redis-auth-password
-  ca_file: /run/elitea-runtime/runtime-ca.crt
-  # Quoted because validRedisKeyPrefix REQUIRES a trailing ':', and an unquoted
-  # scalar ending in ':' is a nested mapping key to YAML, not a string — the
-  # loader rejects the whole document with "YAML document" and no line number.
-  key_prefix: "elitea-standalone-auth:"
-  attempt_key_file: /run/elitea-runtime/auth-attempt-key
-
+# No `redis:` block. The Form sign-in state (sessions, one-time login
+# transactions, attempt windows) is in PostgreSQL (elitea-main shared migration
+# 0145), and cmd/elitea-main refuses the retired elitea.auth.form.v1 document
+# that carried one.
 credentials:
+  # 32 to 64 private bytes. They key the HMAC that names each stored attempt
+  # window, so a database dump does not give back client addresses or logins.
+  attempt_key_file: /run/elitea-runtime/auth-attempt-key
   pat_signing_key_file: /run/elitea-runtime/auth-pat-signing-key
   # No legacy other_auth_headers aliases in this stack. Authorization Bearer and
   # Basic are mandatory built-ins and are not configured here.

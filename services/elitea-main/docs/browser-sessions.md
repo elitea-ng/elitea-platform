@@ -79,12 +79,13 @@ READ, so the answer about the caller is already known.
 
 ### Why Postgres and not Redis
 
-This service already keeps one kind of auth state in Redis —
-`internal/infra/authsession`, the Form graph's login-transaction store. Losing
-that store costs a user one retry of a login they are in the middle of. Losing a
-browser-session store signs everybody out. An OIDC-only deployment — the shape
-the Kubernetes chart and the standalone stack both run — composes no Redis at
-all. Postgres is present in every deployment.
+Losing a browser-session store signs everybody out, and Postgres is present in
+every deployment. The Form graph followed the same rule later: its sessions
+(`internal/infra/authsession`), one-time login transactions
+(`internal/infra/authflow`) and attempt windows (`internal/infra/authattempt`)
+moved from a dedicated auth Redis to `elitea_auth.form_sessions`,
+`form_login_transactions` and `browser_attempt_windows` (shared migration
+0145). No auth state is in Redis now, and readiness checks the database only.
 
 ## The SPA contract
 
@@ -153,9 +154,10 @@ one that ships this.
   and `internal/api/router.go` says so.
 * **OIDC end-session.** Same shape: the row records the provider, and nothing
   yet calls the provider's `end_session_endpoint`.
-* **A sweeper.** `PostgresStore.DeleteExpired` exists and nothing schedules it.
-  The table grows until something does; the rows are small and the index on
-  `expires_at` is there for it.
+* **A sweeper.** elitea-scheduler's `internal/authstateretention` deletes rows
+  one day past `expires_at`, in bounded batches, every five minutes, with the
+  Form graph's tables. `PostgresStore.DeleteExpired` stays as a store method;
+  the scheduler does not call it, it issues the same delete itself.
 * **Suspension does not revoke.** `authsvc.NewPrincipalValidator` already
   refuses a suspended account on every request, so a suspended user cannot act.
   Their session row stays until it expires.

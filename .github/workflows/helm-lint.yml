@@ -522,13 +522,12 @@ jobs:
 
       # The auth-minimal capability set. It is the combination NO other pass
       # renders: production authentication and the Configurations write path ON
-      # with the runtime plane OFF, plus a runtimeRedis that no worker reads.
+      # with the runtime plane OFF and no Redis at all (the Form sign-in state
+      # is in PostgreSQL, elitea-main shared migration 0145).
       #
-      # That combination is exactly the one templates/guards.yaml could grow an
-      # edge against by accident — worker->runtime and worker->runtimeRedis are
-      # guarded, runtimeRedis->runtime deliberately is not — so a guard added
-      # without this pass would break the cheapest supported install with every
-      # other gate in this file still green.
+      # A guard that tied production authentication to the runtime plane or to
+      # runtimeRedis by accident would break the cheapest supported install
+      # with every other gate in this file still green.
       - name: helm template + kubeconform (auth-minimal capability values)
         if: matrix.chart == 'elitea'
         run: |

@@ -212,7 +212,7 @@ ensure_runtime_material() {
   bash "${REPO_ROOT}/deploy/scripts/gen-runtime-certs.sh"
   local file
   for file in runtime-ca.crt redis-server.crt redis-server.key redis-users.acl \
-              redis-bootstrap-password redis-auth-password auth-attempt-key \
+              redis-bootstrap-password auth-attempt-key \
               auth-pat-signing-key auth-form-users.json; do
     [ -f "${RUNTIME_MATERIAL_DIR}/${file}" ] || die "missing material: ${RUNTIME_MATERIAL_DIR}/${file}"
   done
@@ -228,11 +228,10 @@ ensure_runtime_material() {
     --from-file="${RUNTIME_MATERIAL_DIR}/redis-bootstrap-password" \
     --dry-run=client -o yaml | kc apply -f -
 
-  # The five files internal/authcomposition/material.go opens. Their names are
+  # The three files internal/authcomposition/material.go opens. Their names are
   # the contract: the chart derives every path in the auth document from them.
+  # The Form sign-in state is in PostgreSQL, so no Redis password or CA here.
   kc -n "$NS" create secret generic elitea-main-auth-material \
-    --from-file="${RUNTIME_MATERIAL_DIR}/redis-auth-password" \
-    --from-file="${RUNTIME_MATERIAL_DIR}/runtime-ca.crt" \
     --from-file="${RUNTIME_MATERIAL_DIR}/auth-attempt-key" \
     --from-file="${RUNTIME_MATERIAL_DIR}/auth-pat-signing-key" \
     --from-file="${RUNTIME_MATERIAL_DIR}/auth-form-users.json" \
