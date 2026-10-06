@@ -3,7 +3,9 @@ package budgetwriteback
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,12 +17,13 @@ import (
 )
 
 // TestSecuredWriteBackRunsOnTheChartsPermissions runs the scheduler's real
-// write-back path — Dial with its identity, Bind (the durable consumer's
-// create-or-update), the drain loop's fetches and acks, and a second Bind as
-// a restarted scheduler — as the elitea-scheduler identity against a
-// nats-server started from the NATS chart's own rendered config, after the
-// real bootstrap.sh created the stream (#1076). The deltas are published as
-// the gateway, which is who publishes them in production.
+// write-back path — Dial with its identity, Bind (bind to and verify the
+// durable consumer the bootstrap created), the drain loop's fetches and acks,
+// and a second Bind as a restarted scheduler — as the elitea-scheduler
+// identity against a nats-server started from the NATS chart's own rendered
+// config, after the real bootstrap.sh created the stream and the consumer
+// (#1076). The deltas are published as the gateway, which is who publishes
+// them in production.
 func TestSecuredWriteBackRunsOnTheChartsPermissions(t *testing.T) {
 	s := natstest.Start(t)
 	s.Bootstrap(t, nil)
@@ -122,13 +125,45 @@ func TestSecuredWriteBackRunsOnTheChartsPermissions(t *testing.T) {
 		return c
 	}
 	if _, err := js.CreateOrUpdateConsumer(op(), DeltasStream, jetstream.ConsumerConfig{Durable: "rogue", FilterSubject: DeltaSubject}); err == nil {
-		t.Error("the scheduler created a consumer other than its own")
+		t.Error("the scheduler created a consumer")
 	}
 	s.RequireViolation(t, natsconn.IdentityScheduler, "Publish", "$JS.API.CONSUMER.CREATE."+DeltasStream+".rogue."+DeltaSubject)
+	// Redefining its own consumer as a push consumer would deliver every
+	// spend delta onto a subject of the scheduler's choosing (#1076 F1).
+	if _, err := js.CreateOrUpdatePushConsumer(op(), DeltasStream, jetstream.ConsumerConfig{
+		Durable: DurableName, FilterSubject: DeltaSubject, DeliverSubject: "gateway.events.project.42.events",
+		AckPolicy: jetstream.AckNonePolicy,
+	}); err == nil {
+		t.Error("the scheduler redefined budget-writeback as a push consumer")
+	}
+	s.RequireViolation(t, natsconn.IdentityScheduler, "Publish", "$JS.API.CONSUMER.CREATE."+DeltasStream+"."+DurableName+"."+DeltaSubject)
 	if err := js.DeleteConsumer(op(), DeltasStream, DurableName); err == nil {
 		t.Error("the scheduler deleted its durable consumer")
 	}
 	s.RequireViolation(t, natsconn.IdentityScheduler, "Publish", "$JS.API.CONSUMER.DELETE."+DeltasStream+"."+DurableName)
+}
+
+// A scheduler that starts before the bootstrap ran cannot bind, says which
+// Job creates the consumer, and does not try to create it.
+func TestSecuredWriteBackWithoutBootstrapNamesTheJob(t *testing.T) {
+	s := natstest.Start(t)
+	m := s.Material(natsconn.IdentityScheduler)
+	nc, err := Dial(DialConfig{URL: s.URL(), TLSCAFile: m.CAFile, TLSCertFile: m.CertFile, TLSKeyFile: m.KeyFile}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(nc.Close)
+	js, err := jetstream.New(nc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err = Bind(ctx, js, &tableDB{tbl: newAcctTable()}, Config{}, nil)
+	if !errors.Is(err, ErrConsumerMissing) || !strings.Contains(err.Error(), "nats-bootstrap") {
+		t.Fatalf("Bind before the bootstrap = %v; want ErrConsumerMissing naming nats-bootstrap", err)
+	}
+	s.RequireNoViolations(t, natsconn.IdentityScheduler)
 }
 
 // Dial refuses what the server would refuse.

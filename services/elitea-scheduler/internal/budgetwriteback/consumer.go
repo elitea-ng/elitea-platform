@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -17,12 +18,6 @@ const (
 	// defaultFetchWait bounds a Fetch that finds fewer than batchSize messages,
 	// so an idle stream doesn't block the loop forever.
 	defaultFetchWait = 5 * time.Second
-	// defaultAckWait is how long JetStream waits for an ACK before redelivering
-	// (§8.6 at-least-once). Must exceed a worst-case batch apply time.
-	defaultAckWait = 30 * time.Second
-	// defaultMaxDeliver bounds redelivery attempts for a message that keeps
-	// failing to apply (§8.6). A poison delta is Term()'d earlier by validate().
-	defaultMaxDeliver = 10
 )
 
 // Message is the minimal ack surface of a JetStream message the consumer drains.
@@ -44,12 +39,13 @@ type Fetcher interface {
 	Fetch(ctx context.Context) ([]Message, error)
 }
 
-// Config tunes the write-back consumer. Zero values fall back to §8.6 defaults.
+// Config tunes the write-back drain loop. Zero values fall back to §8.6
+// defaults. The consumer's own settings (AckWait, MaxDeliver) are not here:
+// the nats-bootstrap Job creates the consumer with them (#1076), and the
+// scheduler only binds.
 type Config struct {
-	BatchSize  int
-	FetchWait  time.Duration
-	AckWait    time.Duration
-	MaxDeliver int
+	BatchSize int
+	FetchWait time.Duration
 }
 
 func (c Config) withDefaults() Config {
@@ -58,12 +54,6 @@ func (c Config) withDefaults() Config {
 	}
 	if c.FetchWait <= 0 {
 		c.FetchWait = defaultFetchWait
-	}
-	if c.AckWait <= 0 {
-		c.AckWait = defaultAckWait
-	}
-	if c.MaxDeliver <= 0 {
-		c.MaxDeliver = defaultMaxDeliver
 	}
 	return c
 }
@@ -274,15 +264,30 @@ func (c *Consumer) term(m Message) {
 	}
 }
 
-// consumerConfig builds the durable pull-consumer config from Config (§8.6).
-func consumerConfig(cfg Config) jetstream.ConsumerConfig {
-	return jetstream.ConsumerConfig{
-		Durable:       DurableName,
-		FilterSubject: DeltaSubject,
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		AckWait:       cfg.AckWait,
-		MaxDeliver:    cfg.MaxDeliver,
+// ErrConsumerMissing is wrapped by Bind when the durable consumer (or its
+// stream) does not exist yet: the nats-bootstrap Job has not run.
+var ErrConsumerMissing = errors.New("the budget write-back consumer does not exist")
+
+// verifyConsumer checks what the drain loop depends on in the consumer the
+// bootstrap created: a pull consumer (no deliver subject — a push consumer's
+// deliveries would go wherever its deliver subject says, not to this loop),
+// filtered to exactly the delta subject, with explicit acks (the loop acks
+// only after the accumulator transaction commits).
+func verifyConsumer(cfg jetstream.ConsumerConfig) error {
+	if cfg.DeliverSubject != "" {
+		return fmt.Errorf("it is a push consumer delivering to %q; budget write-back drains a pull consumer", cfg.DeliverSubject)
 	}
+	filters := cfg.FilterSubjects
+	if cfg.FilterSubject != "" {
+		filters = append([]string{cfg.FilterSubject}, filters...)
+	}
+	if len(filters) != 1 || filters[0] != DeltaSubject {
+		return fmt.Errorf("it filters %v; budget write-back reads exactly %s", filters, DeltaSubject)
+	}
+	if cfg.AckPolicy != jetstream.AckExplicitPolicy {
+		return fmt.Errorf("its ack policy is %s; budget write-back acks each delta explicitly after it is applied", cfg.AckPolicy)
+	}
+	return nil
 }
 
 // jsFetcher adapts a jetstream.Consumer to the Fetcher seam.
@@ -311,13 +316,26 @@ func (f *jsFetcher) Fetch(ctx context.Context) ([]Message, error) {
 	return out, nil
 }
 
-// Bind creates (idempotently) the durable pull consumer on GATEWAY_BUDGET_DELTAS
-// and returns a Consumer ready to Run. js is the scheduler's JetStream handle.
+// Bind binds to the durable pull consumer on GATEWAY_BUDGET_DELTAS, verifies
+// it, and returns a Consumer ready to Run. js is the scheduler's JetStream
+// handle.
+//
+// It creates nothing (#1076). The nats-bootstrap Job creates the consumer,
+// and the scheduler's NATS identity may read its info, pull and ack, but not
+// create or redefine a consumer: that grant would also let it turn the
+// consumer into a push consumer delivering spend deltas onto any subject in
+// the GATEWAY account.
 func Bind(ctx context.Context, js jetstream.JetStream, db DB, cfg Config, logger *slog.Logger) (*Consumer, error) {
 	cfg = cfg.withDefaults()
-	cons, err := js.CreateOrUpdateConsumer(ctx, DeltasStream, consumerConfig(cfg))
+	cons, err := js.Consumer(ctx, DeltasStream, DurableName)
 	if err != nil {
-		return nil, err
+		if errors.Is(err, jetstream.ErrConsumerNotFound) || errors.Is(err, jetstream.ErrStreamNotFound) {
+			return nil, fmt.Errorf("%w: %s/%s is created by the nats-bootstrap Job (deploy/helm/nats-bootstrap; in compose, the nats-bootstrap service) — run it", ErrConsumerMissing, DeltasStream, DurableName)
+		}
+		return nil, fmt.Errorf("bind %s/%s: %w", DeltasStream, DurableName, err)
+	}
+	if err := verifyConsumer(cons.CachedInfo().Config); err != nil {
+		return nil, fmt.Errorf("consumer %s/%s: %w; it is configured by the nats-bootstrap Job — re-run it", DeltasStream, DurableName, err)
 	}
 	fetcher := &jsFetcher{cons: cons, batch: cfg.BatchSize, wait: cfg.FetchWait}
 	return NewConsumer(fetcher, NewStore(db), logger), nil

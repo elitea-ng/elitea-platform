@@ -91,7 +91,13 @@ nothing else crosses.
 Every user may subscribe to its own inbox prefix `_INBOX_<identity>.>` only
 (each client sets `nats.CustomInboxPrefix`), so nobody reads another client's
 JetStream API replies or acks. Nobody may delete or purge a stream; only each
-account's bootstrap identity may create or update one.
+account's bootstrap identity may create or update one, or create a consumer —
+a consumer-create grant is also the right to aim a push consumer's deliveries
+anywhere in the account. The one exception is elitea-main's presence watcher
+(an ordered consumer on its own bucket, inside MAIN). So the scheduler binds
+to the `budget-writeback` pull consumer the GATEWAY bootstrap creates (with
+the AckWait and MaxDeliver in `deploy/helm/nats-bootstrap` `deltas.writeback`)
+and cannot redefine it, and the gateway holds no consumer grant at all.
 
 ### The permission table
 
@@ -100,8 +106,8 @@ account's bootstrap identity may create or update one.
 | MAIN | `elitea-main` | `gateway.events.project.*.events`; `$KV.ELITEA_CANVAS_PRESENCE.>`; `$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE`; `$JS.API.CONSUMER.{CREATE.KV_ELITEA_CANVAS_PRESENCE.>,DELETE.KV_ELITEA_CANVAS_PRESENCE.*}` (the presence watcher); `$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>`. Denied: stream admin | `gateway.events.project.>`, `_INBOX_elitea-main.>` |
 | MAIN | `elitea-nats-bootstrap-main` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}.KV_ELITEA_CANVAS_PRESENCE` | `_INBOX_elitea-nats-bootstrap-main.>` |
 | GATEWAY | `elitea-llm-gateway` | `gateway.budget.counter.>`, `gateway.ratelimit.counter.>`, `gateway.budget.delta`, `gateway.events.project.*.events`, `gateway.events.ops.>`, `$KV.GATEWAY_ALERT_COOLDOWN.>`; `STREAM.INFO` on its four assets; `DIRECT.GET` on `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `KV_GATEWAY_ALERT_COOLDOWN`. Denied: stream admin, every `$JS.API.CONSUMER.>` | `_INBOX_elitea-llm-gateway.>` |
-| GATEWAY | `elitea-scheduler` | `$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback.>`, `$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback`, `$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>`. Denied: stream admin | `_INBOX_elitea-scheduler.>` |
-| GATEWAY | `elitea-nats-bootstrap-gateway` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on its four assets, `CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback` | `_INBOX_elitea-nats-bootstrap-gateway.>` |
+| GATEWAY | `elitea-scheduler` | `$JS.API.CONSUMER.{INFO,MSG.NEXT}.GATEWAY_BUDGET_DELTAS.budget-writeback`, `$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>` — it binds to the consumer the bootstrap creates. Denied: stream admin, consumer create/delete | `_INBOX_elitea-scheduler.>` |
+| GATEWAY | `elitea-nats-bootstrap-gateway` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on its four assets, `CONSUMER.{CREATE,INFO}` on `GATEWAY_BUDGET_DELTAS.budget-writeback` | `_INBOX_elitea-nats-bootstrap-gateway.>` |
 | RUNTIME | `elitea-main-runtime` (reserved) | `elitea.rt.v1.*.d.*`; `STREAM.INFO` and `CONSUMER.INFO` on `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}`. Denied: stream admin, consumer create/delete | `_INBOX_elitea-main-runtime.>` |
 | RUNTIME | `elitea-worker` (reserved) | `CONSUMER.{INFO,MSG.NEXT}` and `$JS.ACK` on `elitea-<route>-worker-v1` of `ELITEA_RT_V1_<ROUTE>`; `$KV.ELITEA_RT_QUARANTINE.>` + its `STREAM.INFO` (dead letters). Denied: `elitea.rt.v1.*.d.>` (no command injection), stream admin, consumer create/delete | `_INBOX_elitea-worker.>` |
 | RUNTIME | `elitea-nats-bootstrap-runtime` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on the three route streams and `KV_ELITEA_RT_QUARANTINE`, `CONSUMER.{CREATE,INFO}` on the three route durables | `_INBOX_elitea-nats-bootstrap-runtime.>` |
@@ -157,6 +163,7 @@ NetworkPolicy. KEDA (runtime command bus) will need a 8222 rule then.
 | `GATEWAY_BUDGET_DELTAS` | GATEWAY | stream (72h / 1 GiB / 5M, 12m dedup) | write-behind deltas, drained by `budget-writeback` |
 | `GATEWAY_ALERT_COOLDOWN` | GATEWAY | KV (TTL 4h) | 80% soft-alert cooldown (`kv.Create` = SETNX-with-TTL) |
 | `ELITEA_CANVAS_PRESENCE` | MAIN | KV (TTL 2m, history 1) | canvas presence rosters |
+| `GATEWAY_BUDGET_DELTAS` / `budget-writeback` | GATEWAY | durable pull consumer (explicit ack, AckWait 30s, MaxDeliver 10) | the scheduler's write-back drain; it binds only |
 
 The services **bind** and verify what their code depends on (counter flag,
 direct get, dedup windows, TTLs); they create nothing, and a missing asset is a

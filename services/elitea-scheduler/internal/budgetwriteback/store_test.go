@@ -126,7 +126,7 @@ type fakeDB struct {
 	// newTx, when set, builds a fresh tx per Begin (overrides tx). Each minted
 	// tx is recorded in txs so tests can assert per-group isolation.
 	newTx func() *fakeTx
-	txs    []*fakeTx
+	txs   []*fakeTx
 }
 
 func (d *fakeDB) Begin(context.Context) (Tx, error) {

@@ -84,6 +84,10 @@ mutate "$TMP/m-bootstrap-purge.yaml" 'user("GATEWAY","elitea-nats-bootstrap-gate
 refuse "nats: a bootstrap may purge"          "Nobody deletes or purges"     "${NA[@]}" -f "$TMP/m-bootstrap-purge.yaml"
 mutate "$TMP/m-gw-create.yaml" 'user("GATEWAY","elitea-llm-gateway")["permissions"]["publish"]["allow"].append("$JS.API.STREAM.CREATE.GATEWAY_BUDGET")'
 refuse "nats: a service may create a stream"  "Only the account's bootstrap" "${NA[@]}" -f "$TMP/m-gw-create.yaml"
+mutate "$TMP/m-sched-consumer.yaml" 'user("GATEWAY","elitea-scheduler")["permissions"]["publish"]["allow"].append("$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback.>")'
+refuse "nats: the scheduler may create its consumer" "only the account's bootstrap creates consumers" "${NA[@]}" -f "$TMP/m-sched-consumer.yaml"
+mutate "$TMP/m-main-consumer.yaml" 'user("MAIN","elitea-main")["permissions"]["publish"]["allow"].append("$JS.API.CONSUMER.CREATE.KV_OTHER.>")'
+refuse "nats: main may create a consumer off its bucket" "only the account's bootstrap creates consumers" "${NA[@]}" -f "$TMP/m-main-consumer.yaml"
 mutate "$TMP/m-dup.yaml" 'accts["RUNTIME"]["users"].append(dict(user("MAIN","elitea-main")))'
 refuse "nats: one identity in two accounts"   "is declared in accounts"      "${NA[@]}" -f "$TMP/m-dup.yaml"
 mutate "$TMP/m-wrong-bootstrap.yaml" 'accts["MAIN"]["users"].append({"user": "spiffe://elitea.internal/nats/elitea-nats-bootstrap-extra"})'
@@ -168,6 +172,13 @@ admin = re.compile(r"^\$JS\.API\.STREAM\.(CREATE|UPDATE)")
 for i in ALL:
     pub = users.get(URI(i), {}).get("publish", {}).get("allow", [])
     check(f"{i} may not delete or purge a stream", not [p for p in pub if destroy.match(p) or p in (">", "$JS.API.>")])
+    consumers = [p for p in pub if re.match(r"^\$JS\.API\.CONSUMER\.(DURABLE\.)?CREATE", p)]
+    if i.startswith("elitea-nats-bootstrap-"):
+        pass
+    elif i == "elitea-main":
+        check("elitea-main creates consumers only on its own presence bucket (the watcher)", all(p.startswith("$JS.API.CONSUMER.CREATE.KV_ELITEA_CANVAS_PRESENCE.") for p in consumers), consumers)
+    else:
+        check(f"{i} may not create a consumer", not consumers, consumers)
     made = [p for p in pub if admin.match(p)]
     if i.startswith("elitea-nats-bootstrap-"):
         check(f"{i} may create and update streams", made, pub)

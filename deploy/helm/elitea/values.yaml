@@ -2207,8 +2207,9 @@ scheduler:
     # Empty means the top-level `nats` block, resolved in this namespace.
     GATEWAY_NATS_URL: ""
     BUDGET_WRITEBACK_BATCH_SIZE: "500"
-    BUDGET_WRITEBACK_ACK_WAIT: "30s"
-    BUDGET_WRITEBACK_MAX_DELIVER: "10"
+    # The consumer's AckWait and MaxDeliver are the consumer's own
+    # configuration, set by the nats-bootstrap Job that creates it
+    # (deploy/helm/nats-bootstrap deltas.writeback); the scheduler only binds.
 
     # Audit-event retention sweep (issue #619).
     #

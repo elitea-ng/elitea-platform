@@ -62,8 +62,8 @@ func TestEveryIdentityIsInItsPlanesAccount(t *testing.T) {
 func TestBootstrapOwnsAndReconcilesTheAssets(t *testing.T) {
 	s := natstest.Start(t)
 	out := s.Bootstrap(t, nil) // also asserts no bootstrap identity hit a violation
-	if !strings.Contains(out, "5 of 5 expected assertions") {
-		t.Fatalf("bootstrap did not verify five assets:\n%s", out)
+	if !strings.Contains(out, "6 of 6 expected assertions") {
+		t.Fatalf("bootstrap did not verify six assets:\n%s", out)
 	}
 	for _, acct := range []string{"main", "gateway", "runtime"} {
 		if !strings.Contains(out, "account "+acct+": reconciling") {
@@ -93,6 +93,31 @@ func TestBootstrapOwnsAndReconcilesTheAssets(t *testing.T) {
 	}
 	if info.Config.MaxMsgs != 5000000 {
 		t.Errorf("bootstrap left max_msgs=%d after drift, want 5000000", info.Config.MaxMsgs)
+	}
+
+	// The scheduler's consumer is the bootstrap's too, and a drift is put
+	// back the same way.
+	if out, err := cli("consumer", "edit", "GATEWAY_BUDGET_DELTAS", "budget-writeback", "--max-deliver", "3", "--force").CombinedOutput(); err != nil {
+		t.Fatalf("drift the consumer: %v\n%s", err, out)
+	}
+	s.Bootstrap(t, nil)
+	raw, err = cli("consumer", "info", "GATEWAY_BUDGET_DELTAS", "budget-writeback", "--json").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ci struct {
+		Config struct {
+			MaxDeliver     int    `json:"max_deliver"`
+			AckPolicy      string `json:"ack_policy"`
+			DeliverSubject string `json:"deliver_subject"`
+			FilterSubject  string `json:"filter_subject"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(raw, &ci); err != nil {
+		t.Fatal(err)
+	}
+	if ci.Config.MaxDeliver != 10 || ci.Config.AckPolicy != "explicit" || ci.Config.DeliverSubject != "" || ci.Config.FilterSubject != "gateway.budget.delta" {
+		t.Errorf("budget-writeback after the bootstrap = %+v; want a pull consumer on gateway.budget.delta, explicit acks, max_deliver 10", ci.Config)
 	}
 
 	// Counter streams really are counters.

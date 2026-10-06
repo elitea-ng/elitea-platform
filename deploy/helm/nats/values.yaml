@@ -267,16 +267,18 @@ nats:
                   allow:
                     - "_INBOX_elitea-llm-gateway.>"
 
-            # elitea-scheduler: the budget write-back durable pull consumer on
-            # GATEWAY_BUDGET_DELTAS. It creates its own consumer (the consumer
-            # config is the scheduler's tuning), and nothing else.
+            # elitea-scheduler: BINDS to the budget write-back durable pull
+            # consumer on GATEWAY_BUDGET_DELTAS, which the GATEWAY bootstrap
+            # creates. It reads the consumer's info, pulls and acks — and may
+            # not create, redefine or delete a consumer, so it cannot turn
+            # budget-writeback into a push consumer delivering spend deltas
+            # onto another subject.
             - user: "spiffe://elitea.internal/nats/elitea-scheduler"
               permissions:
                 publish:
                   allow:
-                    # Bind: CreateOrUpdateConsumer with a name and a filter
-                    # subject (CREATE.<stream>.<durable>.<filter>).
-                    - "$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
+                    # Bind (js.Consumer) and the readiness check.
+                    - "$JS.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
                     # The drain loop: pull, then ack/nak/term.
                     - "$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"
                     - "$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
@@ -287,12 +289,16 @@ nats:
                     - "$JS.API.STREAM.PURGE.>"
                     - "$JS.API.STREAM.MSG.DELETE.>"
                     - "$JS.API.ACCOUNT.PURGE.>"
+                    - "$JS.API.CONSUMER.CREATE.>"
+                    - "$JS.API.CONSUMER.DURABLE.CREATE.>"
+                    - "$JS.API.CONSUMER.DELETE.>"
                 subscribe:
                   allow:
                     - "_INBOX_elitea-scheduler.>"
 
             # elitea-nats-bootstrap-gateway: creates and reconciles GATEWAY's
-            # four assets. Publishes no data.
+            # four assets and the scheduler's budget-writeback pull consumer.
+            # Publishes no data.
             - user: "spiffe://elitea.internal/nats/elitea-nats-bootstrap-gateway"
               permissions:
                 publish:
@@ -312,6 +318,7 @@ nats:
                     - "$JS.API.STREAM.INFO.KV_GATEWAY_ALERT_COOLDOWN"
                     - "$JS.API.STREAM.CREATE.KV_GATEWAY_ALERT_COOLDOWN"
                     - "$JS.API.STREAM.UPDATE.KV_GATEWAY_ALERT_COOLDOWN"
+                    - "$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
                     - "$JS.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
                 subscribe:
                   allow:

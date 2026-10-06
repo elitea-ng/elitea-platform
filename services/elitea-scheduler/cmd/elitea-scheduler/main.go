@@ -207,11 +207,7 @@ func main() {
 			slog.Warn("budget write-back: JetStream init failed; consumer disabled", "err", jerr)
 			nc.Close()
 		} else {
-			wbCfg := budgetwriteback.Config{
-				BatchSize:  cfg.BudgetWriteBackBatchSize,
-				AckWait:    cfg.BudgetWriteBackAckWait,
-				MaxDeliver: cfg.BudgetWriteBackMaxDeliver,
-			}
+			wbCfg := budgetwriteback.Config{BatchSize: cfg.BudgetWriteBackBatchSize}
 			bindCtx, bc := context.WithTimeout(ctx, 5*time.Second)
 			consumer, berr := budgetwriteback.Bind(bindCtx, js, budgetwriteback.NewPoolDB(pool), wbCfg, logger)
 			bc()

@@ -58,6 +58,10 @@ spec:
               value: {{ .Values.deltas.maxBytes | quote }}
             - name: NATS_DELTAS_MAX_MSGS
               value: {{ .Values.deltas.maxMsgs | quote }}
+            - name: NATS_WRITEBACK_ACK_WAIT
+              value: {{ .Values.deltas.writeback.ackWait | quote }}
+            - name: NATS_WRITEBACK_MAX_DELIVER
+              value: {{ .Values.deltas.writeback.maxDeliver | quote }}
             - name: NATS_PRESENCE_TTL
               value: {{ .Values.presence.ttl | quote }}
           volumeMounts:

@@ -34,8 +34,6 @@ type Config struct {
 	BudgetWriteBackNATSTLSCertFile string
 	BudgetWriteBackNATSTLSKeyFile  string
 	BudgetWriteBackBatchSize       int
-	BudgetWriteBackAckWait         time.Duration
-	BudgetWriteBackMaxDeliver      int
 
 	// Audit-event retention sweep (issue #619). `centry.audit_events` got its
 	// first product writer in issue #615 and no bound on its growth, so the
@@ -82,8 +80,6 @@ func FromEnv() Config {
 		BudgetWriteBackNATSTLSCertFile: os.Getenv("GATEWAY_NATS_TLS_CERT_FILE"),
 		BudgetWriteBackNATSTLSKeyFile:  os.Getenv("GATEWAY_NATS_TLS_KEY_FILE"),
 		BudgetWriteBackBatchSize:       intEnv("BUDGET_WRITEBACK_BATCH_SIZE", 500),
-		BudgetWriteBackAckWait:         durationEnv("BUDGET_WRITEBACK_ACK_WAIT", 30*time.Second),
-		BudgetWriteBackMaxDeliver:      intEnv("BUDGET_WRITEBACK_MAX_DELIVER", 10),
 
 		// 365 days, and ON by default.
 		//

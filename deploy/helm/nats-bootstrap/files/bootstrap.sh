@@ -24,6 +24,9 @@
 #     stream GATEWAY_BUDGET_DELTAS   write-behind deltas, subject gateway.budget.delta,
 #                                    drained by elitea-scheduler's budget-writeback
 #     KV     GATEWAY_ALERT_COOLDOWN  80% soft-alert cooldown (kv.Create + bucket TTL)
+#     consumer GATEWAY_BUDGET_DELTAS/budget-writeback
+#                                    the durable PULL consumer elitea-scheduler
+#                                    drains; it only binds to it
 #   account RUNTIME
 #     RESERVED for the runtime command bus. No assets yet: the run proves the
 #     RUNTIME bootstrap identity connects, and the command bus change adds
@@ -75,6 +78,9 @@
 #   NATS_DELTAS_MAX_AGE         MaxAge  (default 72h)
 #   NATS_DELTAS_MAX_BYTES       MaxBytes (default 1 GiB)
 #   NATS_DELTAS_MAX_MSGS        MaxMsgs (default 5000000)
+#   NATS_WRITEBACK_ACK_WAIT     budget-writeback AckWait (default 30s; must
+#                               exceed the scheduler's worst-case batch apply)
+#   NATS_WRITEBACK_MAX_DELIVER  budget-writeback MaxDeliver (default 10)
 #   NATS_PRESENCE_TTL           ELITEA_CANVAS_PRESENCE TTL (default 2m — must
 #                               be at least elitea-main's 120s roster TTL)
 set -eu
@@ -88,6 +94,8 @@ DELTAS_DUPE_WINDOW="${NATS_DELTAS_DUPE_WINDOW:-12m}"
 DELTAS_MAX_AGE="${NATS_DELTAS_MAX_AGE:-72h}"
 DELTAS_MAX_BYTES="${NATS_DELTAS_MAX_BYTES:-1073741824}"   # 1 GiB
 DELTAS_MAX_MSGS="${NATS_DELTAS_MAX_MSGS:-5000000}"
+WRITEBACK_ACK_WAIT="${NATS_WRITEBACK_ACK_WAIT:-30s}"
+WRITEBACK_MAX_DELIVER="${NATS_WRITEBACK_MAX_DELIVER:-10}"
 PRESENCE_TTL="${NATS_PRESENCE_TTL:-2m}"
 CONNECT_WAIT="${NATS_CONNECT_WAIT:-120}"
 
@@ -214,6 +222,23 @@ ensure_kv() {
   fi
 }
 
+# ensure_pull_consumer STREAM NAME FILTER FLAGS...: a durable PULL consumer,
+# added when absent and edited to FLAGS when present. The services bind to
+# it and cannot create, redefine or delete it: a consumer-create grant would
+# also let them point a push consumer's deliveries at any subject in their
+# account.
+ensure_pull_consumer() {
+  stream="$1"; name="$2"; filter="$3"; shift 3
+  if $NATS consumer info "$stream" "$name" >/dev/null 2>&1; then
+    log "consumer ${stream}/${name} exists — reconciling its configuration"
+    $NATS consumer edit "$stream" "$name" "$@" --force >/dev/null
+  else
+    log "creating consumer ${stream}/${name}"
+    $NATS consumer add "$stream" "$name" --pull --filter "$filter" --ack explicit \
+      --deliver all --replay instant "$@" --defaults >/dev/null
+  fi
+}
+
 # The verdict (issue #486). The ensure_* calls either created or edited, so a
 # run that did nothing looks the same as one that did all of it; only a
 # read-back tells them apart. Each account adds what it expects, so a deleted
@@ -223,13 +248,13 @@ ASSERTED=0
 expect() { EXPECTED_ASSERTIONS=$((EXPECTED_ASSERTIONS + $1)); }
 assert_asset() {
   kind="$1"
-  name="$2"
-  if ! $NATS "${kind}" info "${name}" >/dev/null 2>&1; then
-    log "FAILED: ${kind} ${name} does not exist after bootstrap"
+  shift
+  if ! $NATS "${kind}" info "$@" >/dev/null 2>&1; then
+    log "FAILED: ${kind} $* does not exist after bootstrap"
     exit 1
   fi
   ASSERTED=$((ASSERTED + 1))
-  log "  ok ${kind} ${name} (account ${acct})"
+  log "  ok ${kind} $* (account ${acct})"
 }
 
 # ── account MAIN ────────────────────────────────────────────────────────────
@@ -249,7 +274,7 @@ bootstrap_main() {
 
 # ── account GATEWAY ─────────────────────────────────────────────────────────
 bootstrap_gateway() {
-  expect 4
+  expect 5
   # GATEWAY_BUDGET: the budget counter stream. AllowMsgCounter makes every
   # publish carrying Nats-Incr an atomic add whose running total comes back in
   # the PubAck. allow_direct is what the gateway reads the total with (a direct
@@ -320,10 +345,19 @@ bootstrap_gateway() {
     --ttl "${ALERT_COOLDOWN}" \
     --description "elitea-llm-gateway 80% soft-alert cooldown"
 
+  # budget-writeback: the durable pull consumer elitea-scheduler drains
+  # GATEWAY_BUDGET_DELTAS with (design §8.6). Created here, not by the
+  # scheduler, whose identity may only read its info, pull and ack.
+  ensure_pull_consumer GATEWAY_BUDGET_DELTAS budget-writeback "gateway.budget.delta" \
+    --wait "${WRITEBACK_ACK_WAIT}" \
+    --max-deliver "${WRITEBACK_MAX_DELIVER}" \
+    --description "elitea-scheduler budget write-back (design §8.6)"
+
   assert_asset stream GATEWAY_BUDGET
   assert_asset stream GATEWAY_RATELIMIT
   assert_asset stream GATEWAY_BUDGET_DELTAS
   assert_asset kv GATEWAY_ALERT_COOLDOWN
+  assert_asset consumer GATEWAY_BUDGET_DELTAS budget-writeback
 }
 
 # ── account RUNTIME ─────────────────────────────────────────────────────────

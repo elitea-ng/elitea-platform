@@ -77,6 +77,14 @@ deltas:
   maxAge: "72h"
   maxBytes: 1073741824   # 1 GiB
   maxMsgs: 5000000
+  # The budget-writeback durable pull consumer elitea-scheduler drains the
+  # stream with. The bootstrap creates it; the scheduler only binds.
+  writeback:
+    # How long JetStream waits for an ack before redelivering. Must exceed the
+    # scheduler's worst-case batch apply time (design §8.6 at-least-once).
+    ackWait: "30s"
+    # Redelivery attempts for a delta that keeps failing to apply.
+    maxDeliver: 10
 
 # ELITEA_CANVAS_PRESENCE KV TTL. At least elitea-main's 120s roster TTL, or a
 # heartbeat's entry is collected before its own deadline.

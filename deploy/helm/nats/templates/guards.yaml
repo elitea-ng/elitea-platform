@@ -71,6 +71,10 @@ value and says why.
 {{- if or (eq $p ">") (eq $p "$JS.API.>") (eq $p "$JS.API.STREAM.>") (hasPrefix "$JS.API.STREAM.DELETE" $p) (hasPrefix "$JS.API.STREAM.PURGE" $p) (hasPrefix "$JS.API.STREAM.MSG.DELETE" $p) (hasPrefix "$JS.API.ACCOUNT.PURGE" $p) -}}
 {{- fail (printf "user %q may publish %q. Nobody deletes or purges a stream, and no identity gets the whole JetStream API (#1076)." $name $p) -}}
 {{- end -}}
+{{- $watcher := and (hasSuffix "/nats/elitea-main" $name) (hasPrefix "$JS.API.CONSUMER.CREATE.KV_ELITEA_CANVAS_PRESENCE." $p) -}}
+{{- if and (not $isBootstrap) (not $watcher) (or (hasPrefix "$JS.API.CONSUMER.CREATE" $p) (hasPrefix "$JS.API.CONSUMER.DURABLE.CREATE" $p) (eq $p "$JS.API.CONSUMER.>")) -}}
+{{- fail (printf "user %q may publish %q. A consumer-create grant is also the right to point a push consumer's deliveries at any subject in the account (the server does not check a deliver subject against permissions), so only the account's bootstrap creates consumers; the one exception is elitea-main's presence watcher on its own bucket (#1076)." $name $p) -}}
+{{- end -}}
 {{- if and (not $isBootstrap) (or (hasPrefix "$JS.API.STREAM.CREATE" $p) (hasPrefix "$JS.API.STREAM.UPDATE" $p)) -}}
 {{- fail (printf "user %q may publish %q. Only the account's bootstrap identity (...%s) creates or updates a stream (#1076)." $name $p $bootstrap) -}}
 {{- end -}}
