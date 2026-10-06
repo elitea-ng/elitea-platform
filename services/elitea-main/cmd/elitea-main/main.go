@@ -423,7 +423,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	var currentNotificationStore notificationapp.Store
 	var currentNotificationEvents *notificationsapi.CurrentNotificationEventsRoute
 	var formGraph *authcomposition.FormGraph
-	var authReadiness health.Checker
 	var principalValidator apimw.PrincipalValidator
 	var forwardedIdentityVerifier apimw.ForwardedIdentityPeerVerifier
 	// firstLoginPolicy travels OUT of the authEnabled block below, because the
@@ -550,11 +549,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("compose production Form authentication: %w", err)
 		}
-		defer func() {
-			if err := formGraph.Close(); runErr == nil && err != nil {
-				runErr = fmt.Errorf("close production Form authentication: %w", err)
-			}
-		}()
 		if formGraph.FormSignInEnabled() {
 			logFormUserConfiguration(logger, formGraph.FormUsers())
 			productionAuth, err = api.NewProductionAuthRoutes(formGraph.BrowserRoutes(), formGraph.MainEdgeAuth())
@@ -567,7 +561,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		principalValidator = authsvc.NewPrincipalValidator(pool)
 		forwardedIdentityVerifier = formGraph.ForwardedIdentityVerifier()
-		authReadiness = formGraph
 		logger.Info("production Form authentication enabled", "form_sign_in", formGraph.FormSignInEnabled())
 	}
 
@@ -2330,9 +2323,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		ToolkitRegistry:              toolkitArgumentSchemas,
 		DelegatedAuthToolkitSettings: delegatedAuthToolkitSettings,
 		WorkerImplementation:         workerImplementation,
+		// Readiness is the database alone. The Form graph's sign-in state is
+		// in this same database (shared migration 0145), so it adds no
+		// dependency of its own; the auth Redis it once pinged is gone.
 		HealthDeps: health.Deps{
-			DB:    &poolChecker{pool: pool},
-			Redis: authReadiness,
+			DB: &poolChecker{pool: pool},
 		},
 		AuthValidator:      apiGroupAuth.Validator,
 		PrincipalValidator: apiGroupAuth.PrincipalValidator,

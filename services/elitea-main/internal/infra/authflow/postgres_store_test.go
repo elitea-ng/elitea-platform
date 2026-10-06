@@ -5,54 +5,40 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/browserauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth/browserflow"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authstatetest"
 )
 
-const testKeyPrefix = "elitea_auth_flow_"
+var _ browserauth.TransactionStore = (*PostgresStore)(nil)
 
-var _ browserauth.TransactionStore = (*RedisStore)(nil)
-
-func TestNewRedisStoreRejectsInvalidConfigurationAndDistributedClients(t *testing.T) {
+func TestNewPostgresStoreRejectsInvalidConfiguration(t *testing.T) {
 	t.Parallel()
 
-	if _, err := NewRedisStore(nil, Config{KeyPrefix: testKeyPrefix}); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("nil client error = %v, want %v", err, ErrInvalidConfiguration)
+	pool := authstatetest.ClosedPool(t)
+	if _, err := NewPostgresStore(nil); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("nil pool error = %v, want %v", err, ErrInvalidConfiguration)
 	}
-	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:0"})
-	t.Cleanup(func() { _ = client.Close() })
-	for _, prefix := range []string{"", "prefix\n", strings.Repeat("p", maxKeyPrefixBytes+1)} {
-		if _, err := NewRedisStore(client, Config{KeyPrefix: prefix}); !errors.Is(err, ErrInvalidConfiguration) {
-			t.Fatalf("prefix %q error = %v, want %v", prefix, err, ErrInvalidConfiguration)
-		}
+	if _, err := newPostgresStore(pool, nil, time.Now); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("nil generator error = %v, want %v", err, ErrInvalidConfiguration)
 	}
-
-	cluster := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{"127.0.0.1:0"}})
-	t.Cleanup(func() { _ = cluster.Close() })
-	if _, err := NewRedisStore(cluster, Config{KeyPrefix: testKeyPrefix}); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("cluster error = %v, want %v", err, ErrInvalidConfiguration)
-	}
-	ring := redis.NewRing(&redis.RingOptions{Addrs: map[string]string{"shard": "127.0.0.1:0"}})
-	t.Cleanup(func() { _ = ring.Close() })
-	if _, err := NewRedisStore(ring, Config{KeyPrefix: testKeyPrefix}); !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("ring error = %v, want %v", err, ErrInvalidConfiguration)
+	if _, err := newPostgresStore(pool, browserflow.NewTransactionID, nil); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("nil clock error = %v, want %v", err, ErrInvalidConfiguration)
 	}
 }
 
-func TestRedisStoreCreateConsumeAndReplay(t *testing.T) {
+func TestPostgresStoreCreateConsumeAndReplay(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
 	id := testTransactionID(1)
-	store, server, client, _ := newTestStore(t, now, fixedGenerator(id))
+	store, pool, _ := newTestStore(t, now, fixedGenerator(id))
 	transaction := testTransaction(now, "oidc", "session-1")
 
 	createdID, err := store.Create(context.Background(), transaction)
@@ -62,12 +48,14 @@ func TestRedisStoreCreateConsumeAndReplay(t *testing.T) {
 	if createdID != id || browserflow.ValidateTransactionID(createdID) != nil {
 		t.Fatalf("created ID = %q", createdID)
 	}
-	key := testKeyPrefix + id
-	if value, err := client.HGet(context.Background(), key, "provider").Result(); err != nil || value != "oidc" {
-		t.Fatalf("stored provider = %q, %v", value, err)
+	var provider, session string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT provider, originating_session_id FROM elitea_auth.form_login_transactions WHERE id = $1`, id,
+	).Scan(&provider, &session); err != nil || provider != "oidc" || session != "session-1" {
+		t.Fatalf("stored binding = %q %q, %v", provider, session, err)
 	}
-	if ttl := server.TTL(key); ttl <= 0 || ttl > 5*time.Minute {
-		t.Fatalf("TTL = %s, want derived five-minute lifetime", ttl)
+	if ttl := remainingLifetime(t, pool, id); ttl <= 4*time.Minute || ttl > 5*time.Minute {
+		t.Fatalf("lifetime = %s, want the derived five minutes", ttl)
 	}
 
 	consumed, err := store.Consume(context.Background(), id, "oidc", "session-1")
@@ -77,22 +65,21 @@ func TestRedisStoreCreateConsumeAndReplay(t *testing.T) {
 	if consumed != transaction {
 		t.Fatalf("consumed transaction = %+v, want %+v", consumed, transaction)
 	}
-	if server.Exists(key) {
-		t.Fatal("consumed transaction remains in Redis")
+	if exists(t, pool, id) {
+		t.Fatal("consumed transaction remains in the table")
 	}
 	if _, err := store.Consume(context.Background(), id, "oidc", "session-1"); !errors.Is(err, browserflow.ErrTransactionRejected) {
 		t.Fatalf("replay error = %v, want %v", err, browserflow.ErrTransactionRejected)
 	}
 }
 
-func TestRedisStoreBindingMismatchDoesNotConsume(t *testing.T) {
+func TestPostgresStoreBindingMismatchDoesNotConsume(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
 	id := testTransactionID(2)
-	store, server, _, _ := newTestStore(t, now, fixedGenerator(id))
-	transaction := testTransaction(now, "oidc", "session-1")
-	if _, err := store.Create(context.Background(), transaction); err != nil {
+	store, pool, _ := newTestStore(t, now, fixedGenerator(id))
+	if _, err := store.Create(context.Background(), testTransaction(now, "oidc", "session-1")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -106,7 +93,7 @@ func TestRedisStoreBindingMismatchDoesNotConsume(t *testing.T) {
 		if _, err := store.Consume(context.Background(), id, binding.provider, binding.session); !errors.Is(err, browserflow.ErrTransactionRejected) {
 			t.Fatalf("binding %+v error = %v, want %v", binding, err, browserflow.ErrTransactionRejected)
 		}
-		if !server.Exists(testKeyPrefix + id) {
+		if !exists(t, pool, id) {
 			t.Fatalf("binding mismatch %+v consumed transaction", binding)
 		}
 	}
@@ -115,18 +102,19 @@ func TestRedisStoreBindingMismatchDoesNotConsume(t *testing.T) {
 	}
 }
 
-func TestRedisStoreTTLAndApplicationExpirationAreBounded(t *testing.T) {
+func TestPostgresStoreLifetimeAndApplicationExpirationAreBounded(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
-	t.Run("Redis expiry", func(t *testing.T) {
+	t.Run("row expiry", func(t *testing.T) {
 		t.Parallel()
 		id := testTransactionID(3)
-		store, server, _, _ := newTestStore(t, now, fixedGenerator(id))
+		store, pool, _ := newTestStore(t, now, fixedGenerator(id))
 		if _, err := store.Create(context.Background(), testTransaction(now, "oidc", "session-1")); err != nil {
 			t.Fatal(err)
 		}
-		server.FastForward(5 * time.Minute)
+		authstatetest.Exec(t, pool,
+			`UPDATE elitea_auth.form_login_transactions SET expires_at = now() - interval '1 millisecond' WHERE id = $1`, id)
 		if _, err := store.Consume(context.Background(), id, "oidc", "session-1"); !errors.Is(err, browserflow.ErrTransactionRejected) {
 			t.Fatalf("expired consume error = %v, want %v", err, browserflow.ErrTransactionRejected)
 		}
@@ -135,7 +123,7 @@ func TestRedisStoreTTLAndApplicationExpirationAreBounded(t *testing.T) {
 	t.Run("application clock expiry", func(t *testing.T) {
 		t.Parallel()
 		id := testTransactionID(4)
-		store, server, _, clock := newTestStore(t, now, fixedGenerator(id))
+		store, pool, clock := newTestStore(t, now, fixedGenerator(id))
 		transaction := testTransaction(now, "oidc", "session-1")
 		if _, err := store.Create(context.Background(), transaction); err != nil {
 			t.Fatal(err)
@@ -144,7 +132,7 @@ func TestRedisStoreTTLAndApplicationExpirationAreBounded(t *testing.T) {
 		if _, err := store.Consume(context.Background(), id, "oidc", "session-1"); !errors.Is(err, browserflow.ErrTransactionRejected) {
 			t.Fatalf("expired consume error = %v, want %v", err, browserflow.ErrTransactionRejected)
 		}
-		if server.Exists(testKeyPrefix + id) {
+		if exists(t, pool, id) {
 			t.Fatal("application-expired transaction was not consumed")
 		}
 	})
@@ -152,25 +140,27 @@ func TestRedisStoreTTLAndApplicationExpirationAreBounded(t *testing.T) {
 	t.Run("already expired create", func(t *testing.T) {
 		t.Parallel()
 		id := testTransactionID(5)
-		store, server, _, clock := newTestStore(t, now, fixedGenerator(id))
+		store, pool, clock := newTestStore(t, now, fixedGenerator(id))
 		transaction := testTransaction(now, "oidc", "session-1")
 		clock.Set(transaction.ExpiresAt)
 		if _, err := store.Create(context.Background(), transaction); !errors.Is(err, browserflow.ErrTransactionRejected) {
 			t.Fatalf("expired create error = %v, want %v", err, browserflow.ErrTransactionRejected)
 		}
-		if len(server.Keys()) != 0 {
-			t.Fatalf("expired create wrote keys: %v", server.Keys())
+		if count := rowCount(t, pool); count != 0 {
+			t.Fatalf("expired create wrote %d rows", count)
 		}
 	})
 }
 
-func TestRedisStoreRetriesAndBoundsIDCollisions(t *testing.T) {
+func TestPostgresStoreRetriesAndBoundsIDCollisions(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
+	pool := authstatetest.Pool(t, 4)
 	firstID := testTransactionID(6)
 	secondID := testTransactionID(7)
-	store, _, _, _ := newTestStore(t, now, sequenceGenerator(firstID, firstID, secondID))
+	clock := &testClock{now: now}
+	store := storeOn(t, pool, sequenceGenerator(firstID, firstID, secondID), clock)
 	if id, err := store.Create(context.Background(), testTransaction(now, "oidc", "session-1")); err != nil || id != firstID {
 		t.Fatalf("first create = %q, %v", id, err)
 	}
@@ -179,37 +169,44 @@ func TestRedisStoreRetriesAndBoundsIDCollisions(t *testing.T) {
 	}
 
 	collidingID := testTransactionID(8)
-	bounded, _, _, _ := newTestStore(t, now, fixedGenerator(collidingID))
+	bounded := storeOn(t, pool, fixedGenerator(collidingID), clock)
 	if _, err := bounded.Create(context.Background(), testTransaction(now, "oidc", "session-1")); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := bounded.Create(context.Background(), testTransaction(now, "saml", "session-2")); !errors.Is(err, ErrIDCollision) {
 		t.Fatalf("bounded collision error = %v, want %v", err, ErrIDCollision)
 	}
+	// An expired row is absent, so its ID is free again.
+	authstatetest.Exec(t, pool,
+		`UPDATE elitea_auth.form_login_transactions SET expires_at = now() - interval '1 millisecond' WHERE id = $1`, collidingID)
+	if id, err := bounded.Create(context.Background(), testTransaction(now, "saml", "session-2")); err != nil || id != collidingID {
+		t.Fatalf("create over an expired row = %q, %v", id, err)
+	}
+	if _, err := bounded.Consume(context.Background(), collidingID, "saml", "session-2"); err != nil {
+		t.Fatalf("consume the replacement: %v", err)
+	}
 
-	invalid, server, _, _ := newTestStore(t, now, fixedGenerator("transaction-1"))
+	before := rowCount(t, pool)
+	invalid := storeOn(t, pool, fixedGenerator("transaction-1"), clock)
 	if _, err := invalid.Create(context.Background(), testTransaction(now, "oidc", "session-3")); !errors.Is(err, ErrInvalidID) {
 		t.Fatalf("invalid generated ID error = %v, want %v", err, ErrInvalidID)
 	}
-	if len(server.Keys()) != 0 {
-		t.Fatalf("invalid generated ID wrote keys: %v", server.Keys())
+	if rowCount(t, pool) != before {
+		t.Fatal("invalid generated ID wrote a row")
 	}
 }
 
-func TestRedisStoreCollisionRecomputesRemainingAbsoluteTTL(t *testing.T) {
+func TestPostgresStoreCollisionRecomputesRemainingAbsoluteLifetime(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: now}
 	firstID := testTransactionID(60)
 	secondID := testTransactionID(61)
-	server := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: server.Addr(), MaxRetries: -1})
-	t.Cleanup(func() { _ = client.Close() })
-	if err := server.Set(testKeyPrefix+firstID, "unrelated"); err != nil {
-		t.Fatal(err)
-	}
-	server.SetTTL(testKeyPrefix+firstID, time.Hour)
+	pool := authstatetest.Pool(t, 4)
+	authstatetest.Exec(t, pool, `
+		INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_id, record, expires_at)
+		VALUES ($1, 'oidc', 'other', 'unrelated', now() + interval '1 hour')`, firstID)
 
 	calls := 0
 	generate := func() (string, error) {
@@ -220,34 +217,31 @@ func TestRedisStoreCollisionRecomputesRemainingAbsoluteTTL(t *testing.T) {
 		}
 		return secondID, nil
 	}
-	store, err := newRedisStore(client, Config{KeyPrefix: testKeyPrefix}, generate, clock.Now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	transaction := testTransaction(now, "oidc", "session-1")
-	id, err := store.Create(context.Background(), transaction)
+	store := storeOn(t, pool, generate, clock)
+	id, err := store.Create(context.Background(), testTransaction(now, "oidc", "session-1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if id != secondID || calls != 2 {
 		t.Fatalf("created ID = %q, generator calls = %d", id, calls)
 	}
-	if ttl := server.TTL(testKeyPrefix + secondID); ttl != 3*time.Minute {
-		t.Fatalf("TTL after delayed collision retry = %s, want 3m", ttl)
+	if ttl := remainingLifetime(t, pool, secondID); ttl <= 2*time.Minute+50*time.Second || ttl > 3*time.Minute {
+		t.Fatalf("lifetime after a delayed collision retry = %s, want 3m", ttl)
 	}
 }
 
-func TestRedisStoreConcurrentConsumeHasOneWinner(t *testing.T) {
+func TestPostgresStoreConcurrentConsumeHasOneWinner(t *testing.T) {
 	t.Parallel()
 
+	const attempts = 32
 	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
 	id := testTransactionID(9)
-	store, _, _, _ := newTestStore(t, now, fixedGenerator(id))
+	pool := authstatetest.Pool(t, 16)
+	store := storeOn(t, pool, fixedGenerator(id), &testClock{now: now})
 	if _, err := store.Create(context.Background(), testTransaction(now, "oidc", "session-1")); err != nil {
 		t.Fatal(err)
 	}
 
-	const attempts = 32
 	start := make(chan struct{})
 	results := make(chan error, attempts)
 	var wait sync.WaitGroup
@@ -279,7 +273,7 @@ func TestRedisStoreConcurrentConsumeHasOneWinner(t *testing.T) {
 	}
 }
 
-func TestRedisStoreConsumesMalformedRecordsWithoutReturningClaims(t *testing.T) {
+func TestPostgresStoreConsumesMalformedRecordsWithoutReturningClaims(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
@@ -297,108 +291,58 @@ func TestRedisStoreConsumesMalformedRecordsWithoutReturningClaims(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	tests := []struct {
+	pool := authstatetest.Pool(t, 4)
+	for index, test := range []struct {
 		name   string
-		mutate func(context.Context, *redis.Client, string) error
+		record []byte
 	}{
-		{
-			name: "malformed JSON",
-			mutate: func(ctx context.Context, client *redis.Client, key string) error {
-				return client.HSet(ctx, key, "record", "{").Err()
-			},
-		},
-		{
-			name: "unknown field",
-			mutate: func(ctx context.Context, client *redis.Client, key string) error {
-				return client.HSet(ctx, key, "record", unknownRecord).Err()
-			},
-		},
-		{
-			name: "duplicate field",
-			mutate: func(ctx context.Context, client *redis.Client, key string) error {
-				return client.HSet(ctx, key, "record", duplicateRecord).Err()
-			},
-		},
-		{
-			name: "non canonical whitespace",
-			mutate: func(ctx context.Context, client *redis.Client, key string) error {
-				return client.HSet(ctx, key, "record", append([]byte(" "), validRecord...)).Err()
-			},
-		},
-		{
-			name: "oversized",
-			mutate: func(ctx context.Context, client *redis.Client, key string) error {
-				return client.HSet(ctx, key, "record", strings.Repeat("x", MaxRecordBytes+1)).Err()
-			},
-		},
-		{
-			name: "record binding differs from sidecar",
-			mutate: func(ctx context.Context, client *redis.Client, key string) error {
-				return client.HSet(ctx, key, "record", mismatchedRecord).Err()
-			},
-		},
-		{
-			name: "missing record field",
-			mutate: func(ctx context.Context, client *redis.Client, key string) error {
-				return client.HDel(ctx, key, "record").Err()
-			},
-		},
-		{
-			name: "missing provider sidecar",
-			mutate: func(ctx context.Context, client *redis.Client, key string) error {
-				return client.HDel(ctx, key, "provider").Err()
-			},
-		},
-		{
-			name: "missing originating session sidecar",
-			mutate: func(ctx context.Context, client *redis.Client, key string) error {
-				return client.HDel(ctx, key, "originating_session_id").Err()
-			},
-		},
-		{
-			name: "missing Redis TTL",
-			mutate: func(ctx context.Context, client *redis.Client, key string) error {
-				return client.Persist(ctx, key).Err()
-			},
-		},
-		{
-			name: "wrong Redis type",
-			mutate: func(ctx context.Context, client *redis.Client, key string) error {
-				if err := client.Del(ctx, key).Err(); err != nil {
-					return err
-				}
-				return client.Set(ctx, key, "not-a-hash", time.Minute).Err()
-			},
-		},
-	}
-	for index, test := range tests {
+		{name: "malformed JSON", record: []byte("{")},
+		{name: "unknown field", record: unknownRecord},
+		{name: "duplicate field", record: duplicateRecord},
+		{name: "non canonical whitespace", record: append([]byte(" "), validRecord...)},
+		{name: "record binding differs from the binding columns", record: mismatchedRecord},
+	} {
 		t.Run(test.name, func(t *testing.T) {
-			t.Parallel()
 			id := testTransactionID(byte(20 + index))
-			store, server, client, _ := newTestStore(t, now, fixedGenerator(id))
+			store := storeOn(t, pool, fixedGenerator(id), &testClock{now: now})
 			if _, err := store.Create(context.Background(), validTransaction); err != nil {
 				t.Fatal(err)
 			}
-			key := testKeyPrefix + id
-			if err := test.mutate(context.Background(), client, key); err != nil {
-				t.Fatal(err)
-			}
+			authstatetest.Exec(t, pool,
+				`UPDATE elitea_auth.form_login_transactions SET record = $2 WHERE id = $1`, id, test.record)
 			if _, err := store.Consume(context.Background(), id, "oidc", "session-1"); !errors.Is(err, ErrInvalidRecord) {
 				t.Fatalf("error = %v, want %v", err, ErrInvalidRecord)
 			}
-			if server.Exists(key) {
-				t.Fatal("malformed transaction remains in Redis")
+			if exists(t, pool, id) {
+				t.Fatal("malformed transaction remains in the table")
 			}
 		})
 	}
+
+	// What Redis had to detect at read time, the table refuses at write time:
+	// a missing or empty binding, an empty or oversized record.
+	t.Run("the table refuses incomplete rows", func(t *testing.T) {
+		for name, statement := range map[string]string{
+			"missing provider":            `INSERT INTO elitea_auth.form_login_transactions (id, originating_session_id, record, expires_at) VALUES ($1, 's', 'r', now())`,
+			"missing originating session": `INSERT INTO elitea_auth.form_login_transactions (id, provider, record, expires_at) VALUES ($1, 'oidc', 'r', now())`,
+			"missing record":              `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_id, expires_at) VALUES ($1, 'oidc', 's', now())`,
+			"empty record":                `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_id, record, expires_at) VALUES ($1, 'oidc', 's', ''::bytea, now())`,
+			"oversized record":            `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_id, record, expires_at) VALUES ($1, 'oidc', 's', convert_to(repeat('x', 65537), 'UTF8'), now())`,
+			"missing expiry":              `INSERT INTO elitea_auth.form_login_transactions (id, provider, originating_session_id, record) VALUES ($1, 'oidc', 's', 'r')`,
+		} {
+			if _, err := pool.Exec(context.Background(), statement, testTransactionID(50)); err == nil {
+				t.Fatalf("%s: the table stored the row", name)
+			}
+		}
+	})
 }
 
-func TestRedisStoreCancellationOutageAndInvalidInput(t *testing.T) {
+func TestPostgresStoreCancellationOutageAndInvalidInput(t *testing.T) {
 	t.Parallel()
 
 	now := time.Date(2026, time.July, 20, 12, 0, 0, 0, time.UTC)
 	id := testTransactionID(40)
-	store, server, _, _ := newTestStore(t, now, fixedGenerator(id))
+	store, pool, _ := newTestStore(t, now, fixedGenerator(id))
 	transaction := testTransaction(now, "oidc", "session-1")
 
 	canceled, cancel := context.WithCancel(context.Background())
@@ -412,7 +356,7 @@ func TestRedisStoreCancellationOutageAndInvalidInput(t *testing.T) {
 	if _, err := store.Consume(canceled, id, "oidc", "session-1"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled consume error = %v, want %v", err, context.Canceled)
 	}
-	if !server.Exists(testKeyPrefix + id) {
+	if !exists(t, pool, id) {
 		t.Fatal("pre-canceled consume mutated transaction")
 	}
 	if _, err := store.Consume(context.Background(), "transaction-1", "oidc", "session-1"); !errors.Is(err, ErrInvalidID) {
@@ -421,40 +365,64 @@ func TestRedisStoreCancellationOutageAndInvalidInput(t *testing.T) {
 	if _, err := store.Consume(context.Background(), id, "oidc provider", "session-1"); !errors.Is(err, browserflow.ErrTransactionRejected) {
 		t.Fatalf("invalid binding error = %v, want %v", err, browserflow.ErrTransactionRejected)
 	}
-	if !server.Exists(testKeyPrefix + id) {
+	if !exists(t, pool, id) {
 		t.Fatal("invalid binding consumed transaction")
 	}
 
-	server.Close()
-	if _, err := store.Consume(context.Background(), id, "oidc", "session-1"); !errors.Is(err, ErrUnavailable) {
+	outage := storeOn(t, authstatetest.ClosedPool(t), fixedGenerator(id), &testClock{now: now})
+	if _, err := outage.Consume(context.Background(), id, "oidc", "session-1"); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("outage consume error = %v, want %v", err, ErrUnavailable)
 	}
-	if _, err := store.Create(context.Background(), testTransaction(now, "saml", "session-2")); !errors.Is(err, ErrUnavailable) {
+	if _, err := outage.Create(context.Background(), testTransaction(now, "saml", "session-2")); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("outage create error = %v, want %v", err, ErrUnavailable)
 	}
 }
 
-func newTestStore(
-	t *testing.T,
-	now time.Time,
-	generate idGenerator,
-) (*RedisStore, *miniredis.Miniredis, *redis.Client, *testClock) {
+func newTestStore(t *testing.T, now time.Time, generate idGenerator) (*PostgresStore, *pgxpool.Pool, *testClock) {
 	t.Helper()
-	server := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{
-		Addr:         server.Addr(),
-		MaxRetries:   -1,
-		DialTimeout:  100 * time.Millisecond,
-		ReadTimeout:  100 * time.Millisecond,
-		WriteTimeout: 100 * time.Millisecond,
-	})
-	t.Cleanup(func() { _ = client.Close() })
+	pool := authstatetest.Pool(t, 4)
 	clock := &testClock{now: now}
-	store, err := newRedisStore(client, Config{KeyPrefix: testKeyPrefix}, generate, clock.Now)
+	return storeOn(t, pool, generate, clock), pool, clock
+}
+
+func storeOn(t *testing.T, pool *pgxpool.Pool, generate idGenerator, clock *testClock) *PostgresStore {
+	t.Helper()
+	store, err := newPostgresStore(pool, generate, clock.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return store, server, client, clock
+	return store
+}
+
+func exists(t *testing.T, pool *pgxpool.Pool, id string) bool {
+	t.Helper()
+	var present bool
+	if err := pool.QueryRow(context.Background(),
+		`SELECT EXISTS (SELECT 1 FROM elitea_auth.form_login_transactions WHERE id = $1)`, id).Scan(&present); err != nil {
+		t.Fatal(err)
+	}
+	return present
+}
+
+func rowCount(t *testing.T, pool *pgxpool.Pool) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM elitea_auth.form_login_transactions`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	return count
+}
+
+func remainingLifetime(t *testing.T, pool *pgxpool.Pool, id string) time.Duration {
+	t.Helper()
+	var seconds float64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT extract(epoch FROM expires_at - now()) FROM elitea_auth.form_login_transactions WHERE id = $1`, id,
+	).Scan(&seconds); err != nil {
+		t.Fatal(err)
+	}
+	return time.Duration(seconds * float64(time.Second))
 }
 
 func testTransaction(now time.Time, provider string, sessionID string) browserflow.Transaction {
@@ -482,8 +450,11 @@ func fixedGenerator(id string) idGenerator {
 }
 
 func sequenceGenerator(ids ...string) idGenerator {
+	var mutex sync.Mutex
 	index := 0
 	return func() (string, error) {
+		mutex.Lock()
+		defer mutex.Unlock()
 		if index >= len(ids) {
 			return ids[len(ids)-1], nil
 		}

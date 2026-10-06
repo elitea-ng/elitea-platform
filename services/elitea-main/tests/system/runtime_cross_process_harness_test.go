@@ -291,7 +291,6 @@ func prepareTLSRedisConfig(t *testing.T, directory string, pki runtimePKI) {
 		"user producer on >" + producerPassword + " ~" + commandStream + " ~" + commandStream + ":delivery-index.v1 +@connection +eval +evalsha +xlen +xadd +hget +xrange +hdel +hlen +hset",
 		"user worker on >" + workerPassword + " ~" + commandStream + " ~" + commandStream + ":delivery-index.v1 +@connection +eval +xreadgroup +xclaim +xautoclaim +hget +xrange +xpending +xack +xdel +hdel",
 		"user observer on >" + observerPassword + " ~" + commandStream + " ~" + commandStream + ":delivery-index.v1 +@connection +xgroup +xrange +xlen +xpending +xinfo +hget +hlen",
-		"user auth on >" + authPassword + " ~runtime-system-auth:* +@all",
 	}, "\n")+"\n"), 0o644)
 	writeFile(t, filepath.Join(directory, "redis.conf"), []byte(strings.Join([]string{
 		"bind 0.0.0.0",
@@ -597,15 +596,13 @@ func runtimeMainEnvironment(databaseURL string, controlRedisPort, publicPort, co
 	}
 }
 
-func writeRuntimeAuthConfig(t *testing.T, root string, controlRedisPort, publicPort int, pki runtimePKI) string {
+func writeRuntimeAuthConfig(t *testing.T, root string, publicPort int) string {
 	t.Helper()
-	authPasswordPath := filepath.Join(root, "auth-redis.password")
 	attemptKeyPath := filepath.Join(root, "auth-attempt.key")
 	patKeyPath := filepath.Join(root, "auth-pat.key")
 	formUsersPath := filepath.Join(root, "auth-form-users.json")
-	configPath := filepath.Join(root, "auth-form-v1.yaml")
+	configPath := filepath.Join(root, "auth-form-v2.yaml")
 
-	writeFile(t, authPasswordPath, []byte(authPassword), 0o600)
 	writeFile(t, attemptKeyPath, bytes.Repeat([]byte{0xa7}, 32), 0o600)
 	writeFile(t, patKeyPath, []byte("system-auth-pat-signing-key-5681"), 0o600)
 	writeFile(
@@ -615,7 +612,7 @@ func writeRuntimeAuthConfig(t *testing.T, root string, controlRedisPort, publicP
 		0o600,
 	)
 
-	config := fmt.Sprintf(`schema_version: elitea.auth.form.v1
+	config := fmt.Sprintf(`schema_version: elitea.auth.form.v2
 public_origin: https://localhost:%d
 trusted_proxy_cidrs:
   - 127.0.0.1/32
@@ -628,14 +625,8 @@ cookie:
   name: runtime_system_auth
   same_site: lax
   lifetime_seconds: 3600
-redis:
-  topology: single_primary_endpoint
-  url: rediss://auth@localhost:%d/0
-  password_file: %q
-  ca_file: %q
-  key_prefix: "runtime-system-auth:"
-  attempt_key_file: %q
 credentials:
+  attempt_key_file: %q
   pat_signing_key_file: %q
   credential_headers: []
 mappers:
@@ -648,7 +639,7 @@ provider:
   kind: form
   form:
     users_json_file: %q
-`, publicPort, controlRedisPort, authPasswordPath, pki.caPath, attemptKeyPath, patKeyPath, formUsersPath)
+`, publicPort, attemptKeyPath, patKeyPath, formUsersPath)
 	writeFile(t, configPath, []byte(config), 0o600)
 	return configPath
 }

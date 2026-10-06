@@ -2,30 +2,22 @@ package main
 
 import (
 	"bytes"
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
 
 // The mode that the kubelet gives each key of a Secret volume when the pod
 // declares defaultMode 0444.
 const secretVolumeMode = 0o444
 
-// The five key names of this test's Secret. They are the basenames of the five
-// paths in the authentication configuration below, which is the contract: the
-// operator names the paths, and the Secret keys must match their basenames.
+// The three key names of this test's Secret. They are the basenames of the
+// three paths in the authentication configuration below, which is the
+// contract: the operator names the paths, and the Secret keys must match their
+// basenames.
 var materialKeys = []string{
-	"redis-auth-password",
-	"auth-redis-ca.crt",
 	"auth-attempt-key",
 	"auth-pat-signing-key",
 	"auth-form-users.json",
@@ -59,9 +51,38 @@ func TestInstallMakesASecretVolumeReadableByTheAuthenticationPlane(t *testing.T)
 	}
 }
 
+// A Secret minted for the retired elitea.auth.form.v1 document still carries
+// the auth Redis password and CA. Those keys are not material any more, and
+// an install that refused them would force an operator to re-mint the Secret
+// in the same step as the upgrade. They are copied and never read.
+func TestInstallAcceptsASecretThatStillCarriesTheRetiredRedisKeys(t *testing.T) {
+	pod := newPod(t)
+	pod.contents["redis-auth-password"] = []byte("a-retired-auth-redis-password\n")
+	pod.contents["auth-redis-ca.crt"] = []byte("a retired CA")
+	if err := os.RemoveAll(pod.source); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(pod.source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pod.writeSecretVolume(t)
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{
+		"-config", pod.configuration, "-source", pod.source, "-mount", pod.material,
+	}, &stdout, &stderr); code != exitInstalled {
+		t.Fatalf("exit code = %d, stderr = %q", code, stderr.String())
+	}
+	for _, name := range materialKeys {
+		if _, err := os.Lstat(filepath.Join(pod.material, name)); err != nil {
+			t.Fatalf("required material %s was not installed: %v", name, err)
+		}
+	}
+}
+
 // TestInstallRefusesAMountThatTheConfigurationDoesNotName is the check that
 // the chart needs. The chart states the directory; the operator's
-// authentication document states the five paths. Nothing else compares them.
+// authentication document states the three paths. Nothing else compares them.
 func TestInstallRefusesAMountThatTheConfigurationDoesNotName(t *testing.T) {
 	pod := newPod(t)
 	elsewhere := filepath.Join(filepath.Dir(pod.material), "somewhere-else")
@@ -178,8 +199,6 @@ func newPod(t *testing.T) pod {
 	}
 
 	contents := map[string][]byte{
-		"redis-auth-password":  []byte("an-auth-redis-password\n"),
-		"auth-redis-ca.crt":    testCAPEM(t),
 		"auth-attempt-key":     bytes.Repeat([]byte{0xa5}, 32),
 		"auth-pat-signing-key": []byte("a-pat-signing-key"),
 		"auth-form-users.json": []byte(`{"users":[{"login":"admin","password":"correct horse battery staple"}]}`),
@@ -250,11 +269,11 @@ func (p pod) installOK(t *testing.T) {
 	}
 }
 
-// authConfiguration is one complete authentication document whose five
+// authConfiguration is one complete authentication document whose three
 // material paths sit in the given directory. It mirrors the shape of
 // deploy/runtime/auth.form.yml.
 func authConfiguration(directory string) string {
-	return fmt.Sprintf(`schema_version: elitea.auth.form.v1
+	return fmt.Sprintf(`schema_version: elitea.auth.form.v2
 public_origin: https://elitea.example
 trusted_proxy_cidrs:
   - 10.0.0.0/8
@@ -267,14 +286,8 @@ cookie:
   name: elitea_browser_auth
   same_site: lax
   lifetime_seconds: 86400
-redis:
-  topology: single_primary_endpoint
-  url: rediss://auth@redis.example:6380/0
-  password_file: %[1]s/redis-auth-password
-  ca_file: %[1]s/auth-redis-ca.crt
-  key_prefix: "elitea-auth:"
-  attempt_key_file: %[1]s/auth-attempt-key
 credentials:
+  attempt_key_file: %[1]s/auth-attempt-key
   pat_signing_key_file: %[1]s/auth-pat-signing-key
   credential_headers: []
 mappers:
@@ -288,26 +301,4 @@ provider:
   form:
     users_json_file: %[1]s/auth-form-users.json
 `, directory)
-}
-
-func testCAPEM(t *testing.T) []byte {
-	t.Helper()
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "auth Redis test CA"},
-		NotBefore:             time.Now().Add(-time.Minute),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }

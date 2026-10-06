@@ -18,9 +18,11 @@ type Checker interface {
 	Ping(ctx context.Context) error
 }
 
+// Deps are the readiness dependencies. The database is the only one: the
+// Form graph's sign-in state moved from the auth Redis into it (shared
+// migration 0145), so no Redis decides readiness any more.
 type Deps struct {
-	DB    Checker
-	Redis Checker
+	DB Checker
 }
 
 func Routes() chi.Router {
@@ -53,15 +55,6 @@ func readinessHandler(deps Deps) http.HandlerFunc {
 				allOK = false
 			} else {
 				checks["db"] = "ok"
-			}
-		}
-
-		if deps.Redis != nil {
-			if err := deps.Redis.Ping(ctx); err != nil {
-				checks["redis"] = "unavailable"
-				allOK = false
-			} else {
-				checks["redis"] = "ok"
 			}
 		}
 

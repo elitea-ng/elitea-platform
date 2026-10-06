@@ -147,7 +147,7 @@ func TestInstalledAuthenticationMaterialStillRefusesAWorldReadablePrivateFile(t 
 	pod := newAuthDeployment(t)
 	pod.install(t)
 
-	private := pod.config.Redis.AttemptKeyFile
+	private := pod.config.Credentials.AttemptKeyFile
 	for _, mode := range []os.FileMode{0o644, 0o604, 0o640, 0o606} {
 		if err := os.Chmod(private, mode); err != nil {
 			t.Fatal(err)
@@ -178,7 +178,7 @@ func TestMaterialDirectoryRefusesPathsOneMountCannotServe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if directory != filepath.Dir(config.Redis.PasswordFile) {
+	if directory != filepath.Dir(config.Credentials.AttemptKeyFile) {
 		t.Fatalf("MaterialDirectory = %q", directory)
 	}
 
@@ -199,7 +199,7 @@ type authDeployment struct {
 
 func newAuthDeployment(t *testing.T) authDeployment {
 	t.Helper()
-	// writeMaterialFixture writes the five files as real files in one
+	// writeMaterialFixture writes the three files as real files in one
 	// directory. That directory becomes the DESTINATION here, and its contents
 	// move into a Secret volume that the install must copy back.
 	config := writeMaterialFixture(t)
@@ -212,7 +212,7 @@ func newAuthDeployment(t *testing.T) authDeployment {
 		t.Fatal(err)
 	}
 
-	keys := make(map[string][]byte, 5)
+	keys := make(map[string][]byte, 3)
 	for _, file := range config.materialFiles() {
 		contents, err := os.ReadFile(file.Path)
 		if err != nil {
