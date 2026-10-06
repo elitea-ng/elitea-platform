@@ -16,13 +16,15 @@ name: CI — DeepWiki real engine
 #     serve it: the repository under analysis is the public
 #     github.com/kharkevich-engineering-lab/floe (its owner agreed to this
 #     use), allowlisted as github.com. The product clones a branch or tag
-#     head, never a commit, so the pin (`native_commit`) is CHECKED by the
+#     head, never a commit, so a pin (`native_commit`) is CHECKED by the
 #     runner script before anything is built, and the journey requires the
-#     published manifest to name it. When floe's `main` moves past the pin
-#     the native leg fails at that check, by design: re-verify and move the
-#     pin (the input default below, the `schedule` fallback in the job env
-#     and the runner script's default), or dispatch with `native_ref` set to
-#     a tag at the pin.
+#     published manifest to name it. A dispatch pins by default (the input
+#     default below), so a hand-run proof is reproducible; dispatch with
+#     `native_commit=none` to take the head. The weekly run takes floe's
+#     current `main` head (`none`): floe is a live repository, and a pin
+#     there would turn the weekly native leg red the first time `main`
+#     moves, which says nothing about the engine. Its manifest still names
+#     the commit it analysed.
 #
 # The weekly run covers BOTH engines (two matrix jobs on separate runners,
 # well inside the 20-job cap); a dispatch runs the one `engine` it names.
@@ -148,7 +150,7 @@ jobs:
       # are null and the fallbacks apply; keep the commit in step with the
       # input default above.
       DEEPWIKI_NATIVE_REF: ${{ inputs.native_ref || 'main' }}
-      DEEPWIKI_NATIVE_COMMIT: ${{ inputs.native_commit || '89c2197fa88a910c9b8344ae3c4dd06618ed28ae' }}
+      DEEPWIKI_NATIVE_COMMIT: ${{ github.event_name == 'schedule' && 'none' || inputs.native_commit || '89c2197fa88a910c9b8344ae3c4dd06618ed28ae' }}
     steps:
       - uses: actions/checkout@v7
         with:
