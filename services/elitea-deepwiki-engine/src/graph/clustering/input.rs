@@ -79,13 +79,13 @@ impl ClusterGraph {
                 is_doc: constants::is_doc_symbol(&data.symbol_type.to_lowercase()),
             });
         }
-        let mut succ: Vec<Vec<SuccEntry>> = vec![Vec::new(); nodes.len()];
+        let mut succ = SuccBuilder::new(nodes.len());
         let mut edge_count = 0;
         for edge in graph.edges() {
             let (Some(&u), Some(&v)) = (index.get(edge.source), index.get(edge.target)) else {
                 continue;
             };
-            push_edge(&mut succ[u], v, edge.data.weight);
+            succ.push(u, v, edge.data.weight);
             edge_count += 1;
         }
         let mut pred = Vec::with_capacity(nodes.len());
@@ -93,10 +93,11 @@ impl ClusterGraph {
             let list = graph
                 .predecessors(&node.id)
                 .filter_map(|source| index.get(source).copied())
-                .map(|u| (u, multiplicity(&succ[u], v)))
+                .map(|u| (u, succ.multiplicity(u, v)))
                 .collect();
             pred.push(list);
         }
+        let succ = succ.finish();
         Self {
             nodes,
             index,
@@ -131,14 +132,14 @@ impl ClusterGraph {
                 .copied()
                 .ok_or_else(|| InputError::UnknownNode(id.to_owned()))
         };
-        let mut succ: Vec<Vec<SuccEntry>> = vec![Vec::new(); nodes.len()];
+        let mut succ = SuccBuilder::new(nodes.len());
         for (source, target, weight) in edges {
             let u = lookup(source)?;
             let v = lookup(target)?;
-            push_edge(&mut succ[u], v, *weight);
+            succ.push(u, v, *weight);
         }
         let mut sources: Vec<Vec<usize>> = vec![Vec::new(); nodes.len()];
-        for (u, entries) in succ.iter().enumerate() {
+        for (u, entries) in succ.lists.iter().enumerate() {
             for entry in entries {
                 sources[entry.target].push(u);
             }
@@ -149,7 +150,7 @@ impl ClusterGraph {
             let mut list = Vec::with_capacity(listed.len());
             for source in listed {
                 let u = lookup(source)?;
-                let count = multiplicity(&succ[u], v);
+                let count = succ.multiplicity(u, v);
                 if count == 0 {
                     return Err(InputError::Predecessors {
                         node: node.id.clone(),
@@ -169,7 +170,7 @@ impl ClusterGraph {
         Ok(Self {
             nodes,
             index,
-            succ,
+            succ: succ.finish(),
             pred,
             edge_count: edges.len(),
         })
@@ -226,23 +227,51 @@ impl ClusterGraph {
     }
 }
 
-/// Append an edge to its target's keydict, or start one.
-fn push_edge(entries: &mut Vec<SuccEntry>, target: usize, weight: f64) {
-    if let Some(entry) = entries.iter_mut().find(|e| e.target == target) {
-        entry.weights.push(weight);
-    } else {
-        entries.push(SuccEntry {
-            target,
-            weights: vec![weight],
-        });
-    }
+/// The successor lists while the graph is built. `slot` maps `(source,
+/// target)` to the target's entry in the source's list, so appending an
+/// edge and reading a multiplicity take constant time, however many
+/// successors a node has. The lists are the same as a linear search for
+/// the target's entry would build.
+struct SuccBuilder {
+    lists: Vec<Vec<SuccEntry>>,
+    slot: HashMap<(usize, usize), usize>,
 }
 
-fn multiplicity(entries: &[SuccEntry], target: usize) -> usize {
-    entries
-        .iter()
-        .find(|e| e.target == target)
-        .map_or(0, |e| e.weights.len())
+impl SuccBuilder {
+    fn new(nodes: usize) -> Self {
+        Self {
+            lists: vec![Vec::new(); nodes],
+            slot: HashMap::new(),
+        }
+    }
+
+    /// Append an edge to its target's keydict, or start one.
+    fn push(&mut self, source: usize, target: usize, weight: f64) {
+        let entries = &mut self.lists[source];
+        match self.slot.entry((source, target)) {
+            std::collections::hash_map::Entry::Occupied(at) => {
+                entries[*at.get()].weights.push(weight);
+            }
+            std::collections::hash_map::Entry::Vacant(at) => {
+                at.insert(entries.len());
+                entries.push(SuccEntry {
+                    target,
+                    weights: vec![weight],
+                });
+            }
+        }
+    }
+
+    /// The number of parallel edges `source → target`.
+    fn multiplicity(&self, source: usize, target: usize) -> usize {
+        self.slot
+            .get(&(source, target))
+            .map_or(0, |&at| self.lists[source][at].weights.len())
+    }
+
+    fn finish(self) -> Vec<Vec<SuccEntry>> {
+        self.lists
+    }
 }
 
 #[cfg(test)]
@@ -292,6 +321,84 @@ mod tests {
         assert_eq!(
             unknown.unwrap_err(),
             InputError::UnknownNode("b".to_owned())
+        );
+    }
+
+    /// The linear-search builder this module used before `SuccBuilder`:
+    /// the reference the new one must equal.
+    fn reference_push_edge(entries: &mut Vec<SuccEntry>, target: usize, weight: f64) {
+        if let Some(entry) = entries.iter_mut().find(|e| e.target == target) {
+            entry.weights.push(weight);
+        } else {
+            entries.push(SuccEntry {
+                target,
+                weights: vec![weight],
+            });
+        }
+    }
+
+    fn reference_multiplicity(entries: &[SuccEntry], target: usize) -> usize {
+        entries
+            .iter()
+            .find(|e| e.target == target)
+            .map_or(0, |e| e.weights.len())
+    }
+
+    #[test]
+    fn the_slot_map_builds_the_same_lists_as_the_linear_search() {
+        let mut seed: u64 = 11;
+        let mut next = move |bound: usize| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            usize::try_from(seed >> 33).unwrap() % bound
+        };
+        for round in 0..50 {
+            let n = 1 + next(30);
+            let mut builder = SuccBuilder::new(n);
+            let mut reference: Vec<Vec<SuccEntry>> = vec![Vec::new(); n];
+            for i in 0..next(200) {
+                let (u, v) = (next(n), next(n));
+                #[allow(clippy::cast_precision_loss)]
+                let weight = i as f64 * 0.5;
+                builder.push(u, v, weight);
+                reference_push_edge(&mut reference[u], v, weight);
+            }
+            for (u, entries) in reference.iter().enumerate() {
+                for v in 0..n {
+                    assert_eq!(
+                        builder.multiplicity(u, v),
+                        reference_multiplicity(entries, v),
+                        "round {round}: {u} -> {v}"
+                    );
+                }
+            }
+            assert_eq!(builder.finish(), reference, "round {round}");
+        }
+    }
+
+    #[test]
+    fn a_node_with_many_successors_builds_in_linear_time() {
+        // The linear search took 1.7 s (release) for these 80k successors.
+        const FAN_OUT: usize = 80_000;
+        let mut nodes = vec![node("hub", "a.py")];
+        let mut edges = Vec::with_capacity(FAN_OUT + 1);
+        let mut preds = vec![Vec::new()];
+        for i in 0..FAN_OUT {
+            let id = format!("n{i}");
+            nodes.push(node(&id, "b.py"));
+            edges.push(("hub".to_owned(), id, 1.0));
+            preds.push(vec!["hub".to_owned()]);
+        }
+        edges.push(("hub".to_owned(), "n0".to_owned(), 2.0));
+        let started = std::time::Instant::now();
+        let graph = ClusterGraph::from_parts(nodes, &edges, &preds).unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(graph.successors(0).len(), FAN_OUT);
+        assert_eq!(graph.predecessors(1), &[(0, 2)]);
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "{elapsed:?} for {FAN_OUT} successors"
         );
     }
 
