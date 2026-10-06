@@ -1,0 +1,420 @@
+{
+  "structure_after_split": {
+    "wiki_title": "Repository Technical Documentation",
+    "overview": "This wiki covers 5 pages across 2 sections: Section 0, Section 1.",
+    "sections": [
+      {
+        "section_name": "Section 0",
+        "section_order": 1,
+        "description": "Section covering 12 symbols",
+        "rationale": "Mathematical clustering: macro=0, 3 pages, 12 symbols",
+        "pages": [
+          {
+            "page_name": "Section 0 — Page 0",
+            "page_order": 1,
+            "description": "Page covering 4 symbols",
+            "content_focus": "Page covering 4 symbols",
+            "rationale": "Grouped by graph clustering (macro=0, micro=0, 4 symbols)",
+            "target_symbols": [
+              "API",
+              "GET /api/v1/notes/{var}",
+              "POST /notes/{var}"
+            ],
+            "target_docs": [],
+            "target_folders": [
+              "plugins/notes/api/v1"
+            ],
+            "key_files": [
+              "plugins/notes/api/v1/notes.py"
+            ],
+            "retrieval_query": "Section 0 — Page 0",
+            "metadata": {
+              "planner_mode": "cluster",
+              "section_id": 0,
+              "page_id": 0,
+              "cluster_node_ids": [
+                "python::notes::API",
+                "contract::rest::GET /api/v1/notes/{var}",
+                "contract::rest::POST /api/v1/notes/{var}",
+                "contract::rest::POST /notes/{var}"
+              ]
+            }
+          },
+          {
+            "page_name": "Section 0 — Page 1",
+            "page_order": 2,
+            "description": "Page covering 6 symbols",
+            "content_focus": "Page covering 6 symbols",
+            "rationale": "Grouped by graph clustering (macro=0, micro=1, 6 symbols)",
+            "target_symbols": [],
+            "target_docs": [
+              "README.md",
+              "config.yaml",
+              "plugins/notes/metadata.json"
+            ],
+            "target_folders": [
+              "plugins/notes",
+              "plugins/notes/api/v1"
+            ],
+            "key_files": [
+              "README.md",
+              "config.yaml",
+              "plugins/notes/api/v1/notes.py",
+              "plugins/notes/metadata.json"
+            ],
+            "retrieval_query": "Section 0 — Page 1",
+            "metadata": {
+              "planner_mode": "cluster",
+              "section_id": 0,
+              "page_id": 1,
+              "cluster_node_ids": [
+                "markdown::README::Notes",
+                "markdown::README::Layout",
+                "yaml::config::config",
+                "json::metadata::metadata",
+                "contract::rest::GET /notes/{var}",
+                "markdown_document::README.md"
+              ]
+            }
+          },
+          {
+            "page_name": "Section 0 — Page 2",
+            "page_order": 3,
+            "description": "Page covering 2 symbols",
+            "content_focus": "Page covering 2 symbols",
+            "rationale": "Grouped by graph clustering (macro=0, micro=2, 2 symbols)",
+            "target_symbols": [
+              "Codec"
+            ],
+            "target_docs": [
+              "README.md"
+            ],
+            "target_folders": [
+              "native"
+            ],
+            "key_files": [
+              "README.md",
+              "native/codec.h"
+            ],
+            "retrieval_query": "Section 0 — Page 2",
+            "metadata": {
+              "planner_mode": "cluster",
+              "section_id": 0,
+              "page_id": 2,
+              "cluster_node_ids": [
+                "cpp::codec::notes.Codec",
+                "markdown::README::Quick start"
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "section_name": "Section 1",
+        "section_order": 2,
+        "description": "Section covering 14 symbols",
+        "rationale": "Mathematical clustering: macro=1, 2 pages, 14 symbols",
+        "pages": [
+          {
+            "page_name": "Section 1 — Page 0",
+            "page_order": 1,
+            "description": "Page covering 9 symbols",
+            "content_focus": "Page covering 9 symbols",
+            "rationale": "Grouped by graph clustering (macro=1, micro=0, 9 symbols)",
+            "target_symbols": [
+              "NoteStore",
+              "handle_create",
+              "Note"
+            ],
+            "target_docs": [],
+            "target_folders": [
+              "app"
+            ],
+            "key_files": [
+              "app/base.py",
+              "app/handlers.py",
+              "app/models.py"
+            ],
+            "retrieval_query": "Section 1 — Page 0",
+            "metadata": {
+              "planner_mode": "cluster",
+              "section_id": 1,
+              "page_id": 0,
+              "cluster_node_ids": [
+                "python::handlers::STORE",
+                "python::handlers::ROUTES",
+                "python::handlers::handle_create",
+                "python::handlers::handle_search",
+                "python::handlers::dispatch",
+                "python::models::Note",
+                "python::models::NoteStore",
+                "python::base::BaseStore",
+                "python::models::make_store"
+              ]
+            }
+          },
+          {
+            "page_name": "Section 1 — Page 1",
+            "page_order": 2,
+            "description": "Page covering 5 symbols",
+            "content_focus": "Page covering 5 symbols",
+            "rationale": "Grouped by graph clustering (macro=1, micro=1, 5 symbols)",
+            "target_symbols": [],
+            "target_docs": [
+              "docs/architecture.md",
+              "docs/usage.md"
+            ],
+            "target_folders": [
+              "docs"
+            ],
+            "key_files": [
+              "docs/architecture.md",
+              "docs/usage.md"
+            ],
+            "retrieval_query": "Section 1 — Page 1",
+            "metadata": {
+              "planner_mode": "cluster",
+              "section_id": 1,
+              "page_id": 1,
+              "cluster_node_ids": [
+                "markdown::architecture::Architecture",
+                "markdown::architecture::Codec",
+                "markdown::usage::Usage",
+                "markdown_document::docs/architecture.md",
+                "markdown_document::docs/usage.md"
+              ]
+            }
+          },
+          {
+            "page_name": "Everything At Once (Part 1)",
+            "page_order": 301,
+            "description": "Page covering 9 symbols",
+            "content_focus": "Page covering 9 symbols",
+            "rationale": "Grouped by graph clustering (macro=1, micro=0, 30 symbols) [auto-split part 1/2]",
+            "target_symbols": [
+              "BaseStore",
+              "BaseStore",
+              "BaseStore",
+              "handle_create",
+              "handle_search",
+              "dispatch",
+              "handle_create",
+              "handle_search",
+              "dispatch",
+              "handle_create",
+              "handle_search",
+              "dispatch",
+              "NoteStore",
+              "Note",
+              "make_store",
+              "MAX_NOTES",
+              "NoteStore",
+              "Note",
+              "make_store",
+              "MAX_NOTES",
+              "NoteStore",
+              "Note",
+              "make_store",
+              "MAX_NOTES"
+            ],
+            "target_docs": [],
+            "target_folders": [
+              "app"
+            ],
+            "key_files": [
+              "app/base.py",
+              "app/handlers.py",
+              "app/models.py"
+            ],
+            "retrieval_query": "Section 1 — Page 0",
+            "metadata": {}
+          },
+          {
+            "page_name": "Everything At Once (Part 2)",
+            "page_order": 302,
+            "description": "Page covering 9 symbols",
+            "content_focus": "Page covering 9 symbols",
+            "rationale": "Grouped by graph clustering (macro=1, micro=0, 30 symbols) [auto-split part 2/2]",
+            "target_symbols": [
+              "Codec",
+              "Codec",
+              "Codec",
+              "API",
+              "API",
+              "API"
+            ],
+            "target_docs": [],
+            "target_folders": [
+              "app"
+            ],
+            "key_files": [
+              "app/base.py",
+              "app/handlers.py",
+              "app/models.py"
+            ],
+            "retrieval_query": "Section 1 — Page 0",
+            "metadata": {}
+          },
+          {
+            "page_name": "Notices & Licences",
+            "page_order": 4,
+            "description": "Page covering 9 symbols",
+            "content_focus": "Page covering 9 symbols",
+            "rationale": "Hand-written page",
+            "target_symbols": [],
+            "target_docs": [
+              "NOTICE",
+              "../outside.txt"
+            ],
+            "target_folders": [
+              "app"
+            ],
+            "key_files": [
+              "app/base.py",
+              "app/handlers.py",
+              "app/models.py"
+            ],
+            "retrieval_query": "Section 1 — Page 0",
+            "metadata": {}
+          },
+          {
+            "page_name": "Store Usage Guide",
+            "page_order": 5,
+            "description": "Page covering 9 symbols",
+            "content_focus": "Page covering 9 symbols",
+            "rationale": "Hand-written page",
+            "target_symbols": [],
+            "target_docs": [],
+            "target_folders": [
+              "app"
+            ],
+            "key_files": [
+              "app/base.py",
+              "app/handlers.py",
+              "app/models.py"
+            ],
+            "retrieval_query": "Section 1 — Page 0",
+            "metadata": {}
+          }
+        ]
+      }
+    ],
+    "total_pages": 9
+  },
+  "pages": [
+    {
+      "page_id": "0#0",
+      "title": "Section 0 — Page 0",
+      "content": "# Section 0 — Page 0\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n",
+      "status": "completed"
+    },
+    {
+      "page_id": "0#1",
+      "title": "Section 0 — Page 1",
+      "content": "# Section 0 — Page 1\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n",
+      "status": "completed"
+    },
+    {
+      "page_id": "0#2",
+      "title": "Section 0 — Page 2",
+      "content": "# Section 0 — Page 2\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n",
+      "status": "completed"
+    },
+    {
+      "page_id": "1#0",
+      "title": "Section 1 — Page 0",
+      "content": "# Section 1 — Page 0\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n",
+      "status": "completed"
+    },
+    {
+      "page_id": "1#1",
+      "title": "Section 1 — Page 1",
+      "content": "# Section 1 — Page 1\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n",
+      "status": "completed"
+    },
+    {
+      "page_id": "1#2",
+      "title": "Everything At Once (Part 1)",
+      "content": "# Everything At Once (Part 1)\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n",
+      "status": "completed"
+    },
+    {
+      "page_id": "1#3",
+      "title": "Everything At Once (Part 2)",
+      "content": "# Everything At Once (Part 2)\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n",
+      "status": "completed"
+    },
+    {
+      "page_id": "1#4",
+      "title": "Notices & Licences",
+      "content": "# Notices & Licences\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n",
+      "status": "completed"
+    },
+    {
+      "page_id": "1#5",
+      "title": "Store Usage Guide",
+      "content": "# Store Usage Guide\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n",
+      "status": "completed"
+    }
+  ],
+  "errors": [],
+  "failed_pages": [],
+  "export_wiki_id": "acme--notes--main",
+  "export_artifacts": [
+    {
+      "name": "acme--notes--main/analysis/wiki_structure_20261005_151835.json",
+      "type": "application/json",
+      "data": "{\n    \"wiki_title\": \"Repository Technical Documentation\",\n    \"sections\": [\n        {\n            \"section_name\": \"Section 0\",\n            \"pages\": [\n                {\n                    \"page_name\": \"section-0-page-0.md\",\n                    \"page_content\": \"# Section 0 \\u2014 Page 0\\n\\n## Overview\\n\\nThis page documents the component.\\n\\n```mermaid\\nflowchart TD\\nA[\\\"Start here\\\"] --> B[\\\"Load (config)\\\"]\\nB --> end_[\\\"Done\\\"]\\nB --> |\\\"yes\\\"| C[\\\"x\\\"]\\n```\\nThen the sequence:\\n\\n```mermaid\\nsequenceDiagram\\nparticipant API as API\\nparticipant User as User\\n  participant end_\\n  User->>API: call(a, b)\\n  API-->>end_: ok<br/>done\\n```\\nAn inline closer:\\n```mermaid\\ngraph TD\\n  X --> Y\\n```\\nAfter.\\n\"\n                },\n                {\n                    \"page_name\": \"section-0-page-1.md\",\n                    \"page_content\": \"# Section 0 \\u2014 Page 1\\n\\n## Overview\\n\\nThis page documents the component.\\n\\n```mermaid\\nflowchart TD\\nA[\\\"Start here\\\"] --> B[\\\"Load (config)\\\"]\\nB --> end_[\\\"Done\\\"]\\nB --> |\\\"yes\\\"| C[\\\"x\\\"]\\n```\\nThen the sequence:\\n\\n```mermaid\\nsequenceDiagram\\nparticipant API as API\\nparticipant User as User\\n  participant end_\\n  User->>API: call(a, b)\\n  API-->>end_: ok<br/>done\\n```\\nAn inline closer:\\n```mermaid\\ngraph TD\\n  X --> Y\\n```\\nAfter.\\n\"\n                },\n                {\n                    \"page_name\": \"section-0-page-2.md\",\n                    \"page_content\": \"# Section 0 \\u2014 Page 2\\n\\n## Overview\\n\\nThis page documents the component.\\n\\n```mermaid\\nflowchart TD\\nA[\\\"Start here\\\"] --> B[\\\"Load (config)\\\"]\\nB --> end_[\\\"Done\\\"]\\nB --> |\\\"yes\\\"| C[\\\"x\\\"]\\n```\\nThen the sequence:\\n\\n```mermaid\\nsequenceDiagram\\nparticipant API as API\\nparticipant User as User\\n  participant end_\\n  User->>API: call(a, b)\\n  API-->>end_: ok<br/>done\\n```\\nAn inline closer:\\n```mermaid\\ngraph TD\\n  X --> Y\\n```\\nAfter.\\n\"\n                }\n            ]\n        },\n        {\n            \"section_name\": \"Section 1\",\n            \"pages\": [\n                {\n                    \"page_name\": \"section-1-page-0.md\",\n                    \"page_content\": \"# Section 1 \\u2014 Page 0\\n\\n## Overview\\n\\nThis page documents the component.\\n\\n```mermaid\\nflowchart TD\\nA[\\\"Start here\\\"] --> B[\\\"Load (config)\\\"]\\nB --> end_[\\\"Done\\\"]\\nB --> |\\\"yes\\\"| C[\\\"x\\\"]\\n```\\nThen the sequence:\\n\\n```mermaid\\nsequenceDiagram\\nparticipant API as API\\nparticipant User as User\\n  participant end_\\n  User->>API: call(a, b)\\n  API-->>end_: ok<br/>done\\n```\\nAn inline closer:\\n```mermaid\\ngraph TD\\n  X --> Y\\n```\\nAfter.\\n\"\n                },\n                {\n                    \"page_name\": \"section-1-page-1.md\",\n                    \"page_content\": \"# Section 1 \\u2014 Page 1\\n\\n## Overview\\n\\nThis page documents the component.\\n\\n```mermaid\\nflowchart TD\\nA[\\\"Start here\\\"] --> B[\\\"Load (config)\\\"]\\nB --> end_[\\\"Done\\\"]\\nB --> |\\\"yes\\\"| C[\\\"x\\\"]\\n```\\nThen the sequence:\\n\\n```mermaid\\nsequenceDiagram\\nparticipant API as API\\nparticipant User as User\\n  participant end_\\n  User->>API: call(a, b)\\n  API-->>end_: ok<br/>done\\n```\\nAn inline closer:\\n```mermaid\\ngraph TD\\n  X --> Y\\n```\\nAfter.\\n\"\n                },\n                {\n                    \"page_name\": \"everything-at-once-part-1.md\",\n                    \"page_content\": \"# Everything At Once (Part 1)\\n\\n## Overview\\n\\nThis page documents the component.\\n\\n```mermaid\\nflowchart TD\\nA[\\\"Start here\\\"] --> B[\\\"Load (config)\\\"]\\nB --> end_[\\\"Done\\\"]\\nB --> |\\\"yes\\\"| C[\\\"x\\\"]\\n```\\nThen the sequence:\\n\\n```mermaid\\nsequenceDiagram\\nparticipant API as API\\nparticipant User as User\\n  participant end_\\n  User->>API: call(a, b)\\n  API-->>end_: ok<br/>done\\n```\\nAn inline closer:\\n```mermaid\\ngraph TD\\n  X --> Y\\n```\\nAfter.\\n\"\n                },\n                {\n                    \"page_name\": \"everything-at-once-part-2.md\",\n                    \"page_content\": \"# Everything At Once (Part 2)\\n\\n## Overview\\n\\nThis page documents the component.\\n\\n```mermaid\\nflowchart TD\\nA[\\\"Start here\\\"] --> B[\\\"Load (config)\\\"]\\nB --> end_[\\\"Done\\\"]\\nB --> |\\\"yes\\\"| C[\\\"x\\\"]\\n```\\nThen the sequence:\\n\\n```mermaid\\nsequenceDiagram\\nparticipant API as API\\nparticipant User as User\\n  participant end_\\n  User->>API: call(a, b)\\n  API-->>end_: ok<br/>done\\n```\\nAn inline closer:\\n```mermaid\\ngraph TD\\n  X --> Y\\n```\\nAfter.\\n\"\n                },\n                {\n                    \"page_name\": \"notices-licences.md\",\n                    \"page_content\": \"# Notices & Licences\\n\\n## Overview\\n\\nThis page documents the component.\\n\\n```mermaid\\nflowchart TD\\nA[\\\"Start here\\\"] --> B[\\\"Load (config)\\\"]\\nB --> end_[\\\"Done\\\"]\\nB --> |\\\"yes\\\"| C[\\\"x\\\"]\\n```\\nThen the sequence:\\n\\n```mermaid\\nsequenceDiagram\\nparticipant API as API\\nparticipant User as User\\n  participant end_\\n  User->>API: call(a, b)\\n  API-->>end_: ok<br/>done\\n```\\nAn inline closer:\\n```mermaid\\ngraph TD\\n  X --> Y\\n```\\nAfter.\\n\"\n                },\n                {\n                    \"page_name\": \"store-usage-guide.md\",\n                    \"page_content\": \"# Store Usage Guide\\n\\n## Overview\\n\\nThis page documents the component.\\n\\n```mermaid\\nflowchart TD\\nA[\\\"Start here\\\"] --> B[\\\"Load (config)\\\"]\\nB --> end_[\\\"Done\\\"]\\nB --> |\\\"yes\\\"| C[\\\"x\\\"]\\n```\\nThen the sequence:\\n\\n```mermaid\\nsequenceDiagram\\nparticipant API as API\\nparticipant User as User\\n  participant end_\\n  User->>API: call(a, b)\\n  API-->>end_: ok<br/>done\\n```\\nAn inline closer:\\n```mermaid\\ngraph TD\\n  X --> Y\\n```\\nAfter.\\n\"\n                }\n            ]\n        }\n    ]\n}"
+    },
+    {
+      "name": "acme--notes--main/wiki_pages/README.md",
+      "type": "text/markdown",
+      "data": "# Repository Technical Documentation\n\nThis wiki covers 5 pages across 2 sections: Section 0, Section 1.\n\n## Wiki Structure\n\n### Section 0/\n\n- [Section 0 — Page 0](section-0/section-0-page-0.md)\n- [Section 0 — Page 1](section-0/section-0-page-1.md)\n- [Section 0 — Page 2](section-0/section-0-page-2.md)\n\n### Section 1/\n\n- [Section 1 — Page 0](section-1/section-1-page-0.md)\n- [Section 1 — Page 1](section-1/section-1-page-1.md)\n- [Everything At Once (Part 1)](section-1/everything-at-once-part-1.md)\n- [Everything At Once (Part 2)](section-1/everything-at-once-part-2.md)\n- [Notices & Licences](section-1/notices-licences.md)\n- [Store Usage Guide](section-1/store-usage-guide.md)\n\n\n---\n\n*Generated by EliteA Wiki Toolkit*\n"
+    },
+    {
+      "name": "acme--notes--main/wiki_pages/section-0/section-0-page-2.md",
+      "type": "text/markdown",
+      "data": "# Section 0 — Page 2\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n"
+    },
+    {
+      "name": "acme--notes--main/wiki_pages/section-0/section-0-page-0.md",
+      "type": "text/markdown",
+      "data": "# Section 0 — Page 0\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n"
+    },
+    {
+      "name": "acme--notes--main/wiki_pages/section-0/section-0-page-1.md",
+      "type": "text/markdown",
+      "data": "# Section 0 — Page 1\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n"
+    },
+    {
+      "name": "acme--notes--main/wiki_pages/section-1/everything-at-once-part-1.md",
+      "type": "text/markdown",
+      "data": "# Everything At Once (Part 1)\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n"
+    },
+    {
+      "name": "acme--notes--main/wiki_pages/section-1/store-usage-guide.md",
+      "type": "text/markdown",
+      "data": "# Store Usage Guide\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n"
+    },
+    {
+      "name": "acme--notes--main/wiki_pages/section-1/everything-at-once-part-2.md",
+      "type": "text/markdown",
+      "data": "# Everything At Once (Part 2)\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n"
+    },
+    {
+      "name": "acme--notes--main/wiki_pages/section-1/notices-licences.md",
+      "type": "text/markdown",
+      "data": "# Notices & Licences\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n"
+    },
+    {
+      "name": "acme--notes--main/wiki_pages/section-1/section-1-page-0.md",
+      "type": "text/markdown",
+      "data": "# Section 1 — Page 0\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n"
+    },
+    {
+      "name": "acme--notes--main/wiki_pages/section-1/section-1-page-1.md",
+      "type": "text/markdown",
+      "data": "# Section 1 — Page 1\n\n## Overview\n\nThis page documents the component.\n\n```mermaid\nflowchart TD\nA[\"Start here\"] --> B[\"Load (config)\"]\nB --> end_[\"Done\"]\nB --> |\"yes\"| C[\"x\"]\n```\nThen the sequence:\n\n```mermaid\nsequenceDiagram\nparticipant API as API\nparticipant User as User\n  participant end_\n  User->>API: call(a, b)\n  API-->>end_: ok<br/>done\n```\nAn inline closer:\n```mermaid\ngraph TD\n  X --> Y\n```\nAfter.\n"
+    }
+  ]
+}

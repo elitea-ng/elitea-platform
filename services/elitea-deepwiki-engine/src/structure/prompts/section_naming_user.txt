@@ -1,0 +1,13 @@
+SECTION CLUSTER — {node_count} symbols across {file_count} files
+
+TOP SYMBOLS (most connected and documented in this section):
+{dominant_symbols_json}
+
+SUB-GROUPS (page-level groupings — shown only for context; name the section, not individual pages):
+{micro_summaries_json}
+
+Output ONLY valid JSON (no markdown fences):
+{{
+  "section_name": "...",
+  "section_description": "..."
+}}

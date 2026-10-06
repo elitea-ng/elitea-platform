@@ -1,0 +1,14 @@
+{"kind": "search", "query": "GET /api/v1/notes/{var}", "cluster_id": null, "limit": 9, "node_ids": []}
+{"kind": "search", "query": "GET /api/v1/notes/{var}", "cluster_id": 0, "limit": 9, "node_ids": []}
+{"kind": "search", "query": "POST /notes/{var}", "cluster_id": null, "limit": 9, "node_ids": []}
+{"kind": "search", "query": "POST /notes/{var}", "cluster_id": 0, "limit": 9, "node_ids": []}
+{"kind": "search", "query": "handle_search", "cluster_id": null, "limit": 9, "node_ids": ["python::handlers::ROUTES", "python::handlers::handle_search"]}
+{"kind": "search", "query": "handle_search", "cluster_id": 1, "limit": 9, "node_ids": ["python::handlers::ROUTES", "python::handlers::handle_search"]}
+{"kind": "search", "query": "dispatch", "cluster_id": null, "limit": 9, "node_ids": ["python::handlers::dispatch", "markdown::architecture::Architecture"]}
+{"kind": "search", "query": "dispatch", "cluster_id": 1, "limit": 9, "node_ids": ["python::handlers::dispatch", "markdown::architecture::Architecture"]}
+{"kind": "search", "query": "MAX_NOTES", "cluster_id": null, "limit": 9, "node_ids": ["python::models::MAX_NOTES", "yaml::config::config", "python::models::NoteStore.save", "python::models::NoteStore"]}
+{"kind": "search", "query": "MAX_NOTES", "cluster_id": 1, "limit": 9, "node_ids": ["python::models::MAX_NOTES", "python::models::NoteStore.save", "python::models::NoteStore"]}
+{"kind": "symbol", "query": "API", "cluster_id": 1, "limit": 3, "node_ids": []}
+{"kind": "symbol", "query": "API", "cluster_id": 1, "limit": 3, "node_ids": []}
+{"kind": "symbol", "query": "API", "cluster_id": 1, "limit": 3, "node_ids": []}
+{"kind": "search", "query": "Codec", "cluster_id": null, "limit": 9, "node_ids": ["cpp::codec::include.codec.h", "markdown::architecture::Codec", "cpp::codec::notes.Codec", "cpp::codec::notes.Codec.Encode", "cpp::codec::notes.Codec.Decode", "yaml::config::config", "markdown::README::Layout", "markdown::README::Notes"]}

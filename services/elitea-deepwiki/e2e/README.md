@@ -9,8 +9,11 @@ host's; run the host in front of this sidecar to see them.
 
 What it does **not** prove: content quality. `llm_stub.py` is a local,
 deterministic, prompt-aware OpenAI-compatible stub. It returns a well-formed
-`WikiStructureSpec` when asked for structure and canned markdown for pages, so
-the pipeline has something of the right *shape* to work with. No model is
+`WikiStructureSpec` when asked for structure, names made from the listed
+symbols for the cluster planner's naming prompts, and canned markdown for
+pages, so the pipeline has something of the right *shape* to work with.
+`LLM_STUB_RECORD=<path>` makes it append every chat request body to a file
+(the Rust engine's structure parity gate compares two such records). No model is
 called, nothing leaves the machine, and a run is reproducible.
 
 It is deliberately **not** in CI: it needs the `engine` extra (~1.1 GB, torch

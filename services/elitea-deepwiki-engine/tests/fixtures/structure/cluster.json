@@ -1,0 +1,1876 @@
+{
+ "rows": [
+  {
+   "node_id": "c0",
+   "rel_path": "src/core/loader.py",
+   "symbol_name": "Engine",
+   "symbol_type": "class",
+   "signature": "def Engine(a, b) -> None",
+   "docstring": "Documented.",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "c1",
+   "rel_path": "src/core/engine.py",
+   "symbol_name": "run",
+   "symbol_type": "function",
+   "signature": "def run(a, b) -> None                              ",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "c2",
+   "rel_path": "src/core/engine.py",
+   "symbol_name": "Loader",
+   "symbol_type": "class",
+   "signature": "def Loader(a, b) -> None                                                            ",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "c3",
+   "rel_path": "src/core/loader.py",
+   "symbol_name": "MAX_SIZE",
+   "symbol_type": "constant",
+   "signature": "def MAX_SIZE(a, b) -> None                                                                                          ",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "c4",
+   "rel_path": "src/core/engine.py",
+   "symbol_name": "parse",
+   "symbol_type": "function",
+   "signature": "def parse(a, b) -> None                                                                                                                        ",
+   "docstring": "Documented.",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "c5",
+   "rel_path": "src/core/engine.py",
+   "symbol_name": "Config",
+   "symbol_type": "struct",
+   "signature": "def Config(a, b) -> None                                                                                                                                                      ",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "c6",
+   "rel_path": "src/core/loader.py",
+   "symbol_name": "helper_util",
+   "symbol_type": "function",
+   "signature": "def helper_util(a, b) -> None                                                                                                                                                                                    ",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "c7",
+   "rel_path": "src/core/engine.py",
+   "symbol_name": "Mode",
+   "symbol_type": "enum",
+   "signature": "def Mode(a, b) -> None                                                                                                                                                                                                                  ",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "c8",
+   "rel_path": "src/core/engine.py",
+   "symbol_name": "Alias",
+   "symbol_type": "type_alias",
+   "signature": "def Alias(a, b) -> None                                                                                                                                                                                                                                                ",
+   "docstring": "Documented.",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "c9",
+   "rel_path": "src/core/loader.py",
+   "symbol_name": "start",
+   "symbol_type": "method",
+   "signature": "def start(a, b) -> None                                                                                                                                                                                                                                                                              ",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "c10",
+   "rel_path": "docs/core.md",
+   "symbol_name": "Overview",
+   "symbol_type": "markdown_section",
+   "signature": "def Overview(a, b) -> None                                                                                                                                                                                                                                                                                                            ",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 1,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "c11",
+   "rel_path": "src/core/engine.py",
+   "symbol_name": "misc",
+   "symbol_type": "variable",
+   "signature": "def misc(a, b) -> None                                                                                                                                                                                                                                                                                                                                          ",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "s0",
+   "rel_path": "src/small.py",
+   "symbol_name": "Zeta",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 3
+  },
+  {
+   "node_id": "s1",
+   "rel_path": "src/small.py",
+   "symbol_name": "alpha",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 3
+  },
+  {
+   "node_id": "s2",
+   "rel_path": "src/small.py",
+   "symbol_name": "Beta",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 3
+  },
+  {
+   "node_id": "p0",
+   "rel_path": "src/api/handlers.py",
+   "symbol_name": "Handler0",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 2
+  },
+  {
+   "node_id": "p1",
+   "rel_path": "src/api/handlers.py",
+   "symbol_name": "Handler1",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 2
+  },
+  {
+   "node_id": "p2",
+   "rel_path": "src/api/handlers.py",
+   "symbol_name": "Handler2",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 2
+  },
+  {
+   "node_id": "p3",
+   "rel_path": "src/api/handlers.py",
+   "symbol_name": "Handler3",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 2
+  },
+  {
+   "node_id": "p4",
+   "rel_path": "src/api/handlers.py",
+   "symbol_name": "Handler4",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 2
+  },
+  {
+   "node_id": "b0",
+   "rel_path": "src/bridge/f0.py",
+   "symbol_name": "bridge_0",
+   "symbol_type": "function",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 5
+  },
+  {
+   "node_id": "b1",
+   "rel_path": "src/bridge/f1.py",
+   "symbol_name": "bridge_1",
+   "symbol_type": "function",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 5
+  },
+  {
+   "node_id": "b2",
+   "rel_path": "src/bridge/f2.py",
+   "symbol_name": "bridge_2",
+   "symbol_type": "function",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 5
+  },
+  {
+   "node_id": "b3",
+   "rel_path": "src/bridge/f3.py",
+   "symbol_name": "bridge_3",
+   "symbol_type": "function",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 5
+  },
+  {
+   "node_id": "lone",
+   "rel_path": "src/api/lone.py",
+   "symbol_name": "Lone",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 7
+  },
+  {
+   "node_id": "d0",
+   "rel_path": "docs/api.md",
+   "symbol_name": "API section 0",
+   "symbol_type": "markdown_section",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 1,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 8
+  },
+  {
+   "node_id": "d1",
+   "rel_path": "docs/api.md",
+   "symbol_name": "API section 1",
+   "symbol_type": "markdown_section",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 1,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 8
+  },
+  {
+   "node_id": "d2",
+   "rel_path": "docs/api.md",
+   "symbol_name": "API section 2",
+   "symbol_type": "markdown_section",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 1,
+   "is_test": 0,
+   "macro_cluster": 1,
+   "micro_cluster": 8
+  },
+  {
+   "node_id": "k0",
+   "rel_path": "pkg/consts.py",
+   "symbol_name": "K0",
+   "symbol_type": "constant",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 2,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "k1",
+   "rel_path": "pkg/consts.py",
+   "symbol_name": "K1",
+   "symbol_type": "constant",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 2,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "k2",
+   "rel_path": "pkg/consts.py",
+   "symbol_name": "K2",
+   "symbol_type": "constant",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 2,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "m0",
+   "rel_path": "pkg/a/mod.py",
+   "symbol_name": "Model0",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 2,
+   "micro_cluster": 1
+  },
+  {
+   "node_id": "m1",
+   "rel_path": "pkg/b/mod.py",
+   "symbol_name": "Model1",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 2,
+   "micro_cluster": 1
+  },
+  {
+   "node_id": "m2",
+   "rel_path": "pkg/a/mod.py",
+   "symbol_name": "Model2",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 2,
+   "micro_cluster": 1
+  },
+  {
+   "node_id": "m3",
+   "rel_path": "pkg/b/mod.py",
+   "symbol_name": "Model3",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 2,
+   "micro_cluster": 1
+  },
+  {
+   "node_id": "l0",
+   "rel_path": "lib/list.py",
+   "symbol_name": "Lister0",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 3,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "l1",
+   "rel_path": "lib/list.py",
+   "symbol_name": "Lister1",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 3,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "t0",
+   "rel_path": "tests/test_x.py",
+   "symbol_name": "TestX0",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 1,
+   "macro_cluster": 4,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "t1",
+   "rel_path": "tests/test_x.py",
+   "symbol_name": "TestX1",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 1,
+   "macro_cluster": 4,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "t2",
+   "rel_path": "tests/test_x.py",
+   "symbol_name": "TestX2",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 1,
+   "macro_cluster": 4,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "t3",
+   "rel_path": "lib/real.py",
+   "symbol_name": "Real",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 4,
+   "micro_cluster": 0
+  },
+  {
+   "node_id": "none",
+   "rel_path": "src/x.py",
+   "symbol_name": "Unclustered",
+   "symbol_type": "class",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 1,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": null,
+   "micro_cluster": null
+  },
+  {
+   "node_id": "meth",
+   "rel_path": "src/core/engine.py",
+   "symbol_name": "inner",
+   "symbol_type": "method",
+   "signature": "",
+   "docstring": "",
+   "source_text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "is_architectural": 0,
+   "is_doc": 0,
+   "is_test": 0,
+   "macro_cluster": 0,
+   "micro_cluster": 0
+  }
+ ],
+ "edges": [
+  [
+   "c0",
+   "c1",
+   1.0
+  ],
+  [
+   "c0",
+   "c2",
+   1.0
+  ],
+  [
+   "c0",
+   "c3",
+   1.0
+  ],
+  [
+   "c0",
+   "c4",
+   1.0
+  ],
+  [
+   "c0",
+   "c5",
+   1.0
+  ],
+  [
+   "c0",
+   "c6",
+   1.0
+  ],
+  [
+   "c0",
+   "c7",
+   1.0
+  ],
+  [
+   "c0",
+   "c8",
+   1.0
+  ],
+  [
+   "c1",
+   "c2",
+   0.5
+  ],
+  [
+   "c2",
+   "c1",
+   2.0
+  ],
+  [
+   "c1",
+   "c2",
+   0.25
+  ],
+  [
+   "c3",
+   "c3",
+   1.0
+  ],
+  [
+   "c4",
+   "c5",
+   0.0
+  ],
+  [
+   "c5",
+   "c4",
+   null
+  ],
+  [
+   "c6",
+   "c7",
+   1.0
+  ],
+  [
+   "c8",
+   "c9",
+   1.0
+  ],
+  [
+   "c10",
+   "c0",
+   1.0
+  ],
+  [
+   "meth",
+   "c0",
+   1.0
+  ],
+  [
+   "p0",
+   "p1",
+   1.0
+  ],
+  [
+   "lone",
+   "p3",
+   1.0
+  ],
+  [
+   "lone",
+   "b0",
+   1.0
+  ],
+  [
+   "b1",
+   "lone",
+   1.0
+  ],
+  [
+   "p2",
+   "b2",
+   1.0
+  ],
+  [
+   "s0",
+   "s1",
+   1.0
+  ],
+  [
+   "m0",
+   "m1",
+   1.0
+  ],
+  [
+   "none",
+   "c0",
+   1.0
+  ]
+ ],
+ "repo_identifier": "acme/notes:main:0123abcd",
+ "cases": [
+  {
+   "exclude_tests": false,
+   "calls": [
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing a wiki for a mixed audience: product managers, team leads, and engineers.\n\nYou are given a SECTION composed of several PAGES.  Each page is a small group of related code symbols.  Your job, in ONE response, is to:\n    1. Name every page based ONLY on that page's own symbols.\n    2. Name the section based on the pages it contains (NOT individual symbols).\n\nRules for names:\n- Use plain language a non-developer stakeholder can understand.\n- Name the CAPABILITY or DOMAIN, not class names or file paths.\n- Page name ≤ 10 words.  Section name ≤ 8 words.\n- Good page: \"Record Batch Decoding & Output Routing\"\n- Bad page: \"disk_space_manager and storage.h\"\n- Good section: \"Authentication & Session Management\"\n- Bad section: \"AuthService and friends\"\n\nOutput strictly valid JSON, no markdown fences, no extra prose."
+      ],
+      [
+       "user",
+       "SECTION CLUSTER — 15 symbols across 4 files\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_id\": 0,\n    \"symbol_count\": 12,\n    \"page_symbols\": [\n      {\n        \"name\": \"Engine\",\n        \"type\": \"class\",\n        \"path\": \"src/core/loader.py\",\n        \"signature\": \"def Engine(a, b) -> None\",\n        \"docstring\": \"Documented.\"\n      },\n      {\n        \"name\": \"parse\",\n        \"type\": \"function\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def parse(a, b) -> None                                                                                                                        \",\n        \"docstring\": \"Documented.\"\n      },\n      {\n        \"name\": \"Alias\",\n        \"type\": \"type_alias\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def Alias(a, b) -> None                                                                                                                                                                                 \",\n        \"docstring\": \"Documented.\"\n      },\n      {\n        \"name\": \"run\",\n        \"type\": \"function\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def run(a, b) -> None                              \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Loader\",\n        \"type\": \"class\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def Loader(a, b) -> None                                                            \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"MAX_SIZE\",\n        \"type\": \"constant\",\n        \"path\": \"src/core/loader.py\",\n        \"signature\": \"def MAX_SIZE(a, b) -> None                                                                                          \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Config\",\n        \"type\": \"struct\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def Config(a, b) -> None                                                                                                                                                      \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"helper_util\",\n        \"type\": \"function\",\n        \"path\": \"src/core/loader.py\",\n        \"signature\": \"def helper_util(a, b) -> None                                                                                                                                                                           \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Overview\",\n        \"type\": \"markdown_section\",\n        \"path\": \"docs/core.md\",\n        \"signature\": \"def Overview(a, b) -> None                                                                                                                                                                              \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Mode\",\n        \"type\": \"enum\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def Mode(a, b) -> None                                                                                                                                                                                  \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"start\",\n        \"type\": \"method\",\n        \"path\": \"src/core/loader.py\",\n        \"signature\": \"def start(a, b) -> None                                                                                                                                                                                 \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"misc\",\n        \"type\": \"variable\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def misc(a, b) -> None                                                                                                                                                                                  \",\n        \"docstring\": \"\"\n      }\n    ]\n  },\n  {\n    \"page_id\": 3,\n    \"symbol_count\": 3,\n    \"page_symbols\": [\n      {\n        \"name\": \"Zeta\",\n        \"type\": \"class\",\n        \"path\": \"src/small.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"alpha\",\n        \"type\": \"class\",\n        \"path\": \"src/small.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Beta\",\n        \"type\": \"class\",\n        \"path\": \"src/small.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  }\n]\n\nOutput ONLY valid JSON in this exact shape (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\",\n    \"pages\": [\n        {\n            \"page_id\": <integer matching the input page_id>,\n            \"page_name\": \"...\",\n            \"description\": \"...\",\n            \"retrieval_query\": \"...\"\n        }\n        /* one entry per input page, in the same order */\n    ]\n}"
+      ]
+     ],
+     "answer": "```json\n{\"section_name\": \"Core Engine\", \"section_description\": \"\", \"pages\": [{\"page_id\": \"0\", \"page_name\": \"Page of Engine\", \"description\": null, \"retrieval_query\": \"q Engine\"}, {\"page_id\": \"3\", \"page_name\": \"Page of Zeta\", \"description\": null, \"retrieval_query\": \"q Zeta\"}, {\"page_id\": \"bad\"}, \"skip\"]}\n```"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing a wiki for a mixed audience: product managers, team leads, and engineers.\n\nYou are given a SECTION composed of several PAGES.  Each page is a small group of related code symbols.  Your job, in ONE response, is to:\n    1. Name every page based ONLY on that page's own symbols.\n    2. Name the section based on the pages it contains (NOT individual symbols).\n\nRules for names:\n- Use plain language a non-developer stakeholder can understand.\n- Name the CAPABILITY or DOMAIN, not class names or file paths.\n- Page name ≤ 10 words.  Section name ≤ 8 words.\n- Good page: \"Record Batch Decoding & Output Routing\"\n- Bad page: \"disk_space_manager and storage.h\"\n- Good section: \"Authentication & Session Management\"\n- Bad section: \"AuthService and friends\"\n\nOutput strictly valid JSON, no markdown fences, no extra prose."
+      ],
+      [
+       "user",
+       "SECTION CLUSTER — 13 symbols across 7 files\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_id\": 2,\n    \"symbol_count\": 5,\n    \"page_symbols\": [\n      {\n        \"name\": \"Handler0\",\n        \"type\": \"class\",\n        \"path\": \"src/api/handlers.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Handler2\",\n        \"type\": \"class\",\n        \"path\": \"src/api/handlers.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Handler1\",\n        \"type\": \"class\",\n        \"path\": \"src/api/handlers.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Handler3\",\n        \"type\": \"class\",\n        \"path\": \"src/api/handlers.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Handler4\",\n        \"type\": \"class\",\n        \"path\": \"src/api/handlers.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  },\n  {\n    \"page_id\": 8,\n    \"symbol_count\": 3,\n    \"page_symbols\": [\n      {\n        \"name\": \"API section 0\",\n        \"type\": \"markdown_section\",\n        \"path\": \"docs/api.md\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"API section 1\",\n        \"type\": \"markdown_section\",\n        \"path\": \"docs/api.md\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"API section 2\",\n        \"type\": \"markdown_section\",\n        \"path\": \"docs/api.md\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  },\n  {\n    \"page_id\": 9,\n    \"symbol_count\": 2,\n    \"page_symbols\": [\n      {\n        \"name\": \"Lone\",\n        \"type\": \"class\",\n        \"path\": \"src/api/lone.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"bridge_0\",\n        \"type\": \"function\",\n        \"path\": \"src/bridge/f0.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  },\n  {\n    \"page_id\": 10,\n    \"symbol_count\": 1,\n    \"page_symbols\": [\n      {\n        \"name\": \"bridge_1\",\n        \"type\": \"function\",\n        \"path\": \"src/bridge/f1.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  },\n  {\n    \"page_id\": 11,\n    \"symbol_count\": 1,\n    \"page_symbols\": [\n      {\n        \"name\": \"bridge_2\",\n        \"type\": \"function\",\n        \"path\": \"src/bridge/f2.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  },\n  {\n    \"page_id\": 12,\n    \"symbol_count\": 1,\n    \"page_symbols\": [\n      {\n        \"name\": \"bridge_3\",\n        \"type\": \"function\",\n        \"path\": \"src/bridge/f3.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  }\n]\n\nOutput ONLY valid JSON in this exact shape (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\",\n    \"pages\": [\n        {\n            \"page_id\": <integer matching the input page_id>,\n            \"page_name\": \"...\",\n            \"description\": \"...\",\n            \"retrieval_query\": \"...\"\n        }\n        /* one entry per input page, in the same order */\n    ]\n}"
+      ]
+     ],
+     "answer": "{\"section_name\": \"Api\", \"pages\": [{\"page_id\": 2, \"page_name\": \"Handlers\"}]}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 5 symbols in 1 files\nParent section: \"Section 1\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"Handler0\",\n    \"type\": \"class\",\n    \"path\": \"src/api/handlers.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Handler2\",\n    \"type\": \"class\",\n    \"path\": \"src/api/handlers.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Handler1\",\n    \"type\": \"class\",\n    \"path\": \"src/api/handlers.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Handler3\",\n    \"type\": \"class\",\n    \"path\": \"src/api/handlers.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Handler4\",\n    \"type\": \"class\",\n    \"path\": \"src/api/handlers.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"src/api\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": null
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 3 symbols in 1 files\nParent section: \"Section 1\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"API section 0\",\n    \"type\": \"markdown_section\",\n    \"path\": \"docs/api.md\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"API section 1\",\n    \"type\": \"markdown_section\",\n    \"path\": \"docs/api.md\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"API section 2\",\n    \"type\": \"markdown_section\",\n    \"path\": \"docs/api.md\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"docs\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": "Here: {\"page_name\": \"Named page\", \"description\": \"Described.\", \"retrieval_query\": \"rq\",}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 2 symbols in 2 files\nParent section: \"Section 1\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"Lone\",\n    \"type\": \"class\",\n    \"path\": \"src/api/lone.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"bridge_0\",\n    \"type\": \"function\",\n    \"path\": \"src/bridge/f0.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"src/api\", \"src/bridge\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": "Here: {\"page_name\": \"Named page\", \"description\": \"Described.\", \"retrieval_query\": \"rq\",}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 1 symbols in 1 files\nParent section: \"Section 1\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"bridge_1\",\n    \"type\": \"function\",\n    \"path\": \"src/bridge/f1.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"src/bridge\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": "Here: {\"page_name\": \"Named page\", \"description\": \"Described.\", \"retrieval_query\": \"rq\",}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 1 symbols in 1 files\nParent section: \"Section 1\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"bridge_2\",\n    \"type\": \"function\",\n    \"path\": \"src/bridge/f2.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"src/bridge\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": "Here: {\"page_name\": \"Named page\", \"description\": \"Described.\", \"retrieval_query\": \"rq\",}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 1 symbols in 1 files\nParent section: \"Section 1\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"bridge_3\",\n    \"type\": \"function\",\n    \"path\": \"src/bridge/f3.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"src/bridge\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": "Here: {\"page_name\": \"Named page\", \"description\": \"Described.\", \"retrieval_query\": \"rq\",}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect.  You are given the page titles and one-sentence descriptions that belong to a section of a wiki.  Your job is to produce a single short, user-facing **capability name** and a one-sentence description that summarises ALL the listed pages.\n\nRules:\n- Name the CAPABILITY or DOMAIN that ties the pages together — not the most prominent class or file name.\n- Use plain language a non-developer stakeholder can understand.\n- Good: \"Authentication & Session Management\", \"Pipeline Execution\"\n- Bad: \"AuthService and friends\", \"src/auth/*\"\n- The name must be ≤ 8 words."
+      ],
+      [
+       "user",
+       "SECTION (derived from 6 named pages, 13 symbols total)\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_name\": \"Page 2\",\n    \"description\": \"Page covering 5 symbols\"\n  },\n  {\n    \"page_name\": \"Named page\",\n    \"description\": \"Described.\"\n  },\n  {\n    \"page_name\": \"Named page\",\n    \"description\": \"Described.\"\n  },\n  {\n    \"page_name\": \"Named page\",\n    \"description\": \"Described.\"\n  },\n  {\n    \"page_name\": \"Named page\",\n    \"description\": \"Described.\"\n  },\n  {\n    \"page_name\": \"Named page\",\n    \"description\": \"Described.\"\n  }\n]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\"\n}"
+      ]
+     ],
+     "answer": "{\"section_name\": \"From Pages\", \"section_description\": \"Derived.\"}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing a wiki for a mixed audience: product managers, team leads, and engineers.\n\nYou are given a SECTION composed of several PAGES.  Each page is a small group of related code symbols.  Your job, in ONE response, is to:\n    1. Name every page based ONLY on that page's own symbols.\n    2. Name the section based on the pages it contains (NOT individual symbols).\n\nRules for names:\n- Use plain language a non-developer stakeholder can understand.\n- Name the CAPABILITY or DOMAIN, not class names or file paths.\n- Page name ≤ 10 words.  Section name ≤ 8 words.\n- Good page: \"Record Batch Decoding & Output Routing\"\n- Bad page: \"disk_space_manager and storage.h\"\n- Good section: \"Authentication & Session Management\"\n- Bad section: \"AuthService and friends\"\n\nOutput strictly valid JSON, no markdown fences, no extra prose."
+      ],
+      [
+       "user",
+       "SECTION CLUSTER — 4 symbols across 2 files\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_id\": 1,\n    \"symbol_count\": 4,\n    \"page_symbols\": [\n      {\n        \"name\": \"Model0\",\n        \"type\": \"class\",\n        \"path\": \"pkg/a/mod.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Model1\",\n        \"type\": \"class\",\n        \"path\": \"pkg/b/mod.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Model2\",\n        \"type\": \"class\",\n        \"path\": \"pkg/a/mod.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Model3\",\n        \"type\": \"class\",\n        \"path\": \"pkg/b/mod.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  }\n]\n\nOutput ONLY valid JSON in this exact shape (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\",\n    \"pages\": [\n        {\n            \"page_id\": <integer matching the input page_id>,\n            \"page_name\": \"...\",\n            \"description\": \"...\",\n            \"retrieval_query\": \"...\"\n        }\n        /* one entry per input page, in the same order */\n    ]\n}"
+      ]
+     ],
+     "answer": null
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 4 symbols in 2 files\nParent section: \"Section 2\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"Model0\",\n    \"type\": \"class\",\n    \"path\": \"pkg/a/mod.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Model1\",\n    \"type\": \"class\",\n    \"path\": \"pkg/b/mod.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Model2\",\n    \"type\": \"class\",\n    \"path\": \"pkg/a/mod.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Model3\",\n    \"type\": \"class\",\n    \"path\": \"pkg/b/mod.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"pkg/a\", \"pkg/b\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": null
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect.  You are given the page titles and one-sentence descriptions that belong to a section of a wiki.  Your job is to produce a single short, user-facing **capability name** and a one-sentence description that summarises ALL the listed pages.\n\nRules:\n- Name the CAPABILITY or DOMAIN that ties the pages together — not the most prominent class or file name.\n- Use plain language a non-developer stakeholder can understand.\n- Good: \"Authentication & Session Management\", \"Pipeline Execution\"\n- Bad: \"AuthService and friends\", \"src/auth/*\"\n- The name must be ≤ 8 words."
+      ],
+      [
+       "user",
+       "SECTION (derived from 1 named pages, 4 symbols total)\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_name\": \"Page 1\",\n    \"description\": \"Page covering 4 symbols\"\n  }\n]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\"\n}"
+      ]
+     ],
+     "answer": null
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing a wiki for a mixed audience: product managers, team leads, and engineers.\n\nYou are given a SECTION composed of several PAGES.  Each page is a small group of related code symbols.  Your job, in ONE response, is to:\n    1. Name every page based ONLY on that page's own symbols.\n    2. Name the section based on the pages it contains (NOT individual symbols).\n\nRules for names:\n- Use plain language a non-developer stakeholder can understand.\n- Name the CAPABILITY or DOMAIN, not class names or file paths.\n- Page name ≤ 10 words.  Section name ≤ 8 words.\n- Good page: \"Record Batch Decoding & Output Routing\"\n- Bad page: \"disk_space_manager and storage.h\"\n- Good section: \"Authentication & Session Management\"\n- Bad section: \"AuthService and friends\"\n\nOutput strictly valid JSON, no markdown fences, no extra prose."
+      ],
+      [
+       "user",
+       "SECTION CLUSTER — 2 symbols across 1 files\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_id\": 0,\n    \"symbol_count\": 2,\n    \"page_symbols\": [\n      {\n        \"name\": \"Lister0\",\n        \"type\": \"class\",\n        \"path\": \"lib/list.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Lister1\",\n        \"type\": \"class\",\n        \"path\": \"lib/list.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  }\n]\n\nOutput ONLY valid JSON in this exact shape (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\",\n    \"pages\": [\n        {\n            \"page_id\": <integer matching the input page_id>,\n            \"page_name\": \"...\",\n            \"description\": \"...\",\n            \"retrieval_query\": \"...\"\n        }\n        /* one entry per input page, in the same order */\n    ]\n}"
+      ]
+     ],
+     "answer": "[\"not\", \"an\", \"object\"]"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing a wiki for a mixed audience: product managers, team leads, and engineers.\n\nYou are given a SECTION composed of several PAGES.  Each page is a small group of related code symbols.  Your job, in ONE response, is to:\n    1. Name every page based ONLY on that page's own symbols.\n    2. Name the section based on the pages it contains (NOT individual symbols).\n\nRules for names:\n- Use plain language a non-developer stakeholder can understand.\n- Name the CAPABILITY or DOMAIN, not class names or file paths.\n- Page name ≤ 10 words.  Section name ≤ 8 words.\n- Good page: \"Record Batch Decoding & Output Routing\"\n- Bad page: \"disk_space_manager and storage.h\"\n- Good section: \"Authentication & Session Management\"\n- Bad section: \"AuthService and friends\"\n\nOutput strictly valid JSON, no markdown fences, no extra prose."
+      ],
+      [
+       "user",
+       "SECTION CLUSTER — 4 symbols across 2 files\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_id\": 0,\n    \"symbol_count\": 4,\n    \"page_symbols\": [\n      {\n        \"name\": \"TestX0\",\n        \"type\": \"class\",\n        \"path\": \"tests/test_x.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"TestX1\",\n        \"type\": \"class\",\n        \"path\": \"tests/test_x.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"TestX2\",\n        \"type\": \"class\",\n        \"path\": \"tests/test_x.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Real\",\n        \"type\": \"class\",\n        \"path\": \"lib/real.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  }\n]\n\nOutput ONLY valid JSON in this exact shape (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\",\n    \"pages\": [\n        {\n            \"page_id\": <integer matching the input page_id>,\n            \"page_name\": \"...\",\n            \"description\": \"...\",\n            \"retrieval_query\": \"...\"\n        }\n        /* one entry per input page, in the same order */\n    ]\n}"
+      ]
+     ],
+     "answer": "{\"section_name\": \"Odd\", \"pages\": [{\"page_id\": 0, \"page_name\": 7}]}"
+    }
+   ],
+   "structure": {
+    "wiki_title": "notes — Technical Documentation",
+    "overview": "This wiki covers 11 pages across 5 sections: Core Engine, From Pages, Module: pkg, Module: lib/list.py, Section 4.",
+    "sections": [
+     {
+      "section_name": "Core Engine",
+      "section_order": 1,
+      "description": "Section covering 15 symbols",
+      "rationale": "Mathematical clustering: macro=0, 2 pages, 15 symbols (batched naming)",
+      "pages": [
+       {
+        "page_name": "Page of Engine",
+        "page_order": 1,
+        "description": "Page covering 12 symbols",
+        "content_focus": "Page covering 12 symbols",
+        "rationale": "Grouped by graph clustering (macro=0, micro=0, 12 symbols)",
+        "target_symbols": [
+         "Engine",
+         "run",
+         "Loader",
+         "parse"
+        ],
+        "target_docs": [
+         "docs/core.md"
+        ],
+        "target_folders": [
+         "docs",
+         "src/core"
+        ],
+        "key_files": [
+         "docs/core.md",
+         "src/core/engine.py",
+         "src/core/loader.py"
+        ],
+        "retrieval_query": "q Engine",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 0,
+         "page_id": 0,
+         "cluster_node_ids": [
+          "c0",
+          "c1",
+          "c2",
+          "c3",
+          "c4",
+          "c5",
+          "c6",
+          "c7",
+          "c8",
+          "c9",
+          "c10",
+          "c11"
+         ]
+        }
+       },
+       {
+        "page_name": "Page of Zeta",
+        "page_order": 2,
+        "description": "Page covering 3 symbols",
+        "content_focus": "Page covering 3 symbols",
+        "rationale": "Grouped by graph clustering (macro=0, micro=3, 3 symbols)",
+        "target_symbols": [
+         "Zeta",
+         "alpha",
+         "Beta"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "src"
+        ],
+        "key_files": [
+         "src/small.py"
+        ],
+        "retrieval_query": "q Zeta",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 0,
+         "page_id": 3,
+         "cluster_node_ids": [
+          "s0",
+          "s1",
+          "s2"
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "section_name": "From Pages",
+      "section_order": 2,
+      "description": "Derived.",
+      "rationale": "Mathematical clustering: macro=1, 6 pages, 13 symbols",
+      "pages": [
+       {
+        "page_name": "From Pages — Page 2",
+        "page_order": 1,
+        "description": "Page covering 5 symbols",
+        "content_focus": "Page covering 5 symbols",
+        "rationale": "Grouped by graph clustering (macro=1, micro=2, 5 symbols)",
+        "target_symbols": [
+         "Handler0",
+         "Handler1",
+         "Handler2"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "src/api"
+        ],
+        "key_files": [
+         "src/api/handlers.py"
+        ],
+        "retrieval_query": "From Pages — Page 2",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 1,
+         "page_id": 2,
+         "cluster_node_ids": [
+          "p0",
+          "p1",
+          "p2",
+          "p3",
+          "p4"
+         ]
+        }
+       },
+       {
+        "page_name": "Named page",
+        "page_order": 2,
+        "description": "Described.",
+        "content_focus": "Described.",
+        "rationale": "Grouped by graph clustering (macro=1, micro=8, 3 symbols)",
+        "target_symbols": [],
+        "target_docs": [
+         "docs/api.md"
+        ],
+        "target_folders": [
+         "docs"
+        ],
+        "key_files": [
+         "docs/api.md"
+        ],
+        "retrieval_query": "rq",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 1,
+         "page_id": 8,
+         "cluster_node_ids": [
+          "d0",
+          "d1",
+          "d2"
+         ]
+        }
+       },
+       {
+        "page_name": "Named page",
+        "page_order": 3,
+        "description": "Described.",
+        "content_focus": "Described.",
+        "rationale": "Grouped by graph clustering (macro=1, micro=9, 2 symbols)",
+        "target_symbols": [
+         "bridge_0",
+         "Lone"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "src/api",
+         "src/bridge"
+        ],
+        "key_files": [
+         "src/api/lone.py",
+         "src/bridge/f0.py"
+        ],
+        "retrieval_query": "rq",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 1,
+         "page_id": 9,
+         "cluster_node_ids": [
+          "b0",
+          "lone"
+         ]
+        }
+       },
+       {
+        "page_name": "Named page",
+        "page_order": 4,
+        "description": "Described.",
+        "content_focus": "Described.",
+        "rationale": "Grouped by graph clustering (macro=1, micro=10, 1 symbols)",
+        "target_symbols": [
+         "bridge_1"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "src/bridge"
+        ],
+        "key_files": [
+         "src/bridge/f1.py"
+        ],
+        "retrieval_query": "rq",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 1,
+         "page_id": 10,
+         "cluster_node_ids": [
+          "b1"
+         ]
+        }
+       },
+       {
+        "page_name": "Named page",
+        "page_order": 5,
+        "description": "Described.",
+        "content_focus": "Described.",
+        "rationale": "Grouped by graph clustering (macro=1, micro=11, 1 symbols)",
+        "target_symbols": [
+         "bridge_2"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "src/bridge"
+        ],
+        "key_files": [
+         "src/bridge/f2.py"
+        ],
+        "retrieval_query": "rq",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 1,
+         "page_id": 11,
+         "cluster_node_ids": [
+          "b2"
+         ]
+        }
+       },
+       {
+        "page_name": "Named page",
+        "page_order": 6,
+        "description": "Described.",
+        "content_focus": "Described.",
+        "rationale": "Grouped by graph clustering (macro=1, micro=12, 1 symbols)",
+        "target_symbols": [
+         "bridge_3"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "src/bridge"
+        ],
+        "key_files": [
+         "src/bridge/f3.py"
+        ],
+        "retrieval_query": "rq",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 1,
+         "page_id": 12,
+         "cluster_node_ids": [
+          "b3"
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "section_name": "Module: pkg",
+      "section_order": 3,
+      "description": "Auto-generated section with 4 symbols",
+      "rationale": "Fallback: LLM naming failed for macro=2",
+      "pages": [
+       {
+        "page_name": "Module: pkg — Page 1",
+        "page_order": 1,
+        "description": "Page with 4 symbols",
+        "content_focus": "Symbols in cluster 2/1",
+        "rationale": "Grouped by graph clustering (macro=2, micro=1, 4 symbols)",
+        "target_symbols": [
+         "Model0",
+         "Model1",
+         "Model2"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "pkg/a",
+         "pkg/b"
+        ],
+        "key_files": [
+         "pkg/a/mod.py",
+         "pkg/b/mod.py"
+        ],
+        "retrieval_query": "Model0 Model1 Model2",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 2,
+         "page_id": 1,
+         "cluster_node_ids": [
+          "m0",
+          "m1",
+          "m2",
+          "m3"
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "section_name": "Module: lib/list.py",
+      "section_order": 4,
+      "description": "Auto-generated section with 2 symbols",
+      "rationale": "Fallback: LLM naming failed for macro=3",
+      "pages": [
+       {
+        "page_name": "Module: lib/list.py — Page 0",
+        "page_order": 1,
+        "description": "Page with 2 symbols",
+        "content_focus": "Symbols in cluster 3/0",
+        "rationale": "Grouped by graph clustering (macro=3, micro=0, 2 symbols)",
+        "target_symbols": [
+         "Lister0",
+         "Lister1"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "lib"
+        ],
+        "key_files": [
+         "lib/list.py"
+        ],
+        "retrieval_query": "Lister0 Lister1",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 3,
+         "page_id": 0,
+         "cluster_node_ids": [
+          "l0",
+          "l1"
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "section_name": "Section 4",
+      "section_order": 5,
+      "description": "Auto-generated section with 4 symbols",
+      "rationale": "Fallback: LLM naming failed for macro=4",
+      "pages": [
+       {
+        "page_name": "Section 4 — Page 0",
+        "page_order": 1,
+        "description": "Page with 4 symbols",
+        "content_focus": "Symbols in cluster 4/0",
+        "rationale": "Grouped by graph clustering (macro=4, micro=0, 4 symbols)",
+        "target_symbols": [
+         "TestX0",
+         "TestX1",
+         "TestX2"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "lib",
+         "tests"
+        ],
+        "key_files": [
+         "lib/real.py",
+         "tests/test_x.py"
+        ],
+        "retrieval_query": "TestX0 TestX1 TestX2",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 4,
+         "page_id": 0,
+         "cluster_node_ids": [
+          "t0",
+          "t1",
+          "t2",
+          "t3"
+         ]
+        }
+       }
+      ]
+     }
+    ],
+    "total_pages": 11
+   }
+  },
+  {
+   "exclude_tests": true,
+   "calls": [
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing a wiki for a mixed audience: product managers, team leads, and engineers.\n\nYou are given a SECTION composed of several PAGES.  Each page is a small group of related code symbols.  Your job, in ONE response, is to:\n    1. Name every page based ONLY on that page's own symbols.\n    2. Name the section based on the pages it contains (NOT individual symbols).\n\nRules for names:\n- Use plain language a non-developer stakeholder can understand.\n- Name the CAPABILITY or DOMAIN, not class names or file paths.\n- Page name ≤ 10 words.  Section name ≤ 8 words.\n- Good page: \"Record Batch Decoding & Output Routing\"\n- Bad page: \"disk_space_manager and storage.h\"\n- Good section: \"Authentication & Session Management\"\n- Bad section: \"AuthService and friends\"\n\nOutput strictly valid JSON, no markdown fences, no extra prose."
+      ],
+      [
+       "user",
+       "SECTION CLUSTER — 15 symbols across 4 files\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_id\": 0,\n    \"symbol_count\": 12,\n    \"page_symbols\": [\n      {\n        \"name\": \"Engine\",\n        \"type\": \"class\",\n        \"path\": \"src/core/loader.py\",\n        \"signature\": \"def Engine(a, b) -> None\",\n        \"docstring\": \"Documented.\"\n      },\n      {\n        \"name\": \"parse\",\n        \"type\": \"function\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def parse(a, b) -> None                                                                                                                        \",\n        \"docstring\": \"Documented.\"\n      },\n      {\n        \"name\": \"Alias\",\n        \"type\": \"type_alias\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def Alias(a, b) -> None                                                                                                                                                                                 \",\n        \"docstring\": \"Documented.\"\n      },\n      {\n        \"name\": \"run\",\n        \"type\": \"function\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def run(a, b) -> None                              \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Loader\",\n        \"type\": \"class\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def Loader(a, b) -> None                                                            \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"MAX_SIZE\",\n        \"type\": \"constant\",\n        \"path\": \"src/core/loader.py\",\n        \"signature\": \"def MAX_SIZE(a, b) -> None                                                                                          \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Config\",\n        \"type\": \"struct\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def Config(a, b) -> None                                                                                                                                                      \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"helper_util\",\n        \"type\": \"function\",\n        \"path\": \"src/core/loader.py\",\n        \"signature\": \"def helper_util(a, b) -> None                                                                                                                                                                           \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Overview\",\n        \"type\": \"markdown_section\",\n        \"path\": \"docs/core.md\",\n        \"signature\": \"def Overview(a, b) -> None                                                                                                                                                                              \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Mode\",\n        \"type\": \"enum\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def Mode(a, b) -> None                                                                                                                                                                                  \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"start\",\n        \"type\": \"method\",\n        \"path\": \"src/core/loader.py\",\n        \"signature\": \"def start(a, b) -> None                                                                                                                                                                                 \",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"misc\",\n        \"type\": \"variable\",\n        \"path\": \"src/core/engine.py\",\n        \"signature\": \"def misc(a, b) -> None                                                                                                                                                                                  \",\n        \"docstring\": \"\"\n      }\n    ]\n  },\n  {\n    \"page_id\": 3,\n    \"symbol_count\": 3,\n    \"page_symbols\": [\n      {\n        \"name\": \"Zeta\",\n        \"type\": \"class\",\n        \"path\": \"src/small.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"alpha\",\n        \"type\": \"class\",\n        \"path\": \"src/small.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Beta\",\n        \"type\": \"class\",\n        \"path\": \"src/small.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  }\n]\n\nOutput ONLY valid JSON in this exact shape (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\",\n    \"pages\": [\n        {\n            \"page_id\": <integer matching the input page_id>,\n            \"page_name\": \"...\",\n            \"description\": \"...\",\n            \"retrieval_query\": \"...\"\n        }\n        /* one entry per input page, in the same order */\n    ]\n}"
+      ]
+     ],
+     "answer": "```json\n{\"section_name\": \"Core Engine\", \"section_description\": \"\", \"pages\": [{\"page_id\": \"0\", \"page_name\": \"Page of Engine\", \"description\": null, \"retrieval_query\": \"q Engine\"}, {\"page_id\": \"3\", \"page_name\": \"Page of Zeta\", \"description\": null, \"retrieval_query\": \"q Zeta\"}, {\"page_id\": \"bad\"}, \"skip\"]}\n```"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing a wiki for a mixed audience: product managers, team leads, and engineers.\n\nYou are given a SECTION composed of several PAGES.  Each page is a small group of related code symbols.  Your job, in ONE response, is to:\n    1. Name every page based ONLY on that page's own symbols.\n    2. Name the section based on the pages it contains (NOT individual symbols).\n\nRules for names:\n- Use plain language a non-developer stakeholder can understand.\n- Name the CAPABILITY or DOMAIN, not class names or file paths.\n- Page name ≤ 10 words.  Section name ≤ 8 words.\n- Good page: \"Record Batch Decoding & Output Routing\"\n- Bad page: \"disk_space_manager and storage.h\"\n- Good section: \"Authentication & Session Management\"\n- Bad section: \"AuthService and friends\"\n\nOutput strictly valid JSON, no markdown fences, no extra prose."
+      ],
+      [
+       "user",
+       "SECTION CLUSTER — 13 symbols across 7 files\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_id\": 2,\n    \"symbol_count\": 5,\n    \"page_symbols\": [\n      {\n        \"name\": \"Handler0\",\n        \"type\": \"class\",\n        \"path\": \"src/api/handlers.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Handler2\",\n        \"type\": \"class\",\n        \"path\": \"src/api/handlers.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Handler1\",\n        \"type\": \"class\",\n        \"path\": \"src/api/handlers.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Handler3\",\n        \"type\": \"class\",\n        \"path\": \"src/api/handlers.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Handler4\",\n        \"type\": \"class\",\n        \"path\": \"src/api/handlers.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  },\n  {\n    \"page_id\": 8,\n    \"symbol_count\": 3,\n    \"page_symbols\": [\n      {\n        \"name\": \"API section 0\",\n        \"type\": \"markdown_section\",\n        \"path\": \"docs/api.md\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"API section 1\",\n        \"type\": \"markdown_section\",\n        \"path\": \"docs/api.md\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"API section 2\",\n        \"type\": \"markdown_section\",\n        \"path\": \"docs/api.md\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  },\n  {\n    \"page_id\": 9,\n    \"symbol_count\": 2,\n    \"page_symbols\": [\n      {\n        \"name\": \"Lone\",\n        \"type\": \"class\",\n        \"path\": \"src/api/lone.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"bridge_0\",\n        \"type\": \"function\",\n        \"path\": \"src/bridge/f0.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  },\n  {\n    \"page_id\": 10,\n    \"symbol_count\": 1,\n    \"page_symbols\": [\n      {\n        \"name\": \"bridge_1\",\n        \"type\": \"function\",\n        \"path\": \"src/bridge/f1.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  },\n  {\n    \"page_id\": 11,\n    \"symbol_count\": 1,\n    \"page_symbols\": [\n      {\n        \"name\": \"bridge_2\",\n        \"type\": \"function\",\n        \"path\": \"src/bridge/f2.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  },\n  {\n    \"page_id\": 12,\n    \"symbol_count\": 1,\n    \"page_symbols\": [\n      {\n        \"name\": \"bridge_3\",\n        \"type\": \"function\",\n        \"path\": \"src/bridge/f3.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  }\n]\n\nOutput ONLY valid JSON in this exact shape (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\",\n    \"pages\": [\n        {\n            \"page_id\": <integer matching the input page_id>,\n            \"page_name\": \"...\",\n            \"description\": \"...\",\n            \"retrieval_query\": \"...\"\n        }\n        /* one entry per input page, in the same order */\n    ]\n}"
+      ]
+     ],
+     "answer": "{\"section_name\": \"Api\", \"pages\": [{\"page_id\": 2, \"page_name\": \"Handlers\"}]}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 5 symbols in 1 files\nParent section: \"Section 1\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"Handler0\",\n    \"type\": \"class\",\n    \"path\": \"src/api/handlers.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Handler2\",\n    \"type\": \"class\",\n    \"path\": \"src/api/handlers.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Handler1\",\n    \"type\": \"class\",\n    \"path\": \"src/api/handlers.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Handler3\",\n    \"type\": \"class\",\n    \"path\": \"src/api/handlers.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Handler4\",\n    \"type\": \"class\",\n    \"path\": \"src/api/handlers.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"src/api\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": null
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 3 symbols in 1 files\nParent section: \"Section 1\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"API section 0\",\n    \"type\": \"markdown_section\",\n    \"path\": \"docs/api.md\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"API section 1\",\n    \"type\": \"markdown_section\",\n    \"path\": \"docs/api.md\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"API section 2\",\n    \"type\": \"markdown_section\",\n    \"path\": \"docs/api.md\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"docs\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": "Here: {\"page_name\": \"Named page\", \"description\": \"Described.\", \"retrieval_query\": \"rq\",}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 2 symbols in 2 files\nParent section: \"Section 1\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"Lone\",\n    \"type\": \"class\",\n    \"path\": \"src/api/lone.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"bridge_0\",\n    \"type\": \"function\",\n    \"path\": \"src/bridge/f0.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"src/api\", \"src/bridge\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": "Here: {\"page_name\": \"Named page\", \"description\": \"Described.\", \"retrieval_query\": \"rq\",}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 1 symbols in 1 files\nParent section: \"Section 1\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"bridge_1\",\n    \"type\": \"function\",\n    \"path\": \"src/bridge/f1.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"src/bridge\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": "Here: {\"page_name\": \"Named page\", \"description\": \"Described.\", \"retrieval_query\": \"rq\",}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 1 symbols in 1 files\nParent section: \"Section 1\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"bridge_2\",\n    \"type\": \"function\",\n    \"path\": \"src/bridge/f2.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"src/bridge\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": "Here: {\"page_name\": \"Named page\", \"description\": \"Described.\", \"retrieval_query\": \"rq\",}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 1 symbols in 1 files\nParent section: \"Section 1\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"bridge_3\",\n    \"type\": \"function\",\n    \"path\": \"src/bridge/f3.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"src/bridge\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": "Here: {\"page_name\": \"Named page\", \"description\": \"Described.\", \"retrieval_query\": \"rq\",}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect.  You are given the page titles and one-sentence descriptions that belong to a section of a wiki.  Your job is to produce a single short, user-facing **capability name** and a one-sentence description that summarises ALL the listed pages.\n\nRules:\n- Name the CAPABILITY or DOMAIN that ties the pages together — not the most prominent class or file name.\n- Use plain language a non-developer stakeholder can understand.\n- Good: \"Authentication & Session Management\", \"Pipeline Execution\"\n- Bad: \"AuthService and friends\", \"src/auth/*\"\n- The name must be ≤ 8 words."
+      ],
+      [
+       "user",
+       "SECTION (derived from 6 named pages, 13 symbols total)\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_name\": \"Page 2\",\n    \"description\": \"Page covering 5 symbols\"\n  },\n  {\n    \"page_name\": \"Named page\",\n    \"description\": \"Described.\"\n  },\n  {\n    \"page_name\": \"Named page\",\n    \"description\": \"Described.\"\n  },\n  {\n    \"page_name\": \"Named page\",\n    \"description\": \"Described.\"\n  },\n  {\n    \"page_name\": \"Named page\",\n    \"description\": \"Described.\"\n  },\n  {\n    \"page_name\": \"Named page\",\n    \"description\": \"Described.\"\n  }\n]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\"\n}"
+      ]
+     ],
+     "answer": "{\"section_name\": \"From Pages\", \"section_description\": \"Derived.\"}"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing a wiki for a mixed audience: product managers, team leads, and engineers.\n\nYou are given a SECTION composed of several PAGES.  Each page is a small group of related code symbols.  Your job, in ONE response, is to:\n    1. Name every page based ONLY on that page's own symbols.\n    2. Name the section based on the pages it contains (NOT individual symbols).\n\nRules for names:\n- Use plain language a non-developer stakeholder can understand.\n- Name the CAPABILITY or DOMAIN, not class names or file paths.\n- Page name ≤ 10 words.  Section name ≤ 8 words.\n- Good page: \"Record Batch Decoding & Output Routing\"\n- Bad page: \"disk_space_manager and storage.h\"\n- Good section: \"Authentication & Session Management\"\n- Bad section: \"AuthService and friends\"\n\nOutput strictly valid JSON, no markdown fences, no extra prose."
+      ],
+      [
+       "user",
+       "SECTION CLUSTER — 4 symbols across 2 files\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_id\": 1,\n    \"symbol_count\": 4,\n    \"page_symbols\": [\n      {\n        \"name\": \"Model0\",\n        \"type\": \"class\",\n        \"path\": \"pkg/a/mod.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Model1\",\n        \"type\": \"class\",\n        \"path\": \"pkg/b/mod.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Model2\",\n        \"type\": \"class\",\n        \"path\": \"pkg/a/mod.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Model3\",\n        \"type\": \"class\",\n        \"path\": \"pkg/b/mod.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  }\n]\n\nOutput ONLY valid JSON in this exact shape (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\",\n    \"pages\": [\n        {\n            \"page_id\": <integer matching the input page_id>,\n            \"page_name\": \"...\",\n            \"description\": \"...\",\n            \"retrieval_query\": \"...\"\n        }\n        /* one entry per input page, in the same order */\n    ]\n}"
+      ]
+     ],
+     "answer": null
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing page titles for a technical wiki.  The audience includes non-technical stakeholders, so page names must describe the CAPABILITY or FUNCTIONALITY in plain language — never use class names, file names, or implementation jargon as the page title.\n\nYou are given the symbols that belong to ONE specific page.  Name this page based ONLY on these symbols — ignore anything outside this list.\n\nRules:\n- Name the CAPABILITY (what does this code accomplish for its users?).\n- Good: \"Record Batch Decoding & Output Routing\", \"Disk Space Reclamation\"\n- Bad: \"disk_space_manager and storage.h\", \"JS VM Bridge\"\n- The name must be ≤ 10 words.\n- Description: one sentence explaining the page's value to a reader.\n- retrieval_query: 3-6 keyword phrase for documentation search."
+      ],
+      [
+       "user",
+       "PAGE CLUSTER — 4 symbols in 2 files\nParent section: \"Section 2\"\n\nPAGE SYMBOLS (this page's own representative code elements):\n[\n  {\n    \"name\": \"Model0\",\n    \"type\": \"class\",\n    \"path\": \"pkg/a/mod.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Model1\",\n    \"type\": \"class\",\n    \"path\": \"pkg/b/mod.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Model2\",\n    \"type\": \"class\",\n    \"path\": \"pkg/a/mod.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  },\n  {\n    \"name\": \"Model3\",\n    \"type\": \"class\",\n    \"path\": \"pkg/b/mod.py\",\n    \"signature\": \"\",\n    \"docstring\": \"\"\n  }\n]\n\nDIRECTORIES:\n[\"pkg/a\", \"pkg/b\"]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n  \"page_name\": \"...\",\n  \"description\": \"...\",\n  \"retrieval_query\": \"...\"\n}"
+      ]
+     ],
+     "answer": null
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect.  You are given the page titles and one-sentence descriptions that belong to a section of a wiki.  Your job is to produce a single short, user-facing **capability name** and a one-sentence description that summarises ALL the listed pages.\n\nRules:\n- Name the CAPABILITY or DOMAIN that ties the pages together — not the most prominent class or file name.\n- Use plain language a non-developer stakeholder can understand.\n- Good: \"Authentication & Session Management\", \"Pipeline Execution\"\n- Bad: \"AuthService and friends\", \"src/auth/*\"\n- The name must be ≤ 8 words."
+      ],
+      [
+       "user",
+       "SECTION (derived from 1 named pages, 4 symbols total)\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_name\": \"Page 1\",\n    \"description\": \"Page covering 4 symbols\"\n  }\n]\n\nOutput ONLY valid JSON (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\"\n}"
+      ]
+     ],
+     "answer": null
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing a wiki for a mixed audience: product managers, team leads, and engineers.\n\nYou are given a SECTION composed of several PAGES.  Each page is a small group of related code symbols.  Your job, in ONE response, is to:\n    1. Name every page based ONLY on that page's own symbols.\n    2. Name the section based on the pages it contains (NOT individual symbols).\n\nRules for names:\n- Use plain language a non-developer stakeholder can understand.\n- Name the CAPABILITY or DOMAIN, not class names or file paths.\n- Page name ≤ 10 words.  Section name ≤ 8 words.\n- Good page: \"Record Batch Decoding & Output Routing\"\n- Bad page: \"disk_space_manager and storage.h\"\n- Good section: \"Authentication & Session Management\"\n- Bad section: \"AuthService and friends\"\n\nOutput strictly valid JSON, no markdown fences, no extra prose."
+      ],
+      [
+       "user",
+       "SECTION CLUSTER — 2 symbols across 1 files\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_id\": 0,\n    \"symbol_count\": 2,\n    \"page_symbols\": [\n      {\n        \"name\": \"Lister0\",\n        \"type\": \"class\",\n        \"path\": \"lib/list.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      },\n      {\n        \"name\": \"Lister1\",\n        \"type\": \"class\",\n        \"path\": \"lib/list.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  }\n]\n\nOutput ONLY valid JSON in this exact shape (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\",\n    \"pages\": [\n        {\n            \"page_id\": <integer matching the input page_id>,\n            \"page_name\": \"...\",\n            \"description\": \"...\",\n            \"retrieval_query\": \"...\"\n        }\n        /* one entry per input page, in the same order */\n    ]\n}"
+      ]
+     ],
+     "answer": "[\"not\", \"an\", \"object\"]"
+    },
+    {
+     "messages": [
+      [
+       "system",
+       "You are a documentation architect writing a wiki for a mixed audience: product managers, team leads, and engineers.\n\nYou are given a SECTION composed of several PAGES.  Each page is a small group of related code symbols.  Your job, in ONE response, is to:\n    1. Name every page based ONLY on that page's own symbols.\n    2. Name the section based on the pages it contains (NOT individual symbols).\n\nRules for names:\n- Use plain language a non-developer stakeholder can understand.\n- Name the CAPABILITY or DOMAIN, not class names or file paths.\n- Page name ≤ 10 words.  Section name ≤ 8 words.\n- Good page: \"Record Batch Decoding & Output Routing\"\n- Bad page: \"disk_space_manager and storage.h\"\n- Good section: \"Authentication & Session Management\"\n- Bad section: \"AuthService and friends\"\n\nOutput strictly valid JSON, no markdown fences, no extra prose."
+      ],
+      [
+       "user",
+       "SECTION CLUSTER — 1 symbols across 1 files\n\nPAGES IN THIS SECTION:\n[\n  {\n    \"page_id\": 0,\n    \"symbol_count\": 1,\n    \"page_symbols\": [\n      {\n        \"name\": \"Real\",\n        \"type\": \"class\",\n        \"path\": \"lib/real.py\",\n        \"signature\": \"\",\n        \"docstring\": \"\"\n      }\n    ]\n  }\n]\n\nOutput ONLY valid JSON in this exact shape (no markdown fences):\n{\n    \"section_name\": \"...\",\n    \"section_description\": \"...\",\n    \"pages\": [\n        {\n            \"page_id\": <integer matching the input page_id>,\n            \"page_name\": \"...\",\n            \"description\": \"...\",\n            \"retrieval_query\": \"...\"\n        }\n        /* one entry per input page, in the same order */\n    ]\n}"
+      ]
+     ],
+     "answer": "{\"section_name\": \"Odd\", \"pages\": [{\"page_id\": 0, \"page_name\": 7}]}"
+    }
+   ],
+   "structure": {
+    "wiki_title": "notes — Technical Documentation",
+    "overview": "This wiki covers 11 pages across 5 sections: Core Engine, From Pages, Module: pkg, Module: lib/list.py, Module: lib/real.py.",
+    "sections": [
+     {
+      "section_name": "Core Engine",
+      "section_order": 1,
+      "description": "Section covering 15 symbols",
+      "rationale": "Mathematical clustering: macro=0, 2 pages, 15 symbols (batched naming)",
+      "pages": [
+       {
+        "page_name": "Page of Engine",
+        "page_order": 1,
+        "description": "Page covering 12 symbols",
+        "content_focus": "Page covering 12 symbols",
+        "rationale": "Grouped by graph clustering (macro=0, micro=0, 12 symbols)",
+        "target_symbols": [
+         "Engine",
+         "run",
+         "Loader",
+         "parse"
+        ],
+        "target_docs": [
+         "docs/core.md"
+        ],
+        "target_folders": [
+         "docs",
+         "src/core"
+        ],
+        "key_files": [
+         "docs/core.md",
+         "src/core/engine.py",
+         "src/core/loader.py"
+        ],
+        "retrieval_query": "q Engine",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 0,
+         "page_id": 0,
+         "cluster_node_ids": [
+          "c0",
+          "c1",
+          "c2",
+          "c3",
+          "c4",
+          "c5",
+          "c6",
+          "c7",
+          "c8",
+          "c9",
+          "c10",
+          "c11"
+         ]
+        }
+       },
+       {
+        "page_name": "Page of Zeta",
+        "page_order": 2,
+        "description": "Page covering 3 symbols",
+        "content_focus": "Page covering 3 symbols",
+        "rationale": "Grouped by graph clustering (macro=0, micro=3, 3 symbols)",
+        "target_symbols": [
+         "Zeta",
+         "alpha",
+         "Beta"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "src"
+        ],
+        "key_files": [
+         "src/small.py"
+        ],
+        "retrieval_query": "q Zeta",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 0,
+         "page_id": 3,
+         "cluster_node_ids": [
+          "s0",
+          "s1",
+          "s2"
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "section_name": "From Pages",
+      "section_order": 2,
+      "description": "Derived.",
+      "rationale": "Mathematical clustering: macro=1, 6 pages, 13 symbols",
+      "pages": [
+       {
+        "page_name": "From Pages — Page 2",
+        "page_order": 1,
+        "description": "Page covering 5 symbols",
+        "content_focus": "Page covering 5 symbols",
+        "rationale": "Grouped by graph clustering (macro=1, micro=2, 5 symbols)",
+        "target_symbols": [
+         "Handler0",
+         "Handler1",
+         "Handler2"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "src/api"
+        ],
+        "key_files": [
+         "src/api/handlers.py"
+        ],
+        "retrieval_query": "From Pages — Page 2",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 1,
+         "page_id": 2,
+         "cluster_node_ids": [
+          "p0",
+          "p1",
+          "p2",
+          "p3",
+          "p4"
+         ]
+        }
+       },
+       {
+        "page_name": "Named page",
+        "page_order": 2,
+        "description": "Described.",
+        "content_focus": "Described.",
+        "rationale": "Grouped by graph clustering (macro=1, micro=8, 3 symbols)",
+        "target_symbols": [],
+        "target_docs": [
+         "docs/api.md"
+        ],
+        "target_folders": [
+         "docs"
+        ],
+        "key_files": [
+         "docs/api.md"
+        ],
+        "retrieval_query": "rq",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 1,
+         "page_id": 8,
+         "cluster_node_ids": [
+          "d0",
+          "d1",
+          "d2"
+         ]
+        }
+       },
+       {
+        "page_name": "Named page",
+        "page_order": 3,
+        "description": "Described.",
+        "content_focus": "Described.",
+        "rationale": "Grouped by graph clustering (macro=1, micro=9, 2 symbols)",
+        "target_symbols": [
+         "bridge_0",
+         "Lone"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "src/api",
+         "src/bridge"
+        ],
+        "key_files": [
+         "src/api/lone.py",
+         "src/bridge/f0.py"
+        ],
+        "retrieval_query": "rq",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 1,
+         "page_id": 9,
+         "cluster_node_ids": [
+          "b0",
+          "lone"
+         ]
+        }
+       },
+       {
+        "page_name": "Named page",
+        "page_order": 4,
+        "description": "Described.",
+        "content_focus": "Described.",
+        "rationale": "Grouped by graph clustering (macro=1, micro=10, 1 symbols)",
+        "target_symbols": [
+         "bridge_1"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "src/bridge"
+        ],
+        "key_files": [
+         "src/bridge/f1.py"
+        ],
+        "retrieval_query": "rq",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 1,
+         "page_id": 10,
+         "cluster_node_ids": [
+          "b1"
+         ]
+        }
+       },
+       {
+        "page_name": "Named page",
+        "page_order": 5,
+        "description": "Described.",
+        "content_focus": "Described.",
+        "rationale": "Grouped by graph clustering (macro=1, micro=11, 1 symbols)",
+        "target_symbols": [
+         "bridge_2"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "src/bridge"
+        ],
+        "key_files": [
+         "src/bridge/f2.py"
+        ],
+        "retrieval_query": "rq",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 1,
+         "page_id": 11,
+         "cluster_node_ids": [
+          "b2"
+         ]
+        }
+       },
+       {
+        "page_name": "Named page",
+        "page_order": 6,
+        "description": "Described.",
+        "content_focus": "Described.",
+        "rationale": "Grouped by graph clustering (macro=1, micro=12, 1 symbols)",
+        "target_symbols": [
+         "bridge_3"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "src/bridge"
+        ],
+        "key_files": [
+         "src/bridge/f3.py"
+        ],
+        "retrieval_query": "rq",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 1,
+         "page_id": 12,
+         "cluster_node_ids": [
+          "b3"
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "section_name": "Module: pkg",
+      "section_order": 3,
+      "description": "Auto-generated section with 4 symbols",
+      "rationale": "Fallback: LLM naming failed for macro=2",
+      "pages": [
+       {
+        "page_name": "Module: pkg — Page 1",
+        "page_order": 1,
+        "description": "Page with 4 symbols",
+        "content_focus": "Symbols in cluster 2/1",
+        "rationale": "Grouped by graph clustering (macro=2, micro=1, 4 symbols)",
+        "target_symbols": [
+         "Model0",
+         "Model1",
+         "Model2"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "pkg/a",
+         "pkg/b"
+        ],
+        "key_files": [
+         "pkg/a/mod.py",
+         "pkg/b/mod.py"
+        ],
+        "retrieval_query": "Model0 Model1 Model2",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 2,
+         "page_id": 1,
+         "cluster_node_ids": [
+          "m0",
+          "m1",
+          "m2",
+          "m3"
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "section_name": "Module: lib/list.py",
+      "section_order": 4,
+      "description": "Auto-generated section with 2 symbols",
+      "rationale": "Fallback: LLM naming failed for macro=3",
+      "pages": [
+       {
+        "page_name": "Module: lib/list.py — Page 0",
+        "page_order": 1,
+        "description": "Page with 2 symbols",
+        "content_focus": "Symbols in cluster 3/0",
+        "rationale": "Grouped by graph clustering (macro=3, micro=0, 2 symbols)",
+        "target_symbols": [
+         "Lister0",
+         "Lister1"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "lib"
+        ],
+        "key_files": [
+         "lib/list.py"
+        ],
+        "retrieval_query": "Lister0 Lister1",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 3,
+         "page_id": 0,
+         "cluster_node_ids": [
+          "l0",
+          "l1"
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "section_name": "Module: lib/real.py",
+      "section_order": 5,
+      "description": "Auto-generated section with 1 symbols",
+      "rationale": "Fallback: LLM naming failed for macro=4",
+      "pages": [
+       {
+        "page_name": "Module: lib/real.py — Page 0",
+        "page_order": 1,
+        "description": "Page with 1 symbols",
+        "content_focus": "Symbols in cluster 4/0",
+        "rationale": "Grouped by graph clustering (macro=4, micro=0, 1 symbols)",
+        "target_symbols": [
+         "Real"
+        ],
+        "target_docs": [],
+        "target_folders": [
+         "lib"
+        ],
+        "key_files": [
+         "lib/real.py"
+        ],
+        "retrieval_query": "Real",
+        "metadata": {
+         "planner_mode": "cluster",
+         "section_id": 4,
+         "page_id": 0,
+         "cluster_node_ids": [
+          "t3"
+         ]
+        }
+       }
+      ]
+     }
+    ],
+    "total_pages": 11
+   }
+  }
+ ]
+}

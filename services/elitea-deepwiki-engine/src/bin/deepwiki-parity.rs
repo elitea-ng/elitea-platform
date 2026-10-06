@@ -5,7 +5,27 @@
 //! deepwiki-parity graph-dump <repo> <out-dir> [--parses-from <dir>] [--no-phase1c]
 //!                             [--through phase2 --replay <recording.jsonl>]
 //! deepwiki-parity index-dump <repo> <wiki-id> [--embeddings <dim>]
+//! deepwiki-parity pages <python-dump-dir> <out-dir>
+//! deepwiki-parity structure-dump <repo> <py-dump> <out-dir> --llm-base <url>
+//!                             [--planner cluster] [--repo-name owner/name] [--branch main]
+//!                             [--repo-identifier owner/name:main:0123abcd]
 //! ```
+//!
+//! `pages` runs the page phase (phase 5b) over a dump
+//! `parity/python_pages_dump.py` wrote, against the in-process stub model,
+//! and writes the same files (see `wiki::parity`); `parity/compare_pages.py`
+//! diffs the two.
+//!
+//! `structure-dump` is the Rust side of the structure gate
+//! (`parity/python_structure_dump.py` writes `<py-dump>`): Phase 1 + 1c with
+//! this engine's parsers, Phase 2 against the dump's `recording.jsonl`,
+//! Phase 3 with the dump's leidenalg memberships replayed
+//! (`p3_leiden_calls.jsonl`; the cluster columns are checked against
+//! `p3_assignments.jsonl`), then the repository analysis and the structure
+//! planner against the model at `--llm-base` (the LLM stub, which records
+//! the request bodies). It writes `structure.json`, `analysis.json` and
+//! `summary.json`; `parity/compare_structure.py` compares them and the two
+//! request records.
 //!
 //! `index-dump` builds the graph of `<repo>` (Phase 1 + 1c, this engine's
 //! parsers), stages it into the build space of the database
@@ -62,7 +82,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
-const USAGE: &str = "usage: deepwiki-parity parse-dump <language> <repo> <files.txt> <out.jsonl>\n       deepwiki-parity graph-dump <repo> <out-dir> [--parses-from <dir>] [--no-phase1c] [--through phase2 --replay <recording.jsonl>]\n       deepwiki-parity index-dump <repo> <wiki-id> [--embeddings <dim>]";
+const USAGE: &str = "usage: deepwiki-parity parse-dump <language> <repo> <files.txt> <out.jsonl>\n       deepwiki-parity graph-dump <repo> <out-dir> [--parses-from <dir>] [--no-phase1c] [--through phase2 --replay <recording.jsonl>]\n       deepwiki-parity index-dump <repo> <wiki-id> [--embeddings <dim>]\n       deepwiki-parity structure-dump <repo> <py-dump> <out-dir> --llm-base <url> [--planner P] [--repo-name N] [--branch B] [--repo-identifier I]\n       deepwiki-parity pages <python-dump-dir> <out-dir>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -72,6 +92,20 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("index-dump: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("pages") if args.len() == 3 => match pages(&args[1], &args[2]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("pages: {error}");
+                ExitCode::FAILURE
+            }
+        },
+        Some("structure-dump") => match structure_dump(&args[1..]) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("structure-dump: {error}");
                 ExitCode::FAILURE
             }
         },
@@ -683,4 +717,293 @@ fn relativise(value: &mut serde_json::Value, prefix: &str) {
         serde_json::Value::Object(map) => map.values_mut().for_each(|v| relativise(v, prefix)),
         _ => {}
     }
+}
+
+/// `pages <python-dump-dir> <out-dir>` (see the module comment).
+fn pages(dump_dir: &str, out_dir: &str) -> Result<(), String> {
+    use elitea_deepwiki_engine::wiki::parity;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    runtime.block_on(async {
+        let dump = parity::load_dump(Path::new(dump_dir)).map_err(|e| e.to_string())?;
+        let model = parity::StubModel::start(dump.page_answer)
+            .await
+            .map_err(|e| e.to_string())?;
+        let (outcome, timing) = parity::run_dump(dump, &model)
+            .await
+            .map_err(|e| e.to_string())?;
+        parity::write_outcome(Path::new(out_dir), &outcome, &model.requests(), timing)
+            .map_err(|e| e.to_string())?;
+        println!(
+            "{{\"pages\": {}, \"requests\": {}, \"page_seconds\": {:.4}, \"context_seconds\": {:.4}}}",
+            outcome.pages.pages.len(),
+            model.requests().len(),
+            timing.page_seconds,
+            timing.context_seconds
+        );
+        Ok(())
+    })
+}
+
+/// The options of `structure-dump`.
+struct StructureArgs {
+    repo: String,
+    py_dump: PathBuf,
+    out_dir: PathBuf,
+    llm_base: String,
+    planner: String,
+    repo_name: Option<String>,
+    branch: String,
+    repo_identifier: Option<String>,
+}
+
+fn parse_structure_args(args: &[String]) -> Result<StructureArgs, String> {
+    let mut positional = Vec::new();
+    let mut options: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--llm-base" | "--planner" | "--repo-name" | "--branch" | "--repo-identifier" => {
+                options.insert(arg.as_str(), iter.next().ok_or(USAGE)?.clone());
+            }
+            _ => positional.push(arg.clone()),
+        }
+    }
+    let [repo, py_dump, out_dir] =
+        <[String; 3]>::try_from(positional).map_err(|_| USAGE.to_owned())?;
+    Ok(StructureArgs {
+        repo,
+        py_dump: PathBuf::from(py_dump),
+        out_dir: PathBuf::from(out_dir),
+        llm_base: options
+            .remove("--llm-base")
+            .ok_or("--llm-base is required")?,
+        planner: options
+            .remove("--planner")
+            .unwrap_or_else(|| "cluster".to_owned()),
+        repo_name: options.remove("--repo-name"),
+        branch: options
+            .remove("--branch")
+            .unwrap_or_else(|| "main".to_owned()),
+        repo_identifier: options.remove("--repo-identifier"),
+    })
+}
+
+fn read_jsonl<T: for<'de> serde::Deserialize<'de>>(path: &Path) -> Result<Vec<T>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .enumerate()
+        .map(|(i, l)| {
+            serde_json::from_str(l).map_err(|e| format!("{}:{}: {e}", path.display(), i + 1))
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_lines)]
+fn structure_dump(args: &[String]) -> Result<(), String> {
+    use elitea_deepwiki_engine::graph::clustering::{
+        ClusterAssignment, ClusterGraph, Phase3Flags, RecordedCall, ReplayPartitioner, run_phase3,
+    };
+    use elitea_deepwiki_engine::llm::{ChatClient, ModelSettings, Transport, TransportSettings};
+    use elitea_deepwiki_engine::runner::StopSignal;
+    use elitea_deepwiki_engine::structure::index::{IndexNode, PlannerIndex};
+    use elitea_deepwiki_engine::structure::model::LiveModel;
+    use elitea_deepwiki_engine::structure::{self, PlannerChoice, StructureSettings, analysis};
+
+    let options = parse_structure_args(args)?;
+    let repo =
+        std::fs::canonicalize(&options.repo).map_err(|e| format!("{}: {e}", options.repo))?;
+    let repo_str = repo
+        .to_str()
+        .ok_or("the repository path is not UTF-8")?
+        .to_owned();
+    let repo_name = options.repo_name.clone().unwrap_or_else(|| {
+        format!(
+            "acme/{}",
+            repo.file_name().and_then(|n| n.to_str()).unwrap_or("repo")
+        )
+    });
+    let repo_identifier = options
+        .repo_identifier
+        .clone()
+        .unwrap_or_else(|| format!("{repo_name}:{}:0123abcd", options.branch));
+    std::fs::create_dir_all(&options.out_dir).map_err(|e| e.to_string())?;
+    let mut timings: Vec<(&str, f64)> = Vec::new();
+
+    // Phase 1 + 1c.
+    let started = Instant::now();
+    let discovery = discover::discover_files(&repo_str);
+    let flags = Phase1cFlags::from_env().map_err(|e| e.to_string())?;
+    let (mut graph, _report, _phase1c) =
+        builder::build_index_graph_parsed(&repo_str, &discovery, &flags);
+    timings.push(("phase1", started.elapsed().as_secs_f64()));
+
+    // Phase 2 against the recording.
+    let started = Instant::now();
+    let recording = options.py_dump.join("recording.jsonl");
+    let text =
+        std::fs::read_to_string(&recording).map_err(|e| format!("{}: {e}", recording.display()))?;
+    let mut store = ReplayStore::from_jsonl(&text).map_err(|e| e.to_string())?;
+    let config = Phase2Config {
+        profile: CalibrationProfile::from_env()?,
+        ..Phase2Config::default()
+    };
+    let mut embedder = StandinEmbedder;
+    let outcome = topology::run_phase2(&mut graph, &mut store, Some(&mut embedder), &config)
+        .map_err(|e| format!("phase 2: {e}"))?;
+    timings.push(("phase2", started.elapsed().as_secs_f64()));
+
+    // Phase 3 on the graph (it reads the re-typed types), memberships replayed.
+    let started = Instant::now();
+    let cluster_graph = ClusterGraph::from_code_graph(&graph);
+    let calls: Vec<RecordedCall> = read_jsonl(&options.py_dump.join("p3_leiden_calls.jsonl"))?;
+    let mut partitioner = ReplayPartitioner::new(calls);
+    let exclude_tests = std::env::var("DEEPWIKI_EXCLUDE_TESTS").is_ok_and(|v| {
+        matches!(
+            v.trim().to_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    });
+    let phase3 = run_phase3(
+        &cluster_graph,
+        outcome.hubs_for_phase3(),
+        Phase3Flags {
+            exclude_tests,
+            calibrated_weights: config.profile == CalibrationProfile::Calibrated,
+        },
+        &mut partitioner,
+    )
+    .map_err(|e| format!("phase 3: {e}"))?;
+    let assignments = phase3.assignments(&cluster_graph);
+    timings.push(("phase3", started.elapsed().as_secs_f64()));
+    let mut expected: Vec<ClusterAssignment> =
+        read_jsonl(&options.py_dump.join("p3_assignments.jsonl"))?;
+    expected.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+    let mut sorted = assignments.clone();
+    sorted.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+    let assignments_equal = sorted == expected;
+    if !assignments_equal {
+        eprintln!("warning: the Phase 3 cluster columns differ from the dump's");
+    }
+
+    // The index rows: types as stored (before the lexical re-typing), the
+    // cluster columns, and the edges Phase 2 persisted.
+    for (id, previous) in &outcome.retyped {
+        if let Some(node) = graph.node_mut(id) {
+            node.symbol_type.clone_from(previous);
+        }
+    }
+    let by_id: std::collections::HashMap<&str, &ClusterAssignment> = assignments
+        .iter()
+        .map(|a| (a.node_id.as_str(), a))
+        .collect();
+    let nodes: Vec<IndexNode> = graph
+        .nodes()
+        .map(|(id, data)| {
+            let mut row = node_row(id, data);
+            if let Some(a) = by_id.get(id) {
+                row.macro_cluster = a.macro_cluster.and_then(|m| i64::try_from(m).ok());
+                row.micro_cluster = a.micro_cluster.and_then(|m| i64::try_from(m).ok());
+            }
+            IndexNode::from_row(&row)
+        })
+        .collect();
+    let graph_edges = graph.edge_rows();
+    let edges_equal_graph = graph_edges == store.edges;
+    let index = PlannerIndex::new(nodes, &store.edges, Some(repo_identifier.clone()));
+
+    // generate_wiki: analyze_repository → generate_wiki_structure.
+    let settings = StructureSettings::from_env(exclude_tests);
+    let model_settings = ModelSettings::from_llm_settings(&serde_json::json!({
+        "api_base": options.llm_base,
+        "api_key": "stub-key",
+        "model_name": "gpt-4o",
+    }))
+    .map_err(|e| e.to_string())?;
+    let transport = Transport::new(&TransportSettings::default()).map_err(|e| e.to_string())?;
+    let model = LiveModel {
+        client: ChatClient::new(transport, model_settings),
+        stop: StopSignal::default(),
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let (repository, spec, analysis_seconds, structure_seconds) = runtime.block_on(async {
+        let started = Instant::now();
+        let repository = analysis::analyze_repository(
+            &model,
+            &repo,
+            &discovery,
+            &repo_name,
+            &options.branch,
+            settings.structured_analysis,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        let analysis_seconds = started.elapsed().as_secs_f64();
+        let started = Instant::now();
+        let spec = structure::plan_wiki_structure(
+            &model,
+            PlannerChoice::resolve(Some(&options.planner)),
+            &repository,
+            Some(&index),
+            &settings,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        Ok::<_, String>((
+            repository,
+            spec,
+            analysis_seconds,
+            started.elapsed().as_secs_f64(),
+        ))
+    })?;
+    timings.push(("analysis", analysis_seconds));
+    timings.push(("structure", structure_seconds));
+
+    let write = |name: &str, text: String| {
+        std::fs::write(options.out_dir.join(name), text).map_err(|e| format!("{name}: {e}"))
+    };
+    write("structure.json", format!("{}\n", spec.to_python_json()))?;
+    let analysis_json = serde_json::json!({
+        "repository_context": repository.repository_context,
+        "repository_tree": repository.repository_tree,
+        "readme_content": repository.readme_content,
+    });
+    write(
+        "analysis.json",
+        format!("{}\n", pyjson::dumps_indent2(&analysis_json)),
+    )?;
+    let seconds: serde_json::Map<String, Value> = timings
+        .iter()
+        .map(|(k, v)| {
+            (
+                (*k).to_owned(),
+                serde_json::json!((v * 1000.0).round() / 1000.0),
+            )
+        })
+        .collect();
+    let summary = serde_json::json!({
+        "repo": repo_str,
+        "repo_name": repo_name,
+        "repo_identifier": repo_identifier,
+        "planner": options.planner,
+        "nodes": graph.node_count(),
+        "phase3_assignments_equal": assignments_equal,
+        "phase3_replayed": partitioner.replayed,
+        "phase2_edges_equal_graph_edges": edges_equal_graph,
+        "sections": spec.sections.len(),
+        "pages": spec.page_count(),
+        "seconds": seconds,
+    });
+    write(
+        "summary.json",
+        format!("{}\n", pyjson::dumps_indent2(&summary)),
+    )?;
+    println!("{}", pyjson::dumps(&summary));
+    Ok(())
 }

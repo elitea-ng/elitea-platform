@@ -19,6 +19,11 @@ base64 = "=0.22.1"
 # mailmap, archive). The ssh and file transports compile in with the
 # blocking client but are unreachable: a CloneTarget holds only http(s).
 gix = { version = "=0.88.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "worktree-mutation", "sha1", "max-performance-safe"] }
+# The Mermaid sanitizer is ~150 transcribed Python regular expressions,
+# several with look-around, which `regex` lacks. A backtracking engine
+# with `sre`'s match preference. Already in the tree (tiktoken-rs uses it);
+# this pins the same version as a direct dependency.
+fancy-regex = "=0.19.2"
 globset = "=0.4.20"
 http-body-util = "=0.1.5"
 hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1"] }
@@ -62,6 +67,9 @@ tiktoken-rs = "=0.12.1"
 tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "=0.1.19", features = ["sync"] }
 tracing = "=0.1.44"
+# NFKD for the sanitizer's node-id slug (`unicodedata.normalize`). Already
+# in the tree through sqlx; pinned to the locked version.
+unicode-normalization = "=0.1.25"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
 tree-sitter = "=0.27.0"
 # The C# grammar `tree_sitter_language_pack` 1.16.1 builds (its

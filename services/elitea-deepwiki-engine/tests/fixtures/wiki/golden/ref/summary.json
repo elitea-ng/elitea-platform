@@ -1,0 +1,11 @@
+{
+  "repo": "../repo",
+  "repository": "acme/notes",
+  "pages": 9,
+  "failed": 0,
+  "requests": 9,
+  "fts_calls": 14,
+  "vector_fallbacks": 0,
+  "page_seconds": 0.1683,
+  "page_answer": "mermaid"
+}

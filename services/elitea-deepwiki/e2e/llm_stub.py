@@ -13,8 +13,20 @@ run is reproducible.
 
 Embeddings are deterministic too: a seeded hash-bucket projection, the same
 idea as the P0 retrieval fixtures' StubEmbedder.
+
+The cluster structure planner's naming prompts (one batched call per
+section; per page and section-from-pages on its fallback path) get names
+derived from the symbols they list, so a structure is not all fallback
+names. One batched answer in five (sections whose symbol count is a
+multiple of 5) leaves out the last page on purpose, which drives the
+planner onto its multi-call fallback path. Every other request is answered
+as before.
+
+``LLM_STUB_RECORD=<path>`` appends each chat request body, one JSON line
+per request in arrival order, to that file. The ADR-0026 structure parity
+gate compares the Python engine's requests with the Rust engine's.
 """
-import hashlib, json, math, re
+import hashlib, json, math, os, re, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DIM = 1536
@@ -69,7 +81,81 @@ def embed(text: str) -> list:
     return [v / norm for v in vector]
 
 
+def _section_of(prompt: str, start: str, end: str):
+    """The JSON value between two markers of a naming prompt, or None."""
+    at = prompt.find(start)
+    if at < 0:
+        return None
+    rest = prompt[at + len(start):]
+    stop = rest.find(end)
+    if stop < 0:
+        return None
+    try:
+        return json.loads(rest[:stop])
+    except ValueError:
+        return None
+
+
+def _page_name(symbols) -> str:
+    names = [str(s.get("name", "")) for s in symbols if isinstance(s, dict)][:2]
+    names = [n for n in names if n]
+    return "Working with " + " and ".join(names) if names else "General Utilities"
+
+
+def naming_answer(prompt: str):
+    """Answers for the cluster planner's naming prompts, or None."""
+    if "PAGES IN THIS SECTION:" in prompt and '"page_id"' in prompt:
+        pages = _section_of(prompt, "PAGES IN THIS SECTION:\n", "\n\nOutput ONLY valid JSON")
+        if not isinstance(pages, list):
+            return None
+        count = re.search(r"SECTION CLUSTER \u2014 (\d+) symbols", prompt)
+        node_count = int(count.group(1)) if count else 0
+        named = []
+        for page in pages:
+            name = _page_name(page.get("page_symbols") or [])
+            named.append({
+                "page_id": page.get("page_id"),
+                "page_name": name,
+                "description": f"How {name.lower()} works ({page.get('symbol_count')} symbols).",
+                "retrieval_query": " ".join(
+                    str(s.get("name", "")) for s in (page.get("page_symbols") or [])[:4]
+                ),
+            })
+        if node_count % 5 == 0 and len(named) > 1:
+            named = named[:-1]
+        first = named[0]["page_name"] if named else "Overview"
+        return json.dumps({
+            "section_name": f"Area: {first}",
+            "section_description": f"Capabilities around {first.lower()}.",
+            "pages": named,
+        })
+    if "PAGE CLUSTER \u2014" in prompt and "PAGE SYMBOLS" in prompt:
+        symbols = _section_of(prompt, "PAGE SYMBOLS (this page's own representative code elements):\n", "\n\nDIRECTORIES:")
+        name = _page_name(symbols if isinstance(symbols, list) else [])
+        return "```json\n" + json.dumps({
+            "page_name": name,
+            "description": f"Single-page naming for {name.lower()}.",
+            "retrieval_query": name.lower(),
+        }) + "\n```"
+    if "SECTION (derived from" in prompt:
+        pages = _section_of(prompt, "PAGES IN THIS SECTION:\n", "\n\nOutput ONLY valid JSON")
+        first = pages[0].get("page_name", "Overview") if isinstance(pages, list) and pages else "Overview"
+        return json.dumps({
+            "section_name": f"Domain of {first}",
+            "section_description": "Derived from its pages.",
+        })
+    if "SECTION CLUSTER \u2014" in prompt and "TOP SYMBOLS" in prompt:
+        return json.dumps({
+            "section_name": "Core Section",
+            "section_description": "Named from its top symbols.",
+        })
+    return None
+
+
 def answer(prompt: str) -> str:
+    named = naming_answer(prompt)
+    if named is not None:
+        return named
     lowered = prompt.lower()
     wants_json = "json" in lowered or "wiki_title" in lowered or "sections" in lowered
     if wants_json and ("structure" in lowered or "sections" in lowered or "wiki_title" in lowered):
@@ -89,6 +175,18 @@ def answer(prompt: str) -> str:
         "```mermaid\nflowchart LR\n  api --> store\n  api --> auth\n```\n\n"
         "See `notes/store.py` for persistence and `auth/tokens.py` for signing.\n"
     )
+
+
+_RECORD_LOCK = threading.Lock()
+
+
+def record(request) -> None:
+    """Append one chat request body to ``LLM_STUB_RECORD`` (when set)."""
+    path = os.environ.get("LLM_STUB_RECORD")
+    if not path:
+        return
+    with _RECORD_LOCK, open(path, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(request, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -127,6 +225,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if self.path.endswith("/chat/completions"):
+            record(request)
             prompt = "\n".join(
                 str(m.get("content", "")) for m in request.get("messages", [])
             )
@@ -164,8 +263,6 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    import os
-
     # Loopback by default (the manual harness); a compose service binds all
     # interfaces and takes the mock's port so the gateway's egress allowlist
     # (`llm-mock:8090`) needs no change.

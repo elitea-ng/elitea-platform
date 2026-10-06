@@ -1,0 +1,15 @@
+PAGE CLUSTER — {symbol_count} symbols in {file_count} files
+Parent section: "{section_name}"
+
+PAGE SYMBOLS (this page's own representative code elements):
+{page_symbols_json}
+
+DIRECTORIES:
+{directories_json}
+
+Output ONLY valid JSON (no markdown fences):
+{{
+  "page_name": "...",
+  "description": "...",
+  "retrieval_query": "..."
+}}

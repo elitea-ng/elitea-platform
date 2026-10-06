@@ -592,6 +592,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "fancy-regex",
  "gix",
  "globset",
  "http-body-util",
@@ -624,6 +625,7 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-typescript",
+ "unicode-normalization",
  "zeroize",
 ]
 

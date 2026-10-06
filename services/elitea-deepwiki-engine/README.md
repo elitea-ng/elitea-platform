@@ -470,6 +470,208 @@ yet re-measured. The run needs about 10 GB of database disk
 on a small corpus (spring-petclinic, CleanArchitecture, leveldb) on a
 shared machine.
 
+## Wiki pages and export (`src/wiki/`)
+
+Phase 5b of `generate_wiki`: the planner's structure in, the engine result
+out. Not wired to a runner yet; the native runner calls
+`wiki::run::generate_wiki_pages(generator, structure, repo_context,
+identity, clock, started)` after the structure planner, with a
+`wiki::index::PageIndex` built from the Phase 3 graph
+(`PageIndex::from_graph` + `GraphFacts::from_graph`).
+
+The live Python path (`agents/wiki_graph_optimized.py`, cluster planner):
+`dispatch_page_generation` (with `_split_overloaded_pages`) →
+`generate_page_content` per page (LangGraph `Send`, at most 4 in flight)
+→ `_try_cluster_expansion` (`cluster_expansion.expand_for_page` with
+`shared_expansion.expand_symbol_smart` and the language hints — both
+hard-coded on) or, for a page without symbols, the documentation path
+(`_fetch_explicit_target_docs` strategies 2–3,
+`_get_doc_nodes_from_graph`'s scan) → the 80,000-token budget and ranked
+truncation (`document_ranker`, graph-based, no embeddings) →
+`_format_simple_context` → `_generate_simple`
+(`ENHANCED_CONTENT_GENERATION_PROMPT_V3_TONE_ADJUSTED`, streamed,
+temperature 0.1 / 1.0 for `o*`) → `diagram_sanitizer.sanitize_content`
+→ `finalize_wiki` → `ArtifactExporter` → the hybrid wrapper's result →
+`wiki_subprocess_worker`'s composition (manifest, `wiki_id`,
+`analysis_key`, the analysis records).
+
+Dead in that path and not ported: the hierarchical and agentic modes
+(`AGENTIC_MODE_THRESHOLD` is 999,999), quality assessment and enhancement
+(their graph nodes are commented out), `_collect_expansion_neighbors`
+(smart expansion is on), the FTS5 graph text index (never built since the
+`.code_graph.gz` writes were removed), semantic doc retrieval (flags off).
+
+| Module | Ports |
+| --- | --- |
+| `spec` | `PageSpec`, `SectionSpec`, `WikiStructureSpec`, `WikiPage` (MERGE NOTE: the planner port has its own copy; one survives the merge) |
+| `index`, `search` | the `.wiki.db` queries, answered in SQLite's row order from memory; the two FTS5 lookups behind `PageSearch` |
+| `expansion`, `retrieve`, `ranker`, `context`, `repo_files` | the page context |
+| `prompts` | the prompt files and `PROMPTS_MANIFEST.json` (MERGE NOTE: the planner keeps its own manifest; they merge into one list) |
+| `pages` | the split, the fan-out, `_generate_simple`, the sanitizer call |
+| `pyregex`, `sanitizer` | Python `re` on `fancy-regex`; `diagram_sanitizer.py` line for line |
+| `export`, `compose`, `run` | the artifacts, the worker's composition, end to end |
+
+### Deliberate differences
+
+- **Planner-chosen paths are contained.** `_fetch_explicit_target_docs`
+  joined `target_docs` (model output) to the clone root: an absolute path
+  or `..` read any file, symlinks were followed, and the bare-name walk
+  entered `.git`. Here a path must be plain relative components, no
+  symlink on the way, a regular file; the walk skips `.git` and visits in
+  sorted order.
+- **Colliding page slugs** in one directory get `-2`, `-3` (README links
+  and the structure JSON follow). Python wrote both pages to one file. An
+  empty slug is `page` / `section` (Python lost the page).
+- **Artifact order** is README, then the pages in structure order
+  (Python: the temp directory's `rglob` order). The manifest's `pages`
+  follow it.
+- **The manifest has no `faiss_cache_key`, `graph_cache_key`,
+  `docstore_cache_key`/`docstore_files`, `bm25_cache_key`/`bm25_files`,
+  `unified_db_key`/`unified_db_files`.** No live consumer reads them: the
+  Go host and `apps/elitea-web` never mention them; in the Python sidecar
+  only `publishing.py` reads `unified_db_key` (with a newest-file
+  fallback) on the legacy-runner path, and the legacy engine's
+  `artifact_manager` / dead `wiki_loader` read the rest.
+  `analysis_cache_key` stays.
+- **Full-text search.** FTS5 is gone (no SQLite); production uses
+  `SubstringSearch`: Python's own non-FTS fallback of
+  `_search_framework_fts` for framework references, a token-phrase match
+  for the symbol fallback. The parity gate replays Python's FTS5 answers.
+- **Symbols cluster expansion cannot resolve** go to the documentation
+  path; Python ran its legacy networkx expansion there (not ported, ~450
+  lines). **An empty retrieval** uses the repository context, the fallback
+  Python used when its (removed) vector search failed.
+- **Orphan seeds are walked in insertion order** (Python: a `set`, hash
+  seed order; the reference is patched to match).
+- `DEEPWIKI_MAX_SYMBOLS_PER_PAGE` below 1 is ignored (Python looped
+  forever); the structure timestamp is UTC.
+
+Quirks kept: the context and the related-files list are joined with the
+two characters `\n`; the sanitizer's literal `'\1'` template, its
+"duplicate deactivate" pass on any diagram with `alt `, and the blank
+line it drops after a fence; failed pages are exported as empty files.
+
+### Parity
+
+```bash
+# Python: index (Phase 1–3, stand-in embedding), then the page path against
+# the e2e stub over a FIXED structure; every chat request recorded
+PYTHONHASHSEED=0 PYTHONPATH=services/elitea-deepwiki/src python parity/python_pages_dump.py <repo> <ref> [--structure s.json] [--mermaid-pages]
+cargo run --release --bin deepwiki-parity -- pages <ref> <out>
+python3 parity/compare_pages.py <ref> <out>
+# Sanitizer corpus (tests/fixtures/wiki/sanitizer_corpus.jsonl)
+PYTHONPATH=services/elitea-deepwiki/src python parity/python_sanitizer_corpus.py <out.jsonl> <file.md>...
+```
+
+Measured 2026-10-05 (Apple M4 Pro, release build; the structures are the
+cluster planner's against the stub; `--mermaid-pages` answers every page
+with broken diagrams so the sanitizer runs on every page). Every page
+prompt (context assembly, truncation, ordering), every page, every
+artifact (time/uuid names normalised) and every result field is
+byte-identical on all four corpora, in both modes:
+
+| Corpus | Pages (doc-only) | Prompts | Artifacts | Pages phase py / rs | Context building py / rs |
+| --- | --- | --- | --- | --- | --- |
+| spring-petclinic | 23 (4) | 23/23 | 26/26 | 0.27 s / 0.06 s | 21 ms / 6 ms |
+| CleanArchitecture | 34 (8) | 34/34 | 37/37 | 0.45 s / 0.06 s | 52 ms / 9 ms |
+| leveldb | 54 (2) | 54/54 | 57/57 | 0.81 s / 0.06 s | 434 ms / 27 ms |
+| express | 30 (1) | 30/30 | 33/33 | 0.46 s / 0.09 s | 195 ms / 94 ms |
+
+The pages phase includes the stub model (Python drafts sequentially for
+the recording; Rust four at a time). A leveldb variant with two
+60-symbol pages of the same name (the split, the symbol fallback, the
+collision rule) is identical except the three artifacts the collision
+suffix changes. The Mermaid corpus — 94 cases: every hand-made repair
+case and the real diagrams of the design documents and the Mermaid
+README — is byte-identical, fixes and statuses included.
+
+`tests/wiki_pages_golden.rs` runs the same gate without Python over
+`tests/fixtures/wiki/golden` (a repository with Python, C++, a Pylon API,
+Markdown and YAML; a split page; a page whose targets are only on disk or
+outside the checkout). `tests/wiki_contract.rs` holds the export to the
+frozen `conformance/provider/fixtures/deepwiki/generation` fixtures, and
+`tests/wiki_prompts.rs` re-derives every prompt hash from the Python source.
+
+## Repository analysis and structure planning (`src/structure/`)
+
+ADR-0026 phase 5a: the first two nodes of `generate_wiki`'s agent graph
+(`agents/wiki_graph_optimized.py`), `analyze_repository` →
+`generate_wiki_structure`. Not wired to a runner yet; the native runner
+calls `structure::analysis::analyze_repository` and then
+`structure::plan_wiki_structure` with the index rows of Phase 3
+(`structure::index::PlannerIndex`: `repo_nodes` with the cluster columns,
+`repo_edges` as Phase 2 persisted them, both in row order).
+
+1. **Repository analysis** — one model call (`ENHANCED_REPO_ANALYSIS_PROMPT`;
+   the JSON variant under `DEEPWIKI_USE_STRUCTURED_REPO_ANALYSIS=1`). Its
+   inputs: the tree of the agent's own file list (an `os.walk` with the
+   indexer's default `FilterManager`, not graph discovery), the README as the
+   graph builder chunked it (the file-based reader of the live path always
+   says "No README file found"), code samples and file statistics. The answer
+   is the `repository_context` page generation, ask and deep research read.
+2. **Planner choice** — `planner_mode` / `planner_type` (the web app always
+   sends `cluster`): `cluster`; `agent` / `agentic` / `deepagents`; anything
+   else `auto`. `auto` takes deepagents at 2,000 files or a context of 8,000
+   tokens (`DEEPWIKI_DEEPAGENTS_FILE_THRESHOLD`,
+   `DEEPWIKI_DEEPAGENTS_REPOCTX_TOKENS`), else the classic planner. The
+   deepagents planner is a later unit (5d): it is refused with
+   `RuntimeError` "…not supported by the native engine yet".
+3. **Cluster planner** (`ClusterStructurePlanner.plan_structure`) — the
+   architectural cluster map; the candidate validator (demote, split by file
+   into at most 5 pages, merge into the sibling with the most edges); the
+   coverage ledger (logged only, as in Python); one batched naming call per
+   section (`BATCHED_NAMING_*`, on unless `DEEPWIKI_NAMING_BATCHED` is
+   false), falling back to one call per page and a section name from the
+   pages (or, with `DEEPWIKI_NAMING_ORDER` other than `pages_first`, from
+   the top symbols); the fallback section when naming fails outright; the
+   `target_symbols` of a page by `PageRank` (`select_central_symbols`).
+4. **Classic planner** — one call (`ENHANCED_WIKI_STRUCTURE_PROMPT`), the
+   answer's JSON validated as pydantic's lax mode validates it; an answer
+   that does not validate becomes the one-page fallback structure.
+
+Every call is the worker's `ChatOpenAI`: the request settings' model and
+`max_tokens`, temperature 0.1, streamed by default. Repository text goes in
+user messages only.
+
+**Prompts.** Every prompt text is the Python value, byte for byte, in
+`src/structure/prompts/*.txt` (compiled in). `PROMPTS_MANIFEST.json` names
+the source file, the symbol and the SHA-256 of each Python value;
+`tests/structure_prompts.rs` derives the hashes again from the Python
+source with python3 (`ast`, no engine import) and from the embedded texts.
+
+**`PageRank`.** Pages are full of exact rank ties, and a tie keeps the
+subgraph's node order, so `centrality.rs` reproduces networkx 3.6 / scipy
+1.18 / numpy 2.5 operation by operation: the subgraph view's node and
+neighbour order, `to_undirected`'s edge merging, the sparse matrix's
+duplicate sums, `reduceat` and pairwise sums, and the power iteration.
+
+### Deliberate differences
+
+- **Set order.** Python held a section's nodes, and the nodes a page's
+  centrality starts from, in `set`s; networkx's subgraph view iterates such
+  a set. Their order follows the hash seed, and it reaches `target_symbols`
+  (order and members) and the file count in the naming prompt. Here the
+  order is insertion order. Measured on the four small corpora, Python run
+  twice with `PYTHONHASHSEED` 0 and 1 against the pinned order:
+  `target_symbols` change on 7–20 pages of 17–49, with different MEMBERS on
+  2–18 of them; names and every other field are unchanged. A Python wiki is
+  not reproducible run to run; this one is.
+- **Walk order.** `os.walk` lists a directory in file-system order; here
+  each listing is sorted. Only ties of the file-statistics sort see it.
+- **Links** are listed as `os.walk` lists them but never read for a code
+  sample (Python opened the target).
+- **README.** A code file whose path contains `readme`, in a language
+  sorted before `documentation`, is not considered; a large README cut into
+  generic chunks keeps its chunk order (Python's sort raised `TypeError` on
+  them and failed the analysis).
+- **Failures.** A failed analysis call or classic structure call is
+  returned as the call's error (Python logged it and returned an empty
+  wiki). A classic answer whose JSON candidate does not parse is
+  `RuntimeError` "Structure generation failed". A stop ends planning;
+  every other failed naming call is replaced, as in Python.
+- `json.loads` takes `NaN` / `Infinity`; `serde_json` does not (the answer
+  then takes the parse-failure path). Integer fields hold `i64` only.
+
 ## Parity with the Python engine
 
 The parity tools are in `parity/`. They run the Python engine itself (the
@@ -606,6 +808,50 @@ expression and returned nothing for `a::b`, `a.b` or `a-b`;
 `plainto_tsquery` folds such a name and matches it. Directory, bridge and
 hub changes follow from those edges: anchors and components move.
 Structural edges and every weight of an edge both sides have are equal.
+
+### Structure planning
+
+```bash
+# Python: Phase 1–3 (recorded), then analyze_repository + generate_wiki_structure
+# against the LLM stub (started in process; it records every request body)
+PYTHONHASHSEED=0 PYTHONPATH=services/elitea-deepwiki/src python services/elitea-deepwiki-engine/parity/python_structure_dump.py <repo> <py-dump> [--planner cluster|auto]
+# Rust: Phase 1 + 1c, Phase 2 on the recording, Phase 3 with leidenalg's memberships replayed,
+# then the same two nodes against the stub (LLM_STUB_RECORD=<rs-out>/requests.jsonl LLM_STUB_PORT=…)
+cargo run --release --bin deepwiki-parity -- structure-dump <repo> <py-dump> <rs-out> --llm-base http://127.0.0.1:<port>/v1 [--planner …]
+python3 parity/compare_structure.py <py-dump> <rs-out>
+```
+
+The stub (`services/elitea-deepwiki/e2e/llm_stub.py`) answers the naming
+prompts with names made from the listed symbols, and drops the last page of
+one batched answer in five so the multi-call path runs too. The gate:
+the same requests in the same order (messages byte for byte, model,
+temperature, tools, token budget), `structure.json` byte-identical, the
+analysis state equal. Rust Phase 3 replays Python's partitions (Leiden
+differs by design), and its cluster columns are checked against Python's.
+Measured 2026-10-05 (Apple M4 Pro):
+
+| Corpus | Planner | Requests | Sections / pages | Requests / structure | Python analysis + structure | Rust |
+| --- | --- | --- | --- | --- | --- | --- |
+| spring-petclinic | cluster | 7 | 6 / 17 | identical / identical | 0.11 s | 0.008 s |
+| CleanArchitecture | cluster | 11 | 10 / 34 | identical / identical | 0.26 s | 0.011 s |
+| leveldb | cluster | 9 (multi-call naming in one section) | 5 / 49 | identical / identical | 0.18 s | 0.010 s |
+| express | cluster | 6 | 5 / 23 | identical / identical | 0.17 s | 0.010 s |
+| leveldb | cluster, `DEEPWIKI_NAMING_BATCHED=0`, `DEEPWIKI_NAMING_ORDER=sections_first` | 55 | 5 / 49 | identical / identical | 0.29 s | 0.025 s |
+| spring-petclinic | auto (classic) | 2 | 2 / 3 | identical / identical | 0.16 s | 0.053 s |
+| express | auto (classic) | 2 | 2 / 3 | identical / identical | 0.15 s | 0.052 s |
+| elitea-platform (150,942 nodes) | cluster | 17 | 16 / 192 | identical / identical | 15.3 s | 0.40 s |
+
+The times are dominated by the stub's answers; the Rust planner itself
+takes milliseconds. On elitea-platform the whole run (Phase 1 to structure) took 55 min
+in the reproducible Python reference (inline thread pools; Phase 1 alone
+39 min) and 10.1 s in Rust (3.2 GB peak RSS, most of it the Phase 2
+recording); the Phase 3 cluster columns were equal to Python's. The only key on one side only is `stream_options` (the
+Rust client asks for streamed usage; `LangChain` did not). The golden tests
+(`tests/structure_golden.rs`, fixtures from
+`parity/python_structure_fixture.py`) replay a scripted model over a
+synthetic index that reaches every planner branch, and over a small
+repository for the analysis and the classic planner, with no Python and
+no network.
 
 ## Running
 
