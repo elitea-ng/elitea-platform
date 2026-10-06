@@ -2466,24 +2466,7 @@ impl AgentEventProjector {
             batch.push(self.model_start_event(event, &timestamp)?)?;
         }
 
-        if content_delta.len() + thinking_delta.len() <= INLINE_TEXT_CHUNK_BYTES {
-            if let Some(chunk) = self.model_chunk_event(event, content_delta, thinking_delta)? {
-                batch.push(chunk)?;
-            }
-        } else {
-            for (field, value) in [("text", content_delta), ("thinking", thinking_delta)] {
-                for (_, fragment) in text_fragments(&value) {
-                    let (text, thinking) = if field == "text" {
-                        (fragment.to_owned(), String::new())
-                    } else {
-                        (String::new(), fragment.to_owned())
-                    };
-                    if let Some(chunk) = self.model_chunk_event(event, text, thinking)? {
-                        batch.push(chunk)?;
-                    }
-                }
-            }
-        }
+        self.push_model_chunks(&mut batch, event, content_delta, thinking_delta)?;
 
         if model_event.closes_turn {
             let (response_tool_name, response_tool_metadata) = model_step_presentation(event)?;
@@ -2624,6 +2607,35 @@ impl AgentEventProjector {
         }), event.timestamp)?)?;
         if chunked {
             batch.push(end)?;
+        }
+        Ok(())
+    }
+
+    /// One chunk for a small delta; bounded fragments for an oversized one.
+    fn push_model_chunks(
+        &self,
+        batch: &mut ProjectedAgentEventBatch,
+        event: &Event,
+        content_delta: String,
+        thinking_delta: String,
+    ) -> Result<(), AgentEventProjectionError> {
+        if content_delta.len() + thinking_delta.len() <= INLINE_TEXT_CHUNK_BYTES {
+            if let Some(chunk) = self.model_chunk_event(event, content_delta, thinking_delta)? {
+                batch.push(chunk)?;
+            }
+            return Ok(());
+        }
+        for (field, value) in [("text", content_delta), ("thinking", thinking_delta)] {
+            for (_, fragment) in text_fragments(&value) {
+                let (text, thinking) = if field == "text" {
+                    (fragment.to_owned(), String::new())
+                } else {
+                    (String::new(), fragment.to_owned())
+                };
+                if let Some(chunk) = self.model_chunk_event(event, text, thinking)? {
+                    batch.push(chunk)?;
+                }
+            }
         }
         Ok(())
     }
