@@ -96,9 +96,18 @@ for name in "${material[@]}"; do
   [ -f "$RUNTIME_DIR/$name" ] || needs_regen=1
 done
 # A tree minted before the Form sign-in state moved to PostgreSQL still grants
-# the retired `auth` Redis user. Rotate it, so no unused credential stays live.
+# the retired `auth` Redis user. Drop just that line (and its password file) in
+# place, so no unused credential stays live. Nothing else is touched: a full
+# rotation would also rotate vault-master-key, auth-pat-signing-key and the
+# Form users, and every vault secret already stored would become unreadable.
+# Idempotent: a tree without the line is left alone.
 if [ -f "$RUNTIME_DIR/redis-users.acl" ] && grep -q '^user auth ' "$RUNTIME_DIR/redis-users.acl"; then
-  needs_regen=1
+  acl_tmp="$RUNTIME_DIR/.redis-users.acl.tmp"
+  cp -p "$RUNTIME_DIR/redis-users.acl" "$acl_tmp"   # keeps the file's mode
+  grep -v '^user auth ' "$RUNTIME_DIR/redis-users.acl" > "$acl_tmp" || true
+  mv -f "$acl_tmp" "$RUNTIME_DIR/redis-users.acl"
+  rm -f "$RUNTIME_DIR/redis-auth-password"
+  echo "→ Removed the retired 'auth' user from $RUNTIME_DIR/redis-users.acl (restart runtime-redis to apply)."
 fi
 if [ "$needs_regen" -eq 0 ]; then
   for name in runtime-ca.crt redis-server.crt control-server.crt output-server.crt \
