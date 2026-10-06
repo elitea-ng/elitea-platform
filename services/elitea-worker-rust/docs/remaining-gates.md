@@ -93,6 +93,10 @@ Immediate YAML-to-Flow changes now retain valid and invalid drafts without waiti
 Semantic edits use canonical formatting. State rename does not rewrite node references; this existing editor gap remains open.
 The Worker restart probe in chat 825 fails after delivery consumes the original JavaScript deadline.
 The same-consumer pending-delivery correction passes 45 focused tests and strict Clippy. Deployed restart acceptance remains open.
+The deployed retest acquires its replacement claim about 254 milliseconds after lease expiry.
+It exposes an indexed hydration capacity deadlock before the restored broker starts.
+The [shared Supervisor correction](source-mapping/code-retained-hydration-recovery-20261006.md) passes twelve selected tests and strict Clippy.
+The existing CI harness selects three new PostgreSQL regressions. Supervisor deployment and the exact restart retest remain open.
 Recovery latency and its generic public error remain explicit gates. No recovery success is claimed for this probe.
 
 Code-node backend selection is tracked in the [isolation assessment](source-mapping/code-node-isolation-assessment-20260928.md).

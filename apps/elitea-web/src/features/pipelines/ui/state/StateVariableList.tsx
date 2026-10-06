@@ -31,7 +31,7 @@ import { t } from '@/shared/i18n';
 
 import { StateVariableItem } from './StateVariableItem';
 
-export interface StateVariableConfig {
+interface StateVariableConfig {
   readonly type?: string;
   readonly value?: unknown;
 }

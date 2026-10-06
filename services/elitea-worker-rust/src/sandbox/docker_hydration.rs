@@ -4,7 +4,7 @@ use crate::{
     protocol::sandbox_grant::AuthorizedJob,
     sandbox::{
         dependency_content::DependencyBundle,
-        ledger::{JobLease, JobScope, Phase},
+        ledger::{JobLease, JobRecord, JobScope, LedgerError, Phase},
         request::PreparedJob,
     },
 };
@@ -28,11 +28,13 @@ impl DockerSupervisor {
         if !request.matches_bundle(bundle) || index > bundle.file_count() {
             return Err(SupervisorError::Invalid);
         }
-        let _permit = self
-            .capacity
-            .try_acquire()
-            .map_err(|_| SupervisorError::Busy)?;
         let scope = authorization.scope();
+        let Some(_permit) = hydration_capacity(&self.capacity, self.ledger.read(scope)).await?
+        else {
+            // The exact job is dispatched or terminal. This reply permits
+            // reconciliation, never hydration or another dispatch.
+            return Ok(true);
+        };
         if self.ledger.reserve(scope).await?.phase != Phase::Reserved {
             return Ok(true);
         }
@@ -122,6 +124,34 @@ impl DockerSupervisor {
         }
     }
 }
+
+/// Read exact retained state before reserving another execution slot.
+/// Missing and inert jobs retain the original capacity and claim path.
+async fn hydration_capacity(
+    capacity: &tokio::sync::Semaphore,
+    existing: impl std::future::Future<Output = Result<JobRecord, LedgerError>>,
+) -> Result<Option<tokio::sync::SemaphorePermit<'_>>, SupervisorError> {
+    match existing.await {
+        Ok(record) => match record.phase {
+            Phase::Reserved => {}
+            Phase::Dispatched
+            | Phase::Completed
+            | Phase::Failed
+            | Phase::Cancelled
+            | Phase::Uncertain => return Ok(None),
+        },
+        Err(LedgerError::Missing) => {}
+        Err(error) => return Err(error.into()),
+    }
+    capacity
+        .try_acquire()
+        .map(Some)
+        .map_err(|_| SupervisorError::Busy)
+}
+
+#[cfg(test)]
+#[path = "docker_hydration_capacity_tests.rs"]
+mod capacity_tests;
 
 #[cfg(test)]
 #[path = "docker_hydration_deadline_tests.rs"]

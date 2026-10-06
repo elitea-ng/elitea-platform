@@ -36,6 +36,7 @@ import Typography from '@mui/material/Typography';
 import { messageNodeRecoveryBinding } from '../../lib/nodeRecoveryBinding';
 import { NodeRecoveryNotice } from './NodeRecoveryNotice';
 import { ApplicationAnswerActions } from './ApplicationAnswerActions';
+import { ApplicationAnswerLoading } from './ApplicationAnswerLoading';
 import { ApplicationAnswerAuthorization } from './ApplicationAnswerAuthorization';
 import { AssistantAvatar } from './MessageAvatar';
 import { MessageFeedbackControl } from './MessageFeedbackControl';
@@ -340,22 +341,7 @@ export function ApplicationAnswer({
             !exception &&
             nonSwarmChildActions.length === 0 &&
             effectiveHitlInterrupts.length === 0 && (
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Box
-                  component="span"
-                  sx={{
-                    display: 'inline-block',
-                    width: '6px',
-                    height: '6px',
-                    borderRadius: '50%',
-                    backgroundColor: 'primary.main',
-                    animation: 'pulse 1.5s infinite',
-                  }}
-                />
-                <Typography variant="bodyMedium" component="p" sx={{ color: 'text.secondary' }}>
-                  {isStreaming ? 'Streaming...' : 'Loading...'}
-                </Typography>
-              </Box>
+              <ApplicationAnswerLoading isStreaming={isStreaming} />
             )}
 
           <Box
