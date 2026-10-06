@@ -186,6 +186,8 @@ where
 struct RedisIntakeSchedule {
     reclaim_cursor: String,
     next_reclaim: Instant,
+    owned_pending_cursor: String,
+    next_owned_pending: Instant,
 }
 
 impl<C> RedisDeliveryIntake<C>
@@ -205,11 +207,13 @@ where
             schedule: AsyncMutex::new(RedisIntakeSchedule {
                 reclaim_cursor: INITIAL_RECLAIM_CURSOR.to_owned(),
                 next_reclaim: Instant::now() + config.reclaim_interval,
+                owned_pending_cursor: INITIAL_RECLAIM_CURSOR.to_owned(),
+                next_owned_pending: Instant::now(),
             }),
         }
     }
 
-    /// Await one capacity-bounded new-read or reclaim turn.
+    /// Await one capacity-bounded pending, new-read or reclaim turn.
     ///
     /// A retryable generation failure is never replayed here. The generation
     /// handle invalidates it; a later call explicitly connects a replacement
@@ -229,6 +233,28 @@ where
             )
         })?;
         let mut schedule = self.schedule.lock().await;
+        let now = Instant::now();
+        if now >= schedule.next_owned_pending {
+            let result = self
+                .handle
+                .read_owned_pending(count, schedule.owned_pending_cursor.clone())
+                .await;
+            // At most one own-PEL page per interval. A retry never steals an
+            // entry from another consumer or changes Main's claim authority.
+            schedule.next_owned_pending = Instant::now() + self.config.reclaim_interval;
+            match result {
+                Ok(page) => {
+                    schedule.owned_pending_cursor = page.next_start_id;
+                    if !page.deliveries.is_empty() {
+                        return self.bind_deliveries(page.deliveries, permits);
+                    }
+                }
+                Err(error) => {
+                    INITIAL_RECLAIM_CURSOR.clone_into(&mut schedule.owned_pending_cursor);
+                    return Err(error);
+                }
+            }
+        }
         let now = Instant::now();
         let deliveries = if now >= schedule.next_reclaim {
             let result = self
@@ -251,8 +277,11 @@ where
                 }
             }
         } else {
-            let until_reclaim = schedule.next_reclaim.saturating_duration_since(now);
-            let block_millis = u64::try_from(until_reclaim.as_millis())
+            let until_pending = schedule
+                .next_owned_pending
+                .min(schedule.next_reclaim)
+                .saturating_duration_since(now);
+            let block_millis = u64::try_from(until_pending.as_millis())
                 .map_or(u64::MAX, |millis| millis)
                 .clamp(1, self.config.read_block_millis);
             self.handle.read_new(count, block_millis).await?

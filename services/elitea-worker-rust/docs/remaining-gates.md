@@ -1,6 +1,6 @@
 # Rust worker remaining gates
 
-Updated: 2026-10-05. Main integration baseline: `20f0dfd04` (PR 883 merged).
+Updated: 2026-10-06. Main integration baseline: `e79c277bd` (PR 1014 merged).
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
@@ -18,7 +18,7 @@ Current-platform code defines business behavior, not a requirement to copy its i
 - Gate 4 is accepted for progression on 2026-09-28. The final audit records every required contract and its evidence.
 - Gate 5 is active. [Direct HITL admission](source-mapping/pipeline-hitl-admission-20260928.md) records main-chat history, repeated edits, paused-worker recovery, and transaction evidence.
 - PR 883 is merged. Its final CI reports 67 successful checks and three configured skips. Pending Point 5 work remains preserved.
-- The user requests complete Point 5 delivery in one PR. Each internal component requires its own source mapping and acceptance evidence.
+- Point 5 delivery continues through focused increments. Each component requires its own source mapping and acceptance evidence.
 - Persistent and ephemeral four-language benchmarks pass on the existing rehearsal backend with matching prepared runtime images.
 - The [point 4 acceptance audit](source-mapping/point4-acceptance-audit-20260928.md) records the final requirement review and explicit acceptance limits. Chats 727/728 verify parent completion after child access-denial and rate-limit failures.
 - [Provider context accounting](source-mapping/provider-context-accounting-20260928.md) records provider usage retention, native cache normalization, and the combined-window context meter. Chat 717 passes fresh-browser synthetic/Haiku measurements, model switching, regeneration, and reload. Chat 719 verifies per-call pipeline continuation and repair measurements without replacing the root meter. Chat 721 verifies repeated Haiku input accounting without proving its adapter. Confirmed native-adapter regeneration and reload pass in chat 720; cache counters remain zero. Chat 720 exposes generic diagnostics for the separate 64 KiB instruction limit. The [instruction capacity correction](source-mapping/instruction-content-capacity-20260928.md) passes chat 720 regeneration and reload with the original large instructions. [Input-admission diagnostics](source-mapping/input-admission-diagnostics-20260928.md) add a separate public failure code; chat 723 verifies deployment, live UI, support details, reload, and ERROR logs. The user-message bound correction passes regeneration in chat 723. Recovery accounting passes in chat 724. Full-window accounting after compaction passes in chat 708. Section-specific input guidance passes deployed agent-settings rejection and reload in chat 725. Real-provider cache savings remain unproven; the final audit records this performance limitation.
@@ -69,7 +69,31 @@ OpenAPI supports delegated OAuth and client credentials. DCR remains an MCP or o
 
 All Code workspace integration moves to the [post-worker feature backlog](wanted_feature.md#wf-01--code-workspaces) on 2026-10-05.
 The former Point 5f does not belong to the active worker gaps or their acceptance register.
+
+### Point 5 consolidation after the sandbox merge, 2026-10-06
+
+PR 1014 merges at `e79c277bdcd12fd08fc5d487d80438c5a059c74d`.
+The next delivery preserves the existing graph implementation and composes its missing Main and Web consumers.
+The [consolidation mapping](source-mapping/point5-consolidation-20261006.md) separates source checks from assembled acceptance.
+All 118 audited Worker graph source paths remain present. Four retain newer corrections.
+Do not restore the saved snapshot over these corrections.
+
+The restored [data shaping catalog](data-shaping-node-catalog.md) retains the full planned operation families.
+SplitOut and Aggregate remain the first implementation tier for Gate 5c.
+Their Rust execution and the executable HTTP consumer remain open work.
+Map and fixed Parallel remain separate Gate 5a contracts.
+Keep their admission gates false until assembled runtime acceptance passes.
+
+Workspaces remain in the [post-worker backlog](wanted_feature.md#wf-01--code-workspaces).
+They do not return to the active Point 5 delivery.
 The user schedules it after completion and release of the full Rust worker.
+
+Real-backend editor checks pass for exact source retention, attachment synchronization, and saved descriptor metadata.
+Immediate YAML-to-Flow changes now retain valid and invalid drafts without waiting for the shared editor debounce.
+Semantic edits use canonical formatting. State rename does not rewrite node references; this existing editor gap remains open.
+The Worker restart probe in chat 825 fails after delivery consumes the original JavaScript deadline.
+The same-consumer pending-delivery correction passes 45 focused tests and strict Clippy. Deployed restart acceptance remains open.
+Recovery latency and its generic public error remain explicit gates. No recovery success is claimed for this probe.
 
 Code-node backend selection is tracked in the [isolation assessment](source-mapping/code-node-isolation-assessment-20260928.md).
 The deployed Docker path passes Python/Pyodide, JavaScript, TypeScript, and Rust execution through the pipeline test chat.

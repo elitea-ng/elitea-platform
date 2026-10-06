@@ -70,6 +70,147 @@ describe('useFunctionInputMapping', () => {
     }
   });
 
+  it('retains saved child variable sources when a missing task requires a YAML mapping write', async () => {
+    const existingMapping = {
+      count: { type: 'variable', value: 'parent_count' },
+      label: { type: 'fstring', value: 'for {topic}' },
+      enabled: { type: 'fixed', value: false },
+      removed: { type: 'fixed', value: 'undeclared' },
+    };
+    const siblingNode = {
+      id: 'OtherChild',
+      type: 'agent',
+      tool: 'other_child',
+      input_mapping: { task: { type: 'fixed', value: 'Other task' }, count: { type: 'fixed', value: 9 } },
+    };
+    const childNode = { id: 'Child', type: 'agent', tool: 'selected_child', input_mapping: existingMapping };
+    const yamlJsonObject: YamlPipelineDocument = {
+      state: { parent_count: { type: 'integer' }, topic: { type: 'string' } },
+      nodes: [childNode, siblingNode],
+    };
+    const versionTools = [
+      {
+        id: 'selected-id',
+        type: 'application',
+        name: 'selected_child',
+        toolkit_name: 'selected_child',
+        variables: [{ name: 'count', value: 1 }, { name: 'label', value: 'default label' }, { name: 'enabled', value: true }],
+      },
+      {
+        id: 'other-id',
+        type: 'application',
+        name: 'other_child',
+        toolkit_name: 'other_child',
+        variables: [{ name: 'foreign', value: 'other child default' }],
+      },
+    ];
+    const expectedMapping = {
+      task: { type: 'fstring', value: '' },
+      count: existingMapping.count,
+      label: existingMapping.label,
+      enabled: existingMapping.enabled,
+    };
+    const setYamlJsonObject = vi.fn();
+    let latest: UseFunctionInputMappingResult | undefined;
+    renderWithRouterAndProject(
+      <HookProbe
+        id="Child"
+        yamlJsonObject={yamlJsonObject}
+        setYamlJsonObject={setYamlJsonObject}
+        versionTools={versionTools}
+        onResult={result => {
+          latest = result;
+        }}
+      />,
+      PROJECT_ID,
+    );
+
+    await waitFor(() => expect(latest?.requiredInputs).toEqual(['task']));
+    const result = latest;
+    if (result === undefined) throw new Error('Hook result is missing');
+    expect(result.selectedToolkit?.id).toBe('selected-id');
+    expect(result.inputMappings).toEqual(expectedMapping);
+    expect(result.mappingInfo['label']).toMatchObject(existingMapping.label);
+    expect(setYamlJsonObject).toHaveBeenCalled();
+    for (const [written] of setYamlJsonObject.mock.calls) {
+      const document = written as YamlPipelineDocument;
+      const child = document.nodes?.find(node => node.id === 'Child');
+      expect(child).toMatchObject({
+        tool: 'selected_child',
+        input_mapping: { count: existingMapping.count, label: existingMapping.label, enabled: existingMapping.enabled },
+      });
+      expect(child?.input_mapping).not.toHaveProperty('removed');
+      expect(child?.input_mapping).not.toHaveProperty('foreign');
+      expect(document.nodes?.find(node => node.id === 'OtherChild')).toEqual(siblingNode);
+    }
+    expect(setYamlJsonObject).toHaveBeenLastCalledWith({
+      ...yamlJsonObject,
+      nodes: [{ ...childNode, input_mapping: expectedMapping }, siblingNode],
+    });
+  });
+
+  it.each([
+    { name: 'a fixed empty value', entry: { type: 'fixed', value: '' } },
+    { name: 'an unsupported empty source', entry: { type: 'unsupported', value: '' } },
+    { name: 'a null entry', entry: null },
+    { name: 'a descriptor without a value', entry: { type: 'fixed' } },
+  ])('retains $name for a declared child during a missing-task YAML write', async ({ entry }) => {
+    const siblingNode = {
+      id: 'OtherChild', type: 'agent', tool: 'other_child',
+      input_mapping: { task: { type: 'fixed', value: 'Other task' }, empty_note: { type: 'fixed', value: 'Other note' } },
+    };
+    const childNode = {
+      id: 'Child', type: 'agent', tool: 'selected_child',
+      input_mapping: { empty_note: entry, removed: { type: 'fixed', value: 'undeclared' } },
+    };
+    // Saved YAML can contain invalid entries which the runtime must reject.
+    const yamlJsonObject = { nodes: [childNode, siblingNode] } as unknown as YamlPipelineDocument;
+    const versionTools = [
+      {
+        id: 'selected-id', type: 'application', name: 'selected_child', toolkit_name: 'selected_child',
+        variables: [{ name: 'empty_note', value: 'default note' }, { name: 'new_empty', value: '' }, { name: 'new_unset' }],
+      },
+      {
+        id: 'other-id', type: 'application', name: 'other_child', toolkit_name: 'other_child',
+        variables: [{ name: 'foreign', value: 'other default' }],
+      },
+    ];
+    const setYamlJsonObject = vi.fn();
+    let latest: UseFunctionInputMappingResult | undefined;
+    renderWithRouterAndProject(
+      <HookProbe
+        id="Child"
+        yamlJsonObject={yamlJsonObject}
+        setYamlJsonObject={setYamlJsonObject}
+        versionTools={versionTools}
+        onResult={result => {
+          latest = result;
+        }}
+      />,
+      PROJECT_ID,
+    );
+
+    await waitFor(() => expect(latest?.requiredInputs).toEqual(['task']));
+    expect(latest?.selectedToolkit?.id).toBe('selected-id');
+    expect(setYamlJsonObject).toHaveBeenCalled();
+    for (const [written] of setYamlJsonObject.mock.calls) {
+      const document = written as YamlPipelineDocument;
+      const child = document.nodes?.find(node => node.id === 'Child');
+      expect(child).toMatchObject({ tool: 'selected_child', input_mapping: { empty_note: entry } });
+      expect(child?.input_mapping).not.toHaveProperty('removed');
+      expect(child?.input_mapping).not.toHaveProperty('foreign');
+      expect(child?.input_mapping).not.toHaveProperty('new_empty');
+      expect(child?.input_mapping).not.toHaveProperty('new_unset');
+      expect(document.nodes?.find(node => node.id === 'OtherChild')).toEqual(siblingNode);
+    }
+    expect(setYamlJsonObject).toHaveBeenLastCalledWith({
+      nodes: [
+        { ...childNode, input_mapping: { task: { type: 'fstring', value: '' }, empty_note: entry } },
+        siblingNode,
+      ],
+    });
+  });
+
   it('resolves an MCP toolkit tool schema via available_mcp_tools and writes its required-field default mapping', async () => {
     const yamlJsonObject: YamlPipelineDocument = {
       nodes: [{ id: 'McpNode', tool: 'my_mcp_tool', toolkit_name: 'my_mcp_toolkit' }],

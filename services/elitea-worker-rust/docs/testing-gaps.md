@@ -92,6 +92,14 @@ Detailed diagnostics remain tracked by [OBS-RUST-01](source-mapping/agent-runtim
 
 ## Maintenance rules
 
+The [2026-10-06 consolidation](source-mapping/point5-consolidation-20261006.md) records the latest Point 5 evidence.
+Real-backend editor preservation checks pass. Main's new static consumers still require database and deployed acceptance.
+The exact Worker restart probe fails after delivery exhausts the original Code deadline.
+Retain its failed receipts and repeat the same boundary after the delivery correction deploys.
+Keep crash recovery, typed failure display, and complete-cohort acceptance open until their proofs pass.
+State rename reference rewriting remains a separate editor gap.
+Workspaces remain outside this register in the post-worker backlog.
+
 Update this register with each relevant implementation slice.
 Keep detailed source mappings authoritative for business behavior and implementation ownership.
 Distinguish unit, component, database, protocol, browser, and system evidence.

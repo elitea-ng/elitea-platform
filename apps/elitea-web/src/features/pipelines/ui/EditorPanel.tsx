@@ -1,5 +1,16 @@
 import type { Component, ErrorInfo, ReactNode } from 'react';
-import { PureComponent, Suspense, forwardRef, lazy, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
+import {
+  PureComponent,
+  Suspense,
+  forwardRef,
+  lazy,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
@@ -7,11 +18,11 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useTheme, type SxProps, type Theme } from '@mui/material/styles';
 import { useRouterState } from '@tanstack/react-router';
-import { load } from 'js-yaml';
 
 import { t } from '@/shared/i18n';
 import { handleCopy } from '@/shared/lib/clipboard';
 import { PipelineEditorMode } from '@/shared/lib/enums';
+import type { CodeMirrorEditorHandle } from '@/shared/ui/CodeMirrorEditor';
 import { CopyLinkIcon } from '@/shared/ui/icons/copy-link-icon';
 import { RefreshIcon } from '@/shared/ui/icons/refresh-icon';
 import { TabGroupButton } from '@/shared/ui/TabGroupButton';
@@ -19,12 +30,11 @@ import type { TabGroupButtonItem } from '@/shared/ui/TabGroupButton';
 import { combineSx } from '@/shared/ui/lib/combineSx';
 
 import type { AiAssistantLlmSettings } from '../api/aiAssistantPredict';
-import { dumpYaml } from '../lib/dumpYaml.helpers';
 import { useIsPipelineYamlCodeDirty, isChatPath } from '../lib/hooks/useIsPipelineYamlCodeDirty';
 import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
-import { migerateLegacyNodes, parseYaml } from '../lib/flow-editor/helpers/parsePipeline.helpers';
+import { parseYaml } from '../lib/flow-editor/helpers/parsePipeline.helpers';
 import type { RunSocketEvent } from '../lib/flow-editor/helpers/parseRunsByEvent.support';
-import type { FlowEdge, FlowNode } from '../lib/flow-editor/reactFlowTypes';
+import type { FlowEdge, FlowNode, SetYamlJsonObject } from '../lib/flow-editor/reactFlowTypes';
 import type { YamlPipelineDocument } from '../lib/flow-editor/helpers/pipelineFlow.types';
 import { usePipelineYamlStore } from '../model/pipelineYamlStore';
 import { AddNodeMenu } from './AddNodeMenu';
@@ -96,14 +106,6 @@ export interface EditorPanelProps {
   readonly disabled?: boolean | undefined;
   readonly versionTools?: readonly PipelineToolEntry[] | undefined;
   readonly llmSettings?: AiAssistantLlmSettings | null | undefined;
-}
-
-/** Baseline `EditorPanel.jsx`'s local `areYamlObjectsEqual` — a fast-path reference check plus a `JSON.stringify` deep comparison, acceptable for this size of document (same baseline rationale, preserved). */
-function areYamlObjectsEqual(obj1: unknown, obj2: unknown): boolean {
-  if (obj1 === obj2) return true;
-  if (!obj1 || !obj2) return obj1 === obj2;
-  if (typeof obj1 !== 'object' || typeof obj2 !== 'object') return obj1 === obj2;
-  return JSON.stringify(obj1) === JSON.stringify(obj2);
 }
 
 interface FlowEditorErrorBoundaryProps {
@@ -212,6 +214,7 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   const isFromChat = isChatPath(pathname);
   const [mode, setMode] = useState<PipelineEditorModeValue>(PipelineEditorMode.Flow);
   const flowEditorRef = useRef<FlowEditorHandle>(null);
+  const yamlEditorRef = useRef<CodeMirrorEditorHandle>(null);
 
   const isYamlCodeDirty = useIsPipelineYamlCodeDirty();
   useEffect(() => {
@@ -223,42 +226,29 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   const resetFlag = usePipelineYamlStore((state) => state.resetFlag);
   const layoutVersion = usePipelineYamlStore((state) => state.layoutVersion);
   const storeSetYamlCode = usePipelineYamlStore((state) => state.setYamlCode);
-  const storeSetYamlJsonObject = usePipelineYamlStore((state) => state.setYamlJsonObject);
+  const editPipelineYamlDocument = usePipelineYamlStore((state) => state.editPipelineYamlDocument);
+  const parsePipelineYamlCode = usePipelineYamlStore((state) => state.parsePipelineYamlCode);
   const clearResetFlag = usePipelineYamlStore((state) => state.clearResetFlag);
   const setLayoutVersion = usePipelineYamlStore((state) => state.setLayoutVersion);
 
-  const setYamlJsonObject = useCallback(
-    (next: YamlPipelineDocument) => {
-      if (areYamlObjectsEqual(next, yamlJsonObject)) return;
-      storeSetYamlJsonObject(next);
-      const yamlString = dumpYaml(next);
-      if (Object.keys(next).length && yamlString !== yamlCode) {
-        storeSetYamlCode(yamlString);
-      }
-    },
-    [storeSetYamlCode, storeSetYamlJsonObject, yamlCode, yamlJsonObject],
+  const setYamlJsonObject = useCallback<SetYamlJsonObject>(
+    (next, options) => editPipelineYamlDocument(next, options),
+    [editPipelineYamlDocument],
   );
 
   const onParseCodeToJson = useCallback(
     (code: string) => {
-      let parsedYamlJson: YamlPipelineDocument | undefined;
       try {
-        parsedYamlJson = (load(code || '') as YamlPipelineDocument | undefined) ?? {};
-        // `migerateLegacyNodes`'s own doc comment: "Faithfully preserved baseline inconsistency
-        // (NOT a bug fix)" — its non-migrating branches return a shape with no `.yamlJson` key at
-        // all, so this destructure resolves to `undefined` there, exactly like the baseline.
-        const migrated = migerateLegacyNodes(parsedYamlJson) as { readonly yamlJson?: YamlPipelineDocument };
-        parsedYamlJson = migrated.yamlJson;
+        if (parsePipelineYamlCode(code)) {
+          const parsed = usePipelineYamlStore.getState().yamlJsonObject as YamlPipelineDocument;
+          const expanded = flowEditorRef.current?.getCurrentExpandState();
+          flowEditorRef.current?.calculateLayoutNodes(parsed, true, true, expanded);
+        }
       } catch {
-        // YAML parsing failed, parsedYamlJson remains undefined.
-      }
-      if (parsedYamlJson && !areYamlObjectsEqual(parsedYamlJson, yamlJsonObject)) {
-        setYamlJsonObject(parsedYamlJson);
-        const currentExpandState = flowEditorRef.current?.getCurrentExpandState();
-        flowEditorRef.current?.calculateLayoutNodes(parsedYamlJson, true, true, currentExpandState);
+        // Invalid text remains in the YAML editor; keep the last valid flow view.
       }
     },
-    [setYamlJsonObject, yamlJsonObject],
+    [parsePipelineYamlCode],
   );
 
   const onChangeCode = useCallback(
@@ -300,17 +290,18 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   const onSelectChatMode = useCallback(
     (newMode: string) => {
       if (mode === newMode) return;
-      setMode(newMode as PipelineEditorModeValue);
       if (newMode === PipelineEditorMode.Flow) {
-        onParseCodeToJson(yamlCode);
-      } else {
-        const yamlString = dumpYaml(yamlJsonObject);
-        if (Object.keys(yamlJsonObject).length && yamlString !== yamlCode) {
-          storeSetYamlCode(yamlString);
-        }
+        // Commit the live document before unmount cancels its debounced change notification.
+        const storedCode = usePipelineYamlStore.getState().yamlCode;
+        const currentCode = yamlEditorRef.current?.getCode() ?? storedCode;
+        // CodeMirror normalizes line endings. Preserve stored bytes when the document is unchanged.
+        const code = currentCode === storedCode.replace(/\r\n?/g, '\n') ? storedCode : currentCode;
+        storeSetYamlCode(code);
+        onParseCodeToJson(code);
       }
+      setMode(newMode as PipelineEditorModeValue);
     },
-    [mode, onParseCodeToJson, storeSetYamlCode, yamlCode, yamlJsonObject],
+    [mode, onParseCodeToJson, storeSetYamlCode],
   );
 
   const onAddNode = useCallback((type: PipelineNodeType) => {
@@ -320,14 +311,6 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   const onCopy = useCallback(() => {
     void handleCopy(yamlCode);
   }, [yamlCode]);
-
-  useEffect(() => {
-    const nodes = (yamlJsonObject as { readonly nodes?: readonly { readonly decision?: unknown }[] }).nodes;
-    if (nodes?.find((node) => node.decision)) {
-      onParseCodeToJson(dumpYaml(yamlJsonObject));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [yamlJsonObject]);
 
   const initialNodes: readonly FlowNode[] = useMemo(() => parseYaml(yamlJsonObject).nodes as unknown as readonly FlowNode[], [yamlJsonObject]);
   const initialEdges: readonly FlowEdge[] = useMemo(() => parseYaml(yamlJsonObject).edges as unknown as readonly FlowEdge[], [yamlJsonObject]);
@@ -388,6 +371,7 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
         {mode === PipelineEditorMode.Yaml && (
           <Box sx={yamlEditorContainerSx(isFromChat, isSmallWindow)}>
             <YamlCodeEditor
+              ref={yamlEditorRef}
               code={yamlCode || ''}
               onChangeCode={onChangeCode}
               disabled={disabled ?? false}

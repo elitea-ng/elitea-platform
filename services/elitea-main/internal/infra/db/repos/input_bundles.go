@@ -67,7 +67,10 @@ WHERE c.execution_id = $1
   AND c.fence_token = $9
   AND c.released_at IS NULL
   AND c.lease_expires_at > clock_timestamp()
-  AND j.desired_state = 'RUNNING'
+  AND ((j.desired_state = 'RUNNING' AND c.recovery_mode <> 'NODE_RECOVERY') OR (
+      j.desired_state IN ('SUSPENDED', 'RUNNING') AND c.recovery_mode = 'NODE_RECOVERY'
+      AND j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1')
+  ))
   AND b.input_bundle_id = $10`,
 		fence.ExecutionID,
 		int64(fence.Generation),

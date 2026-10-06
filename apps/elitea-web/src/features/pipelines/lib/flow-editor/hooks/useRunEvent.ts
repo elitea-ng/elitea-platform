@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { isRootNodeRecoveryOwner, nodeRecoveryFromEvent } from '@/shared/lib/nodeRecovery';
 import { PipelineStatus } from '../constants/flowEditor.constants';
 import { parseRunEvent } from '../helpers/parseRunsByEvent.helpers';
 import type { RunPipelineStatus, RunSocketEvent } from '../helpers/parseRunsByEvent.support';
@@ -27,6 +28,7 @@ export function useRunEvent(setFlowNodes: SetFlowNodes, yamlJsonObject: YamlPipe
   const [isRunningPipeline, setIsRunningPipeline] = useState(false);
   const runPipelineStatusNodeIdRef = useRef<string | undefined>('');
   const activeNodeIdRef = useRef<string | undefined>('');
+  const runIdentity = useRef<{ responseId: string; generation: string } | undefined>(undefined);
   const runPipelineStatus = useRef<RunPipelineStatus | null>(null);
 
   const nextRunName = useMemo(() => {
@@ -44,6 +46,7 @@ export function useRunEvent(setFlowNodes: SetFlowNodes, yamlJsonObject: YamlPipe
   }, []);
 
   const clearRunParseStatus = useCallback(() => {
+    runIdentity.current = undefined;
     activeNodeIdRef.current = '';
     runPipelineStatusNodeIdRef.current = '';
     runPipelineStatus.current = null;
@@ -73,8 +76,32 @@ export function useRunEvent(setFlowNodes: SetFlowNodes, yamlJsonObject: YamlPipe
     setFlowNodes(prev => prev.map(node => ({ ...node, data: { ...node.data, isPerforming: undefined } }) as unknown as FlowNode));
   }, [onResetRunParseStatus, setFlowNodes]);
 
+  const applyRecoveryPause = useCallback((event: RunSocketEvent) => {
+    const binding = nodeRecoveryFromEvent(event), identity = runIdentity.current;
+    if (!binding || !identity || identity.responseId !== binding.responseMessageId
+      || identity.generation !== binding.executionGeneration || !runPipelineStatus.current) return;
+    const suspended = runPipelineStatus.current;
+    activeNodeIdRef.current = '';
+    suspended.data.status = PipelineStatus.Interrupt;
+    suspended.data.recoveryPaused = true;
+    suspended.data.timeline = suspended.data.timeline.map(step =>
+      step.id === binding.receipt.node_id && step.status === PipelineStatus.InProgress
+        ? { ...step, status: PipelineStatus.Interrupt } : step);
+    setFlowNodes(prev => prev.map(node => ({ ...node, data: { ...node.data, isPerforming: undefined } }) as unknown as FlowNode));
+    setPipelineRunNodes(prev => prev.map(node => node.id !== suspended.id ? node
+      : { ...node, data: { ...suspended.data, timeline: [...suspended.data.timeline] } }));
+  }, [setFlowNodes]);
+
   const onRcvAgentEvent = useCallback(
     (event: RunSocketEvent) => {
+      if ((event.type === 'agent_start' || event.type === 'start_task') && isRootNodeRecoveryOwner(event.response_metadata)) {
+        runIdentity.current = event.message_id && event.execution_generation
+          ? { responseId: event.message_id, generation: event.execution_generation } : undefined;
+      }
+      if (event.type === 'agent_node_recovery_required') {
+        applyRecoveryPause(event);
+        return;
+      }
       parseRunEvent(
         event,
         yamlJsonObject.nodes ?? [],
@@ -112,7 +139,7 @@ export function useRunEvent(setFlowNodes: SetFlowNodes, yamlJsonObject: YamlPipe
         });
       }
     },
-    [isRunningPipeline, nextRunName, setFlowNodes, yamlJsonObject.interrupt_after, yamlJsonObject.interrupt_before, yamlJsonObject.nodes],
+    [applyRecoveryPause, isRunningPipeline, nextRunName, setFlowNodes, yamlJsonObject.interrupt_after, yamlJsonObject.interrupt_before, yamlJsonObject.nodes],
   );
 
   useEffect(() => {

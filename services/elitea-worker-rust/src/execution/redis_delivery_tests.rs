@@ -17,10 +17,16 @@ use crate::transport::redis_commands::{
 use crate::transport::redis_generation::{
     RedisGenerationFuture, RedisStreamsConnection, RedisStreamsConnector, RedisStreamsHandle,
 };
-use crate::transport::redis_streams::{RedisReclaimPage, RedisStreamsError, RedisStreamsErrorKind};
+use crate::transport::redis_streams::{
+    RedisOwnedPendingPage, RedisReclaimPage, RedisStreamsError, RedisStreamsErrorKind,
+};
 
 #[derive(Debug, Eq, PartialEq)]
 enum FakeOperation {
+    Pending {
+        count: u64,
+        start_id: String,
+    },
     Read {
         count: u64,
         block_millis: u64,
@@ -37,11 +43,13 @@ enum FakeOperation {
 struct FakeConnection {
     batch_size: u64,
     reads: Mutex<VecDeque<Result<Vec<RedisCommandDelivery>, RedisStreamsError>>>,
+    pending: Mutex<VecDeque<Result<RedisOwnedPendingPage, RedisStreamsError>>>,
     reclaims: Mutex<VecDeque<Result<RedisReclaimPage, RedisStreamsError>>>,
     heartbeats: Mutex<VecDeque<Result<Vec<String>, RedisStreamsError>>>,
     operations: Mutex<Vec<FakeOperation>>,
     operation_changed: Notify,
     read_available: Notify,
+    retirement_calls: AtomicUsize,
 }
 
 impl FakeConnection {
@@ -49,11 +57,13 @@ impl FakeConnection {
         Self {
             batch_size,
             reads: Mutex::new(VecDeque::new()),
+            pending: Mutex::new(VecDeque::new()),
             reclaims: Mutex::new(VecDeque::new()),
             heartbeats: Mutex::new(VecDeque::new()),
             operations: Mutex::new(Vec::new()),
             operation_changed: Notify::new(),
             read_available: Notify::new(),
+            retirement_calls: AtomicUsize::new(0),
         }
     }
 
@@ -69,6 +79,10 @@ impl FakeConnection {
             .push_back(value);
     }
 
+    fn push_pending(&self, value: Result<RedisOwnedPendingPage, RedisStreamsError>) {
+        self.pending.lock().expect("pending queue").push_back(value);
+    }
+
     fn push_heartbeat(&self, value: Result<Vec<String>, RedisStreamsError>) {
         self.heartbeats
             .lock()
@@ -82,6 +96,10 @@ impl FakeConnection {
             .expect("operation log")
             .iter()
             .map(|operation| match operation {
+                FakeOperation::Pending { count, start_id } => FakeOperation::Pending {
+                    count: *count,
+                    start_id: start_id.clone(),
+                },
                 FakeOperation::Read {
                     count,
                     block_millis,
@@ -104,6 +122,18 @@ impl FakeConnection {
             .collect()
     }
 
+    async fn wait_for_heartbeat(&self, entry: &str) {
+        loop {
+            let changed = self.operation_changed.notified();
+            if self.operations().iter().any(|operation| {
+                matches!(operation, FakeOperation::Heartbeat(entries) if entries.iter().any(|id| id == entry))
+            }) {
+                return;
+            }
+            changed.await;
+        }
+    }
+
     async fn wait_operations(&self, expected: usize) {
         while self.operations.lock().expect("operation log").len() < expected {
             let changed = self.operation_changed.notified();
@@ -121,6 +151,7 @@ impl RedisRetirementClient for FakeConnection {
         &self,
         _request: RedisRetirementRequest,
     ) -> Result<RedisRetirementResponse, RedisRetirementClientError> {
+        self.retirement_calls.fetch_add(1, Ordering::AcqRel);
         Ok(RedisRetirementResponse {
             acknowledged: 1,
             deleted: 1,
@@ -158,6 +189,30 @@ impl RedisStreamsConnection for FakeConnection {
                 }
                 available.await;
             }
+        })
+    }
+
+    fn read_owned_pending(
+        self: Arc<Self>,
+        count: u64,
+        start_id: String,
+    ) -> RedisGenerationFuture<Result<RedisOwnedPendingPage, RedisStreamsError>> {
+        Box::pin(async move {
+            self.operations
+                .lock()
+                .expect("operation log")
+                .push(FakeOperation::Pending { count, start_id });
+            self.operation_changed.notify_waiters();
+            self.pending
+                .lock()
+                .expect("pending queue")
+                .pop_front()
+                .unwrap_or_else(|| {
+                    Ok(RedisOwnedPendingPage {
+                        next_start_id: "0-0".to_owned(),
+                        deliveries: Vec::new(),
+                    })
+                })
         })
     }
 
@@ -391,16 +446,18 @@ async fn intake_alternates_a_bounded_read_with_the_due_reclaim_turn() {
     assert!(matches!(
         operations.as_slice(),
         [
+            FakeOperation::Pending { count: 2, start_id: own_start },
             FakeOperation::Read {
                 count: 2,
                 block_millis: 1..=100
             },
+            FakeOperation::Pending { count: 2, start_id: next_own_start },
             FakeOperation::Reclaim {
                 min_idle_millis: 60_000,
                 start_id,
                 count: 2
             }
-        ] if start_id == "0-0"
+        ] if start_id == "0-0" && own_start == "0-0" && next_own_start == "0-0"
     ));
 }
 
@@ -516,7 +573,7 @@ async fn retryable_generation_failure_is_not_replayed_and_next_turn_reconnects()
     let error = intake.next_batch().await.err().expect("first read fails");
     assert_eq!(error.kind(), RedisStreamsErrorKind::DependencyUnavailable);
     assert!(!redis_intake_failure_is_fatal(&error));
-    assert_eq!(first.operations().len(), 1);
+    assert_eq!(first.operations().len(), 2);
 
     let next = intake.next_batch().await.expect("explicit next turn");
     assert_eq!(next.len(), 1);
@@ -575,7 +632,7 @@ async fn runtime_stops_intake_but_heartbeats_until_owned_processing_drains() {
     tokio::task::yield_now().await;
     assert!(!task.is_finished());
     tokio::time::advance(Duration::from_millis(100)).await;
-    connection.wait_operations(3).await;
+    connection.wait_for_heartbeat("1-0").await;
     assert!(connection.operations().iter().any(
         |operation| matches!(operation, FakeOperation::Heartbeat(entries) if entries == &["1-0"])
     ));
@@ -665,7 +722,7 @@ async fn runtime_reconnects_only_after_the_stop_aware_dependency_delay() {
     let runtime = RedisDeliveryRuntime::new(handle, Arc::clone(&processor), runtime_config(1, 1));
     let (stop, stopped) = watch::channel(false);
     let task = tokio::spawn(runtime.run(stopped));
-    first.wait_operations(1).await;
+    first.wait_operations(2).await;
 
     tokio::time::advance(Duration::from_millis(99)).await;
     tokio::task::yield_now().await;
@@ -673,7 +730,7 @@ async fn runtime_reconnects_only_after_the_stop_aware_dependency_delay() {
     tokio::time::advance(Duration::from_millis(1)).await;
     processor.wait_started(1).await;
     assert!(matches!(
-        second.operations().first(),
+        second.operations().get(1),
         Some(FakeOperation::Reclaim { .. })
     ));
 
@@ -744,4 +801,139 @@ fn deployed_intake_bounds_fail_closed() {
     assert!(RedisDeliveryRuntimeConfig::new(intake, 60_000, 300_000).is_ok());
     assert!(RedisDeliveryRuntimeConfig::new(intake, 99, 1_000).is_err());
     assert!(RedisDeliveryRuntimeConfig::new(intake, 100, 999).is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn own_pending_revisits_deferred_delivery_after_the_existing_claim_lease_expires() {
+    let connection = Arc::new(FakeConnection::new(2));
+    for _ in 0..=6 {
+        connection.push_pending(Ok(RedisOwnedPendingPage {
+            next_start_id: "0-0".to_owned(),
+            deliveries: vec![delivery("1-0")],
+        }));
+    }
+    let intake = intake(
+        Arc::clone(&connection),
+        RedisDeliveryIntakeConfig::new(1, 1, 30_000, 60_000, 5_000).unwrap(),
+    );
+    let started = tokio::time::Instant::now();
+    let lease_end = started + Duration::from_secs(30);
+    let mut dispatched = 0;
+    for _ in 0..=6 {
+        // Model the existing Main fence: a live old claim defers without ACK.
+        let batch = intake.next_batch().await.expect("same consumer redelivery");
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].entry_id(), "1-0");
+        if tokio::time::Instant::now() >= lease_end {
+            dispatched += 1;
+        }
+        drop(batch);
+        assert_eq!(intake.owned_count(), 0);
+        if dispatched == 1 {
+            break;
+        }
+        tokio::time::advance(Duration::from_secs(5)).await;
+    }
+    assert_eq!(dispatched, 1);
+    assert_eq!(connection.retirement_calls.load(Ordering::Acquire), 0);
+    assert_eq!(
+        tokio::time::Instant::now() - started,
+        Duration::from_secs(30)
+    );
+    assert!(
+        connection
+            .operations()
+            .iter()
+            .all(|operation| !matches!(operation, FakeOperation::Close))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn own_pending_pages_preserve_new_and_cross_consumer_intake_fairness() {
+    let connection = Arc::new(FakeConnection::new(1));
+    for id in ["1-0", "2-0"] {
+        connection.push_pending(Ok(RedisOwnedPendingPage {
+            next_start_id: id.to_owned(),
+            deliveries: vec![delivery(id)],
+        }));
+    }
+    connection.push_read(Ok(vec![delivery("3-0")]));
+    connection.push_read(Ok(vec![delivery("4-0")]));
+    connection.push_reclaim(Ok(RedisReclaimPage {
+        next_start_id: "0-0".to_owned(),
+        deliveries: vec![delivery("5-0")],
+    }));
+    let intake = intake(Arc::clone(&connection), config(1, 1));
+    for expected in ["1-0", "3-0"] {
+        let batch = intake.next_batch().await.unwrap();
+        assert_eq!(batch[0].entry_id(), expected);
+        drop(batch);
+    }
+    tokio::time::advance(Duration::from_millis(100)).await;
+    for expected in ["2-0", "5-0", "4-0"] {
+        let batch = intake.next_batch().await.unwrap();
+        assert_eq!(batch[0].entry_id(), expected);
+        drop(batch);
+    }
+    let operations = connection.operations();
+    assert!(
+        matches!(&operations[0], FakeOperation::Pending { count: 1, start_id } if start_id == "0-0")
+    );
+    assert!(matches!(&operations[1], FakeOperation::Read { .. }));
+    assert!(
+        matches!(&operations[2], FakeOperation::Pending { count: 1, start_id } if start_id == "1-0")
+    );
+    assert!(matches!(
+        &operations[3],
+        FakeOperation::Reclaim {
+            min_idle_millis: 60_000,
+            ..
+        }
+    ));
+    assert!(matches!(&operations[4], FakeOperation::Read { .. }));
+}
+
+#[tokio::test(start_paused = true)]
+async fn own_pending_does_not_dispatch_an_active_local_delivery_twice() {
+    let connection = Arc::new(FakeConnection::new(2));
+    for _ in 0..2 {
+        connection.push_pending(Ok(RedisOwnedPendingPage {
+            next_start_id: "0-0".to_owned(),
+            deliveries: vec![delivery("1-0")],
+        }));
+    }
+    let intake = intake(Arc::clone(&connection), config(1, 1));
+    let active = intake.next_batch().await.unwrap();
+    tokio::time::advance(Duration::from_millis(100)).await;
+    assert!(intake.next_batch().await.unwrap().is_empty());
+    assert_eq!(intake.owned_count(), 1);
+    assert!(matches!(
+        connection.operations().last(),
+        Some(FakeOperation::Pending { count: 1, .. })
+    ));
+    drop(active);
+    assert_eq!(intake.owned_count(), 0);
+}
+
+#[tokio::test]
+async fn own_pending_waits_for_existing_capacity_and_stop_cancels_the_wait() {
+    let connection = Arc::new(FakeConnection::new(2));
+    connection.push_pending(Ok(RedisOwnedPendingPage {
+        next_start_id: "2-0".to_owned(),
+        deliveries: vec![delivery("1-0"), delivery("2-0")],
+    }));
+    let intake = intake(Arc::clone(&connection), config(1, 1));
+    let active = intake.next_batch().await.unwrap();
+    let waiting = intake.next_batch();
+    tokio::pin!(waiting);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(1), &mut waiting)
+            .await
+            .is_err()
+    );
+    assert_eq!(connection.operations().len(), 1);
+    intake.close().await.unwrap();
+    assert!(matches!(waiting.await, Err(error) if error.kind() == RedisStreamsErrorKind::Closed));
+    drop(active);
+    assert_eq!(intake.owned_count(), 0);
 }

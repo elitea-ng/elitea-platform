@@ -237,6 +237,13 @@ pub struct RedisReclaimPage {
     pub deliveries: Vec<RedisCommandDelivery>,
 }
 
+/// One page of entries already pending for the configured consumer.
+/// A zero cursor starts another scan. This page grants no execution authority.
+pub(crate) struct RedisOwnedPendingPage {
+    pub next_start_id: String,
+    pub deliveries: Vec<RedisCommandDelivery>,
+}
+
 /// Stable low-cardinality Redis transport failure category.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RedisStreamsErrorKind {
@@ -619,6 +626,54 @@ impl RedisStreamsClient {
             response,
             &self.config.stream,
             count,
+            self.config.command_limits,
+        );
+        if result.is_err() {
+            self.fail();
+        }
+        result
+    }
+
+    /// Read only this consumer's pending entries without claiming another owner.
+    /// Main must still authorize each exact redelivery before execution.
+    /// # Errors
+    /// Returns bounded configuration, transport, cursor, or payload errors.
+    pub(crate) async fn read_owned_pending(
+        &self,
+        count: u64,
+        start_id: &str,
+    ) -> Result<RedisOwnedPendingPage, RedisStreamsError> {
+        self.ensure_open()?;
+        if count == 0 || count > self.config.read_count {
+            return Err(RedisStreamsError::configuration(
+                "the Redis pending read exceeds its configured bound",
+            ));
+        }
+        decode_entry_id(start_id.as_bytes()).map_err(|error| map_command_decode_error(&error))?;
+        let permit = self.intake_permit().await?;
+        self.ensure_open()?;
+        let mut intake = self.intake.clone();
+        let command = owned_pending_read_command(
+            &self.config.stream,
+            &self.config.group,
+            &self.config.consumer,
+            count,
+            start_id,
+        );
+        let response = run_owned_operation(permit, self.failed.clone(), async move {
+            command
+                .query_async::<Value>(&mut intake)
+                .await
+                .map_err(|error| {
+                    RedisStreamsError::from_redis(error, "Redis owned pending read failed")
+                })
+        })
+        .await?;
+        let result = decode_owned_pending_response(
+            response,
+            &self.config.stream,
+            count,
+            start_id,
             self.config.command_limits,
         );
         if result.is_err() {
@@ -1318,6 +1373,121 @@ fn decode_read_response(
     Ok(deliveries)
 }
 
+fn owned_pending_read_command(
+    stream: &str,
+    group: &str,
+    consumer: &str,
+    count: u64,
+    start_id: &str,
+) -> redis::Cmd {
+    let mut command = cmd("XREADGROUP");
+    command
+        .arg("GROUP")
+        .arg(group)
+        .arg(consumer)
+        .arg("COUNT")
+        .arg(count)
+        .arg("STREAMS")
+        .arg(stream)
+        .arg(start_id);
+    command
+}
+
+fn pending_cursor_numbers(value: &str) -> Result<(u64, u64), RedisStreamsError> {
+    decode_entry_id(value.as_bytes()).map_err(|error| map_command_decode_error(&error))?;
+    let (millis, sequence) = value
+        .split_once('-')
+        .ok_or_else(|| RedisStreamsError::protocol("the Redis pending cursor is malformed"))?;
+    Ok((
+        millis
+            .parse()
+            .map_err(|_| RedisStreamsError::protocol("the Redis pending cursor is malformed"))?,
+        sequence
+            .parse()
+            .map_err(|_| RedisStreamsError::protocol("the Redis pending cursor is malformed"))?,
+    ))
+}
+
+fn decode_owned_pending_response(
+    response: Value,
+    expected_stream: &str,
+    max_count: u64,
+    start_id: &str,
+    limits: RedisCommandLimits,
+) -> Result<RedisOwnedPendingPage, RedisStreamsError> {
+    let mut previous = pending_cursor_numbers(start_id)?;
+    let mut page = RedisOwnedPendingPage {
+        next_start_id: "0-0".to_owned(),
+        deliveries: Vec::new(),
+    };
+    if matches!(response, Value::Nil) {
+        return Ok(page);
+    }
+    let streams = value_array(response, "the Redis pending response is malformed")?;
+    if streams.len() > 1 {
+        return Err(RedisStreamsError::protocol(
+            "Redis returned more than one pending stream",
+        ));
+    }
+    for stream in streams {
+        let mut pair = value_array(stream, "the Redis pending stream is malformed")?;
+        if pair.len() != 2 {
+            return Err(RedisStreamsError::protocol(
+                "the Redis pending stream is malformed",
+            ));
+        }
+        let entries = value_array(pair.remove(1), "the Redis pending entries are malformed")?;
+        if value_text(pair.remove(0), "the Redis pending stream is malformed")?
+            != expected_stream.as_bytes()
+        {
+            return Err(RedisStreamsError::protocol(
+                "Redis returned another pending stream",
+            ));
+        }
+        if u64::try_from(entries.len()).unwrap_or(u64::MAX) > max_count {
+            return Err(RedisStreamsError::resource_exhausted(
+                "the Redis pending response exceeds its batch bound",
+            ));
+        }
+        let full_page = u64::try_from(entries.len()).unwrap_or(u64::MAX) == max_count;
+        for entry in entries {
+            let mut fields = value_array(entry, "the Redis pending entry is malformed")?;
+            if fields.len() != 2 {
+                return Err(RedisStreamsError::protocol(
+                    "the Redis pending entry is malformed",
+                ));
+            }
+            let payload = fields.remove(1);
+            let id_bytes = value_text(
+                fields.remove(0),
+                "the Redis pending entry identity is malformed",
+            )?;
+            let id =
+                decode_entry_id(&id_bytes).map_err(|error| map_command_decode_error(&error))?;
+            let numbers = pending_cursor_numbers(&id)?;
+            if numbers <= previous {
+                return Err(RedisStreamsError::protocol(
+                    "the Redis pending cursor did not advance",
+                ));
+            }
+            previous = numbers;
+            if full_page {
+                page.next_start_id.clone_from(&id);
+            }
+            // Deleted stream payloads remain PEL tombstones. Advance the scan,
+            // but never fabricate a command or acknowledge the missing payload.
+            if !matches!(payload, Value::Nil) {
+                page.deliveries.push(decode_delivery(
+                    Value::Array(vec![Value::BulkString(id_bytes), payload]),
+                    expected_stream,
+                    limits,
+                )?);
+            }
+        }
+    }
+    Ok(page)
+}
+
 fn decode_reclaim_response(
     response: Value,
     expected_stream: &str,
@@ -1863,6 +2033,137 @@ mod tests {
             tokio::task::yield_now().await;
         }
         assert!(dropped.load(Ordering::Acquire));
+    }
+
+    fn pending_response(stream: &'static [u8], entries: Vec<Value>) -> Value {
+        Value::Array(vec![Value::Array(vec![
+            bytes(stream),
+            Value::Array(entries),
+        ])])
+    }
+
+    fn pending_limits() -> RedisCommandLimits {
+        RedisCommandLimits {
+            max_entry_bytes: 1024,
+            max_field_bytes: 512,
+        }
+    }
+
+    #[test]
+    fn owned_pending_wire_selects_only_the_configured_consumer_without_claim_or_ack() {
+        let packed = owned_pending_read_command("commands", "group", "worker-a", 2, "9-0")
+            .get_packed_command();
+        assert_eq!(packed, b"*9\r\n$10\r\nXREADGROUP\r\n$5\r\nGROUP\r\n$5\r\ngroup\r\n$8\r\nworker-a\r\n$5\r\nCOUNT\r\n$1\r\n2\r\n$7\r\nSTREAMS\r\n$8\r\ncommands\r\n$3\r\n9-0\r\n");
+    }
+
+    #[test]
+    fn owned_pending_pages_use_numeric_cursor_order_and_preserve_signed_bytes() {
+        let page = decode_owned_pending_response(
+            pending_response(
+                b"commands",
+                vec![
+                    command_entry(b"10-0", b"\x00\xffsigned"),
+                    command_entry(b"11-0", b"second"),
+                ],
+            ),
+            "commands",
+            2,
+            "9-9",
+            pending_limits(),
+        )
+        .expect("bounded pending page");
+        assert_eq!(page.next_start_id, "11-0");
+        assert_eq!(page.deliveries.len(), 2);
+        assert_eq!(page.deliveries[0].signed_envelope(), b"\x00\xffsigned");
+    }
+
+    #[test]
+    fn owned_pending_short_and_empty_pages_restart_the_scan() {
+        for response in [
+            Value::Nil,
+            pending_response(b"commands", vec![]),
+            pending_response(b"commands", vec![command_entry(b"10-0", b"signed")]),
+        ] {
+            let page =
+                decode_owned_pending_response(response, "commands", 2, "9-0", pending_limits())
+                    .expect("end of scan");
+            assert_eq!(page.next_start_id, "0-0");
+        }
+    }
+
+    #[test]
+    fn owned_pending_deleted_payload_advances_without_creating_a_delivery() {
+        let page = decode_owned_pending_response(
+            pending_response(
+                b"commands",
+                vec![Value::Array(vec![bytes(b"10-0"), Value::Nil])],
+            ),
+            "commands",
+            1,
+            "9-0",
+            pending_limits(),
+        )
+        .expect("PEL tombstone");
+        assert_eq!(page.next_start_id, "10-0");
+        assert!(page.deliveries.is_empty());
+    }
+
+    #[test]
+    fn owned_pending_rejects_wrong_stream_cursor_order_bounds_and_malformed_payloads() {
+        let cases = [
+            pending_response(b"other", vec![command_entry(b"10-0", b"signed")]),
+            pending_response(b"commands", vec![command_entry(b"9-0", b"signed")]),
+            pending_response(
+                b"commands",
+                vec![
+                    command_entry(b"10-0", b"signed"),
+                    command_entry(b"10-0", b"duplicate"),
+                ],
+            ),
+            pending_response(
+                b"commands",
+                vec![
+                    command_entry(b"11-0", b"signed"),
+                    command_entry(b"10-0", b"backwards"),
+                ],
+            ),
+            pending_response(b"commands", vec![command_entry(b"bad", b"signed")]),
+            pending_response(b"commands", vec![Value::Array(vec![bytes(b"10-0")])]),
+            pending_response(
+                b"commands",
+                vec![Value::Array(vec![bytes(b"10-0"), Value::Array(vec![])])],
+            ),
+            pending_response(
+                b"commands",
+                vec![Value::Array(vec![
+                    bytes(b"10-0"),
+                    Value::Array(vec![bytes(b"signed_envelope")]),
+                ])],
+            ),
+        ];
+        for response in cases {
+            assert!(
+                decode_owned_pending_response(response, "commands", 2, "9-0", pending_limits())
+                    .is_err()
+            );
+        }
+        assert!(
+            decode_owned_pending_response(
+                pending_response(
+                    b"commands",
+                    vec![command_entry(b"10-0", b"a"), command_entry(b"11-0", b"b")]
+                ),
+                "commands",
+                1,
+                "9-0",
+                pending_limits()
+            )
+            .is_err()
+        );
+        assert!(
+            decode_owned_pending_response(Value::Nil, "commands", 1, "bad", pending_limits())
+                .is_err()
+        );
     }
 
     #[test]

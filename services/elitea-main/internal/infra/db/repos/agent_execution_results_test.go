@@ -680,3 +680,23 @@ func TestLoadAndPersistCurrentAgentMixedPausePreservesBothGuards(t *testing.T) {
 		t.Fatal("mixed pause used the single-kind writer")
 	}
 }
+
+func staticMessageMetadataFixture() string {
+	return `{"thread_id":"thread-current-1","invoked_skills":[],"application_details":{"agent_type":"pipeline"},"pipeline_static_v1":{"revision":1,"pause_id":"pipeline-static:sha256:` + strings.Repeat("a", 64) + `","checkpoint_id":"checkpoint-1","kind":"before","node_name":"tick","definition_digest":"sha256:` + strings.Repeat("b", 64) + `","node_digest":"sha256:` + strings.Repeat("c", 64) + `","pending_nodes":["tick"],"step":0,"descendant_path":[]}}`
+}
+func TestStaticFullMessagePreservesTheValidatedPauseAndRejectsMixedTerminal(t *testing.T) {
+	metadata := staticMessageMetadataFixture()
+	got, err := decodeCurrentAgentFullMessage([]byte(`"Pipeline paused. Type a message to continue."`), []byte(`[]`), []byte(metadata))
+	if err != nil || len(got.PipelineStaticProof) == 0 {
+		t.Fatalf("proof lost: %+v err=%v", got, err)
+	}
+	for _, changed := range []string{strings.Replace(metadata, `"pending_nodes":["tick"]`, `"pending_nodes":["successor"]`, 1), strings.Replace(metadata, `"invoked_skills":[]`, `"invoked_skills":[],"output_limit_reached":true`, 1), strings.Replace(metadata, `"agent_type":"pipeline"`, `"agent_type":"agent"`, 1)} {
+		if _, err := decodeCurrentAgentFullMessage([]byte(`"paused"`), []byte(`[]`), []byte(changed)); err == nil {
+			t.Fatal("unbound or mixed static terminal accepted")
+		}
+	}
+	ordinary, err := decodeCurrentAgentFullMessage([]byte(`"complete"`), []byte(`[]`), []byte(`{"thread_id":"thread-current-1","invoked_skills":[]}`))
+	if err != nil || len(ordinary.PipelineStaticProof) != 0 {
+		t.Fatal("ordinary completion retained static proof")
+	}
+}

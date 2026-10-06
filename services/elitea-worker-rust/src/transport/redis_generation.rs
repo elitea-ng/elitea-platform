@@ -16,7 +16,9 @@ use super::redis_commands::{
     RedisCommandDelivery, RedisRetirementClient, RedisRetirementClientError,
     RedisRetirementRequest, RedisRetirementResponse,
 };
-use super::redis_streams::{RedisReclaimPage, RedisStreamsClient, RedisStreamsError};
+use super::redis_streams::{
+    RedisOwnedPendingPage, RedisReclaimPage, RedisStreamsClient, RedisStreamsError,
+};
 
 pub(crate) type RedisGenerationFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
@@ -35,6 +37,12 @@ pub(crate) trait RedisStreamsConnection:
         count: u64,
         block_millis: u64,
     ) -> RedisGenerationFuture<Result<Vec<RedisCommandDelivery>, RedisStreamsError>>;
+
+    fn read_owned_pending(
+        self: Arc<Self>,
+        count: u64,
+        start_id: String,
+    ) -> RedisGenerationFuture<Result<RedisOwnedPendingPage, RedisStreamsError>>;
 
     fn reclaim_page(
         self: Arc<Self>,
@@ -64,6 +72,16 @@ impl RedisStreamsConnection for RedisStreamsClient {
         Box::pin(
             async move { RedisStreamsClient::read_new(self.as_ref(), count, block_millis).await },
         )
+    }
+
+    fn read_owned_pending(
+        self: Arc<Self>,
+        count: u64,
+        start_id: String,
+    ) -> RedisGenerationFuture<Result<RedisOwnedPendingPage, RedisStreamsError>> {
+        Box::pin(async move {
+            RedisStreamsClient::read_owned_pending(self.as_ref(), count, &start_id).await
+        })
     }
 
     fn reclaim_page(
@@ -182,6 +200,20 @@ where
         let current = self.current().await?;
         let result = Arc::clone(&current.connection)
             .read_new(count, block_millis)
+            .await;
+        self.invalidate_retryable(current.number, result.as_ref().err())
+            .await;
+        result
+    }
+
+    pub(crate) async fn read_owned_pending(
+        &self,
+        count: u64,
+        start_id: String,
+    ) -> Result<RedisOwnedPendingPage, RedisStreamsError> {
+        let current = self.current().await?;
+        let result = Arc::clone(&current.connection)
+            .read_owned_pending(count, start_id)
             .await;
         self.invalidate_retryable(current.number, result.as_ref().err())
             .await;

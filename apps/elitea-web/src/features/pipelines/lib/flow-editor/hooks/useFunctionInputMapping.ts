@@ -55,7 +55,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { toolkitTools } from '@/entities/toolkit';
+import { ToolTypes, toolkitTools } from '@/entities/toolkit';
 
 import * as FlowEditorHelpers from '../helpers/flowEditor.helpers';
 import type { YamlInputMappingEntry, YamlPipelineDocument, YamlPipelineNode } from '../helpers/pipelineFlow.types';
@@ -169,9 +169,18 @@ function shouldWriteDefaultMapping({ existingInputMapping, requiredInputs, selec
  * Filter mapping to only include required fields or fields with a non-empty
  * value — prevents optional empty parameters from being added to YAML
  * initially (baseline: `useFunctionInputMapping.hooks.js:147-155`).
+ * Retain existing declared child entries, including empty values and invalid descriptors.
  */
-function filterRequiredOrNonEmpty(mapping: Record<string, unknown>, requiredInputs: readonly string[]): Record<string, unknown> {
+function filterRequiredOrNonEmpty(
+  mapping: Record<string, unknown>,
+  requiredInputs: readonly string[],
+  existingChildMapping: Readonly<Record<string, YamlInputMappingEntry>> | undefined,
+): Record<string, unknown> {
   return Object.entries(mapping).reduce<Record<string, unknown>>((result, [key, value]) => {
+    if (existingChildMapping && Object.hasOwn(existingChildMapping, key)) {
+      result[key] = existingChildMapping[key];
+      return result;
+    }
     const isRequired = requiredInputs.includes(key);
     const entry = value as { value?: unknown } | undefined;
     const hasValue = entry?.value !== '' && entry?.value !== undefined;
@@ -275,7 +284,8 @@ export function useFunctionInputMapping({ id, yamlJsonObject, setYamlJsonObject,
     const existingInputMapping = Object.keys(yamlNode?.input_mapping ?? {});
 
     if (shouldWriteDefaultMapping({ existingInputMapping, requiredInputs, selectedTool, initialTool, initialToolkit, toolkit })) {
-      const filteredMapping = filterRequiredOrNonEmpty(mapping, requiredInputs);
+      const existingChildMapping = selectedToolkit?.type === ToolTypes.application.value ? yamlNode?.input_mapping : undefined;
+      const filteredMapping = filterRequiredOrNonEmpty(mapping, requiredInputs, existingChildMapping);
       FlowEditorHelpers.updateYamlNode(id, 'input_mapping', filteredMapping, yamlJsonObject, setYamlJsonObject);
     }
     // baseline's own deps array (useFunctionInputMapping.hooks.js:158-166).

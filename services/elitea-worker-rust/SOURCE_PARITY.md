@@ -429,3 +429,12 @@ Main's exact profile admission remains unchanged.
 The [source mapping](docs/source-mapping/code-compiled-cohort-selection-20261006.md) separates the failed four-language fixture from passing Cargo browser runs.
 The unchanged four-language fixture and Cargo regression pass after the Worker-only correction deploys.
 Replacement CI and complete-cohort restart acceptance remain required.
+
+## Point 5 consolidation, 2026-10-06
+
+PR 1014 is merged. Preserved graph source remains intact while missing Main and Web consumers are connected.
+The [consolidation mapping](docs/source-mapping/point5-consolidation-20261006.md) records focused checks and real-backend editor acceptance.
+It also records the failed Worker restart probe and its delivery latency boundary.
+Source checks do not prove deployed Main continuation or successful Code recovery.
+Parallel, Map, resilience, data shaping, and HTTP actions retain their separate acceptance gates.
+Workspaces remain in the post-worker backlog, outside active Point 5 scope.

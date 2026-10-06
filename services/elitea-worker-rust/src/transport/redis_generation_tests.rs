@@ -16,7 +16,9 @@ use super::redis_commands::{
 use super::redis_generation::{
     RedisGenerationFuture, RedisStreamsConnection, RedisStreamsConnector, RedisStreamsHandle,
 };
-use super::redis_streams::{RedisReclaimPage, RedisStreamsError, RedisStreamsErrorKind};
+use super::redis_streams::{
+    RedisOwnedPendingPage, RedisReclaimPage, RedisStreamsError, RedisStreamsErrorKind,
+};
 
 enum FakeOutcome {
     Success,
@@ -124,6 +126,19 @@ impl RedisStreamsConnection for FakeConnection {
                 self.read_release.notified().await;
             }
             Self::outcome(&self.read_outcomes)
+        })
+    }
+
+    fn read_owned_pending(
+        self: Arc<Self>,
+        _count: u64,
+        _start_id: String,
+    ) -> RedisGenerationFuture<Result<RedisOwnedPendingPage, RedisStreamsError>> {
+        Box::pin(async move {
+            Self::outcome(&self.read_outcomes).map(|deliveries| RedisOwnedPendingPage {
+                next_start_id: "0-0".to_owned(),
+                deliveries,
+            })
         })
     }
 
@@ -316,4 +331,26 @@ async fn close_is_one_way_and_observes_the_current_generation_once() {
         handle.connect().await.expect_err("closed handle").kind(),
         RedisStreamsErrorKind::Closed
     );
+}
+
+#[tokio::test]
+async fn owned_pending_failure_invalidates_the_generation_without_implicit_replay() {
+    let connector = Arc::new(FakeConnector::new());
+    let handle = RedisStreamsHandle::new(Arc::clone(&connector));
+    handle.connect().await.unwrap();
+    connector.connection(0).fail_next_read();
+    assert!(
+        handle
+            .read_owned_pending(1, "0-0".to_owned())
+            .await
+            .is_err()
+    );
+    assert_eq!(connector.attempts.load(Ordering::Acquire), 1);
+    assert_eq!(handle.connect().await.unwrap(), 2);
+    let page = handle
+        .read_owned_pending(1, "0-0".to_owned())
+        .await
+        .unwrap();
+    assert!(page.deliveries.is_empty());
+    assert_eq!(page.next_start_id, "0-0");
 }

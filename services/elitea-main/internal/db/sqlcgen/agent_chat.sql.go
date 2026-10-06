@@ -123,7 +123,7 @@ func (q *Queries) FinalizeCurrentAgentAuthorizationPause(ctx context.Context, ar
 const finalizeCurrentAgentFullMessage = `-- name: FinalizeCurrentAgentFullMessage :execrows
 UPDATE chat_message_group
 SET is_streaming = FALSE,
-    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'authorization_requests' - 'output_limit_reached')
+    meta = (meta - 'hitl_interrupt' - 'hitl_interrupts' - 'authorization_requests' - 'output_limit_reached' - 'pipeline_static_v1' - 'pipeline_static_tools_v1')
         || jsonb_build_object(
             'thread_id', $1::text,
             'references', $2::jsonb,
@@ -143,17 +143,25 @@ SET is_streaming = FALSE,
                 END
             )
             ELSE '{}'::jsonb
-        END,
+        END
+        || CASE WHEN jsonb_typeof($5::jsonb) = 'object'
+            THEN jsonb_build_object('pipeline_static_v1', $5::jsonb)
+            ELSE '{}'::jsonb END
+        || CASE WHEN jsonb_typeof($6::jsonb) = 'object'
+            THEN jsonb_build_object('pipeline_static_tools_v1', $6::jsonb)
+            ELSE '{}'::jsonb END,
     updated_at = clock_timestamp()
-WHERE id = $5::bigint
+WHERE id = $7::bigint
 `
 
 type FinalizeCurrentAgentFullMessageParams struct {
-	ThreadID           string `db:"thread_id" json:"thread_id"`
-	ReferencesJson     []byte `db:"references_json" json:"references_json"`
-	InvokedSkills      []byte `db:"invoked_skills" json:"invoked_skills"`
-	OutputLimitReached bool   `db:"output_limit_reached" json:"output_limit_reached"`
-	MessageGroupID     int64  `db:"message_group_id" json:"message_group_id"`
+	ThreadID            string `db:"thread_id" json:"thread_id"`
+	ReferencesJson      []byte `db:"references_json" json:"references_json"`
+	InvokedSkills       []byte `db:"invoked_skills" json:"invoked_skills"`
+	OutputLimitReached  bool   `db:"output_limit_reached" json:"output_limit_reached"`
+	PipelineStaticProof []byte `db:"pipeline_static_proof" json:"pipeline_static_proof"`
+	PipelineStaticTools []byte `db:"pipeline_static_tools" json:"pipeline_static_tools"`
+	MessageGroupID      int64  `db:"message_group_id" json:"message_group_id"`
 }
 
 func (q *Queries) FinalizeCurrentAgentFullMessage(ctx context.Context, arg FinalizeCurrentAgentFullMessageParams) (int64, error) {
@@ -162,6 +170,8 @@ func (q *Queries) FinalizeCurrentAgentFullMessage(ctx context.Context, arg Final
 		arg.ReferencesJson,
 		arg.InvokedSkills,
 		arg.OutputLimitReached,
+		arg.PipelineStaticProof,
+		arg.PipelineStaticTools,
 		arg.MessageGroupID,
 	)
 	if err != nil {

@@ -58,7 +58,7 @@ SELECT j.resource_project_id::text,
        j.actor_id,
        j.input_bundle_id,
        j.capability_id,
-       e.semantic_role,
+       CASE WHEN c.recovery_mode = 'NODE_RECOVERY' THEN 'node.recovery.inspection' ELSE e.semantic_role END,
        e.media_type,
        e.content_digest,
        e.content_size
@@ -81,7 +81,11 @@ WHERE c.claim_id = $1
   AND ws.issued_at <= clock_timestamp()
   AND ws.expires_at > clock_timestamp()
   AND ws.revoked_at IS NULL
-  AND j.desired_state = 'RUNNING'
+  AND ((j.desired_state = 'RUNNING' AND c.recovery_mode <> 'NODE_RECOVERY') OR (
+      j.desired_state IN ('SUSPENDED', 'RUNNING') AND c.recovery_mode = 'NODE_RECOVERY'
+      AND j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1')
+      AND e.semantic_role = 'agent.execution_request'
+  ))
   AND j.capability_id IN (
       'configuration.validate.v1',
       'index.ingest.v1',
@@ -117,6 +121,10 @@ WHERE c.claim_id = $1
 	}
 	if err != nil {
 		return ContentAuthorization{}, fmt.Errorf("authorize input content: %w", err)
+	}
+	if authorization.SemanticRole == "node.recovery.inspection" {
+		authorization.InspectionOnly = true
+		authorization.SemanticRole = "agent.execution_request"
 	}
 	if len(digest) != sha256.Size {
 		return ContentAuthorization{}, errors.New("authorize input content: invalid stored digest")
