@@ -5,25 +5,29 @@
 // (internal/api/v2/events), on every replica. elitea-main's domain events
 // (conversation create, artifact upload, pipeline runs, …) are deliberately
 // NOT published here: they go to webhook sinks only (cmd/elitea-main,
-// newDomainEventsPublisher), and the SSE route forwards an allowlist of types. It replaced the plain Redis
-// (Valkey) pub/sub client that used to sit at REDIS_URL.
+// newDomainEventsPublisher), and the SSE route forwards one type per subject
+// family. It replaced the plain Redis (Valkey) pub/sub client that used to sit
+// at REDIS_URL.
 //
-// # Subject scheme
+// # Subject scheme: one family per producer
 //
-// Callers name a LOGICAL channel (events.ProjectChannel → "project:<id>:events")
-// and subjectFor maps it under SubjectRoot by replacing ':' with '.':
+// Callers name a LOGICAL channel and subjectFor maps it to a subject by
+// replacing ':' with '.' under the family's root:
 //
-//	project:123:events → gateway.events.project.123.events
+//	project:123:presence → elitea.events.project.123.presence  (PresenceSubjectRoot)
+//	project:123:events   → gateway.events.project.123.events   (SubjectRoot)
 //
-// That is the subject space ADR-0015 / design §8.1 reserve for platform events
-// ("the EventBus is re-pointed from Redis pub/sub to NATS gateway.events.*"),
-// and it is the subject the LLM gateway already publishes budget.soft_alert on
-// (services/elitea-llm-gateway/internal/infra/nats, EventSubjectRoot). Keeping
-// elitea-main's events in the same per-project subject is what makes one SSE
-// subscription receive both: a second scheme (e.g. elitea.events.project.<id>)
-// would need a second subscription per stream, and the soft alert would stay
-// invisible to the SPA exactly as it was over Redis. A Redis-style "prefix:*"
-// catch-all maps to the NATS multi-token wildcard ("gateway.events.prefix.>").
+// The families are separate on purpose (#1076). elitea.events.> is
+// elitea-main's own subject space in its own NATS account (MAIN), and only
+// elitea-main publishes canvas presence there. gateway.events.> is the LLM
+// gateway's, in the GATEWAY account; its per-project soft-alert subject is
+// exported to MAIN and imported here, and elitea-main's identity may not
+// publish on it. So neither producer can put a frame into the other's family,
+// and the SSE route accepts each event type from its own family only.
+//
+// A channel ending in ":presence" maps under PresenceSubjectRoot; every other
+// channel under SubjectRoot. A Redis-style "prefix:*" catch-all maps to the
+// NATS multi-token wildcard ("gateway.events.prefix.>").
 //
 // Project ids are positive integers by the time a channel is built
 // (legacyrbac refuses anything else before the SSE handler runs), so no
@@ -61,9 +65,18 @@ type Event struct {
 // EventHandler consumes one decoded Event (Subscribe).
 type EventHandler func(ctx context.Context, event Event) error
 
-// SubjectRoot is the reserved subject prefix for all platform events on NATS
-// (design/ADR: gateway.events.*). Every logical channel is mapped under it.
+// SubjectRoot is the LLM gateway's event family (design/ADR: gateway.events.*),
+// in the gateway's NATS account; elitea-main reads the per-project soft-alert
+// subject it imports. Every channel not in another family maps under it.
 const SubjectRoot = "gateway.events"
+
+// PresenceSubjectRoot is elitea-main's own event family, in its own NATS
+// account (#1076): canvas presence rosters, project:<id>:presence →
+// elitea.events.project.<id>.presence.
+const PresenceSubjectRoot = "elitea.events"
+
+// presenceSuffix marks a channel of the presence family.
+const presenceSuffix = ":presence"
 
 // ConnectTimeout bounds the initial dial and every request the client makes so
 // a NATS partition fails fast rather than hanging (design §8.5, matches the
@@ -165,6 +178,9 @@ func New(conn natsConn, source string, opts ...Option) *EventBus {
 func subjectFor(channel string) string {
 	if channel == "" {
 		return SubjectRoot
+	}
+	if strings.HasSuffix(channel, presenceSuffix) && !strings.Contains(channel, "*") {
+		return PresenceSubjectRoot + "." + strings.ReplaceAll(channel, ":", ".")
 	}
 	// Bare "*" Redis catch-all matches every channel → NATS "root.>".
 	if channel == "*" {

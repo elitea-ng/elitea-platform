@@ -155,6 +155,9 @@ func splitTokens(s string) []string {
 func TestSubjectFor(t *testing.T) {
 	cases := map[string]string{
 		"project:123:events": "gateway.events.project.123.events",
+		// The presence family is elitea-main's own subject space (#1076).
+		"project:123:presence": "elitea.events.project.123.presence",
+		"project:*":            "gateway.events.project.>",
 		"elitea:*":           "gateway.events.elitea.>",
 		"*":                  "gateway.events.>",
 		"":                   "gateway.events",

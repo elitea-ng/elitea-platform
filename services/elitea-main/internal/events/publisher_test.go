@@ -44,6 +44,19 @@ func TestPublisher_Emit(t *testing.T) {
 	}
 }
 
+// Canvas presence publishes on its own family, never the gateway's subject,
+// and to no webhook sink (#1076).
+func TestPresencePublisherUsesThePresenceChannel(t *testing.T) {
+	bus := &mockBus{}
+	NewPresencePublisher(bus).Emit(context.Background(), "7", "canvas.editors", map[string]any{})
+	if len(bus.published) != 1 || bus.published[0].channel != "project:7:presence" {
+		t.Fatalf("published = %+v, want one event on project:7:presence", bus.published)
+	}
+	if PresenceChannel("7") == ProjectChannel("7") {
+		t.Fatal("the presence and gateway families share a channel")
+	}
+}
+
 func TestProjectChannel(t *testing.T) {
 	ch := ProjectChannel("abc-123")
 	if ch != "project:abc-123:events" {

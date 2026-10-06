@@ -105,12 +105,17 @@ func TestSecuredGatewayRunsOnTheChartsPermissions(t *testing.T) {
 	}
 	s.RequireViolation(t, natsconn.IdentityGateway, "Publish", "$JS.API.CONSUMER.CREATE."+DeltasStream+".budget-writeback."+DeltaSubject)
 	_ = nc.Publish("$KV.ELITEA_CANVAS_PRESENCE.x.y", []byte("{}"))
+	// elitea-main's presence family: the gateway cannot forge a roster into
+	// a project's stream (#1076 F2). It is not in the gateway's account
+	// either; the permission refuses it before that matters.
+	_ = nc.Publish("elitea.events.project.42.presence", []byte(`{"type":"canvas.editors"}`))
 	_ = nc.Publish("elitea.rt.v1.agent.d.x", []byte("{}"))
 	if _, err := nc.SubscribeSync("gateway.events.project.>"); err != nil {
 		t.Fatal(err)
 	}
 	_ = nc.Flush()
 	s.RequireViolation(t, natsconn.IdentityGateway, "Publish", "$KV.ELITEA_CANVAS_PRESENCE.x.y")
+	s.RequireViolation(t, natsconn.IdentityGateway, "Publish", "elitea.events.project.42.presence")
 	s.RequireViolation(t, natsconn.IdentityGateway, "Publish", "elitea.rt.v1.agent.d.x")
 	s.RequireViolation(t, natsconn.IdentityGateway, "Subscription", "gateway.events.project.>")
 }

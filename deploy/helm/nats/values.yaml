@@ -129,8 +129,9 @@ nats:
       # redirected delivery can only land inside its creator's own account.
       #
       #   MAIN     elitea-main's live-update plane: the canvas presence KV
-      #            (ELITEA_CANVAS_PRESENCE) and the project event relay.
-      #            Imports the gateway's soft alerts from GATEWAY.
+      #            (ELITEA_CANVAS_PRESENCE), the presence rosters it publishes
+      #            on elitea.events.project.<id>.presence, and the project
+      #            event relay. Imports the gateway's soft alerts from GATEWAY.
       #   GATEWAY  the LLM gateway's budget plane: the counter streams
       #            (GATEWAY_BUDGET, GATEWAY_RATELIMIT), the write-behind deltas
       #            (GATEWAY_BUDGET_DELTAS) the scheduler drains, and the
@@ -176,8 +177,12 @@ nats:
               permissions:
                 publish:
                   allow:
-                    # canvas.editors rosters onto the project's subject.
-                    - "gateway.events.project.*.events"
+                    # canvas.editors rosters onto the project's PRESENCE
+                    # subject: elitea-main's own family, which nothing else
+                    # can publish on. The SSE route accepts canvas.editors
+                    # from this family only, and budget.soft_alert from the
+                    # gateway's imported subject only.
+                    - "elitea.events.project.*.presence"
                     # Presence Put/Delete.
                     - "$KV.ELITEA_CANVAS_PRESENCE.>"
                     # Bind (js.KeyValue) and the bucket status check.
@@ -192,6 +197,9 @@ nats:
                     # grant; without it a slow replica's watcher stalls.
                     - "$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>"
                   deny:
+                    # The gateway's family, imported: elitea-main reads it and
+                    # never speaks for the gateway on it.
+                    - "gateway.>"
                     - "$JS.API.STREAM.CREATE.>"
                     - "$JS.API.STREAM.UPDATE.>"
                     - "$JS.API.STREAM.DELETE.>"
@@ -200,7 +208,9 @@ nats:
                     - "$JS.API.ACCOUNT.PURGE.>"
                 subscribe:
                   allow:
-                    - "gateway.events.project.>"
+                    # The two families the project SSE route reads.
+                    - "elitea.events.project.*.presence"
+                    - "gateway.events.project.*.events"
                     - "_INBOX_elitea-main.>"
 
             # elitea-nats-bootstrap-main: creates and reconciles MAIN's one

@@ -388,7 +388,7 @@ func TestNATSBackendSharesTheRosterAndPublishes(t *testing.T) {
 	bus := natsbus.NewFromConn(conn, "test")
 
 	projectID := fmt.Sprintf("%d", 900000+rosterSeq.Add(1))
-	events, cancel, err := bus.Raw(context.Background(), "project:"+projectID+":events")
+	events, cancel, err := bus.Raw(context.Background(), "project:"+projectID+":presence")
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}

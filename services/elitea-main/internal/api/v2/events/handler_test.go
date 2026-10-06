@@ -17,30 +17,46 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
 )
 
-// fakeSource is an in-memory EventSource: it hands the test a send channel it
-// can push decoded events onto, and records the channel it was asked to
-// subscribe to. It lets the SSE Stream handler be exercised without a live
-// Redis or NATS server.
+// fakeSource is an in-memory EventSource: one send channel per logical
+// channel the handler subscribes to, and a record of what it subscribed to.
+// It lets the SSE Stream handler be exercised without a live NATS server.
 type fakeSource struct {
 	mu          sync.Mutex
-	channel     string
-	events      chan natsbus.Event
+	channel     string   // the first channel subscribed to
+	channels    []string // every channel subscribed to, in order
+	streams     map[string]chan natsbus.Event
 	err         error
 	cancelCalls int
 }
 
 func newFakeSource() *fakeSource {
-	return &fakeSource{events: make(chan natsbus.Event, 8)}
+	return &fakeSource{streams: map[string]chan natsbus.Event{}}
+}
+
+// stream is the send side of one logical channel.
+func (f *fakeSource) stream(channel string) chan natsbus.Event {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ch, ok := f.streams[channel]
+	if !ok {
+		ch = make(chan natsbus.Event, 8)
+		f.streams[channel] = ch
+	}
+	return ch
 }
 
 func (f *fakeSource) Raw(_ context.Context, channel string) (<-chan natsbus.Event, func(), error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.channel = channel
-	if f.err != nil {
-		return nil, nil, f.err
+	if f.channel == "" {
+		f.channel = channel
 	}
-	return f.events, func() {
+	f.channels = append(f.channels, channel)
+	err := f.err
+	f.mu.Unlock()
+	if err != nil {
+		return nil, nil, err
+	}
+	return f.stream(channel), func() {
 		f.mu.Lock()
 		f.cancelCalls++
 		f.mu.Unlock()
@@ -75,7 +91,7 @@ func TestStream_DeliversEventThenClosesOnCtxCancel(t *testing.T) {
 	}()
 
 	// Push an event, then cancel the request context to end the stream.
-	src.events <- natsbus.Event{Type: "budget.soft_alert", Payload: json.RawMessage(`{"n":1}`)}
+	src.stream("project:42:events") <- natsbus.Event{Type: "budget.soft_alert", Payload: json.RawMessage(`{"n":1}`)}
 	// Give the handler a moment to write it before we cancel.
 	time.Sleep(50 * time.Millisecond)
 	cancel()
@@ -86,11 +102,11 @@ func TestStream_DeliversEventThenClosesOnCtxCancel(t *testing.T) {
 		t.Fatal("Stream did not return after ctx cancel")
 	}
 
-	if src.channel != "project:42:events" {
-		t.Errorf("subscribed channel = %q, want project:42:events", src.channel)
+	if got := strings.Join(src.channels, ","); got != "project:42:events,project:42:presence" {
+		t.Errorf("subscribed channels = %q, want the gateway's and the presence family of project 42", got)
 	}
-	if src.cancelled() != 1 {
-		t.Errorf("cancel func called %d times, want 1", src.cancelled())
+	if src.cancelled() != 2 {
+		t.Errorf("cancel funcs called %d times, want 2 (one per family)", src.cancelled())
 	}
 
 	body := rec.Body.String()
@@ -105,15 +121,17 @@ func TestStream_DeliversEventThenClosesOnCtxCancel(t *testing.T) {
 	}
 }
 
-// Only forwardedEventTypes reach the client. Domain events (conversation.created
-// carries a private conversation's name and creator) and anything forged onto
-// the shared subject by another workload are dropped, payload and all, while
-// the allowed frames around them still arrive in order (PR #1074 review).
-func TestStream_ForwardsOnlyAllowlistedEventTypes(t *testing.T) {
+// Each family forwards its ONE type (#1076). Domain events (conversation.created
+// carries a private conversation's name and creator) and forged frames are
+// dropped, payload and all — and so is a frame of the OTHER family's type: a
+// canvas.editors roster on the gateway's subject (the gateway forging presence
+// into a project's stream) and a budget.soft_alert on the presence subject.
+// The allowed frames around them still arrive in order.
+func TestStream_ForwardsEachTypeOnlyFromItsOwnFamily(t *testing.T) {
 	src := newFakeSource()
 	h := NewHandlerFromSource(src)
 
-	rec := httptest.NewRecorder()
+	rec := &lockedRecorder{ResponseRecorder: httptest.NewRecorder()}
 	req := newRequestWithProjectID(context.Background(), "42")
 	done := make(chan struct{})
 	go func() {
@@ -121,21 +139,29 @@ func TestStream_ForwardsOnlyAllowlistedEventTypes(t *testing.T) {
 		close(done)
 	}()
 
-	frames := []natsbus.Event{
+	gateway := []natsbus.Event{
 		{Type: "conversation.created", Payload: json.RawMessage(`{"name":"secret-conversation","created_by":9}`)},
-		{Type: "canvas.editors", Payload: json.RawMessage(`{"editors":[]}`)},
-		{Type: "artifact.uploaded", Payload: json.RawMessage(`{"object":"secret-file"}`)},
-		{Type: "pipeline.run.failed", Payload: json.RawMessage(`{"error":"secret-error"}`)},
+		{Type: "canvas.editors", Payload: json.RawMessage(`{"editors":["secret-forged-by-the-gateway"]}`)},
 		{Type: "", Payload: json.RawMessage(`{"forged":"secret-empty-type"}`)},
 		{Type: "budget.soft_alert ", Payload: json.RawMessage(`{"forged":"secret-near-miss"}`)},
 		{Type: "budget.soft_alert", Payload: json.RawMessage(`{"cost_just_billed_nano":5}`)},
 	}
-	// The channel holds 8, so every frame is queued before the close that ends
-	// the stream: the handler drains them all, then returns.
-	for _, frame := range frames {
-		src.events <- frame
+	presence := []natsbus.Event{
+		{Type: "artifact.uploaded", Payload: json.RawMessage(`{"object":"secret-file"}`)},
+		{Type: "budget.soft_alert", Payload: json.RawMessage(`{"forged":"secret-alert-on-presence"}`)},
+		{Type: "canvas.editors", Payload: json.RawMessage(`{"editors":[]}`)},
 	}
-	close(src.events)
+	// Feed one family, wait for its allowed frame, then the other: the two
+	// subscriptions are concurrent, so order is only defined within one.
+	for _, frame := range gateway {
+		src.stream("project:42:events") <- frame
+	}
+	waitForBody(t, rec, "event: budget.soft_alert\n")
+	for _, frame := range presence {
+		src.stream("project:42:presence") <- frame
+	}
+	waitForBody(t, rec, "event: canvas.editors")
+	close(src.stream("project:42:presence"))
 
 	select {
 	case <-done:
@@ -145,17 +171,54 @@ func TestStream_ForwardsOnlyAllowlistedEventTypes(t *testing.T) {
 
 	body := rec.Body.String()
 	if strings.Contains(body, "secret") {
-		t.Fatalf("a non-allowlisted frame reached the client; body=%q", body)
+		t.Fatalf("a frame outside its family's allowlist reached the client; body=%q", body)
 	}
-	for _, unwanted := range []string{"conversation.created", "artifact.uploaded", "pipeline.run.failed"} {
+	for _, unwanted := range []string{"conversation.created", "artifact.uploaded"} {
 		if strings.Contains(body, unwanted) {
 			t.Errorf("event %q reached the client; body=%q", unwanted, body)
 		}
 	}
-	editors := strings.Index(body, "event: canvas.editors")
-	alert := strings.Index(body, "event: budget.soft_alert\n")
-	if editors < 0 || alert < 0 || editors > alert {
-		t.Fatalf("allowlisted frames missing or out of order; body=%q", body)
+	if strings.Count(body, "event: canvas.editors") != 1 || strings.Count(body, "event: budget.soft_alert\n") != 1 {
+		t.Fatalf("want exactly one roster and one alert; body=%q", body)
+	}
+}
+
+// lockedRecorder lets a test read the SSE body while Stream is still writing.
+type lockedRecorder struct {
+	mu sync.Mutex
+	*httptest.ResponseRecorder
+}
+
+func (l *lockedRecorder) Write(b []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.ResponseRecorder.Write(b)
+}
+
+func (l *lockedRecorder) Flush() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.ResponseRecorder.Flush()
+}
+
+func (l *lockedRecorder) body() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.Body.String()
+}
+
+// waitForBody waits until the recorded SSE body contains want.
+func waitForBody(t *testing.T, rec *lockedRecorder, want string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if strings.Contains(rec.body(), want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%q never reached the client; body=%q", want, rec.body())
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -174,8 +237,24 @@ func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
 			t.Errorf("Forwarded(%q) = true; every forwarded type is readable by any project viewer", eventType)
 		}
 	}
-	if len(forwardedEventTypes) != 2 {
-		t.Errorf("forwardedEventTypes has %d entries, want 2; widening it is a privacy decision — update this test deliberately", len(forwardedEventTypes))
+	if len(streamFamilies) != 2 {
+		t.Errorf("streamFamilies has %d entries, want 2; widening it is a privacy decision — update this test deliberately", len(streamFamilies))
+	}
+	// And each from its own family only.
+	for _, c := range []struct {
+		channel, eventType string
+		want               bool
+	}{
+		{"project:7:presence", "canvas.editors", true},
+		{"project:7:events", "budget.soft_alert", true},
+		{"project:7:events", "canvas.editors", false},
+		{"project:7:presence", "budget.soft_alert", false},
+		{"project:8:presence", "canvas.editors", false},
+		{"project:7:other", "canvas.editors", false},
+	} {
+		if got := ForwardedOn("7", c.channel, c.eventType); got != c.want {
+			t.Errorf("ForwardedOn(7, %q, %q) = %v, want %v", c.channel, c.eventType, got, c.want)
+		}
 	}
 }
 
@@ -192,15 +271,15 @@ func TestStream_ReturnsWhenSourceChannelCloses(t *testing.T) {
 		close(done)
 	}()
 
-	close(src.events) // upstream gone → handler should return
+	close(src.stream("project:7:events")) // upstream gone → handler should return
 
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Stream did not return when source channel closed")
 	}
-	if src.cancelled() != 1 {
-		t.Errorf("cancel func called %d times, want 1", src.cancelled())
+	if src.cancelled() != 2 {
+		t.Errorf("cancel funcs called %d times, want 2", src.cancelled())
 	}
 }
 

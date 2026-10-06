@@ -942,11 +942,14 @@ main:
     ELITEA_APPLICATION_SKILLS_ENABLED: ""
 
     # --- Live-update plane (#152) ----------------------------------------------
-    # NATS core pub/sub for GET /api/v2/events/prompt_lib/{projectID} (subject
-    # gateway.events.project.<id>.events, shared with the gateway's
-    # budget.soft_alert) and canvas presence (its publish and its JetStream KV
-    # bucket ELITEA_CANVAS_PRESENCE). The server needs JetStream. Domain events
-    # (conversation.created, …) do NOT travel here — they go to webhooks only.
+    # NATS core pub/sub for GET /api/v2/events/prompt_lib/{projectID}, which
+    # reads two subject families (#1076): canvas presence rosters on
+    # elitea.events.project.<id>.presence, which elitea-main publishes in its
+    # own NATS account, and the gateway's budget.soft_alert on
+    # gateway.events.project.<id>.events, imported from the gateway's account.
+    # Plus canvas presence's JetStream KV bucket ELITEA_CANVAS_PRESENCE. The
+    # server needs JetStream. Domain events (conversation.created, …) do NOT
+    # travel here — they go to webhooks only.
     #
     # Empty means the gateway's effective NATS: an explicit
     # llmGateway.env.GATEWAY_NATS_URL if set, else the top-level `nats` block

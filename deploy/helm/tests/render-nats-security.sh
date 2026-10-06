@@ -188,6 +188,15 @@ check("GATEWAY exports exactly the soft-alert stream, to MAIN only",
       accts["GATEWAY"].get("exports") == [{"stream": ALERTS, "accounts": ["MAIN"]}], accts["GATEWAY"].get("exports"))
 check("MAIN imports exactly GATEWAY's soft-alert stream",
       accts["MAIN"].get("imports") == [{"stream": {"account": "GATEWAY", "subject": ALERTS}}], accts["MAIN"].get("imports"))
+mainp = users.get(URI("elitea-main"), {})
+check("elitea-main publishes presence on its own family, never the gateway's",
+      "elitea.events.project.*.presence" in mainp.get("publish", {}).get("allow", [])
+      and not any(p.startswith("gateway.") for p in mainp.get("publish", {}).get("allow", []))
+      and "gateway.>" in mainp.get("publish", {}).get("deny", []), mainp.get("publish"))
+check("elitea-main reads exactly the two families the SSE route forwards",
+      sorted(mainp.get("subscribe", {}).get("allow", [])) == sorted(["elitea.events.project.*.presence", ALERTS, "_INBOX_elitea-main.>"]), mainp.get("subscribe"))
+gwp = users.get(URI("elitea-llm-gateway"), {}).get("publish", {}).get("allow", [])
+check("the gateway cannot publish on elitea-main's presence family", not any(p.startswith("elitea.") for p in gwp), gwp)
 check("RUNTIME neither exports nor imports", not accts["RUNTIME"].get("exports") and not accts["RUNTIME"].get("imports"))
 check("MAIN neither exports nor does GATEWAY import", not accts["MAIN"].get("exports") and not accts["GATEWAY"].get("imports"))
 cl = c3.get("cluster", {})

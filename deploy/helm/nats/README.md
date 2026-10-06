@@ -88,6 +88,19 @@ that nothing reaches `GATEWAY_BUDGET_DELTAS`.
 `gateway.events.ops.>` (the operator-only loss record) is not exported, and
 nothing else crosses.
 
+**One subject family per producer.** The project SSE route
+(`GET /api/v2/events/prompt_lib/{projectID}`) reads two subjects and accepts
+ONE event type from each:
+
+| Family | Subject | Account | Publisher | Accepted type |
+|---|---|---|---|---|
+| presence | `elitea.events.project.<id>.presence` | MAIN | elitea-main only | `canvas.editors` |
+| gateway | `gateway.events.project.<id>.events` | GATEWAY, imported into MAIN | elitea-llm-gateway only | `budget.soft_alert` |
+
+So the gateway cannot forge a `canvas.editors` roster into a project's stream
+(its subject is the gateway's, and the route drops that type there), and
+elitea-main cannot publish on the gateway's family at all.
+
 Every user may subscribe to its own inbox prefix `_INBOX_<identity>.>` only
 (each client sets `nats.CustomInboxPrefix`), so nobody reads another client's
 JetStream API replies or acks. Nobody may delete or purge a stream; only each
@@ -103,7 +116,7 @@ and cannot redefine it, and the gateway holds no consumer grant at all.
 
 | Account | Identity | May publish | May subscribe |
 |---|---|---|---|
-| MAIN | `elitea-main` | `gateway.events.project.*.events`; `$KV.ELITEA_CANVAS_PRESENCE.>`; `$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE`; `$JS.API.CONSUMER.{CREATE.KV_ELITEA_CANVAS_PRESENCE.>,DELETE.KV_ELITEA_CANVAS_PRESENCE.*}` (the presence watcher); `$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>`. Denied: stream admin | `gateway.events.project.>`, `_INBOX_elitea-main.>` |
+| MAIN | `elitea-main` | `elitea.events.project.*.presence` (its presence family); `$KV.ELITEA_CANVAS_PRESENCE.>`; `$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE`; `$JS.API.CONSUMER.{CREATE.KV_ELITEA_CANVAS_PRESENCE.>,DELETE.KV_ELITEA_CANVAS_PRESENCE.*}` (the presence watcher); `$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>`. Denied: `gateway.>` (it never speaks for the gateway), stream admin | `elitea.events.project.*.presence`, `gateway.events.project.*.events` (imported), `_INBOX_elitea-main.>` |
 | MAIN | `elitea-nats-bootstrap-main` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}.KV_ELITEA_CANVAS_PRESENCE` | `_INBOX_elitea-nats-bootstrap-main.>` |
 | GATEWAY | `elitea-llm-gateway` | `gateway.budget.counter.>`, `gateway.ratelimit.counter.>`, `gateway.budget.delta`, `gateway.events.project.*.events`, `gateway.events.ops.>`, `$KV.GATEWAY_ALERT_COOLDOWN.>`; `STREAM.INFO` on its four assets; `DIRECT.GET` on `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `KV_GATEWAY_ALERT_COOLDOWN`. Denied: stream admin, every `$JS.API.CONSUMER.>` | `_INBOX_elitea-llm-gateway.>` |
 | GATEWAY | `elitea-scheduler` | `$JS.API.CONSUMER.{INFO,MSG.NEXT}.GATEWAY_BUDGET_DELTAS.budget-writeback`, `$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>` — it binds to the consumer the bootstrap creates. Denied: stream admin, consumer create/delete | `_INBOX_elitea-scheduler.>` |

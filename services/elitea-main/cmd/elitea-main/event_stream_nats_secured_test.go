@@ -65,9 +65,10 @@ func TestSecuredLiveUpdatePlaneRunsOnTheChartsPermissions(t *testing.T) {
 	}
 	waitRoster(t, replicas[1], key, 0)
 
-	// The relay: what the SSE route reads, and what presence publishes.
+	// The relay: what the SSE route reads, and what presence publishes — on
+	// the presence family, elitea-main's own subject (#1076 F2).
 	bus := natsbus.NewFromConn(conn, "elitea-main")
-	events, cancel, err := bus.Raw(ctx, "project:42:events")
+	events, cancel, err := bus.Raw(ctx, "project:42:presence")
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestSecuredLiveUpdatePlaneRunsOnTheChartsPermissions(t *testing.T) {
 	if err := conn.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	if err := bus.Publish(ctx, "project:42:events", v2canvaspresence.EventType, map[string]any{"editors": []any{}}); err != nil {
+	if err := bus.Publish(ctx, "project:42:presence", v2canvaspresence.EventType, map[string]any{"editors": []any{}}); err != nil {
 		t.Fatalf("Publish: %v", err)
 	}
 	select {
@@ -104,6 +105,9 @@ func TestSecuredLiveUpdatePlaneRunsOnTheChartsPermissions(t *testing.T) {
 	_ = conn.Publish("gateway.budget.counter.project.42.1700000000", []byte("1"))
 	_ = conn.Publish("gateway.budget.delta", []byte("{}"))
 	_ = conn.Publish("gateway.events.ops.budget", []byte("{}"))
+	// The gateway's per-project family: elitea-main reads it, never forges
+	// a soft alert onto it.
+	_ = conn.Publish("gateway.events.project.42.events", []byte("{}"))
 	_ = conn.Publish("elitea.rt.v1.agent.d.x", []byte("{}"))
 	if _, err := conn.SubscribeSync("gateway.budget.>"); err != nil {
 		t.Fatal(err)
@@ -115,6 +119,7 @@ func TestSecuredLiveUpdatePlaneRunsOnTheChartsPermissions(t *testing.T) {
 	s.RequireViolation(t, natsconn.IdentityMain, "Publish", "gateway.budget.counter.project.42.1700000000")
 	s.RequireViolation(t, natsconn.IdentityMain, "Publish", "gateway.budget.delta")
 	s.RequireViolation(t, natsconn.IdentityMain, "Publish", "gateway.events.ops.budget")
+	s.RequireViolation(t, natsconn.IdentityMain, "Publish", "gateway.events.project.42.events")
 	s.RequireViolation(t, natsconn.IdentityMain, "Publish", "elitea.rt.v1.agent.d.x")
 	s.RequireViolation(t, natsconn.IdentityMain, "Subscription", "gateway.budget.>")
 	s.RequireViolation(t, natsconn.IdentityMain, "Subscription", "_INBOX_elitea-llm-gateway.>")
