@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
 )
 
 // budget-check (spec §8.5 / §8.8, gate BFF.9e):
@@ -198,7 +200,7 @@ Hermetic equivalent (no live infra):
 		os.Exit(2)
 	}
 
-	nc, err := nats.Connect(*natsURL, nats.Timeout(2*time.Second))
+	nc, err := connectBudgetCheckNATS(*natsURL, os.LookupEnv)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "budget-check: NATS connect %q: %v\n", *natsURL, err)
 		os.Exit(2)
@@ -240,4 +242,39 @@ Hermetic equivalent (no live infra):
 		os.Exit(1)
 	}
 	fmt.Println("\n✓ budget-check: all gates pass")
+}
+
+// budgetCheckNATSPrefix names the client identity budget-check presents on a
+// secured NATS: elitea-main's (ELITEA_EVENTS_NATS_TLS_{CA,CERT,KEY}_FILE).
+// budget-check only SUBSCRIBES to the project event subjects, which is
+// exactly what that identity may do (deploy/helm/nats/values.yaml), so an
+// operator runs it with the elitea-main client certificate instead of a new
+// identity widening the permission table. With none of the three set it
+// connects plaintext, for the compose posture.
+const budgetCheckNATSPrefix = "ELITEA_EVENTS"
+
+func connectBudgetCheckNATS(url string, lookup func(string) (string, bool)) (*nats.Conn, error) {
+	material, err := natsconn.FromEnv(budgetCheckNATSPrefix, lookup)
+	if err != nil {
+		return nil, err
+	}
+	if err := material.CheckURL(url); err != nil {
+		return nil, err
+	}
+	if err := material.Check(); err != nil {
+		return nil, err
+	}
+	opts := []nats.Option{
+		nats.Name("cutover-ctl budget-check"),
+		nats.Timeout(2 * time.Second),
+		// The identity may subscribe only to its own inbox prefix.
+		nats.CustomInboxPrefix(natsconn.InboxPrefix(natsconn.IdentityMain)),
+	}
+	if material.Enabled() {
+		opts = append(opts,
+			nats.Secure(natsconn.BaseTLSConfig()),
+			nats.ClientTLSConfig(material.ClientCertificate, material.RootCAs),
+		)
+	}
+	return nats.Connect(url, opts...)
 }

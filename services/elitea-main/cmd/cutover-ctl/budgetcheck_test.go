@@ -238,3 +238,14 @@ func TestBudgetCheck_AllGatesFail(t *testing.T) {
 		t.Error("UnderBudgetReason is empty despite failure")
 	}
 }
+
+// budget-check presents elitea-main's NATS identity: half-configured TLS
+// material is refused before any connection is attempted, never silently
+// downgraded to plaintext.
+func TestBudgetCheckNATSRefusesPartialTLSMaterial(t *testing.T) {
+	env := map[string]string{"ELITEA_EVENTS_NATS_TLS_CERT_FILE": "/does/not/exist.crt"}
+	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+	if _, err := connectBudgetCheckNATS("tls://127.0.0.1:1", lookup); err == nil {
+		t.Fatal("partial TLS material was accepted")
+	}
+}
