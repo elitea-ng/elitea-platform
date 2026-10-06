@@ -262,6 +262,23 @@ jobs:
             || python3 -m pip install --quiet --disable-pip-version-check pyyaml
           bash deploy/helm/tests/render-bf0-2b.sh
 
+      # The NATS security posture (#1076), on the rendered output of the three
+      # charts that must agree about it: every client certificate the platform
+      # and the bootstrap issue names a user in the NATS chart's permission
+      # table and comes from the dedicated NATS CA Issuer, every client pod is
+      # one the NATS NetworkPolicy admits, every rendered URL is tls:// with no
+      # credential, and each refusal (TLS off, verify_and_map off,
+      # no_auth_user, plaintext routes, nats:// or credential URLs, plaintext
+      # without the acknowledgement) still fires. It vendors the upstream nats
+      # subchart with `helm dependency build`, which needs network access the
+      # template matrix below does not take. Whether each grant is RIGHT is the
+      # secured permission tests' job (ci-go.yml, ci-gateway.yml).
+      - name: NATS security — the charts agree on identities, issuer and policy
+        run: |
+          python3 -c 'import yaml' 2>/dev/null \
+            || python3 -m pip install --quiet --disable-pip-version-check pyyaml
+          bash deploy/helm/tests/render-nats-security.sh
+
       # `helm lint` covers every chart. The `template` job below covers only the
       # charts its matrix names, and a chart in neither list is never rendered
       # and never schema-checked, with nothing reporting the hole.
