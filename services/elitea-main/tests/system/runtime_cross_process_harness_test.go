@@ -8,7 +8,6 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -32,7 +31,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	redis "github.com/redis/go-redis/v9"
+
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn/natstest"
 )
 
 type runtimePKI struct {
@@ -43,8 +44,6 @@ type runtimePKI struct {
 	wrongIdentityWorkerKeyPath  string
 	untrustedWorkerCertPath     string
 	untrustedWorkerKeyPath      string
-	redisCertPath               string
-	redisKeyPath                string
 	controlCertPath             string
 	controlKeyPath              string
 	outputCertPath              string
@@ -184,7 +183,6 @@ func generateRuntimePKI(t *testing.T, root string) runtimePKI {
 		"spiffe://elitea.test/runtime/wrong-worker",
 	)
 	untrustedWorkerCert, untrustedWorkerKey := issueSelfSignedClient(t, root, now)
-	redisCert, redisKey := issue("redis-server", 3, false, "")
 	controlCert, controlKey := issue("control-server", 4, false, "")
 	outputCert, outputKey := issue("output-server", 5, false, "")
 	contentCert, contentKey := issue("content-server", 6, false, "")
@@ -194,8 +192,7 @@ func generateRuntimePKI(t *testing.T, root string) runtimePKI {
 		wrongIdentityWorkerKeyPath:  wrongIdentityWorkerKey,
 		untrustedWorkerCertPath:     untrustedWorkerCert,
 		untrustedWorkerKeyPath:      untrustedWorkerKey,
-		redisCertPath:               redisCert, redisKeyPath: redisKey,
-		controlCertPath: controlCert, controlKeyPath: controlKey,
+		controlCertPath:             controlCert, controlKeyPath: controlKey,
 		outputCertPath: outputCert, outputKeyPath: outputKey,
 		contentCertPath: contentCert, contentKeyPath: contentKey,
 	}
@@ -274,41 +271,6 @@ func generateSigningMaterial(t *testing.T, root string) signingMaterial {
 	}
 }
 
-func prepareTLSRedisConfig(t *testing.T, directory string, pki runtimePKI) {
-	t.Helper()
-	copyPublic := func(source, target string) {
-		contents, err := os.ReadFile(source)
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeFile(t, filepath.Join(directory, target), contents, 0o644)
-	}
-	copyPublic(pki.caPath, "ca.pem")
-	copyPublic(pki.redisCertPath, "redis.pem")
-	copyPublic(pki.redisKeyPath, "redis.key")
-	writeFile(t, filepath.Join(directory, "users.acl"), []byte(strings.Join([]string{
-		"user default off",
-		"user producer on >" + producerPassword + " ~" + commandStream + " ~" + commandStream + ":delivery-index.v1 +@connection +eval +evalsha +xlen +xadd +hget +xrange +hdel +hlen +hset",
-		"user worker on >" + workerPassword + " ~" + commandStream + " ~" + commandStream + ":delivery-index.v1 +@connection +eval +xreadgroup +xclaim +xautoclaim +hget +xrange +xpending +xack +xdel +hdel",
-		"user observer on >" + observerPassword + " ~" + commandStream + " ~" + commandStream + ":delivery-index.v1 +@connection +xgroup +xrange +xlen +xpending +xinfo +hget +hlen",
-	}, "\n")+"\n"), 0o644)
-	writeFile(t, filepath.Join(directory, "redis.conf"), []byte(strings.Join([]string{
-		"bind 0.0.0.0",
-		"protected-mode yes",
-		"port 0",
-		"tls-port 6379",
-		"tls-cert-file /runtime/redis.pem",
-		"tls-key-file /runtime/redis.key",
-		"tls-ca-cert-file /runtime/ca.pem",
-		"tls-auth-clients no",
-		"aclfile /runtime/users.acl",
-		"save \"\"",
-		"dir /data",
-		"appendonly yes",
-		"appendfsync always",
-	}, "\n")+"\n"), 0o644)
-}
-
 type containerSet struct {
 	mu    sync.Mutex
 	names []string
@@ -379,7 +341,7 @@ func systemPython(t *testing.T, repositoryRoot string) string {
 func requirePythonRuntime(t *testing.T, python, repositoryRoot string) {
 	t.Helper()
 	environment := append(os.Environ(), "PYTHONPATH="+pythonPath(repositoryRoot))
-	command := exec.Command(python, "-c", "import elitea_sdk, grpc, h2, httpx, pydantic, redis")
+	command := exec.Command(python, "-c", "import elitea_sdk, grpc, h2, httpx, pydantic, nats")
 	command.Env = environment
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("system-test Python runtime is incomplete: %v\n%s\nInstall the worker's pinned dependencies or set ELITEA_SYSTEM_PYTHON/PYTHONPATH.", err, output)
@@ -529,41 +491,9 @@ INSERT INTO elitea_runtime.workload_sessions (
 	}
 }
 
-func newControlRedisClient(t *testing.T, port int, username, password, caPath string) *redis.Client {
-	t.Helper()
-	caPEM, err := os.ReadFile(caPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(caPEM) {
-		t.Fatal("parse runtime CA")
-	}
-	return redis.NewClient(&redis.Options{
-		Addr:     fmt.Sprintf("localhost:%d", port),
-		Username: username,
-		Password: password,
-		Protocol: 2,
-		TLSConfig: &tls.Config{
-			MinVersion: tls.VersionTLS13,
-			ServerName: "localhost",
-			RootCAs:    roots,
-		},
-	})
-}
-
-func waitForRedis(t *testing.T, ctx context.Context, client *redis.Client, containers *containerSet, containerName string) {
-	t.Helper()
-	if err := eventually(ctx, 100*time.Millisecond, func() (bool, error) {
-		pingCtx, cancel := context.WithTimeout(ctx, time.Second)
-		defer cancel()
-		return client.Ping(pingCtx).Err() == nil, nil
-	}); err != nil {
-		t.Fatalf("TLS/ACL Redis did not become ready: %v\n%s", err, containers.logs(containerName))
-	}
-}
-
-func runtimeMainEnvironment(databaseURL string, controlRedisPort, publicPort, controlPort, outputPort, contentPort int, producerPasswordPath, authConfigPath string, pki runtimePKI, signing signingMaterial) []string {
+func runtimeMainEnvironment(databaseURL string, natsServer *natstest.Server, publicPort, controlPort, outputPort, contentPort int, authConfigPath string, pki runtimePKI, signing signingMaterial) []string {
+	// elitea-main publishes as the elitea-main-runtime identity.
+	natsMaterial := natsServer.Material(natsconn.IdentityMainRuntime)
 	return []string{
 		"DATABASE_URL=" + databaseURL,
 		"SKIP_MIGRATIONS=1",
@@ -573,11 +503,10 @@ func runtimeMainEnvironment(databaseURL string, controlRedisPort, publicPort, co
 		fmt.Sprintf("ELITEA_HTTP_ADDRESS=127.0.0.1:%d", publicPort),
 		"ELITEA_RUNTIME_COMMAND_STREAM=" + commandStream,
 		"ELITEA_RUNTIME_MAX_OUTSTANDING=16",
-		"ELITEA_RUNTIME_STREAM_MAX_ENTRIES=16",
-		fmt.Sprintf("ELITEA_RUNTIME_REDIS_URL=rediss://producer@localhost:%d/0", controlRedisPort),
-		"ELITEA_RUNTIME_REDIS_PASSWORD_FILE=" + producerPasswordPath,
-		"ELITEA_RUNTIME_REDIS_CA_FILE=" + pki.caPath,
-		"ELITEA_RUNTIME_REDIS_POOL_SIZE=4",
+		"ELITEA_RUNTIME_NATS_URL=" + natsServer.URL(),
+		"ELITEA_RUNTIME_NATS_TLS_CA_FILE=" + natsMaterial.CAFile,
+		"ELITEA_RUNTIME_NATS_TLS_CERT_FILE=" + natsMaterial.CertFile,
+		"ELITEA_RUNTIME_NATS_TLS_KEY_FILE=" + natsMaterial.KeyFile,
 		"ELITEA_RUNTIME_SIGNING_KEY_ID=" + signingKeyID,
 		"ELITEA_RUNTIME_SIGNING_KEY_FILE=" + signing.privateKeyPath,
 		"ELITEA_RUNTIME_VERIFICATION_KEYRING_FILE=" + signing.goodKeyringPath,
@@ -644,50 +573,55 @@ provider:
 	return configPath
 }
 
-func writeWorkerConfig(t *testing.T, root, name string, redisPort, controlPort, outputPort, contentPort, platformPort int, redisPasswordPath string, pki runtimePKI, keyringPath, spoolRoot, spoolKeyPath string) string {
+func writeWorkerConfig(t *testing.T, root, name string, natsServer *natstest.Server, controlPort, outputPort, contentPort, platformPort int, pki runtimePKI, keyringPath, spoolRoot, spoolKeyPath string) string {
 	t.Helper()
+	// Every worker binds as the elitea-worker NATS identity; the gRPC
+	// identity (pki.worker*) is what the unauthorized legs vary.
+	natsMaterial := natsServer.Material(natsconn.IdentityWorker)
 	value := map[string]any{
-		"schema_version":       "elitea.runtime-deploy.v1",
-		"limits_revision":      "elitea.runtime.limits.conformance.v3",
-		"workload_session_id":  workloadSession,
-		"producer_id":          producerID,
-		"consumer_id":          "worker-" + name,
-		"redis_url":            fmt.Sprintf("rediss://worker@localhost:%d/0", redisPort),
-		"redis_password_path":  redisPasswordPath,
-		"redis_stream":         commandStream,
-		"redis_group":          consumer,
-		"control_target":       fmt.Sprintf("localhost:%d", controlPort),
-		"output_target":        fmt.Sprintf("localhost:%d", outputPort),
-		"content_origin":       fmt.Sprintf("https://localhost:%d", contentPort),
-		"platform_origin":      fmt.Sprintf("https://localhost:%d", platformPort),
-		"ca_path":              pki.caPath,
-		"certificate_path":     pki.workerCertPath,
-		"private_key_path":     pki.workerKeyPath,
-		"ed25519_keyring_path": keyringPath,
-		"spool_root":           spoolRoot,
-		"spool_key_path":       spoolKeyPath,
+		"schema_version":        "elitea.runtime-deploy.v1",
+		"limits_revision":       "elitea.runtime.limits.conformance.v3",
+		"workload_session_id":   workloadSession,
+		"producer_id":           producerID,
+		"consumer_id":           "worker-" + name,
+		"nats_url":              natsServer.URL(),
+		"nats_ca_path":          natsMaterial.CAFile,
+		"nats_certificate_path": natsMaterial.CertFile,
+		"nats_private_key_path": natsMaterial.KeyFile,
+		"nats_stream":           commandStream,
+		"nats_consumer":         commandConsumer,
+		"control_target":        fmt.Sprintf("localhost:%d", controlPort),
+		"output_target":         fmt.Sprintf("localhost:%d", outputPort),
+		"content_origin":        fmt.Sprintf("https://localhost:%d", contentPort),
+		"platform_origin":       fmt.Sprintf("https://localhost:%d", platformPort),
+		"ca_path":               pki.caPath,
+		"certificate_path":      pki.workerCertPath,
+		"private_key_path":      pki.workerKeyPath,
+		"ed25519_keyring_path":  keyringPath,
+		"spool_root":            spoolRoot,
+		"spool_key_path":        spoolKeyPath,
 		"limits": map[string]any{
-			"redis_read_batch":               4,
-			"redis_block_millis":             250,
-			"redis_reclaim_idle_millis":      testReclaimIdle.Milliseconds(),
-			"redis_reclaim_interval_millis":  250,
-			"dependency_retry_millis":        250,
-			"delivery_max_concurrency":       2,
-			"delivery_queue_capacity":        4,
-			"sync_max_workers":               2,
-			"sync_max_in_flight":             2,
-			"admission_timeout_millis":       5000,
-			"grpc_deadline_millis":           5000,
-			"content_timeout_millis":         5000,
-			"http_max_connections":           4,
-			"http_max_keepalive_connections": 2,
-			"output_max_queued_frames":       4,
-			"output_max_queued_bytes":        256 * 1024,
-			"output_max_sessions":            2,
-			"output_ack_timeout_millis":      5000,
-			"output_stream_deadline_millis":  30000,
-			"lease_poll_interval_millis":     1000,
-			"shutdown_timeout_millis":        10000,
+			"nats_fetch_batch":                 4,
+			"nats_fetch_expires_millis":        250,
+			"nats_in_progress_interval_millis": 1000,
+			"nats_retry_delay_millis":          1000,
+			"dependency_retry_millis":          250,
+			"delivery_max_concurrency":         2,
+			"delivery_queue_capacity":          4,
+			"sync_max_workers":                 2,
+			"sync_max_in_flight":               2,
+			"admission_timeout_millis":         5000,
+			"grpc_deadline_millis":             5000,
+			"content_timeout_millis":           5000,
+			"http_max_connections":             4,
+			"http_max_keepalive_connections":   2,
+			"output_max_queued_frames":         4,
+			"output_max_queued_bytes":          256 * 1024,
+			"output_max_sessions":              2,
+			"output_ack_timeout_millis":        5000,
+			"output_stream_deadline_millis":    30000,
+			"lease_poll_interval_millis":       1000,
+			"shutdown_timeout_millis":          10000,
 		},
 	}
 	encoded, err := json.Marshal(value)
@@ -797,114 +731,6 @@ func waitForMain(t *testing.T, ctx context.Context, publicBaseURL string, proces
 		return response.StatusCode == http.StatusOK, nil
 	}); err != nil {
 		t.Fatalf("elitea-main did not become ready: %v\n%s", err, process.logs())
-	}
-}
-
-func waitForWorkerConsumer(t *testing.T, ctx context.Context, client *redis.Client, consumer string, process *childProcess) {
-	t.Helper()
-	if err := eventually(ctx, 100*time.Millisecond, func() (bool, error) {
-		process.ensureRunning(t)
-		consumers, err := client.XInfoConsumers(ctx, commandStream, consumer).Result()
-		if err != nil {
-			return false, nil
-		}
-		for _, item := range consumers {
-			if item.Name == consumer {
-				return true, nil
-			}
-		}
-		return false, nil
-	}); err != nil {
-		t.Fatalf("worker did not join the Redis consumer group: %v\n%s", err, process.logs())
-	}
-}
-
-func waitForPendingDelivery(t *testing.T, ctx context.Context, client *redis.Client, pool *pgxpool.Pool, executionID, consumer string, process *childProcess) {
-	t.Helper()
-	if err := eventually(ctx, 100*time.Millisecond, func() (bool, error) {
-		process.ensureRunning(t)
-		length, err := client.XLen(ctx, commandStream).Result()
-		if err != nil || length != 1 {
-			return false, nil
-		}
-		pending, err := client.XPendingExt(ctx, &redis.XPendingExtArgs{
-			Stream: commandStream,
-			Group:  consumer,
-			Start:  "-",
-			End:    "+",
-			Count:  1,
-		}).Result()
-		if err != nil || len(pending) != 1 || pending[0].Consumer != consumer {
-			return false, nil
-		}
-		var state string
-		if err := pool.QueryRow(ctx, `SELECT state FROM elitea_runtime.execution_jobs WHERE execution_id = $1`, executionID).Scan(&state); err != nil {
-			return false, nil
-		}
-		return state == "DISPATCHED", nil
-	}); err != nil {
-		t.Fatalf("unauthorized worker %q did not leave one pending reference: %v\n%s", consumer, err, process.logs())
-	}
-}
-
-func agePendingDelivery(t *testing.T, ctx context.Context, port int, caPath, consumer string) {
-	t.Helper()
-	worker := newControlRedisClient(t, port, "worker", workerPassword, caPath)
-	defer func() { _ = worker.Close() }()
-	pending, err := worker.XPendingExt(ctx, &redis.XPendingExtArgs{
-		Stream: commandStream,
-		Group:  consumer,
-		Start:  "-",
-		End:    "+",
-		Count:  1,
-	}).Result()
-	if err != nil || len(pending) != 1 || pending[0].Consumer != consumer {
-		t.Fatalf("locate pending delivery owned by %q before accelerated reclaim: pending=%v err=%v", consumer, pending, err)
-	}
-	result, err := worker.Do(
-		ctx,
-		"XCLAIM",
-		commandStream,
-		consumer,
-		consumer,
-		0,
-		pending[0].ID,
-		"IDLE",
-		testReclaimIdle.Milliseconds(),
-		"JUSTID",
-	).Result()
-	if err != nil || result == nil {
-		t.Fatalf("age pending delivery for accelerated reclaim: result=%v err=%v", result, err)
-	}
-}
-
-func waitForSettlementAndRetirement(t *testing.T, ctx context.Context, pool *pgxpool.Pool, client *redis.Client, executionID string, process *childProcess) {
-	t.Helper()
-	if err := eventually(ctx, 100*time.Millisecond, func() (bool, error) {
-		process.ensureRunning(t)
-		var state string
-		if err := pool.QueryRow(ctx, `SELECT state FROM elitea_runtime.execution_jobs WHERE execution_id = $1`, executionID).Scan(&state); err != nil {
-			return false, nil
-		}
-		if state != "SUCCEEDED" {
-			return false, nil
-		}
-		length, err := client.XLen(ctx, commandStream).Result()
-		if err != nil || length != 0 {
-			return false, nil
-		}
-		pending, err := client.XPending(ctx, commandStream, consumer).Result()
-		if err != nil || pending.Count != 0 {
-			return false, nil
-		}
-		mappings, err := client.HLen(ctx, commandStream+":delivery-index.v1").Result()
-		return err == nil && mappings == 0, nil
-	}); err != nil {
-		t.Fatalf("runtime did not durably settle and atomically XACK+XDEL+HDEL the command: %v\n%s", err, process.logs())
-	}
-	entries, err := client.XRangeN(ctx, commandStream, "-", "+", 1).Result()
-	if err != nil || len(entries) != 0 {
-		t.Fatalf("Redis retained output or settings after settlement: entries=%v err=%v", entries, err)
 	}
 }
 
