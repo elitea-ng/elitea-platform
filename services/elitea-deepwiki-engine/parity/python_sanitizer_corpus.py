@@ -77,6 +77,11 @@ HAND_CASES: list[tuple[str, str]] = [
     ("quote_before_indexer", "```mermaid\nflowchart TD\n  A[\"obj\\\"['k']\"] --> B[\"x\" ['y']]\n```\n"),
     ("pipe_spaces", "```mermaid\nflowchart TD\n  A -- text --> B\n  B -->|  spaced   | C\n```\n"),
     ("subgraph_digit_rep", "```mermaid\nflowchart TD\n  subgraph S1\n    2abc[\"x\"]\n  end\n  S1 --> Z\n```\n"),
+    # re.IGNORECASE: `i` also matches U+0130 and U+0131.
+    ("ignorecase_dotted_i", "```mermaİd\nsequenceDiagram\n  A->>B: x\n  Note rİght of B: one; two\n```\n"),
+    ("ignorecase_dotless_i", "```MERMAıD\nflowchart TD\n  A[x y] --> B\n```\n"),
+    ("ignorecase_dotless_i_indented", "Intro\n  ```mermaıd\nsequenceDiagram\n  A->>B: x\n  note rıght of B: one; two\n```\n"),
+    ("ignorecase_note_mixed", "```mermaid\nsequenceDiagram\n  A->>B: x\n  NOTE LEFT OF B: one; two\n  Note rİght of A: three; four\n```\n"),
 ]
 
 

@@ -20,7 +20,14 @@
 //! * replacement templates (`\1`, `\g<name>`, `\\`) are parsed as
 //!   `re._parser.parse_template` does — `r"'\\1'"` is the literal text
 //!   `'\1'`, not group 1 (the sanitizer has that quirk, kept);
-//! * a group that did not take part substitutes `""`.
+//! * a group that did not take part substitutes `""`;
+//! * under `IGNORECASE`, Python's `i` also matches `İ` (U+0130, whose
+//!   simple lower case is `i`) and `ı` (U+0131, an `sre` case
+//!   equivalence); Unicode simple case folding (Rust) has neither. A
+//!   literal `i` / `I` becomes `[iI\u{130}\u{131}]` and a class that
+//!   holds `i` or `I` gains the two characters. Every other ASCII letter
+//!   folds the same in both (`k` / U+212A and `s` / U+017F included;
+//!   checked over all code points with Python 3.12).
 //!
 //! The one `sre` behaviour not reproduced: after an EMPTY match, `sre`
 //! retries the same position for a non-empty alternative; this skips to
@@ -180,16 +187,28 @@ impl<'t> Match<'t> {
 
 /// Rewrite the Python-only syntax (see the module comment) after
 /// [`crate::graph::pyre::translate`].
-fn rewrite(pattern: &str, multiline: bool) -> String {
+fn rewrite(pattern: &str, multiline: bool, ignorecase: bool) -> String {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::with_capacity(pattern.len() + 16);
     let mut in_class = false;
     let mut class_start = false;
+    let mut class_body = 0;
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
         if c == '\\' {
             let next = chars.get(i + 1).copied();
+            // `\p{L}`, `\x{1C}`: the braces are part of the escape.
+            if matches!(next, Some('p' | 'P' | 'x' | 'u')) && chars.get(i + 2) == Some(&'{') {
+                let close = chars[i..]
+                    .iter()
+                    .position(|&ch| ch == '}')
+                    .map_or(chars.len(), |at| i + at + 1);
+                out.extend(&chars[i..close]);
+                i = close;
+                class_start = false;
+                continue;
+            }
             match next {
                 Some('b') if !in_class => {
                     let _ = write!(out, "(?:(?<={WORD})(?!{WORD})|(?<!{WORD})(?={WORD}))");
@@ -212,6 +231,9 @@ fn rewrite(pattern: &str, multiline: bool) -> String {
         if in_class {
             if c == ']' && !class_start {
                 in_class = false;
+                if ignorecase && class_holds_i(&chars[class_body..i]) {
+                    out.push_str(DOTTED_DOTLESS_I);
+                }
             }
             class_start = false;
             out.push(c);
@@ -227,6 +249,19 @@ fn rewrite(pattern: &str, multiline: bool) -> String {
                     out.push('^');
                     i += 1;
                 }
+                class_body = i + 1;
+            }
+            // A group header: its name and flags are not literals.
+            '(' if chars.get(i + 1) == Some(&'?') => {
+                let header = group_header_len(&chars[i..]);
+                out.extend(&chars[i..i + header]);
+                i += header;
+                continue;
+            }
+            'i' | 'I' if ignorecase => {
+                out.push_str("[iI");
+                out.push_str(DOTTED_DOTLESS_I);
+                out.push(']');
             }
             '$' if !multiline => out.push_str(r"(?=\n?\z)"),
             _ => out.push(c),
@@ -234,6 +269,61 @@ fn rewrite(pattern: &str, multiline: bool) -> String {
         i += 1;
     }
     out
+}
+
+/// `İ` and `ı`, which Python's `IGNORECASE` lets an `i` match.
+const DOTTED_DOTLESS_I: &str = "\u{130}\u{131}";
+
+/// Whether a class body (between `[` / `[^` and `]`) holds `i` or `I`,
+/// as a literal or inside a range.
+fn class_holds_i(body: &[char]) -> bool {
+    let mut j = 0;
+    while j < body.len() {
+        if body[j] == '\\' {
+            j += 2;
+            continue;
+        }
+        let low = body[j];
+        if body.get(j + 1) == Some(&'-')
+            && let Some(&high) = body.get(j + 2)
+            && high != '\\'
+        {
+            if (low..=high).contains(&'i') || (low..=high).contains(&'I') {
+                return true;
+            }
+            j += 3;
+            continue;
+        }
+        if matches!(low, 'i' | 'I') {
+            return true;
+        }
+        j += 1;
+    }
+    false
+}
+
+/// The length of the group header at the start of `chars` (`(?:`, `(?=`,
+/// `(?<!`, `(?P<name>`, `(?P=name)`, `(?<name>`, `(?i)`, `(?s:` …): the
+/// part that holds names and flags, not pattern text.
+fn group_header_len(chars: &[char]) -> usize {
+    let through = |stop: char| {
+        chars
+            .iter()
+            .position(|&c| c == stop)
+            .map_or(chars.len(), |at| at + 1)
+    };
+    match (chars.get(2).copied(), chars.get(3).copied()) {
+        (Some('P'), Some('<')) => through('>'),
+        (Some('<'), Some(c)) if c != '=' && c != '!' => through('>'),
+        (Some('P'), Some('=')) => through(')'),
+        (Some(c), _) if c.is_ascii_alphabetic() || c == '-' => {
+            2 + chars[2..]
+                .iter()
+                .take_while(|c| c.is_ascii_alphabetic() || **c == '-')
+                .count()
+        }
+        _ => 2,
+    }
 }
 
 impl PyRe {
@@ -270,6 +360,7 @@ impl PyRe {
         source.push_str(&rewrite(
             &crate::graph::pyre::translate(pattern),
             flags.multiline,
+            flags.ignorecase,
         ));
         let regex = RegexBuilder::new(&source)
             .backtrack_limit(BACKTRACK_LIMIT)
@@ -622,6 +713,35 @@ mod tests {
                 .unwrap(),
             r#"end_["a"] xend["b"]"#
         );
+    }
+
+    /// `re.IGNORECASE` lets `i` match `İ` and `ı` (python3.12: `[c for c
+    /// in range(0x110000) if re.fullmatch("i", chr(c), re.I)]` is `i I İ ı`;
+    /// for every other ASCII letter Python and Rust agree).
+    #[test]
+    fn ignorecase_i_matches_the_dotted_and_dotless_i() {
+        let p = re("mermaid", Flags::I);
+        for text in ["mermaid", "MERMAID", "merma\u{130}d", "MERMA\u{131}D"] {
+            assert!(p.is_match(text).unwrap(), "{text}");
+        }
+        assert!(
+            !re("mermaid", Flags::NONE)
+                .is_match("merma\u{130}d")
+                .unwrap()
+        );
+        assert!(re("[h-j]", Flags::I).is_match("\u{131}").unwrap());
+        assert!(!re("[^i]", Flags::I).is_match("\u{130}").unwrap());
+        assert!(!re("[a-h]", Flags::I).is_match("\u{131}").unwrap());
+        // Names and flags are not pattern text.
+        let named = re(r"(?P<inner>x)(?P=inner)", Flags::I);
+        assert_eq!(named.search("XX").unwrap().unwrap().name("inner"), "X");
+        // python3 -c 'import re;print(bool(re.search(r"\bin\b", "x İn y", re.I)),
+        //   bool(re.search(r"\bin\b", "xİn y", re.I)))'  →  True False
+        assert!(re(r"\bin\b", Flags::I).is_match("x \u{130}n y").unwrap());
+        assert!(!re(r"\bin\b", Flags::I).is_match("x\u{130}n y").unwrap());
+        // Python and Rust both fold the Kelvin sign and the long s.
+        assert!(re("k", Flags::I).is_match("\u{212a}").unwrap());
+        assert!(re("s", Flags::I).is_match("\u{17f}").unwrap());
     }
 
     #[test]
