@@ -136,11 +136,9 @@ func TestProductionRuntimeCrossProcessSystem(t *testing.T) {
 	outputFaultProxy := startOutputACKDropProxy(t, fmt.Sprintf("localhost:%d", outputPort), pki)
 	workerOutputPort := outputFaultProxy.port(t)
 
-	badSignatureConfigPath := writeWorkerConfig(t, root, "bad-signature", natsServer, controlPort, workerOutputPort, contentPort, publicPort, pki, signing.badKeyringPath, unauthorizedSpool("bad-signature"), spoolKeyPath)
-	badSignatureWorker := startWorker(t, python, repositoryRoot, badSignatureConfigPath, filepath.Join(root, "worker-bad-signature.log"))
-	t.Cleanup(func() { badSignatureWorker.stop(t) })
-	bus.waitForWorkerPulling(t, ctx, badSignatureWorker)
-
+	// The command is admitted and published BEFORE the first worker starts,
+	// so its live copy can be read (reference-only body) while it is still
+	// in the stream: the bad-signature worker below terminates it.
 	admission := submitValidationPrivate(t, ctx, pool, settings)
 	deliveryID := outboxDeliveryID(t, ctx, pool, admission.ExecutionID)
 	subject, err := commandbus.DeliverySubject(commandStream, deliveryID)
@@ -151,13 +149,22 @@ func TestProductionRuntimeCrossProcessSystem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delivered := bus.waitForUnsettledDelivery(t, ctx, pool, admission.ExecutionID, 0, "worker-bad-signature", badSignatureWorker)
-	// A signature failure is poison: NakWithDelay(24h) plus one dead-letter
-	// record, never a claim.
+	settledCommand := bus.waitForLiveCommand(t, ctx, subject, deliveryID, settingsMarker)
+
+	badSignatureConfigPath := writeWorkerConfig(t, root, "bad-signature", natsServer, controlPort, workerOutputPort, contentPort, publicPort, pki, signing.badKeyringPath, unauthorizedSpool("bad-signature"), spoolKeyPath)
+	badSignatureWorker := startWorker(t, python, repositoryRoot, badSignatureConfigPath, filepath.Join(root, "worker-bad-signature.log"))
+	t.Cleanup(func() { badSignatureWorker.stop(t) })
+	// A signature failure can never become valid: one dead-letter record,
+	// then Term (#1081 review S2) — the stream's capacity is freed at once,
+	// and there is never a claim.
 	bus.waitForDeadLetter(t, ctx, deadLetterKey, badSignatureWorker)
-	settledCommand := assertReferenceOnlyCommand(t, ctx, bus, subject, deliveryID, settingsMarker)
+	bus.waitForTerminated(t, ctx, badSignatureWorker)
 	assertNoClaim(t, ctx, pool, admission.ExecutionID)
 	badSignatureWorker.stop(t)
+	// PostgreSQL re-offers the still-dispatched outbox row (the visibility
+	// repair, once the 2m duplicate window has passed); the test publishes
+	// the same bytes now instead of waiting for it.
+	bus.replaySettledCommand(t, ctx, settledCommand)
 
 	// Preserve a real pending delivery through every durable infrastructure
 	// process restart before any authorized worker can claim it: the NATS
@@ -171,8 +178,8 @@ func TestProductionRuntimeCrossProcessSystem(t *testing.T) {
 	mainProcess.stop(t)
 	mainProcess = startChild(t, "elitea-main", mainLog, filepath.Join(repositoryRoot, "services", "elitea-main"), mainEnvironment, mainBinary)
 	waitForMain(t, ctx, publicBaseURL, mainProcess)
-
-	bus.redeliverNow(t, ctx)
+	bus.waitForLiveCommand(t, ctx, subject, deliveryID, settingsMarker)
+	var delivered uint64
 
 	wrongIdentityPKI := pki
 	wrongIdentityPKI.workerCertPath = pki.wrongIdentityWorkerCertPath

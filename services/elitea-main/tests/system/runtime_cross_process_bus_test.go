@@ -171,8 +171,8 @@ func (b *runtimeBus) waitForUnsettledDelivery(t *testing.T, ctx context.Context,
 }
 
 // waitForDeadLetter waits until a worker recorded key in the dead-letter
-// bucket (and so also parked the message with the 24h poison NAK, which the
-// worker sends first).
+// bucket. The record is written first; the worker then terminates the
+// message (signature or subject failure) or parks it with the 24h nak.
 func (b *runtimeBus) waitForDeadLetter(t *testing.T, ctx context.Context, key string, process *childProcess) {
 	t.Helper()
 	if err := eventually(ctx, 100*time.Millisecond, func() (bool, error) {
@@ -181,6 +181,33 @@ func (b *runtimeBus) waitForDeadLetter(t *testing.T, ctx context.Context, key st
 		return records == 1, nil
 	}); err != nil {
 		t.Fatalf("poison delivery was not dead-lettered under %s: %v\n%s", key, err, process.logs())
+	}
+}
+
+// waitForLiveCommand waits until the one command is in the stream and not
+// yet delivered (it survived any restart in between), and returns its live
+// copy after the reference-only checks.
+func (b *runtimeBus) waitForLiveCommand(t *testing.T, ctx context.Context, subject, deliveryID, settingsMarker string) *jetstream.RawStreamMsg {
+	t.Helper()
+	if err := eventually(ctx, 100*time.Millisecond, func() (bool, error) {
+		stream, info, err := b.state(ctx)
+		return err == nil && stream.State.Msgs == 1 && info.NumPending == 1 && info.NumAckPending == 0, nil
+	}); err != nil {
+		t.Fatalf("the published command never became the one undelivered message of %s: %v", commandStream, err)
+	}
+	return assertReferenceOnlyCommand(t, ctx, b, subject, deliveryID, settingsMarker)
+}
+
+// waitForTerminated waits until a terminated delivery has left the
+// WorkQueue stream: nothing pending, nothing ack-pending, no message.
+func (b *runtimeBus) waitForTerminated(t *testing.T, ctx context.Context, process *childProcess) {
+	t.Helper()
+	if err := eventually(ctx, 100*time.Millisecond, func() (bool, error) {
+		process.ensureRunning(t)
+		stream, info, err := b.state(ctx)
+		return err == nil && stream.State.Msgs == 0 && info.NumPending == 0 && info.NumAckPending == 0, nil
+	}); err != nil {
+		t.Fatalf("the unverifiable command was not terminated (still in %s): %v\n%s", commandStream, err, process.logs())
 	}
 }
 
