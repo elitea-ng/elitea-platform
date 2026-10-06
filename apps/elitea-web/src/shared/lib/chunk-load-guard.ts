@@ -78,7 +78,7 @@ const STAY_EVENTS = ['pointerdown', 'keydown', 'focus'] as const;
  * browser fires `beforeunload` for) must not hold route chunks pending
  * forever, so the flag clears itself and held loads retry.
  */
-export const LEAVE_TIMEOUT_MS = 2000;
+const LEAVE_TIMEOUT_MS = 2000;
 
 export interface ChunkLoadGuardOptions {
   readonly leaveTimeoutMs?: number;
