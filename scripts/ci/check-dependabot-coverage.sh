@@ -39,7 +39,7 @@ services/elitea-worker-python/pyproject.toml    frozen runtime capability profil
 services/elitea-worker-rust/vendor/adk-agent/Cargo.toml patched ADK source: worker Cargo.lock scans its dependency closure; upstream revision and local patches move together
 services/elitea-worker-rust/vendor/adk-runner/Cargo.toml patched ADK source: worker Cargo.lock scans its dependency closure; upstream revision and local patches move together
 services/elitea-worker-rust/vendor/adk-sandbox/Cargo.toml patched ADK source: worker Cargo.lock scans its dependency closure; upstream revision and local patches move together
-services/elitea-deepwiki-engine/vendor/leiden-rs/Cargo.toml vendored leiden-rs 0.8.1, unmodified and pinned by digest (vendor/README.md): the engine Cargo.lock scans its dependency closure; it moves by re-vendoring, never one pin at a time
+services/elitea-deepwiki-engine/vendor/leiden-rs/Cargo.toml vendored leiden-rs 0.8.1, the crates.io archive minus its Cargo.lock, pinned by digest (vendor/README.md): the engine Cargo.lock scans its dependency closure; it moves by re-vendoring, never one pin at a time
 scripts/runtime/fixtures/code-data-processing/Cargo.toml locked acceptance fixture: package versions are test inputs; runner and worker scan shipping dependencies
 EXEMPTIONS
 )

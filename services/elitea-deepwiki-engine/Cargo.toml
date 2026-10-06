@@ -31,8 +31,8 @@ pgvector = { version = "=0.4.2", features = ["sqlx"] }
 rayon = "=1.12.0"
 regex = "=1.13.1"
 # Leiden community detection for Phase 3 clustering (ADR-0026 decision 6):
-# leiden-rs 0.8.1, VENDORED unmodified from the crates.io archive (sha256
-# c7bbf470…6d42, see vendor/README.md) because it is a single-author crate
+# leiden-rs 0.8.1, VENDORED from the crates.io archive (sha256 c7bbf470…6d42)
+# minus its Cargo.lock (see vendor/README.md) because it is a single-author crate
 # hosted on gitcode. No default features: no CLI, no rayon (one thread, so
 # a seed gives one result), no gryf. Called only behind
 # `graph::clustering::Partitioner`.
