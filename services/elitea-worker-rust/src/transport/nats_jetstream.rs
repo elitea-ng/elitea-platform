@@ -1,12 +1,23 @@
 //! NATS `JetStream` pull-consumer transport for signed worker commands.
 //!
 //! `docs/runtime-command-bus.md` is the contract. The worker is a consumer
-//! only and binds to what the bootstrap created: it reads the stream and the
-//! durable (`get_stream`, `get_consumer`), refuses to start when either is
-//! absent or drifted, and then uses exactly the operations its permission row
-//! grants: pull (`MSG.NEXT`), `+WPI`, nak with a delay, a double ack after the
-//! settlement receipt, and a dead-letter KV put. It never publishes a command,
-//! creates a consumer, terminates a message or administers a stream.
+//! only and binds to what the bootstrap created: it reads the durable
+//! (`CONSUMER.INFO`), refuses to start when it is absent or drifted, and then
+//! uses exactly the operations its permission row grants: pull (`MSG.NEXT`),
+//! `+WPI`, nak with a delay, `+TERM` for a command that can never verify, a
+//! double ack after the settlement receipt, and a dead-letter KV put. It never
+//! publishes a command, creates a consumer or administers a stream.
+//!
+//! With a client identity (the chart's posture) the worker is the only user of
+//! the WORKER account, which holds its dead-letter bucket and nothing else, and
+//! reaches RUNTIME's durables through service imports under
+//! [`RUNTIME_API_PREFIX`]: the command-bus `JetStream` context uses that prefix,
+//! the dead-letter bucket the default `$JS.API` of WORKER's own `JetStream`.
+//! A request's reply subject is not checked against permissions and the server
+//! answers `JetStream` API requests onto it, so in RUNTIME a reply naming a
+//! command subject stored the answer in a command stream; from WORKER it lands
+//! in WORKER. Without an identity (compose, one global account) both contexts
+//! use the default prefix.
 //!
 //! async-nats reconnects internally. The transport therefore never assumes
 //! that anything sent across a disconnect arrived: retirement and naks are
@@ -25,7 +36,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use async_nats::jetstream::consumer::{AckPolicy, DeliverPolicy, PullConsumer};
-use async_nats::jetstream::stream::RetentionPolicy;
 use async_nats::jetstream::{self, kv};
 use async_nats::{Client, ConnectOptions, Event};
 use async_trait::async_trait;
@@ -41,8 +51,8 @@ use zeroize::Zeroizing;
 use super::command_bus::{
     AckReplyInfo, CommandBusLimits, CommandRetirementClient, CommandRetirementClientError,
     CommandRetirementRequest, DEAD_LETTER_BUCKET, DeadLetterRecord, DecodedDelivery,
-    MAX_REQUEST_BATCH, MAX_REQUEST_EXPIRES, WORKER_INBOX_PREFIX, decode_delivery, filter_subject,
-    valid_route_pair,
+    MAX_REQUEST_BATCH, MAX_REQUEST_EXPIRES, RUNTIME_API_PREFIX, WORKER_INBOX_PREFIX,
+    decode_delivery, filter_subject, valid_route_pair,
 };
 use crate::security::{MAX_CA_BYTES, MAX_CERTIFICATE_BYTES, MAX_PRIVATE_KEY_BYTES};
 
@@ -280,7 +290,9 @@ pub(crate) trait CommandBusConnection:
     /// Messages per pull (`limits.nats_fetch_batch`).
     fn fetch_batch(&self) -> usize;
 
-    /// Pull at most `max` messages, waiting up to `expires` for the first.
+    /// Pull at most `max` messages, waiting up to `expires` for the FIRST and
+    /// returning as soon as one has arrived (with whatever else is available
+    /// at that moment), never holding a delivered command until `expires`.
     async fn fetch(
         &self,
         max: usize,
@@ -293,6 +305,10 @@ pub(crate) trait CommandBusConnection:
 
     /// Nak one delivery with a redelivery delay; confirmed by the server.
     async fn nak(&self, reply: &str, delay: Duration) -> Result<(), NatsJetStreamError>;
+
+    /// Terminate one delivery (`+TERM`): it is never redelivered and leaves
+    /// the `WorkQueue` stream. Only for a command that can never verify.
+    async fn term(&self, reply: &str) -> Result<(), NatsJetStreamError>;
 
     /// Put one dead-letter record into the bucket.
     async fn record_dead_letter(&self, record: &DeadLetterRecord)
@@ -419,16 +435,23 @@ impl NatsCommandBus {
         config: ValidatedConfig,
         observer: Arc<ConnectionObserver>,
     ) -> Result<Self, NatsJetStreamError> {
+        // The durable is RUNTIME's, reached from WORKER through the imported
+        // API prefix when the worker presents its identity; the dead-letter
+        // bucket is WORKER's own, on the default prefix.
+        let mut command_bus = if config.tls.is_some() {
+            jetstream::with_prefix(client.clone(), RUNTIME_API_PREFIX)
+        } else {
+            jetstream::new(client.clone())
+        };
+        command_bus.set_timeout(config.request_timeout);
         let mut context = jetstream::new(client.clone());
         context.set_timeout(config.request_timeout);
-        let stream = context
-            .get_stream(&config.stream)
+        let consumer: PullConsumer = command_bus
+            .get_consumer_from_stream(&config.consumer, &config.stream)
             .await
-            .map_err(|_| NatsJetStreamError::consumer_missing("the NATS command stream is absent"))?;
-        verify_stream(stream.cached_info(), &config.filter_subject)?;
-        let consumer: PullConsumer = stream.get_consumer(&config.consumer).await.map_err(|_| {
-            NatsJetStreamError::consumer_missing("the NATS durable consumer is absent")
-        })?;
+            .map_err(|_| {
+                NatsJetStreamError::consumer_missing("the NATS durable consumer is absent")
+            })?;
         verify_consumer(
             &consumer.cached_info().config,
             &config.consumer,
@@ -475,6 +498,90 @@ impl NatsCommandBus {
             return Err(NatsJetStreamError::protocol(
                 "the delivery belongs to another stream or consumer",
             ));
+        }
+        Ok(())
+    }
+
+    /// One pull that ends on the server before it ends here: a long poll
+    /// (`expires` set) or a no-wait pull (`expires` None), until `deliveries`
+    /// holds `up_to`.
+    async fn pull_into(
+        &self,
+        deliveries: &mut Vec<DecodedDelivery>,
+        up_to: usize,
+        expires: Option<Duration>,
+    ) -> Result<(), NatsJetStreamError> {
+        let wanted = up_to.saturating_sub(deliveries.len());
+        if wanted == 0 {
+            return Ok(());
+        }
+        let started = deliveries.len();
+        let request = async {
+            match expires {
+                Some(expires) => {
+                    self.consumer
+                        .batch()
+                        .max_messages(wanted)
+                        .expires(expires)
+                        .messages()
+                        .await
+                }
+                None => self.consumer.fetch().max_messages(wanted).messages().await,
+            }
+        };
+        let mut batch = tokio::time::timeout(self.config.request_timeout, request)
+            .await
+            .map_err(|_| NatsJetStreamError::timeout("the NATS pull request timed out"))?
+            .map_err(|_| NatsJetStreamError::unavailable("the NATS pull request failed"))?;
+        let deadline = tokio::time::Instant::now()
+            + expires
+                .unwrap_or_default()
+                .saturating_add(self.config.request_timeout);
+        let mut received = 0;
+        loop {
+            let next = match tokio::time::timeout_at(deadline, batch.next()).await {
+                Err(_) | Ok(None) => break,
+                Ok(Some(next)) => next,
+            };
+            let message = match next {
+                Ok(message) => message,
+                Err(_) if deliveries.len() == started => {
+                    return Err(NatsJetStreamError::unavailable(
+                        "the NATS pull ended with a server status",
+                    ));
+                }
+                // Return what this pull already owns; the next pull reports
+                // the status again if it persists.
+                Err(_) => break,
+            };
+            received += 1;
+            if received > wanted {
+                return Err(NatsJetStreamError::resource_exhausted(
+                    "the NATS pull returned more messages than requested",
+                ));
+            }
+            let Some(reply) = message.message.reply.as_ref() else {
+                tracing::error!(event = "nats_delivery_without_ack_subject");
+                continue;
+            };
+            match decode_delivery(
+                message.message.subject.as_str(),
+                reply.as_str(),
+                message.message.payload.to_vec(),
+                message.message.length,
+                self.config.limits,
+            ) {
+                Ok(decoded) => deliveries.push(decoded),
+                // Only this message: an ack subject that is unusable or names
+                // another stream or consumer cannot be answered by this
+                // identity, so it is left to AckWait; the rest is kept.
+                Err(error) => {
+                    tracing::error!(event = "nats_delivery_unackable", error_code = error.code(),);
+                }
+            }
+            if received == wanted {
+                break;
+            }
         }
         Ok(())
     }
@@ -526,56 +633,26 @@ impl CommandBusConnection for NatsCommandBus {
                 "the NATS pull exceeds its configured bound",
             ));
         }
-        let mut batch = tokio::time::timeout(
-            self.config.request_timeout,
-            self.consumer
-                .batch()
-                .max_messages(max)
-                .expires(expires)
-                .messages(),
-        )
-        .await
-        .map_err(|_| NatsJetStreamError::timeout("the NATS pull request timed out"))?
-        .map_err(|_| NatsJetStreamError::unavailable("the NATS pull request failed"))?;
-        let deadline =
-            tokio::time::Instant::now() + expires.saturating_add(self.config.request_timeout);
+        // Two pulls, each COMPLETE on the server before it is abandoned here.
+        //
+        // A batch pull for `max` messages does not end until `max` arrived or
+        // the server answers 408 at `expires`, so a single command used to
+        // wait up to `expires` (5s deployed) in this function before anything
+        // could start it. Dropping that pull early instead would leave the
+        // server delivering the rest of the batch to an inbox nobody reads —
+        // each such command then waits out AckWait. So: a long poll for ONE
+        // message, which the server closes as soon as it delivers it, then a
+        // no-wait pull for at most `max - 1` more, which the server closes at
+        // once with whatever is already available.
         let mut deliveries = Vec::with_capacity(max);
-        loop {
-            let next = match tokio::time::timeout_at(deadline, batch.next()).await {
-                Err(_) | Ok(None) => break,
-                Ok(Some(next)) => next,
-            };
-            let message = match next {
-                Ok(message) => message,
-                Err(_) if deliveries.is_empty() => {
-                    return Err(NatsJetStreamError::unavailable(
-                        "the NATS pull ended with a server status",
-                    ));
-                }
-                // Return what this pull already owns; the next pull reports
-                // the status again if it persists.
-                Err(_) => break,
-            };
-            if deliveries.len() >= max {
-                return Err(NatsJetStreamError::resource_exhausted(
-                    "the NATS pull returned more messages than requested",
-                ));
-            }
-            let Some(reply) = message.message.reply.as_ref() else {
-                tracing::error!(event = "nats_delivery_without_ack_subject");
-                continue;
-            };
-            match decode_delivery(
-                message.message.subject.as_str(),
-                reply.as_str(),
-                message.message.payload.to_vec(),
-                message.message.length,
-                self.config.limits,
-            ) {
-                Ok(decoded) => deliveries.push(decoded),
-                Err(error) => {
-                    tracing::error!(event = "nats_delivery_unackable", error_code = error.code(),);
-                }
+        self.pull_into(&mut deliveries, 1, Some(expires)).await?;
+        if !deliveries.is_empty() && max > 1 {
+            // A failure here keeps what the first pull already owns.
+            if let Err(error) = self.pull_into(&mut deliveries, max, None).await {
+                tracing::warn!(
+                    event = "nats_pull_remainder_unavailable",
+                    error_code = error.code(),
+                );
             }
         }
         Ok(deliveries)
@@ -614,6 +691,11 @@ impl CommandBusConnection for NatsCommandBus {
     async fn nak(&self, reply: &str, delay: Duration) -> Result<(), NatsJetStreamError> {
         let payload = format!("-NAK {{\"delay\":{}}}", delay.as_nanos()).into_bytes();
         self.request_ack(reply, payload, "the NATS nak was not confirmed")
+            .await
+    }
+
+    async fn term(&self, reply: &str) -> Result<(), NatsJetStreamError> {
+        self.request_ack(reply, b"+TERM".to_vec(), "the NATS term was not confirmed")
             .await
     }
 
@@ -677,21 +759,6 @@ impl CommandRetirementClient for NatsCommandBus {
             | NatsJetStreamErrorKind::ResourceExhausted => CommandRetirementClientError::Protocol,
         })
     }
-}
-
-/// The stream must be the contract's `WorkQueue` stream for exactly this route.
-pub(crate) fn verify_stream(
-    info: &jetstream::stream::Info,
-    filter_subject: &str,
-) -> Result<(), NatsJetStreamError> {
-    if info.config.subjects != [filter_subject]
-        || info.config.retention != RetentionPolicy::WorkQueue
-    {
-        return Err(NatsJetStreamError::configuration(
-            "the NATS command stream drifted from the contract",
-        ));
-    }
-    Ok(())
 }
 
 /// The durable must be the contract's pull consumer (docs/runtime-command-bus.md

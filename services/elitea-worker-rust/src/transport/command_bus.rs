@@ -44,10 +44,20 @@ pub const DEAD_LETTER_BUCKET: &str = "ELITEA_RT_V1_DEADLETTER";
 pub const DEAD_LETTER_SCHEMA: &str = "elitea.runtime.dead-letter.v1";
 /// The only inbox prefix the `elitea-worker` permission row admits.
 pub const WORKER_INBOX_PREFIX: &str = "_INBOX_elitea-worker";
+/// The `JetStream` API prefix under which the WORKER account imports RUNTIME's
+/// command-bus consumer API (`CONSUMER.INFO` and `CONSUMER.MSG.NEXT` of the
+/// three worker durables). A worker that presents its identity opens the
+/// command-bus context with it; its own account's `JetStream` (the dead-letter
+/// bucket only) keeps the default `$JS.API`. Go's
+/// `natsconn.WorkerRuntimeJSAPIPrefix` and the chart's import mappings name the
+/// same prefix (`deploy/helm/tests/render-nats-security.sh` pins all three).
+pub const RUNTIME_API_PREFIX: &str = "JS.RUNTIME.API";
 /// The consumer's redelivery timer (twice Main's 30s claim lease).
 pub const ACK_WAIT: Duration = Duration::from_mins(1);
-/// The nak delay of a poison command. Never `Term`: that frees the subject and
-/// `PostgreSQL` would re-offer the poison every 30 seconds.
+/// The nak delay of a poison command that might still be served later (a
+/// decode or version mismatch, an unsupported command). A command that can
+/// never verify — a bad signature, or a subject that does not name it — is
+/// terminated instead ([`PoisonReason::terminates`]).
 pub const POISON_DELAY: Duration = Duration::from_hours(24);
 /// The consumer's `MaxRequestBatch`.
 pub const MAX_REQUEST_BATCH: usize = 64;
@@ -312,6 +322,16 @@ pub enum PoisonReason {
 }
 
 impl PoisonReason {
+    /// Whether the delivery is terminated (`+TERM`) rather than parked for
+    /// [`POISON_DELAY`]. A signature that does not verify, or a subject that
+    /// does not name the signed command, cannot become valid by waiting, and
+    /// a terminated message frees its slot in the stream (`MaxMsgs`); parked
+    /// it would hold the slot for a day.
+    #[must_use]
+    pub const fn terminates(self) -> bool {
+        matches!(self, Self::SignatureInvalid | Self::SubjectMismatch)
+    }
+
     #[must_use]
     pub const fn code(self) -> &'static str {
         match self {

@@ -10,10 +10,26 @@
 //! | --- | --- |
 //! | retired (the settlement receipt led to a confirmed double ack) | nothing |
 //! | processed but not retired (retry later, active lease elsewhere, recovery pending, a failure) | nak with the retry delay |
-//! | poison (decode/signature failure, subject mismatch, unsupported command) | nak 24h + dead-letter record + ERROR log + counter |
+//! | poison that can never verify (signature failure, subject mismatch) | dead-letter record, then `+TERM` + ERROR log + counter |
+//! | other poison (decode failure, unsupported command, malformed message) | dead-letter record, then nak 24h + ERROR log + counter |
+//! | poison whose dead-letter record could not be written | nak with the retry delay (the next delivery retries the record) |
+//! | queued, never started, when the worker stops | nak with no delay (another replica takes it now) |
 //!
-//! It never acknowledges a command itself and never terminates one: the exact
-//! post-settlement retirement authority remains the only ack path.
+//! It never acknowledges a command itself: the exact post-settlement
+//! retirement authority remains the only ack path.
+//!
+//! Capacity: one replica owns at most `max_concurrency` running commands plus
+//! a prefetch of `min(fetch_batch, queue_capacity)` waiting behind them. Each
+//! pull asks only for the permits that are free, so a replica never holds work
+//! it cannot start soon: the KEDA scaler counts delivered-but-unacked commands
+//! (`num_ack_pending`) as in flight, and anything a replica hoards is invisible
+//! to the replicas KEDA adds.
+//!
+//! A delayed nak is never followed by a `+WPI` for the same delivery: the
+//! server treats `+WPI` as progress and resets the redelivery timer to
+//! `AckWait`, which would turn a 24h or retry delay into a 60s loop. The
+//! disposition stops owning the delivery and answers it while holding the same
+//! gate a heartbeat round holds for its whole send.
 
 #![allow(dead_code)] // Production bootstrap remains capability-disabled.
 
@@ -23,7 +39,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, mpsc, watch};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
@@ -56,9 +72,20 @@ const MAX_SHUTDOWN_TIMEOUT_MILLIS: u64 = 300_000;
 /// ERROR event and readable by tests.
 static DEAD_LETTERED_TOTAL: AtomicU64 = AtomicU64::new(0);
 
+/// Process-wide count of poison deliveries whose dead-letter record could not
+/// be written (each is nak'd with the retry delay instead of being parked or
+/// terminated, so the next delivery retries the record). Carried on every
+/// `worker_command.dead_letter_write_failed` ERROR event.
+static DEAD_LETTER_WRITE_FAILED_TOTAL: AtomicU64 = AtomicU64::new(0);
+
 #[must_use]
 pub(crate) fn dead_lettered_total() -> u64 {
     DEAD_LETTERED_TOTAL.load(Ordering::Relaxed)
+}
+
+#[must_use]
+pub(crate) fn dead_letter_write_failed_total() -> u64 {
+    DEAD_LETTER_WRITE_FAILED_TOTAL.load(Ordering::Relaxed)
 }
 
 /// Deployed bounds for queued, active and owned deliveries.
@@ -108,8 +135,18 @@ impl CommandDeliveryIntakeConfig {
         })
     }
 
+    /// Running commands plus a small prefetch behind them. The prefetch is
+    /// at most one pull (`fetch_batch`) and at most the queue.
     const fn ownership_capacity(self) -> usize {
-        self.queue_capacity + self.max_concurrency
+        self.max_concurrency + self.prefetch()
+    }
+
+    const fn prefetch(self) -> usize {
+        if self.fetch_batch < self.queue_capacity {
+            self.fetch_batch
+        } else {
+            self.queue_capacity
+        }
     }
 
     const fn max_concurrency(self) -> usize {
@@ -162,7 +199,18 @@ impl CommandDeliveryRuntimeConfig {
 
 /// (stream, stream sequence): one message, whatever its delivery count.
 type DeliveryKey = (String, u64);
-type OwnedReplies = Arc<Mutex<BTreeMap<DeliveryKey, String>>>;
+
+/// Every queued or active delivery this process owns, with the reply subject
+/// of its NEWEST delivery (a redelivery that arrives while the first copy is
+/// still owned is not run twice, but its ack subject is the one the server now
+/// tracks), and the gate a heartbeat round and a delayed answer share.
+#[derive(Default)]
+struct OwnershipLedger {
+    owned: Mutex<BTreeMap<DeliveryKey, String>>,
+    gate: Arc<AsyncMutex<()>>,
+}
+
+type OwnedReplies = Arc<OwnershipLedger>;
 
 /// One fetched message with its exact process-local ownership slot.
 ///
@@ -175,6 +223,7 @@ pub(crate) struct OwnedCommandDelivery {
     settlement: Arc<DeliverySettlement>,
     key: DeliveryKey,
     owned: OwnedReplies,
+    released: bool,
     _permit: OwnedSemaphorePermit,
 }
 
@@ -204,11 +253,26 @@ impl OwnedCommandDelivery {
     fn retired(&self) -> bool {
         self.settlement.retired()
     }
+
+    /// Stop owning this delivery so it can be answered: no heartbeat round
+    /// that started before can still be sending, and none that starts after
+    /// will include it, until the returned guard is dropped. Returns the reply
+    /// subject of the newest copy of the message.
+    async fn release_for_answer(&mut self) -> (OwnedMutexGuard<()>, String) {
+        let gate = Arc::clone(&self.owned.gate).lock_owned().await;
+        let reply = lock_owned(&self.owned.owned)
+            .remove(&self.key)
+            .unwrap_or_else(|| self.coordinates.reply.clone());
+        self.released = true;
+        (gate, reply)
+    }
 }
 
 impl Drop for OwnedCommandDelivery {
     fn drop(&mut self) {
-        lock_owned(&self.owned).remove(&self.key);
+        if !self.released {
+            lock_owned(&self.owned.owned).remove(&self.key);
+        }
     }
 }
 
@@ -240,7 +304,7 @@ where
             connection,
             config,
             capacity: Arc::new(Semaphore::new(config.ownership_capacity())),
-            owned: Arc::new(Mutex::new(BTreeMap::new())),
+            owned: Arc::new(OwnershipLedger::default()),
         }
     }
 
@@ -261,9 +325,12 @@ where
         self.bind_deliveries(fetched, permits)
     }
 
-    /// Send `+WPI` for every queued or active message.
+    /// Send `+WPI` for every queued or active message. The gate is held for
+    /// the whole round, so a delivery being answered with a delayed nak is
+    /// either in a round that finished before the nak or in none.
     pub(crate) async fn heartbeat_owned(&self) -> Result<usize, NatsJetStreamError> {
-        let replies: Vec<String> = lock_owned(&self.owned).values().cloned().collect();
+        let _round = self.owned.gate.lock().await;
+        let replies: Vec<String> = lock_owned(&self.owned.owned).values().cloned().collect();
         if replies.is_empty() {
             return Ok(0);
         }
@@ -272,7 +339,7 @@ where
 
     #[must_use]
     pub(crate) fn owned_count(&self) -> usize {
-        lock_owned(&self.owned).len()
+        lock_owned(&self.owned.owned).len()
     }
 
     pub(crate) async fn close(&self) -> Result<(), NatsJetStreamError> {
@@ -310,7 +377,7 @@ where
                 "the pull returned more messages than the reserved capacity",
             ));
         }
-        let mut owned = lock_owned(&self.owned);
+        let mut owned = lock_owned(&self.owned.owned);
         let mut permits = permits.into_iter();
         let mut batch = CommandBatch {
             commands: Vec::with_capacity(fetched.len()),
@@ -330,15 +397,17 @@ where
             let coordinates = delivery.coordinates().clone();
             let key = (coordinates.stream.clone(), coordinates.stream_sequence);
             // A redelivery of a message this worker still owns (its earlier
-            // delivery outlived AckWait): keep the owner, heartbeat it, and
-            // let the duplicate go. `+WPI` and the ack are per message.
-            if owned.contains_key(&key) {
+            // delivery outlived AckWait): keep the owner — the command is not
+            // run twice — but heartbeat and answer the NEWEST copy, whose ack
+            // subject is the one the server now tracks.
+            if let Some(reply) = owned.get_mut(&key) {
                 tracing::warn!(
                     event = "command_delivery_duplicate_ignored",
                     nats_stream = %coordinates.stream,
                     nats_stream_sequence = coordinates.stream_sequence,
                     nats_delivered = coordinates.delivered,
                 );
+                reply.clone_from(&coordinates.reply);
                 continue;
             }
             owned.insert(key.clone(), coordinates.reply.clone());
@@ -348,6 +417,7 @@ where
                 coordinates,
                 key,
                 owned: Arc::clone(&self.owned),
+                released: false,
                 _permit: permit,
             });
         }
@@ -492,6 +562,7 @@ where
                 Arc::clone(&self.processor),
                 Arc::clone(&self.connection),
                 self.config.intake.retry_delay(),
+                stop.clone(),
                 worker_index,
             ));
             registry.workers.insert(task.id());
@@ -543,11 +614,20 @@ where
                     match batch {
                         Ok(batch) => {
                             for poison in batch.poison {
-                                dispose_poison(
+                                // Never owned, so never heartbeated: answer
+                                // it directly.
+                                let answer = record_poison(
                                     self.connection.as_ref(),
                                     &poison.coordinates,
                                     poison.reason,
                                     None,
+                                    self.config.intake.retry_delay(),
+                                )
+                                .await;
+                                send_answer(
+                                    self.connection.as_ref(),
+                                    &poison.coordinates.reply,
+                                    answer,
                                 )
                                 .await;
                             }
@@ -558,7 +638,10 @@ where
                                     owned_delivery_count = self.intake.owned_count(),
                                 );
                             }
-                            if !enqueue_batch(batch.commands, sender, stop).await {
+                            if let Err(unsent) = enqueue_batch(batch.commands, sender, stop).await {
+                                for delivery in unsent {
+                                    release_unstarted(self.connection.as_ref(), delivery).await;
+                                }
                                 return None;
                             }
                         }
@@ -643,6 +726,7 @@ async fn delivery_worker<P, C>(
     processor: Arc<P>,
     connection: Arc<C>,
     retry_delay: Duration,
+    stop: watch::Receiver<bool>,
     worker_index: usize,
 ) -> DeliveryTaskExit
 where
@@ -659,6 +743,13 @@ where
         let nats_stream = delivery.coordinates().stream.clone();
         let nats_stream_sequence = delivery.coordinates().stream_sequence;
         let nats_delivered = delivery.coordinates().delivered;
+        if *stop.borrow() {
+            // Queued, never started, and this process is stopping: give it
+            // back now rather than start it only to have shutdown cut it off
+            // (or leave it to AckWait).
+            release_unstarted(connection.as_ref(), delivery).await;
+            continue;
+        }
         tracing::info!(
             event = "command_delivery_worker_received",
             worker_index,
@@ -670,9 +761,10 @@ where
             Ok(verdict) => verdict,
             Err(error) => return DeliveryTaskExit::Worker(Err(error)),
         };
-        // The disposition runs while the owner (and its heartbeat) is held.
+        // The disposition runs while the owner (and its heartbeat) is held,
+        // and stops owning the delivery before any delayed answer.
         let disposition =
-            dispose_processed(connection.as_ref(), &delivery, verdict, retry_delay).await;
+            dispose_processed(connection.as_ref(), &mut delivery, verdict, retry_delay).await;
         drop(delivery);
         tracing::info!(
             event = "command_delivery_worker_completed",
@@ -684,60 +776,117 @@ where
     }
 }
 
+/// How a delivery that ends without a retirement is answered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Answer {
+    Nak(Duration),
+    Term,
+}
+
+/// Give a queued, never-started delivery back at shutdown: nak with no delay.
+async fn release_unstarted<C>(connection: &C, mut delivery: OwnedCommandDelivery)
+where
+    C: CommandBusConnection + ?Sized,
+{
+    let (_gate, reply) = delivery.release_for_answer().await;
+    let released = connection.nak(&reply, Duration::ZERO).await;
+    tracing::info!(
+        event = "command_delivery_released_at_shutdown",
+        nats_stream = %delivery.coordinates().stream,
+        nats_stream_sequence = delivery.coordinates().stream_sequence,
+        nak_confirmed = released.is_ok(),
+    );
+}
+
 /// Apply the contract's disposition to one processed delivery and return its
 /// stable name.
 async fn dispose_processed<C>(
     connection: &C,
-    delivery: &OwnedCommandDelivery,
+    delivery: &mut OwnedCommandDelivery,
     verdict: DeliveryVerdict,
     retry_delay: Duration,
 ) -> &'static str
 where
     C: CommandBusConnection,
 {
-    match verdict {
+    let (answer, disposition) = match verdict {
+        DeliveryVerdict::Processed if delivery.retired() => return "retired",
+        DeliveryVerdict::Processed => (Answer::Nak(retry_delay), "retry_later"),
         DeliveryVerdict::Poison {
             reason,
             delivery_token,
         } => {
-            dispose_poison(
+            let answer = record_poison(
                 connection,
                 delivery.coordinates(),
                 reason,
                 delivery_token.as_deref(),
+                retry_delay,
             )
             .await;
-            "dead_lettered"
+            let disposition = match answer {
+                Answer::Term => "dead_lettered_terminated",
+                Answer::Nak(delay) if delay == POISON_DELAY => "dead_lettered",
+                Answer::Nak(_) => "dead_letter_unrecorded_retry",
+            };
+            (answer, disposition)
         }
-        DeliveryVerdict::Processed if delivery.retired() => "retired",
-        DeliveryVerdict::Processed => {
-            if let Err(error) = connection
-                .nak(&delivery.coordinates().reply, retry_delay)
-                .await
-            {
-                // Unconfirmed: AckWait redelivers instead.
-                tracing::warn!(
-                    event = "command_delivery_nak_unconfirmed",
-                    error_code = error.code(),
-                    retryable = error.retryable(),
-                );
-            }
-            "retry_later"
-        }
+    };
+    let (_gate, reply) = delivery.release_for_answer().await;
+    send_answer(connection, &reply, answer).await;
+    disposition
+}
+
+#[cfg(test)]
+pub(super) async fn test_dispose_processed<C>(
+    connection: &C,
+    delivery: &mut OwnedCommandDelivery,
+    verdict: DeliveryVerdict,
+    retry_delay: Duration,
+) -> &'static str
+where
+    C: CommandBusConnection,
+{
+    dispose_processed(connection, delivery, verdict, retry_delay).await
+}
+
+/// Send one answer; an unconfirmed one is left to `AckWait`.
+async fn send_answer<C>(connection: &C, reply: &str, answer: Answer)
+where
+    C: CommandBusConnection + ?Sized,
+{
+    let result = match answer {
+        Answer::Nak(delay) => connection.nak(reply, delay).await,
+        Answer::Term => connection.term(reply).await,
+    };
+    if let Err(error) = result {
+        tracing::warn!(
+            event = "command_delivery_answer_unconfirmed",
+            answer = match answer {
+                Answer::Nak(_) => "nak",
+                Answer::Term => "term",
+            },
+            error_code = error.code(),
+            retryable = error.retryable(),
+        );
     }
 }
 
-/// Nak a poison delivery for 24h (never `Term`), record it in the
-/// dead-letter bucket, and raise the ERROR event and counter.
-pub(crate) async fn dispose_poison<C>(
+/// Record a poison delivery in the dead-letter bucket FIRST, raise the ERROR
+/// event and counter, and decide its answer: `+TERM` for a command that can
+/// never verify, a 24h nak for the other poison classes — and, when the record
+/// could not be written, the ordinary retry delay instead, so that no poison is
+/// parked or terminated without its record (the next delivery retries it).
+async fn record_poison<C>(
     connection: &C,
     coordinates: &DeliveryCoordinates,
     reason: PoisonReason,
     delivery_token: Option<&str>,
-) where
+    retry_delay: Duration,
+) -> Answer
+where
     C: CommandBusConnection + ?Sized,
 {
-    let nak = connection.nak(&coordinates.reply, POISON_DELAY).await;
     let record = DeadLetterRecord::new(
         coordinates,
         reason,
@@ -745,7 +894,28 @@ pub(crate) async fn dispose_poison<C>(
         connection.worker_name(),
         unix_millis_now(),
     );
-    let recorded = connection.record_dead_letter(&record).await;
+    if let Err(error) = connection.record_dead_letter(&record).await {
+        let total = DEAD_LETTER_WRITE_FAILED_TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::error!(
+            event = "worker_command.dead_letter_write_failed",
+            reason = reason.code(),
+            nats_stream = %coordinates.stream,
+            nats_consumer = %coordinates.consumer,
+            nats_subject = %coordinates.subject,
+            nats_stream_sequence = coordinates.stream_sequence,
+            nats_delivered = coordinates.delivered,
+            dead_letter_key = %record.key,
+            error_code = error.code(),
+            retry_delay_millis = u64::try_from(retry_delay.as_millis()).unwrap_or(u64::MAX),
+            dead_letter_write_failed_total = total,
+        );
+        return Answer::Nak(retry_delay);
+    }
+    let answer = if reason.terminates() {
+        Answer::Term
+    } else {
+        Answer::Nak(POISON_DELAY)
+    };
     let total = DEAD_LETTERED_TOTAL.fetch_add(1, Ordering::Relaxed) + 1;
     tracing::error!(
         event = "worker_command.dead_lettered",
@@ -756,10 +926,10 @@ pub(crate) async fn dispose_poison<C>(
         nats_stream_sequence = coordinates.stream_sequence,
         nats_delivered = coordinates.delivered,
         dead_letter_key = %record.key,
-        nak_confirmed = nak.is_ok(),
-        record_written = recorded.is_ok(),
+        terminated = answer == Answer::Term,
         dead_lettered_total = total,
     );
+    answer
 }
 
 fn unix_millis_now() -> u64 {
@@ -803,31 +973,37 @@ where
     }
 }
 
+/// Hand a batch to the workers. On Stop, every delivery not yet handed over is
+/// returned so it can be given back at once.
 async fn enqueue_batch(
     deliveries: Vec<OwnedCommandDelivery>,
     sender: &mpsc::Sender<OwnedCommandDelivery>,
     stop: &mut watch::Receiver<bool>,
-) -> bool {
-    for delivery in deliveries {
+) -> Result<(), Vec<OwnedCommandDelivery>> {
+    let mut pending = deliveries.into_iter();
+    while let Some(delivery) = pending.next() {
         let nats_stream = delivery.coordinates().stream.clone();
         let nats_stream_sequence = delivery.coordinates().stream_sequence;
-        tokio::select! {
-            biased;
-            () = wait_for_stop(stop) => return false,
-            result = sender.send(delivery) => {
-                if result.is_err() {
-                    return false;
-                }
-                tracing::info!(
-                    event = "command_delivery_enqueued",
-                    nats_stream,
-                    nats_stream_sequence,
-                    queue_remaining_capacity = sender.capacity(),
-                );
-            }
+        if *stop.borrow() {
+            return Err(std::iter::once(delivery).chain(pending).collect());
         }
+        let permit = tokio::select! {
+            biased;
+            () = wait_for_stop(stop) => None,
+            permit = sender.reserve() => permit.ok(),
+        };
+        let Some(permit) = permit else {
+            return Err(std::iter::once(delivery).chain(pending).collect());
+        };
+        permit.send(delivery);
+        tracing::info!(
+            event = "command_delivery_enqueued",
+            nats_stream,
+            nats_stream_sequence,
+            queue_remaining_capacity = sender.capacity(),
+        );
     }
-    true
+    Ok(())
 }
 
 async fn wait_for_retry_or_stop(stop: &mut watch::Receiver<bool>, retry: Duration) -> bool {

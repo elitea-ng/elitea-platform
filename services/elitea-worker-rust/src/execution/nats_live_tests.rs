@@ -10,13 +10,18 @@
 //! One test function drives the whole scenario, so nothing else runs against
 //! the shared durable at the same time:
 //!
-//! * elitea-main-runtime publishes four commands with the contract headers;
-//! * the worker binds as elitea-worker and runs the real delivery runtime;
+//! * elitea-main-runtime publishes five commands with the contract headers;
+//! * the worker binds as elitea-worker — from its own WORKER account, through
+//!   the `JS.RUNTIME.API` service imports — and runs the real delivery runtime;
 //! * "ack" is double-acked (twice: the second is the idempotent
 //!   "already acknowledged") and leaves the stream;
 //! * "retry" is nak'd with the retry delay, redelivered, then acked;
-//! * "poison" is nak'd for 24h, recorded in the dead-letter bucket, and stays
-//!   in the stream, undelivered;
+//! * "poison" (an envelope that does not decode) is recorded in the
+//!   dead-letter bucket, nak'd for 24h, and stays in the stream, undelivered;
+//! * "forged" (a signature that does not verify) is recorded and TERMINATED:
+//!   it leaves the stream and is never redelivered;
+//! * "late" is published while the worker is idle-polling and starts well
+//!   under the pull's expiry (a pull returns with its first message);
 //! * "hold" is processed for longer than `AckWait` (60s) while the runtime sends
 //!   `+WPI`; it is never redelivered, then acked;
 //! * the server log shows no permission violation for the worker identity,
@@ -51,6 +56,10 @@ const REQUIRE: &str = "ELITEA_REQUIRE_NATS_SECURE_TEST";
 const WORKER: &str = "elitea-worker";
 const MAIN_RUNTIME: &str = "elitea-main-runtime";
 const BOOTSTRAP: &str = "elitea-nats-bootstrap-runtime";
+const WORKER_BOOTSTRAP: &str = "elitea-nats-bootstrap-worker";
+/// The pull expiry the live worker uses: the deployed 5s, so "starts well
+/// under it" is a real latency bound.
+const FETCH_EXPIRES: Duration = Duration::from_secs(5);
 const HOLD_FOR: Duration = Duration::from_secs(66);
 
 struct Identity {
@@ -150,17 +159,17 @@ impl Environment {
             client_name: "rust-live-test-worker".to_owned(),
             limits: CommandBusLimits::runtime_v1(),
             fetch_batch: 8,
-            fetch_expires: Duration::from_secs(1),
+            fetch_expires: FETCH_EXPIRES,
             connection_timeout: Duration::from_secs(5),
             request_timeout: Duration::from_secs(5),
         }
     }
 
-    fn violations(&self, user: &str) -> Vec<String> {
+    fn violations(&self, account: &str, user: &str) -> Vec<String> {
         let log = std::fs::read_to_string(&self.log).expect("nats-server log");
-        // The server prefixes the mapped user with its account; both command
-        // bus identities live in RUNTIME (deploy/helm/nats/values.yaml).
-        let marker = format!("RUNTIME/user:{user}\"");
+        // The server prefixes the mapped user with its account: the producer
+        // is in RUNTIME, the worker in WORKER (deploy/helm/nats/values.yaml).
+        let marker = format!("{account}/user:{user}\"");
         log.lines()
             .filter(|line| {
                 line.contains(&marker)
@@ -178,13 +187,16 @@ enum Behaviour {
     Ack,
     RetryOnce,
     Poison,
+    Forged,
     Hold,
+    Late,
 }
 
 struct LiveProcessor {
     bus: Arc<NatsCommandBus>,
     behaviours: BTreeMap<String, (String, Behaviour)>,
     seen: Mutex<BTreeMap<String, Vec<u64>>>,
+    started_at: Mutex<BTreeMap<String, Instant>>,
     double_ack_repeats: Mutex<Vec<bool>>,
 }
 
@@ -223,6 +235,11 @@ impl CommandDeliveryProcessor for LiveProcessor {
             name.as_bytes(),
             "the body is the published bytes"
         );
+        self.started_at
+            .lock()
+            .expect("started at")
+            .entry(name.clone())
+            .or_insert_with(Instant::now);
         self.seen
             .lock()
             .expect("seen")
@@ -231,9 +248,10 @@ impl CommandDeliveryProcessor for LiveProcessor {
             .push(delivery.delivered());
         match behaviour {
             Behaviour::Ack => self.retire(&delivery, true).await,
+            Behaviour::Forged => DeliveryVerdict::poison(PoisonReason::SignatureInvalid),
             Behaviour::RetryOnce if delivery.delivered() == 1 => DeliveryVerdict::Processed,
-            Behaviour::RetryOnce => self.retire(&delivery, false).await,
-            Behaviour::Poison => DeliveryVerdict::poison(PoisonReason::SignatureInvalid),
+            Behaviour::RetryOnce | Behaviour::Late => self.retire(&delivery, false).await,
+            Behaviour::Poison => DeliveryVerdict::poison(PoisonReason::EnvelopeInvalid),
             Behaviour::Hold => {
                 tokio::time::sleep(HOLD_FOR).await;
                 self.retire(&delivery, false).await
@@ -298,37 +316,65 @@ async fn the_real_worker_transport_runs_on_the_chart_permission_table() {
     let producer_js = jetstream::new(producer.clone());
     let mut behaviours = BTreeMap::new();
     let mut subjects = BTreeMap::new();
+    let publish = |delivery_id: String| {
+        let producer_js = producer_js.clone();
+        async move {
+            let token = delivery_token(&delivery_id);
+            let subject = delivery_subject(STREAM_AGENT, &delivery_id).expect("subject");
+            let mut headers = HeaderMap::new();
+            headers.insert(HEADER_MSG_ID, token.as_str());
+            headers.insert(HEADER_DELIVERY_ID, delivery_id.as_str());
+            headers.insert("Nats-Expected-Stream", STREAM_AGENT);
+            producer_js
+                .publish_with_headers(subject.clone(), headers, delivery_id.clone().into())
+                .await
+                .expect("publish")
+                .await
+                .expect("PubAck");
+            (token, subject)
+        }
+    };
     for behaviour in [
         Behaviour::Ack,
         Behaviour::RetryOnce,
         Behaviour::Poison,
+        Behaviour::Forged,
         Behaviour::Hold,
+        Behaviour::Late,
     ] {
         let delivery_id = format!("rust-live-{run}-{behaviour:?}");
         let token = delivery_token(&delivery_id);
         let subject = delivery_subject(STREAM_AGENT, &delivery_id).expect("subject");
-        let mut headers = HeaderMap::new();
-        headers.insert(HEADER_MSG_ID, token.as_str());
-        headers.insert(HEADER_DELIVERY_ID, delivery_id.as_str());
-        headers.insert("Nats-Expected-Stream", STREAM_AGENT);
-        producer_js
-            .publish_with_headers(subject.clone(), headers, delivery_id.clone().into())
-            .await
-            .expect("publish")
-            .await
-            .expect("PubAck");
         behaviours.insert(token.clone(), (delivery_id.clone(), behaviour));
         subjects.insert(behaviour, (delivery_id, token, subject));
     }
+    for behaviour in [
+        Behaviour::Ack,
+        Behaviour::RetryOnce,
+        Behaviour::Poison,
+        Behaviour::Forged,
+        Behaviour::Hold,
+    ] {
+        publish(subjects[&behaviour].0.clone()).await;
+    }
 
-    // The observer: the bootstrap identity (stream and consumer info only).
+    // The observers: RUNTIME's bootstrap identity for the command stream, and
+    // WORKER's for the dead-letter bucket (stream and consumer info only).
     let observer = env.client(BOOTSTRAP).await;
     let observer_js = jetstream::new(observer.clone());
     let agent_stream = observer_js.get_stream(STREAM_AGENT).await.expect("stream");
-    let dead_letters = observer_js
+    let worker_observer = env.client(WORKER_BOOTSTRAP).await;
+    let dead_letters = jetstream::new(worker_observer.clone())
         .get_stream(format!("KV_{DEAD_LETTER_BUCKET}"))
         .await
-        .expect("dead-letter bucket stream");
+        .expect("dead-letter bucket stream in WORKER");
+    assert!(
+        observer_js
+            .get_stream(format!("KV_{DEAD_LETTER_BUCKET}"))
+            .await
+            .is_err(),
+        "RUNTIME holds no dead-letter bucket"
+    );
 
     // The worker: the real transport and the real delivery runtime.
     let bus = Arc::new(
@@ -340,10 +386,18 @@ async fn the_real_worker_transport_runs_on_the_chart_permission_table() {
         bus: Arc::clone(&bus),
         behaviours,
         seen: Mutex::new(BTreeMap::new()),
+        started_at: Mutex::new(BTreeMap::new()),
         double_ack_repeats: Mutex::new(Vec::new()),
     });
-    let intake =
-        CommandDeliveryIntakeConfig::new(4, 4, 8, 1_000, 1_000, 1_000).expect("live intake config");
+    let intake = CommandDeliveryIntakeConfig::new(
+        4,
+        4,
+        8,
+        u64::try_from(FETCH_EXPIRES.as_millis()).expect("expires"),
+        1_000,
+        1_000,
+    )
+    .expect("live intake config");
     let runtime = CommandDeliveryRuntime::new(
         Arc::clone(&bus),
         Arc::clone(&processor),
@@ -365,6 +419,8 @@ async fn the_real_worker_transport_runs_on_the_chart_permission_table() {
     let (retry_id, _, retry_subject) = subjects[&Behaviour::RetryOnce].clone();
     let (poison_id, poison_token, poison_subject) = subjects[&Behaviour::Poison].clone();
     let (hold_id, _, hold_subject) = subjects[&Behaviour::Hold].clone();
+    let (forged_id, forged_token, forged_subject) = subjects[&Behaviour::Forged].clone();
+    let (late_id, _, late_subject) = subjects[&Behaviour::Late].clone();
 
     // Fetch + double ack removes the message from the WorkQueue stream.
     wait_until(
@@ -378,6 +434,22 @@ async fn the_real_worker_transport_runs_on_the_chart_permission_table() {
     )
     .await;
     assert_eq!(seen(&ack_id), [1]);
+    // The stream empties on the FIRST double ack; the repeat is recorded only
+    // when its own answer arrives. Asserting right after the stream emptied
+    // raced it (CI run 37433037989 read an empty list here).
+    wait_until(
+        "the repeated double ack to be answered",
+        Duration::from_secs(10),
+        || {
+            let answered = !processor
+                .double_ack_repeats
+                .lock()
+                .expect("repeats")
+                .is_empty();
+            async move { answered }
+        },
+    )
+    .await;
     assert_eq!(
         processor
             .double_ack_repeats
@@ -412,6 +484,52 @@ async fn the_real_worker_transport_runs_on_the_chart_permission_table() {
     assert_eq!(subject_count(&agent_stream, &poison_subject).await, 1);
     assert_eq!(seen(&poison_id), [1]);
 
+    // Forged: recorded, then terminated — it leaves the WorkQueue stream.
+    let forged_record = format!("$KV.{DEAD_LETTER_BUCKET}.agent.{forged_token}");
+    wait_until(
+        "the forged command's record",
+        Duration::from_secs(20),
+        || {
+            let stream = dead_letters.clone();
+            let subject = forged_record.clone();
+            async move { subject_count(&stream, &subject).await == 1 }
+        },
+    )
+    .await;
+    wait_until(
+        "the terminated command to leave the stream",
+        Duration::from_secs(20),
+        || {
+            let stream = agent_stream.clone();
+            let subject = forged_subject.clone();
+            async move { subject_count(&stream, &subject).await == 0 }
+        },
+    )
+    .await;
+    assert_eq!(seen(&forged_id), [1]);
+
+    // Late: published while the worker idles in a long poll, it starts well
+    // under the pull's expiry rather than waiting it out.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let published = Instant::now();
+    let _ = publish(late_id.clone()).await;
+    wait_until(
+        "the late command to be acked",
+        Duration::from_secs(20),
+        || {
+            let stream = agent_stream.clone();
+            let subject = late_subject.clone();
+            async move { subject_count(&stream, &subject).await == 0 }
+        },
+    )
+    .await;
+    let started = processor.started_at.lock().expect("started at")[&late_id];
+    let latency = started.saturating_duration_since(published);
+    assert!(
+        latency < FETCH_EXPIRES / 2,
+        "a command published to an idle worker started after {latency:?}; the pull held it"
+    );
+
     // +WPI keeps the held command owned past AckWait: no redelivery.
     wait_until(
         "the held command to finish",
@@ -425,6 +543,11 @@ async fn the_real_worker_transport_runs_on_the_chart_permission_table() {
     .await;
     assert_eq!(seen(&hold_id), [1], "+WPI suppressed every redelivery");
     assert_eq!(seen(&poison_id), [1], "the 24h nak holds the poison back");
+    assert_eq!(
+        seen(&forged_id),
+        [1],
+        "a terminated command is never redelivered"
+    );
     assert_eq!(subject_count(&agent_stream, &poison_subject).await, 1);
     let mut consumer: jetstream::consumer::PullConsumer = agent_stream
         .get_consumer(CONSUMER_AGENT)
@@ -451,12 +574,12 @@ async fn the_real_worker_transport_runs_on_the_chart_permission_table() {
         "the server to log the probe violation",
         Duration::from_secs(10),
         || {
-            let found = !env.violations(&producer_user).is_empty();
+            let found = !env.violations("RUNTIME", &producer_user).is_empty();
             async move { found }
         },
     )
     .await;
-    let worker_violations = env.violations(&env.identity(WORKER).user);
+    let worker_violations = env.violations("WORKER", &env.identity(WORKER).user);
     assert!(
         worker_violations.is_empty(),
         "the worker hit permission violations:\n{}",
@@ -464,4 +587,5 @@ async fn the_real_worker_transport_runs_on_the_chart_permission_table() {
     );
     let _ = producer.drain().await;
     let _ = observer.drain().await;
+    let _ = worker_observer.drain().await;
 }
