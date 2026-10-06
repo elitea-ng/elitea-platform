@@ -33,11 +33,9 @@ func (s *suite) chatEnrichment(t *testing.T) {
 	}
 	api := s.main.api
 
-	// Discovery speaks 1.2 and carries the attachment policy.
+	// Discovery carries the attachment policy (1.1); its version is checked
+	// by the contract_1_3 scenario.
 	discovery := mustJSON(t, need(t)(api.Get(ctx, "/.well-known/elitea-client")), http.StatusOK)
-	if discovery["client_contract"] != "1.2" {
-		t.Errorf("discovery client_contract = %v, want 1.2", discovery["client_contract"])
-	}
 	policy, _ := discovery["attachments"].(map[string]any)
 	if chunk, _ := asInt64(policy["chunk_bytes"]); chunk <= 0 || policy["inline_image_downscale"] != true {
 		t.Errorf("discovery attachments policy = %v", policy)

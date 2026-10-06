@@ -323,3 +323,179 @@ INSERT INTO elitea_runtime.agent_execution_jobs (
 		t.Fatal(err)
 	}
 }
+
+// TestPostgresCurrentAgentCancelIsIdempotentAndSurvivesSettlement pins the
+// semantics client contract 1.3 publishes for cancelChatExecution: a stop
+// repeated by the same caller is a replay (the route's 204), also after the
+// worker settled the run as cancelled; another user's stop is refused.
+func TestPostgresCurrentAgentCancelIsIdempotentAndSurvivesSettlement(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+
+	const (
+		questionID   = "20000000-0000-4000-8000-000000000161"
+		questionItem = "40000000-0000-4000-8000-000000000161"
+		responseID   = "30000000-0000-4000-8000-000000000161"
+		executionID  = "execution-stop-running-twice"
+	)
+	tx, err := pool.BeginTx(t.Context(), pgx.TxOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := tenant.BindProject(t.Context(), tx, tenant.Project{ID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	responseMessageID := insertPostgresCurrentApplicationTurn(
+		t,
+		sqlcgen.New(tx),
+		mustCurrentPGUUID(t, "10000000-0000-4000-8000-000000000031"),
+		questionID,
+		questionItem,
+		responseID,
+		"stop me twice",
+		executionID,
+	)
+	insertPostgresCurrentAgentCancelBinding(
+		t, tx, responseMessageID, questionID, executionID,
+		"agent.execute.application.v1", "RUNNING", "RUNNING",
+	)
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, err := NewCurrentAgentCancelRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel := func(actor int64) (agentexecutionapp.CurrentAgentCancelOutcome, error) {
+		return repository.CancelCurrentAgent(t.Context(), agentexecutionapp.CurrentAgentCancelRequest{
+			ProjectID:         1,
+			ActorUserID:       actor,
+			ResponseMessageID: uuid.UUID(responseMessageID.Bytes).String(),
+		})
+	}
+
+	first, err := cancel(11)
+	if err != nil || first.Replay {
+		t.Fatalf("first stop: outcome=%+v err=%v, want a fresh stop", first, err)
+	}
+	second, err := cancel(11)
+	if err != nil || !second.Replay {
+		t.Fatalf("second stop: outcome=%+v err=%v, want a replay", second, err)
+	}
+
+	// The worker observes CANCELLED and settles the run.
+	if _, err := pool.Exec(t.Context(), `
+UPDATE elitea_runtime.execution_jobs
+SET state = 'CANCELLED', settled_at = clock_timestamp()
+WHERE execution_id = $1 AND generation = 1`, executionID); err != nil {
+		t.Fatal(err)
+	}
+	settled, err := cancel(11)
+	if err != nil || !settled.Replay {
+		t.Fatalf("stop after settlement: outcome=%+v err=%v, want a replay", settled, err)
+	}
+
+	if _, err := cancel(12); !errors.Is(err, agentexecutionapp.ErrCurrentAgentCancelNotAllowed) {
+		t.Fatalf("another user's stop: err=%v, want ErrCurrentAgentCancelNotAllowed", err)
+	}
+}
+
+// TestPostgresCurrentAgentCancelReplayAcceptsConversationAuthor pins the 1.3
+// idempotency promise for the second principal cancelChatExecution admits:
+// the conversation author stopping a turn another member asked. A stop of a
+// turn with no output deletes the question and the empty answer, so the retry
+// cannot find the target again and must be recognised as a replay from the
+// job/binding alone. Before the fix the replay matched only the job's actor
+// (the asker), and the author's retry answered 409.
+func TestPostgresCurrentAgentCancelReplayAcceptsConversationAuthor(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+
+	const (
+		conversationUUID = "10000000-0000-4000-8000-000000000031"
+		questionID       = "20000000-0000-4000-8000-000000000171"
+		questionItem     = "40000000-0000-4000-8000-000000000171"
+		responseID       = "30000000-0000-4000-8000-000000000171"
+		executionID      = "execution-stop-by-conversation-author"
+		authorID         = 99 // owns the conversation, did not ask
+		askerID          = 11 // asked the question; the job's actor
+		strangerID       = 12
+	)
+	tx, err := pool.BeginTx(t.Context(), pgx.TxOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := tenant.BindProject(t.Context(), tx, tenant.Project{ID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	responseMessageID := insertPostgresCurrentApplicationTurn(
+		t,
+		sqlcgen.New(tx),
+		mustCurrentPGUUID(t, conversationUUID),
+		questionID,
+		questionItem,
+		responseID,
+		"stopped by the conversation author",
+		executionID,
+	)
+	insertPostgresCurrentAgentCancelBinding(
+		t, tx, responseMessageID, questionID, executionID,
+		"agent.execute.application.v1", "RUNNING", "RUNNING",
+	)
+	// Admission pins client_stream_id to the conversation uuid; the shared
+	// fixture helper writes a placeholder, so put the real value back.
+	if _, err := tx.Exec(t.Context(), `
+UPDATE elitea_runtime.agent_execution_jobs
+SET client_stream_id = $2
+WHERE execution_id = $1`, executionID, conversationUUID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), `
+UPDATE chat_conversations SET author_id = $1 WHERE uuid = $2::uuid`,
+		authorID, conversationUUID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, err := NewCurrentAgentCancelRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel := func(actor int64) (agentexecutionapp.CurrentAgentCancelOutcome, error) {
+		return repository.CancelCurrentAgent(t.Context(), agentexecutionapp.CurrentAgentCancelRequest{
+			ProjectID:         1,
+			ActorUserID:       actor,
+			ResponseMessageID: uuid.UUID(responseMessageID.Bytes).String(),
+		})
+	}
+
+	first, err := cancel(authorID)
+	if err != nil || first.Replay || !first.Deleted {
+		t.Fatalf("author's first stop: outcome=%+v err=%v, want a fresh stop that deletes the empty pair", first, err)
+	}
+	second, err := cancel(authorID)
+	if err != nil || !second.Replay {
+		t.Fatalf("author's retry: outcome=%+v err=%v, want a replay", second, err)
+	}
+	if _, err := pool.Exec(t.Context(), `
+UPDATE elitea_runtime.execution_jobs
+SET state = 'CANCELLED', settled_at = clock_timestamp()
+WHERE execution_id = $1 AND generation = 1`, executionID); err != nil {
+		t.Fatal(err)
+	}
+	settled, err := cancel(authorID)
+	if err != nil || !settled.Replay {
+		t.Fatalf("author's stop after settlement: outcome=%+v err=%v, want a replay", settled, err)
+	}
+	if asker, err := cancel(askerID); err != nil || !asker.Replay {
+		t.Fatalf("asker's stop: outcome=%+v err=%v, want a replay", asker, err)
+	}
+	if _, err := cancel(strangerID); !errors.Is(err, agentexecutionapp.ErrCurrentAgentCancelNotAllowed) {
+		t.Fatalf("a stranger's stop: err=%v, want ErrCurrentAgentCancelNotAllowed", err)
+	}
+}

@@ -224,12 +224,27 @@ Every operation tagged `client` in `api/openapi/v2.yaml`. `client` is always the
 | Tool history (1.1) | `listMessageTraces`, `getMessageTrace` |
 | Attachments (1.1) | `downloadConversationAttachment` |
 | Current user (1.2) | `getCurrentAuthor` (`GET /api/v2/social/author`) |
+| Stop (1.3) | `cancelChatExecution` (`DELETE /api/v2/elitea_core/task/prompt_lib/{project_id}/{response_message_id}`) |
+| Message feedback (1.3) | `getMessageFeedback`, `setMessageFeedback`, `deleteMessageFeedback` |
+| Export (1.3) | `exportConversation` |
+| Notification deletes (1.3) | `deleteNotification`, `deleteNotifications` |
+| Suggestions and discover (1.3) | `getRecommendations`, `listPublicApplications` |
+| Memories (1.3) | `listMemories`, `deleteMemory`, `clearMemories` |
+| Usage and budget (1.3) | `getProjectUsage`, `getProjectBudget`, `getMemberBudget` |
 
 Contract 1.1 also adds the discovery document's `attachments` policy, typed attachment items on messages (`AttachmentMessageItem`), the `sender` of a `chat_user_mentioned` notification, and the agent progress frame catalogue below. A client gates each on `client_contract` ≥ 1.1 and treats a 404 or 501 from an older server as "not available".
 
 Contract 1.2 adds the client's "who am I" read and a distinct frame for a paused tool call:
 - `getCurrentAuthor` (`GET /api/v2/social/author`) answers the caller's `id` (user id), `name` (display name), `email`, `avatar` (a URL, absolute or relative to the deployment origin; `""` when none) and `personal_project_id`. `personal_project_id` is `""` while a fresh account's personal project is still being provisioned (the first read starts it): poll until it is set. Every other key in the answer is outside the client's concern and may be ignored.
 - `agent_tool_paused` (below). A tool call that pauses for the user — a sensitive tool awaiting approval, or a clarifying question — is no longer reported as `agent_tool_error`, and its stored trace step (`listMessageTraces`) has `is_error: false` with a pause `finish_reason`. A 1.1 server sends `agent_tool_error` with the LangGraph interrupt as its text for the same call.
+
+Contract 1.3 tags reads and writes the web app already served, describes the server-side stop, and adds data controls to the policy:
+- **Stop** (`cancelChatExecution`) stops the run on the server; dropping the stream alone does not, and the run keeps spending the budget. Only the conversation's author or the user who asked may stop it; an invalid project id answers 403 (the project permission check runs first), not 400. A repeated stop by the same caller answers 204 again, also after the run settled; an answer that completed or failed on its own, or is not the caller's, answers 409 without saying which. A stopped turn with no output is removed with its question; one with partial output keeps it. After a 204, close the stream and reload the transcript. Both workers honour it: the run's desired state becomes CANCELLED, which the Python worker reads on its next lease poll or output acknowledgement (a synchronous SDK step already running completes first, and the run still settles as cancelled) and the Rust worker through its lease monitor, which stops the model run (`native_agent_lifecycle.rs` `drive_native_stream`; covered by `output_delivery_tests.rs` `durable_stop_interrupts_only_the_owned_run_then_settles_cancelled` and the Python delivery suites).
+- **Regenerate** has one handler, the reviewed agent-execution route. A stub that answered `{"ok": true}` without running anything used to be mounted on the same path and is removed (`TestRegenerateHasOneHandlerTheReviewedOne`).
+- **Notification deletes** reach the caller's other devices as `deleted` tombstones in the `changes_since` delta, so a dismissed notification does not come back.
+- **Discover**: `listPublicApplications` is the catalogue of published agents (`rows[].project_id` is always the public project; `version_id` is the published version; the icon is in `meta.icon_meta`). To chat with one, create a conversation in the caller's personal project (`createConversation`) and add the agent as a participant (`addConversationParticipants` with `entity_name: application`, `entity_meta: {id, project_id: <row.project_id>}`, `entity_settings: {version_id}`). The turn resolver admits exactly one foreign project, the public one, and only a `published` version (`agent_catalogue_turn_postgres_integration_test.go`); nothing is forked or copied. Any other project's agent is refused at send.
+- **Usage and budget** are totals only: billing has no per-model or per-agent dimensions in the budget figures.
+- **Data controls** in the policy (public in discovery and full in the token response): `allow_share_out` (copy, share, export; default true), `allow_share_in` (system share sheet into the app; default true), `allow_cloud_stt` (speech recognition that leaves the device; default false), `notification_preview` (`none` or `title`; default `none`; treat an unknown value as `none`), `allow_notification_actions` (default true), `allow_system_surfaces` (titles on widgets and quick actions; default false, which means counts only). The client enforces them; an admin sets them in the `native_client_policy` Configuration section.
 
 The client policy has no operation of its own. Its public part is in the discovery document, and the full policy is `client_policy` in every token response.
 

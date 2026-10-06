@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.2"
+  x-elitea-client-contract: "1.3"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -10710,7 +10710,16 @@ components:
         The public subset of the native client policy (ADR-0025 decision 5);
         the full policy travels with every token response. NOTE(W2):
         internal/api/v2/discovery/document.go:65 (`PublicPolicy`).
-      required: [require_device_lock, offline_enabled, min_client_version]
+      required:
+        - require_device_lock
+        - offline_enabled
+        - min_client_version
+        - allow_share_out
+        - allow_share_in
+        - allow_cloud_stt
+        - notification_preview
+        - allow_notification_actions
+        - allow_system_surfaces
       properties:
         require_device_lock:
           type: boolean
@@ -10724,6 +10733,42 @@ components:
             Deployment-wide minimum client version; empty means none. The
             document's per-client `min_client_version` entry, when present,
             is never lower than this.
+        allow_share_out:
+          type: boolean
+          description: >-
+            Client contract 1.3. Copy, share and export of messages and
+            transcripts out of the app are allowed. Default true.
+        allow_share_in:
+          type: boolean
+          description: >-
+            Client contract 1.3. The system share sheet may send text, links,
+            files and photos into the app. Default true.
+        allow_cloud_stt:
+          type: boolean
+          description: >-
+            Client contract 1.3. Dictation may use a recogniser that sends
+            audio off the device (the platform's server recogniser or the
+            workspace's transcription model). False means on-device
+            recognition only. Default false.
+        notification_preview:
+          type: string
+          description: >-
+            Client contract 1.3. What a notification shows on the lock screen:
+            `none` (a generic text only, the default) or `title` (the
+            conversation or item title). Message content is never shown.
+            Treat an unknown value as `none`.
+        allow_notification_actions:
+          type: boolean
+          description: >-
+            Client contract 1.3. A notification may offer actions (mark read,
+            open an approval). A decision always needs the app unlocked.
+            Default true.
+        allow_system_surfaces:
+          type: boolean
+          description: >-
+            Client contract 1.3. Widgets, home-screen quick actions and other
+            surfaces outside the app may show conversation and agent titles.
+            False means counts only. Default false.
     NativeOAuthError:
       type: object
       description: >-
@@ -10792,6 +10837,12 @@ components:
         - offline_max_mb
         - offline_attachments
         - min_client_version
+        - allow_share_out
+        - allow_share_in
+        - allow_cloud_stt
+        - notification_preview
+        - allow_notification_actions
+        - allow_system_surfaces
       properties:
         require_device_lock:
           type: boolean
@@ -10821,6 +10872,42 @@ components:
           description: >-
             The lowest version this deployment serves this client; empty means
             none. MAJOR.MINOR.PATCH with an optional -prerelease.
+        allow_share_out:
+          type: boolean
+          description: >-
+            Client contract 1.3. Copy, share and export of messages and
+            transcripts out of the app are allowed. Default true.
+        allow_share_in:
+          type: boolean
+          description: >-
+            Client contract 1.3. The system share sheet may send text, links,
+            files and photos into the app. Default true.
+        allow_cloud_stt:
+          type: boolean
+          description: >-
+            Client contract 1.3. Dictation may use a recogniser that sends
+            audio off the device (the platform's server recogniser or the
+            workspace's transcription model). False means on-device
+            recognition only. Default false.
+        notification_preview:
+          type: string
+          description: >-
+            Client contract 1.3. What a notification shows on the lock screen:
+            `none` (a generic text only, the default) or `title` (the
+            conversation or item title). Message content is never shown.
+            Treat an unknown value as `none`.
+        allow_notification_actions:
+          type: boolean
+          description: >-
+            Client contract 1.3. A notification may offer actions (mark read,
+            open an approval). A decision always needs the app unlocked.
+            Default true.
+        allow_system_surfaces:
+          type: boolean
+          description: >-
+            Client contract 1.3. Widgets, home-screen quick actions and other
+            surfaces outside the app may show conversation and agent titles.
+            False means counts only. Default false.
     InvalidClientVersionError:
       type: object
       description: >-
@@ -15403,8 +15490,9 @@ paths:
 
         Reading an export needs the same permission as reading the messages
         (`models.chat.messages.list`). There is no separate export right.
-      tags: [chat]
+      tags: [chat, client]
       parameters:
+        - $ref: "#/components/parameters/XClientVersion"
         - name: format
           in: query
           required: false
@@ -15419,6 +15507,8 @@ paths:
             value is a 400 rather than a silent fallback, because a client that
             asked for a format it did not get would save the wrong extension.
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '200':
           description: >
             The transcript document. `text/markdown` for `format=md`,
@@ -16079,6 +16169,76 @@ paths:
               schema:
                 $ref: '#/components/schemas/ChatExecutionError'
 
+  /elitea_core/task/prompt_lib/{project_id}/{response_message_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: response_message_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The running answer to stop (its `uid`, the send's or the regeneration's `response_message_id`).
+    delete:
+      operationId: cancelChatExecution
+      summary: Stop a running answer on the server
+      description: |
+        Client contract 1.3. Stops the turn that is writing this answer: the
+        execution's desired state becomes CANCELLED, which both workers
+        observe (the Python worker on its next lease poll or output
+        acknowledgement, after any synchronous SDK step already running; the
+        Rust worker through its lease monitor, which stops the model run) and
+        settle as cancelled. Dropping the stream alone does
+        NOT stop the run; it keeps spending the budget.
+
+        What happens to the answer: a turn stopped before any output is
+        removed together with its question; a turn with partial output keeps
+        what was written. After a 204, close the stream and reload the
+        transcript rather than waiting for a terminal frame.
+
+        Only the conversation's author, or the user who asked the question,
+        may stop it (internal/api/v2/agentexecution/cancel.go). The project
+        permission check runs before the route reads anything, so an
+        invalid project id answers 403, like a project the caller cannot
+        use.
+
+        Idempotent for the same caller: stopping an answer that this caller
+        already stopped answers 204 again, also after the run has settled.
+        An answer that completed (or failed) on its own, one that is not this
+        caller's, or one that does not exist answers 409 without saying
+        which; for a completed answer the transcript already holds it.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '204': { description: 'Stopped, or already stopped by this caller.' }
+        '400':
+          description: >-
+            An invalid response message id, or a native client version that
+            does not parse (InvalidClientVersionError).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '409':
+          description: The answer is not running, or this caller may not stop it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '502':
+          description: The stop could not be recorded. Retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '504':
+          description: The stop timed out. Retry.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /elitea_core/regenerate/prompt_lib/{project_id}/{message_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -16673,14 +16833,25 @@ paths:
     delete:
       operationId: deleteNotifications
       summary: Delete several of the caller's notifications
-      tags: [notifications]
+      description: >
+        Deletes the listed notifications of the CALLER; an id that is not the
+        caller's is skipped, and `deleted` counts what was removed. Each
+        deletion reaches the caller's other devices as a `deleted` tombstone
+        in the `changes_since` delta of listNotifications (shared migration
+        0144's AFTER DELETE trigger), so a dismissed item does not come back
+        on another device.
+      tags: [notifications, client]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/NotificationBulkDeleteRequest'
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '200':
           description: How many rows were deleted.
           content:
@@ -16691,11 +16862,15 @@ paths:
                 properties:
                   deleted: { type: integer, format: int64 }
         '400':
-          description: An invalid body.
+          description: >-
+            An invalid body, or a native client version that does not parse
+            (invalid_client_version).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NotificationErrorResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/NotificationErrorResponse'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
@@ -16748,15 +16923,27 @@ paths:
     delete:
       operationId: deleteNotification
       summary: Delete one of the caller's notifications
-      tags: [notifications]
+      description: >
+        Deletes one notification of the CALLER. The deletion reaches the
+        caller's other devices as a `deleted` tombstone in the
+        `changes_since` delta of listNotifications (shared migration 0144).
+      tags: [notifications, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '204': { description: Deleted. }
         '400':
-          description: An invalid id, or a notification that is not the caller's.
+          description: >-
+            An invalid id, a notification that is not the caller's, or a
+            native client version that does not parse (invalid_client_version).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NotificationErrorResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/NotificationErrorResponse'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
@@ -17046,14 +17233,19 @@ paths:
         user's, and never gated by an "admin sees everyone's memories" mode.
         Most recent first. `q`, when given, filters by a case-insensitive
         substring match over content and tags.
-      tags: [chat]
+      tags: [chat, client]
       parameters:
+        - $ref: "#/components/parameters/XClientVersion"
         - name: q
           in: query
           required: false
           schema: { type: string }
           description: Case-insensitive substring filter over content and tags.
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
         '200':
           description: The caller's own memories in this project.
           content:
@@ -17101,8 +17293,14 @@ paths:
         internal/api/v2/memories/handler.go's ClearAll (#870). Settings >
         Memory's "Clear all" control, after its own confirmation dialog.
         Never touches another user's memories.
-      tags: [chat]
+      tags: [chat, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
         '200':
           description: How many memories were removed.
           content:
@@ -17171,8 +17369,14 @@ paths:
         answers 204 the same as a successful delete — the same
         DeleteMessageFeedback-style shape, matching MemoriesRepo.Delete's own
         comment.
-      tags: [chat]
+      tags: [chat, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
         '204':
           description: Deleted (or already absent).
         '401': { $ref: '#/components/responses/401' }
@@ -17197,8 +17401,14 @@ paths:
         Reads p_{project_id}.chat_message_feedback
         (tenant/0135_chat_message_feedback.sql). `mine` is absent when the
         caller has not rated this message.
-      tags: [chat]
+      tags: [chat, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
         '200':
           description: Feedback summary for the message.
           content:
@@ -17217,14 +17427,18 @@ paths:
         from the same user REPLACES their rating and comment rather than
         adding a second row (UNIQUE(message_group_uuid, user_id)). Returns
         the updated aggregate, same shape as the GET.
-      tags: [chat]
+      tags: [chat, client]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/MessageFeedbackRequest'
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '200':
           description: Feedback recorded; the updated summary.
           content:
@@ -17253,8 +17467,14 @@ paths:
         internal/api/v2/conversations/handler.go's DeleteMessageFeedback
         (#880). Removes only the CALLER's own row; other users' feedback on
         the same message is untouched. Returns the updated aggregate.
-      tags: [chat]
+      tags: [chat, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
         '200':
           description: Feedback retracted; the updated summary.
           content:
@@ -17692,8 +17912,9 @@ paths:
 
         Trending (`trend_start_period`/`trend_end_period`) is the one pylon
         parameter still missing here.
-      tags: [applications]
+      tags: [applications, client]
       parameters:
+        - $ref: "#/components/parameters/XClientVersion"
         - $ref: '#/components/parameters/Limit'
         - $ref: '#/components/parameters/Offset'
         - name: category
@@ -17756,6 +17977,10 @@ paths:
             Keep only the applications the CALLER has liked. A request with no
             user identity answers no rows rather than the generic list.
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
         '200':
           description: Published applications
           content:
@@ -18780,14 +19005,19 @@ paths:
         NOTE(W2): internal/api/v2/eliteacore/handler.go:1705-1734 —
         {applications, total} envelope (NOT a bare array); limit/days are
         accepted but not read (hard LIMIT 10).
-      tags: [applications]
+      tags: [applications, client]
       parameters:
+        - $ref: "#/components/parameters/XClientVersion"
         - $ref: '#/components/parameters/Limit'
         - name: days
           in: query
           schema: { type: integer }
           description: Old-SPA parameter; accepted but not read.
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
         '200':
           description: Recommended applications
           content:
@@ -19007,8 +19237,12 @@ paths:
 
         The administration-mode twin below serves platform administrators
         regardless of membership and never redacts.
-      tags: [budgets]
+      tags: [budgets, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '200':
           description: Budget state and current-period spend
           content:
@@ -19195,8 +19429,12 @@ paths:
         this project: the gateway's admission check is project-scoped only, so
         a per-member limit is an authored intention that nothing currently
         blocks a call on. Render it as authored-but-inactive.
-      tags: [budgets]
+      tags: [budgets, client]
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '200':
           description: The member's budget state and current-period spend
           content:
@@ -19385,13 +19623,16 @@ paths:
         warning threshold, the period and the token counts are still present, so
         the usage bar and the charts still render. Project admins, and the owner
         of a personal project, see the amounts.
-      tags: [budgets]
+      tags: [budgets, client]
       parameters:
+        - $ref: "#/components/parameters/XClientVersion"
         - name: scope
           in: query
           required: false
           schema: { type: string, enum: [project, user], default: project }
       responses:
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
         '200':
           description: Usage and budget state for the requested scope
           content:

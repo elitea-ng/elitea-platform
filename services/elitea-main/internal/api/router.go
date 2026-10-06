@@ -3454,8 +3454,11 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 						Post("/select_conversation/prompt_lib/{projectID}/{conversationID}", convHandler.SelectConversation)
 					r.With(requireConversationRead).
 						Delete("/select_conversation/prompt_lib/{projectID}", convHandler.DeselectConversation)
-					r.With(projectPermission("models.chat.conversations.regenerate")).
-						Post("/regenerate/prompt_lib/{projectID}/{conversationID}", convHandler.Regenerate)
+					// No regenerate here. This group used to mount a stub
+					// convHandler.Regenerate (200 {"ok":true}, nothing run) on
+					// the reviewed agent-execution regeneration's method and
+					// path; the reviewed route is the only regenerate
+					// (TestRegenerateHasOneHandlerTheReviewedOne).
 					r.With(projectPermission("models.chat.canvas.create")).
 						Post("/canvases/prompt_lib/{projectID}", convHandler.CreateCanvas)
 					r.With(projectPermission("models.chat.canvas.details")).

@@ -60,10 +60,12 @@ export function Latest(): ReactNode {
   }, [query]);
 
   const listQuery = useListPublicApplications({});
-  // `.data.data`'s declared type includes no error-envelope variant on this
-  // endpoint (`listPublicApplicationsResponse` is 200-only) — `eliteaFetch`
-  // throws for every non-2xx instead (mutator.ts's §3.6 unwrap contract).
-  const wire = listQuery.data?.data;
+  // `eliteaFetch` throws for every non-2xx (mutator.ts's §3.6 unwrap
+  // contract), so a resolved envelope is the 200. The declared union also
+  // names the native-client 400/426 bodies (client contract 1.3 tags this
+  // operation), so the 200 is selected by its status rather than cast.
+  const wireEnvelope = listQuery.data;
+  const wire = wireEnvelope?.status === 200 ? wireEnvelope.data : undefined;
 
   const filtered = useMemo(() => {
     const rows = wire ? normaliseAppPage(wire).rows.filter(isPipelineRow) : [];

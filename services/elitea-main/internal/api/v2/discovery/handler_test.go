@@ -91,6 +91,12 @@ func TestHandler_DefaultsWithNoSources(t *testing.T) {
 	if policy["require_device_lock"] != false || policy["offline_enabled"] != true || policy["min_client_version"] != "" {
 		t.Errorf("client_policy = %v", policy)
 	}
+	// Client contract 1.3 data controls, at their defaults.
+	if policy["allow_share_out"] != true || policy["allow_share_in"] != true || policy["allow_cloud_stt"] != false ||
+		policy["notification_preview"] != "none" || policy["allow_notification_actions"] != true ||
+		policy["allow_system_surfaces"] != false {
+		t.Errorf("client_policy data controls = %v", policy)
+	}
 	if m, ok := doc["min_client_version"].(map[string]any); !ok || len(m) != 0 {
 		t.Errorf("min_client_version = %v, want {}", doc["min_client_version"])
 	}

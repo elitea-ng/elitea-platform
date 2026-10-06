@@ -281,7 +281,6 @@ func newRouter(h *conversations.Handler) chi.Router {
 		r.Put("/{conversationID}/participants/settings/batch", h.BatchUpdateEntitySettings)
 		r.Post("/{conversationID}/select", h.SelectConversation)
 		r.Post("/deselect", h.DeselectConversation)
-		r.Post("/{conversationID}/regenerate", h.Regenerate)
 		r.Post("/canvas", h.CreateCanvas)
 		r.Get("/canvas/{canvasID}", h.GetCanvas)
 		r.Put("/canvas/{canvasID}", h.UpdateCanvas)
@@ -1087,23 +1086,6 @@ func TestDeselectConversation_Error(t *testing.T) {
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500, got %d", w.Code)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Regenerate (stub - no repo call)
-// ---------------------------------------------------------------------------
-
-func TestRegenerate_Success(t *testing.T) {
-	h := conversations.NewHandler(&mockRepo{})
-	router := newRouter(h)
-
-	req := httptest.NewRequest(http.MethodPost, "/projects/proj-1/conversations/conv-1/regenerate", nil)
-	w := httptest.NewRecorder()
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
 	}
 }
 

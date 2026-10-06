@@ -2117,7 +2117,6 @@ func TestProductionRouterMatchesMainComposedRouteSurface(t *testing.T) {
 		"POST /api/v2/elitea_core/publish_skill/prompt_lib/{projectID}/{skillID}/{versionID}",
 		"POST /api/v2/elitea_core/publish_skill_validate/prompt_lib/{projectID}/{skillID}/{versionID}",
 		"POST /api/v2/elitea_core/publish_validate/prompt_lib/{projectID}/{versionID}",
-		"POST /api/v2/elitea_core/regenerate/prompt_lib/{projectID}/{conversationID}",
 		"POST /api/v2/elitea_core/register_descriptor/{projectID}",
 		// ADR-0023 S3, migration 0109. Two routes, not one, and gated on
 		// `provider_hub.descriptor.activate` rather than `.register`: a facade
@@ -2577,5 +2576,62 @@ func TestPerMessageReadDoesNotAcceptTheDeleteSiblingsPermission(t *testing.T) {
 	}
 	if repo.gotMessageUID != "" {
 		t.Fatalf("the repository was reached (%q) despite the refusal", repo.gotMessageUID)
+	}
+}
+
+// TestRegenerateHasOneHandlerTheReviewedOne pins client contract 1.3's
+// regenerate finding. The conversations repository used to mount a stub
+// `convHandler.Regenerate` (it answered 200 {"ok":true} and did nothing) on
+// the same method and path as the reviewed agent-execution regeneration.
+// The reviewed route wins only because it is registered later; without it
+// the stub answered every regenerate as a success that never ran. A client
+// must never see that: one handler, the reviewed one, or no route at all.
+func TestRegenerateHasOneHandlerTheReviewedOne(t *testing.T) {
+	pool := &pgxpool.Pool{}
+	agentStart := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("X-Reviewed-Agent-Route", "true")
+		writer.WriteHeader(http.StatusAccepted)
+	})
+	regeneratePatterns := func(t *testing.T, router chi.Router) []string {
+		t.Helper()
+		routeSet, err := oapiserver.CollectRoutes(router)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, pattern := range routeSet.Patterns() {
+			if strings.HasPrefix(pattern, "POST /api/v2/elitea_core/regenerate/") {
+				out = append(out, pattern)
+			}
+		}
+		return out
+	}
+	config := func(withAgent bool) RouterConfig {
+		cfg := RouterConfig{
+			Pool:      pool,
+			AppsRepo:  dbrepos.NewApplicationsRepo(pool),
+			ConvsRepo: dbrepos.NewConversationsRepo(pool),
+		}
+		if withAgent {
+			cfg.CurrentAgentStart = agentStart
+		}
+		return cfg
+	}
+
+	composed := NewRouter(config(true))
+	want := "POST " + agentexecutionapi.CurrentRegenerationPath
+	if got := regeneratePatterns(t, composed); len(got) != 1 || got[0] != want {
+		t.Fatalf("regenerate patterns = %v, want exactly [%s]", got, want)
+	}
+	recorder := httptest.NewRecorder()
+	composed.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
+		"/api/v2/elitea_core/regenerate/prompt_lib/2/30000000-0000-4000-8000-000000000141", nil))
+	if recorder.Code != http.StatusAccepted || recorder.Header().Get("X-Reviewed-Agent-Route") != "true" {
+		t.Fatalf("regenerate reached status %d (reviewed=%q), want the reviewed route",
+			recorder.Code, recorder.Header().Get("X-Reviewed-Agent-Route"))
+	}
+
+	if got := regeneratePatterns(t, NewRouter(config(false))); len(got) != 0 {
+		t.Fatalf("without agent execution, regenerate patterns = %v, want none (no route that pretends to regenerate)", got)
 	}
 }

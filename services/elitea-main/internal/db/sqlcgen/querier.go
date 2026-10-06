@@ -388,6 +388,11 @@ type Querier interface {
 	InsertToolkitExecuteReadJob(ctx context.Context, arg InsertToolkitExecuteReadJobParams) (string, error)
 	InsertToolkitExecuteReadResult(ctx context.Context, arg InsertToolkitExecuteReadResultParams) error
 	InstallCurrentTenantSearchPath(ctx context.Context, searchPath string) (string, error)
+	// A replay admits the same principals CancelCurrentAgentExecution does: the
+	// user who asked (the job's actor) and the conversation's author. A stop of a
+	// turn with no output deletes the question and the answer, so the author is
+	// resolved through the binding's client_stream_id, which admission pins to the
+	// conversation uuid, not through the deleted message rows.
 	IsCurrentAgentCancellationReplay(ctx context.Context, arg IsCurrentAgentCancellationReplayParams) (bool, error)
 	IsCurrentUserProjectMember(ctx context.Context, arg IsCurrentUserProjectMemberParams) (bool, error)
 	LinkAuthProviderIfMissing(ctx context.Context, arg LinkAuthProviderIfMissingParams) (int64, error)
