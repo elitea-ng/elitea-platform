@@ -695,7 +695,7 @@ export type deleteNotificationsResponse200 = {
 };
 
 export type deleteNotificationsResponse400 = {
-  data: NotificationErrorResponse;
+  data: NotificationErrorResponse | InvalidClientVersionError;
   status: 400;
 };
 
@@ -799,6 +799,7 @@ export const getDeleteNotificationsQueryOptions = <
   TData = Awaited<ReturnType<typeof deleteNotifications>>,
   TError =
     | NotificationErrorResponse
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | ClientUpgradeRequiredResponse,
@@ -847,6 +848,7 @@ export type DeleteNotificationsQueryResult = NonNullable<
 >;
 export type DeleteNotificationsQueryError =
   | NotificationErrorResponse
+  | InvalidClientVersionError
   | N401Response
   | N403Response
   | ClientUpgradeRequiredResponse;
@@ -855,6 +857,7 @@ export function useDeleteNotifications<
   TData = Awaited<ReturnType<typeof deleteNotifications>>,
   TError =
     | NotificationErrorResponse
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | ClientUpgradeRequiredResponse,
@@ -887,6 +890,7 @@ export function useDeleteNotifications<
   TData = Awaited<ReturnType<typeof deleteNotifications>>,
   TError =
     | NotificationErrorResponse
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | ClientUpgradeRequiredResponse,
@@ -919,6 +923,7 @@ export function useDeleteNotifications<
   TData = Awaited<ReturnType<typeof deleteNotifications>>,
   TError =
     | NotificationErrorResponse
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | ClientUpgradeRequiredResponse,
@@ -947,6 +952,7 @@ export function useDeleteNotifications<
   TData = Awaited<ReturnType<typeof deleteNotifications>>,
   TError =
     | NotificationErrorResponse
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | ClientUpgradeRequiredResponse,
@@ -1266,7 +1272,7 @@ export type deleteNotificationResponse204 = {
 };
 
 export type deleteNotificationResponse400 = {
-  data: NotificationErrorResponse;
+  data: NotificationErrorResponse | InvalidClientVersionError;
   status: 400;
 };
 
@@ -1346,6 +1352,7 @@ export const getDeleteNotificationQueryOptions = <
   TData = Awaited<ReturnType<typeof deleteNotification>>,
   TError =
     | NotificationErrorResponse
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | ClientUpgradeRequiredResponse,
@@ -1398,6 +1405,7 @@ export type DeleteNotificationQueryResult = NonNullable<
 >;
 export type DeleteNotificationQueryError =
   | NotificationErrorResponse
+  | InvalidClientVersionError
   | N401Response
   | N403Response
   | ClientUpgradeRequiredResponse;
@@ -1406,6 +1414,7 @@ export function useDeleteNotification<
   TData = Awaited<ReturnType<typeof deleteNotification>>,
   TError =
     | NotificationErrorResponse
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | ClientUpgradeRequiredResponse,
@@ -1438,6 +1447,7 @@ export function useDeleteNotification<
   TData = Awaited<ReturnType<typeof deleteNotification>>,
   TError =
     | NotificationErrorResponse
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | ClientUpgradeRequiredResponse,
@@ -1470,6 +1480,7 @@ export function useDeleteNotification<
   TData = Awaited<ReturnType<typeof deleteNotification>>,
   TError =
     | NotificationErrorResponse
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | ClientUpgradeRequiredResponse,
@@ -1498,6 +1509,7 @@ export function useDeleteNotification<
   TData = Awaited<ReturnType<typeof deleteNotification>>,
   TError =
     | NotificationErrorResponse
+    | InvalidClientVersionError
     | N401Response
     | N403Response
     | ClientUpgradeRequiredResponse,

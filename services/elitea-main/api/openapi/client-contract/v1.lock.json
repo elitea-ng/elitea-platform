@@ -926,19 +926,38 @@
         "400": {
           "content": {
             "application/json": {
-              "type": "object",
-              "required": [
-                "error",
-                "ok"
-              ],
-              "properties": {
-                "error": {
-                  "type": "string"
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
                 },
-                "ok": {
-                  "type": "boolean"
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "ok"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
                 }
-              }
+              ]
             }
           }
         },
@@ -1074,19 +1093,38 @@
         "400": {
           "content": {
             "application/json": {
-              "type": "object",
-              "required": [
-                "error",
-                "ok"
-              ],
-              "properties": {
-                "error": {
-                  "type": "string"
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
                 },
-                "ok": {
-                  "type": "boolean"
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "ok"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    }
+                  }
                 }
-              }
+              ]
             }
           }
         },

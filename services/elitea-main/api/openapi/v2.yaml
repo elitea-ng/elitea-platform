@@ -16859,11 +16859,15 @@ paths:
                 properties:
                   deleted: { type: integer, format: int64 }
         '400':
-          description: An invalid body.
+          description: >-
+            An invalid body, or a native client version that does not parse
+            (invalid_client_version).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NotificationErrorResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/NotificationErrorResponse'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
@@ -16928,11 +16932,15 @@ paths:
           $ref: "#/components/responses/ClientUpgradeRequired"
         '204': { description: Deleted. }
         '400':
-          description: An invalid id, or a notification that is not the caller's.
+          description: >-
+            An invalid id, a notification that is not the caller's, or a
+            native client version that does not parse (invalid_client_version).
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/NotificationErrorResponse'
+                oneOf:
+                  - $ref: '#/components/schemas/NotificationErrorResponse'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
         '500':
