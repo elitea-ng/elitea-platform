@@ -2904,6 +2904,10 @@ deepwiki:
       # No CPU limit, as elsewhere in this chart. CPU is bounded per
       # generation by workerCpuSeconds below (RLIMIT_CPU, CPU time, not a
       # rate): the engine's default, 4 h of CPU.
+      #
+      # Set both HERE, not in deepwiki.env: the chart renders
+      # ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES and _CPU_SECONDS from these two
+      # over any env value, and the build owner from the pod name.
       resources:
         requests:
           cpu: 500m
