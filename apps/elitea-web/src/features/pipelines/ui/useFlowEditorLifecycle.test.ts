@@ -57,7 +57,7 @@ describe('useFlowEditorReset', () => {
     expect(onResetHandled).not.toHaveBeenCalled();
   });
 
-  it('snaps nodes/edges back to initial, clears run status, and reports the reset handled', () => {
+  it('snaps nodes/edges back to initial, clears run status, and acknowledges after persistence', () => {
     const setFlowNodes = vi.fn();
     const setFlowEdges = vi.fn();
     const onResetRunParseStatus = vi.fn();
@@ -82,7 +82,9 @@ describe('useFlowEditorReset', () => {
     expect(setFlowNodes).toHaveBeenCalledWith(initialNodes);
     expect(setFlowEdges).toHaveBeenCalledWith([]);
     expect(onResetRunParseStatus).toHaveBeenCalled();
-    expect(onResetHandled).toHaveBeenCalled();
+    expect(onResetHandled).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(150);
+    expect(onResetHandled).toHaveBeenCalledTimes(1);
   });
 
   it('persists the reset graph and fits the view after the 150ms sync delay when there is real content', () => {
@@ -113,12 +115,59 @@ describe('useFlowEditorReset', () => {
     expect(fitView).toHaveBeenCalled();
   });
 
-  it('does not fit the view when the reset graph has 2 or fewer nodes', () => {
+  it.each(['llm', 'code', 'hitl'])('fits the reset view for an authored %s node and END', (type) => {
+    const persistNodes = vi.fn();
+    const persistEdges = vi.fn();
+    const fitView = vi.fn();
+    const initialNodes = [
+      { ...makeNode('authored'), type, position: { x: 60, y: 870 } },
+      { ...makeNode('END'), type: 'END', position: { x: 60, y: 1043 } },
+    ];
+    const initialEdges = [makeEdge('authored-END', 'authored', 'END')];
+    const setFlowNodes = vi.fn();
+    const setFlowEdges = vi.fn();
+    renderHook(() =>
+      useFlowEditorReset({
+        resetFlag: true,
+        initialNodes,
+        initialEdges,
+        setFlowNodes,
+        setFlowEdges,
+        onResetRunParseStatus: vi.fn(),
+        onResetHandled: vi.fn(),
+        persistNodes,
+        persistEdges,
+        fitView,
+      }),
+    );
+    expect(setFlowNodes).toHaveBeenCalledWith(initialNodes);
+    expect(setFlowEdges).toHaveBeenCalledWith(initialEdges);
+    vi.advanceTimersByTime(149);
+    expect(fitView).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(persistNodes).toHaveBeenCalledWith(initialNodes);
+    expect(persistEdges).toHaveBeenCalledWith(initialEdges);
+    expect(fitView).toHaveBeenCalledTimes(1);
+    expect(fitView.mock.invocationCallOrder[0]).toBeGreaterThan(persistEdges.mock.invocationCallOrder[0] ?? 0);
+  });
+
+
+  it.each([
+    { label: 'empty graph', nodes: [] },
+    { label: 'END placeholder', nodes: [{ ...makeNode('END'), type: 'END' }] },
+    {
+      label: 'entry/end placeholders',
+      nodes: [
+        { ...makeNode('entry_point'), type: 'entry_point' },
+        { ...makeNode('END'), type: 'END' },
+      ],
+    },
+  ])('does not fit the reset view for $label', ({ nodes }) => {
     const fitView = vi.fn();
     renderHook(() =>
       useFlowEditorReset({
         resetFlag: true,
-        initialNodes: [makeNode('a')],
+        initialNodes: nodes,
         initialEdges: [],
         setFlowNodes: vi.fn(),
         setFlowEdges: vi.fn(),

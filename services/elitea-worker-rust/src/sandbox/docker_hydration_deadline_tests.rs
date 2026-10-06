@@ -61,6 +61,9 @@ async fn database() -> IsolatedPostgres {
             "../../../elitea-main/migrations/agentstate/0009_sandbox_preparation_bundle.sql"
         ),
         include_str!("../../../elitea-main/migrations/agentstate/0010_sandbox_phase_deadlines.sql"),
+        include_str!(
+            "../../../elitea-main/migrations/agentstate/0013_sandbox_whole_code_recovery.sql"
+        ),
     ] {
         sqlx::raw_sql(migration)
             .execute(&database.pool)

@@ -6,6 +6,7 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import type { MessageFeedbackSummary, MessageTraceStepDetail } from '@/shared/api/generated/model';
 import { installTestEventSource, type TestEventSourceRegistry } from '@/shared/api/sse/testing';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirrorTestPolyfills';
@@ -25,6 +26,7 @@ const frames = replay.trim().split('\n').map(line => JSON.parse(line) as Record<
 const start = frames[0]!;
 const entry = frames[1]!['response_metadata'] as Record<string, unknown>;
 const finalText = frames.at(-1)!['content'] as string;
+const question = 'code-debug-generation-ui-20261005';
 const executionId = 'cf9ad06c51f3951e37a0ec38eeaa1ea2';
 const artifactName = 'b90f6f0bea803692a23ea0db342d579f069664d178500056cf0edbeda8e13d09.json';
 const user = { id: '6', name: 'Code test user', avatar: '' };
@@ -51,7 +53,9 @@ beforeEach(() => {
     http.post('*/elitea_core/conversations/prompt_lib/2', () => HttpResponse.json({ ...conversation, source: 'editor_test',
       meta: { is_hidden: true, editor_test: { revision: 1, actor_id: '6', project_id: '2', application_id: '143', application_version_id: '164' } } })),
     http.get('*/elitea_core/conversation/prompt_lib/2/:id', () => HttpResponse.json(conversation)),
-    http.post('*/elitea_core/messages/prompt_lib/2/:uuid', () => {
+    http.post('*/elitea_core/messages/prompt_lib/2/:uuid', async ({ request, params }) => {
+      expect(params['uuid']).toBe(start['stream_id']);
+      expect(await request.json()).toMatchObject({ payload: { user_input: question } });
       admissions++;
       return HttpResponse.json({ execution_id: executionId, response_message_id: start['message_id'],
         execution_generation: start['execution_generation'], events_url: `/api/v2/executions/2/${executionId}/events` });
@@ -61,6 +65,7 @@ beforeEach(() => {
     http.get('*/elitea_core/application/prompt_lib/2/143', () => HttpResponse.json({ id: '143', name: 'Code pipeline',
       versions: [{ id: '164', name: 'Saved version' }], version_details: { id: '164', agent_type: 'pipeline' } })),
     http.get('*/elitea_core/message_traces/prompt_lib/2/:id', () => HttpResponse.json({ rows: [], limit: 50, offset: 0, has_more: false })),
+    http.get(`/api/v2/elitea_core/message_feedback/prompt_lib/2/${String(start['message_id'])}`, () => HttpResponse.json<MessageFeedbackSummary>({ likes: 0, dislikes: 0 })),
     http.get(`/api/v2/artifacts/objects/2/code-debug/${artifactName}`, ({ request }) => {
       artifactReads++;
       expect(request.credentials).toBe('same-origin');
@@ -89,19 +94,19 @@ function renderChat(mode: 'editor' | 'main' | 'reload') {
   '/pipelines/all/143', { projectId: '2' });
 }
 
-async function openGroupedExport() {
-  await userEvent.click(await screen.findByRole('button', { name: /Thought for/ }));
-  await userEvent.click(screen.getByRole('button', { name: /^debug_probe$/i }));
-  await userEvent.click(screen.getByText('debug_probe / debug export'));
+async function openGroupedExport(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole('button', { name: /Thought for/ }));
+  await user.click(screen.getByRole('button', { name: /^debug_probe$/i }));
+  await user.click(screen.getByText('debug_probe / debug export'));
   expect(await screen.findByRole('dialog')).toHaveTextContent('Code debug · debug_probe · attempt 1');
   expect(artifactReads).toBe(0);
 }
 
-async function verifyDownload() {
+async function verifyDownload(user: ReturnType<typeof userEvent.setup>) {
   const createUrl = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:verified-code-debug');
   const revokeUrl = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
   const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
-  await userEvent.click(screen.getByRole('button', { name: 'Download verified snapshot' }));
+  await user.click(screen.getByRole('button', { name: 'Download verified snapshot' }));
   await waitFor(() => expect(createUrl).toHaveBeenCalledTimes(1));
   expect(artifactReads).toBe(1);
   expect(anchorClick).toHaveBeenCalledTimes(1);
@@ -112,42 +117,59 @@ async function verifyDownload() {
 }
 
 it.each(['editor', 'main'] as const)('opens and downloads the exact live replay receipt through %s chat', async mode => {
+  const user = userEvent.setup();
   renderChat(mode);
   const input = await screen.findByTestId('chat-message-input');
-  await userEvent.click(input);
-  await userEvent.type(input, 'code-debug-generation-ui-20261005');
+  await user.click(input);
+  expect(input).toHaveFocus();
+  await user.keyboard('c');
+  expect(input).toHaveValue('c');
+  await user.paste(question.slice(1));
+  expect(input).toHaveValue(question);
   await waitFor(() => expect(screen.getByTestId('chat-send-button')).toBeEnabled());
-  await userEvent.keyboard('{Enter}');
+  await user.keyboard('{Enter}');
   await waitFor(() => expect(registry.getOpen()).toHaveLength(1));
+  expect(registry.getOpen()[0]?.url).toBe(`/api/v2/executions/2/${executionId}/events`);
   act(() => frames.forEach((frame, index) => registry.emit('execution.node_event', JSON.stringify(frame), String(index + 1))));
   await waitFor(() => expect(registry.getOpen()).toHaveLength(0));
   expect(admissions).toBe(1);
-  await openGroupedExport();
-  await verifyDownload();
+  await openGroupedExport(user);
+  await verifyDownload(user);
 });
 
 it('opens the same grouped receipt after persisted trace restoration without admitting a new run', async () => {
+  const user = userEvent.setup();
   server.use(http.get('*/elitea_core/message_traces/prompt_lib/2/:id', () => HttpResponse.json({ rows: [
     { id: 101, message_group_id: 51, kind: 'tool_call', tool_name: entry['tool_name'],
+      is_error: false,
       started_at: entry['timestamp_start'], finished_at: entry['timestamp_finish'],
       attrs: { metadata: entry['metadata'], tool_meta: entry['tool_meta'] } },
-  ], limit: 50, offset: 0, has_more: false })));
+  ], limit: 50, offset: 0, has_more: false })),
+  http.get('/api/v2/elitea_core/message_trace/prompt_lib/2/101', ({ request }) => {
+    expect(new URL(request.url).searchParams.get('message_group_id')).toBe('51');
+    return HttpResponse.json<MessageTraceStepDetail>({ id: 101, message_group_id: 51, kind: 'tool_call', is_error: false,
+      tool_name: String(entry['tool_name']),
+      attrs: entry, tool_inputs: {}, tool_output: null });
+  }));
   renderChat('reload');
-  await openGroupedExport();
-  await verifyDownload();
+  await openGroupedExport(user);
+  await verifyDownload(user);
   expect(admissions).toBe(0);
 });
 
 it('downloads the same receipt through the persisted trace detail fallback', async () => {
-  const step = { id: 101, message_group_id: 51, kind: 'tool_call', tool_name: entry['tool_name'] };
-  server.use(http.get('*/elitea_core/message_trace/prompt_lib/2/101', () => HttpResponse.json({ ...step,
-    attrs: entry, tool_inputs: {}, tool_output: null })));
+  const user = userEvent.setup();
+  const step = { id: 101, message_group_id: 51, kind: 'tool_call', tool_name: String(entry['tool_name']), is_error: false };
+  server.use(http.get('/api/v2/elitea_core/message_trace/prompt_lib/2/101', ({ request }) => {
+    expect(new URL(request.url).searchParams.get('message_group_id')).toBe('51');
+    return HttpResponse.json<MessageTraceStepDetail>({ ...step, attrs: entry, tool_inputs: {}, tool_output: null });
+  }));
   renderPipelinesRoute(<PersistedMessageTrace value={{ projectId: '2', conversationId: '501', messageGroupId: 51,
     steps: [step], failed: false }} />, '/pipelines/all/143', { projectId: '2' });
-  await userEvent.click(await screen.findByRole('button', { name: 'Execution details' }));
-  await userEvent.click(screen.getByRole('button', { name: 'debug_probe / debug export' }));
+  await user.click(await screen.findByRole('button', { name: 'Execution details' }));
+  await user.click(screen.getByRole('button', { name: 'debug_probe / debug export' }));
   expect(await screen.findByText('Code debug · debug_probe · attempt 1')).toBeVisible();
   expect(artifactReads).toBe(0);
-  await verifyDownload();
+  await verifyDownload(user);
   expect(admissions).toBe(0);
 });

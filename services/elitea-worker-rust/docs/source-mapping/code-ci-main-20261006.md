@@ -29,6 +29,11 @@ The reconciliation does not apply or discard that stash.
 | Compilation retention test | `services/elitea-main/internal/infra/db/repos/compiled_snapshots_postgres_integration_test.go` | Require the exact protected foreign key under either valid PostgreSQL violation code. |
 | Fresh HITL authoring | `apps/elitea-web/src/features/pipelines/lib/flow-editor/constants/nodeDefaults.constants.ts` | Omit an absent optional edit key before strict serialization. |
 | Pipeline journey assertions | `apps/elitea-web/e2e/journeys/pipelines/pipelines.validation.spec.ts` | Verify enabled pause controls, exact stored identities, clearing, and invalid identity refusal. |
+| Selected model request | `apps/elitea-web/src/widgets/chat-box/ui/hooks/useChatBoxSend.ts` | Refresh model identity and settings together for creation, start, and regeneration. |
+| Artifact fixture contracts | `apps/elitea-web/src/test/msw/fixtures/artifacts/` | Preserve synthetic response bodies after source verification and update their verification metadata. |
+| Saved graph viewport | `apps/elitea-web/src/features/pipelines/ui/useFlowEditorLifecycle.ts` | Finish reset persistence and fitting before acknowledgement; keep authored graphs visible after refresh. |
+| Sandbox test schema | `services/elitea-worker-rust/src/sandbox/docker_*tests.rs` and `src/state/postgres_checkpointer_tests.rs` | Include Main's recovery migration in fresh test databases. |
+| Project Context save cache | `apps/elitea-web/src/pages/settings/ProjectContext.tsx` | Install the committed response before a pending background read can restore old content. |
 
 Current-platform business behavior remains a reference through the existing Code and pipeline source mappings.
 These CI repairs change verification boundaries, not the current-platform behavior contract.
@@ -99,6 +104,46 @@ Twenty-two focused tests pass without skips; type checking and owning lint pass.
 No product code, dependency, timeout, or retry changes.
 The exact-lock replacement CI result remains required.
 
+The next static gate finds nine dependencies in the regeneration callback, above the eight-dependency budget.
+Model identity and settings now share one memoized request value with their original input dependencies.
+Creation, start, and regeneration retain their existing request contracts.
+The transport regression also changes the picked model and project before regeneration.
+It verifies that regeneration sends the new identity and settings together.
+Three focused suites pass all 73 tests without skips.
+Full complexity budgets, type checking, and owning lint pass.
+These local Web checks use the existing dependency cache described above.
+
+Four synthetic artifact fixtures exceed their thirty-day verification window.
+Their bodies match the current Main bucket, object-list, upload, and download handlers.
+Six isolated handler checks pass without skips.
+The fixture metadata records this source verification and retains the synthetic marker.
+No response body changes or live backend recording occurs.
+The freshness gate passes all 22 fixtures.
+
+Project Context Save also exposes a cache race while its refreshed GET remains pending.
+The synchronization effect copies the previous query body after the successful Save clears its dirty guard.
+The correction installs the successful PUT response through the generated GET query key before invalidation.
+Its controlled regression fails before correction and passes afterward.
+All eleven paired tests, type checking, and owning lint pass.
+
+Chromium and WebKit preserve the saved buffer during a held refetch and two oversized Markdown import refusals.
+Both isolated probes use full generated response schemas and exact request checks.
+They report zero unknown requests, page errors, or console errors; root reviews both final screenshots.
+See [the save cache mapping](../../../../docs/source-mapping/project-context-save-cache-20261006.md) for the unchanged import and permission contracts.
+Full AppShell project switching and backend persistence remain separate verification boundaries.
+
+The saved-version reset has two defects.
+It excludes authored two-node graphs from fitting and acknowledges before the delayed persistence callback.
+Acknowledgement clears the reset flag, which cancels that callback through effect cleanup.
+The correction acknowledges after persistence and fitting, and fits authored two-node graphs.
+The existing delay, external reset cancellation, unmount cleanup, and placeholder behavior remain.
+Five focused files pass all 75 tests without skips; type checking and owning lint pass.
+
+Chromium and WebKit each pass the saved-and-cleared interrupt roundtrip with ordinary pointer actions.
+Each browser records two exact version writes and two separate application metadata writes.
+No manual Fit View, forced clicks, unknown requests, page errors, or console errors occur.
+This isolated production-editor proof does not establish backend persistence or deployment.
+
 The Rust worker's unchanged 2 MiB regression and all 67 output-delivery tests pass with current locked dependencies.
 All-target, all-feature strict Clippy also passes.
 These macOS results do not replace Linux CI stack verification.
@@ -130,9 +175,44 @@ The repairs preserve the existing resource limits and refusal assertions.
 No new test skips, increased thread stacks, or relaxed visual thresholds are introduced.
 The replacement head still requires the complete Linux CI matrix.
 The added enabled pause-control baseline still requires comparison in replacement CI.
-The WebKit journey also reports a pointer obstruction while clearing a saved pause control.
-That failure requires separate investigation before full browser acceptance.
+Commit `9cca2bb23ce2e1c1e40f253b3eb4709c769f233c` passes all three Helm jobs and the committed-binary gate.
+Its Rust PostgreSQL job progresses past graph receipts, then fails three sandbox deadline cases.
+Fresh test databases omit Main's recovery migration `0013`.
+The repaired fixtures apply that migration without changing production code or migration ownership.
+All 35 required deadline, preparation, and hydration cases pass against an isolated PostgreSQL 18 server.
+The run uses default test concurrency and no stack or wait-bound override.
+The fixture is removed after verification.
+Three real-Docker recovery/submission cases share two updated state setup locations but remain unrun locally.
+The native macOS debug link emits the existing compact-unwind size warning; full Linux CI remains required.
+See [the fixture mapping](code-ci-deadline-fixtures-20261006.md) for exact schema owners and proof boundaries.
+The WebKit journey reports a pointer obstruction while clearing a saved pause control.
+The isolated WebKit fixture reproduces the obstruction; the normal Fit View control restores pointer access.
+The saved-version reset replaces node positions but excludes an authored two-node graph from automatic fitting.
+The focused reset correction and browser proof above address that obstruction.
+Full browser acceptance remains required.
+
+The same commit's Web unit shard then reports two Code debug live-case timeouts and a restoration read-count failure.
+The local baseline passes; it does not reproduce the CI timeout.
+Repeated character delivery updates the entire mounted chat tree for each input event.
+The test keeps real focus and a first keyboard character, then pastes the remaining exact prompt.
+Its handlers verify the full prompt, conversation identity, execution stream URL, feedback identity, and trace group.
+Opening still requires zero artifact reads; downloading requires exactly one verified Blob read.
+
+Four focused files pass 41 tests without skips; type checking and owning lint pass.
+The subsequent read-count mismatch remains consistent with timed-out test overlap, rather than a reproduced production defect.
+Exact-lock unit acceptance remains required.
 Read the resulting CI state before declaring this repair complete.
+
+The complete `9cca2bb23` matrix finishes with 63 successful checks, five failures, and four skips.
+All Helm jobs, image scans, Main checks, and native Rust chat journeys pass.
+The five failed jobs belong to sandbox fixture schemas, Web static gates, one debug unit shard, and two WebKit shards.
+The source corrections above address their reported failures; replacement CI remains required.
+
+Coverage merge skips because a unit shard fails.
+The other skipped jobs are conditional contract parity, live toolkit/image credentials, and documentation screenshot capture.
+They do not establish runtime acceptance.
+Two WebKit cases also pass only after retry: configuration-form mounting and toolkit catalogue retry.
+Their transient failures are retained without source changes or relaxed assertions.
 
 The live rehearsal services and databases remain unchanged during these source checks.
 The earlier migration-transition proposal has no runtime proof.

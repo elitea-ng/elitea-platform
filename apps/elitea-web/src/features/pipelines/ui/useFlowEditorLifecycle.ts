@@ -104,7 +104,6 @@ export function useFlowEditorReset(args: UseFlowEditorResetArgs): void {
     setFlowNodes([...initialNodes]);
     setFlowEdges([...initialEdges]);
     onResetRunParseStatus();
-    onResetHandled();
 
     // Force sync nodes to the persisted copy after reset so measured
     // heights are available for save — without this the persisted copy
@@ -113,7 +112,9 @@ export function useFlowEditorReset(args: UseFlowEditorResetArgs): void {
     const timer = setTimeout(() => {
       persistNodes(initialNodes);
       persistEdges(initialEdges);
-      if (initialNodes.length > 2) fitView();
+      const hasAuthoredNode = initialNodes.some(node => node.type !== 'entry_point' && node.type !== 'END');
+      if (initialNodes.length > 2 || hasAuthoredNode) fitView();
+      onResetHandled();
     }, 150);
     return () => clearTimeout(timer);
     // baseline disables exhaustive-deps here too (`FlowEditor.jsx:196`) — only re-run when the reset flag or the reset target itself changes.

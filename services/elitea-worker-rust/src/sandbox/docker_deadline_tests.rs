@@ -20,6 +20,17 @@ const PHASE_MIGRATION: &str =
     include_str!("../../../elitea-main/migrations/agentstate/0010_sandbox_phase_deadlines.sql");
 const WAIT: Duration = Duration::from_secs(10);
 
+async fn migrate_current_phase_schema(pool: &PgPool) {
+    for migration in [
+        PHASE_MIGRATION,
+        include_str!(
+            "../../../elitea-main/migrations/agentstate/0013_sandbox_whole_code_recovery.sql"
+        ),
+    ] {
+        sqlx::raw_sql(migration).execute(pool).await.unwrap();
+    }
+}
+
 async fn database(with_phase_clocks: bool) -> IsolatedPostgres {
     let database = IsolatedPostgres::create(
         &std::env::var(DATABASE_URL).expect("ELITEA_TEST_DATABASE_URL is required"),
@@ -46,10 +57,7 @@ async fn database(with_phase_clocks: bool) -> IsolatedPostgres {
             .unwrap();
     }
     if with_phase_clocks {
-        sqlx::raw_sql(PHASE_MIGRATION)
-            .execute(&database.pool)
-            .await
-            .unwrap();
+        migrate_current_phase_schema(&database.pool).await;
     }
     database
 }
@@ -544,10 +552,7 @@ async fn phase_deadline_migration_and_old_writer_preserve_conservative_legacy_bu
     insert_old_writer(&database.pool, &request, 60, "dispatched", Some(RUNTIME_ID)).await;
     insert_old_writer(&database.pool, &request, 61, "reserved", Some(RUNTIME_ID)).await;
     insert_old_writer(&database.pool, &request, 62, "reserved", None).await;
-    sqlx::raw_sql(PHASE_MIGRATION)
-        .execute(&database.pool)
-        .await
-        .unwrap();
+    migrate_current_phase_schema(&database.pool).await;
     let backfill: Vec<(bool, bool)> = sqlx::query_as("SELECT runtime_bound_at IS NOT DISTINCT FROM CASE WHEN runtime_id IS NOT NULL THEN created_at END,dispatched_at IS NOT DISTINCT FROM CASE WHEN phase <> 'reserved' THEN created_at END FROM elitea_runtime.sandbox_jobs ORDER BY job_key")
         .fetch_all(&database.pool).await.unwrap();
     assert_eq!(backfill, vec![(true, true); 3]);

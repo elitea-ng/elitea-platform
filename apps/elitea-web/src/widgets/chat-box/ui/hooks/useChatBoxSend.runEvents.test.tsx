@@ -133,15 +133,17 @@ describe('useChatBoxSend — the flow editor’s run-event feed', () => {
         return HttpResponse.json({ task_id: 'exec-2', events_url: '/api/v2/executions/7/exec-2/events', response_message_id: 'resp-1' });
       }),
     );
-    const { api, Probe } = harness({
+    const overrides = {
       isAgentsPage: false,
       activeParticipant: { id: 2, entity_name: 'dummy' },
       participants: [{ id: 2, entity_name: 'dummy' }],
       userId: '5',
       llmSettings: selectedSettings,
       model: { name: 'vllm/CONTINUATION-REPAIR-FIXTURE' },
-    }, true);
-    render(withQueryClient(<Probe />));
+    };
+    const { api, Probe } = harness(overrides, true);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const view = render(<QueryClientProvider client={client}><Probe /></QueryClientProvider>);
     await act(async () => {
       await api.current?.createConversationForSend('hello');
       await api.current?.startStreamedExecution({
@@ -157,6 +159,13 @@ describe('useChatBoxSend — the flow editor’s run-event feed', () => {
     expect(redundantParticipantWrites).toBe(0);
     expect(startBody?.['llm_settings']).toEqual(expectedSettings);
     expect((regenerateBody?.['payload'] as Record<string, unknown> | undefined)?.['llm_settings']).toEqual(expectedSettings);
+    overrides.llmSettings = { model_name: 'picked-replacement', model_project_id: 3, temperature: 0.2 };
+    view.rerender(<QueryClientProvider client={client}><Probe /></QueryClientProvider>);
+    await act(async () => {
+      await api.current?.regenerateStreamedExecution({ messageId: 'resp-1', questionId: 'q-1', question: 'hello again' });
+    });
+    expect((regenerateBody?.['payload'] as Record<string, unknown> | undefined)?.['llm_settings'])
+      .toEqual({ ...overrides.llmSettings, stream: true });
   });
 
   it.each([

@@ -1394,6 +1394,12 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
     .execute(&isolated.pool)
     .await
     .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0013_sandbox_whole_code_recovery.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
     let image = env::var("ELITEA_CODE_RUNNER_TEST_IMAGE").unwrap();
     let runtime = DockerClient::with_image(image.clone())
         .await
@@ -1748,6 +1754,12 @@ async fn sandbox_submission(over_tls: bool) {
     .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0006_sandbox_stop_reconciliation.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0013_sandbox_whole_code_recovery.sql"
     ))
     .execute(&isolated.pool)
     .await

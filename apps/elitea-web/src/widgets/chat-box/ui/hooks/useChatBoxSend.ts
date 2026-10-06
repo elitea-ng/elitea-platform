@@ -153,9 +153,11 @@ export function useChatBoxSend(
   params: UseChatBoxSendParams,
 ): UseChatBoxSendResult {
   const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend } = params;
-  const modelName = resolveSendModelName(params.llmSettings, params.model?.name);
-  const llmSettings = useMemo(
-    () => resolveSendLlmSettings(params.llmSettings, params.model, params.configuredModelProjectId),
+  const modelRequest = useMemo(
+    () => ({
+      modelName: resolveSendModelName(params.llmSettings, params.model?.name),
+      llmSettings: resolveSendLlmSettings(params.llmSettings, params.model, params.configuredModelProjectId),
+    }),
     [params.llmSettings, params.model, params.configuredModelProjectId],
   );
   const target = useMemo(
@@ -207,8 +209,7 @@ export function useChatBoxSend(
         conversationUuid,
         projectId: projectIdString,
         payload,
-        llmSettings,
-        modelName,
+        ...modelRequest,
         isApplicationTurn,
         participantId:
           (isApplicationTurn
@@ -231,9 +232,8 @@ export function useChatBoxSend(
       startDetailed,
       projectId,
       projectIdString,
-      llmSettings,
+      modelRequest,
       getInternalToolsForSend,
-      modelName,
       target,
     ],
   );
@@ -283,8 +283,7 @@ export function useChatBoxSend(
         responseMessageId: input.messageId,
         questionId: input.questionId,
         question: input.question,
-        llmSettings,
-        modelName,
+        ...modelRequest,
         isApplicationTurn,
         participantId: positiveParticipantId(
           (target as { readonly id?: unknown } | null | undefined)?.id,
@@ -310,9 +309,8 @@ export function useChatBoxSend(
       projectIdString,
       params.conversationUuid,
       target,
-      llmSettings,
+      modelRequest,
       getInternalToolsForSend,
-      modelName,
     ],
   );
 
@@ -326,14 +324,14 @@ export function useChatBoxSend(
           question.slice(0, 50) ||
           t("widgets.chatBox.defaultConversationName", "New Chat"),
         isPrivate: true,
-        meta: creationMeta(llmSettings, internalTools),
-        ...(!isAgentsPage && modelName ? {
-          participants: adhocParticipants({ userId: params.userId, modelName, llmSettings }),
+        meta: creationMeta(modelRequest.llmSettings, internalTools),
+        ...(!isAgentsPage && modelRequest.modelName ? {
+          participants: adhocParticipants({ userId: params.userId, modelName: modelRequest.modelName, llmSettings: modelRequest.llmSettings }),
         } : {}),
       });
       if (!created) return undefined;
 
-      if (!isAgentsPage && !modelName) {
+      if (!isAgentsPage && !modelRequest.modelName) {
         // The conversation still exists when no model is available. Its blank
         // responder cannot supply model settings for a REST turn.
         console.warn(
@@ -346,9 +344,8 @@ export function useChatBoxSend(
       deps,
       params.editorTest,
       isAgentsPage,
-      modelName,
+      modelRequest,
       params.userId,
-      llmSettings,
       getInternalToolsForSend,
     ],
   );
