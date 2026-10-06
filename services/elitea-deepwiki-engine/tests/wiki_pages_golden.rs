@@ -11,9 +11,18 @@
 //! produce byte-identical pages and artifacts (time- and uuid-derived
 //! names normalised).
 
+use elitea_deepwiki_engine::errors::EngineError;
+use elitea_deepwiki_engine::runner::StopSignal;
+use elitea_deepwiki_engine::wiki::context::PylonPlugin;
+use elitea_deepwiki_engine::wiki::expansion::ExpansionFlags;
+use elitea_deepwiki_engine::wiki::pages::{PageGenerator, PageSettings, generate_pages};
 use elitea_deepwiki_engine::wiki::parity::{self, StubModel};
+use elitea_deepwiki_engine::wiki::retrieve::{CONTEXT_TOKEN_BUDGET, RetrievalContext};
+use elitea_deepwiki_engine::wiki::search::{PageSearch, ReplaySearch};
 use serde_json::{Map, Value};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::thread::ThreadId;
 
 fn golden() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/wiki/golden/ref")
@@ -173,4 +182,88 @@ async fn the_rust_page_phase_equals_the_python_reference() {
         format!("{}{}", &text[..at], &text[end..])
     };
     assert_eq!(message(&python_result), message(&rust_result));
+}
+
+/// A `PageSearch` that records the thread of every call.
+struct ThreadProbe {
+    inner: ReplaySearch,
+    threads: Mutex<Vec<ThreadId>>,
+}
+
+impl PageSearch for ThreadProbe {
+    fn search(
+        &self,
+        term: &str,
+        cluster_id: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<String>, EngineError> {
+        self.threads
+            .lock()
+            .unwrap()
+            .push(std::thread::current().id());
+        self.inner.search(term, cluster_id, limit)
+    }
+
+    fn symbol(&self, name: &str, macro_id: Option<i64>) -> Result<Vec<String>, EngineError> {
+        self.threads
+            .lock()
+            .unwrap()
+            .push(std::thread::current().id());
+        self.inner.symbol(name, macro_id)
+    }
+}
+
+async fn probe_generator(
+    stop: StopSignal,
+) -> (Arc<PageGenerator<ThreadProbe>>, parity::Dump, StubModel) {
+    let dump = parity::load_dump(&golden()).unwrap();
+    let model = StubModel::start(dump.page_answer).await.unwrap();
+    let generator = Arc::new(PageGenerator {
+        retrieval: RetrievalContext {
+            index: Arc::new(dump.index.clone()),
+            search: Arc::new(ThreadProbe {
+                inner: dump.search.clone(),
+                threads: Mutex::new(Vec::new()),
+            }),
+            repo_root: dump.repo_root.clone(),
+            flags: ExpansionFlags::from_env().unwrap(),
+            budget: CONTEXT_TOKEN_BUDGET,
+            pylon: PylonPlugin::new(dump.repo_root.clone()),
+        },
+        chat: parity::stub_chat(&model.base_url).unwrap(),
+        settings: PageSettings::new(dump.identity.repository.clone()),
+        stop,
+        thinking: None,
+    });
+    (generator, dump, model)
+}
+
+/// Retrieval is CPU work: on a single-threaded runtime it must run off the
+/// runtime's thread (the blocking pool), or four pages in flight would
+/// stall the socket and every model stream.
+#[tokio::test(flavor = "current_thread")]
+async fn page_retrieval_runs_off_the_runtime_thread() {
+    let (generator, dump, _model) = probe_generator(StopSignal::default()).await;
+    let runtime_thread = std::thread::current().id();
+    let pages = generate_pages(Arc::clone(&generator), &dump.structure, &dump.repo_context)
+        .await
+        .unwrap();
+    assert!(!pages.pages.is_empty());
+    let threads = generator.retrieval.search.threads.lock().unwrap().clone();
+    assert!(!threads.is_empty(), "the golden pages search");
+    assert!(threads.iter().all(|t| *t != runtime_thread));
+}
+
+/// A stop before the fan-out starts no page and sends no model request.
+#[tokio::test(flavor = "current_thread")]
+async fn a_stop_starts_no_page() {
+    let stop = StopSignal::default();
+    stop.request();
+    let (generator, dump, model) = probe_generator(stop).await;
+    let result = generate_pages(generator, &dump.structure, &dump.repo_context).await;
+    assert_eq!(
+        result.map_err(|e| e.message),
+        Err("Invocation cancelled".to_owned())
+    );
+    assert!(model.requests().is_empty());
 }

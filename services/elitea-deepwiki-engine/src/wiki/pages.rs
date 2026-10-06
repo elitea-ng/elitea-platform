@@ -18,7 +18,7 @@ use super::prompts::{
     PAGE_CONTENT_SYSTEM, PAGE_CONTENT_V3_TONE_ADJUSTED, TARGET_AUDIENCE_MIXED, format_template,
 };
 use super::retrieve::RetrievalContext;
-use super::sanitizer::{SanitizerConfig, sanitize_content};
+use super::sanitizer::{SANITIZE_BUDGET, SanitizerConfig, sanitize_content_within};
 use super::search::PageSearch;
 use super::spec::{PageSpec, PageStatus, WikiPage, WikiStructureSpec};
 use crate::errors::EngineError;
@@ -235,7 +235,7 @@ impl<S: PageSearch + 'static> PageGenerator<S> {
 
     /// `generate_page_content` for one page.
     async fn generate_page(
-        &self,
+        self: Arc<Self>,
         page_id: String,
         page: PageSpec,
         repo_context: Arc<String>,
@@ -244,7 +244,7 @@ impl<S: PageSearch + 'static> PageGenerator<S> {
             "I am on phase page_generation\nDrafting page: {}\nReasoning: Converting structural intent into detailed narrative leveraging repository signals.\nNext: Retrieve relevant symbols/files then invoke LLM.",
             page.page_name
         ));
-        match self.draft(&page, &repo_context).await {
+        match Arc::clone(&self).draft(&page, repo_context).await {
             Ok(content) => Ok((
                 WikiPage {
                     page_id,
@@ -277,25 +277,79 @@ impl<S: PageSearch + 'static> PageGenerator<S> {
         }
     }
 
+    /// Fail with the stop line once a stop was requested.
+    fn checkpoint(&self) -> Result<(), EngineError> {
+        if self.stop.is_requested() {
+            Err(EngineError::cancelled())
+        } else {
+            Ok(())
+        }
+    }
+
     /// Retrieval, `_generate_simple`, then the sanitizer.
-    async fn draft(&self, page: &PageSpec, repo_context: &str) -> Result<String, EngineError> {
-        let (content, _route) = self.retrieval.relevant_content(page, repo_context)?;
-        let prompt = page_prompt(page, &content, repo_context, &self.settings)?;
+    ///
+    /// Retrieval (cluster expansion, ranking, token counting) and the
+    /// sanitizer are CPU work: they run on the blocking pool, not on a
+    /// runtime worker, so four pages in flight never starve the socket or
+    /// the model streams. The stop flag is read before and after each
+    /// stage and between the diagrams of a page.
+    async fn draft(
+        self: Arc<Self>,
+        page: &PageSpec,
+        repo_context: Arc<String>,
+    ) -> Result<String, EngineError> {
+        self.checkpoint()?;
+        let prompt = {
+            let this = Arc::clone(&self);
+            let page = page.clone();
+            blocking(move || {
+                let (content, _route) = this.retrieval.relevant_content(&page, &repo_context)?;
+                page_prompt(&page, &content, &repo_context, &this.settings)
+            })
+            .await??
+        };
+        self.checkpoint()?;
         let request = ChatRequest::new(vec![
             ChatMessage::System(PAGE_CONTENT_SYSTEM),
             ChatMessage::User(prompt),
         ]);
         let response = self.chat.chat(&request, &self.stop, &mut |_| {}).await?;
-        let generated = response.content;
-        match sanitize_content(&generated, &SanitizerConfig::default()) {
-            Ok((sanitized, summary)) if summary.total > 0 => Ok(sanitized),
-            Ok(_) => Ok(generated),
-            Err(error) => {
-                tracing::warn!(page = %page.page_name, %error, "Mermaid sanitization skipped");
-                Ok(generated)
+        self.checkpoint()?;
+        let stop = self.stop.clone();
+        let name = page.page_name.clone();
+        let content = blocking(move || {
+            let generated = response.content;
+            let sanitized = sanitize_content_within(
+                &generated,
+                &SanitizerConfig::default(),
+                SANITIZE_BUDGET,
+                &|| stop.is_requested(),
+            );
+            match sanitized {
+                Ok((sanitized, summary)) if summary.total > 0 => sanitized,
+                Ok(_) => generated,
+                Err(error) => {
+                    tracing::warn!(page = %name, %error, "Mermaid sanitization skipped");
+                    generated
+                }
             }
-        }
+        })
+        .await?;
+        self.checkpoint()?;
+        Ok(content)
     }
+}
+
+/// Run CPU work on the blocking pool.
+async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, EngineError> {
+    tokio::task::spawn_blocking(work).await.map_err(|e| {
+        EngineError::new(
+            crate::errors::ErrorType::Runtime,
+            format!("page task failed: {e}"),
+        )
+    })
 }
 
 /// Generate every page of `structure` (already split), at most
@@ -323,8 +377,12 @@ pub async fn generate_pages<S: PageSearch + 'static>(
     let mut slots: Vec<Option<(WikiPage, Option<String>)>> = vec![None; work.len()];
     let mut tasks: JoinSet<(usize, PageResult)> = JoinSet::new();
     let mut pending = work.into_iter().enumerate();
+    // No new page starts after a stop request.
     let spawn = |tasks: &mut JoinSet<_>,
                  pending: &mut dyn Iterator<Item = (usize, (String, PageSpec))>| {
+        if generator.stop.is_requested() {
+            return;
+        }
         if let Some((slot, (page_id, page))) = pending.next() {
             let generator = Arc::clone(&generator);
             let repo_context = Arc::clone(&repo_context);
@@ -354,6 +412,9 @@ pub async fn generate_pages<S: PageSearch + 'static>(
             }
         }
         spawn(&mut tasks, &mut pending);
+    }
+    if generator.stop.is_requested() {
+        return Err(EngineError::cancelled());
     }
     let mut generated = GeneratedPages::default();
     for (page, error) in slots.into_iter().flatten() {
