@@ -133,6 +133,17 @@ func (s *PostgresStore) Create(ctx context.Context, state sessionstate.State) (s
 }
 
 // Read returns only a supported, bounded state whose row has not expired.
+//
+// Read runs on every edge request that carries a Form cookie (flow.Authorize)
+// and is deliberately not throttled or cached. It is one primary-key SELECT on
+// the shared pool, bounded by operationLimit; a cookie that is not a canonical
+// 256-bit ID is refused before the database. A live session's request then
+// pays a heavier principal re-validation query on this pool anyway, and a
+// well-shaped random cookie costs one index miss: what any unauthenticated
+// request to a database-backed route costs. A negative cache would add a
+// revocation-visibility hazard (a logout on one replica unseen on another)
+// for no saving that matters; a rate limit here would turn a flood into
+// sign-outs for everyone.
 // Provider authentication expiration remains data for the authorization and
 // logout boundaries; it does not shorten the independent server-session
 // lifetime. Malformed records, unknown schema versions, and dependency
