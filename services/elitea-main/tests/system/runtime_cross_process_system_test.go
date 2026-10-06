@@ -89,7 +89,7 @@ func TestProductionRuntimeCrossProcessSystem(t *testing.T) {
 	containers := &containerSet{}
 	t.Cleanup(containers.stopAll)
 	postgresName := containers.start(t,
-		"postgres", "postgres:16-alpine",
+		"postgres", "postgres:16-trixie",
 		[]string{
 			"-e", "POSTGRES_USER=elitea",
 			"-e", "POSTGRES_PASSWORD=elitea",

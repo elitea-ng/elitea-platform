@@ -25,7 +25,7 @@ import (
 //
 // It runs only when ELITEA_TEST_DATABASE_URL names a database:
 //
-//	podman run -d --name pg -e POSTGRES_PASSWORD=postgres -p 55515:5432 postgres:16-alpine
+//	podman run -d --name pg -e POSTGRES_PASSWORD=postgres -p 55515:5432 postgres:16-trixie
 //	ELITEA_TEST_DATABASE_URL='postgres://postgres:postgres@127.0.0.1:55515/postgres?sslmode=disable' \
 //	  GOWORK=off go test -run TestPostgres ./internal/failmode/
 

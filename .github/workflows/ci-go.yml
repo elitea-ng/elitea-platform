@@ -202,7 +202,7 @@ jobs:
         # sets ELITEA_REQUIRE_PGVECTOR_POSTGRES_TEST below, which turns that
         # guard into a t.Fatal. Losing the image here fails the job; it can
         # never turn it green with zero execution.
-        image: pgvector/pgvector:0.8.5-pg16
+        image: pgvector/pgvector:0.8.5-pg16-trixie
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -535,7 +535,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: pgvector/pgvector:0.8.5-pg16
+        image: pgvector/pgvector:0.8.5-pg16-trixie
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
