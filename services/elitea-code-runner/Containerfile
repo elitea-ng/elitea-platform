@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS builder
+FROM rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS builder
 WORKDIR /src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo install cargo-auditable --locked --version 0.7.5
@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cp /target/release/elitea-code-rust-prepare /usr/local/bin/elitea-code-rust-prepare
 
 # Minimal runner verification target. The Deno language target extends it below.
-FROM python:3.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS verification
+FROM python:3.12-slim-trixie@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f AS verification
 COPY --from=builder /usr/local/bin/elitea-code-runner /usr/local/bin/elitea-code-runner
 RUN mkdir -p /workspace/repository && chown -R 10001:10001 /workspace
 WORKDIR /workspace
@@ -60,7 +60,7 @@ COPY adapters/rust/src/platform.rs adapters/rust/src/platform_client.rs adapters
 RUN mkdir -p /opt/elitea-rust-platform-v1/.cargo && \
     cargo vendor --locked --manifest-path /opt/elitea-rust-platform-v1/Cargo.toml /opt/rust-platform-vendor > /opt/elitea-rust-platform-v1/.cargo/config.toml
 
-FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS rust-runtime
+FROM rust:1.97.1-trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS rust-runtime
 COPY --from=builder /usr/local/bin/elitea-code-runner /usr/local/bin/elitea-code-runner
 COPY --from=builder /usr/local/bin/elitea-code-execute /usr/local/bin/elitea-code-execute
 COPY --from=builder /usr/local/bin/elitea-code-rust /usr/local/bin/elitea-code-rust
