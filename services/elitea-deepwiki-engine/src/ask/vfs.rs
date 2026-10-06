@@ -486,6 +486,14 @@ fn replace(
             "Error: String '{old}' appears {occurrences} times in file. Use replace_all=True to replace all instances, or provide a more specific string with surrounding context."
         ));
     }
+    // The size of the result before it is built: a short `old_string`
+    // replaced everywhere must not allocate past the file-system bound.
+    let size = content.len() - occurrences * old.len() + occurrences.saturating_mul(new.len());
+    if size > MAX_BYTES {
+        return Err(format!(
+            "Error: the file system is full ({MAX_FILES} files, {MAX_BYTES} bytes); delete files you no longer need"
+        ));
+    }
     Ok((content.replace(old, new), occurrences))
 }
 
@@ -770,6 +778,20 @@ pub fn evict(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_replace_that_would_pass_the_bound_is_refused_before_it_is_built() {
+        let content = "a".repeat(1_000_000);
+        let new = "b".repeat(1_000);
+        let refused = replace(&content, "a", &new, true);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.contains("file system is full")),
+            "{refused:?}"
+        );
+        assert_eq!(replace("aXa", "a", "bb", true), Ok(("bbXbb".to_owned(), 2)));
+    }
 
     #[test]
     fn a_large_result_is_cut_when_the_file_system_is_full() {
