@@ -508,6 +508,7 @@ enum CommonProfileMode {
     OutputContinuation,
 }
 
+#[allow(clippy::too_many_lines)] // Keep profile admission visibly ordered before credential redemption.
 fn validate_common_profile(
     request: &AgentExecutionRequest,
     mode: CommonProfileMode,
@@ -559,7 +560,13 @@ fn validate_common_profile(
         || payload.debug_mode.is_some()
         || payload.next_input_suggestion.enabled
         || payload.debug
-        || !payload.meta.is_empty()
+        || !(payload.meta.is_empty()
+            || (mode == CommonProfileMode::DirectGuardrailContinuation
+                && payload.meta.len() == 1
+                && super::graph::static_tool_pause::parse_static_tool_decisions(&payload.meta)
+                    .ok()
+                    .flatten()
+                    .is_some()))
         || !matches!(
             payload.persona.as_str(),
             "generic" | "qa" | "nerdy" | "quirky" | "cynical" | "none" | "bare"

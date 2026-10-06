@@ -57,6 +57,7 @@ const FORWARDED_TYPES: ReadonlySet<string> = new Set<string>([
   SocketMessageType.McpAuthorizationRequired,
   SocketMessageType.AgentRequiresConfirmation,
   SocketMessageType.AgentHitlInterrupt,
+  SocketMessageType.AgentNodeRecoveryRequired,
   SocketMessageType.PipelineFinish,
 ]);
 

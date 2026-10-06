@@ -9,6 +9,13 @@ use std::time::Duration;
 
 const API_TIMEOUT: Duration = Duration::from_secs(15);
 
+#[path = "dependency_content.rs"]
+mod dependency_content;
+#[path = "platform_client.rs"]
+mod platform_client;
+#[path = "repository_content.rs"]
+mod repository_content;
+
 #[derive(Clone, Copy, Debug, thiserror::Error)]
 pub enum ControlError {
     #[error("Kubernetes sandbox workload identity does not match the durable execution")]
@@ -88,11 +95,42 @@ impl KubernetesClient {
         policy: &PodPolicy,
         identity: &PodIdentity,
     ) -> Result<Pod, ControlError> {
+        self.create_with_compiled_launch(policy, identity, None)
+            .await
+    }
+    pub(crate) async fn create_with_compiled_launch(
+        &self,
+        policy: &PodPolicy,
+        identity: &PodIdentity,
+        launch: Option<(&str, &str, &str)>,
+    ) -> Result<Pod, ControlError> {
+        self.create_with_repository(policy, identity, launch, None)
+            .await
+    }
+    pub(super) async fn create_with_repository(
+        &self,
+        policy: &PodPolicy,
+        identity: &PodIdentity,
+        launch: Option<(&str, &str, &str)>,
+        repository: Option<&str>,
+    ) -> Result<Pod, ControlError> {
         if policy.namespace != self.namespace {
             return Err(ControlError::Identity);
         }
-        let pod: Pod = serde_json::from_value(policy.workload(identity)?)
-            .map_err(|_| ControlError::Identity)?;
+        let mut workload = match repository {
+            Some(root) => policy.workload_repository(identity, root)?,
+            None => policy.workload(identity)?,
+        };
+        let expected = launch
+            .map(|launch| compiled_launch_values(&policy.image, launch))
+            .transpose()?;
+        if let Some(env) = &expected {
+            workload["spec"]["containers"][0]["env"]
+                .as_array_mut()
+                .ok_or(ControlError::Identity)?
+                .extend(env.iter().cloned());
+        }
+        let pod: Pod = serde_json::from_value(workload).map_err(|_| ControlError::Identity)?;
         let result =
             tokio::time::timeout(API_TIMEOUT, self.pods.create(&PostParams::default(), &pod))
                 .await
@@ -106,7 +144,32 @@ impl KubernetesClient {
             Err(_) => return Err(ControlError::Api),
         };
         validate(&created, identity, &self.namespace, None)?;
+        if let Some(expected) = expected {
+            validate_compiled_values(&created, &policy.image, &expected)?;
+        }
+        if let Some(root) = repository {
+            let value = serde_json::to_value(&created).map_err(|_| ControlError::Identity)?;
+            super::workspace::validate(&value, identity, &policy.image, root)?;
+        }
         Ok(created)
+    }
+
+    pub(super) async fn verify_compiled_launch(
+        &self,
+        policy: &PodPolicy,
+        identity: &PodIdentity,
+        uid: &str,
+        launch: (&str, &str, &str),
+    ) -> Result<(), ControlError> {
+        if policy.namespace != self.namespace {
+            return Err(ControlError::Identity);
+        }
+        let expected = compiled_launch_values(&policy.image, launch)?;
+        let pod = self
+            .observe(identity, Some(uid))
+            .await?
+            .ok_or(ControlError::Identity)?;
+        validate_compiled_values(&pod, &policy.image, &expected)
     }
 
     /// Request graceful deletion of the original Pod. This does not confirm termination.
@@ -384,6 +447,64 @@ fn validate_receipt(bytes: &[u8]) -> Result<(), ControlError> {
     Ok(())
 }
 
+fn compiled_launch_values(
+    image: &str,
+    (purpose, hash, policy): (&str, &str, &str),
+) -> Result<Vec<serde_json::Value>, ControlError> {
+    let (name, digest) = image.rsplit_once('@').ok_or(ControlError::Identity)?;
+    let image_hash = digest
+        .strip_prefix("sha256:")
+        .ok_or(ControlError::Identity)?;
+    if name.is_empty()
+        || name.chars().any(char::is_whitespace)
+        || !crate::sandbox::dependency_bundle::valid_digest(image_hash)
+        || !matches!(purpose, "compile" | "execute")
+        || !crate::sandbox::dependency_bundle::valid_digest(hash)
+        || policy.is_empty()
+        || policy.len() > 128
+        || !policy
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return Err(ControlError::Identity);
+    }
+    Ok(vec![
+        serde_json::json!({"name":"ELITEA_COMPILED_CODE_SNAPSHOTS","value":"1"}),
+        serde_json::json!({"name":"ELITEA_COMPILED_CODE_JOB_PURPOSE","value":purpose}),
+        serde_json::json!({"name":"ELITEA_COMPILED_CODE_CONTROL_SHA256","value":hash}),
+        serde_json::json!({"name":"ELITEA_COMPILED_CODE_IMAGE_DIGEST","value":digest}),
+        serde_json::json!({"name":"ELITEA_COMPILED_CODE_POLICY_REVISION","value":policy}),
+    ])
+}
+fn validate_compiled_values(
+    pod: &Pod,
+    image: &str,
+    expected: &[serde_json::Value],
+) -> Result<(), ControlError> {
+    let spec = pod.spec.as_ref().ok_or(ControlError::Identity)?;
+    let mut code = spec
+        .containers
+        .iter()
+        .filter(|container| container.name == "code");
+    let container = code.next().ok_or(ControlError::Identity)?;
+    if code.next().is_some() || container.image.as_deref() != Some(image) {
+        return Err(ControlError::Identity);
+    }
+    let env = container.env.as_ref().ok_or(ControlError::Identity)?;
+    for binding in expected {
+        let name = binding["name"].as_str().ok_or(ControlError::Identity)?;
+        let mut matches = env.iter().filter(|entry| entry.name == name);
+        let entry = matches.next().ok_or(ControlError::Identity)?;
+        if matches.next().is_some()
+            || entry.value.as_deref() != binding["value"].as_str()
+            || entry.value_from.is_some()
+        {
+            return Err(ControlError::Identity);
+        }
+    }
+    Ok(())
+}
+
 fn validate(
     pod: &Pod,
     identity: &PodIdentity,
@@ -606,4 +727,208 @@ mod tests {
         pod.metadata.uid = None;
         assert!(validate(&pod, &identity, "execution", None).is_err());
     }
+
+    #[test]
+    fn compiled_launch_binds_configured_image_and_policy_for_both_roles() {
+        let image = format!("registry/runner@sha256:{}", "a".repeat(64));
+        for purpose in ["compile", "execute"] {
+            let values =
+                compiled_launch_values(&image, (purpose, &"b".repeat(64), "rust-v2")).unwrap();
+            assert_eq!(values.len(), 5);
+            assert!(values.contains(&json!({"name":"ELITEA_COMPILED_CODE_IMAGE_DIGEST","value":format!("sha256:{}", "a".repeat(64))})));
+            assert!(values.contains(
+                &json!({"name":"ELITEA_COMPILED_CODE_POLICY_REVISION","value":"rust-v2"})
+            ));
+        }
+        assert!(
+            compiled_launch_values("runner:latest", ("compile", &"b".repeat(64), "rust-v1"))
+                .is_err()
+        );
+        for policy in ["", "x y", "x\n", "x=override"] {
+            assert!(compiled_launch_values(&image, ("compile", &"b".repeat(64), policy)).is_err());
+        }
+    }
+
+    #[test]
+    fn compiled_recovery_rejects_missing_duplicate_changed_or_indirect_values() {
+        let image = format!("registry/runner@sha256:{}", "a".repeat(64));
+        let expected =
+            compiled_launch_values(&image, ("compile", &"b".repeat(64), "rust-v1")).unwrap();
+        let original =
+            json!({"spec":{"containers":[{"name":"code", "image":image, "env":expected}]}});
+        let pod: Pod = serde_json::from_value(original.clone()).unwrap();
+        assert!(validate_compiled_values(&pod, &image, &expected).is_ok());
+        for index in 0..expected.len() {
+            for mode in 0..4 {
+                let mut changed = original.clone();
+                let values = changed["spec"]["containers"][0]["env"]
+                    .as_array_mut()
+                    .unwrap();
+                match mode {
+                    0 => {
+                        values.remove(index);
+                    }
+                    1 => values.push(expected[index].clone()),
+                    2 => values[index]["value"] = "changed".into(),
+                    3 => {
+                        values[index]["valueFrom"] =
+                            json!({"fieldRef":{"fieldPath":"metadata.name"}});
+                    }
+                    _ => unreachable!(),
+                }
+                let pod: Pod = serde_json::from_value(changed).unwrap();
+                assert!(validate_compiled_values(&pod, &image, &expected).is_err());
+            }
+        }
+        let mut changed = original;
+        changed["spec"]["containers"][0]["image"] =
+            format!("registry/runner@sha256:{}", "c".repeat(64)).into();
+        let pod: Pod = serde_json::from_value(changed).unwrap();
+        assert!(validate_compiled_values(&pod, &image, &expected).is_err());
+    }
+
+    #[tokio::test]
+    async fn compiled_creation_sets_attested_values_and_refuses_conflicting_original_launch() {
+        use http_body_util::BodyExt;
+        for conflict in [false, true] {
+            let image = format!("registry/runner@sha256:{}", "a".repeat(64));
+            let hash = "b".repeat(64);
+            let identity = PodIdentity::new(&[1; 32], &[2; 32]);
+            let expected = compiled_launch_values(&image, ("compile", &hash, "rust-v1")).unwrap();
+            let policy = PodPolicy {
+                namespace: "execution".into(),
+                image: image.clone(),
+                runtime_class: "gvisor".into(),
+                node_selector: std::collections::BTreeMap::from([(
+                    "sandbox".into(),
+                    "true".into(),
+                )]),
+                memory_bytes: 512 * 1024 * 1024,
+                workspace_bytes: 256 * 1024 * 1024,
+                cpu_millis: 1000,
+                timeout_seconds: 60,
+            };
+            let mut original = policy.workload(&identity).unwrap();
+            original["metadata"]["uid"] = "original".into();
+            original["spec"]["containers"][0]["env"]
+                .as_array_mut()
+                .unwrap()
+                .extend(expected.clone());
+            if conflict {
+                original["spec"]["containers"][0]["env"][6]["value"] = "rust-v2".into();
+            }
+            let client = Client::new(
+                tower::service_fn(move |request: http::Request<kube::client::Body>| {
+                    let original = original.clone();
+                    let expected = expected.clone();
+                    let image = image.clone();
+                    async move {
+                        if request.method() == http::Method::POST {
+                            let bytes = request.into_body().collect().await.unwrap().to_bytes();
+                            let created: serde_json::Value =
+                                serde_json::from_slice(&bytes).unwrap();
+                            assert_eq!(created["spec"]["containers"][0]["image"], image);
+                            for value in expected {
+                                assert!(
+                                    created["spec"]["containers"][0]["env"]
+                                        .as_array()
+                                        .unwrap()
+                                        .contains(&value)
+                                );
+                            }
+                            if conflict {
+                                return Ok::<_, std::convert::Infallible>(response(
+                                    409,
+                                    &json!({"kind":"Status","apiVersion":"v1","metadata":{},"status":"Failure","message":"already exists","reason":"AlreadyExists","code":409}),
+                                ));
+                            }
+                        } else {
+                            assert_eq!(request.method(), http::Method::GET);
+                        }
+                        Ok::<_, std::convert::Infallible>(response(200, &original))
+                    }
+                }),
+                "execution",
+            );
+            let control = KubernetesClient::new(client, "execution".into());
+            assert_eq!(
+                control
+                    .create_with_compiled_launch(
+                        &policy,
+                        &identity,
+                        Some(("compile", &hash, "rust-v1"))
+                    )
+                    .await
+                    .is_ok(),
+                !conflict
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn compiled_recovery_verifies_original_uid_without_mutating_the_pod() {
+        let image = format!("registry/runner@sha256:{}", "a".repeat(64));
+        let hash = "b".repeat(64);
+        let identity = PodIdentity::new(&[1; 32], &[2; 32]);
+        let expected = compiled_launch_values(&image, ("execute", &hash, "rust-v1")).unwrap();
+        let pod = json!({"apiVersion":"v1","kind":"Pod","metadata":{
+            "name":identity.name,"namespace":"execution","uid":"original",
+            "annotations":{"sandbox.elitea.ai/job":identity.job,"sandbox.elitea.ai/request":identity.request}
+        },"spec":{"containers":[{"name":"code","image":image,"env":expected}]}});
+        let client = Client::new(
+            tower::service_fn(move |request: http::Request<kube::client::Body>| {
+                assert_eq!(request.method(), http::Method::GET);
+                let pod = pod.clone();
+                async move { Ok::<_, std::convert::Infallible>(response(200, &pod)) }
+            }),
+            "execution",
+        );
+        let control = KubernetesClient::new(client, "execution".into());
+        let policy = PodPolicy {
+            namespace: "execution".into(),
+            image,
+            runtime_class: "gvisor".into(),
+            node_selector: std::collections::BTreeMap::from([("sandbox".into(), "true".into())]),
+            memory_bytes: 512 * 1024 * 1024,
+            workspace_bytes: 256 * 1024 * 1024,
+            cpu_millis: 1000,
+            timeout_seconds: 60,
+        };
+        assert!(
+            control
+                .verify_compiled_launch(
+                    &policy,
+                    &identity,
+                    "original",
+                    ("execute", &hash, "rust-v1")
+                )
+                .await
+                .is_ok()
+        );
+        assert!(
+            control
+                .verify_compiled_launch(
+                    &policy,
+                    &identity,
+                    "replacement",
+                    ("execute", &hash, "rust-v1")
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            control
+                .verify_compiled_launch(
+                    &policy,
+                    &identity,
+                    "original",
+                    ("execute", &hash, "rust-v2")
+                )
+                .await
+                .is_err()
+        );
+    }
 }
+
+#[path = "compiled_content.rs"]
+mod compiled_content;

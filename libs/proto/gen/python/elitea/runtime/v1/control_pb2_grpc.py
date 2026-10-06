@@ -3,6 +3,7 @@
 import grpc
 import warnings
 
+from elitea.runtime.v1 import compiled_code_pb2 as elitea_dot_runtime_dot_v1_dot_compiled__code__pb2
 from elitea.runtime.v1 import control_pb2 as elitea_dot_runtime_dot_v1_dot_control__pb2
 from elitea.runtime.v1 import sandbox_pb2 as elitea_dot_runtime_dot_v1_dot_sandbox__pb2
 
@@ -39,6 +40,11 @@ class RuntimeControlServiceStub(object):
                 '/elitea.runtime.v1.RuntimeControlService/AuthorizeSandboxJob',
                 request_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.AuthorizeSandboxJobRequestV1.SerializeToString,
                 response_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.AuthorizeSandboxJobResponseV1.FromString,
+                _registered_method=True)
+        self.AuthorizeRustCompiledSnapshot = channel.unary_unary(
+                '/elitea.runtime.v1.RuntimeControlService/AuthorizeRustCompiledSnapshot',
+                request_serializer=elitea_dot_runtime_dot_v1_dot_compiled__code__pb2.AuthorizeRustCompiledSnapshotRequestV1.SerializeToString,
+                response_deserializer=elitea_dot_runtime_dot_v1_dot_compiled__code__pb2.AuthorizeRustCompiledSnapshotResponseV1.FromString,
                 _registered_method=True)
         self.ClaimCommand = channel.unary_unary(
                 '/elitea.runtime.v1.RuntimeControlService/ClaimCommand',
@@ -81,6 +87,12 @@ class RuntimeControlServiceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
     def AuthorizeSandboxJob(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def AuthorizeRustCompiledSnapshot(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -135,6 +147,11 @@ def add_RuntimeControlServiceServicer_to_server(servicer, server):
                     servicer.AuthorizeSandboxJob,
                     request_deserializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.AuthorizeSandboxJobRequestV1.FromString,
                     response_serializer=elitea_dot_runtime_dot_v1_dot_sandbox__pb2.AuthorizeSandboxJobResponseV1.SerializeToString,
+            ),
+            'AuthorizeRustCompiledSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.AuthorizeRustCompiledSnapshot,
+                    request_deserializer=elitea_dot_runtime_dot_v1_dot_compiled__code__pb2.AuthorizeRustCompiledSnapshotRequestV1.FromString,
+                    response_serializer=elitea_dot_runtime_dot_v1_dot_compiled__code__pb2.AuthorizeRustCompiledSnapshotResponseV1.SerializeToString,
             ),
             'ClaimCommand': grpc.unary_unary_rpc_method_handler(
                     servicer.ClaimCommand,
@@ -199,6 +216,33 @@ class RuntimeControlService(object):
             '/elitea.runtime.v1.RuntimeControlService/AuthorizeSandboxJob',
             elitea_dot_runtime_dot_v1_dot_sandbox__pb2.AuthorizeSandboxJobRequestV1.SerializeToString,
             elitea_dot_runtime_dot_v1_dot_sandbox__pb2.AuthorizeSandboxJobResponseV1.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AuthorizeRustCompiledSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/elitea.runtime.v1.RuntimeControlService/AuthorizeRustCompiledSnapshot',
+            elitea_dot_runtime_dot_v1_dot_compiled__code__pb2.AuthorizeRustCompiledSnapshotRequestV1.SerializeToString,
+            elitea_dot_runtime_dot_v1_dot_compiled__code__pb2.AuthorizeRustCompiledSnapshotResponseV1.FromString,
             options,
             channel_credentials,
             insecure,

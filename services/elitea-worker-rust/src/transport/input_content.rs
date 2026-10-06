@@ -28,8 +28,22 @@ use crate::protocol::control::{
     ClaimBoundInputAuthority, LeaseMonitoredAgentExecution, LiveModelCheckpointInspection,
 };
 
+#[path = "code_intent_content.rs"]
+mod code_intent_content;
+#[path = "code_platform_content.rs"]
+pub(crate) mod code_platform_content;
+#[path = "code_workspace_content.rs"]
+mod code_workspace_content;
+#[cfg(test)]
+pub(crate) use code_intent_content::actual_original_code_visit_fixture;
+
+#[path = "node_recovery_content.rs"]
+mod node_recovery_content;
 #[path = "toolkit_discovery_artifact.rs"]
 mod toolkit_discovery_artifact;
+pub(crate) use node_recovery_content::{
+    NodeRecoveryAckReply, receipt_sha256 as node_recovery_receipt_sha256,
+};
 
 const MAX_SAFE_TEXT_BYTES: usize = 256;
 const MAX_ORIGIN_BYTES: usize = 2048;
@@ -358,6 +372,14 @@ impl InputContentClient {
                 .ok_or(InputContentError::InvalidInput(
                     "the checkpoint input authority is malformed",
                 ))?;
+        self.fetch_authority(reference).await
+    }
+
+    /// Only the isolated suspended inspection path calls this read-only fetch.
+    pub(crate) async fn fetch_node_recovery_authority(
+        &self,
+        reference: ClaimBoundInputAuthority<'_>,
+    ) -> Result<MaterializedInput, InputContentError> {
         self.fetch_authority(reference).await
     }
 

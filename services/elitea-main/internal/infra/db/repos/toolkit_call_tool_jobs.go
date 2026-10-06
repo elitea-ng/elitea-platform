@@ -104,6 +104,9 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 		if digest != admission.Record.RequestDigest {
 			return executionapp.AdmissionOutcome{}, executionapp.ErrIdempotencyConflict
 		}
+		if err := verifyCodeToolkitReplay(ctx, r.pool, admission, existing.ExecutionID); err != nil {
+			return executionapp.AdmissionOutcome{}, err
+		}
 		return existing, nil
 	case !errors.Is(err, pgx.ErrNoRows):
 		return executionapp.AdmissionOutcome{}, fmt.Errorf("load tool-run idempotency binding: %w", err)
@@ -122,6 +125,9 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 		}
 	}()
 	txQueries := sqlcgen.New(tx)
+	if err := lockCodeToolkitParent(ctx, tx, admission); err != nil {
+		return executionapp.AdmissionOutcome{}, err
+	}
 	capabilityID := executiondomain.ToolkitCallToolCapability
 	if err := txQueries.EnsureRuntimeAdmissionPolicy(ctx, sqlcgen.EnsureRuntimeAdmissionPolicyParams{
 		CapabilityID:   capabilityID,
@@ -148,6 +154,9 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 	case err == nil:
 		if digest != admission.Record.RequestDigest {
 			return executionapp.AdmissionOutcome{}, executionapp.ErrIdempotencyConflict
+		}
+		if err := verifyCodeToolkitReplay(ctx, tx, admission, existing.ExecutionID); err != nil {
+			return executionapp.AdmissionOutcome{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
 			return executionapp.AdmissionOutcome{}, fmt.Errorf("commit tool-run admission replay: %w", err)
@@ -219,6 +228,9 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 		if digest != admission.Record.RequestDigest {
 			return executionapp.AdmissionOutcome{}, executionapp.ErrIdempotencyConflict
 		}
+		if err := verifyCodeToolkitReplay(ctx, tx, admission, existing.ExecutionID); err != nil {
+			return executionapp.AdmissionOutcome{}, err
+		}
 		if rollbackErr := tx.Rollback(context.WithoutCancel(ctx)); rollbackErr != nil &&
 			!errors.Is(rollbackErr, pgx.ErrTxClosed) {
 			return executionapp.AdmissionOutcome{}, fmt.Errorf("rollback concurrent tool-run admission: %w", rollbackErr)
@@ -231,6 +243,9 @@ func (r *ToolkitCallToolJobsRepository) AdmitToolkitCallTool(
 	}
 	if createdID != admission.Record.Job.ID {
 		return executionapp.AdmissionOutcome{}, errors.New("tool-run execution job insert changed identity")
+	}
+	if err := bindCodeToolkitChild(ctx, tx, admission); err != nil {
+		return executionapp.AdmissionOutcome{}, err
 	}
 	if err := txQueries.InsertRuntimeCommandOutbox(ctx, sqlcgen.InsertRuntimeCommandOutboxParams{
 		OutboxID:       admission.Record.Outbox.ID,

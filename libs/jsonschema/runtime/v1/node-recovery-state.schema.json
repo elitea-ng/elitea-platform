@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.node-recovery-state.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "execution_id",
+    "generation",
+    "status",
+    "receipt"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.node-recovery-state.v1"
+    },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "Main currentRuntimeID encodes 16 bytes as lowercase hex. Chat response IDs use separate UUIDs.",
+      "minLength": 32,
+      "maxLength": 32
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "status": {
+      "enum": [
+        "suspended",
+        "authorized",
+        "running"
+      ]
+    },
+    "receipt": {
+      "$ref": "elitea.pipeline.node-recovery-required.v1"
+    }
+  }
+}

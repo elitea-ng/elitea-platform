@@ -25,6 +25,7 @@ type privateServerRunner interface {
 // components. The caller owns Run's context, waits for Run to drain, and calls
 // Close after Run returns.
 type Runtime struct {
+	codeOwnerClient        interface{ Close() }
 	publisher              publisherRunner
 	private                privateServerRunner
 	controlRedis           *redis.Client
@@ -194,6 +195,9 @@ func (r *Runtime) Close() error {
 		return nil
 	}
 	r.closeOnce.Do(func() {
+		if r.codeOwnerClient != nil {
+			r.codeOwnerClient.Close()
+		}
 		if r.controlRedis != nil {
 			r.closeErr = r.controlRedis.Close()
 		}

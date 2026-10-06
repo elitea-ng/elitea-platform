@@ -59,6 +59,11 @@ type Config struct {
 
 	// Empty keeps sandbox grant issuance disabled. Values are exact identities.
 	SandboxAudiences        []string
+	RustCompiledSnapshots   *CompiledSnapshotConfig
+	CodeOwnerRecovery       *CodeOwnerConfig
+	CodeWorkspace           *CodeWorkspaceConfig
+	CodePlatform            *CodePlatformDeploymentConfig
+	CodeDebugArtifacts      *CodeDebugArtifactsConfig
 	SigningKeyID            string
 	SigningKeyFile          string
 	VerificationKeyringFile string
@@ -78,6 +83,15 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 	enabledValue, _ := lookup("ELITEA_RUNTIME_ENABLED")
 	switch enabledValue {
 	case "", "false":
+		if _, _, _, err := codeConsumerConfigFromEnv(lookup, nil); err != nil {
+			return Config{}, err
+		}
+		if _, err := codeOwnerConfigFromEnv(lookup, false, false, nil); err != nil {
+			return Config{}, err
+		}
+		if _, err := compiledSnapshotConfigFromEnv(lookup, false, false, nil); err != nil {
+			return Config{}, err
+		}
 		for _, name := range []string{
 			executionapi.EnvSSEMaxStreams,
 			executionapi.EnvSSEMaxStreamsPrincipal,
@@ -239,6 +253,16 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		}
 		config.SandboxAudiences = strings.Split(raw, ",")
 	}
+	if config.RustCompiledSnapshots, err = compiledSnapshotConfigFromEnv(lookup, config.Enabled, config.AgentExecutionDispatchEnabled, config.SandboxAudiences); err != nil {
+		return Config{}, err
+	}
+	if config.CodeOwnerRecovery, err = codeOwnerConfigFromEnv(lookup, config.Enabled, config.AgentExecutionDispatchEnabled, config.SandboxAudiences); err != nil {
+		return Config{}, err
+	}
+	if config.CodeWorkspace, config.CodePlatform, config.CodeDebugArtifacts, err = codeConsumerConfigFromEnv(lookup, config.CodeOwnerRecovery); err != nil {
+		return Config{}, err
+	}
+
 	if config.SigningKeyID, err = required("ELITEA_RUNTIME_SIGNING_KEY_ID"); err != nil {
 		return Config{}, err
 	}
@@ -296,6 +320,20 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 }
 
 func (c Config) Validate() error {
+	if err := validateCodeOwnerConfig(c.CodeOwnerRecovery, c.Enabled, c.AgentExecutionDispatchEnabled, c.SandboxAudiences); err != nil {
+		return err
+	}
+	if err := validateCodeConsumerConfig(c); err != nil {
+		return err
+	}
+	if c.RustCompiledSnapshots != nil {
+		if !c.Enabled || !c.AgentExecutionDispatchEnabled || len(c.SandboxAudiences) == 0 {
+			return errors.New("compiled snapshots require active agent dispatch and exact audiences")
+		}
+		if err := c.RustCompiledSnapshots.Validate(); err != nil {
+			return err
+		}
+	}
 	if c.ToolkitDiscoveryEnabled && (!c.Enabled || (!c.IndexIngestDispatchEnabled && !c.AgentExecutionDispatchEnabled)) {
 		return errors.New("toolkit discovery requires an active worker runtime")
 	}

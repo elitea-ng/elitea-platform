@@ -116,6 +116,8 @@ export interface VoiceButtonHandle {
 
 export interface NewChatInputStateProps {
   readonly isLoading?: boolean | undefined;
+  /** Defaults to isLoading. A host can retain draft entry while Send stays blocked. */
+  readonly disabledInput?: boolean | undefined;
   readonly isStreaming?: boolean | undefined;
   readonly disabledSend?: boolean | undefined;
   readonly isCreatingConversation?: boolean | undefined;

@@ -39,7 +39,6 @@ enum RuntimeErrorCodeV1 {
   RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED = 32;
   // Input admission failed before the worker authorized model execution.
   RUNTIME_ERROR_CODE_V1_EXECUTION_INPUT_LIMIT = 31;
-
 }
 
 // RuntimeErrorV1 contains only a registered safe code/message pair. Detailed

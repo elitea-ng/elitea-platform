@@ -14,6 +14,7 @@ import (
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 )
 
 // CurrentAdhocTurn is the immutable current-chat side of one durable ad-hoc
@@ -64,6 +65,7 @@ type CurrentAdhocTarget struct {
 	Tools               json.RawMessage
 	ChatHistory         json.RawMessage
 	ConversationMeta    json.RawMessage
+	OriginalSource      *scope.SourceReference
 }
 
 type CurrentAdhocResolver interface {
@@ -144,6 +146,9 @@ func (service *CurrentApplicationStartService) StartCurrentAdhoc(
 	snapshot, err := currentAdhocSnapshot(request.LLMSettings, target)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, fmt.Errorf("build current ad-hoc snapshot: %w", err)
+	}
+	if err = service.captureAdhocSource(ctx, request.ProjectID, request.ActorUserID, &target, snapshot); err != nil {
+		return CurrentApplicationStartOutcome{}, err
 	}
 	frozen, contextSettings, err := service.freezeVersionWithContext(
 		ctx,
@@ -367,7 +372,14 @@ func currentAdhocInput(
 	if !hasFrozenProjectContext(frozen) {
 		instructions = appendCurrentInstructionsProjectContext(instructions, projectContextText)
 	}
-	application, err := json.Marshal(map[string]string{"instructions": instructions})
+	applicationFields := map[string]any{"instructions": instructions}
+	if target.OriginalSource != nil {
+		if target.OriginalSource.Validate() != nil {
+			return nil, ErrUnsupportedCurrentAgentStart
+		}
+		applicationFields["source_definition"] = target.OriginalSource
+	}
+	application, err := json.Marshal(applicationFields)
 	if err != nil {
 		return nil, ErrUnsupportedCurrentAgentStart
 	}

@@ -1,33 +1,8 @@
-/**
- * Hand-written REST layer for the conversation-scoped subset of
- * `apps/elitea-ui/src/[fsd]/features/chat/api/chat.api.js` (unit C1) — create/
- * edit/delete/details/select/unselect/regenerate/stopChatTask. No OpenAPI
- * schema documents any `/elitea_core/conversation(s)/...` path (orval's
- * generated client never picked these routes up), but every route below IS
- * a real, wired Go route — confirmed directly against
- * `services/elitea-main/internal/api/router.go`. Per R-A5, every fetcher
- * below goes through `eliteaFetch` (the same transport every generated hook
- * uses) and this unit reports 6 new `source:"handwritten"` manifest entries
- * for merge into `endpoints.manifest.json` (see the unit report — this file
- * does NOT edit that file itself).
- *
- * `conversationDetails` and `stopChatTask` are DELIBERATELY NOT new manifest
- * entries: both routes are byte-identical to two already-landed handwritten
- * entries this same backend domain already produced —
- * `toolkits.getIndexHistoryConversationDetails` (`GET /elitea_core/
- * conversation/prompt_lib/{projectId}/{conversationId}`,
- * `features/toolkits/indexes/api/indexesApi.ts`) and `pipelines.stopLlmTask`
- * (`DELETE /elitea_core/task/prompt_lib/{projectId}/{taskId}`,
- * `features/pipelines/api/aiAssistantPredict.ts`). This module reuses the
- * exact same URL patterns rather than importing those two functions
- * directly (`entities/` may not import `features/`, `no-upward-from-entities`)
- * — the unit report asks for `entities/conversation` to be added to both
- * pre-existing entries' `usedBy` array instead of a new, duplicate entry.
- *
- * Response shapes are loosely typed (`ConversationWire`'s catch-all index
- * signature) for the same reason `features/toolkits/indexes/api/
- * indexesApi.ts`'s own `ConversationDetailsWire` is: no schema exists to
- * assert a narrower shape against.
+import { continueChatExecution } from '@/shared/api/generated/chat/chat';
+import { StaticPipelineRootContinuation, StaticPipelineToolsContinuation, StaticPipelineLeafDecision, StaticPipelineContinuationReceipt, type ChatContinueRequest, type EditorTestRunsPage } from '@/shared/api/generated/model';
+/** Conversation adapters retain existing routes and ordinary chat behavior.
+ * OpenAPI now documents atomic create, detail, and typed editor Test recovery.
+ * Remaining mutation adapters use the same generated fetch transport.
  */
 import { useMutation, useQuery, type UseMutationResult, type UseQueryResult } from '@tanstack/react-query';
 
@@ -45,6 +20,8 @@ export interface ConversationWire {
   readonly id: string | number;
   readonly uuid?: string;
   readonly name: string;
+  readonly source?: string;
+  readonly editor_test_runs?: EditorTestRunsPage;
   readonly is_private?: boolean;
   readonly folder_id?: string | number;
   readonly created_at?: string;
@@ -61,6 +38,7 @@ export interface ConversationCreateParams {
   readonly projectId: string | number;
   readonly name: string;
   readonly is_private: boolean;
+  readonly source?: string;
   readonly participants?: readonly unknown[];
   readonly meta?: Readonly<Record<string, unknown>>;
 }
@@ -124,6 +102,9 @@ export function useDeleteConversationMutation(): UseMutationResult<unknown, unkn
 export interface ConversationDetailsParams {
   readonly projectId: string | number;
   readonly id: string | number;
+  readonly editor_test_runs?: boolean;
+  readonly runs_limit?: number;
+  readonly runs_offset?: number;
   readonly messages_offset?: number;
   readonly messages_limit?: number;
   readonly sort_order?: string;
@@ -131,6 +112,9 @@ export interface ConversationDetailsParams {
 
 function detailsQueryString(params: ConversationDetailsParams): string {
   const query = new URLSearchParams();
+  if (params.editor_test_runs !== undefined) query.set('editor_test_runs', String(params.editor_test_runs));
+  if (params.runs_limit !== undefined) query.set('runs_limit', String(params.runs_limit));
+  if (params.runs_offset !== undefined) query.set('runs_offset', String(params.runs_offset));
   if (params.messages_offset !== undefined) query.set('messages_offset', String(params.messages_offset));
   if (params.messages_limit !== undefined) query.set('messages_limit', String(params.messages_limit));
   if (params.sort_order !== undefined) query.set('sort_order', params.sort_order);
@@ -145,7 +129,7 @@ export async function conversationDetails(params: ConversationDetailsParams, sig
 
 export function useConversationDetailsQuery(params: ConversationDetailsParams, options: { enabled?: boolean } = {}): UseQueryResult<ConversationWire> {
   return useQuery({
-    queryKey: ['conversation', 'details', params.projectId, params.id, params.messages_offset, params.messages_limit, params.sort_order],
+    queryKey: ['conversation', 'details', params.projectId, params.id, params.messages_offset, params.messages_limit, params.sort_order, params.editor_test_runs, params.runs_limit, params.runs_offset],
     queryFn: ({ signal }) => conversationDetails(params, signal),
     enabled: options.enabled ?? true,
   });
@@ -273,6 +257,7 @@ export async function startAgentExecution(params: StartAgentExecutionParams): Pr
  * continuation has its own contract because it starts a fresh model call in
  * the same durable session; it is not a HITL or checkpoint resume.
  */
+export const AGENT_CONTINUE_STATIC_CONTRACT = 'agent.continue.static.v1';
 export const AGENT_CONTINUE_HITL_CONTRACT = 'agent.continue.hitl.v1';
 /**
  * MCP tool authorization. Its own contract because the route's checks are the
@@ -300,6 +285,16 @@ export interface ContinueAgentExecutionParams {
  */
 export async function continueAgentExecution(params: ContinueAgentExecutionParams): Promise<AgentExecutionStart> {
   const { projectId, conversationUuid, contract, body } = params;
+  if(contract===AGENT_CONTINUE_STATIC_CONTRACT){
+    const request = 'static_pause_id' in body
+      ? StaticPipelineRootContinuation.strict().parse(body)
+      : StaticPipelineToolsContinuation.strict().parse({ ...body, static_decisions: Array.isArray(body['static_decisions']) ? body['static_decisions'].map(decision => StaticPipelineLeafDecision.strict().parse(decision)) : body['static_decisions'] });
+    if (request.project_id !== Number(projectId) || request.conversation_uuid !== conversationUuid) throw new Error('Static continuation scope mismatch');
+    const receipt=await continueChatExecution(String(projectId),conversationUuid,request satisfies ChatContinueRequest,{execution_contract:AGENT_CONTINUE_STATIC_CONTRACT});
+    const accepted = StaticPipelineContinuationReceipt.strict().parse(receipt.data);
+    if (accepted.response_message_id !== request.message_id) throw new Error('Static continuation response mismatch');
+    return accepted;
+  }
   return fetchData<AgentExecutionStart>(
     `/elitea_core/continue_predict/prompt_lib/${String(projectId)}/${conversationUuid}?execution_contract=${encodeURIComponent(contract)}`,
     { method: 'POST', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } },

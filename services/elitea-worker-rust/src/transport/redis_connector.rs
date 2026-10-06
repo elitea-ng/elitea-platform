@@ -77,6 +77,7 @@ impl RedisStreamsConnector for ProductionRedisConnector {
                 .map_err(|error| map_trust_error(&error))?;
             let connection = RedisStreamsClient::connect(self.transport.clone(), tls).await?;
             connection.ping().await?;
+            connection.verify_consumer_group().await?;
             Ok(Arc::new(connection))
         })
     }
@@ -134,6 +135,7 @@ mod tests {
             spool_key_path: PathBuf::from("/runtime/spool.key"),
             sandbox_runtimes: Vec::new(),
             agent_model_checkpoint_recovery: false,
+            agent_node_recovery: false,
             agent_checkpoint_connection_path: Some(PathBuf::from("/runtime/agentstate")),
             limits: RuntimeLimits {
                 redis_read_batch: 8,

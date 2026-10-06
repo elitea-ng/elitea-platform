@@ -62,6 +62,7 @@ import type {
   MessageTraceListing,
   MessageTraceStepDetail,
   ParticipantCandidatesPage,
+  StaticPipelineContinuationReceipt,
   SupportAssistantConfig,
   SupportConversation,
   SupportConversationDetails,
@@ -468,7 +469,22 @@ export const getGetConversationResponseMock = (
     undefined,
   ]),
   is_private: faker.datatype.boolean(),
-  meta: {},
+  meta: {
+    editor_test: faker.helpers.arrayElement([
+      {
+        revision: faker.helpers.arrayElement([1] as const),
+        actor_id: faker.helpers.fromRegExp("^[1-9][0-9]*$"),
+        project_id: faker.helpers.fromRegExp("^[1-9][0-9]*$"),
+        application_id: faker.helpers.fromRegExp("^[1-9][0-9]*$"),
+        application_version_id: faker.helpers.fromRegExp("^[1-9][0-9]*$"),
+      },
+      undefined,
+    ]),
+    is_hidden: faker.helpers.arrayElement([
+      faker.datatype.boolean(),
+      undefined,
+    ]),
+  },
   participants: Array.from(
     { length: faker.number.int({ min: 1, max: 10 }) },
     (_, i) => i + 1,
@@ -526,6 +542,61 @@ export const getGetConversationResponseMock = (
       { length: faker.number.int({ min: 1, max: 10 }) },
       (_, i) => i + 1,
     ).map(() => ({})),
+    undefined,
+  ]),
+  editor_test_runs: faker.helpers.arrayElement([
+    {
+      rows: Array.from(
+        { length: faker.number.int({ min: 1, max: 50 }) },
+        (_, i) => i + 1,
+      ).map(() => ({
+        response_message_id: faker.string.uuid(),
+        response_message_group_id: faker.helpers.arrayElement([
+          faker.number.int({ min: 1 }),
+          undefined,
+        ]),
+        trace_available: faker.helpers.arrayElement([
+          faker.datatype.boolean(),
+          undefined,
+        ]),
+        question_id: faker.string.uuid(),
+        execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        execution_generation: faker.string.alpha({
+          length: { min: 10, max: 20 },
+        }),
+        phase: faker.helpers.arrayElement([
+          "RUNNING",
+          "PAUSED",
+          "TERMINAL",
+        ] as const),
+        state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        desired_state: faker.string.alpha({ length: { min: 10, max: 20 } }),
+        admitted_at: faker.date.past().toISOString().slice(0, 19) + "Z",
+        settled_at: faker.helpers.arrayElement([
+          faker.helpers.arrayElement([
+            faker.date.past().toISOString().slice(0, 19) + "Z",
+            null,
+          ]),
+          undefined,
+        ]),
+        input_reference: {
+          bundle_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          entry_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+          immutable_version: faker.string.alpha({
+            length: { min: 10, max: 20 },
+          }),
+          content_digest: faker.helpers.fromRegExp("^[a-f0-9]{64}$"),
+        },
+        can_control: faker.datatype.boolean(),
+        events_url: faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          undefined,
+        ]),
+      })),
+      limit: faker.number.int({ min: 1, max: 50 }),
+      offset: faker.number.int({ min: 0, max: 10000 }),
+      has_more: faker.datatype.boolean(),
+    },
     undefined,
   ]),
   ...overrideResponse,
@@ -720,16 +791,34 @@ export const getRegenerateChatMessageResponseMock = (
   ...overrideResponse,
 });
 
-export const getContinueChatExecutionResponseMock = (
-  overrideResponse: Partial<Extract<ChatExecutionStarted, object>> = {},
-): ChatExecutionStarted => ({
-  task_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  command_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  response_message_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
-  created: faker.datatype.boolean(),
-  ...overrideResponse,
+export const getContinueChatExecutionResponseMock = (): ChatExecutionStarted &
+  (StaticPipelineContinuationReceipt | ChatExecutionStarted) => ({
+  ...{
+    task_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    command_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    response_message_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    created: faker.datatype.boolean(),
+  },
+  ...faker.helpers.arrayElement([
+    {
+      task_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      command_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      response_message_id: faker.string.uuid(),
+      events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      created: faker.datatype.boolean(),
+    },
+    {
+      task_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      execution_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      command_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      response_message_id: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      events_url: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      created: faker.datatype.boolean(),
+    },
+  ]),
 });
 
 export const getUploadConversationAttachmentResponseMock = (
@@ -1684,10 +1773,17 @@ export const getRegenerateChatMessageMockHandler = (
 
 export const getContinueChatExecutionMockHandler = (
   overrideResponse?:
-    | ChatExecutionStarted
+    | (ChatExecutionStarted &
+        (StaticPipelineContinuationReceipt | ChatExecutionStarted))
     | ((
         info: Parameters<Parameters<typeof http.post>[1]>[0],
-      ) => Promise<ChatExecutionStarted> | ChatExecutionStarted),
+      ) =>
+        | Promise<
+            ChatExecutionStarted &
+              (StaticPipelineContinuationReceipt | ChatExecutionStarted)
+          >
+        | (ChatExecutionStarted &
+            (StaticPipelineContinuationReceipt | ChatExecutionStarted))),
   options?: RequestHandlerOptions,
 ) => {
   return http.post(

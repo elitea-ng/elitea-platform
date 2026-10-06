@@ -71,21 +71,20 @@ export function reduceTurnFrame(
     frame.response_metadata?.metadata,
     frame.response_metadata?.tool_meta?.metadata,
   );
-  const childOutput = hierarchy.parent_agent_path.length > 0 || Boolean(hierarchy.parent_agent_name);
+  const childOutput = hierarchy.parent_agent_path.length > 0 || Boolean(hierarchy.parent_agent_name) || Boolean(hierarchy.parent_agent_call_id);
   // Child model output belongs to its execution steps, not the parent answer.
   // A child's finish reason must not settle a parent that still waits for siblings.
   if (childOutput && ANSWER_LIFECYCLE_FRAMES.has(type)) return history;
   switch (type) {
     case SocketMessageType.AgentResultChunk: {
-      if (index === -1) return history;
-      const current = history[index];
-      if (!current) return history;
+      const current = history[index] ?? createAssistantMessage(frame, context);
       const result = appendToolOutputChunk(current.assembledResult, frame.content,
         frame.response_metadata?.['result_chunk_v1'], current.resultChunk, 4194304);
       if (!result) return history;
       const split = splitWholeResponse(current.id, (current.continuedResultPrefix ?? '') + result.output, (current.toolActions ?? []) as readonly ToolAction[], frame.created_at);
-      return replaceAt(history, index, { content: split.answer, assembledResult: result.output, resultChunk: result.chunk,
-        toolActions: split.actions, isLoading: false, isStreaming: true });
+      const update = { content: split.answer, assembledResult: result.output, resultChunk: result.chunk,
+        toolActions: split.actions, isLoading: false, isStreaming: true };
+      return index === -1 ? [...history, { ...current, ...update }] : replaceAt(history, index, update);
     }
 
     // The turn begins. The baseline resets content here unless it is resuming a
@@ -110,6 +109,7 @@ export function reduceTurnFrame(
         references: continuingOutput ? current.references : [],
         exception: undefined,
         requiresConfirmation: undefined,
+        ...(frame.execution_generation ? { executionGeneration: frame.execution_generation } : {}),
         ...(frame.question_id !== undefined ? { questionId: frame.question_id } : {}),
       });
     }
@@ -338,9 +338,8 @@ export function reduceTurnFrame(
     // Terminal for the whole execution, including pipelines whose last frame is
     // not an agent_response.
     case SocketMessageType.PipelineFinish: {
-      if (index === -1) return history;
-      const current = history[index];
-      if (!current) return history;
+      if (index === -1 && (frame.content === undefined || frame.content === null)) return history;
+      const current = history[index] ?? createAssistantMessage(frame, context);
       // Also a last chance to settle an unclosed reasoning block: a run that
       // ends without `agent_llm_end` (a pipeline whose last node is not an LLM)
       // would otherwise leave the row spinning with the answer inside it.
@@ -355,12 +354,16 @@ export function reduceTurnFrame(
         ? splitWholeResponse(current.id, frameText(frame, true), finishActions, frame.created_at)
         : { answer: current.content, actions: finishActions };
       const settled = settleReasoning(current.id, final.answer, final.actions);
-      return replaceAt(history, index, {
+      const threadId = threadIdOf(frame);
+      const update = {
         isStreaming: false,
         isLoading: false,
+        isRegenerating: false,
+        ...(threadId ? { threadId } : {}),
         ...(settled.actions === finishActions ? {} : { toolActions: settled.actions }),
         ...(settled.content === current.content ? {} : { content: settled.content }),
-      });
+      };
+      return index === -1 ? [...history, { ...current, ...update }] : replaceAt(history, index, update);
     }
 
     // Failures stop the turn and surface on the message. `content` is left

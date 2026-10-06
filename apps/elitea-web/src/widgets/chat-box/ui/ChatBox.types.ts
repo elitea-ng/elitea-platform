@@ -1,3 +1,4 @@
+import type { EditorTestRun } from '@/shared/api/generated/model';
 import type { Dispatch, ReactNode, Ref, SetStateAction } from 'react';
 import type { PlusChatButtonEntitySubmenus } from '@/widgets/chat';
 import type { ChatBoxEditorCallbacks } from './ChatBox.helpers';
@@ -52,6 +53,7 @@ export interface ChatBoxProps {
   readonly onDelete?: { readonly answer?: (messageId: string) => void; readonly all?: () => void };
   /** Host-supplied composer extension points, bundled to stay under the §3.5 component-props budget (one slot instead of two, as `onDelete` above); both pass straight through. */
   readonly extensions?: {
+    readonly editorTest?: { readonly restoredRun?: { readonly conversationUuid: string; readonly projectId: string | number; readonly run: EditorTestRun } | undefined } | undefined;
     readonly contextIndicator?: ReactNode;
     /** Agent/pipeline editor open/close callbacks — see `ChatBox.helpers.ts`'s `buildAgentEditorProps`. Optional; falls back to the pre-existing no-ops. */
     readonly editorCallbacks?: ChatBoxEditorCallbacks;

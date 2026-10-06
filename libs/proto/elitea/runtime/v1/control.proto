@@ -3,6 +3,7 @@ syntax = "proto3";
 package elitea.runtime.v1;
 
 import "elitea/runtime/v1/common.proto";
+import "elitea/runtime/v1/compiled_code.proto";
 import "elitea/runtime/v1/envelope.proto";
 import "elitea/runtime/v1/errors.proto";
 import "elitea/runtime/v1/input.proto";
@@ -28,6 +29,8 @@ enum ClaimDispositionV1 {
   // Input and checkpoint inspection only. Ordinary invocation authorization
   // remains forbidden. The worker must validate its durable model checkpoint.
   CLAIM_DISPOSITION_V1_RECOVER_AGENT_MODEL_CHECKPOINT = 11;
+  // Inspect one stored recovery visit. Consume an authorized journal action first.
+  CLAIM_DISPOSITION_V1_RECOVER_NODE_VISIT = 12;
 }
 
 enum BeginExecutionDispositionV1 {
@@ -49,6 +52,7 @@ message ClaimCommandRequestV1 {
   reserved 4 to 15;
   // Opt in only when the worker implements explicit model checkpoint recovery.
   bool agent_model_checkpoint_recovery = 16;
+  bool node_recovery = 17;
 }
 
 // SettlementRecoveryV1 carries only durable recovery material. A worker must
@@ -80,6 +84,8 @@ message ClaimReceiptV1 {
   // carried only by ACCEPTED receipts so a separate execution-state database
   // can order stale-writer takeover without reading Main's business tables.
   int64 claim_started_at_unix_micros = 12;
+  // Exact strict JSON owned by node-recovery-v1.md, never caller metadata.
+  bytes node_recovery_receipt_json = 16;
   reserved 13 to 15;
 }
 
@@ -178,6 +184,7 @@ message PrepareSettlementResponseV1 {
 
 service RuntimeControlService {
   rpc AuthorizeSandboxJob(AuthorizeSandboxJobRequestV1) returns (AuthorizeSandboxJobResponseV1);
+  rpc AuthorizeRustCompiledSnapshot(AuthorizeRustCompiledSnapshotRequestV1) returns (AuthorizeRustCompiledSnapshotResponseV1);
   rpc ClaimCommand(ClaimCommandRequestV1) returns (ClaimCommandResponseV1);
   rpc BeginExecution(BeginExecutionRequestV1) returns (BeginExecutionResponseV1);
   rpc AuthorizeInvocation(AuthorizeInvocationRequestV1) returns (AuthorizeInvocationResponseV1);

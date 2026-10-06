@@ -53,16 +53,15 @@ type CurrentApplicationVersionSource interface {
 }
 
 // RuntimeApplicationVersionContext is the wire document. Its fields are the
-// complete set the worker accepts: `ApplicationVersionResponse` is
-// `deny_unknown_fields` (runtime_context.rs:774-781), so one extra key here
-// fails every nested assembly with a malformed-response error that names
-// nothing.
+// versioned fields defined by application-version.schema.json. Deploy the
+// compatible Worker before adding a response field to this strict envelope.
 type RuntimeApplicationVersionContext struct {
-	SchemaVersion  string          `json:"schema_version"`
-	ProjectID      int64           `json:"project_id"`
-	ApplicationID  int64           `json:"application_id"`
-	VersionID      int64           `json:"version_id"`
-	VersionDetails json.RawMessage `json:"version_details"`
+	SchemaVersion          string          `json:"schema_version"`
+	ProjectID              int64           `json:"project_id"`
+	ApplicationID          int64           `json:"application_id"`
+	VersionID              int64           `json:"version_id"`
+	VersionDetails         json.RawMessage `json:"version_details"`
+	FrozenDefinitionSHA256 string          `json:"frozen_definition_sha256,omitempty"`
 }
 
 // AgentRuntimeContextAuthorizer applies every check RuntimeContextAuthorizer
@@ -95,10 +94,11 @@ type CurrentApplicationVersionMaterializer interface {
 // that contract matter here: the definition is frozen before credentials are
 // redeemed, and the claim selects its project. The request cannot select a project.
 type RuntimeApplicationVersionService struct {
-	materializer CurrentApplicationVersionMaterializer
-	authorizer   AgentRuntimeContextAuthorizer
-	versions     CurrentApplicationVersionSource
-	freezer      agentexecutionapp.CurrentApplicationVersionFreezer
+	materializer      CurrentApplicationVersionMaterializer
+	savedChildCapture FrozenSavedChildVersionCapture
+	authorizer        AgentRuntimeContextAuthorizer
+	versions          CurrentApplicationVersionSource
+	freezer           agentexecutionapp.CurrentApplicationVersionFreezer
 }
 
 func NewRuntimeApplicationVersionService(
@@ -222,6 +222,28 @@ func (service *RuntimeApplicationVersionService) Resolve(
 			runtimeContextStageNestedVersionFreeze,
 		)
 	}
+	// Disabled capture preserves the existing saved-version envelope bytes.
+	// The enabled Main producer overwrites child request receipts before identity
+	// and redemption, while retaining record.VersionDetails as original source.
+	if service.savedChildCapture != nil {
+		frozen, err = FreezeHTTPChildVersion(int64(applicationID), int64(versionID), frozen)
+		if err != nil {
+			return RuntimeApplicationVersionContext{}, runtimeContextUnavailable(runtimeContextStageNestedVersionFreeze)
+		}
+	}
+	definitionSHA256, err := runtimeApplicationDefinitionSHA256(
+		authorization.ResourceProjectID, applicationID, versionID, frozen,
+	)
+	if err != nil {
+		return RuntimeApplicationVersionContext{}, runtimeContextUnavailable(
+			runtimeContextStageNestedVersionFreeze,
+		)
+	}
+	if service.savedChildCapture != nil {
+		if err = service.savedChildCapture.CaptureFrozenSavedChildVersion(ctx, claim, applicationID, versionID, definitionSHA256, frozen, record.VersionDetails); err != nil {
+			return RuntimeApplicationVersionContext{}, runtimeContextUnavailable(runtimeContextStageNestedVersionFreeze)
+		}
+	}
 	frozen, err = service.materializer.MaterializeCurrentApplicationVersion(ctx, int32(authorization.ResourceProjectID), int32(actorID), frozen)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -235,10 +257,11 @@ func (service *RuntimeApplicationVersionService) Resolve(
 		)
 	}
 	return RuntimeApplicationVersionContext{
-		SchemaVersion:  RuntimeApplicationVersionSchemaVersion,
-		ProjectID:      authorization.ResourceProjectID,
-		ApplicationID:  int64(applicationID),
-		VersionID:      int64(versionID),
-		VersionDetails: frozen,
+		SchemaVersion:          RuntimeApplicationVersionSchemaVersion,
+		ProjectID:              authorization.ResourceProjectID,
+		ApplicationID:          int64(applicationID),
+		VersionID:              int64(versionID),
+		VersionDetails:         frozen,
+		FrozenDefinitionSHA256: definitionSHA256,
 	}, nil
 }

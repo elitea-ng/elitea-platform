@@ -56,7 +56,7 @@ describe('useLoopToolNodeEditing onChangeToolkit', () => {
     result.current.onChangeToolkit(null);
 
     const [nextDoc] = setYamlJsonObject.mock.calls[0] as [YamlPipelineDocument];
-    expect(nextDoc.nodes?.[0]).toMatchObject({ toolkit_name: undefined, tool: undefined });
+    expect(nextDoc.nodes?.[0]).toEqual({ id: 'loop-tool-1' });
   });
 
   it('writes toolkit_name for a non-application toolkit', () => {
@@ -69,7 +69,7 @@ describe('useLoopToolNodeEditing onChangeToolkit', () => {
     result.current.onChangeToolkit('my-github');
 
     const [nextDoc] = setYamlJsonObject.mock.calls[0] as [YamlPipelineDocument];
-    expect(nextDoc.nodes?.[0]).toMatchObject({ toolkit_name: 'my-github', tool: undefined });
+    expect(nextDoc.nodes?.[0]).toEqual({ id: 'loop-tool-1', toolkit_name: 'my-github' });
   });
 
   it('writes tool for an application-type entry', () => {
@@ -82,7 +82,7 @@ describe('useLoopToolNodeEditing onChangeToolkit', () => {
     result.current.onChangeToolkit('sub-agent');
 
     const [nextDoc] = setYamlJsonObject.mock.calls[0] as [YamlPipelineDocument];
-    expect(nextDoc.nodes?.[0]).toMatchObject({ toolkit_name: undefined, tool: 'sub-agent' });
+    expect(nextDoc.nodes?.[0]).toEqual({ id: 'loop-tool-1', tool: 'sub-agent' });
   });
 
   it('is a no-op when yamlJsonObject is undefined', () => {
@@ -107,7 +107,7 @@ describe('useLoopToolNodeEditing onChangeToolkit', () => {
     result.current.onChangeToolkit('schema-jira');
 
     const [nextDoc] = setYamlJsonObject.mock.calls[0] as [YamlPipelineDocument];
-    expect(nextDoc.nodes?.[0]).toMatchObject({ toolkit_name: 'schema-jira', tool: undefined });
+    expect(nextDoc.nodes?.[0]).toEqual({ id: 'loop-tool-1', toolkit_name: 'schema-jira' });
   });
 });
 
@@ -144,7 +144,7 @@ describe('useLoopToolNodeEditing onChangeLoopToolkit', () => {
     result.current.onChangeLoopToolkit(null);
 
     const [nextDoc] = setYamlJsonObject.mock.calls[0] as [YamlPipelineDocument];
-    expect(nextDoc.nodes?.[0]).toMatchObject({ loop_toolkit_name: undefined, loop_tool: undefined, variables_mapping: undefined });
+    expect(nextDoc.nodes?.[0]).toEqual({ id: 'loop-tool-1' });
   });
 
   it('writes loop_toolkit_name (non-application) and derives a default variables_mapping', () => {
@@ -157,7 +157,8 @@ describe('useLoopToolNodeEditing onChangeLoopToolkit', () => {
     result.current.onChangeLoopToolkit('my-github');
 
     const [nextDoc] = setYamlJsonObject.mock.calls[0] as [YamlPipelineDocument];
-    expect(nextDoc.nodes?.[0]).toMatchObject({ loop_toolkit_name: 'my-github', loop_tool: undefined });
+    expect(nextDoc.nodes?.[0]).toMatchObject({ loop_toolkit_name: 'my-github' });
+    expect(nextDoc.nodes?.[0]).not.toHaveProperty('loop_tool');
     expect(nextDoc.nodes?.[0]?.variables_mapping).toBeDefined();
   });
 
@@ -171,7 +172,8 @@ describe('useLoopToolNodeEditing onChangeLoopToolkit', () => {
     result.current.onChangeLoopToolkit('sub-agent');
 
     const [nextDoc] = setYamlJsonObject.mock.calls[0] as [YamlPipelineDocument];
-    expect(nextDoc.nodes?.[0]).toMatchObject({ loop_toolkit_name: undefined, loop_tool: 'sub-agent' });
+    expect(nextDoc.nodes?.[0]).toMatchObject({ loop_tool: 'sub-agent' });
+    expect(nextDoc.nodes?.[0]).not.toHaveProperty('loop_toolkit_name');
   });
 
   it('is a no-op when the yamlNode cannot be found', () => {

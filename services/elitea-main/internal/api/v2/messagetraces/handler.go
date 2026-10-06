@@ -140,6 +140,7 @@ type listQuery struct {
 	limit           int
 	offset          int
 	includeTotal    bool
+	identity        *runIdentity
 }
 
 // List serves message_traces.py's prompt_lib GET.
@@ -161,9 +162,23 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	var reader traceReader = h.pool
+	if query.identity != nil {
+		if err := query.identity.bindActor(r); err != nil {
+			writeError(w, http.StatusForbidden, "trace execution requires its original actor")
+			return
+		}
+		tx, err := h.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to read trace steps")
+			return
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		reader = tx
+	}
 	var total *int64
 	if query.includeTotal {
-		counted, err := h.countSteps(ctx, schema, conversationID, query)
+		counted, err := h.countSteps(ctx, reader, schema, conversationID, query)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read trace steps")
 			return
@@ -171,7 +186,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		total = &counted
 	}
 
-	rows, err := h.listSteps(ctx, schema, conversationID, query)
+	rows, err := h.listSteps(ctx, reader, schema, conversationID, query)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read trace steps")
 		return
@@ -181,13 +196,18 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"total": total, "rows": rows})
 }
 
+type traceReader interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
 // listConditions renders the shared WHERE of the list and its count, so the two
 // can never disagree about which rows the page is a page OF.
 //
 // The blank-thinking-step exclusion lives here rather than in the caller for
 // the same reason: a count that included markers the listing drops would report
 // a page size no client could reach.
-func listConditions(conversationID int64, query listQuery, args *argList) string {
+func listConditions(schema string, conversationID int64, query listQuery, args *argList) string {
 	conditions := []string{
 		"message_group.conversation_id = " + args.add(conversationID),
 		"(trace.kind <> 'thinking_step' OR trace.has_visible_content)",
@@ -201,31 +221,32 @@ func listConditions(conversationID int64, query listQuery, args *argList) string
 	if query.kind != "" {
 		conditions = append(conditions, "trace.kind = "+args.add(query.kind))
 	}
+	conditions = append(conditions, runIdentityConditions(schema, query.identity, args))
 	return strings.Join(conditions, " AND ")
 }
 
 func (h *Handler) countSteps(
-	ctx context.Context, schema string, conversationID int64, query listQuery,
+	ctx context.Context, reader traceReader, schema string, conversationID int64, query listQuery,
 ) (int64, error) {
 	args := &argList{}
 	statement := fmt.Sprintf(`
 SELECT count(*)
 FROM %s.chat_message_trace_step AS trace
 JOIN %s.chat_message_group AS message_group ON message_group.id = trace.message_group_id
-WHERE %s`, schema, schema, listConditions(conversationID, query, args))
+WHERE %s`, schema, schema, listConditions(schema, conversationID, query, args))
 
 	var total int64
-	if err := h.pool.QueryRow(ctx, statement, args.values...).Scan(&total); err != nil {
+	if err := reader.QueryRow(ctx, statement, args.values...).Scan(&total); err != nil {
 		return 0, err
 	}
 	return total, nil
 }
 
 func (h *Handler) listSteps(
-	ctx context.Context, schema string, conversationID int64, query listQuery,
+	ctx context.Context, reader traceReader, schema string, conversationID int64, query listQuery,
 ) ([]listItem, error) {
 	args := &argList{}
-	where := listConditions(conversationID, query, args)
+	where := listConditions(schema, conversationID, query, args)
 	// Ordered by (started_at, id): render order is derived from timestamps,
 	// and NULLS LAST keeps a step that never started from jumping to the top of
 	// the pin strip. `id` breaks ties so paging is stable.
@@ -241,7 +262,7 @@ ORDER BY trace.started_at ASC NULLS LAST, trace.id ASC
 LIMIT %s OFFSET %s`,
 		schema, schema, where, args.add(query.limit), args.add(query.offset))
 
-	pgRows, err := h.pool.Query(ctx, statement, args.values...)
+	pgRows, err := reader.Query(ctx, statement, args.values...)
 	if err != nil {
 		return nil, err
 	}
@@ -288,6 +309,19 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	identity, err := parseRunIdentity(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if identity != nil {
+		if err := identity.bindActor(r); err != nil {
+			writeError(w, http.StatusForbidden, "trace execution requires its original actor")
+			return
+		}
+	}
+	args := &argList{values: []any{stepID, messageGroupID}}
+	where := runIdentityConditions(schema, identity, args)
 	statement := fmt.Sprintf(`
 SELECT trace.id, trace.message_group_id, trace.kind, trace.tool_name,
        trace.parent_agent_name, trace.parent_agent_call_id,
@@ -295,11 +329,12 @@ SELECT trace.id, trace.message_group_id, trace.kind, trace.tool_name,
        trace.step_type, trace.model_name, trace.finish_reason, trace.attrs,
        trace.tool_inputs, trace.tool_output, trace.text, trace.thinking
 FROM %s.chat_message_trace_step AS trace
-WHERE trace.id = $1 AND trace.message_group_id = $2`, schema)
+JOIN %s.chat_message_group AS message_group ON message_group.id=trace.message_group_id
+WHERE trace.id = $1 AND trace.message_group_id = $2 AND %s`, schema, schema, where)
 
 	var item detailItem
 	var attrs, toolInputs []byte
-	err = h.pool.QueryRow(r.Context(), statement, stepID, messageGroupID).Scan(
+	err = h.pool.QueryRow(r.Context(), statement, args.values...).Scan(
 		&item.ID, &item.MessageGroupID, &item.Kind, &item.ToolName,
 		&item.ParentAgentName, &item.ParentAgentCallID,
 		&item.StartedAt, &item.FinishedAt, &item.IsError,
@@ -372,6 +407,14 @@ func parseListQuery(r *http.Request) (listQuery, error) {
 	if offset, err := strconv.Atoi(query.Get("offset")); err == nil && offset > 0 {
 		parsed.offset = offset
 	}
+	identity, err := parseRunIdentity(r)
+	if err != nil {
+		return listQuery{}, err
+	}
+	if identity != nil && parsed.messageGroupID == nil {
+		return listQuery{}, errors.New("message_group_id is required with execution identity")
+	}
+	parsed.identity = identity
 	return parsed, nil
 }
 

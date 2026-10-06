@@ -160,7 +160,8 @@ LIMIT $4`, projectionProjectID, executionID, effectiveCursor, limit-len(events))
 			return nil, executionsapi.ErrInvalidEventStream
 		}
 		if !visible {
-			continue
+			// A later cursor must not make this projection-hidden event unreachable.
+			break
 		}
 		event.Cursor = uint64(cursor)
 		event.Data = append(json.RawMessage(nil), event.Data...)

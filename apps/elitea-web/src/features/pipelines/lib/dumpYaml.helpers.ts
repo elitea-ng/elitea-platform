@@ -32,7 +32,15 @@
  * the modern (non-"compat") style unconditionally, so this is a type-only
  * no-op, not a behaviour change.
  */
-import { dump } from 'js-yaml';
+import { dump, load } from 'js-yaml';
+import type { Document, MappingNode, Node } from 'js-yaml';
+
+import {
+  pipelineValueFingerprint,
+  readPipelineStateOrder,
+  reconcilePipelineStateOrder,
+  validatePipelineStateOrder,
+} from './pipelineYamlState.helpers';
 
 /** `state -> entry_point -> interrupt_after -> interrupt_before -> nodes` — baseline `dumpYaml.helpers.js:4`. */
 const TOP_LEVEL_KEY_ORDER: readonly string[] = ['state', 'entry_point', 'interrupt_after', 'interrupt_before', 'nodes'];
@@ -57,57 +65,80 @@ function isSerializable(value: unknown): boolean {
 function reorderNodeKeys(obj: unknown): unknown {
   if (!obj || typeof obj !== 'object') return obj;
 
+  if (obj instanceof Date || obj instanceof Uint8Array) return obj;
+
   if (Array.isArray(obj)) {
     return obj.map((item) => reorderNodeKeys(item));
   }
 
   const record = obj as Record<string, unknown>;
 
-  if ('id' in record && 'type' in record) {
-    const reordered: Record<string, unknown> = {};
-    if (isSerializable(record['id'])) reordered['id'] = record['id'];
-    if (isSerializable(record['type'])) reordered['type'] = record['type'];
-    Object.keys(record).forEach((key) => {
-      if (key === 'id' || key === 'type') return;
-      const value = record[key];
-      if (isSerializable(value)) reordered[key] = reorderNodeKeys(value);
-    });
-    return reordered;
+  return Object.fromEntries(
+    Object.entries(record)
+      .filter(([, value]) => isSerializable(value))
+      .map(([key, value]) => [key, reorderNodeKeys(value)]),
+  );
+}
+
+export interface DumpYamlOptions {
+  readonly originalYaml?: string;
+  readonly stateKeyOrder?: readonly string[];
+}
+
+function nodeKey(node: Node): string {
+  return node.kind === 'scalar' ? node.value : '';
+}
+
+function sortMapping(mapping: MappingNode, order: readonly string[]): void {
+  mapping.items.sort((a, b) => compareByOrder(nodeKey(a.key), nodeKey(b.key), order));
+}
+
+function orderRootMapping(root: Node | null, stateOrder: readonly string[]): void {
+  if (root?.kind !== 'mapping') return;
+  sortMapping(root, TOP_LEVEL_KEY_ORDER);
+  const state = root.items.find(({ key }) => nodeKey(key) === 'state')?.value;
+  if (state?.kind === 'mapping') sortMapping(state, stateOrder);
+}
+
+function orderNodes(root: Node | null): void {
+  const nodes = root?.kind === 'mapping' ? root.items.find(({ key }) => nodeKey(key) === 'nodes')?.value : root;
+  if (nodes?.kind !== 'sequence') return;
+  for (const node of nodes.items) {
+    if (node.kind === 'mapping') sortMapping(node, NODE_PRIORITY_FIELDS);
   }
+}
 
-  const processed: Record<string, unknown> = {};
-  Object.keys(record).forEach((key) => {
-    const value = record[key];
-    if (isSerializable(value)) processed[key] = reorderNodeKeys(value);
+function orderYamlMappings(documents: Document[], stateOrder: readonly string[]): void {
+  for (const document of documents) {
+    orderRootMapping(document.contents, stateOrder);
+    orderNodes(document.contents);
+  }
+}
+
+/** Serialize an instruction edit. Keep original text when its contract is unchanged. */
+export function serializePipelineYaml(data: unknown, options: DumpYamlOptions = {}): string {
+  const originalOrder = options.originalYaml === undefined ? [] : readPipelineStateOrder(options.originalYaml);
+  const stateOrder = options.stateKeyOrder ?? reconcilePipelineStateOrder(data, originalOrder);
+  validatePipelineStateOrder(data, stateOrder);
+  const fingerprint = pipelineValueFingerprint(data, stateOrder);
+  if (options.originalYaml !== undefined) {
+    const original = load(options.originalYaml || '');
+    if (fingerprint === pipelineValueFingerprint(original, originalOrder)) return options.originalYaml;
+  }
+  const result = dump(reorderNodeKeys(data), {
+    lineWidth: -1,
+    transform: (documents) => orderYamlMappings(documents, stateOrder),
   });
-  return processed;
+  if (fingerprint !== pipelineValueFingerprint(load(result), readPipelineStateOrder(result))) {
+    throw new Error('Pipeline YAML serialization changed its contract');
+  }
+  return result;
 }
 
-function sortYamlKeys(a: string, b: string): number {
-  const aIsPriority = NODE_PRIORITY_FIELDS.includes(a);
-  const bIsPriority = NODE_PRIORITY_FIELDS.includes(b);
-
-  if (aIsPriority && bIsPriority) return NODE_PRIORITY_FIELDS.indexOf(a) - NODE_PRIORITY_FIELDS.indexOf(b);
-  if (aIsPriority) return -1;
-  if (bIsPriority) return 1;
-
-  return compareByOrder(a, b, TOP_LEVEL_KEY_ORDER);
-}
-
-/** Dumps `data` to YAML with the flow editor's custom key ordering. Never throws — mirrors the baseline's own try/catch, returning an `Error dumping YAML: ...` string instead. */
-export function dumpYaml(data: unknown): string {
+/** Keep the existing non-throwing API. Use the strict serializer for editor writes. */
+export function dumpYaml(data: unknown, options: DumpYamlOptions = {}): string {
   try {
-    const processedData = reorderNodeKeys(data);
-    return dump(processedData, {
-      lineWidth: -1,
-      // js-yaml 5.4 deprecates `sortKeys` for `transform` (an AST visit that
-      // sorts each mapping's items). The comparator above is keyed on the
-      // mapping's DEPTH and parent, which the visit API has to reconstruct
-      // from node positions — a rewrite with its own tests, not a rename.
-      // Kept on the deprecated option, which still works, until that lands.
-      // oxlint-disable-next-line typescript/no-deprecated
-      sortKeys: sortYamlKeys,
-    });
+    return serializePipelineYaml(reorderNodeKeys(data), options);
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
     return `Error dumping YAML: ${message}`;

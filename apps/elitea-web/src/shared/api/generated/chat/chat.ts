@@ -101,6 +101,8 @@ import type {
   ParticipantCandidatesPage,
   RegenerateChatMessageParams,
   SendChatMessageParams,
+  StaticPipelineContinuationBody,
+  StaticPipelineContinuationReceipt,
   StreamExecutionEventsParams,
   SupportAssistantConfig,
   SupportConversation,
@@ -5227,7 +5229,8 @@ export function useRegenerateChatMessage<
 }
 
 export type continueChatExecutionResponse200 = {
-  data: ChatExecutionStarted;
+  data: ChatExecutionStarted &
+    (StaticPipelineContinuationReceipt | ChatExecutionStarted);
   status: 200;
 };
 
@@ -5339,12 +5342,15 @@ export const getContinueChatExecutionUrl = (
  * `agent_hitl_already_resolved`, `agent_authorization_already_resolved`
  * or `agent_output_limit_already_resolved` and `retryable: false`:
  * refresh the transcript instead of retrying.
+ *
+ * The existing static continuation contract uses agent.continue.static.v1 with the exact original pause identity.
  * @summary Resume a paused turn (human decision, tool authorization, output limit)
  */
 export const continueChatExecution = async (
   projectId: string,
   conversationId: string,
-  chatContinueRequest: ChatContinueRequest,
+  chatContinueRequestStaticPipelineContinuationBodyChatContinueRequest: ChatContinueRequest &
+    (StaticPipelineContinuationBody | ChatContinueRequest),
   params: ContinueChatExecutionParams,
   options?: Parameters<typeof eliteaFetch>[1],
 ): Promise<continueChatExecutionResponse> => {
@@ -5378,7 +5384,9 @@ export const continueChatExecution = async (
         "Content-Type": "application/json",
         ...getHeaders(options?.headers),
       },
-      body: JSON.stringify(chatContinueRequest),
+      body: JSON.stringify(
+        chatContinueRequestStaticPipelineContinuationBodyChatContinueRequest,
+      ),
     },
   );
 };
@@ -5386,14 +5394,15 @@ export const continueChatExecution = async (
 export const getContinueChatExecutionQueryKey = (
   projectId: string,
   conversationId: string,
-  chatContinueRequest?: ChatContinueRequest,
+  chatContinueRequestStaticPipelineContinuationBodyChatContinueRequest?: ChatContinueRequest &
+    (StaticPipelineContinuationBody | ChatContinueRequest),
   params?: ContinueChatExecutionParams,
 ) => {
   return [
     "POST",
     `/elitea_core/continue_predict/prompt_lib/${projectId}/${conversationId}`,
     ...(params ? [params] : []),
-    chatContinueRequest,
+    chatContinueRequestStaticPipelineContinuationBodyChatContinueRequest,
   ] as const;
 };
 
@@ -5408,7 +5417,8 @@ export const getContinueChatExecutionQueryOptions = <
 >(
   projectId: string,
   conversationId: string,
-  chatContinueRequest: ChatContinueRequest,
+  chatContinueRequestStaticPipelineContinuationBodyChatContinueRequest: ChatContinueRequest &
+    (StaticPipelineContinuationBody | ChatContinueRequest),
   params: ContinueChatExecutionParams,
   options?: {
     query?: Partial<
@@ -5428,7 +5438,7 @@ export const getContinueChatExecutionQueryOptions = <
     getContinueChatExecutionQueryKey(
       projectId,
       conversationId,
-      chatContinueRequest,
+      chatContinueRequestStaticPipelineContinuationBodyChatContinueRequest,
       params,
     );
 
@@ -5438,7 +5448,7 @@ export const getContinueChatExecutionQueryOptions = <
     continueChatExecution(
       projectId,
       conversationId,
-      chatContinueRequest,
+      chatContinueRequestStaticPipelineContinuationBodyChatContinueRequest,
       params,
       { signal, ...requestOptions },
     );
@@ -5480,7 +5490,8 @@ export function useContinueChatExecution<
 >(
   projectId: string,
   conversationId: string,
-  chatContinueRequest: ChatContinueRequest,
+  chatContinueRequestStaticPipelineContinuationBodyChatContinueRequest: ChatContinueRequest &
+    (StaticPipelineContinuationBody | ChatContinueRequest),
   params: ContinueChatExecutionParams,
   options: {
     query: Partial<
@@ -5515,7 +5526,8 @@ export function useContinueChatExecution<
 >(
   projectId: string,
   conversationId: string,
-  chatContinueRequest: ChatContinueRequest,
+  chatContinueRequestStaticPipelineContinuationBodyChatContinueRequest: ChatContinueRequest &
+    (StaticPipelineContinuationBody | ChatContinueRequest),
   params: ContinueChatExecutionParams,
   options?: {
     query?: Partial<
@@ -5550,7 +5562,8 @@ export function useContinueChatExecution<
 >(
   projectId: string,
   conversationId: string,
-  chatContinueRequest: ChatContinueRequest,
+  chatContinueRequestStaticPipelineContinuationBodyChatContinueRequest: ChatContinueRequest &
+    (StaticPipelineContinuationBody | ChatContinueRequest),
   params: ContinueChatExecutionParams,
   options?: {
     query?: Partial<
@@ -5581,7 +5594,8 @@ export function useContinueChatExecution<
 >(
   projectId: string,
   conversationId: string,
-  chatContinueRequest: ChatContinueRequest,
+  chatContinueRequestStaticPipelineContinuationBodyChatContinueRequest: ChatContinueRequest &
+    (StaticPipelineContinuationBody | ChatContinueRequest),
   params: ContinueChatExecutionParams,
   options?: {
     query?: Partial<
@@ -5600,7 +5614,7 @@ export function useContinueChatExecution<
   const queryOptions = getContinueChatExecutionQueryOptions(
     projectId,
     conversationId,
-    chatContinueRequest,
+    chatContinueRequestStaticPipelineContinuationBodyChatContinueRequest,
     params,
     options,
   );

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"strconv"
 	"strings"
@@ -597,6 +598,29 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 		return conversations.Conversation{}, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if source == conversations.EditorTestSource {
+		identity, err := conversations.EditorTestIdentity(conv, access.ActorID, projectID)
+		if err != nil {
+			return conversations.Conversation{}, err
+		}
+		var allowed bool
+		if err := tx.QueryRow(ctx, fmt.Sprintf(`SELECT EXISTS (SELECT 1 FROM %s.application_versions WHERE id=$1 AND application_id=$2)`, s), identity.ApplicationVersionID, identity.ApplicationID).Scan(&allowed); err != nil {
+			return conversations.Conversation{}, err
+		}
+		if !allowed {
+			return conversations.Conversation{}, apierr.NotFound("saved application version not found")
+		}
+		meta = maps.Clone(meta)
+		meta[conversations.EditorTestSource] = identity
+		meta["is_hidden"] = true
+		private = true
+		encodedMeta, err = json.Marshal(meta)
+		if err != nil {
+			return conversations.Conversation{}, err
+		}
+	} else if _, reserved := meta[conversations.EditorTestSource]; reserved {
+		return conversations.Conversation{}, apierr.BadRequest("editor Test identity is server owned")
+	}
 	var c conversations.Conversation
 	var metaBytes []byte
 	err = tx.QueryRow(ctx, fmt.Sprintf(`INSERT INTO %s.chat_conversations (name,author_id,is_private,meta,source,instructions)
@@ -659,6 +683,13 @@ func (r *ConversationsRepo) Create(ctx context.Context, projectID string, conv c
 }
 
 func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationID string, conv conversations.Conversation) (conversations.Conversation, error) {
+	current, err := r.Get(ctx, projectID, conversationID)
+	if err != nil {
+		return conversations.Conversation{}, err
+	}
+	if err := conversations.PreserveEditorTestUpdate(current, &conv); err != nil {
+		return conversations.Conversation{}, err
+	}
 	s := schema(projectID)
 
 	if conv.IsPrivate != nil && !*conv.IsPrivate && publicproject.IDString() == projectID {
@@ -777,6 +808,9 @@ func (r *ConversationsRepo) Update(ctx context.Context, projectID, conversationI
 	c.FolderID = folderID
 	c.Meta = decodeConversationMeta(metaBytes)
 	c.IsPrivate = &isPrivate
+	if current.Source == conversations.EditorTestSource {
+		c.Source = current.Source
+	}
 	return c, nil
 }
 
@@ -1040,6 +1074,9 @@ func (r *ConversationsRepo) AddParticipant(ctx context.Context, projectID, conve
 // was already a participant returns its existing id; legacy's POST answers
 // with those same rows (get_or_create_one), not the whole conversation.
 func (r *ConversationsRepo) AddParticipants(ctx context.Context, projectID, conversationID string, bodies []map[string]any) ([]int, error) {
+	if err := r.rejectEditorTestParticipants(ctx, projectID, conversationID); err != nil {
+		return nil, err
+	}
 	if len(bodies) > 100 {
 		return nil, apierr.BadRequest("at most 100 participants are allowed")
 	}
@@ -1073,6 +1110,9 @@ func (r *ConversationsRepo) AddParticipants(ctx context.Context, projectID, conv
 }
 
 func (r *ConversationsRepo) RemoveParticipant(ctx context.Context, projectID, conversationID, participantID string) error {
+	if err := r.rejectEditorTestParticipants(ctx, projectID, conversationID); err != nil {
+		return err
+	}
 	s := schema(projectID)
 	id, err := r.resolveConversationID(ctx, projectID, conversationID)
 	if err != nil {
@@ -1104,6 +1144,9 @@ func (r *ConversationsRepo) RemoveParticipant(ctx context.Context, projectID, co
 }
 
 func (r *ConversationsRepo) UpdateEntitySettings(ctx context.Context, projectID, conversationID, participantID string, settings map[string]any) error {
+	if err := r.rejectEditorTestParticipants(ctx, projectID, conversationID); err != nil {
+		return err
+	}
 	s := schema(projectID)
 	id, err := r.resolveConversationID(ctx, projectID, conversationID)
 	if err != nil {

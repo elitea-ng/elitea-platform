@@ -27,6 +27,7 @@ on:
       # workflow. A gate that does not trigger on the file it guards is the
       # same false green in another costume (#409).
       - "scripts/go/**"
+      - "scripts/contract/check_compiled_snapshots_postgres.sh"
       - "scripts/coverage/**"
       - "Taskfile.yml"
   push:
@@ -53,6 +54,7 @@ on:
       # workflow. A gate that does not trigger on the file it guards is the
       # same false green in another costume (#409).
       - "scripts/go/**"
+      - "scripts/contract/check_compiled_snapshots_postgres.sh"
       - "scripts/coverage/**"
       - "Taskfile.yml"
 
@@ -408,6 +410,52 @@ jobs:
       # pure-Go CGO_ENABLED=0 binary is not a case this repository has seen.
       # Production images are built from the Containerfiles, not here.
 
+  editor-lifecycle:
+    name: Editor Test lifecycle (PostgreSQL 18)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The editor guard rejects the broad Test job's PG16 listener and DSN.
+    # Run this fixture in its own process and database. Do not use product settings.
+    services:
+      editor-postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: editor_fixture
+          POSTGRES_DB: elitea_it_editor_lifecycle_20261002
+        ports:
+          - "127.0.0.1:15444:5432"
+        options: >-
+          --health-cmd="pg_isready -U postgres -d elitea_it_editor_lifecycle_20261002"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.25"
+          cache-dependency-path: |
+            services/elitea-main/go.sum
+            libs/go/*/go.sum
+            libs/proto/gen/go/go.sum
+            gen/go/go.sum
+      - name: Check the editor fixture CI gate
+        run: python3 -m unittest discover -s scripts/go/tests -p 'test_editor_lifecycle_ci.py' -v
+      - name: Run required editor PostgreSQL acceptance
+        env:
+          ELITEA_EDITOR_TEST_DATABASE_URL: "postgres://postgres:editor_fixture@127.0.0.1:15444/elitea_it_editor_lifecycle_20261002?sslmode=disable"
+          ELITEA_REQUIRE_EDITOR_POSTGRES_TEST: "true"
+          ELITEA_EDITOR_TEST_ARTIFACT_DIR: ${{ runner.temp }}/editor-lifecycle
+        run: bash scripts/go/editor-lifecycle-postgres.sh
+      - name: Upload editor PostgreSQL acceptance
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: editor-lifecycle-postgres
+          path: ${{ runner.temp }}/editor-lifecycle
+          if-no-files-found: error
+
   integration:
     name: Integration (Postgres + pgvector)
     runs-on: ubuntu-latest
@@ -448,3 +496,33 @@ jobs:
   # published images too, and adding apps/elitea-web/** to this workflow's
   # triggers would run the Postgres service, the storage emulators and the whole
   # Go test suite on every front-end change.
+
+  compiled-snapshots-postgres:
+    name: Compiled snapshots (required isolated PostgreSQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.5-pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: elitea_compiled_fixture_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d elitea_compiled_fixture_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: services/elitea-main/go.mod
+          cache-dependency-path: services/elitea-main/go.sum
+      - name: Check compiled snapshot publication and recovery
+        env:
+          ELITEA_COMPILED_SNAPSHOT_PG_FIXTURE_DSN: "postgres://postgres:postgres@127.0.0.1:5432/elitea_compiled_fixture_ci?sslmode=disable"
+          ELITEA_COMPILED_SNAPSHOT_PG_DISPOSABLE_ACK: "isolated_fixture_only"
+        run: bash scripts/contract/check_compiled_snapshots_postgres.sh

@@ -24,6 +24,7 @@
  */
 import { resolveCredentialsMode } from './http';
 import type { HttpFailure, HttpResult } from './http';
+import { boundedArtifactBlob } from './boundedArtifactBlob';
 
 /* ── base URL ─────────────────────────────────────────────────────────────── */
 
@@ -261,6 +262,8 @@ export interface FetchArtifactBlobParams {
   // (already-optional) fields straight through under exactOptionalPropertyTypes.
   readonly devToken?: string | undefined;
   readonly signal?: AbortSignal | undefined;
+  /** Cancel the response when retained bytes exceed this limit. */
+  readonly maximumBytes?: number;
 }
 
 /**
@@ -291,7 +294,12 @@ export async function fetchArtifactBlob(params: FetchArtifactBlobParams): Promis
   } catch (cause) {
     return { ok: false, error: networkFailure(cause, url) };
   }
-  return toBlobResult(response);
+  if (params.maximumBytes === undefined) return toBlobResult(response);
+  try {
+    return await boundedArtifactBlob(response, params.maximumBytes);
+  } catch (cause) {
+    return { ok: false, error: networkFailure(cause, url) };
+  }
 }
 
 /**

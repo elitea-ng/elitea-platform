@@ -2356,10 +2356,34 @@
             "type": "string"
           }
         },
+        "query:editor_test_runs": {
+          "schema": {
+            "type": "boolean"
+          }
+        },
         "query:messages_limit": {
           "schema": {
             "type": "integer",
             "minimum": 0
+          }
+        },
+        "query:messages_offset": {
+          "schema": {
+            "type": "integer"
+          }
+        },
+        "query:runs_limit": {
+          "schema": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50
+          }
+        },
+        "query:runs_offset": {
+          "schema": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10000
           }
         },
         "query:sort_order": {
@@ -2396,6 +2420,126 @@
                 "description": {
                   "type": "string"
                 },
+                "editor_test_runs": {
+                  "type": "object",
+                  "required": [
+                    "has_more",
+                    "limit",
+                    "offset",
+                    "rows"
+                  ],
+                  "properties": {
+                    "has_more": {
+                      "type": "boolean"
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 50
+                    },
+                    "offset": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 10000
+                    },
+                    "rows": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "admitted_at",
+                          "can_control",
+                          "desired_state",
+                          "execution_generation",
+                          "execution_id",
+                          "input_reference",
+                          "phase",
+                          "question_id",
+                          "response_message_id",
+                          "state"
+                        ],
+                        "properties": {
+                          "admitted_at": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "can_control": {
+                            "type": "boolean"
+                          },
+                          "desired_state": {
+                            "type": "string"
+                          },
+                          "events_url": {
+                            "type": "string"
+                          },
+                          "execution_generation": {
+                            "type": "string"
+                          },
+                          "execution_id": {
+                            "type": "string"
+                          },
+                          "input_reference": {
+                            "type": "object",
+                            "required": [
+                              "bundle_id",
+                              "content_digest",
+                              "entry_id",
+                              "immutable_version"
+                            ],
+                            "properties": {
+                              "bundle_id": {
+                                "type": "string"
+                              },
+                              "content_digest": {
+                                "type": "string",
+                                "pattern": "^[a-f0-9]{64}$"
+                              },
+                              "entry_id": {
+                                "type": "string"
+                              },
+                              "immutable_version": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "phase": {
+                            "type": "string",
+                            "enum": [
+                              "PAUSED",
+                              "RUNNING",
+                              "TERMINAL"
+                            ]
+                          },
+                          "question_id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "response_message_group_id": {
+                            "type": "integer",
+                            "format": "int64",
+                            "minimum": 1
+                          },
+                          "response_message_id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "settled_at": {
+                            "type": "string",
+                            "format": "date-time",
+                            "nullable": true
+                          },
+                          "state": {
+                            "type": "string"
+                          },
+                          "trace_available": {
+                            "type": "boolean"
+                          }
+                        }
+                      },
+                      "max_items": 50
+                    }
+                  }
+                },
                 "folder_id": {
                   "type": "string",
                   "nullable": true
@@ -2421,6 +2565,45 @@
                 },
                 "meta": {
                   "type": "object",
+                  "properties": {
+                    "editor_test": {
+                      "type": "object",
+                      "required": [
+                        "actor_id",
+                        "application_id",
+                        "application_version_id",
+                        "project_id",
+                        "revision"
+                      ],
+                      "properties": {
+                        "actor_id": {
+                          "type": "string",
+                          "pattern": "^[1-9][0-9]*$"
+                        },
+                        "application_id": {
+                          "type": "string",
+                          "pattern": "^[1-9][0-9]*$"
+                        },
+                        "application_version_id": {
+                          "type": "string",
+                          "pattern": "^[1-9][0-9]*$"
+                        },
+                        "project_id": {
+                          "type": "string",
+                          "pattern": "^[1-9][0-9]*$"
+                        },
+                        "revision": {
+                          "type": "integer",
+                          "enum": [
+                            "1"
+                          ]
+                        }
+                      }
+                    },
+                    "is_hidden": {
+                      "type": "boolean"
+                    }
+                  },
                   "open": true
                 },
                 "name": {
@@ -2911,10 +3094,30 @@
             "type": "integer"
           }
         },
+        "query:execution_generation": {
+          "schema": {
+            "type": "string",
+            "min_length": 1,
+            "max_length": 256
+          }
+        },
+        "query:execution_id": {
+          "schema": {
+            "type": "string",
+            "min_length": 1,
+            "max_length": 256
+          }
+        },
         "query:message_group_id": {
           "required": true,
           "schema": {
             "type": "integer"
+          }
+        },
+        "query:response_message_id": {
+          "schema": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -3196,6 +3399,20 @@
             "type": "string"
           }
         },
+        "query:execution_generation": {
+          "schema": {
+            "type": "string",
+            "min_length": 1,
+            "max_length": 256
+          }
+        },
+        "query:execution_id": {
+          "schema": {
+            "type": "string",
+            "min_length": 1,
+            "max_length": 256
+          }
+        },
         "query:include_total": {
           "schema": {
             "type": "boolean"
@@ -3225,6 +3442,12 @@
         "query:offset": {
           "schema": {
             "type": "integer"
+          }
+        },
+        "query:response_message_id": {
+          "schema": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -5937,7 +6160,8 @@
             "enum": [
               "agent.continue.authorization.v1",
               "agent.continue.hitl.v1",
-              "agent.continue.output-limit.v1"
+              "agent.continue.output-limit.v1",
+              "agent.continue.static.v1"
             ]
           }
         }
@@ -6007,7 +6231,185 @@
               "user_input": {
                 "type": "string"
               }
-            }
+            },
+            "one_of": [
+              {
+                "one_of": [
+                  {
+                    "type": "object",
+                    "required": [
+                      "conversation_uuid",
+                      "message_id",
+                      "project_id",
+                      "static_decisions"
+                    ],
+                    "properties": {
+                      "conversation_uuid": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "message_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "project_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "static_decisions": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "required": [
+                            "action",
+                            "child_thread_id",
+                            "pause_id",
+                            "tool_call_id",
+                            "value"
+                          ],
+                          "properties": {
+                            "action": {
+                              "type": "string",
+                              "enum": [
+                                "continue"
+                              ]
+                            },
+                            "child_thread_id": {
+                              "type": "string",
+                              "min_length": 1,
+                              "max_length": 256
+                            },
+                            "pause_id": {
+                              "type": "string",
+                              "pattern": "^pipeline-static:sha256:[0-9a-f]{64}$"
+                            },
+                            "tool_call_id": {
+                              "type": "string",
+                              "min_length": 1,
+                              "max_length": 512
+                            },
+                            "value": {
+                              "type": "string",
+                              "min_length": 1,
+                              "max_length": 8192
+                            }
+                          }
+                        },
+                        "min_items": 1,
+                        "max_items": 16
+                      },
+                      "thread_id": {
+                        "type": "string",
+                        "min_length": 1,
+                        "max_length": 256
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "conversation_uuid",
+                      "message_id",
+                      "project_id",
+                      "static_pause_id",
+                      "user_input"
+                    ],
+                    "properties": {
+                      "conversation_uuid": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "message_id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "project_id": {
+                        "type": "integer",
+                        "minimum": 1
+                      },
+                      "static_pause_id": {
+                        "type": "string",
+                        "pattern": "^pipeline-static:sha256:[0-9a-f]{64}$"
+                      },
+                      "thread_id": {
+                        "type": "string",
+                        "min_length": 1,
+                        "max_length": 256
+                      },
+                      "user_input": {
+                        "type": "string",
+                        "min_length": 1,
+                        "max_length": 8192
+                      }
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "object",
+                "required": [
+                  "conversation_uuid",
+                  "message_id",
+                  "project_id"
+                ],
+                "properties": {
+                  "authorization_action": {
+                    "type": "string"
+                  },
+                  "authorization_request_id": {
+                    "type": "string"
+                  },
+                  "conversation_uuid": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "hitl_action": {
+                    "type": "string"
+                  },
+                  "hitl_decisions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "open": true
+                    }
+                  },
+                  "hitl_resume": {
+                    "type": "boolean"
+                  },
+                  "hitl_value": {},
+                  "ignored_mcp_servers": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "mcp_tokens": {
+                    "type": "object",
+                    "open": true
+                  },
+                  "message_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "project_id": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "thread_id": {
+                    "type": "string"
+                  },
+                  "user_declined_mcp_servers": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "user_input": {
+                    "type": "string"
+                  }
+                }
+              }
+            ]
           }
         }
       },
@@ -6043,7 +6445,72 @@
                 "task_id": {
                   "type": "string"
                 }
-              }
+              },
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "command_id",
+                    "created",
+                    "events_url",
+                    "execution_id",
+                    "response_message_id",
+                    "task_id"
+                  ],
+                  "properties": {
+                    "command_id": {
+                      "type": "string"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    },
+                    "events_url": {
+                      "type": "string"
+                    },
+                    "execution_id": {
+                      "type": "string"
+                    },
+                    "response_message_id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "task_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "command_id",
+                    "created",
+                    "events_url",
+                    "execution_id",
+                    "response_message_id",
+                    "task_id"
+                  ],
+                  "properties": {
+                    "command_id": {
+                      "type": "string"
+                    },
+                    "created": {
+                      "type": "boolean"
+                    },
+                    "events_url": {
+                      "type": "string"
+                    },
+                    "execution_id": {
+                      "type": "string"
+                    },
+                    "response_message_id": {
+                      "type": "string"
+                    },
+                    "task_id": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
             }
           }
         },

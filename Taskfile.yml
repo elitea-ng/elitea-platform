@@ -317,6 +317,20 @@ tasks:
       - task: helm:llmpath
       - task: helm:edge-healthz
       - task: helm:bf02b
+      - task: helm:compiled-snapshots
+      - task: helm:code-consumers
+
+  helm:code-consumers:
+    desc: Check opt-in Code consumers and private material boundaries
+    cmds:
+      - python3 scripts/runtime/test_code_consumers_deployment.py
+      - python3 scripts/runtime/test_code_material_install.py
+      - python3 -B scripts/runtime/test_code_platform_public_trust.py
+
+  helm:compiled-snapshots:
+    desc: Check opt-in compiled Rust startup material and render contracts
+    cmds:
+      - python3 deploy/helm/tests/render-compiled-snapshots.py
 
   helm:edge-healthz:
     desc: Check that the chart's browser edge publishes /healthz with no authenticating filter in front of it

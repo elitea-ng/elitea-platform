@@ -106,6 +106,30 @@ where
         )
     }
 
+    fn inspect_node_recovery<'a>(
+        &'a self,
+        request: &'a crate::agents::AgentExecutionRequest,
+        command: &'a crate::agents::session::AuthorizedNativeCommandBinding,
+        session: crate::protocol::control::ClaimBoundSessionAuthority,
+        lease: Arc<dyn crate::state::StateWriterLease>,
+        receipt: &'a crate::agents::graph::node_recovery_receipt::NodeRecoveryRequiredReceipt,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        crate::agents::node_recovery_checkpoint::OpenedNodeRecoveryVisit,
+                        NativeAgentAssemblyError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(
+            self.native_factory
+                .inspect_node_recovery(request, command, session, lease, receipt),
+        )
+    }
+
     fn run(&self, run: AuthorizedAgentRun) -> OwnedFuture<AgentAuthorizedLifecycleCompletion> {
         let execution_kind = run.execution_kind();
         let native_factory = Arc::clone(&self.native_factory);
@@ -250,7 +274,7 @@ where
                     error_code = error.code().as_str(),
                     "native agent requires connection authorization; user notice published"
                 );
-                return Box::pin(finish_after_stream(
+                return finish_after_stream(
                     run,
                     None,
                     FreshAgentTerminalSelection::Completed,
@@ -258,7 +282,7 @@ where
                     retirer,
                     clock,
                     terminal_recovery,
-                ))
+                )
                 .await;
             }
             tracing::error!(
@@ -411,14 +435,7 @@ where
             .await;
         }
     };
-    Box::pin(execute_started(
-        started,
-        control,
-        retirer,
-        clock,
-        terminal_recovery,
-    ))
-    .await
+    execute_started(started, control, retirer, clock, terminal_recovery).await
 }
 
 /// Own the post-start stream and terminal phases in a separate boxed future.
@@ -426,8 +443,34 @@ where
 /// The authorized pre-start path already owns several large generic futures.
 /// Keeping the live ADK stream phase out of that poll frame prevents each new
 /// durable pause boundary from increasing the executor thread's stack demand.
+// Construct the next phase outside the current poll frame. Boxing an async
+// state machine in its caller still reserves its construction temporaries there.
+#[inline(never)]
+fn execute_started<C, S, R, RC, K>(
+    started: StartedAuthorizedAgentRun<C, S>,
+    control: Arc<AgentControlClient<R>>,
+    retirer: Arc<RedisCommandRetirer<RC>>,
+    clock: Arc<K>,
+    terminal_recovery: AgentTerminalRecoveryConfig,
+) -> std::pin::Pin<Box<impl std::future::Future<Output = AgentAuthorizedLifecycleCompletion>>>
+where
+    C: AgentProgressConnector + AgentTerminalReplay,
+    S: crate::agents::runtime::NativeAgentCompletionSelector,
+    R: ControlRpc + 'static,
+    RC: RedisRetirementClient + 'static,
+    K: UnixMillisClock,
+{
+    Box::pin(execute_started_owned(
+        started,
+        control,
+        retirer,
+        clock,
+        terminal_recovery,
+    ))
+}
+
 #[allow(clippy::too_many_lines)] // Keep pause ACK, terminal selection and retirement authority linear.
-async fn execute_started<C, S, R, RC, K>(
+async fn execute_started_owned<C, S, R, RC, K>(
     started: StartedAuthorizedAgentRun<C, S>,
     control: Arc<AgentControlClient<R>>,
     retirer: Arc<RedisCommandRetirer<RC>>,
@@ -462,6 +505,10 @@ where
     let mut successful_terminal = FreshAgentTerminalSelection::Completed;
     let mut failure = match stream {
         NativeStreamOutcome::Eos => None,
+        NativeStreamOutcome::NodeRecoverySuspended => {
+            return Box::pin(run.close_no_ack("agent_lifecycle.node_recovery_suspended", false))
+                .await;
+        }
         NativeStreamOutcome::Paused => {
             let pause = match pauses.finish() {
                 Ok(pause) => pause,
@@ -534,7 +581,7 @@ where
                     "native agent completion selection failed"
                 );
                 failure = Some(assembly_failure(&error));
-                return Box::pin(finish_after_stream(
+                return finish_after_stream(
                     run,
                     failure,
                     FreshAgentTerminalSelection::Completed,
@@ -542,7 +589,7 @@ where
                     retirer,
                     clock,
                     terminal_recovery,
-                ))
+                )
                 .await;
             }
             Err(ClaimLeaseError::Cancelled(_)) => {
@@ -573,7 +620,7 @@ where
                     "native agent completion projection failed"
                 );
                 failure = Some(projection_failure(&error));
-                return Box::pin(finish_after_stream(
+                return finish_after_stream(
                     run,
                     failure,
                     FreshAgentTerminalSelection::Completed,
@@ -581,7 +628,7 @@ where
                     retirer,
                     clock,
                     terminal_recovery,
-                ))
+                )
                 .await;
             }
         };
@@ -596,7 +643,7 @@ where
         }
     }
 
-    Box::pin(finish_after_stream(
+    finish_after_stream(
         run,
         failure,
         successful_terminal,
@@ -604,13 +651,14 @@ where
         retirer,
         clock,
         terminal_recovery,
-    ))
+    )
     .await
 }
 
 enum NativeStreamOutcome {
     Eos,
     Paused,
+    NodeRecoverySuspended,
     Failure(RuntimeFailureKind),
     RecoveryRequired { code: &'static str, retryable: bool },
     FatalLease(ClaimLeaseError),
@@ -620,12 +668,17 @@ const fn stream_disposition(outcome: &NativeStreamOutcome) -> &'static str {
     match outcome {
         NativeStreamOutcome::Eos => "eos",
         NativeStreamOutcome::Paused => "paused",
+        NativeStreamOutcome::NodeRecoverySuspended => "node_recovery_suspended",
         NativeStreamOutcome::Failure(_) => "failed",
         NativeStreamOutcome::RecoveryRequired { .. } => "recovery_required",
         NativeStreamOutcome::FatalLease(_) => "lease_failed",
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keep ordered authority checks and durable phases in one owner operation."
+)]
 async fn drive_native_stream<C, K>(
     run: &mut CursorBoundAuthorizedAgentRun<C>,
     native: &mut NativeAgentRun,
@@ -662,7 +715,9 @@ where
                         if let Some(failure) = failure {
                             return NativeStreamOutcome::Failure(failure);
                         }
-                        return if projector.is_paused() {
+                        return if projector.is_node_recovery_paused() {
+                            NativeStreamOutcome::NodeRecoverySuspended
+                        } else if projector.is_paused() {
                             NativeStreamOutcome::Paused
                         } else {
                             NativeStreamOutcome::Eos
@@ -722,6 +777,10 @@ where
                 };
                 match Box::pin(publish_batch(run, batch, pauses, clock)).await {
                     BatchPublication::Acknowledged => {
+                        if projector.is_node_recovery_paused() {
+                            let _requested=native.request_stop();
+                            return NativeStreamOutcome::NodeRecoverySuspended;
+                        }
                         if let Err(error) = probe.ensure_running() {
                             match error {
                                 ClaimLeaseError::Cancelled(_) => {
@@ -1084,7 +1143,36 @@ where
     BatchPublication::Acknowledged
 }
 
-async fn finish_after_stream<C, R, RC, K>(
+// Keep terminal-future construction out of the active stream poll frame.
+// Caller boxing retains the construction temporary in that same stack frame.
+#[inline(never)]
+fn finish_after_stream<C, R, RC, K>(
+    run: CursorBoundAuthorizedAgentRun<C>,
+    failure: Option<RuntimeFailureKind>,
+    successful_terminal: FreshAgentTerminalSelection,
+    control: Arc<AgentControlClient<R>>,
+    retirer: Arc<RedisCommandRetirer<RC>>,
+    clock: Arc<K>,
+    terminal_recovery: AgentTerminalRecoveryConfig,
+) -> std::pin::Pin<Box<impl Future<Output = AgentAuthorizedLifecycleCompletion>>>
+where
+    C: AgentProgressConnector + AgentTerminalReplay,
+    R: ControlRpc + 'static,
+    RC: RedisRetirementClient + 'static,
+    K: UnixMillisClock,
+{
+    Box::pin(finish_after_stream_owned(
+        run,
+        failure,
+        successful_terminal,
+        control,
+        retirer,
+        clock,
+        terminal_recovery,
+    ))
+}
+
+async fn finish_after_stream_owned<C, R, RC, K>(
     run: CursorBoundAuthorizedAgentRun<C>,
     mut failure: Option<RuntimeFailureKind>,
     successful_terminal: FreshAgentTerminalSelection,
@@ -1179,7 +1267,7 @@ where
     RC: RedisRetirementClient + 'static,
     K: UnixMillisClock,
 {
-    Box::pin(finish_after_stream(
+    finish_after_stream(
         run,
         Some(failure),
         FreshAgentTerminalSelection::Completed,
@@ -1187,7 +1275,7 @@ where
         retirer,
         clock,
         terminal_recovery,
-    ))
+    )
     .await
 }
 

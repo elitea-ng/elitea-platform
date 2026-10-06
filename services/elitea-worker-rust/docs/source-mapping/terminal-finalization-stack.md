@@ -10,26 +10,64 @@ Main acknowledges the terminal frame before settlement and Redis retirement.
 The current platform is a behavior reference for the final chat result.
 Its Python stack layout does not define the Rust implementation.
 
-## Implementation
+## Earlier implementation
 
-The shared `finalize` function allocates its `finish_after_stream` future on the heap.
-Previously, each caller embeds that large future in its own generated async state.
-Several failure branches repeat this allocation footprint in the debug poll frame.
-The successful path also retains that poll frame while terminal publication runs.
-This causes a stack overflow on the normal test thread.
+Earlier changes boxed terminal finalization and the post-start stream phase.
+Historical macOS verification passed 59 output-delivery tests and 953 library tests.
+Those results describe the earlier source and dependency cohort.
+They do not establish the current Linux stack bound.
 
-The change uses the existing `Box::pin` pattern at one shared phase boundary.
-It keeps cancellation, lease checks, exact replay, settlement, and retirement in the same order.
-It adds no task, queue, schema, or thread-stack override.
+## October 6 correction
 
-## Evidence
+The PostgreSQL 18 CI job aborts in the explicit `sensitive-hitl-2mib-stack` thread.
+The owning sensitive HITL regression uses fake control, progress, and Redis clients.
+Its failing lifecycle path performs no PostgreSQL operation.
 
-The application and ad-hoc lifecycle regression fails before this change with stack overflow.
-The macOS crash report identifies terminal publication beneath the active lifecycle poll frames.
-Debug disassembly shows approximately 1 MiB in `execute_owned` and 588 KiB in `execute_started` before correction.
-The test passes with the boxed finalization phase and the normal stack configuration.
-The final minimal patch passes all 59 output-delivery tests with no ignored tests.
+Caller boxing still constructs terminal-future temporaries inside the caller's generated poll frame.
+The private `finish_after_stream` allocation factory now isolates construction behind `#[inline(never)]`.
+Its `finish_after_stream_owned` async body remains byte-identical to the previous terminal body.
+All five callers await the existing boxed phase through this factory.
 
-The complete library suite passes all 953 tests with local test sockets enabled.
-No tests are ignored.
-`cargo clippy --lib --locked --offline -- -D warnings` also passes.
+The change preserves cancellation, lease checks, exact replay, settlement, and retirement order.
+It retains one allocation per terminal phase.
+It adds no task, queue, schema, retry, or thread-stack override.
+The explicit 2 MiB test remains unchanged.
+
+## Current evidence
+
+Current-lock macOS ARM64 verification uses Rust 1.97.1, all features, and one Cargo job.
+The unchanged 2 MiB regression passes.
+All 67 output-delivery tests pass with no ignored tests and default test concurrency.
+Current-lock strict Clippy passes for all targets and features with warnings denied.
+No database environment or `RUST_MIN_STACK` override is supplied.
+The lockfile remains unchanged.
+
+Static ARM64 debug disassembly measures these three nested poll frames:
+
+| Phase | Baseline bytes | Factory bytes |
+| --- | ---: | ---: |
+| Authorized preparation | 832,592 | 797,808 |
+| Started stream | 741,568 | 637,248 |
+| Terminal publication | 242,848 | 242,848 |
+| Sum | 1,817,008 | 1,677,904 |
+
+The measured reduction is 139,104 bytes, approximately 135.8 KiB.
+The baseline artifact uses earlier locked dependencies; the factory artifact uses the current lockfile.
+These measurements compare frame reservations, rather than total process stack usage.
+The existing macOS debug linker emits its large `__eh_frame` warning.
+
+Current focused checks:
+
+```sh
+CARGO_INCREMENTAL=0 cargo test --locked --offline --all-features -j1 --lib \
+  execution::output_delivery_tests::sensitive_interrupt_is_the_acked_paused_hitl_terminal_and_skips_completion \
+  -- --exact --nocapture
+CARGO_INCREMENTAL=0 cargo test --locked --offline --all-features -j1 --lib \
+  execution::output_delivery_tests:: -- --nocapture
+cargo fmt -- --check
+```
+
+The output-delivery group was executed directly from the first command's current-lock test binary.
+Linux CI must still verify the unchanged 2 MiB acceptance contract.
+No Linux cache was verified, and no cold Linux build or shared database mutation was performed.
+A stronger preparation-phase split remains deferred unless a subsequent observed failure requires it.

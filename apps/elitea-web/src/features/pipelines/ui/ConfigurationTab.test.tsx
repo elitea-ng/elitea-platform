@@ -174,12 +174,12 @@ describe('ConfigurationTab', () => {
     expect(await screen.findByTestId('configuration-form')).toBeInTheDocument();
   });
 
-  it('run-history\'s onRestoreConversation sets the restore target (handleRestoreConversation) without throwing', async () => {
+  it('restoring History mounts the test pane with the original conversation target', async () => {
     const user = userEvent.setup();
     renderConfigurationTab({
       slots: {
         renderConfigurationForm: () => <div data-testid="configuration-form" />,
-        renderChat: () => <div data-testid="chat-slot" />,
+        renderChat: ({ restore }) => <div data-testid="chat-slot">{restore?.conversationId}</div>,
         renderRunHistory: ({ onRestoreConversation }) => (
           <button
             type="button"
@@ -194,9 +194,8 @@ describe('ConfigurationTab', () => {
     await screen.findByTestId('chat-slot');
     await user.click(screen.getByTestId('pipeline-history-tab'));
     await user.click(await screen.findByRole('button', { name: 'restore-conversation' }));
-    // No crash — the restore id flows into `usePipelineChat`'s own `restoredConversationID`
-    // arg; a full restore-completes round-trip needs a real conversation-fetch + socket
-    // confirmation sequence this composition-root-level test does not attempt.
+    expect(await screen.findByTestId('chat-slot')).toHaveTextContent('42');
+    expect(screen.queryByRole('button', { name: 'restore-conversation' })).not.toBeInTheDocument();
   });
 
   it('re-layouts (isSmallWindow -> true) when the window narrows past the breakpoint, and schedules editorPanelRef.fitView() without throwing', async () => {

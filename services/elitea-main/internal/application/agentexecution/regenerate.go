@@ -287,6 +287,10 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
+		// Regeneration admits a new run; capture its resolved source before freeze.
+		if err = service.captureApplicationSource(ctx, request.ProjectID, request.ActorUserID, &resolved); err != nil {
+			return nil, nil, "", err
+		}
 		frozen, contextSettings, err := service.freezeVersionWithContext(
 			ctx,
 			CurrentApplicationVersionFreezeRequest{
@@ -334,6 +338,9 @@ func (service *CurrentApplicationStartService) currentRegenerationInput(
 		}
 		snapshot, err := currentAdhocSnapshot(request.LLMSettings, resolved)
 		if err != nil {
+			return nil, nil, "", err
+		}
+		if err = service.captureAdhocSource(ctx, request.ProjectID, request.ActorUserID, &resolved, snapshot); err != nil {
 			return nil, nil, "", err
 		}
 		frozen, contextSettings, err := service.freezeVersionWithContext(

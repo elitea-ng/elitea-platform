@@ -111,6 +111,7 @@ fn shared_pipeline_resolver(graph: Arc<CompiledGraph>) -> Arc<dyn PipelineApplic
     Arc::new(FixtureApplicationResolver {
         alias: "Research Agent".to_owned(),
         participant: ResolvedApplicationParticipant::Pipeline {
+            static_pauses: super::static_pause::StaticPauseCatalog::default(),
             graph,
             variable_types: BTreeMap::new(),
             events: None,
@@ -913,6 +914,7 @@ fn child_variable_resolver(
     Arc::new(FixtureApplicationResolver {
         alias: "Research Agent".into(),
         participant: ResolvedApplicationParticipant::Pipeline {
+            static_pauses: super::static_pause::StaticPauseCatalog::default(),
             graph: Arc::new(graph),
             variable_types,
             events: None,
@@ -1010,6 +1012,7 @@ async fn child_input_type_failure_keeps_public_reason_through_event_stream() {
     let resolver = Arc::new(FixtureApplicationResolver {
         alias: "Research Agent".into(),
         participant: ResolvedApplicationParticipant::Pipeline {
+            static_pauses: super::static_pause::StaticPauseCatalog::default(),
             variable_types: child.declared_variable_types(),
             graph: Arc::new(
                 child
@@ -1262,4 +1265,492 @@ nodes:
         json!({"task":"Investigate", "audience":"team ops"})
     );
     assert!(!state.contains_key("audience"));
+}
+
+struct CountingPipelineResolver {
+    effects: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl PipelineApplicationResolver for CountingPipelineResolver {
+    fn test_activation_checkpoints(&self) -> bool {
+        true
+    }
+
+    fn resolve(
+        &self,
+        selection: &PipelineApplicationSelection,
+        checkpointer: Arc<dyn Checkpointer>,
+    ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
+        if selection.alias() != "Research Agent" {
+            return Err(ApplicationExecutionError::Unavailable);
+        }
+        let effects = self.effects.clone();
+        let graph =
+            adk_rust::graph::StateGraph::with_channels(&["input", "messages", "elitea_response"])
+                .add_node_fn("effect", move |_| {
+                    let effects = effects.clone();
+                    async move {
+                        let visit = effects.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                        Ok(adk_rust::graph::NodeOutput::new()
+                            .with_update("elitea_response", json!(format!("visit-{visit}"))))
+                    }
+                })
+                .add_edge(adk_rust::graph::START, "effect")
+                .add_edge("effect", adk_rust::graph::END)
+                .compile()
+                .map_err(|_| ApplicationExecutionError::Unavailable)?
+                .with_checkpointer_arc(checkpointer);
+        Ok(ResolvedApplicationParticipant::Pipeline {
+            static_pauses: super::static_pause::StaticPauseCatalog::default(),
+            graph: Arc::new(graph),
+            variable_types: BTreeMap::new(),
+            events: None,
+            display_name: "Research Agent".to_owned(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn application_loop_starts_each_child_activation_once_and_reuses_completed_root() {
+    use super::application::{
+        APPLICATION_MESSAGES_STATE_KEY, APPLICATION_RESULT_STATE_KEY, APPLICATION_TASK_STATE_KEY,
+    };
+    use adk_rust::graph::{END, NodeOutput, START, StateGraph};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let checkpointer: Arc<dyn Checkpointer> = Arc::new(MemoryCheckpointer::new());
+    let effects = Arc::new(AtomicUsize::new(0));
+    let resolver = CountingPipelineResolver {
+        effects: effects.clone(),
+    };
+    let node = ApplicationNode::new(
+        ApplicationNodeDefinition::from_yaml(AGENT_NODE).unwrap(),
+        BTreeMap::from([
+            ("topic".to_owned(), "str".to_owned()),
+            ("answer".to_owned(), "str".to_owned()),
+        ]),
+        &resolver,
+        checkpointer.clone(),
+    )
+    .unwrap();
+    let parent = StateGraph::with_channels(&[
+        "topic",
+        "answer",
+        "messages",
+        "iterations",
+        APPLICATION_TASK_STATE_KEY,
+        APPLICATION_MESSAGES_STATE_KEY,
+        APPLICATION_RESULT_STATE_KEY,
+    ])
+    .add_node(node)
+    .add_node_fn("loop", |context| async move {
+        let count = context
+            .state
+            .get("iterations")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+            + 1;
+        Ok(NodeOutput::new().with_update("iterations", json!(count)))
+    })
+    .add_edge(START, "delegate")
+    .add_edge("delegate", "loop")
+    .add_conditional_edges(
+        "loop",
+        |state| {
+            if state
+                .get("iterations")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                < 2
+            {
+                "again".to_owned()
+            } else {
+                "done".to_owned()
+            }
+        },
+        [("again", "delegate"), ("done", END)],
+    )
+    .compile()
+    .unwrap()
+    .with_checkpointer_arc(checkpointer.clone());
+    let input = State::from_iter([("topic".to_owned(), json!("one"))]);
+    let completed = parent
+        .invoke(input.clone(), ExecutionConfig::new("loop-root"))
+        .await
+        .unwrap();
+    assert_eq!(completed.get("answer"), Some(&json!("visit-2")));
+    assert_eq!(effects.load(Ordering::SeqCst), 2);
+    let terminal_child = checkpointer
+        .load("loop-root/delegate")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(terminal_child.pending_nodes.is_empty());
+    assert_eq!(
+        terminal_child.metadata["elitea.pipeline.application-activation.v1"]["loop-root/delegate"]
+            ["parent_step"],
+        json!(2)
+    );
+    let recovered = parent
+        .invoke(input, ExecutionConfig::new("loop-root"))
+        .await
+        .unwrap();
+    assert_eq!(recovered.get("answer"), Some(&json!("visit-2")));
+    assert_eq!(effects.load(Ordering::SeqCst), 2);
+}
+
+struct OwnedCountingPipelineResolver {
+    child: CountingPipelineResolver,
+    owner: Arc<crate::agents::pipeline::scoped_runtime::PipelineGraphCallOwner>,
+    events: Option<super::node_events::PipelineNodeEventSender>,
+}
+impl PipelineApplicationResolver for OwnedCountingPipelineResolver {
+    fn resolve(
+        &self,
+        selection: &PipelineApplicationSelection,
+        checkpointer: Arc<dyn Checkpointer>,
+    ) -> Result<ResolvedApplicationParticipant, ApplicationExecutionError> {
+        let mut participant = self.child.resolve(selection, checkpointer)?;
+        if let ResolvedApplicationParticipant::Pipeline { events, .. } = &mut participant {
+            *events = self.events.clone();
+        }
+        Ok(participant)
+    }
+    fn graph_call_owner(
+        &self,
+        node: &str,
+    ) -> Option<Arc<crate::agents::pipeline::scoped_runtime::PipelineGraphCallOwner>> {
+        (node == "delegate").then(|| self.owner.clone())
+    }
+}
+
+fn owned_counting_graph(
+    inner: Arc<dyn Checkpointer>,
+    effects: Arc<std::sync::atomic::AtomicUsize>,
+) -> (CompiledGraph, Arc<dyn Checkpointer>) {
+    owned_counting_graph_with_events(inner, effects, None)
+}
+fn owned_counting_graph_with_events(
+    inner: Arc<dyn Checkpointer>,
+    effects: Arc<std::sync::atomic::AtomicUsize>,
+    events: Option<super::node_events::PipelineNodeEventSender>,
+) -> (CompiledGraph, Arc<dyn Checkpointer>) {
+    use super::application::{
+        APPLICATION_MESSAGES_STATE_KEY, APPLICATION_RESULT_STATE_KEY, APPLICATION_TASK_STATE_KEY,
+    };
+    use crate::agents::pipeline::scoped_applications::PipelineApplicationScopeRegistry;
+    use adk_rust::graph::{END, NodeOutput, START, StateGraph};
+    let source = format!(
+        "state: {{topic: str, answer: str}}\nentry_point: delegate\nnodes:\n  - {}",
+        AGENT_NODE.trim().replace('\n', "\n    ")
+    );
+    let definition = PipelineDefinition::from_yaml(&source).unwrap();
+    let mut registry = PipelineApplicationScopeRegistry::default();
+    registry
+        .register_scope(String::new(), &definition, None)
+        .unwrap();
+    let checkpointer = registry.wrap_checkpointer("", inner).unwrap();
+    let resolver = OwnedCountingPipelineResolver {
+        child: CountingPipelineResolver { effects },
+        owner: registry.graph_call_owner("", "delegate").unwrap(),
+        events,
+    };
+    let node = ApplicationNode::new(
+        ApplicationNodeDefinition::from_yaml(AGENT_NODE).unwrap(),
+        BTreeMap::from([
+            ("topic".to_owned(), "str".to_owned()),
+            ("answer".to_owned(), "str".to_owned()),
+        ]),
+        &resolver,
+        checkpointer.clone(),
+    )
+    .unwrap();
+    let graph = StateGraph::with_channels(&[
+        "topic",
+        "answer",
+        "messages",
+        "iterations",
+        APPLICATION_TASK_STATE_KEY,
+        APPLICATION_MESSAGES_STATE_KEY,
+        APPLICATION_RESULT_STATE_KEY,
+    ])
+    .add_node(node)
+    .add_node_fn("loop", |context| async move {
+        let count = context
+            .state
+            .get("iterations")
+            .and_then(Value::as_u64)
+            .unwrap_or_default()
+            + 1;
+        Ok(NodeOutput::new().with_update("iterations", json!(count)))
+    })
+    .add_edge(START, "delegate")
+    .add_edge("delegate", "loop")
+    .add_conditional_edges(
+        "loop",
+        |state| {
+            if state
+                .get("iterations")
+                .and_then(Value::as_u64)
+                .unwrap_or_default()
+                < 2
+            {
+                "again".to_owned()
+            } else {
+                "done".to_owned()
+            }
+        },
+        [("again", "delegate"), ("done", END)],
+    )
+    .compile()
+    .unwrap()
+    .with_checkpointer_arc(checkpointer.clone());
+    (graph, checkpointer)
+}
+async fn run_owned_counting_result(
+    graph: CompiledGraph,
+) -> Result<(), crate::agents::runtime::NativeAgentRuntimeError> {
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "elitea".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: Some("owned-loop".to_owned()),
+            state: HashMap::new(),
+        })
+        .await
+        .unwrap();
+    let runner = Runner::builder()
+        .app_name("elitea")
+        .agent(Arc::new(EliteaGraphAgent::new(
+            adk_rust::graph::GraphAgent::from_graph("owned-root", graph),
+        )))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+    let mut invocation = NativeAgentInvocation::new(
+        runner,
+        UserId::new("user-1").unwrap(),
+        SessionId::new("owned-loop").unwrap(),
+        Content::new("user").with_text("run"),
+    )
+    .start()
+    .unwrap();
+    while invocation.next_event().await?.is_some() {}
+    Ok(())
+}
+async fn run_owned_counting(graph: CompiledGraph) {
+    run_owned_counting_result(graph).await.unwrap();
+}
+#[tokio::test]
+async fn owned_wrapper_completion_replays_before_parent_advance_without_repolling_child() {
+    use crate::agents::pipeline::scope_receipts::{GraphCallOutcome, receipt_for_node};
+    use adk_rust::graph::Checkpoint;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let original: Arc<dyn Checkpointer> = Arc::new(MemoryCheckpointer::new());
+    let effects = Arc::new(AtomicUsize::new(0));
+    let (graph, checkpointer) = owned_counting_graph(original.clone(), effects.clone());
+    checkpointer
+        .save(&Checkpoint::new(
+            "owned-loop",
+            State::from_iter([("topic".to_owned(), json!("one"))]),
+            0,
+            vec!["delegate".to_owned()],
+        ))
+        .await
+        .unwrap();
+    run_owned_counting(graph).await;
+    assert_eq!(effects.load(Ordering::SeqCst), 2);
+    let history = checkpointer.list("owned-loop").await.unwrap();
+    let completed_before_advance = history
+        .iter()
+        .rev()
+        .find(|checkpoint| {
+            checkpoint.step == 2
+                && checkpoint.pending_nodes == ["delegate"]
+                && receipt_for_node(checkpoint, "delegate")
+                    .unwrap()
+                    .is_some_and(|receipt| {
+                        matches!(receipt.outcome(), GraphCallOutcome::Completed { .. })
+                    })
+        })
+        .unwrap()
+        .clone();
+    let completion = receipt_for_node(&completed_before_advance, "delegate")
+        .unwrap()
+        .unwrap();
+    assert_eq!(completion.activation().step(), 2);
+    let mut distinct = std::collections::BTreeSet::new();
+    for checkpoint in history {
+        if let Some(receipt) = receipt_for_node(&checkpoint, "delegate").unwrap() {
+            distinct.insert(receipt.activation().call_id().to_owned());
+        }
+    }
+    assert_eq!(distinct.len(), 2);
+    // Replacement recovers the exact admitted family cutpoint; no fresh graph frontier/state.
+    let replacement: Arc<dyn Checkpointer> = Arc::new(MemoryCheckpointer::new());
+    replacement.save(&completed_before_advance).await.unwrap();
+    let terminal_child = original.load("owned-loop/delegate").await.unwrap().unwrap();
+    replacement.save(&terminal_child).await.unwrap();
+    let (recovered, recovered_checkpointer) = owned_counting_graph(replacement, effects.clone());
+    run_owned_counting(recovered).await;
+    assert_eq!(effects.load(Ordering::SeqCst), 2);
+    let final_checkpoint = recovered_checkpointer
+        .load("owned-loop")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(final_checkpoint.state["answer"], json!("visit-2"));
+    assert!(final_checkpoint.pending_nodes.is_empty());
+    let recovered_completion = receipt_for_node(&final_checkpoint, "delegate")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&recovered_completion).unwrap(),
+        serde_json::to_value(&completion).unwrap()
+    );
+}
+
+/// Simulate a process losing its ability to advance the parent after durable wrapper completion.
+struct CrashAfterOwnedCompletion {
+    inner: Arc<MemoryCheckpointer>,
+    armed: std::sync::atomic::AtomicBool,
+}
+#[async_trait::async_trait]
+impl Checkpointer for CrashAfterOwnedCompletion {
+    async fn save(
+        &self,
+        checkpoint: &adk_rust::graph::Checkpoint,
+    ) -> Result<String, adk_rust::graph::GraphError> {
+        use crate::agents::pipeline::scope_receipts::{GraphCallOutcome, receipt_for_node};
+        if checkpoint.thread_id == "owned-loop"
+            && !checkpoint.metadata.contains_key(
+                crate::agents::pipeline::scope_receipts::GRAPH_CALL_REVISION_METADATA_KEY,
+            )
+            && let Some(previous) = self.inner.load("owned-loop").await?
+            && previous.step == 2
+            && previous.pending_nodes == ["delegate"]
+            && receipt_for_node(&previous, "delegate")?.is_some_and(|receipt| {
+                matches!(receipt.outcome(), GraphCallOutcome::Completed { .. })
+            })
+            && self.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(adk_rust::graph::GraphError::InvalidGraph(
+                "fixture crash before parent advance".to_owned(),
+            ));
+        }
+        self.inner.save(checkpoint).await
+    }
+    async fn load(
+        &self,
+        thread: &str,
+    ) -> Result<Option<adk_rust::graph::Checkpoint>, adk_rust::graph::GraphError> {
+        self.inner.load(thread).await
+    }
+    async fn load_by_id(
+        &self,
+        id: &str,
+    ) -> Result<Option<adk_rust::graph::Checkpoint>, adk_rust::graph::GraphError> {
+        self.inner.load_by_id(id).await
+    }
+    async fn list(
+        &self,
+        thread: &str,
+    ) -> Result<Vec<adk_rust::graph::Checkpoint>, adk_rust::graph::GraphError> {
+        self.inner.list(thread).await
+    }
+    async fn delete(&self, thread: &str) -> Result<(), adk_rust::graph::GraphError> {
+        self.inner.delete(thread).await
+    }
+    async fn prune(
+        &self,
+        thread: &str,
+        policy: &adk_rust::graph::checkpoint::RetentionPolicy,
+    ) -> Result<usize, adk_rust::graph::GraphError> {
+        self.inner.prune(thread, policy).await
+    }
+}
+
+#[tokio::test]
+async fn owned_wrapper_channel_crash_after_completion_reemits_original_terminal_without_child_poll()
+{
+    use crate::agents::pipeline::scope_receipts::{GraphCallOutcome, receipt_for_node};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let original = Arc::new(MemoryCheckpointer::new());
+    let crash: Arc<dyn Checkpointer> = Arc::new(CrashAfterOwnedCompletion {
+        inner: original.clone(),
+        armed: AtomicBool::new(true),
+    });
+    let effects = Arc::new(AtomicUsize::new(0));
+    let (sender, receiver) = super::node_events::pipeline_node_event_channel();
+    let (graph, checkpointer) =
+        owned_counting_graph_with_events(crash, effects.clone(), Some(sender));
+    checkpointer
+        .save(&adk_rust::graph::Checkpoint::new(
+            "owned-loop",
+            State::from_iter([("topic".to_owned(), json!("one"))]),
+            0,
+            vec!["delegate".to_owned()],
+        ))
+        .await
+        .unwrap();
+    assert!(run_owned_counting_result(graph).await.is_err());
+    let cutpoint = original.load("owned-loop").await.unwrap().unwrap();
+    assert_eq!(cutpoint.step, 2);
+    assert_eq!(cutpoint.pending_nodes, ["delegate"]);
+    let receipt = receipt_for_node(&cutpoint, "delegate").unwrap().unwrap();
+    let GraphCallOutcome::Completed { terminal, .. } = receipt.outcome() else {
+        panic!("wrapper completion must precede the failed parent advance");
+    };
+    let mut drained = receiver
+        .drain(receipt.invocation_id(), receipt.author(), receipt.branch())
+        .await
+        .unwrap();
+    let mut terminals = Vec::new();
+    while let Some(event) = drained.try_recv() {
+        let event = event.unwrap();
+        if event.id == terminal.id {
+            terminals.push(event);
+        }
+    }
+    assert_eq!(terminals.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&terminals[0]).unwrap(),
+        serde_json::to_value(terminal).unwrap()
+    );
+    drop(drained);
+    let replacement: Arc<dyn Checkpointer> = Arc::new(MemoryCheckpointer::new());
+    replacement.save(&cutpoint).await.unwrap();
+    replacement
+        .save(&original.load("owned-loop/delegate").await.unwrap().unwrap())
+        .await
+        .unwrap();
+    let (sender, replacement_receiver) = super::node_events::pipeline_node_event_channel();
+    let (graph, recovered) =
+        owned_counting_graph_with_events(replacement, effects.clone(), Some(sender));
+    run_owned_counting(graph).await;
+    assert_eq!(effects.load(Ordering::SeqCst), 2);
+    let checkpoint = recovered.load("owned-loop").await.unwrap().unwrap();
+    assert_eq!(checkpoint.state["answer"], json!("visit-2"));
+    assert!(checkpoint.pending_nodes.is_empty());
+    let recovered_receipt = receipt_for_node(&checkpoint, "delegate").unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(&recovered_receipt).unwrap(),
+        serde_json::to_value(&receipt).unwrap()
+    );
+    let mut drained = replacement_receiver
+        .drain(receipt.invocation_id(), receipt.author(), receipt.branch())
+        .await
+        .unwrap();
+    let mut terminals = Vec::new();
+    while let Some(event) = drained.try_recv() {
+        let event = event.unwrap();
+        if event.id == terminal.id {
+            terminals.push(event);
+        }
+    }
+    assert_eq!(terminals.len(), 1);
+    assert_eq!(
+        serde_json::to_value(terminals[0].content()).unwrap(),
+        serde_json::to_value(terminal.content()).unwrap()
+    );
 }

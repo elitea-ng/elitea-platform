@@ -18,8 +18,10 @@ import Typography from '@mui/material/Typography';
 
 import { convertJsonToString } from '@/shared/lib/json';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
+import type { ToolActionDraft } from '@/entities/message/lib/toolActions';
 
-import type { PartitionedBlock } from '../../lib/subAgentGrouping';
+import type { PartitionedBlock, SubAgentGroupable } from '../../lib/subAgentGrouping';
+import { ActionView, type ActionViewProps } from '../ActionView';
 
 import type { SubAgentTool } from './subAgentIcon.helpers';
 import { resolveSubAgentIcon } from './subAgentIcon.helpers';
@@ -47,6 +49,18 @@ function BlockTitle({ block, tools, theme }: { readonly block: PartitionedBlock;
       {name || 'Sub-agent'}
     </Box>
   );
+}
+
+/** Code receipts retain the shared modal and its project-scoped artifact reader inside a group. */
+function codeDebugAction(action: SubAgentGroupable): ActionViewProps['action'] | undefined {
+  const draft = action as unknown as ToolActionDraft;
+  if (!draft.toolMeta || !Object.hasOwn(draft.toolMeta, 'code_debug_v1')) return undefined;
+  return {
+    type: draft.type, toolMeta: draft.toolMeta,
+    ...(draft.name !== undefined ? { name: draft.name } : {}),
+    ...(draft.traceStepId !== undefined ? { traceStepId: draft.traceStepId } : {}),
+    ...(draft.traceMessageGroupId !== undefined ? { traceMessageGroupId: draft.traceMessageGroupId } : {}),
+  };
 }
 
 /**
@@ -80,9 +94,13 @@ export function SubAgentAccordion({
                 title: <BlockTitle block={block} tools={tools} theme={theme} />,
                 content: (
                   <Box sx={{ px: 2, pb: 1 }}>
-                    {block.actions.map((action, actionIndex) => (
+                    {block.actions.map((action, actionIndex) => {
+                      const key = `${String((action as unknown as Record<string, unknown>).id)}-${actionIndex}`;
+                      const debug = codeDebugAction(action);
+                      if (debug) return <ActionView key={key} action={debug} onClick={() => onActionClick?.(action)} />;
+                      return (
                       <Box
-                        key={`${String((action as unknown as Record<string, unknown>).id)}-${actionIndex}`}
+                        key={key}
                         component="pre"
                         onClick={() => onActionClick?.(action)}
                         sx={{
@@ -110,7 +128,8 @@ export function SubAgentAccordion({
                         </Typography>
                         {convertJsonToString(action.toolOutputs ?? '')}
                       </Box>
-                    ))}
+                      );
+                    })}
                     {block.pausedForResume && (
                       <Typography
                         variant="bodySmall"

@@ -1,3 +1,5 @@
+import { useEditorTestTransport } from './useEditorTestTransport';
+import type { ChatBoxProps } from '../ChatBox.types';
 /** Binds ChatBox send, continuation, and regeneration to the REST/SSE transport. */
 import { useCallback, useMemo } from "react";
 
@@ -51,6 +53,7 @@ interface SendDeps {
 
 /** @public Params for `useChatBoxSend`. */
 export interface UseChatBoxSendParams {
+  readonly editorTest?: NonNullable<ChatBoxProps['extensions']>['editorTest'];
   readonly deps: SendDeps;
   readonly getInternalToolsForSend?: () => Promise<readonly string[]>;
   /** Model settings the composer resolved; forwarded as the turn's `llm_settings`. */
@@ -150,9 +153,11 @@ export function useChatBoxSend(
   params: UseChatBoxSendParams,
 ): UseChatBoxSendResult {
   const { setChatHistory, projectId, projectIdString, isAgentsPage, getInternalToolsForSend } = params;
-  const modelName = resolveSendModelName(params.llmSettings, params.model?.name);
-  const llmSettings = useMemo(
-    () => resolveSendLlmSettings(params.llmSettings, params.model, params.configuredModelProjectId),
+  const modelRequest = useMemo(
+    () => ({
+      modelName: resolveSendModelName(params.llmSettings, params.model?.name),
+      llmSettings: resolveSendLlmSettings(params.llmSettings, params.model, params.configuredModelProjectId),
+    }),
     [params.llmSettings, params.model, params.configuredModelProjectId],
   );
   const target = useMemo(
@@ -169,7 +174,8 @@ export function useChatBoxSend(
     context: buildChatStreamContext(params),
     onAgentEvent: params.onAgentEvent,
   });
-  const { startDetailed, resume, regenerateDetailed } = transport;
+  const { startDetailed, resume, resumeDetailed, regenerateDetailed } = transport;
+  const requireTestTransport = useEditorTestTransport(params.editorTest, transport);
 
   const startStreamedExecution = useCallback(
     async ({
@@ -179,7 +185,7 @@ export function useChatBoxSend(
       readonly conversationUuid: string;
       readonly payload: Record<string, unknown>;
     }): Promise<StreamStartOutcome> => {
-      if (projectId === undefined) return NO_STREAM_TRANSPORT;
+      if (projectId === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
       const toolsFailure = await internalToolsSaveFailure(getInternalToolsForSend);
       if (toolsFailure) return toolsFailure;
       // The contract comes from the PARTICIPANT this turn addresses, never
@@ -194,7 +200,7 @@ export function useChatBoxSend(
         (target as { readonly entity_name?: unknown } | null | undefined)
           ?.entity_name === "user"
       )
-        return NO_STREAM_TRANSPORT;
+        return requireTestTransport(NO_STREAM_TRANSPORT);
       const targetParticipantId = positiveParticipantId(
         (target as { readonly id?: unknown } | null | undefined)?.id,
       );
@@ -203,8 +209,7 @@ export function useChatBoxSend(
         conversationUuid,
         projectId: projectIdString,
         payload,
-        llmSettings,
-        modelName,
+        ...modelRequest,
         isApplicationTurn,
         participantId:
           (isApplicationTurn
@@ -214,21 +219,21 @@ export function useChatBoxSend(
       // No body can satisfy this contract (an agent turn with no addressable
       // participant). The socket fallback takes it rather than a POST that is
       // certain to be refused.
-      if (body === undefined) return NO_STREAM_TRANSPORT;
-      return startDetailed({
+      if (body === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
+      return requireTestTransport(await startDetailed({
         projectId,
         conversationUuid,
         contract: resolveStartContract(target),
         body,
-      });
+      }));
     },
     [
+      requireTestTransport,
       startDetailed,
       projectId,
       projectIdString,
-      llmSettings,
+      modelRequest,
       getInternalToolsForSend,
-      modelName,
       target,
     ],
   );
@@ -243,16 +248,19 @@ export function useChatBoxSend(
       readonly contract: string;
       readonly body: Record<string, unknown>;
     }): Promise<StreamStartOutcome> => {
-      if (projectId === undefined) return NO_STREAM_TRANSPORT;
+      if (projectId === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
+      if (contract === 'agent.continue.static.v1') {
+        return requireTestTransport(await resumeDetailed({ projectId, conversationUuid, contract, body }));
+      }
       const resumed = await resume({
         projectId,
         conversationUuid,
         contract,
         body,
       });
-      return resumed ? STREAM_STARTED : NO_STREAM_TRANSPORT;
+      return requireTestTransport(resumed ? STREAM_STARTED : NO_STREAM_TRANSPORT);
     },
-    [resume, projectId],
+    [resume, resumeDetailed, projectId, requireTestTransport],
   );
 
   const regenerateStreamedExecution = useCallback(
@@ -263,7 +271,7 @@ export function useChatBoxSend(
       readonly updatedItems?: readonly unknown[] | undefined;
     }): Promise<StreamStartOutcome> => {
       if (projectId === undefined || params.conversationUuid === undefined)
-        return NO_STREAM_TRANSPORT;
+        return requireTestTransport(NO_STREAM_TRANSPORT);
       const toolsFailure = await internalToolsSaveFailure(getInternalToolsForSend);
       if (toolsFailure) return toolsFailure;
       const isApplicationTurn =
@@ -275,8 +283,7 @@ export function useChatBoxSend(
         responseMessageId: input.messageId,
         questionId: input.questionId,
         question: input.question,
-        llmSettings,
-        modelName,
+        ...modelRequest,
         isApplicationTurn,
         participantId: positiveParticipantId(
           (target as { readonly id?: unknown } | null | undefined)?.id,
@@ -285,45 +292,46 @@ export function useChatBoxSend(
           ? { updatedItems: input.updatedItems }
           : {}),
       });
-      if (body === undefined) return NO_STREAM_TRANSPORT;
+      if (body === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
       // Verbatim, not collapsed to a boolean — see `regenerateStreamedWithRetry`
       // (`useChatBoxHandlers.regenerate.ts`) for the one refusal it carries.
-      return regenerateDetailed({
+      return requireTestTransport(await regenerateDetailed({
         projectId,
         conversationUuid: params.conversationUuid,
         responseMessageId: input.messageId,
         body,
-      });
+      }));
     },
     [
       regenerateDetailed,
+      requireTestTransport,
       projectId,
       projectIdString,
       params.conversationUuid,
       target,
-      llmSettings,
+      modelRequest,
       getInternalToolsForSend,
-      modelName,
     ],
   );
 
   const { deps } = params;
   const createConversationForSend = useCallback(
     async (question: string) => {
+      if (params.editorTest) throw new Error('A validated Test context is required.');
       const internalTools = await getInternalToolsForSend?.();
       const created = await deps.createConversation({
         name:
           question.slice(0, 50) ||
           t("widgets.chatBox.defaultConversationName", "New Chat"),
         isPrivate: true,
-        meta: creationMeta(llmSettings, internalTools),
-        ...(!isAgentsPage && modelName ? {
-          participants: adhocParticipants({ userId: params.userId, modelName, llmSettings }),
+        meta: creationMeta(modelRequest.llmSettings, internalTools),
+        ...(!isAgentsPage && modelRequest.modelName ? {
+          participants: adhocParticipants({ userId: params.userId, modelName: modelRequest.modelName, llmSettings: modelRequest.llmSettings }),
         } : {}),
       });
       if (!created) return undefined;
 
-      if (!isAgentsPage && !modelName) {
+      if (!isAgentsPage && !modelRequest.modelName) {
         // The conversation still exists when no model is available. Its blank
         // responder cannot supply model settings for a REST turn.
         console.warn(
@@ -334,10 +342,10 @@ export function useChatBoxSend(
     },
     [
       deps,
+      params.editorTest,
       isAgentsPage,
-      modelName,
+      modelRequest,
       params.userId,
-      llmSettings,
       getInternalToolsForSend,
     ],
   );

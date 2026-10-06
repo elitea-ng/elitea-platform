@@ -1,0 +1,17 @@
+{
+  "schema": "elitea.pipeline.node-recovery-required.v1",
+  "activation_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "journal_revision": 2,
+  "node_id": "python",
+  "graph_thread": "graph-thread",
+  "step": 1,
+  "attempt": 1,
+  "failure_class": "attempt_timeout",
+  "stop_reason": "operator_approval_required",
+  "replay_safety": {
+    "kind": "no_external_effect"
+  },
+  "allowed_actions": [
+    "retry"
+  ]
+}

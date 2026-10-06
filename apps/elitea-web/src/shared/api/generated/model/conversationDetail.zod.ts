@@ -41,6 +41,8 @@
  */
 import * as zod from "zod";
 import { ConversationParticipant } from "./conversationParticipant.zod";
+import { EditorTestContext } from "./editorTestContext.zod";
+import { EditorTestRunsPage } from "./editorTestRunsPage.zod";
 
 export const ConversationDetail = zod
   .object({
@@ -62,7 +64,10 @@ export const ConversationDetail = zod
     is_private: zod
       .boolean()
       .describe("Always present; a row that cannot say reads as private."),
-    meta: zod.record(zod.string(), zod.unknown()),
+    meta: zod.object({
+      editor_test: EditorTestContext.optional(),
+      is_hidden: zod.boolean().optional(),
+    }),
     participants: zod.array(ConversationParticipant),
     message_groups: zod
       .array(zod.record(zod.string(), zod.unknown()))
@@ -70,6 +75,7 @@ export const ConversationDetail = zod
       .describe(
         "Present only when `messages_limit` > 0. The legacy message-group projection (items and their details). Prefer the message list (listConversationMessages) for a transcript: it is the read that supports `changes_since`.\n",
       ),
+    editor_test_runs: EditorTestRunsPage.optional(),
   })
   .describe(
     "One conversation with its participants, and with its newest message groups when `messages_limit` is set. NOTE(W2): internal/api/v2/conversations/handler.go:581 (`Get`); the map is built at :604-628.\n",

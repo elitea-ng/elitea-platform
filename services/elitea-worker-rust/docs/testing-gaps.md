@@ -1,6 +1,6 @@
 # Rust worker verification gaps
 
-Updated: 2026-09-14.
+Updated: 2026-10-05.
 
 ## Progression decision
 
@@ -52,6 +52,10 @@ The focused [discovery](source-mapping/toolkit-discovery-authorization.md) and [
 | TG-15 | Verification: Main, Rust, UI | Chat-driven entity building with the three newly exposed typed configuration operations. | Select a real model and verify the endpoint project's saved default. Confirm denied permissions cause no mutation. Component and MCP protocol fixtures are not deployed proof. |
 | TG-16 | Verification: Main, Rust, UI | Save As Version with attached skills, from the agent and pipeline editors and through internal MCP. | Select a non-default source version. Verify exact skill revisions after save and reload, then launch the new version and confirm runtime consumption. Main transaction and MCP protocol fixtures plus UI component tests pass; deployed browser and runtime proof remain open. |
 | MODULE-RUST-01 | Implementation and verification: Rust, Main, UI | Gate 7a built-in runtime modules, distinct from internal MCP. | Complete the [module ledger](source-mapping/builtin-runtime-modules.md), with source mappings, real invocation, UI proof, authority, and replacement behavior before indexing. Exclude Swarm. |
+
+The user moves `CODE-WORKSPACE-01` out of this active register on 2026-10-05.
+Its complete scope is preserved as [WF-01 in the post-worker backlog](wanted_feature.md#wf-01--code-workspaces).
+Complete and release the full worker before starting this future feature.
 
 ## Mixed-guard test fixture
 

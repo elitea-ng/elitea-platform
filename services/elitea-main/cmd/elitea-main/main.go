@@ -1631,6 +1631,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// than inside the router: two handlers over one table would be two chances
 	// for the tick and the settings routes to disagree on a dependency.
 	var pipelineTriggers *v2pipelinetriggers.Handler
+	var currentNodeRecovery http.Handler
 	var currentAgentCancel http.Handler
 	var currentApplicationTask http.Handler
 	var currentIndexCancel http.Handler
@@ -1649,6 +1650,18 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			return openErr
 		}
 		defer runtimePools.Close()
+		compiledState, compiledStateErr := openCompiledSnapshotStatePool(ctx, runtimeConfig)
+		if compiledStateErr != nil {
+			return compiledStateErr
+		}
+		if compiledState.close != nil {
+			defer compiledState.close()
+		}
+		codeConsumers, codeConsumersErr := openCodeConsumerStartup(ctx, runtimeConfig, compiledState)
+		if codeConsumersErr != nil {
+			return codeConsumersErr
+		}
+		defer codeConsumers.Close()
 		var configurationLifecycleReconciler configurationapp.CurrentConfigurationLifecycleReconciler
 		if currentConfigurationsConfig.MutationEnabled {
 			// No LLM runtime here: the lifecycle is database-side. It once
@@ -1672,6 +1685,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			ReplayPool:                       runtimePools.Replay,
 			TerminalEffectsPool:              runtimePools.TerminalEffects,
 			ContentPool:                      runtimePools.Content,
+			CompiledSnapshotStatePool:        compiledState.pool,
+			CodeWorkspaceCapabilities:        codeConsumers.workspaceCapabilities,
+			CodeWorkspacePolicy:              codeConsumers.workspacePolicy,
+			CodePlatform:                     codeConsumers.platform,
+			CodeBrokerPolicies:               codeConsumers.brokerPolicies,
+			CodeDebugStatePool:               codeConsumers.debugStatePool,
 			CurrentConfigurations:            currentConfigurationsRoot,
 			ConfigurationLifecycleReconciler: configurationLifecycleReconciler,
 			ActorTokenIssuer:                 formGraph,
@@ -1843,6 +1862,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		if workerImplementation == "rust" && publicRoutes.ToolkitExecuteRead != nil {
 			mcpToolkitExecute = publicRoutes.ToolkitExecuteRead
+		}
+		if publicRoutes.NodeRecovery != nil {
+			currentNodeRecovery, err = agentexecutionapi.NewCurrentNodeRecoveryRoute(publicRoutes.NodeRecovery, apiGroupAuth, legacyrbac.NewPostgresResolver(pool))
+			if err != nil {
+				return err
+			}
 		}
 		if publicRoutes.AgentCancel != nil {
 			currentAgentCancel, err = agentexecutionapi.NewCurrentAgentCancelRoute(
@@ -2324,6 +2349,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SCIMAccessTokenTTL:         scimAccessTokenTTL,
 		SCIMClientAddresses:        scimClientAddresses,
 		CurrentAgentCancel:         currentAgentCancel,
+		CurrentNodeRecovery:        currentNodeRecovery,
 		CurrentApplicationTask:     currentApplicationTask,
 		CurrentIndexCancel:         currentIndexCancel,
 		CurrentIndexMeta:           currentIndexMeta,

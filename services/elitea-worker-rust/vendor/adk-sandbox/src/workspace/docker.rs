@@ -27,6 +27,14 @@ use super::session::SandboxSession;
 use super::types::{DirEntry, EntryType, ExecOutput, SessionHandle, SnapshotId};
 use crate::SandboxError;
 
+#[path = "docker_compiled_content.rs"]
+mod compiled_content;
+#[path = "docker_dependency_content.rs"]
+mod dependency_content;
+#[path = "docker_repository.rs"]
+mod repository;
+pub use repository::CodeRepositoryMount;
+
 /// The workspace root directory inside Docker containers.
 const CONTAINER_WORKSPACE_ROOT: &str = "/workspace";
 
@@ -90,6 +98,9 @@ pub struct DockerClient {
     /// Apply Elitea's offline Code-job container policy.
     code_job_policy: bool,
     code_workspace_execution: bool,
+    code_platform_profile: bool,
+    code_workspace_bytes: u64,
+    code_preparation_network: Option<String>,
     command_timeout: Duration,
     /// Bollard Docker client for API communication.
     client: Docker,
@@ -128,12 +139,29 @@ impl DockerClient {
             cpu_limit: None,
             code_job_policy: false,
             code_workspace_execution: false,
+            code_platform_profile: false,
+            code_workspace_bytes: 256 * 1024 * 1024,
+            code_preparation_network: None,
             command_timeout: DEFAULT_COMMAND_TIMEOUT,
             client: docker,
             sessions: RwLock::new(HashMap::new()),
         })
     }
 
+    pub fn with_code_workspace_bytes(mut self, bytes: u64) -> Result<Self, SandboxError> {
+        if !self.code_job_policy
+            || !(512 * 1024 * 1024..=4 * 1024 * 1024 * 1024).contains(&bytes)
+            || self
+                .memory_limit_bytes
+                .is_none_or(|m| m < bytes + 128 * 1024 * 1024)
+        {
+            return Err(SandboxError::ExecutionFailed(
+                "native workspace capacity is invalid".into(),
+            ));
+        }
+        self.code_workspace_bytes = bytes;
+        Ok(self)
+    }
     /// Creates a new `DockerClient` with a custom base image.
     ///
     /// # Errors
@@ -176,7 +204,7 @@ impl DockerClient {
     /// # Errors
     /// Returns an error unless a valid finite Code resource policy is configured.
     pub fn with_code_compilation(mut self) -> Result<Self, SandboxError> {
-        if !self.code_job_policy {
+        if !self.code_job_policy || self.code_preparation_network.is_some() {
             return Err(SandboxError::ExecutionFailed(
                 "Code resource policy is required before compilation".into(),
             ));
@@ -186,8 +214,51 @@ impl DockerClient {
         Ok(self)
     }
 
+    /// Select only an operator-admitted immutable broker image/wrapper/key profile.
+    /// No YAML, Code source, or prepared metadata may call this constructor.
+    /// # Errors
+    /// Refuses resolver-network or unbounded/nonimmutable execution profiles.
+    pub fn with_code_platform_profile(mut self) -> Result<Self, SandboxError> {
+        self.validate_code_job_policy()?;
+        if !self.code_job_policy
+            || self.code_preparation_network.is_some()
+            || !immutable_image_reference(&self.base_image)
+        {
+            return Err(SandboxError::ExecutionFailed(
+                "Code platform profile is not admitted".into(),
+            ));
+        }
+        self.code_platform_profile = true;
+        Ok(self)
+    }
+    pub fn code_platform_profile_enabled(&self) -> bool {
+        self.code_job_policy && self.code_platform_profile
+    }
+
     pub fn code_compilation_enabled(&self) -> bool {
         self.code_job_policy && self.code_workspace_execution
+    }
+
+    /// Select an operator-created network only for the trusted resolver profile.
+    /// Execution profiles retain network=none; source cannot select this name.
+    /// # Errors
+    /// Rejects invalid names and profiles without bounded non-root isolation.
+    pub fn with_code_preparation_network(mut self, network: String) -> Result<Self, SandboxError> {
+        if !self.code_job_policy
+            || self.code_workspace_execution
+            || network.is_empty()
+            || network.len() > 128
+            || matches!(network.as_str(), "host" | "none" | "bridge")
+            || !network
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
+        {
+            return Err(SandboxError::ExecutionFailed(
+                "Invalid dependency preparation network policy".into(),
+            ));
+        }
+        self.code_preparation_network = Some(network);
+        Ok(self)
     }
 
     fn validate_code_job_policy(&self) -> Result<(), SandboxError> {
@@ -268,16 +339,25 @@ impl DockerClient {
             host_config.readonly_rootfs = Some(true);
             host_config.cap_drop = Some(vec!["ALL".into()]);
             host_config.security_opt = Some(vec!["no-new-privileges:true".into()]);
-            host_config.network_mode = Some("none".into());
+            host_config.network_mode = Some(
+                self.code_preparation_network
+                    .clone()
+                    .unwrap_or_else(|| "none".into()),
+            );
             host_config.tmpfs = Some(HashMap::from([
                 (
                     "/workspace".into(),
                     format!(
-                        "rw,{},nosuid,nodev,size=256m,uid=10001,gid=10001,mode=0700",
+                        "rw,{},nosuid,nodev,size={},uid=10001,gid=10001,mode=0700",
                         if self.code_workspace_execution {
                             "exec"
                         } else {
                             "noexec"
+                        },
+                        if self.code_workspace_bytes == 256 * 1024 * 1024 {
+                            "256m".into()
+                        } else {
+                            self.code_workspace_bytes.to_string()
                         }
                     ),
                 ),
@@ -379,6 +459,26 @@ impl DockerClient {
         manifest: &Manifest,
         identity: Option<&CodeJobIdentity>,
     ) -> Result<SessionHandle, SandboxError> {
+        self.provision_with_launch(manifest, identity, None).await
+    }
+
+    async fn provision_with_launch(
+        &self,
+        manifest: &Manifest,
+        identity: Option<&CodeJobIdentity>,
+        launch: Option<Vec<String>>,
+    ) -> Result<SessionHandle, SandboxError> {
+        self.provision_with_repository(manifest, identity, launch, None)
+            .await
+    }
+
+    async fn provision_with_repository(
+        &self,
+        manifest: &Manifest,
+        identity: Option<&CodeJobIdentity>,
+        launch: Option<Vec<String>>,
+        repository: Option<&CodeRepositoryMount>,
+    ) -> Result<SessionHandle, SandboxError> {
         let image = if self.code_job_policy {
             self.validate_code_job_policy()?;
             self.check_code_image_ready().await?
@@ -398,9 +498,23 @@ impl DockerClient {
             });
         }
 
+        if let Some(repository) = repository {
+            host_config.mounts = Some(vec![repository.mount(true)]);
+        }
+        let launch = if let (Some(repository), Some(identity)) = (repository, identity) {
+            let mut env = launch.unwrap_or_default();
+            env.extend(repository.environment(identity));
+            Some(env)
+        } else {
+            launch
+        };
         let config = Config {
             image: Some(image),
+            env: launch,
             labels: identity.map(|identity| {
+                if let Some(repository) = repository {
+                    return repository.labels(identity, "execution");
+                }
                 HashMap::from([
                     ("io.elitea.code.job".into(), identity.job_key.clone()),
                     (
@@ -1194,6 +1308,56 @@ mod tests {
     fn container_workspace_root_is_absolute() {
         assert!(CONTAINER_WORKSPACE_ROOT.starts_with('/'));
     }
+
+    fn bounded_policy() -> DockerClient {
+        DockerClient {
+            base_image: format!("sha256:{}", "a".repeat(64)),
+            memory_limit_bytes: Some(536_870_912),
+            cpu_limit: Some(1.0),
+            code_job_policy: true,
+            code_workspace_execution: false,
+            code_platform_profile: false,
+            code_workspace_bytes: 256 * 1024 * 1024,
+            code_preparation_network: None,
+            command_timeout: Duration::from_secs(60),
+            client: Docker::connect_with_http_defaults().unwrap(),
+            sessions: RwLock::new(HashMap::new()),
+        }
+    }
+
+    #[test]
+    fn preparation_network_is_opt_in_and_cannot_enable_executable_scratch() {
+        assert_eq!(
+            bounded_policy().build_host_config().network_mode.as_deref(),
+            Some("none")
+        );
+        for network in ["host", "none", "bridge", "", "network/escape", "x\n", "x y"] {
+            assert!(
+                bounded_policy()
+                    .with_code_preparation_network(network.into())
+                    .is_err()
+            );
+        }
+        let preparation = bounded_policy()
+            .with_code_preparation_network("elitea-package-resolver".into())
+            .unwrap();
+        let host = preparation.build_host_config();
+        assert_eq!(
+            host.network_mode.as_deref(),
+            Some("elitea-package-resolver")
+        );
+        assert_eq!(host.memory_swap, host.memory);
+        assert_eq!(host.readonly_rootfs, Some(true));
+        assert!(host.tmpfs.unwrap()["/workspace"].contains(",noexec,"));
+        assert!(preparation.with_code_compilation().is_err());
+        assert!(
+            bounded_policy()
+                .with_code_compilation()
+                .unwrap()
+                .with_code_preparation_network("elitea-package-resolver".into())
+                .is_err()
+        );
+    }
 }
 
 #[cfg(test)]
@@ -1202,4 +1366,6 @@ mod live_tests;
 
 #[path = "docker_code_jobs.rs"]
 mod code_jobs;
+#[path = "docker_code_platform.rs"]
+mod code_platform;
 pub use code_jobs::{CodeJobIdentity, CodeJobObservation};

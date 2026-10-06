@@ -9,8 +9,8 @@ use thiserror::Error;
 const MAX_YAML_NODE_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_NODE_ID_BYTES: usize = 128;
 const MAX_OUTPUT_KEY_BYTES: usize = 256;
-const MAX_BRANCHES: usize = 64;
-const MAX_CONCURRENCY: u32 = 32;
+const MAX_BRANCHES: usize = 16;
+const MAX_CONCURRENCY: u32 = 8;
 const CONFIG_DIGEST_DOMAIN: &[u8] = b"elitea.graph.parallel.config.v1\0";
 
 /// The only scheduling barrier currently exposed by the Elitea YAML contract.
@@ -54,10 +54,9 @@ impl ParallelBranchDefinition {
 
 /// Strict v1 YAML contract for a true graph parallel node.
 ///
-/// Each branch names a compiler-owned child graph entry. A single-node branch
-/// can wrap an existing node; a multi-node branch can compile a subgraph. The
-/// branch graph is checkpointed independently, which is what lets a completed
-/// short branch survive a process loss while a longer sibling is still active.
+/// Each branch owns a different declared Agent node. Its isolated child graph
+/// contains that Agent followed by END. Independent durable child checkpoints
+/// retain completed siblings during a later pause or process restart.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ParallelNodeDefinition {
     id: String,
@@ -107,7 +106,7 @@ where
         type Value = Vec<RawParallelBranchDefinition>;
 
         fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-            formatter.write_str("at most 64 parallel branch mappings")
+            formatter.write_str("at most 16 parallel branch mappings")
         }
 
         fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
@@ -216,6 +215,10 @@ impl ParallelNodeDefinition {
         &self.output
     }
 
+    pub(crate) fn output_keys(&self) -> &[String] {
+        std::slice::from_ref(&self.output)
+    }
+
     #[must_use]
     pub fn transition(&self) -> Option<&str> {
         self.transition.as_deref()
@@ -254,7 +257,7 @@ impl ParallelNodeDefinition {
         }
         if self.branches.len() < 2 || self.branches.len() > MAX_BRANCHES {
             return Err(ParallelConfigurationError::Invalid(
-                "a parallel node must declare between 2 and 64 branches",
+                "a parallel node must declare between 2 and 16 branches",
             ));
         }
         let branch_count = u32::try_from(self.branches.len()).map_err(|_| {

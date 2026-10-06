@@ -1,14 +1,27 @@
 use sqlx::{PgPool, Row};
 
-use super::dependency_content::PythonDependencyBundle;
+use super::dependency_content::DependencyBundle;
+
+#[path = "ledger_code_platform.rs"]
+mod code_platform;
+#[path = "ledger_code_recovery.rs"]
+mod code_recovery;
+#[path = "ledger_code_recovery_cleanup.rs"]
+mod code_recovery_cleanup;
+#[allow(
+    unused_imports,
+    reason = "Retain the existing ledger state interface for owner tests."
+)]
+pub(crate) use code_recovery::{CodeOwnerObservation, CodeOwnerState};
+pub(crate) use code_recovery_cleanup::CodeCleanupFailure;
 
 /// Construct only from an authenticated invocation, never caller-selected tenant headers.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct JobScope {
-    tenant: String,
-    project: i32,
-    key: [u8; 32],
-    digest: [u8; 32],
+    pub(super) tenant: String,
+    pub(super) project: i32,
+    pub(super) key: [u8; 32],
+    pub(super) digest: [u8; 32],
 }
 
 impl JobScope {
@@ -91,6 +104,42 @@ pub struct JobLease {
     pub observed_phase: Phase,
 }
 
+impl JobLease {
+    /// Read the actual ownership fence without exposing mutable lease fields.
+    #[must_use]
+    pub(crate) const fn epoch(&self) -> i64 {
+        self.epoch
+    }
+}
+
+/// `PostgreSQL` schema failures expose only fixed operator diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum SchemaMigrationRequired {
+    #[error(
+        "Sandbox schema is missing a required column (SQLSTATE 42703). Verify the configured database and apply Main AgentState release migrations. Retry the same activation afterward."
+    )]
+    MissingColumn,
+    #[error(
+        "Sandbox schema is missing a required table (SQLSTATE 42P01). Verify the configured database and apply Main AgentState release migrations. Retry the same activation afterward."
+    )]
+    MissingTable,
+}
+impl SchemaMigrationRequired {
+    fn from_sqlstate(value: &str) -> Option<Self> {
+        match value {
+            "42703" => Some(Self::MissingColumn),
+            "42P01" => Some(Self::MissingTable),
+            _ => None,
+        }
+    }
+    pub(crate) const fn sqlstate(self) -> &'static str {
+        match self {
+            Self::MissingColumn => "42703",
+            Self::MissingTable => "42P01",
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum LedgerError {
     #[error("sandbox job identity or receipt is invalid")]
@@ -101,17 +150,26 @@ pub enum LedgerError {
     Missing,
     #[error("sandbox job ownership expired or the state already advanced")]
     Fenced,
+    #[error(transparent)]
+    SchemaMigrationRequired(SchemaMigrationRequired),
     #[error("sandbox job persistence failed")]
     Database(#[source] sqlx::Error),
 }
 impl From<sqlx::Error> for LedgerError {
     fn from(error: sqlx::Error) -> Self {
-        Self::Database(error)
+        let schema = error
+            .as_database_error()
+            .and_then(sqlx::error::DatabaseError::code)
+            .and_then(|code| SchemaMigrationRequired::from_sqlstate(code.as_ref()));
+        match schema {
+            Some(schema) => Self::SchemaMigrationRequired(schema),
+            None => Self::Database(error),
+        }
     }
 }
 
 pub struct JobLedger {
-    pool: PgPool,
+    pub(super) pool: PgPool,
 }
 
 impl JobLedger {
@@ -155,7 +213,7 @@ impl JobLedger {
     pub async fn read_preparation_bundle(
         &self,
         scope: &JobScope,
-    ) -> Result<Option<PythonDependencyBundle>, LedgerError> {
+    ) -> Result<Option<DependencyBundle>, LedgerError> {
         let row = sqlx::query("SELECT request_digest,preparation_bundle_json FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3")
             .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice())
             .fetch_optional(&self.pool).await?.ok_or(LedgerError::Missing)?;
@@ -172,7 +230,7 @@ impl JobLedger {
                 }
                 let root: RecordedRoot =
                     serde_json::from_str(&record).map_err(|_| LedgerError::Invalid)?;
-                PythonDependencyBundle::parse(record.as_bytes(), &root.digest)
+                DependencyBundle::parse(record.as_bytes(), &root.digest)
                     .map_err(|_| LedgerError::Invalid)
             })
             .transpose()
@@ -185,7 +243,7 @@ impl JobLedger {
     pub async fn record_preparation_bundle(
         &self,
         lease: &JobLease,
-        bundle: &PythonDependencyBundle,
+        bundle: &DependencyBundle,
     ) -> Result<(), LedgerError> {
         let record = std::str::from_utf8(bundle.record_json()).map_err(|_| LedgerError::Invalid)?;
         let mut transaction = self.pool.begin().await?;
@@ -209,11 +267,28 @@ impl JobLedger {
         Ok(())
     }
 
-    /// Use database time so reconnects do not reset a running job's deadline.
+    /// Start readiness at the first runtime binding. Lease renewal does not reset it.
     /// # Errors
     /// Returns `Missing` for an unknown request identity or a database error.
-    pub async fn age_seconds(&self, scope: &JobScope) -> Result<i64, LedgerError> {
-        sqlx::query_scalar("SELECT GREATEST(0, EXTRACT(EPOCH FROM (clock_timestamp()-created_at))::bigint) FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4")
+    pub async fn readiness_age_seconds(&self, scope: &JobScope) -> Result<i64, LedgerError> {
+        sqlx::query_scalar("SELECT GREATEST(0, EXTRACT(EPOCH FROM (clock_timestamp()-COALESCE(runtime_bound_at,created_at)))::bigint) FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4")
+            .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice())
+            .fetch_optional(&self.pool).await?.ok_or(LedgerError::Missing)
+    }
+
+    /// Retain an inert allocation from its first binding, including legacy bindings.
+    /// This age does not start or shorten the execution deadline.
+    /// # Errors
+    /// Returns `Missing` for an unknown request identity or a database error.
+    pub async fn hydration_age_seconds(&self, scope: &JobScope) -> Result<i64, LedgerError> {
+        self.readiness_age_seconds(scope).await
+    }
+
+    /// Start execution observation at dispatch. Reconnects and lease renewal do not reset it.
+    /// # Errors
+    /// Returns `Missing` for an unknown request identity or a database error.
+    pub async fn execution_age_seconds(&self, scope: &JobScope) -> Result<i64, LedgerError> {
+        sqlx::query_scalar("SELECT GREATEST(0, EXTRACT(EPOCH FROM (clock_timestamp()-COALESCE(dispatched_at,created_at)))::bigint) FROM elitea_runtime.sandbox_jobs WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4")
             .bind(&scope.tenant).bind(scope.project).bind(scope.key.as_slice()).bind(scope.digest.as_slice())
             .fetch_optional(&self.pool).await?.ok_or(LedgerError::Missing)
     }
@@ -267,6 +342,40 @@ impl JobLedger {
         }
         let rows = sqlx::query("SELECT tenant_id,project_id,job_key,request_digest FROM elitea_runtime.sandbox_jobs WHERE cancellation_owner=$1 AND cancellation_requested AND phase IN ('reserved','dispatched') AND (lease_until IS NULL OR lease_until <= clock_timestamp()) ORDER BY updated_at,tenant_id,project_id,job_key LIMIT $2")
             .bind(owner).bind(limit).fetch_all(&self.pool).await?;
+        rows.into_iter()
+            .map(|row| {
+                let key: Vec<u8> = row.try_get("job_key")?;
+                let digest: Vec<u8> = row.try_get("request_digest")?;
+                JobScope::new(
+                    row.try_get("tenant_id")?,
+                    row.try_get("project_id")?,
+                    key.try_into().map_err(|_| LedgerError::Invalid)?,
+                    digest.try_into().map_err(|_| LedgerError::Invalid)?,
+                )
+            })
+            .collect()
+    }
+
+    /// Discover bound inert allocations after their owner lease and retention expire.
+    /// The caller must claim and recheck each candidate before runtime side effects.
+    /// # Errors
+    /// Returns invalid bounds, corrupt identities, or a database error.
+    pub(crate) async fn expired_hydrations(
+        &self,
+        owner: &str,
+        minimum_age_seconds: i64,
+        limit: i64,
+    ) -> Result<Vec<JobScope>, LedgerError> {
+        if owner.is_empty()
+            || owner.len() > 128
+            || owner.contains('\0')
+            || minimum_age_seconds <= 0
+            || !(1..=32).contains(&limit)
+        {
+            return Err(LedgerError::Invalid);
+        }
+        let rows = sqlx::query("SELECT tenant_id,project_id,job_key,request_digest FROM elitea_runtime.sandbox_jobs WHERE owner_id=$1 AND phase='reserved' AND runtime_id IS NOT NULL AND (lease_until IS NULL OR lease_until <= clock_timestamp()) AND GREATEST(0,EXTRACT(EPOCH FROM (clock_timestamp()-COALESCE(runtime_bound_at,created_at)))::bigint) >= $2 ORDER BY COALESCE(runtime_bound_at,created_at),tenant_id,project_id,job_key LIMIT $3")
+            .bind(owner).bind(minimum_age_seconds).bind(limit).fetch_all(&self.pool).await?;
         rows.into_iter()
             .map(|row| {
                 let key: Vec<u8> = row.try_get("job_key")?;
@@ -350,8 +459,20 @@ impl JobLedger {
         changed(count)
     }
 
+    /// End this ownership interval after a bounded preparation or publication operation.
+    /// The next claim increments the epoch. This lease cannot admit another operation.
+    /// # Errors
+    /// Returns `Fenced` for expired ownership or an advanced state, or a database error.
+    pub(crate) async fn release(&self, lease: &JobLease) -> Result<(), LedgerError> {
+        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET lease_until=clock_timestamp(),updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase IN ('reserved','dispatched')")
+            .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
+            .bind(&lease.owner).bind(lease.epoch).execute(&self.pool).await?.rows_affected();
+        changed(count)
+    }
+
     /// Bind once before dispatch. Repeating the same binding is idempotent;
     /// changing it or using an expired lease is rejected.
+    /// Preserve reservation time when an older supervisor already bound the runtime.
     /// # Errors
     /// Returns `Invalid`, `Fenced`, or a database error.
     pub async fn bind_runtime(
@@ -367,7 +488,7 @@ impl JobLedger {
         {
             return Err(LedgerError::Invalid);
         }
-        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET runtime_id=$7,updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='reserved' AND (runtime_id IS NULL OR runtime_id=$7)")
+        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET runtime_id=$7,runtime_bound_at=COALESCE(runtime_bound_at,CASE WHEN runtime_id IS NULL THEN clock_timestamp() ELSE created_at END),updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='reserved' AND (runtime_id IS NULL OR runtime_id=$7)")
             .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
             .bind(&lease.owner).bind(lease.epoch).bind(runtime_id).execute(&self.pool).await?.rows_affected();
         changed(count)
@@ -378,7 +499,7 @@ impl JobLedger {
     /// # Errors
     /// Returns `Fenced` if ownership or phase changed, or a database error.
     pub async fn mark_dispatched(&self, lease: &JobLease) -> Result<(), LedgerError> {
-        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET phase='dispatched',updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='reserved' AND NOT cancellation_requested")
+        let count = sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET phase='dispatched',dispatched_at=COALESCE(dispatched_at,clock_timestamp()),updated_at=clock_timestamp() WHERE tenant_id=$1 AND project_id=$2 AND job_key=$3 AND request_digest=$4 AND owner_id=$5 AND lease_epoch=$6 AND lease_until > clock_timestamp() AND phase='reserved' AND NOT cancellation_requested")
             .bind(&lease.scope.tenant).bind(lease.scope.project).bind(lease.scope.key.as_slice()).bind(lease.scope.digest.as_slice())
             .bind(&lease.owner).bind(lease.epoch).execute(&self.pool).await?.rows_affected();
         changed(count)
@@ -456,3 +577,14 @@ fn hex(bytes: &[u8]) -> String {
     }
     output
 }
+
+#[path = "ledger_compiled.rs"]
+mod compiled;
+
+#[path = "ledger_workspace.rs"]
+mod workspace;
+pub use workspace::{WorkspaceBackend, WorkspaceRuntimeReceipt};
+
+#[cfg(test)]
+#[path = "ledger_schema_tests.rs"]
+mod schema_tests;

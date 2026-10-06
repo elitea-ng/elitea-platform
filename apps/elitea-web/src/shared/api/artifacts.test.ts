@@ -254,7 +254,11 @@ describe('fetchArtifactBlob', () => {
     const result = await fetchArtifactBlob({ baseUrl: '/api/v2', projectId: 'p1', bucket: 'bucket', filePath: 'notes.md' });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error('unreachable');
-    expect(result.data).toBeInstanceOf(Blob);
+    // Response.blob() owns its realm. Verify the real Blob brand and byte API.
+    expect(Object.prototype.toString.call(result.data)).toBe('[object Blob]');
+    expect(new TextDecoder().decode(await result.data.slice(0, 5).arrayBuffer())).toBe('hello');
+    expect(result.data.size).toBe(22);
+    expect(result.data.type).toBe('text/plain');
     expect(await result.data.text()).toBe('hello artifact content');
   });
 

@@ -1,0 +1,10 @@
+{
+  "revision": 1,
+  "kind": "synthetic_contract_fixture_not_executable_or_runtime_evidence",
+  "snapshot_key_sha256": "7942af2611b0d1c1aefbaee4119dc76a4a525a1621c220c0e63e42b3a610b912",
+  "descriptor_sha256": "1a8e8bd0fddd0c1d3dcefae672d81237ac80b4ca60ad60f7868cca29aa058658",
+  "compile_control_sha256": "27d8fcf12af4b9d5d14238880fbc6c8a85a568f0decd5e99485d5bef62f27df5",
+  "execute_control_sha256": "4524f365a95bedbd2564fcc8151502d7f4f2b079f1ec27c96e78706a90f1d65a",
+  "executable_sha256": "9a3a45d01531a20e89ac6ae10b0b0beb0492acd7216a368aa062d1a5fecaf9cd",
+  "executable_bytes": 6
+}

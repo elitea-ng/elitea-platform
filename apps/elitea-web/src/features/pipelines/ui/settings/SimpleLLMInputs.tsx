@@ -20,6 +20,7 @@ export interface SimpleLLMInputsProps {
   readonly enableAIAssistant?: boolean;
   readonly modelConfig?: AiAssistantLlmSettings | null;
   readonly gap?: string;
+  readonly codeLanguage?: string | undefined;
 }
 
 /**
@@ -28,7 +29,7 @@ export interface SimpleLLMInputsProps {
  * `SimpleLLMInputItem`, one row per `inputMappings` key.
  */
 export function SimpleLLMInputs(props: SimpleLLMInputsProps): ReactNode {
-  const { inputMappings, values, onChangeMapping, defaultValues, disabled = false, enableAIAssistant = false, modelConfig = null, gap } = props;
+  const { inputMappings, values, onChangeMapping, defaultValues, disabled = false, enableAIAssistant = false, modelConfig = null, gap, codeLanguage } = props;
 
   const containerSx: SxProps<Theme> = { display: 'flex', flexDirection: 'column', gap };
 
@@ -48,6 +49,7 @@ export function SimpleLLMInputs(props: SimpleLLMInputsProps): ReactNode {
             disabled={disabled}
             enableAIAssistant={enableAIAssistant}
             modelConfig={modelConfig}
+            codeLanguage={codeLanguage}
           />
         );
       })}

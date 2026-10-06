@@ -1,3 +1,4 @@
+import { isFixedParallelAuthoringAllowed } from '../lib/flow-editor/constants/parallel.constants';
 import type { ReactNode } from 'react';
 import { memo, useCallback, useMemo, useState } from 'react';
 
@@ -65,7 +66,8 @@ function getVisibleNodeTypes(): readonly PipelineNodeType[] {
     .filter((key) => !DeprecatedConstants.DeprecatedOrInvisibleNode.includes(key))
     .map((key) => types[key])
     .filter((value): value is PipelineNodeType => value !== undefined)
-    .filter((value) => RuntimeContractConstants.isCompilerAdmittedNodeType(value));
+    .filter((value) => RuntimeContractConstants.isCompilerAdmittedNodeType(value))
+    .filter(isFixedParallelAuthoringAllowed);
 }
 
 const menuColumnsSx: SxProps<Theme> = { display: 'flex' };

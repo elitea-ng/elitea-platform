@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 use ring::digest;
 use serde::{Deserialize, Serialize};
 
+use super::dependency_bundle::{DependencyBundle, hex};
+use super::native_bundle::NativePlatform;
 use super::request::{InvalidRequest, Language, PreparedJob};
 
 const MAX_TRANSPORT_BYTES: usize = 1024 * 1024;
@@ -18,9 +20,100 @@ pub struct PreparationJob {
     preparer_image_digest: String,
     policy_revision: String,
     timeout_seconds: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    platform: Option<NativePlatform>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_image_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_policy_revision: Option<String>,
 }
 
 impl PreparationJob {
+    #[cfg(feature = "sandbox-supervisor")]
+    #[must_use]
+    pub(crate) fn source(&self) -> &str {
+        &self.source
+    }
+
+    #[cfg(feature = "sandbox-supervisor")]
+    #[must_use]
+    pub(crate) fn image_digest(&self) -> &str {
+        &self.preparer_image_digest
+    }
+
+    #[cfg(feature = "sandbox-supervisor")]
+    #[must_use]
+    pub(crate) fn policy_revision(&self) -> &str {
+        &self.policy_revision
+    }
+
+    #[cfg(feature = "sandbox-supervisor")]
+    #[must_use]
+    pub(crate) fn timeout_seconds(&self) -> u32 {
+        self.timeout_seconds
+    }
+
+    #[cfg(feature = "sandbox-supervisor")]
+    pub(crate) fn within_timeout(&self, maximum: std::time::Duration) -> bool {
+        std::time::Duration::from_secs(self.timeout_seconds.into()) <= maximum
+    }
+
+    #[cfg(feature = "sandbox-supervisor")]
+    pub(crate) fn matches_runtime(&self, image: &str, policy: &str) -> bool {
+        let configured_digest = image.rsplit_once('@').map_or(image, |(_, digest)| digest);
+        self.preparer_image_digest == configured_digest && self.policy_revision == policy
+    }
+
+    /// Select the image-owned holding preparer. Source never supplies command arguments.
+    #[cfg(feature = "sandbox-supervisor")]
+    pub(crate) fn manifest(&self) -> Result<adk_sandbox::workspace::Manifest, InvalidRequest> {
+        use adk_sandbox::workspace::{Manifest, ManifestEntry};
+        let runner = if self.revision == 2 {
+            let argv = match self.language {
+                Language::JavaScript | Language::TypeScript => vec![
+                    "/usr/local/bin/deno",
+                    "run",
+                    "--no-config",
+                    "--cached-only",
+                    "--no-prompt",
+                    "--deny-ffi",
+                    "--allow-run=/usr/local/bin/deno",
+                    "--allow-read=/opt/elitea-code,/opt/deno-cache,/workspace",
+                    "--allow-write=/workspace",
+                    "--allow-env",
+                    "--allow-net=jsr.io,registry.npmjs.org",
+                    "/opt/elitea-code/javascript_preparation_job.mjs",
+                ],
+                Language::Rust => vec!["/usr/local/bin/elitea-code-rust-prepare", "--retain"],
+                Language::Python => return Err(InvalidRequest),
+            };
+            serde_json::json!({"argv":argv,"timeout_seconds":self.timeout_seconds})
+        } else {
+            serde_json::json!({
+                "argv": [
+                    "/usr/local/bin/deno", "run", "--no-config", "--frozen",
+                "--lock=/opt/elitea-code/deno.lock", "--cached-only", "--no-prompt",
+                    "--deny-run", "--deny-ffi",
+                    "--allow-read=/opt/elitea-code,/opt/deno-cache,/workspace",
+                    "--allow-write=/workspace", "--allow-env=NODE_DEBUG",
+                    "--allow-net=cdn.jsdelivr.net,pypi.org,files.pythonhosted.org",
+                    "/opt/elitea-code/python_preparation_job.mjs"
+                ],
+                "timeout_seconds": self.timeout_seconds,
+            })
+        };
+        Ok(Manifest::new(vec![
+            ManifestEntry::File {
+                path: ".elitea-code.json".into(),
+                content: self.to_transport()?,
+            },
+            ManifestEntry::File {
+                path: ".elitea-job.json".into(),
+                content: serde_json::to_vec(&runner).map_err(|_| InvalidRequest)?,
+            },
+        ]))
+    }
+
     /// Select the immutable preparer image and policy before requesting Main authority.
     /// This request does not authorize source execution or supply a package list.
     ///
@@ -49,11 +142,92 @@ impl PreparationJob {
             preparer_image_digest,
             policy_revision,
             timeout_seconds,
+            platform: None,
+            execution_image_digest: None,
+            execution_policy_revision: None,
         };
         job.to_transport()?;
         Ok(job)
     }
 
+    /// Bind acquisition to the selected platform and both immutable runtime profiles.
+    /// # Errors
+    /// Rejects unsupported languages, invalid profiles, excessive source, and unsafe time limits.
+    #[allow(clippy::too_many_arguments)] // Preserve both complete profile bindings at this boundary.
+    pub fn new_native(
+        language: Language,
+        source: String,
+        preparer_image_digest: String,
+        policy_revision: String,
+        timeout_seconds: u32,
+        platform: NativePlatform,
+        execution_image_digest: String,
+        execution_policy_revision: String,
+    ) -> Result<Self, InvalidRequest> {
+        if language == Language::Python
+            || timeout_seconds > if language == Language::Rust { 600 } else { 120 }
+            || language == Language::Rust && source.len() > 64 * 1024
+        {
+            return Err(InvalidRequest);
+        }
+        platform.validate().map_err(|_| InvalidRequest)?;
+        PreparedJob::new(
+            language,
+            source.clone(),
+            BTreeMap::new(),
+            execution_image_digest.clone(),
+            execution_policy_revision.clone(),
+            timeout_seconds,
+        )?;
+        let mut job = Self::new(
+            source,
+            preparer_image_digest,
+            policy_revision,
+            timeout_seconds,
+        )?;
+        job.revision = 2;
+        job.language = language;
+        job.platform = Some(platform);
+        job.execution_image_digest = Some(execution_image_digest);
+        job.execution_policy_revision = Some(execution_policy_revision);
+        job.to_transport()?;
+        Ok(job)
+    }
+    #[must_use]
+    pub fn language(&self) -> Language {
+        self.language
+    }
+    #[must_use]
+    pub fn platform(&self) -> Option<&NativePlatform> {
+        self.platform.as_ref()
+    }
+    #[must_use]
+    pub fn native(&self) -> bool {
+        self.revision == 2
+    }
+    #[must_use]
+    pub fn matches_bundle(&self, bundle: &DependencyBundle) -> bool {
+        match (self.platform.as_ref(), bundle.native()) {
+            (None, None) => self.language == Language::Python,
+            (Some(p), Some(b)) => {
+                *p == b.record.platform
+                    && self.language == b.record.language
+                    && (self.language != Language::Rust
+                        || b.record.payload["profile"]["preparation_image"].as_str()
+                            == Some(self.preparer_image_digest.as_str()))
+                    && self
+                        .fingerprint()
+                        .is_ok_and(|v| hex(&v) == b.record.preparation_sha256)
+                    && hex(digest::digest(&digest::SHA256, self.source.as_bytes()).as_ref())
+                        == b.record.source_sha256
+                    && self.execution_image_digest.as_deref()
+                        == Some(b.record.execution_image_digest.as_str())
+                    && self.execution_policy_revision.as_deref()
+                        == Some(b.record.execution_policy_revision.as_str())
+            }
+            _ => false,
+        }
+    }
     /// Decode strict versioned JSON and reapply constructor validation.
     ///
     /// # Errors
@@ -68,20 +242,42 @@ impl PreparationJob {
             preparer_image_digest: String,
             policy_revision: String,
             timeout_seconds: u32,
+            #[serde(default, deserialize_with = "platform_field")]
+            platform: Option<NativePlatform>,
+            #[serde(default, deserialize_with = "string_field")]
+            execution_image_digest: Option<String>,
+            #[serde(default, deserialize_with = "string_field")]
+            execution_policy_revision: Option<String>,
         }
         if bytes.len() > MAX_TRANSPORT_BYTES {
             return Err(InvalidRequest);
         }
         let wire: WireJob = serde_json::from_slice(bytes).map_err(|_| InvalidRequest)?;
-        if wire.revision != 1 || wire.language != Language::Python {
-            return Err(InvalidRequest);
+        match (
+            wire.revision,
+            wire.language,
+            wire.platform,
+            wire.execution_image_digest,
+            wire.execution_policy_revision,
+        ) {
+            (1, Language::Python, None, None, None) => Self::new(
+                wire.source,
+                wire.preparer_image_digest,
+                wire.policy_revision,
+                wire.timeout_seconds,
+            ),
+            (2, language, Some(platform), Some(image), Some(policy)) => Self::new_native(
+                language,
+                wire.source,
+                wire.preparer_image_digest,
+                wire.policy_revision,
+                wire.timeout_seconds,
+                platform,
+                image,
+                policy,
+            ),
+            _ => Err(InvalidRequest),
         }
-        Self::new(
-            wire.source,
-            wire.preparer_image_digest,
-            wire.policy_revision,
-            wire.timeout_seconds,
-        )
     }
 
     /// Serialize the bounded preparation request without execution state.
@@ -146,6 +342,61 @@ mod tests {
             write!(output, "{byte:02x}").unwrap();
             output
         })
+    }
+
+    #[cfg(feature = "sandbox-supervisor")]
+    #[test]
+    fn manifest_uses_the_image_lock_for_cached_only_preparation() {
+        use adk_sandbox::workspace::ManifestEntry;
+
+        let image_cache = include_str!("../../../elitea-code-runner/Containerfile")
+            .lines()
+            .find(|line| line.contains("deno cache --frozen"))
+            .expect("runner image must cache its pinned preparation dependencies");
+        let image_lock = image_cache
+            .split_ascii_whitespace()
+            .find(|argument| argument.starts_with("--lock="))
+            .expect("runner image must select its dependency lock");
+        let manifest = job().manifest().unwrap();
+        let runner = manifest
+            .entries
+            .iter()
+            .find_map(|entry| match entry {
+                ManifestEntry::File { path, content } if path == ".elitea-job.json" => {
+                    Some(serde_json::from_slice::<serde_json::Value>(content).unwrap())
+                }
+                _ => None,
+            })
+            .expect("preparation manifest must contain the trusted runner request");
+        let argv: Vec<&str> = runner["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|argument| argument.as_str().unwrap())
+            .collect();
+        assert_eq!(argv[0], "/usr/local/bin/deno");
+        assert_eq!(argv[1], "run");
+        assert_eq!(
+            argv.iter()
+                .filter(|argument| **argument == image_lock)
+                .count(),
+            1
+        );
+        for restriction in [
+            "--no-config",
+            "--frozen",
+            "--cached-only",
+            "--no-prompt",
+            "--deny-run",
+            "--deny-ffi",
+        ] {
+            assert!(argv.contains(&restriction), "missing {restriction}");
+        }
+        assert_eq!(runner["timeout_seconds"], 30);
+        assert_eq!(
+            argv.last(),
+            Some(&"/opt/elitea-code/python_preparation_job.mjs")
+        );
     }
 
     #[test]
@@ -308,5 +559,60 @@ mod tests {
             hex(&prepared),
             "ed5b8382186f15a8104e2f09c549fc09f147ea2aa2507ecd673ff616a7b5e093"
         );
+    }
+}
+
+fn platform_field<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<NativePlatform>, D::Error> {
+    NativePlatform::deserialize(d).map(Some)
+}
+fn string_field<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
+    String::deserialize(d).map(Some)
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    #[test]
+    fn native_preparation_fixture_retains_exact_typed_request_domain() {
+        let job = PreparationJob::new_native(
+            Language::TypeScript,
+            "export default 42;".into(),
+            format!("sha256:{}", "a".repeat(64)),
+            "js-preparation-v2".into(),
+            30,
+            NativePlatform {
+                os: "linux".into(),
+                arch: "arm64".into(),
+                abi: "gnu".into(),
+            },
+            format!("sha256:{}", "b".repeat(64)),
+            "js-offline-v2".into(),
+        )
+        .unwrap();
+        assert_eq!(
+            hex(&job.fingerprint().unwrap()),
+            "b43355889c53e4f8019d5997effa97027a82cd63d18f151faafc6294e99c5e1d"
+        );
+        let raw = include_bytes!("native-deno-v2.json");
+        let bundle = DependencyBundle::parse_record(raw).unwrap();
+        assert!(job.matches_bundle(&bundle));
+        assert!(
+            PreparationJob::from_transport(&job.to_transport().unwrap())
+                .unwrap()
+                .matches_bundle(&bundle)
+        );
+        let old = PreparationJob::new(
+            "print(42)".into(),
+            format!("sha256:{}", "a".repeat(64)),
+            "python-v1".into(),
+            30,
+        )
+        .unwrap();
+        let mut v: serde_json::Value =
+            serde_json::from_slice(&old.to_transport().unwrap()).unwrap();
+        v["platform"] = serde_json::Value::Null;
+        assert!(PreparationJob::from_transport(&serde_json::to_vec(&v).unwrap()).is_err());
     }
 }

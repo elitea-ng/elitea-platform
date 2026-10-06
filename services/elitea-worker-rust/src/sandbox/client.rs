@@ -1,8 +1,15 @@
 //! Worker-side transport only. No container runtime or receipt database access.
+#[path = "client_compiled.rs"]
+mod compiled;
 #[cfg(all(test, feature = "sandbox-supervisor"))]
 #[path = "client_disconnect_tests.rs"]
 mod disconnect_tests;
-use super::request::PreparedJob;
+pub(crate) use compiled::CompilationOutcome;
+#[path = "client_hydration.rs"]
+mod hydration;
+#[path = "client_preparation.rs"]
+mod preparation;
+use super::{dependency_bundle::DependencyBundle, request::PreparedJob};
 use crate::{
     protocol::elitea::runtime::v1::{
         AuthorizeSandboxJobRequestV1, CancelSandboxJobRequestV1, SandboxJobStatusV1,
@@ -11,6 +18,7 @@ use crate::{
     },
     transport::control_grpc::{ControlGrpcClient, ControlGrpcError, ControlRpc},
 };
+pub use preparation::{PreparationOutcome, PublicationOutcome};
 use std::time::Duration;
 use tonic::{Code, Request, transport::Channel};
 
@@ -71,7 +79,7 @@ impl SandboxClient {
         }
         Ok(Self {
             rpc: SandboxSupervisorServiceClient::new(channel)
-                .max_encoding_message_size(1024 * 1024 + 8192)
+                .max_encoding_message_size(6 * 1024 * 1024)
                 .max_decoding_message_size(512 * 1024 + 8192),
             audience,
             deadline,
@@ -85,8 +93,46 @@ impl SandboxClient {
     pub async fn submit<R: ControlRpc>(
         &self,
         control: &ControlGrpcClient<R>,
+        authorization: AuthorizeSandboxJobRequestV1,
+        job: &PreparedJob,
+    ) -> Result<SandboxOutcome, SandboxCallError> {
+        if job.dependency_bundle_root().is_some() {
+            return Err(SandboxCallError::Invalid);
+        }
+        self.submit_authorized(control, authorization, job, None)
+            .await
+    }
+
+    /// Acquire separate root-content and execution grants for the exact admitted job.
+    /// # Errors
+    /// Returns authorization, transport, or receipt errors without user payloads.
+    pub async fn submit_with_dependencies<R: ControlRpc>(
+        &self,
+        control: &ControlGrpcClient<R>,
+        authorization: AuthorizeSandboxJobRequestV1,
+        job: &PreparedJob,
+        bundle: &DependencyBundle,
+    ) -> Result<SandboxOutcome, SandboxCallError> {
+        let root = job
+            .dependency_bundle_root()
+            .ok_or(SandboxCallError::Invalid)?;
+        if root != bundle.root() || !job.matches_bundle(bundle) {
+            return Err(SandboxCallError::Invalid);
+        }
+        let digest = job.fingerprint().map_err(|_| SandboxCallError::Invalid)?;
+        let content = self
+            .authorize_content(control, authorization.clone(), &digest, root)
+            .await?;
+        self.submit_authorized(control, authorization, job, Some((content, bundle)))
+            .await
+    }
+
+    async fn submit_authorized<R: ControlRpc>(
+        &self,
+        control: &ControlGrpcClient<R>,
         mut authorization: AuthorizeSandboxJobRequestV1,
         job: &PreparedJob,
+        content: Option<(SignedSandboxJobGrantV1, &DependencyBundle)>,
     ) -> Result<SandboxOutcome, SandboxCallError> {
         authorization.request_digest = job
             .fingerprint()
@@ -100,7 +146,46 @@ impl SandboxClient {
             return Err(SandboxCallError::Rejected);
         }
         let grant = response.grant.ok_or(SandboxCallError::Rejected)?;
-        self.submit_granted(grant, job).await
+        self.submit_content_granted(grant, job, content).await
+    }
+    pub(crate) async fn submit_whole_code<R: ControlRpc>(
+        &self,
+        control: &ControlGrpcClient<R>,
+        mut authorization: AuthorizeSandboxJobRequestV1,
+        job: &PreparedJob,
+        bundle: Option<&DependencyBundle>,
+        intent: &[u8],
+    ) -> Result<SandboxOutcome, SandboxCallError> {
+        if intent.is_empty() || intent.len() > 16 * 1024 {
+            return Err(SandboxCallError::Invalid);
+        }
+        let digest = job.fingerprint().map_err(|_| SandboxCallError::Invalid)?;
+        let content = if let Some(bundle) = bundle {
+            if !job.matches_bundle(bundle) {
+                return Err(SandboxCallError::Invalid);
+            }
+            Some((
+                self.authorize_content(control, authorization.clone(), &digest, bundle.root())
+                    .await?,
+                bundle,
+            ))
+        } else {
+            None
+        };
+        if job.dependency_bundle_root().is_some() != bundle.is_some() {
+            return Err(SandboxCallError::Invalid);
+        }
+        authorization.request_digest = digest.to_vec();
+        authorization.audience.clone_from(&self.audience);
+        authorization.cancel_only = false;
+        authorization.dependency_bundle_sha256.clear();
+        let response = control.authorize_sandbox_job(authorization).await?;
+        if response.rejection.is_some() {
+            return Err(SandboxCallError::Rejected);
+        }
+        let grant = response.grant.ok_or(SandboxCallError::Rejected)?;
+        self.submit_content_granted_with_intent(grant, job, content, Some(intent))
+            .await
     }
 
     /// Request stop authority for the same immutable job. Never dispatch code.
@@ -167,11 +252,40 @@ impl SandboxClient {
         }
     }
 
+    #[cfg(all(test, feature = "sandbox-supervisor"))]
     pub(crate) async fn submit_granted(
         &self,
         grant: SignedSandboxJobGrantV1,
         job: &PreparedJob,
     ) -> Result<SandboxOutcome, SandboxCallError> {
+        self.submit_content_granted(grant, job, None).await
+    }
+
+    async fn submit_content_granted(
+        &self,
+        grant: SignedSandboxJobGrantV1,
+        job: &PreparedJob,
+        content: Option<(SignedSandboxJobGrantV1, &DependencyBundle)>,
+    ) -> Result<SandboxOutcome, SandboxCallError> {
+        self.submit_content_granted_with_intent(grant, job, content, None)
+            .await
+    }
+    async fn submit_content_granted_with_intent(
+        &self,
+        grant: SignedSandboxJobGrantV1,
+        job: &PreparedJob,
+        content: Option<(SignedSandboxJobGrantV1, &DependencyBundle)>,
+        intent: Option<&[u8]>,
+    ) -> Result<SandboxOutcome, SandboxCallError> {
+        if job.dependency_bundle_root().is_some() != content.is_some() {
+            return Err(SandboxCallError::Invalid);
+        }
+        if content
+            .as_ref()
+            .is_some_and(|(_, bundle)| job.dependency_bundle_root() != Some(bundle.root()))
+        {
+            return Err(SandboxCallError::Invalid);
+        }
         if grant.signature.len() != 64
             || grant.claims_bytes.is_empty()
             || grant.claims_bytes.len() > 4096
@@ -180,9 +294,15 @@ impl SandboxClient {
         {
             return Err(SandboxCallError::Rejected);
         }
+        let (content_grant, bundle_json) = content
+            .map(|(grant, bundle)| (Some(grant), bundle.record_json().to_vec()))
+            .unwrap_or_default();
         let mut request = Request::new(SubmitSandboxJobRequestV1 {
             grant: Some(grant),
             prepared_job_json: job.to_transport().map_err(|_| SandboxCallError::Invalid)?,
+            dependency_content_grant: content_grant,
+            dependency_bundle_json: bundle_json,
+            code_execution_intent_json: intent.unwrap_or_default().to_vec(),
         });
         request.set_timeout(self.deadline);
         let response =
@@ -312,3 +432,7 @@ mod tests {
         }
     }
 }
+
+#[path = "client_workspace.rs"]
+mod workspace;
+pub(crate) use workspace::{WorkspaceHydrationMode, WorkspaceHydrationOutcome};

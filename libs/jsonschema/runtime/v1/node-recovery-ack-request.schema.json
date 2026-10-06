@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.node-recovery-ack-request.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "request_id",
+    "activation_id",
+    "expected_revision",
+    "receipt_sha256",
+    "applied_revision",
+    "continuation_receipt",
+    "terminal_stop_reason"
+  ],
+  "properties": {
+    "request_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "activation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "expected_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "receipt_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "applied_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "continuation_receipt": {
+      "oneOf": [
+        {
+          "$ref": "elitea.pipeline.node-recovery-required.v1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "terminal_stop_reason": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "attempts_exhausted",
+        "elapsed_limit",
+        "not_retryable",
+        "retry_disabled",
+        null
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "continuation_receipt": {
+          "type": "null"
+        },
+        "terminal_stop_reason": {
+          "type": "null"
+        }
+      }
+    },
+    {
+      "properties": {
+        "continuation_receipt": {
+          "type": "object"
+        },
+        "terminal_stop_reason": {
+          "type": "null"
+        }
+      }
+    },
+    {
+      "properties": {
+        "continuation_receipt": {
+          "type": "null"
+        },
+        "terminal_stop_reason": {
+          "type": "string"
+        }
+      }
+    }
+  ]
+}

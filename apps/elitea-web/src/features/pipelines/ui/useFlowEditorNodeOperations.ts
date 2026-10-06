@@ -1,3 +1,4 @@
+import { isFixedParallelAuthoringAllowed } from '../lib/flow-editor/constants/parallel.constants';
 /**
  * `FlowEditor.jsx`'s node-creation/layout callbacks (baseline lines 205-
  * 326: `onNodeCreateAtPosition`/`onAddNode`/`calculateLayoutNodes`), split
@@ -42,6 +43,7 @@ function useOnNodeCreateAtPosition(args: Pick<UseFlowEditorNodeOperationsArgs, '
 
   return useCallback(
     (type, position) => {
+      if (!isFixedParallelAuthoringAllowed(type)) throw new Error('Fixed Parallel authoring is not enabled.');
       const newNode = FlowEditorHelpers.generateNodeIdByType(type, flowNodes);
       // DISCLOSED REDESIGN RISK — baseline (`FlowEditor.jsx:214-220`) calls
       // `setYamlJsonObject(prevValue => ({...prevValue, ...}))`, an atomic

@@ -1,0 +1,34 @@
+{
+  "revision": 1,
+  "purpose": "preparation",
+  "backend": {
+    "kind": "docker"
+  },
+  "preparation_network": "elitea-python-preparation-resolver",
+  "listen_address": "0.0.0.0:9448",
+  "owner": "sandbox-python-preparation-replica-unique-id",
+  "audience": "dns:elitea-sandbox-preparation",
+  "ca_path": "/run/elitea-sandbox/preparation/client-ca.pem",
+  "certificate_path": "/run/elitea-sandbox/preparation/server.pem",
+  "private_key_path": "/run/elitea-sandbox/preparation/server.key",
+  "verification_keyring_path": "/run/elitea-sandbox/preparation/command-signing-keyring.json",
+  "database_url_path": "/run/elitea-sandbox/preparation/database-url",
+  "database_ca_path": "/run/elitea-sandbox/preparation/database-ca.pem",
+  "database_connections": 2,
+  "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "policy_revision": "python-preparation-v1",
+  "languages": ["python"],
+  "concurrency": 1,
+  "memory_bytes": 536870912,
+  "cpu_limit": 1.0,
+  "timeout_seconds": 120,
+  "dependency_content": {
+    "origin": "https://elitea-main:9445",
+    "ca_path": "/run/elitea-sandbox/preparation/content-ca.pem",
+    "certificate_path": "/run/elitea-sandbox/preparation/content-client.pem",
+    "private_key_path": "/run/elitea-sandbox/preparation/content-client.key",
+    "staging_root": "/run/elitea-sandbox-content/preparation",
+    "capacity": 1,
+    "timeout_seconds": 30
+  }
+}

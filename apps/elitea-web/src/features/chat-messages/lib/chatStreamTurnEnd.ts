@@ -1,3 +1,4 @@
+import { staticPauseFromFrame } from './chatStreamStaticPause';
 /**
  * lib/chatStreamTurnEnd.ts — the predicate that ends a turn.
  *
@@ -6,6 +7,7 @@
  */
 import { isTerminalPauseFrame } from './chatStreamInterruptFrames';
 import { SocketMessageType, type ChatStreamFrame } from './chatStreamFrame';
+import { isFullMessageResultFrame, isRootAnswerFrame } from './chatStreamFinalResult';
 
 /**
  * The frames on which the run FAILED.
@@ -38,8 +40,16 @@ const TURN_FAILURE_TYPES: ReadonlySet<string> = new Set<string>([
  *   pause from a mid-run one. Read its own comment.
  */
 export function isTurnTerminalFrame(frame: ChatStreamFrame): boolean {
+  if (!isRootAnswerFrame(frame)) return false;
+  if (isFullMessageResultFrame(frame)) return true;
   if (frame.type === SocketMessageType.PipelineFinish) return true;
   if (frame.type === SocketMessageType.AgentResponse) return Boolean(frame.response_metadata?.finish_reason);
   if (frame.type !== undefined && TURN_FAILURE_TYPES.has(frame.type)) return true;
-  return isTerminalPauseFrame(frame);
+  return isTerminalPauseFrame(frame) || staticPauseFromFrame(frame) !== undefined;
+}
+
+/** Durable workers publish success progress before the result-bearing frame. */
+export function isObserverTerminalFrame(frame: ChatStreamFrame, generation?: string): boolean {
+  if (generation && (frame.type === SocketMessageType.PipelineFinish || frame.type === SocketMessageType.AgentResponse)) return false;
+  return isTurnTerminalFrame(frame);
 }

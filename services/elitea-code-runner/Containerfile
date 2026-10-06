@@ -5,16 +5,19 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo install cargo-auditable --locked --version 0.7.5
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+COPY adapters/rust ./adapters/rust
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/target \
     CARGO_TARGET_DIR=/target cargo auditable build --locked --release -j 2 && \
     cp /target/release/elitea-code-runner /usr/local/bin/elitea-code-runner && \
     cp /target/release/elitea-code-execute /usr/local/bin/elitea-code-execute && \
-    cp /target/release/elitea-code-rust /usr/local/bin/elitea-code-rust
+    cp /target/release/elitea-code-rust /usr/local/bin/elitea-code-rust && \
+    cp /target/release/elitea-code-rust-prepare /usr/local/bin/elitea-code-rust-prepare
 
 # Minimal runner verification target. The Deno language target extends it below.
 FROM python:3.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS verification
 COPY --from=builder /usr/local/bin/elitea-code-runner /usr/local/bin/elitea-code-runner
+RUN mkdir -p /workspace/repository && chown -R 10001:10001 /workspace
 WORKDIR /workspace
 USER 10001:10001
 CMD ["/usr/local/bin/elitea-code-runner"]
@@ -28,7 +31,7 @@ COPY --from=builder /usr/local/bin/elitea-code-execute /usr/local/bin/elitea-cod
 COPY adapters /opt/elitea-code
 ENV DENO_DIR=/opt/deno-cache
 RUN mkdir -p /opt/elitea-wheels && \
-    deno cache --frozen --lock=/opt/elitea-code/deno.lock /opt/elitea-code/python.mjs /opt/elitea-code/javascript.mjs && \
+    deno cache --frozen --lock=/opt/elitea-code/deno.lock /opt/elitea-code/python.mjs /opt/elitea-code/javascript.mjs /opt/elitea-code/prepare_python_code.mjs /opt/elitea-code/javascript_preparation_job.mjs /opt/elitea-code/javascript_hydration_job.mjs && \
     deno run --no-config --no-prompt --deny-net \
       --allow-read=/opt/elitea-code --allow-write=/opt/elitea-code \
       /opt/elitea-code/prepare_javascript.mjs /opt/elitea-code/javascript-packages.json \
@@ -49,12 +52,24 @@ COPY adapters/rust /opt/elitea-rust
 RUN mkdir -p /opt/elitea-rust/.cargo && \
     cargo vendor --locked --manifest-path /opt/elitea-rust/Cargo.toml /opt/rust-vendor > /opt/elitea-rust/.cargo/config.toml
 
+FROM builder AS rust-platform-dependencies
+COPY adapters/rust/platform-v1.Cargo.toml /opt/elitea-rust-platform-v1/Cargo.toml
+COPY adapters/rust/platform-v1.Cargo.lock /opt/elitea-rust-platform-v1/Cargo.lock
+COPY adapters/rust/src/main_platform.rs /opt/elitea-rust-platform-v1/src/main.rs
+COPY adapters/rust/src/platform.rs adapters/rust/src/platform_client.rs adapters/rust/src/platform_pipe.rs adapters/rust/src/user.rs /opt/elitea-rust-platform-v1/src/
+RUN mkdir -p /opt/elitea-rust-platform-v1/.cargo && \
+    cargo vendor --locked --manifest-path /opt/elitea-rust-platform-v1/Cargo.toml /opt/rust-platform-vendor > /opt/elitea-rust-platform-v1/.cargo/config.toml
+
 FROM rust:1.97.1-bookworm@sha256:0e2bcaef56d041a486784e54104a81aebe0da44bd03019bd70bc0401e42e4a97 AS rust-runtime
 COPY --from=builder /usr/local/bin/elitea-code-runner /usr/local/bin/elitea-code-runner
 COPY --from=builder /usr/local/bin/elitea-code-execute /usr/local/bin/elitea-code-execute
 COPY --from=builder /usr/local/bin/elitea-code-rust /usr/local/bin/elitea-code-rust
+COPY --from=builder /usr/local/bin/elitea-code-rust-prepare /usr/local/bin/elitea-code-rust-prepare
 COPY --from=rust-dependencies /opt/elitea-rust /opt/elitea-rust
 COPY --from=rust-dependencies /opt/rust-vendor /opt/rust-vendor
+COPY --from=rust-platform-dependencies /opt/elitea-rust-platform-v1 /opt/elitea-rust-platform-v1
+COPY --from=rust-platform-dependencies /opt/rust-platform-vendor /opt/rust-platform-vendor
+RUN mkdir -p /workspace/repository && chown -R 10001:10001 /workspace
 WORKDIR /workspace
 USER 10001:10001
 CMD ["/usr/local/bin/elitea-code-runner"]

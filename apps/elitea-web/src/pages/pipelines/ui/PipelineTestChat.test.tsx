@@ -46,13 +46,17 @@ function installConversationRoutes(): { readonly posted: ParticipantRow[][]; rea
   const posted: ParticipantRow[][] = [];
   const counter = { creates: 0 };
   server.use(
-    http.post('*/elitea_core/conversations/prompt_lib/:projectId', () => {
-      counter.creates += 1;
-      return HttpResponse.json({ id: 501, uuid: '00000000-0000-4000-8000-000000000abc', name: 'My Pipeline' });
+    http.post('*/elitea_core/conversations/prompt_lib/:projectId', async ({request}) => {
+      const body=await request.json() as {readonly source:string;readonly meta:{readonly is_hidden:boolean};readonly participants:ParticipantRow[]};
+      counter.creates += 1;posted.push(body.participants);
+      expect(body.source).toBe('editor_test');expect(body.meta.is_hidden).toBe(true);
+      return HttpResponse.json({id:501,uuid:'00000000-0000-4000-8000-000000000abc',name:'My Pipeline',source:'editor_test',is_private:true,
+        meta:{is_hidden:true,editor_test:{revision:1,actor_id:'6',project_id:'9',application_id:'42',application_version_id:'7'}},
+        participants:[{id:'900',entity_name:'user',entity_meta:{id:6}},{id:'901',entity_name:'application',entity_meta:{id:'42',project_id:'9'},entity_settings:{version_id:'7',agent_type:'pipeline'}}]});
     }),
     http.post('*/elitea_core/participants/prompt_lib/:projectId/:conversationId', async ({ request }) => {
-      posted.push((await request.json()) as ParticipantRow[]);
-      return HttpResponse.json([]);
+      await request.json();
+      throw new Error('Test participants must be atomic');
     }),
     http.get('*/elitea_core/conversation/prompt_lib/:projectId/:conversationId', () =>
       HttpResponse.json({
@@ -131,7 +135,7 @@ describe('PipelineTestChat', () => {
     await waitFor(() => expect(routes.creates).toBe(0));
   });
 
-  it('attaches both participants, with the pipeline still named `application`, on first use', async () => {
+  it('creates the saved application atomically and receives the server-owned user on first use', async () => {
     const routes = installConversationRoutes();
     const user = userEvent.setup();
     renderPane(
@@ -148,13 +152,8 @@ describe('PipelineTestChat', () => {
 
     await waitFor(() => expect(routes.posted).toHaveLength(1));
     const rows = routes.posted[0] ?? [];
-    // The USER row is the client's to add and it must carry a NUMBER: the
-    // resolver's author join is an INNER JOIN comparing `entity_meta->>'id'`.
-    expect(rows[0]?.entity_name).toBe('user');
-    expect(rows[0]?.entity_meta?.id).toBe(6);
-    // `'application'`, NOT the honest-looking `'pipeline'` — the resolver's
-    // target join is on that literal, and `agent_type` is the discriminator
-    // that routes the worker to the graph assembler.
+    expect(rows).toHaveLength(1);
+    expect(rows.some((row)=>row.entity_name==='user')).toBe(false);
     const pipelineRow = rows.find((row) => row.entity_name === 'application');
     expect(pipelineRow, 'a pipeline participant must still be named `application`').toBeDefined();
     expect(pipelineRow?.entity_settings?.version_id).toBe('7');
@@ -163,6 +162,25 @@ describe('PipelineTestChat', () => {
     // Exactly one conversation, however many events that one click produced
     // (pointer-down AND focus both call `ensure`).
     await waitFor(() => expect(routes.creates).toBe(1));
+  });
+
+  it('Clear releases the local test context without creating or deleting durable records', async () => {
+    const routes = installConversationRoutes();
+    const user = userEvent.setup();
+    let deleted = 0;
+    server.use(http.delete('*/elitea_core/*', () => {
+      deleted += 1;
+      return new HttpResponse(null, { status: 204 });
+    }));
+    renderPane(<PipelineTestChat settings={{}} disableChat={false} slotRef={undefined} identity={IDENTITY} user={USER} />);
+
+    expect(await screen.findByTestId('editor-test-clear')).toBeDisabled();
+    await user.click(screen.getByTestId('chat-message-input'));
+    await waitFor(() => expect(screen.getByTestId('editor-test-clear')).toBeEnabled());
+    await user.click(screen.getByTestId('editor-test-clear'));
+    await waitFor(() => expect(screen.getByTestId('editor-test-clear')).toBeDisabled());
+    expect(routes.creates).toBe(1);
+    expect(deleted).toBe(0);
   });
 
   it('creates nothing while the version has not resolved — a participant with no version_id 422s every turn', async () => {

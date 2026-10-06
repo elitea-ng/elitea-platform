@@ -53,8 +53,15 @@ type Secret struct {
 // Vault is an immutable, read-only snapshot. Concurrent exact-name lookups are
 // safe. It exposes no enumeration or mutation API.
 type Vault struct {
-	regular map[string]json.RawMessage
-	hidden  map[string]json.RawMessage
+	regular        map[string]json.RawMessage
+	hidden         map[string]json.RawMessage
+	externalAccess map[string]bool
+}
+
+// AllowsExternalAccess returns the persisted sharing flag for one exact name.
+// Omitted flags deny access, including names that do not exist.
+func (v *Vault) AllowsExternalAccess(name string) bool {
+	return v != nil && v.externalAccess[name]
 }
 
 // OpenUnwrapped opens a vault whose centry.secrets_key data is the 44-byte
@@ -250,8 +257,9 @@ func open(projectKey [fernetKeyBytes]byte, encryptedVault []byte) (*Vault, error
 }
 
 type storedVault struct {
-	Secrets       *map[string]json.RawMessage `json:"secrets"`
-	HiddenSecrets *map[string]json.RawMessage `json:"hidden_secrets"`
+	Secrets        *map[string]json.RawMessage `json:"secrets"`
+	HiddenSecrets  *map[string]json.RawMessage `json:"hidden_secrets"`
+	ExternalAccess map[string]bool             `json:"external_access,omitempty"`
 }
 
 func parseVault(plaintext []byte) (*Vault, bool) {
@@ -272,8 +280,9 @@ func parseVault(plaintext []byte) (*Vault, bool) {
 	}
 
 	return &Vault{
-		regular: *stored.Secrets,
-		hidden:  *stored.HiddenSecrets,
+		regular:        *stored.Secrets,
+		hidden:         *stored.HiddenSecrets,
+		externalAccess: stored.ExternalAccess,
 	}, true
 }
 

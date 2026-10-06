@@ -71,6 +71,7 @@ export const NODE_ID_WORD_SEPARATOR = '_';
  * `custom` remains unsupported by the compiler.
  */
 export const CompilerAdmittedNodeTypes: readonly PipelineNodeType[] = [
+  PipelineNodeTypes.Parallel, // compiler.rs:1768; execution binding remains independently gated
   PipelineNodeTypes.Code, // compiler.rs:1531 "code"; admitted sandbox runtime required
   PipelineNodeTypes.Decision, // compiler.rs:1243 "decision"
   PipelineNodeTypes.Agent, // compiler.rs:1246 "agent"
@@ -116,6 +117,8 @@ export interface ReservedStateKey {
  * two `DefaultState` keys the editor seeds, and they stay legal.
  */
 export const ReservedStateKeys: readonly ReservedStateKey[] = [
+  { key: '__elitea_parallel_agent_inputs_v1', citation: 'compiler.rs:1998 (parallel_application.rs:13)', reason: 'fixed Parallel frozen Agent inputs' },
+  { key: '__elitea_parallel_resume_v1', citation: 'compiler.rs:1997 (parallel.rs:40)', reason: 'fixed Parallel resume channel' },
   // The four private resume/scope channels, held by name, not by literal.
   { key: '__elitea_hitl_resume_v1', citation: 'compiler.rs:1457 (hitl.rs:29)', reason: 'HITL resume channel' },
   { key: '__elitea_tool_resume_v1', citation: 'compiler.rs:1458 (direct_tool.rs:44)', reason: 'direct-tool resume channel' },

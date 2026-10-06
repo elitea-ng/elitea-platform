@@ -43,12 +43,31 @@ import * as zod from "zod";
 
 export const getConversationParamsMessagesLimitMin = 0;
 
+export const getConversationParamsRunsLimitDefault = 20;
+export const getConversationParamsRunsLimitMax = 50;
+
+export const getConversationParamsRunsOffsetDefault = 0;
+export const getConversationParamsRunsOffsetMin = 0;
+export const getConversationParamsRunsOffsetMax = 10000;
+
 export const GetConversationParams = zod.object({
   messages_limit: zod
     .int()
     .min(getConversationParamsMessagesLimitMin)
     .optional(),
   sort_order: zod.string().optional(),
+  editor_test_runs: zod.boolean().optional(),
+  runs_limit: zod
+    .int()
+    .min(1)
+    .max(getConversationParamsRunsLimitMax)
+    .default(getConversationParamsRunsLimitDefault),
+  runs_offset: zod
+    .int()
+    .min(getConversationParamsRunsOffsetMin)
+    .max(getConversationParamsRunsOffsetMax)
+    .default(getConversationParamsRunsOffsetDefault),
+  messages_offset: zod.int().optional(),
 });
 
 export type GetConversationParams = zod.input<typeof GetConversationParams>;

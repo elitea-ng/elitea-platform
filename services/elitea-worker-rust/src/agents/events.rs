@@ -24,6 +24,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::direct_hitl::sensitive_call_identity;
+use super::graph::static_pause::{
+    STATIC_PAUSE_MESSAGE, STATIC_PAUSE_METADATA_KEY, StaticPauseMetadata,
+};
 use super::graph::{
     PIPELINE_APPLICATION_HITL_SCHEMA, PIPELINE_COMPLETED_CONTENT, PIPELINE_COMPLETED_METADATA_KEY,
     PIPELINE_COMPLETED_METADATA_VALUE, PIPELINE_NODE_METADATA_KEY, PRINTER_PAUSE_METADATA_KEY,
@@ -102,6 +105,8 @@ pub(crate) const APPLICATION_BRANCH_ROOT: &str = "elitea.saved_applications";
 pub(crate) const DESCENDANT_CONTAINER_INVOCATION_KEY: &str =
     "elitea.descendant.container_invocation_id";
 pub(crate) const DESCENDANT_PARENT_CALL_KEY: &str = "elitea.descendant.parent_call_id";
+pub(crate) const PIPELINE_TOOL_BOUNDARY_METADATA_KEY: &str = "elitea.pipeline.tool-boundary.v1";
+
 pub(crate) const DESCENDANT_CHECKPOINT_THREAD_KEY: &str = "elitea.descendant.checkpoint_thread_id";
 /// The pipeline child's own pending graph checkpoint (#973).
 ///
@@ -124,6 +129,13 @@ pub(crate) fn strip_descendant_private_metadata(event: &mut Event) {
         DESCENDANT_PARENT_CALL_KEY,
         DESCENDANT_CHECKPOINT_THREAD_KEY,
         PIPELINE_TOOL_PENDING_METADATA_KEY,
+        PIPELINE_TOOL_BOUNDARY_METADATA_KEY,
+        super::application_pipeline::BOUNDARY_LEDGER_KEY,
+        super::application_pipeline::STATIC_TOOL_THREAD_METADATA_KEY,
+        super::pipeline::scoped_applications::PIPELINE_APPLICATION_SCOPE_METADATA_KEY,
+        super::pipeline::scoped_applications::PIPELINE_ROOT_PROJECTION_METADATA_KEY,
+        super::pipeline::scoped_applications::ACTIVATION_CHAIN_KEY,
+        super::pipeline::scoped_applications::LOCAL_PROJECTION_KEY,
     ] {
         event.provider_metadata.remove(key);
     }
@@ -469,6 +481,18 @@ impl ApplicationToolPresentation {
 }
 
 impl ApplicationToolPresentationCatalog {
+    pub(crate) fn merge_exact(&mut self, other: Self) -> Result<(), AgentEventProjectionError> {
+        if other
+            .by_tool_name
+            .keys()
+            .any(|key| self.by_tool_name.contains_key(key))
+        {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        self.by_tool_name.extend(other.by_tool_name);
+        Ok(())
+    }
+
     pub(super) fn agent_tool_names(&self) -> impl Iterator<Item = &str> {
         self.by_tool_name
             .iter()
@@ -718,6 +742,7 @@ struct ActiveToolCall {
     arguments: Value,
     public_arguments: Value,
     timestamp_start: String,
+    original_batch_event_id: String,
     application: Option<ApplicationToolPresentation>,
     sibling_ordinal: Option<usize>,
     pipeline_node_name: Option<String>,
@@ -805,6 +830,7 @@ enum ProjectionState {
     Active(ActiveModelTurn),
     Complete(CompletedModelTurn),
     PrinterComplete,
+    StaticComplete,
     Paused,
     Finished,
 }
@@ -821,9 +847,12 @@ pub(crate) struct AgentEventProjector {
     toolkit_attribution: ToolkitAttributionCatalog,
     descendants: BTreeMap<String, DescendantAgentProjector>,
     pipeline_result: Option<String>,
+    static_pause_proof: Option<Value>,
+    static_tool_pauses: BTreeMap<String, Value>,
     saw_pipeline_node_events: bool,
     continuation_overlap: Option<ContinuationOverlap>,
     checkpoint_recovery: bool,
+    node_recovery_paused: bool,
 }
 
 const MAX_CONTINUATION_OVERLAP_CHARS: usize = 150;
@@ -961,9 +990,12 @@ impl AgentEventProjector {
             toolkit_attribution: ToolkitAttributionCatalog::default(),
             descendants: BTreeMap::new(),
             pipeline_result: None,
+            static_pause_proof: None,
+            static_tool_pauses: BTreeMap::new(),
             saw_pipeline_node_events: false,
             continuation_overlap,
             checkpoint_recovery: false,
+            node_recovery_paused: false,
         })
     }
 
@@ -1030,12 +1062,33 @@ impl AgentEventProjector {
     ///
     /// The returned batch contains at most four inline events. The caller must
     /// persist/send/ACK them in iteration order before polling ADK again.
+    #[allow(clippy::too_many_lines)] // Keep event validation, original lineage, and browser projection in one ordered path.
     pub(crate) fn project(
         &mut self,
         event: &Event,
     ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
         validate_event_id(&event.id)?;
         validate_invocation_id(&event.invocation_id)?;
+        if let Some(projected) = super::pipeline::scoped_applications::project_root_scope_event(
+            event,
+            self.invocation_id.as_deref(),
+        )
+        .map_err(|_| AgentEventProjectionError::invalid_state())?
+        {
+            return self.project(&projected);
+        }
+        if let Some(retained) = super::application_tools::retained_application_events(event)
+            .map_err(|_| AgentEventProjectionError::invalid_state())?
+        {
+            let mut batch = ProjectedAgentEventBatch::new();
+            for original in retained {
+                self.restore_retained_authorization(&original)?;
+                for projected in self.project(&original)? {
+                    batch.push(projected)?;
+                }
+            }
+            return Ok(batch);
+        }
         let has_descendant_container = event
             .provider_metadata
             .contains_key(DESCENDANT_CONTAINER_INVOCATION_KEY);
@@ -1053,6 +1106,20 @@ impl AgentEventProjector {
             )?
         {
             let batch = self.project_descendant_event(&child_interrupt.event)?;
+            if child_interrupt.static_pause {
+                let thread = self
+                    .context
+                    .graph_checkpoint_thread_id
+                    .as_deref()
+                    .ok_or_else(AgentEventProjectionError::invalid_state)?;
+                self.static_pause_proof = Some(
+                    pipeline_static_event_binding(event, &self.context.root_agent_name, thread)?
+                        .public_proof(event)?,
+                );
+                self.pipeline_result = Some(STATIC_PAUSE_MESSAGE.to_owned());
+                self.state = ProjectionState::StaticComplete;
+                return Ok(batch);
+            }
             return replace_nested_interrupt_identity(
                 batch,
                 &child_interrupt.interrupt_id,
@@ -1063,7 +1130,46 @@ impl AgentEventProjector {
             if !(has_descendant_container && has_descendant_call) {
                 return Err(AgentEventProjectionError::invalid_state());
             }
-            return self.project_descendant_event(event);
+            for boundary in super::application_pipeline::projected_outer_boundaries(event)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?
+            {
+                let active = self
+                    .projected_application_call(&boundary.container, &boundary.call)
+                    .ok_or_else(AgentEventProjectionError::invalid_state)?;
+                if self.projected_application_checkpoint_thread(&boundary.container, &boundary.call)
+                    != Some(boundary.thread.as_str())
+                    || active
+                        .application
+                        .as_ref()
+                        .is_none_or(|app| app.agent_type != "pipeline")
+                    || !boundary
+                        .lineage
+                        .matches_projection(
+                            &active.original_batch_event_id,
+                            active
+                                .sibling_ordinal
+                                .ok_or_else(AgentEventProjectionError::invalid_state)?,
+                            &active.name,
+                            &active.arguments,
+                        )
+                        .map_err(|_| AgentEventProjectionError::invalid_state())?
+                {
+                    return Err(AgentEventProjectionError::invalid_state());
+                }
+            }
+            let static_pause = super::application_pipeline::static_pipeline_tool_pause(event)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?;
+            let mut batch = self.project_descendant_event(event)?;
+            if let Some(pause) = static_pause {
+                self.collect_static_tool_inventory(&pause)?;
+                // The lifecycle stops on Paused at EOS. Emit the bounded root inventory
+                // during the ordered stream so Main persists it before the waiting receipt.
+                batch.push(self.event("full_message",&Value::String(STATIC_PAUSE_MESSAGE.to_owned()),None,
+                    &json!({"thread_id":self.context.thread_id,"chat_project_id":self.context.chat_project_id,
+                        "should_continue":true,"pipeline_static_tools_v1":{"revision":1,
+                            "pauses":self.static_tool_pauses.values().cloned().collect::<Vec<_>>()}}),event.timestamp)?)?;
+            }
+            return Ok(batch);
         }
         if let Some(skills) =
             super::instruction_authority::public_active_delta(&event.actions.state_delta)
@@ -1111,9 +1217,16 @@ impl AgentEventProjector {
             return Ok(batch);
         }
         validate_adk_event(event, &self.context.root_agent_name)?;
-        let batch = if let Some(status) =
-            super::context_status::ModelContextStatus::from_event(event)
-                .map_err(|_| AgentEventProjectionError::invalid_state())?
+        let batch = if let Some(proof) = super::graph::code_debug::CodeDebugProof::from_event(event)
+            .map_err(|_| AgentEventProjectionError::invalid_state())?
+        {
+            self.project_code_debug(event, &proof)?
+        } else if let Some(trace) = super::graph::code_trace::CodeTraceEvent::from_event(event)
+            .map_err(|_| AgentEventProjectionError::invalid_state())?
+        {
+            self.project_code_trace(event, &trace)?
+        } else if let Some(status) = super::context_status::ModelContextStatus::from_event(event)
+            .map_err(|_| AgentEventProjectionError::invalid_state())?
         {
             self.project_context_status(event, &status)?
         } else {
@@ -1166,6 +1279,53 @@ impl AgentEventProjector {
             self.project_tool_starts(event, &tool_calls, &mut batch)?;
         }
         Ok(batch)
+    }
+
+    /// Restore card metadata only in the projector. This does not grant tool execution.
+    fn restore_retained_authorization(
+        &mut self,
+        event: &Event,
+    ) -> Result<(), AgentEventProjectionError> {
+        let Some(request) = &event.actions.tool_confirmation else {
+            return Ok(());
+        };
+        let Some(encoded) = event
+            .provider_metadata
+            .get(DELEGATED_AUTHORIZATION_METADATA_KEY)
+        else {
+            return Ok(());
+        };
+        let requirement = decode_delegated_authorization_requirement(encoded)
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        let container = event
+            .provider_metadata
+            .get(DESCENDANT_CONTAINER_INVOCATION_KEY)
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        let parent = event
+            .provider_metadata
+            .get(DESCENDANT_PARENT_CALL_KEY)
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        if self.invocation_id.as_deref() == Some(container) {
+            let descendant = self
+                .descendants
+                .get_mut(parent)
+                .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            let catalog = &mut descendant.projector.delegated_authorization;
+            if let Some(expected) = catalog.requirement_for(&request.tool_name) {
+                if !expected.same_authority(&requirement) {
+                    return Err(AgentEventProjectionError::invalid_state());
+                }
+            } else {
+                catalog
+                    .insert(&request.tool_name, requirement)
+                    .map_err(|()| AgentEventProjectionError::invalid_state())?;
+            }
+            return Ok(());
+        }
+        for descendant in self.descendants.values_mut() {
+            descendant.projector.restore_retained_authorization(event)?;
+        }
+        Ok(())
     }
 
     fn project_descendant_event(
@@ -1226,13 +1386,33 @@ impl AgentEventProjector {
             .application
             .clone()
             .ok_or_else(AgentEventProjectionError::invalid_state)?;
-        let checkpoint_thread_id = descendant_checkpoint_thread(
-            event,
-            &application,
-            self.context.graph_checkpoint_thread_id.as_deref(),
-            &self.context.thread_id,
-            parent_call_id,
-        )?;
+        let checkpoint_thread_id =
+            match super::application_pipeline::static_thread_for_projected_call(
+                event,
+                &self.context.thread_id,
+                &active.original_batch_event_id,
+                active.sibling_ordinal.unwrap_or_default(),
+                parent_call_id,
+                &active.name,
+                &active.arguments,
+            )
+            .map_err(|_| AgentEventProjectionError::invalid_state())?
+            {
+                Some(thread)
+                    if application.agent_type == "pipeline"
+                        && self.context.graph_checkpoint_thread_id.is_none() =>
+                {
+                    Some(thread)
+                }
+                Some(_) => return Err(AgentEventProjectionError::invalid_state()),
+                None => descendant_checkpoint_thread(
+                    event,
+                    &application,
+                    self.context.graph_checkpoint_thread_id.as_deref(),
+                    &self.context.thread_id,
+                    parent_call_id,
+                )?,
+            };
         if !self.descendants.contains_key(parent_call_id) {
             let nested_context = self.context.nested(
                 active.name.clone(),
@@ -1283,7 +1463,21 @@ impl AgentEventProjector {
             // pipeline-parent case, for the same reason.
             child_event.branch.clear();
         }
-        let batch = descendant.projector.project(&child_event)?;
+        let mut batch = descendant.projector.project(&child_event)?;
+        if matches!(descendant.projector.state, ProjectionState::StaticComplete) {
+            let completion = CompletedAgentBrowserOutput {
+                content: STATIC_PAUSE_MESSAGE.to_owned(),
+                thread_id: descendant.projector.context.thread_id.clone(),
+                execution_finished: false,
+                context_info: Value::Null,
+            };
+            for event in descendant
+                .projector
+                .finish_after_eos(completion, child_event.timestamp)?
+            {
+                batch.push(event)?;
+            }
+        }
         overlay_batch_hierarchy(batch, std::slice::from_ref(&descendant.tier))
     }
 
@@ -1293,6 +1487,12 @@ impl AgentEventProjector {
     ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
         let payload = GraphInterruptPayload::from_event(event)
             .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        if event
+            .provider_metadata
+            .contains_key(STATIC_PAUSE_METADATA_KEY)
+        {
+            return self.project_pipeline_static(event);
+        }
         if event
             .provider_metadata
             .contains_key(PRINTER_PAUSE_METADATA_KEY)
@@ -1305,6 +1505,8 @@ impl AgentEventProjector {
             .and_then(Value::as_str)
             .ok_or_else(AgentEventProjectionError::invalid_state)?;
         match guardrail_type {
+            "pipeline_node_recovery" => self.project_pipeline_node_recovery(event, &payload),
+            "pipeline_static" => self.project_pipeline_static(event),
             "pipeline_hitl" => self.project_pipeline_hitl(event, &payload),
             "sensitive_tool" => self.project_pipeline_tool_confirmation(event, &payload),
             "mcp_auth" => self.project_pipeline_mcp_authorization(event, &payload),
@@ -1314,6 +1516,48 @@ impl AgentEventProjector {
             }
             _ => Err(AgentEventProjectionError::unsupported()),
         }
+    }
+
+    fn project_pipeline_node_recovery(
+        &mut self,
+        event: &Event,
+        payload: &GraphInterruptPayload,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        if !matches!(
+            self.state,
+            ProjectionState::Started | ProjectionState::Complete(_)
+        ) || !self.active_tools.is_empty()
+        {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let (data, _) = pipeline_interrupt_data(payload, &payload.thread_id)?;
+        if data.as_object().is_none_or(|data| data.len() != 2) {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let receipt: super::graph::node_recovery_receipt::NodeRecoveryRequiredReceipt =
+            serde_json::from_value(
+                data.get("receipt")
+                    .cloned()
+                    .ok_or_else(AgentEventProjectionError::invalid_state)?,
+            )
+            .map_err(|_| AgentEventProjectionError::invalid_state())?;
+        if !receipt.validate()
+            || receipt.graph_thread != payload.thread_id
+            || self.context.graph_checkpoint_thread_id.as_deref() != Some(&receipt.graph_thread)
+        {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let mut batch = ProjectedAgentEventBatch::new();
+        batch.push(self.event(
+            "agent_node_recovery_required",
+            &Value::String("Node recovery requires an authorized operator action.".into()),
+            None,
+            &serde_json::json!({"node_recovery_required_v1":receipt}),
+            event.timestamp,
+        )?)?;
+        self.state = ProjectionState::Paused;
+        self.node_recovery_paused = true;
+        Ok(batch)
     }
 
     fn project_pipeline_application_confirmation(
@@ -1332,23 +1576,107 @@ impl AgentEventProjector {
             &self.context.root_agent_name,
             checkpoint_thread_id,
         )?;
-        let _active = self
-            .active_tools
-            .get(binding.application_call_id())
-            .filter(|active| {
-                active.name == binding.application_tool_name() && active.application.is_some()
-            })
-            .ok_or_else(AgentEventProjectionError::invalid_state)?;
-        let descendant = self
-            .descendants
-            .get(binding.application_call_id())
-            .ok_or_else(AgentEventProjectionError::invalid_state)?;
-        if !matches!(self.state, ProjectionState::Complete(_)) || !descendant.projector.is_paused()
+        if !matches!(self.state, ProjectionState::Complete(_))
+            || !self.has_paused_application(
+                binding.application_call_id(),
+                binding.application_tool_name(),
+            )
         {
             return Err(AgentEventProjectionError::invalid_state());
         }
         self.state = ProjectionState::Paused;
         Ok(ProjectedAgentEventBatch::new())
+    }
+
+    fn projected_application_call(&self, invocation: &str, call: &str) -> Option<&ActiveToolCall> {
+        if self.invocation_id.as_deref() == Some(invocation) {
+            return self.active_tools.get(call);
+        }
+        self.descendants
+            .values()
+            .find_map(|child| child.projector.projected_application_call(invocation, call))
+    }
+    fn projected_application_checkpoint_thread(
+        &self,
+        invocation: &str,
+        call: &str,
+    ) -> Option<&str> {
+        if self.invocation_id.as_deref() == Some(invocation) {
+            return self
+                .descendants
+                .get(call)?
+                .projector
+                .context
+                .graph_checkpoint_thread_id
+                .as_deref();
+        }
+        self.descendants.values().find_map(|child| {
+            child
+                .projector
+                .projected_application_checkpoint_thread(invocation, call)
+        })
+    }
+    fn collect_static_tool_inventory(
+        &mut self,
+        pause: &super::application_pipeline::PipelineStaticToolPause,
+    ) -> Result<(), AgentEventProjectionError> {
+        let active = self
+            .projected_application_call(&pause.container_invocation_id, &pause.parent_call_id)
+            .filter(|active| {
+                active
+                    .application
+                    .as_ref()
+                    .is_some_and(|app| app.agent_type == "pipeline")
+            })
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        if !pause
+            .matches_projected_call(
+                &active.original_batch_event_id,
+                active
+                    .sibling_ordinal
+                    .ok_or_else(AgentEventProjectionError::invalid_state)?,
+                &active.name,
+                &active.arguments,
+            )
+            .map_err(|_| AgentEventProjectionError::invalid_state())?
+        {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let entry = pause.inventory();
+        for (id, stored) in &self.static_tool_pauses {
+            if id == &pause.pause_id {
+                if stored != &entry {
+                    return Err(AgentEventProjectionError::invalid_state());
+                }
+                return Ok(());
+            }
+            if stored["original_batch_event_id"] == entry["original_batch_event_id"]
+                && stored["original_ordinal"] == entry["original_ordinal"]
+            {
+                return Err(AgentEventProjectionError::invalid_state());
+            }
+        }
+        if self.static_tool_pauses.len() >= 16 {
+            return Err(resource_exhausted_projection());
+        }
+        self.static_tool_pauses
+            .insert(pause.pause_id.clone(), entry);
+        Ok(())
+    }
+
+    fn has_paused_application(&self, call_id: &str, tool_name: &str) -> bool {
+        (self
+            .active_tools
+            .get(call_id)
+            .is_some_and(|active| active.name == tool_name && active.application.is_some())
+            && self
+                .descendants
+                .get(call_id)
+                .is_some_and(|child| child.projector.is_paused()))
+            || self
+                .descendants
+                .values()
+                .any(|child| child.projector.has_paused_application(call_id, tool_name))
     }
 
     fn project_sensitive_confirmation(
@@ -1595,6 +1923,31 @@ impl AgentEventProjector {
         )?)?;
         self.state = ProjectionState::Paused;
         Ok(batch)
+    }
+
+    fn project_pipeline_static(
+        &mut self,
+        event: &Event,
+    ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
+        if !matches!(
+            self.state,
+            ProjectionState::Started | ProjectionState::Complete(_)
+        ) || !self.active_tools.is_empty()
+        {
+            return Err(AgentEventProjectionError::invalid_state());
+        }
+        let thread_id = self
+            .context
+            .graph_checkpoint_thread_id
+            .as_deref()
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        self.static_pause_proof = Some(
+            pipeline_static_event_binding(event, &self.context.root_agent_name, thread_id)?
+                .public_proof(event)?,
+        );
+        self.pipeline_result = Some(STATIC_PAUSE_MESSAGE.to_owned());
+        self.state = ProjectionState::StaticComplete;
+        Ok(ProjectedAgentEventBatch::new())
     }
 
     fn project_pipeline_printer(
@@ -2027,8 +2380,13 @@ impl AgentEventProjector {
     }
 
     #[must_use]
+    pub(crate) fn is_node_recovery_paused(&self) -> bool {
+        self.node_recovery_paused
+    }
+
     pub(crate) fn is_paused(&self) -> bool {
         matches!(self.state, ProjectionState::Paused)
+            || !self.static_tool_pauses.is_empty()
             || self
                 .descendants
                 .values()
@@ -2066,6 +2424,7 @@ impl AgentEventProjector {
             }
             ProjectionState::Created
             | ProjectionState::PrinterComplete
+            | ProjectionState::StaticComplete
             | ProjectionState::Paused
             | ProjectionState::Finished => {
                 return Err(AgentEventProjectionError::invalid_state());
@@ -2288,13 +2647,22 @@ impl AgentEventProjector {
             } else {
                 call.args.clone()
             };
+            let replay_ordinal = super::application_tools::application_replay_ordinal(event, id)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?;
             let active = ActiveToolCall {
                 name: call.name.to_owned(),
                 arguments: call.args.clone(),
                 public_arguments,
                 timestamp_start: timestamp.clone(),
+                original_batch_event_id: super::application_tools::original_application_batch_id(
+                    event,
+                )
+                .map_err(|_| AgentEventProjectionError::invalid_state())?,
                 application: self.application_tools.get(call.name).cloned(),
-                sibling_ordinal: self.application_tools.get(call.name).map(|_| index + 1),
+                sibling_ordinal: self
+                    .application_tools
+                    .get(call.name)
+                    .map(|_| replay_ordinal.unwrap_or(index + 1)),
                 pipeline_node_name: pipeline_node_name.clone(),
                 toolkit: self.toolkit_attribution.get(call.name).cloned(),
             };
@@ -2674,18 +3042,22 @@ impl AgentEventProjector {
     }
 
     /// Emit the selected completed result only after ADK reaches EOS.
+    #[allow(clippy::too_many_lines)] // Keep event validation, original lineage, and browser projection in one ordered path.
     pub(crate) fn finish_after_eos(
         &mut self,
         completion: CompletedAgentBrowserOutput,
         occurred_at: DateTime<Utc>,
     ) -> Result<ProjectedAgentEventBatch, AgentEventProjectionError> {
-        let printer_checkpoint = matches!(self.state, ProjectionState::PrinterComplete);
+        let text_checkpoint = matches!(
+            self.state,
+            ProjectionState::PrinterComplete | ProjectionState::StaticComplete
+        );
         let output_limited = match &self.state {
             ProjectionState::Complete(turn) => turn.output_limited,
-            ProjectionState::PrinterComplete => false,
+            ProjectionState::PrinterComplete | ProjectionState::StaticComplete => false,
             _ => return Err(AgentEventProjectionError::invalid_state()),
         };
-        if !self.active_tools.is_empty() {
+        if !self.active_tools.is_empty() && !matches!(self.state, ProjectionState::StaticComplete) {
             return Err(AgentEventProjectionError::invalid_state());
         }
         validate_public_text(&completion.thread_id)?;
@@ -2695,7 +3067,7 @@ impl AgentEventProjector {
             mut execution_finished,
             context_info,
         } = completion;
-        execution_finished &= !printer_checkpoint;
+        execution_finished &= !text_checkpoint;
         let content = self.pipeline_result.take().unwrap_or(content);
         let content = self
             .continuation_overlap
@@ -2772,6 +3144,7 @@ impl AgentEventProjector {
                 "context_info": context_info,
                 "invoked_skills": self.context.applied_skills,
                 "result_ref_v1": result_ref,
+                "pipeline_static_v1": self.static_pause_proof,
             }),
             occurred_at,
         )?)?;
@@ -2802,6 +3175,15 @@ impl AgentEventProjector {
                 .as_object_mut()
                 .ok_or_else(AgentEventProjectionError::invalid_state)?
                 .remove("result_ref_v1");
+        }
+        if response_metadata
+            .get("pipeline_static_v1")
+            .is_some_and(Value::is_null)
+        {
+            response_metadata
+                .as_object_mut()
+                .ok_or_else(AgentEventProjectionError::invalid_state)?
+                .remove("pipeline_static_v1");
         }
         let event = NodeEventV1 {
             r#type: event_type.to_owned(),
@@ -3574,10 +3956,21 @@ impl PipelineMcpAuthEventBinding {
 
 pub(crate) struct PipelineApplicationHitlEventBinding {
     checkpoint_id: String,
+    nested_checkpoints: Vec<NestedPipelineCheckpoint>,
     data: PipelineApplicationHitlData,
 }
 
 impl PipelineApplicationHitlEventBinding {
+    pub(crate) fn pending_node_name(&self) -> &str {
+        self.nested_checkpoints.first().map_or(
+            self.data.node_name.as_str(),
+            NestedPipelineCheckpoint::node_name,
+        )
+    }
+    pub(crate) fn nested_checkpoints(&self) -> &[NestedPipelineCheckpoint] {
+        &self.nested_checkpoints
+    }
+
     #[must_use]
     pub(crate) fn checkpoint_id(&self) -> &str {
         &self.checkpoint_id
@@ -3759,6 +4152,106 @@ impl PipelineHitlEventBinding {
             .iter()
             .any(|candidate| candidate == action)
     }
+}
+
+pub(crate) struct PipelineStaticEventBinding {
+    pub(crate) checkpoint_id: String,
+    pub(crate) metadata: StaticPauseMetadata,
+    pub(crate) nested_checkpoints: Vec<NestedPipelineCheckpoint>,
+}
+
+impl PipelineStaticEventBinding {
+    pub(crate) fn public_proof(&self, event: &Event) -> Result<Value, AgentEventProjectionError> {
+        let payload = GraphInterruptPayload::from_event(event)
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        let path: Vec<Value> = self.nested_checkpoints.iter().map(|entry| json!({
+            "node_name": entry.node_name(), "thread_id": entry.thread_id(), "checkpoint_id": entry.checkpoint_id(),
+        })).collect();
+        let identity = serde_json::to_vec(&json!([
+            event.invocation_id,
+            payload.thread_id,
+            self.checkpoint_id,
+            self.metadata,
+            path
+        ]))
+        .map_err(|_| AgentEventProjectionError::invalid_state())?;
+        let pause_id = format!(
+            "pipeline-static:sha256:{}",
+            hex(digest::digest(&digest::SHA256, &identity).as_ref())
+        );
+        Ok(
+            json!({"revision": 1, "pause_id": pause_id, "checkpoint_id": self.checkpoint_id,
+            "kind": self.metadata.kind, "node_name": self.metadata.node_name,
+            "definition_digest": self.metadata.definition_digest, "node_digest": self.metadata.node_digest,
+            "pending_nodes": self.metadata.pending_nodes, "step": self.metadata.step, "descendant_path": path}),
+        )
+    }
+}
+
+/// Parse the same typed identity for projection and durable continuation.
+pub(crate) fn pipeline_static_event_binding(
+    event: &Event,
+    root_agent_name: &str,
+    thread_id: &str,
+) -> Result<PipelineStaticEventBinding, AgentEventProjectionError> {
+    let payload = GraphInterruptPayload::from_event(event)
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    if payload.thread_id != thread_id || !valid_graph_checkpoint_identity(&payload.checkpoint_id) {
+        return Err(AgentEventProjectionError::invalid_state());
+    }
+    let (metadata, nested_checkpoints) =
+        if let Some(raw) = event.provider_metadata.get(STATIC_PAUSE_METADATA_KEY) {
+            validate_graph_interrupt_event_with_metadata_count(event, root_agent_name, 2)?;
+            if raw.len() > 16 * 1024 {
+                return Err(AgentEventProjectionError::invalid_state());
+            }
+            let metadata: StaticPauseMetadata = serde_json::from_str(raw)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?;
+            if payload.kind != metadata.kind
+                || payload.node.as_deref() != Some(&metadata.node_name)
+                || payload.message.is_some()
+                || payload.data.is_some()
+                || event
+                    .content()
+                    .and_then(|content| content.parts.first())
+                    .and_then(|part| match part {
+                        Part::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    != Some(STATIC_PAUSE_MESSAGE)
+            {
+                return Err(AgentEventProjectionError::invalid_state());
+            }
+            (metadata, Vec::new())
+        } else {
+            validate_graph_interrupt_event(event, root_agent_name)?;
+            if payload.kind != "dynamic" || payload.node.is_some() {
+                return Err(AgentEventProjectionError::invalid_state());
+            }
+            let (raw, nested) = pipeline_interrupt_data(&payload, thread_id)?;
+            if nested.is_empty() {
+                return Err(AgentEventProjectionError::invalid_state());
+            }
+            let metadata: StaticPauseMetadata = serde_json::from_value(raw)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?;
+            validate_pipeline_interrupt_message(
+                payload
+                    .message
+                    .as_deref()
+                    .ok_or_else(AgentEventProjectionError::invalid_state)?,
+                &metadata.native_message(),
+                &nested,
+            )?;
+            (metadata, nested)
+        };
+    if !metadata.validate() {
+        return Err(AgentEventProjectionError::invalid_state());
+    }
+    Ok(PipelineStaticEventBinding {
+        checkpoint_id: payload.checkpoint_id,
+        metadata,
+        nested_checkpoints,
+    })
 }
 
 /// Validate and bind a persisted graph interrupt without projecting it again.
@@ -4031,14 +4524,13 @@ fn pipeline_application_event_binding_from_payload(
         .ok_or_else(AgentEventProjectionError::invalid_state)?;
     validate_pipeline_interrupt_envelope_message(message)?;
     let (raw_data, nested_checkpoints) = pipeline_interrupt_data(payload, thread_id)?;
-    if !nested_checkpoints.is_empty() {
-        return Err(AgentEventProjectionError::invalid_state());
-    }
     let data = serde_json::from_value::<PipelineApplicationHitlData>(raw_data)
         .map_err(|_| AgentEventProjectionError::invalid_state())?;
-    data.validate(message)?;
+    validate_pipeline_interrupt_message(message, &data.message, &nested_checkpoints)?;
+    data.validate(&data.message)?;
     Ok(PipelineApplicationHitlEventBinding {
         checkpoint_id: payload.checkpoint_id.clone(),
+        nested_checkpoints,
         data,
     })
 }
@@ -4047,8 +4539,10 @@ struct NestedPipelineInterruptProjection {
     event: Event,
     interrupt_id: String,
     call_digest: String,
+    static_pause: bool,
 }
 
+#[allow(clippy::too_many_lines)] // Keep event validation, original lineage, and browser projection in one ordered path.
 fn nested_pipeline_interrupt_child_event(
     event: &Event,
     root_agent_name: &str,
@@ -4112,13 +4606,33 @@ fn nested_pipeline_interrupt_child_event(
     else {
         return Ok(None);
     };
-    let child_payload = GraphInterruptPayload {
-        kind: payload.kind,
-        node: None,
-        message: Some(child_message.to_owned()),
-        data: Some(nested.data),
-        thread_id: nested.thread,
-        checkpoint_id: nested.checkpoint_id,
+    let static_pause = guardrail_type == "pipeline_static";
+    let leaf_static = if static_pause && nested.data.get("subgraph").is_none() {
+        Some(
+            serde_json::from_value::<StaticPauseMetadata>(nested.data.clone())
+                .map_err(|_| AgentEventProjectionError::invalid_state())?,
+        )
+    } else {
+        None
+    };
+    let child_payload = if let Some(metadata) = &leaf_static {
+        GraphInterruptPayload {
+            kind: metadata.kind.clone(),
+            node: Some(metadata.node_name.clone()),
+            message: None,
+            data: None,
+            thread_id: nested.thread.clone(),
+            checkpoint_id: nested.checkpoint_id.clone(),
+        }
+    } else {
+        GraphInterruptPayload {
+            kind: payload.kind,
+            node: None,
+            message: Some(child_message.to_owned()),
+            data: Some(nested.data),
+            thread_id: nested.thread,
+            checkpoint_id: nested.checkpoint_id,
+        }
     };
     let mut child_event = event.clone();
     child_event.invocation_id = format!("pipeline-child:{}", scope.parent_call_id());
@@ -4129,6 +4643,15 @@ fn nested_pipeline_interrupt_child_event(
         INTERRUPT_METADATA_KEY.to_owned(),
         child_payload.to_metadata_value(),
     );
+    if let Some(metadata) = leaf_static {
+        child_event
+            .set_content(adk_rust::Content::new("assistant").with_text(STATIC_PAUSE_MESSAGE));
+        child_event.provider_metadata.insert(
+            STATIC_PAUSE_METADATA_KEY.to_owned(),
+            serde_json::to_string(&metadata)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?,
+        );
+    }
     child_event.provider_metadata.insert(
         DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
         event.invocation_id.clone(),
@@ -4145,6 +4668,7 @@ fn nested_pipeline_interrupt_child_event(
         event: child_event,
         interrupt_id,
         call_digest,
+        static_pause,
     }))
 }
 
@@ -4156,6 +4680,28 @@ fn nested_pipeline_interrupt_identity(
     guardrail_type: &str,
 ) -> Result<Option<(String, String)>, AgentEventProjectionError> {
     let identity = match guardrail_type {
+        "pipeline_static" => {
+            pipeline_static_event_binding(event, root_agent_name, root_thread_id)?;
+            let mut context = digest::Context::new(&digest::SHA256);
+            context.update(b"elitea.pipeline-static-interrupt.v1\0");
+            let encoded = canonical_json(
+                payload
+                    .data
+                    .as_ref()
+                    .ok_or_else(AgentEventProjectionError::invalid_state)?,
+            )?;
+            for field in [
+                event.invocation_id.as_bytes(),
+                payload.thread_id.as_bytes(),
+                payload.checkpoint_id.as_bytes(),
+                encoded.as_slice(),
+            ] {
+                context.update(&(field.len() as u64).to_be_bytes());
+                context.update(field);
+            }
+            let hash = format!("sha256:{}", hex(context.finish().as_ref()));
+            (format!("pipeline-static:{hash}"), hash)
+        }
         "pipeline_hitl" => {
             let binding = pipeline_hitl_event_binding_from_payload(
                 event,
@@ -5096,7 +5642,16 @@ fn descendant_checkpoint_thread(
 }
 
 fn pipeline_application_call_node(call_id: &str) -> Option<&str> {
-    let (node_name, step) = call_id.strip_prefix("pipeline:")?.rsplit_once(':')?;
+    let (node_name, step) = if let Some(versioned) = call_id.strip_prefix("pipeline-v2:") {
+        let (node_and_digest, step) = versioned.rsplit_once(':')?;
+        let (node, digest) = node_and_digest.rsplit_once(':')?;
+        if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        (node, step)
+    } else {
+        call_id.strip_prefix("pipeline:")?.rsplit_once(':')?
+    };
     (valid_pipeline_node_identity(node_name)
         && !step.is_empty()
         && step.bytes().all(|byte| byte.is_ascii_digit()))
@@ -5360,3 +5915,96 @@ fn text_digest(text: &str) -> String {
     }
     value
 }
+
+#[path = "events_code_trace.rs"]
+mod code_trace;
+
+#[cfg(test)]
+mod scoped_static_inventory_tests {
+    use super::*;
+    use crate::agents::application_pipeline::{static_pause_fixture, static_pipeline_tool_pause};
+    use adk_rust::Content;
+    #[test]
+    fn static_inventory_keeps_equal_ordinals_from_distinct_original_child_batches() {
+        let mut root =
+            AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({}))).unwrap();
+        let mut pauses = Vec::new();
+        for (batch, invocation, call, branch) in [
+            ("batch-one", "child-one", "call-one", "agent-one"),
+            ("batch-two", "child-two", "call-two", "agent-two"),
+        ] {
+            let mut original = Event::with_id(batch, invocation);
+            original.llm_response.content = Some(Content {
+                role: "model".to_owned(),
+                parts: vec![Part::FunctionCall {
+                    name: "saved_pipeline".to_owned(),
+                    args: json!({"task":"work"}),
+                    id: Some(call.to_owned()),
+                    thought_signature: None,
+                }],
+            });
+            let (_, _, event, _) = static_pause_fixture(&original, 0, "before");
+            pauses.push(static_pipeline_tool_pause(&event).unwrap().unwrap());
+            let mut catalog = ApplicationToolPresentationCatalog::default();
+            catalog
+                .insert_runtime(
+                    "saved_pipeline".to_owned(),
+                    "Saved pipeline".to_owned(),
+                    "pipeline".to_owned(),
+                    "fixture".to_owned(),
+                    ApplicationToolPresentationCatalog::default(),
+                    ApplicationToolGuardCatalogs::default(),
+                )
+                .unwrap();
+            let mut child =
+                AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({}))).unwrap();
+            child.invocation_id = Some(invocation.to_owned());
+            child.active_tools.insert(
+                call.to_owned(),
+                ActiveToolCall {
+                    name: "saved_pipeline".to_owned(),
+                    arguments: json!({"task":"work"}),
+                    public_arguments: json!({"task":"work"}),
+                    timestamp_start: Utc::now().to_rfc3339(),
+                    original_batch_event_id: batch.to_owned(),
+                    application: catalog.get("saved_pipeline").cloned(),
+                    sibling_ordinal: Some(1),
+                    pipeline_node_name: None,
+                    toolkit: None,
+                },
+            );
+            root.descendants.insert(
+                branch.to_owned(),
+                DescendantAgentProjector {
+                    tier: AgentPathTier {
+                        name: branch.to_owned(),
+                        call_id: branch.to_owned(),
+                        sibling_ordinal: Some(1),
+                    },
+                    projector: Box::new(child),
+                },
+            );
+        }
+        for pause in &pauses {
+            root.collect_static_tool_inventory(pause).unwrap();
+        }
+        assert_eq!(root.static_tool_pauses.len(), 2);
+        assert!(
+            root.static_tool_pauses
+                .values()
+                .all(|entry| entry["original_ordinal"] == json!(1))
+        );
+        assert_eq!(
+            root.static_tool_pauses
+                .values()
+                .map(|entry| entry["original_batch_event_id"].as_str().unwrap())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from(["batch-one", "batch-two"])
+        );
+        root.collect_static_tool_inventory(&pauses[0]).unwrap();
+        assert_eq!(root.static_tool_pauses.len(), 2);
+    }
+}
+
+#[path = "events_code_debug.rs"]
+mod code_debug;

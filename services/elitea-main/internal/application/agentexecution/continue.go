@@ -35,6 +35,7 @@ const (
 	CurrentContinuationHITL          CurrentContinuationKind = "hitl"
 	CurrentContinuationAuthorization CurrentContinuationKind = "authorization"
 	CurrentContinuationOutputLimit   CurrentContinuationKind = "output_limit"
+	CurrentContinuationStatic        CurrentContinuationKind = "static"
 )
 
 type CurrentContinuationResolveRequest struct {
@@ -44,16 +45,20 @@ type CurrentContinuationResolveRequest struct {
 	ResponseMessageID string
 	Kind              CurrentContinuationKind
 	AuthorizationID   string
+	StaticTools       bool
 }
 
 func (request CurrentContinuationResolveRequest) Validate() error {
+	if request.StaticTools && request.normalizedKind() != CurrentContinuationStatic {
+		return ErrInvalidCurrentAgentStart
+	}
 	if request.ProjectID <= 0 || request.ActorUserID <= 0 ||
 		!validUUID(request.ConversationUUID) || !validUUID(request.ResponseMessageID) {
 		return ErrInvalidCurrentAgentStart
 	}
 	if request.normalizedKind() != CurrentContinuationHITL &&
 		request.normalizedKind() != CurrentContinuationAuthorization &&
-		request.normalizedKind() != CurrentContinuationOutputLimit {
+		request.normalizedKind() != CurrentContinuationOutputLimit && request.normalizedKind() != CurrentContinuationStatic {
 		return ErrInvalidCurrentAgentStart
 	}
 	if request.normalizedKind() == CurrentContinuationAuthorization &&
@@ -90,6 +95,8 @@ type CurrentContinuationTarget struct {
 	AvailableActions      []string
 	HITLInterrupts        []CurrentHITLInterrupt
 	PipelineHITLReview    *CurrentPipelineHITLReview
+	PipelineStaticPause   *CurrentPipelineStaticPause
+	PipelineStaticTools   *CurrentPipelineStaticTools
 	AuthorizationRequests []CurrentAuthorizationRequest
 	TruncatedContent      string
 	OutputLimitSequence   int64
@@ -146,7 +153,13 @@ func (target CurrentContinuationTarget) Validate() error {
 		target.ThreadID == "" || len(target.ThreadID) > 256 || strings.ContainsRune(target.ThreadID, '\x00') ||
 		!validStoredUUID(target.ExecutionGeneration) ||
 		(kind != CurrentContinuationHITL && kind != CurrentContinuationAuthorization &&
-			kind != CurrentContinuationOutputLimit) {
+			kind != CurrentContinuationOutputLimit && kind != CurrentContinuationStatic) {
+		return ErrUnsupportedCurrentAgentStart
+	}
+	if kind == CurrentContinuationStatic {
+		return target.validateStaticContinuation()
+	}
+	if target.PipelineStaticPause != nil || target.PipelineStaticTools != nil {
 		return ErrUnsupportedCurrentAgentStart
 	}
 	if review := target.PipelineHITLReview; review != nil {
@@ -232,6 +245,9 @@ type CurrentContinuationResolver interface {
 }
 
 type CurrentContinuationRequest struct {
+	StaticPauseID      string
+	StaticInputText    string
+	StaticDecisions    []CurrentStaticLeafDecision
 	ProjectID          int64
 	ActorUserID        int64
 	ConversationUUID   string
@@ -254,6 +270,12 @@ func (request CurrentContinuationRequest) Validate() error {
 		len(request.Value) > maxCurrentHITLValueBytes ||
 		strings.ContainsRune(request.Value, '\x00') ||
 		(request.ThreadID != "" && (len(request.ThreadID) > 256 || strings.ContainsRune(request.ThreadID, '\x00'))) {
+		return ErrInvalidCurrentAgentStart
+	}
+	if kind == CurrentContinuationStatic {
+		return request.validateStaticContinuation()
+	}
+	if request.StaticPauseID != "" || request.StaticInputText != "" || len(request.StaticDecisions) != 0 {
 		return ErrInvalidCurrentAgentStart
 	}
 	if kind == CurrentContinuationHITL {
@@ -436,6 +458,8 @@ type CurrentContinueTurn struct {
 	ContinuationKind     CurrentContinuationKind
 	HITLDecisions        json.RawMessage
 	PipelineHITLReview   *CurrentPipelineHITLReview
+	PipelineStaticPause  *CurrentPipelineStaticPause
+	PipelineStaticTools  *CurrentPipelineStaticTools
 	OutputLimitSequence  int64
 }
 
@@ -467,7 +491,13 @@ func (turn CurrentContinueTurn) Validate() error {
 		kind = CurrentContinuationHITL
 	}
 	if kind != CurrentContinuationHITL && kind != CurrentContinuationAuthorization &&
-		kind != CurrentContinuationOutputLimit {
+		kind != CurrentContinuationOutputLimit && kind != CurrentContinuationStatic {
+		return ErrInvalidCurrentAgentStart
+	}
+	if kind == CurrentContinuationStatic {
+		return turn.validateStaticContinuation()
+	}
+	if turn.PipelineStaticPause != nil || turn.PipelineStaticTools != nil {
 		return ErrInvalidCurrentAgentStart
 	}
 	if review := turn.PipelineHITLReview; review != nil {
@@ -557,6 +587,8 @@ func (turn *CurrentContinueTurn) Clone() *CurrentContinueTurn {
 	clone := *turn
 	clone.HITLDecisions = bytes.Clone(turn.HITLDecisions)
 	clone.PipelineHITLReview = turn.PipelineHITLReview.clone()
+	clone.PipelineStaticPause = turn.PipelineStaticPause.clone()
+	clone.PipelineStaticTools = turn.PipelineStaticTools.clone()
 	return &clone
 }
 
@@ -575,6 +607,7 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 			ResponseMessageID: request.ResponseMessageID,
 			Kind:              request.normalizedKind(),
 			AuthorizationID:   request.AuthorizationID,
+			StaticTools:       len(request.StaticDecisions) != 0,
 		},
 	)
 	if err != nil {
@@ -603,6 +636,11 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 		}
 	}
 
+	if request.normalizedKind() == CurrentContinuationStatic && len(request.StaticDecisions) == 0 &&
+		(target.PipelineStaticPause == nil || target.PipelineStaticPause.Proof.PauseID != request.StaticPauseID) {
+		return CurrentApplicationStartOutcome{}, ErrUnsupportedCurrentAgentStart
+	}
+
 	input, turn, capabilityID, err := service.currentContinuationInput(ctx, request, target, decisions)
 	if err != nil {
 		return CurrentApplicationStartOutcome{}, err
@@ -615,6 +653,18 @@ func (service *CurrentApplicationStartService) ContinueCurrentAgent(
 		request.AuthorizationID,
 		request.Action,
 	)
+	if request.normalizedKind() == CurrentContinuationStatic {
+		selected := request.StaticPauseID
+		if len(request.StaticDecisions) != 0 {
+			ids := make([]string, 0, len(request.StaticDecisions))
+			for _, decision := range request.StaticDecisions {
+				ids = append(ids, decision.PauseID)
+			}
+			slices.Sort(ids)
+			selected = strings.Join(ids, "\x00")
+		}
+		idempotencyKey = currentStaticContinuationIdempotencyKey(request.ResponseMessageID, selected)
+	}
 	if request.normalizedKind() == CurrentContinuationOutputLimit {
 		idempotencyKey = currentOutputContinuationIdempotencyKey(
 			request.ResponseMessageID,
@@ -646,6 +696,12 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 	target CurrentContinuationTarget,
 	decisions []CurrentHITLDecision,
 ) (*runtimev1.AgentExecutionInputV1, *CurrentContinueTurn, string, error) {
+	if request.normalizedKind() == CurrentContinuationStatic {
+		if len(request.StaticDecisions) != 0 {
+			return service.currentStaticToolContinuationInput(ctx, request, target)
+		}
+		return service.currentStaticContinuationInput(ctx, request, target)
+	}
 	projectID, projectIDValid := currentContinuationDatabaseID(request.ProjectID)
 	actorUserID, actorUserIDValid := currentContinuationDatabaseID(request.ActorUserID)
 	if !projectIDValid || !actorUserIDValid {
@@ -692,6 +748,17 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		resolved, err := service.resolver.ResolveCurrentApplication(ctx, start)
 		if err != nil {
 			return nil, nil, "", err
+		}
+		originalSource, sourceErr := service.restoreContinuationSource(ctx, RootSourceRestoreRequest{request.ProjectID, request.ActorUserID, request.ConversationUUID, request.ResponseMessageID, target.ExecutionGeneration})
+		if sourceErr != nil || originalSource != nil && originalSource.Reference.Kind != "saved_application" {
+			return nil, nil, "", ErrUnsupportedCurrentAgentStart
+		}
+		resolved.OriginalSource = nil
+		if originalSource != nil {
+			resolved.OriginalSource = &originalSource.Reference
+			resolved.ApplicationID = int64(originalSource.Reference.ApplicationID)
+			resolved.ApplicationVersionID = int64(originalSource.Reference.VersionID)
+			resolved.VersionDetails = originalSource.RuntimeVersionDetails
 		}
 		frozen, err := service.freezer.FreezeCurrentApplicationVersion(
 			ctx,
@@ -742,12 +809,24 @@ func (service *CurrentApplicationStartService) currentContinuationInput(
 		if err != nil {
 			return nil, nil, "", err
 		}
+		originalSource, sourceErr := service.restoreContinuationSource(ctx, RootSourceRestoreRequest{request.ProjectID, request.ActorUserID, request.ConversationUUID, request.ResponseMessageID, target.ExecutionGeneration})
+		if sourceErr != nil || originalSource != nil && originalSource.Reference.Kind != "ephemeral_definition" {
+			return nil, nil, "", ErrUnsupportedCurrentAgentStart
+		}
+		resolved.OriginalSource = nil
+		if originalSource != nil {
+			resolved.OriginalSource = &originalSource.Reference
+			resolved.Instructions = originalSource.Instructions
+		}
 		if policy != nil {
 			resolved.LLMSettings = json.RawMessage(`{}`)
 		}
 		snapshot, err := currentAdhocSnapshot(start.LLMSettings, resolved)
 		if err != nil {
 			return nil, nil, "", err
+		}
+		if originalSource != nil {
+			snapshot = originalSource.RuntimeVersionDetails
 		}
 		frozen, err := service.freezer.FreezeCurrentApplicationVersion(
 			ctx,

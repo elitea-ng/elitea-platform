@@ -762,6 +762,11 @@ and the term that actually moves is the one this counts.
 {{- fail "main.runtime.enabled is true but main.env.ELITEA_DATABASE_MAX_CONNS is unset, so this release's connection use cannot be computed. cmd/elitea-main/database_pool.go returns early when it is unset and pgx then applies max(4, numCPU) — a value that depends on the node the pod lands on. With the runtime plane on, each replica ALSO opens 36 isolated runtime-plane connections that may not share capacity, so at autoscaling.maxReplicas the total is the number that exhausts the server. Set it explicitly (1..64)." -}}
 {{- end -}}
 
+{{- $replicas := int (default 1 $main.replicaCount) -}}
+{{- if and $main.autoscaling $main.autoscaling.enabled -}}
+{{- $replicas = int $main.autoscaling.maxReplicas -}}
+{{- end -}}
+
 {{- $pb := .Values.pgbouncer | default dict -}}
 {{- if $pb.enabled -}}
 {{/*
@@ -777,7 +782,16 @@ and the term that actually moves is the one this counts.
 */}}
 {{- $poolServer := add (int $pb.poolSize) (int $pb.reservePoolSize) -}}
 {{- $poolAvailable := sub (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections)) -}}
-{{- if gt $poolServer $poolAvailable -}}
+{{- $compiledDirect := 0 -}}
+{{- if or ($main.runtime.rustCompiledSnapshots | default dict).enabled ($main.runtime.codeDebugArtifacts | default dict).enabled -}}
+{{/* The private receipt DSN is independent of the product PgBouncer route. */}}
+{{- $compiledDirect = mul 4 $replicas -}}
+{{- end -}}
+{{- $serverTotal := add $poolServer $compiledDirect -}}
+{{- if gt $serverTotal $poolAvailable -}}
+{{- if $compiledDirect -}}
+{{- fail (printf "this release can open %d PostgreSQL server connections (%d PgBouncer plus %d independent Code receipt connections across %d Main replicas), but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). Lower the pool or replica ceiling, or increase the measured server budget." $serverTotal $poolServer $compiledDirect $replicas $poolAvailable (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections))) -}}
+{{- end -}}
 {{- fail (printf "pgbouncer.poolSize + pgbouncer.reservePoolSize is %d server-side connections for the whole cluster, but only %d are available (postgresql.maxConnections %d minus reservedConnections %d). The pooler cannot open more than poolSize + reserve (its max_db_connections is their sum), so raising it does not help: lower pgbouncer.poolSize, raise postgresql.maxConnections to match the server you actually run, or reserve fewer connections for the direct consumers." $poolServer $poolAvailable (int (default 100 $pg.maxConnections)) (int (default 25 $pg.reservedConnections))) -}}
 {{- end -}}
 {{- end -}}
@@ -796,9 +810,9 @@ and the term that actually moves is the one this counts.
       (int (default 4  (get $env "ELITEA_RUNTIME_DB_CONTENT_MAX_CONNS"))) -}}
 {{- end -}}
 
-{{- $replicas := int (default 1 $main.replicaCount) -}}
-{{- if and $main.autoscaling $main.autoscaling.enabled -}}
-{{- $replicas = int $main.autoscaling.maxReplicas -}}
+{{- if or ($main.runtime.rustCompiledSnapshots | default dict).enabled ($main.runtime.codeDebugArtifacts | default dict).enabled -}}
+{{/* Debug and compiled receipts share the same four-connection AgentState pool. */}}
+{{- $perReplica = add $perReplica 4 -}}
 {{- end -}}
 
 {{- if $pb.enabled -}}
@@ -826,6 +840,7 @@ and the term that actually moves is the one this counts.
 {{- end }}
 
 {{- define "elitea-main.validateRuntime" -}}
+{{- include "elitea.codeNodes.validate" . -}}
 {{- $runtime := .Values.main.runtime | default dict -}}
 {{- $agent := $runtime.agentExecutionDispatch | default dict -}}
 {{- $ingest := $runtime.indexIngestDispatch | default dict -}}
@@ -1088,6 +1103,19 @@ carries the material must use those names as its keys.
 {{- $listeners := $runtime.listeners | default dict -}}
 {{- $dir := $runtime.material.mountPath | toString | trimSuffix "/" -}}
 {{- $sse := $runtime.sse | default dict -}}
+{{- $compiled := $runtime.rustCompiledSnapshots | default dict -}}
+{{- with (include "elitea.codeNodes.env" .) }}
+{{ . }}
+{{- end }}
+{{- if $compiled.enabled }}
+ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_ENABLED: "true"
+ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PROFILES_FILE: {{ printf "%s/rust-compiled-profiles.json" $dir | quote }}
+ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PROFILES_SHA256: {{ $compiled.profilesSha256 | quote }}
+ELITEA_RUST_COMPILED_AGENTSTATE_DSN_FILE: {{ printf "%s/agent-checkpoint-connection" $dir | quote }}
+{{- range $field, $suffix := dict "globalEntries" "GLOBAL_ENTRIES" "globalBytes" "GLOBAL_BYTES" "tenantEntries" "TENANT_ENTRIES" "tenantBytes" "TENANT_BYTES" "publishingTtlSeconds" "PUBLISHING_TTL_SECONDS" "readyTtlSeconds" "READY_TTL_SECONDS" }}
+ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_{{ $suffix }}: {{ include "elitea.compiledSnapshots.integer" (dict "value" (get $compiled $field) "maximum" 1099511627776) | quote }}
+{{- end }}
+{{- end }}
 ELITEA_RUNTIME_ENABLED: "true"
 ELITEA_RUNTIME_COMMAND_STREAM: {{ $runtime.commandStream | quote }}
 ELITEA_RUNTIME_MAX_OUTSTANDING: {{ $runtime.maxOutstanding | toString | quote }}

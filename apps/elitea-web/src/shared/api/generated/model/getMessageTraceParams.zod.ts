@@ -41,8 +41,23 @@
  */
 import * as zod from "zod";
 
+export const getMessageTraceParamsExecutionIdMax = 256;
+
+export const getMessageTraceParamsExecutionGenerationMax = 256;
+
 export const GetMessageTraceParams = zod.object({
   message_group_id: zod.int(),
+  execution_id: zod
+    .string()
+    .min(1)
+    .max(getMessageTraceParamsExecutionIdMax)
+    .optional(),
+  execution_generation: zod
+    .string()
+    .min(1)
+    .max(getMessageTraceParamsExecutionGenerationMax)
+    .optional(),
+  response_message_id: zod.uuid().optional(),
 });
 
 export type GetMessageTraceParams = zod.input<typeof GetMessageTraceParams>;

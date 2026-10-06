@@ -102,6 +102,7 @@ import { usePipelineEditorStore } from '../model/pipelineEditorStore';
 import { flowEditorContainerSx, flowEditorStateBarSx, FLOW_EDITOR_DEFAULT_VIEWPORT } from './FlowEditor.styles';
 import { FlowEditorBackground, FlowEditorCanvasControls } from './FlowEditorCanvasControls';
 import { FlowEditorProvider } from './FlowEditorProvider';
+import { flowEditorFitViewOptions } from './flowEditorFitView';
 import { FlowEditorStateToggle } from './FlowEditorStateToggle';
 import { RunStateNodeGroup } from './nodes/RunStateNodeGroup';
 import type { PipelineToolEntry } from './select/pipelineToolEntry.types';
@@ -172,8 +173,8 @@ const FlowEditorImpl = forwardRef<FlowEditorHandle, FlowEditorProps>(function Fl
   const { editorRef, editorHeight, editorWidth } = useFlowEditorResizeObserver();
   const { fitView, getViewport, getZoom, setCenter } = useReactFlow();
   const fitViewVoid = useCallback(() => {
-    void fitView();
-  }, [fitView]);
+    void fitView(flowEditorFitViewOptions(editorRef.current?.querySelector<HTMLElement>('.react-flow') ?? null));
+  }, [fitView, editorRef]);
   const nodesInitialized = useNodesInitialized({ includeHiddenNodes: true });
 
   const [flowNodes, setFlowNodes] = useNodesState<FlowNode>(cachedNodes.length ? [...cachedNodes] : [...initialNodes]);

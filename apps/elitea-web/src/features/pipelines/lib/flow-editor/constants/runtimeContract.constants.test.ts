@@ -40,9 +40,9 @@ describe('NODE_ID_PATTERN mirrors valid_graph_id (worker yaml.rs:362)', () => {
 });
 
 describe('CompilerAdmittedNodeTypes mirrors parse_pipeline_node (worker compiler.rs:1236)', () => {
-  it('holds exactly the ten types the compiler has an arm for', () => {
+  it('holds exactly the eleven parsed types the compiler has an arm for', () => {
     expect([...CompilerAdmittedNodeTypes].sort()).toEqual(
-      ['agent', 'code', 'decision', 'hitl', 'llm', 'mcp', 'printer', 'router', 'state_modifier', 'toolkit'].sort(),
+      ['agent', 'code', 'decision', 'hitl', 'llm', 'mcp', 'parallel', 'printer', 'router', 'state_modifier', 'toolkit'].sort(),
     );
   });
 
@@ -70,8 +70,8 @@ describe('CompilerAdmittedNodeTypes mirrors parse_pipeline_node (worker compiler
 });
 
 describe('ReservedStateKeys mirrors reserved_user_state_key (worker compiler.rs:1456)', () => {
-  it('holds all 23 reserved keys, each citing the compiler line that reserves it', () => {
-    expect(ReservedStateKeys).toHaveLength(23);
+  it('holds the 25 recorded reserved keys, each citing the compiler line that reserves it', () => {
+    expect(ReservedStateKeys).toHaveLength(25);
     for (const entry of ReservedStateKeys) {
       expect(entry.key.length).toBeGreaterThan(0);
       expect(entry.citation).toMatch(/^compiler\.rs:\d+/);

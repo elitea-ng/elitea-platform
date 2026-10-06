@@ -37,7 +37,14 @@ pub(crate) const PIPELINE_NODE_EVENT_SCOPE_STATE_KEY: &str =
 pub(crate) const PIPELINE_NODE_EVENT_SCOPE_WRAPPER_KEY: &str = "elitea_event_scope";
 const MAX_EVENT_SCOPE_IDENTITY_BYTES: usize = 480;
 
+#[path = "node_events_map.rs"]
+mod map_scope;
+#[path = "node_events_parallel.rs"]
+mod parallel_scope;
+use parallel_scope::ParallelEventScope;
+
 enum PipelineNodeEventSignal {
+    RoutedEvent(Box<Event>),
     Event(PipelineNodeEventData),
     ExecutionFailed {
         code: &'static str,
@@ -51,6 +58,7 @@ enum PipelineNodeEventSignal {
 struct PipelineNodeEventData {
     node_name: Option<String>,
     scope: Option<PipelineNodeEventScope>,
+    parallel_scope: Option<Arc<ParallelEventScope>>,
     event: Box<Event>,
 }
 
@@ -63,6 +71,8 @@ pub(crate) struct PipelineNodeEventScope {
     parent_call_id: String,
     agent_name: String,
     checkpoint_thread_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent: Option<Box<PipelineNodeEventScope>>,
 }
 
 impl PipelineNodeEventScope {
@@ -75,6 +85,7 @@ impl PipelineNodeEventScope {
             parent_call_id: parent_call_id.to_owned(),
             agent_name: agent_name.to_owned(),
             checkpoint_thread_id: checkpoint_thread_id.to_owned(),
+            parent: None,
         };
         scope.validate()?;
         Ok(scope)
@@ -99,15 +110,44 @@ impl PipelineNodeEventScope {
         serde_json::to_value(self).map_err(|_| pipeline_node_event_channel_error())
     }
 
+    pub(crate) fn with_parent(mut self, parent: Option<Self>) -> adk_rust::Result<Self> {
+        self.parent = parent.map(Box::new);
+        self.validate()?;
+        Ok(self)
+    }
+
     pub(crate) fn validate(&self) -> adk_rust::Result<()> {
-        if valid_event_identity(&self.parent_call_id)
-            && valid_event_identity(&self.agent_name)
-            && valid_event_identity(&self.checkpoint_thread_id)
-        {
-            Ok(())
-        } else {
-            Err(pipeline_node_event_channel_error())
+        let mut cursor = self;
+        let mut depth = 0;
+        let mut seen = std::collections::BTreeSet::new();
+        loop {
+            depth += 1;
+            if depth > 3
+                || !valid_event_identity(&cursor.parent_call_id)
+                || !valid_event_identity(&cursor.agent_name)
+                || !valid_event_identity(&cursor.checkpoint_thread_id)
+                || !seen.insert(cursor.checkpoint_thread_id.as_str())
+            {
+                return Err(pipeline_node_event_channel_error());
+            }
+            let Some(parent) = cursor.parent.as_deref() else {
+                break;
+            };
+            let child_node = cursor
+                .checkpoint_thread_id
+                .strip_prefix(&format!("{}/", parent.checkpoint_thread_id))
+                .filter(|node| valid_graph_id(node))
+                .ok_or_else(pipeline_node_event_channel_error)?;
+            if child_node.is_empty() {
+                return Err(pipeline_node_event_channel_error());
+            }
+            cursor = parent;
         }
+        Ok(())
+    }
+
+    pub(crate) fn parent(&self) -> Option<&Self> {
+        self.parent.as_deref()
     }
 
     #[must_use]
@@ -129,6 +169,7 @@ impl PipelineNodeEventScope {
 #[derive(Clone)]
 pub(crate) struct PipelineNodeEventSender {
     inner: mpsc::Sender<PipelineNodeEventSignal>,
+    parallel_scope: Option<Arc<ParallelEventScope>>,
 }
 
 #[derive(Clone)]
@@ -141,7 +182,10 @@ pub(crate) fn pipeline_node_event_channel() -> (PipelineNodeEventSender, Pipelin
 {
     let (sender, receiver) = mpsc::channel(PIPELINE_NODE_EVENT_CHANNEL_CAPACITY);
     (
-        PipelineNodeEventSender { inner: sender },
+        PipelineNodeEventSender {
+            inner: sender,
+            parallel_scope: None,
+        },
         PipelineNodeEventReceiver {
             inner: Arc::new(Mutex::new(Some(receiver))),
         },
@@ -149,6 +193,13 @@ pub(crate) fn pipeline_node_event_channel() -> (PipelineNodeEventSender, Pipelin
 }
 
 impl PipelineNodeEventSender {
+    pub(crate) async fn send_routed_application_event(&self, event: Event) -> adk_rust::Result<()> {
+        self.inner
+            .send(PipelineNodeEventSignal::RoutedEvent(Box::new(event)))
+            .await
+            .map_err(|_| pipeline_node_event_channel_error())
+    }
+
     pub(crate) async fn send_execution_failure(&self, code: &'static str) -> adk_rust::Result<()> {
         self.inner
             .send(PipelineNodeEventSignal::ExecutionFailed { code })
@@ -177,6 +228,7 @@ impl PipelineNodeEventSender {
             .send(PipelineNodeEventSignal::Event(PipelineNodeEventData {
                 node_name: None,
                 scope: None,
+                parallel_scope: self.parallel_scope.clone(),
                 event: Box::new(event),
             }))
             .await
@@ -210,34 +262,85 @@ impl PipelineNodeEventSender {
             .send(PipelineNodeEventSignal::Event(PipelineNodeEventData {
                 node_name: Some(node_name.to_owned()),
                 scope: scope.cloned(),
+                parallel_scope: self.parallel_scope.clone(),
                 event: Box::new(event),
             }))
             .await
             .map_err(|_| pipeline_node_event_channel_error())
     }
 
-    pub(crate) async fn send_application_start(
+    pub(crate) async fn send_original_application_event(
+        &self,
+        mut event: Event,
+        scope: Option<&PipelineNodeEventScope>,
+        root_container: &str,
+    ) -> adk_rust::Result<()> {
+        if self.parallel_scope.is_some() {
+            self.project_parallel_application_event(&mut event, scope, root_container)?;
+            return self.send_routed_application_event(event).await;
+        }
+        if let Some(scope) = scope {
+            event.provider_metadata.insert(
+                DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
+                scope.parent().map_or_else(
+                    || root_container.to_owned(),
+                    |parent| format!("pipeline-child:{}", parent.parent_call_id()),
+                ),
+            );
+            event.provider_metadata.insert(
+                DESCENDANT_PARENT_CALL_KEY.to_owned(),
+                scope.parent_call_id().to_owned(),
+            );
+            event.provider_metadata.insert(
+                DESCENDANT_CHECKPOINT_THREAD_KEY.to_owned(),
+                scope.checkpoint_thread_id().to_owned(),
+            );
+        }
+        if scope.is_none() {
+            let original_root = event.invocation_id.clone();
+            crate::agents::pipeline::scoped_applications::stamp_root_scope_projection(
+                &mut event,
+                &original_root,
+                root_container,
+            )
+            .map_err(|_| pipeline_node_event_channel_error())?;
+        }
+        self.send_routed_application_event(event).await
+    }
+    pub(crate) async fn send_application_start_scoped(
         &self,
         tool_name: &str,
         call_id: &str,
+        arguments: &Value,
+        scope: Option<&PipelineNodeEventScope>,
     ) -> adk_rust::Result<()> {
+        if !arguments.is_object()
+            || serde_json::to_vec(arguments)
+                .map_err(|_| pipeline_node_event_channel_error())?
+                .len()
+                > 240 * 1024
+        {
+            return Err(pipeline_node_event_channel_error());
+        }
         let mut event = Event::new("pipeline_application_started");
         event.llm_response.content = Some(Content {
             role: "model".to_owned(),
             parts: vec![Part::FunctionCall {
                 name: tool_name.to_owned(),
-                args: json!({}),
+                args: arguments.clone(),
                 id: Some(call_id.to_owned()),
                 thought_signature: None,
             }],
         });
-        self.send_application_event(tool_name, call_id, event).await
+        self.send_application_event_scoped(tool_name, call_id, event, scope)
+            .await
     }
 
-    pub(crate) async fn send_application_end(
+    pub(crate) async fn send_application_end_scoped(
         &self,
         tool_name: &str,
         call_id: &str,
+        scope: Option<&PipelineNodeEventScope>,
     ) -> adk_rust::Result<()> {
         let mut event = Event::new("pipeline_application_completed");
         event.llm_response.content = Some(Content {
@@ -245,28 +348,34 @@ impl PipelineNodeEventSender {
             parts: vec![Part::FunctionResponse {
                 function_response: FunctionResponseData::new(
                     tool_name,
-                    json!({"response": "Pipeline completed."}),
+                    json!({"response":"Pipeline completed."}),
                 ),
                 id: Some(call_id.to_owned()),
                 annotations: None,
             }],
         });
-        self.send_application_event(tool_name, call_id, event).await
+        self.send_application_event_scoped(tool_name, call_id, event, scope)
+            .await
     }
 
-    async fn send_application_event(
+    async fn send_application_event_scoped(
         &self,
         tool_name: &str,
         call_id: &str,
         event: Event,
+        scope: Option<&PipelineNodeEventScope>,
     ) -> adk_rust::Result<()> {
         if !valid_event_identity(tool_name) || !valid_event_identity(call_id) {
             return Err(pipeline_node_event_channel_error());
         }
+        if let Some(scope) = scope {
+            scope.validate()?;
+        }
         self.inner
             .send(PipelineNodeEventSignal::Event(PipelineNodeEventData {
                 node_name: None,
-                scope: None,
+                scope: scope.cloned(),
+                parallel_scope: self.parallel_scope.clone(),
                 event: Box::new(event),
             }))
             .await
@@ -442,6 +551,7 @@ fn pipeline_node_signal_event(
     root_branch: &str,
 ) -> adk_rust::Result<Event> {
     let signal = match signal {
+        PipelineNodeEventSignal::RoutedEvent(event) => return Ok(*event),
         PipelineNodeEventSignal::Event(signal) => signal,
         PipelineNodeEventSignal::ExecutionFailed { code } => {
             return Err(AdkError::new(
@@ -473,13 +583,24 @@ fn pipeline_node_signal_event(
     {
         return Err(pipeline_node_event_channel_error());
     }
-    if let Some(scope) = signal.scope {
+    if let Some(parallel) = signal.parallel_scope {
+        parallel.project_node_event(
+            &mut event,
+            signal.scope.as_ref(),
+            root_invocation_id,
+            root_author,
+            root_branch,
+        )?;
+    } else if let Some(scope) = signal.scope {
         scope.validate()?;
         if event
             .provider_metadata
             .insert(
                 DESCENDANT_CONTAINER_INVOCATION_KEY.to_owned(),
-                root_invocation_id.to_owned(),
+                scope.parent.as_deref().map_or_else(
+                    || root_invocation_id.to_owned(),
+                    |parent| format!("pipeline-child:{}", parent.parent_call_id),
+                ),
             )
             .is_some()
             || event

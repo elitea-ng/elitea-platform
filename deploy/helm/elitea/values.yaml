@@ -1701,6 +1701,45 @@ main:
     # Exact supervisor grant audiences. Empty disables sandbox grant issuance.
     sandboxAudiences: []
 
+    # These Code consumers remain off until their exact deployment is accepted.
+    # Enabled owner recovery adds code-owner-client.crt and .key to material.
+    codeOwnerRecovery:
+      enabled: false
+      mainWorkloadIdentity: ""
+      supervisors: []
+
+    # Credentials stay in Main. Execution containers retain network denial.
+    # Use exact host:port rules and the bounded CodeWorkspacePolicy fields.
+    codeWorkspace:
+      enabled: false
+      repositoryCapabilities: []
+      egressAllowlist: []
+      policy: {}
+
+    # Add private code-platform-content-keys.json to the existing material Secret.
+    # Broker policies bound calls and bytes; existing permissions govern operations.
+    codePlatform:
+      enabled: false
+      brokerPolicies: []
+
+    # Add private agent-checkpoint-connection to the existing material Secret.
+    # The same receipt pool serves debug and compiled snapshots when both use it.
+    codeDebugArtifacts:
+      enabled: false
+
+    # OFF by default. Every consumer must receive identical pinned manifest bytes.
+    # Existing material Secrets must add rust-compiled-profiles.json.
+    # Main also needs agent-checkpoint-connection for original compile receipts.
+    rustCompiledSnapshots:
+      enabled: false
+      profilesSha256: ""
+      globalEntries: 100
+      globalBytes: 1073741824
+      tenantEntries: 10
+      tenantBytes: 268435456
+      publishingTtlSeconds: 60
+      readyTtlSeconds: 3600
+
     # Three listeners, three DISTINCT addresses. The agent worker dials all three
     # on this Service, so the server certificates must carry the Service name.
     # The chart opens the ports on the container and the Service when the runtime
@@ -3740,24 +3779,47 @@ sandboxImageWarmup:
   tolerations: []
   imagePullSecrets: []
 
-# Kubernetes execution boundary only. The supervisor API adapter is not enabled here.
-# Use a dedicated namespace with a NetworkPolicy-capable CNI.
+# Optional Kubernetes supervisor and isolated Code namespaces.
+# Use dedicated namespaces with a NetworkPolicy-capable CNI.
 sandboxKubernetes:
   enabled: false
   executionNamespace: ""
   supervisorServiceAccount: elitea-sandbox-supervisor
   # This cap includes running Pods and completed Pods awaiting receipt cleanup.
   maxPods: 128
+  # Optional Python resolver boundary. Execution keeps its deny-all policy.
+  preparation:
+    enabled: false
+    namespace: ""
+    maxPods: 4
+    # Match the cluster DNS deployment explicitly.
+    dnsNamespaceLabels:
+      kubernetes.io/metadata.name: kube-system
+    dnsPodLabels:
+      k8s-app: kube-dns
+    # Required public registry or controlled egress gateway CIDRs, TCP 443 only.
+    # NetworkPolicy cannot enforce registry hostnames. Verify the operator egress policy.
+    resolverCidrs: []
   supervisor:
     enabled: false
     image: ""
     # Existing Secret: flat configuration, certificate, keyring, and database files.
     materialSecret: ""
+    # Admit one to eight profiles with distinct files, ports, and durable owners.
+    # All-language acquisition requires seven independent profiles.
     profiles:
       - file: deno.json
         port: 9446
       - file: rust.json
         port: 9447
+    # Optional profiles may set serviceName for a certificate-matched DNS alias.
+    # Each content client uses /run/elitea-sandbox-content/<name>/private.
+    # Admit at most eight clients with distinct staging names.
+    # Budget pooled database connections and staging memory for every profile.
+    contentStaging: []
+    # Example: [{name: deno, sizeMiB: 256}, {name: preparation, sizeMiB: 256}]
+    # Required with contentStaging. Use a pinned image with /bin/sh, mkdir, and chmod.
+    contentStagingInitImage: ""
     resources:
       requests:
         cpu: 100m

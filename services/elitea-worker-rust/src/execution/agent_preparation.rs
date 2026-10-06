@@ -79,6 +79,34 @@ impl AgentPreparationConfig {
 /// coordinator component tests.
 #[async_trait]
 pub(crate) trait AgentInputMaterializer: Send + Sync {
+    async fn materialize_node_recovery(
+        &self,
+        _authority: &crate::protocol::control::NodeRecoveryControlAuthority,
+    ) -> Result<MaterializedInput, InputContentError> {
+        Err(InputContentError::AuthorizationFailed(
+            "node recovery input inspection is unavailable",
+        ))
+    }
+    async fn apply_node_recovery_action(
+        &self,
+        _authority: &crate::protocol::control::NodeRecoveryControlAuthority,
+        _journal: &crate::agents::graph::node_recovery_runtime::NodeAttemptJournal,
+        _activation: &crate::agents::graph::node_recovery_runtime::NodeAttemptActivation,
+        _context: &adk_rust::graph::NodeContext,
+        _projector: Option<&dyn crate::agents::graph::node_recovery_runtime::NodeResultRecovery>,
+        _now_ms: u64,
+    ) -> Result<
+        Option<(
+            crate::agents::graph::node_recovery_runtime::AppliedNodeRecoveryAction,
+            crate::transport::input_content::NodeRecoveryAckReply,
+            crate::agents::graph::node_recovery::OperatorRetryRequest,
+        )>,
+        InputContentError,
+    > {
+        Err(InputContentError::AuthorizationFailed(
+            "node recovery control is unavailable",
+        ))
+    }
     async fn materialize_checkpoint(
         &self,
         _inspection: &LiveModelCheckpointInspection,
@@ -122,6 +150,39 @@ pub(crate) trait AgentInputMaterializer: Send + Sync {
 
 #[async_trait]
 impl AgentInputMaterializer for InputContentClient {
+    async fn materialize_node_recovery(
+        &self,
+        authority: &crate::protocol::control::NodeRecoveryControlAuthority,
+    ) -> Result<MaterializedInput, InputContentError> {
+        let reference =
+            authority
+                .input_content_authority()
+                .ok_or(InputContentError::AuthorizationFailed(
+                    "node recovery input authority is absent",
+                ))?;
+        self.fetch_node_recovery_authority(reference).await
+    }
+    async fn apply_node_recovery_action(
+        &self,
+        authority: &crate::protocol::control::NodeRecoveryControlAuthority,
+        journal: &crate::agents::graph::node_recovery_runtime::NodeAttemptJournal,
+        activation: &crate::agents::graph::node_recovery_runtime::NodeAttemptActivation,
+        context: &adk_rust::graph::NodeContext,
+        projector: Option<&dyn crate::agents::graph::node_recovery_runtime::NodeResultRecovery>,
+        now_ms: u64,
+    ) -> Result<
+        Option<(
+            crate::agents::graph::node_recovery_runtime::AppliedNodeRecoveryAction,
+            crate::transport::input_content::NodeRecoveryAckReply,
+            crate::agents::graph::node_recovery::OperatorRetryRequest,
+        )>,
+        InputContentError,
+    > {
+        InputContentClient::apply_node_recovery_action(
+            self, authority, journal, activation, context, projector, now_ms,
+        )
+        .await
+    }
     async fn materialize_checkpoint(
         &self,
         inspection: &LiveModelCheckpointInspection,
@@ -432,7 +493,7 @@ impl InvocationAuthorizationPayload for PreparedAgentAuthorizationPayload {
             output_authority,
             output: output_spool,
             lease,
-            permit,
+            permit: NativeSubmissionPermit::Fresh(permit),
             runtime_context,
             session,
             checkpoint: None,
@@ -496,13 +557,45 @@ pub(crate) struct AuthorizedAgentRun {
     output_authority: AgentExecutionOutputAuthority,
     output: PreparedAgentOutput,
     lease: ClaimLeaseMonitor,
-    permit: InvocationSubmissionPermit,
+    permit: NativeSubmissionPermit,
     runtime_context: ClaimBoundRuntimeContextAuthority,
     session: ClaimBoundSessionAuthority,
-    checkpoint: Option<crate::protocol::control::CheckpointAssemblyAuthorization>,
+    checkpoint: Option<NativeCheckpointAuthorization>,
+}
+
+enum NativeSubmissionPermit {
+    Fresh(InvocationSubmissionPermit),
+    NodeRestore(crate::protocol::control::NodeRecoverySubmissionPermit),
+}
+enum NativeCheckpointAuthorization {
+    Model(crate::protocol::control::CheckpointAssemblyAuthorization),
+    Node(crate::protocol::control::NodeRecoveryAssemblyAuthorization),
 }
 
 impl AuthorizedAgentRun {
+    pub(crate) fn from_node_checkpoint(
+        delivery: RedisCommandDelivery,
+        verified: VerifiedAgentCommand,
+        request: AgentExecutionRequest,
+        output: PreparedAgentOutput,
+        lease: ClaimLeaseMonitor,
+        authorization: crate::protocol::control::NodeRecoveryResumption,
+    ) -> Self {
+        let (permit, output_authority, runtime_context, session, checkpoint) =
+            authorization.into_lifecycle_parts();
+        Self {
+            delivery,
+            verified,
+            request,
+            output_authority,
+            output,
+            lease,
+            permit: NativeSubmissionPermit::NodeRestore(permit),
+            runtime_context,
+            session,
+            checkpoint: Some(NativeCheckpointAuthorization::Node(checkpoint)),
+        }
+    }
     #[allow(dead_code)]
     pub(crate) fn from_checkpoint(
         delivery: RedisCommandDelivery,
@@ -521,10 +614,10 @@ impl AuthorizedAgentRun {
             output_authority,
             output,
             lease,
-            permit,
+            permit: NativeSubmissionPermit::Fresh(permit),
             runtime_context,
             session,
-            checkpoint: Some(checkpoint),
+            checkpoint: Some(NativeCheckpointAuthorization::Model(checkpoint)),
         }
     }
 
@@ -683,10 +776,10 @@ pub(crate) struct CursorBoundAuthorizedAgentRun<C: AgentProgressConnector> {
     request: AgentExecutionRequest,
     publisher: FreshAgentProgressPublisher<C>,
     lease: ClaimLeaseMonitor,
-    permit: Option<InvocationSubmissionPermit>,
+    permit: Option<NativeSubmissionPermit>,
     runtime_context: Option<ClaimBoundRuntimeContextAuthority>,
     session: Option<ClaimBoundSessionAuthority>,
-    checkpoint: Option<crate::protocol::control::CheckpointAssemblyAuthorization>,
+    checkpoint: Option<NativeCheckpointAuthorization>,
     sandbox_stop: Option<Box<crate::sandbox::dispatch::BoundSandboxStop>>,
 }
 
@@ -995,10 +1088,14 @@ impl<C: AgentProgressConnector> CursorBoundAuthorizedAgentRun<C> {
             .run_cancellation_safe_phase(async {
                 let assembly = assembly.bind_sandbox(&verified)?;
                 match checkpoint.take() {
-                    Some(authorization) => assembler
+                    Some(NativeCheckpointAuthorization::Model(authorization)) => assembler
                         .assemble_checkpoint(assembly)
                         .await?
                         .authorize_lifecycle(authorization),
+                    Some(NativeCheckpointAuthorization::Node(authorization)) => assembler
+                        .assemble_node_checkpoint(assembly, &authorization)
+                        .await?
+                        .authorize_node_lifecycle(authorization),
                     None => assembler.assemble(assembly).await,
                 }
             })
@@ -1823,7 +1920,7 @@ fn agent_input_binding(
     )
 }
 
-fn input_binding_from_parts(
+pub(super) fn input_binding_from_parts(
     bundle: &crate::protocol::elitea::runtime::v1::ExecutionInputBundleV1,
     bundle_reference: &crate::protocol::elitea::runtime::v1::ExecutionInputBundleReferenceV1,
     request: &crate::protocol::elitea::runtime::v1::ExecutionInputEntryV1,

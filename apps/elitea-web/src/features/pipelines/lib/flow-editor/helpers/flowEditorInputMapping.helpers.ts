@@ -78,7 +78,7 @@ const createApplicationMapping = (
       task: { ...(existingMapping?.['task'] ?? { type: 'fstring', value: '' }) },
       ...selectedToolkit?.variables?.reduce<Record<string, unknown>>((result, variable) => {
         return {
-          [variable.name]: { type: 'fixed', value: variable.value },
+          [variable.name]: { ...(existingMapping?.[variable.name] ?? { type: 'fixed', value: variable.value }) },
           ...result,
         };
       }, {}),
@@ -87,7 +87,10 @@ const createApplicationMapping = (
       task: { tooltip: 'Task for agent.', type: 'fstring', value: '', data_type: 'string' },
       ...selectedToolkit?.variables?.reduce<Record<string, unknown>>((result, variable) => {
         return {
-          [variable.name]: { tooltip: 'This is a variable from the agent', type: 'fixed', value: variable.value },
+          [variable.name]: {
+            tooltip: 'This is a variable from the agent',
+            ...(existingMapping?.[variable.name] ?? { type: 'fixed', value: variable.value }),
+          },
           ...result,
         };
       }, {}),

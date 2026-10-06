@@ -19,19 +19,29 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	SandboxSupervisorService_SubmitSandboxJob_FullMethodName = "/elitea.runtime.v1.SandboxSupervisorService/SubmitSandboxJob"
-	SandboxSupervisorService_CancelSandboxJob_FullMethodName = "/elitea.runtime.v1.SandboxSupervisorService/CancelSandboxJob"
+	SandboxSupervisorService_HydrateSandboxWorkspace_FullMethodName     = "/elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxWorkspace"
+	SandboxSupervisorService_SubmitRustCompiledSnapshot_FullMethodName  = "/elitea.runtime.v1.SandboxSupervisorService/SubmitRustCompiledSnapshot"
+	SandboxSupervisorService_PublishRustCompiledSnapshot_FullMethodName = "/elitea.runtime.v1.SandboxSupervisorService/PublishRustCompiledSnapshot"
+	SandboxSupervisorService_SubmitSandboxJob_FullMethodName            = "/elitea.runtime.v1.SandboxSupervisorService/SubmitSandboxJob"
+	SandboxSupervisorService_CancelSandboxJob_FullMethodName            = "/elitea.runtime.v1.SandboxSupervisorService/CancelSandboxJob"
+	SandboxSupervisorService_PrepareSandboxDependencies_FullMethodName  = "/elitea.runtime.v1.SandboxSupervisorService/PrepareSandboxDependencies"
+	SandboxSupervisorService_PublishSandboxDependencies_FullMethodName  = "/elitea.runtime.v1.SandboxSupervisorService/PublishSandboxDependencies"
+	SandboxSupervisorService_HydrateSandboxDependencies_FullMethodName  = "/elitea.runtime.v1.SandboxSupervisorService/HydrateSandboxDependencies"
 )
 
 // SandboxSupervisorServiceClient is the client API for SandboxSupervisorService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
-//
-// Supervisor-only transport. Each retry needs a fresh Main grant and the same
-// prepared request. It reconciles the existing activation; it never restarts it.
 type SandboxSupervisorServiceClient interface {
+	HydrateSandboxWorkspace(ctx context.Context, in *HydrateSandboxWorkspaceRequestV1, opts ...grpc.CallOption) (*HydrateSandboxWorkspaceResponseV1, error)
+	// Revision 4 authority selects compile or cached execution. No executable bytes.
+	SubmitRustCompiledSnapshot(ctx context.Context, in *SubmitRustCompiledSnapshotRequestV1, opts ...grpc.CallOption) (*SubmitRustCompiledSnapshotResponseV1, error)
+	PublishRustCompiledSnapshot(ctx context.Context, in *PublishRustCompiledSnapshotRequestV1, opts ...grpc.CallOption) (*PublishRustCompiledSnapshotResponseV1, error)
 	SubmitSandboxJob(ctx context.Context, in *SubmitSandboxJobRequestV1, opts ...grpc.CallOption) (*SubmitSandboxJobResponseV1, error)
 	CancelSandboxJob(ctx context.Context, in *CancelSandboxJobRequestV1, opts ...grpc.CallOption) (*CancelSandboxJobResponseV1, error)
+	PrepareSandboxDependencies(ctx context.Context, in *PrepareSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*PrepareSandboxDependenciesResponseV1, error)
+	PublishSandboxDependencies(ctx context.Context, in *PublishSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*PublishSandboxDependenciesResponseV1, error)
+	HydrateSandboxDependencies(ctx context.Context, in *HydrateSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*HydrateSandboxDependenciesResponseV1, error)
 }
 
 type sandboxSupervisorServiceClient struct {
@@ -40,6 +50,36 @@ type sandboxSupervisorServiceClient struct {
 
 func NewSandboxSupervisorServiceClient(cc grpc.ClientConnInterface) SandboxSupervisorServiceClient {
 	return &sandboxSupervisorServiceClient{cc}
+}
+
+func (c *sandboxSupervisorServiceClient) HydrateSandboxWorkspace(ctx context.Context, in *HydrateSandboxWorkspaceRequestV1, opts ...grpc.CallOption) (*HydrateSandboxWorkspaceResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HydrateSandboxWorkspaceResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_HydrateSandboxWorkspace_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxSupervisorServiceClient) SubmitRustCompiledSnapshot(ctx context.Context, in *SubmitRustCompiledSnapshotRequestV1, opts ...grpc.CallOption) (*SubmitRustCompiledSnapshotResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SubmitRustCompiledSnapshotResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_SubmitRustCompiledSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxSupervisorServiceClient) PublishRustCompiledSnapshot(ctx context.Context, in *PublishRustCompiledSnapshotRequestV1, opts ...grpc.CallOption) (*PublishRustCompiledSnapshotResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PublishRustCompiledSnapshotResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_PublishRustCompiledSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *sandboxSupervisorServiceClient) SubmitSandboxJob(ctx context.Context, in *SubmitSandboxJobRequestV1, opts ...grpc.CallOption) (*SubmitSandboxJobResponseV1, error) {
@@ -62,15 +102,49 @@ func (c *sandboxSupervisorServiceClient) CancelSandboxJob(ctx context.Context, i
 	return out, nil
 }
 
+func (c *sandboxSupervisorServiceClient) PrepareSandboxDependencies(ctx context.Context, in *PrepareSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*PrepareSandboxDependenciesResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PrepareSandboxDependenciesResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_PrepareSandboxDependencies_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxSupervisorServiceClient) PublishSandboxDependencies(ctx context.Context, in *PublishSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*PublishSandboxDependenciesResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PublishSandboxDependenciesResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_PublishSandboxDependencies_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sandboxSupervisorServiceClient) HydrateSandboxDependencies(ctx context.Context, in *HydrateSandboxDependenciesRequestV1, opts ...grpc.CallOption) (*HydrateSandboxDependenciesResponseV1, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HydrateSandboxDependenciesResponseV1)
+	err := c.cc.Invoke(ctx, SandboxSupervisorService_HydrateSandboxDependencies_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // SandboxSupervisorServiceServer is the server API for SandboxSupervisorService service.
 // All implementations must embed UnimplementedSandboxSupervisorServiceServer
 // for forward compatibility.
-//
-// Supervisor-only transport. Each retry needs a fresh Main grant and the same
-// prepared request. It reconciles the existing activation; it never restarts it.
 type SandboxSupervisorServiceServer interface {
+	HydrateSandboxWorkspace(context.Context, *HydrateSandboxWorkspaceRequestV1) (*HydrateSandboxWorkspaceResponseV1, error)
+	// Revision 4 authority selects compile or cached execution. No executable bytes.
+	SubmitRustCompiledSnapshot(context.Context, *SubmitRustCompiledSnapshotRequestV1) (*SubmitRustCompiledSnapshotResponseV1, error)
+	PublishRustCompiledSnapshot(context.Context, *PublishRustCompiledSnapshotRequestV1) (*PublishRustCompiledSnapshotResponseV1, error)
 	SubmitSandboxJob(context.Context, *SubmitSandboxJobRequestV1) (*SubmitSandboxJobResponseV1, error)
 	CancelSandboxJob(context.Context, *CancelSandboxJobRequestV1) (*CancelSandboxJobResponseV1, error)
+	PrepareSandboxDependencies(context.Context, *PrepareSandboxDependenciesRequestV1) (*PrepareSandboxDependenciesResponseV1, error)
+	PublishSandboxDependencies(context.Context, *PublishSandboxDependenciesRequestV1) (*PublishSandboxDependenciesResponseV1, error)
+	HydrateSandboxDependencies(context.Context, *HydrateSandboxDependenciesRequestV1) (*HydrateSandboxDependenciesResponseV1, error)
 	mustEmbedUnimplementedSandboxSupervisorServiceServer()
 }
 
@@ -81,11 +155,29 @@ type SandboxSupervisorServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedSandboxSupervisorServiceServer struct{}
 
+func (UnimplementedSandboxSupervisorServiceServer) HydrateSandboxWorkspace(context.Context, *HydrateSandboxWorkspaceRequestV1) (*HydrateSandboxWorkspaceResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HydrateSandboxWorkspace not implemented")
+}
+func (UnimplementedSandboxSupervisorServiceServer) SubmitRustCompiledSnapshot(context.Context, *SubmitRustCompiledSnapshotRequestV1) (*SubmitRustCompiledSnapshotResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SubmitRustCompiledSnapshot not implemented")
+}
+func (UnimplementedSandboxSupervisorServiceServer) PublishRustCompiledSnapshot(context.Context, *PublishRustCompiledSnapshotRequestV1) (*PublishRustCompiledSnapshotResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PublishRustCompiledSnapshot not implemented")
+}
 func (UnimplementedSandboxSupervisorServiceServer) SubmitSandboxJob(context.Context, *SubmitSandboxJobRequestV1) (*SubmitSandboxJobResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SubmitSandboxJob not implemented")
 }
 func (UnimplementedSandboxSupervisorServiceServer) CancelSandboxJob(context.Context, *CancelSandboxJobRequestV1) (*CancelSandboxJobResponseV1, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CancelSandboxJob not implemented")
+}
+func (UnimplementedSandboxSupervisorServiceServer) PrepareSandboxDependencies(context.Context, *PrepareSandboxDependenciesRequestV1) (*PrepareSandboxDependenciesResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PrepareSandboxDependencies not implemented")
+}
+func (UnimplementedSandboxSupervisorServiceServer) PublishSandboxDependencies(context.Context, *PublishSandboxDependenciesRequestV1) (*PublishSandboxDependenciesResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method PublishSandboxDependencies not implemented")
+}
+func (UnimplementedSandboxSupervisorServiceServer) HydrateSandboxDependencies(context.Context, *HydrateSandboxDependenciesRequestV1) (*HydrateSandboxDependenciesResponseV1, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method HydrateSandboxDependencies not implemented")
 }
 func (UnimplementedSandboxSupervisorServiceServer) mustEmbedUnimplementedSandboxSupervisorServiceServer() {
 }
@@ -107,6 +199,60 @@ func RegisterSandboxSupervisorServiceServer(s grpc.ServiceRegistrar, srv Sandbox
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&SandboxSupervisorService_ServiceDesc, srv)
+}
+
+func _SandboxSupervisorService_HydrateSandboxWorkspace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HydrateSandboxWorkspaceRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).HydrateSandboxWorkspace(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_HydrateSandboxWorkspace_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).HydrateSandboxWorkspace(ctx, req.(*HydrateSandboxWorkspaceRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SandboxSupervisorService_SubmitRustCompiledSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SubmitRustCompiledSnapshotRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).SubmitRustCompiledSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_SubmitRustCompiledSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).SubmitRustCompiledSnapshot(ctx, req.(*SubmitRustCompiledSnapshotRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SandboxSupervisorService_PublishRustCompiledSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PublishRustCompiledSnapshotRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).PublishRustCompiledSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_PublishRustCompiledSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).PublishRustCompiledSnapshot(ctx, req.(*PublishRustCompiledSnapshotRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _SandboxSupervisorService_SubmitSandboxJob_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -145,6 +291,60 @@ func _SandboxSupervisorService_CancelSandboxJob_Handler(srv interface{}, ctx con
 	return interceptor(ctx, in, info, handler)
 }
 
+func _SandboxSupervisorService_PrepareSandboxDependencies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PrepareSandboxDependenciesRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).PrepareSandboxDependencies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_PrepareSandboxDependencies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).PrepareSandboxDependencies(ctx, req.(*PrepareSandboxDependenciesRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SandboxSupervisorService_PublishSandboxDependencies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PublishSandboxDependenciesRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).PublishSandboxDependencies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_PublishSandboxDependencies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).PublishSandboxDependencies(ctx, req.(*PublishSandboxDependenciesRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _SandboxSupervisorService_HydrateSandboxDependencies_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(HydrateSandboxDependenciesRequestV1)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SandboxSupervisorServiceServer).HydrateSandboxDependencies(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: SandboxSupervisorService_HydrateSandboxDependencies_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SandboxSupervisorServiceServer).HydrateSandboxDependencies(ctx, req.(*HydrateSandboxDependenciesRequestV1))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // SandboxSupervisorService_ServiceDesc is the grpc.ServiceDesc for SandboxSupervisorService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -153,12 +353,36 @@ var SandboxSupervisorService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*SandboxSupervisorServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
+			MethodName: "HydrateSandboxWorkspace",
+			Handler:    _SandboxSupervisorService_HydrateSandboxWorkspace_Handler,
+		},
+		{
+			MethodName: "SubmitRustCompiledSnapshot",
+			Handler:    _SandboxSupervisorService_SubmitRustCompiledSnapshot_Handler,
+		},
+		{
+			MethodName: "PublishRustCompiledSnapshot",
+			Handler:    _SandboxSupervisorService_PublishRustCompiledSnapshot_Handler,
+		},
+		{
 			MethodName: "SubmitSandboxJob",
 			Handler:    _SandboxSupervisorService_SubmitSandboxJob_Handler,
 		},
 		{
 			MethodName: "CancelSandboxJob",
 			Handler:    _SandboxSupervisorService_CancelSandboxJob_Handler,
+		},
+		{
+			MethodName: "PrepareSandboxDependencies",
+			Handler:    _SandboxSupervisorService_PrepareSandboxDependencies_Handler,
+		},
+		{
+			MethodName: "PublishSandboxDependencies",
+			Handler:    _SandboxSupervisorService_PublishSandboxDependencies_Handler,
+		},
+		{
+			MethodName: "HydrateSandboxDependencies",
+			Handler:    _SandboxSupervisorService_HydrateSandboxDependencies_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

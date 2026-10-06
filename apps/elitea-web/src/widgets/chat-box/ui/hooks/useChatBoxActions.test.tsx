@@ -1,6 +1,9 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import receipt from '@/shared/lib/fixtures/node-recovery-required.json';
+import { nodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
+import type { ChatMessage } from '@/features/chat-messages';
 import { useChatBoxActions } from './useChatBoxActions';
 import type { UseChatBoxActionsParams } from './useChatBoxActions';
 
@@ -10,6 +13,7 @@ function renderActions(
   sendQuestion: ReturnType<typeof vi.fn>,
   onConversationCreated: OnConversationCreated,
   mentionState: Record<string, unknown> = {},
+  messages: readonly ChatMessage[] = [],
 ) {
   return renderHook(() =>
     useChatBoxActions({
@@ -30,7 +34,7 @@ function renderActions(
       } as never,
       handlers: { sendQuestion } as never,
       deleteAlert: {} as never,
-      messages: [],
+      messages,
       isAgentsPage: false,
       readAloudStop: vi.fn(),
       onConversationCreated,
@@ -39,6 +43,16 @@ function renderActions(
 }
 
 describe('useChatBoxActions new-conversation promotion', () => {
+  it('does not submit a new turn from a suspended response', () => {
+    const response = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const paused: ChatMessage = { id: response, role: 'assistant', name: '', content: '', createdAt: '', isStreaming: true,
+      executionGeneration: '1', nodeRecoveryRequired: nodeRecoveryBinding(response, '1', receipt) };
+    const sendQuestion = vi.fn();
+    const { result } = renderActions(sendQuestion, vi.fn(), {}, [paused]);
+    act(() => result.current.handleSend('another test'));
+    expect(sendQuestion).not.toHaveBeenCalled();
+  });
+
   it('publishes the created conversation after the first turn starts', async () => {
     const createdConversation = { id: '503', uuid: 'conversation-uuid' };
     const sendQuestion = vi.fn().mockResolvedValue({ success: true, createdConversation });

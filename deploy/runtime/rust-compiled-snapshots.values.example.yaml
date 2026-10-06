@@ -1,0 +1,20 @@
+# Optional Main environment. Keep the feature disabled until runtime acceptance.
+# The existing chart renders main.env into the Main ConfigMap.
+main:
+  env:
+    ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_ENABLED: "false"
+
+# Set the remaining values only with explicit enablement.
+# Mount both files in the existing private runtime material directory.
+# Use a private Secret for the DSN file. Keep the DSN out of environment maps.
+# Required file settings:
+# ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PROFILES_FILE
+# ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PROFILES_SHA256
+# ELITEA_RUST_COMPILED_AGENTSTATE_DSN_FILE
+# Required finite limits:
+# ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_GLOBAL_ENTRIES
+# ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_GLOBAL_BYTES
+# ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_TENANT_ENTRIES
+# ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_TENANT_BYTES
+# ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PUBLISHING_TTL_SECONDS
+# ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_READY_TTL_SECONDS

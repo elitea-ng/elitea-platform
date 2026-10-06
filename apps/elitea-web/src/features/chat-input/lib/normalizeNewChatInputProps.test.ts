@@ -15,12 +15,17 @@ describe('resolveState', () => {
   it('defaults every field to false', () => {
     expect(resolveState(undefined)).toEqual({
       isLoading: false,
+      disabledInput: false,
       isStreaming: false,
       disabledSend: false,
       isCreatingConversation: false,
       isEditorDirty: false,
       allowSendWhileStreaming: false,
     });
+  });
+  it('keeps loading as the input default and accepts an explicit draft override', () => {
+    expect(resolveState({ isLoading: true }).disabledInput).toBe(true);
+    expect(resolveState({ isLoading: true, disabledInput: false })).toMatchObject({ isLoading: true, disabledInput: false });
   });
   it('passes through given values', () => {
     expect(resolveState({ isLoading: true, isStreaming: true })).toMatchObject({ isLoading: true, isStreaming: true });

@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "services/elitea-worker-rust/**"
+      - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"
       - ".github/workflows/ci-rust.yml"
@@ -12,6 +13,7 @@ on:
       - main
     paths:
       - "services/elitea-worker-rust/**"
+      - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"
       - ".github/workflows/ci-rust.yml"
@@ -29,6 +31,38 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  code-runner:
+    name: Code runner format, lint, and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: services/elitea-code-runner
+    env:
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show pinned toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: services/elitea-code-runner
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run all targets and features
+        run: cargo test --locked --all-targets --all-features
+
   quality:
     name: Format, Clippy, docs, and release
     runs-on: ubuntu-latest
@@ -140,4 +174,31 @@ jobs:
       - name: Run all targets and features
         env:
           ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+          ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS: "1"
+          ELITEA_TEST_DATABASE_GUARD: "disposable-pg18"
         run: cargo test --locked --all-targets --all-features
+
+      - name: Verify sandbox phase deadlines with PostgreSQL
+        env:
+          ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+        run: cargo test --locked --lib --all-features sandbox::docker_supervisor::deadline_tests -- --ignored
+
+      - name: Verify Python preparation and final hydration with PostgreSQL
+        env:
+          ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+          ELITEA_TEST_BUNDLE_TLS: "${{ runner.temp }}/elitea-python-bundle-tls"
+        run: |
+          umask 077
+          mkdir -p "$ELITEA_TEST_BUNDLE_TLS"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj "/CN=Disposable Python bundle CA" -addext "basicConstraints=critical,CA:TRUE" \
+            -keyout "$ELITEA_TEST_BUNDLE_TLS/ca.key" -out "$ELITEA_TEST_BUNDLE_TLS/ca.pem"
+          openssl req -new -newkey rsa:2048 -nodes -subj "/CN=python-bundle.test" \
+            -keyout "$ELITEA_TEST_BUNDLE_TLS/client.key" -out "$ELITEA_TEST_BUNDLE_TLS/client.csr"
+          printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=clientAuth\nsubjectAltName=DNS:python-bundle.test\n' > "$ELITEA_TEST_BUNDLE_TLS/client.ext"
+          openssl x509 -req -days 1 -in "$ELITEA_TEST_BUNDLE_TLS/client.csr" \
+            -CA "$ELITEA_TEST_BUNDLE_TLS/ca.pem" -CAkey "$ELITEA_TEST_BUNDLE_TLS/ca.key" -CAcreateserial \
+            -extfile "$ELITEA_TEST_BUNDLE_TLS/client.ext" -out "$ELITEA_TEST_BUNDLE_TLS/client.pem"
+          cat "$ELITEA_TEST_BUNDLE_TLS/client.pem" "$ELITEA_TEST_BUNDLE_TLS/client.key" > "$ELITEA_TEST_BUNDLE_TLS/client-combined.pem"
+          cargo test --locked --lib --all-features sandbox::docker_supervisor::preparation::tests -- --ignored
+          cargo test --locked --lib --all-features sandbox::docker_supervisor::hydration::deadline_tests -- --ignored

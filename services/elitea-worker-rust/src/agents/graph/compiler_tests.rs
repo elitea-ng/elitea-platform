@@ -87,8 +87,8 @@ fn whole_pipeline_yaml_is_bounded_strict_and_digest_stable() {
             "graph.pipeline.invalid_configuration",
         ),
         (
-            "entry_point: review\ninterrupt_before: [review]\nnodes:\n  - id: review\n    type: hitl\n    routes:\n      approve: END\n",
-            "graph.pipeline.unsupported_capability",
+            "entry_point: review\ninterrupt_before: [absent]\nnodes:\n  - id: review\n    type: hitl\n    routes:\n      approve: END\n",
+            "graph.pipeline.invalid_configuration",
         ),
         (
             "entry_point: review\nnodes:\n  - id: review\n    type: hitl\n    routes:\n      approve: absent\n",

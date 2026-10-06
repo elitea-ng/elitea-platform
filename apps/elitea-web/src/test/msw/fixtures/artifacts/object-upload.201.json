@@ -1,7 +1,7 @@
 {
-  "recordedAt": "2026-09-06",
+  "recordedAt": "2026-10-06",
   "synthetic": true,
-  "note": "Shape re-verified 2026-09-06 against the served route POST /api/v2/artifacts/objects/{projectID}/{bucket}?overwrite=true -> 201 (elitea-main internal/api/router.go:596 -> Handler.UploadObject, internal/api/v2/artifacts/objects.go:424). The 201 body is written at objects.go:529-535 and holds exactly the five keys below. uploadArtifactObject (shared/api/artifacts.ts) inspects response.ok/status and never this body; it is fixtured so the handler still answers with the real envelope.",
+  "note": "This synthetic fixture matches Main source on 2026-10-06. Handler.UploadObject returns status 201 and these five fields in internal/api/v2/artifacts/objects.go. The isolated TestUploadObject_ReturnsFullShape check passes. uploadArtifactObject uses status instead of the body. No live backend recording occurs.",
   "body": {
     "key": "a.txt",
     "size_bytes": 10,

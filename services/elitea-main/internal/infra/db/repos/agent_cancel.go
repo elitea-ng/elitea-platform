@@ -106,6 +106,13 @@ func (repository *CurrentAgentCancelRepository) CancelCurrentAgent(
 				return errors.New("current agent cancellation target is incomplete")
 			}
 
+			if err := cancelNodeRecovery(ctx, tx, row.ExecutionID, uint64(row.Generation)); err != nil {
+				return err
+			}
+			if err := cancelCodeToolkitChildren(ctx, tx, row.ExecutionID, int64(row.Generation)); err != nil {
+				return err
+			}
+
 			projection, projectionErr := queries.ProjectCurrentAgentStop(
 				ctx,
 				sqlcgen.ProjectCurrentAgentStopParams{

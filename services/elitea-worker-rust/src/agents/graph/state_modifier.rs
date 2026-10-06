@@ -253,7 +253,7 @@ fn render_template(
 
 // serde_json arbitrary-precision numbers serialize as private maps. Convert
 // numeric primitives explicitly so templates receive numbers instead of maps.
-fn template_value(value: &Value) -> JinjaValue {
+pub(super) fn template_value(value: &Value) -> JinjaValue {
     match value {
         Value::Null => JinjaValue::from(()),
         Value::Bool(value) => JinjaValue::from(*value),

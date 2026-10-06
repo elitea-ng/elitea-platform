@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1e\x65litea/runtime/v1/common.proto\x12\x11\x65litea.runtime.v1\"X\n\x08\x44igestV1\x12\x37\n\talgorithm\x18\x01 \x01(\x0e\x32$.elitea.runtime.v1.DigestAlgorithmV1\x12\r\n\x05value\x18\x02 \x01(\x0cJ\x04\x08\x03\x10\x10\"\xa8\x01\n\x13\x45xecutionIdentityV1\x12\x11\n\ttenant_id\x18\x01 \x01(\t\x12\x1b\n\x13resource_project_id\x18\x02 \x01(\t\x12\x1d\n\x15projection_project_id\x18\x03 \x01(\t\x12\x12\n\ncommand_id\x18\x04 \x01(\t\x12\x14\n\x0c\x65xecution_id\x18\x05 \x01(\t\x12\x12\n\ngeneration\x18\x06 \x01(\x04J\x04\x08\x07\x10\x10\"\x8b\x01\n\x10\x45xecutionFenceV1\x12\x1b\n\x13workload_session_id\x18\x01 \x01(\t\x12\x15\n\rclaim_attempt\x18\x02 \x01(\x04\x12\x13\n\x0blease_epoch\x18\x03 \x01(\x04\x12\x13\n\x0bproducer_id\x18\x04 \x01(\t\x12\x13\n\x0b\x66\x65nce_token\x18\x05 \x01(\x0cJ\x04\x08\x06\x10\x10*X\n\x11\x44igestAlgorithmV1\x12#\n\x1f\x44IGEST_ALGORITHM_V1_UNSPECIFIED\x10\x00\x12\x1e\n\x1a\x44IGEST_ALGORITHM_V1_SHA256\x10\x01*\xc0\x01\n\x17\x44\x65siredExecutionStateV1\x12*\n&DESIRED_EXECUTION_STATE_V1_UNSPECIFIED\x10\x00\x12&\n\"DESIRED_EXECUTION_STATE_V1_RUNNING\x10\x01\x12(\n$DESIRED_EXECUTION_STATE_V1_CANCELLED\x10\x02\x12\'\n#DESIRED_EXECUTION_STATE_V1_DRAINING\x10\x03*\xcd\x01\n\x12\x45xecutionOutcomeV1\x12$\n EXECUTION_OUTCOME_V1_UNSPECIFIED\x10\x00\x12\"\n\x1e\x45XECUTION_OUTCOME_V1_SUCCEEDED\x10\x01\x12\x1f\n\x1b\x45XECUTION_OUTCOME_V1_FAILED\x10\x02\x12\"\n\x1e\x45XECUTION_OUTCOME_V1_CANCELLED\x10\x03\x12(\n$EXECUTION_OUTCOME_V1_OUTCOME_UNKNOWN\x10\x04\x42SZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1e\x65litea/runtime/v1/common.proto\x12\x11\x65litea.runtime.v1\"X\n\x08\x44igestV1\x12\x37\n\talgorithm\x18\x01 \x01(\x0e\x32$.elitea.runtime.v1.DigestAlgorithmV1\x12\r\n\x05value\x18\x02 \x01(\x0cJ\x04\x08\x03\x10\x10\"\xa8\x01\n\x13\x45xecutionIdentityV1\x12\x11\n\ttenant_id\x18\x01 \x01(\t\x12\x1b\n\x13resource_project_id\x18\x02 \x01(\t\x12\x1d\n\x15projection_project_id\x18\x03 \x01(\t\x12\x12\n\ncommand_id\x18\x04 \x01(\t\x12\x14\n\x0c\x65xecution_id\x18\x05 \x01(\t\x12\x12\n\ngeneration\x18\x06 \x01(\x04J\x04\x08\x07\x10\x10\"\x8b\x01\n\x10\x45xecutionFenceV1\x12\x1b\n\x13workload_session_id\x18\x01 \x01(\t\x12\x15\n\rclaim_attempt\x18\x02 \x01(\x04\x12\x13\n\x0blease_epoch\x18\x03 \x01(\x04\x12\x13\n\x0bproducer_id\x18\x04 \x01(\t\x12\x13\n\x0b\x66\x65nce_token\x18\x05 \x01(\x0cJ\x04\x08\x06\x10\x10*X\n\x11\x44igestAlgorithmV1\x12#\n\x1f\x44IGEST_ALGORITHM_V1_UNSPECIFIED\x10\x00\x12\x1e\n\x1a\x44IGEST_ALGORITHM_V1_SHA256\x10\x01*\xea\x01\n\x17\x44\x65siredExecutionStateV1\x12*\n&DESIRED_EXECUTION_STATE_V1_UNSPECIFIED\x10\x00\x12&\n\"DESIRED_EXECUTION_STATE_V1_RUNNING\x10\x01\x12(\n$DESIRED_EXECUTION_STATE_V1_CANCELLED\x10\x02\x12\'\n#DESIRED_EXECUTION_STATE_V1_DRAINING\x10\x03\x12(\n$DESIRED_EXECUTION_STATE_V1_SUSPENDED\x10\x04*\xcd\x01\n\x12\x45xecutionOutcomeV1\x12$\n EXECUTION_OUTCOME_V1_UNSPECIFIED\x10\x00\x12\"\n\x1e\x45XECUTION_OUTCOME_V1_SUCCEEDED\x10\x01\x12\x1f\n\x1b\x45XECUTION_OUTCOME_V1_FAILED\x10\x02\x12\"\n\x1e\x45XECUTION_OUTCOME_V1_CANCELLED\x10\x03\x12(\n$EXECUTION_OUTCOME_V1_OUTCOME_UNKNOWN\x10\x04\x42SZQgithub.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1;runtimev1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,9 +35,9 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_DIGESTALGORITHMV1']._serialized_start=456
   _globals['_DIGESTALGORITHMV1']._serialized_end=544
   _globals['_DESIREDEXECUTIONSTATEV1']._serialized_start=547
-  _globals['_DESIREDEXECUTIONSTATEV1']._serialized_end=739
-  _globals['_EXECUTIONOUTCOMEV1']._serialized_start=742
-  _globals['_EXECUTIONOUTCOMEV1']._serialized_end=947
+  _globals['_DESIREDEXECUTIONSTATEV1']._serialized_end=781
+  _globals['_EXECUTIONOUTCOMEV1']._serialized_start=784
+  _globals['_EXECUTIONOUTCOMEV1']._serialized_end=989
   _globals['_DIGESTV1']._serialized_start=53
   _globals['_DIGESTV1']._serialized_end=141
   _globals['_EXECUTIONIDENTITYV1']._serialized_start=144

@@ -215,7 +215,7 @@
       "targetComponent": "src/features/pipelines/ui/AddNodeMenu.tsx",
       "theme": "dark",
       "wiringStatus": "wired",
-      "notes": "STATE SHOT (58600cb0): three node families placed through the Add-node menu, each showing the id the editor minted — `LLM_1`/`Router_1`/`Printer_1`, underscored, because `valid_graph_id` (worker `graph/yaml.rs:362`) refuses the space the editor used to mint. No admission alert anywhere (these three are complete the moment they are added), and the test-chat pane in its `Save the pipeline to test it` state, which is what an unsaved graph produces.",
+      "notes": "STATE SHOT: A stored admissible graph shows enabled interrupt controls bound to its node identity. The native compiler validates authored pause lists. Save journeys verify stored lists and refuse missing or duplicate identities.",
       "baseline": "e2e/snapshots/visual/pipeline-editor.visual.spec.ts-snapshots/pipeline-editor-authored-graph-visual-linux.png"
     },
     {
@@ -234,7 +234,7 @@
       "theme": "dark",
       "wiringStatus": "wired",
       "notes": "STATE SHOT (58600cb0): a stored admissible one-node graph whose card shows the two interrupt switches DISABLED with the reason printed beneath them. The switches were kept rather than removed precisely so the withheld capability stays visible, which makes how they look the whole point — the Rust runtime refuses any pipeline declaring interrupts (`compiler.rs:470-474`) while the SDK worker honours them, so the editor authors the intersection.",
-      "baseline": "e2e/snapshots/visual/pipeline-editor.visual.spec.ts-snapshots/pipeline-editor-interrupts-disabled-visual-linux.png"
+      "baseline": "e2e/snapshots/visual/pipeline-editor.visual.spec.ts-snapshots/pipeline-editor-interrupts-enabled-visual-linux.png"
     },
     {
       "file": "credentials-list-populated.dark.jpeg",

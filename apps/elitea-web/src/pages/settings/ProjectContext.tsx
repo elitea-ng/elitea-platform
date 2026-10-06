@@ -30,6 +30,7 @@ import { DrawerPage } from '@/shared/ui/settings/DrawerPage';
 import { DrawerPageHeader } from '@/shared/ui/settings/DrawerPageHeader';
 import { t } from '@/shared/i18n';
 import {
+  getGetProjectContextQueryKey,
   updateProjectContext,
   useGetProjectContext,
 } from '@/shared/api/generated/applications/applications';
@@ -119,8 +120,9 @@ export function ProjectContext({
   const saveMutation = useMutation({
     mutationFn: ({ content, enabled }: { content: string; enabled: boolean }) =>
       updateProjectContext(projectId, { content, enabled }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: [`/elitea_core/project_context/prompt_lib/${projectId}/project-context`] });
+    onSuccess: (response) => {
+      queryClient.setQueryData(getGetProjectContextQueryKey(projectId), response);
+      void queryClient.invalidateQueries({ queryKey: getGetProjectContextQueryKey(projectId) });
     },
   } as { mutateAsync: (args: { content: string; enabled: boolean }) => Promise<unknown> });
 

@@ -1,7 +1,25 @@
 //! Content identity for an admitted sandbox job. This is not authorization.
 use std::collections::BTreeMap;
 
+use super::dependency_bundle::{hex, valid_digest};
+use super::native_bundle::{NativeKind, NativePlatform};
+use ring::digest;
 use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct NativeDependencies {
+    pub kind: NativeKind,
+    pub platform: NativePlatform,
+    pub preparation_sha256: String,
+    pub source_sha256: String,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "dependency_digest"
+    )]
+    pub dependencies_toml: Option<String>,
+}
 
 #[cfg(feature = "sandbox-supervisor")]
 use super::ledger::{JobScope, LedgerError};
@@ -28,6 +46,12 @@ pub struct PreparedJob {
     timeout_seconds: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     dependency_bundle_sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    native_dependencies: Option<NativeDependencies>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    workspace: Option<super::workspace::WorkspaceBinding>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    platform_client: Option<super::platform_client_binding::PlatformClientBinding>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -35,6 +59,23 @@ pub struct PreparedJob {
 pub struct InvalidRequest;
 
 impl PreparedJob {
+    /// Check the independently signed whole-Code intent against this admitted request.
+    pub(crate) fn matches_code_binding(
+        &self,
+        binding: &super::code_recovery::WholeCodeBinding,
+    ) -> bool {
+        let language = serde_json::to_value(self.language).ok();
+        let input = serde_json::to_vec(&self.input).ok();
+        binding.valid()
+            && language.as_ref().and_then(serde_json::Value::as_str)
+                == Some(binding.language.as_str())
+            && binding.source_sha256 == super::code_recovery::sha256(self.source.as_bytes())
+            && input
+                .is_some_and(|input| binding.input_sha256 == super::code_recovery::sha256(&input))
+            && self.to_transport().is_ok_and(|wire| {
+                binding.prepared_job_sha256 == super::code_recovery::sha256(&wire)
+            })
+    }
     /// Construct only after runtime selection and invocation authorization.
     /// Wrappers and baseline dependencies belong to the runtime image/policy revision.
     ///
@@ -80,6 +121,9 @@ impl PreparedJob {
             policy_revision,
             timeout_seconds,
             dependency_bundle_sha256: None,
+            native_dependencies: None,
+            platform_client: None,
+            workspace: None,
         };
         job.bytes()?;
         Ok(job)
@@ -98,12 +142,119 @@ impl PreparedJob {
         {
             return Err(InvalidRequest);
         }
-        self.revision = 2;
+        self.revision = self.revision.max(2);
         self.dependency_bundle_sha256 = Some(digest);
         self.bytes()?;
         Ok(self)
     }
 
+    /// Bind native content to its acquisition source and immutable preparation identity.
+    /// # Errors
+    /// Rejects unsupported language bindings, invalid digests, excessive declarations, and source mismatches.
+    pub fn with_native_dependency_bundle(
+        mut self,
+        root: String,
+        native: NativeDependencies,
+    ) -> Result<Self, InvalidRequest> {
+        native.platform.validate().map_err(|_| InvalidRequest)?;
+        let acquisition = match (
+            self.language,
+            native.kind,
+            native.dependencies_toml.as_deref(),
+        ) {
+            (Language::JavaScript | Language::TypeScript, NativeKind::Deno, None) => {
+                self.source.as_str()
+            }
+            (Language::Rust, NativeKind::Cargo, Some(v))
+                if !v.is_empty() && v.len() <= 64 * 1024 && !v.contains('\0') =>
+            {
+                v
+            }
+            _ => return Err(InvalidRequest),
+        };
+        if !valid_digest(&root)
+            || !valid_digest(&native.preparation_sha256)
+            || !valid_digest(&native.source_sha256)
+            || hex(digest::digest(&digest::SHA256, acquisition.as_bytes()).as_ref())
+                != native.source_sha256
+        {
+            return Err(InvalidRequest);
+        }
+        self.revision = self.revision.max(3);
+        self.dependency_bundle_sha256 = Some(root);
+        self.native_dependencies = Some(native);
+        self.bytes()?;
+        Ok(self)
+    }
+    /// Bind only an immutable Main snapshot before requesting execution authority.
+    /// # Errors
+    /// Rejects invalid workspace identity and requests beyond the existing size limit.
+    pub fn with_workspace(
+        mut self,
+        workspace: super::workspace::WorkspaceBinding,
+    ) -> Result<Self, InvalidRequest> {
+        workspace.validate().map_err(|_| InvalidRequest)?;
+        self.revision = self.revision.max(4);
+        self.workspace = Some(workspace);
+        self.bytes()?;
+        Ok(self)
+    }
+    /// Reconstruct the exact admitted dependency/broker base. Remove only workspace.
+    /// # Errors
+    /// Rejects any base which exceeds the existing prepared-request limits.
+    pub fn pre_workspace(&self) -> Result<Self, InvalidRequest> {
+        let revision = if self.platform_client.is_some() {
+            5
+        } else if self.native_dependencies.is_some() {
+            3
+        } else if self.dependency_bundle_sha256.is_some() {
+            2
+        } else {
+            1
+        };
+        let base = Self {
+            revision,
+            language: self.language,
+            source: self.source.clone(),
+            input: self.input.clone(),
+            image_digest: self.image_digest.clone(),
+            policy_revision: self.policy_revision.clone(),
+            timeout_seconds: self.timeout_seconds,
+            dependency_bundle_sha256: self.dependency_bundle_sha256.clone(),
+            native_dependencies: self.native_dependencies.clone(),
+            workspace: None,
+            platform_client: self.platform_client.clone(),
+        };
+        base.bytes()?;
+        Ok(base)
+    }
+    #[must_use]
+    pub fn workspace(&self) -> Option<&super::workspace::WorkspaceBinding> {
+        self.workspace.as_ref()
+    }
+    #[must_use]
+    pub fn native_dependencies(&self) -> Option<&NativeDependencies> {
+        self.native_dependencies.as_ref()
+    }
+    #[must_use]
+    pub fn matches_bundle(&self, bundle: &super::dependency_bundle::DependencyBundle) -> bool {
+        if self.dependency_bundle_root() != Some(bundle.root()) {
+            return false;
+        }
+        match (self.native_dependencies(), bundle.native()) {
+            (None, None) => self.language == Language::Python,
+            (Some(n), Some(b)) => {
+                n.kind == b.record.kind
+                    && n.platform == b.record.platform
+                    && self.language == b.record.language
+                    && n.preparation_sha256 == b.record.preparation_sha256
+                    && n.source_sha256 == b.record.source_sha256
+                    && self.image_digest == b.record.execution_image_digest
+                    && self.policy_revision == b.record.execution_policy_revision
+            }
+            _ => false,
+        }
+    }
     /// Decode bounded transport input and reapply every constructor invariant.
     /// # Errors
     /// Returns `InvalidRequest` for malformed, unknown, duplicate top-level, or invalid fields.
@@ -120,6 +271,12 @@ impl PreparedJob {
             timeout_seconds: u32,
             #[serde(default, deserialize_with = "dependency_digest")]
             dependency_bundle_sha256: Option<String>,
+            #[serde(default, deserialize_with = "native_identity_field")]
+            native_dependencies: Option<NativeDependencies>,
+            #[serde(default, deserialize_with = "workspace_identity_field")]
+            workspace: Option<super::workspace::WorkspaceBinding>,
+            #[serde(default, deserialize_with = "platform_client_identity_field")]
+            platform_client: Option<super::platform_client_binding::PlatformClientBinding>,
         }
         if bytes.len() > 1024 * 1024 {
             return Err(InvalidRequest);
@@ -133,11 +290,43 @@ impl PreparedJob {
             wire.policy_revision,
             wire.timeout_seconds,
         )?;
-        match (wire.revision, wire.dependency_bundle_sha256) {
-            (1, None) => Ok(job),
-            (2, Some(digest)) => job.with_python_dependency_bundle(digest),
+        let base = match (wire.dependency_bundle_sha256, wire.native_dependencies) {
+            (None, None) => job,
+            (Some(root), None) => job.with_python_dependency_bundle(root)?,
+            (Some(root), Some(native)) => job.with_native_dependency_bundle(root, native)?,
+            _ => return Err(InvalidRequest),
+        };
+        match (wire.revision, wire.workspace, wire.platform_client) {
+            (5, workspace, Some(platform)) => {
+                let base = match workspace {
+                    Some(value) => base.with_workspace(value)?,
+                    None => base,
+                };
+                base.with_platform_client(platform)
+            }
+            (4, Some(workspace), None) => base.with_workspace(workspace),
+            (revision, None, None) if revision == base.revision => Ok(base),
             _ => Err(InvalidRequest),
         }
+    }
+
+    /// Bind only the deployment-selected broker policy before grant creation.
+    /// The signed prepared fingerprint binds this exact optional capability.
+    pub(crate) fn with_platform_client(
+        mut self,
+        binding: super::platform_client_binding::PlatformClientBinding,
+    ) -> Result<Self, InvalidRequest> {
+        binding.validate()?;
+        self.platform_client = Some(binding);
+        self.revision = 5;
+        self.bytes()?;
+        Ok(self)
+    }
+
+    pub(crate) fn platform_client(
+        &self,
+    ) -> Option<&super::platform_client_binding::PlatformClientBinding> {
+        self.platform_client.as_ref()
     }
 
     /// Serialize the exact prepared request for authenticated supervisor transport.
@@ -163,6 +352,11 @@ impl PreparedJob {
         self.image_digest == configured_digest
             && self.policy_revision == policy
             && languages.contains(&self.language)
+    }
+
+    #[must_use]
+    pub fn dependency_bundle_root(&self) -> Option<&str> {
+        self.dependency_bundle_sha256.as_deref()
     }
 
     /// The image owns the language adapter; no caller supplies executable argv.
@@ -482,3 +676,89 @@ mod tests {
         );
     }
 }
+
+fn native_identity_field<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<NativeDependencies>, D::Error> {
+    NativeDependencies::deserialize(d).map(Some)
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+    #[test]
+    fn native_identity_binds_execution_without_changing_python_bytes() {
+        let raw = include_bytes!("native-deno-v2.json");
+        let v: serde_json::Value = serde_json::from_slice(raw).unwrap();
+        let bundle = super::super::dependency_bundle::DependencyBundle::parse(
+            raw,
+            v["digest"].as_str().unwrap(),
+        )
+        .unwrap();
+        let job = PreparedJob::new(
+            Language::TypeScript,
+            "export default 42;".into(),
+            BTreeMap::new(),
+            format!("sha256:{}", "b".repeat(64)),
+            "js-offline-v2".into(),
+            30,
+        )
+        .unwrap();
+        let native = NativeDependencies {
+            kind: NativeKind::Deno,
+            platform: NativePlatform {
+                os: "linux".into(),
+                arch: "arm64".into(),
+                abi: "gnu".into(),
+            },
+            preparation_sha256: v["preparation_sha256"].as_str().unwrap().into(),
+            source_sha256: v["source_sha256"].as_str().unwrap().into(),
+            dependencies_toml: None,
+        };
+        let job = job
+            .with_native_dependency_bundle(bundle.root().into(), native)
+            .unwrap();
+        assert!(job.matches_bundle(&bundle));
+        let bytes = job.to_transport().unwrap();
+        assert!(
+            PreparedJob::from_transport(&bytes)
+                .unwrap()
+                .matches_bundle(&bundle)
+        );
+        let mut wrong: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        wrong["source"] = serde_json::json!("export default 41;");
+        assert!(PreparedJob::from_transport(&serde_json::to_vec(&wrong).unwrap()).is_err());
+        let legacy = PreparedJob::new(
+            Language::Python,
+            "print(42)".into(),
+            BTreeMap::new(),
+            format!("sha256:{}", "a".repeat(64)),
+            "python-v1".into(),
+            30,
+        )
+        .unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&legacy.to_transport().unwrap()).unwrap();
+        value["native_dependencies"] = serde_json::Value::Null;
+        assert!(PreparedJob::from_transport(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+}
+
+fn workspace_identity_field<'de, D>(
+    deserializer: D,
+) -> Result<Option<super::workspace::WorkspaceBinding>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    super::workspace::WorkspaceBinding::deserialize(deserializer).map(Some)
+}
+
+fn platform_client_identity_field<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<super::platform_client_binding::PlatformClientBinding>, D::Error> {
+    super::platform_client_binding::PlatformClientBinding::deserialize(deserializer).map(Some)
+}
+
+#[cfg(test)]
+#[path = "request_workspace_projection_tests.rs"]
+mod workspace_projection_tests;

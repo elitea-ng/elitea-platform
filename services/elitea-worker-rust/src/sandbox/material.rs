@@ -2,6 +2,8 @@
 use crate::config::read_regular_file;
 use std::{fs, io::Write, path::Path};
 
+const MAX_MATERIAL_FILES: usize = 64;
+
 #[derive(Debug, thiserror::Error)]
 #[error(
     "sandbox material preparation failed; check the Secret projection, file bounds, and destination permissions"
@@ -39,7 +41,7 @@ pub fn prepare(source: &Path, destination: &Path) -> Result<(), MaterialError> {
             || !name
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
-            || entries.len() >= 32
+            || entries.len() >= MAX_MATERIAL_FILES
         {
             return Err(MaterialError);
         }
@@ -131,5 +133,25 @@ mod tests {
         symlink("config.json", source.join("..revision/alias")).unwrap();
         assert!(prepare(&source, &destination).is_err());
         assert_eq!(fs::read_dir(destination).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn accepts_64_material_files_and_rejects_65_before_copying() {
+        let (_root, source, destination) = fixture();
+        let revision = source.join("..revision");
+        for index in 2..64 {
+            fs::write(revision.join(format!("profile-{index}.json")), b"{}").unwrap();
+        }
+        prepare(&source, &destination).unwrap();
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 64);
+        fs::write(revision.join("profile-64.json"), b"{}").unwrap();
+        fs::write(destination.join("server.key"), b"retained-test-key").unwrap();
+        assert!(prepare(&source, &destination).is_err());
+        assert_eq!(fs::read_dir(&destination).unwrap().count(), 64);
+        assert_eq!(
+            fs::read(destination.join("server.key")).unwrap(),
+            b"retained-test-key"
+        );
+        assert!(!destination.join("profile-64.json").exists());
     }
 }

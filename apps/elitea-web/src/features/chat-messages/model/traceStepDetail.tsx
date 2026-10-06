@@ -31,6 +31,7 @@ import type { ReactNode } from 'react';
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 
 import { getMessageTrace } from '@/shared/api/generated/chat/chat';
+import { CodeDebugProjectContext } from '@/shared/ui/CodeDebugArtifact';
 
 /** @public The body of one persisted trace step. */
 export interface TraceStepDetail {
@@ -76,7 +77,7 @@ export function TraceStepDetailProvider({ projectId, children }: TraceStepDetail
     };
   }, [projectId]);
 
-  return <TraceStepDetailContext value={load}>{children}</TraceStepDetailContext>;
+  return <CodeDebugProjectContext value={projectId}><TraceStepDetailContext value={load}>{children}</TraceStepDetailContext></CodeDebugProjectContext>;
 }
 
 /**

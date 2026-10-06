@@ -594,7 +594,7 @@ fn pipeline_runtime_cycles_with_capture(
     let paths = Arc::new(Mutex::new(Vec::new()));
     let responses = (0..cycles)
         .flat_map(|_| {
-            [
+            let mut cycle = [
                 runtime_response(&json!({
                     "schema_version": "elitea.runtime.elitea-client-token.v1",
                     "project_id": 17,
@@ -607,7 +607,12 @@ fn pipeline_runtime_cycles_with_capture(
                     "version_id": 4,
                     "version_details": version_details
                 })),
-            ]
+            ];
+            // Saved composition admission resolves its exact version before credential redemption.
+            if version_details.get("agent_type").and_then(Value::as_str) == Some("pipeline") {
+                cycle.swap(0, 1);
+            }
+            cycle
         })
         .collect::<VecDeque<_>>();
     pipeline_runtime_from_responses_with_capture(responses, outcomes, calls, paths)
@@ -2516,8 +2521,8 @@ async fn saved_pipeline_participant_loads_exact_version_and_runs_as_child_subgra
     assert_eq!(
         paths.lock().expect("runtime paths").as_slice(),
         [
-            "/executions/execution%2Fone/generations/2/runtime-context/elitea-client-token",
-            "/executions/execution%2Fone/generations/2/runtime-context/applications/3/versions/4"
+            "/executions/execution%2Fone/generations/2/runtime-context/applications/3/versions/4",
+            "/executions/execution%2Fone/generations/2/runtime-context/elitea-client-token"
         ]
     );
     assert!(

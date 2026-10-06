@@ -117,7 +117,7 @@
  *    highlight is a poor gate for it besides.
  *  - A SHOT OF THE TEST-CHAT PANE ON ITS OWN. Its two states are both pinned
  *    already, full-size, inside the page shots below: live in
- *    `pipeline-editor-empty`/`pipeline-editor-interrupts-disabled`, and
+ *    `pipeline-editor-empty`/`pipeline-editor-interrupts-enabled`, and
  *    "Save the pipeline to test it" in the two authored-graph shots. A
  *    component-scoped duplicate of the same pixels would add a PNG and no
  *    signal — `lib/settle.ts` records the measurement behind that: at
@@ -514,44 +514,24 @@ test('@visual pipeline-editor-node-admission', async ({ page }) => {
   });
 });
 
-/**
- * The two interrupt switches, disabled WITH a visible reason.
- *
- * They are disabled because the two workers disagree: the native Rust runtime
- * refuses any pipeline declaring `interrupt_before`/`interrupt_after` whole
- * (worker `compiler.rs:470-474`) and the Python SDK worker honours them, and
- * the editor cannot know which one takes a turn — so it authors the
- * intersection. Before that, flipping either switch turned a working pipeline
- * into one that would not start, with no signal in the UI at all.
- *
- * The switches were kept and disabled rather than removed, precisely so the
- * withheld capability stays VISIBLE — which makes this a screen whose whole
- * point is how it looks, and the one state in this file that a page shot is
- * the only way to pin. `CommonInterruptSettings` renders inside the node card
- * body, and `expandAll` starts `true` (`FlowEditor.tsx:164`), so the stored
- * document below shows it without any expansion step.
- *
- * A stored ADMISSIBLE document is used rather than a menu-authored one so the
- * card is clean: this shot is about the withheld control, and an admission
- * alert above it would change what the reader is looking at. The chat pane is
- * live here for the same reason it is in `pipeline-editor-empty` — a loaded
- * document that has not been edited is not dirty.
- */
-test('@visual pipeline-editor-interrupts-disabled', async ({ page }) => {
+/** Active pause controls use the stored node identity. Admission remains visible for invalid graphs. */
+test('@visual pipeline-editor-interrupts-enabled', async ({ page }) => {
   await openEditor(page, ADMISSIBLE_GRAPH);
 
   const card = page.locator('.react-flow__node[data-id="LLM_1"]');
   await expect(card).toBeVisible({ timeout: 15_000 });
-  await expect(card.getByRole('switch', { name: 'Interrupt before' })).toBeDisabled();
-  await expect(card.getByRole('switch', { name: 'Interrupt after' })).toBeDisabled();
-  await expect(card.getByTestId('interrupt-withheld-reason')).toContainText('native pipeline runtime refuses');
+  await expect(card.getByRole('switch', { name: 'Interrupt before' })).toBeEnabled();
+  await expect(card.getByRole('switch', { name: 'Interrupt before' })).not.toBeChecked();
+  await expect(card.getByRole('switch', { name: 'Interrupt after' })).toBeEnabled();
+  await expect(card.getByRole('switch', { name: 'Interrupt after' })).not.toBeChecked();
+  await expect(card.getByTestId('interrupt-withheld-reason')).toHaveCount(0);
   // The document is admissible, so neither admission surface is on screen —
   // this shot must not double as the admission one.
   await expect(page.getByTestId('node-admission-issues')).toHaveCount(0);
   await expect(page.getByTestId('graph-admission-gate')).toHaveCount(0);
   await settle(page);
 
-  await expect(page).toHaveScreenshot('pipeline-editor-interrupts-disabled.png', {
+  await expect(page).toHaveScreenshot('pipeline-editor-interrupts-enabled.png', {
     fullPage: false,
     mask: volatileRegions(page),
     ...SNAPSHOT_TOLERANCE,

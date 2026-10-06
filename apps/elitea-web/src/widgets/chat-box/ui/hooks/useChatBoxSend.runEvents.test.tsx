@@ -133,15 +133,17 @@ describe('useChatBoxSend — the flow editor’s run-event feed', () => {
         return HttpResponse.json({ task_id: 'exec-2', events_url: '/api/v2/executions/7/exec-2/events', response_message_id: 'resp-1' });
       }),
     );
-    const { api, Probe } = harness({
+    const overrides = {
       isAgentsPage: false,
       activeParticipant: { id: 2, entity_name: 'dummy' },
       participants: [{ id: 2, entity_name: 'dummy' }],
       userId: '5',
       llmSettings: selectedSettings,
       model: { name: 'vllm/CONTINUATION-REPAIR-FIXTURE' },
-    }, true);
-    render(withQueryClient(<Probe />));
+    };
+    const { api, Probe } = harness(overrides, true);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const view = render(<QueryClientProvider client={client}><Probe /></QueryClientProvider>);
     await act(async () => {
       await api.current?.createConversationForSend('hello');
       await api.current?.startStreamedExecution({
@@ -157,6 +159,13 @@ describe('useChatBoxSend — the flow editor’s run-event feed', () => {
     expect(redundantParticipantWrites).toBe(0);
     expect(startBody?.['llm_settings']).toEqual(expectedSettings);
     expect((regenerateBody?.['payload'] as Record<string, unknown> | undefined)?.['llm_settings']).toEqual(expectedSettings);
+    overrides.llmSettings = { model_name: 'picked-replacement', model_project_id: 3, temperature: 0.2 };
+    view.rerender(<QueryClientProvider client={client}><Probe /></QueryClientProvider>);
+    await act(async () => {
+      await api.current?.regenerateStreamedExecution({ messageId: 'resp-1', questionId: 'q-1', question: 'hello again' });
+    });
+    expect((regenerateBody?.['payload'] as Record<string, unknown> | undefined)?.['llm_settings'])
+      .toEqual({ ...overrides.llmSettings, stream: true });
   });
 
   it.each([
@@ -318,4 +327,44 @@ describe('internal tools persistence before chat execution', () => {
     await act(async () => { await api.current?.createConversationForSend('save a skill'); });
     expect(createConversation).toHaveBeenCalledWith({ name: 'save a skill', isPrivate: true, meta: { steps_limit: 35, internal_tools: ['elitea'] } });
   });
+});
+
+
+it("rejects unsupported durable Test transport without permitting socket fallback", async () => {
+  server.use(
+    http.post(
+      `${BASE}/elitea_core/messages/prompt_lib/7/${CONVERSATION_UUID}`,
+      () =>
+        HttpResponse.json(
+          { error: "unsupported_agent_execution" },
+          { status: 422 },
+        ),
+    ),
+  );
+  const { api, Probe } = harness({ editorTest: {} });
+  render(withQueryClient(<Probe />));
+  await act(async () =>
+    expect(
+      await api.current?.startStreamedExecution({
+        conversationUuid: CONVERSATION_UUID,
+        payload: { participant_id: 42, message: "hello" },
+      }),
+    ).toMatchObject({ started: false, reason: "rejected" }),
+  );
+  expect(registry.getSources()).toHaveLength(0);
+});
+it("never allocates an ordinary conversation from a Test composer before identity validation", async () => {
+  const create = vi.fn();
+  const { api, Probe } = harness({
+    editorTest: {},
+    deps: {
+      createConversation: create,
+      uploadAttachments: () => Promise.resolve({ success: true, uploaded: [] }),
+    },
+  });
+  render(withQueryClient(<Probe />));
+  await expect(api.current?.createConversationForSend("hello")).rejects.toThrow(
+    "validated Test context",
+  );
+  expect(create).not.toHaveBeenCalled();
 });

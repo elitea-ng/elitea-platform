@@ -1,0 +1,169 @@
+{
+  "schema_version": "elitea.runtime.http-frozen-request-fixture.v1",
+  "cases": [
+    {
+      "name": "integer",
+      "numeric_token": "1",
+      "application": {
+        "id": 31,
+        "version_id": 41,
+        "version_details": {
+          "agent_type": "pipeline",
+          "instructions": "state:\n  report: dict\nentry_point: fetch\nnodes:\n  - id: fetch\n    type: http\n    revision: 1\n    request:\n      method: POST\n      url: https://api.example.test/items\n      body: {kind: json, value: {a: 2, n: 1}}\n      response: {mode: json}\n    output: [report]\n    transition: END\n",
+          "tools": [],
+          "http_action_snapshot": {
+            "schema_version": "elitea.runtime.http-action-snapshot.v1",
+            "application_id": "31",
+            "version_id": "41",
+            "instructions_digest": "3dc12b1a98a0d461c8faf43dd930265be4633a976c6551cbc5a568d93706fbca",
+            "nodes": [
+              {
+                "node_id": "fetch",
+                "request_digest": "23159140623a2dff613786b47f73439691bb17692263c480359f59b289037493",
+                "request_wire_b64": "eyJib2R5Ijp7ImtpbmQiOiJqc29uIiwidmFsdWUiOnsiYSI6MiwibiI6MX19LCJtZXRob2QiOiJQT1NUIiwicmVzcG9uc2UiOnsibW9kZSI6Impzb24ifSwidXJsIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS50ZXN0L2l0ZW1zIn0=",
+                "binding_digest": "6f23fb8974a21abd151d97711e6784b945f3725765aad0a32c66552edd62e0cc",
+                "output": [
+                  "report"
+                ],
+                "transition": "END"
+              }
+            ]
+          }
+        }
+      },
+      "request_wire_utf8": "{\"body\":{\"kind\":\"json\",\"value\":{\"a\":2,\"n\":1}},\"method\":\"POST\",\"response\":{\"mode\":\"json\"},\"url\":\"https://api.example.test/items\"}",
+      "request_digest": "23159140623a2dff613786b47f73439691bb17692263c480359f59b289037493",
+      "binding_digest": "6f23fb8974a21abd151d97711e6784b945f3725765aad0a32c66552edd62e0cc",
+      "thread_id": "graph-fixture",
+      "node_id": "fetch",
+      "step": 3,
+      "execution_id": "11111111-1111-4111-8111-111111111111",
+      "generation": 7,
+      "activation_id": "536611cc272e3fcd0f0a582e6ce9f9241cd9c06cd9a543e8cf3dc5af46095651",
+      "effect_id": "949c021e684f6329ba2af70dbbe8a77fd3b9a5b7119c89155ec8c953e9b784b4"
+    },
+    {
+      "name": "decimal",
+      "numeric_token": "1.0",
+      "application": {
+        "id": 31,
+        "version_id": 41,
+        "version_details": {
+          "agent_type": "pipeline",
+          "instructions": "state:\n  report: dict\nentry_point: fetch\nnodes:\n  - id: fetch\n    type: http\n    revision: 1\n    request:\n      method: POST\n      url: https://api.example.test/items\n      body: {kind: json, value: {a: 2, n: 1.0}}\n      response: {mode: json}\n    output: [report]\n    transition: END\n",
+          "tools": [],
+          "http_action_snapshot": {
+            "schema_version": "elitea.runtime.http-action-snapshot.v1",
+            "application_id": "31",
+            "version_id": "41",
+            "instructions_digest": "eff20617eaca159cadfe3a1c2fcca605e00d13c810057f9439bf26345b982916",
+            "nodes": [
+              {
+                "node_id": "fetch",
+                "request_digest": "86442547dd408b93124d3ec767f667ef05d3842742d2254a26606317ea3dac66",
+                "request_wire_b64": "eyJib2R5Ijp7ImtpbmQiOiJqc29uIiwidmFsdWUiOnsiYSI6MiwibiI6MS4wfX0sIm1ldGhvZCI6IlBPU1QiLCJyZXNwb25zZSI6eyJtb2RlIjoianNvbiJ9LCJ1cmwiOiJodHRwczovL2FwaS5leGFtcGxlLnRlc3QvaXRlbXMifQ==",
+                "binding_digest": "63bde2a602748f7df39ffe084f565cf3a879e2976251a9eb84f73f07d62bd48f",
+                "output": [
+                  "report"
+                ],
+                "transition": "END"
+              }
+            ]
+          }
+        }
+      },
+      "request_wire_utf8": "{\"body\":{\"kind\":\"json\",\"value\":{\"a\":2,\"n\":1.0}},\"method\":\"POST\",\"response\":{\"mode\":\"json\"},\"url\":\"https://api.example.test/items\"}",
+      "request_digest": "86442547dd408b93124d3ec767f667ef05d3842742d2254a26606317ea3dac66",
+      "binding_digest": "63bde2a602748f7df39ffe084f565cf3a879e2976251a9eb84f73f07d62bd48f",
+      "thread_id": "graph-fixture",
+      "node_id": "fetch",
+      "step": 3,
+      "execution_id": "11111111-1111-4111-8111-111111111111",
+      "generation": 7,
+      "activation_id": "7dcf719a87a515d1699aaa6f63a8b970acd7fd4f39ba94a0401b1c8a7c0d4cb7",
+      "effect_id": "513b0139d111a3bac3d55509f03bbc1adae6c64170a6ea98aede17c3e1011a16"
+    },
+    {
+      "name": "large_integer",
+      "numeric_token": "184467440737095516170000000000000001",
+      "application": {
+        "id": 31,
+        "version_id": 41,
+        "version_details": {
+          "agent_type": "pipeline",
+          "instructions": "state:\n  report: dict\nentry_point: fetch\nnodes:\n  - id: fetch\n    type: http\n    revision: 1\n    request:\n      method: POST\n      url: https://api.example.test/items\n      body: {kind: json, value: {a: 2, n: 184467440737095516170000000000000001}}\n      response: {mode: json}\n    output: [report]\n    transition: END\n",
+          "tools": [],
+          "http_action_snapshot": {
+            "schema_version": "elitea.runtime.http-action-snapshot.v1",
+            "application_id": "31",
+            "version_id": "41",
+            "instructions_digest": "e1d1c065ebe0117c8dbf886eccb1210757227f37b2ee0bae1930ebe6839ab867",
+            "nodes": [
+              {
+                "node_id": "fetch",
+                "request_digest": "f6adf7dc51f35fc3c255d815e2c1d0e3772b27c0343a1062a4ed6296871b047f",
+                "request_wire_b64": "eyJib2R5Ijp7ImtpbmQiOiJqc29uIiwidmFsdWUiOnsiYSI6MiwibiI6MTg0NDY3NDQwNzM3MDk1NTE2MTcwMDAwMDAwMDAwMDAwMDAxfX0sIm1ldGhvZCI6IlBPU1QiLCJyZXNwb25zZSI6eyJtb2RlIjoianNvbiJ9LCJ1cmwiOiJodHRwczovL2FwaS5leGFtcGxlLnRlc3QvaXRlbXMifQ==",
+                "binding_digest": "e7f74715d279a04fa38b363240d6acf1fdee1cf71009b6dfdc7175d7c02c2172",
+                "output": [
+                  "report"
+                ],
+                "transition": "END"
+              }
+            ]
+          }
+        }
+      },
+      "request_wire_utf8": "{\"body\":{\"kind\":\"json\",\"value\":{\"a\":2,\"n\":184467440737095516170000000000000001}},\"method\":\"POST\",\"response\":{\"mode\":\"json\"},\"url\":\"https://api.example.test/items\"}",
+      "request_digest": "f6adf7dc51f35fc3c255d815e2c1d0e3772b27c0343a1062a4ed6296871b047f",
+      "binding_digest": "e7f74715d279a04fa38b363240d6acf1fdee1cf71009b6dfdc7175d7c02c2172",
+      "thread_id": "graph-fixture",
+      "node_id": "fetch",
+      "step": 3,
+      "execution_id": "11111111-1111-4111-8111-111111111111",
+      "generation": 7,
+      "activation_id": "9e3e1d9ffa9352e9fef9865e49696b13f952fc534b536b256d7ae9e8def939c4",
+      "effect_id": "852a70d61e01d6dc839085c66ff4dbaee7d8a452f72d6eb87e90ea6b1e6e3937"
+    },
+    {
+      "name": "reordered_keys",
+      "numeric_token": "1",
+      "application": {
+        "id": 31,
+        "version_id": 41,
+        "version_details": {
+          "agent_type": "pipeline",
+          "instructions": "state:\n  report: dict\nentry_point: fetch\nnodes:\n  - id: fetch\n    type: http\n    revision: 1\n    request:\n      method: POST\n      url: https://api.example.test/items\n      body: {kind: json, value: {n: 1, a: 2}}\n      response: {mode: json}\n    output: [report]\n    transition: END\n",
+          "tools": [],
+          "http_action_snapshot": {
+            "schema_version": "elitea.runtime.http-action-snapshot.v1",
+            "application_id": "31",
+            "version_id": "41",
+            "instructions_digest": "c1953d8254bbe455d5632f9dcb3830f04e48960f0137349f07b93b7c9ab11c1a",
+            "nodes": [
+              {
+                "node_id": "fetch",
+                "request_digest": "23159140623a2dff613786b47f73439691bb17692263c480359f59b289037493",
+                "request_wire_b64": "eyJib2R5Ijp7ImtpbmQiOiJqc29uIiwidmFsdWUiOnsiYSI6MiwibiI6MX19LCJtZXRob2QiOiJQT1NUIiwicmVzcG9uc2UiOnsibW9kZSI6Impzb24ifSwidXJsIjoiaHR0cHM6Ly9hcGkuZXhhbXBsZS50ZXN0L2l0ZW1zIn0=",
+                "binding_digest": "2c2f591a10e686e8d0a605fb5bae360d36b684cf11cc94071de6673b56ac421d",
+                "output": [
+                  "report"
+                ],
+                "transition": "END"
+              }
+            ]
+          }
+        }
+      },
+      "request_wire_utf8": "{\"body\":{\"kind\":\"json\",\"value\":{\"a\":2,\"n\":1}},\"method\":\"POST\",\"response\":{\"mode\":\"json\"},\"url\":\"https://api.example.test/items\"}",
+      "request_digest": "23159140623a2dff613786b47f73439691bb17692263c480359f59b289037493",
+      "binding_digest": "2c2f591a10e686e8d0a605fb5bae360d36b684cf11cc94071de6673b56ac421d",
+      "thread_id": "graph-fixture",
+      "node_id": "fetch",
+      "step": 3,
+      "execution_id": "11111111-1111-4111-8111-111111111111",
+      "generation": 7,
+      "activation_id": "59eefd796284298cf665889a15f6564a83cc155beaf784a0213db07f309570c3",
+      "effect_id": "681f14c106bb6eea6501eb2b9d3078fab9ac6de484e409b0a07cbe8948eb7a89"
+    }
+  ]
+}

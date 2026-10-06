@@ -24,6 +24,7 @@
  */
 
 // Bundled hooks (imported at top so chatHooks can reference them).
+export { currentNodeRecoveryBinding } from './lib/nodeRecoveryBinding';
 import { useParticipantName } from './lib/participantName';
 import { useParticipantEntityType } from './lib/participantIcon';
 
@@ -193,3 +194,6 @@ export {
   openArtifactFileInCanvas,
   saveCanvasToArtifact,
 } from './model/canvasFileTransfer';
+
+export { currentStaticPause, staticPauseKey, staticContinuationBody, consumeStaticPause, STATIC_CONTINUATION_CONTRACT } from './lib/staticPipelinePause';
+export type { StaticPauseBinding } from './lib/staticPipelinePause.types';

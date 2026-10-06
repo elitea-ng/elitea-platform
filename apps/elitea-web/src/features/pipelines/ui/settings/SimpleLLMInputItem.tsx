@@ -39,14 +39,7 @@ interface NodeFieldInputProps {
   readonly enableFStringAutocomplete: boolean;
   readonly stateVariableOptions: readonly SingleSelectOption[];
   readonly modelConfig?: AiAssistantLlmSettings | null;
-  /**
-   * Forced content-type for the AI-Assistant editor (baseline's `code`-field
-   * `language = 'python'` override — see `SimpleLLMInputItem`'s
-   * `codeFieldLanguage` for the restored computation). Forwarded only to
-   * `AIAssistantInput`; the plain `StyledInputEnhancer` branch has no such
-   * prop (see this file's top doc comment on dropped CodeMirror highlighting
-   * for that branch).
-   */
+  /** Selected Code language. Its presence also enables multiline source input. */
   readonly language?: string;
 }
 
@@ -107,11 +100,12 @@ function NodeFieldInput(props: NodeFieldInputProps): ReactNode {
   });
 
   const isChatHistory = variable === 'chat_history';
+  const isMultiline = isChatHistory || language !== undefined;
 
   /**
    * `handleCursorChange` (from `useFStringInputAutocomplete`) reads
    * `event.target.value`/`event.target.selectionStart` off whatever
-   * element the DOM event actually fired on -- always the real `<input>`
+   * element the DOM event actually fired on -- the real `<input>` or `<textarea>`
    * at runtime, even though React's `MouseEvent<HTMLDivElement>`/
    * `FocusEvent<HTMLDivElement>`/`KeyboardEvent<HTMLDivElement>` handler
    * types (attached by `StyledInputEnhancer`'s `TextFieldProps`) declare
@@ -147,8 +141,8 @@ function NodeFieldInput(props: NodeFieldInputProps): ReactNode {
           disabled={disabled}
           name="value"
           id={`${variable}-value`}
-          {...(isChatHistory ? { expand: { minRows: 3, maxRows: 8 } } : {})}
-          actions={{ enabled: true, showCopy: true, showFullScreen: true, showExpand: isChatHistory }}
+          {...(isMultiline ? { expand: { minRows: 3, maxRows: 8 } } : {})}
+          actions={{ enabled: true, showCopy: true, showFullScreen: true, showExpand: isMultiline }}
           onChange={handleChange}
           onBlur={closeAutocomplete}
           onClick={onFieldClick}
@@ -177,8 +171,8 @@ function autocompleteIsOpen(shouldEnableAIAssistant: boolean, filteredCount: num
 /**
  * Baseline: `apps/elitea-ui/…/settings/SimpleLLMInputItem.jsx:126-127` —
  * `(type === 'fstring' || type === 'fixed') && variableName.toLowerCase() === 'code'
- * ? 'python' : undefined`. Forces the Code node's AI-Assistant editor to open
- * pre-set to Python instead of falling back to `AIAssistantInput`'s own
+ * ? 'python' : undefined`. The editor now uses the selected Code language.
+ * Omitted language retains Python instead of falling back to `AIAssistantInput`'s own
  * `detectContentType` heuristic (`../../lib/aiAssistantLanguage.ts`), which can
  * easily guess "text" for a short/empty code snippet. This was dropped during
  * the initial port (a real regression, not a disclosed trim) — restored here.
@@ -194,13 +188,12 @@ function autocompleteIsOpen(shouldEnableAIAssistant: boolean, filteredCount: num
  * dependency (see that file's header doc comment). Adding that package is a
  * `package.json` edit — a shared, cross-cutting file this sub-unit (owns only
  * `src/features/pipelines/`) should not change unilaterally in a worktree
- * shared with sibling units. What this restores is the correct initial
- * content-type selection (pre-set to "Python" in the dropdown, matching
- * baseline) and persisted/detected-language bookkeeping; real highlighting is
+ * shared with sibling units. This selects the configured content type and retains the Python default.
+ * It also preserves detected-language bookkeeping; real highlighting is
  * a follow-up that needs the dependency added elsewhere.
  */
-function resolveCodeFieldLanguage(type: string, variableName: string): string | undefined {
-  return (type === 'fstring' || type === 'fixed') && variableName.toLowerCase() === 'code' ? 'python' : undefined;
+function resolveCodeFieldLanguage(type: string, variableName: string, codeLanguage: string | undefined): string | undefined {
+  return (type === 'fstring' || type === 'fixed') && variableName.toLowerCase() === 'code' ? (codeLanguage ?? 'python') : undefined;
 }
 
 export interface SimpleLLMInputItemProps {
@@ -213,6 +206,7 @@ export interface SimpleLLMInputItemProps {
   readonly disabled?: boolean | undefined;
   readonly enableAIAssistant?: boolean;
   readonly modelConfig?: AiAssistantLlmSettings | null;
+  readonly codeLanguage?: string | undefined;
 }
 
 const containerSx: SxProps<Theme> = {};
@@ -233,7 +227,7 @@ const AI_ASSISTANT_VARIABLE_NAMES: ReadonlySet<string> = new Set(['system', 'tas
  * around.
  */
 export function SimpleLLMInputItem(props: SimpleLLMInputItemProps): ReactNode {
-  const { variableName, variable, type, value, defaultValue, onChangeMapping, disabled = false, enableAIAssistant = false, modelConfig = null } = props;
+  const { variableName, variable, type, value, defaultValue, onChangeMapping, disabled = false, enableAIAssistant = false, modelConfig = null, codeLanguage } = props;
 
   const typeOptions = useMemo<SingleSelectOption[]>(
     () => FlowEditorConstants.agentTaskTypeOptions.map(option => ({ label: option.label, value: option.value })),
@@ -285,7 +279,7 @@ export function SimpleLLMInputItem(props: SimpleLLMInputItemProps): ReactNode {
 
   const isStringType = type === 'string' || type === 'fstring' || type === 'fixed';
 
-  const codeFieldLanguage = resolveCodeFieldLanguage(type, variableName);
+  const codeFieldLanguage = resolveCodeFieldLanguage(type, variableName, codeLanguage);
 
   return (
     <Box sx={containerSx}>

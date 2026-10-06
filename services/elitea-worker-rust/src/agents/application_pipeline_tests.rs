@@ -311,6 +311,10 @@ fn harness(yaml: &str) -> Harness {
 }
 
 fn harness_named(yaml: &str, tool_name: &str) -> Harness {
+    harness_with_runtimes(yaml, tool_name, PipelineNodeRuntimes::default())
+}
+
+fn harness_with_runtimes(yaml: &str, tool_name: &str, runtimes: PipelineNodeRuntimes) -> Harness {
     let definition = PipelineDefinition::from_yaml(yaml).expect("pipeline definition");
     let (node_sender, node_receiver) = pipeline_node_event_channel();
     let (sender, events) = mpsc::channel(64);
@@ -319,7 +323,7 @@ fn harness_named(yaml: &str, tool_name: &str) -> Harness {
         tool_name.to_owned(),
         pipeline_tool_description("review-pipeline", Some("Reviews a change.")),
         definition,
-        PipelineNodeRuntimes::default(),
+        runtimes,
         node_receiver,
         super::application_pipeline::PipelineToolParentBinding {
             conversation_thread_id: CONVERSATION_THREAD.to_owned(),
@@ -1178,4 +1182,231 @@ async fn a_later_call_never_replays_an_earlier_calls_node_events() {
                 )))),
         "a later call replayed an earlier call's node event under its own identity"
     );
+}
+
+const RECURSIVE_REVIEW_ROOT: &str = r"
+state: {input: str, messages: list, verdict: str}
+entry_point: delegate
+nodes:
+  - id: delegate
+    type: agent
+    tool: review-child
+    input_mapping: {task: {type: variable, value: input}}
+    output: [verdict]
+    transition: END
+";
+
+struct RecursiveReviewResolver {
+    child: PipelineDefinition,
+}
+
+impl super::graph::PipelineApplicationResolver for RecursiveReviewResolver {
+    fn resolve(
+        &self,
+        selection: &super::graph::PipelineApplicationSelection,
+        checkpointer: Arc<dyn adk_rust::graph::Checkpointer>,
+    ) -> Result<super::graph::ResolvedApplicationParticipant, super::graph::ApplicationExecutionError>
+    {
+        if selection.alias() != "review-child" {
+            return Err(super::graph::ApplicationExecutionError::Unavailable);
+        }
+        let graph = self
+            .child
+            .compile_subgraph_with_runtime(checkpointer, &PipelineNodeRuntimes::default())
+            .map_err(|_| super::graph::ApplicationExecutionError::Unavailable)?;
+        Ok(super::graph::ResolvedApplicationParticipant::Pipeline {
+            graph: Arc::new(graph),
+            variable_types: self.child.declared_variable_types(),
+            events: None,
+            display_name: "review-child".to_owned(),
+            static_pauses: self.child.static_pause_catalog(),
+        })
+    }
+}
+
+fn recursive_review_harness() -> Harness {
+    use super::pipeline::composition::{PipelineCheckpointCatalog, PipelineCheckpointRevision};
+    let child = PipelineDefinition::from_yaml(REVIEW_PIPELINE).unwrap();
+    let root = PipelineDefinition::from_yaml(RECURSIVE_REVIEW_ROOT).unwrap();
+    let catalog = PipelineCheckpointCatalog {
+        root: Some(PipelineCheckpointRevision {
+            application_id: 31,
+            version_id: 41,
+            definition_digest: root.definition_digest(),
+        }),
+        descendants: std::collections::BTreeMap::from([(
+            "delegate".to_owned(),
+            PipelineCheckpointRevision {
+                application_id: 51,
+                version_id: 61,
+                definition_digest: child.definition_digest(),
+            },
+        )]),
+    };
+    let runtime = PipelineNodeRuntimes::new(
+        None,
+        None,
+        Some(Arc::new(RecursiveReviewResolver { child })),
+    )
+    .with_checkpoint_catalog(catalog);
+    harness_with_runtimes(RECURSIVE_REVIEW_ROOT, TOOL_NAME, runtime)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn deeper_ordinary_parent_pipeline_resumes_from_a_new_tool_with_exact_family() {
+    let mut original = recursive_review_harness();
+    let paused = original
+        .tool
+        .execute(context(), json!({"task":"ship it"}))
+        .await
+        .unwrap();
+    let interrupt_id = nested_application_interrupt_ids(&paused)
+        .unwrap()
+        .iter()
+        .next()
+        .unwrap()
+        .clone();
+    let mut events = vec![root_call_event()];
+    events.extend(persisted(&mut original.events));
+    let pause = pause_event(&events);
+    let pending: Value =
+        serde_json::from_str(&pause.provider_metadata[PIPELINE_TOOL_PENDING_METADATA_KEY]).unwrap();
+    assert_eq!(
+        pending["schema_revision"],
+        "elitea.pipeline-tool-pending.v2"
+    );
+    assert_eq!(
+        pending["descendant_checkpoints"][0]["thread_id"],
+        format!("{CONVERSATION_THREAD}/{CALL_ID}/delegate")
+    );
+    let original_id = pending["descendant_checkpoints"][0]["checkpoint_id"].clone();
+    assert!(original_id.as_str().is_some_and(|id| !id.is_empty()));
+    drop(original);
+    let replacement = recursive_review_harness();
+    answer(&replacement, &events, &interrupt_id, "approve", "").await;
+    let result = replacement
+        .tool
+        .execute(context(), json!({"task":"ship it"}))
+        .await
+        .unwrap();
+    assert_eq!(result, json!({"response":"APPROVED ship it"}));
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Preserve ordered real producer, projector, after-resume, and later-original-batch assertions.
+async fn static_saved_pipeline_produces_authorized_inventory_and_resumes_after_once() {
+    use super::application_pipeline::static_pipeline_tool_pause;
+    use super::application_tools::install_static_application_resume;
+    use super::graph::static_tool_pause::parse_static_tool_decisions;
+    use super::pipeline::composition::{PipelineCheckpointCatalog, PipelineCheckpointRevision};
+    let yaml = "interrupt_after: [tick]\nstate: {input: str, messages: list, count: {type: int, value: 0}, verdict: str}\nentry_point: tick\nnodes:\n  - id: tick\n    type: state_modifier\n    template: '{{ count + 1 }}'\n    input: [count]\n    output: [count]\n    transition: report\n  - id: report\n    type: state_modifier\n    template: 'COUNT {{ count }}'\n    input: [count]\n    output: [verdict]\n    transition: END\n";
+    let definition = PipelineDefinition::from_yaml(yaml).unwrap();
+    let runtimes =
+        PipelineNodeRuntimes::default().with_checkpoint_catalog(PipelineCheckpointCatalog {
+            root: Some(PipelineCheckpointRevision {
+                application_id: 31,
+                version_id: 41,
+                definition_digest: definition.definition_digest(),
+            }),
+            descendants: std::collections::BTreeMap::new(),
+        });
+    let mut h = harness_with_runtimes(yaml, TOOL_NAME, runtimes);
+    let mut original = root_call_event();
+    original.branch = super::events::APPLICATION_BRANCH_ROOT.to_owned();
+    h.resume.observe_call_lineage(&original).await.unwrap();
+    let paused = h
+        .tool
+        .execute(context(), json!({"task":"ship it"}))
+        .await
+        .unwrap();
+    let ids = nested_application_interrupt_ids(&paused).unwrap();
+    assert_eq!(ids.len(), 1);
+    let forwarded = persisted(&mut h.events);
+    let event = forwarded
+        .iter()
+        .find(|event| {
+            event
+                .provider_metadata
+                .contains_key(PIPELINE_TOOL_PENDING_METADATA_KEY)
+        })
+        .unwrap();
+    let pause = static_pipeline_tool_pause(event).unwrap().unwrap();
+    assert!(pause.thread_id.contains("/static-v1:"));
+    let stored = serde_json::to_vec(event).unwrap();
+    let mut projector = AgentEventProjector::with_tool_catalogs(
+        AgentEventProjectionContext::fixture(json!({})),
+        SensitiveToolCatalog::default(),
+        presentations(),
+    )
+    .unwrap();
+    projector.start(chrono::Utc::now()).unwrap();
+    projector.project(&original).unwrap();
+    let rendered = projector
+        .project(event)
+        .unwrap()
+        .into_iter()
+        .map(|event| {
+            String::from_utf8(
+                crate::protocol::node_event::encode_current_node_event_json(&event).unwrap(),
+            )
+            .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        rendered
+            .iter()
+            .any(|event| event.contains("pipeline_static_tools_v1"))
+    );
+    assert!(rendered.iter().all(|event| {
+        !event.contains(super::application_pipeline::STATIC_TOOL_THREAD_METADATA_KEY)
+            && !event.contains(PIPELINE_TOOL_PENDING_METADATA_KEY)
+            && !event.contains("arguments_digest")
+    }));
+    let meta = serde_json::Map::from_iter([(
+        "pipeline_static_tool_resume_v1".to_owned(),
+        json!({"revision":1,"decisions":[{"pause_id":pause.pause_id,"child_thread_id":pause.thread_id,"tool_call_id":CALL_ID,"action":"continue","value":"finish once"}]}),
+    )]);
+    let decisions = parse_static_tool_decisions(&meta).unwrap().unwrap();
+    let mut events = vec![original.clone()];
+    events.extend(forwarded);
+    install_static_application_resume(&events, decisions, &presentations(), &h.resume)
+        .await
+        .unwrap();
+    let mut replay = turn_root_call_event("replayed-static-call", "resumed-static-turn");
+    replay.branch = super::events::APPLICATION_BRANCH_ROOT.to_owned();
+    replay.llm_response.provider_metadata = Some(
+        json!({"elitea.application.replay_batch.v1":{"event_id":original.id,"interrupt_ids":ids,"call_ordinals":{CALL_ID:1}}}),
+    );
+    h.resume.observe_call_lineage(&replay).await.unwrap();
+    assert_eq!(
+        h.tool
+            .execute(
+                turn_context("resumed-static-turn"),
+                json!({"task":"ship it"})
+            )
+            .await
+            .unwrap(),
+        json!({"response":"COUNT 1"})
+    );
+    assert_eq!(serde_json::to_vec(&events[1]).unwrap(), stored);
+    // A later ordinary batch can reuse the provider call ID but must get a different family.
+    let mut later = turn_root_call_event("later-original-batch", "later-static-turn");
+    later.branch = super::events::APPLICATION_BRANCH_ROOT.to_owned();
+    h.resume.observe_call_lineage(&later).await.unwrap();
+    assert!(
+        nested_application_interrupt_ids(
+            &h.tool
+                .execute(turn_context("later-static-turn"), json!({"task":"ship it"}))
+                .await
+                .unwrap()
+        )
+        .is_some()
+    );
+    let later_events = persisted(&mut h.events);
+    let later_pause = later_events
+        .iter()
+        .find_map(|event| static_pipeline_tool_pause(event).unwrap())
+        .unwrap();
+    assert_ne!(pause.thread_id, later_pause.thread_id);
+    assert_ne!(pause.pause_id, later_pause.pause_id);
 }

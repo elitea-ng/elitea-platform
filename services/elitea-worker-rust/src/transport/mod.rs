@@ -28,7 +28,9 @@ mod summary_selection_tests;
 pub use control_grpc::{
     ControlGrpcClient, ControlGrpcConfig, ControlGrpcError, ControlRpc, TonicControlRpc,
 };
-pub use input_content::{InputContentClient, InputContentError, MaterializedInput};
+pub use input_content::{
+    InputContentClient, InputContentError, InputContentTransportError, MaterializedInput,
+};
 pub use output_grpc::{
     DurablyAckedProgress, DurablyAckedTerminal, OutputGrpcConfig, OutputGrpcError,
     OutputGrpcSession, PreparedOutputSpool,

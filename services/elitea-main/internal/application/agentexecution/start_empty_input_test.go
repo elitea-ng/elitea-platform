@@ -48,7 +48,7 @@ func TestCurrentApplicationStartAdmitsAnUnattendedRunWithNoInput(t *testing.T) {
 	resolver := &currentApplicationResolverStub{target: CurrentApplicationTarget{
 		ApplicationID: 31, ApplicationVersionID: 41,
 		Variables:      json.RawMessage(`[]`),
-		VersionDetails: json.RawMessage(`{"id":41,"application_id":31,"agent_type":"pipeline","instructions":"state: {}","llm_settings":{"model_name":"test"},"meta":{},"tools":[]}`),
+		VersionDetails: json.RawMessage(`{"id":41,"application_id":31,"agent_type":"pipeline","instructions":"state: {}\nnodes: []","llm_settings":{"model_name":"test"},"meta":{},"tools":[]}`),
 		ChatHistory:    json.RawMessage(`[]`),
 	}}
 	admissions := &currentApplicationAdmissionStub{outcome: executionapp.AdmissionOutcome{

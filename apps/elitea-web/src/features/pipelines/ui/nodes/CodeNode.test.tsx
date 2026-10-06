@@ -1,6 +1,7 @@
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { cleanup, waitFor, type RenderResult } from '@testing-library/react';
+import { cleanup, fireEvent, waitFor, type RenderResult } from '@testing-library/react';
+import { dump, load } from 'js-yaml';
 
 import { ReactFlow, ReactFlowProvider, type Edge } from '@xyflow/react';
 
@@ -68,6 +69,30 @@ describe('CodeNode', () => {
     });
     expect(await findByRole('combobox', { name: 'Language' })).toHaveTextContent('Python');
     expect(setYamlJsonObject).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { language: 'python', source: 'def run(value):\n    return value + 1\n\nresult = run(input)\n' },
+    { language: 'javascript', source: 'function run(value) {\n  return value + 1;\n}\n\nresult = run(input);\n' },
+    { language: 'typescript', source: 'function run(value: number): number {\n  return value + 1;\n}\n\nresult = run(input);\n' },
+    { language: 'rust', source: 'fn run(value: i64) -> i64 {\n    value + 1\n}\n\nlet result = run(input);\n' },
+  ])('keeps $language source bytes after card edits, YAML save, and reopen', async ({ language, source }) => {
+    const node = { id: 'Node1', language, code: { type: 'fixed', value: source }, input: ['payload'], output: ['answer'], transition: 'END' };
+    const sibling = { id: 'Other', code: { type: 'fixed', value: 'unchanged' } };
+    const edited = source.replace('value + 1', 'value + 2');
+    let saved: YamlPipelineDocument = { nodes: [node, sibling] };
+    const setYamlJsonObject = vi.fn((document: YamlPipelineDocument) => {
+      saved = document;
+    });
+    const ui = renderCodeNodeBare({ expandAll: true, yamlJsonObject: saved, setYamlJsonObject });
+    const field = await ui.findByRole('textbox', { name: 'Value' });
+    expect(field.tagName).toBe('TEXTAREA');
+    expect(field).toHaveValue(source);
+    fireEvent.change(field, { target: { value: edited } });
+    expect(setYamlJsonObject).toHaveBeenLastCalledWith({ nodes: [{ ...node, code: { type: 'fixed', value: edited } }, sibling] });
+    ui.unmount();
+    const reopened = renderCodeNodeBare({ expandAll: true, yamlJsonObject: load(dump(saved)) as YamlPipelineDocument });
+    expect(await reopened.findByRole('textbox', { name: 'Value' })).toHaveValue(edited);
   });
 
   it.each(['JavaScript', 'TypeScript', 'Rust'])('changes language to %s without rewriting the node', async language => {
@@ -226,9 +251,47 @@ describe('CodeNode', () => {
     expect(container.querySelector('.react-flow__handle')).not.toBeInTheDocument();
   });
 
-  /* elitea_issues: #5203 — product gap: no `debug` toggle exists on the Code node, so there is no way to capture the assembled preamble+user code the sandbox actually ran to a `code_debug` artifact. */
-  it.fails('elitea_issues 5203: a Debug toggle exists on the Code node for artifact capture', () => {
-    const { getByRole } = renderCodeNode();
-    expect(getByRole('checkbox', { name: /debug/i })).toBeInTheDocument();
+  it('elitea_issues 5203: a Debug toggle exists on the Code node for artifact capture', async () => {
+    const user = userEvent.setup();
+    const source = 'def run(value):\n    return value + 1\n\nresult = run(input)\n';
+    const node = { id: 'Node1', type: 'code', code: { type: 'fixed', value: source }, input: ['payload'], output: ['answer'],
+      transition: 'END', metadata: { owner: 'retained', nested: ['unchanged'] } };
+    const sibling = { id: 'Other', type: 'code', debug: false, code: { type: 'fixed', value: 'result = 2' } };
+    let saved: YamlPipelineDocument = { nodes: [node, sibling], state: { payload: { type: 'dict' }, answer: { type: 'int' } } };
+    const original = saved;
+    const setYamlJsonObject = vi.fn((document: YamlPipelineDocument) => { saved = document; });
+    const ui = renderCodeNodeBare({ expandAll: true, yamlJsonObject: saved, setYamlJsonObject });
+    const toggle = await ui.findByRole('checkbox', { name: /^debug$/i });
+    expect(toggle).not.toBeChecked(); expect(setYamlJsonObject).not.toHaveBeenCalled();
+    await user.click(toggle);
+    expect(saved).toEqual({ ...original, nodes: [{ ...node, debug: true }, sibling] });
+    ui.unmount();
+    const reopened = renderCodeNodeBare({ expandAll: true, yamlJsonObject: load(dump(saved)) as YamlPipelineDocument, setYamlJsonObject });
+    expect(await reopened.findByRole('checkbox', { name: /^debug$/i })).toBeChecked();
+    expect(await reopened.findByRole('textbox', { name: 'Value' })).toHaveValue(source);
+    await user.click(reopened.getByRole('checkbox', { name: /^debug$/i }));
+    expect(saved).toEqual({ ...original, nodes: [{ ...node, debug: false }, sibling] });
+    reopened.unmount();
+    const disabledAgain = renderCodeNodeBare({ expandAll: true, yamlJsonObject: load(dump(saved)) as YamlPipelineDocument });
+    expect(await disabledAgain.findByRole('checkbox', { name: /^debug$/i })).not.toBeChecked();
+    expect(original.nodes?.[0]).not.toHaveProperty('debug');
+  });
+
+  it.each([undefined, false, true, null, 'true', { enabled: true }])('preserves stored Debug value %j without an authoring write', async (debug) => {
+    const node = { id: 'Node1', type: 'code', code: { type: 'fixed', value: 'result = 1' }, ...(debug === undefined ? {} : { debug }) };
+    const setYamlJsonObject = vi.fn();
+    const { findByRole } = renderCodeNodeBare({ expandAll: true, yamlJsonObject: { nodes: [node] }, setYamlJsonObject });
+    const toggle = await findByRole('checkbox', { name: /^debug$/i });
+    expect(toggle).toHaveProperty('checked', debug === true);
+    expect(setYamlJsonObject).not.toHaveBeenCalled();
+  });
+
+  it.each([{ isRunningPipeline: true }, { disabled: true }])('prevents Debug edits for a running or selected-run pipeline: %j', async (scope) => {
+    const setYamlJsonObject = vi.fn();
+    const { findByRole } = renderCodeNodeBare({ ...scope, expandAll: true,
+      yamlJsonObject: { nodes: [{ id: 'Node1', type: 'code', debug: true, code: { type: 'fixed', value: 'result = 1' } }] }, setYamlJsonObject });
+    const toggle = await findByRole('checkbox', { name: /^debug$/i });
+    expect(toggle).toBeChecked(); expect(toggle).toBeDisabled();
+    fireEvent.click(toggle); expect(setYamlJsonObject).not.toHaveBeenCalled();
   });
 });

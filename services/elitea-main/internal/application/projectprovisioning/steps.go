@@ -341,6 +341,68 @@ func referencingDeletes() []referencingDelete {
     WHERE job.resource_project_id = $1 OR job.projection_project_id = $1`
 
 	return []referencingDelete{
+
+		// Remove recovery and immutable Code children before their execution owner.
+		{
+			table: "elitea_runtime.node_recovery_audit",
+			statement: `DELETE FROM elitea_runtime.node_recovery_audit
+WHERE (execution_id, generation) IN (` + jobsOfProject + `)`,
+		},
+		{
+			table: "elitea_runtime.node_recovery_control_outbox",
+			statement: `DELETE FROM elitea_runtime.node_recovery_control_outbox
+WHERE (execution_id, generation) IN (` + jobsOfProject + `)`,
+		},
+		{
+			table: "elitea_runtime.node_recovery_visits",
+			statement: `DELETE FROM elitea_runtime.node_recovery_visits
+WHERE (execution_id, generation) IN (` + jobsOfProject + `)`,
+		},
+		{
+			table: "elitea_runtime.original_code_owner_receipts",
+			statement: `DELETE FROM elitea_runtime.original_code_owner_receipts
+WHERE (execution_id, generation) IN (` + jobsOfProject + `)`,
+		},
+		{
+			table: "elitea_runtime.code_workspace_snapshots",
+			statement: `DELETE FROM elitea_runtime.code_workspace_snapshots
+WHERE resource_project_id = $1 OR (execution_id, generation) IN (` + jobsOfProject + `)`,
+		},
+		{
+			table: "elitea_runtime.original_code_intents",
+			statement: `DELETE FROM elitea_runtime.original_code_intents
+WHERE (execution_id, generation) IN (` + jobsOfProject + `)`,
+		},
+		{
+			table: "elitea_runtime.original_code_visits",
+			statement: `DELETE FROM elitea_runtime.original_code_visits
+WHERE (execution_id, generation) IN (` + jobsOfProject + `)`,
+		},
+		{
+			table: "elitea_runtime.code_debug_artifacts",
+			statement: `DELETE FROM elitea_runtime.code_debug_artifacts
+WHERE project_id = $1 OR (execution_id, original_generation) IN (` + jobsOfProject + `)`,
+		},
+		{
+			table: "elitea_runtime.execution_http_effects",
+			statement: `DELETE FROM elitea_runtime.execution_http_effects
+WHERE (execution_id, generation) IN (` + jobsOfProject + `)`,
+		},
+		{
+			table: "elitea_runtime.execution_saved_child_definitions",
+			statement: `DELETE FROM elitea_runtime.execution_saved_child_definitions
+WHERE resource_project_id = $1 OR (execution_id, generation) IN (` + jobsOfProject + `)`,
+		},
+		{
+			table: "elitea_runtime.execution_saved_child_captures",
+			statement: `DELETE FROM elitea_runtime.execution_saved_child_captures
+WHERE resource_project_id = $1 OR (execution_id, generation) IN (` + jobsOfProject + `)`,
+		},
+		{
+			table: "elitea_runtime.execution_saved_child_scopes",
+			statement: `DELETE FROM elitea_runtime.execution_saved_child_scopes
+WHERE (execution_id, generation) IN (` + jobsOfProject + `)`,
+		},
 		{
 			table: "elitea_runtime.index_ingest_results",
 			statement: `
@@ -375,6 +437,14 @@ DELETE FROM elitea_runtime.execution_replay_state WHERE projection_project_id = 
 			statement: `
 DELETE FROM elitea_runtime.execution_jobs
 WHERE resource_project_id = $1 OR projection_project_id = $1`,
+		},
+		{
+			table:     "elitea_runtime.execution_definition_source_refs",
+			statement: `DELETE FROM elitea_runtime.execution_definition_source_refs WHERE resource_project_id = $1`,
+		},
+		{
+			table:     "elitea_runtime.execution_captured_definitions",
+			statement: `DELETE FROM elitea_runtime.execution_captured_definitions WHERE resource_project_id = $1`,
 		},
 		{
 			table: "elitea_runtime.input_bundles",

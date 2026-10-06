@@ -697,6 +697,7 @@ async fn preparation_receipt_database() -> IsolatedPostgres {
         include_str!(
             "../../../elitea-main/migrations/agentstate/0009_sandbox_preparation_bundle.sql"
         ),
+        include_str!("../../../elitea-main/migrations/agentstate/0010_sandbox_phase_deadlines.sql"),
     ] {
         sqlx::raw_sql(migration)
             .execute(&isolated.pool)
@@ -709,7 +710,7 @@ async fn preparation_receipt_database() -> IsolatedPostgres {
 #[cfg(feature = "sandbox-supervisor")]
 fn preparation_receipt_bundle(
     requirement: &str,
-) -> crate::sandbox::dependency_content::PythonDependencyBundle {
+) -> crate::sandbox::dependency_content::DependencyBundle {
     use std::fmt::Write as _;
     let mut record = format!(
         r#"{{"revision":1,"runtime":"pyodide-0.29.0","requirements":["{requirement}"],"files":[{{"name":"elitea-python-lock.json","bytes":2,"sha256":"{}"}}]}}"#,
@@ -722,8 +723,7 @@ fn preparation_receipt_bundle(
     }
     record.pop();
     write!(record, ",\"digest\":\"{root}\"}}").unwrap();
-    crate::sandbox::dependency_content::PythonDependencyBundle::parse(record.as_bytes(), &root)
-        .unwrap()
+    crate::sandbox::dependency_content::DependencyBundle::parse(record.as_bytes(), &root).unwrap()
 }
 
 #[cfg(feature = "sandbox-supervisor")]
@@ -1021,6 +1021,12 @@ async fn sandbox_receipts_fence_stale_owners_and_preserve_terminal_results() {
     .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0009_sandbox_preparation_bundle.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0010_sandbox_phase_deadlines.sql"
     ))
     .execute(&isolated.pool)
     .await
@@ -1371,6 +1377,12 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
     .await
     .unwrap();
     sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0010_sandbox_phase_deadlines.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0005_sandbox_cancellation.sql"
     ))
     .execute(&isolated.pool)
@@ -1378,6 +1390,12 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
     .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0006_sandbox_stop_reconciliation.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0013_sandbox_whole_code_recovery.sql"
     ))
     .execute(&isolated.pool)
     .await
@@ -1397,6 +1415,13 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
     let identity = scope.runtime_identity().unwrap();
     let ledger = JobLedger::new(isolated.pool.clone());
     ledger.reserve(&scope).await.unwrap();
+    // A delayed reservation must not consume the real runtime's dispatch budget.
+    sqlx::query(
+        "UPDATE elitea_runtime.sandbox_jobs SET created_at=clock_timestamp()-interval '2 hours'",
+    )
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
     let lease = ledger
         .claim(&scope, "old-process".into(), 60)
         .await
@@ -1619,7 +1644,7 @@ async fn sandbox_supervisor_recovers_dispatched_job_and_persists_before_cleanup(
         .unwrap();
     ledger.mark_dispatched(&abandoned_lease).await.unwrap();
     // Test-only time adjustment; no signal was sent to the prepared container.
-    sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET created_at=clock_timestamp()-interval '2 hours', lease_until=clock_timestamp()-interval '1 second' WHERE phase='dispatched'")
+    sqlx::query("UPDATE elitea_runtime.sandbox_jobs SET dispatched_at=clock_timestamp()-interval '2 hours', lease_until=clock_timestamp()-interval '1 second' WHERE phase='dispatched'")
         .execute(&isolated.pool).await.unwrap();
     let deadline = tokio::time::timeout(
         Duration::from_secs(20),
@@ -1716,6 +1741,12 @@ async fn sandbox_submission(over_tls: bool) {
     .await
     .unwrap();
     sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0010_sandbox_phase_deadlines.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0005_sandbox_cancellation.sql"
     ))
     .execute(&isolated.pool)
@@ -1723,6 +1754,12 @@ async fn sandbox_submission(over_tls: bool) {
     .unwrap();
     sqlx::raw_sql(include_str!(
         "../../../elitea-main/migrations/agentstate/0006_sandbox_stop_reconciliation.sql"
+    ))
+    .execute(&isolated.pool)
+    .await
+    .unwrap();
+    sqlx::raw_sql(include_str!(
+        "../../../elitea-main/migrations/agentstate/0013_sandbox_whole_code_recovery.sql"
     ))
     .execute(&isolated.pool)
     .await
@@ -1897,8 +1934,11 @@ async fn sandbox_submission(over_tls: bool) {
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(25));
         let wire = SubmitSandboxJobRequestV1 {
+            code_execution_intent_json: Vec::new(),
             grant: Some(grant.clone()),
             prepared_job_json: request.to_transport().unwrap(),
+            dependency_content_grant: None,
+            dependency_bundle_json: Vec::new(),
         };
         // A trusted CA alone does not authenticate the caller.
         let anonymous = endpoint
@@ -2223,11 +2263,13 @@ async fn sandbox_dispatch_journal_preserves_exact_pending_identity() {
     };
     let scope = DispatchScope::from_identity(&identity).unwrap();
     let journal = DispatchJournal::new(isolated.pool.clone());
+    assert!(!journal.contains_activation(&scope, &[1; 32]).await.unwrap());
     journal
         .register(&scope, &[1; 32], &[2; 32], "dns:sandbox-a")
         .await
         .unwrap();
     // A fresh worker uses the exact same identity; retries do not duplicate it.
+    assert!(journal.contains_activation(&scope, &[1; 32]).await.unwrap());
     let replacement = DispatchJournal::new(isolated.pool.clone());
     replacement
         .register(&scope, &[1; 32], &[2; 32], "dns:sandbox-a")
@@ -2274,11 +2316,18 @@ async fn sandbox_dispatch_journal_preserves_exact_pending_identity() {
     .await
     .unwrap();
     assert_eq!(pending, 0);
+    assert!(journal.contains_activation(&scope, &[1; 32]).await.unwrap());
     let changed = DispatchScope::from_identity(&ExecutionIdentityV1 {
         generation: 2,
         ..identity.clone()
     })
     .unwrap();
+    assert!(
+        journal
+            .contains_activation(&changed, &[1; 32])
+            .await
+            .unwrap()
+    );
     journal
         .register(&changed, &[1; 32], &[3; 32], "dns:sandbox-b")
         .await
@@ -2288,6 +2337,12 @@ async fn sandbox_dispatch_journal_preserves_exact_pending_identity() {
         ..identity
     })
     .unwrap();
+    assert!(
+        !journal
+            .contains_activation(&foreign, &[1; 32])
+            .await
+            .unwrap()
+    );
     assert!(matches!(
         journal
             .resolve(&foreign, &[1; 32], &[2; 32], "dns:sandbox-a")
@@ -2304,3 +2359,118 @@ async fn sandbox_dispatch_journal_preserves_exact_pending_identity() {
     ));
     isolated.pool.close().await;
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Keep takeover, original checkpoint identity, and stale writer checks in one scenario.
+async fn postgres_recursive_application_threads_preserve_takeover_and_completed_leaf() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL checkpoint component test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_test_schema(&database.pool).await;
+    let lease = Arc::new(TestStateWriterLease::current());
+    let root = PostgresCheckpointer::activate(
+        database.pool.clone(),
+        writer("execution-1", "claim-1", 1, 1, [0x41; 32], [0x61; 32]),
+        CheckpointLimits::default(),
+        lease.clone(),
+    )
+    .await
+    .expect("activate root");
+    assert!(root.load("thread-1/delegate/inner").await.is_err());
+    let family: Arc<dyn Checkpointer> = Arc::new(
+        root.with_application_paths(&["delegate".to_owned(), "delegate/inner".to_owned()])
+            .await
+            .expect("activate admitted child"),
+    );
+    for thread in ["other", "thread-1/unknown", "thread-1/delegate/deeper"] {
+        assert!(family.load(thread).await.is_err());
+        assert!(
+            family
+                .save(&Checkpoint::new(thread, State::new(), 0, vec![]))
+                .await
+                .is_err()
+        );
+    }
+    let calls = Arc::new(AtomicUsize::new(0));
+    let count = calls.clone();
+    let child = StateGraph::with_channels(&["result"])
+        .add_node_fn("work", move |_| {
+            let count = count.clone();
+            async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(NodeOutput::new().with_update("result", json!("child completed")))
+            }
+        })
+        .add_edge(START, "work")
+        .add_edge("work", END)
+        .compile()
+        .expect("compile child")
+        .with_checkpointer_arc(family.clone());
+    let child = StateGraph::with_channels(&["result"])
+        .add_node(adk_rust::graph::subgraph::SubgraphNode::new(
+            "inner",
+            Arc::new(child),
+        ))
+        .add_edge(START, "inner")
+        .add_edge("inner", END)
+        .compile()
+        .expect("compile middle")
+        .with_checkpointer_arc(family.clone());
+    let parent = StateGraph::with_channels(&["result"])
+        .add_node(adk_rust::graph::subgraph::SubgraphNode::new(
+            "delegate",
+            Arc::new(child),
+        ))
+        .add_edge(START, "delegate")
+        .add_edge("delegate", END)
+        .compile()
+        .expect("compile parent")
+        .with_checkpointer_arc(family.clone());
+    let result = parent
+        .invoke(State::new(), ExecutionConfig::new("thread-1"))
+        .await
+        .expect("execute admitted subgraph");
+    assert_eq!(result.get("result"), Some(&json!("child completed")));
+    let child_checkpoint = family
+        .load("thread-1/delegate/inner")
+        .await
+        .expect("load child")
+        .expect("child saved");
+    assert_eq!(
+        family
+            .load_by_id(&child_checkpoint.checkpoint_id)
+            .await
+            .expect("load by id")
+            .expect("saved")
+            .thread_id,
+        "thread-1/delegate/inner"
+    );
+    let replacement = PostgresCheckpointer::activate(
+        database.pool.clone(),
+        writer("execution-1", "claim-2", 2, 2, [0x41; 32], [0x62; 32]),
+        CheckpointLimits::default(),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("take over root")
+    .with_application_paths(&["delegate".to_owned(), "delegate/inner".to_owned()])
+    .await
+    .expect("take over child");
+    assert!(family.save(&child_checkpoint).await.is_err());
+    let recovered = replacement
+        .load("thread-1/delegate/inner")
+        .await
+        .expect("recover child")
+        .expect("checkpoint");
+    assert_eq!(
+        recovered.state.get("result"),
+        Some(&json!("child completed"))
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    lease.revoke();
+    assert!(family.load("thread-1/delegate/inner").await.is_err());
+}
+
+mod graph_receipts;

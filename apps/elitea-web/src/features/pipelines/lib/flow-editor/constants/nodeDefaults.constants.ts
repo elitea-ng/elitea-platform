@@ -1,3 +1,4 @@
+import { FixedParallelNodeDefaults } from './parallel.constants';
 /**
  * `InitialNodeData` — the default `data` payload seeded onto a freshly
  * created YAML node, keyed by `PipelineNodeTypes` (baseline
@@ -20,6 +21,7 @@
  * strings — that `validate_target` refuses. See the per-factory comments.
  */
 import { PipelineNodeTypes } from './flowEditor.constants';
+import { GraphExtensionDefaults } from './graphExtensionDefaults.constants';
 
 
 const createBaseNodeData = () => ({
@@ -197,11 +199,11 @@ const createPrinterNodeData = () => ({
  * `user_message.value` was `''`, which `validate_message` (`hitl.rs:440`)
  * refuses; see the field comment below.
  *
- * `edit_state_key` is `undefined`, NOT `''`: the runtime types it
+ * `edit_state_key` is omitted, NOT `''`: the runtime types it
  * `Option<String>` and refuses `Some("")` outright
  * (`hitl.rs:157-165` — `!valid_output_key(key)`), whereas an absent key is
- * `None` and legal. js-yaml drops undefined values, so the key simply does
- * not appear in the stored document until the picker sets one; the reader
+ * `None` and legal. The strict serializer rejects undefined values, so the
+ * factory omits this optional key until the picker sets one; the reader
  * side already defaults it (`HITLNode.parts.tsx:341`, `?? ''`).
  */
 const createHitlNodeData = () => ({
@@ -221,7 +223,6 @@ const createHitlNodeData = () => ({
     approve: PipelineNodeTypes.End as string,
     reject: PipelineNodeTypes.End as string,
   },
-  edit_state_key: undefined as string | undefined,
 });
 
 /**
@@ -230,6 +231,8 @@ const createHitlNodeData = () => ({
  * this module's doc comment.
  */
 export const InitialNodeData: Readonly<Record<string, Record<string, unknown>>> = {
+  ...GraphExtensionDefaults,
+  [PipelineNodeTypes.Parallel]: FixedParallelNodeDefaults,
   [PipelineNodeTypes.Tool]: createToolNodeData(),
   [PipelineNodeTypes.Agent]: createAgentNodeData(),
   [PipelineNodeTypes.Pipeline]: createTransitionNodeData(),

@@ -18,12 +18,13 @@
  *    toolbar and again in the saved view's menu); this port had neither.
  */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { configure, fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, configure, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import type { ProjectContext as ProjectContextResponse } from '@/shared/api/generated/model/projectContext.zod';
 import { resetBackendCapabilitiesForTests, setBackendCapabilityForTests } from '@/shared/config/backendCapabilities';
 import { installCodeMirrorTestPolyfills } from '@/shared/ui/lib/field/codeMirrorTestPolyfills';
 import { renderWithTheme } from '@/shared/ui/lib/testTheme';
@@ -295,6 +296,66 @@ describe('Settings › Project Context', () => {
         `${String(MAX_CHARS - '# Imported by type'.length)} characters left.`,
       ),
     );
+  });
+
+  it('keeps the saved content when an import is refused before the save refetch resolves', async () => {
+    const savedContent = 'Short project overview, well under the limit';
+    const initialContext: ProjectContextResponse = {
+      id: null, content: '', enabled: true, activation_description: null, updated_at: null,
+    };
+    const savedContext: ProjectContextResponse = {
+      id: 7, content: savedContent, enabled: true, activation_description: null, updated_at: '2026-10-06T09:00:00Z',
+    };
+    const bodies: unknown[] = [];
+    let getCalls = 0;
+    let releaseRefetch: (() => void) | undefined;
+    const refetchGate = new Promise<void>((resolve) => { releaseRefetch = resolve; });
+    server.use(
+      http.get(CONTEXT_PATH, async () => {
+        getCalls += 1;
+        if (getCalls === 1) return HttpResponse.json(initialContext);
+        await refetchGate;
+        return HttpResponse.json(savedContext);
+      }),
+      http.put(CONTEXT_PATH, async ({ request }) => {
+        bodies.push(await request.json());
+        return HttpResponse.json(savedContext);
+      }),
+    );
+
+    const { container } = mount();
+    const user = userEvent.setup();
+    installCodeMirrorTestPolyfills();
+    try {
+      await user.click(await screen.findByTestId('project-context-create-button'));
+      const editor = await screen.findByRole('textbox');
+      await user.click(editor);
+      await user.keyboard(savedContent);
+      await waitFor(() => expect(screen.getByTestId('project-context-char-counter'))
+        .toHaveTextContent(`${String(MAX_CHARS - savedContent.length)} characters left.`));
+      await user.click(screen.getByTestId('project-context-save-button'));
+
+      expect(await screen.findByText('Project Context saved successfully')).toBeInTheDocument();
+      await waitFor(() => expect(getCalls).toBe(2));
+      expect(bodies).toEqual([{ content: savedContent, enabled: true }]);
+      await waitFor(() => expect(screen.getByTestId('project-context-save-button')).toBeDisabled());
+
+      await importFile(new File(['x'.repeat(MAX_CHARS + 1)], 'too-long.md', { type: 'text/markdown' }));
+      expect(await screen.findByText('File content exceeds 2500 characters')).toBeInTheDocument();
+      expect(container.querySelector('.cm-content')).toHaveTextContent(savedContent);
+      expect(screen.getByTestId('project-context-char-counter'))
+        .toHaveTextContent(`${String(MAX_CHARS - savedContent.length)} characters left.`);
+
+      // Discard must also use the saved owner response while the GET is held.
+      await user.click(editor);
+      await user.keyboard(' draft');
+      await waitFor(() => expect(screen.getByTestId('project-context-discard-button')).toBeEnabled());
+      await user.click(screen.getByTestId('project-context-discard-button'));
+      await waitFor(() => expect(container.querySelector('.cm-content')).toHaveTextContent(savedContent));
+      expect(container.querySelector('.cm-content')).not.toHaveTextContent(' draft');
+    } finally {
+      act(() => { releaseRefetch?.(); });
+    }
   });
 
   it('does not let the toggle-triggered background refetch clobber an unsaved edit', async () => {

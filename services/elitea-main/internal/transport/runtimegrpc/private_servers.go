@@ -35,25 +35,27 @@ type GRPCServerPolicy struct {
 }
 
 type PrivateServerConfig struct {
-	ControlAddress          string
-	OutputAddress           string
-	ContentAddress          string
-	ControlTLS              *tls.Config
-	OutputTLS               *tls.Config
-	ContentTLS              *tls.Config
-	ControlMaxRequestBytes  int
-	ControlMaxResponseBytes int
-	OutputMaxRequestBytes   int
-	OutputMaxResponseBytes  int
-	ControlGRPC             GRPCServerPolicy
-	OutputGRPC              GRPCServerPolicy
-	ContentMaxConnections   int
-	ContentMaxStreams       int
-	ContentReadTimeout      time.Duration
-	ContentWriteTimeout     time.Duration
-	ContentIdleTimeout      time.Duration
-	ContentMaxHeaderBytes   int
-	ShutdownTimeout         time.Duration
+	ControlAddress         string
+	OutputAddress          string
+	ContentAddress         string
+	ControlTLS             *tls.Config
+	OutputTLS              *tls.Config
+	ContentTLS             *tls.Config
+	ControlMaxRequestBytes int
+	// Zero keeps compiled snapshot authority disabled at the transport boundary.
+	CompiledSnapshotMaxRequestBytes int
+	ControlMaxResponseBytes         int
+	OutputMaxRequestBytes           int
+	OutputMaxResponseBytes          int
+	ControlGRPC                     GRPCServerPolicy
+	OutputGRPC                      GRPCServerPolicy
+	ContentMaxConnections           int
+	ContentMaxStreams               int
+	ContentReadTimeout              time.Duration
+	ContentWriteTimeout             time.Duration
+	ContentIdleTimeout              time.Duration
+	ContentMaxHeaderBytes           int
+	ShutdownTimeout                 time.Duration
 }
 
 type PrivateServices struct {
@@ -113,6 +115,11 @@ func newPrivateServerSet(config PrivateServerConfig, services PrivateServices, l
 	controlCodec, err := NewDirectionalStrictProtoCodec(config.ControlMaxRequestBytes, config.ControlMaxResponseBytes)
 	if err != nil {
 		return nil, err
+	}
+	if config.CompiledSnapshotMaxRequestBytes != 0 {
+		if err = controlCodec.WithCompiledSnapshotRequestLimit(config.CompiledSnapshotMaxRequestBytes); err != nil {
+			return nil, err
+		}
 	}
 	outputCodec, err := NewDirectionalStrictProtoCodec(config.OutputMaxRequestBytes, config.OutputMaxResponseBytes)
 	if err != nil {

@@ -46,6 +46,7 @@ export const ContinueChatExecutionParams = zod.object({
     "agent.continue.hitl.v1",
     "agent.continue.authorization.v1",
     "agent.continue.output-limit.v1",
+    "agent.continue.static.v1",
   ]),
 });
 

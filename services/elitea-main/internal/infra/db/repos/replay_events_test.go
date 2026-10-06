@@ -96,6 +96,58 @@ func TestReplayEventsRepositoryReleasesAgentTerminalAfterProjectionCommits(t *te
 	}
 }
 
+func TestReplayEventsRepositoryDoesNotAdvancePastUnprojectedTerminal(t *testing.T) {
+	progress := []byte(`{"type":"next_input_suggestion_ready","content":"Continue?"}`)
+	progressDigest := runtimedomain.SHA256(progress)
+	terminal := []byte(`{"type":"full_message","content":"Done"}`)
+	terminalDigest := runtimedomain.SHA256(terminal)
+	later := []byte(`{"type":"execution_metadata","content":"Settled"}`)
+	laterDigest := runtimedomain.SHA256(later)
+	executor := &scriptedExecutor{
+		rowResults: []scriptedRow{
+			{values: []any{int64(0), int64(8), true, true}},
+			{values: []any{int64(0), int64(8), true, true}},
+			{values: []any{int64(0), int64(8), true, true}},
+		},
+		rowsResults: []*scriptedRows{
+			{rows: []scriptedRow{
+				{values: []any{int64(6), replayEventNodeEvent, progress, progressDigest[:], true}},
+				{values: []any{int64(7), replayEventNodeEvent, terminal, terminalDigest[:], false}},
+				{values: []any{int64(8), replayEventNodeEvent, later, laterDigest[:], true}},
+			}},
+			{rows: []scriptedRow{
+				{values: []any{int64(7), replayEventNodeEvent, terminal, terminalDigest[:], true}},
+				{values: []any{int64(8), replayEventNodeEvent, later, laterDigest[:], true}},
+			}},
+		},
+	}
+	repository := newReplayEventsRepository(executor)
+	first, err := repository.Replay(context.Background(), "42", "execution-1", 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || first[0].Cursor != 6 {
+		t.Fatalf("replay skipped the projection barrier: %+v", first)
+	}
+	second, err := repository.Replay(context.Background(), "42", "execution-1", first[0].Cursor, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 2 || second[0].Cursor != 7 || second[1].Cursor != 8 {
+		t.Fatalf("reconnect lost the now-visible terminal: %+v", second)
+	}
+	third, err := repository.Replay(context.Background(), "42", "execution-1", second[1].Cursor, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(third) != 0 || len(executor.queryCalls) != 2 {
+		t.Fatalf("caught-up replay duplicated events: %+v", third)
+	}
+	if got := executor.queryCalls[1].args[2]; got != int64(6) {
+		t.Fatalf("reconnect did not keep the last visible cursor: %v", got)
+	}
+}
+
 func TestReplayEventsRepositoryRejectsTamperedDurableData(t *testing.T) {
 	data := []byte(`{"valid":true}`)
 	wrong := runtimedomain.SHA256([]byte("other"))

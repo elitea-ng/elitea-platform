@@ -75,6 +75,17 @@ describe('updateNode / updateYamlNode / batchUpdateYamlNode', () => {
     expect(set2).toHaveBeenCalledWith({ nodes: [{ id: 'A', tool: 'z' }] });
   });
 
+  it('omits verified explicit deletion markers and retains unrelated null/undefined values', () => {
+    const doc = {nodes:[{id:'A',transition:'END',tool:'old',opaque:{value:null}}]};
+    const set = vi.fn();
+    batchUpdateYamlNode('A',{transition:undefined,tool:undefined},doc,set);
+    const next = set.mock.calls[0]?.[0] as typeof doc;
+    expect(Object.hasOwn(next.nodes[0]!, 'transition')).toBe(false);
+    expect(Object.hasOwn(next.nodes[0]!, 'tool')).toBe(false);
+    expect(next.nodes[0]?.opaque).toEqual({value:null});
+    expect(doc.nodes[0]?.transition).toBe('END');
+  });
+
   it('updateNode preserves node order via splice-in-place', () => {
     const doc = { nodes: [{ id: 'A' }, { id: 'B' }, { id: 'C' }] };
     const set = vi.fn();

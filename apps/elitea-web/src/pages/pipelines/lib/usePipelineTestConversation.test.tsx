@@ -1,205 +1,277 @@
-/**
- * What a green `PipelineTestChat.test.tsx` still could not see: what happens
- * to a test conversation AFTER it exists.
- *
- * Both behaviours pinned here are invisible from the rendered pane. The
- * version a pipeline chat runs is state on the SERVER's participant row, so
- * "the editor switched versions" and "the chat switched versions" are two
- * different events, and the failure mode between them is a chat that answers
- * correctly from the wrong graph. And the repair for that — writing the new
- * version onto the row — has its own trap: doing the obvious thing to the
- * CLIENT copy at the same time silently empties the transcript.
- */
-import type { ReactNode } from 'react';
-
+import { act, renderHook as renderTestingHook, waitFor, type RenderHookOptions } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { renderHook, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
-import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
-
-import {
-  resetPipelineTestConversationsForTests,
-  usePipelineTestConversation,
-  type PipelineTestChatIdentity,
-} from './usePipelineTestConversation';
-
-const BASE = '/api/v2';
-const globals = globalThis as unknown as Record<string, unknown>;
-
-const IDENTITY: PipelineTestChatIdentity = {
-  projectId: '9',
-  applicationId: '42',
-  pipelineName: 'My Pipeline',
-  versionId: '7',
-  agentType: 'pipeline',
-  userId: '6',
+import { usePipelineTestConversation, resetPipelineTestConversationsForTests, type PipelineTestChatIdentity } from './usePipelineTestConversation';
+const api={create:vi.fn<(...args:unknown[])=>Promise<Record<string,unknown>>>(),details:vi.fn<(...args:unknown[])=>Promise<Record<string,unknown>>>()};
+function renderHook<Result,Props>(callback:(props:Props)=>Result,options?:RenderHookOptions<Props>) {
+ const client=new QueryClient({defaultOptions:{queries:{retry:false},mutations:{retry:false}}});
+ return renderTestingHook(callback,{...options,wrapper:({children})=><QueryClientProvider client={client}>{children}</QueryClientProvider>});
+}
+const identity: PipelineTestChatIdentity = {
+  projectId: "7",
+  applicationId: "12",
+  versionId: "19",
+  userId: "41",
+  pipelineName: "Pipeline",
+  agentType: "pipeline",
 };
-
-interface SettingsPut {
-  readonly participantId: string;
-  readonly body: Readonly<Record<string, unknown>>;
+function detail(version = "19", actor = "41") {
+  return {
+    id: "10",
+    uuid: "c79eb6f8-7344-4b57-a9d0-585c28f33fa8",
+    name: "Test",
+    source: "editor_test",
+    is_private: true,
+    meta: {
+      is_hidden: true,
+      editor_test: {
+        revision: 1,
+        actor_id: actor,
+        project_id: "7",
+        application_id: "12",
+        application_version_id: version,
+      },
+    },
+    participants: [
+      {
+        id: "9",
+        entity_name: "application",
+        entity_meta: { id: "12", project_id: "7" },
+        entity_settings: { version_id: version },
+      },
+    ],
+    editor_test_runs: { rows: [], limit: 50, offset: 0, has_more: false },
+    message_groups: [],
+  };
 }
-
-interface Routes {
-  readonly puts: SettingsPut[];
-  readonly creates: () => number;
-  /** Make the settings PUT fail, the way a permission error would. */
-  failSettings: boolean;
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
 }
-
-function installRoutes(): Routes {
-  const puts: SettingsPut[] = [];
-  const counter = { creates: 0 };
-  const state = { failSettings: false };
+beforeEach(() => {
+  resetPipelineTestConversationsForTests();
+  configureGeneratedClient({baseUrl:'/api/v2'});
   server.use(
-    http.post(`${BASE}/elitea_core/conversations/prompt_lib/:projectId`, () => {
-      counter.creates += 1;
-      return HttpResponse.json({ id: 501, uuid: '00000000-0000-4000-8000-000000000abc', name: 'My Pipeline' });
-    }),
-    http.post(`${BASE}/elitea_core/participants/prompt_lib/:projectId/:conversationId`, () => HttpResponse.json([])),
-    http.get(`${BASE}/elitea_core/conversation/prompt_lib/:projectId/:conversationId`, () =>
-      HttpResponse.json({
-        id: 501,
-        uuid: '00000000-0000-4000-8000-000000000abc',
-        name: 'My Pipeline',
-        participants: [
-          { id: '900', entity_name: 'user', entity_meta: { id: 6 } },
-          {
-            id: '901',
-            entity_name: 'application',
-            entity_meta: { id: '42' },
-            entity_settings: { version_id: '7', agent_type: 'pipeline', variables: [], icon_meta: {}, llm_settings: { temperature: 0.4 } },
-          },
-        ],
+   http.post('/api/v2/elitea_core/conversations/prompt_lib/7',async({request})=>HttpResponse.json(await api.create(await request.json()))),
+   http.get('/api/v2/elitea_core/conversation/prompt_lib/7/:id',async({request,params})=>{
+    const query=new URL(request.url).searchParams;
+    const input={projectId:'7',id:String(params['id']),editor_test_runs:query.get('editor_test_runs')==='true',runs_limit:Number(query.get('runs_limit'))};
+    return HttpResponse.json(await api.details(input,request.signal));
+   }),
+  );
+  api.create.mockReset();
+  api.details.mockReset();
+  api.create.mockResolvedValue(detail());
+});
+afterEach(()=>resetGeneratedClient());
+describe("immutable editor Test lifecycle", () => {
+  it("creates atomic hidden Test context once and derives user server-side", async () => {
+    const hook = renderHook(() => usePipelineTestConversation(identity));
+    act(() => {
+      hook.result.current.ensure();
+      hook.result.current.ensure();
+    });
+    await waitFor(() =>
+      expect(hook.result.current.conversation?.id).toBe("10"),
+    );
+    expect(api.create).toHaveBeenCalledTimes(1);
+    expect(api.details).not.toHaveBeenCalled();
+    expect(api.create.mock.calls[0]?.[0]).toMatchObject({
+      source: "editor_test",
+      is_private: true,
+      participants: [{ entity_name: "application" }],
+    });
+  });
+  it("allocates a new immutable context for a saved version without rewriting the old participant", async () => {
+    const hook = renderHook(({ input }) => usePipelineTestConversation(input), {
+      initialProps: { input: identity },
+    });
+    act(() => hook.result.current.ensure());
+    await waitFor(() => expect(hook.result.current.conversation).toBeDefined());
+    hook.rerender({ input: { ...identity, versionId: "20" } });
+    api.create.mockResolvedValue(detail("20"));
+    act(() => hook.result.current.ensure());
+    await waitFor(() => expect(api.create).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(hook.result.current.conversation?.participants?.[0]).toMatchObject(
+        { entity_settings: { version_id: "20" } },
+      ),
+    );
+  });
+  it("refuses older Main responses without typed context and never enables ordinary Test execution", async () => {
+    api.create.mockResolvedValue({
+      id: "10",
+      uuid: "ordinary",
+      name: "Test",
+      participants: [],
+    });
+    const hook = renderHook(() => usePipelineTestConversation(identity));
+    act(() => hook.result.current.ensure());
+    await waitFor(() => expect(hook.result.current.hasFailed).toBe(true));
+    expect(hook.result.current.conversation).toBeUndefined();
+  });
+  it("drops stale bootstrap after actor changes", async () => {
+    const first = deferred<ReturnType<typeof detail>>();
+    api.create.mockReturnValueOnce(first.promise);
+    const hook = renderHook(({ input }) => usePipelineTestConversation(input), {
+      initialProps: { input: identity },
+    });
+    act(() => hook.result.current.ensure());
+    hook.rerender({ input: { ...identity, userId: "42" } });
+    await act(async () => {first.resolve(detail());await Promise.resolve();});
+    expect(hook.result.current.conversation).toBeUndefined();
+  });
+  it("restores existing saved identity without creation and survives completion acknowledgement", async () => {
+    const onComplete = vi.fn();
+    api.details.mockResolvedValue(detail("18"));
+    const initialProps: {id:string|undefined} = {id:"10"};
+    const hook = renderHook(
+      ({ id }: {id:string|undefined}) =>
+        usePipelineTestConversation(identity, {
+          conversationId: id,
+          onComplete,
+        }),
+      { initialProps },
+    );
+    act(() => hook.result.current.ensure());
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.details).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "10",
+        editor_test_runs: true,
+        runs_limit: 50,
       }),
-    ),
-    http.put(`${BASE}/elitea_core/entity_settings/prompt_lib/:projectId/:conversationId/:participantId`, async ({ request, params }) => {
-      if (state.failSettings) return new HttpResponse(null, { status: 403 });
-      const body = (await request.json()) as Readonly<Record<string, unknown>>;
-      puts.push({ participantId: String(params['participantId']), body });
-      return HttpResponse.json({ entity_settings: body });
+      expect.any(AbortSignal),
+    );
+    hook.rerender({ id: undefined });
+    expect(hook.result.current.conversation?.id).toBe("10");
+  });
+  it("drops stale restore and refuses foreign actor context", async () => {
+    const first = deferred<ReturnType<typeof detail>>();
+    api.details
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce(detail("19", "99"));
+    const complete = vi.fn();
+    const hook = renderHook(
+      ({ id }: {id:string|undefined}) =>
+        usePipelineTestConversation(identity, {
+          conversationId: id,
+          onComplete: complete,
+        }),
+      { initialProps: { id: "10" } },
+    );
+    hook.rerender({ id: "11" });
+    await act(async () => {first.resolve(detail());await Promise.resolve();});
+    await waitFor(() => expect(hook.result.current.hasFailed).toBe(true));
+    expect(complete).not.toHaveBeenCalled();
+    expect(api.create).not.toHaveBeenCalled();
+  });
+});
+
+it("selects original paused response and question without restoring other run decisions", async () => {
+  const firstResponse = "bd5ef16f-78a7-4c6e-9f55-4d94e4a4eefe";
+  const firstQuestion = "734326c5-7f3b-42a5-b82f-0a3bfd7326ce";
+  const secondResponse = "8b0ee0d6-e186-4301-b363-61dfc880eaa0";
+  const secondQuestion = "839b2ab1-ae03-48c3-9330-d67d238c81a0";
+  const run = (response: string, question: string) => ({
+    response_message_id: response,
+    question_id: question,
+    execution_id: response,
+    execution_generation: "original-generation",
+    phase: "PAUSED",
+    state: "COMPLETED",
+    desired_state: "RUNNING",
+    admitted_at: "2026-10-02T00:00:00Z",
+    settled_at: "2026-10-02T00:01:00Z",
+    input_reference: {
+      bundle_id: "admitted",
+      entry_id: "request",
+      immutable_version: "1",
+      content_digest: "a".repeat(64),
+    },
+    can_control: true,
+  });
+  const snapshot = {
+    ...detail(),
+    editor_test_runs: {
+      rows: [
+        run(firstResponse, firstQuestion),
+        run(secondResponse, secondQuestion),
+      ],
+      limit: 50,
+      offset: 0,
+      has_more: false,
+    },
+    message_groups: [
+      { uuid: firstQuestion, meta: {} },
+      {
+        uuid: firstResponse,
+        meta: {
+          execution_generation: "original-generation",
+          thread_id: "original-thread",
+          hitl_interrupts: [
+            {
+              interrupt_id: "original-interrupt",
+              tool_call_id: "original-tool",
+            },
+          ],
+        },
+      },
+      { uuid: secondQuestion, meta: {} },
+      {
+        uuid: secondResponse,
+        meta: { hitl_interrupts: [{ interrupt_id: "other-interrupt" }] },
+      },
+    ],
+  };
+  api.details.mockResolvedValue(snapshot);
+  const hook = renderHook(() =>
+    usePipelineTestConversation(identity, {
+      conversationId: "10",
+      onComplete: vi.fn(),
     }),
   );
-  return {
-    puts,
-    creates: () => counter.creates,
-    get failSettings() {
-      return state.failSettings;
-    },
-    set failSettings(value: boolean) {
-      state.failSettings = value;
-    },
-  };
-}
-
-function createWrapper(): ({ children }: { children: ReactNode }) => ReactNode {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return function Wrapper({ children }: { children: ReactNode }): ReactNode {
-    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
-  };
-}
-
-beforeEach(() => {
-  globals['elitea_ui_config'] = { vite_server_url: BASE, vite_base_uri: '/', vite_public_project_id: 'public-1' };
-  resetConfigForTests();
-  configureGeneratedClient({ baseUrl: BASE });
-  // Module scope, so it outlives a `render`. Without this each test would
-  // inherit the previous one's conversation.
-  resetPipelineTestConversationsForTests();
+  await waitFor(() =>
+    expect(hook.result.current.selectedRun?.response_message_id).toBe(
+      firstResponse,
+    ),
+  );
+  expect(hook.result.current.conversation?.message_groups).toEqual(
+    snapshot.message_groups.slice(0, 2),
+  );
+  expect(hook.result.current.conversation?.isPlayback).not.toBe(true);
+  act(() => hook.result.current.selectRun(secondResponse));
+  expect(hook.result.current.conversation?.message_groups).toEqual(
+    snapshot.message_groups.slice(2),
+  );
+  expect(api.create).not.toHaveBeenCalled();
 });
 
-afterEach(() => {
-  delete globals['elitea_ui_config'];
-  resetConfigForTests();
-  resetGeneratedClient();
+it("reads existing runs when a page-local context remounts without creating another context", async () => {
+  const first = renderHook(() => usePipelineTestConversation(identity));
+  act(() => first.result.current.ensure());
+  await waitFor(() => expect(first.result.current.conversation).toBeDefined());
+  first.unmount();
+  api.details.mockResolvedValue(detail());
+  const second = renderHook(() => usePipelineTestConversation(identity));
+  act(() => second.result.current.ensure());
+  await waitFor(() => expect(second.result.current.conversation).toBeDefined());
+  expect(api.create).toHaveBeenCalledTimes(1);
+  expect(api.details).toHaveBeenCalledTimes(1);
 });
 
-describe('usePipelineTestConversation', () => {
-  it('writes the new version onto the persisted participant when the editor switches versions', async () => {
-    const routes = installRoutes();
-    const { result, rerender } = renderHook((identity: PipelineTestChatIdentity) => usePipelineTestConversation(identity), {
-      wrapper: createWrapper(),
-      initialProps: IDENTITY,
-    });
 
-    result.current.ensure();
-    await waitFor(() => expect(result.current.conversation).toBeDefined());
-    expect(routes.puts).toHaveLength(0);
-
-    rerender({ ...IDENTITY, versionId: '9' });
-
-    // The worker resolves the graph from the STORED row, so this PUT is the
-    // whole switch. Without it the pane shows v9 and answers from v7.
-    await waitFor(() => expect(routes.puts).toHaveLength(1));
-    const put = routes.puts[0];
-    expect(put?.participantId).toBe('901');
-    expect(put?.body['version_id']).toBe('9');
-    // The PUT REPLACES `entity_settings` (`SET entity_settings = $1`), so a
-    // bare `{version_id}` patch would drop the discriminator that routes the
-    // turn to the graph assembler — and the settings already on the row.
-    expect(put?.body['agent_type']).toBe('pipeline');
-    expect(put?.body['llm_settings']).toEqual({ temperature: 0.4 });
-  });
-
-  it('leaves the client participant list untouched, because ChatBox re-seeds its transcript from it', async () => {
-    installRoutes();
-    const { result, rerender } = renderHook((identity: PipelineTestChatIdentity) => usePipelineTestConversation(identity), {
-      wrapper: createWrapper(),
-      initialProps: IDENTITY,
-    });
-
-    result.current.ensure();
-    await waitFor(() => expect(result.current.conversation).toBeDefined());
-    const participantsBefore = result.current.conversation?.participants;
-
-    rerender({ ...IDENTITY, versionId: '9' });
-    await waitFor(() => expect(result.current.staleVersionId).toBeUndefined());
-
-    // Reference equality, not deep equality: `useChatBoxData`'s
-    // `seedConversationForSync` has `participants` in its dependency list and
-    // resets `conversationForSync` — the LIVE transcript — whenever that array
-    // changes identity. This hook passes `message_groups: []`, so writing the
-    // new version into the client row would blank the chat mid-conversation.
-    expect(result.current.conversation?.participants).toBe(participantsBefore);
-  });
-
-  it('says which version replies still run when the switch cannot be written', async () => {
-    const routes = installRoutes();
-    const { result, rerender } = renderHook((identity: PipelineTestChatIdentity) => usePipelineTestConversation(identity), {
-      wrapper: createWrapper(),
-      initialProps: IDENTITY,
-    });
-
-    result.current.ensure();
-    await waitFor(() => expect(result.current.conversation).toBeDefined());
-
-    routes.failSettings = true;
-    rerender({ ...IDENTITY, versionId: '9' });
-
-    // Named, not a bare boolean: the useful thing to tell the user is which
-    // graph is actually answering, which is the OLD version.
-    await waitFor(() => expect(result.current.staleVersionId).toBe('7'));
-  });
-
-  it('re-attaches to the conversation it already made instead of minting one per pane mount', async () => {
-    const routes = installRoutes();
-    const wrapper = createWrapper();
-    const first = renderHook(() => usePipelineTestConversation(IDENTITY), { wrapper });
-    first.result.current.ensure();
-    await waitFor(() => expect(first.result.current.conversation).toBeDefined());
-    expect(routes.creates()).toBe(1);
-    first.unmount();
-
-    // The pane unmounts on every editor tab switch. A per-mount guard alone
-    // would leave one private conversation per switch in the user's sidebar.
-    const second = renderHook(() => usePipelineTestConversation(IDENTITY), { wrapper });
-    second.result.current.ensure();
-    await waitFor(() => expect(second.result.current.conversation).toBeDefined());
-    expect(routes.creates()).toBe(1);
-    expect(second.result.current.activeParticipant).toBeDefined();
-  });
+it('releases only the local Test pointer after Clear and permits a fresh immutable context',async()=>{
+ const hook=renderHook(()=>usePipelineTestConversation(identity));act(()=>hook.result.current.ensure());
+ await waitFor(()=>expect(hook.result.current.conversation).toBeDefined());
+ act(()=>hook.result.current.release());expect(hook.result.current.conversation).toBeUndefined();
+ act(()=>hook.result.current.ensure());await waitFor(()=>expect(api.create).toHaveBeenCalledTimes(2));
+ expect(api.details).not.toHaveBeenCalled();
 });

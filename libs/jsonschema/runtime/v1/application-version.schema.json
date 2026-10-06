@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.elitea.ai/runtime/v1/application-version.schema.json",
+  "title": "Elitea Runtime Application Version V1",
+  "description": "The private claim-bound HTTP response for one saved application version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "application_id", "version_id", "version_details"],
+  "properties": {
+    "schema_version": {"const": "elitea.runtime.application-version.v1"},
+    "project_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+    "application_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+    "version_id": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+    "version_details": {"type": "object", "minProperties": 1},
+    "frozen_definition_sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "Main's opaque digest of the exact frozen pre-redemption definition. Omission preserves the legacy response. Null is invalid."
+    }
+  }
+}

@@ -16,6 +16,9 @@ use zeroize::Zeroizing;
 use super::StateWriterLease;
 
 mod application_children;
+mod map_children;
+mod node_attempts;
+mod parallel_append;
 mod parallel_children;
 
 const CHECKPOINT_FAMILY: &str = "adk-graph.2.0.0.v1";
@@ -401,7 +404,20 @@ RETURNING writer_claim_id
         &self,
         checkpoint: &Checkpoint,
     ) -> Result<String, PostgresCheckpointError> {
+        self.save_checkpoint_inner(checkpoint, CheckpointAppendCondition::Unconditional)
+            .await
+    }
+
+    async fn save_checkpoint_inner(
+        &self,
+        checkpoint: &Checkpoint,
+        condition: CheckpointAppendCondition<'_>,
+    ) -> Result<String, PostgresCheckpointError> {
         self.scope.require_thread(&checkpoint.thread_id)?;
+        if let CheckpointAppendCondition::Latest(Some(expected)) = condition {
+            self.scope.require_thread(&expected.thread_id)?;
+            SerializedCheckpoint::new(expected, self.limits)?;
+        }
         let serialized = SerializedCheckpoint::new(checkpoint, self.limits)?;
         let mut transaction = self.pool.begin().await.map_err(storage_error)?;
         self.lock_current_writer(&mut transaction, WriterLock::Exclusive)
@@ -458,6 +474,15 @@ WHERE tenant_id = $1
             None => {}
         }
 
+        if let CheckpointAppendCondition::Latest(expected) = condition {
+            self.validate_expected_latest(&mut transaction, expected)
+                .await?;
+        }
+
+        // Receipt-only revisions compare their expected immutable parent under the
+        // same writer lock as ordinal allocation/insert. Generic writes remain immutable.
+        self.validate_graph_receipt_append(&mut transaction, checkpoint)
+            .await?;
         self.ensure_save_capacity(&mut transaction, serialized.total_bytes)
             .await?;
         let save_ordinal = self.allocate_save_ordinal(&mut transaction).await?;
@@ -465,6 +490,46 @@ WHERE tenant_id = $1
             .await?;
         self.commit_current(transaction).await?;
         Ok(checkpoint.checkpoint_id.clone())
+    }
+
+    async fn validate_graph_receipt_append(
+        &self,
+        transaction: &mut Transaction<'_, Postgres>,
+        candidate: &Checkpoint,
+    ) -> Result<(), PostgresCheckpointError> {
+        use crate::agents::pipeline::scope_receipts::{
+            receipt_revision_parent, validate_graph_call_revision,
+        };
+        if receipt_revision_parent(candidate)
+            .map_err(|_| PostgresCheckpointError::CheckpointConflict)?
+            .is_none()
+        {
+            return Ok(());
+        }
+        let row = sqlx::query(
+            r"
+SELECT checkpoint_id, thread_id, state, step, pending_nodes, metadata,
+       created_at, created_at_rfc3339, cleared_interrupt, attempts, child_ledger
+FROM elitea_runtime.agent_graph_checkpoints
+WHERE tenant_id=$1 AND resource_project_id=$2 AND projection_project_id=$3
+  AND capability_id=$4 AND checkpoint_family=$5 AND definition_digest=$6 AND thread_id=$7
+ORDER BY save_ordinal DESC LIMIT 1
+",
+        )
+        .bind(&self.scope.authority.tenant_id)
+        .bind(self.scope.authority.resource_project_id)
+        .bind(self.scope.authority.projection_project_id)
+        .bind(self.scope.authority.capability_id)
+        .bind(CHECKPOINT_FAMILY)
+        .bind(self.scope.authority.definition_digest.as_slice())
+        .bind(&self.scope.authority.thread_id)
+        .fetch_optional(&mut **transaction)
+        .await
+        .map_err(storage_error)?
+        .ok_or(PostgresCheckpointError::CheckpointConflict)?;
+        let parent = self.decode_row(&row)?;
+        validate_graph_call_revision(&parent, candidate)
+            .map_err(|_| PostgresCheckpointError::CheckpointConflict)
     }
 
     async fn ensure_save_capacity(
@@ -1097,6 +1162,12 @@ WHERE writer.tenant_id = $1
 FOR UPDATE OF writer
 ";
 
+enum CheckpointAppendCondition<'a> {
+    Unconditional,
+    Latest(Option<&'a Checkpoint>),
+}
+
+#[derive(Eq, PartialEq)]
 struct SerializedCheckpoint {
     state: String,
     step: i64,

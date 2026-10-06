@@ -21,33 +21,36 @@
  * (see `NodeCardHeader.tsx`'s `onBlur`), and only overrides `id`/`data.label`
  * for the node whose `id === name`.
  */
+import { graphExtensionReferenceUpdate } from '../../../lib/graphExtensionReferenceRename.helpers';
 import type { YamlConditionSpec, YamlDecisionSpec, YamlPipelineDocument, YamlPipelineNode } from '../../../lib/flow-editor/helpers/pipelineFlow.types';
 import { PipelineNodeTypes } from '../../../lib/flow-editor/constants/flowEditor.constants';
 import type { FlowEdge, FlowNode, FlowNodeData } from '../../../lib/flow-editor/reactFlowTypes';
 
-// Every helper below casts its own return value rather than letting the
-// cast bubble up to its caller -- `exactOptionalPropertyTypes` sees a
-// `x?.map(...)`/ternary result as `T | undefined` assigned to a field typed
-// `field?: T` (optional-but-not-explicitly-`|undefined`) even though the
-// key is only ever produced when the source value existed. Matches the
-// established cast, e.g. `deletionOperations.helpers.ts`'s own
-// `as YamlPipelineNode`.
+// Keep omitted optional fields omitted. The strict serializer rejects new undefined values.
+// Keep authored nulls and unknown metadata intact during reference updates.
+
+function isReferenceObject(value: unknown): boolean {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
 
 function renameCondition(condition: YamlConditionSpec, name: string, inputtedName: string): YamlConditionSpec {
   return {
     ...condition,
-    condition_definition: condition.condition_definition?.replaceAll(name, inputtedName),
-    conditional_outputs: condition.conditional_outputs?.map(item => (item === name ? inputtedName : item)),
-    default_output: condition.default_output === name ? inputtedName : condition.default_output,
-  } as YamlConditionSpec;
+    ...(typeof condition.condition_definition === 'string'
+      ? { condition_definition: condition.condition_definition.replaceAll(name, inputtedName) } : {}),
+    ...(Array.isArray(condition.conditional_outputs)
+      ? { conditional_outputs: condition.conditional_outputs.map((item: string) => item === name ? inputtedName : item) } : {}),
+    ...(condition.default_output === name ? { default_output: inputtedName } : {}),
+  };
 }
 
 function renameDecision(decision: YamlDecisionSpec, name: string, inputtedName: string): YamlDecisionSpec {
   return {
     ...decision,
-    nodes: decision.nodes?.map(item => (item === name ? inputtedName : item)),
-    default_output: decision.default_output === name ? inputtedName : decision.default_output,
-  } as YamlDecisionSpec;
+    ...(Array.isArray(decision.nodes)
+      ? { nodes: decision.nodes.map((item: string) => item === name ? inputtedName : item) } : {}),
+    ...(decision.default_output === name ? { default_output: inputtedName } : {}),
+  };
 }
 
 /** `NodeCardHeader.jsx:93-113` -- which of a yaml node's four mutually-exclusive rename branches applies. */
@@ -56,18 +59,17 @@ function computeYamlNodeReferenceUpdate(
   name: string,
   inputtedName: string,
 ): Partial<YamlPipelineNode> {
-  if (node.condition && node.type !== PipelineNodeTypes.Router) {
+  if (node.condition && isReferenceObject(node.condition) && node.type !== PipelineNodeTypes.Router) {
     return { condition: renameCondition(node.condition, name, inputtedName) };
   }
-  if (node.decision) {
+  if (node.decision && isReferenceObject(node.decision)) {
     return { decision: renameDecision(node.decision, name, inputtedName) };
   }
   if (node.type === PipelineNodeTypes.Decision) {
-    // New-style Decision nodes.
     return {
-      nodes: node.nodes?.map(item => (item === name ? inputtedName : item)),
-      default_output: node.default_output === name ? inputtedName : node.default_output,
-    } as Partial<YamlPipelineNode>;
+      ...(Array.isArray(node.nodes) ? { nodes: node.nodes.map((item: string) => item === name ? inputtedName : item) } : {}),
+      ...(node.default_output === name ? { default_output: inputtedName } : {}),
+    };
   }
   return node.transition === name ? { transition: inputtedName } : {};
 }
@@ -78,6 +80,7 @@ export function renameYamlNode(node: YamlPipelineNode, name: string, inputtedNam
     ...node,
     ...(node.id === name ? { id: inputtedName } : {}),
     ...computeYamlNodeReferenceUpdate(node, name, inputtedName),
+    ...graphExtensionReferenceUpdate(node, name, inputtedName),
   };
 }
 
@@ -89,26 +92,21 @@ export function renameYamlDocument(
 ): YamlPipelineDocument {
   return {
     ...yamlJsonObject,
-    entry_point: yamlJsonObject.entry_point === name ? inputtedName : yamlJsonObject.entry_point,
+    ...(yamlJsonObject.entry_point === name ? { entry_point: inputtedName } : {}),
     nodes: (yamlJsonObject.nodes ?? []).map(node => renameYamlNode(node, name, inputtedName)),
-    // Plain `?.map` (not `Array.isArray(...)` + `.map`, unlike the baseline)
-    // -- `interrupt_before`/`interrupt_after` are already typed
-    // `readonly string[] | undefined`, and `lib.es5`'s `Array.isArray`
-    // signature (`arg is any[]`) narrows a `readonly` array to `any[]`,
-    // losing its element type and tripping `no-unsafe-return` on the
-    // mapper's `item`. Same runtime result either way.
-    interrupt_before: yamlJsonObject.interrupt_before?.map(item => (item === name ? inputtedName : item)),
-    interrupt_after: yamlJsonObject.interrupt_after?.map(item => (item === name ? inputtedName : item)),
-    // Same `exactOptionalPropertyTypes` cast rationale as `renameYamlNode`.
-  } as YamlPipelineDocument;
+    ...(Array.isArray(yamlJsonObject.interrupt_before)
+      ? { interrupt_before: yamlJsonObject.interrupt_before.map((item: string) => item === name ? inputtedName : item) } : {}),
+    ...(Array.isArray(yamlJsonObject.interrupt_after)
+      ? { interrupt_after: yamlJsonObject.interrupt_after.map((item: string) => item === name ? inputtedName : item) } : {}),
+  };
 }
 
 /** `NodeCardHeader.jsx:141-176` -- which of a flow node's `data` rename branches applies. */
 function computeFlowNodeDataOverride(data: FlowNodeData, name: string, inputtedName: string): Partial<FlowNodeData> {
-  if (data.condition) {
+  if (data.condition && isReferenceObject(data.condition)) {
     return { condition: renameCondition(data.condition, name, inputtedName) };
   }
-  if (data.decision) {
+  if (data.decision && isReferenceObject(data.decision)) {
     return { decision: renameDecision(data.decision, name, inputtedName) };
   }
   if (data['type'] === PipelineNodeTypes.Decision) {
@@ -139,6 +137,7 @@ export function renameFlowNode(node: FlowNode, name: string, inputtedName: strin
       ...node.data,
       ...(isRenamedNode ? { label: inputtedName } : {}),
       ...computeFlowNodeDataOverride(node.data, name, inputtedName),
+      ...graphExtensionReferenceUpdate({ ...node.data, type: node.data['type'] ?? node.type }, name, inputtedName),
     },
   };
 }

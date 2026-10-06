@@ -80,17 +80,69 @@ message AuthorizeSandboxJobResponseV1 {
 
 // Supervisor-only transport. Each retry needs a fresh Main grant and the same
 // prepared request. It reconciles the existing activation; it never restarts it.
+// Workspace content uses a distinct Main endpoint under the owning grant mode.
+// It never accepts dependency-content revision 3 or arbitrary mounts.
+message HydrateSandboxWorkspaceRequestV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  bytes prepared_job_json = 2;
+  // Exact immutable manifest from claim-authorized Main acquisition.
+  bytes workspace_manifest_json = 3;
+  // Plain mode requires revision 1 and no compiled fields.
+  // Compile requires revision 4 Compile plus the exact canonical Control.
+  bytes control_json = 4;
+  // Cached Execute requires its exact selected descriptor and pinned Read grant.
+  bytes descriptor_json = 5;
+  SignedSandboxJobGrantV1 read_grant = 6;
+  // Exact existing signed original Code execution intent for Execute modes.
+  // Compile uses its owning pre-stage visit and preparation admission instead.
+  optional bytes code_execution_intent_json = 7;
+  uint32 file_index = 8;
+  reserved 9 to 15;
+}
+message HydrateSandboxWorkspaceResponseV1 {
+  SandboxJobStatusV1 status = 1;
+  WorkspaceHydrationCursorV1 cursor = 2;
+  reserved 3 to 15;
+}
+// The immutable manifest and original runtime own this cursor. It is progress,
+// never an authority selector. N,false requires an explicit N finalization call.
+message WorkspaceHydrationCursorV1 {
+  uint32 revision = 1; // Exactly 1.
+  bytes manifest_sha256 = 2; // Exactly 32 bytes.
+  uint32 next_file_index = 3;
+  uint32 file_count = 4;
+  bool ready = 5; // Original helper verified/exited and Code launch is prepared.
+  reserved 6 to 15;
+}
+
 service SandboxSupervisorService {
+  rpc HydrateSandboxWorkspace(HydrateSandboxWorkspaceRequestV1) returns (HydrateSandboxWorkspaceResponseV1);
+  // Revision 4 authority selects compile or cached execution. No executable bytes.
+  rpc SubmitRustCompiledSnapshot(SubmitRustCompiledSnapshotRequestV1) returns (SubmitRustCompiledSnapshotResponseV1);
+  rpc PublishRustCompiledSnapshot(PublishRustCompiledSnapshotRequestV1) returns (PublishRustCompiledSnapshotResponseV1);
   rpc SubmitSandboxJob(SubmitSandboxJobRequestV1) returns (SubmitSandboxJobResponseV1);
   rpc CancelSandboxJob(CancelSandboxJobRequestV1) returns (CancelSandboxJobResponseV1);
+  rpc PrepareSandboxDependencies(PrepareSandboxDependenciesRequestV1) returns (PrepareSandboxDependenciesResponseV1);
+  rpc PublishSandboxDependencies(PublishSandboxDependenciesRequestV1) returns (PublishSandboxDependenciesResponseV1);
+  rpc HydrateSandboxDependencies(HydrateSandboxDependenciesRequestV1) returns (HydrateSandboxDependenciesResponseV1);
 }
 
 message SubmitSandboxJobRequestV1 {
   SignedSandboxJobGrantV1 grant = 1;
-  // Bounded PreparedJob revision 1 or 2 JSON, at most 1 MiB. Revision 2 adds
+  // Separate Main-signed original whole-Code intent, at most 16 KiB.
+  // This is Execute-only; it never authorizes preparation or owner observation.
+  // See contracts/sandbox-node-code-recovery-v1.md. Historical empty intent
+  // grants no whole-Code recovery audience.
+  bytes code_execution_intent_json = 18;
+  // Bounded PreparedJob revision 1, 2, or 3 JSON, at most 1 MiB. Revision 2 adds
   // dependency_bundle_sha256: 64 lowercase hexadecimal characters, for Python
   // only. Its SHA-256 covers the resolved bundle record and file identities.
-  // Revision 1 has no bundle field. Package bytes use a separate data plane.
+  // Revision 1 has no bundle field. Revision 3 binds native_dependencies:
+  // kind, platform, preparation_sha256, source_sha256; Cargo also binds
+  // literal dependencies_toml. Native bundle revision 2 binds the language,
+  // platform, execution image and policy, preparation request, and payload.
+  // Its root hashes recursively sorted UTF-8 JSON without its digest field.
+  // Native records remain bounded to 128 KiB. No package bytes enter this RPC.
   // The request digest includes the revision and dependency bundle identity.
   // Python bundle JSON revision 1 has runtime="pyodide-0.29.0", requirements,
   // files=[{name,bytes,sha256}], and digest. The root hashes UTF-8 JSON of
@@ -103,6 +155,14 @@ message SubmitSandboxJobRequestV1 {
   // queue or a log field.
   bytes prepared_job_json = 2;
   reserved 3 to 15;
+  // Revisions 2 and 3 require separate root-bound content authority for this exact
+  // execution activation and request. Revision 1 rejects this field.
+  // Content authority never substitutes for the execution grant.
+  SignedSandboxJobGrantV1 dependency_content_grant = 16;
+  // Revisions 2 and 3 carry the same verified metadata used for indexed hydration.
+  // The supervisor compares it to the immutable runtime record before dispatch.
+  // Revision 1 requires this field to be empty. At most 128 KiB, no file bytes.
+  bytes dependency_bundle_json = 17;
 }
 
 enum SandboxJobStatusV1 {
@@ -134,4 +194,135 @@ message CancelSandboxJobResponseV1 {
   SandboxJobStatusV1 status = 1;
   bool cleanup_pending = 2;
   reserved 3 to 15;
+}
+
+// Each retry uses fresh revision 1 authority and the same preparation request.
+// The preparation activation derives from the original graph Code activation.
+// The supervisor retains the trusted preparer until publication and cleanup.
+message PrepareSandboxDependenciesRequestV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  // Strict PreparationJob JSON, at most 1 MiB. Revision 1 is Python only.
+  // Native revision 2 adds language/platform, execution_image_digest and
+  // execution_policy_revision. Source is the language-owned acquisition source:
+  // JavaScript/TypeScript code, or the saved Cargo TOML declaration.
+  // Native content uses /sandbox-native-bundles/{root} and flat digest aliases.
+  // Native metadata is elitea-native-bundle-v2.json. Python paths do not change.
+  // Contains literal source, immutable preparer image digest, policy, and timeout.
+  // Contains no input state, user arguments, package list, or content root.
+  // The preparation fingerprint uses a separate domain from code execution.
+  bytes preparation_job_json = 2;
+  reserved 3 to 15;
+}
+
+message PrepareSandboxDependenciesResponseV1 {
+  // Ready metadata remains Pending until publication and confirmed termination.
+  // Completed requires both immutable publication and a terminal preparer.
+  SandboxJobStatusV1 status = 1;
+  // Verified bundle metadata only, at most 128 KiB. No file content.
+  bytes bundle_json = 2;
+  string failure_code = 3;
+  bool cleanup_pending = 4;
+  reserved 5 to 15;
+}
+
+// Transfer control has no caller-selected path, source, tenant, or content root.
+// The revision 3 grant binds the recorded root and preparation JobScope.
+// Package files use Main's private content listener outside this RPC.
+message PublishSandboxDependenciesRequestV1 {
+  SignedSandboxJobGrantV1 content_grant = 1;
+  // Select exactly one file from the supervisor's recorded ordered file list.
+  // The index equals the file count only for final metadata publication.
+  // Publish metadata last, then release the trusted preparer and confirm exit.
+  // Reject an index above the recorded file count. Retries retain the same index.
+  uint32 index = 2;
+  reserved 3 to 15;
+}
+
+message PublishSandboxDependenciesResponseV1 {
+  // Completed requires published metadata and confirmed terminal preparation.
+  SandboxJobStatusV1 status = 1;
+  string failure_code = 2;
+  bool cleanup_pending = 3;
+  reserved 4 to 15;
+}
+
+// Reserve the exact execution runtime without dispatching user code. Each file
+// uses fresh execution and content grants for the final Code activation. Files
+// survive retries in the original inert runtime; existing bytes are immutable.
+message HydrateSandboxDependenciesRequestV1 {
+  SignedSandboxJobGrantV1 execution_grant = 1;
+  SignedSandboxJobGrantV1 content_grant = 2;
+  bytes prepared_job_json = 3;
+  // Verified metadata only, at most 128 KiB; package bytes never enter RPC.
+  bytes bundle_json = 4;
+  // An ordered file index; file count selects final metadata import. The
+  // supervisor verifies every referenced file before acknowledging ready.
+  uint32 index = 5;
+  reserved 6 to 15;
+  // Carry the refreshed, signed original Execute intent before runtime staging.
+  // Verify exact job, peer, scope, and dispatch identity before registering bindings.
+  // Platform-enabled jobs require this field. Legacy plain jobs can omit it.
+  bytes code_execution_intent_json = 16;
+}
+
+message HydrateSandboxDependenciesResponseV1 {
+  // A successful response acknowledges this index. False requires the next
+  // indexed transfer with fresh grants. True means the runtime is ready, or
+  // the exact execution already crossed dispatch and Submit must reconcile it.
+  // A busy lease returns Aborted, never a false file acknowledgement.
+  bool ready = 1;
+  reserved 2 to 15;
+}
+
+// Separate from ordinary execution and package preparation authority.
+message SubmitRustCompiledSnapshotRequestV1 {
+  SignedSandboxJobGrantV1 grant = 1;
+  bytes prepared_job_json = 2; // Exact existing PreparedJob, at most 1 MiB.
+  bytes control_json = 3; // Exact canonical runner Control, at most 16 KiB.
+  bytes descriptor_json = 4; // Empty for compile; required for cached execution.
+  SignedSandboxJobGrantV1 read_grant = 5; // Execute requires separate pinned Read authority.
+  SignedSandboxJobGrantV1 dependency_content_grant = 6; // Separate native Content authority for Compile or selected Execute.
+  bytes dependency_bundle_json = 7; // Exact verified native dependency record; never execution authority.
+  bool reconcile_only = 8; // Read existing Compile or Execute identity; never reserve or provision.
+  // Inert native import. Compile renews Compile and separate Content grants per index.
+  // Selected Execute renews independent Execute, pinned Read, and native Content grants.
+  // Receipt-only recovery accepts no index or content. No index dispatches a runtime.
+  // The file-count index verifies every original object and commits readiness.
+  optional uint32 native_hydration_index = 9;
+  // Separate Main-signed original whole-Code intent. Accepted only for Execute.
+  // Compile and every non-Execute purpose reject it. No generated output is
+  // authoritative until this versioned source is adopted by the generator.
+  bytes code_execution_intent_json = 10;
+  reserved 11 to 31;
+}
+message SubmitRustCompiledSnapshotResponseV1 {
+  SandboxJobStatusV1 status = 1;
+  bytes result_json = 2; // Execution result or original compiler terminal receipt.
+  bytes descriptor_json = 3; // Captured retained compile metadata; at most 16 KiB.
+  bytes compilation_job_key = 4; // Original compiler ledger key; no runtime override.
+  string failure_code = 5;
+  bool cleanup_pending = 6;
+  bool needs_admission = 7; // Reconcile-only observed Missing or Reserved, not dispatch.
+  // A successful indexed reply acknowledges the exact requested index.
+  // Busy ownership returns Aborted; false never acknowledges a skipped transfer.
+  bool native_hydration_ready = 8;
+  reserved 9 to 31;
+}
+enum RustCompiledPublicationPhaseV1 {
+  RUST_COMPILED_PUBLICATION_PHASE_V1_UNSPECIFIED = 0;
+  RUST_COMPILED_PUBLICATION_PHASE_V1_EXECUTABLE = 1;
+  RUST_COMPILED_PUBLICATION_PHASE_V1_RELEASE = 2;
+  RUST_COMPILED_PUBLICATION_PHASE_V1_READY = 3;
+}
+// Preserve the recorded compiler runtime. Publish has no code execution authority.
+message PublishRustCompiledSnapshotRequestV1 {
+  SignedSandboxJobGrantV1 publish_grant = 1;
+  RustCompiledPublicationPhaseV1 phase = 2;
+  reserved 3 to 31;
+}
+message PublishRustCompiledSnapshotResponseV1 {
+  SandboxJobStatusV1 status = 1;
+  string failure_code = 2;
+  bool cleanup_pending = 3;
+  reserved 4 to 31;
 }

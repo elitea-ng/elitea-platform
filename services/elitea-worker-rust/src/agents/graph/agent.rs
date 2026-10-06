@@ -49,6 +49,7 @@ pub(crate) struct EliteaGraphAgent {
     graph: GraphAgent,
     sub_agents: Vec<Arc<dyn Agent>>,
     printer_interrupts: Option<PrinterInterruptAdapter>,
+    static_interrupts: Option<StaticInterruptAdapter>,
 }
 
 impl EliteaGraphAgent {
@@ -60,7 +61,23 @@ impl EliteaGraphAgent {
             graph,
             sub_agents: Vec::new(),
             printer_interrupts: None,
+            static_interrupts: None,
         }
+    }
+
+    #[must_use]
+    pub(crate) fn with_static_interrupts(
+        mut self,
+        checkpointer: Arc<dyn Checkpointer>,
+        catalog: super::static_pause::StaticPauseCatalog,
+    ) -> Self {
+        if !catalog.is_empty() {
+            self.static_interrupts = Some(StaticInterruptAdapter {
+                checkpointer,
+                catalog,
+            });
+        }
+        self
     }
 
     #[must_use]
@@ -76,6 +93,59 @@ impl EliteaGraphAgent {
             });
         }
         self
+    }
+}
+
+#[derive(Clone)]
+struct StaticInterruptAdapter {
+    checkpointer: Arc<dyn Checkpointer>,
+    catalog: super::static_pause::StaticPauseCatalog,
+}
+
+impl StaticInterruptAdapter {
+    async fn enrich(&self, event: &mut Event) -> adk_rust::Result<()> {
+        if event
+            .provider_metadata
+            .contains_key(PRINTER_PAUSE_METADATA_KEY)
+        {
+            return Ok(());
+        }
+        let Some(payload) = GraphInterruptPayload::from_event(event) else {
+            return Ok(());
+        };
+        if !matches!(payload.kind.as_str(), "before" | "after") {
+            return Ok(());
+        }
+        let node = payload
+            .node
+            .as_deref()
+            .ok_or_else(|| adk_rust::AdkError::agent("Static pause node is missing"))?;
+        let checkpoint = self
+            .checkpointer
+            .load_by_id(&payload.checkpoint_id)
+            .await
+            .map_err(|_| adk_rust::AdkError::agent("Static pause checkpoint lookup failed"))?
+            .ok_or_else(|| adk_rust::AdkError::agent("Static pause checkpoint is unavailable"))?;
+        if checkpoint.thread_id != payload.thread_id
+            || checkpoint.checkpoint_id != payload.checkpoint_id
+        {
+            return Err(adk_rust::AdkError::agent(
+                "Static pause checkpoint identity is invalid",
+            ));
+        }
+        let metadata = self
+            .catalog
+            .bind(&payload.kind, node, &checkpoint)
+            .ok_or_else(|| adk_rust::AdkError::agent("Static pause frontier is invalid"))?;
+        event.set_content(
+            Content::new("assistant").with_text(super::static_pause::STATIC_PAUSE_MESSAGE),
+        );
+        event.provider_metadata.insert(
+            super::static_pause::STATIC_PAUSE_METADATA_KEY.to_owned(),
+            serde_json::to_string(&metadata)
+                .map_err(|_| adk_rust::AdkError::agent("Static pause metadata encoding failed"))?,
+        );
+        Ok(())
     }
 }
 
@@ -159,6 +229,7 @@ impl Agent for EliteaGraphAgent {
         let invocation_id = context.invocation_id().to_owned();
         let author = self.name.clone();
         let printer_interrupts = self.printer_interrupts.clone();
+        let static_interrupts = self.static_interrupts.clone();
         let events = self.graph.run(context).await?;
         Ok(Box::pin(async_stream::stream! {
             let mut events = events;
@@ -174,6 +245,12 @@ impl Agent for EliteaGraphAgent {
                 event.author.clone_from(&author);
                 if event.provider_metadata.contains_key(INTERRUPT_METADATA_KEY)
                     && let Some(adapter) = printer_interrupts.as_ref()
+                    && let Err(error) = adapter.enrich(&mut event).await
+                {
+                    yield Err(error);
+                    return;
+                }
+                if let Some(adapter) = static_interrupts.as_ref()
                     && let Err(error) = adapter.enrich(&mut event).await
                 {
                     yield Err(error);

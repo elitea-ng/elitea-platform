@@ -86,6 +86,7 @@ export function createAssistantMessage(frame: ChatStreamFrame, context: ChatStre
     createdAt: nowIso(context),
     isStreaming: true,
     isLoading: true,
+    ...(frame.execution_generation ? { executionGeneration: frame.execution_generation } : {}),
     ...(frame.question_id !== undefined ? { questionId: frame.question_id } : {}),
     ...(context.participantId !== undefined ? { participantId: context.participantId } : {}),
     ...(context.avatar !== undefined ? { avatar: context.avatar } : {}),

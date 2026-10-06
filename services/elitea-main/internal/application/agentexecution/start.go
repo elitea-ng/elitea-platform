@@ -14,6 +14,7 @@ import (
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
 	"github.com/google/uuid"
 )
 
@@ -78,8 +79,11 @@ type CurrentApplicationTarget struct {
 	ApplicationVersionID int64
 	Variables            json.RawMessage
 	VersionDetails       json.RawMessage
+	// Main resolver-only carrier; never serialized into execution input or Redis.
+	SourceVersionDetails json.RawMessage
 	ChatHistory          json.RawMessage
 	InternalTools        json.RawMessage
+	OriginalSource       *scope.SourceReference
 }
 
 type CurrentApplicationResolver interface {
@@ -169,6 +173,7 @@ type CurrentApplicationStartOutcome struct {
 }
 
 type CurrentApplicationStartService struct {
+	originalSources      OriginalRootSourceOwner
 	resolver             CurrentApplicationResolver
 	adhocResolver        CurrentAdhocResolver
 	regenerationResolver CurrentRegenerationResolver
@@ -253,6 +258,9 @@ func (service *CurrentApplicationStartService) StartCurrentApplication(
 		!validJSONArray(target.ChatHistory) ||
 		(len(target.InternalTools) != 0 && !validJSONArray(target.InternalTools)) {
 		return CurrentApplicationStartOutcome{}, ErrUnsupportedCurrentAgentStart
+	}
+	if err = service.captureApplicationSource(ctx, request.ProjectID, request.ActorUserID, &target); err != nil {
+		return CurrentApplicationStartOutcome{}, err
 	}
 	frozenVersion, contextSettings, err := service.freezeVersionWithContext(
 		ctx,
@@ -402,12 +410,23 @@ func currentApplicationInput(
 	// appendCurrentApplicationProjectContext, off the frozen version's own
 	// meta (ELITEA-0945).
 	versionDetails = appendCurrentApplicationProjectContext(versionDetails, projectContextText)
-	application, err := json.Marshal(map[string]any{
+	versionDetails, err = freezeCurrentHTTPActionRequests(target.ApplicationID, target.ApplicationVersionID, versionDetails)
+	if err != nil {
+		return nil, ErrUnsupportedCurrentAgentStart
+	}
+	applicationFields := map[string]any{
 		"id":              target.ApplicationID,
 		"version_id":      target.ApplicationVersionID,
 		"variables":       json.RawMessage(target.Variables),
 		"version_details": json.RawMessage(versionDetails),
-	})
+	}
+	if target.OriginalSource != nil {
+		if target.OriginalSource.Validate() != nil {
+			return nil, ErrUnsupportedCurrentAgentStart
+		}
+		applicationFields["source_definition"] = target.OriginalSource
+	}
+	application, err := json.Marshal(applicationFields)
 	if err != nil {
 		return nil, ErrInvalidCurrentAgentStart
 	}

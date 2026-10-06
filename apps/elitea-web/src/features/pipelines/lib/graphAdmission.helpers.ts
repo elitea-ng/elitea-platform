@@ -1,3 +1,4 @@
+import { graphParallelIssues } from './graphParallelAdmission.helpers';
 /**
  * Pipeline **graph admission** — the editor's transcription of the Rust
  * pipeline compiler's own refusals. See `./graphAdmission.types.ts` for the
@@ -20,6 +21,8 @@
  * names the runtime `file:line` it mirrors; that citation is the diff to
  * re-check when `services/elitea-worker-rust/src/agents/graph/` changes.
  */
+import { graphShapingIssues } from './graphShapingAdmission.helpers';
+import { graphMapIssues } from './graphMapAdmission.helpers';
 import { RuntimeContractConstants } from './flow-editor/constants';
 import type { YamlPipelineDocument } from './flow-editor/helpers/pipelineFlow.types';
 import { isValidGraphId, isValidOutputKey } from './graphAdmission.nodeReads';
@@ -34,6 +37,9 @@ const MAX_PIPELINE_NODES = 128;
 
 /** `compiler.rs:52` — `MAX_PIPELINE_STATE_KEYS`. */
 const MAX_PIPELINE_STATE_KEYS = 256;
+
+/** `compiler.rs:56, 187-217` bounds each authored pause list. */
+const MAX_STATIC_INTERRUPTS = 128;
 
 /** `compiler.rs:1378-1390` — every state type the compiler normalises, mapped to the normalised name it becomes. */
 const STATE_TYPE_ALIASES: ReadonlyMap<string, string> = new Map([
@@ -126,35 +132,40 @@ function entryPointIssues(graph: AdmissionGraph): readonly GraphAdmissionIssue[]
   return [];
 }
 
-/**
- * `compiler.rs:470-474`. The Rust compiler refuses ANY non-empty
- * `interrupt_before`/`interrupt_after` outright — "static pipeline
- * interrupts are not enabled in this compiler slice" — while the Python SDK
- * worker honours them. The editor cannot know which worker will run a given
- * turn, so it authors the INTERSECTION both accept: no static interrupts at
- * all. `ui/settings/CommonInterruptSettings.tsx` disables the two switches
- * for the same reason and says so on screen; this rule is what catches a
- * document that already carries them (authored before the switches were
- * disabled, or through the YAML tab).
- */
+/** `compiler.rs:187-217, 620-621, 1971-1984` validates authored pause lists. */
 const staticInterruptRule: GraphAdmissionRule = {
   id: 'document.static-interrupts',
-  citation: 'compiler.rs:470-474',
-  summary: 'no static `interrupt_before`/`interrupt_after` entries',
-  check: (graph) =>
-    (['interrupt_before', 'interrupt_after'] as const)
-      .filter((field) => (graph.document[field] ?? []).length > 0)
-      .map((field) =>
-        admissionIssue(
-          'document.static-interrupts',
-          'compiler.rs:470',
-          undefined,
-          field,
-          (graph.document[field] ?? []).join(', '),
-          `${field}: static interrupts are not supported by the native runtime — remove [${(graph.document[field] ?? []).join(', ')}] or the pipeline will not start.`,
-        ),
-      ),
+  citation: 'compiler.rs:187-217, 1971-1984',
+  summary: 'each pause list contains at most 128 unique stored node identifiers',
+  check: (graph) => (['interrupt_before', 'interrupt_after'] as const).flatMap((field) => staticInterruptIssues(graph, field)),
 };
+
+function staticInterruptIssues(graph: AdmissionGraph, field: 'interrupt_before' | 'interrupt_after'): readonly GraphAdmissionIssue[] {
+  const value: unknown = graph.document[field];
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    return [admissionIssue('document.static-interrupts', 'compiler.rs:217', undefined, field, '', `${field}: declare a list of stored node identifiers.`)];
+  }
+  const entries: readonly unknown[] = value;
+  if (entries.length > MAX_STATIC_INTERRUPTS) {
+    return [admissionIssue('document.static-interrupts', 'compiler.rs:204', undefined, field, String(entries.length), `${field}: declare at most ${String(MAX_STATIC_INTERRUPTS)} node identifiers.`)];
+  }
+  const seen = new Set<string>();
+  return entries.flatMap((nodeId, index) => {
+    const entryField = `${field}[${String(index)}]`;
+    if (typeof nodeId !== 'string' || !isValidGraphId(nodeId)) {
+      return [admissionIssue('document.static-interrupts', 'compiler.rs:1978', undefined, entryField, typeof nodeId === 'string' ? nodeId : '', `${entryField}: use a legal node identifier.`)];
+    }
+    if (!graph.nodeIds.has(nodeId)) {
+      return [admissionIssue('document.static-interrupts', 'compiler.rs:1978', undefined, entryField, nodeId, `${entryField}: "${nodeId}" does not name any stored node in this pipeline.`)];
+    }
+    if (seen.has(nodeId)) {
+      return [admissionIssue('document.static-interrupts', 'compiler.rs:1978', undefined, entryField, nodeId, `${entryField}: "${nodeId}" already appears in ${field}.`)];
+    }
+    seen.add(nodeId);
+    return [];
+  });
+}
 
 const stateKeyRule: GraphAdmissionRule = {
   id: 'state.key',
@@ -241,7 +252,7 @@ export const GRAPH_ADMISSION_RULES: readonly GraphAdmissionRule[] = [
 /** Every reason the Rust pipeline compiler would refuse `document`. Empty means "admissible". */
 export function collectGraphAdmissionIssues(document: YamlPipelineDocument | undefined): readonly GraphAdmissionIssue[] {
   const graph = readAdmissionGraph(document);
-  return GRAPH_ADMISSION_RULES.flatMap((rule) => rule.check(graph));
+  return [...GRAPH_ADMISSION_RULES.flatMap((rule) => rule.check(graph)), ...graphShapingIssues(graph.document), ...graphMapIssues(graph.document), ...graphParallelIssues(graph.document)];
 }
 
 /** The issues a given node's panel should show. */

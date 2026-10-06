@@ -151,6 +151,27 @@ beforeEach(() => {
 });
 
 describe('NewChatInput', () => {
+  it('retains a multiline draft with the loading spinner and Send refusal', async () => {
+    const onSend = vi.fn();
+    renderInput(<NewChatInput {...baseProps({
+      state: { isLoading: true, disabledInput: false, disabledSend: true },
+      callbacks: { onSend },
+    })} />, { projectId: 'proj-1' });
+    const textarea = await waitFor(() => getTextarea());
+    expect(textarea).toBeEnabled();
+    fireEvent.change(textarea, { target: { value: 'first line\n  keep indentation' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+    expect(textarea).toHaveValue('first line\n  keep indentation');
+    expect(onSend).not.toHaveBeenCalled();
+    expect(screen.getByRole('progressbar')).toBeInTheDocument();
+  });
+
+  it('keeps ordinary loading inputs disabled when the override is absent', async () => {
+    renderInput(<NewChatInput {...baseProps({ state: { isLoading: true } })} />, { projectId: 'proj-1' });
+    const textarea = await waitFor(() => getTextarea());
+    expect(textarea).toBeDisabled();
+  });
+
   it('sends the typed question on Enter', async () => {
     const onSend = vi.fn();
     renderInput(<NewChatInput {...baseProps({ callbacks: { onSend } })} />, { projectId: 'proj-1' });

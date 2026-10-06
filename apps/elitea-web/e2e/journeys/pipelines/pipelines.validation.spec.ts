@@ -213,70 +213,48 @@ test('J16: an output naming an undeclared state key is named in the panel and ne
   expect(after, 'the stored pipeline must be byte-identical to the last legal save').toBe(before);
 });
 
-/* elitea_issues: #3194 — NOT REPRODUCED: the issue asks for a warning when
-   enabling interruption on a child pipeline in an Agent Node, because doing so
-   "may disrupt the flow of the parent pipeline". On this platform the switch
-   cannot be enabled at all (see below) — the editor shows a stronger,
-   always-visible reason (`interrupt-withheld-reason`) explaining WHY, rather
-   than a warning that appears only after the fact. */
-test('J16: the interrupt switches are disabled, and no interrupt reaches the stored document', async ({ page }) => {
-  /*
-   * `compiler.rs:470-474` refuses ANY non-empty `interrupt_before`/
-   * `interrupt_after` — "static pipeline interrupts are not enabled in this
-   * compiler slice" — while the Python SDK worker honours them. The editor
-   * cannot know which worker takes a turn, so it authors the intersection.
-   * Flipping a switch used to turn a working pipeline into a non-starting
-   * one with no signal at all.
-   */
-  const name = `${AUTOTEST_PREFIX}intr-${Date.now() % 1e9}`;
-  const id = await createPipeline(page, name);
-
+/* onetest: Authored static pauses bind to stored node identities and survive save. */
+test('J16: active interrupt controls roundtrip the exact stored node lists', async ({ page }) => {
+  const id = await createPipeline(page, `${AUTOTEST_PREFIX}intr-${Date.now() % 1e9}`);
   await authorYaml(page, ADMISSIBLE_YAML);
-
   const card = page.locator('.react-flow__node[data-id="LLM_1"]');
-  const interruptBefore = card.getByRole('switch', { name: 'Interrupt before' });
-  const interruptAfter = card.getByRole('switch', { name: 'Interrupt after' });
-  await expect(interruptBefore).toBeDisabled();
-  await expect(interruptAfter).toBeDisabled();
-  await expect(card.getByTestId('interrupt-withheld-reason')).toContainText('native pipeline runtime refuses');
-
-  // Forced past the disabled state — the handler is gone, not merely blocked.
-  await interruptBefore.dispatchEvent('click');
-  await interruptAfter.dispatchEvent('click');
-
+  const before = card.getByRole('switch', { name: 'Interrupt before' });
+  const after = card.getByRole('switch', { name: 'Interrupt after' });
+  await expect(before).toBeEnabled();
+  await expect(after).toBeEnabled();
+  await before.check();
+  await after.check();
+  await expect(before).toBeChecked();
+  await expect(after).toBeChecked();
   await saveAndAwaitPersist(page);
+  const stored = parseStoredDocument(await readStoredInstructions(page, id));
+  expect(parseStoredGraph(await readStoredInstructions(page, id)).nodes.map((node) => node['id'])).toContain('LLM_1');
+  expect(stored['interrupt_before']).toEqual(['LLM_1']);
+  expect(stored['interrupt_after']).toEqual(['LLM_1']);
 
-  const instructions = await readStoredInstructions(page, id);
-  // The graph really did persist — without this, the two interrupt
-  // assertions below would hold just as well for an empty document.
-  expect(parseStoredGraph(instructions).nodes.map((node) => node['id'])).toContain('LLM_1');
-
-  const stored = parseStoredDocument(instructions);
-  expect(stored['interrupt_before'] ?? [], 'a saved pipeline must carry no static interrupt_before').toEqual([]);
-  expect(stored['interrupt_after'] ?? [], 'a saved pipeline must carry no static interrupt_after').toEqual([]);
+  await before.uncheck();
+  await after.uncheck();
+  await saveAndAwaitPersist(page);
+  const cleared = parseStoredDocument(await readStoredInstructions(page, id));
+  expect(cleared['interrupt_before'] ?? []).toEqual([]);
+  expect(cleared['interrupt_after'] ?? []).toEqual([]);
 });
 
-test('J16: a document that already carries a static interrupt is refused, naming the entry', async ({ page }) => {
-  /*
-   * The switches cannot author one any more, but a stored document from
-   * before this change (or from the YAML tab) still can. That document must
-   * not be re-saved silently: `document.static-interrupts` names the exact
-   * entries in the save gate.
-   */
-  const name = `${AUTOTEST_PREFIX}legacy-${Date.now() % 1e9}`;
-  const id = await createPipeline(page, name);
-
-  await authorYaml(page, ADMISSIBLE_YAML);
+/* onetest: Invalid static pause identities cannot replace a saved, legal document. */
+test('J16: missing and duplicate static interrupt identities are refused before save', async ({ page }) => {
+  const id = await createPipeline(page, `${AUTOTEST_PREFIX}invalid-intr-${Date.now() % 1e9}`);
+  await authorYaml(page, INTERRUPTED_YAML);
   await saveAndAwaitPersist(page);
   const before = await readStoredInstructions(page, id);
+  expect(parseStoredDocument(before)['interrupt_before']).toEqual(['LLM_1']);
 
-  await authorYaml(page, INTERRUPTED_YAML);
-
-  const gate = page.getByTestId('graph-admission-gate');
-  await expect(gate).toBeVisible({ timeout: 10_000 });
-  await expect(gate).toContainText('interrupt_before');
-  await expect(gate).toContainText('LLM_1');
-  await expect(page.getByTestId('pipeline-save-button')).toBeDisabled();
-
-  expect(await readStoredInstructions(page, id)).toBe(before);
+  for (const entries of ['missing_node', 'LLM_1, LLM_1']) {
+    await authorYaml(page, INTERRUPTED_YAML.replace('[LLM_1]', `[${entries}]`));
+    const gate = page.getByTestId('graph-admission-gate');
+    await expect(gate).toBeVisible({ timeout: 10_000 });
+    await expect(gate).toContainText(entries.includes(',') ? 'interrupt_before[1]' : 'interrupt_before[0]');
+    await expect(gate).toContainText(entries.includes(',') ? 'LLM_1' : 'missing_node');
+    await expect(page.getByTestId('pipeline-save-button')).toBeDisabled();
+    expect(await readStoredInstructions(page, id)).toBe(before);
+  }
 });

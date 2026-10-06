@@ -225,6 +225,170 @@ components:
       description: End of date range (inclusive)
 
   schemas:
+    EditorTestRunsPage:
+      type: object
+      additionalProperties: false
+      required: [rows, limit, offset, has_more]
+      properties:
+        rows: {type: array, maxItems: 50, items: {$ref: '#/components/schemas/EditorTestRun'}}
+        limit: {type: integer, minimum: 1, maximum: 50}
+        offset: {type: integer, minimum: 0, maximum: 10000}
+        has_more: {type: boolean}
+    EditorTestRun:
+      type: object
+      additionalProperties: false
+      description: Existing admitted run. Reading or observing this row creates no work.
+      required: [response_message_id, question_id, execution_id, execution_generation, phase, state, desired_state, admitted_at, input_reference, can_control]
+      properties:
+        response_message_id: {type: string, format: uuid}
+        response_message_group_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Original response group for this execution and generation. Never substitute a newer response.
+        trace_available:
+          type: boolean
+          description: Visible persisted trace exists and the original response still matches this execution and generation. Omission on older Main versions means unavailable.
+        question_id: {type: string, format: uuid}
+        execution_id: {type: string}
+        execution_generation: {type: string}
+        phase: {type: string, enum: [RUNNING, PAUSED, TERMINAL]}
+        state: {type: string}
+        desired_state: {type: string}
+        admitted_at: {type: string, format: date-time}
+        settled_at: {type: string, format: date-time, nullable: true}
+        input_reference: {$ref: '#/components/schemas/EditorTestInputReference'}
+        can_control: {type: boolean}
+        events_url: {type: string}
+    EditorTestInputReference:
+      type: object
+      additionalProperties: false
+      required: [bundle_id, entry_id, immutable_version, content_digest]
+      properties:
+        bundle_id: {type: string}
+        entry_id: {type: string}
+        immutable_version: {type: string}
+        content_digest: {type: string, pattern: '^[a-f0-9]{64}$'}
+    EditorTestContext:
+      type: object
+      additionalProperties: false
+      description: Immutable Test identity. Main derives actor and project from authenticated authority.
+      required: [revision, actor_id, project_id, application_id, application_version_id]
+      properties:
+        revision: {type: integer, enum: [1]}
+        actor_id: {type: string, pattern: '^[1-9][0-9]*$'}
+        project_id: {type: string, pattern: '^[1-9][0-9]*$'}
+        application_id: {type: string, pattern: '^[1-9][0-9]*$'}
+        application_version_id: {type: string, pattern: '^[1-9][0-9]*$'}
+    StaticPipelineContinuationReceipt:
+      type: object
+      additionalProperties: false
+      required: [task_id, execution_id, command_id, response_message_id, events_url, created]
+      properties:
+        task_id: {type: string}
+        execution_id: {type: string}
+        command_id: {type: string}
+        response_message_id: {type: string, format: uuid}
+        events_url: {type: string}
+        created: {type: boolean}
+    StaticPipelineContinuationBody:
+      oneOf:
+        - {$ref: '#/components/schemas/StaticPipelineRootContinuation'}
+        - {$ref: '#/components/schemas/StaticPipelineToolsContinuation'}
+    StaticPipelineToolsContinuation:
+      description: Continue only selected original saved-pipeline leaves. Main atomically retains every unselected occurrence.
+      type: object
+      additionalProperties: false
+      required: [project_id, conversation_uuid, message_id, static_decisions]
+      properties:
+        project_id: {type: integer, minimum: 1}
+        conversation_uuid: {type: string, format: uuid}
+        message_id: {type: string, format: uuid}
+        thread_id: {type: string, minLength: 1, maxLength: 256}
+        static_decisions:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items: {$ref: '#/components/schemas/StaticPipelineLeafDecision'}
+    StaticPipelineRootContinuation:
+      description: Continue the original before/after occurrence. Main resolves its frozen checkpoint and version; the browser supplies neither.
+      type: object
+      additionalProperties: false
+      required: [project_id, conversation_uuid, message_id, static_pause_id, user_input]
+      properties:
+        project_id: {type: integer, minimum: 1}
+        conversation_uuid: {type: string, format: uuid}
+        message_id: {type: string, format: uuid}
+        thread_id: {type: string, minLength: 1, maxLength: 256}
+        static_pause_id: {type: string, pattern: '^pipeline-static:sha256:[0-9a-f]{64}$'}
+        user_input: {type: string, minLength: 1, maxLength: 8192}
+    StaticPipelineLeafDecision:
+      type: object
+      additionalProperties: false
+      required: [pause_id, child_thread_id, tool_call_id, action, value]
+      properties:
+        pause_id: {type: string, pattern: '^pipeline-static:sha256:[0-9a-f]{64}$'}
+        child_thread_id: {type: string, minLength: 1, maxLength: 256}
+        tool_call_id: {type: string, minLength: 1, maxLength: 512}
+        action: {type: string, enum: [continue]}
+        value: {type: string, minLength: 1, maxLength: 8192}
+    StaticPipelineToolInventory:
+      description: Original saved-pipeline pauses under an Agent or Pipeline root, at most 16 total. Each batch/ordinal pair, pause ID, and child/tool pair is unique.
+      type: object
+      additionalProperties: false
+      required: [revision, pauses]
+      properties:
+        revision: {type: integer, enum: [1]}
+        pauses:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items: {$ref: '#/components/schemas/StaticPipelineToolPause'}
+    StaticPipelineInventoryRootKind:
+      description: Server-owned original application kind. The immutable admitted input supplies authority; clients never select this kind.
+      type: string
+      enum: [agent, pipeline]
+    StaticPipelineToolPause:
+      type: object
+      additionalProperties: false
+      required: [tool_call_id, child_thread_id, original_batch_event_id, original_ordinal, proof]
+      properties:
+        tool_call_id: {type: string, minLength: 1, maxLength: 512}
+        child_thread_id: {type: string, minLength: 1, maxLength: 256}
+        original_batch_event_id: {type: string, minLength: 1, maxLength: 512}
+        original_ordinal: {type: integer, minimum: 1, maximum: 16}
+        proof: {$ref: '#/components/schemas/StaticPipelinePauseProof'}
+    StaticPipelinePauseProof:
+      description: Original persisted static occurrence. Echo only pause_id when continuing; never send this proof.
+      type: object
+      additionalProperties: false
+      required: [revision, pause_id, checkpoint_id, kind, node_name, definition_digest, node_digest, pending_nodes, step, descendant_path]
+      properties:
+        revision: {type: integer, enum: [1]}
+        pause_id: {type: string, pattern: '^pipeline-static:sha256:[0-9a-f]{64}$'}
+        checkpoint_id: {type: string, minLength: 1, maxLength: 256}
+        kind: {type: string, enum: [before, after]}
+        node_name: {type: string, minLength: 1, maxLength: 128}
+        definition_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        node_digest: {type: string, pattern: '^sha256:[0-9a-f]{64}$'}
+        pending_nodes:
+          type: array
+          maxItems: 128
+          uniqueItems: true
+          items: {type: string, minLength: 1, maxLength: 128}
+        step: {type: integer, minimum: 0, maximum: 2147483647}
+        descendant_path:
+          type: array
+          maxItems: 8
+          items: {$ref: '#/components/schemas/StaticPipelinePauseDescendant'}
+    StaticPipelinePauseDescendant:
+      type: object
+      additionalProperties: false
+      required: [node_name, thread_id, checkpoint_id]
+      properties:
+        node_name: {type: string, minLength: 1, maxLength: 128}
+        thread_id: {type: string, minLength: 1, maxLength: 1024}
+        checkpoint_id: {type: string, minLength: 1, maxLength: 256}
     McpOAuthProxyRequest:
       type: object
       required: [token_endpoint]
@@ -2645,23 +2809,45 @@ components:
     ConversationDetail:
       type: object
       description: >
-        One conversation with its participants, and with its newest message
-        groups when `messages_limit` is set. NOTE(W2):
-        internal/api/v2/conversations/handler.go:581 (`Get`); the map is
-        built at :604-628.
-      required: [id, project_id, name, created_at, updated_at, created_by, message_count, participants, meta, is_private]
+        One conversation with its participants, and with its newest message groups when `messages_limit` is set.
+        NOTE(W2): internal/api/v2/conversations/handler.go:581 (`Get`); the map is built at :604-628.
+      required:
+        - id
+        - project_id
+        - name
+        - created_at
+        - updated_at
+        - created_by
+        - message_count
+        - participants
+        - meta
+        - is_private
       properties:
-        id: { type: string }
-        uuid: { type: string, format: uuid }
-        project_id: { type: string }
-        name: { type: string }
-        description: { type: string }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-        created_by: { type: string }
-        message_count: { type: integer }
-        source: { type: string }
-        instructions: { type: string }
+        id:
+          type: string
+        uuid:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        message_count:
+          type: integer
+        source:
+          type: string
+        instructions:
+          type: string
         folder_id:
           type: string
           nullable: true
@@ -2672,32 +2858,32 @@ components:
         meta:
           type: object
           additionalProperties: true
-          x-elitea-passthrough: >-
-            NOTE(W2): always an object, never absent
-            (internal/api/v2/conversations/handler.go:627, `metaOrEmpty`); the
-            stored `chat_conversations.meta` document re-emitted verbatim.
+          x-elitea-passthrough: "NOTE(W2): always an object, never absent (internal/api/v2/conversations/handler.go:627,
+            `metaOrEmpty`); the stored `chat_conversations.meta` document re-emitted verbatim."
+          properties:
+            editor_test:
+              $ref: "#/components/schemas/EditorTestContext"
+            is_hidden:
+              type: boolean
         participants:
           type: array
           items:
-            $ref: '#/components/schemas/ConversationParticipant'
+            $ref: "#/components/schemas/ConversationParticipant"
         message_groups:
           type: array
           description: >
-            Present only when `messages_limit` > 0. The legacy message-group
-            projection (items and their details). Prefer the message list
-            (listConversationMessages) for a transcript: it is the read that
-            supports `changes_since`.
+            Present only when `messages_limit` > 0. The legacy message-group projection (items and their details).
+            Prefer the message list (listConversationMessages) for a transcript: it is the read that supports
+            `changes_since`.
           items:
             type: object
             additionalProperties: true
-            x-elitea-passthrough: >-
-              NOTE(W2): `ListMessageGroups` returns `[]map[string]any` built
-              row by row from the message-group, item and text tables
-              (internal/api/v2/conversations/handler.go:647). Its item details
-              vary by item type (text, attachment, canvas), so the group is
-              passed through; typing it is tracked as follow-up of ADR-0025
-              decision 14.
-
+            x-elitea-passthrough: "NOTE(W2): `ListMessageGroups` returns `[]map[string]any` built row by row from the
+              message-group, item and text tables (internal/api/v2/conversations/handler.go:647). Its item details
+              vary by item type (text, attachment, canvas), so the group is passed through; typing it is tracked as
+              follow-up of ADR-0025 decision 14."
+        editor_test_runs:
+          $ref: "#/components/schemas/EditorTestRunsPage"
     AttachmentMessageItem:
       type: object
       additionalProperties: true
@@ -15265,7 +15451,7 @@ paths:
 
   /elitea_core/conversations/prompt_lib/{project_id}:
     parameters:
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: "#/components/parameters/ProjectId"
     get:
       operationId: listConversations
       summary: List conversations, optionally scoped to one participant entity
@@ -15283,84 +15469,97 @@ paths:
         property, not a convenience.
 
         The route also serves POST, createConversation below.
-      tags: [chat, client]
+      tags:
+        - chat
+        - client
       parameters:
-        - $ref: '#/components/parameters/XClientVersion'
+        - $ref: "#/components/parameters/XClientVersion"
         - name: source
           in: query
           required: false
-          schema: { type: string }
+          schema:
+            type: string
           description: Filter by `chat_conversations.source` (e.g. `deepwiki`).
         - name: entity_name
           in: query
           required: false
-          schema: { type: string }
-          description: '`application` (agents and pipelines) or `toolkit` (toolkits and MCP connections).'
+          schema:
+            type: string
+          description: "`application` (agents and pipelines) or `toolkit` (toolkits and MCP connections)."
         - name: entity_meta_id
           in: query
           required: false
-          schema: { type: string }
+          schema:
+            type: string
           description: The participant entity's id, paired with entity_name.
         - name: mine
           in: query
           required: false
-          schema: { type: boolean }
+          schema:
+            type: boolean
         - name: hidden
           in: query
           required: false
-          schema: { type: string }
-          description: '`only` inverts the default hidden-conversation exclusion; any other value keeps the default.'
+          schema:
+            type: string
+          description: "`only` inverts the default hidden-conversation exclusion; any other value keeps the default."
         - name: limit
           in: query
           required: false
-          schema: { type: integer, default: 10, maximum: 100 }
+          schema:
+            type: integer
+            default: 10
+            maximum: 100
           description: >
-            Page size, at most 100. In delta mode the default is 100, and rows
-            and tombstones are each bounded by it.
+            Page size, at most 100. In delta mode the default is 100, and rows and tombstones are each bounded by
+            it.
         - name: offset
           in: query
           required: false
-          schema: { type: integer, default: 0 }
+          schema:
+            type: integer
+            default: 0
           description: Legacy paging only; ignored with `changes_since`.
         - name: changes_since
           in: query
           required: false
-          schema: { type: string }
+          schema:
+            type: string
           description: >
-            Incremental sync (ADR-0025 WP6). Absent: the legacy page, unchanged.
-            Empty or `0`: a full sync from the beginning in delta shape.
-            Otherwise the opaque `next_cursor` of a previous delta of THIS list
-            — the same project and the same `source`, `entity_name`,
-            `entity_meta_id`, `mine` and `hidden` values; a cursor from another
-            list is a 400. Rows come oldest change first. Losing access to the
-            whole project is not a tombstone: the client sees 403 and drops
-            that project's cache.
+            Incremental sync (ADR-0025 WP6). Absent: the legacy page, unchanged. Empty or `0`: a full sync from
+            the beginning in delta shape. Otherwise the opaque `next_cursor` of a previous delta of THIS list —
+            the same project and the same `source`, `entity_name`, `entity_meta_id`, `mine` and `hidden` values; a
+            cursor from another list is a 400. Rows come oldest change first. Losing access to the whole project
+            is not a tombstone: the client sees 403 and drops that project's cache.
       responses:
-        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
-        '200':
+        "200":
           description: >
-            The matching conversations, newest first; with `changes_since`,
-            the conversations changed since the cursor, oldest change first,
-            plus tombstones and the next cursor.
+            The matching conversations, newest first; with `changes_since`, the conversations changed since the
+            cursor, oldest change first, plus tombstones and the next cursor.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ConversationListing'
-        '400':
-          description: >-
-            `changes_since` is not a cursor this list issued, or `limit` is
-            not a positive integer (SyncCursorError); or, for a native client,
-            `X-Client-Version` does not parse (InvalidClientVersionError).
+                $ref: "#/components/schemas/ConversationListing"
+        "400":
+          description: "`changes_since` is not a cursor this list issued, or `limit` is not a positive integer
+            (SyncCursorError); or, for a native client, `X-Client-Version` does not parse
+            (InvalidClientVersionError)."
           content:
             application/json:
               schema:
                 oneOf:
-                  - $ref: '#/components/schemas/SyncCursorError'
-                  - $ref: '#/components/schemas/InvalidClientVersionError'
-        '410': { $ref: '#/components/responses/SyncCursorExpired' }
-        '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
-        '500': { $ref: '#/components/responses/500' }
+                  - $ref: "#/components/schemas/SyncCursorError"
+                  - $ref: "#/components/schemas/InvalidClientVersionError"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "410":
+          $ref: "#/components/responses/SyncCursorExpired"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
     post:
       operationId: createConversation
       summary: Create a conversation
@@ -15370,38 +15569,46 @@ paths:
         project's chat defaults applied. Answers 201 with the stored
         conversation; its `uuid` is the id the chat send and the attachment
         upload take.
-      tags: [chat, client]
+      tags:
+        - chat
+        - client
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ConversationCreateRequest'
+              $ref: "#/components/schemas/ConversationCreateRequest"
+              description: >
+                editor_test requires exactly one saved application participant in this project. Main derives
+                actor/project, validates the exact version, and forces private hidden visibility. Clients must not
+                supply reserved editor_test metadata.
       parameters:
-        - $ref: '#/components/parameters/XClientVersion'
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
-        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
-        '201':
+        "201":
           description: The created conversation.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/CreatedConversation'
-        '400': { $ref: '#/components/responses/400' }
-        '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
-        '500': { $ref: '#/components/responses/500' }
-
-  # --- ADR-0025 WP5: the chat, execution and notification operations of the
-  # `client` contract that the document did not describe before.
-
+                $ref: "#/components/schemas/CreatedConversation"
+        "400":
+          $ref: "#/components/responses/400"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
   /elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}:
     parameters:
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: "#/components/parameters/ProjectId"
       - name: conversation_id
         in: path
         required: true
-        schema: { type: string }
+        schema:
+          type: string
         description: The conversation's numeric id or its UUID; both resolve.
     get:
       operationId: getConversation
@@ -15413,32 +15620,65 @@ paths:
         `messages_limit` > 0 embeds the newest message groups in the legacy
         projection; a client that keeps a transcript reads the message list
         instead.
-      tags: [chat, client]
+      tags:
+        - chat
+        - client
       parameters:
-        - $ref: '#/components/parameters/XClientVersion'
+        - $ref: "#/components/parameters/XClientVersion"
         - name: messages_limit
           in: query
           required: false
-          schema: { type: integer, minimum: 0 }
+          schema:
+            type: integer
+            minimum: 0
           description: Embed this many message groups (0 or absent embeds none).
         - name: sort_order
           in: query
           required: false
-          schema: { type: string }
+          schema:
+            type: string
           description: Order of the embedded groups, `asc` or `desc`.
+        - name: editor_test_runs
+          in: query
+          schema:
+            type: boolean
+        - name: runs_limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 50
+        - name: runs_offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+            maximum: 10000
+        - name: messages_offset
+          in: query
+          schema:
+            type: integer
       responses:
-        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
-        '400': { $ref: '#/components/responses/InvalidClientVersion' }
-        '200':
+        "200":
           description: The conversation.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ConversationDetail'
-        '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
-        '404': { $ref: '#/components/responses/404' }
-        '500': { $ref: '#/components/responses/500' }
+                $ref: "#/components/schemas/ConversationDetail"
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
     delete:
       operationId: deleteConversation
       summary: Delete a conversation and its stored attachments
@@ -15448,18 +15688,26 @@ paths:
         `deleted` tombstone for the conversation on the conversation list (no
         per-message tombstones). A 500 after the rows are gone means the byte
         cleanup failed; the conversation is still deleted.
-      tags: [chat, client]
+      tags:
+        - chat
+        - client
       parameters:
-        - $ref: '#/components/parameters/XClientVersion'
+        - $ref: "#/components/parameters/XClientVersion"
       responses:
-        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
-        '400': { $ref: '#/components/responses/InvalidClientVersion' }
-        '204': { description: Deleted. }
-        '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
-        '404': { $ref: '#/components/responses/404' }
-        '500': { $ref: '#/components/responses/500' }
-
+        "204":
+          description: Deleted.
+        "400":
+          $ref: "#/components/responses/InvalidClientVersion"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
   /elitea_core/participants/prompt_lib/{project_id}/{conversation_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -15920,19 +16168,24 @@ paths:
 
   /elitea_core/continue_predict/prompt_lib/{project_id}/{conversation_id}:
     parameters:
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: "#/components/parameters/ProjectId"
       - name: conversation_id
         in: path
         required: true
-        schema: { type: string, format: uuid }
+        schema:
+          type: string
+          format: uuid
         description: The conversation UUID; must equal the body's `conversation_uuid`.
     post:
       operationId: continueChatExecution
       summary: Resume a paused turn (human decision, tool authorization, output limit)
-      description: |
+      description: >
         Answers a pause the event stream announced and starts the turn's
+
         continuation, answering like the send with a new `events_url`.
+
         `execution_contract`:
+
         - `agent.continue.hitl.v1` — a human-in-the-loop decision
           (`hitl_resume: true` plus `hitl_action`/`hitl_value`, or
           `hitl_decisions` for a multi-pause frame);
@@ -15942,75 +16195,100 @@ paths:
         - `agent.continue.output-limit.v1` — continue an answer cut at the
           model's output limit (`message_id` only).
         A pause that was already answered is a 409 with
+
         `agent_hitl_already_resolved`, `agent_authorization_already_resolved`
+
         or `agent_output_limit_already_resolved` and `retryable: false`:
+
         refresh the transcript instead of retrying.
-      tags: [chat, client]
+
+
+        The existing static continuation contract uses agent.continue.static.v1 with the exact original pause
+        identity.
+      tags:
+        - chat
+        - client
       parameters:
-        - $ref: '#/components/parameters/XClientVersion'
+        - $ref: "#/components/parameters/XClientVersion"
         - name: execution_contract
           in: query
           required: true
           schema:
             type: string
-            enum: [agent.continue.hitl.v1, agent.continue.authorization.v1, agent.continue.output-limit.v1]
+            enum:
+              - agent.continue.hitl.v1
+              - agent.continue.authorization.v1
+              - agent.continue.output-limit.v1
+              - agent.continue.static.v1
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ChatContinueRequest'
+              allOf:
+                - $ref: "#/components/schemas/ChatContinueRequest"
+                - anyOf:
+                    - $ref: "#/components/schemas/StaticPipelineContinuationBody"
+                    - $ref: "#/components/schemas/ChatContinueRequest"
       responses:
-        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
-        '200':
+        "200":
           description: The continuation was admitted or replayed.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ChatExecutionStarted'
-        '400':
+                allOf:
+                  - $ref: "#/components/schemas/ChatExecutionStarted"
+                  - anyOf:
+                      - $ref: "#/components/schemas/StaticPipelineContinuationReceipt"
+                      - $ref: "#/components/schemas/ChatExecutionStarted"
+        "400":
           description: A malformed request.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ChatExecutionError'
-        '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
-        '409':
+                $ref: "#/components/schemas/ChatExecutionError"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "409":
           description: The pause was already answered.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ChatExecutionError'
-        '413':
+                $ref: "#/components/schemas/ChatExecutionError"
+        "413":
           description: The body is larger than 512 KiB.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ChatExecutionError'
-        '415':
+                $ref: "#/components/schemas/ChatExecutionError"
+        "415":
           description: Content-Type is not application/json.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ChatExecutionError'
-        '422':
-          description: '`unsupported_agent_execution`: the fields do not fit the contract.'
+                $ref: "#/components/schemas/ChatExecutionError"
+        "422":
+          description: "`unsupported_agent_execution`: the fields do not fit the contract."
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ChatExecutionError'
-        '500': { $ref: '#/components/responses/500' }
-        '503':
+                $ref: "#/components/schemas/ChatExecutionError"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
+        "503":
           description: Admission capacity is full; retry after `Retry-After`.
           headers:
             Retry-After:
-              schema: { type: string }
+              schema:
+                type: string
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ChatExecutionError'
-
+                $ref: "#/components/schemas/ChatExecutionError"
   /elitea_core/attachments/prompt_lib/{project_id}/{conversation_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -16555,11 +16833,12 @@ paths:
 
   /elitea_core/message_traces/prompt_lib/{project_id}/{conversation_id}:
     parameters:
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: "#/components/parameters/ProjectId"
       - name: conversation_id
         in: path
         required: true
-        schema: { type: integer }
+        schema:
+          type: integer
     get:
       operationId: listMessageTraces
       summary: Trace steps for a conversation — the pin strip under each answer
@@ -16577,71 +16856,111 @@ paths:
 
         `total` is null unless include_total=true, so "not counted" stays
         distinguishable from "counted zero".
-      tags: [chat, client]
+      tags:
+        - chat
+        - client
       parameters:
-        - $ref: '#/components/parameters/XClientVersion'
+        - $ref: "#/components/parameters/XClientVersion"
         - name: message_group_id
           in: query
           required: false
-          schema: { type: integer }
+          schema:
+            type: integer
           description: >
-            Scope to a single message group. A value that is not a positive
-            integer is a 400 rather than an ignored filter — dropping it would
-            return the whole conversation to a caller that asked for one
+            Scope to a single message group. A value that is not a positive integer is a 400 rather than an
+            ignored filter — dropping it would return the whole conversation to a caller that asked for one
             message. Omit the parameter to ask for the whole conversation.
         - name: message_group_ids
           in: query
           required: false
-          schema: { type: string }
+          schema:
+            type: string
           description: >
-            Comma-separated loaded message-group ids, at most 200. Duplicates
-            are collapsed; a non-integer member is a 400.
+            Comma-separated loaded message-group ids, at most 200. Duplicates are collapsed; a non-integer member
+            is a 400.
         - name: kind
           in: query
           required: false
-          schema: { type: string }
+          schema:
+            type: string
           description: >
-            Filter by step kind. Allowed values are `tool_call` and
-            `thinking_step`; anything else is a 400 rather than an empty page.
+            Filter by step kind. Allowed values are `tool_call` and `thinking_step`; anything else is a 400 rather
+            than an empty page.
         - name: limit
           in: query
           required: false
-          schema: { type: integer, default: 2000, maximum: 2000 }
+          schema:
+            type: integer
+            default: 2000
+            maximum: 2000
         - name: offset
           in: query
           required: false
-          schema: { type: integer, default: 0 }
+          schema:
+            type: integer
+            default: 0
         - name: include_total
           in: query
           required: false
-          schema: { type: boolean, default: false }
+          schema:
+            type: boolean
+            default: false
+        - name: execution_id
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+          description: Original admitted execution. Supply with execution_generation, response_message_id and
+            message_group_id. Mismatched or superseded identity returns no trace.
+        - name: execution_generation
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+          description: Original client generation. All three identity fields are required together and are checked in
+            the trace read snapshot.
+        - name: response_message_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Original response UUID. The execution binding must belong to the authenticated actor and exact
+            project. Ordinary callers may omit all identity fields.
       responses:
-        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
-        '200':
+        "200":
           description: Trace steps for the conversation.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MessageTraceListing'
-        '400':
-          description: >
-            An unsupported kind, a malformed message_group_id, or a malformed
-            message-group id list.
+                $ref: "#/components/schemas/MessageTraceListing"
+        "400":
+          description: |
+            An unsupported kind, a malformed message_group_id, or a malformed message-group id list.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
-        '500': { $ref: '#/components/responses/500' }
-
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
   /elitea_core/message_trace/prompt_lib/{project_id}/{step_id}:
     parameters:
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: "#/components/parameters/ProjectId"
       - name: step_id
         in: path
         required: true
-        schema: { type: integer }
+        schema:
+          type: integer
     get:
       operationId: getMessageTrace
       summary: One trace step in full, fetched on pin expand
@@ -16651,38 +16970,70 @@ paths:
         `message_group_id` is REQUIRED and is matched together with the step
         id: it is what confines a numeric step id to the message the caller is
         reading, so a step from elsewhere is a 404 rather than a body.
-      tags: [chat, client]
+      tags:
+        - chat
+        - client
       parameters:
-        - $ref: '#/components/parameters/XClientVersion'
+        - $ref: "#/components/parameters/XClientVersion"
         - name: message_group_id
           in: query
           required: true
-          schema: { type: integer }
+          schema:
+            type: integer
           description: The owning message group, from the trace-list row.
+        - name: execution_id
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+          description: Original admitted execution. Supply with execution_generation, response_message_id and
+            message_group_id. Mismatched or superseded identity returns no trace.
+        - name: execution_generation
+          in: query
+          required: false
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+          description: Original client generation. All three identity fields are required together and are checked in
+            the trace read snapshot.
+        - name: response_message_id
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+          description: Original response UUID. The execution binding must belong to the authenticated actor and exact
+            project. Ordinary callers may omit all identity fields.
       responses:
-        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
-        '200':
+        "200":
           description: The full trace step.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MessageTraceStepDetail'
-        '400':
+                $ref: "#/components/schemas/MessageTraceStepDetail"
+        "400":
           description: message_group_id was missing or not a positive integer.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
-        '404':
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
           description: No such step within that message group.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '500': { $ref: '#/components/responses/500' }
-
+                $ref: "#/components/schemas/ErrorResponse"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
   /elitea_core/memories/prompt_lib/{project_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

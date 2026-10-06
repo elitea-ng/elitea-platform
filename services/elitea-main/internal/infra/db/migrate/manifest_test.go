@@ -625,7 +625,10 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// the wire) with a (user_id, sync_at, id) index, and
 	// centry.notification_tombstones filled by an AFTER DELETE trigger. No
 	// permission. Guarded on centry.notifications for bare databases.
-	require.EqualValues(t, 144, Head(shared))
+	// Code authority, workspace, broker, debug, and saved source require 0145 through 0152.
+	// Their SQL bytes remain unchanged after incoming history claims the former slots.
+	// HTTP schema remains inactive until its runtime gate is enabled.
+	require.EqualValues(t, 152, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
@@ -817,5 +820,5 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// database, so its ledger advances independently of the tenant one.
 	agentState, err := LoadManifest(platformmigrations.Files, ScopeAgentState)
 	require.NoError(t, err)
-	require.EqualValues(t, 9, Head(agentState))
+	require.EqualValues(t, 13, Head(agentState))
 }

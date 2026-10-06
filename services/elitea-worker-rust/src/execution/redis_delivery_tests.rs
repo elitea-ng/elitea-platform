@@ -526,6 +526,39 @@ async fn retryable_generation_failure_is_not_replayed_and_next_turn_reconnects()
     )));
 }
 
+#[tokio::test]
+async fn missing_consumer_group_stops_before_processing_and_closes_transport() {
+    let connection = Arc::new(FakeConnection::new(1));
+    connection.push_read(Err(RedisStreamsError::consumer_group_missing(
+        "Redis command intake failed",
+    )));
+    let connector = Arc::new(FakeConnector::new([Arc::clone(&connection)]));
+    let handle = Arc::new(RedisStreamsHandle::new(connector));
+    let processor = Arc::new(TestProcessor::new());
+    let runtime = RedisDeliveryRuntime::new(handle, Arc::clone(&processor), runtime_config(2, 2));
+    let (_stop, stopped) = watch::channel(false);
+    let error = tokio::time::timeout(Duration::from_secs(1), runtime.run(stopped))
+        .await
+        .expect("missing group drains promptly")
+        .expect_err("missing group remains fatal");
+    assert_eq!(error.code(), "redis_streams.consumer_group_missing");
+    assert!(!error.retryable());
+    assert_eq!(processor.started.load(Ordering::Acquire), 0);
+    assert_eq!(processor.completed.load(Ordering::Acquire), 0);
+    assert!(matches!(
+        connection.operations().last(),
+        Some(FakeOperation::Close)
+    ));
+    assert_eq!(
+        connection
+            .operations()
+            .iter()
+            .filter(|operation| matches!(operation, FakeOperation::Read { .. }))
+            .count(),
+        1
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn runtime_stops_intake_but_heartbeats_until_owned_processing_drains() {
     let connection = Arc::new(FakeConnection::new(2));

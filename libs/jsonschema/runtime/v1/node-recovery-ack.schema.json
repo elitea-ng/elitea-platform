@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.node-recovery-ack.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "execution_id",
+    "generation",
+    "request_id",
+    "applied_revision",
+    "replay",
+    "recovery_resume_authorized",
+    "resumption",
+    "terminal_settlement_authorized",
+    "terminal_authorization"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.node-recovery-ack.v1"
+    },
+    "execution_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$",
+      "description": "Main currentRuntimeID encodes 16 bytes as lowercase hex. Chat response IDs use separate UUIDs.",
+      "minLength": 32,
+      "maxLength": 32
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "applied_revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "replay": {
+      "type": "boolean"
+    },
+    "recovery_resume_authorized": {
+      "type": "boolean"
+    },
+    "resumption": {
+      "oneOf": [
+        {
+          "$ref": "elitea.pipeline.node-recovery-resumption.v1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "terminal_settlement_authorized": {
+      "type": "boolean"
+    },
+    "terminal_authorization": {
+      "oneOf": [
+        {
+          "$ref": "elitea.pipeline.node-recovery-terminal-settlement.v1"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "recovery_resume_authorized": {
+          "const": true
+        },
+        "resumption": {
+          "type": "object"
+        },
+        "terminal_settlement_authorized": {
+          "const": false
+        },
+        "terminal_authorization": {
+          "type": "null"
+        }
+      }
+    },
+    {
+      "properties": {
+        "recovery_resume_authorized": {
+          "const": false
+        },
+        "resumption": {
+          "type": "null"
+        },
+        "terminal_settlement_authorized": {
+          "const": true
+        },
+        "terminal_authorization": {
+          "type": "object"
+        }
+      }
+    },
+    {
+      "properties": {
+        "recovery_resume_authorized": {
+          "const": false
+        },
+        "resumption": {
+          "type": "null"
+        },
+        "terminal_settlement_authorized": {
+          "const": false
+        },
+        "terminal_authorization": {
+          "type": "null"
+        }
+      }
+    }
+  ]
+}

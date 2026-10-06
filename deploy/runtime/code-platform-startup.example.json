@@ -1,0 +1,178 @@
+{
+  "worker": {
+    "schema_version": "elitea.runtime-deploy.v1",
+    "limits_revision": "elitea.runtime.limits.conformance.v2",
+    "workload_session_id": "standalone-agent-worker-1",
+    "producer_id": "standalone-agent-worker-1",
+    "consumer_id": "standalone-agent-worker-1-consumer",
+    "redis_url": "rediss://worker@runtime-redis:6380/0",
+    "redis_password_path": "/run/elitea-runtime/redis-worker-password",
+    "redis_stream": "commands.v1.agent.execute.agent.shared.1.0",
+    "redis_group": "elitea-agent-worker-v1",
+    "control_target": "elitea-main:9443",
+    "output_target": "elitea-main:9444",
+    "content_origin": "https://elitea-main:9445",
+    "platform_origin": "https://elitea-platform-edge",
+    "ca_path": "/run/elitea-runtime/runtime-ca.crt",
+    "certificate_path": "/run/elitea-runtime/agent-worker-client.crt",
+    "private_key_path": "/run/elitea-runtime/agent-worker-client.key",
+    "ed25519_keyring_path": "/run/elitea-runtime/command-signing-keyring.json",
+    "spool_root": "/var/lib/elitea-worker/output-spool",
+    "spool_key_path": "/run/elitea-runtime/worker-output-spool-key",
+    "agent_checkpoint_connection_path": "/run/elitea-runtime/agent-checkpoint-connection",
+    "limits": {
+      "redis_read_batch": 4,
+      "redis_block_millis": 1000,
+      "redis_reclaim_idle_millis": 60000,
+      "redis_reclaim_interval_millis": 5000,
+      "dependency_retry_millis": 250,
+      "delivery_max_concurrency": 32,
+      "delivery_queue_capacity": 64,
+      "sync_max_workers": 32,
+      "sync_max_in_flight": 32,
+      "admission_timeout_millis": 5000,
+      "grpc_deadline_millis": 5000,
+      "content_timeout_millis": 15000,
+      "http_max_connections": 32,
+      "http_max_keepalive_connections": 16,
+      "output_max_queued_frames": 2,
+      "output_max_queued_bytes": 131072,
+      "output_max_sessions": 2,
+      "output_ack_timeout_millis": 15000,
+      "output_stream_deadline_millis": 300000,
+      "lease_poll_interval_millis": 10000,
+      "shutdown_timeout_millis": 30000
+    },
+    "agent_node_recovery": true,
+    "sandbox_runtimes": [
+      {
+        "language": "python",
+        "target": "sandbox.internal:9446",
+        "audience": "dns:code-shared",
+        "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "policy_revision": "python-js-v1",
+        "timeout_seconds": 60,
+        "platform_client": {
+          "target": "sandbox.internal:9446",
+          "audience": "dns:code-shared",
+          "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "policy_revision": "python-js-v1",
+          "timeout_seconds": 60,
+          "max_calls": 32,
+          "max_total_bytes": 1048576
+        }
+      },
+      {
+        "language": "javascript",
+        "target": "sandbox.internal:9446",
+        "audience": "dns:code-shared",
+        "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "policy_revision": "python-js-v1",
+        "timeout_seconds": 60,
+        "platform_client": {
+          "target": "sandbox.internal:9446",
+          "audience": "dns:code-shared",
+          "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "policy_revision": "python-js-v1",
+          "timeout_seconds": 60,
+          "max_calls": 32,
+          "max_total_bytes": 1048576
+        }
+      },
+      {
+        "language": "typescript",
+        "target": "sandbox.internal:9446",
+        "audience": "dns:code-shared",
+        "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "policy_revision": "python-js-v1",
+        "timeout_seconds": 60,
+        "platform_client": {
+          "target": "sandbox.internal:9446",
+          "audience": "dns:code-shared",
+          "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "policy_revision": "python-js-v1",
+          "timeout_seconds": 60,
+          "max_calls": 32,
+          "max_total_bytes": 1048576
+        }
+      },
+      {
+        "language": "rust",
+        "target": "sandbox.internal:9452",
+        "audience": "dns:rust-pure",
+        "image_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "policy_revision": "cargo-execute-v2",
+        "timeout_seconds": 60,
+        "platform_client": {
+          "target": "sandbox.internal:9453",
+          "audience": "dns:rust-broker",
+          "image_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "policy_revision": "cargo-broker-execute-v1",
+          "timeout_seconds": 60,
+          "max_calls": 32,
+          "max_total_bytes": 1048576
+        }
+      }
+    ]
+  },
+  "supervisors": [
+    {
+      "revision": 1,
+      "listen_address": "0.0.0.0:9446",
+      "owner": "code-shared-owner",
+      "audience": "dns:code-shared",
+      "ca_path": "/run/elitea-sandbox/client-ca.pem",
+      "certificate_path": "/run/elitea-sandbox/server.pem",
+      "private_key_path": "/run/elitea-sandbox/server.key",
+      "verification_keyring_path": "/run/elitea-sandbox/command-signing-keyring.json",
+      "database_url_path": "/run/elitea-sandbox/database-url",
+      "database_ca_path": "/run/elitea-sandbox/database-ca.pem",
+      "database_connections": 4,
+      "image_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "policy_revision": "python-js-v1",
+      "languages": [
+        "python",
+        "javascript",
+        "typescript"
+      ],
+      "concurrency": 4,
+      "memory_bytes": 536870912,
+      "cpu_limit": 1.0,
+      "timeout_seconds": 60,
+      "purpose": "execution",
+      "code_owner_requester": "dns:elitea-main",
+      "code_platform_profile": true
+    },
+    {
+      "revision": 1,
+      "listen_address": "0.0.0.0:9453",
+      "owner": "rust-broker-owner",
+      "audience": "dns:rust-broker",
+      "ca_path": "/run/elitea-sandbox/client-ca.pem",
+      "certificate_path": "/run/elitea-sandbox/server.pem",
+      "private_key_path": "/run/elitea-sandbox/server.key",
+      "verification_keyring_path": "/run/elitea-sandbox/command-signing-keyring.json",
+      "database_url_path": "/run/elitea-sandbox/database-url",
+      "database_ca_path": "/run/elitea-sandbox/database-ca.pem",
+      "database_connections": 4,
+      "image_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "policy_revision": "cargo-broker-execute-v1",
+      "languages": [
+        "rust"
+      ],
+      "concurrency": 4,
+      "memory_bytes": 1073741824,
+      "cpu_limit": 1.0,
+      "timeout_seconds": 60,
+      "purpose": "execution",
+      "code_owner_requester": "dns:elitea-main",
+      "code_platform_profile": true,
+      "native_platform": {
+        "os": "linux",
+        "arch": "arm64",
+        "abi": "gnu"
+      },
+      "native_workspace_bytes": 536870912
+    }
+  ]
+}

@@ -1,0 +1,106 @@
+{{- $s := .Values.sandboxKubernetes }}
+{{- $p := $s.preparation }}
+{{- if $p.enabled }}
+{{- if or (not $s.enabled) (not $s.supervisor.enabled) }}{{ fail "Kubernetes preparation requires the consolidated sandbox supervisor" }}{{ end }}
+{{- if not (regexMatch "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$" $p.namespace) }}{{ fail "sandboxKubernetes.preparation.namespace must be an explicit DNS label" }}{{ end }}
+{{- if or (eq $p.namespace .Release.Namespace) (eq $p.namespace $s.executionNamespace) (hasPrefix "kube-" $p.namespace) (eq $p.namespace "default") }}{{ fail "sandboxKubernetes.preparation.namespace must be separate from platform and execution" }}{{ end }}
+{{- if or (not (regexMatch "^[0-9]+$" (toString $p.maxPods))) (lt (int $p.maxPods) 1) (gt (int $p.maxPods) 4096) }}{{ fail "sandboxKubernetes.preparation.maxPods must be between 1 and 4096" }}{{ end }}
+{{- if or (not $p.dnsNamespaceLabels) (not $p.dnsPodLabels) }}{{ fail "Kubernetes preparation requires explicit DNS namespace and Pod labels" }}{{ end }}
+{{- if or (not $p.resolverCidrs) (gt (len $p.resolverCidrs) 64) }}{{ fail "Kubernetes preparation requires one to 64 resolver CIDRs" }}{{ end }}
+{{- $cidrs := dict }}
+{{- range $p.resolverCidrs }}
+{{- if not (regexMatch "^[a-fA-F0-9.:]+/[0-9]+$" .) }}{{ fail "Kubernetes preparation resolver CIDRs must be explicit IP networks" }}{{ end }}
+{{- $parts := splitList "/" . }}{{- $prefix := int (index $parts 1) }}
+{{- $maximum := 32 }}{{- if contains ":" (index $parts 0) }}{{- $maximum = 128 }}{{- end }}
+{{- if or (lt $prefix 1) (gt $prefix $maximum) (hasKey $cidrs .) }}{{ fail "Kubernetes preparation resolver CIDRs must be unique and cannot grant all addresses" }}{{ end }}
+{{- $_ := set $cidrs . true }}
+{{- end }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $p.namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: elitea-python-preparation-network
+  namespace: {{ $p.namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $p.dnsNamespaceLabels | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $p.dnsPodLabels | nindent 14 }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        {{- range $p.resolverCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - {protocol: TCP, port: 443}
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: elitea-python-preparation-capacity
+  namespace: {{ $p.namespace }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  hard:
+    count/pods: {{ $p.maxPods | quote }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: elitea-code
+  namespace: {{ $p.namespace }}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: elitea-code-supervisor
+  namespace: {{ $p.namespace }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, get, patch, delete]
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create, get]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: elitea-code-supervisor
+  namespace: {{ $p.namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $s.supervisorServiceAccount }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: elitea-code-supervisor
+{{- end }}

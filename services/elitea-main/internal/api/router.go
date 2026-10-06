@@ -494,8 +494,9 @@ type RouterConfig struct {
 	// group's own 404, while a registered route with no runtime behind it is
 	// the "answers 200, nothing is wired" defect this repository keeps
 	// rediscovering.
-	PipelineTriggers   *v2pipelinetriggers.Handler
-	CurrentAgentCancel http.Handler
+	PipelineTriggers    *v2pipelinetriggers.Handler
+	CurrentNodeRecovery http.Handler
+	CurrentAgentCancel  http.Handler
 	// CurrentApplicationTask serves the legacy application_task path (issue
 	// 254 P2): GET polls the run bound to a response message, DELETE stops
 	// it through the SAME use case CurrentAgentCancel runs.

@@ -25,7 +25,7 @@ for filename, expected in zip(sys.argv[1:], ["", "dns:sandbox.test,spiffe://elit
               if "ELITEA_RUNTIME_SANDBOX_AUDIENCES" in config]
     assert values == [expected], values
 PYTEST
-if rg -q 'kind: DaemonSet' "$work/default.yaml"; then
+if grep -Fq 'kind: DaemonSet' "$work/default.yaml"; then
   echo "Unexpected default DaemonSet" >&2; exit 1
 fi
 helm template warm "$chart" "${base[@]}" "${warm[@]}" --show-only templates/sandbox/image-warmup.yaml > "$work/warm.yaml"
@@ -49,9 +49,9 @@ PY
 if helm template warm "$chart" "${base[@]}" "${warm[@]}" --set-string sandboxImageWarmup.images[0].image=runtime:latest > "$work/invalid" 2>&1; then
   echo "Mutable image accepted" >&2; exit 1
 fi
-rg -q 'must use registry SHA-256 digests' "$work/invalid"
+grep -Fq 'must use registry SHA-256 digests' "$work/invalid"
 if helm template warm "$chart" "${base[@]}" --set sandboxImageWarmup.enabled=true --set sandboxImageWarmup.images[0].name=python --set-string "sandboxImageWarmup.images[0].image=$image" > "$work/invalid" 2>&1; then
   echo "Missing sandbox node selection accepted" >&2; exit 1
 fi
-rg -q 'must select sandbox nodes explicitly' "$work/invalid"
+grep -Fq 'must select sandbox nodes explicitly' "$work/invalid"
 echo 'Sandbox image warmup rendering checks passed'

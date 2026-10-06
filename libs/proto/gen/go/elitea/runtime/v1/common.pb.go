@@ -75,6 +75,8 @@ const (
 	DesiredExecutionStateV1_DESIRED_EXECUTION_STATE_V1_RUNNING     DesiredExecutionStateV1 = 1
 	DesiredExecutionStateV1_DESIRED_EXECUTION_STATE_V1_CANCELLED   DesiredExecutionStateV1 = 2
 	DesiredExecutionStateV1_DESIRED_EXECUTION_STATE_V1_DRAINING    DesiredExecutionStateV1 = 3
+	// Nonterminal same-generation node recovery. Never ordinary invocation.
+	DesiredExecutionStateV1_DESIRED_EXECUTION_STATE_V1_SUSPENDED DesiredExecutionStateV1 = 4
 )
 
 // Enum value maps for DesiredExecutionStateV1.
@@ -84,12 +86,14 @@ var (
 		1: "DESIRED_EXECUTION_STATE_V1_RUNNING",
 		2: "DESIRED_EXECUTION_STATE_V1_CANCELLED",
 		3: "DESIRED_EXECUTION_STATE_V1_DRAINING",
+		4: "DESIRED_EXECUTION_STATE_V1_SUSPENDED",
 	}
 	DesiredExecutionStateV1_value = map[string]int32{
 		"DESIRED_EXECUTION_STATE_V1_UNSPECIFIED": 0,
 		"DESIRED_EXECUTION_STATE_V1_RUNNING":     1,
 		"DESIRED_EXECUTION_STATE_V1_CANCELLED":   2,
 		"DESIRED_EXECUTION_STATE_V1_DRAINING":    3,
+		"DESIRED_EXECUTION_STATE_V1_SUSPENDED":   4,
 	}
 )
 
@@ -421,12 +425,13 @@ const file_elitea_runtime_v1_common_proto_rawDesc = "" +
 	"fenceTokenJ\x04\b\x06\x10\x10*X\n" +
 	"\x11DigestAlgorithmV1\x12#\n" +
 	"\x1fDIGEST_ALGORITHM_V1_UNSPECIFIED\x10\x00\x12\x1e\n" +
-	"\x1aDIGEST_ALGORITHM_V1_SHA256\x10\x01*\xc0\x01\n" +
+	"\x1aDIGEST_ALGORITHM_V1_SHA256\x10\x01*\xea\x01\n" +
 	"\x17DesiredExecutionStateV1\x12*\n" +
 	"&DESIRED_EXECUTION_STATE_V1_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"DESIRED_EXECUTION_STATE_V1_RUNNING\x10\x01\x12(\n" +
 	"$DESIRED_EXECUTION_STATE_V1_CANCELLED\x10\x02\x12'\n" +
-	"#DESIRED_EXECUTION_STATE_V1_DRAINING\x10\x03*\xcd\x01\n" +
+	"#DESIRED_EXECUTION_STATE_V1_DRAINING\x10\x03\x12(\n" +
+	"$DESIRED_EXECUTION_STATE_V1_SUSPENDED\x10\x04*\xcd\x01\n" +
 	"\x12ExecutionOutcomeV1\x12$\n" +
 	" EXECUTION_OUTCOME_V1_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eEXECUTION_OUTCOME_V1_SUCCEEDED\x10\x01\x12\x1f\n" +

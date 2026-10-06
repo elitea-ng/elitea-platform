@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1.7
+# Supply an isolated helper context and a converted public trust context.
+ARG CODE_RUNNER_IMAGE
+FROM python:3.12-slim-bookworm@sha256:593bd06efe90efa80dc4eee3948be7c0fde4134606dd40d8dd8dbcade98e669c AS validate-trust
+ARG CODE_RUNNER_IMAGE
+ARG CODE_PLATFORM_REQUIRED_KEY_ID
+COPY code_platform_public_trust.py /usr/local/bin/code_platform_public_trust.py
+COPY --from=code-platform-trust /main-receipt-keys.json /input/main-receipt-keys.json
+RUN mkdir -m 0755 -p /out/elitea-code-trust && python3 /usr/local/bin/code_platform_public_trust.py validate \
+    --input /input/main-receipt-keys.json --output /out/elitea-code-trust/main-receipt-keys.json \
+    --runner-image "${CODE_RUNNER_IMAGE}" --require-key-id "${CODE_PLATFORM_REQUIRED_KEY_ID}"
+
+# The validator refuses mutable references. Inherit the admitted runtime command.
+FROM ${CODE_RUNNER_IMAGE} AS code-platform
+COPY --from=validate-trust --chown=0:0 \
+    /out/elitea-code-trust /opt/elitea-code-trust
+USER 10001:10001

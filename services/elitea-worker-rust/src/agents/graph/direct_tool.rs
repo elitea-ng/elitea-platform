@@ -1047,7 +1047,42 @@ pub(super) fn pipeline_tool_context(
     }
 }
 
+pub(crate) fn scoped_pipeline_tool_context(
+    context: &NodeContext,
+    call_id: &str,
+    tool_name: &str,
+    invocation_id: &str,
+    agent_name: &str,
+    branch: &str,
+) -> Result<Arc<dyn ToolContext>, GraphError> {
+    let parent =
+        context
+            .config
+            .parent_context
+            .clone()
+            .ok_or_else(|| GraphError::NodeExecutionFailed {
+                node: "application_scope".to_owned(),
+                message: "the scoped application has no owning invocation context".to_owned(),
+            })?;
+    let mut ctx = PipelineToolContext::new(parent, call_id.to_owned(), tool_name);
+    ctx.scope = Some(PipelineToolScope {
+        invocation_id: invocation_id.to_owned(),
+        agent_name: agent_name.to_owned(),
+        thread_id: context.config.thread_id.clone(),
+        branch: branch.to_owned(),
+    });
+    Ok(Arc::new(ctx))
+}
+
+struct PipelineToolScope {
+    invocation_id: String,
+    agent_name: String,
+    thread_id: String,
+    branch: String,
+}
+
 struct PipelineToolContext {
+    scope: Option<PipelineToolScope>,
     parent: Arc<dyn InvocationContext>,
     function_call_id: String,
     tool_name: String,
@@ -1065,6 +1100,7 @@ impl PipelineToolContext {
             }),
         );
         Self {
+            scope: None,
             parent,
             function_call_id,
             tool_name: tool_name.to_owned(),
@@ -1094,11 +1130,17 @@ impl PipelineToolContext {
 
 impl ReadonlyContext for PipelineToolContext {
     fn invocation_id(&self) -> &str {
-        self.parent.invocation_id()
+        self.scope.as_ref().map_or_else(
+            || self.parent.invocation_id(),
+            |scope| scope.invocation_id.as_str(),
+        )
     }
 
     fn agent_name(&self) -> &str {
-        self.parent.agent_name()
+        self.scope.as_ref().map_or_else(
+            || self.parent.agent_name(),
+            |scope| scope.agent_name.as_str(),
+        )
     }
 
     fn user_id(&self) -> &str {
@@ -1110,11 +1152,16 @@ impl ReadonlyContext for PipelineToolContext {
     }
 
     fn session_id(&self) -> &str {
-        self.parent.session_id()
+        self.scope.as_ref().map_or_else(
+            || self.parent.session_id(),
+            |scope| scope.thread_id.as_str(),
+        )
     }
 
     fn branch(&self) -> &str {
-        self.parent.branch()
+        self.scope
+            .as_ref()
+            .map_or_else(|| self.parent.branch(), |scope| scope.branch.as_str())
     }
 
     fn user_content(&self) -> &Content {

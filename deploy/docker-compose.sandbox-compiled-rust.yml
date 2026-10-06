@@ -1,0 +1,36 @@
+# Add after standalone-full, standalone-rust-agent, and sandbox.
+# Run check-compiled-sandbox-material.py before this opt-in overlay.
+services:
+  runtime-material:
+    environment:
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_ENABLED: "true"
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PROFILES_SHA256: ${ELITEA_RUST_COMPILED_PROFILES_SHA256:?Set the exact release manifest SHA-256}
+    volumes:
+      - type: bind
+        source: ${ELITEA_RUST_COMPILED_PROFILES_FILE:?Set the canonical release manifest path}
+        target: /src/rust-compiled-profiles.json
+        read_only: true
+        bind:
+          create_host_path: false
+
+  elitea-main:
+    environment:
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_ENABLED: "true"
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PROFILES_FILE: /run/elitea-runtime/rust-compiled-profiles.json
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PROFILES_SHA256: ${ELITEA_RUST_COMPILED_PROFILES_SHA256:?Set the exact release manifest SHA-256}
+      ELITEA_RUST_COMPILED_AGENTSTATE_DSN_FILE: /run/elitea-runtime/agent-checkpoint-connection
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_GLOBAL_ENTRIES: ${ELITEA_RUST_COMPILED_GLOBAL_ENTRIES:?Set the bounded global entry quota}
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_GLOBAL_BYTES: ${ELITEA_RUST_COMPILED_GLOBAL_BYTES:?Set the bounded global byte quota}
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_TENANT_ENTRIES: ${ELITEA_RUST_COMPILED_TENANT_ENTRIES:?Set the bounded tenant entry quota}
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_TENANT_BYTES: ${ELITEA_RUST_COMPILED_TENANT_BYTES:?Set the bounded tenant byte quota}
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_PUBLISHING_TTL_SECONDS: ${ELITEA_RUST_COMPILED_PUBLISHING_TTL_SECONDS:?Set the bounded publishing TTL}
+      ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_READY_TTL_SECONDS: ${ELITEA_RUST_COMPILED_READY_TTL_SECONDS:?Set the bounded ready TTL}
+
+  elitea-sandbox:
+    volumes:
+      - type: bind
+        source: ${ELITEA_RUST_COMPILED_PROFILES_FILE:?Set the canonical release manifest path}
+        target: /run/elitea-sandbox/rust/rust-compiled-profiles.json
+        read_only: true
+        bind:
+          create_host_path: false

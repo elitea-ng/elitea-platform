@@ -272,7 +272,10 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
   }, []);
 
   const handleShowHistory = useCallback(() => setShowHistory(true), []);
-  const handleRestoreConversation = useCallback((id: string | number) => setRestoredConversationID(id), []);
+  const handleRestoreConversation = useCallback((id: string | number) => {
+    setRestoredConversationID(id);
+    setShowHistory(false);
+  }, []);
   const handleCloseHistory = useCallback(() => setShowHistory(false), []);
 
   const styles = useMemo(() => configurationTabStyles(isSmallWindow, isChatPaneCollapsed, isGeneralPaneCollapsed), [isSmallWindow, isChatPaneCollapsed, isGeneralPaneCollapsed]);
@@ -338,6 +341,7 @@ export function ConfigurationTab(props: ConfigurationTabProps): ReactNode {
         <ChatPanel
           ref={chatPanelRef}
           settings={settings}
+          restore={{ conversationId: restoredConversationID == null ? undefined : String(restoredConversationID), onComplete: onRestoreConversationComplete }}
           onCollapsed={handleCollapsedChatPane}
           setActiveConversation={chat.setActiveConversation}
           hasRunsInProgress={handleHasRunsInProgress}

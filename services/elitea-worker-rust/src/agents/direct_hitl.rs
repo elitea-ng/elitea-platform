@@ -186,6 +186,7 @@ pub(crate) struct DirectHitlDecision {
 pub(crate) struct DirectHitlDecisionSet {
     decisions: Vec<DirectHitlDecision>,
     authorization: DelegatedAuthorizationAuthority,
+    static_tools: Vec<super::graph::static_tool_pause::StaticToolDecision>,
 }
 
 #[derive(Default)]
@@ -395,6 +396,7 @@ impl DirectHitlDecisionSet {
     pub(crate) fn single(decision: DirectHitlDecision) -> Self {
         Self {
             decisions: vec![decision],
+            static_tools: Vec::new(),
             authorization: DelegatedAuthorizationAuthority::default(),
         }
     }
@@ -413,6 +415,29 @@ impl DirectHitlDecisionSet {
     }
 
     pub(crate) fn from_payload(payload: &AgentExecutionPayload) -> Result<Self, DirectHitlError> {
+        if let Some(static_tools) =
+            super::graph::static_tool_pause::parse_static_tool_decisions(&payload.meta)
+                .map_err(|_| DirectHitlError::new(DirectHitlErrorCode::InvalidInput))?
+        {
+            if !payload.should_continue
+                || payload.hitl_resume
+                || payload.auto_approve_sensitive_actions
+                || payload.hitl_action.is_some()
+                || payload.hitl_value.is_some()
+                || !payload.hitl_decisions.is_empty()
+                || payload.meta.len() != 1
+                || payload.checkpoint_id.is_some()
+                || !payload.ignored_mcp_servers.is_empty()
+                || !payload.user_declined_mcp_servers.is_empty()
+            {
+                return Err(DirectHitlError::new(DirectHitlErrorCode::InvalidInput));
+            }
+            return Ok(Self {
+                decisions: Vec::new(),
+                authorization: DelegatedAuthorizationAuthority::default(),
+                static_tools,
+            });
+        }
         if !payload.should_continue
             || !payload.hitl_resume
             || payload.auto_approve_sensitive_actions
@@ -453,11 +478,13 @@ impl DirectHitlDecisionSet {
         Ok(Self {
             decisions,
             authorization,
+            static_tools: Vec::new(),
         })
     }
 
     pub(crate) fn into_single(mut self) -> Result<DirectHitlDecision, DirectHitlError> {
-        if self.decisions.len() != 1
+        if !self.static_tools.is_empty()
+            || self.decisions.len() != 1
             || !self.authorization.is_empty()
             || self.decisions.first().is_some_and(|decision| {
                 matches!(
@@ -479,6 +506,12 @@ impl DirectHitlDecisionSet {
         self,
         session: &dyn adk_rust::session::Session,
     ) -> Result<ResolvedDirectHitlStart, DirectHitlError> {
+        if !self.static_tools.is_empty() {
+            if !self.decisions.is_empty() || !self.authorization.is_empty() {
+                return Err(DirectHitlError::new(DirectHitlErrorCode::InvalidInput));
+            }
+            return Ok(ResolvedDirectHitlStart::StaticTools(self.static_tools));
+        }
         let events = session.events().all();
         let mut resolved = Vec::with_capacity(self.decisions.len());
         for decision in self.decisions {
@@ -1103,6 +1136,7 @@ pub(crate) struct ResolvedDirectHitlDecision {
 pub(crate) enum ResolvedDirectHitlStart {
     Direct(Box<ResolvedDirectHitlDecision>),
     Nested(Vec<ResolvedDirectHitlDecision>),
+    StaticTools(Vec<super::graph::static_tool_pause::StaticToolDecision>),
 }
 
 #[derive(Clone)]
@@ -2022,17 +2056,31 @@ impl ResolvedDirectHitlDecision {
         self.application_route.as_ref()
     }
 
+    /// Only a checkpoint-proven pipeline scope may normalize this private branch.
+    /// Original leaf IDs, arguments, batch lineage and persisted events stay unchanged.
+    pub(crate) fn into_pipeline_scope(mut self, root_branch: &str) -> Result<Self, ()> {
+        let route = self.application_route.as_mut().ok_or(())?;
+        let branch = super::pipeline::scoped_applications::local_application_branch(
+            &route.branch,
+            root_branch,
+        )
+        .ok_or(())?;
+        if branch == super::events::APPLICATION_BRANCH_ROOT {
+            return Err(());
+        }
+        route.branch = branch;
+        Ok(self)
+    }
+
     #[cfg(test)]
     pub(crate) fn call_digest(&self) -> &str {
         &self.call_digest
     }
 
-    #[cfg(test)]
     pub(crate) fn call_id(&self) -> &str {
         &self.call_id
     }
 
-    #[cfg(test)]
     pub(crate) const fn arguments(&self) -> &Value {
         &self.arguments
     }
@@ -2506,4 +2554,64 @@ fn hex(bytes: &[u8]) -> String {
         output.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
     }
     output
+}
+
+#[cfg(test)]
+mod static_transport_tests {
+    use super::super::assembly_tests::ordinary_request;
+    use super::super::request::AgentExecutionKind;
+    use super::*;
+    use serde_json::json;
+
+    fn payload() -> AgentExecutionPayload {
+        let mut payload = ordinary_request(AgentExecutionKind::Adhoc).payload;
+        payload.should_continue = true;
+        payload.meta = serde_json::Map::from_iter([(
+            "pipeline_static_tool_resume_v1".to_owned(),
+            json!({"revision":1,"decisions":[{
+            "pause_id":format!("pipeline-static:sha256:{}","a".repeat(64)),"child_thread_id":"child-root","tool_call_id":"call-one","action":"continue","value":"continue"}]}),
+        )]);
+        payload
+    }
+
+    #[test]
+    fn static_transport_is_typed_and_cannot_enter_ordinary_sensitive_replay() {
+        let admitted = DirectHitlDecisionSet::from_payload(&payload()).unwrap();
+        assert!(admitted.decisions.is_empty());
+        assert_eq!(admitted.static_tools.len(), 1);
+        assert!(!admitted.has_delegated_authorization_actions());
+        assert!(admitted.into_single().is_err());
+        for field in [
+            "hitl_resume",
+            "auto_approve",
+            "checkpoint",
+            "ordinary_action",
+            "ordinary_decisions",
+            "unrelated_meta",
+        ] {
+            let mut changed = payload();
+            match field {
+                "hitl_resume" => changed.hitl_resume = true,
+                "auto_approve" => changed.auto_approve_sensitive_actions = true,
+                "checkpoint" => changed.checkpoint_id = Some("client-checkpoint".to_owned()),
+                "ordinary_action" => changed.hitl_action = Some("approve".to_owned()),
+                "ordinary_decisions" => {
+                    changed.hitl_decisions =
+                        vec![json!({"interrupt_id":"sensitive","action":"approve"})];
+                }
+                "unrelated_meta" => {
+                    changed.meta.insert("unrelated".to_owned(), json!(true));
+                }
+                _ => unreachable!(),
+            }
+            assert!(DirectHitlDecisionSet::from_payload(&changed).is_err());
+        }
+        let mut duplicate = payload();
+        let first = duplicate.meta["pipeline_static_tool_resume_v1"]["decisions"][0].clone();
+        duplicate
+            .meta
+            .get_mut("pipeline_static_tool_resume_v1")
+            .unwrap()["decisions"] = json!([first.clone(), first]);
+        assert!(DirectHitlDecisionSet::from_payload(&duplicate).is_err());
+    }
 }

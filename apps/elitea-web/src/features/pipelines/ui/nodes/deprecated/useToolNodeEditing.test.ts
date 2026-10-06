@@ -165,7 +165,7 @@ describe('useToolNodeEditing onSelectToolkit', () => {
 
     expect(setYamlJsonObject).toHaveBeenCalledTimes(1);
     const [nextDoc] = setYamlJsonObject.mock.calls[0] as [YamlPipelineDocument];
-    expect(nextDoc.nodes?.[0]).toMatchObject({ toolkit_name: 'my-github', tool: undefined });
+    expect(nextDoc.nodes?.[0]).toEqual({ id: 'tool-1', toolkit_name: 'my-github' });
   });
 
   it('falls back to getToolkitNameFromSchema when the picked non-application toolkit has no toolkit_name', () => {
@@ -185,7 +185,7 @@ describe('useToolNodeEditing onSelectToolkit', () => {
     result.current.onSelectToolkit({ type: 'github' });
 
     const [nextDoc] = setYamlJsonObject.mock.calls[0] as [YamlPipelineDocument];
-    expect(nextDoc.nodes?.[0]).toMatchObject({ toolkit_name: 'derived-name', tool: undefined });
+    expect(nextDoc.nodes?.[0]).toEqual({ id: 'tool-1', toolkit_name: 'derived-name' });
   });
 
   it('falls back to getToolkitNameFromSchema when the picked non-application toolkit has an EMPTY STRING toolkit_name (regression: `??` would keep the empty string instead of falling through)', () => {
@@ -205,7 +205,7 @@ describe('useToolNodeEditing onSelectToolkit', () => {
     result.current.onSelectToolkit({ type: 'github', toolkit_name: '' });
 
     const [nextDoc] = setYamlJsonObject.mock.calls[0] as [YamlPipelineDocument];
-    expect(nextDoc.nodes?.[0]).toMatchObject({ toolkit_name: 'derived-name', tool: undefined });
+    expect(nextDoc.nodes?.[0]).toEqual({ id: 'tool-1', toolkit_name: 'derived-name' });
   });
 
   it('writes tool (not toolkit_name) for an application-type association', () => {
@@ -225,7 +225,7 @@ describe('useToolNodeEditing onSelectToolkit', () => {
     result.current.onSelectToolkit({ type: 'application', name: 'sub-agent' });
 
     const [nextDoc] = setYamlJsonObject.mock.calls[0] as [YamlPipelineDocument];
-    expect(nextDoc.nodes?.[0]).toMatchObject({ toolkit_name: undefined, tool: 'sub-agent' });
+    expect(nextDoc.nodes?.[0]).toEqual({ id: 'tool-1', tool: 'sub-agent' });
   });
 
   it('clears both fields when passed null', () => {
@@ -245,7 +245,7 @@ describe('useToolNodeEditing onSelectToolkit', () => {
     result.current.onSelectToolkit(null);
 
     const [nextDoc] = setYamlJsonObject.mock.calls[0] as [YamlPipelineDocument];
-    expect(nextDoc.nodes?.[0]).toMatchObject({ toolkit_name: undefined, tool: undefined });
+    expect(nextDoc.nodes?.[0]).toEqual({ id: 'tool-1' });
   });
 
   it('is a no-op when yamlJsonObject is undefined', () => {

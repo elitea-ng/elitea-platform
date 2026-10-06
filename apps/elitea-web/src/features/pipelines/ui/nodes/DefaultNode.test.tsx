@@ -183,11 +183,13 @@ describe('DefaultNode', () => {
     await user.click(getAllByRole('combobox', { hidden: true })[0] as HTMLElement);
     await user.click(getByRole('option', { name: 'My Agent', hidden: true }));
 
-    expect(setYamlJsonObject).toHaveBeenCalledWith(
+    expect(setYamlJsonObject).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        nodes: [expect.objectContaining({ id: 'Node1', toolkit_name: undefined, tool: 'My Agent' })],
+        nodes: [expect.objectContaining({ id: 'Node1', tool: 'My Agent' })],
       }),
     );
+    const [nextDoc] = setYamlJsonObject.mock.lastCall as [YamlPipelineDocument];
+    expect(nextDoc.nodes?.[0]).not.toHaveProperty('toolkit_name');
   });
 
   it('selecting a non-application toolkit writes toolkit_name (not tool)', async () => {
@@ -205,11 +207,13 @@ describe('DefaultNode', () => {
     await user.click(getAllByRole('combobox', { hidden: true })[0] as HTMLElement);
     await user.click(getByRole('option', { name: 'github', hidden: true }));
 
-    expect(setYamlJsonObject).toHaveBeenCalledWith(
+    expect(setYamlJsonObject).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        nodes: [expect.objectContaining({ id: 'Node1', toolkit_name: 'github', tool: undefined })],
+        nodes: [expect.objectContaining({ id: 'Node1', toolkit_name: 'github' })],
       }),
     );
+    const [nextDoc] = setYamlJsonObject.mock.lastCall as [YamlPipelineDocument];
+    expect(nextDoc.nodes?.[0]).not.toHaveProperty('tool');
   });
 
   it('clearing the toolkit selection resets toolkit_name/tool/input_mapping', async () => {
@@ -228,9 +232,9 @@ describe('DefaultNode', () => {
     // Re-selecting the already-selected option triggers `onClear` (`ToolSelect.test.tsx`'s own established pattern).
     await user.click(document.querySelector('[data-value="github"]') ?? combobox);
 
-    expect(setYamlJsonObject).toHaveBeenCalledWith(
+    expect(setYamlJsonObject).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        nodes: [expect.objectContaining({ id: 'Node1', toolkit_name: undefined, tool: undefined, input_mapping: undefined })],
+        nodes: [{ id: 'Node1' }],
       }),
     );
   });

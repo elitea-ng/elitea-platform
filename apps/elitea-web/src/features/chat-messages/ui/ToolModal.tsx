@@ -18,7 +18,7 @@
  *    carries no `toolOutputs`, which is how `ActionView` already treats the
  *    two fields for its own preview line.
  */
-import type { ReactNode } from 'react';
+import { useContext, type ReactNode } from 'react';
 
 import Dialog from '@mui/material/Dialog';
 import DialogContent from '@mui/material/DialogContent';
@@ -31,6 +31,7 @@ import CloseIcon from '@mui/icons-material/Close';
 
 import { t } from '@/shared/i18n';
 import { toolPayloadText } from '@/shared/lib/toolPayloadText';
+import { CodeDebugArtifact, CodeDebugProjectContext } from '@/shared/ui/CodeDebugArtifact';
 
 import { useTraceStepDetail } from '../model/traceStepDetail';
 
@@ -105,6 +106,7 @@ const styles = {
  * `INPUT` | `OUTPUT` across two read-only code editors.
  */
 export function ToolModal({ open, onClose, toolAction }: ToolModalProps): ReactNode {
+  const projectId = useContext(CodeDebugProjectContext);
   const ownInput = toolPayloadText(toolAction.toolInputs);
   const ownOutput = toolPayloadText(toolAction.toolOutputs ?? toolAction.content);
   // Only a RESTORED pin with nothing of its own asks for anything: a live step
@@ -132,6 +134,11 @@ export function ToolModal({ open, onClose, toolAction }: ToolModalProps): ReactN
         </IconButton>
       </DialogTitle>
       <DialogContent sx={styles.content}>
+        {open && <CodeDebugArtifact
+          value={toolAction.toolMeta?.['code_debug_v1']}
+          projectId={projectId}
+          scopeKey={JSON.stringify([toolAction.traceMessageGroupId, toolAction.traceStepId])}
+        />}
         <ToolModalPane
           caption={t('chatMessages.toolModal.inputCaption', 'INPUT')}
           value={inputText}

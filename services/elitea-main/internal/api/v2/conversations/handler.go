@@ -592,6 +592,39 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var testRuns *EditorTestRunsPage
+	if r.URL.Query().Get("editor_test_runs") == "true" {
+		limit, offset := 20, 0
+		var parseErr error
+		if raw := r.URL.Query().Get("runs_limit"); raw != "" {
+			limit, parseErr = strconv.Atoi(raw)
+		}
+		if parseErr != nil || limit < 1 || limit > 50 {
+			apierr.Write(w, apierr.BadRequest("invalid editor Test run limit"))
+			return
+		}
+		if raw := r.URL.Query().Get("runs_offset"); raw != "" {
+			offset, parseErr = strconv.Atoi(raw)
+		}
+		if parseErr != nil || offset < 0 || offset > 10000 {
+			apierr.Write(w, apierr.BadRequest("invalid editor Test run offset"))
+			return
+		}
+		reader, ok := h.repo.(interface {
+			EditorTestRuns(context.Context, string, string, int, int) (EditorTestRunsPage, error)
+		})
+		if !ok {
+			apierr.Write(w, apierr.Internal("editor Test history unavailable"))
+			return
+		}
+		page, err := reader.EditorTestRuns(r.Context(), projectID, conv.ID, limit, offset)
+		if err != nil {
+			apierr.Write(w, err)
+			return
+		}
+		testRuns = &page
+	}
+
 	// Every downstream lookup keys off `conv.ID`, not the path segment: the
 	// path may carry a UUID (see the repo's idPredicate), and participants
 	// and message groups are joined on the numeric conversation id only.
@@ -631,6 +664,10 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		// absent key read as "public" would withdraw the control from every
 		// conversation.
 		"is_private": conv.IsPrivate == nil || *conv.IsPrivate,
+	}
+
+	if testRuns != nil {
+		resp["editor_test_runs"] = *testRuns
 	}
 
 	// UI passes messages_limit to embed message_groups in the conversation response
@@ -732,11 +769,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.events != nil {
-		h.events.Emit(r.Context(), projectID, "conversation.created", map[string]any{
-			"conversation_id": created.ID,
-			"name":            created.Name,
-			"created_by":      created.CreatedBy,
-		})
+		payload := map[string]any{"conversation_id": created.ID, "name": created.Name, "created_by": created.CreatedBy}
+		if created.Source == EditorTestSource {
+			payload["source"] = EditorTestSource
+			payload["is_hidden"] = true
+		}
+		h.events.Emit(r.Context(), projectID, "conversation.created", payload)
 	}
 	writeJSON(w, http.StatusCreated, created)
 }

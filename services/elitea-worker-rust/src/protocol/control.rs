@@ -1,5 +1,7 @@
 #[path = "model_checkpoint_inspection.rs"]
 mod model_checkpoint_inspection;
+#[path = "node_recovery_inspection.rs"]
+mod node_recovery_inspection;
 #[cfg(test)]
 pub(crate) use model_checkpoint_inspection::test_checkpoint_authorizer;
 #[allow(unused_imports)] // The recovery coordinator consumes these sealed values.
@@ -8,6 +10,13 @@ pub(crate) use model_checkpoint_inspection::{
     InspectedModelCheckpointClaim, LiveModelCheckpointInspection,
     ModelCheckpointAuthorizationFailure, ModelCheckpointInspection,
     PendingModelCheckpointInspection,
+};
+#[cfg(test)]
+pub(crate) use node_recovery_inspection::test_node_recovery_control_authority;
+pub(crate) use node_recovery_inspection::{
+    NodeRecoveryAckAuthorization, NodeRecoveryAssemblyAuthorization, NodeRecoveryClaimDecision,
+    NodeRecoveryControlAuthority, NodeRecoveryInspection, NodeRecoveryJournalLease,
+    NodeRecoveryResumption, NodeRecoverySubmissionPermit,
 };
 
 #[path = "toolkit_invocation.rs"]
@@ -1792,6 +1801,7 @@ pub enum DesiredExecutionState {
     Running,
     Cancelled,
     Draining,
+    Suspended,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2218,6 +2228,7 @@ fn build_claim_request(
     }
     Ok(ClaimCommandRequestV1 {
         agent_model_checkpoint_recovery: false,
+        node_recovery: false,
         workload_session_id: workload_session_id.to_owned(),
         producer_id: producer_id.to_owned(),
         signed_command: Some(verified.signed().clone()),
@@ -2326,9 +2337,11 @@ fn parse_claim_decision(
             AgentOutputRecoveryKind::AmbiguousInvocation,
         )
         .map(AgentClaimDecision::RecoverAmbiguousInvocationNoAck),
-        ClaimDispositionV1::Unspecified | ClaimDispositionV1::RecoverAgentModelCheckpoint => Err(
-            ControlSemanticError::InvalidInput("the claim disposition is malformed"),
-        ),
+        ClaimDispositionV1::Unspecified
+        | ClaimDispositionV1::RecoverAgentModelCheckpoint
+        | ClaimDispositionV1::RecoverNodeVisit => Err(ControlSemanticError::InvalidInput(
+            "the claim disposition is malformed",
+        )),
     }
 }
 
@@ -2425,6 +2438,7 @@ fn validate_no_worker_authority_except_retirement(
         || !receipt.claim_id.is_empty()
         || receipt.settlement_recovery.is_some()
         || receipt.claim_started_at_unix_micros != 0
+        || !receipt.node_recovery_receipt_json.is_empty()
     {
         return Err(ControlSemanticError::InvalidInput(
             "the no-authority claim contains worker authority or business material",
@@ -2461,6 +2475,7 @@ fn validate_recovery_claim(
         || (!allow_settlement_recovery && receipt.settlement_recovery.is_some())
         || receipt.claim_handoff_watermark > i64::MAX as u64
         || receipt.claim_started_at_unix_micros != 0
+        || !receipt.node_recovery_receipt_json.is_empty()
     {
         return Err(ControlSemanticError::InvalidInput(
             "the recovery claim contains unexpected business material",
@@ -2738,7 +2753,10 @@ fn parse_input_claim_binding(
             "the claim handoff watermark exceeds the durable counter limit",
         ));
     }
-    if receipt.desired_state != DesiredExecutionStateV1::Running as i32 {
+    let recovery_node = expected == ClaimDispositionV1::RecoverNodeVisit;
+    let desired_allowed = receipt.desired_state == DesiredExecutionStateV1::Running as i32
+        || (recovery_node && receipt.desired_state == DesiredExecutionStateV1::Suspended as i32);
+    if !desired_allowed || (!recovery_node && !receipt.node_recovery_receipt_json.is_empty()) {
         return Err(ControlSemanticError::AuthorizationFailed(
             "the accepted claim desired state is malformed",
         ));
@@ -3255,6 +3273,7 @@ fn desired_state(value: i32) -> Result<DesiredExecutionState, ControlSemanticErr
         Some(DesiredExecutionStateV1::Running) => Ok(DesiredExecutionState::Running),
         Some(DesiredExecutionStateV1::Cancelled) => Ok(DesiredExecutionState::Cancelled),
         Some(DesiredExecutionStateV1::Draining) => Ok(DesiredExecutionState::Draining),
+        Some(DesiredExecutionStateV1::Suspended) => Ok(DesiredExecutionState::Suspended),
         _ => Err(ControlSemanticError::InvalidInput(
             "the execution desired state is malformed",
         )),

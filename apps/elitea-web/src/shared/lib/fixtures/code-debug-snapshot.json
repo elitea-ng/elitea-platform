@@ -1,0 +1,1 @@
+{"schema_version":"elitea.runtime.code-debug-snapshot.v1","language":"python","source":"print(input['input'])\n","selected_input":{"input":"hello"}}

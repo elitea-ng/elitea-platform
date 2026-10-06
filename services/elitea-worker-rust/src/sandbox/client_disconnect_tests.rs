@@ -4,11 +4,69 @@ use crate::protocol::elitea::runtime::v1::sandbox_supervisor_service_server::{
 };
 use std::sync::Arc;
 use tokio::{net::TcpListener, sync::Notify};
+use tonic::{Response, Status};
 
 struct PendingSupervisor(Arc<Notify>);
 
 #[tonic::async_trait]
 impl SandboxSupervisorService for PendingSupervisor {
+    async fn submit_rust_compiled_snapshot(
+        &self,
+        _request: Request<
+            crate::protocol::elitea::runtime::v1::SubmitRustCompiledSnapshotRequestV1,
+        >,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::SubmitRustCompiledSnapshotResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented("compiled snapshots disabled"))
+    }
+    async fn publish_rust_compiled_snapshot(
+        &self,
+        _request: Request<
+            crate::protocol::elitea::runtime::v1::PublishRustCompiledSnapshotRequestV1,
+        >,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::PublishRustCompiledSnapshotResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented("compiled snapshots disabled"))
+    }
+
+    async fn hydrate_sandbox_dependencies(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::HydrateSandboxDependenciesRequestV1>,
+    ) -> Result<
+        tonic::Response<crate::protocol::elitea::runtime::v1::HydrateSandboxDependenciesResponseV1>,
+        tonic::Status,
+    > {
+        Err(tonic::Status::failed_precondition(
+            "dependency hydration is outside this submission fixture",
+        ))
+    }
+    async fn prepare_sandbox_dependencies(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::PrepareSandboxDependenciesRequestV1>,
+    ) -> Result<
+        tonic::Response<crate::protocol::elitea::runtime::v1::PrepareSandboxDependenciesResponseV1>,
+        tonic::Status,
+    > {
+        Err(tonic::Status::failed_precondition(
+            "dependency preparation is outside this submission fixture",
+        ))
+    }
+    async fn publish_sandbox_dependencies(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::PublishSandboxDependenciesRequestV1>,
+    ) -> Result<
+        tonic::Response<crate::protocol::elitea::runtime::v1::PublishSandboxDependenciesResponseV1>,
+        tonic::Status,
+    > {
+        Err(tonic::Status::failed_precondition(
+            "dependency publication is outside this submission fixture",
+        ))
+    }
+
     async fn cancel_sandbox_job(
         &self,
         _: Request<crate::protocol::elitea::runtime::v1::CancelSandboxJobRequestV1>,
@@ -18,6 +76,17 @@ impl SandboxSupervisorService for PendingSupervisor {
     > {
         Err(tonic::Status::unimplemented(
             "not part of the submission fixture",
+        ))
+    }
+    async fn hydrate_sandbox_workspace(
+        &self,
+        _request: Request<crate::protocol::elitea::runtime::v1::HydrateSandboxWorkspaceRequestV1>,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::HydrateSandboxWorkspaceResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "Workspace hydration is outside this fixture.",
         ))
     }
     async fn submit_sandbox_job(

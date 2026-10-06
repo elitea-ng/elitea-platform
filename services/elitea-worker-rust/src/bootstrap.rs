@@ -63,6 +63,7 @@ pub(crate) enum ProductionBootstrapError {
     InvalidConfiguration,
     ResourceExhausted,
     AuthenticationFailed,
+    ConsumerGroupMissing,
     DependencyUnavailable,
 }
 
@@ -73,6 +74,7 @@ impl ProductionBootstrapError {
             Self::InvalidConfiguration => "worker_bootstrap.invalid_configuration",
             Self::ResourceExhausted => "worker_bootstrap.resource_exhausted",
             Self::AuthenticationFailed => "worker_bootstrap.authentication_failed",
+            Self::ConsumerGroupMissing => "worker_bootstrap.consumer_group_missing",
             Self::DependencyUnavailable => "worker_bootstrap.dependency_unavailable",
         }
     }
@@ -89,6 +91,7 @@ impl fmt::Display for ProductionBootstrapError {
             Self::InvalidConfiguration => "the worker deployment configuration is invalid",
             Self::ResourceExhausted => "the worker deployment exceeds an approved limit",
             Self::AuthenticationFailed => "the worker dependency rejected its identity",
+            Self::ConsumerGroupMissing => "the Redis consumer group requires deployment bootstrap",
             Self::DependencyUnavailable => "a worker dependency is unavailable",
         })
     }
@@ -116,9 +119,32 @@ pub(crate) struct ProductionTransportBundle {
 impl ProductionTransportBundle {
     /// Load trust, validate local state ownership and connect every required
     /// private-plane dependency without starting command intake.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep ordered trust loading and transport composition together"
+    )]
     pub(crate) async fn connect(
         deployment: Arc<RuntimeDeployConfig>,
     ) -> Result<Self, ProductionBootstrapError> {
+        let compiled_profile = crate::sandbox::compiled_profile_config::load_worker_profile(
+            &deployment.sandbox_runtimes,
+        )
+        .map_err(|error| {
+            tracing::error!(event = "compiled_snapshot_profile_invalid", reason = %error);
+            ProductionBootstrapError::InvalidConfiguration
+        })?;
+        let platform_compiled_profiles = deployment.sandbox_runtimes.iter().map(|runtime| {
+            let Some(platform) = &runtime.platform_client else { return Ok(None); };
+            platform.compiled_snapshot.as_ref().map(|settings| settings.load(
+                &platform.image_digest,
+                &platform.policy_revision,
+                runtime.preparation.as_ref().and_then(|p| p.native_platform.as_ref()),
+            )).transpose()
+        }).collect::<Result<Vec<_>, crate::sandbox::compiled_profile_config::CompiledProfileError>>()
+            .map_err(|error| {
+                tracing::error!(event = "code_platform_compiled_profile_invalid", reason = %error);
+                ProductionBootstrapError::InvalidConfiguration
+            })?;
         let trust = RuntimeTrustMaterial::load(&deployment).map_err(map_trust_error)?;
         let spool_root = validate_private_directory(&deployment.spool_root, "output spool root")
             .map_err(|error| map_config_error(&error))?;
@@ -177,8 +203,23 @@ impl ProductionTransportBundle {
         let control = AgentControlClient::from_channel(control, profiles.control)
             .map_err(|error| map_agent_control_error(&error))?;
         let control = Arc::new(control);
+        let input = Arc::new(input);
+        let runtime_context = Arc::new(runtime_context);
+        if compiled_profile.is_some() {
+            sqlx::query(
+                "SELECT compiled_descriptor_json FROM elitea_runtime.sandbox_dispatches LIMIT 0",
+            )
+            .execute(&agentstate)
+            .await
+            .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
+        }
         let mut sandbox_profiles = Vec::with_capacity(deployment.sandbox_runtimes.len());
-        for profile in &deployment.sandbox_runtimes {
+        let mut platform_profiles = Vec::new();
+        for (profile, compiled) in deployment
+            .sandbox_runtimes
+            .iter()
+            .zip(platform_compiled_profiles)
+        {
             let channel = connect_private_grpc(
                 &profile.target,
                 profiles.grpc_connect_timeout,
@@ -192,16 +233,75 @@ impl ProductionTransportBundle {
                 Duration::from_secs(u64::from(profile.timeout_seconds) + 60),
             )
             .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
-            sandbox_profiles.push((profile.clone(), client));
+            let preparation_client = if let Some(preparation) = &profile.preparation {
+                let channel = connect_private_grpc(
+                    &preparation.target,
+                    profiles.grpc_connect_timeout,
+                    trust.private_ca(),
+                    trust.client_identity(),
+                )
+                .await?;
+                Some(
+                    crate::sandbox::client::SandboxClient::from_channel(
+                        channel,
+                        preparation.audience.clone(),
+                        Duration::from_secs(u64::from(preparation.timeout_seconds) + 60),
+                    )
+                    .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?,
+                )
+            } else {
+                None
+            };
+            if let Some(platform) = &profile.platform_client {
+                let execution = platform.execution_config(profile);
+                let channel = connect_private_grpc(
+                    &execution.target,
+                    profiles.grpc_connect_timeout,
+                    trust.private_ca(),
+                    trust.client_identity(),
+                )
+                .await?;
+                let platform_client = crate::sandbox::client::SandboxClient::from_channel(
+                    channel,
+                    execution.audience.clone(),
+                    Duration::from_secs(u64::from(execution.timeout_seconds) + 60),
+                )
+                .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
+                let policy = platform
+                    .policy()
+                    .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
+                platform_profiles.push((
+                    execution,
+                    platform_client,
+                    preparation_client.clone(),
+                    policy,
+                    compiled,
+                ));
+            }
+            sandbox_profiles.push((profile.clone(), client, preparation_client));
         }
-        let sandbox = (!sandbox_profiles.is_empty()).then(|| {
-            Arc::new(crate::agents::graph::CodeRuntimeFactory::new(
+        let sandbox = if sandbox_profiles.is_empty() {
+            None
+        } else {
+            let mut factory = crate::agents::graph::CodeRuntimeFactory::new(
                 control.clone(),
                 sandbox_profiles,
                 agentstate.clone(),
-            ))
-        });
-        let platform = Arc::new(PlatformClient::new(Arc::new(runtime_context)));
+            )
+            .with_code_intents(input.clone())
+            .with_debug_artifacts(runtime_context.clone());
+            for (config, client, preparation, policy, compiled) in platform_profiles {
+                factory = factory
+                    .with_platform_client(config, client, preparation, policy, compiled)
+                    .map_err(|_| ProductionBootstrapError::InvalidConfiguration)?;
+            }
+            Some(Arc::new(if let Some(profile) = compiled_profile {
+                factory.with_compiled_snapshots(profile)
+            } else {
+                factory
+            }))
+        };
+        let platform = Arc::new(PlatformClient::new(runtime_context));
         Ok(Self {
             command_authenticator: trust.command_authenticator(),
             spool_master_key: trust.spool_master_key(),
@@ -211,7 +311,7 @@ impl ProductionTransportBundle {
             control,
             sandbox,
             output,
-            input: Arc::new(input),
+            input,
             platform,
             model_facade: Arc::new(model_facade),
             agentstate,
@@ -362,6 +462,9 @@ fn map_trust_error(error: RuntimeTrustError) -> ProductionBootstrapError {
 fn map_redis_error(error: &RedisStreamsError) -> ProductionBootstrapError {
     match error.kind() {
         RedisStreamsErrorKind::Authentication => ProductionBootstrapError::AuthenticationFailed,
+        RedisStreamsErrorKind::ConsumerGroupMissing => {
+            ProductionBootstrapError::ConsumerGroupMissing
+        }
         RedisStreamsErrorKind::DependencyUnavailable | RedisStreamsErrorKind::Timeout => {
             ProductionBootstrapError::DependencyUnavailable
         }
@@ -449,6 +552,7 @@ mod tests {
             ProductionBootstrapError::InvalidConfiguration,
             ProductionBootstrapError::ResourceExhausted,
             ProductionBootstrapError::AuthenticationFailed,
+            ProductionBootstrapError::ConsumerGroupMissing,
             ProductionBootstrapError::DependencyUnavailable,
         ];
         for error in cases {
@@ -469,6 +573,10 @@ mod tests {
         assert_eq!(
             map_redis_error(&RedisStreamsError::authentication("provider text")),
             ProductionBootstrapError::AuthenticationFailed
+        );
+        assert_eq!(
+            map_redis_error(&RedisStreamsError::consumer_group_missing("provider text")),
+            ProductionBootstrapError::ConsumerGroupMissing
         );
         assert_eq!(
             map_redis_error(&RedisStreamsError::unavailable("provider text")),
