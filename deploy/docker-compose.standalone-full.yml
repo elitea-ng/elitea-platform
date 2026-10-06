@@ -247,13 +247,30 @@ services:
   # healthcheck. Not published to the host: only elitea-main dials it. The
   # gateway does NOT use it (GATEWAY_NATS_URL stays unset, see below).
   nats:
-    image: nats:2.12-alpine
+    image: nats:2.12.0-alpine
     command: ["-js", "-sd", "/data", "-m", "8222"]
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz?js-enabled-only=true"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Creates every JetStream asset, with the same script the cluster's
+  # nats-bootstrap hook Job runs (deploy/helm/nats-bootstrap/files/bootstrap.sh).
+  # elitea-main only BINDS to its presence bucket and refuses to start when it
+  # is missing (#1076), so it waits for this to complete. Plaintext and no
+  # client identity, like the server above: compose's posture. The secured
+  # posture is the opt-in overlay docker-compose.nats-secure.yml.
+  nats-bootstrap:
+    image: docker.io/natsio/nats-box:0.19.7
+    command: ["sh", "/bootstrap/bootstrap.sh"]
+    environment:
+      NATS_URL: "nats://nats:4222"
+    volumes:
+      - ./helm/nats-bootstrap/files/bootstrap.sh:/bootstrap/bootstrap.sh:ro
+    depends_on:
+      nats:
+        condition: service_healthy
 
   # ── Runtime plane: material, TLS Redis, stream bootstrap (issue #281) ───────
 
@@ -1242,6 +1259,8 @@ services:
         condition: service_healthy
       nats:
         condition: service_healthy
+      nats-bootstrap:
+        condition: service_completed_successfully
       elitea-migrate:
         condition: service_completed_successfully
       runtime-redis:

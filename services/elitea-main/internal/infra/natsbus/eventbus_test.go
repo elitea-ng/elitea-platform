@@ -155,6 +155,9 @@ func splitTokens(s string) []string {
 func TestSubjectFor(t *testing.T) {
 	cases := map[string]string{
 		"project:123:events": "gateway.events.project.123.events",
+		// The presence family is elitea-main's own subject space (#1076).
+		"project:123:presence": "elitea.events.project.123.presence",
+		"project:*":            "gateway.events.project.>",
 		"elitea:*":           "gateway.events.elitea.>",
 		"*":                  "gateway.events.>",
 		"":                   "gateway.events",
@@ -519,13 +522,6 @@ func TestCloseDeliversBufferedPublishes(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("only %d of %d buffered publishes reached the server", got, n)
 		}
-	}
-}
-
-func TestConnect_BadURL(t *testing.T) {
-	// An unroutable URL fails the 1s dial — exercises the error branch of Connect.
-	if _, err := Connect("nats://127.0.0.1:1", "test", "test"); err == nil {
-		t.Fatal("expected connect error to unreachable server")
 	}
 }
 

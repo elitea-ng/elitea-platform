@@ -150,19 +150,13 @@ func New(ctx context.Context, cfg config.Config, logger *slog.Logger, level *slo
 	// the authoritative owner of the KV/stream assets.
 	var natsClient NATSClient
 	if cfg.NATSURL != "" {
-		nc, nerr := o.natsConnect(ctx, natsinfra.Config{
-			URL:                cfg.NATSURL,
-			Name:               cfg.ServiceName,
-			CBFailureThreshold: cfg.CBFailureThreshold,
-			CBOpenDuration:     cfg.CBOpenDuration,
-			Replicas:           cfg.NATSReplicas,
-		})
+		nc, nerr := o.natsConnect(ctx, natsClientConfig(cfg))
 		if nerr != nil {
 			logger.Warn("NATS budget path unavailable at startup; continuing without enforcement wiring",
-				"err", nerr, "url", redactURL(cfg.NATSURL))
+				"err", nerr, "url", redactURL(cfg.NATSURL), "nats_auth", natsAuthMode(cfg))
 		} else {
 			natsClient = nc
-			logger.Info("NATS budget path connected", "url", redactURL(cfg.NATSURL), "replicas", cfg.NATSReplicas)
+			logNATSPosture(logger, "NATS budget path connected", cfg)
 		}
 	} else {
 		logger.Info("NATS budget path disabled (GATEWAY_NATS_URL unset)")
@@ -227,18 +221,12 @@ func (s *Server) RedialNATS(ctx context.Context) (NATSClient, error) {
 	if s.nats != nil {
 		return s.nats, nil
 	}
-	nc, err := s.natsConnect(ctx, natsinfra.Config{
-		URL:                s.cfg.NATSURL,
-		Name:               s.cfg.ServiceName,
-		CBFailureThreshold: s.cfg.CBFailureThreshold,
-		CBOpenDuration:     s.cfg.CBOpenDuration,
-		Replicas:           s.cfg.NATSReplicas,
-	})
+	nc, err := s.natsConnect(ctx, natsClientConfig(s.cfg))
 	if err != nil {
 		return nil, fmt.Errorf("server: re-dial NATS: %w", err)
 	}
 	s.nats = nc
-	s.logger.Info("NATS budget path reconnected", "url", redactURL(s.cfg.NATSURL), "replicas", s.cfg.NATSReplicas)
+	logNATSPosture(s.logger, "NATS budget path reconnected", s.cfg)
 	return nc, nil
 }
 
@@ -377,4 +365,40 @@ func (s *Server) Close() {
 	if s.nats != nil {
 		s.nats.Close()
 	}
+}
+
+// natsClientConfig is the one place the gateway's NATS settings become the
+// client's: the startup dial and the lazy re-dial must not disagree.
+func natsClientConfig(cfg config.Config) natsinfra.Config {
+	return natsinfra.Config{
+		URL:                cfg.NATSURL,
+		Name:               cfg.ServiceName,
+		CBFailureThreshold: cfg.CBFailureThreshold,
+		CBOpenDuration:     cfg.CBOpenDuration,
+		TLSCAFile:          cfg.NATSTLSCAFile,
+		TLSCertFile:        cfg.NATSTLSCertFile,
+		TLSKeyFile:         cfg.NATSTLSKeyFile,
+	}
+}
+
+// natsAuthMode is "mtls" when the gateway presents a NATS client certificate
+// and "none" otherwise.
+func natsAuthMode(cfg config.Config) string {
+	if cfg.NATSTLSCertFile != "" {
+		return "mtls"
+	}
+	return "none"
+}
+
+// logNATSPosture states the connection's security posture once per dial. The
+// plaintext, identity-less posture is compose's; in a cluster the NATS server
+// refuses it, so seeing it logged at WARN anywhere else is the signal (#1076).
+func logNATSPosture(logger *slog.Logger, msg string, cfg config.Config) {
+	mode := natsAuthMode(cfg)
+	attrs := []any{"url", redactURL(cfg.NATSURL), "nats_auth", mode, "tls", mode == "mtls"}
+	if mode == "none" {
+		logger.Warn(msg+" without TLS or a client identity (compose posture only)", attrs...)
+		return
+	}
+	logger.Info(msg, attrs...)
 }

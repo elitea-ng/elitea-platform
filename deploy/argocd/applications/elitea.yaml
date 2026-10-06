@@ -97,16 +97,14 @@ spec:
           value: "database-url"
 
         # NATS. applications/nats.yaml installs it as release `elitea-nats`
-        # (Service elitea-nats) in the `elitea-gateway` namespace, not in
-        # this Application's `elitea` namespace, and the chart resolves an
-        # empty nats.namespace to its OWN namespace. Name it, so the gateway,
-        # the scheduler and elitea-main's live-update plane
-        # (ELITEA_EVENTS_NATS_URL, derived from the same block) all resolve
-        # nats://elitea-nats.elitea-gateway.svc.cluster.local:4222.
+        # (Service elitea-nats) in this Application's own `elitea` namespace,
+        # so the empty nats.namespace default resolves it, and the gateway,
+        # the scheduler and elitea-main's live-update plane all dial
+        # tls://elitea-nats.elitea.svc.cluster.local:4222 with the client
+        # certificates the chart issues from the NATS chart's elitea-nats-ca
+        # Issuer (#1076). Nothing to set here unless NATS lives elsewhere.
         - name: nats.service
           value: "elitea-nats"
-        - name: nats.namespace
-          value: "elitea-gateway"
 
         # ── YOU MUST FILL THESE IN ────────────────────────────────────────
         #

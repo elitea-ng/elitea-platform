@@ -291,7 +291,8 @@ esac
 # unregistered (#152); and the retired plain Redis must not come back.
 events_nats="$(data ELITEA_EVENTS_NATS_URL "$WORK/default.yaml")"
 case "$events_nats" in
-  nats://elitea-nats.*.svc.cluster.local:4222)
+  tls://elitea-nats.*.svc.cluster.local:4222)
+    # tls:// since #1076: the NATS chart requires TLS and a client certificate.
     pass "ELITEA_EVENTS_NATS_URL renders \"$events_nats\" from the top-level nats block"
     ;;
   *)
@@ -306,18 +307,18 @@ main_events_nats() {
   yq eval-all 'select(.kind == "ConfigMap") | select(.metadata.name == "elitea-main-config") | .data.ELITEA_EVENTS_NATS_URL // ""' "$1"
 }
 helm template ${GATEWAY_RENDER_POSTURE} test-release "$CHART" \
-  --set-string llmGateway.env.GATEWAY_NATS_URL=nats://nats.elitea-gateway.svc.cluster.local:4222 \
+  --set-string llmGateway.env.GATEWAY_NATS_URL=tls://nats.elitea-gateway.svc.cluster.local:4222 \
   >"$WORK/gateway-nats.yaml"
-if [ "$(main_events_nats "$WORK/gateway-nats.yaml")" = "nats://nats.elitea-gateway.svc.cluster.local:4222" ]; then
+if [ "$(main_events_nats "$WORK/gateway-nats.yaml")" = "tls://nats.elitea-gateway.svc.cluster.local:4222" ]; then
   pass "ELITEA_EVENTS_NATS_URL follows an explicit llmGateway.env.GATEWAY_NATS_URL"
 else
-  fail "ELITEA_EVENTS_NATS_URL renders \"$(main_events_nats "$WORK/gateway-nats.yaml")\" while the gateway names nats://nats.elitea-gateway.svc.cluster.local:4222"
+  fail "ELITEA_EVENTS_NATS_URL renders \"$(main_events_nats "$WORK/gateway-nats.yaml")\" while the gateway names tls://nats.elitea-gateway.svc.cluster.local:4222"
 fi
 helm template ${GATEWAY_RENDER_POSTURE} test-release "$CHART" \
-  --set-string llmGateway.env.GATEWAY_NATS_URL=nats://nats.elitea-gateway.svc.cluster.local:4222 \
-  --set-string main.env.ELITEA_EVENTS_NATS_URL=nats://main-own.example.invalid:4222 \
+  --set-string llmGateway.env.GATEWAY_NATS_URL=tls://nats.elitea-gateway.svc.cluster.local:4222 \
+  --set-string main.env.ELITEA_EVENTS_NATS_URL=tls://main-own.example.invalid:4222 \
   >"$WORK/main-explicit-nats.yaml"
-if [ "$(main_events_nats "$WORK/main-explicit-nats.yaml")" = "nats://main-own.example.invalid:4222" ]; then
+if [ "$(main_events_nats "$WORK/main-explicit-nats.yaml")" = "tls://main-own.example.invalid:4222" ]; then
   pass "an explicit main.env.ELITEA_EVENTS_NATS_URL still wins"
 else
   fail "an explicit main.env.ELITEA_EVENTS_NATS_URL was overridden"

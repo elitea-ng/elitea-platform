@@ -9,6 +9,8 @@
 FROM golang:1.25-alpine AS builder
 WORKDIR /src
 COPY libs/go/observability ./libs/go/observability
+# The NATS client identity helper (#1076), the module's second local replace.
+COPY libs/go/natsconn ./libs/go/natsconn
 COPY services/elitea-scheduler/go.mod services/elitea-scheduler/go.sum ./services/elitea-scheduler/
 WORKDIR /src/services/elitea-scheduler
 # A TRANSIENT proxy.golang.org failure must not fail the build.

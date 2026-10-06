@@ -1,0 +1,39 @@
+{{- if dig "config" "cluster" "enabled" false (.Values.nats | default dict) }}
+{{- $headless := include "elitea-nats.headlessServiceName" . -}}
+{{- $ns := include "elitea-nats.namespace" . -}}
+# The route certificate (#1076, HA): what each NATS server presents to its
+# cluster peers, and the only kind of certificate a peer accepts on 6222. It
+# comes from the ROUTE CA (templates/ca.yaml), never the client CA, so a
+# service's client certificate is refused as a route. cert-manager writes the
+# route CA into the Secret's ca.crt, and values-ha.yaml points the cluster
+# TLS ca_file at it.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "elitea-nats.fullname" . }}-route
+  namespace: {{ $ns }}
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+spec:
+  secretName: {{ dig "config" "cluster" "tls" "secretName" "" .Values.nats | required "nats.config.cluster.tls.secretName is required (values-ha.yaml sets it)" }}
+  duration: {{ .Values.security.routeCertificate.duration }}
+  renewBefore: {{ .Values.security.routeCertificate.renewBefore }}
+  isCA: false
+  usages:
+    # A route is a TLS server to the peer that dials it and a TLS client to
+    # the peer it dials.
+    - server auth
+    - client auth
+  commonName: {{ include "elitea-nats.fullname" . }}-route
+  dnsNames:
+    # Routes dial each pod by its headless name.
+    - "*.{{ $headless }}"
+    - "*.{{ $headless }}.{{ $ns }}"
+    - "*.{{ $headless }}.{{ $ns }}.svc"
+    - "*.{{ $headless }}.{{ $ns }}.svc.cluster.local"
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    {{- include "elitea-nats.routeIssuerRef" . | nindent 4 }}
+{{- end }}

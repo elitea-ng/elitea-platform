@@ -21,7 +21,15 @@ on:
       # still trigger it — the whole point is catching drift introduced from
       # either side.
       - "deploy/helm/elitea-main/**"
+      - "deploy/helm/elitea/**"
       - "services/elitea-llm-gateway/scripts/env-drift-check.sh"
+      # The secured NATS permission tests (#1076) run elitea-main's and the
+      # scheduler's real NATS paths against the nats.conf the NATS chart
+      # renders, after the real bootstrap.sh. A change to the permission
+      # table, the bootstrap or the render script must run them.
+      - "deploy/helm/nats/**"
+      - "deploy/helm/nats-bootstrap/**"
+      - "scripts/nats/**"
       # The vet and test steps below run scripts/go/workspace-run.sh. A change
       # to that script, or to the Taskfile that calls it, must run this
       # workflow. A gate that does not trigger on the file it guards is the
@@ -48,7 +56,15 @@ on:
       - "go.work.sum"
       - ".github/workflows/ci-go.yml"
       - "deploy/helm/elitea-main/**"
+      - "deploy/helm/elitea/**"
       - "services/elitea-llm-gateway/scripts/env-drift-check.sh"
+      # The secured NATS permission tests (#1076) run elitea-main's and the
+      # scheduler's real NATS paths against the nats.conf the NATS chart
+      # renders, after the real bootstrap.sh. A change to the permission
+      # table, the bootstrap or the render script must run them.
+      - "deploy/helm/nats/**"
+      - "deploy/helm/nats-bootstrap/**"
+      - "scripts/nats/**"
       # The vet and test steps below run scripts/go/workspace-run.sh. A change
       # to that script, or to the Taskfile that calls it, must run this
       # workflow. A gate that does not trigger on the file it guards is the
@@ -287,7 +303,7 @@ jobs:
       - name: Start NATS (JetStream)
         run: |
           set -euo pipefail
-          docker run -d --name ci-nats -p 4222:4222 -p 8222:8222 nats:2.12-alpine -js -m 8222
+          docker run -d --name ci-nats -p 4222:4222 -p 8222:8222 nats:2.12.0-alpine -js -m 8222
           for _ in $(seq 1 30); do
             if curl -fsS "http://127.0.0.1:8222/healthz?js-enabled-only=true" >/dev/null; then
               # The same server binary, out of the container, for the
@@ -304,6 +320,24 @@ jobs:
           done
           docker logs ci-nats
           exit 1
+
+      # The secured NATS permission tests (#1076): libs/go/natsconn/natstest
+      # starts nats-server on the nats.conf `helm template deploy/helm/nats`
+      # renders and runs elitea-main's and the scheduler's real NATS paths as
+      # their certificate identities, after the real bootstrap.sh. The script
+      # renders that config (helm + the upstream subchart), fetches the pinned
+      # nats CLI the bootstrap runs, and sets ELITEA_REQUIRE_NATS_SECURE_TEST,
+      # so a missing piece fails those tests instead of skipping them. The
+      # plaintext ci-nats container above still backs the plaintext suites.
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v3.16.0
+
+      - name: Provision the secured NATS permission tests
+        env:
+          ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
+        run: bash scripts/nats/ci-secure-test-env.sh
 
       - name: Run tests (workspace)
         env:

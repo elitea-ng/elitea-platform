@@ -90,6 +90,15 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.scheduler.resources | nindent 12 }}
+          {{- if .Values.nats.tls.enabled }}
+          volumeMounts:
+            # The scheduler's NATS client certificate (templates/natsClient.yaml).
+            {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
+          {{- end }}
+      {{- if .Values.nats.tls.enabled }}
+      volumes:
+        {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-scheduler.fullname" .))) | nindent 8 }}
+      {{- end }}
       {{- with .Values.scheduler.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

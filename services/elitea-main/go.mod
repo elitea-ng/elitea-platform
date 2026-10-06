@@ -11,6 +11,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.0
 	github.com/EliteaAI/elitea-platform/libs/go/egresslib v0.0.0-00010101000000-000000000000
+	github.com/EliteaAI/elitea-platform/libs/go/natsconn v0.0.0-00010101000000-000000000000
 	github.com/EliteaAI/elitea-platform/libs/go/observability v0.0.0
 	github.com/EliteaAI/elitea-platform/libs/proto/gen/go v0.0.0
 	github.com/alicebob/miniredis/v2 v2.38.0
@@ -136,3 +137,5 @@ require (
 )
 
 replace github.com/EliteaAI/elitea-platform/libs/go/egresslib => ../../libs/go/egresslib
+
+replace github.com/EliteaAI/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn

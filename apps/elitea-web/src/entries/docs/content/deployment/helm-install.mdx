@@ -67,25 +67,29 @@ A minimal single-replica shape (image tag `shadow-v0.1`, `DATABASE_URL` inlined 
 </Tab>
 </Tabs>
 
-## Install order: nats, nats-bootstrap, elitea
+## Install order: nats, nats-bootstrap, elitea — one namespace
 
-Whether you install by hand or through ArgoCD (sync waves `-2`, `-1`, `0` — see [GitOps with ArgoCD](/deployment/argocd)), the order matters: the LLM gateway's budget counters and the scheduler both dial NATS, and its JetStream assets (KV buckets, the budget-deltas stream) must exist first.
+Whether you install by hand or through ArgoCD (sync waves `-2`, `-1`, `0` — see [GitOps with ArgoCD](/deployment/argocd)), the order matters: elitea-main, the LLM gateway's budget counters and the scheduler all dial NATS, and its JetStream assets (KV buckets, streams, the scheduler's consumer) must exist first.
+
+All three go into **one namespace**. NATS requires TLS and a client certificate from every client (mTLS, no anonymous or password access), and those certificates come from the NATS chart's own CA, a *namespaced* cert-manager `Issuer` that signs only in its own namespace. The platform chart refuses a render that points `nats.namespace` elsewhere while it uses that Issuer. **cert-manager must be installed first.**
 
 <Steps>
 <Step title="NATS">
+TLS-only server with its own CA, one NATS account per plane, and an ingress NetworkPolicy that admits only the platform's NATS clients:
 ```bash
+helm dependency build deploy/helm/nats
 helm install elitea-nats deploy/helm/nats \
   -f deploy/helm/nats/values-scale1.yaml \
-  -n elitea-gateway --create-namespace
+  -n elitea --create-namespace
 ```
 </Step>
 <Step title="NATS bootstrap">
-Idempotent hook Job that creates the KV buckets and stream:
+Idempotent hook Job that creates every stream, KV bucket and consumer, connecting to each account with a short-lived certificate of its own:
 ```bash
 helm install elitea-nats-bootstrap deploy/helm/nats-bootstrap \
-  --set natsUrl=nats://elitea-nats:4222 \
+  --set natsUrl=tls://elitea-nats:4222 \
   --set replicas=1 \
-  -n elitea-gateway
+  -n elitea
 ```
 </Step>
 <Step title="elitea">
@@ -96,8 +100,9 @@ helm install elitea deploy/helm/elitea \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.example.com/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted \
   --set-string platform.aiProjectId=1 \
-  -n elitea --create-namespace
+  -n elitea
 ```
+The chart issues each NATS client (elitea-main, the LLM gateway, the scheduler) its own certificate and renders `tls://elitea-nats.elitea.svc.cluster.local:4222` for it — no NATS credential goes in any value.
 </Step>
 </Steps>
 
@@ -171,13 +176,16 @@ See [Troubleshooting](/support/troubleshooting#operator-checks) for what each en
 
 <AccordionGroup>
 <Accordion title="No PostgreSQL and no NATS">
-No chart provisions either (the runtime's TLS Redis is the one exception: `runtimeRedis`). elitea-main's live updates — the project SSE stream and canvas presence — need the shared NATS with JetStream (`ELITEA_EVENTS_NATS_URL`, derived from the top-level `nats` block). The migration hook fails against a cluster where they do not already exist or where the Secret/host settings have not been pointed at them.
+The platform chart provisions neither (the runtime's TLS Redis is the one exception: `runtimeRedis`). NATS comes from its own chart (`deploy/helm/nats`, above); elitea-main's live updates — the project SSE stream and canvas presence — need it with JetStream (`ELITEA_EVENTS_NATS_URL`, derived from the top-level `nats` block). The migration hook fails against a cluster where PostgreSQL does not already exist or where the Secret/host settings have not been pointed at it.
 </Accordion>
 <Accordion title="No ingress by default">
 No Ingress renders until `main.ingress.enabled: true`. A cluster serving the web app needs per-route rules to avoid the SPA backend swallowing them.
 </Accordion>
-<Accordion title="Cross-namespace DNS">
-NATS and the gateway live in `elitea-gateway`; the rest live in `elitea`. `LLM_GATEWAY_URL` and `GATEWAY_NATS_URL` must be fully qualified (`....elitea-gateway.svc.cluster.local`) — short names do not resolve across namespaces.
+<Accordion title="NATS in another namespace">
+The reference install puts NATS in the platform's namespace. To run it elsewhere, back a cert-manager `ClusterIssuer` with a CA used for NATS only, point the NATS chart (`security.ca.create=false`, `security.issuerRef`), the bootstrap (`tls.certificate.issuerRef`) and the platform (`nats.tls.issuerRef`, `nats.namespace`) at it, and add the platform's namespace to the NATS chart's `networkPolicy.clients` — and, where cert-manager's approver-policy is installed, to `security.approverPolicy.clientNamespaces`, or the platform's certificates are never approved. The platform chart renders fully qualified `tls://` URLs from `nats.namespace`.
+</Accordion>
+<Accordion title="Who can mint a NATS identity">
+Anyone who may create a cert-manager `Certificate` in the NATS namespace, or read its Secrets (the CA key is one), can obtain any NATS client identity. Restrict both with RBAC; the NATS chart's optional approver-policy limits what its issuers sign. See `deploy/helm/nats/README.md`.
 </Accordion>
 <Accordion title="Cross-namespace Secrets">
 Gateway cert issues into `elitea-gateway`; main runs in `elitea`. Either colocate or replicate via reflector or external-secrets.

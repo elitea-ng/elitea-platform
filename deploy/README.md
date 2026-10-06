@@ -169,8 +169,8 @@ address. Those copies had already drifted apart.
 
 | Chart (`deploy/helm/`) | ArgoCD Application | Wave | Namespace | Status |
 |---|---|---|---|---|
-| `nats` | `applications/nats.yaml` | -2 | `elitea-gateway` | **Production reference.** scale-1 profile by default; `values-ha.yaml` for HA. |
-| `nats-bootstrap` | `applications/nats-bootstrap.yaml` | -1 | `elitea-gateway` | **Production reference.** Idempotent Helm hook Job; HA needs `replicas=3`. |
+| `nats` | `applications/nats.yaml` | -2 | `elitea` | **Production reference.** scale-1 profile by default; `values-ha.yaml` for HA. mTLS-only with its own CA Issuer (#1076), so it shares the platform's namespace. |
+| `nats-bootstrap` | `applications/nats-bootstrap.yaml` | -1 | `elitea` | **Production reference.** Idempotent Helm hook Job that owns every stream and KV bucket; HA needs `replicas=3`. |
 | `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform.** One release: elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the runtime Redis, the OTel collector, the `dbInit` Job, and the DeepWiki provider service with its own migration Job. |
 
 Components of the `elitea` chart are switched by `<component>.enabled`, and
@@ -452,7 +452,7 @@ file whose capability set matches `docker-compose.standalone-full.yml`.
 | `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` | off | off | `ELITEA_CONFIGURATIONS_ENABLED` **and** `runtime.enabled` — read below |
 | `ELITEA_INDEX_TYPES_ENABLED` | off | **on** | production authentication |
 | `ELITEA_APPLICATION_SKILLS_ENABLED` | off | **on** | production authentication |
-| `ELITEA_EVENTS_NATS_URL` | **derived** from `nats` | derived | the shared NATS, with JetStream (the plain Redis/Valkey it replaced is gone) |
+| `ELITEA_EVENTS_NATS_URL` | **derived** from `nats` (`tls://`) | derived | the shared NATS, with JetStream and the bootstrap's assets; main presents its own client certificate (`nats.tls`, #1076) |
 | `ADMIN_UI_STATIC_DIR` | **set** | set | the image ships the bundle at it |
 | `ELITEA_RUNTIME_ENABLED` and its block | off | **on** | production authentication **and** runtime material — read below |
 
@@ -1126,7 +1126,10 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   migration hook fails against a cluster where PostgreSQL does not already
   exist or `postgresql.existingSecret` has not been pointed at it, and
   elitea-main stops at startup when the NATS named by `nats` (its
-  `ELITEA_EVENTS_NATS_URL`) is unreachable or has no JetStream.
+  `ELITEA_EVENTS_NATS_URL`) is unreachable, has no JetStream, or lacks the
+  presence bucket the `nats-bootstrap` Job creates. The NATS chart in this
+  directory is the reference server; it requires cert-manager (its own CA
+  Issuer, #1076), and every NATS client presents a certificate from it.
   The table in [Values an operator supplies](#values-an-operator-supplies-and-where-each-one-goes-475)
   names both.
   The database itself may be **empty**. `elitea-migrate` embeds the pylon-era
@@ -1147,26 +1150,22 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   it must stay in step with `deploy/traefik/dynamic.yml`. Both are walked by
   `services/elitea-main/tests/deployedge/`, so a new root-mounted family fails
   CI until every edge routes it (#568).
-- **Cross-namespace DNS.** NATS and the gateway live in `elitea-gateway`; the
-  rest live in `elitea`. Short names do not resolve across namespaces, so
-  `LLM_GATEWAY_URL` and `GATEWAY_NATS_URL` must be FQDNs
-  (`…​.elitea-gateway.svc.cluster.local`).
-- **Cross-namespace *Secrets*, which DNS advice does not solve.** The gateway
-  chart's cert-manager `Certificate` for the edge issues Secret
-  `elitea-main-gateway-client-tls` **into the gateway's own namespace**
-  (`elitea-gateway`), and its comment says elitea-main mounts it. Secrets are
-  namespace-scoped, so elitea-main running in `elitea` **cannot read it**. To
-  wire the elitea-main → gateway mTLS hop you must do one of:
-  1. install elitea-main into `elitea-gateway` (override the Application's
-     `destination.namespace`), or
-  2. replicate the Secret into `elitea` (reflector/kubed, external-secrets, or
-     a second `Certificate` in `elitea` from the same `elitea-internal-ca`
-     ClusterIssuer — the issuer is cluster-scoped, so this works), or
-  3. there is no third option: plain HTTP is **not** one.
-     `internal/llmproxy/proxy.go` builds an mTLS transport whenever
-     `Config.Transport` is nil, and nothing binds that field to an environment
-     variable, so an `http://` gateway URL still loads a client keypair and
-     still fails at boot without one.
+- **One namespace for NATS and the platform.** The Argo CD sample installs
+  NATS, its bootstrap and the platform into `elitea`. That is not a
+  convenience: the NATS chart's CA is a NAMESPACED cert-manager Issuer
+  (`elitea-nats-ca`), and the platform's NATS client Certificates are issued
+  by it, so they must live in its namespace (#1076); the platform chart
+  refuses `nats.namespace` other than its own while `nats.tls.issuerRef` is a
+  namespaced `Issuer`. It also means whoever may create Certificates or read Secrets in that namespace can
+  mint a NATS identity — restrict both (`deploy/helm/nats/README.md`, "Who
+  can mint a NATS identity"). To run NATS in another namespace, back a
+  `ClusterIssuer` with a CA used for NATS only, point
+  `nats.tls.issuerRef` (platform), `tls.certificate.issuerRef` (bootstrap) and
+  `security.issuerRef` + `security.ca.create=false` (NATS) at it, set
+  `nats.namespace`, and add the platform's namespace to the NATS chart's
+  `networkPolicy.clients` and, with approver-policy installed, to
+  `security.approverPolicy.clientNamespaces` (otherwise no policy approves
+  the platform's client certificates).
   The mount itself is no longer missing. `LLM_GATEWAY_CLIENT_CERT` and its two
   siblings are *file paths* (`llmproxy.Config.ClientCertFile`), and issue #463
   moved them out of the `secrets:` block — where a `secretKeyRef` had been

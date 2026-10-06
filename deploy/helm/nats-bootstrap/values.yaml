@@ -1,35 +1,110 @@
-# nats-bootstrap — creates the LLM-gateway JetStream assets as a Helm hook Job.
+# nats-bootstrap — creates and reconciles EVERY elitea JetStream asset as a
+# Helm hook Job (#1076). The services bind only; this Job's per-account
+# identities are the only ones the NATS permission table lets create or update
+# a stream. Nobody deletes or purges one.
 
-# NATS Server 2.12.0+ image (bundles the `nats` CLI). MUST be 2.12.0+ for the
-# Nats-Incr the counters depend on, but the CLI here only creates assets.
+# natscli 0.4.0 (nats-box 0.19.7): --allow-counter needs natscli 0.3.0+, and
+# the counter streams cannot be created without it.
 image:
   repository: natsio/nats-box
-  tag: "0.18.0"
+  tag: "0.19.7"
   pullPolicy: IfNotPresent
 
-# NATS connection URL reachable from the Job pod (the upstream chart's client
-# ClusterIP service). Override per environment.
-natsUrl: "nats://nats:4222"
+# The NATS client URL reachable from the Job pod: tls://, and no credential —
+# the client certificates below are the identities. deploy/helm/nats installs
+# the server as release `elitea-nats`, whose Service is elitea-nats. Override
+# per environment.
+natsUrl: "tls://elitea-nats:4222"
 
-# KV/stream replicas — MUST match the NATS profile:
+# The NATS server has one account per plane (deploy/helm/nats/values.yaml),
+# and each account has its own bootstrap identity, URI SAN
+# spiffe://<trustDomain>/nats/elitea-nats-bootstrap-<account>, that may
+# administer that account's assets and nothing else. The Job connects once
+# per account with that account's certificate, so it needs all three.
+accounts:
+  - main
+  - gateway
+  - runtime
+
+tls:
+  # Each account's certificate Secret (tls.crt, tls.key, ca.crt) is mounted at
+  # <mountPath>/<account>. With certificate.create the Secret is
+  # <fullname>-<account>-nats-client-tls, written by templates/certificate.yaml;
+  # otherwise name an existing Secret per account in secretNames.
+  mountPath: /etc/nats-client
+  secretNames: {}
+  #   main: my-bootstrap-main-tls
+  #   gateway: my-bootstrap-gateway-tls
+  #   runtime: my-bootstrap-runtime-tls
+  certificate:
+    create: true
+    # The NATS CA issuer deploy/helm/nats renders (security.ca.name).
+    # A namespaced Issuer signs only in its own namespace, so this release
+    # must share the NATS release's namespace — or name a ClusterIssuer.
+    issuerRef:
+      name: elitea-nats-ca
+      kind: Issuer
+    trustDomain: elitea.internal
+    # Short-lived on purpose: the bootstrap identities may create streams and
+    # consumers, and they are needed only while the hook Job runs. The
+    # Certificates are hooks deleted with the Job (templates/certificate.yaml),
+    # so nothing renews them; an hour covers the Job's own deadline.
+    duration: 1h
+    renewBefore: 15m
+
+# Stream/KV replicas — MUST match the NATS profile:
 #   scale-1 -> 1 (default; HA waived)
 #   HA      -> 3 (or 5; quorum-replicated)
 # An asset created at replicas=1 on a 3-node cluster still has no quorum.
 replicas: 1
 
-# GATEWAY_ALERT_COOLDOWN bucket-level TTL (design §8.3; replaces the retired
-# Python CostAlerter's in-process 4-hour cooldown).
+# GATEWAY_ALERT_COOLDOWN bucket-level TTL (design §8.3).
 alertCooldown: "4h"
+
+# GATEWAY_BUDGET counter stream. The duplicate window must cover the gateway's
+# recovery replay (it refuses to bind a stream with less than 12m).
+budget:
+  duplicateWindow: "12m"
+
+# GATEWAY_RATELIMIT counter stream. MaxAge expires each minute's window.
+rateLimit:
+  maxAge: "5m"
 
 # GATEWAY_BUDGET_DELTAS write-behind stream tuning (design §8.6, §9.5).
 deltas:
-  # >= the consumer's worst-case redelivery span; 2m is the documented floor.
-  duplicateWindow: "2m"
+  # Publish-side dedup window, matching the budget stream's so a replay inside
+  # one outage window is deduplicated. Was 2m here and 12m in the gateway,
+  # which overwrote it on every boot.
+  duplicateWindow: "12m"
   # Retention limits bound growth if Postgres write-behind stalls (alarm before
-  # the cap). Old messages are discarded once the consumer has drained them.
+  # the cap). MaxBytes is RESERVED against the server's max_file_store.
   maxAge: "72h"
   maxBytes: 1073741824   # 1 GiB
   maxMsgs: 5000000
+  # The budget-writeback durable pull consumer elitea-scheduler drains the
+  # stream with. The bootstrap creates it; the scheduler only binds.
+  writeback:
+    # How long JetStream waits for an ack before redelivering. Must exceed the
+    # scheduler's worst-case batch apply time (design §8.6 at-least-once).
+    ackWait: "30s"
+    # Redelivery attempts for a delta that keeps failing to apply.
+    maxDeliver: 10
+
+# ELITEA_CANVAS_PRESENCE KV TTL. At least elitea-main's 120s roster TTL, or a
+# heartbeat's entry is collected before its own deadline.
+presence:
+  ttl: "2m"
+
+# Seconds bootstrap.sh waits for the server to accept each account's identity
+# before failing (NATS_CONNECT_WAIT). Covers NATS still starting and a
+# bootstrap certificate cert-manager is still (re-)issuing: an upgrade finds
+# last install's expired certificate in the Secret, and the kubelet takes up to
+# about a minute to show the re-issued one in the mounted volume.
+connectWait: 300
+
+# The Job's own deadline, bounding a wedged run (NATS never comes up). Also
+# bounds how long the hook bootstrap certificates are needed.
+activeDeadlineSeconds: 600
 
 resources:
   requests:
@@ -39,6 +114,12 @@ resources:
     cpu: 250m
     memory: 128Mi
 
-# Extra args appended to every `nats` invocation (e.g. TLS/creds flags). The
-# --server flag is always injected from natsUrl.
+# The NATS chart's NetworkPolicy admits the Job pod by its
+# app.kubernetes.io/name label, nats-bootstrap (deploy/helm/nats
+# networkPolicy.clients). A nameOverride changes that label and is refused
+# unless this is true — set it after adding the new name to that list.
+networkPolicyClientNameManaged: false
+
+# Extra args appended to every `nats` invocation. Connection, TLS and inbox
+# flags are rendered from the values above.
 extraNatsArgs: ""

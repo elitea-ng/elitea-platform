@@ -258,6 +258,53 @@ nats:
   namespace: ""
   port: 4222
 
+  # ── Client identity (#1076) ──────────────────────────────────────────────
+  #
+  # The NATS server (deploy/helm/nats) requires TLS and a client certificate
+  # whose URI SAN, spiffe://<trustDomain>/nats/<identity>, names a user in its
+  # permission table. With `enabled` this chart:
+  #   * issues one Certificate per client from the NATS CA:
+  #       elitea-main        -> Secret elitea-main-nats-client-tls
+  #       elitea-llm-gateway -> Secret elitea-llm-gateway-nats-client-tls
+  #       elitea-scheduler   -> Secret elitea-scheduler-nats-client-tls
+  #   * mounts it at mountPath and sets <PREFIX>_NATS_TLS_{CA,CERT,KEY}_FILE
+  #     (ELITEA_EVENTS_ for main, GATEWAY_ for the gateway and scheduler);
+  #   * renders every derived URL as tls://<service>.<ns>.svc.cluster.local:4222
+  #     — no credential, so the ConfigMaps hold nothing secret.
+  # The services re-read the certificate files on every TLS handshake, so a
+  # cert-manager renewal is picked up on the next reconnect.
+  #
+  # templates/natsClient.yaml refuses: a nats:// URL (or a tls:// one with
+  # TLS off), and user:password@ or token@ in any NATS URL this chart renders
+  # into a ConfigMap. Plaintext is compose's posture; to render it in a cluster
+  # anyway set enabled: false AND allowPlaintext: true, and accept that any pod
+  # that reaches the server can read every tenant's events and reset budget
+  # counters.
+  tls:
+    enabled: true
+    allowPlaintext: false
+    # The NATS CA issuer deploy/helm/nats renders (security.ca.name). It is a
+    # NAMESPACED Issuer, so it signs only in the namespace both releases share;
+    # templates/natsClient.yaml refuses nats.namespace other than this
+    # release's while kind is Issuer. With NATS elsewhere, name a
+    # ClusterIssuer backed by a CA used for NATS only.
+    issuerRef:
+      name: elitea-nats-ca
+      kind: Issuer
+    # Must match the URI SANs the NATS chart's permission table names.
+    trustDomain: elitea.internal
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+    mountPath: /etc/elitea/nats-client
+
+  # The NATS chart's NetworkPolicy admits 4222 from pods labelled
+  # app.kubernetes.io/name=elitea-main / elitea-llm-gateway / elitea-scheduler
+  # (deploy/helm/nats networkPolicy.clients). A main/llmGateway/scheduler
+  # nameOverride changes that label, so templates/natsClient.yaml refuses it
+  # unless this is true — set it only after adding the new name to the NATS
+  # chart's networkPolicy.clients.
+  networkPolicyClientNamesManaged: false
+
 # The top-level `redis` block (the plaintext "general purpose" Redis, service
 # elitea-valkey, rendered into REDIS_URL for elitea-main and the scheduler) is
 # GONE. Its three uses moved or were deleted: the project SSE stream to NATS
@@ -905,11 +952,14 @@ main:
     ELITEA_APPLICATION_SKILLS_ENABLED: ""
 
     # --- Live-update plane (#152) ----------------------------------------------
-    # NATS core pub/sub for GET /api/v2/events/prompt_lib/{projectID} (subject
-    # gateway.events.project.<id>.events, shared with the gateway's
-    # budget.soft_alert) and canvas presence (its publish and its JetStream KV
-    # bucket ELITEA_CANVAS_PRESENCE). The server needs JetStream. Domain events
-    # (conversation.created, …) do NOT travel here — they go to webhooks only.
+    # NATS core pub/sub for GET /api/v2/events/prompt_lib/{projectID}, which
+    # reads two subject families (#1076): canvas presence rosters on
+    # elitea.events.project.<id>.presence, which elitea-main publishes in its
+    # own NATS account, and the gateway's budget.soft_alert on
+    # gateway.events.project.<id>.events, imported from the gateway's account.
+    # Plus canvas presence's JetStream KV bucket ELITEA_CANVAS_PRESENCE. The
+    # server needs JetStream. Domain events (conversation.created, …) do NOT
+    # travel here — they go to webhooks only.
     #
     # Empty means the gateway's effective NATS: an explicit
     # llmGateway.env.GATEWAY_NATS_URL if set, else the top-level `nats` block
@@ -921,24 +971,27 @@ main:
     # and elitea-main runs with no live-update plane (route unregistered,
     # presence per-replica), which it logs at startup.
     #
-    # CREDENTIALS DO NOT GO HERE: this map is rendered into a ConfigMap. For a
-    # NATS that needs user:password, a token or an nkey, leave this empty and
-    # supply the whole URL from a Secret through `main.secrets` (rendered as
-    # valueFrom.secretKeyRef; the ConfigMap then carries no such key):
+    # NO CREDENTIALS, and with nats.tls.enabled (the default) tls:// only: the
+    # client certificate the chart mounts is main's identity (#1076), and
+    # templates/natsClient.yaml refuses user:password@/token@ here because
+    # this map is rendered into a ConfigMap. An externally managed NATS whose
+    # URL must stay private can still come from a Secret through
+    # `main.secrets` (rendered as valueFrom.secretKeyRef; the ConfigMap then
+    # carries no such key):
     #
     #   main:
     #     secrets:
     #       ELITEA_EVENTS_NATS_URL:
-    #         secretName: elitea-nats-credentials
-    #         key: url        # e.g. tls://user:pass@nats.example:4222
+    #         secretName: elitea-nats-url
+    #         key: url
     #
     # The chart refuses to render when the gateway reads GATEWAY_NATS_URL from
     # a Secret (llmGateway.secrets) and elitea-main names no URL of its own,
     # because it cannot then tell which NATS the gateway uses.
+    #
+    # The presence KV bucket's replicas are the nats-bootstrap Job's to set
+    # (deploy/helm/nats-bootstrap `replicas`); main binds to it.
     ELITEA_EVENTS_NATS_URL: ""
-    # Replica count of the presence KV bucket. Empty means 1 (the scale-1 NATS
-    # profile); set "3" on the HA profile. Presence is ephemeral either way.
-    ELITEA_EVENTS_NATS_REPLICAS: ""
 
     # --- Admin console ---------------------------------------------------------
     # Directory the admin single-page application is served from. The published
@@ -2131,13 +2184,11 @@ scheduler:
     PRICE_SYNC_LITELLM_URL: ""
 
     # Budget write-back consumer (design §8.6). Requires BOTH the flag AND
-    # GATEWAY_NATS_URL; with either unset the consumer never starts.
-    #
-    # CROSS-NAMESPACE: NATS is installed by deploy/helm/nats into the
-    # `elitea-gateway` namespace (deploy/argocd/applications/nats.yaml) while this
-    # chart's ArgoCD Application targets `elitea`. The short name `nats` does NOT
-    # resolve across namespaces — use the FQDN below if you enable this.
-    # ON by default since issue #464, with the FQDN filled in.
+    # a NATS URL; with either unset the consumer never starts. ON by default
+    # since issue #464. NATS is installed by deploy/helm/nats into THIS
+    # release's namespace (the Argo CD sample: `elitea`, #1076), and the URL
+    # comes from the top-level `nats` block unless GATEWAY_NATS_URL below
+    # overrides it.
     #
     # WHY THIS IS NOT AN OPTIONAL EXTRA. gateway.llm_budget_accumulators is not
     # only the table the budget screens read. The gateway's fail-mode FSM reads it
@@ -2155,20 +2206,23 @@ scheduler:
     # spend_available=false, which is the honest "no figure was collected" signal
     # rather than a zero.
     BUDGET_WRITEBACK_ENABLED: "true"
-    # CROSS-NAMESPACE, so this is an FQDN and not the short name `nats`. NATS is
-    # installed by deploy/helm/nats into `elitea-gateway`
-    # (deploy/argocd/applications/nats.yaml) while this chart's Application
-    # targets `elitea`. Change it if your topology differs.
+    # Empty (the default) renders tls://<nats.service>.<namespace>.svc.cluster.local:4222
+    # from the top-level `nats` block — the FQDN, with nats.namespace (empty =
+    # this release's) — next to the scheduler's client certificate
+    # (GATEWAY_NATS_TLS_*). An override must be tls:// and carry no
+    # credential (templates/natsClient.yaml).
     #
-    # A NATS that does not answer is NOT fatal: cmd/elitea-scheduler logs
-    # "budget write-back: NATS connect failed; consumer disabled" and keeps
-    # running its other jobs. So this default degrades loudly instead of
-    # preventing a deployment that has no NATS from starting.
-    # Empty means the top-level `nats` block, resolved in this namespace.
+    # A NATS that does not answer, or a consumer the nats-bootstrap Job has
+    # not created yet, is NOT fatal and NOT final: cmd/elitea-scheduler keeps
+    # running its other jobs and keeps attaching with backoff (one WARN per
+    # outage), and GET /readyz/budget-writeback on its health port reports
+    # attached / waiting (503) / disabled / misconfigured (503). Deltas wait
+    # in GATEWAY_BUDGET_DELTAS meanwhile, for up to its MaxAge (72h).
     GATEWAY_NATS_URL: ""
     BUDGET_WRITEBACK_BATCH_SIZE: "500"
-    BUDGET_WRITEBACK_ACK_WAIT: "30s"
-    BUDGET_WRITEBACK_MAX_DELIVER: "10"
+    # The consumer's AckWait and MaxDeliver are the consumer's own
+    # configuration, set by the nats-bootstrap Job that creates it
+    # (deploy/helm/nats-bootstrap deltas.writeback); the scheduler only binds.
 
     # Audit-event retention sweep (issue #619).
     #

@@ -135,49 +135,79 @@ func (f *fakeConn) FlushTimeout(time.Duration) error {
 	return f.flushErr
 }
 
-// fakeProvisioner exercises ensureAssets without a live server. It records all
-// StreamConfigs so both the budget counter stream and the deltas stream
-// contracts can be asserted, and returns a stub Stream for the bind call.
-type fakeProvisioner struct {
-	streamCfgs []jetstream.StreamConfig // one entry per CreateOrUpdateStream call
-	kvCfg      jetstream.KeyValueConfig
-	streamErr  error
-	kvErr      error
-	bindErr    error
-	boundStrm  jetstream.Stream
+// fakeBinder exercises bindAssets without a live server: each stream is a
+// stub whose CachedInfo carries the configuration under test.
+type fakeBinder struct {
+	streams map[string]jetstream.StreamConfig
+	kvTTL   time.Duration
+	noKV    bool
+	err     error
 }
 
-func (f *fakeProvisioner) CreateOrUpdateStream(_ context.Context, cfg jetstream.StreamConfig) (jetstream.Stream, error) {
-	f.streamCfgs = append(f.streamCfgs, cfg)
-	return nil, f.streamErr
-}
-
-// streamCfgByName returns the StreamConfig recorded for the named stream, or
-// the zero value if it was not created.
-func (f *fakeProvisioner) streamCfgByName(name string) (jetstream.StreamConfig, bool) {
-	for _, c := range f.streamCfgs {
-		if c.Name == name {
-			return c, true
-		}
+func (f *fakeBinder) Stream(_ context.Context, name string) (jetstream.Stream, error) {
+	if f.err != nil {
+		return nil, f.err
 	}
-	return jetstream.StreamConfig{}, false
-}
-
-func (f *fakeProvisioner) CreateOrUpdateKeyValue(_ context.Context, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
-	f.kvCfg = cfg
-	if f.kvErr != nil {
-		return nil, f.kvErr
+	cfg, ok := f.streams[name]
+	if !ok {
+		return nil, jetstream.ErrStreamNotFound
 	}
-	return stubKV{}, nil
+	return stubStream{info: &jetstream.StreamInfo{Config: cfg}}, nil
 }
 
-func (f *fakeProvisioner) Stream(_ context.Context, _ string) (jetstream.Stream, error) {
-	return f.boundStrm, f.bindErr
+func (f *fakeBinder) KeyValue(_ context.Context, bucket string) (jetstream.KeyValue, error) {
+	if f.noKV {
+		return nil, jetstream.ErrBucketNotFound
+	}
+	return stubKV{ttl: f.kvTTL}, nil
 }
 
-// stubKV satisfies jetstream.KeyValue enough to be returned by the provisioner;
-// only Create is reachable through the Client.
-type stubKV struct{ jetstream.KeyValue }
+// bootstrapStreams is what deploy/helm/nats-bootstrap/files/bootstrap.sh
+// creates, reduced to the properties bindAssets checks.
+func bootstrapStreams() map[string]jetstream.StreamConfig {
+	return map[string]jetstream.StreamConfig{
+		BudgetStream: {
+			Name: BudgetStream, Subjects: []string{"gateway.budget.counter.>"},
+			AllowMsgCounter: true, AllowDirect: true, Duplicates: 12 * time.Minute,
+		},
+		RateLimitStream: {
+			Name: RateLimitStream, Subjects: []string{"gateway.ratelimit.counter.>"},
+			AllowMsgCounter: true, AllowDirect: true, MaxAge: 5 * time.Minute,
+		},
+		DeltasStream: {
+			Name: DeltasStream, Subjects: []string{DeltaSubject}, Duplicates: 12 * time.Minute,
+		},
+	}
+}
+
+func goodBinder() *fakeBinder {
+	return &fakeBinder{streams: bootstrapStreams(), kvTTL: 4 * time.Hour}
+}
+
+type stubStream struct {
+	jetstream.Stream
+	info *jetstream.StreamInfo
+}
+
+func (s stubStream) CachedInfo() *jetstream.StreamInfo { return s.info }
+
+// stubKV satisfies jetstream.KeyValue enough for bindAssets; only Status and
+// Create are reachable.
+type stubKV struct {
+	jetstream.KeyValue
+	ttl time.Duration
+}
+
+func (k stubKV) Status(context.Context) (jetstream.KeyValueStatus, error) {
+	return stubKVStatus{ttl: k.ttl}, nil
+}
+
+type stubKVStatus struct {
+	jetstream.KeyValueStatus
+	ttl time.Duration
+}
+
+func (s stubKVStatus) TTL() time.Duration { return s.ttl }
 
 // newTestClient builds a Client wired to fakes with a low failure threshold so
 // breaker behaviour is exercisable in a unit test.
@@ -207,9 +237,6 @@ func TestConfigDefaults(t *testing.T) {
 	}
 	if c.CBOpenDuration != 10*time.Second {
 		t.Errorf("CBOpenDuration default = %v, want 10s", c.CBOpenDuration)
-	}
-	if c.Replicas != 1 {
-		t.Errorf("Replicas default = %d, want 1", c.Replicas)
 	}
 }
 
@@ -542,70 +569,125 @@ func TestConnectUnreachableURLFailsFast(t *testing.T) {
 	}
 }
 
-func TestEnsureAssetsConfiguresCounterStream(t *testing.T) {
-	prov := &fakeProvisioner{}
-	c := &Client{cfg: Config{Replicas: 3}.withDefaults()}
-	if err := c.ensureAssets(context.Background(), prov); err != nil {
-		t.Fatalf("ensureAssets: %v", err)
+func TestBindAssetsBindsWhatTheBootstrapCreated(t *testing.T) {
+	c := &Client{cfg: Config{}.withDefaults()}
+	if err := c.bindAssets(context.Background(), goodBinder()); err != nil {
+		t.Fatalf("bindAssets: %v", err)
 	}
-	budgetCfg, ok := prov.streamCfgByName(BudgetStream)
-	if !ok {
-		t.Fatalf("budget stream %q not created", BudgetStream)
-	}
-	// The budget stream MUST enable the atomic counter (Nats-Incr requires it).
-	if !budgetCfg.AllowMsgCounter {
-		t.Error("budget stream must set AllowMsgCounter=true")
-	}
-	// The dedup window backs recovery-replay idempotency (§8.5 step 2).
-	if budgetCfg.Duplicates != RecoveryDedupeWindow {
-		t.Errorf("dedup window = %v, want %v", budgetCfg.Duplicates, RecoveryDedupeWindow)
-	}
-	if budgetCfg.Replicas != 3 {
-		t.Errorf("stream replicas = %d, want 3", budgetCfg.Replicas)
-	}
-	if prov.kvCfg.Bucket != AlertCooldownBucket {
-		t.Errorf("kv bucket = %q, want %q", prov.kvCfg.Bucket, AlertCooldownBucket)
-	}
-	if c.cooldown == nil {
-		t.Error("cooldown KV not bound")
+	if c.budget == nil || c.ratelimit == nil || c.cooldown == nil {
+		t.Errorf("not every handle bound: budget=%v ratelimit=%v cooldown=%v", c.budget != nil, c.ratelimit != nil, c.cooldown != nil)
 	}
 }
 
-// TestEnsureAssetsCooldownKVHasTTL asserts FIX 1: the cooldown KV bucket is
-// provisioned with a non-zero TTL so keys expire and the 80% soft-alert can
-// re-fire after the cooldown window (§8.3).
-func TestEnsureAssetsCooldownKVHasTTL(t *testing.T) {
-	prov := &fakeProvisioner{}
-	c := &Client{cfg: Config{}.withDefaults()}
-	if err := c.ensureAssets(context.Background(), prov); err != nil {
-		t.Fatalf("ensureAssets: %v", err)
+// The gateway creates nothing (#1076). A missing asset is a boot error that
+// names the asset and the Job that creates it.
+func TestBindAssetsMissingAssetNamesTheBootstrap(t *testing.T) {
+	for _, name := range []string{BudgetStream, RateLimitStream, DeltasStream} {
+		b := goodBinder()
+		delete(b.streams, name)
+		c := &Client{cfg: Config{}.withDefaults()}
+		err := c.bindAssets(context.Background(), b)
+		if err == nil || !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), "nats-bootstrap") {
+			t.Errorf("missing %s: err = %v, want one naming the stream and nats-bootstrap", name, err)
+		}
 	}
-	if prov.kvCfg.TTL == 0 {
-		t.Error("cooldown KV bucket TTL must be non-zero; without it cooldown keys never expire")
+	b := goodBinder()
+	b.noKV = true
+	c := &Client{cfg: Config{}.withDefaults()}
+	if err := c.bindAssets(context.Background(), b); err == nil || !strings.Contains(err.Error(), AlertCooldownBucket) {
+		t.Errorf("missing cooldown bucket: err = %v", err)
 	}
 }
 
-// TestEnsureAssetsDeltasStreamCreated asserts FIX 2: the write-behind deltas
-// stream GATEWAY_BUDGET_DELTAS is created in ensureAssets so PublishDelta does
-// not fail with stream-not-found at runtime (§8.6).
-func TestEnsureAssetsDeltasStreamCreated(t *testing.T) {
-	prov := &fakeProvisioner{}
+// Each property the gateway's correctness rests on is verified on bind.
+func TestBindAssetsRefusesAMisconfiguredAsset(t *testing.T) {
+	cases := map[string]func(b *fakeBinder){
+		"budget not a counter": func(b *fakeBinder) {
+			cfg := b.streams[BudgetStream]
+			cfg.AllowMsgCounter = false
+			b.streams[BudgetStream] = cfg
+		},
+		"budget dedup window shorter than the recovery replay": func(b *fakeBinder) {
+			cfg := b.streams[BudgetStream]
+			cfg.Duplicates = 2 * time.Minute
+			b.streams[BudgetStream] = cfg
+		},
+		"budget wrong subjects": func(b *fakeBinder) {
+			cfg := b.streams[BudgetStream]
+			cfg.Subjects = []string{"gateway.budget.>"}
+			b.streams[BudgetStream] = cfg
+		},
+		"ratelimit not a counter": func(b *fakeBinder) {
+			cfg := b.streams[RateLimitStream]
+			cfg.AllowMsgCounter = false
+			b.streams[RateLimitStream] = cfg
+		},
+		"ratelimit without MaxAge": func(b *fakeBinder) {
+			cfg := b.streams[RateLimitStream]
+			cfg.MaxAge = 0
+			b.streams[RateLimitStream] = cfg
+		},
+		"deltas without a dedup window": func(b *fakeBinder) {
+			cfg := b.streams[DeltasStream]
+			cfg.Duplicates = 0
+			b.streams[DeltasStream] = cfg
+		},
+		"deltas wrong subject": func(b *fakeBinder) {
+			cfg := b.streams[DeltasStream]
+			cfg.Subjects = []string{"gateway.budget.deltas"}
+			b.streams[DeltasStream] = cfg
+		},
+		"budget without allow_direct": func(b *fakeBinder) {
+			cfg := b.streams[BudgetStream]
+			cfg.AllowDirect = false
+			b.streams[BudgetStream] = cfg
+		},
+		"ratelimit without allow_direct": func(b *fakeBinder) {
+			cfg := b.streams[RateLimitStream]
+			cfg.AllowDirect = false
+			b.streams[RateLimitStream] = cfg
+		},
+		"ratelimit MaxAge inside one window": func(b *fakeBinder) {
+			cfg := b.streams[RateLimitStream]
+			cfg.MaxAge = 30 * time.Second
+			b.streams[RateLimitStream] = cfg
+		},
+		"cooldown without TTL": func(b *fakeBinder) { b.kvTTL = 0 },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			b := goodBinder()
+			mutate(b)
+			c := &Client{cfg: Config{}.withDefaults()}
+			if err := c.bindAssets(context.Background(), b); err == nil {
+				t.Error("bindAssets accepted it")
+			}
+		})
+	}
+}
+
+func TestBindAssetsPropagatesLookupErrors(t *testing.T) {
 	c := &Client{cfg: Config{}.withDefaults()}
-	if err := c.ensureAssets(context.Background(), prov); err != nil {
-		t.Fatalf("ensureAssets: %v", err)
+	if err := c.bindAssets(context.Background(), &fakeBinder{err: errors.New("boom")}); err == nil {
+		t.Error("lookup error not propagated")
 	}
-	deltaCfg, ok := prov.streamCfgByName(DeltasStream)
-	if !ok {
-		t.Fatalf("deltas stream %q not created in ensureAssets", DeltasStream)
+}
+
+// Connect refuses a URL and TLS material that disagree before it dials.
+func TestConnectRefusesMismatchedURLAndMaterial(t *testing.T) {
+	cases := map[string]Config{
+		"tls url without material": {URL: "tls://127.0.0.1:1"},
+		"nats url with material":   {URL: "nats://127.0.0.1:1", TLSCAFile: "/ca", TLSCertFile: "/crt", TLSKeyFile: "/key"},
+		"credential with material": {URL: "tls://u:p@127.0.0.1:1", TLSCAFile: "/ca", TLSCertFile: "/crt", TLSKeyFile: "/key"},
+		"half material":            {URL: "tls://127.0.0.1:1", TLSCertFile: "/crt", TLSKeyFile: "/key"},
+		"unreadable material":      {URL: "tls://127.0.0.1:1", TLSCAFile: "/nonexistent/ca", TLSCertFile: "/nonexistent/crt", TLSKeyFile: "/nonexistent/key"},
 	}
-	if len(deltaCfg.Subjects) == 0 {
-		t.Error("deltas stream must bind at least one subject")
-	}
-	if deltaCfg.Storage != jetstream.FileStorage {
-		t.Error("deltas stream must use FileStorage for durability")
-	}
-	if deltaCfg.Duplicates == 0 {
-		t.Error("deltas stream must have a non-zero dedup window for publish-side idempotency")
+	for name, cfg := range cases {
+		if _, err := Connect(context.Background(), cfg); err == nil {
+			t.Errorf("%s: Connect succeeded", name)
+		} else if strings.Contains(err.Error(), "u:p@") {
+			t.Errorf("%s: error echoes the credential: %v", name, err)
+		}
 	}
 }
 
@@ -637,22 +719,6 @@ func TestIncrBudgetNegativeTotalFromAck(t *testing.T) {
 	}
 	if got != -250 {
 		t.Errorf("IncrBudget negative ack total = %d, want -250 (got large positive = uint64 wrap bug)", got)
-	}
-}
-
-func TestEnsureAssetsPropagatesErrors(t *testing.T) {
-	cases := map[string]*fakeProvisioner{
-		"stream": {streamErr: errors.New("stream boom")},
-		"kv":     {kvErr: errors.New("kv boom")},
-		"bind":   {bindErr: errors.New("bind boom")},
-	}
-	for name, prov := range cases {
-		t.Run(name, func(t *testing.T) {
-			c := &Client{cfg: Config{}.withDefaults()}
-			if err := c.ensureAssets(context.Background(), prov); err == nil {
-				t.Errorf("%s error not propagated", name)
-			}
-		})
 	}
 }
 

@@ -1,0 +1,57 @@
+# OPT-IN overlay: run compose's NATS the way a cluster runs it (#1076).
+#
+#   deploy/scripts/gen-nats-certs.sh
+#   podman compose -f deploy/docker-compose.yml -f deploy/docker-compose.nats-secure.yml up -d
+#
+# (Also layers onto docker-compose.standalone-full.yml and
+# docker-compose.e2e-standalone.yml, which define the same three services.)
+#
+# The default compose posture stays plaintext with no client identity: NATS is
+# not published to the host and only compose services reach it, and every
+# client logs nats_auth=none at WARN. This overlay switches all three NATS
+# users in compose to the cluster posture:
+#
+#   * `nats` runs the nats.conf rendered from deploy/helm/nats — TLS required,
+#     verify_and_map, the chart's own accounts and permission table — with the dev NATS CA
+#     material mounted at the chart's container paths, so the config needs no
+#     edit;
+#   * `nats-bootstrap` presents each account's bootstrap identity and creates
+#     that account's assets with the permissions a cluster gives it;
+#   * `elitea-main` presents its own identity (URI SAN
+#     spiffe://elitea.internal/nats/elitea-main) over tls://.
+#
+# A permission the chart is missing then shows up here as a "Permissions
+# Violation" in `podman compose logs nats`, the same line a cluster logs.
+services:
+  nats:
+    command: ["-c", "/etc/nats-config/nats.conf"]
+    environment:
+      # The rendered config names the server from this variable.
+      SERVER_NAME: nats
+    volumes:
+      - ./certs/nats/nats.conf:/etc/nats-config/nats.conf:ro
+      - ./certs/nats/server:/etc/nats-certs/nats:ro
+      - ./certs/nats/ca:/etc/nats-ca-cert:ro
+    tmpfs:
+      # pid_file in the chart's config, and its JetStream store_dir.
+      - /var/run/nats
+      - /data
+
+  nats-bootstrap:
+    environment:
+      NATS_URL: "tls://nats:4222"
+      # One certificate per account, as the cluster's Job mounts them.
+      NATS_TLS_DIR: /etc/nats-client
+    volumes:
+      - ./certs/nats/clients/elitea-nats-bootstrap-main:/etc/nats-client/main:ro
+      - ./certs/nats/clients/elitea-nats-bootstrap-gateway:/etc/nats-client/gateway:ro
+      - ./certs/nats/clients/elitea-nats-bootstrap-runtime:/etc/nats-client/runtime:ro
+
+  elitea-main:
+    environment:
+      ELITEA_EVENTS_NATS_URL: "tls://nats:4222"
+      ELITEA_EVENTS_NATS_TLS_CA_FILE: /etc/nats-client/ca.crt
+      ELITEA_EVENTS_NATS_TLS_CERT_FILE: /etc/nats-client/tls.crt
+      ELITEA_EVENTS_NATS_TLS_KEY_FILE: /etc/nats-client/tls.key
+    volumes:
+      - ./certs/nats/clients/elitea-main:/etc/nats-client:ro

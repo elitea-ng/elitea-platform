@@ -1,7 +1,22 @@
-# ArgoCD Application: NATS JetStream coordination substrate (BF0.2b).
-# Sync-wave -2 so NATS is healthy before the bootstrap Job (-1) and the gateway
+# ArgoCD Application: NATS JetStream shared by elitea-main, the LLM gateway and
+# the scheduler (BF0.2b; secured by #1076).
+# Sync-wave -2 so NATS is healthy before the bootstrap Job (-1) and the platform
 # (0). Defaults to the scale-1 profile; HA deployments swap the values file to
 # values-ha.yaml and set nats-bootstrap replicas=3.
+#
+# SECURED (#1076): TLS with client certificates only, every client mapped to a
+# user in the chart's permission table, and an ingress NetworkPolicy. The chart
+# renders its own NATS CA as a NAMESPACED cert-manager Issuer (elitea-nats-ca),
+# which signs only in this namespace — so NATS, its bootstrap and the platform
+# all install into `elitea`. cert-manager must be installed. Whoever may create
+# Certificates or read Secrets in `elitea` can mint a NATS identity: restrict
+# both (deploy/helm/nats/README.md, "Who can mint a NATS identity").
+#
+# MOVED from `elitea-gateway` (#1076). A new namespace is a new StatefulSet
+# with a NEW, EMPTY JetStream volume: budget counters and rate-limit windows
+# restart at zero for the current period, undrained write-behind deltas and
+# the soft-alert cooldowns are lost (greenfield, by decision). The old PVC in
+# `elitea-gateway` is not pruned; delete it. docs/UPGRADING.md has the steps.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -23,7 +38,9 @@ spec:
         - values-scale1.yaml
   destination:
     server: https://kubernetes.default.svc
-    namespace: elitea-gateway
+    # The platform's namespace: the NATS CA Issuer is namespaced, and the
+    # elitea Application's client Certificates are issued by it.
+    namespace: elitea
   syncPolicy:
     automated:
       prune: true

@@ -14,6 +14,9 @@
 {{- $eventsNatsUrl := include "elitea.eventsNatsUrl" . }}
 {{- if and (not (get $env "ELITEA_EVENTS_NATS_URL")) (not (hasKey (.Values.main.secrets | default dict) "ELITEA_EVENTS_NATS_URL")) $eventsNatsUrl }}{{- $env = merge (deepCopy $env) (dict "ELITEA_EVENTS_NATS_URL" $eventsNatsUrl) }}{{- end }}
 {{- if hasKey (.Values.main.secrets | default dict) "ELITEA_EVENTS_NATS_URL" }}{{- $env = omit $env "ELITEA_EVENTS_NATS_URL" }}{{- end }}
+{{- /* The chart owns ELITEA_EVENTS_NATS_TLS_* when it mounts the certificate (data below). */ -}}
+{{- $mainNatsTLS := and .Values.nats.tls.enabled (include "elitea-main.usesNats" .) }}
+{{- if $mainNatsTLS }}{{- $env = omit $env "ELITEA_EVENTS_NATS_TLS_CA_FILE" "ELITEA_EVENTS_NATS_TLS_CERT_FILE" "ELITEA_EVENTS_NATS_TLS_KEY_FILE" }}{{- end }}
 {{- /*
   The public project, from the ONE place an operator sets it. Filled only when
   something names a project: with the Configurations plane off, elitea-main
@@ -77,6 +80,12 @@ data:
   # rendered — they are the defaults in values.yaml's `env` map.
   {{- range $key, $value := $env }}
   {{ $key }}: {{ $value | quote }}
+  {{- end }}
+  {{- if $mainNatsTLS }}
+  # The live-update plane's NATS identity (#1076), mounted by deployment.yaml.
+  ELITEA_EVENTS_NATS_TLS_CA_FILE: {{ include "elitea.natsClientFile" (dict "file" "ca.crt" "ctx" $) }}
+  ELITEA_EVENTS_NATS_TLS_CERT_FILE: {{ include "elitea.natsClientFile" (dict "file" "tls.crt" "ctx" $) }}
+  ELITEA_EVENTS_NATS_TLS_KEY_FILE: {{ include "elitea.natsClientFile" (dict "file" "tls.key" "ctx" $) }}
   {{- end }}
   {{/*
     Capability prerequisites are checked HERE, and this ConfigMap always

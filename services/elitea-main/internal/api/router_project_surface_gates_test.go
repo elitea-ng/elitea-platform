@@ -2,8 +2,11 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -335,13 +338,32 @@ func TestTheEntitledStreamSubscribesToItsOwnProject(t *testing.T) {
 	if status := serveStatus(t, router, http.MethodGet, "/api/v2/events/prompt_lib/7/"); status != http.StatusOK {
 		t.Fatalf("status = %d for an entitled member, want 200", status)
 	}
-	select {
-	case channel := <-source.asked:
-		if channel != "project:7:events" {
-			t.Fatalf("subscribed to %q, want project:7:events", channel)
+	assertSubscribedToOwnProject(t, source, 7)
+}
+
+// drainAsked returns every channel the stream asked the source for, in order.
+func drainAsked(source closedEventSource) []string {
+	var channels []string
+	for {
+		select {
+		case channel := <-source.asked:
+			channels = append(channels, channel)
+		default:
+			return channels
 		}
-	default:
-		t.Fatal("the admitted stream subscribed to nothing")
+	}
+}
+
+// assertSubscribedToOwnProject requires the admitted stream to have subscribed
+// to exactly its own project's two families — the project events and the
+// canvas presence rosters — and to nothing else.
+func assertSubscribedToOwnProject(t *testing.T, source closedEventSource, projectID int) {
+	t.Helper()
+	got := drainAsked(source)
+	sort.Strings(got)
+	want := []string{fmt.Sprintf("project:%d:events", projectID), fmt.Sprintf("project:%d:presence", projectID)}
+	if !slices.Equal(got, want) {
+		t.Fatalf("the admitted stream subscribed to %q, want %q", got, want)
 	}
 }
 

@@ -4,7 +4,10 @@ go 1.25.0
 
 replace github.com/EliteaAI/elitea-platform/libs/go/observability => ../../libs/go/observability
 
+replace github.com/EliteaAI/elitea-platform/libs/go/natsconn => ../../libs/go/natsconn
+
 require (
+	github.com/EliteaAI/elitea-platform/libs/go/natsconn v0.0.0-00010101000000-000000000000
 	github.com/EliteaAI/elitea-platform/libs/go/observability v0.0.0
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/nats-io/nats.go v1.53.1

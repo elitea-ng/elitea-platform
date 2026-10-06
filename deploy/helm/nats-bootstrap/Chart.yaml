@@ -1,10 +1,13 @@
 apiVersion: v2
 name: nats-bootstrap
 description: >-
-  Post-install Job that creates the elitea-llm-gateway JetStream assets
-  (GATEWAY_BUDGET / GATEWAY_ALERT_COOLDOWN KV buckets + GATEWAY_BUDGET_DELTAS
-  stream) with duplicate_window + retention limits, at a replicas count matching
-  the NATS profile (scale-1=1, HA>=3). BF0.2b.
+  Hook Job that creates and reconciles every elitea JetStream asset
+  (GATEWAY_BUDGET and GATEWAY_RATELIMIT counter streams, GATEWAY_BUDGET_DELTAS
+  and its budget-writeback consumer, GATEWAY_ALERT_COOLDOWN and
+  ELITEA_CANVAS_PRESENCE KV buckets) at a replicas count matching the NATS
+  profile. Connects over mTLS to each NATS account that owns assets (MAIN,
+  GATEWAY, RUNTIME; SCHEDULER owns none) as that account's bootstrap identity, the only one there that may create
+  streams and consumers (#1076), with install-only certificates.
 type: application
 version: 0.1.0
 appVersion: "2.12.0"

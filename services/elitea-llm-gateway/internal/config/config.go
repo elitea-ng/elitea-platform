@@ -31,10 +31,11 @@ const (
 	// 1000-worker-per-provider default (§9.5, §6.1).
 	DefaultProviderConcurrency = 50
 
-	// DefaultNATSReplicas is the KV/stream replica count the gateway requests
-	// when it provisions its assets. 1 is the scale-1 baseline; HA operators
-	// MUST override to the real replica count (≥3) — a 1-replica store has no
-	// quorum (design §9.5, LLM_BUDGET_EXPECTED_REPLICAS).
+	// DefaultNATSReplicas is the default gateway replica count
+	// (LLM_BUDGET_EXPECTED_REPLICAS) the degraded per-replica cap divides by.
+	// It no longer sizes any NATS asset: the gateway binds to streams the
+	// nats-bootstrap Job creates, at the replica count that Job is given
+	// (#1076). HA operators MUST set the real gateway replica count.
 	DefaultNATSReplicas = 1
 
 	// DefaultCBFailureThreshold trips the budget-path circuit breaker after this
@@ -202,9 +203,16 @@ type Config struct {
 	// gateway then serves /llm without budget enforcement (dev/test only), so
 	// startup does not hard-fail when no NATS cluster is reachable.
 	NATSURL string
-	// NATSReplicas is the KV/stream replica count the gateway requests when
-	// provisioning its assets (§9.5); ≥3 for HA quorum.
-	NATSReplicas int
+	// NATSTLSCAFile, NATSTLSCertFile and NATSTLSKeyFile are the gateway's NATS
+	// client identity (#1076): a certificate from the NATS CA whose
+	// URI SAN spiffe://elitea.internal/nats/elitea-llm-gateway the server maps
+	// to the gateway's user in the chart's permission table. All three or
+	// none; with them GATEWAY_NATS_URL must be tls:// and carry no credential.
+	// The files are re-read on every handshake, so a cert-manager renewal is
+	// picked up on reconnect.
+	NATSTLSCAFile   string
+	NATSTLSCertFile string
+	NATSTLSKeyFile  string
 	// CBFailureThreshold trips the budget-path circuit breaker after this many
 	// consecutive NATS failures (§8.5).
 	CBFailureThreshold uint32
@@ -237,8 +245,7 @@ type Config struct {
 	NATSDegradedCapUSD float64
 	// ExpectedReplicas is the operator-configured replica count used for the
 	// NATS_DOWN_PG_FRESH_NEAR per-replica cap (§8.5, LLM_BUDGET_EXPECTED_REPLICAS,
-	// default 1). It reuses NATSReplicas' env var; kept distinct so the FSM reads
-	// an int replica count without re-parsing.
+	// default 1).
 	ExpectedReplicas int
 
 	// TLS / mTLS (FIX #10). When TLSCertFile and TLSKeyFile are both set the
@@ -378,7 +385,9 @@ func FromEnv() Config {
 		IdentitySecret:      os.Getenv("GATEWAY_IDENTITY_SECRET"),
 		HopSecret:           os.Getenv("GATEWAY_HOP_SECRET"),
 		NATSURL:             os.Getenv("GATEWAY_NATS_URL"),
-		NATSReplicas:        intOr("LLM_BUDGET_EXPECTED_REPLICAS", DefaultNATSReplicas),
+		NATSTLSCAFile:       os.Getenv("GATEWAY_NATS_TLS_CA_FILE"),
+		NATSTLSCertFile:     os.Getenv("GATEWAY_NATS_TLS_CERT_FILE"),
+		NATSTLSKeyFile:      os.Getenv("GATEWAY_NATS_TLS_KEY_FILE"),
 		CBFailureThreshold:  uint32Or("LLM_BUDGET_CB_FAILURE_THRESHOLD", DefaultCBFailureThreshold),
 		CBOpenDuration:      secondsOr("LLM_BUDGET_CB_OPEN_DURATION_SEC", DefaultCBOpenDuration),
 

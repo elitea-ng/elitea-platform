@@ -199,6 +199,7 @@ Last updated: 2026-09-07
 ```
 DATABASE_URL=postgres://...
 ELITEA_EVENTS_NATS_URL=nats://host:4222   # optional: live updates (SSE, canvas presence); replaced REDIS_URL
+                                          # clusters: tls://… plus ELITEA_EVENTS_NATS_TLS_{CA,CERT,KEY}_FILE (#1076)
 SHADOW_ENABLED=true|false
 SHADOW_LEGACY_URL=http://pylon-main:8000
 SHADOW_WEIGHT=0.1

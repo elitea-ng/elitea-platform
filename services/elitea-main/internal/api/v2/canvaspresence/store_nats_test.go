@@ -8,6 +8,7 @@ package canvaspresence_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -50,6 +51,9 @@ func newNATSStore(t *testing.T) (*v2canvaspresence.NATSStore, jetstream.JetStrea
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	if err := v2canvaspresence.BootstrapBucket(ctx, js, v2canvaspresence.PresenceBucket); err != nil {
+		t.Fatalf("bootstrap the bucket: %v", err)
+	}
 	store, err := v2canvaspresence.NewNATSStore(ctx, js, v2canvaspresence.NATSStoreConfig{})
 	if err != nil {
 		t.Fatalf("NewNATSStore: %v", err)
@@ -341,28 +345,37 @@ func TestNATSStoreKeysCannotEscapeTheirRoster(t *testing.T) {
 	}
 }
 
-// The bucket's MaxAge is the garbage collector that stands in for the Redis
-// key's PEXPIRE: without it an entry nobody refreshes is stored forever. It
-// must equal TTL, and History must be 1 so a heartbeat does not pile up
-// revisions.
-func TestNATSStoreBucketCollectsEntriesAfterTheTTL(t *testing.T) {
-	_, js, _ := newNATSStore(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+// The store binds; it does not create (#1076). A missing bucket is a startup
+// error naming the nats-bootstrap Job, and a bucket whose MaxAge cannot do
+// its job — no TTL at all, or one shorter than the roster TTL — is refused.
+// Buckets of its own: the shared one must not be disturbed.
+func TestNATSStoreBindsOnlyToABucketThatCanExpireEntries(t *testing.T) {
+	conn := natsTestConn(t)
+	js, err := jetstream.New(conn)
+	if err != nil {
+		t.Fatalf("jetstream: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	kv, err := js.KeyValue(ctx, v2canvaspresence.PresenceBucket)
-	if err != nil {
-		t.Fatalf("open bucket: %v", err)
+	missing := fmt.Sprintf("ELITEA_CANVAS_PRESENCE_TEST_MISSING_%d", time.Now().UnixNano())
+	_, err = v2canvaspresence.NewNATSStore(ctx, js, v2canvaspresence.NATSStoreConfig{Bucket: missing})
+	if !errors.Is(err, v2canvaspresence.ErrBucketMissing) || !strings.Contains(err.Error(), "nats-bootstrap") {
+		t.Fatalf("NewNATSStore on a missing bucket = %v; want ErrBucketMissing naming nats-bootstrap", err)
 	}
-	status, err := kv.Status(ctx)
-	if err != nil {
-		t.Fatalf("bucket status: %v", err)
+	if _, err := js.KeyValue(ctx, missing); !errors.Is(err, jetstream.ErrBucketNotFound) {
+		t.Fatalf("the store created the bucket it was told is missing: %v", err)
 	}
-	if status.TTL() != v2canvaspresence.TTL {
-		t.Fatalf("bucket MaxAge = %v, want TTL (%v)", status.TTL(), v2canvaspresence.TTL)
-	}
-	if status.History() != 1 {
-		t.Fatalf("bucket history = %d, want 1", status.History())
+
+	for name, ttl := range map[string]time.Duration{"no TTL": 0, "TTL under the roster TTL": 30 * time.Second} {
+		bucket := fmt.Sprintf("ELITEA_CANVAS_PRESENCE_TEST_TTL_%d", time.Now().UnixNano())
+		if _, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: bucket, History: 1, TTL: ttl, Storage: jetstream.FileStorage}); err != nil {
+			t.Fatalf("%s: create: %v", name, err)
+		}
+		t.Cleanup(func() { _ = js.DeleteKeyValue(context.Background(), bucket) })
+		if _, err := v2canvaspresence.NewNATSStore(ctx, js, v2canvaspresence.NATSStoreConfig{Bucket: bucket}); err == nil {
+			t.Errorf("%s: NewNATSStore bound to it", name)
+		}
 	}
 }
 
@@ -375,7 +388,7 @@ func TestNATSBackendSharesTheRosterAndPublishes(t *testing.T) {
 	bus := natsbus.NewFromConn(conn, "test")
 
 	projectID := fmt.Sprintf("%d", 900000+rosterSeq.Add(1))
-	events, cancel, err := bus.Raw(context.Background(), "project:"+projectID+":events")
+	events, cancel, err := bus.Raw(context.Background(), "project:"+projectID+":presence")
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -479,6 +492,10 @@ func TestNATSStoreFollowsTheBucketAcrossAServerRestart(t *testing.T) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		// The bootstrap's job; the store only binds. Idempotent.
+		if err := v2canvaspresence.BootstrapBucket(ctx, js, v2canvaspresence.PresenceBucket); err != nil {
+			t.Fatalf("bootstrap the bucket: %v", err)
+		}
 		store, err := v2canvaspresence.NewNATSStore(ctx, js, v2canvaspresence.NATSStoreConfig{})
 		if err != nil {
 			t.Fatalf("NewNATSStore: %v", err)
@@ -522,19 +539,23 @@ func TestNATSStoreFollowsTheBucketAcrossAServerRestart(t *testing.T) {
 }
 
 // A bucket that disappears from the server (deleted, or a node replaced
-// without its storage) is recreated by the store: a watcher only reconnects
-// to a stream that still exists, so without this every beat would fail until
-// elitea-main restarted. A bucket of its own: deleting the shared one would
-// disturb other packages' tests on the same server.
-func TestNATSStoreRecreatesABucketThatDisappeared(t *testing.T) {
+// without its storage) is NOT recreated by the store (#1076): elitea-main's
+// NATS identity may not create a stream, and the bucket's settings are the
+// bootstrap's. Beats fail while it is gone; once the nats-bootstrap Job has
+// recreated it, the same store follows it again without a restart. A bucket
+// of its own: deleting the shared one would disturb other packages' tests.
+func TestNATSStoreFollowsABucketTheBootstrapRecreated(t *testing.T) {
 	conn := natsTestConn(t)
 	js, err := jetstream.New(conn)
 	if err != nil {
 		t.Fatalf("jetstream: %v", err)
 	}
 	bucket := fmt.Sprintf("ELITEA_CANVAS_PRESENCE_TEST_%d", time.Now().UnixNano())
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	if err := v2canvaspresence.BootstrapBucket(ctx, js, bucket); err != nil {
+		t.Fatalf("bootstrap the bucket: %v", err)
+	}
 	store, err := v2canvaspresence.NewNATSStore(ctx, js, v2canvaspresence.NATSStoreConfig{Bucket: bucket})
 	if err != nil {
 		t.Fatalf("NewNATSStore: %v", err)
@@ -552,21 +573,32 @@ func TestNATSStoreRecreatesABucketThatDisappeared(t *testing.T) {
 		t.Fatalf("delete bucket: %v", err)
 	}
 
-	// Beats fail until the run loop has recreated the bucket, then land and
-	// show up in the roster again.
-	deadline := time.Now().Add(20 * time.Second)
+	// While it is gone, beats fail and nothing recreates it.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := store.Touch(ctx, key, v2canvaspresence.Editor{UserID: "2", UserName: "grace"}, v2canvaspresence.TTL); err == nil {
+			t.Fatal("a beat landed in a bucket that was deleted; something recreated it")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if _, err := js.KeyValue(ctx, bucket); !errors.Is(err, jetstream.ErrBucketNotFound) {
+		t.Fatalf("the store recreated the bucket itself: %v", err)
+	}
+
+	// The bootstrap brings it back; the same store follows it.
+	if err := v2canvaspresence.BootstrapBucket(ctx, js, bucket); err != nil {
+		t.Fatalf("re-bootstrap the bucket: %v", err)
+	}
+	deadline = time.Now().Add(20 * time.Second)
 	for {
 		err := store.Touch(ctx, key, v2canvaspresence.Editor{UserID: "2", UserName: "grace"}, v2canvaspresence.TTL)
 		if err == nil {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("touch never succeeded after the bucket was deleted: %v", err)
+			t.Fatalf("touch never succeeded after the bootstrap recreated the bucket: %v", err)
 		}
 		time.Sleep(100 * time.Millisecond)
-	}
-	if _, err := js.KeyValue(ctx, bucket); err != nil {
-		t.Fatalf("bucket not recreated: %v", err)
 	}
 	eventuallyRoster(t, store, key, func(r []v2canvaspresence.Editor) bool { return containsUser(r, "2") })
 }

@@ -7,8 +7,9 @@
 // mount, on a timer, when the tab is hidden or shown again, and once with
 // `state: "left"` on unmount. The answer is the current roster, and the same
 // roster is published as a `canvas.editors` event on
-// events.ProjectChannel(projectID) so every OTHER subscriber of that project's
-// stream learns about it without polling.
+// events.PresenceChannel(projectID) — elitea-main's own subject, which the
+// project SSE stream reads beside the gateway's — so every OTHER subscriber of
+// that project's stream learns about it without polling.
 //
 // WHY NOT A SOCKET SERVER. #615 and #622 record the decision in full. The short
 // form: every control on this surface — authentication, project resolution,
@@ -18,7 +19,7 @@
 // deleted 332-line prototype got the room name, the field name and the presence
 // identity wrong in ~40 lines of canvas handling.
 //
-// THE ROOM IS THE PROJECT CHANNEL. events.ProjectChannel is derived SERVER-SIDE
+// THE ROOM IS THE PROJECT. events.PresenceChannel is derived SERVER-SIDE
 // from the {projectID} segment of the mount pattern, which
 // apimw.RequireResolvedPermissions has already gated. No part of the channel
 // name comes from the request body. This is the specific defect the prototype
@@ -259,7 +260,7 @@ func WithBackend(b Backend) Option {
 			return
 		}
 		h.store = b.Store
-		h.emitter = events.NewPublisher(b.Bus)
+		h.emitter = events.NewPresencePublisher(b.Bus)
 	}
 }
 
@@ -397,9 +398,9 @@ func (h *Handler) Heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.emitter != nil {
-		// projectID is the RESOLVED mount segment. events.Publisher.Emit turns
-		// it into events.ProjectChannel(projectID) itself, so no caller of this
-		// package ever names a channel.
+		// projectID is the RESOLVED mount segment. The presence Publisher
+		// turns it into events.PresenceChannel(projectID) itself, so no
+		// caller of this package ever names a channel.
 		h.emitter.Emit(r.Context(), projectID, EventType, response)
 	}
 

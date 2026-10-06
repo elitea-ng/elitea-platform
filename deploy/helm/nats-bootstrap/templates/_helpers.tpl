@@ -22,3 +22,13 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
+
+{{/*
+nats-bootstrap.secretName — the Secret holding one account's bootstrap
+certificate: tls.secretNames.<account>, or the one templates/certificate.yaml
+writes.
+*/}}
+{{- define "nats-bootstrap.secretName" -}}
+{{- $names := .ctx.Values.tls.secretNames | default dict -}}
+{{- get $names .account | default (printf "%s-%s-nats-client-tls" (include "nats-bootstrap.fullname" .ctx) .account) -}}
+{{- end }}

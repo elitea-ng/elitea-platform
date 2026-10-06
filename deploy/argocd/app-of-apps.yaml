@@ -22,11 +22,15 @@
 # pointed at them. The plain Redis this root once listed is gone.
 #
 # NATS WITH JETSTREAM is installed HERE (applications/nats.yaml, wave -2, plus
-# its bootstrap at -1) in the elitea-gateway namespace. The gateway's budget
-# counters, the scheduler and elitea-main's live-update plane (project SSE
-# stream, canvas presence KV) all dial it; applications/elitea.yaml points
-# nats.namespace at it. A NATS you bring yourself must run JetStream, or
-# elitea-main refuses to start.
+# its bootstrap at -1) in the platform's `elitea` namespace. The gateway's
+# budget counters, the scheduler and elitea-main's live-update plane (project
+# SSE stream, canvas presence KV) all dial it over mTLS (#1076), with client
+# certificates from the NATS chart's namespaced elitea-nats-ca Issuer — which
+# is why it shares the platform's namespace. cert-manager is a prerequisite.
+# A NATS you bring yourself must run JetStream, require the same client
+# identities, and have the bootstrap's assets, or elitea-main refuses to start.
+# Moving NATS here from `elitea-gateway` starts it on an EMPTY JetStream
+# volume — budget counters reset for the current period (docs/UPGRADING.md).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

@@ -506,11 +506,13 @@ if [ -z "$nats_url" ]; then
   fail "a default scheduler install renders GATEWAY_NATS_URL empty, so the write-back consumer never starts whatever BUDGET_WRITEBACK_ENABLED says"
 else
   pass "a default scheduler install renders GATEWAY_NATS_URL=\"$nats_url\""
-  # NATS is installed into a DIFFERENT namespace from this workload, and a
-  # short name does not resolve across namespaces.
+  # The chart renders the FQDN (nats.namespace may name another namespace
+  # when the NATS issuer is a ClusterIssuer, and a short name does not
+  # resolve across namespaces), over tls:// with the scheduler's client
+  # certificate (#1076).
   case "$nats_url" in
-    *.svc.cluster.local:*) pass "GATEWAY_NATS_URL is an FQDN, so it resolves from another namespace" ;;
-    *) fail "GATEWAY_NATS_URL is \"$nats_url\", which is not an FQDN; NATS runs in elitea-gateway and this workload does not" ;;
+    tls://*.svc.cluster.local:*) pass "GATEWAY_NATS_URL is a tls:// FQDN" ;;
+    *) fail "GATEWAY_NATS_URL is \"$nats_url\", not a tls:// FQDN; the NATS chart requires TLS, and a short name resolves only in this workload's own namespace" ;;
   esac
 fi
 
