@@ -101,6 +101,19 @@ if helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.
 else
   pass "a lagThreshold above one replica's in-flight capacity is refused"
 fi
+# An explicit 0 is not "unset": `default` would swap it for the default
+# threshold without a word, so it is refused with its own message.
+for zero in "--set worker.autoscaling.lagThreshold=0" "--set-string worker.autoscaling.lagThreshold=0" "--set worker.autoscaling.lagThreshold=-1"; do
+  # shellcheck disable=SC2086 # the flag and its value are two words on purpose
+  if out=$(helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.enabled=true \
+       $zero 2>&1 >/dev/null); then
+    fail "lagThreshold below 1 ($zero) rendered"
+  elif grep -q 'lagThreshold .* must be at least 1' <<<"$out"; then
+    pass "lagThreshold below 1 ($zero) is refused with a clear message"
+  else
+    fail "lagThreshold below 1 ($zero) was refused, but not by the lower-bound guard: $out"
+  fi
+done
 # The HA fallback builds <server_name>.<endpoint host>: only the headless
 # service has those pod DNS names.
 if grep -qE 'natsServerMonitoringEndpoint: "elitea-nats-headless\.[^"]+:8222"' "$work/on.yaml"; then

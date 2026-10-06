@@ -57,7 +57,18 @@
 */}}
 {{- $limits := .Values.worker.runtime.limits -}}
 {{- $perReplica := add (int $limits.delivery_max_concurrency) (int $limits.nats_fetch_batch) -}}
-{{- $lag := int ($a.lagThreshold | default $limits.delivery_max_concurrency) -}}
+{{- /*
+  "" (or null) means "use the default". Any other value is taken as given:
+  `default` would treat an explicit 0 as unset and silently substitute the
+  default, so 0 is refused here instead of reinterpreted.
+*/}}
+{{- $lag := int $limits.delivery_max_concurrency -}}
+{{- if not (or (kindIs "invalid" $a.lagThreshold) (eq (toString $a.lagThreshold) "")) }}
+{{- $lag = int $a.lagThreshold -}}
+{{- if lt $lag 1 }}
+{{- fail (printf "worker.autoscaling.lagThreshold (%v) must be at least 1: it is the lag one replica absorbs, and KEDA divides the lag by it. Leave it empty (\"\") for the default, delivery_max_concurrency (%d)." $a.lagThreshold (int $limits.delivery_max_concurrency)) }}
+{{- end }}
+{{- end }}
 {{- if or (lt $lag 1) (gt $lag (int $perReplica)) }}
 {{- fail (printf "worker.autoscaling.lagThreshold (%d) must be between 1 and what one replica holds in flight, delivery_max_concurrency + nats_fetch_batch (%d). KEDA's metric counts pulled-but-unacked commands too, so a higher threshold leaves a backlog waiting while the fleet looks sized." $lag (int $perReplica)) }}
 {{- end }}
