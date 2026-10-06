@@ -440,7 +440,7 @@ func TestCompleteClassifiesOriginatingSessionReadFailure(t *testing.T) {
 	}{
 		{name: "missing", readErr: sessionstate.ErrNotFound, want: ErrTransactionRejected},
 		{name: "malformed", readErr: sessionstate.ErrInvalidState, want: ErrDependencyUnavailable},
-		{name: "unavailable", readErr: errors.New("redis unavailable"), want: ErrDependencyUnavailable},
+		{name: "unavailable", readErr: errors.New("dependency unavailable"), want: ErrDependencyUnavailable},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -687,7 +687,7 @@ func TestCompleteReportsPostProvisionSessionFinalizationFailure(t *testing.T) {
 	t.Parallel()
 
 	service, sessions, _, provisioner, _, clock := newTestService(t)
-	sessions.rotateErr = errors.New("redis password=must-not-leak")
+	sessions.rotateErr = errors.New("store password=must-not-leak")
 	correlation := browserflow.ProtocolCorrelation{Nonce: "nonce-1"}
 	begin := beginFlow(t, service, "oidc", correlation)
 	request := CompleteRequest{

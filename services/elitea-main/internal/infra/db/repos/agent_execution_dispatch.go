@@ -19,7 +19,7 @@ var ErrPendingAgentExecutionDispatchNotFound = errors.New("pending agent executi
 
 // LoadPendingAgentExecution loads only immutable bundle and browser
 // correlation references. The admitted prompt, tools, model settings,
-// credentials and history are deliberately absent from this query and Redis.
+// credentials and history are deliberately absent from this query and the command bus.
 func (r *AgentExecutionJobsRepository) LoadPendingAgentExecution(ctx context.Context, outboxID string) (agentexecutionapp.AgentExecutionDispatch, error) {
 	if outboxID == "" {
 		return agentexecutionapp.AgentExecutionDispatch{}, agentexecutionapp.ErrInvalidAgentExecutionDispatch
@@ -115,7 +115,7 @@ func (r *AgentExecutionJobsRepository) LoadPreparedAgentExecution(ctx context.Co
 
 // StorePreparedAgentExecution selects one exact signed envelope under the
 // job/outbox lock. Competing publishers and key rotation observe the same
-// durable winner before any Redis append is attempted.
+// durable winner before any command-bus publish is attempted.
 func (r *AgentExecutionJobsRepository) StorePreparedAgentExecution(ctx context.Context, outboxID string, candidate executionapp.PreparedCommandEnvelope) (executionapp.StoredPreparedEnvelope, error) {
 	if outboxID == "" {
 		return executionapp.StoredPreparedEnvelope{}, agentexecutionapp.ErrInvalidAgentExecutionDispatch
@@ -150,7 +150,7 @@ func (r *AgentExecutionJobsRepository) StorePreparedAgentExecution(ctx context.C
 	// path appends the same durable winner again. The winner therefore stays
 	// returnable in PENDING and in DISPATCHED. Worker authority, or a terminal
 	// job state, does end the window: returning the winner then would recreate
-	// a Redis entry that the worker may already have acknowledged and deleted.
+	// a bus message that the worker may already have acknowledged and deleted.
 	if row.Retired || row.AuthorityGranted ||
 		(row.State != string(executiondomain.JobPending) && row.State != string(executiondomain.JobDispatched)) {
 		return executionapp.StoredPreparedEnvelope{}, executionapp.ErrDispatchRetired

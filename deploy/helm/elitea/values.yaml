@@ -18,9 +18,8 @@
 #
 #   PostgreSQL          `postgresql` names its secret. The operator's lifecycle
 #                       is not this application's — see that block.
-#   NATS                `nats` names it. Commodity infrastructure. (The
-#                       plain Redis/Valkey this chart once named is gone;
-#                       the runtime's TLS Redis is `runtimeRedis` below.)
+#   NATS                `nats` names it. Commodity infrastructure. It is
+#                       also the runtime command bus; there is no Redis.
 #   Object storage      An S3-compatible endpoint, configured under `main.env`.
 #   Ingress             The cluster's own edge. `worker.platformEdge` is NOT it:
 #                       that one is internal, has no route from any gateway, and
@@ -60,7 +59,7 @@
 # ever express a mistake. The release stamps this field; the working tree keeps
 # the placeholder.
 #
-# Third-party images (the runtime Redis, the OTel collector) keep their own
+# Third-party images (the OTel collector) keep their own
 # deliberate pins under their component keys — a release number means nothing
 # to those registries.
 image:
@@ -1728,8 +1727,8 @@ main:
       # process serves cleartext, so the origin is derived from its own listener
       # (http://127.0.0.1:<port of ELITEA_HTTP_ADDRESS>).
       #
-      # Set it only where another server answers that path — centry-hybrid aims
-      # it at the edge, which routes the path to legacy Centry. It must then be
+      # Set it only where another server answers that path (the retired
+      # centry-hybrid stack aimed it at an edge that routed it to legacy Centry). It must then be
       # an https ORIGIN, with no path, query or fragment, on an address that
       # TERMINATES TLS. An https origin on elitea-main's own cleartext port is
       # refused at boot.
@@ -1896,8 +1895,8 @@ main:
     # and provision that ServiceAccount outside this chart so it exists when the
     # hook runs.
     serviceAccountName: ""
-    # -all-tenants mirrors deploy/centry-hybrid/pov-compose.yml's elitea-migrate
-    # invocation: apply the shared history, then the tenant history for every
+    # -all-tenants mirrors the elitea-migrate invocation of the retired
+    # centry-hybrid PoV stack: apply the shared history, then the tenant history for every
     # existing legacy project. Both cmd/elitea-migrate flags are idempotent —
     # already-applied migration files are skipped — so re-running on every
     # upgrade is safe.
@@ -3355,7 +3354,7 @@ worker:
   # Scale-out is now CORRECT, and this stays at 1 because correct is not the
   # same as needed.
   #
-  # Each replica gets its own Redis consumer name — the init container
+  # Each replica gets its own NATS connection name — the init container
   # substitutes the pod's own name into consumer_id, see
   # templates/worker/deployment.yaml. Everything else stays shared: one
   # workload session row, one producer_id, one client certificate. That is not
@@ -3365,7 +3364,7 @@ worker:
   # identify themselves.
   #
   # Raise this, or put an autoscaler on it, with a measured reason. The bound
-  # to measure first is the Redis consumer group's read rate, not CPU.
+  # to measure first is the JetStream consumer's pending count, not CPU.
   #
   # IGNORED when autoscaling below is on: the Deployment then omits `replicas`
   # entirely, because a value there is rewritten on every `helm upgrade` and
@@ -3653,85 +3652,6 @@ worker:
   securityContext:
     allowPrivilegeEscalation: false
     readOnlyRootFilesystem: false
-    capabilities:
-      drop: ["ALL"]
-
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-
-runtimeRedis:
-  # NO LONGER the runtime dispatch bus: commands travel on NATS JetStream
-  # (docs/runtime-command-bus.md), and the Form authentication stores moved to
-  # PostgreSQL. Kept only until the next change removes the component.
-  enabled: false
-  # TLS Redis, with NO consumer left: production Form authentication keeps
-  # its sign-in state in PostgreSQL (elitea-main shared migration 0153), the
-  # plaintext `elitea-valkey` was retired in favour of NATS, and the command
-  # bus is NATS JetStream. Nothing in this chart points at it any more; the
-  # component itself goes with the next change. Cleartext is off entirely
-  # (`port 0`).
-
-  image:
-    repository: docker.io/library/redis
-    tag: "7-alpine"
-    pullPolicy: IfNotPresent
-
-  # Server certificate, CA and the ACL file all arrive in ONE Secret, minted by
-  # deploy/scripts/gen-runtime-certs.sh (the only material-minting script this
-  # repo ships). Keys: runtime-ca.crt, redis-server.crt, redis-server.key,
-  # redis-users.acl, redis-bootstrap-password.
-  #
-  # Unlike elitea-main's material, redis enforces no permission bits of its own,
-  # so a plain Secret volume is enough — no copy-into-emptyDir init container.
-  materialSecretName: elitea-runtime-redis-material
-
-  tlsPort: 6380
-
-  service:
-    # The name is load-bearing: it is the host in every rediss:// URL, and
-    # deploy/scripts/gen-runtime-certs.sh bakes it in as a SAN on
-    # redis-server.crt alongside the compose service name `runtime-redis` (so
-    # the same material serves both stacks). Renaming it away from what the
-    # script issues silently breaks the TLS handshake with a message that
-    # reads like a trust problem.
-    name: elitea-runtime-redis
-
-  # Persistence. The compose stack turns this off and calls the keys disposable,
-  # which is true of a laptop stack. Nothing reads or writes this instance any
-  # more (see `enabled` above), so what an AOF protects here is nothing.
-  #
-  # Set enabled=false to accept that.
-  persistence:
-    enabled: true
-    size: 8Gi
-    storageClassName: ceph-rbd
-    # everysec, not always: the fsync-per-write cost is not worth it for
-    # session state whose worst case is one second of writes, and `always`
-    # would put an fsync in the path of every write.
-    appendfsync: everysec
-
-  resources:
-    requests:
-      cpu: 50m
-      memory: 128Mi
-    limits:
-      cpu: "1"
-      memory: 512Mi
-
-  # uid/gid 999 is the `redis` user in the official image. fsGroup makes the
-  # Secret volume readable after the entrypoint drops privileges.
-  podSecurityContext:
-    runAsNonRoot: true
-    runAsUser: 999
-    runAsGroup: 999
-    fsGroup: 999
-    seccompProfile:
-      type: RuntimeDefault
-
-  securityContext:
-    allowPrivilegeEscalation: false
-    readOnlyRootFilesystem: true
     capabilities:
       drop: ["ALL"]
 

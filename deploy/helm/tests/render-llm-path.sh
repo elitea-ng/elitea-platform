@@ -26,8 +26,8 @@ set -euo pipefail
 # "the Deployment" or "the ConfigMap" from the render. The single chart renders
 # every component, so the suite narrows the render to its subject instead of
 # teaching twenty selectors to disambiguate.
-ONLY_SCHEDULER="--set main.enabled=false --set web.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false --set runtimeRedis.enabled=false"
-ONLY_GATEWAY="--set main.enabled=false --set web.enabled=false --set scheduler.enabled=false --set otelCollector.enabled=false --set worker.enabled=false --set runtimeRedis.enabled=false"
+ONLY_SCHEDULER="--set main.enabled=false --set web.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false"
+ONLY_GATEWAY="--set main.enabled=false --set web.enabled=false --set scheduler.enabled=false --set otelCollector.enabled=false --set worker.enabled=false"
 # Chooses the narrowing for one case. A case that states a gateway value is a
 # gateway case, and is left to supply (or withhold) the postures itself — the
 # suite asserts that withholding them is refused, which a blanket injection
@@ -39,7 +39,7 @@ narrow_for() {
     *) echo "$ONLY_MAIN $GATEWAY_RENDER_POSTURE" ;;
   esac
 }
-ONLY_MAIN="--set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false --set runtimeRedis.enabled=false"
+ONLY_MAIN="--set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false"
 GATEWAY_RENDER_POSTURE="--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"

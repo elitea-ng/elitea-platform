@@ -10,7 +10,7 @@
 -- `input_bundle_entries.semantic_role`, which is already durable.
 --
 -- What that costs, stated rather than hidden: a crash between admission and the
--- Redis append leaves an outbox row that nothing will ever publish. That is the
+-- command-bus publish leaves an outbox row that nothing will ever publish. That is the
 -- right answer for a synchronous run — the caller's request died with the
 -- process, so "nothing ran" is true — but the row must not go on consuming
 -- admission capacity, which is what
@@ -141,7 +141,7 @@ WHERE execution_id = sqlc.arg(execution_id)::text
   AND state = 'PENDING';
 
 -- LockExpiredNoAuthorityToolkitCallToolExecutions reclaims the capacity a run
--- that never reached Redis would otherwise hold forever. It selects only work
+-- that never reached the command bus would otherwise hold forever. It selects only work
 -- past its deadline that no worker ever claimed, which is exactly the crash
 -- window this capability accepts in exchange for having no binding table.
 --

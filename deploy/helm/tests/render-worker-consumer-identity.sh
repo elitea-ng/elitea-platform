@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 #
-# Every worker replica gets its own Redis consumer name.
+# Every worker replica gets its own NATS connection name.
 #
-# WHAT IS BEING PROTECTED. consumer_id is the consumer NAME inside the Redis
-# consumer group. Redis tracks pending entries per name, not per connection, so
-# two processes sharing one name are one consumer. The worker refreshes its own
-# pending entries with `XCLAIM ... JUSTID`, which means a living replica keeps a
-# DEAD replica's in-flight entries looking fresh and XAUTOCLAIM never reclaims
-# them — work lost with nothing logged. And XAUTOCLAIM claims by idle time
-# rather than by owner, so one replica can take an entry another is executing.
+# WHAT IS BEING PROTECTED. consumer_id is the worker's NATS connection NAME.
+# Every replica pulls from the SAME durable JetStream consumer, and JetStream
+# tracks each delivery itself, so the name carries no delivery correctness. It
+# is what tells replicas apart in `nats server report connections` and in the
+# worker's own logs: with one shared name, a stuck or dead replica cannot be
+# told from a healthy one, and an operator draining "the" worker drains a
+# guess. (Under the retired Redis command bus the name WAS the consumer-group
+# identity, and sharing it lost work; the per-pod substitution was built then
+# and stays.)
 #
 # The mechanism has three parts and a break in any one of them is silent, which
 # is why each is asserted separately:
@@ -37,8 +39,7 @@ CHART="deploy/helm/elitea"
 BASE=(-f "$CHART/values-standalone.yaml"
       --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
       --set llmGateway.egressPosture=public-unrestricted
-      --set worker.enabled=true
-      --set runtimeRedis.enabled=true)
+      --set worker.enabled=true)
 
 failures=0
 fail() { printf 'FAIL: %s\n' "$1" >&2; failures=$((failures + 1)); }
@@ -61,7 +62,7 @@ helm template identity "$CHART" "${BASE[@]}" > "$MANIFEST"
 if grep -q '"consumer_id":"[^"]*__ELITEA_POD_NAME__"' "$MANIFEST"; then
   pass "the ConfigMap emits a per-pod placeholder"
 else
-  fail "the ConfigMap's consumer_id has no __ELITEA_POD_NAME__ placeholder, so every replica shares one Redis consumer name"
+  fail "the ConfigMap's consumer_id has no __ELITEA_POD_NAME__ placeholder, so every replica shares one NATS connection name"
 fi
 
 # ------------------------------------------------------------------ part 2

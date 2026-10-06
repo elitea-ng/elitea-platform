@@ -16,7 +16,7 @@ The harness crosses the following real boundaries:
   PostgreSQL/PgVector server and inspects the resulting rows directly;
 - real Poppler and Tesseract executables process deterministic PDF, populated
   OCR, and empty-OCR fixtures in the mandatory CI profile;
-- the Go control-plane test serializes the production Redis command envelope
+- the Go control-plane test serializes the production command-bus envelope
   and asserts that image, base64, prompt, and attachment bytes are absent.
 
 It does not claim that the standalone worker already has end-to-end Confluence
@@ -99,10 +99,10 @@ The golden successful outcome is:
   UUID/timestamps are normalized);
 - the observed Confluence stats shape (`items_processed=1`,
   `total_fetched=0`, `total_skipped=0`);
-- no source, image, base64, prompt, credential, or result bytes in the Redis
+- no source, image, base64, prompt, credential, or result bytes in the command-bus
   control envelope.
 
-The production Redis-envelope serializer test hashes a deterministic 62 MiB
+The production command-bus envelope serializer test hashes a deterministic 62 MiB
 data fixture:
 ten 3 MiB image payloads plus one 32 MiB payload. Only the immutable bundle
 reference, byte length, and digest may enter the command; every payload canary
@@ -110,7 +110,7 @@ and representative base64/prompt/result fragment must be absent.
 
 This proves only that the production command serializer is reference-only. It
 does **not** yet prove the complete admission -> durable bundle persistence ->
-Redis `XADD` -> standalone-worker consumption -> output-streaming path under
+JetStream publish -> standalone-worker consumption -> output-streaming path under
 the 62 MiB workload, and it does not close issue #5681 by itself.
 
 ## Required full profile
@@ -157,7 +157,7 @@ Two tests are intentionally skipped rather than presenting mocked success:
   Pylon task cancellation plus index-meta reconciliation, not an SDK operation.
 
 The production 62 MiB cross-process path is also an explicit residual. The
-current test cannot honestly replace durable admission, real Redis delivery,
+current test cannot honestly replace durable admission, real JetStream delivery,
 worker claim/consumption, and streamed output with an in-process fake.
 
 ## Evidence boundary

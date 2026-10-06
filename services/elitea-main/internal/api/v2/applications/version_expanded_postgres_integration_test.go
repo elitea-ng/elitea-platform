@@ -7,7 +7,7 @@ package applications_test
 // `requests.patch(url, headers=..., verify=False)` with NO body, so this
 // handler is a READ. Before this change the Go router served only GET, PUT and
 // DELETE on the path, and the hybrid edge sent the PATCH to pylon
-// (deploy/centry-hybrid/traefik/index-routes.yml). `GetVersionExpanded`
+// (the since-retired deploy/centry-hybrid/traefik/index-routes.yml). `GetVersionExpanded`
 // existed but no router registered it, and it authenticated against an
 // `APPLICATION_SECRET_KEY` process environment variable that no deployment
 // sets and that pylon never reads.

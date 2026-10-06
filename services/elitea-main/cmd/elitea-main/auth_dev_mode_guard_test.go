@@ -42,7 +42,7 @@ func TestDevelopmentFlagsRejectAuthDevModeTrue(t *testing.T) {
 }
 
 // A lingering "false" is inert and must stay tolerated — deployments that
-// pinned it off (deploy/centry-hybrid) must not be broken by the removal.
+// pinned it off (the retired deploy/centry-hybrid did) must not be broken by the removal.
 // Any other value is likewise not the dangerous one and must not be rejected.
 func TestDevelopmentFlagsTolerateNonTrueAuthDevMode(t *testing.T) {
 	for _, value := range []string{"", "false", "1", "TRUE", "yes"} {

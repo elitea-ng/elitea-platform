@@ -10,7 +10,7 @@ This walks a Kubernetes install of the `elitea` chart end to end. Read [Producti
 <CardGroup cols={2}>
   <Card title="Cluster access" icon="server">A Kubernetes cluster with `helm` v3 and `kubectl` configured against it.</Card>
   <Card title="PostgreSQL" icon="database">Reachable, with a superuser DSN available for the database-preparation Job (`CREATE DATABASE`, `CREATE EXTENSION vector`).</Card>
-  <Card title="Redis" icon="server">A general-purpose Redis reachable from the cluster. The runtime plane needs no Redis of its own: its command bus is NATS JetStream.</Card>
+  <Card title="NATS JetStream" icon="server">The `nats` and `nats-bootstrap` charts, installed first. The platform needs no Redis: the runtime command bus, live updates and presence are on NATS, and the chart refuses values that still set `runtimeRedis`.</Card>
   <Card title="Object storage" icon="package">An S3-compatible bucket, created ahead of the first sync and named by `main.env.STORAGE_CONTAINER`.</Card>
   <Card title="cert-manager" icon="shield-check">A `ClusterIssuer` for the internal mTLS hops (LLM gateway, DeepWiki/Inventory), if you enable those components.</Card>
 </CardGroup>

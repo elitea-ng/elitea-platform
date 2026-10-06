@@ -308,10 +308,10 @@ INSERT INTO elitea_runtime.execution_replay_events (
 }
 
 // ListPendingValidationIDs returns both new unpublished work and published,
-// unclaimed, nonterminal work whose bounded Redis visibility observation has
+// unclaimed, nonterminal work whose bounded command-bus visibility observation has
 // expired. PostgreSQL publication is therefore a visibility lease rather than
 // a permanent delivery acknowledgement. The query deliberately does not lock
-// rows: scaled-out publishers may discover the same ID, while the Redis adapter
+// rows: scaled-out publishers may discover the same ID, while the command-bus adapter
 // atomically deduplicates by stable outbox identity and exact prepared bytes.
 func (r *CommandOutboxRepository) ListPendingValidationIDs(ctx context.Context, limit int, visibilityTimeout time.Duration) ([]string, error) {
 	if limit <= 0 || limit > executionapp.MaxOutboxPublisherBatchSize || visibilityTimeout < executionapp.MinOutboxVisibilityTimeout || visibilityTimeout > executionapp.MaxOutboxVisibilityTimeout {
@@ -540,7 +540,7 @@ WHERE outbox_id = $1 AND stream_name = $2`, outboxID, r.expectedStream).Scan(
 }
 
 // StorePreparedValidation atomically selects one exact signed envelope before
-// any Redis append. Signing is deliberately outside this short transaction:
+// any command-bus publish. Signing is deliberately outside this short transaction:
 // when multiple publishers race, only one candidate is stored and every caller
 // receives that durable winner.
 func (r *CommandOutboxRepository) StorePreparedValidation(ctx context.Context, outboxID string, candidate executionapp.PreparedCommandEnvelope) (executionapp.StoredPreparedEnvelope, error) {

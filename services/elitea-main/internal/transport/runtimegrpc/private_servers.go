@@ -239,7 +239,7 @@ func (s *PrivateServerSet) Serve(ctx context.Context) error {
 // Shutdown drains all private listeners exactly once. The first caller owns
 // the supplied deadline; subsequent callers wait for that same drain. This
 // lets elitea-main pass its one application-wide drain context instead of
-// racing an independent listener timeout against database and Redis closure.
+// racing an independent listener timeout against database and command-bus closure.
 func (s *PrivateServerSet) Shutdown(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("runtime listener shutdown context is required")

@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestPostgresAgentDispatchRetainsExactEnvelopeAcrossRedisOutageAndACKLoss(t *testing.T) {
+func TestPostgresAgentDispatchRetainsExactEnvelopeAcrossBusOutageAndACKLoss(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	policy := AgentExecutionDispatchPolicy{
 		StreamName:        "elitea:runtime:agent:commands",
@@ -35,9 +35,9 @@ func TestPostgresAgentDispatchRetainsExactEnvelopeAcrossRedisOutageAndACKLoss(t 
 		"20000000-0000-4000-8000-000000000021",
 		"30000000-0000-4000-8000-000000000021",
 	)
-	redisOutage := errors.New("test Redis unavailable")
+	busOutage := errors.New("test command bus unavailable")
 	signer := &postgresIndexDispatchSigner{keyID: "agent-key-before-rotation"}
-	appender := &postgresIndexDispatchAppender{err: redisOutage}
+	appender := &postgresIndexDispatchAppender{err: busOutage}
 	producer := newPostgresAgentProducer(t, policy, signer, appender)
 	dispatcher, err := agentexecutionapp.NewDispatcher(repository, producer)
 	if err != nil {
@@ -46,7 +46,7 @@ func TestPostgresAgentDispatchRetainsExactEnvelopeAcrossRedisOutageAndACKLoss(t 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := dispatcher.Dispatch(ctx, "outbox-agent"); !errors.Is(err, redisOutage) {
+	if err := dispatcher.Dispatch(ctx, "outbox-agent"); !errors.Is(err, busOutage) {
 		t.Fatalf("injected agent append failure = %v", err)
 	}
 	prepared := assertPostgresAgentDispatchState(t, ctx, pool, admitted.ExecutionID, false, "PENDING", 0)
@@ -66,7 +66,7 @@ func TestPostgresAgentDispatchRetainsExactEnvelopeAcrossRedisOutageAndACKLoss(t 
 		t.Fatal("agent dispatch retry re-signed or changed the durable envelope")
 	}
 
-	// Simulate a process restart after Redis accepted the command but before a
+	// Simulate a process restart after the command bus accepted the command but before a
 	// worker claim/ACK became observable. The visibility timeout must select the
 	// same outbox row and replay the exact prepared bytes.
 	if _, err := pool.Exec(ctx, `

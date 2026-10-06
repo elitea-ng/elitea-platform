@@ -122,8 +122,8 @@ type AuthDeps struct {
 // 404'd in every deployment.
 //
 // They are gone rather than fixed because the replacement transport already
-// ships: runtimecomposition + the Redis command stream + services/
-// elitea-worker-python, deployed in deploy/centry-hybrid/pov-compose.yml, and
+// ships: runtimecomposition + the runtime command bus (NATS JetStream) +
+// services/elitea-worker-python, and
 // elitea-docs' spec-transport-implementation.mdx lists indexersvc/rpc.go under
 // "Delete after bounded dispatch/control/output adapters land". They landed.
 //

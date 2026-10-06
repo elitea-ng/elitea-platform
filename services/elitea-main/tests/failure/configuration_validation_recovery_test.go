@@ -17,7 +17,7 @@ import (
 )
 
 // This failure test exercises the in-process crash-recovery contract over the
-// checked cross-language corpus. It does not claim networked Redis/PostgreSQL
+// checked cross-language corpus. It does not claim networked NATS/PostgreSQL
 // failover coverage; service-backed fault injection remains a deployment gate.
 func TestCrashAfterTerminalACKRecoversSettlementWithoutInputOrBusinessReplay(t *testing.T) {
 	envelope := &runtimev1.WorkerExecutionEnvelopeV1{}

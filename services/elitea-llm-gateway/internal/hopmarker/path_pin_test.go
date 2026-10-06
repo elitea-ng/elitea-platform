@@ -87,7 +87,7 @@ func repoRoot(t *testing.T) string {
 //
 // It covers the whole directory, not a named list, because the edge is not one
 // file: deploy/traefik/dynamic.yml and dynamic.e2e.yml front the browser,
-// deploy/centry-hybrid/traefik/middlewares.yml fronts the hybrid stack, and
+// deploy/runtime/platform-edge-dynamic.yml fronts the runtime plane, and
 // deploy/helm/elitea/values.yaml carries the chart's own strip list. A gate
 // that named three of the four would go quiet the day a fourth appeared.
 func TestHopMarker_NoDeployConfigurationStripsIt(t *testing.T) {

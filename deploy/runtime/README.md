@@ -1,8 +1,8 @@
 # The runtime plane — what `ELITEA_RUNTIME_ENABLED=true` actually costs
 
 This directory holds the non-secret half of the runtime plane for the full
-standalone stack: the TLS Redis config (no client left; removed next), the production auth config, and the two
-scripts that install generated material and pre-create the dispatch streams. The
+standalone stack: the production auth config and the script that installs the
+generated material. The command bus's streams are created by `nats-bootstrap`. The
 secret half is minted by [`../scripts/gen-runtime-certs.sh`](../scripts/gen-runtime-certs.sh)
 into `deploy/certs/runtime/`, which is gitignored and must stay that way.
 
@@ -24,9 +24,8 @@ else.
    ([`docs/runtime-command-bus.md`](../../docs/runtime-command-bus.md)).
    `ELITEA_RUNTIME_NATS_URL` is `nats://nats:4222` in compose (plaintext, no
    identity); `docker-compose.nats-secure.yml` switches it to `tls://` with
-   the `elitea-main-runtime` client certificate. The TLS `runtime-redis` has
-   no client left (Form auth keeps its state in PostgreSQL); it is removed
-   with the next change.
+   the `elitea-main-runtime` client certificate. There is no Redis (Form auth
+   keeps its state in PostgreSQL).
 2. **Three mTLS listeners, not one.** Control gRPC `:9443`, output gRPC `:9444`,
    content HTTPS `:9445`, each with its own `_TLS_CERT_FILE`, `_TLS_KEY_FILE`
    and `_TLS_CLIENT_CA_FILE`. All three demand
@@ -76,7 +75,7 @@ derived from one seed.
 This is why compose does **not** bind-mount `deploy/certs/runtime` into the
 services. Under rootless podman a bind-mounted host file arrives owned by
 container uid 0, so a `0600` file is unreadable by elitea-main (distroless
-`nonroot`, uid 65532) or redis (uid 999) — and "chmod 644 on the host" is not a
+`nonroot`, uid 65532) or the worker (uid 10001) — and "chmod 644 on the host" is not a
 fix, because `PrivateMaterial` rejects any group/other bit.
 [`install-material.sh`](install-material.sh) copies into per-consumer named
 volumes instead, where owner and mode can be set independently, and gives each
@@ -258,10 +257,10 @@ elitea-main → gateway → mock returns the mock's echo (streaming and unary).
 Joining those into one journey is #284.
 
 Toolkit-bearing agents will fail here regardless. The SDK resolves toolkits
-through `/api/v2/elitea_core/tools_list/{project_id}`, which `deploy/centry-hybrid`
-routes to **pylon**; Go's equivalent is a different path and answers 501 by
+through `/api/v2/elitea_core/tools_list/{project_id}`, which the retired `deploy/centry-hybrid`
+stack routed to **pylon**; Go's equivalent is a different path and answers 501 by
 design. Nested application references and the artifact toolkit are pylon-backed
-in the hybrid for the same reason. A plain adhoc turn touches none of them.
+in a mixed deployment for the same reason. A plain adhoc turn touches none of them.
 
 The web chat surface also still emits into a noop socket.io client rather than
 subscribing to `{events_url}`; that port is #93.
@@ -288,7 +287,7 @@ which aimed TLS at that same cleartext port, so every turn logged
 `http: server gave HTTP response to HTTPS client` — a deployment fault reported
 per turn, hiding the routing gap behind it. `internal/runtimecomposition/config.go`
 now refuses that value at boot. Set the variable only where another server
-answers the path, as centry-hybrid does with its edge.
+answers the path, as the retired centry-hybrid stack did with its edge.
 
 The cost is one bounded request of 3 s for each send, regeneration, continuation
 and ad-hoc turn. The failure is now visible. The client writes the cause to the

@@ -3,7 +3,6 @@ version: "3"
 vars:
   SERVICE: services/elitea-main
   WORKER_SERVICE: services/elitea-worker-python
-  CENTRY_DIR: '{{.CENTRY_DIR | default "../centry"}}'
 
 tasks:
   # ── Go ────────────────────────────────────────────────────────────────────────
@@ -124,7 +123,7 @@ tasks:
 
   # ── Local Environment ─────────────────────────────────────────────────────────
   up:
-    desc: Start full local environment (postgres, redis, all services)
+    desc: Start full local environment (postgres, NATS, all services)
     cmds:
       - git submodule update --init --recursive
       - podman compose -f deploy/docker-compose.yml up --build
@@ -160,70 +159,6 @@ tasks:
     desc: Tear down the standalone full stack
     cmds:
       - deploy/scripts/standalone-stack.sh down
-
-  hybrid:config:
-    desc: Validate the mixed Centry and selected Go-slice deployment
-    # deploy:check-edge runs first, and `hybrid:up` depends on this task. The
-    # PoV launcher deploy/centry-hybrid/compose.sh already calls the same gate
-    # (#368). The foundation stack had no such call, and that is the stack
-    # #378 broke: it mounted a whole directory and loaded routers whose
-    # edge-auth endpoint it never registers. `docker compose config`
-    # accepts that model, because the defect is in the edge YAML.
-    deps: ["deploy:check-edge"]
-    cmds:
-      - >-
-        ELITEA_PLATFORM_DIR="{{.ROOT_DIR}}"
-        docker compose
-        --project-directory "{{.CENTRY_DIR}}"
-        --env-file "{{.CENTRY_DIR}}/envs/default.env"
-        --env-file "{{.CENTRY_DIR}}/envs/override.env"
-        -f "{{.CENTRY_DIR}}/docker-compose.yml"
-        -f "{{.ROOT_DIR}}/deploy/centry-hybrid/docker-compose.yml"
-        config --quiet
-
-  hybrid:up:
-    desc: Start Centry with the selected Go slices behind the hybrid gateway
-    deps: ["hybrid:config"]
-    cmds:
-      - >-
-        ELITEA_PLATFORM_DIR="{{.ROOT_DIR}}"
-        docker compose
-        --project-directory "{{.CENTRY_DIR}}"
-        --env-file "{{.CENTRY_DIR}}/envs/default.env"
-        --env-file "{{.CENTRY_DIR}}/envs/override.env"
-        -f "{{.CENTRY_DIR}}/docker-compose.yml"
-        -f "{{.ROOT_DIR}}/deploy/centry-hybrid/docker-compose.yml"
-        up -d --build
-
-  hybrid:pov:prepare:
-    desc: Provision ignored local Auth/runtime material for the full mixed PoV
-    cmds:
-      - deploy/centry-hybrid/compose.sh prepare "{{.CENTRY_DIR}}"
-
-  hybrid:pov:config:
-    desc: Validate the full Auth, Configurations, LiteLLM and indexing PoV model
-    cmds:
-      - deploy/centry-hybrid/compose.sh config "{{.CENTRY_DIR}}"
-
-  hybrid:pov:up:
-    desc: Build and start the reproducible full mixed PoV
-    cmds:
-      - deploy/centry-hybrid/compose.sh up "{{.CENTRY_DIR}}"
-
-  hybrid:pov:ps:
-    desc: Show status for the full mixed PoV
-    cmds:
-      - deploy/centry-hybrid/compose.sh ps "{{.CENTRY_DIR}}"
-
-  hybrid:pov:preflight:
-    desc: Re-run the observational index-v1 drain gate
-    cmds:
-      - deploy/centry-hybrid/compose.sh preflight "{{.CENTRY_DIR}}"
-
-  hybrid:pov:logs:
-    desc: Follow the full mixed PoV logs
-    cmds:
-      - deploy/centry-hybrid/compose.sh logs "{{.CENTRY_DIR}}"
 
   # ── Container Images ──────────────────────────────────────────────────────────
   images:

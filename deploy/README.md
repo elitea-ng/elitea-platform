@@ -172,7 +172,7 @@ address. Those copies had already drifted apart.
 |---|---|---|---|---|
 | `nats` | `applications/nats.yaml` | -2 | `elitea` | **Production reference.** scale-1 profile by default; `values-ha.yaml` for HA. mTLS-only with its own CA Issuer (#1076), so it shares the platform's namespace. |
 | `nats-bootstrap` | `applications/nats-bootstrap.yaml` | -1 | `elitea` | **Production reference.** Idempotent Helm hook Job that owns every stream and KV bucket; HA needs `replicas=3`. |
-| `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform.** One release: elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the runtime Redis, the OTel collector, the `dbInit` Job, and the DeepWiki provider service with its own migration Job. |
+| `elitea` | `applications/elitea.yaml` | 0 | `elitea` | **The platform.** One release: elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the `dbInit` Job, and the DeepWiki provider service with its own migration Job. |
 
 Components of the `elitea` chart are switched by `<component>.enabled`, and
 `deploy/helm/elitea/values.yaml` holds every one of them. Ordering inside the
@@ -501,7 +501,7 @@ configuration write path, and that path decides `status_ok` in the request
 (#457), which is what makes a saved credential visible to the gateway.
 
 `deploy/helm/elitea/values-auth-minimal.yaml` is that shape:
-`fileConfig.authConfig`, **no runtime plane and no Redis**, and
+`fileConfig.authConfig`, **no runtime plane**, and
 `ELITEA_CONFIGURATIONS_ENABLED` + the public project (`platform.aiProjectId`)
 on top. Production Form authentication keeps its sign-in state (sessions,
 login transactions, attempt windows) in PostgreSQL (elitea-main shared
@@ -1132,10 +1132,9 @@ the Application values instead. The order is the same.
 
 Stated plainly, because the gap between compose and Helm is where deploys break:
 
-- **No PostgreSQL and no NATS.** No chart here provisions them (the runtime's
-  TLS Redis, `runtimeRedis`, still renders when enabled, but nothing reads it
-  any more; it is removed next). The
-  migration hook fails against a cluster where PostgreSQL does not already
+- **No PostgreSQL and no NATS.** No chart here provisions them. (No Redis is
+  needed at all: `runtimeRedis` is removed and the chart refuses values that
+  still set it; see `docs/UPGRADING.md`.) The migration hook fails against a cluster where PostgreSQL does not already
   exist or `postgresql.existingSecret` has not been pointed at it, and
   elitea-main stops at startup when the NATS named by `nats` (its
   `ELITEA_EVENTS_NATS_URL`) is unreachable, has no JetStream, or lacks the

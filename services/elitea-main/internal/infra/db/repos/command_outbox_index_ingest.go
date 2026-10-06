@@ -566,7 +566,7 @@ WHERE o.outbox_id = $1
 }
 
 // StorePreparedIndexIngest atomically selects one exact signed envelope before
-// Redis append. Competing publishers receive the same durable winner.
+// command-bus publish. Competing publishers receive the same durable winner.
 func (r *CommandOutboxRepository) StorePreparedIndexIngest(ctx context.Context, outboxID string, candidate executionapp.PreparedCommandEnvelope) (executionapp.StoredPreparedEnvelope, error) {
 	if outboxID == "" {
 		return executionapp.StoredPreparedEnvelope{}, indexingapp.ErrInvalidIndexIngestDispatch
@@ -630,7 +630,7 @@ FOR UPDATE OF j, o`, outboxID, r.expectedStream).Scan(
 		// redelivery path appends the same durable winner again. The winner
 		// therefore stays returnable in PENDING and in DISPATCHED. Worker
 		// authority, or a terminal job state, does end the window: returning the
-		// winner then would recreate a Redis entry that the worker may already
+		// winner then would recreate a bus message that the worker may already
 		// have acknowledged and deleted.
 		if authorityGranted || (jobState != string(executiondomain.JobPending) && jobState != string(executiondomain.JobDispatched)) {
 			return executionapp.ErrDispatchRetired

@@ -15,7 +15,7 @@ package mcp_test
 //     async→sync bridge reads the right row and returns real text.
 //
 // The start use case is faked. Admitting a turn for real would need the whole
-// runtime plane — outbox, Redis stream, a Python or Rust worker — which is not
+// runtime plane — outbox, command bus, a Python or Rust worker — which is not
 // what this file is about: the seam under test is everything on THIS side of
 // `StartCurrentApplication`, plus the settle poll on the other side of it.
 

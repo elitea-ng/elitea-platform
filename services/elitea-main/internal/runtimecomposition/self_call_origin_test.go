@@ -79,7 +79,7 @@ func TestSelfCallOriginRefusesHTTPSOnTheProcessOwnCleartextPort(t *testing.T) {
 }
 
 func TestSelfCallOriginKeepsTheExplicitEdgeOrigin(t *testing.T) {
-	// centry-hybrid does not serve this route from this process: it aims the
+	// A mixed deployment (the retired centry-hybrid was one) does not serve this route from this process: it aims the
 	// call at the edge, which routes the path to legacy Centry. An explicit
 	// https origin must still be honoured verbatim.
 	environment := agentDispatchEnvironment()

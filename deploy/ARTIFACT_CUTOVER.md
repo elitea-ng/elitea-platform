@@ -1,7 +1,7 @@
 # Artifact cutover — the current platform's object store to the Go one
 
-Issue #337. This runbook moves the artifact plane of the mixed (hybrid)
-deployment from the current platform to `elitea-main`. It is a **route change
+Issue #337. This runbook moves the artifact plane of a deployment that still
+runs the legacy platform to `elitea-main`. It is a **route change
 plus a one-time data copy**, not a configuration switch: the two stores are
 different kinds of store, and nothing can read both.
 
@@ -32,25 +32,19 @@ backend, and ADR-0016 §8 records that decision. `storage.ConfigFromEnv` accepts
 default, so a deployment cannot be pointed at the old directory by mistake
 either.
 
-## 2. What this repository already changed
+## 2. What this repository provides
 
-- `deploy/centry-hybrid/pov-compose.yml` sets `ELITEA_ARTIFACTS_ENABLED: "true"`
-  and the `STORAGE_*` / `S3_*` variables, and adds `runtime-artifacts` (the
-  object store) with `runtime-artifacts-bucket-init` (which creates the
-  container).
-- `deploy/centry-hybrid/traefik/index-routes.yml` has one artifact router,
-  `go-artifacts`, with no `Host` guard, resolving to `elitea-main`. It covers
-  both the browser surface (`/api/v2/artifacts/...`) and the root-mounted
-  `/artifacts/s3/...` surface the pinned SDK speaks. Before this change the S3
-  half went to pylon behind a `Host(elitea-gateway)` guard and the browser half
-  fell through `base.yml`'s `PathPrefix("/")` catch-all to pylon.
-- `services/elitea-main/tests/deployedge/edge_artifact_owner_test.go` holds the
-  two together. It finds artifact routers by their RULES, not by name, and it
-  fails when the file declares none — an absent router is a silent fall-through
-  to pylon, not an unrouted path.
+- `deploy/scripts/migrate-artifacts.sh` copies the objects (section 3.2).
+- `elitea-main` serves the artifact plane when `ELITEA_ARTIFACTS_ENABLED` is
+  `"true"` and the `STORAGE_*` variables name an object store. Every stack in
+  this repository (Helm, `deploy/docker-compose.standalone-full.yml`) already
+  does.
 
-`deploy/centry-hybrid/compose.sh config` asserts the same pair in the rendered
-Compose model and refuses the retired router name.
+The mixed `deploy/centry-hybrid` stack that this runbook was first written
+against is retired (see `docs/UPGRADING.md`). On your own edge, route both the
+browser surface (`/api/v2/artifacts/...`) and the root-mounted
+`/artifacts/s3/...` surface the pinned SDK speaks to `elitea-main`, and do not
+leave either half falling through to pylon.
 
 ## 3. The procedure
 
@@ -61,9 +55,9 @@ Compose model and refuses the retired router name.
    `/data/libcloud/storage` under the `./pylon_main:/data` mount).
 
    ```bash
-   deploy/centry-hybrid/scripts/migrate-artifacts.sh \
+   deploy/scripts/migrate-artifacts.sh \
      --source <centry>/pylon_main/libcloud/storage \
-     --alias hybrid --dry-run
+     --alias target --dry-run
    ```
 
    `--dry-run` copies nothing. It prints one line per object — the decoded
@@ -76,18 +70,18 @@ Compose model and refuses the retired router name.
 2. **Point `rc` at the target.**
 
    ```bash
-    rc alias set hybrid http://127.0.0.1:9000 elitea <secret>
+    rc alias set target http://127.0.0.1:9000 elitea <secret>
    ```
 
-   `<secret>` is `RUSTFS_SECRET_KEY` on the `runtime-artifacts` service. Use the
+   `<secret>` is the secret key of the target object store (`RUSTFS_SECRET_KEY` on a RustFS store). Use the
    published address of your own store if it is not the compose one.
 
 ### 3.2 The copy
 
 ```bash
-deploy/centry-hybrid/scripts/migrate-artifacts.sh \
+deploy/scripts/migrate-artifacts.sh \
   --source <centry>/pylon_main/libcloud/storage \
-  --alias hybrid \
+  --alias target \
   --container elitea-artifacts
 ```
 
@@ -120,17 +114,10 @@ values the API computes.
 
 ### 3.4 Flip
 
-Nothing to flip by hand: the flag and the routes are in the tree. Bring the
-stack up and the new routing is live.
-
-```bash
-deploy/centry-hybrid/compose.sh config   # validates the model, refuses drift
-deploy/centry-hybrid/compose.sh up
-```
-
-`compose.sh up` force-recreates `auth_gateway` on purpose, because the route
-file is a bind mount and an editor's atomic replace leaves a running container
-attached to the previous inode.
+Switch the artifact routes on your edge to `elitea-main` and set
+`ELITEA_ARTIFACTS_ENABLED: "true"` on it, in one change. Recreate the edge
+container if its route file is a bind mount: an editor's atomic replace leaves
+a running container attached to the previous inode.
 
 ### 3.5 Prove it
 
@@ -152,15 +139,13 @@ attached to the previous inode.
 **Rollback is both edits, not one.** Setting `ELITEA_ARTIFACTS_ENABLED` back to
 `"false"` without reverting `go-artifacts` leaves every artifact path resolving
 to a service that composes no object store, which answers 404 on paths that used
-to work. `edge_artifact_owner_test.go` fails on that combination, which is the
-point of holding the two statements in one gate.
+to work.
 
 To reverse the cutover:
 
-1. Revert both files together (`git revert` of the commit that changed them, or
-   set `ELITEA_ARTIFACTS_ENABLED: "false"` **and** restore the
-   `runtime-worker-current-artifacts` router with `service: current-main`).
-2. `deploy/centry-hybrid/compose.sh up`.
+1. Revert both statements together: set `ELITEA_ARTIFACTS_ENABLED: "false"`
+   **and** route the artifact paths back to the legacy platform.
+2. Recreate the edge and `elitea-main`.
 
 Objects written to the Go store after the flip do **not** travel back. The
 source tree is untouched, so every object that existed before the flip is still

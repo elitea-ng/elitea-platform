@@ -8,7 +8,7 @@ Elitea AI platform Enterprise grade business harnessing LLMs for secure and scal
 elitea-platform/
 ├── services/
 │   ├── elitea-llm-gateway/  # LLM gateway service
-│   ├── elitea-main/         # Go API server (chi/v5, pgx/v5, go-redis/v9)
+│   ├── elitea-main/         # Go API server (chi/v5, pgx/v5, nats.go)
 │   ├── elitea-scheduler/    # Background workers: price sync, budget write-back, retention sweeps (Go)
 │   └── elitea-worker-python/# Python worker runtime and SDK
 ├── apps/
@@ -41,7 +41,7 @@ elitea-platform/
 git clone --recurse-submodules https://github.com/EliteaAI/elitea-platform.git
 cd elitea-platform
 
-# Start everything (postgres, redis, traefik, elitea-main, elitea-ui)
+# Start everything (postgres, nats, rustfs, traefik, elitea-main, elitea-ui)
 task up
 
 # Or manually:
@@ -58,14 +58,13 @@ Services will be available at:
 | API | http://localhost:8080/api/ | elitea-main API endpoints |
 | UI | http://localhost:8080/app/ | elitea-ui React SPA |
 | postgres | localhost:5432 | PostgreSQL 18 |
-| redis | localhost:6379 | Redis 7 |
 
 ## Standalone full stack
 
 `deploy/docker-compose.yml` above is the older local shape and keeps the
 legacy database and routing conventions. `deploy/docker-compose.standalone-full.yml`
 is a separate, self-contained recipe for the **target** architecture: Go `elitea-main` +
-`elitea-web` + the Bifrost `elitea-llm-gateway` + postgres/redis/rustfs/traefik
+`elitea-web` + the Bifrost `elitea-llm-gateway` + postgres/nats/rustfs/traefik
 + a mock OIDC provider — no pylon, no centry, no LiteLLM.
 
 ```bash
@@ -105,7 +104,7 @@ provider credential you seed with `seed-llm`.
 a separate path from the `/llm` passthrough and is not enabled here. It needs
 all of: `services/elitea-worker-python` running as the NodeEvent producer (Go
 has no native agent-token producer — it only projects and serves the events);
-`ELITEA_RUNTIME_ENABLED=true`, which requires a full runtime PKI (TLS Redis +
+`ELITEA_RUNTIME_ENABLED=true`, which requires the JetStream command bus and a full runtime PKI (
 four gRPC server certs + a signing keyring); `cfg.RuntimeRoutes` to be wired in
 `cmd/elitea-main/main.go` so `GET /api/v2/executions/{projectID}/{executionID}/events`
 is actually mounted; and the web chat surface to subscribe to that SSE stream

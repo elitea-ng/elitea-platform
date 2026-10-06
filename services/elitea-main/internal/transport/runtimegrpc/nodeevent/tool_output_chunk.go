@@ -24,7 +24,7 @@ import (
 // `RESOURCE_EXHAUSTED: The agent event exceeds its output limit`.
 //
 // WHY NOT RAISE THE FRAME. The frame bound is not a local constant; it is the
-// conformance limit every transport hop is sized against, Redis field bound
+// conformance limit every transport hop is sized against, bus message bound
 // included. Raising it to fit the largest tool result a toolkit may legally
 // return (200k characters, which is ~800 KiB of worst-case UTF-8 and more once
 // JSON-escaped) would move a bound that four components agree on, to a number

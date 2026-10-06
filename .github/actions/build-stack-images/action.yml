@@ -60,11 +60,11 @@ runs:
   using: composite
   steps:
     # Third-party (non-`build:`) images the compose files reference — postgres,
-    # redis, pgvector, rustfs, traefik, the oidc-mock base, otel, etc. — pulled
+    # nats, pgvector, rustfs, traefik, the oidc-mock base, otel, etc. — pulled
     # up front with a bounded retry, before buildx even starts.
     #
     # Why: three CI runs in one day died before any test ran with a Docker Hub
-    # connection reset while `compose up` pulled a base image (redis:7-alpine,
+    # connection reset while `compose up` pulled a base image (e.g.
     # postgres:18) inline, on the chat-stream shards of ci-web-e2e.yml. Every
     # caller of this action hands compose-files here in the same order and
     # relative-to-deploy/ spelling it later hands to the stack script's `up`,

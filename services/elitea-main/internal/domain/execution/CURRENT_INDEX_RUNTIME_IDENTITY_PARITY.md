@@ -36,7 +36,7 @@ The current Go admission path does not persist:
 
 The HTTP auth boundary also deliberately treats `X-Auth-Reference` as
 compatibility routing material, not an identity claim. Copying the current raw
-browser session cookie/reference into PostgreSQL, Redis, an execution command,
+browser session cookie/reference into PostgreSQL, the command bus, an execution command,
 or a worker payload would create a replayable bearer path and is prohibited.
 
 Because these inputs do not exist, runtime code cannot safely infer
@@ -59,7 +59,7 @@ indistinguishable from an authorized delegation.
 The binding validates against the durable execution identity. It rejects mode
 mixing, cross-tenant/project/actor use, execution/generation replay, and a
 delegation mode without grant evidence. It has no wire tags and is not mounted
-in Redis or the worker contract.
+in the command bus or the worker contract.
 
 `ProjectSystemIssuer` and the generated `GetActiveProjectSystemPAT` query add
 the exact read/encode adapter needed after delegation is authorized. The query:

@@ -440,9 +440,9 @@ func (c Config) Validate() error {
 //
 // # Why the variable still exists
 //
-// The centry-hybrid stack does not serve this route from this process. It aims
-// the call at the edge (`https://elitea-gateway`), which routes the path to
-// legacy Centry — `deploy/centry-hybrid/traefik/index-routes.yml`. An explicit
+// The retired centry-hybrid stack did not serve this route from this process. It aimed
+// the call at the edge (`https://elitea-gateway`), which routed the path to
+// legacy Centry. Any mixed deployment has the same shape, so an explicit
 // origin has to stay possible for that topology.
 func currentMainBaseURL(lookup LookupEnv) (string, error) {
 	listenPort, err := publicListenPort(lookup)

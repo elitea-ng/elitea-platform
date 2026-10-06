@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	threeMiB      = 3 << 20
-	thirtyTwoMiB  = 32 << 20
-	maxRedisBytes = (64 << 10) - 1
+	threeMiB     = 3 << 20
+	thirtyTwoMiB = 32 << 20
+	maxBusBytes  = (64 << 10) - 1
 )
 
 type testSigner struct{}
@@ -41,7 +41,7 @@ func (a *recordingAppender) Append(_ context.Context, _, _ string, value []byte)
 	return "1-0", nil
 }
 
-func TestConfluenceBulkAndImageBytesNeverEnterRedis(t *testing.T) {
+func TestConfluenceBulkAndImageBytesNeverEnterTheCommandBus(t *testing.T) {
 	t.Parallel()
 
 	payloadDigest, canaries := confluenceProductionScaleDigest()
@@ -60,7 +60,7 @@ func TestConfluenceBulkAndImageBytesNeverEnterRedis(t *testing.T) {
 				MaxWorkerCommandBytes:    16 << 10,
 				MaxSignedEnvelopeBytes:   32 << 10,
 				MaxTransportPayloadBytes: 48 << 10,
-				MaxTransportMessageBytes: maxRedisBytes,
+				MaxTransportMessageBytes: maxBusBytes,
 				MaxSignatureBytes:        256,
 				MaxStringBytes:           4096,
 			},
@@ -108,12 +108,12 @@ func TestConfluenceBulkAndImageBytesNeverEnterRedis(t *testing.T) {
 	if err := producer.AppendPrepared(context.Background(), dispatch.OutboxID, prepared); err != nil {
 		t.Fatal(err)
 	}
-	if len(appender.value) == 0 || len(appender.value) >= maxRedisBytes {
-		t.Fatalf("unexpected Redis envelope size: %d", len(appender.value))
+	if len(appender.value) == 0 || len(appender.value) >= maxBusBytes {
+		t.Fatalf("unexpected bus envelope size: %d", len(appender.value))
 	}
 	for _, canary := range canaries {
 		if bytes.Contains(appender.value, canary) {
-			t.Fatalf("Redis envelope contains Confluence data-plane canary %q", canary)
+			t.Fatalf("bus envelope contains Confluence data-plane canary %q", canary)
 		}
 	}
 	for _, fragment := range [][]byte{
@@ -123,7 +123,7 @@ func TestConfluenceBulkAndImageBytesNeverEnterRedis(t *testing.T) {
 		[]byte("release notes from the text attachment"),
 	} {
 		if bytes.Contains(appender.value, fragment) {
-			t.Fatalf("Redis envelope contains forbidden Confluence fragment %q", fragment)
+			t.Fatalf("bus envelope contains forbidden Confluence fragment %q", fragment)
 		}
 	}
 	if got := dispatch.InputBundleByteLength; got != 62<<20 {

@@ -121,7 +121,7 @@ func (b EmbeddingBinding) Validate() error {
 }
 
 // MarshalCanonical returns the exact non-secret bytes stored in the input data
-// plane. Redis receives only their immutable entry reference and digest.
+// plane. The command bus receives only their immutable entry reference and digest.
 func (b EmbeddingBinding) MarshalCanonical() ([]byte, error) {
 	if err := b.Validate(); err != nil {
 		return nil, err

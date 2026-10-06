@@ -36,7 +36,7 @@ import (
 
 // This is a deterministic in-process vertical integration test over the exact
 // checked Python/Go corpus. It intentionally does not claim networked
-// PostgreSQL, Redis, or gRPC-listener coverage; those adapters require a
+// PostgreSQL, NATS, or gRPC-listener coverage; those adapters require a
 // separately activated service-backed suite.
 func TestConfigurationValidationVerticalComponentAgainstCheckedCorpus(t *testing.T) {
 	for _, fixture := range []string{"valid", "invalid", "unsupported"} {

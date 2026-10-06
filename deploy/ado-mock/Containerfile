@@ -6,7 +6,7 @@
 FROM python:3.12.10-slim
 
 # Non-root, and a uid that collides with nothing else in the stack (elitea-main
-# is 65532, the worker 10001, redis 999, mock-llm 10101, qtest-mock 10102).
+# is 65532, the worker 10001, mock-llm 10101, qtest-mock 10102).
 RUN useradd --system --uid 10103 --home-dir /nonexistent --shell /usr/sbin/nologin adomock
 
 COPY server.py /opt/ado-mock/server.py

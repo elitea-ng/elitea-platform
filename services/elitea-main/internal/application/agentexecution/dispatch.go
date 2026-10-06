@@ -94,8 +94,8 @@ type ReferenceCommandProducer interface {
 	AppendPrepared(context.Context, string, executionapp.PreparedCommandEnvelope) error
 }
 
-// Dispatcher durably selects one signed byte sequence before Redis append.
-// Redis or acknowledgement uncertainty therefore retries the exact command
+// Dispatcher durably selects one signed byte sequence before the command-bus publish.
+// Publish or acknowledgement uncertainty therefore retries the exact command
 // and never re-signs a possibly different agent request.
 type Dispatcher struct {
 	store    PendingDispatchStore

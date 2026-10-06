@@ -19,7 +19,7 @@ const (
 	maxStoredInputContentBytes  = 256 * 1024
 	minValidationDeadlineTTL    = time.Millisecond
 	maxValidationDeadlineTTL    = 24 * time.Hour
-	// Phase one deliberately shares the Redis control-stream live-entry ceiling.
+	// Phase one deliberately shares the command bus's live-entry ceiling.
 	// This keeps the serialized active-index scan and worst-case durable input
 	// footprint bounded until production measurements justify a forward change.
 	maxSupportedOutstandingJobs = 1_024

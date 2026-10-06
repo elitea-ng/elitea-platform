@@ -179,10 +179,10 @@ func (x *RoleSet) GetIsProjectAdmin() bool {
 }
 
 // SessionResolveRequest asks the auth service to hydrate an AuthContext from
-// an opaque session reference (e.g., a Redis session key).
+// an opaque session reference (e.g., a server-side session key).
 type SessionResolveRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// session_ref is the opaque session identifier from the cookie or Redis key.
+	// session_ref is the opaque session identifier from the cookie or session store.
 	SessionRef string `protobuf:"bytes,1,opt,name=session_ref,json=sessionRef,proto3" json:"session_ref,omitempty"`
 	// project_id scopes the resolution to a specific tenant project.
 	ProjectId     string `protobuf:"bytes,2,opt,name=project_id,json=projectId,proto3" json:"project_id,omitempty"`

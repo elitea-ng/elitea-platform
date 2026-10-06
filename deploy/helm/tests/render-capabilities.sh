@@ -29,7 +29,7 @@ set -euo pipefail
 # "the Deployment" or "the ConfigMap" from the render. The single chart renders
 # every component, so the suite narrows the render to its subject instead of
 # teaching twenty selectors to disambiguate.
-ONLY_MAIN="--set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false --set runtimeRedis.enabled=false"
+ONLY_MAIN="--set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false"
 GATEWAY_RENDER_POSTURE="--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -1021,6 +1021,18 @@ refuses "a Redis-era runtime.redis block" \
   "runtime.redis is gone" \
   -f "$CHART/values-standalone.yaml" \
   --set main.runtime.redis.url=rediss://producer@elitea-runtime-redis:6380/0
+
+# The runtime Redis is removed (docs/UPGRADING.md, "runtime-redis removed").
+# A values file that still carries the block is refused, even disabled, so the
+# operator learns to delete the leftover objects instead of the key being
+# silently ignored.
+refuses "a values file that still enables runtimeRedis" \
+  "runtimeRedis is removed" \
+  --set runtimeRedis.enabled=true
+
+refuses "a values file that still carries a disabled runtimeRedis block" \
+  "runtimeRedis is removed" \
+  --set runtimeRedis.enabled=false
 
 refuses "a command stream outside the command bus contract" \
   "not one of the command bus's streams" \

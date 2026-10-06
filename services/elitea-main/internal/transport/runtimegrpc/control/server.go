@@ -126,7 +126,7 @@ func (s *Server) ClaimCommand(ctx context.Context, request *runtimev1.ClaimComma
 	disposition := decision.Disposition
 	if (disposition == executionapp.ClaimAccepted || disposition == executionapp.ClaimRecoverAgentModelCheckpoint) && lease.DesiredState != runtimedomain.DesiredRunning {
 		// OBSOLETE_ACK is reserved for an explicit durable cancellation
-		// finalizer. A non-running lease alone never makes Redis ACK safe.
+		// finalizer. A non-running lease alone never makes a bus ACK safe.
 		disposition = executionapp.ClaimActiveLeaseNoACK
 	}
 	wireDisposition, err := claimDispositionProto(disposition)

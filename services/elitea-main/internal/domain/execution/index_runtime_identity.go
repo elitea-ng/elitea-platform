@@ -45,7 +45,7 @@ func (m IndexRuntimeAuthMode) Valid() bool {
 // generation, tenant, project, and actor. Resolve must compare it with the
 // durable Job before issuing any runtime credential.
 //
-// This type has no transport tags: it is not a Redis command or worker payload.
+// This type has no transport tags: it is not a bus command or worker payload.
 type IndexRuntimeIdentityBinding struct {
 	SchemaVersion         string
 	ExecutionID           string

@@ -19,8 +19,7 @@ CHART="deploy/helm/elitea"
 BASE=(-f "$CHART/values-standalone.yaml"
       --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
       --set llmGateway.egressPosture=public-unrestricted
-      --set worker.enabled=true
-      --set runtimeRedis.enabled=true)
+      --set worker.enabled=true)
 KEDA=(--api-versions keda.sh/v1alpha1)
 
 failures=0
@@ -80,7 +79,7 @@ else
   fail "the scaler reads account '$scaler_account', not RUNTIME (deploy/helm/nats accounts); it would see zero lag"
 fi
 
-# Consumer LAG (num_pending), not the old Redis pending-entries count.
+# Consumer LAG (num_pending), not a pending-entries count.
 if grep -q 'lagThreshold:' "$work/on.yaml" && ! grep -q 'pendingEntriesCount:' "$work/on.yaml"; then
   pass "the trigger measures consumer lag"
 else

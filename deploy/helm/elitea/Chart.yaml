@@ -4,7 +4,7 @@ description: >-
   EliteA, as one chart. Installs the whole first-party platform — API, web,
   scheduler, LLM gateway, agent worker, the runtime dispatch bus and the
   telemetry collector — from a single values file, and externalizes the
-  commodity infrastructure (PostgreSQL, Redis, NATS, object storage) behind one
+  commodity infrastructure (PostgreSQL, NATS, object storage) behind one
   connection contract.
 type: application
 

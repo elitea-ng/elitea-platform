@@ -36,7 +36,7 @@ func (p InputProfile) validate() error {
 }
 
 // InputBundleFactory stores one exact direct toolkit invocation as immutable
-// protobuf data-plane content. Redis receives only the bundle and entry
+// protobuf data-plane content. The command bus receives only the bundle and entry
 // references; the toolkit snapshot, arguments, and protected settings stay off
 // the command stream.
 type InputBundleFactory struct {

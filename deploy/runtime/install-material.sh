@@ -6,14 +6,14 @@
 # carry EXACTLY owner-only bits (0600/0400) and to be readable by the reading
 # process. Under rootless podman a bind-mounted host file arrives owned by
 # container uid 0, so a 0600 file is unreadable by elitea-main (distroless
-# `nonroot`, uid 65532) and by redis (uid 999) — and the fix cannot be "chmod
+# `nonroot`, uid 65532) and by the worker (uid 10001) — and the fix cannot be "chmod
 # 644 on the host", because securefile rejects any group/other bit on private
 # material. Copying into a named volume is the only place we can set owner AND
 # mode independently per consumer.
 #
 # Each consumer gets ONLY the material it needs. The worker never sees the
 # server private keys or the signing key; elitea-main never sees the worker's
-# client key or the Redis worker password.
+# client key.
 set -eu
 
 SRC=/src
@@ -93,19 +93,9 @@ install_files "$MAIN" 65532:65532 0600 \
   auth-attempt-key auth-pat-signing-key auth-form-users.json \
   vault-master-key
 
-# ── runtime-redis (redis:7-alpine, uid 999) ──────────────────────────────────
-REDIS=/dst/redis
-mkdir -p "$REDIS"; chown 999:999 "$REDIS"; chmod 755 "$REDIS"
-install_files "$REDIS" 999:999 0644 runtime-ca.crt redis-server.crt
-install_files "$REDIS" 999:999 0600 redis-server.key redis-users.acl
-# The bootstrap password lives here for the healthcheck's redis-cli. The
-# runtime-redis has no client left: Form auth is on PostgreSQL and the command
-# bus is NATS JetStream. The component goes with the next change.
-install_files "$REDIS" 999:999 0600 redis-bootstrap-password
-
 # ── elitea-worker-python (uid 10001) ─────────────────────────────────────────
-# The worker never receives a server private key, the command-signing key or any
-# Redis password: it verifies signatures with the public keyring, and reaches
+# The worker never receives a server private key or the command-signing key: it
+# verifies signatures with the public keyring, and reaches
 # the command bus over NATS (plaintext in compose; the secured overlay mounts
 # its elitea-worker certificate).
 WORKER=/dst/worker

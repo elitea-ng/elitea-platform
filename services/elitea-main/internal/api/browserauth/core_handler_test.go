@@ -465,7 +465,7 @@ func TestCoreHandlerDependencyFailureNeverDowngradesToPublic(t *testing.T) {
 	handler := newCoreTestHandler(t,
 		panicCoreCredential(t),
 		coreSessionFunc(func(context.Context, string) (browserapp.Authorization, error) {
-			return browserapp.Authorization{}, errors.New("redis unavailable")
+			return browserapp.Authorization{}, errors.New("dependency unavailable")
 		}),
 		[]forwardapp.PublicRule{{
 			Name:       "public",

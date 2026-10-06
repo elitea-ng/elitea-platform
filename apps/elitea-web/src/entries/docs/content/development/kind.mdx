@@ -31,7 +31,7 @@ deploy/kind/kind-stack.sh down     # delete the cluster
 `seed` also exists as its own subcommand (applying `seed.sql` again without a full reinstall), but `up` already runs it as its last step. `up` is idempotent: an existing cluster, an already-built image, and an already-installed cert-manager are all reused, and the chart install itself is a `helm upgrade --install`.
 
 <Accordion title="Measured timing on a developer machine (podman, warm build cache)">
-`up` took **3m50s** end to end, and `verify` about **13s**. That's faster than a fully cold run — the README's own estimate is roughly 2m26s for `up` once images are built, plus about 8 minutes to build them from nothing; a warm podman build cache (layers shared with other local image builds) cut that second number close to 2 minutes here. Only one third-party image (`pgvector/pgvector:0.8.5-pg16`, ~467 MB) needed a fresh pull; Redis, rustfs, and the kind node image were already cached locally. Built images: `elitea-subapp-host:kind` (~14 MB), `elitea-main:kind` (~146 MB), `elitea-deepwiki:kind-engine` (~262 MB, built without the `engine` extras — see [Known limits](#known-limits)).
+`up` took **3m50s** end to end, and `verify` about **13s**. That's faster than a fully cold run — the README's own estimate is roughly 2m26s for `up` once images are built, plus about 8 minutes to build them from nothing; a warm podman build cache (layers shared with other local image builds) cut that second number close to 2 minutes here. Only one third-party image (`pgvector/pgvector:0.8.5-pg16`, ~467 MB) needed a fresh pull; rustfs and the kind node image were already cached locally (that run also side-loaded the since-removed runtime Redis image). Built images: `elitea-subapp-host:kind` (~14 MB), `elitea-main:kind` (~146 MB), `elitea-deepwiki:kind-engine` (~262 MB, built without the `engine` extras — see [Known limits](#known-limits)).
 </Accordion>
 
 ## What `up` does, step by step
@@ -68,7 +68,7 @@ This stack has no OIDC provider and no edge — the Form provider's user list ex
 </Note>
 
 <Accordion title="A harmless restart in the first 20 seconds">
-`elitea-main` may restart briefly while the runtime Redis listener starts; Kubernetes' restart backoff resolves it in under a minute. This is expected and harmless.
+`elitea-main` may restart briefly while its dependencies come up; Kubernetes' restart backoff resolves it in under a minute. This is expected and harmless.
 </Accordion>
 
 ## Reaching the API — there is no UI here
@@ -81,7 +81,7 @@ curl -H "Authorization: Bearer <token minted from the seeded PAT>" \
   http://localhost:18080/api/v2/...
 ```
 
-`elitea-deepwiki-svc`, the runtime Redis, Postgres, and rustfs are all in-cluster only — elitea-main reaches the DeepWiki provider over mTLS, and the script itself reaches Postgres with `kubectl exec`.
+`elitea-deepwiki-svc`, Postgres, and rustfs are all in-cluster only — elitea-main reaches the DeepWiki provider over mTLS, and the script itself reaches Postgres with `kubectl exec`.
 
 ## What `verify` proves
 
@@ -94,7 +94,7 @@ Four checks, each exiting non-zero on failure — this **is** the project's `hel
 
 ## Why Form authentication, not OIDC
 
-The provider registrar only arms when `ELITEA_AI_PROJECT_ID` names a public project. This stack uses Form authentication instead of OIDC, which is why `runtimeRedis` is enabled despite no runtime plane or worker running.
+The provider registrar only arms when `ELITEA_AI_PROJECT_ID` names a public project. This stack uses Form authentication instead of OIDC; its sign-in state is in PostgreSQL, so no Redis and no runtime plane or worker is involved.
 
 ## Known limits
 

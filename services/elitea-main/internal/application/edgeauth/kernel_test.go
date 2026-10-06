@@ -218,7 +218,7 @@ func TestBrowserSessionOutcomes(t *testing.T) {
 		{
 			name: "dependency failure cannot become public",
 			session: func(context.Context, string) (browserapp.Authorization, error) {
-				return browserapp.Authorization{}, errors.New("redis unavailable")
+				return browserapp.Authorization{}, errors.New("dependency unavailable")
 			},
 			public:     uriPublicPolicy(t, "public", `/api/private`),
 			wantKind:   DecisionDependencyFailure,

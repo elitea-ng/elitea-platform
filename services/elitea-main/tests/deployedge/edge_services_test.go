@@ -1,22 +1,16 @@
-// This file widens the edge gate to the two references it did not cover
-// (#379).
+// This file widens the edge gate to the SERVICE reference (#379).
 //
 // TestEveryRouterMiddlewareResolves in edge_middlewares_test.go resolves the
-// MIDDLEWARE a router names. A router names two more things, and each one fails
-// in the same silent way:
+// MIDDLEWARE a router names. A router also names a service, and that reference
+// fails in the same silent way: Traefik drops a router that names a service no
+// loaded file defines. It logs the error and keeps serving, and the caller gets
+// an answer from whichever router matches next on a path the configuration
+// says goes to elitea-main. That is the exact failure of #338, through a
+// different reference.
 //
-//	1. the SERVICE. Traefik drops a router that names a service no loaded file
-//	   defines. It logs the error and keeps serving. In deploy/centry-hybrid the
-//	   dropped router is the one that selects Go, base.yml holds a
-//	   PathPrefix("/") catch-all to pylon at priority 1, and the caller gets
-//	   HTTP 200 from pylon on a path the configuration says goes to elitea-main.
-//	   That is the exact failure of #338, through a different reference.
-//	2. the published PORT in the authority header. The value in
-//	   normalize-runtime-public-authority is a literal, because the Traefik file
-//	   provider does not expand environment variables. It must equal the
-//	   ELITEA_HYBRID_HTTPS_PORT default in the Compose file. Change the Compose
-//	   file alone and the routers still load, but the authority header then
-//	   names a port that nothing listens on.
+// (A second check here compared the published port in the hybrid edge's
+// authority header with its Compose default. It retired with
+// deploy/centry-hybrid, the only edge that rewrote the authority.)
 //
 // This gate needs no container and no network. It stays with the other edge
 // gates in the No Binaries workflow, which carries no path filter.
@@ -28,7 +22,6 @@ package deployedge_test
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -143,9 +136,8 @@ func TestEveryRouterServiceResolves(t *testing.T) {
 					"this set defines.\n"+
 					"Traefik does not fail the stack for this. It drops the "+
 					"router and keeps serving, so the traffic falls to "+
-					"whichever router matches next. In deploy/centry-hybrid "+
-					"that is the PathPrefix(\"/\") catch-all to pylon, and the "+
-					"caller gets HTTP 200 from the wrong process.\n"+
+					"whichever router matches next, and the caller gets an "+
+					"answer from the wrong process.\n"+
 					"Defined in this set: %s\n"+
 					"Set boundary: %s",
 				set.name, ref.router, ref.file, ref.service,
@@ -156,133 +148,5 @@ func TestEveryRouterServiceResolves(t *testing.T) {
 
 	if checked == 0 {
 		t.Fatal("no router service reference was inspected, so this gate proved nothing")
-	}
-}
-
-// authorityMiddlewareName is the middleware that rewrites the request authority
-// before the edge-auth call. It carries the published port as a literal.
-const authorityMiddlewareName = "normalize-runtime-public-authority"
-
-// hybridPortVariable is the Compose variable that selects the published port of
-// the hybrid edge.
-const hybridPortVariable = "ELITEA_HYBRID_HTTPS_PORT"
-
-// hybridPortSources are the tracked files that state the default of
-// hybridPortVariable. The Compose file is the deployment. README.md documents
-// the same value as the public URL. traefik/middlewares.yml requires all of
-// them to agree, and this gate is what enforces that requirement.
-var hybridPortSources = []string{
-	"deploy/centry-hybrid/docker-compose.yml",
-	"deploy/centry-hybrid/README.md",
-}
-
-// hybridPortPattern matches the Compose default form `${NAME:-18443}`.
-var hybridPortPattern = regexp.MustCompile(`\$\{` + hybridPortVariable + `:-([0-9]+)\}`)
-
-// TestRuntimeAuthorityPortMatchesTheHybridComposeDefault is the gate for the
-// hardcoded port.
-func TestRuntimeAuthorityPortMatchesTheHybridComposeDefault(t *testing.T) {
-	root := repoRoot(t)
-
-	// 1. Read the literal out of the middleware definition. The gate looks in
-	//    every configuration set, so it keeps working when the definition moves
-	//    to another edge file. It FAILS when no set defines the middleware at
-	//    all: "nothing found, therefore pass" is how a gate stops gating.
-	authorityValue := ""
-	authoritySource := ""
-	for _, set := range configSets() {
-		for _, path := range set.resolve(t, root) {
-			parsed := parseEdgeWithServices(t, path)
-			definition, present := parsed.HTTP.Middlewares[authorityMiddlewareName]
-			if !present {
-				continue
-			}
-			value := definition.Headers.CustomRequestHeaders["Host"]
-			relative, err := filepath.Rel(root, path)
-			if err != nil {
-				relative = path
-			}
-			if authorityValue != "" && authorityValue != value {
-				t.Fatalf(
-					"%s and %s both define %q with a different Host value: %q and %q.\n"+
-						"Two edges cannot rewrite the authority to two different "+
-						"authorities. Make them equal, or give the second one its "+
-						"own name.",
-					authoritySource, relative, authorityMiddlewareName,
-					authorityValue, value,
-				)
-			}
-			authorityValue = value
-			authoritySource = relative
-		}
-	}
-	if authoritySource == "" {
-		t.Fatalf(
-			"no configuration set defines the %q middleware, so this gate "+
-				"stopped gating. The middleware moved or it was renamed. "+
-				"Update authorityMiddlewareName in this file, or update "+
-				"configSets() in edge_middlewares_test.go.",
-			authorityMiddlewareName,
-		)
-	}
-	if authorityValue == "" {
-		t.Fatalf(
-			"%s defines %q with no Host request header.\n"+
-				"That middleware exists to rewrite the request authority. "+
-				"Without the header it rewrites nothing, and the edge-auth "+
-				"call answers 403 on the worker's own authority.",
-			authoritySource, authorityMiddlewareName,
-		)
-	}
-	colon := strings.LastIndex(authorityValue, ":")
-	if colon < 0 {
-		t.Fatalf(
-			"%s: %q rewrites the authority to %q, which carries no port.\n"+
-				"The edge publishes ${%s}, so the authority must name that "+
-				"port. TrustedProxyResolver compares the whole authority "+
-				"against the configured public origin and answers 403 on a "+
-				"mismatch.",
-			authoritySource, authorityMiddlewareName, authorityValue,
-			hybridPortVariable,
-		)
-	}
-	authorityPort := authorityValue[colon+1:]
-
-	// 2. Read the default out of each tracked source, and require one value.
-	for _, relative := range hybridPortSources {
-		absolute := filepath.Join(root, relative)
-		raw, err := os.ReadFile(absolute)
-		if err != nil {
-			t.Fatalf(
-				"read %s: %v.\nThe file moved and this gate stopped gating. "+
-					"Update hybridPortSources in this file.",
-				relative, err,
-			)
-		}
-		matches := hybridPortPattern.FindAllStringSubmatch(string(raw), -1)
-		if len(matches) == 0 {
-			t.Fatalf(
-				"%s states no ${%s:-<port>} default, so this gate stopped "+
-					"gating. Update hybridPortSources in this file.",
-				relative, hybridPortVariable,
-			)
-		}
-		for _, match := range matches {
-			if match[1] == authorityPort {
-				continue
-			}
-			t.Errorf(
-				"%s defaults %s to %s, but %s rewrites the authority to %q.\n"+
-					"The Traefik file provider does not expand environment "+
-					"variables, so the authority is a literal and the two "+
-					"drift apart silently. The routers still load. The "+
-					"edge-auth call then answers 403, because "+
-					"TrustedProxyResolver compares the authority against the "+
-					"configured public origin.\n"+
-					"Change both together.",
-				relative, hybridPortVariable, match[1],
-				authoritySource, authorityValue,
-			)
-		}
 	}
 }

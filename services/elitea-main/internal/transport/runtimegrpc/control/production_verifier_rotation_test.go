@@ -62,7 +62,7 @@ func TestProductionVerifierAuthenticatesImmutableReplayButRejectsCrossCommandSig
 	raw := validRawWorkerCommand(t)
 	envelope := productionSignedEnvelope(t, "runtime-signing-active", privateKey, raw)
 
-	// Signature verification is intentionally stateless: Redis redelivery of
+	// Signature verification is intentionally stateless: bus redelivery of
 	// the same immutable envelope authenticates again. Durable command digest,
 	// claim, lease and fence state—not the signature verifier—own replay safety.
 	for attempt := 0; attempt < 2; attempt++ {

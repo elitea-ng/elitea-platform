@@ -22,7 +22,7 @@ import (
 // layer down in the scheduler instead of a missing route/handler).
 //
 // It stops short of invoking runtimecomposition.New() itself: New()'s full
-// dependency graph (Redis, gRPC TLS, signing keys, five Postgres pools) has
+// dependency graph (NATS, gRPC TLS, signing keys, five Postgres pools) has
 // no existing test anywhere in this package that constructs it, and
 // building one from scratch for this one assertion is out of proportion —
 // see docs/plans/storage-migration-plan.md's S14 section for this

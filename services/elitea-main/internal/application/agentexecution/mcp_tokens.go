@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 )
 
-// Session tokens use the existing encrypted input bundle, never chat history or Redis fields.
+// Session tokens use the existing encrypted input bundle, never chat history or command-bus fields.
 // Toolkit admission and exact credential matching remain required before each operation.
 func validCurrentMCPTokens(tokens json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(tokens)

@@ -20,7 +20,7 @@ import (
 // idempotent recovery, and the same-index conflict guard. When
 // ELITEA_TEST_SDK_PYTHON is set, it also crosses the installed SDK's real
 // index_meta_init/index_meta_update lifecycle. It does not exercise the runtime
-// admission database, Configurations/vault lookup, Redis, or a worker.
+// admission database, Configurations/vault lookup, the command bus, or a worker.
 func TestCurrentIndexMetaWriterRealPgvector(t *testing.T) {
 	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
 	if databaseURL == "" {

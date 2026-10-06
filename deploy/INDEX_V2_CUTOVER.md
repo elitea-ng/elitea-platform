@@ -150,54 +150,25 @@ and never as part of the same change.
 
 Machines here use **podman**: `podman compose`, not `docker compose`.
 
-### What is already done in this repository
+### Status: the mixed (centry-hybrid) deployment is retired
 
-- `deploy/centry-hybrid/pov-compose.yml` puts `pylon_indexer` in the `index-v1`
-  profile. `compose.sh` renders and starts with `--profile runtime` only, so the
-  service is absent from both. Compose has no directive that deletes a service
-  a merged model declares, and Centry's model — which is not in this repository
-  — still declares it, so a profile is the mechanism.
-- `deploy/centry-hybrid/compose.sh config` asserts that absence and refuses a
-  model that starts it.
-- `services/pylon-indexer/` is deleted, with its bake target, its publish
-  matrix entries, its scan matrix entry and its image-scan exemption. #509
-  recorded 604 findings in the base image and said the exemption ends when the
-  service goes away rather than by repairing an image we delete. This is that
-  end.
+Stage C was written for the mixed deployment in `deploy/centry-hybrid`, which
+put `pylon_indexer` in an `index-v1` Compose profile, shipped a
+`cutover-rehearsal.sh` walk-through and a `rollback/index-v1.yml` overlay. That
+directory is gone (see `docs/UPGRADING.md`, "runtime-redis removed"): it
+depended on the private legacy centry repository, and its runtime still wrote
+the Redis command-bus fields that both workers now refuse. The command bus is
+NATS JetStream (`docs/runtime-command-bus.md`), so there is no version-1 Redis
+stream or consumer group left to drain, and no version-1 rollback overlay.
 
-### What a deployer still does live
+`services/pylon-indexer/` is deleted too, with its bake target, its publish
+matrix entries, its scan matrix entry and its image-scan exemption. #509
+recorded 604 findings in the base image and said the exemption ends when the
+service goes away rather than by repairing an image we delete.
 
-1. **Drain first.** Run Stage A in full. Its preflight is the oracle:
-   `deploy/centry-hybrid/compose.sh preflight` runs the candidate image's
-   `/index-v2-preflight` against the version-1 database state, Redis stream and
-   consumer group. Continue only on exit `0` with every count zero.
-2. **Stop the service.** `podman compose ... stop pylon_indexer`. Preserve and
-   mount every stopped replica's durable output-spool root; the preflight needs
-   it and Stage A says so.
-3. **Re-render and bring the stack up** with the tree as it is now. The service
-   is not selected, so it is not recreated.
-4. **Prove no index request reaches pylon.** Read `pylon_main`'s access log for
-   the window of one index run. Finding nothing is the pass; read the window,
-   not the whole file.
-
-`deploy/centry-hybrid/scripts/cutover-rehearsal.sh` walks these steps in order
-and stops at the first one that does not hold. Run it with `--dry-run` first: it
-prints the plan and touches nothing.
-
-### Rollback
-
-`deploy/centry-hybrid/rollback/index-v1.yml` restores the service with the exact
-mounts, health check and dependency it had. Apply it as a further overlay with
-`--profile index-v1` in addition to `--profile runtime`; the file's header
-carries the whole command.
-
-**It is valid only before version-2 admission reopens.** That is Stage B's rule,
-not a new one: after any version-2 command has been admitted, binary rollback to
-version 1 is prohibited. Freeze admission, drain or terminally reconcile version
-2, then roll forward.
-
-A stack running that overlay fails `compose.sh config`, on purpose. That failure
-is the signal that a rollback is in force. It is not a defect to be silenced.
+A deployment still running the legacy index plane migrates by Stages A and B
+against its own stack, then stops `pylon_indexer` there. Version-2 admission
+has no binary rollback to version 1, which was Stage B's rule all along.
 
 ### The four plugins, and what covers each
 
@@ -208,15 +179,15 @@ is the signal that a rollback is in force. It is not a defect to be silenced.
 | `indexer_worker` | `services/elitea-worker-python` — the agent worker serves index ingest on the same command stream and consumer group as agent execution |
 | `worker_core` | the worker's own runtime; replaced with it |
 | `provider_worker` | ADR-0012 P3. The Go successor owns provider descriptors, and no hybrid route reaches this plugin |
-| `runtime_engine_litellm` | **dropped**, and already dropped before this change (#323). It ran a LiteLLM proxy inside the container — a second LLM data plane with no budget and no billing. The LLM data plane is `elitea-llm-gateway`, reached through `elitea-main` at `/llm/v1`. Its configuration file is kept beside the rollback overlay, which is the only thing that would need it |
+| `runtime_engine_litellm` | **dropped**, and already dropped before this change (#323). It ran a LiteLLM proxy inside the container — a second LLM data plane with no budget and no billing. The LLM data plane is `elitea-llm-gateway`, reached through `elitea-main` at `/llm/v1`. Nothing in the repository configures it any more |
 
 ### Retired with the service: the vault-parity gate
 
 `services/elitea-main/tests/vaultparity` asserted that pylon-indexer and
 elitea-main read one `SECRETS_MASTER_KEY` and could read each other's Fernet
-vaults (issue 418). With `services/pylon-indexer` deleted and the service
-behind the `index-v1` rollback profile, elitea-main is the only compose
-service that carries the key, so the package's subject no longer exists and it
+vaults (issue 418). With `services/pylon-indexer` and its rollback
+profile deleted, elitea-main is the only compose service that carries the
+key, so the package's subject no longer exists and it
 was removed in the same change rather than left to fail on a path that is
 gone. The single-key rule for elitea-main itself is still enforced by the
-Helm render suite and `deploy/scripts/compose.sh preflight`.
+Helm render suite.

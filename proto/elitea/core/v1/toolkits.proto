@@ -4,7 +4,7 @@ package elitea.core.v1;
 
 option go_package = "elitea/core/v1;corev1";
 
-// ToolkitUpdatedEvent is published (via Redis pub/sub or future event bus) when
+// ToolkitUpdatedEvent is published (via the NATS event bus) when
 // a toolkit's configuration or tool list has changed. elitea-indexer subscribes
 // to invalidate its in-process toolkit cache.
 message ToolkitUpdatedEvent {

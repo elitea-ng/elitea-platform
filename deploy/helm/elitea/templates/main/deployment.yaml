@@ -296,7 +296,7 @@ spec:
             {{- end }}
             {{- if .Values.main.runtime.enabled }}
             # The runtime material (issue #382): signing key, verification
-            # keyring, Redis password, Redis CA and the three server keypairs.
+            # keyring, the runtime CA and the three server keypairs.
             # A WHOLE-DIRECTORY mount, deliberately — not the per-file subPath
             # mounts used above. internal/security/securefile also rejects any
             # path that resolves through a symlink, and the file names are
