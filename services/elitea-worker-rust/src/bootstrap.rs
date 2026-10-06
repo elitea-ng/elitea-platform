@@ -92,7 +92,9 @@ impl fmt::Display for ProductionBootstrapError {
             Self::InvalidConfiguration => "the worker deployment configuration is invalid",
             Self::ResourceExhausted => "the worker deployment exceeds an approved limit",
             Self::AuthenticationFailed => "the worker dependency rejected its identity",
-            Self::ConsumerMissing => "the NATS command stream or durable requires the nats-bootstrap job",
+            Self::ConsumerMissing => {
+                "the NATS command stream or durable requires the nats-bootstrap job"
+            }
             Self::DependencyUnavailable => "a worker dependency is unavailable",
         })
     }

@@ -530,9 +530,9 @@ async fn retryable_pull_failure_is_not_fatal_and_the_next_turn_pulls_again() {
     assert!(intake_failure_is_fatal(&NatsJetStreamError::configuration(
         "drifted consumer"
     )));
-    assert!(intake_failure_is_fatal(&NatsJetStreamError::consumer_missing(
-        "absent durable"
-    )));
+    assert!(intake_failure_is_fatal(
+        &NatsJetStreamError::consumer_missing("absent durable")
+    ));
 }
 
 #[tokio::test]

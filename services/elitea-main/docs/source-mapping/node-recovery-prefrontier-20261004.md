@@ -53,8 +53,8 @@ Pending B before Main projection reconciles its Started visit or republishes its
 
 One model checkpoint digest remains bound to one claim.
 A different digest on the same live claim fails existing authorization.
-Worker closes the renewal actor without Redis ACK or business dispatch.
-Replacement waits for existing lease expiry and Redis reclaim.
+Worker closes the renewal actor without a command-bus ack or business dispatch.
+Replacement waits for existing lease expiry and the command-bus redelivery.
 This amendment does not reset the digest or invent immediate replacement authority.
 The actual A/B fixture passes with MemoryCheckpointer and current-writer journal CAS.
 It does not provide PostgreSQL persistence proof.

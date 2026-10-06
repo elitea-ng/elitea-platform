@@ -63,7 +63,7 @@ The supervisor preserves readiness time from runtime binding and execution time 
 Request separate content and execution grants for that same request.
 Final submission carries the same bounded bundle metadata that hydration verified.
 Retain each activation and digest when grants expire or transport retries occur.
-Package bytes and grants do not enter Redis or graph checkpoints.
+Package bytes and grants do not enter the command bus or graph checkpoints.
 
 Preparation, hydration, and final submission retry temporary supervisor capacity refusal.
 `ResourceExhausted` retains the same activation, request, root, and selected index.
