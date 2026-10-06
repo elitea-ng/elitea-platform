@@ -46,8 +46,9 @@ services:
     environment:
       DATABASE_URL: >-
         postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${POSTGRES_DB}?sslmode=disable
-      REDIS_URL: redis:${REDIS_PORT}
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # No ELITEA_EVENTS_NATS_URL: Centry runs no NATS, so this slice has no
+      # live-update plane (project SSE route unregistered, canvas presence
+      # per-replica). The plain Redis it used to read for that is retired.
       # Centry remains the schema/migration owner in this coexistence slice.
       SKIP_MIGRATIONS: "1"
       # Empty keeps current pylon_auth as the authorization authority over the
@@ -56,8 +57,6 @@ services:
       ADMIN_UI_STATIC_DIR: "/nonexistent"
     depends_on:
       postgres:
-        condition: service_started
-      redis:
         condition: service_started
       pylon_auth:
         condition: service_started

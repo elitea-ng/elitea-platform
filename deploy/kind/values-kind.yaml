@@ -14,9 +14,12 @@ postgresql:
   existingSecret: elitea-db
   key: database-url
 
-redis:
-  service: redis
-  port: 6379
+# No NATS in this stack: the gateway and the scheduler are off, and the
+# DeepWiki path needs no live updates. An empty service leaves elitea-main's
+# ELITEA_EVENTS_NATS_URL unrendered, so it runs with no live-update plane
+# instead of failing startup on a NATS that does not exist.
+nats:
+  service: ""
 
 # ── Off: nothing here is on the DeepWiki path ────────────────────────────────
 # dbInit creates the agent-state database and the vector extension for the
@@ -126,7 +129,6 @@ main:
       mountPath: /run/elitea-deepwiki
 
   env:
-    REDIS_URL: "redis:6379"
     APPLICATION_SECRET_KEY: "changeme-kind"
     COOKIE_SECURE: "false"
 

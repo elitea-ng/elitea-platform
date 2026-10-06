@@ -80,7 +80,7 @@ flowchart LR
     Gateway --> Worker
     Gateway --> LLMMock[llm-mock / a real model]
     Main --> DB[(postgres)]
-    Main --> Redis[(redis)]
+    Main -->|live updates| NATS[(nats)]
     Worker --> DB
 ```
 

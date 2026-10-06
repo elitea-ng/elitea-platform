@@ -31,7 +31,7 @@ flowchart TB
     Gateway --> DB
     SubappHost --> DB
 
-    Main --> Redis[("Redis (sessions, SSE)")]
+    Main --> NATS
     Main -. mTLS .-> RuntimeRedis[("Runtime Redis (dispatch)")]
     Worker -. mTLS .-> RuntimeRedis
 

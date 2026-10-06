@@ -1,12 +1,14 @@
 {{- if .Values.main.enabled }}
 {{- /*
-  Shared connection addresses, computed once from the top-level `nats` and
-  `redis` blocks and namespace-relative by default. An explicit env entry
-  under this component still wins. These are the settings that drifted when
-  each chart carried its own default.
+  Shared connection addresses, computed once from the top-level `nats`
+  block and namespace-relative by default. An explicit env entry under this
+  component still wins. These are the settings that drifted when each chart
+  carried its own default. The live-update plane dials the SAME NATS the
+  gateway and the scheduler use (GATEWAY_NATS_URL), so one broker serves all
+  three; an empty `nats.service` leaves it unset (no live-update plane).
 */ -}}
 {{- $env := .Values.main.env | default dict }}
-{{- if not (get $env "REDIS_URL") }}{{- $env = merge (deepCopy $env) (dict "REDIS_URL" (include "elitea.serviceAddr" (dict "svc" $.Values.redis "ctx" $))) }}{{- end }}
+{{- if and (not (get $env "ELITEA_EVENTS_NATS_URL")) .Values.nats.service }}{{- $env = merge (deepCopy $env) (dict "ELITEA_EVENTS_NATS_URL" (printf "nats://%s" (include "elitea.serviceAddr" (dict "svc" $.Values.nats "ctx" $)))) }}{{- end }}
 {{- /*
   The public project, from the ONE place an operator sets it. Filled only when
   something names a project: with the Configurations plane off, elitea-main

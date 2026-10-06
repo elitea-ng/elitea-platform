@@ -55,7 +55,6 @@ There is no separate `build` or `status` subcommand: `up` builds what it needs, 
 | 8082 | Traefik (E2E entry point) | `E2E_PORT` |
 | 9400 | oidc-provider-mock | fixed — see [the standalone stack's note](/development/standalone-stack#common-failures) |
 | 15432 | PostgreSQL | `E2E_PG_PORT` |
-| 16379 | Redis | `E2E_REDIS_PORT` |
 
 `E2E_PROJECT` (default `elitea-e2e`) names the Compose project; set it together with the port variables above to run a second, disposable E2E stack beside the first.
 

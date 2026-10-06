@@ -18,7 +18,9 @@
 #
 #   PostgreSQL          `postgresql` names its secret. The operator's lifecycle
 #                       is not this application's — see that block.
-#   Redis, NATS         `redis` / `nats` name them. Commodity infrastructure.
+#   NATS                `nats` names it. Commodity infrastructure. (The
+#                       plain Redis/Valkey this chart once named is gone;
+#                       the runtime's TLS Redis is `runtimeRedis` below.)
 #   Object storage      An S3-compatible endpoint, configured under `main.env`.
 #   Ingress             The cluster's own edge. `worker.platformEdge` is NOT it:
 #                       that one is internal, has no route from any gateway, and
@@ -242,7 +244,10 @@ pgbouncer:
 #
 # The gateway's budget counters and the scheduler both dial it, and they MUST
 # name the same one: two components on two clusters of a shared counter enforce
-# nothing. Externalized — commodity infrastructure.
+# nothing. elitea-main's live-update plane (ELITEA_EVENTS_NATS_URL: the project
+# SSE stream, domain-event publishes, canvas presence's KV bucket) dials it
+# too. It must run JetStream — deploy/helm/nats does. Externalized — commodity
+# infrastructure.
 #
 # `namespace` empty means this release's own namespace. Do not hardcode a
 # namespace here: a chart installable anywhere that names one silently couples
@@ -252,21 +257,12 @@ nats:
   namespace: ""
   port: 4222
 
-# ── Redis (general purpose) ─────────────────────────────────────────────────
-#
-# Sessions, project SSE, scheduler coordination. Plaintext, and NOT the same
-# instance as the runtime dispatch bus under `worker`/`runtimeRedis` — that one
-# is mutually authenticated with an ACL user and a file-backed password, and
-# merging the two would be a security regression, not a simplification.
-#
-# A host/port pair rather than a string because both consumers want bare
-# host:port — the value goes straight to goredis Options.Addr, not to a URL
-# parser. The two charts previously defaulted it to "" and to "redis:6379",
-# neither of which resolves in a real namespace.
-redis:
-  service: "elitea-valkey"
-  namespace: ""
-  port: 6379
+# The top-level `redis` block (the plaintext "general purpose" Redis, service
+# elitea-valkey, rendered into REDIS_URL for elitea-main and the scheduler) is
+# GONE. Its three uses moved or were deleted: the project SSE stream and every
+# event publisher to NATS core pub/sub, canvas presence to a NATS KV bucket,
+# and the scheduler's Redis tick lock went with the legacy pylon RPC dispatcher
+# it guarded. A values file that still sets `redis:` is ignored.
 
 # ── Database preparation ────────────────────────────────────────────────────
 #
@@ -780,8 +776,8 @@ main:
     #      only from fileConfig.authConfig (off by default). Shipping "true" with
     #      authentication off would turn a working default install into a
     #      CrashLoopBackOff.
-    #   2. An operator must choose a public project id and a Redis endpoint. The
-    #      chart cannot guess either.
+    #   2. An operator must choose a public project id. The chart cannot guess
+    #      it.
     #
     # Read values-standalone.yaml for the values file that turns the set on. The
     # chart checks every prerequisite at `helm template` time, so a wrong
@@ -903,16 +899,24 @@ main:
     ELITEA_INDEX_TYPES_ENABLED: ""
     ELITEA_APPLICATION_SKILLS_ENABLED: ""
 
-    # --- Project event stream (#152) -------------------------------------------
-    # Transport for GET /api/v2/events/prompt_lib/{projectID}. The router has a
-    # two-arm fallback and BOTH arms were unassigned in this chart, so the route
-    # was never registered and answered 404 — indistinguishable from a typo.
+    # --- Live-update plane (#152) ----------------------------------------------
+    # NATS core pub/sub for GET /api/v2/events/prompt_lib/{projectID} (subject
+    # gateway.events.project.<id>.events, shared with the gateway's
+    # budget.soft_alert), every domain-event publish, and canvas presence's
+    # JetStream KV bucket ELITEA_CANVAS_PRESENCE. The server needs JetStream.
     #
-    # Host:port of the general-purpose Redis, e.g. "elitea-redis-master:6379".
-    # This is NOT the runtime plane's Redis: that one is separate, mutually
-    # authenticated, and configured under runtime.redis below.
-    REDIS_URL: ""
-    REDIS_USERNAME: ""
+    # Empty means the top-level `nats` block, resolved in this namespace (the
+    # same server the gateway and the scheduler use). An unreachable or
+    # JetStream-less server STOPS elitea-main at startup rather than booting
+    # with the SSE route unregistered (a 404 indistinguishable from a typo,
+    # which is what #152 was). It may carry credentials (nats://user:pass@…) or
+    # use tls://. With this empty AND `nats.service` empty, nothing is rendered
+    # and elitea-main runs with no live-update plane (route unregistered,
+    # presence per-replica), which it logs at startup.
+    ELITEA_EVENTS_NATS_URL: ""
+    # Replica count of the presence KV bucket. Empty means 1 (the scale-1 NATS
+    # profile); set "3" on the HA profile. Presence is ephemeral either way.
+    ELITEA_EVENTS_NATS_REPLICAS: ""
 
     # --- Admin console ---------------------------------------------------------
     # Directory the admin single-page application is served from. The published
@@ -1535,13 +1539,6 @@ main:
     # and a secretKeyRef sets the variable to the CONTENT of the Secret key. The
     # pod then tried to open a file whose name was a PEM block. They are now plain
     # path entries in the `env:` map above; mount the material as a volume.
-    # Password for the general-purpose Redis named by env.REDIS_URL above — the
-    # project event stream's transport (issue #382). Optional, because a Redis
-    # with no authentication needs no password and the pod must still start.
-    REDIS_PASSWORD:
-      secretName: elitea-main-redis-secrets
-      key: redis-password
-      optional: true
 
   # --- Runtime plane (issue #382) ----------------------------------------------
   # Agent execution, the execution-events stream, index ingest, index scheduling
@@ -1683,8 +1680,8 @@ main:
       # a letter or a digit.
       instanceId: ""
 
-    # The runtime's OWN Redis — mutually authenticated, and separate from the
-    # general-purpose Redis in env.REDIS_URL above.
+    # The runtime's OWN Redis — mutually authenticated. (The plaintext
+    # general-purpose Redis this used to be contrasted with is gone.)
     redis:
       # Must be a rediss:// URL that carries an ACL USERNAME and NO password, and
       # it must select database zero explicitly, e.g.
@@ -3573,9 +3570,9 @@ runtimeRedis:
   enabled: false
   # TLS Redis for the runtime dispatch plane and production Form authentication.
   #
-  # This is a SECOND Redis, deliberately separate from `elitea-valkey`, which
-  # stays plaintext and keeps serving elitea-main's REDIS_URL (sessions, project
-  # SSE). It exists because two consumers accept nothing else:
+  # It is the chart's ONLY Redis now: the plaintext `elitea-valkey` that served
+  # elitea-main's REDIS_URL (project SSE, canvas presence) was retired in
+  # favour of NATS. It exists because two consumers accept nothing else:
   #
   #   - internal/runtimecomposition/config.go  — rediss:// only, ACL username,
   #     file-backed password, dialled at MinVersion TLS 1.3

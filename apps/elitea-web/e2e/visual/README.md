@@ -38,14 +38,14 @@ workflow files.
 ## Against a SECOND, parameterised stack
 
 `deploy/docker-compose.e2e-standalone.yml` and `scripts/e2e-stack.sh` take
-`E2E_PROJECT` / `E2E_PORT` / `E2E_PG_PORT` / `E2E_REDIS_PORT` / `E2E_OIDC_PORT`
+`E2E_PROJECT` / `E2E_PORT` / `E2E_PG_PORT` / `E2E_OIDC_PORT`
 so a second stack can run beside the first (#228). To point this suite at it,
 set `PLAYWRIGHT_BASE_URL` and `E2E_OIDC_PORT` — the script forwards those, plus
 `E2E_TZ`, into the container:
 
 ```bash
 E2E_PROJECT=elitea-e2e-b E2E_PORT=8086 E2E_PG_PORT=15434 \
-  E2E_REDIS_PORT=16381 E2E_OIDC_PORT=9401 \
+  E2E_OIDC_PORT=9401 \
   ./scripts/e2e-stack.sh up && … seed
 
 PLAYWRIGHT_BASE_URL=http://localhost:8086 E2E_OIDC_PORT=9401 npm run e2e:visual

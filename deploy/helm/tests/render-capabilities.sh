@@ -285,11 +285,24 @@ case "$allow_own_llms" in
     ;;
 esac
 
-if yq eval-all 'select(.kind == "ConfigMap") | .data | has("REDIS_URL")' \
+# The live-update plane (project SSE stream, domain events, canvas presence)
+# rides the SAME NATS the gateway and the scheduler use. A default install must
+# render it from the top-level `nats` block as an FQDN, or the SSE route stays
+# unregistered (#152); and the retired plain Redis must not come back.
+events_nats="$(data ELITEA_EVENTS_NATS_URL "$WORK/default.yaml")"
+case "$events_nats" in
+  nats://elitea-nats.*.svc.cluster.local:4222)
+    pass "ELITEA_EVENTS_NATS_URL renders \"$events_nats\" from the top-level nats block"
+    ;;
+  *)
+    fail "ELITEA_EVENTS_NATS_URL renders \"$events_nats\"; the project event stream and canvas presence need the shared NATS"
+    ;;
+esac
+if yq eval-all 'select(.kind == "ConfigMap") | .data | (has("REDIS_URL") or has("REDIS_USERNAME"))' \
   "$WORK/default.yaml" | grep -qx true; then
-  pass "the chart exposes REDIS_URL, the project event stream transport"
+  fail "a ConfigMap still renders REDIS_URL/REDIS_USERNAME; nothing reads the plain Redis any more"
 else
-  fail "the chart does not expose REDIS_URL, so the project event stream stays unregistered"
+  pass "no ConfigMap renders the retired plain-Redis REDIS_URL"
 fi
 
 # ---------------------------------------------------------------------------

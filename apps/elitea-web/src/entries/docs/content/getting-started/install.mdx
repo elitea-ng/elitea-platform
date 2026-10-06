@@ -112,6 +112,6 @@ flowchart LR
     Main --> Worker[Agent worker]
     Gateway --> Worker
     Main --> DB[(PostgreSQL)]
-    Main --> Redis[(Redis)]
+    Main --> NATS[(NATS)]
     Worker --> DB
 ```

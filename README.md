@@ -89,7 +89,7 @@ alone.
 Or via Task: `task standalone:up` / `task standalone:down`.
 
 Compose project `elitea-standalone`. Ports: `8084` entry (Traefik), `8085`
-gateway (direct, debug), `15433` postgres, `16380` redis, `9400` oidc-mock
+gateway (direct, debug), `15433` postgres, `9400` oidc-mock
 (**fixed** — the mock's issuer is derived from its Host header, so the port
 cannot be remapped). Because of that fixed port, this stack and the E2E stack
 (`apps/elitea-web/scripts/e2e-stack.sh`, also on 9400 by default) cannot run at
@@ -165,7 +165,7 @@ prints only fixed generic failures and never prints the file path or contents.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | — | PostgreSQL connection string |
-| `REDIS_URL` | — | Redis host:port |
+| `ELITEA_EVENTS_NATS_URL` | — | NATS (JetStream) for live updates: project SSE stream, domain events, canvas presence. Unset disables them; set but unreachable stops startup |
 
 ### The index plane, and the service that used to serve it
 
