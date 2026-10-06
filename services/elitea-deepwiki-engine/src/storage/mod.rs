@@ -20,6 +20,7 @@
 //! * [`adapter`] is the read surface `ask`, `deep_research` and
 //!   `resolve_wiki` use: a port of `storage/unified_db_adapter.py`.
 //! * [`text`] holds the tokenizer and the BM25 arithmetic both sides share.
+//! * [`topology`] is Phase 2's index over a build's staged rows.
 //!
 //! A DSN carries a password. Nothing in this module logs or formats one,
 //! and a DSN that does not parse is reported without its text.
@@ -36,6 +37,7 @@ pub mod migrate;
 pub mod rows;
 pub mod search;
 pub mod text;
+pub mod topology;
 
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use std::str::FromStr;
