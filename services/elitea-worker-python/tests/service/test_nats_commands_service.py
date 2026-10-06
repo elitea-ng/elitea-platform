@@ -461,6 +461,53 @@ def test_unverifiable_poison_is_recorded_then_terminated_freeing_its_subject(
     asyncio.run(run())
 
 
+def test_a_pull_returns_as_soon_as_it_has_a_message_not_at_its_expiry(
+    environment: dict[str, Any],
+) -> None:
+    """D1: a batch pull hands over what it has instead of waiting out expires.
+
+    nats-py's fetch(batch>1) is pinned here against the real server: with one
+    message pending, and with one published a second into the pull, a pull
+    for 4 with a 5s expiry returns that one message promptly. A pull that held
+    on to it until expiry would keep it num_ack_pending and unstarted.
+    """
+
+    async def run() -> None:
+        async with _client(environment, _PRODUCER) as producer, _worker(environment) as worker:
+            consumer = await bind_command_consumer(
+                worker.client,
+                stream=_INDEX,
+                consumer=_INDEX_DURABLE,
+                worker_name="python-service-test-prompt-pull",
+                fetch_batch=4,
+                fetch_expires_millis=5_000,
+                retry_delay_millis=1_000,
+                ack_timeout_seconds=5.0,
+                api_prefix=RUNTIME_API_PREFIX,
+            )
+            # Messages of earlier tests are acked, terminated or delayed.
+            for case in ("pending", "late"):
+                delivery_id = f"py-prompt-{case}-{uuid.uuid4()}"
+                if case == "pending":
+                    await _publish(producer, delivery_id, b"prompt")
+                else:
+                    async def publish_later() -> None:
+                        await asyncio.sleep(1.0)
+                        await _publish(producer, delivery_id, b"prompt")
+
+                    asyncio.create_task(publish_later())
+                started = time.monotonic()
+                deliveries = await consumer.fetch(count=4)
+                elapsed = time.monotonic() - started
+                ours = [d for d in deliveries if d.delivery_token == delivery_token(delivery_id)]
+                assert len(ours) == 1, (case, deliveries)
+                limit = 1.0 if case == "pending" else 2.5
+                assert elapsed < limit, f"{case}: the pull held its message {elapsed:.2f}s"
+                await consumer.ack_after_settlement(ours[0], delivery_id)
+
+    asyncio.run(run())
+
+
 def test_bind_refuses_a_drifted_durable(
     environment: dict[str, Any],
 ) -> None:

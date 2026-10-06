@@ -1347,3 +1347,48 @@ def test_shutdown_releases_queued_unstarted_deliveries_without_delay() -> None:
         assert loop._owned == {}  # noqa: SLF001
 
     asyncio.run(run())
+
+
+# ── D1: hold only what can start now, plus one small prefetch ───────────────
+
+
+def test_a_replica_holds_at_most_its_free_workers_plus_one_fetch_batch() -> None:
+    """KEDA counts num_ack_pending: a held-but-unstarted command is invisible
+    capacity no other replica can take. With 4 workers, a 64-deep queue and a
+    fetch batch of 2, the replica owns at most 4 + 2 = 6, never 4 + 64."""
+
+    async def run() -> None:
+        deliveries = tuple(_delivery(index) for index in range(1, 41))
+        consumer = FakeConsumer(deliveries, batch=2)
+        stop = asyncio.Event()
+        release = asyncio.Event()
+        running_now = 0
+        peak_owned = 0
+
+        loop = _runtime(consumer, None, max_concurrency=4, queue_capacity=64)
+
+        async def process(_: CommandDelivery) -> DeliveryResult:
+            nonlocal running_now
+            running_now += 1
+            await release.wait()
+            running_now -= 1
+            return DeliveryResult(DeliveryDisposition.EXECUTED_SETTLED_ACKED)
+
+        loop._process = process  # noqa: SLF001
+        task = asyncio.create_task(loop.run(stop))
+        while running_now < 4:
+            await asyncio.sleep(0)
+        for _ in range(200):
+            peak_owned = max(peak_owned, len(loop._owned))  # noqa: SLF001
+            await asyncio.sleep(0)
+        assert peak_owned == 6, peak_owned
+        assert all(count <= 2 for count in consumer.fetch_counts)
+        # Saturated: no pull is outstanding while every slot is held.
+        fetches = len(consumer.fetch_counts)
+        await asyncio.sleep(0.01)
+        assert len(consumer.fetch_counts) == fetches
+        stop.set()
+        release.set()
+        await asyncio.wait_for(task, timeout=1.0)
+
+    asyncio.run(run())

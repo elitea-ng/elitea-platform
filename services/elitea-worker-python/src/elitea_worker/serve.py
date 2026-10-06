@@ -247,10 +247,21 @@ class WorkerServeLoop:
         # One token covers each fetched, queued, or actively processed message.
         # Reserved BEFORE the pull, so a fetch never asks for more than this
         # worker can hold (the semaphore-before-pull rule).
-        self._ownership_slots: asyncio.Queue[None] = asyncio.Queue(
-            queue_capacity + max_concurrency
-        )
-        for _ in range(queue_capacity + max_concurrency):
+        #
+        # THE BOUND: max_concurrency + prefetch, where prefetch is at most one
+        # pull batch (nats_fetch_batch) and never more than the queue holds.
+        # It is NOT queue_capacity + max_concurrency (96 by default): a message
+        # this replica holds but cannot start is still num_ack_pending on the
+        # server, so KEDA's nats-jetstream scaler (lag = num_pending +
+        # num_ack_pending, KEDA v2.10..v2.21 getMaxMsgLag) counts it as
+        # in-flight while no other replica may take it, and a scale-in kills
+        # the pod holding it. So a pull asks for the workers free to start a
+        # command now, plus at most one small fixed prefetch; everything else
+        # stays on the server for whichever replica is free.
+        self._prefetch = max(1, min(consumer.delivery_batch_size, queue_capacity))
+        ownership = max_concurrency + self._prefetch
+        self._ownership_slots: asyncio.Queue[None] = asyncio.Queue(ownership)
+        for _ in range(ownership):
             self._ownership_slots.put_nowait(None)
         # Held by a heartbeat round for its whole send, and by every delayed
         # nak around "stop owning it, then nak". A +WPI that reaches the server

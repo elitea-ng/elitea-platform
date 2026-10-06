@@ -99,6 +99,16 @@ compose only; `tls://` requires all three paths, and user information in the URL
 is refused. The TLS material is read from disk again before every reconnect, so
 a rotated certificate is presented without a restart.
 
+A replica holds at most `delivery_max_concurrency` running commands plus ONE
+prefetch of at most `nats_fetch_batch` (and no more than
+`delivery_queue_capacity`). Capacity is reserved before every pull, and a pull
+asks only for what is free. A held-but-unstarted message is `num_ack_pending`
+on the server: KEDA's `nats-jetstream` scaler counts it as in-flight lag while
+no other replica can take it, so the worker keeps that number small. A pull
+returns as soon as it has a message; it does not wait out
+`nats_fetch_expires_millis` to fill its batch (pinned against the real server
+in `tests/service`).
+
 With an identity the worker is in its own NATS account, `WORKER`, not in the
 `RUNTIME` account that holds the command streams: the server answers a
 JetStream API request on the requester's reply subject without checking it
