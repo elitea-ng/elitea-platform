@@ -226,12 +226,38 @@ async fn analysis_and_classic_planner_match_python() {
         } else {
             assert_eq!(result.expect(name).to_value(), case["structure"], "{name}");
         }
+        // Deepagents (asked for, or `auto` over a threshold) falls back to
+        // the same classic call, as Python did when deepagents failed.
+        let over_threshold = StructureSettings {
+            deepagents_file_threshold: 1,
+            ..StructureSettings::default()
+        };
+        for (choice, settings) in [
+            (PlannerChoice::DeepAgents, StructureSettings::default()),
+            (PlannerChoice::Auto, over_threshold),
+        ] {
+            let model = ScriptedModel::new(vec![serde_json::json!({
+                "messages": case["messages"],
+                "answer": case["answer"],
+            })]);
+            let fallback =
+                structure::plan_wiki_structure(&model, choice, &repository, None, &settings).await;
+            model.finish();
+            if case["error"].as_bool().expect("error") {
+                assert!(fallback.is_err(), "{name}: Python failed the node");
+            } else {
+                assert_eq!(
+                    fallback.expect(name).to_value(),
+                    case["structure"],
+                    "{name} {choice:?}"
+                );
+            }
+        }
     }
 }
 
-#[tokio::test]
-async fn deepagents_is_refused_and_an_empty_analysis_uses_the_summary() {
-    let model = ScriptedModel::new(Vec::new());
+#[test]
+fn an_empty_analysis_uses_the_summary() {
     let repository = RepositoryAnalysis {
         repository_context: String::new(),
         repository_tree: "Total files: 1".to_owned(),
@@ -239,18 +265,6 @@ async fn deepagents_is_refused_and_an_empty_analysis_uses_the_summary() {
         summary: AnalysisSummary::new(&["a/b.py".to_owned()], analysis::NO_README),
         files: vec!["a/b.py".to_owned()],
     };
-    let refused = structure::plan_wiki_structure(
-        &model,
-        PlannerChoice::DeepAgents,
-        &repository,
-        None,
-        &StructureSettings::default(),
-    )
-    .await;
-    assert_eq!(
-        refused.map_err(|e| e.message),
-        Err(structure::DEEPAGENTS_UNSUPPORTED.to_owned())
-    );
     let messages = structure::classic_messages(&repository).expect("messages");
     let ChatMessage::User(user) = &messages[1] else {
         panic!("user message");

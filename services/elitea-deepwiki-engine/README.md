@@ -627,8 +627,10 @@ calls `structure::analysis::analyze_repository` and then
    else `auto`. `auto` takes deepagents at 2,000 files or a context of 8,000
    tokens (`DEEPWIKI_DEEPAGENTS_FILE_THRESHOLD`,
    `DEEPWIKI_DEEPAGENTS_REPOCTX_TOKENS`), else the classic planner. The
-   deepagents planner is a later unit (5d): it is refused with
-   `RuntimeError` "…not supported by the native engine yet".
+   deepagents planner is a later unit (5d): a deepagents choice falls back
+   to the classic planner with Python's warning ("Deepagents structure
+   planner failed, falling back to LLM: …"), the path Python took whenever
+   deepagents failed, so no job fails for it.
 3. **Cluster planner** (`ClusterStructurePlanner.plan_structure`) — the
    architectural cluster map; the candidate validator (demote, split by file
    into at most 5 pages, merge into the sibling with the most edges); the

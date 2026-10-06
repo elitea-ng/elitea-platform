@@ -8,8 +8,9 @@
 //!   web app sends), over the index rows of Phase 3 ([`index`]).
 //! * [`plan_wiki_structure`] — the planner choice; the classic single-call
 //!   planner (`ENHANCED_WIKI_STRUCTURE_PROMPT`) that `auto` reaches for a
-//!   small repository; a clear refusal for the deepagents planner, which
-//!   is a later unit (5d).
+//!   small repository, and that every deepagents choice falls back to
+//!   (Python's fallback when deepagents failed; deepagents is a later
+//!   unit, 5d).
 //!
 //! What page generation reads from the result is the
 //! [`spec::WikiStructureSpec`] (sections → pages with `target_symbols`,
@@ -107,7 +108,7 @@ impl StructureSettings {
     }
 }
 
-/// The deepagents planner's refusal.
+/// Why the deepagents planner "fails": the reason in the fallback warning.
 pub const DEEPAGENTS_UNSUPPORTED: &str = "The deepagents structure planner is not supported by the native engine yet (ADR-0026 phase 5d)";
 
 /// A broken embedded template: a bug, reported as a `RuntimeError`.
@@ -140,10 +141,15 @@ pub fn auto_uses_deepagents(
 /// planner cannot run, and the choice falls back to `auto` as Python's did
 /// when it found no `.wiki.db`.
 ///
+/// When the choice lands on deepagents (asked for, or `auto` over the
+/// size thresholds), the classic planner runs instead, with Python's
+/// fallback warning: Python fell back the same way whenever deepagents
+/// failed, and here it is not ported (ADR-0026 phase 5d).
+///
 /// # Errors
 ///
-/// The deepagents refusal, a failed classic model call, a classic answer
-/// that holds broken JSON, or a stop.
+/// A failed classic model call, a classic answer that holds broken JSON,
+/// or a stop.
 pub async fn plan_wiki_structure(
     model: &impl ChatModel,
     choice: PlannerChoice,
@@ -168,7 +174,13 @@ pub async fn plan_wiki_structure(
         }
     };
     if deepagents {
-        return Err(EngineError::new(ErrorType::Runtime, DEEPAGENTS_UNSUPPORTED));
+        // Python ran the deepagents planner and, when it raised, fell back
+        // to the classic one with this warning (no progress line). The
+        // planner is not ported, so it always "fails" here.
+        tracing::info!("Structure planner: deepagents (auto)");
+        tracing::warn!(
+            "Deepagents structure planner failed, falling back to LLM: {DEEPAGENTS_UNSUPPORTED}"
+        );
     }
     classic_structure(model, analysis).await
 }
