@@ -10,7 +10,7 @@
 # is a way that could happen again.
 #
 # The sharpest is the second: a scaler pointed at a queue nobody serves reports
-# ZERO depth, and zero depth scales the fleet DOWN. The failure looks like a
+# ZERO lag, and zero lag scales the fleet DOWN. The failure looks like a
 # healthy, quiet deployment while the backlog grows.
 set -euo pipefail
 
@@ -55,45 +55,46 @@ helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" \
 # both out of the manifest and compare, rather than asserting a literal here:
 # a literal in this file is a third place the names are written, and the point
 # of the check is that there are not several.
-worker_stream=$(grep -o '"redis_stream":"[^"]*"' "$work/on.yaml" | head -1 | cut -d'"' -f4)
-worker_group=$(grep -o '"redis_group":"[^"]*"' "$work/on.yaml" | head -1 | cut -d'"' -f4)
-scaler_stream=$(grep -A1 'type: redis-streams' "$work/on.yaml" | grep -o 'stream: "[^"]*"' | cut -d'"' -f2 || true)
-scaler_stream=$(awk '/type: redis-streams/{f=1} f && /^ *stream:/{gsub(/.*stream: "|"/,""); print; exit}' "$work/on.yaml")
-scaler_group=$(awk '/type: redis-streams/{f=1} f && /^ *consumerGroup:/{gsub(/.*consumerGroup: "|"/,""); print; exit}' "$work/on.yaml")
+worker_stream=$(grep -o '"nats_stream":"[^"]*"' "$work/on.yaml" | head -1 | cut -d'"' -f4)
+worker_consumer=$(grep -o '"nats_consumer":"[^"]*"' "$work/on.yaml" | head -1 | cut -d'"' -f4)
+scaler_stream=$(awk '/type: nats-jetstream/{f=1} f && /^ *stream:/{gsub(/.*stream: "|"/,""); print; exit}' "$work/on.yaml")
+scaler_consumer=$(awk '/type: nats-jetstream/{f=1} f && /^ *consumer:/{gsub(/.*consumer: "|"/,""); print; exit}' "$work/on.yaml")
 
 if [ -n "$worker_stream" ] && [ "$worker_stream" = "$scaler_stream" ]; then
-  pass "the scaler watches the stream the worker consumes"
+  pass "the scaler watches the stream the worker pulls from"
 else
-  fail "the scaler watches stream '$scaler_stream' but the worker consumes '$worker_stream'; a scaler on the wrong stream reports zero depth, which scales the fleet DOWN"
+  fail "the scaler watches stream '$scaler_stream' but the worker pulls from '$worker_stream'; a scaler on the wrong stream reports zero lag, which scales the fleet DOWN"
 fi
-if [ -n "$worker_group" ] && [ "$worker_group" = "$scaler_group" ]; then
-  pass "the scaler watches the consumer group the worker joins"
+if [ -n "$worker_consumer" ] && [ "$worker_consumer" = "$scaler_consumer" ]; then
+  pass "the scaler watches the durable consumer the worker binds"
 else
-  fail "the scaler watches group '$scaler_group' but the worker joins '$worker_group'"
-fi
-
-# PENDING entries, not stream length. Stream length counts everything ever
-# written, acknowledged included, so it only grows — it would pin the fleet at
-# maxReplicas permanently.
-if grep -q 'pendingEntriesCount:' "$work/on.yaml" && ! grep -q 'streamLength:' "$work/on.yaml"; then
-  pass "the trigger measures pending entries, not stream length"
-else
-  fail "the trigger uses stream length; that counter only grows, so the fleet would sit at maxReplicas for ever"
+  fail "the scaler watches consumer '$scaler_consumer' but the worker binds '$worker_consumer'"
 fi
 
-# TLS must follow the worker's own url scheme.
-if grep -q 'enableTLS: "true"' "$work/on.yaml"; then
-  pass "TLS is on, matching the rediss:// url the worker reads"
+# The command bus lives in the NATS chart's RUNTIME account; the scaler's
+# /jsz?acc= query names it, and any other account reads as zero lag.
+scaler_account=$(awk '/type: nats-jetstream/{f=1} f && /^ *account:/{gsub(/.*account: "|"/,""); print; exit}' "$work/on.yaml")
+if [ "$scaler_account" = "RUNTIME" ]; then
+  pass "the scaler reads the RUNTIME account's /jsz"
 else
-  fail "the scaler has TLS off while the worker connects with rediss://; it cannot reach Redis, reports no depth, and scales the fleet down"
+  fail "the scaler reads account '$scaler_account', not RUNTIME (deploy/helm/nats accounts); it would see zero lag"
 fi
-# An actual YAML key, anchored. A bare substring match also hits the rendered
-# comment that says unsafeSsl is deliberately absent — the check reported a
-# credential leak because the template explained that there was not one.
-if grep -qE '^[[:space:]]*unsafeSsl:' "$work/on.yaml"; then
-  fail "unsafeSsl is set: the scaler would send the Redis credential to whatever answers on that address"
+
+# Consumer LAG (num_pending), not the old Redis pending-entries count.
+if grep -q 'lagThreshold:' "$work/on.yaml" && ! grep -q 'pendingEntriesCount:' "$work/on.yaml"; then
+  pass "the trigger measures consumer lag"
 else
-  pass "certificate verification is not disabled"
+  fail "the trigger does not measure JetStream consumer lag"
+fi
+if grep -qE 'natsServerMonitoringEndpoint: "[^"]+:8222"' "$work/on.yaml"; then
+  pass "the scaler reads the NATS monitoring port"
+else
+  fail "the scaler names no NATS monitoring endpoint"
+fi
+if grep -q 'kind: TriggerAuthentication' "$work/on.yaml"; then
+  fail "a TriggerAuthentication renders; the jsz endpoint takes no credential and none may be handed to the scaler"
+else
+  pass "no credential is handed to the scaler"
 fi
 
 # --------------------------------------------------------- replicas ownership
@@ -122,13 +123,13 @@ else
   pass "no ScaledObject renders with autoscaling off"
 fi
 
-# ------------------------------------------------------------ the url guard
+# ------------------------------------------------------------ the route guard
 if helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" \
      --set worker.autoscaling.enabled=true \
-     --set worker.runtime.redisUrl=elitea-runtime-redis:6380 >/dev/null 2>&1; then
-  fail "a redisUrl with no scheme rendered; the scaler derives TLS from the scheme and would silently connect in the clear"
+     --set worker.runtime.natsConsumer=elitea-index-worker-v1 >/dev/null 2>&1; then
+  fail "a stream/durable pair outside the contract rendered; the scaler and the worker would watch a durable nobody pulls"
 else
-  pass "a redisUrl with no scheme is refused"
+  pass "a stream/durable pair outside the contract is refused"
 fi
 
 if [ "$failures" -ne 0 ]; then

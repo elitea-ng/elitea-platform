@@ -117,54 +117,20 @@ spec:
               done
 
               # ---------------------------------------------------------
-              # Per-replica consumer identity.
+              # Per-replica connection name.
               #
-              # THE FAILURE THIS PREVENTS. consumer_id is the Redis consumer
-              # NAME inside the consumer group. Redis tracks pending entries
-              # per consumer name, not per connection, so two processes using
-              # one name are one consumer to Redis, and two things go wrong:
+              # consumer_id is the worker's NATS connection NAME, one per pod,
+              # so `nats server report connections` tells replicas apart.
+              # Every replica pulls from the SAME durable consumer and
+              # JetStream tracks each delivery itself (+WPI heartbeats, acks,
+              # AckWait redelivery), so the name carries no correctness — it
+              # used to be the Redis consumer NAME, whose sharing made one
+              # replica refresh another's pending entries.
               #
-              #   1. Each replica's heartbeat refreshes the OTHER's entries.
-              #      The worker keeps its pending entries alive with
-              #      `XCLAIM ... JUSTID` for its own consumer name
-              #      (redis_streams.rs:81). With a shared name, a living
-              #      replica keeps a DEAD replica's in-flight entries looking
-              #      fresh, so XAUTOCLAIM never reclaims them and that work is
-              #      lost silently rather than retried.
-              #   2. `XAUTOCLAIM` (redis_streams.rs:607) claims by idle time,
-              #      not by owner, so one replica can take an entry another is
-              #      actively executing.
-              #
-              # WHY ONLY THIS ONE FIELD. The security identities —
-              # workload_session_id, producer_id, workload_identity and the
-              # client certificate — stay SHARED, because none of them is what
-              # keeps two replicas off the same execution. Three facts decide
-              # it, and each was read rather than assumed:
-              #
-              #   - `execution_claims_active_idx`
-              #     (migrations/shared/0030_execution_kernel.sql:225) is UNIQUE
-              #     on (execution_id, generation) WHERE released_at IS NULL. One
-              #     live claim per execution, enforced by the database, whoever
-              #     asks.
-              #   - the fence carries a 32-byte random `fence_token`, and every
-              #     authority query matches on it. A replica cannot present a
-              #     fence it never received.
-              #   - `VerifyActiveSession`
-              #     (internal/infra/db/repos/workload_sessions.go:43) asks only
-              #     whether the (session, identity, producer) triple exists,
-              #     is unexpired and is not revoked. One row satisfies every
-              #     replica.
-              #
-              # So the pre-install hook still provisions ONE workload session
-              # row, and the fleet can be any size. That is what unblocks
-              # autoscaling the worker.
-              #
-              # A KNOWN, BOUNDED COST: a restarted pod gets a new name and
-              # therefore a new consumer name, and Redis does not remove the
-              # old one. Empty consumers accumulate in the group's metadata.
-              # They hold no entries — XAUTOCLAIM moves those out — and each is
-              # a few bytes. `XGROUP DELCONSUMER` is the cleanup if a long-lived
-              # deployment ever makes it matter.
+              # The security identities — workload_session_id, producer_id,
+              # the runtime client certificate and the elitea-worker NATS
+              # certificate — stay SHARED: the database enforces one live
+              # claim per execution, whoever asks.
               #
               # sed on one unmistakable token, not a templating language: the
               # document is strict-parsed by the worker and a general
@@ -172,7 +138,7 @@ spec:
               # parses and means something else.
               if ! grep -q '__ELITEA_POD_NAME__' /src-runtime/runtime.json; then
                 echo "ERROR: runtime.json carries no __ELITEA_POD_NAME__ placeholder;" >&2
-                echo "       every replica would share one Redis consumer name." >&2
+                echo "       every replica would share one NATS connection name." >&2
                 exit 1
               fi
               sed "s/__ELITEA_POD_NAME__/${POD_NAME}/g" \
@@ -284,8 +250,7 @@ spec:
             # The RENDERED document, not the ConfigMap. The ConfigMap's copy
             # still carries the __ELITEA_POD_NAME__ placeholder; mounting it
             # here would give the worker a consumer name containing that
-            # literal, identical on every replica — which is the exact defect
-            # this replaces, wearing a stranger name.
+            # literal, identical on every replica.
             - name: runtime-rendered
               mountPath: /run/elitea/runtime.json
               subPath: runtime.json
@@ -301,6 +266,11 @@ spec:
               {{- if (.Values.main.runtime.rustCompiledSnapshots | default dict).enabled }}
               readOnly: true
               {{- end }}
+            {{- if .Values.nats.tls.enabled }}
+            # The elitea-worker NATS identity (templates/natsClient.yaml),
+            # read on every reconnect so a cert-manager renewal is picked up.
+            {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
+            {{- end }}
             - name: spool
               mountPath: {{ .Values.worker.runtime.spoolRoot }}
             - name: tmp
@@ -328,6 +298,9 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: {{ .Values.worker.materialInit.sizeLimit }}
+        {{- if .Values.nats.tls.enabled }}
+        {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-worker-python.fullname" .))) | nindent 8 }}
+        {{- end }}
         - name: spool
           emptyDir:
             sizeLimit: {{ .Values.worker.runtime.spoolSizeLimit }}

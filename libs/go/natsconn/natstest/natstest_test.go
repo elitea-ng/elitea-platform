@@ -2,6 +2,8 @@ package natstest_test
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/url"
 	"os/exec"
 	"strings"
 	"testing"
@@ -420,5 +422,65 @@ func TestCommandBusIdentitiesDoTheirOwnHalfOnly(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"messages": 0`) {
 		t.Errorf("an acknowledged command is still in the WorkQueue stream:\n%s", raw)
+	}
+}
+
+// The KEDA nats-jetstream scaler sizes the worker fleet from /jsz: it asks
+// /jsz?acc=<account>&consumers=true&config=true and reads num_pending of the
+// durable under account_details[name=<account>]. The chart's scaler names
+// RUNTIME (deploy/helm/elitea worker.autoscaling.natsAccount); pin that the
+// server reports the command bus there, and that the old global-account name
+// sees none of it (a wrong account reads as zero lag: no scale-up, ever).
+func TestKEDAReadsTheCommandBusLagInTheRuntimeAccount(t *testing.T) {
+	s := natstest.Start(t)
+	s.Bootstrap(t, nil)
+	main := cliAs(t, s, natsconn.IdentityMainRuntime)
+	subject := "elitea.rt.v1.agent.d.ff7cc06fb9d124826b7f491676dc63e28a1572194bbe1dda72437bfe84b42164"
+	if out, err := main("pub", "--jetstream", subject, "body").CombinedOutput(); err != nil {
+		t.Fatalf("publish a command: %v\n%s", err, out)
+	}
+	pending := func(account string) (int, bool) {
+		resp, err := http.Get(s.MonitorURL() + "/jsz?acc=" + url.QueryEscape(account) + "&consumers=true&config=true")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var jsz struct {
+			Accounts []struct {
+				Name    string `json:"name"`
+				Streams []struct {
+					Name      string `json:"name"`
+					Consumers []struct {
+						Name       string `json:"name"`
+						NumPending int    `json:"num_pending"`
+					} `json:"consumer_detail"`
+				} `json:"stream_detail"`
+			} `json:"account_details"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&jsz); err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range jsz.Accounts {
+			if a.Name != account {
+				continue
+			}
+			for _, st := range a.Streams {
+				if st.Name != "ELITEA_RT_V1_AGENT" {
+					continue
+				}
+				for _, c := range st.Consumers {
+					if c.Name == "elitea-agent-worker-v1" {
+						return c.NumPending, true
+					}
+				}
+			}
+		}
+		return 0, false
+	}
+	if n, ok := pending(natsconn.AccountRuntime); !ok || n != 1 {
+		t.Errorf("/jsz?acc=RUNTIME: elitea-agent-worker-v1 found=%t num_pending=%d, want found and 1", ok, n)
+	}
+	if _, ok := pending("$G"); ok {
+		t.Error("/jsz?acc=$G reports the command bus; the streams belong to RUNTIME")
 	}
 }

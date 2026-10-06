@@ -198,14 +198,14 @@ jobs:
       - name: Workload-session renewal cannot be switched off silently
         run: bash deploy/helm/tests/render-workload-session.sh
 
-      # Every worker replica must get its own Redis consumer name (O2a). The
+      # Every worker replica must get its own NATS connection name (O2a). The
       # mechanism has three parts and one of them fails invisibly: if the
       # worker mounts the ConfigMap instead of the rendered document, every
       # replica reads a consumer name containing the literal placeholder —
       # identical across the fleet, with nothing in any log saying so. The
       # suite also runs the substitution the manifest carries, so that wiring
       # which looks right but substitutes nothing is caught too.
-      - name: Every worker replica gets its own Redis consumer name
+      - name: Every worker replica gets its own NATS connection name
         run: bash deploy/helm/tests/render-worker-consumer-identity.sh
 
       # The worker's KEDA autoscaling (O2c). The refusal is the important half:

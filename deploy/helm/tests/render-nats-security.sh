@@ -44,7 +44,7 @@ NS=elitea
   --set-string llmGateway.egressPosture=public-unrestricted > "$TMP/elitea.yaml"
 # The standalone profile: the runtime plane on, so the command bus's
 # identities (elitea-main-runtime, elitea-worker) render too.
-"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" -f "$DIR/helm/elitea/values-standalone.yaml" \
+"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" -f "$DIR/helm/elitea/values-standalone.yaml" --set worker.enabled=true \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted > "$TMP/elitea-runtime.yaml"
 
@@ -474,6 +474,17 @@ if mc:
     check("ELITEA_RUNTIME_NATS_TLS_* point into its mount",
           [env.get(f"ELITEA_RUNTIME_NATS_TLS_{k}_FILE") for k in ("CA", "CERT", "KEY")] == [f"{base}/ca.crt", f"{base}/tls.crt", f"{base}/tls.key"], env)
     check(f"ELITEA_RUNTIME_NATS_URL is tls://{fqdn}:4222, no credential", env.get("ELITEA_RUNTIME_NATS_URL") == f"tls://{fqdn}:4222", env.get("ELITEA_RUNTIME_NATS_URL"))
+
+wc = rtcerts.get("elitea-worker")
+check("worker on: elitea-worker gets its NATS certificate", wc is not None and wc["spec"]["uris"] == [URI("elitea-worker")] and URI("elitea-worker") in users, sorted(rtcerts))
+if wc:
+    wd = {d["metadata"]["name"]: d for d in kinds(rt, "Deployment")}.get("elitea-worker")
+    wspec = wd["spec"]["template"]["spec"] if wd else {}
+    wvol = [v for v in wspec.get("volumes", []) if v["name"] == "nats-client-tls"]
+    check("the worker mounts the Secret its Certificate writes", wvol and wvol[0]["secret"]["secretName"] == wc["spec"]["secretName"])
+    check("the worker pod label is one the NATS NetworkPolicy admits", wd and wd["spec"]["template"]["metadata"]["labels"].get("app.kubernetes.io/name") == "elitea-worker-python")
+    rj = [json.loads(d["data"]["runtime.json"]) for d in kinds(rt, "ConfigMap") if "runtime.json" in (d.get("data") or {})]
+    check("runtime.json dials tls:// with the mounted identity", rj and rj[0]["nats_url"] == f"tls://{fqdn}:4222" and rj[0]["nats_certificate_path"].endswith("/tls.crt"), rj[0] if rj else None)
 
 # ── the env names the code builds (R7) ────────────────────────────────────
 # natsconn.FromEnv / EnvNames build <PREFIX>_NATS_TLS_{CA,CERT,KEY}_FILE by

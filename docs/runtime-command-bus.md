@@ -158,9 +158,12 @@ KV bucket `ELITEA_RT_V1_DEADLETTER`, created by the bootstrap, history 1, TTL
 `stream_sequence`, `num_delivered`, `reason` (a stable low-cardinality code),
 `worker` (the worker's client name), `recorded_at_unix_millis`. No envelope
 bytes, no delivery ID, no command field: the record says where to look, not
-what the command said. The alert is the bucket being non-empty
-(`nats_stream_total_messages{stream_name="KV_ELITEA_RT_V1_DEADLETTER"} > 0`)
-plus the workers' ERROR log line.
+what the command said. The alert is the bucket being non-empty —
+`EliteaRuntimeCommandDeadLettered` in deploy/helm/nats/templates/prometheusrule.yaml,
+`nats_stream_total_messages{stream_name="KV_ELITEA_RT_V1_DEADLETTER"} > 0` —
+plus the workers' ERROR log line `worker_command.dead_lettered` and their
+in-process counter. `EliteaRuntimeCommandStreamNearlyFull` fires before a
+stream starts backpressuring dispatch.
 
 ## Limits (owner decision Q6)
 
@@ -172,13 +175,22 @@ numbers are unchanged, and the limits revision moved to
 `elitea.runtime.limits.conformance.v3` so a v2 producer and a v3 worker never
 agree by accident.
 
-## Identities and permissions (one account, owner decision Q5)
+## Identities and permissions (the RUNTIME account)
+
+The NATS server has one account per plane (`deploy/helm/nats/values.yaml`:
+MAIN, GATEWAY, RUNTIME). Everything on this page — the three streams, their
+durables, the dead-letter bucket and the replay wake-up subject — lives in
+**RUNTIME**, and so do the three identities below. RUNTIME neither exports nor
+imports anything: no other plane's identity can publish a command, read one or
+see the streams, and neither command bus identity can reach MAIN's or
+GATEWAY's subjects. Nobody may delete or purge a stream; only the bootstrap
+creates or updates one, or creates a consumer.
 
 | NATS user (URI SAN `spiffe://elitea.internal/nats/<id>`) | Grants |
 | --- | --- |
-| `elitea-main-runtime` (elitea-main's runtime plane) | publish `elitea.rt.v1.*.d.*`; stream info and direct get on the three streams; consumer info on their durables; publish and subscribe `elitea.rt.v1.replay.wake`; inbox `_INBOX_elitea-main-runtime.>` |
-| `elitea-worker` (Rust and Python workers) | stream and consumer info, `MSG.NEXT` and `$JS.ACK` on the three streams' durables; dead-letter KV puts and its stream info; inbox `_INBOX_elitea-worker.>`; may NOT publish a command, create a consumer or administer a stream |
-| `elitea-nats-bootstrap` | creates and reconciles every stream, consumer and bucket |
+| `elitea-main-runtime` (elitea-main's runtime plane) | publish `elitea.rt.v1.{validate,agent,index}.d.*`; stream info and direct get on the three streams; consumer info on their durables; publish and subscribe `elitea.rt.v1.replay.wake`; inbox `_INBOX_elitea-main-runtime.>`. Denied: `$KV.>`, `$JS.ACK.>`, `MSG.NEXT`, stream and consumer admin |
+| `elitea-worker` (Rust and Python workers) | stream info on the three streams; consumer info, `MSG.NEXT` and `$JS.ACK` on each stream's own durable only; dead-letter KV puts and its stream info; inbox `_INBOX_elitea-worker.>`. Denied: `elitea.rt.v1.>` (no command, no wake-up), stream and consumer admin |
+| `elitea-nats-bootstrap-runtime` (the `nats-bootstrap` hook Job, short-lived certificate) | creates and reconciles the three streams, their durables and the dead-letter bucket (`bootstrap_runtime` in `bootstrap.sh`); no delete or purge |
 
 ## Autoscaling (owner decision Q8)
 
@@ -186,8 +198,10 @@ KEDA uses the `nats-jetstream` scaler on the worker's stream and durable. It
 scales on consumer lag (`num_pending`: published, not yet delivered), not on
 the old Redis pending-entries count (delivered, not yet acked), so the
 threshold is lower and an activation threshold of 1 wakes a scaled-to-zero
-fleet. The scaler reads `/jsz` on the NATS monitoring port, which the NATS
-chart's NetworkPolicy admits from the KEDA operator only.
+fleet. The scaler reads `/jsz?acc=RUNTIME` on the NATS monitoring port
+(`worker.autoscaling.natsAccount`; a wrong account reads as zero lag, so
+`natstest` pins the answer), which the NATS chart's NetworkPolicy admits from
+the KEDA operator only.
 
 ## Worker configuration (`runtime.json`, schema `elitea.runtime-deploy.v1`)
 

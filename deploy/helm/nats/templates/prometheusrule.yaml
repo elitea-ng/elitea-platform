@@ -1,0 +1,42 @@
+{{- if and .Values.alerts.enabled (dig "promExporter" "enabled" false .Values.nats) (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+# Alerts on the runtime command bus (docs/runtime-command-bus.md). Rendered
+# only where the Prometheus Operator serves PrometheusRule; elsewhere the
+# workers' ERROR log line `worker_command.dead_lettered` is the signal.
+#
+# The exporter sidecar runs with -jsz=all -prefix=nats, so every stream's
+# message count is nats_stream_total_messages{stream_name=...}; a KV bucket
+# is the stream KV_<bucket>.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "elitea-nats.fullname" . }}-command-bus
+  namespace: {{ include "elitea-nats.namespace" . }}
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: elitea-runtime-command-bus
+      rules:
+        # A worker could not verify or decode a command and parked it (24h
+        # nak) with a record in ELITEA_RT_V1_DEADLETTER. Nothing retries it
+        # into success: an operator reads the record (route, stream sequence,
+        # reason) and decides.
+        - alert: EliteaRuntimeCommandDeadLettered
+          expr: max(nats_stream_total_messages{stream_name="KV_ELITEA_RT_V1_DEADLETTER"}) > 0
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "A runtime command was dead-lettered"
+            description: "ELITEA_RT_V1_DEADLETTER holds {{ "{{" }} $value {{ "}}" }} record(s). `nats kv ls ELITEA_RT_V1_DEADLETTER` (as the bootstrap identity) lists them; each key is <route>.<sha256(delivery_id)>."
+        # A command stream near its MaxMsgs: dispatch is about to backpressure
+        # (commands wait in the PostgreSQL outbox).
+        - alert: EliteaRuntimeCommandStreamNearlyFull
+          expr: max by (stream_name) (nats_stream_total_messages{stream_name=~"ELITEA_RT_V1_(VALIDATE|AGENT|INDEX)"}) > {{ .Values.alerts.streamFullMessages }}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Runtime command stream {{ "{{" }} $labels.stream_name {{ "}}" }} is nearly full"
+            description: "Live commands are near the stream's capacity; new dispatch backpressures into the outbox. Check the worker fleet and its consumer lag."
+{{- end }}

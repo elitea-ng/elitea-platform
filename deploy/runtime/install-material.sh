@@ -90,7 +90,6 @@ install_files "$MAIN" 65532:65532 0644 \
 install_files "$MAIN" 65532:65532 0600 \
   control-server.key output-server.key content-server.key \
   command-signing-key.pem \
-  redis-producer-password \
   auth-attempt-key auth-pat-signing-key auth-form-users.json \
   vault-master-key
 
@@ -99,20 +98,22 @@ REDIS=/dst/redis
 mkdir -p "$REDIS"; chown 999:999 "$REDIS"; chmod 755 "$REDIS"
 install_files "$REDIS" 999:999 0644 runtime-ca.crt redis-server.crt
 install_files "$REDIS" 999:999 0600 redis-server.key redis-users.acl
-# The bootstrap password lives here so the stream/group bootstrap can run in a
-# redis-cli container that mounts this volume and nothing else.
+# The bootstrap password lives here for the healthcheck's redis-cli. The
+# runtime-redis has no client left: Form auth is on PostgreSQL and the command
+# bus is NATS JetStream. The component goes with the next change.
 install_files "$REDIS" 999:999 0600 redis-bootstrap-password
 
 # ── elitea-worker-python (uid 10001) ─────────────────────────────────────────
 # The worker never receives a server private key, the command-signing key or any
-# Redis password but its own: it verifies signatures with the public keyring and
-# reads its own ACL user's password.
+# Redis password: it verifies signatures with the public keyring, and reaches
+# the command bus over NATS (plaintext in compose; the secured overlay mounts
+# its elitea-worker certificate).
 WORKER=/dst/worker
 mkdir -p "$WORKER"; chown 10001:10001 "$WORKER"; chmod 700 "$WORKER"
 install_files "$WORKER" 10001:10001 0644 runtime-ca.crt command-signing-keyring.json
 install_files "$WORKER" 10001:10001 0600 \
   agent-worker-client.crt agent-worker-client.key \
-  redis-worker-password worker-output-spool-key \
+  worker-output-spool-key \
   agent-checkpoint-connection
 
 # ── platform-edge (traefik, root) ────────────────────────────────────────────

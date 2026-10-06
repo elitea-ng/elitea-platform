@@ -464,7 +464,10 @@ def test_the_worker_identity_hit_no_permission_violation(
     asyncio.run(violate_as_producer())
 
     def violations(identity: str) -> list[str]:
-        marker = f'"$G/user:{environment["identities"][identity]["user"]}"'
+        # The server prefixes the mapped user with its account: both command
+        # bus identities live in RUNTIME (deploy/helm/nats/values.yaml), so a
+        # line under any other account would be a mis-mapped identity.
+        marker = f'"RUNTIME/user:{environment["identities"][identity]["user"]}"'
         log = Path(environment["log"]).read_text(encoding="utf-8", errors="replace")
         return [
             line

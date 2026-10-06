@@ -13,12 +13,13 @@ data:
   # substitutes it. See the "Per-replica consumer identity" block in
   # deployment.yaml for the whole mechanism and the failure it prevents.
   #
-  # The short version: this is the Redis consumer-group consumer NAME, and
-  # two processes sharing one name are one consumer as far as Redis is
-  # concerned. It is NOT a security identity — those are
-  # workload_session_id, producer_id and the client certificate, and all
-  # three stay shared, because the database enforces mutual exclusion per
-  # EXECUTION rather than per producer.
+  # The short version: it is the worker's NATS connection NAME (what
+  # `nats server report connections` shows), one per pod so an operator can
+  # tell replicas apart. Every replica pulls from the SAME durable consumer;
+  # JetStream tracks each delivery itself, so the name carries no
+  # correctness. It is NOT a security identity — those are
+  # workload_session_id, producer_id, the runtime client certificate and the
+  # elitea-worker NATS certificate.
   runtime.json: |
     {{- $r := .Values.worker.runtime }}
     {{- $material := "/run/elitea-runtime" }}
@@ -28,10 +29,9 @@ data:
       "workload_session_id" $r.workloadSessionId
       "producer_id" $r.producerId
       "consumer_id" (printf "%s-__ELITEA_POD_NAME__" $r.consumerId)
-      "redis_url" $r.redisUrl
-      "redis_password_path" (printf "%s/redis-worker-password" $material)
-      "redis_stream" $r.redisStream
-      "redis_group" $r.redisGroup
+      "nats_url" ($r.natsUrl | default (include "elitea.natsUrl" .))
+      "nats_stream" $r.natsStream
+      "nats_consumer" $r.natsConsumer
       "control_target" $r.controlTarget
       "output_target" $r.outputTarget
       "content_origin" $r.contentOrigin
@@ -45,6 +45,15 @@ data:
       "agent_checkpoint_connection_path" (printf "%s/agent-checkpoint-connection" $material)
       "limits" $r.limits
     }}
+    {{- if .Values.nats.tls.enabled }}
+    {{- $_ := set $config "nats_ca_path" (printf "%s/ca.crt" (trimSuffix "/" .Values.nats.tls.mountPath)) }}
+    {{- $_ := set $config "nats_certificate_path" (printf "%s/tls.crt" (trimSuffix "/" .Values.nats.tls.mountPath)) }}
+    {{- $_ := set $config "nats_private_key_path" (printf "%s/tls.key" (trimSuffix "/" .Values.nats.tls.mountPath)) }}
+    {{- end }}
+    {{- $pairs := dict "ELITEA_RT_V1_VALIDATE" "elitea-configuration-worker-v1" "ELITEA_RT_V1_AGENT" "elitea-agent-worker-v1" "ELITEA_RT_V1_INDEX" "elitea-index-worker-v1" }}
+    {{- if ne (get $pairs ($r.natsStream | toString)) ($r.natsConsumer | toString) }}
+    {{- fail (printf "worker.runtime.natsStream %q with natsConsumer %q is not a command bus route. The streams and their durables are fixed (docs/runtime-command-bus.md): %v." ($r.natsStream | toString) ($r.natsConsumer | toString) $pairs) }}
+    {{- end }}
     {{- if or $r.agentModelCheckpointRecovery (gt (len $r.sandboxRuntimes) 0) }}
     {{- if ne (include "elitea-worker.isRust" .) "true" }}
     {{- fail "worker.runtime checkpoint recovery and sandbox profiles require the Rust worker" }}

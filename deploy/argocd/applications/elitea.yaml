@@ -12,8 +12,9 @@
 # gateway's budget counters dial. Ordering WITHIN the platform is no longer a
 # wave concern: it is Helm hook ordering inside this one release. The migration
 # runs pre-install/pre-upgrade at weight 0 and Helm blocks on it, the
-# workload-session provisioning follows at weight 10, and the Redis consumer
-# groups are created post-install. A failed migration aborts the release and the
+# workload-session provisioning follows at weight 10. The runtime command
+# bus's JetStream streams and durables are the nats-bootstrap Application's
+# (wave -1). A failed migration aborts the release and the
 # previous pods keep serving.
 #
 # ── WHERE THE VALUES COME FROM (issue #475) ─────────────────────────────────
@@ -58,11 +59,12 @@
 #     An upgrade of an already-bootstrapped database is unaffected.
 #
 #   - The material Secrets the runtime plane mounts (runtime CA, server and
-#     client certificates, the command-signing keyring, the Redis ACL password,
-#     the output-spool key) must exist. deploy/runtime/README.md names the keys.
+#     client certificates, the command-signing keyring, the output-spool key)
+#     must exist. The NATS client certificates (elitea-main-runtime,
+#     elitea-worker) are issued by cert-manager from the NATS CA. deploy/runtime/README.md names the keys.
 #
-# CHAT is off unless you turn on all three of `main.runtime.enabled`,
-# `worker.enabled` and `runtimeRedis.enabled` together. The chart refuses the
+# CHAT is off unless you turn on `main.runtime.enabled` and `worker.enabled`
+# together; `runtimeRedis` is not needed for it. The chart refuses the
 # incoherent combinations at render time rather than installing something that
 # reports every pod Ready and then answers no message.
 apiVersion: argoproj.io/v1alpha1

@@ -10,7 +10,8 @@ Two delivery paths, deliberately not one:
 > This machine uses **podman**: `podman compose up -d`, not `docker compose`.
 
 Agent execution (the chat send path) is gated on `ELITEA_RUNTIME_ENABLED`, which
-is a provisioning exercise rather than a flag — TLS Redis, three mTLS listeners,
+is a provisioning exercise rather than a flag — the NATS JetStream command bus
+(and its two NATS client identities), three mTLS listeners,
 a SAN-bearing workload certificate, an Ed25519 signing keyring, production auth
 and a workload-session row. [`runtime/README.md`](runtime/README.md) documents
 that contract and the permission rules its material must satisfy.
@@ -177,8 +178,9 @@ Components of the `elitea` chart are switched by `<component>.enabled`, and
 `deploy/helm/elitea/values.yaml` holds every one of them. Ordering inside the
 platform is Helm hook ordering, not a sync wave: the migration runs
 `pre-install,pre-upgrade` and Helm blocks the release until it finishes, the
-workload-session Job follows it, and the Redis consumer groups are created
-`post-install`. A failed migration aborts the release, and the previous pods
+workload-session Job follows it, and the runtime command bus's JetStream
+streams and durable consumers are created by the `nats-bootstrap` hook
+(docs/runtime-command-bus.md). A failed migration aborts the release, and the previous pods
 keep serving.
 
 Three charts, and that is all of them: `helm lint`, the template matrix and
@@ -244,7 +246,7 @@ where every value comes from, and this table is that answer.
 | `llmGateway.env.GATEWAY_SELF_LLM_ORIGINS` | `spec.source.helm.parameters`, **empty in git** | **the operator** |
 | `llmGateway.egressPosture` | `spec.source.helm.parameters`, **empty in git** | **the operator** |
 | the database password itself | the Kubernetes Secret that `postgresql.existingSecret` names | **the operator**, out of band |
-| the runtime material (CA, certificates, signing keyring, Redis password, spool key) | the Kubernetes Secrets that `main.runtime.material.secretName`, `worker.materialSecretName` and `runtimeRedis.materialSecretName` name | **the operator**, out of band — see [`runtime/README.md`](runtime/README.md) |
+| the runtime material (CA, certificates, signing keyring, spool key) | the Kubernetes Secrets that `main.runtime.material.secretName` and `worker.materialSecretName` name (the NATS client certificates come from cert-manager) | **the operator**, out of band — see [`runtime/README.md`](runtime/README.md) |
 
 **The two empty parameters are fields, not defaults.** Neither can get a chart
 default: both name addresses that only the operator knows, and a guessed origin
@@ -679,23 +681,25 @@ directory and one SDK thread. The chart sizes the pod for 32 at once:
 `worker.resources` requests 2 CPU and 4 Gi, and limits 8 CPU and 16 Gi.
 The measured worker CPU was about 0.4 at cap 2.
 
-`redis_read_batch` stays at 4. The KEDA scaler targets one delivery cap of
-pending entries per replica: `targetPendingEntries` is 32. One replica holds
-32 in-flight and 64 queued entries. The scaler adds a replica only when one
-cannot drain the backlog.
+`nats_fetch_batch` stays at 4. The KEDA `nats-jetstream` scaler reads the
+worker's durable consumer LAG (published, not yet delivered) on the NATS
+monitoring port: `lagThreshold` is 8, `activationLagThreshold` 1. Lag is not
+the old Redis pending count: work a replica already holds no longer counts,
+so a lag at all means every replica's fetch window is full. One replica holds
+32 in-flight and 64 queued entries.
 
 The default `maxReplicas` of 10 caps a KEDA fleet at 320 concurrent flows.
 A manual fleet has no such ceiling. Raise `maxReplicas` when you serve more.
 
-Its material — the signing key, the verification keyring, the Redis password,
-the Redis CA and the three listener keypairs — comes from a **plain Kubernetes
+Its material — the signing key, the verification keyring and the three
+listener keypairs with their CA — comes from a **plain Kubernetes
 Secret**. Set `runtime.material.secretName`, and give the Secret one key for
 each of these names, which are the names `deploy/scripts/gen-runtime-certs.sh`
 writes:
 
 ```
 runtime-ca.crt                command-signing-key.pem
-command-signing-keyring.json  redis-producer-password
+command-signing-keyring.json
 control-server.crt   control-server.key
 output-server.crt    output-server.key
 content-server.crt   content-server.key
@@ -1003,13 +1007,14 @@ fails with `sorry, too many clients already`.
 
 ## Scaling order with live workers (#968)
 
-The agent worker consumes commands from the Redis command stream. The worker
+The agent worker consumes commands from the JetStream command bus. The worker
 has no consumption-pause. Its only drain is SIGTERM. On SIGTERM the worker
 stops intake and finishes in-flight work up to its 30 second shutdown
 deadline.
 
-It creates no shutdown ACK. Unfinished stream entries stay PENDING and
-remain reclaimable. Stopping the worker fleet loses no durable work.
+It creates no shutdown ACK or NAK. Unfinished messages stay un-acked and are
+redelivered after the consumer's 60s AckWait. Stopping the worker fleet loses
+no durable work.
 PostgreSQL stays the source of truth for execution state.
 
 Recreating one `elitea-main` replica drops the execution streams that
@@ -1100,8 +1105,8 @@ instead.
 ### Scale-up: raise main first, then the workers
 
 Adding a main replica adds stream capacity. It does not drop existing
-streams. Raise `elitea-main` first. Raise the worker fleet when the pending
-queue depth needs it. An install without the pooler must read
+streams. Raise `elitea-main` first. Raise the worker fleet when the consumer
+lag needs it. An install without the pooler must read
 [The Postgres pooler and the connection budget (#964)](#the-postgres-pooler-and-the-connection-budget-964)
 before it raises the main replica count. With the pooler in the path, the
 same scale-up stays within the connection budget.
@@ -1122,7 +1127,8 @@ the Application values instead. The order is the same.
 Stated plainly, because the gap between compose and Helm is where deploys break:
 
 - **No PostgreSQL and no NATS.** No chart here provisions them (the runtime's
-  TLS Redis, `runtimeRedis`, is the one store the chart does render). The
+  TLS Redis, `runtimeRedis`, still renders when enabled, but nothing reads it
+  any more; it is removed next). The
   migration hook fails against a cluster where PostgreSQL does not already
   exist or `postgresql.existingSecret` has not been pointed at it, and
   elitea-main stops at startup when the NATS named by `nats` (its

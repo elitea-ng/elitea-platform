@@ -158,7 +158,9 @@ impl Environment {
 
     fn violations(&self, user: &str) -> Vec<String> {
         let log = std::fs::read_to_string(&self.log).expect("nats-server log");
-        let marker = format!("$G/user:{user}\"");
+        // The server prefixes the mapped user with its account; both command
+        // bus identities live in RUNTIME (deploy/helm/nats/values.yaml).
+        let marker = format!("RUNTIME/user:{user}\"");
         log.lines()
             .filter(|line| {
                 line.contains(&marker)

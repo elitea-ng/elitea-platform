@@ -24,21 +24,21 @@ operators return to the current durable recovery path.
    the normal fenced durable state machine. For this rollout, explicitly prove
    execution `4ceb724db45501c2cb9b142422f368db` and every other version-`1`
    execution terminally settle. Never update or delete execution, outbox,
-   claim, Redis stream, delivery-index or spool state by hand.
-4. Keep the version-`1` worker alive until its Redis deliveries and durable
+   claim, command-bus message or spool state by hand.
+4. Keep the version-`1` worker alive until its command-bus deliveries and durable
    output spool are acknowledged, settled and drained. Confirm every
    version-`1` claim is released. A pre-authority outbox must be retired by the
    normal state machine. A post-authority outbox is retained by schema and must
    instead have an exact committed terminal settlement for the same execution
    and generation, with `SUCCEEDED`, `FAILED` or `CANCELLED` matching the
    terminal job state and a non-null job `settled_at`. Do not backfill or
-   manually set `retired_at` on a post-authority outbox. Confirm the old Redis
-   stream/PEL/delivery index are empty.
+   manually set `retired_at` on a post-authority outbox. Confirm the command
+   stream, its durable and its delivery subjects are empty.
 5. Only after step 4, scale every version-`1` Main producer to zero and stop
    every version-`1` worker. Preserve and mount every stopped replica's durable
    output-spool root.
 6. Run the candidate image's `/index-v2-preflight` against the **old
-   version-1** database state, Redis stream and consumer group.
+   version-1** database state and the index stream and its durable.
 7. Continue only when the command exits `0` and every reported count is zero.
    Exit `1`, exit `2`, a timeout, a missing consumer group, a missing spool
    mount or a dependency error blocks the release.
@@ -72,22 +72,18 @@ Required environment:
 | `DATABASE_URL` | Authoritative PostgreSQL URL. Its role needs `USAGE` on schema `elitea_runtime` and `SELECT` on `elitea_runtime.execution_jobs`, `elitea_runtime.command_outbox`, `elitea_runtime.execution_claims` and `elitea_runtime.execution_settlements`. Include the production TLS policy. |
 | `ELITEA_RUNTIME_ENABLED` | Exact value `true`. |
 | `ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED` | Exact value `true`. |
-| `ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM` | Old version-`1` dedicated index command stream. |
-| `ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP` | Old version-`1` worker consumer group. |
-| `ELITEA_RUNTIME_REDIS_URL` | Canonical `rediss://<acl-user>@<host>:<port>/0` URL without a password. |
-| `ELITEA_RUNTIME_REDIS_PASSWORD_FILE` | Absolute in-container path to the old route's Redis ACL password file. |
-| `ELITEA_RUNTIME_REDIS_CA_FILE` | Absolute in-container path to the Redis trust anchor. |
+| `ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM` | The index route's command-bus stream (`ELITEA_RT_V1_INDEX`, or `ELITEA_RT_V1_AGENT` where index shares the agent stream). Its durable is fixed by the stream. |
+| `ELITEA_RUNTIME_NATS_URL` | `tls://<nats-host>:4222`, no credential. |
+| `ELITEA_RUNTIME_NATS_TLS_{CA,CERT,KEY}_FILE` | The `elitea-main-runtime` NATS identity (all three, or none for a plaintext compose NATS). |
 
-The Redis ACL identity needs only the go-redis connection/authentication
-handshake (`HELLO`/`AUTH`) plus `PING`, `XLEN`, `XPENDING` and `HLEN` for the
-old stream, consumer group and derived delivery-index key. Best-effort client
-metadata may be attempted by the library and ignored when denied. The identity
-does not need mutation commands.
+The `elitea-main-runtime` identity's grants cover what the preflight reads —
+`STREAM.INFO` and `CONSUMER.INFO` — and nothing it could change. "Drained" is
+`State.Msgs`, `NumAckPending + NumRedelivered + NumPending` and
+`State.NumSubjects` all zero (docs/runtime-command-bus.md).
 
 Required read-only mounts:
 
-- the Redis password file, private and owned by the container identity;
-- the Redis CA file;
+- the `elitea-main-runtime` NATS client certificate, key and CA;
 - PostgreSQL CA/client identity files referenced by `DATABASE_URL`, when its
   TLS mode uses files;
 - every old worker replica's durable output-spool root, each passed once as an
@@ -115,11 +111,11 @@ services:
       DATABASE_URL: <old-release-database-url>
       ELITEA_RUNTIME_ENABLED: "true"
       ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "true"
-      ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: <old-v1-stream>
-      ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP: <old-v1-group>
-      ELITEA_RUNTIME_REDIS_URL: <old-v1-rediss-url>
-      ELITEA_RUNTIME_REDIS_PASSWORD_FILE: /run/secrets/runtime-redis-password
-      ELITEA_RUNTIME_REDIS_CA_FILE: /run/secrets/runtime-redis-ca.pem
+      ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: ELITEA_RT_V1_INDEX
+      ELITEA_RUNTIME_NATS_URL: tls://elitea-nats:4222
+      ELITEA_RUNTIME_NATS_TLS_CA_FILE: /etc/runtime-nats-client/ca.crt
+      ELITEA_RUNTIME_NATS_TLS_CERT_FILE: /etc/runtime-nats-client/tls.crt
+      ELITEA_RUNTIME_NATS_TLS_KEY_FILE: /etc/runtime-nats-client/tls.key
     read_only: true
     volumes:
       - <worker-0-spool>:/mnt/index-worker-0/output-spool:ro

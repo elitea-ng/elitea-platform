@@ -43,10 +43,10 @@
 #   Turning that flag on is not a one-liner. runtimecomposition/config.go takes
 #   the runtime env block all-or-nothing and refuses to boot on a partial one,
 #   and each piece drags in real provisioning:
-#     * TLS Redis. Agent dispatch is Redis Streams, not NATS: the outbox drains
-#       through internal/transport/redisdispatch/agent.go (XADD). The URL must
-#       be rediss:// with an ACL username and a file-backed password, so the
-#       plaintext `redis` service above cannot serve it — hence `runtime-redis`.
+#     * The runtime command bus: NATS JetStream on the `nats` service, streams
+#       and durables created by `nats-bootstrap` (docs/runtime-command-bus.md).
+#       `runtime-redis` has no client left (Form auth is on PostgreSQL);
+#       it is removed with the next change.
 #     * Three mTLS listeners, not one: control gRPC :9443, output gRPC :9444,
 #       content HTTPS :9445, each with its own cert/key/client-CA.
 #     * An Ed25519 command-signing keypair whose public half must appear in the
@@ -76,7 +76,8 @@
 #       contain a locally minted CA — hence ELITEA_DISABLE_SYSTEM_CA plus
 #       REQUESTS_CA_BUNDLE/SSL_CERT_FILE on the worker service.
 #   The worker has NO env-var configuration: one JSON file, deploy/runtime/
-#   worker-runtime.json, whose stream/group must match elitea-main's env below.
+#   worker-runtime.json, whose nats_stream/nats_consumer must match elitea-main's
+#   env below.
 #
 # ── The mock LLM (issue #283) ────────────────────────────────────────────────
 #   `seed-llm` now defaults to an OFFLINE mock when no provider key is present,
@@ -314,24 +315,6 @@ services:
       timeout: 5s
       retries: 20
       start_period: 5s
-
-  # Creates the dispatch streams and their consumer groups from 0-0. The worker's
-  # ACL has no XGROUP on purpose, so this cannot be left to the consumer.
-  runtime-bootstrap:
-    image: redis:7-alpine
-    entrypoint: ["/bin/sh", "/opt/bootstrap-streams.sh"]
-    environment:
-      AGENT_STREAM: "commands.v1.agent.execute.agent.shared.1.0"
-      AGENT_GROUP: "elitea-agent-worker-v1"
-      CONFIGURATION_STREAM: "commands.v1.configuration.validate.v1.validation-small.shared-credential-free.1.0"
-      CONFIGURATION_GROUP: "elitea-configuration-worker-v1"
-    volumes:
-      - ./runtime/bootstrap-streams.sh:/opt/bootstrap-streams.sh:ro
-      - standalone_runtime_redis:/run/elitea-runtime:ro
-    depends_on:
-      runtime-redis:
-        condition: service_healthy
-    restart: "no"
 
   # ── Schema bootstrap ────────────────────────────────────────────────────────
   # Previously both steps lived inside `standalone-stack.sh seed`, which runs
@@ -1154,20 +1137,18 @@ services:
       ELITEA_RUNTIME_ENABLED: "true"
 
       # Configuration-validation dispatch: the base plane, always required.
-      ELITEA_RUNTIME_COMMAND_STREAM: "commands.v1.configuration.validate.v1.validation-small.shared-credential-free.1.0"
+      # The runtime command bus (docs/runtime-command-bus.md): JetStream on the
+      # same `nats` service, streams created by `nats-bootstrap` above.
+      ELITEA_RUNTIME_COMMAND_STREAM: "ELITEA_RT_V1_VALIDATE"
       # A restored database can already carry the cluster-wide admission
       # policy. All Main replicas must use that persisted value; the runtime
       # deliberately rejects a mismatch instead of silently changing capacity.
       ELITEA_RUNTIME_MAX_OUTSTANDING: "${ELITEA_RUNTIME_MAX_OUTSTANDING:-64}"
-      ELITEA_RUNTIME_STREAM_MAX_ENTRIES: "1024"
 
-      # Agent-execution dispatch: the chat send path. The stream name must not
-      # collide with the base plane's stream or its `:delivery-index.v1`
-      # sibling — config.go:286-310 rejects overlap explicitly.
+      # Agent-execution dispatch: the chat send path. Its own stream; config.go
+      # refuses sharing the configuration-validation stream.
       ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
-      ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: "commands.v1.agent.execute.agent.shared.1.0"
-      ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP: "elitea-agent-worker-v1"
-      ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES: "1024"
+      ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
       # Workers use this HTTPS origin for internal MCP tools.
       # The platform edge terminates TLS and forwards requests to Main.
       # Main also uses this origin for next-input-suggestion policy calls.
@@ -1185,27 +1166,17 @@ services:
       # Bifrost gateway reads, so the only remaining requirement is
       # ELITEA_CONFIGURATIONS_ENABLED, set above.
       ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "true"
-      # DELIBERATELY the same stream AND the same consumer group as the agent
-      # plane above. runtimecomposition/config.go:303-306 makes that an
-      # explicitly supported configuration (it only rejects sharing the stream
-      # with a DIFFERENT group), and the worker dispatches on the command's
-      # capability_id rather than on which stream it came from
-      # (elitea_worker/serve.py:545). So the one running worker consumes both
-      # capabilities and this needs no second worker container, no extra Redis
-      # ACL grant, no extra consumer group and no second workload_sessions row.
-      #
-      # A dedicated index stream is the alternative shape; it costs a second
-      # worker instance with its own runtime.json, ACL entries for the new
-      # stream and its `:delivery-index.v1` sibling, an XGROUP in
-      # runtime/bootstrap-streams.sh, and a second authorized workload session.
-      ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: "commands.v1.agent.execute.agent.shared.1.0"
-      ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP: "elitea-agent-worker-v1"
-      ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES: "1024"
+      # DELIBERATELY the same stream as the agent plane above: one stream has
+      # one durable consumer, and the worker dispatches on the command's
+      # capability_id rather than on which stream it came from, so the one
+      # running worker consumes both capabilities — no second worker container
+      # and no second workload_sessions row. ELITEA_RT_V1_INDEX (with a worker
+      # on elitea-index-worker-v1) is the alternative shape.
+      ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: "ELITEA_RT_V1_AGENT"
 
-      ELITEA_RUNTIME_REDIS_URL: "rediss://producer@runtime-redis:6380/0"
-      ELITEA_RUNTIME_REDIS_PASSWORD_FILE: /run/elitea-runtime/redis-producer-password
-      ELITEA_RUNTIME_REDIS_CA_FILE: /run/elitea-runtime/runtime-ca.crt
-      ELITEA_RUNTIME_REDIS_POOL_SIZE: "8"
+      # Plaintext here (compose posture; docker-compose.nats-secure.yml layers
+      # the elitea-main-runtime identity on).
+      ELITEA_RUNTIME_NATS_URL: "nats://nats:4222"
 
       # composition.go cross-checks this key id against the keyring entry and
       # refuses to start on a mismatch, so it must equal the id baked into
@@ -1236,7 +1207,7 @@ services:
       # ./certs directory. Bind-mounting the parent handed elitea-main the whole
       # of ./certs/runtime, which is exactly the material
       # deploy/runtime/install-material.sh deliberately withholds from it (the
-      # worker client key, redis-worker-password, runtime-ca.key) plus ca.key.
+      # worker client key, runtime-ca.key) plus ca.key.
       # Same defect class as the gateway's mount above (#327); the named volume
       # below stays the only source of runtime material.
       - ./certs/client.crt:/run/certs/client.crt:ro
@@ -1265,8 +1236,6 @@ services:
         condition: service_completed_successfully
       runtime-redis:
         condition: service_healthy
-      runtime-bootstrap:
-        condition: service_completed_successfully
       oidc-mock:
         condition: service_healthy
       rustfs-bucket-init:
@@ -1696,9 +1665,7 @@ services:
         condition: service_completed_successfully
       worker-spool-init:
         condition: service_completed_successfully
-      runtime-redis:
-        condition: service_healthy
-      runtime-bootstrap:
+      nats-bootstrap:
         condition: service_completed_successfully
       runtime-session-init:
         condition: service_completed_successfully
@@ -1787,7 +1754,7 @@ services:
       - standalone_mcp_mock_trust:/trust
       - standalone_runtime_worker:/runtime:ro
     depends_on:
-      runtime-bootstrap:
+      runtime-material:
         condition: service_completed_successfully
     restart: "no"
 

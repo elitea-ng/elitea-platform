@@ -165,6 +165,10 @@ func launch(dir, bin, rendered, cli, root string) (*Server, error) {
 // URL is the client URL: tls://, no credential, as the chart renders it.
 func (s *Server) URL() string { return fmt.Sprintf("tls://127.0.0.1:%d", s.port) }
 
+// MonitorURL is the server's plain-HTTP monitoring endpoint (8222 in the
+// chart), what the KEDA nats-jetstream scaler reads.
+func (s *Server) MonitorURL() string { return fmt.Sprintf("http://127.0.0.1:%d", s.httpPort) }
+
 // PlainURL is the same address with a nats:// scheme, for refusal tests.
 func (s *Server) PlainURL() string { return fmt.Sprintf("nats://127.0.0.1:%d", s.port) }
 

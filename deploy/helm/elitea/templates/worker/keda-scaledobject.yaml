@@ -7,12 +7,9 @@
   CPU and memory. Those are the wrong signal for this workload: an agent
   execution spends most of its life waiting on a model, so a backlog of
   thousands of unclaimed commands raises neither. The signal that matters is
-  the depth of the Redis consumer group, and no native HPA can read it.
-
-  WHY IT COULD NOT EXIST BEFORE. Every replica used to share one Redis consumer
-  name, so scaling out did not divide the work — it split acknowledgements
-  between processes that Redis believed were one consumer. O2a gave each pod
-  its own consumer name; this is what that unblocked.
+  the lag of the worker's JetStream durable consumer, and no native HPA can
+  read it. Every replica pulls from one durable, so scaling out divides the
+  work by construction.
 
   THE GUARD BELOW IS THE POINT OF THIS FILE.
 
@@ -31,47 +28,13 @@
   is refused.
 */}}
 {{- if not (.Capabilities.APIVersions.Has "keda.sh/v1alpha1") }}
-{{- fail "worker.autoscaling.enabled=true needs KEDA, and this cluster does not serve keda.sh/v1alpha1. The worker scales on Redis consumer-group depth, which no native HorizontalPodAutoscaler can read, so there is no degraded mode to fall back to: a ScaledObject applied without KEDA is an object no controller reads. Install KEDA (https://keda.sh), or set worker.autoscaling.enabled=false and size worker.replicaCount by hand. For `helm template`, pass --api-versions keda.sh/v1alpha1." }}
+{{- fail "worker.autoscaling.enabled=true needs KEDA, and this cluster does not serve keda.sh/v1alpha1. The worker scales on JetStream consumer lag, which no native HorizontalPodAutoscaler can read, so there is no degraded mode to fall back to: a ScaledObject applied without KEDA is an object no controller reads. Install KEDA (https://keda.sh), or set worker.autoscaling.enabled=false and size worker.replicaCount by hand. For `helm template`, pass --api-versions keda.sh/v1alpha1." }}
 {{- end }}
 {{- $a := .Values.worker.autoscaling }}
 {{- if lt (int $a.maxReplicas) (int $a.minReplicas) }}
 {{- fail (printf "worker.autoscaling.maxReplicas (%d) is below minReplicas (%d)." (int $a.maxReplicas) (int $a.minReplicas)) }}
 {{- end }}
-{{- $redisURL := .Values.worker.runtime.redisUrl }}
-{{- if not (or (hasPrefix "redis://" $redisURL) (hasPrefix "rediss://" $redisURL)) }}
-{{- fail (printf "worker.runtime.redisUrl is %q, which is neither redis:// nor rediss://. The scaler must connect the same way the worker does, and it derives TLS from this scheme rather than from a second setting that could disagree with it." $redisURL) }}
-{{- end }}
-{{- $tls := hasPrefix "rediss://" $redisURL }}
-{{/*
-  Host and port for the scaler, taken from the SAME url the worker reads.
-
-  A separate `worker.autoscaling.redisAddress` value would be a second place to
-  write one address, and the failure when the two disagree is a scaler reading
-  a queue nobody serves — which reports zero depth and therefore scales DOWN.
-  Silence again, in the shape of a working deployment.
-*/}}
-{{- $afterScheme := last (splitList "//" $redisURL) }}
-{{- $hostPort := first (splitList "/" $afterScheme) }}
-{{- if contains "@" $hostPort }}
-{{- $hostPort = last (splitList "@" $hostPort) }}
-{{- end }}
-apiVersion: keda.sh/v1alpha1
-kind: TriggerAuthentication
-metadata:
-  name: {{ include "elitea-worker-python.fullname" . }}-redis
-  labels:
-    {{- include "elitea-worker-python.labels" . | nindent 4 }}
-spec:
-  secretTargetRef:
-    # The SAME Secret and the SAME key the worker's init container copies. A
-    # separate credential here would be a second thing to rotate, and the
-    # symptom of forgetting one is a scaler that cannot authenticate and
-    # therefore reports no depth — which scales the fleet to minReplicas while
-    # the backlog grows.
-    - parameter: password
-      name: {{ required "materialSecretName is required" .Values.worker.materialSecretName }}
-      key: redis-worker-password
----
+{{- $endpoint := $a.natsMonitoringEndpoint | default (printf "%s:8222" (include "elitea.serviceHost" (dict "svc" .Values.nats "ctx" .))) }}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -95,31 +58,28 @@ spec:
         scaleDown:
           # Match the cooldown. Without this, KEDA's generated HPA uses the
           # Kubernetes default of 300s, and the cooldown above governs only the
-          # scale-to-zero transition — so a value set here to protect long
-          # executions would not, in fact, protect them.
+          # scale-to-zero transition.
           stabilizationWindowSeconds: {{ $a.cooldownSeconds }}
   triggers:
-    - type: redis-streams
+    # The worker's own durable consumer on the command bus
+    # (docs/runtime-command-bus.md). The scaler reads /jsz on the NATS
+    # monitoring port — plain HTTP, no credential, so no
+    # TriggerAuthentication; deploy/helm/nats admits the KEDA operator there
+    # (networkPolicy.monitoringFrom).
+    - type: nats-jetstream
       metadata:
-        address: {{ $hostPort | quote }}
+        natsServerMonitoringEndpoint: {{ $endpoint | quote }}
+        # The NATS account holding the command bus streams.
+        account: {{ $a.natsAccount | quote }}
         # Both names come from the worker's own configuration, so the scaler
-        # cannot watch a different stream or group than the fleet consumes.
-        stream: {{ .Values.worker.runtime.redisStream | quote }}
-        consumerGroup: {{ .Values.worker.runtime.redisGroup | quote }}
-        # PENDING entries, not stream length. Stream length counts everything
-        # ever written, including what has been processed and acknowledged, so
-        # it only ever grows and would pin the fleet at maxReplicas for ever.
-        pendingEntriesCount: {{ $a.targetPendingEntries | quote }}
-        enableTLS: {{ $tls | quote }}
-        {{- if $tls }}
-        # The runtime Redis uses a private CA. KEDA verifies against the
-        # operator pod's trust store, which does not contain it, so the
-        # operator must be installed with that CA mounted — see the chart
-        # README. unsafeSsl is NOT set here: an autoscaler that skips
-        # certificate verification is a credential handed to whatever answers
-        # on that address.
-        {{- end }}
-      authenticationRef:
-        name: {{ include "elitea-worker-python.fullname" . }}-redis
+        # cannot watch a different stream or durable than the fleet pulls.
+        stream: {{ .Values.worker.runtime.natsStream | quote }}
+        consumer: {{ .Values.worker.runtime.natsConsumer | quote }}
+        # Consumer LAG (num_pending: published, not yet delivered), not the
+        # old Redis pending-entries count (delivered, not yet acked). Work a
+        # replica already holds no longer counts toward the target.
+        lagThreshold: {{ $a.lagThreshold | quote }}
+        activationLagThreshold: {{ $a.activationLagThreshold | quote }}
+        useHttps: "false"
 {{- end }}
 {{- end }}
