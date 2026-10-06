@@ -48,7 +48,7 @@ func (p replayRetentionPolicy) validate() error {
 }
 
 // NodeEventsRepository appends current-NodeEvent JSON directly to the durable
-// execution replay log. Redis is deliberately absent from this data path.
+// execution replay log. The command bus is deliberately absent from this data path.
 type NodeEventsRepository struct {
 	store        sharedStore
 	retention    replayRetentionPolicy

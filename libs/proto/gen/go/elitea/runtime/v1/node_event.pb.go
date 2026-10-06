@@ -29,7 +29,7 @@ const (
 // content, response_metadata and references each contain one
 // complete UTF-8 JSON value. JSON fragments preserve arbitrary current payload
 // shapes and integer values without protobuf Struct's float64 conversion. They
-// are forbidden on Redis. Producers and consumers must validate the fragments
+// are forbidden on the command bus. Producers and consumers must validate the fragments
 // and the complete output frame against the selected protocol limits before
 // transport or durable projection.
 // Large agent tool results use the versioned JSON member tool_output_chunk_v1

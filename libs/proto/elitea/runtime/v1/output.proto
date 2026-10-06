@@ -37,7 +37,7 @@ message SettlementProposalV1 {
 }
 
 // ExecutionOutputFrameV1 is accepted only on the dedicated output gRPC
-// listener. Runtime business output is forbidden on Redis and control gRPC.
+// listener. Runtime business output is forbidden on the command bus and control gRPC.
 message ExecutionOutputFrameV1 {
   string output_schema_revision = 1;
   string stream_id = 2;
@@ -64,7 +64,7 @@ message ExecutionOutputFrameV1 {
     // Non-terminal current NodeEvent progress. terminal is false,
     // settlement_proposal is absent, and payload_digest binds the deterministic
     // NodeEventV1 bytes. The exact UI JSON is projected by elitea-main and
-    // replayed over SSE; it never traverses Redis.
+    // replayed over SSE; it never traverses the command bus.
     NodeEventV1 node_event = 32;
   }
 

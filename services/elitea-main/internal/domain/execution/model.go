@@ -69,7 +69,7 @@ type InputEntry struct {
 }
 
 // InputBundle holds the exact immutable manifest and content admitted for one
-// job. Redis dispatch receives only BundleID/Digest and EntryID, never these
+// job. Command-bus dispatch receives only BundleID/Digest and EntryID, never these
 // byte slices.
 type InputBundle struct {
 	ID        string
@@ -209,7 +209,7 @@ func SupportedCapability(capabilityID string) bool {
 }
 
 // ToolkitExecuteReadBinding binds one direct read request to one immutable
-// protobuf input. The toolkit snapshot, arguments and policy stay off Redis.
+// protobuf input. The toolkit snapshot, arguments and policy stay off the command bus.
 type ToolkitExecuteReadBinding struct {
 	RequestEntryID string
 }
@@ -341,7 +341,7 @@ func validOptionalIndexMetaText(value string, limit int) bool {
 
 // AgentExecutionBinding connects one immutable agent request to the bounded
 // command correlation fields used by Main and the browser. The request bytes
-// stay in the input data plane and are never copied into a Redis command.
+// stay in the input data plane and are never copied into a bus command.
 type AgentExecutionBinding struct {
 	RequestEntryID            string
 	ClientStreamID            string

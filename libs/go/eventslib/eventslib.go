@@ -15,7 +15,7 @@ type Event struct {
 }
 
 // Publisher is the interface for publishing events.
-// TODO: implement with NATS / Kafka / Redis Streams backend.
+// TODO: implement with a NATS (JetStream) backend.
 type Publisher interface {
 	Publish(event Event) error
 }

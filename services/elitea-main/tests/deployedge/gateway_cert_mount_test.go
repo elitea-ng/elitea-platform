@@ -6,7 +6,7 @@
 // mounted the whole ./certs tree to get them. That tree is also the parent of
 // ./certs/runtime, which holds the PAT signing key, the command signing key and
 // keyring, the worker client key, the content/control/output server keys, the
-// vault master key and all four Redis passwords. The top level holds ca.key,
+// vault master key. The top level holds ca.key,
 // which lets its holder mint an elitea-main client certificate. None of that is
 // gateway material.
 //
@@ -197,7 +197,7 @@ func TestGatewayMountsCertificateFilesNeverADirectory(t *testing.T) {
 						"The gateway is the egress-facing service. A mount "+
 						"wider than those files hands it ./certs/runtime — the "+
 						"PAT signing key, the command signing keyring, the "+
-						"vault master key and four Redis passwords — plus "+
+						"vault master key — plus "+
 						"ca.key, which mints an elitea-main client certificate "+
 						"(#327).\n"+
 						"Mount one line per file, and nothing else:\n  - ./certs/%s:ro",

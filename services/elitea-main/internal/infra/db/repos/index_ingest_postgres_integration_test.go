@@ -16,7 +16,7 @@ import (
 // TestPostgresServiceBackedIndexIngestAdmission is a real PostgreSQL 16-18
 // service-integration gate. It crosses the typed application use case, SQLC
 // queries, migration constraints and one database transaction; it is not a
-// Redis/worker/system E2E, load, soak or penetration test.
+// command-bus/worker/system E2E, load, soak or penetration test.
 func TestPostgresServiceBackedIndexIngestAdmission(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
 	policy := IndexIngestDispatchPolicy{
@@ -138,7 +138,7 @@ GROUP BY j.generation, i.index_generation,
 		t.Fatalf("uninitialized direct dispatch error=%v", err)
 	}
 	if signer.callCount() != 0 || appender.callCount() != 0 {
-		t.Fatal("uninitialized admission reached signing or Redis append")
+		t.Fatal("uninitialized admission reached signing or the command-bus publish")
 	}
 	assertPostgresCount(t, ctx, pool, 0, `
 SELECT count(*)

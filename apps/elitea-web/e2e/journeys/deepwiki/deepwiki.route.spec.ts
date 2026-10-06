@@ -5,7 +5,7 @@
  * ## What this stack can and cannot prove
  *
  * It runs NO DeepWiki provider service (deploy/docker-compose.e2e-standalone.yml
- * carries elitea-main, elitea-web, oidc-mock, postgres, redis, rustfs and
+ * carries elitea-main, elitea-web, oidc-mock, postgres, nats, rustfs and
  * traefik). So generating a wiki and asking questions about one cannot be
  * exercised here at all: every invocation would fail at the facade's mTLS hop
  * to a service that is not there.

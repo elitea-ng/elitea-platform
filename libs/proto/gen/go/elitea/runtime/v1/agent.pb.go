@@ -952,7 +952,7 @@ func (x *AgentExecutionAttachmentContentV1) GetContent() []byte {
 
 // AgentExecutionResultV1 references the exact current task result. Thinking,
 // token, tool, HITL, MCP and child events are separate non-terminal NodeEventV1
-// frames; a large final task result is never materialized on Redis or gRPC.
+// frames; a large final task result is never materialized on the command bus or gRPC.
 type AgentExecutionResultV1 struct {
 	state                   protoimpl.MessageState             `protogen:"open.v1"`
 	InputBundleId           string                             `protobuf:"bytes,1,opt,name=input_bundle_id,json=inputBundleId,proto3" json:"input_bundle_id,omitempty"`

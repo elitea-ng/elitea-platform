@@ -95,7 +95,7 @@ func (p InputProfile) validate() error {
 
 // InputBundleFactory stores the settings and the arguments as immutable
 // data-plane content. Only their entry references are eligible for the worker
-// command and for Redis.
+// command and for the command bus.
 type InputBundleFactory struct {
 	profile InputProfile
 	newID   executionapp.IDGenerator

@@ -29,7 +29,7 @@
  * exceeds its output limit` at `MAX_CURRENT_NODE_EVENT_JSON_BYTES`; rust
  * refused the same value one layer earlier at `MAX_TOOL_EVENT_VALUE_BYTES`).
  * The frame bound is unchanged — it is the runtime limits conformance
- * document's `max_output_frame_bytes`, under the Redis field bound — and an
+ * document's `max_output_frame_bytes`, under the bus message bound — and an
  * oversized result is now emitted as an ordered sequence of chunk events that
  * elitea-main reassembles onto the stored tool call
  * (`internal/transport/runtimegrpc/nodeevent/tool_output_chunk.go`). So BOTH

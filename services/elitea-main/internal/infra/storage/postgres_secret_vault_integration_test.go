@@ -13,7 +13,7 @@ import (
 
 // TestPostgresCurrentSecretVaultCompatibility crosses a real PostgreSQL
 // service, the current centry table shape and Python-Fernet-compatible reader.
-// It does not exercise mTLS, claims, HTTP, Redis or a worker process.
+// It does not exercise mTLS, claims, HTTP, the command bus or a worker process.
 func TestPostgresCurrentSecretVaultCompatibility(t *testing.T) {
 	databaseURL := os.Getenv("ELITEA_TEST_DATABASE_URL")
 	if databaseURL == "" {

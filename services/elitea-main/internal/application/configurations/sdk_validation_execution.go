@@ -181,7 +181,7 @@ func (p CurrentSDKValidationExecutionPolicy) validate() error {
 
 // CurrentSDKValidationExecutionValidator adapts synchronous SDK validation to
 // the existing durable configuration.validate.v1 execution. Settings bytes are
-// admitted only through the immutable input bundle; command/Redis dispatch
+// admitted only through the immutable input bundle; command-bus dispatch
 // remains reference-only through the existing execution publisher.
 type CurrentSDKValidationExecutionValidator struct {
 	contracts  CurrentSDKValidationContractResolver

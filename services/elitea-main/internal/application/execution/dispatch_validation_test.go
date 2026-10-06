@@ -114,7 +114,7 @@ func TestValidationDispatcherRetriesUnknownAppendWithDurableExactBytes(t *testin
 	store := &dispatchStoreStub{dispatch: dispatch}
 	producer := &producerStub{
 		prepared:     validPreparedEnvelope("key-before-rotation"),
-		appendErrors: []error{errors.New("Redis response lost after append")},
+		appendErrors: []error{errors.New("bus response lost after publish")},
 	}
 	service, err := NewValidationDispatcher(store, producer)
 	if err != nil {
@@ -176,7 +176,7 @@ func TestValidationDispatcherRejectsCorruptDurableEnvelopeBeforeAppend(t *testin
 		t.Fatalf("expected corrupt durable envelope rejection, got %v", err)
 	}
 	if producer.prepareCalls != 0 || producer.appendCalls != 0 {
-		t.Fatal("corrupt durable bytes reached preparation or Redis append")
+		t.Fatal("corrupt durable bytes reached preparation or the command-bus publish")
 	}
 }
 

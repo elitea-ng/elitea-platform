@@ -479,7 +479,7 @@ from elitea_worker.execution.errors import UnsupportedCapability
 from elitea_worker.handlers.indexing import IndexIngestInputBinding, ResolvedIndexIngestInput
 from elitea_worker.protocol.codec import Ed25519CommandAuthenticator, parse_and_verify_signed_command
 from elitea_worker.protocol.indexing import resolve_embedding_binding
-from elitea_worker.transport.redis_commands import RedisCommandDelivery
+from elitea_worker.transport.nats_jetstream import CommandDelivery
 
 
 class Resolver:
@@ -528,10 +528,13 @@ def processor(authenticator, control):
 
 
 def delivery(raw):
-    return RedisCommandDelivery(
-        stream="commands.v1.index.ingest.indexing.shared.1.0",
-        entry_id="1-0",
-        fields={"signed_envelope": raw},
+    return CommandDelivery(
+        stream="ELITEA_RT_V1_INDEX",
+        consumer="elitea-index-worker-v1",
+        subject="elitea.rt.v1.index.d." + hashlib.sha256(raw).hexdigest(),
+        stream_sequence=1,
+        num_delivered=1,
+        signed_envelope=raw,
     )
 
 

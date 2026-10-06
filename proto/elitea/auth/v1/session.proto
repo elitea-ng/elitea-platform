@@ -40,9 +40,9 @@ message RoleSet {
 }
 
 // SessionResolveRequest asks the auth service to hydrate an AuthContext from
-// an opaque session reference (e.g., a Redis session key).
+// an opaque session reference (e.g., a server-side session key).
 message SessionResolveRequest {
-  // session_ref is the opaque session identifier from the cookie or Redis key.
+  // session_ref is the opaque session identifier from the cookie or session store.
   string session_ref = 1;
 
   // project_id scopes the resolution to a specific tenant project.

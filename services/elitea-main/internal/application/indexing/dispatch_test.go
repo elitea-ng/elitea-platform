@@ -90,7 +90,7 @@ func TestIndexIngestDispatcherRetainsAndRetriesExactEnvelopeAfterTransportFailur
 		name string
 		err  error
 	}{
-		{name: "Redis outage", err: errors.New("Redis unavailable")},
+		{name: "command-bus outage", err: errors.New("command bus unavailable")},
 		{name: "capacity", err: executionapp.ErrDispatchBackpressured},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -127,7 +127,7 @@ func TestIndexIngestDispatcherRetainsAndRetriesExactEnvelopeAfterTransportFailur
 
 func TestIndexIngestDispatcherRetriesExactEnvelopeAfterUnknownMarkOutcome(t *testing.T) {
 	dispatch := validIndexIngestDispatch()
-	markFailure := errors.New("PostgreSQL response lost after Redis append")
+	markFailure := errors.New("PostgreSQL response lost after the command-bus publish")
 	store := &indexDispatchStoreStub{dispatch: dispatch, markErrors: []error{markFailure}}
 	producer := &indexProducerStub{prepared: indexPreparedEnvelope("before-mark-retry")}
 	dispatcher, err := NewIndexIngestDispatcher(store, producer)

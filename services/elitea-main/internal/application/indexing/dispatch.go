@@ -135,7 +135,7 @@ type ReferenceCommandProducer interface {
 }
 
 // IndexIngestDispatcher selects one exact signed envelope durably before a
-// Redis append. Every retry and competing publisher reloads that selected byte
+// command-bus publish. Every retry and competing publisher reloads that selected byte
 // sequence; an unknown append result never causes re-signing.
 type IndexIngestDispatcher struct {
 	store    PendingDispatchStore

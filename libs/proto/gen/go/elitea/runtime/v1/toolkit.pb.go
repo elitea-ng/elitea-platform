@@ -87,7 +87,7 @@ func (ToolkitCallToolStatusV1) EnumDescriptor() ([]byte, []int) {
 // ToolkitAvailableToolsCommandV1 is the bounded control-plane command for
 // toolkit.available_tools.v1. The potentially large and credential-bearing
 // settings object is an entry in WorkerCommandV1.input_bundle_ref; it is never
-// embedded in this message or published through Redis.
+// embedded in this message or published on the command bus.
 // The input manifest also requires the immutable JSON entry
 // toolkit-runtime-context with role toolkit.available_tools.runtime_context.
 // It binds the project policy context used during discovery.
@@ -240,7 +240,7 @@ func (x *ToolkitAvailableToolsArtifactReferenceV1) GetClassification() string {
 	return ""
 }
 
-// ToolkitAvailableToolsResultV1 binds the off-Redis result artifact to the
+// ToolkitAvailableToolsResultV1 binds the off-bus result artifact to the
 // exact settings content consumed by the legacy-compatible SDK adapter.
 type ToolkitAvailableToolsResultV1 struct {
 	state                 protoimpl.MessageState                    `protogen:"open.v1"`
@@ -334,7 +334,7 @@ func (x *ToolkitAvailableToolsResultV1) GetResultArtifact() *ToolkitAvailableToo
 	return nil
 }
 
-// ToolkitExecuteReadCommandV1 binds the reference-only Redis command to one
+// ToolkitExecuteReadCommandV1 binds the reference-only bus command to one
 // immutable direct-call request in the input data plane.
 type ToolkitExecuteReadCommandV1 struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
@@ -593,7 +593,7 @@ func (x *ToolkitExecuteReadResultV1) GetToolName() string {
 // and the caller-supplied tool arguments are entries in
 // WorkerCommandV1.input_bundle_ref; neither is embedded here. Settings carry
 // redeemed credentials, and arguments are caller content of unbounded size, so
-// Redis is not where either goes. The caller principal and the project are
+// The command bus is not where either goes. The caller principal and the project are
 // already on the enclosing WorkerCommandV1: repeating them here would make a
 // second, independently forgeable copy of the authorization subject.
 // The input manifest also requires the immutable JSON entry
@@ -781,7 +781,7 @@ func (x *ToolkitCallToolArtifactReferenceV1) GetClassification() string {
 
 // ToolkitCallToolSummaryV1 is the bounded typed inline form of one tool result,
 // and it mirrors IndexIngestSummaryV1 exactly. It is carried only on the
-// authenticated output gRPC data plane and is forbidden on Redis and on the
+// authenticated output gRPC data plane and is forbidden on the command bus and on the
 // control plane.
 //
 // A bounded inline summary exists because this platform has no artifact writer

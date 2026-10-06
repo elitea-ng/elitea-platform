@@ -20,7 +20,7 @@ import (
 // endpoint logs no line for a refused attempt. The key is (client id, caller
 // address), so a caller can block only itself. With N replicas the effective
 // limit is N times the stated one. The browser
-// attempt limiter (internal/infra/authattempt) is shared in Redis, but its
+// attempt limiter (internal/infra/authattempt) is shared in PostgreSQL, but its
 // stages are fixed to the browser sign-in flows, so it is not reused here.
 //
 // A success does not reset the counter: an attacker who also holds one valid

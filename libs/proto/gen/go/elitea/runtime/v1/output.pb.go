@@ -182,7 +182,7 @@ func (x *SettlementProposalV1) GetPrepareIdempotencyKey() string {
 }
 
 // ExecutionOutputFrameV1 is accepted only on the dedicated output gRPC
-// listener. Runtime business output is forbidden on Redis and control gRPC.
+// listener. Runtime business output is forbidden on the command bus and control gRPC.
 type ExecutionOutputFrameV1 struct {
 	state                 protoimpl.MessageState     `protogen:"open.v1"`
 	OutputSchemaRevision  string                     `protobuf:"bytes,1,opt,name=output_schema_revision,json=outputSchemaRevision,proto3" json:"output_schema_revision,omitempty"`
@@ -449,7 +449,7 @@ type ExecutionOutputFrameV1_NodeEvent struct {
 	// Non-terminal current NodeEvent progress. terminal is false,
 	// settlement_proposal is absent, and payload_digest binds the deterministic
 	// NodeEventV1 bytes. The exact UI JSON is projected by elitea-main and
-	// replayed over SSE; it never traverses Redis.
+	// replayed over SSE; it never traverses the command bus.
 	NodeEvent *NodeEventV1 `protobuf:"bytes,32,opt,name=node_event,json=nodeEvent,proto3,oneof"`
 }
 

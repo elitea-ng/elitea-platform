@@ -38,7 +38,7 @@ type CoreConfig struct {
 // login/logout routes are separate. The tracked header mapper is supported;
 // the tracked JSON mapping remains evidence-only until a workload-authenticated
 // consumer transport replaces the current raw session-reference /info contract.
-// This slice stays unmounted until production Redis/PostgreSQL, proxy, and
+// This slice stays unmounted until production PostgreSQL, proxy, and
 // rate-limit composition is verified.
 type CoreHandler struct {
 	kernel             *forwardapp.Kernel

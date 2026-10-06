@@ -49,7 +49,7 @@ var indexSDKSerializationContainerName = regexp.MustCompile(`\A[a-zA-Z0-9_.-]+\z
 // its deterministic tool/provider-boundary fixture blocks that public SDK call
 // without contacting a credentialed provider.
 //
-// Redis reference delivery, the worker serve loop, gRPC, public authentication
+// command-bus reference delivery, the worker serve loop, gRPC, public authentication
 // and a source provider are deliberately outside this gate. SETTLING is staged
 // only after canonical output to represent the durable post-output/pre-receipt
 // recovery window; it is not forced terminalization.

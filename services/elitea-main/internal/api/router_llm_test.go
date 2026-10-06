@@ -52,7 +52,7 @@ func (h *recordingHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // buildMinimalRouterConfig returns a RouterConfig with the minimum deps needed
 // to exercise the /llm route (Auth + Project + LLMProxy). All other optional
-// fields are left nil so we don't need a live DB, Redis, etc.
+// fields are left nil so we don't need a live DB, NATS, etc.
 func buildMinimalRouterConfig(t *testing.T, validator apimw.TokenValidator, resolver apimw.PersonalProjectResolver, llmProxy http.Handler) api.RouterConfig {
 	t.Helper()
 	return api.RouterConfig{

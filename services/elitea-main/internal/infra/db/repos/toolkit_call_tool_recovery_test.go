@@ -28,7 +28,7 @@ func (p *recoveryToolkitProducer) AppendPrepared(_ context.Context, id string, e
 		p.t.Fatal("recovery changed signed command identity")
 	}
 	if p.fail {
-		return errors.New("simulated Redis connection loss")
+		return errors.New("simulated command-bus connection loss")
 	}
 	return nil
 }

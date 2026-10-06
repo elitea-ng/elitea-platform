@@ -42,10 +42,10 @@ package projectprovisioning
 // DROPPED, with the reason:
 //
 //   rabbit_vhost         AGENTS.md forbids the Arbiter transport, and this
-//                        platform's durable worker transport is Redis Streams.
+//                        platform's durable worker transport is NATS JetStream.
 //                        pylon itself skips this step unless ARBITER_RUNTIME is
 //                        "rabbitmq", so dropping it is parity with a
-//                        Redis-Streams deployment rather than a behaviour
+//                        non-Arbiter deployment rather than a behaviour
 //                        change. This is the drop the issue asked to confirm.
 //   influx_databases     No component of this platform reads or writes InfluxDB.
 //                        pylon gates the step on CENTRY_USE_INFLUX, which is

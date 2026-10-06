@@ -142,7 +142,7 @@ const (
 //
 // Deliberately left nil (their surface is not part of the public HTTP API the
 // spec describes): AdminUI (static SPA mount), Shadow/Cutover (/internal/*),
-// Pool/Storage/RedisClient (constructor-injected, nil-safe at registration).
+// Pool/Storage (constructor-injected, nil-safe at registration).
 func buildFullSurfaceConfig() api.RouterConfig {
 	return api.RouterConfig{
 		Auth: api.AuthDeps{

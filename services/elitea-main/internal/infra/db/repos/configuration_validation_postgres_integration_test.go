@@ -478,7 +478,7 @@ func TestPostgresServiceBackedNoAuthorityRetirementRacesAndExclusion(t *testing.
 		t.Fatal(err)
 	}
 
-	// Both Redis-XADD outcomes are authoritative: an unpublished prepared row
+	// Both publish outcomes are authoritative: an unpublished prepared row
 	// models unknown XADD success, while a published row models a completed mark.
 	type retirementFixture struct {
 		frame     outputapp.ConfigurationValidationFrame

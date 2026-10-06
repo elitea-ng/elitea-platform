@@ -20,8 +20,8 @@ import (
 )
 
 // TestPostgresServiceBackedIndexIngestDispatch is a real PostgreSQL 16-18
-// service-integration gate. Redis failures are injected at the StreamAppender
-// boundary; the existing real-Redis test separately proves atomic capacity and
+// service-integration gate. Command-bus failures are injected at the StreamAppender
+// boundary; the real-NATS tests separately prove atomic capacity and
 // delivery-index behavior.
 func TestPostgresServiceBackedIndexIngestDispatch(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
@@ -45,7 +45,7 @@ func TestPostgresServiceBackedIndexIngestDispatch(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	redisOutage := errors.New("test Redis unavailable")
+	busOutage := errors.New("test command bus unavailable")
 
 	for _, test := range []struct {
 		name       string
@@ -54,11 +54,11 @@ func TestPostgresServiceBackedIndexIngestDispatch(t *testing.T) {
 		errorMatch func(error) bool
 	}{
 		{
-			name:      "Redis outage retains exact durable bytes",
+			name:      "command-bus outage retains exact durable bytes",
 			prefix:    "outage",
-			appendErr: redisOutage,
+			appendErr: busOutage,
 			errorMatch: func(err error) bool {
-				return errors.Is(err, redisOutage)
+				return errors.Is(err, busOutage)
 			},
 		},
 		{
