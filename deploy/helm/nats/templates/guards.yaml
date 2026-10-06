@@ -18,35 +18,91 @@ value and says why.
 {{- fail "nats.tlsCA must be enabled and name the server certificate's Secret (nats.config.nats.tls.secretName): its ca.crt is the dedicated NATS CA client certificates are verified against." -}}
 {{- end -}}
 {{- $merge := $n.config.merge | default dict -}}
-{{- range $k := list "no_auth_user" "allow_non_tls" "accounts" -}}
+{{- range $k := list "no_auth_user" "allow_non_tls" "authorization" -}}
 {{- if hasKey $merge $k -}}
-{{- fail (printf "nats.config.merge.%s is set. It would let a connection in without a mapped certificate (or move users out of the global account the JetStream assets live in). #1076 has no mixed mode." $k) -}}
+{{- fail (printf "nats.config.merge.%s is set. no_auth_user and allow_non_tls let a connection in without a mapped certificate, and a top-level authorization block puts users in the global account, outside the per-plane accounts that keep one plane's streams out of another's reach (#1076). Users belong in nats.config.merge.accounts.<MAIN|GATEWAY|RUNTIME>.users." $k) -}}
 {{- end -}}
 {{- end -}}
-{{- $users := ((get $merge "authorization") | default dict).users | default list -}}
-{{- if not $users -}}
-{{- fail "nats.config.merge.authorization.users is empty. With verify_and_map and no users, every client is refused; with users removed from the values the permission table in values.yaml is gone." -}}
+{{- /* The three planes, each its own account (#1076 F1). */ -}}
+{{- $accounts := dict -}}
+{{- range $k, $v := (get $merge "accounts" | default dict) -}}
+{{- if $v }}{{ $_ := set $accounts $k $v }}{{ end -}}
 {{- end -}}
+{{- $want := list "GATEWAY" "MAIN" "RUNTIME" -}}
+{{- if ne (keys $accounts | sortAlpha | join ",") ($want | join ",") -}}
+{{- fail (printf "nats.config.merge.accounts must declare exactly MAIN, GATEWAY and RUNTIME, and declares [%s]. Each plane is its own account so that a consumer's deliver subject (which the server does not check against permissions) can only land inside its creator's own plane (#1076)." (keys $accounts | sortAlpha | join ", ")) -}}
+{{- end -}}
+{{- $seen := dict -}}
+{{- range $acct := $want -}}
+{{- $a := get $accounts $acct | default dict -}}
+{{- if ne (toString (get $a "jetstream")) "enabled" -}}
+{{- fail (printf "nats.config.merge.accounts.%s.jetstream must be \"enabled\": every plane keeps its streams in its own account's JetStream." $acct) -}}
+{{- end -}}
+{{- $users := get $a "users" | default list -}}
+{{- $bootstrap := printf "/nats/elitea-nats-bootstrap-%s" (lower $acct) -}}
+{{- $bootstraps := 0 -}}
 {{- range $u := $users -}}
-{{- if not (hasPrefix "spiffe://" ($u.user | toString)) -}}
-{{- fail (printf "authorization user %q is not a URI SAN (spiffe://...). Users are certificate identities; a name or password user would be a second, unmanaged credential." ($u.user | toString)) -}}
+{{- $name := $u.user | toString -}}
+{{- if not (hasPrefix "spiffe://" $name) -}}
+{{- fail (printf "account %s user %q is not a URI SAN (spiffe://...). Users are certificate identities; a name or password user would be a second, unmanaged credential." $acct $name) -}}
 {{- end -}}
-{{- if hasKey $u "password" -}}
-{{- fail (printf "authorization user %q carries a password. Identity is the client certificate." $u.user) -}}
+{{- range $k := list "password" "nkey" "token" -}}
+{{- if hasKey $u $k -}}
+{{- fail (printf "account %s user %q carries a %s. Identity is the client certificate." $acct $name $k) -}}
+{{- end -}}
+{{- end -}}
+{{- if hasKey $seen $name -}}
+{{- fail (printf "user %q is declared in accounts %s and %s. An identity belongs to exactly one plane." $name (get $seen $name) $acct) -}}
+{{- end -}}
+{{- $_ := set $seen $name $acct -}}
+{{- $isBootstrap := hasSuffix $bootstrap $name -}}
+{{- if $isBootstrap }}{{ $bootstraps = add1 $bootstraps }}{{ end -}}
+{{- if and (contains "/nats/elitea-nats-bootstrap" $name) (not $isBootstrap) -}}
+{{- fail (printf "user %q is a bootstrap identity in account %s, whose bootstrap is ...%s. Each account's assets are administered by that account's own bootstrap only." $name $acct $bootstrap) -}}
 {{- end -}}
 {{- $sub := (($u.permissions | default dict).subscribe | default dict).allow | default list -}}
 {{- range $s := $sub -}}
 {{- if or (eq $s ">") (hasPrefix "_INBOX." $s) (eq $s "_INBOX.>") (hasPrefix "$JS.API" $s) -}}
-{{- fail (printf "authorization user %q may subscribe to %q: every client subscribes to its own _INBOX_<identity> prefix only, so it cannot read another client's replies." $u.user $s) -}}
+{{- fail (printf "user %q may subscribe to %q: every client subscribes to its own _INBOX_<identity> prefix only, so it cannot read another client's replies." $name $s) -}}
 {{- end -}}
 {{- end -}}
-{{- if not (contains "nats-bootstrap" $u.user) -}}
 {{- $pub := (($u.permissions | default dict).publish | default dict).allow | default list -}}
 {{- range $p := $pub -}}
-{{- if or (eq $p ">") (hasPrefix "$JS.API.STREAM.DELETE" $p) (hasPrefix "$JS.API.STREAM.PURGE" $p) (hasPrefix "$JS.API.STREAM.CREATE" $p) (hasPrefix "$JS.API.STREAM.UPDATE" $p) (eq $p "$JS.API.>") (eq $p "$JS.API.STREAM.>") -}}
-{{- fail (printf "authorization user %q may publish %q. Only elitea-nats-bootstrap creates, updates, deletes or purges a stream (#1076)." $u.user $p) -}}
+{{- if or (eq $p ">") (eq $p "$JS.API.>") (eq $p "$JS.API.STREAM.>") (hasPrefix "$JS.API.STREAM.DELETE" $p) (hasPrefix "$JS.API.STREAM.PURGE" $p) (hasPrefix "$JS.API.STREAM.MSG.DELETE" $p) (hasPrefix "$JS.API.ACCOUNT.PURGE" $p) -}}
+{{- fail (printf "user %q may publish %q. Nobody deletes or purges a stream, and no identity gets the whole JetStream API (#1076)." $name $p) -}}
+{{- end -}}
+{{- if and (not $isBootstrap) (or (hasPrefix "$JS.API.STREAM.CREATE" $p) (hasPrefix "$JS.API.STREAM.UPDATE" $p)) -}}
+{{- fail (printf "user %q may publish %q. Only the account's bootstrap identity (...%s) creates or updates a stream (#1076)." $name $p $bootstrap) -}}
 {{- end -}}
 {{- end -}}
+{{- end -}}
+{{- if ne $bootstraps 1 -}}
+{{- fail (printf "account %s must have exactly one bootstrap user (spiffe://<trust domain>%s) and has %d: the bootstrap Job connects to each account as that account's own identity." $acct $bootstrap $bootstraps) -}}
+{{- end -}}
+{{- end -}}
+{{- /* The one cross-account flow: GATEWAY's soft alerts, exported to MAIN only. */ -}}
+{{- $alerts := "gateway.events.project.*.events" -}}
+{{- range $acct := list "MAIN" "RUNTIME" -}}
+{{- if get (get $accounts $acct) "exports" -}}
+{{- fail (printf "account %s exports subjects. The only export is GATEWAY's %s to MAIN; any other turns a plane boundary back into a shared subject space (#1076)." $acct $alerts) -}}
+{{- end -}}
+{{- end -}}
+{{- range $acct := list "GATEWAY" "RUNTIME" -}}
+{{- if get (get $accounts $acct) "imports" -}}
+{{- fail (printf "account %s imports subjects. The only import is MAIN's of GATEWAY's %s (#1076)." $acct $alerts) -}}
+{{- end -}}
+{{- end -}}
+{{- $exports := get (get $accounts "GATEWAY") "exports" | default list -}}
+{{- range $e := $exports -}}
+{{- if or (hasKey $e "service") (ne (toString (get $e "stream")) $alerts) (ne ((get $e "accounts") | default list | join ",") "MAIN") -}}
+{{- fail (printf "GATEWAY export %v is not the soft-alert stream %s to accounts [MAIN]. A service export, another subject or an unrestricted export would let another plane reach the gateway's subjects (#1076)." $e $alerts) -}}
+{{- end -}}
+{{- end -}}
+{{- $imports := get (get $accounts "MAIN") "imports" | default list -}}
+{{- range $i := $imports -}}
+{{- $st := get $i "stream" | default dict -}}
+{{- if or (hasKey $i "service") (ne (toString (get $st "account")) "GATEWAY") (ne (toString (get $st "subject")) $alerts) (hasKey $st "to") (hasKey $i "to") -}}
+{{- fail (printf "MAIN import %v is not GATEWAY's soft-alert stream %s, unmapped. Anything else widens what MAIN receives from another plane (#1076)." $i $alerts) -}}
 {{- end -}}
 {{- end -}}
 {{- if dig "config" "cluster" "enabled" false $n -}}

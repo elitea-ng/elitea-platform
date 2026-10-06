@@ -19,8 +19,8 @@
 // A client is identified by the URI SAN of its certificate,
 // spiffe://<trust domain>/nats/<identity>. The NATS server runs with
 // `verify_and_map`, so the SAN is the user name and the permission table in
-// deploy/helm/nats/values.yaml decides what that user may publish and
-// subscribe to. Nothing in a URL is a credential: URLs are tls://host:port
+// deploy/helm/nats/values.yaml decides which account the user is in and what
+// it may publish and subscribe to there. Nothing in a URL is a credential: URLs are tls://host:port
 // and can sit in a ConfigMap.
 //
 // # Rotation
@@ -43,16 +43,67 @@ import (
 
 // The client identities. Each is the last path segment of the certificate's
 // URI SAN and the suffix of the client's inbox prefix. The NATS chart's
-// permission table names the same five; a sixth needs a row there first.
+// permission table (deploy/helm/nats/values.yaml) declares each in exactly
+// one account; a new identity needs a row there first.
 const (
-	IdentityMain      = "elitea-main"
-	IdentityGateway   = "elitea-llm-gateway"
-	IdentityScheduler = "elitea-scheduler"
-	IdentityBootstrap = "elitea-nats-bootstrap"
-	// IdentityWorker is reserved for the runtime command bus (elitea.rt.v1.>).
-	// No client presents it yet.
-	IdentityWorker = "elitea-worker"
+	// MAIN account.
+	IdentityMain          = "elitea-main"
+	IdentityBootstrapMain = "elitea-nats-bootstrap-main"
+
+	// GATEWAY account.
+	IdentityGateway          = "elitea-llm-gateway"
+	IdentityScheduler        = "elitea-scheduler"
+	IdentityBootstrapGateway = "elitea-nats-bootstrap-gateway"
+
+	// RUNTIME account, RESERVED for the runtime command bus (elitea.rt.v1.>).
+	// No client presents IdentityMainRuntime or IdentityWorker yet.
+	//
+	// IdentityMainRuntime is elitea-main's SECOND identity: the command bus
+	// producer, configured by EnvPrefixRuntime (ELITEA_RUNTIME_NATS_URL and
+	// ELITEA_RUNTIME_NATS_TLS_*), separate from the live-update plane's
+	// elitea-main identity so that neither plane's grants reach the other's
+	// account.
+	IdentityMainRuntime      = "elitea-main-runtime"
+	IdentityWorker           = "elitea-worker"
+	IdentityBootstrapRuntime = "elitea-nats-bootstrap-runtime"
 )
+
+// The accounts, one per plane. A subject or a stream in one account is not
+// reachable from another; the only cross-account flow is GATEWAY's export of
+// the per-project soft-alert subject to MAIN.
+const (
+	AccountMain    = "MAIN"
+	AccountGateway = "GATEWAY"
+	AccountRuntime = "RUNTIME"
+)
+
+// EnvPrefixRuntime is RESERVED for the runtime command bus producer
+// (IdentityMainRuntime): ELITEA_RUNTIME_NATS_URL and the three
+// ELITEA_RUNTIME_NATS_TLS_*_FILE names EnvNames returns for it.
+const EnvPrefixRuntime = "ELITEA_RUNTIME"
+
+// AccountOf returns the account the permission table declares identity in,
+// or "" for an identity it does not declare.
+func AccountOf(identity string) string {
+	switch identity {
+	case IdentityMain, IdentityBootstrapMain:
+		return AccountMain
+	case IdentityGateway, IdentityScheduler, IdentityBootstrapGateway:
+		return AccountGateway
+	case IdentityMainRuntime, IdentityWorker, IdentityBootstrapRuntime:
+		return AccountRuntime
+	}
+	return ""
+}
+
+// Identities lists every identity the permission table declares.
+func Identities() []string {
+	return []string{
+		IdentityMain, IdentityBootstrapMain,
+		IdentityGateway, IdentityScheduler, IdentityBootstrapGateway,
+		IdentityMainRuntime, IdentityWorker, IdentityBootstrapRuntime,
+	}
+}
 
 // DefaultTrustDomain is the SPIFFE trust domain the chart's URI SANs use.
 const DefaultTrustDomain = "elitea.internal"

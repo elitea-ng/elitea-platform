@@ -9,8 +9,10 @@ One NATS JetStream server (or 3-node cluster) serves three clients:
 | `elitea-main` | the project SSE relay (`gateway.events.project.>`) and canvas presence (KV + `canvas.editors` rosters) |
 
 and one owner: the `nats-bootstrap` hook Job (`../nats-bootstrap`), which
-creates every asset. The runtime command bus (`elitea.rt.v1.>`) and its worker
-identity are reserved in the permission table and land with that change.
+creates every asset, connecting to each plane's account as that account's own
+bootstrap identity. The runtime command bus (`elitea.rt.v1.>`), its producer
+and worker identities and its account (`RUNTIME`) are reserved in the
+permission table and land with that change.
 
 ## Security (#1076)
 
@@ -42,7 +44,8 @@ posture is compose's (`deploy/docker-compose.yml`), and
     platform chart (`deploy/helm/elitea`, `nats.tls.*`), mounted at
     `/etc/elitea/nats-client`, read via `<PREFIX>_NATS_TLS_{CA,CERT,KEY}_FILE`
     (`ELITEA_EVENTS_` for main, `GATEWAY_` for gateway and scheduler).
-  * `elitea-nats-bootstrap`: issued by `deploy/helm/nats-bootstrap`.
+  * `elitea-nats-bootstrap-{main,gateway,runtime}`: issued by
+    `deploy/helm/nats-bootstrap`, one per account.
   * The clients (`libs/go/natsconn`) re-read the files on every TLS handshake,
     so a cert-manager renewal is presented on the next reconnect. TLS 1.3 only.
 * **URLs carry no credential**: `tls://elitea-nats.<ns>.svc.cluster.local:4222`
@@ -55,22 +58,58 @@ NATS elsewhere, back a `ClusterIssuer` with a dedicated NATS CA and point
 `security.issuerRef`, the bootstrap's `tls.certificate.issuerRef` and the
 platform's `nats.tls.issuerRef` at it.
 
+### Accounts: one per plane
+
+`values.yaml` → `nats.config.merge.accounts`. Each plane is its own NATS
+account — its own subject space and its own JetStream — and every user is
+declared in exactly one:
+
+| Account | Identities | Assets |
+|---|---|---|
+| `MAIN` | `elitea-main`, `elitea-nats-bootstrap-main` | `ELITEA_CANVAS_PRESENCE` (KV) |
+| `GATEWAY` | `elitea-llm-gateway`, `elitea-scheduler`, `elitea-nats-bootstrap-gateway` | `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `GATEWAY_BUDGET_DELTAS`, `GATEWAY_ALERT_COOLDOWN` (KV) |
+| `RUNTIME` (reserved) | `elitea-main-runtime`, `elitea-worker`, `elitea-nats-bootstrap-runtime` | the command bus's `ELITEA_RT_V1_*` streams and `ELITEA_RT_QUARANTINE` (KV), with that change |
+
+Why accounts and not only per-user permissions: a JetStream **push
+consumer's deliver subject is not checked against its creator's publish
+permissions** (nats-server `consumer.go`). In one shared account,
+elitea-main's grant to create its presence watcher was enough to point a
+consumer's deliveries at `gateway.budget.delta` and write into
+`GATEWAY_BUDGET_DELTAS`, and a consumer-create grant on the deltas stream
+could re-deliver spend deltas onto a project's SSE subject. Across accounts a
+redirected delivery can only land inside its creator's own account, where the
+other plane's streams do not exist. `TestSecuredRedirectedDeliveryStaysInMain`
+(elitea-main) reproduces the attack against the rendered config and asserts
+that nothing reaches `GATEWAY_BUDGET_DELTAS`.
+
+**The one cross-account flow**: `GATEWAY` exports the stream
+`gateway.events.project.*.events` (the per-project `budget.soft_alert`) to
+`MAIN` only, and `MAIN` imports it, so the project SSE relay can forward it.
+`gateway.events.ops.>` (the operator-only loss record) is not exported, and
+nothing else crosses.
+
+Every user may subscribe to its own inbox prefix `_INBOX_<identity>.>` only
+(each client sets `nats.CustomInboxPrefix`), so nobody reads another client's
+JetStream API replies or acks. Nobody may delete or purge a stream; only each
+account's bootstrap identity may create or update one.
+
 ### The permission table
 
-`values.yaml` → `nats.config.merge.authorization.users`. All users are in the
-top-level `authorization {}` block, i.e. the global account, which is where
-every stream already lives — nothing moves. Every user may subscribe to its
-own inbox prefix `_INBOX_<identity>.>` only (each client sets
-`nats.CustomInboxPrefix`), so nobody reads another client's JetStream API
-replies or acks.
+| Account | Identity | May publish | May subscribe |
+|---|---|---|---|
+| MAIN | `elitea-main` | `gateway.events.project.*.events`; `$KV.ELITEA_CANVAS_PRESENCE.>`; `$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE`; `$JS.API.CONSUMER.{CREATE.KV_ELITEA_CANVAS_PRESENCE.>,DELETE.KV_ELITEA_CANVAS_PRESENCE.*}` (the presence watcher); `$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>`. Denied: stream admin | `gateway.events.project.>`, `_INBOX_elitea-main.>` |
+| MAIN | `elitea-nats-bootstrap-main` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}.KV_ELITEA_CANVAS_PRESENCE` | `_INBOX_elitea-nats-bootstrap-main.>` |
+| GATEWAY | `elitea-llm-gateway` | `gateway.budget.counter.>`, `gateway.ratelimit.counter.>`, `gateway.budget.delta`, `gateway.events.project.*.events`, `gateway.events.ops.>`, `$KV.GATEWAY_ALERT_COOLDOWN.>`; `STREAM.INFO` on its four assets; `DIRECT.GET` on `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `KV_GATEWAY_ALERT_COOLDOWN`. Denied: stream admin, every `$JS.API.CONSUMER.>` | `_INBOX_elitea-llm-gateway.>` |
+| GATEWAY | `elitea-scheduler` | `$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback.>`, `$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback`, `$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>`. Denied: stream admin | `_INBOX_elitea-scheduler.>` |
+| GATEWAY | `elitea-nats-bootstrap-gateway` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on its four assets, `CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback` | `_INBOX_elitea-nats-bootstrap-gateway.>` |
+| RUNTIME | `elitea-main-runtime` (reserved) | `elitea.rt.v1.*.d.*`; `STREAM.INFO` and `CONSUMER.INFO` on `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}`. Denied: stream admin, consumer create/delete | `_INBOX_elitea-main-runtime.>` |
+| RUNTIME | `elitea-worker` (reserved) | `CONSUMER.{INFO,MSG.NEXT}` and `$JS.ACK` on `elitea-<route>-worker-v1` of `ELITEA_RT_V1_<ROUTE>`; `$KV.ELITEA_RT_QUARANTINE.>` + its `STREAM.INFO` (dead letters). Denied: `elitea.rt.v1.*.d.>` (no command injection), stream admin, consumer create/delete | `_INBOX_elitea-worker.>` |
+| RUNTIME | `elitea-nats-bootstrap-runtime` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on the three route streams and `KV_ELITEA_RT_QUARANTINE`, `CONSUMER.{CREATE,INFO}` on the three route durables | `_INBOX_elitea-nats-bootstrap-runtime.>` |
 
-| Identity | May publish | May subscribe |
-|---|---|---|
-| `elitea-main` | `gateway.events.project.*.events`; `$KV.ELITEA_CANVAS_PRESENCE.>`; `$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE`; `$JS.API.CONSUMER.{CREATE.KV_ELITEA_CANVAS_PRESENCE.>,DELETE.KV_ELITEA_CANVAS_PRESENCE.*}` (the presence watcher); `$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>`. Denied: `gateway.budget.>`, `gateway.ratelimit.>`, `gateway.events.ops.>`, stream admin | `gateway.events.project.>`, `_INBOX_elitea-main.>` |
-| `elitea-llm-gateway` | `gateway.budget.counter.>`, `gateway.ratelimit.counter.>`, `gateway.budget.delta`, `gateway.events.project.*.events`, `gateway.events.ops.>`, `$KV.GATEWAY_ALERT_COOLDOWN.>`; `STREAM.INFO` on its four assets; `DIRECT.GET` on `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `KV_GATEWAY_ALERT_COOLDOWN`. Denied: stream admin | `_INBOX_elitea-llm-gateway.>` |
-| `elitea-scheduler` | `$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback.>`, `$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback`, `$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>`. Denied: stream admin | `_INBOX_elitea-scheduler.>` |
-| `elitea-nats-bootstrap` | `$JS.API.INFO`, `STREAM.{NAMES,LIST,INFO,CREATE,UPDATE,DELETE,PURGE}`, `CONSUMER.{CREATE,DURABLE.CREATE,INFO,NAMES,LIST}` — the only identity that may administer a stream | `_INBOX_elitea-nats-bootstrap.>` |
-| `elitea-worker` (reserved) | pull/ack/info on the `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}` consumers. Denied: `elitea.rt.v1.*.d.>` (no command injection), `gateway.>`, stream and consumer admin | `_INBOX_elitea-worker.>` |
+The RUNTIME rows are what the runtime command bus change binds to: elitea-main
+presents `elitea-main-runtime` with `ELITEA_RUNTIME_NATS_URL` and
+`ELITEA_RUNTIME_NATS_TLS_{CA,CERT,KEY}_FILE`, separate from its live-update
+identity, and neither the producer nor the worker may create a consumer.
 
 Every grant is exercised by a test that runs the service's REAL code against a
 nats-server started from this chart's rendered `nats.conf`, after the real
@@ -90,9 +129,14 @@ ELITEA_TEST_NATS_CLI_BIN=$(command -v nats) \
 ```
 
 `templates/guards.yaml` refuses a render that turns TLS, `verify_and_map`, the
-NetworkPolicy or route TLS off, adds `no_auth_user`/`allow_non_tls`/`accounts`,
-adds a non-URI or password user, lets a user subscribe to `_INBOX.>`/`>`/
-`$JS.API…`, or gives stream admin to anyone but the bootstrap.
+NetworkPolicy or route TLS off; sets `no_auth_user`, `allow_non_tls` or a
+top-level `authorization` block; declares accounts other than exactly `MAIN`,
+`GATEWAY` and `RUNTIME`, or one without JetStream; declares an identity twice,
+a non-URI, password, nkey or token user, or an account without exactly its own
+bootstrap; lets a user subscribe to `_INBOX.>`/`>`/`$JS.API…`; lets anyone
+delete or purge a stream or anyone but the account's bootstrap create or
+update one; or widens the export/import beyond GATEWAY's soft-alert stream to
+MAIN.
 
 ### Network
 
@@ -106,20 +150,18 @@ NetworkPolicy. KEDA (runtime command bus) will need a 8222 rule then.
 
 ## Assets (all owned by `nats-bootstrap`)
 
-| Asset | Kind | Purpose |
-|-------|------|---------|
-| `GATEWAY_BUDGET` | stream (AllowMsgCounter, allow_direct, 1 msg/subject, 12m dedup) | int64 nano-USD budget counters (`Nats-Incr`) |
-| `GATEWAY_RATELIMIT` | stream (AllowMsgCounter, allow_direct, MaxAge 5m) | per-minute rate-limit counters |
-| `GATEWAY_BUDGET_DELTAS` | stream (72h / 1 GiB / 5M, 12m dedup) | write-behind deltas, drained by `budget-writeback` |
-| `GATEWAY_ALERT_COOLDOWN` | KV (TTL 4h) | 80% soft-alert cooldown (`kv.Create` = SETNX-with-TTL) |
-| `ELITEA_CANVAS_PRESENCE` | KV (TTL 2m, history 1) | canvas presence rosters |
+| Asset | Account | Kind | Purpose |
+|-------|---------|------|---------|
+| `GATEWAY_BUDGET` | GATEWAY | stream (AllowMsgCounter, allow_direct, 1 msg/subject, 12m dedup) | int64 nano-USD budget counters (`Nats-Incr`) |
+| `GATEWAY_RATELIMIT` | GATEWAY | stream (AllowMsgCounter, allow_direct, MaxAge 5m) | per-minute rate-limit counters |
+| `GATEWAY_BUDGET_DELTAS` | GATEWAY | stream (72h / 1 GiB / 5M, 12m dedup) | write-behind deltas, drained by `budget-writeback` |
+| `GATEWAY_ALERT_COOLDOWN` | GATEWAY | KV (TTL 4h) | 80% soft-alert cooldown (`kv.Create` = SETNX-with-TTL) |
+| `ELITEA_CANVAS_PRESENCE` | MAIN | KV (TTL 2m, history 1) | canvas presence rosters |
 
 The services **bind** and verify what their code depends on (counter flag,
 direct get, dedup windows, TTLs); they create nothing, and a missing asset is a
 boot error naming the bootstrap Job. Re-running the bootstrap reconciles drift
-(`stream edit` / `kv edit`). Earlier bootstraps also created a KV bucket
-`GATEWAY_BUDGET` (stream `KV_GATEWAY_BUDGET`) that nothing read; delete it by
-hand if present (`nats kv del GATEWAY_BUDGET`, as the bootstrap identity).
+(`stream edit` / `kv edit`).
 
 **`max_file_store` must hold the reservations**: `GATEWAY_BUDGET_DELTAS`
 reserves its 1 GiB `MaxBytes` up front, so a smaller JetStream file store
@@ -164,27 +206,30 @@ helm upgrade --install elitea-nats deploy/helm/nats \
 ## Verifying
 
 The server refuses a connection without a mapped certificate, so operator
-commands present one. The bootstrap identity can read everything:
+commands present one, and an identity sees only its own account. The GATEWAY
+bootstrap identity reads the gateway's streams:
 
 ```bash
-kubectl -n elitea get secret elitea-nats-bootstrap-nats-client-tls -o json \
+kubectl -n elitea get secret elitea-nats-bootstrap-gateway-nats-client-tls -o json \
   | jq -r '.data | to_entries[] | "\(.key) \(.value)"' \
   | while read -r k v; do echo "$v" | base64 -d > "/tmp/nats-$k"; done
 kubectl -n elitea port-forward svc/elitea-nats 4222:4222 &
-N="nats --server tls://elitea-nats:4222 --tlsca /tmp/nats-ca.crt --tlscert /tmp/nats-tls.crt --tlskey /tmp/nats-tls.key --inbox-prefix _INBOX_elitea-nats-bootstrap"
+N="nats --server tls://elitea-nats:4222 --tlsca /tmp/nats-ca.crt --tlscert /tmp/nats-tls.crt --tlskey /tmp/nats-tls.key --inbox-prefix _INBOX_elitea-nats-bootstrap-gateway"
 # (map elitea-nats to 127.0.0.1 in /etc/hosts for the server name to verify)
-$N stream ls          # GATEWAY_BUDGET, GATEWAY_RATELIMIT, GATEWAY_BUDGET_DELTAS, KV_...
-$N kv ls              # GATEWAY_ALERT_COOLDOWN, ELITEA_CANVAS_PRESENCE
+$N stream ls          # GATEWAY_BUDGET, GATEWAY_RATELIMIT, GATEWAY_BUDGET_DELTAS, KV_GATEWAY_ALERT_COOLDOWN
 ```
+
+(`elitea-nats-bootstrap-main-nats-client-tls` the same way shows MAIN's
+`KV_ELITEA_CANVAS_PRESENCE`, and nothing of GATEWAY's.)
 
 Who is connected, as whom (from inside the pod; 8222 is not reachable from
 elsewhere):
 
 ```bash
 kubectl -n elitea exec elitea-nats-0 -c nats -- wget -qO- 'http://127.0.0.1:8222/connz?auth=1' \
-  | jq -r '.connections[] | "\(.name)\t\(.authorized_user)"'
+  | jq -r '.connections[] | "\(.name)\t\(.account)\t\(.authorized_user)"'
 ```
 
-Every connection must show one of the five `spiffe://elitea.internal/nats/…`
-users. A plaintext `nats pub` or a pod outside the four clients must fail
+Every connection must show one of the `spiffe://elitea.internal/nats/…` users,
+in its plane's account. A plaintext `nats pub` or a pod outside the four clients must fail
 (the first with a TLS/authorization error, the second with a connect timeout).

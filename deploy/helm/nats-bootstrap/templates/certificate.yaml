@@ -1,28 +1,31 @@
 {{- if .Values.tls.certificate.create }}
-# The bootstrap identity (#1076): a client certificate from the dedicated NATS
-# CA whose URI SAN the server maps to the one user that may create streams.
-# A regular resource, not a hook, so it exists before the post-install Job.
+{{- range $acct := .Values.accounts }}
+---
+# The {{ $acct }} account's bootstrap identity (#1076): a client certificate
+# from the dedicated NATS CA whose URI SAN the server maps to the one user in
+# that account that may create streams and consumers.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
-  name: {{ include "nats-bootstrap.fullname" . }}-nats-client
+  name: {{ include "nats-bootstrap.fullname" $ }}-{{ $acct }}-nats-client
   labels:
-    {{- include "nats-bootstrap.labels" . | nindent 4 }}
+    {{- include "nats-bootstrap.labels" $ | nindent 4 }}
 spec:
-  secretName: {{ .Values.tls.secretName }}
-  duration: {{ .Values.tls.certificate.duration }}
-  renewBefore: {{ .Values.tls.certificate.renewBefore }}
+  secretName: {{ include "nats-bootstrap.secretName" (dict "account" $acct "ctx" $) }}
+  duration: {{ $.Values.tls.certificate.duration }}
+  renewBefore: {{ $.Values.tls.certificate.renewBefore }}
   isCA: false
   usages:
     - client auth
-  commonName: elitea-nats-bootstrap
+  commonName: elitea-nats-bootstrap-{{ $acct }}
   uris:
-    - spiffe://{{ .Values.tls.certificate.trustDomain }}/nats/elitea-nats-bootstrap
+    - spiffe://{{ $.Values.tls.certificate.trustDomain }}/nats/elitea-nats-bootstrap-{{ $acct }}
   privateKey:
     algorithm: ECDSA
     size: 256
   issuerRef:
-    name: {{ .Values.tls.certificate.issuerRef.name }}
-    kind: {{ .Values.tls.certificate.issuerRef.kind }}
+    name: {{ $.Values.tls.certificate.issuerRef.name }}
+    kind: {{ $.Values.tls.certificate.issuerRef.kind }}
     group: cert-manager.io
+{{- end }}
 {{- end }}

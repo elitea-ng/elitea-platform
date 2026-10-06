@@ -8,12 +8,15 @@ authorization error.
 {{- range $one := splitList "," $url -}}
 {{- $one = trim $one -}}
 {{- if not (hasPrefix "tls://" $one) -}}
-{{- fail (printf "natsUrl %q is not tls://. The NATS server (deploy/helm/nats) requires TLS with a client certificate; the bootstrap Job presents tls.secretName." $one) -}}
+{{- fail (printf "natsUrl %q is not tls://. The NATS server (deploy/helm/nats) requires TLS with a client certificate; the bootstrap Job presents one client certificate per account." $one) -}}
 {{- end -}}
 {{- if contains "@" $one -}}
 {{- fail "natsUrl carries user information. The client certificate is the identity, and a credential in a value is rendered into the Job spec." -}}
 {{- end -}}
 {{- end -}}
-{{- if not .Values.tls.secretName -}}
-{{- fail "tls.secretName is empty: the Job has no client certificate to present, and the NATS server refuses a connection without one." -}}
+{{- if ne (.Values.accounts | default list | join ",") "main,gateway,runtime" -}}
+{{- fail (printf "accounts is [%s], and must be [main, gateway, runtime]. The NATS server has one account per plane and each plane's assets are created by that account's own bootstrap identity (#1076); an account left out is an account whose streams nobody creates." (.Values.accounts | default list | join ", ")) -}}
+{{- end -}}
+{{- if and (not .Values.tls.certificate.create) (ne (len (.Values.tls.secretNames | default dict)) 3) -}}
+{{- fail "tls.certificate.create is false, so tls.secretNames must name an existing certificate Secret for each of main, gateway and runtime." -}}
 {{- end -}}

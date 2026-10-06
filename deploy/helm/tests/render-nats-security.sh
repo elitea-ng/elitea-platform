@@ -45,7 +45,7 @@ refuse() {
   local name="$1" want="$2"; shift 2
   if "$HELM" template "$@" > /dev/null 2> "$TMP/refusal.err"; then
     echo "REFUSAL-NOT-RAISED	$name" >> "$TMP/refusals"
-  elif grep -q -- "$want" "$TMP/refusal.err"; then
+  elif grep -qF -- "$want" "$TMP/refusal.err"; then
     echo "ok	$name" >> "$TMP/refusals"
   else
     echo "WRONG-REASON	$name	$(tail -1 "$TMP/refusal.err")" >> "$TMP/refusals"
@@ -60,10 +60,41 @@ refuse "nats: verify_and_map off"             "verify_and_map must be true"  "${
 refuse "nats: TLS off"                        "tls.enabled is false"         "${NA[@]}" --set nats.config.nats.tls.enabled=false
 refuse "nats: no_auth_user"                   "no_auth_user"                 "${NA[@]}" --set nats.config.merge.no_auth_user=anyone
 refuse "nats: allow_non_tls"                  "allow_non_tls"                "${NA[@]}" --set nats.config.merge.allow_non_tls=true
+refuse "nats: users in the global account"    "authorization is set"         "${NA[@]}" --set 'nats.config.merge.authorization.users[0].user=spiffe://elitea.internal/nats/elitea-main'
+refuse "nats: a plane's account removed"      "exactly MAIN, GATEWAY and RUNTIME" "${NA[@]}" --set nats.config.merge.accounts.RUNTIME=null
+refuse "nats: an extra account"               "exactly MAIN, GATEWAY and RUNTIME" "${NA[@]}" --set nats.config.merge.accounts.EXTRA.jetstream=enabled
+refuse "nats: GATEWAY export widened"         "is not the soft-alert stream" "${NA[@]}" --set 'nats.config.merge.accounts.GATEWAY.exports[0].stream=gateway.>' --set 'nats.config.merge.accounts.GATEWAY.exports[0].accounts[0]=MAIN'
+refuse "nats: MAIN exports"                   "account MAIN exports"         "${NA[@]}" --set 'nats.config.merge.accounts.MAIN.exports[0].stream=elitea.>'
+refuse "nats: RUNTIME imports"                "account RUNTIME imports"      "${NA[@]}" --set 'nats.config.merge.accounts.RUNTIME.imports[0].stream.account=GATEWAY' --set 'nats.config.merge.accounts.RUNTIME.imports[0].stream.subject=gateway.events.project.*.events'
+# Mutations of one user's grants: a values file derived from values.yaml, so
+# the rest of the table stays as shipped.
+mutate() {
+  local out="$1" expr="$2"
+  python3 - "$DIR/helm/nats/values.yaml" "$out" "$expr" <<'PYM'
+import sys, yaml
+v = yaml.safe_load(open(sys.argv[1]))
+accts = v["nats"]["config"]["merge"]["accounts"]
+def user(acct, ident):
+    return next(u for u in accts[acct]["users"] if u["user"].endswith("/nats/" + ident))
+exec(sys.argv[3])
+yaml.safe_dump({"nats": {"config": {"merge": {"accounts": accts}}}}, open(sys.argv[2], "w"))
+PYM
+}
+mutate "$TMP/m-bootstrap-purge.yaml" 'user("GATEWAY","elitea-nats-bootstrap-gateway")["permissions"]["publish"]["allow"].append("$JS.API.STREAM.PURGE.GATEWAY_BUDGET")'
+refuse "nats: a bootstrap may purge"          "Nobody deletes or purges"     "${NA[@]}" -f "$TMP/m-bootstrap-purge.yaml"
+mutate "$TMP/m-gw-create.yaml" 'user("GATEWAY","elitea-llm-gateway")["permissions"]["publish"]["allow"].append("$JS.API.STREAM.CREATE.GATEWAY_BUDGET")'
+refuse "nats: a service may create a stream"  "Only the account's bootstrap" "${NA[@]}" -f "$TMP/m-gw-create.yaml"
+mutate "$TMP/m-dup.yaml" 'accts["RUNTIME"]["users"].append(dict(user("MAIN","elitea-main")))'
+refuse "nats: one identity in two accounts"   "is declared in accounts"      "${NA[@]}" -f "$TMP/m-dup.yaml"
+mutate "$TMP/m-wrong-bootstrap.yaml" 'accts["MAIN"]["users"].append({"user": "spiffe://elitea.internal/nats/elitea-nats-bootstrap-extra"})'
+refuse "nats: another plane's bootstrap"      "is a bootstrap identity in account MAIN" "${NA[@]}" -f "$TMP/m-wrong-bootstrap.yaml"
+mutate "$TMP/m-password.yaml" 'user("MAIN","elitea-main")["password"] = "x"'
+refuse "nats: a password user"                "carries a password"           "${NA[@]}" -f "$TMP/m-password.yaml"
 refuse "nats: NetworkPolicy off, unstated"    "networkPolicy.enabled is false" "${NA[@]}" --set networkPolicy.enabled=false
 refuse "nats: HA routes in plaintext"         "cluster.tls.enabled false"    elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml" --set nats.config.cluster.tls.enabled=false
 refuse "bootstrap: nats:// URL"               "is not tls://"                elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=nats://elitea-nats:4222
 refuse "bootstrap: credential URL"            "user information"             elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=tls://u:p@elitea-nats:4222
+refuse "bootstrap: an account left out"       "must be [main, gateway, runtime]" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set 'accounts={main,gateway}'
 refuse "elitea: plaintext unacknowledged"     "allowPlaintext"               "${EL[@]}" --set nats.tls.enabled=false
 refuse "elitea: nats:// gateway URL"          "not tls://"                   "${EL[@]}" --set-string llmGateway.env.GATEWAY_NATS_URL=nats://elitea-nats:4222
 refuse "elitea: nats:// main URL"             "not tls://"                   "${EL[@]}" --set-string main.env.ELITEA_EVENTS_NATS_URL=nats://elitea-nats:4222
@@ -95,8 +126,14 @@ def conf_json(text):
     text = re.sub(r':\s*(\d+)(Gi|Mi|Ki)\b', r': "\1\2"', text)
     return json.loads(text)
 
-IDS = ["elitea-main", "elitea-llm-gateway", "elitea-scheduler", "elitea-nats-bootstrap", "elitea-worker"]
+IDS = {
+    "MAIN": ["elitea-main", "elitea-nats-bootstrap-main"],
+    "GATEWAY": ["elitea-llm-gateway", "elitea-scheduler", "elitea-nats-bootstrap-gateway"],
+    "RUNTIME": ["elitea-main-runtime", "elitea-worker", "elitea-nats-bootstrap-runtime"],
+}
+ALL = [i for ids in IDS.values() for i in ids]
 URI = lambda i: f"spiffe://elitea.internal/nats/{i}"
+ALERTS = "gateway.events.project.*.events"
 
 # ── the server ────────────────────────────────────────────────────────────
 scale1, ha = docs("nats-scale1.yaml"), docs("nats-ha.yaml")
@@ -108,24 +145,40 @@ c1, c3 = nats_conf(scale1), nats_conf(ha)
 for label, c in (("scale-1", c1), ("HA", c3)):
     tls = c.get("tls", {})
     check(f"{label}: client port TLS with verify_and_map and the NATS CA", tls.get("verify_and_map") is True and tls.get("ca_file", "").endswith("ca.crt") and tls.get("cert_file"))
-    check(f"{label}: no no_auth_user, no allow_non_tls, no accounts", not any(k in c for k in ("no_auth_user", "allow_non_tls", "accounts")))
+    check(f"{label}: no no_auth_user, no allow_non_tls, no users in the global account", not any(k in c for k in ("no_auth_user", "allow_non_tls", "authorization")))
     check(f"{label}: http monitor stays on 8222 (exporter over localhost, kubelet probes)", c.get("http_port") == 8222)
-check("both profiles carry the SAME permission table", c1["authorization"] == c3["authorization"])
-users = {u["user"]: u.get("permissions", {}) for u in c1["authorization"]["users"]}
-check("the permission table names exactly the five identities", set(users) == {URI(i) for i in IDS}, sorted(users))
-for i in IDS:
+check("both profiles carry the SAME accounts and permission table", c1["accounts"] == c3["accounts"])
+accts = c1["accounts"]
+check("one account per plane: exactly MAIN, GATEWAY and RUNTIME", set(accts) == set(IDS), sorted(accts))
+users = {}
+for acct, a in accts.items():
+    check(f"{acct}: JetStream enabled in the account", a.get("jetstream") == "enabled")
+    names = [u["user"] for u in a.get("users", [])]
+    check(f"{acct}: declares exactly its plane's identities", set(names) == {URI(i) for i in IDS.get(acct, [])}, sorted(names))
+    for u in a.get("users", []):
+        users[u["user"]] = u.get("permissions", {})
+check("every identity is declared once", len(users) == len(ALL))
+for i in ALL:
     sub = users.get(URI(i), {}).get("subscribe", {}).get("allow", [])
     check(f"{i} subscribes to its own inbox prefix", f"_INBOX_{i}.>" in sub, sub)
     others = [s for s in sub if s.startswith("_INBOX")  and s != f"_INBOX_{i}.>"]
     check(f"{i} subscribes to no other inbox", not others, others)
-admin = re.compile(r"^\$JS\.API\.(STREAM\.(CREATE|UPDATE|DELETE|PURGE)|ACCOUNT\.PURGE)")
-for i in IDS:
+destroy = re.compile(r"^\$JS\.API\.(STREAM\.(DELETE|PURGE|MSG\.DELETE)|ACCOUNT\.PURGE)")
+admin = re.compile(r"^\$JS\.API\.STREAM\.(CREATE|UPDATE)")
+for i in ALL:
     pub = users.get(URI(i), {}).get("publish", {}).get("allow", [])
-    bad = [p for p in pub if admin.match(p) or p in (">", "$JS.API.>")]
-    if i == "elitea-nats-bootstrap":
-        check("only the bootstrap may create, update, delete or purge a stream", any(p.startswith("$JS.API.STREAM.CREATE") for p in pub))
+    check(f"{i} may not delete or purge a stream", not [p for p in pub if destroy.match(p) or p in (">", "$JS.API.>")])
+    made = [p for p in pub if admin.match(p)]
+    if i.startswith("elitea-nats-bootstrap-"):
+        check(f"{i} may create and update streams", made, pub)
     else:
-        check(f"{i} may not administer a stream", not bad, bad)
+        check(f"{i} may not create or update a stream", not made, made)
+check("GATEWAY exports exactly the soft-alert stream, to MAIN only",
+      accts["GATEWAY"].get("exports") == [{"stream": ALERTS, "accounts": ["MAIN"]}], accts["GATEWAY"].get("exports"))
+check("MAIN imports exactly GATEWAY's soft-alert stream",
+      accts["MAIN"].get("imports") == [{"stream": {"account": "GATEWAY", "subject": ALERTS}}], accts["MAIN"].get("imports"))
+check("RUNTIME neither exports nor imports", not accts["RUNTIME"].get("exports") and not accts["RUNTIME"].get("imports"))
+check("MAIN neither exports nor does GATEWAY import", not accts["MAIN"].get("exports") and not accts["GATEWAY"].get("imports"))
 cl = c3.get("cluster", {})
 check("HA: routes are tls:// with peer verification", cl.get("tls", {}).get("verify") is True and all(r.startswith("tls://") for r in cl.get("routes", [])))
 
@@ -163,16 +216,23 @@ for label, d in (("scale-1", scale1), ("HA", ha)):
 
 # ── the bootstrap ─────────────────────────────────────────────────────────
 bs = docs("bootstrap.yaml")
-bcert = kinds(bs, "Certificate")
-check("the bootstrap's certificate carries the bootstrap user's URI SAN", bcert and bcert[0]["spec"]["uris"] == [URI("elitea-nats-bootstrap")])
-check("the bootstrap's certificate comes from the NATS CA Issuer", bcert and bcert[0]["spec"]["issuerRef"]["name"] == "elitea-nats-ca")
+bcerts = {c["spec"]["commonName"]: c for c in kinds(bs, "Certificate")}
+check("the bootstrap issues one certificate per account", set(bcerts) == {f"elitea-nats-bootstrap-{a}" for a in ("main", "gateway", "runtime")}, sorted(bcerts))
+for name, c in bcerts.items():
+    check(f"{name}: URI SAN names its account's bootstrap user", c["spec"]["uris"] == [URI(name)] and URI(name) in users)
+    check(f"{name}: issued by the NATS CA Issuer", c["spec"]["issuerRef"]["name"] == "elitea-nats-ca")
 job = kinds(bs, "Job")[0]["spec"]["template"]["spec"]
 env = {e["name"]: e.get("value") for e in job["containers"][0]["env"]}
 check("the bootstrap dials tls:// with no credential", env.get("NATS_URL", "").startswith("tls://") and "@" not in env.get("NATS_URL", ""))
-check("the bootstrap uses its own inbox prefix", env.get("NATS_INBOX_PREFIX") == "_INBOX_elitea-nats-bootstrap")
+check("the bootstrap connects to every account", env.get("NATS_BOOTSTRAP_ACCOUNTS") == "main gateway runtime", env.get("NATS_BOOTSTRAP_ACCOUNTS"))
+check("the bootstrap presents no single identity (NATS_TLS_*_FILE)", not any(k.startswith("NATS_TLS_") and k.endswith("_FILE") for k in env))
 check("the bootstrap Job pod is what the NetworkPolicy admits", kinds(bs, "Job")[0]["spec"]["template"]["metadata"]["labels"].get("app.kubernetes.io/name") == "nats-bootstrap")
-bvols = {v["name"]: v for v in job["volumes"]}
-check("the bootstrap mounts its certificate Secret", bvols.get("nats-client-tls", {}).get("secret", {}).get("secretName") == bcert[0]["spec"]["secretName"])
+bvols = {v["name"]: v.get("secret", {}).get("secretName") for v in job["volumes"]}
+bmnts = {m["name"]: m["mountPath"] for m in job["containers"][0]["volumeMounts"]}
+for a in ("main", "gateway", "runtime"):
+    c = bcerts.get(f"elitea-nats-bootstrap-{a}")
+    check(f"the bootstrap mounts {a}'s certificate Secret at NATS_TLS_DIR/{a}",
+          c and bvols.get(f"nats-client-tls-{a}") == c["spec"]["secretName"] and bmnts.get(f"nats-client-tls-{a}") == f"{env.get('NATS_TLS_DIR')}/{a}")
 
 # ── the platform ──────────────────────────────────────────────────────────
 el = docs("elitea.yaml")

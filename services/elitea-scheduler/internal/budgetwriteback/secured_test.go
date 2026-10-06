@@ -68,7 +68,7 @@ func TestSecuredWriteBackRunsOnTheChartsPermissions(t *testing.T) {
 
 	// Watch the consumer drain from an identity that may read its info, so
 	// the table is only read once the drain loop has stopped.
-	admin, err := jetstream.New(dialAs(t, s, natsconn.IdentityBootstrap))
+	admin, err := jetstream.New(dialAs(t, s, natsconn.IdentityBootstrapGateway))
 	if err != nil {
 		t.Fatal(err)
 	}

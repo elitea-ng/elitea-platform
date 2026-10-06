@@ -1,6 +1,7 @@
 # nats-bootstrap — creates and reconciles EVERY elitea JetStream asset as a
-# Helm hook Job (#1076). The services bind only; this Job is the one identity
-# the NATS permission table lets create, update, delete or purge a stream.
+# Helm hook Job (#1076). The services bind only; this Job's per-account
+# identities are the only ones the NATS permission table lets create or update
+# a stream. Nobody deletes or purges one.
 
 # natscli 0.4.0 (nats-box 0.19.7): --allow-counter needs natscli 0.3.0+, and
 # the counter streams cannot be created without it.
@@ -10,18 +11,31 @@ image:
   pullPolicy: IfNotPresent
 
 # The NATS client URL reachable from the Job pod: tls://, and no credential —
-# the client certificate below is the identity. deploy/helm/nats installs the
-# server as release `elitea-nats`, whose Service is elitea-nats. Override per
-# environment.
+# the client certificates below are the identities. deploy/helm/nats installs
+# the server as release `elitea-nats`, whose Service is elitea-nats. Override
+# per environment.
 natsUrl: "tls://elitea-nats:4222"
 
-# The bootstrap identity's client certificate (URI SAN
-# spiffe://<trustDomain>/nats/elitea-nats-bootstrap), mounted into the Job.
+# The NATS server has one account per plane (deploy/helm/nats/values.yaml),
+# and each account has its own bootstrap identity, URI SAN
+# spiffe://<trustDomain>/nats/elitea-nats-bootstrap-<account>, that may
+# administer that account's assets and nothing else. The Job connects once
+# per account with that account's certificate, so it needs all three.
+accounts:
+  - main
+  - gateway
+  - runtime
+
 tls:
-  # Secret holding tls.crt, tls.key and ca.crt. With certificate.create it is
-  # written by the Certificate below; otherwise it must already exist.
-  secretName: elitea-nats-bootstrap-nats-client-tls
+  # Each account's certificate Secret (tls.crt, tls.key, ca.crt) is mounted at
+  # <mountPath>/<account>. With certificate.create the Secret is
+  # <fullname>-<account>-nats-client-tls, written by templates/certificate.yaml;
+  # otherwise name an existing Secret per account in secretNames.
   mountPath: /etc/nats-client
+  secretNames: {}
+  #   main: my-bootstrap-main-tls
+  #   gateway: my-bootstrap-gateway-tls
+  #   runtime: my-bootstrap-runtime-tls
   certificate:
     create: true
     # The DEDICATED NATS CA issuer deploy/helm/nats renders (security.ca.name).

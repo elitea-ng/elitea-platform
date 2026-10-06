@@ -97,6 +97,13 @@ func TestSecuredGatewayRunsOnTheChartsPermissions(t *testing.T) {
 		t.Error("the gateway deleted the deltas stream")
 	}
 	s.RequireViolation(t, natsconn.IdentityGateway, "Publish", "$JS.API.STREAM.DELETE."+DeltasStream)
+	// No consumer of any kind: the gateway only publishes and reads counters,
+	// so it cannot point a push consumer's deliver subject anywhere, nor
+	// redefine the scheduler's write-back consumer.
+	if _, err := js.CreateOrUpdateConsumer(op(), DeltasStream, jetstream.ConsumerConfig{Durable: "budget-writeback", FilterSubject: DeltaSubject}); err == nil {
+		t.Error("the gateway created or redefined a consumer on the deltas stream")
+	}
+	s.RequireViolation(t, natsconn.IdentityGateway, "Publish", "$JS.API.CONSUMER.CREATE."+DeltasStream+".budget-writeback."+DeltaSubject)
 	_ = nc.Publish("$KV.ELITEA_CANVAS_PRESENCE.x.y", []byte("{}"))
 	_ = nc.Publish("elitea.rt.v1.agent.d.x", []byte("{}"))
 	if _, err := nc.SubscribeSync("gateway.events.project.>"); err != nil {

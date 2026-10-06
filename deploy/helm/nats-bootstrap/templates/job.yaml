@@ -32,16 +32,14 @@ spec:
             # half-configured set.
             - name: NATS_URL
               value: {{ .Values.natsUrl | quote }}
-            - name: NATS_TLS_CA_FILE
-              value: "{{ .Values.tls.mountPath }}/ca.crt"
-            - name: NATS_TLS_CERT_FILE
-              value: "{{ .Values.tls.mountPath }}/tls.crt"
-            - name: NATS_TLS_KEY_FILE
-              value: "{{ .Values.tls.mountPath }}/tls.key"
-            # The permission table lets this identity subscribe to its own
-            # inbox prefix only.
-            - name: NATS_INBOX_PREFIX
-              value: "_INBOX_elitea-nats-bootstrap"
+            # One certificate per account under NATS_TLS_DIR/<account>; the
+            # script connects to each account as that account's bootstrap
+            # identity, with its own inbox prefix
+            # (_INBOX_elitea-nats-bootstrap-<account>).
+            - name: NATS_TLS_DIR
+              value: {{ .Values.tls.mountPath | quote }}
+            - name: NATS_BOOTSTRAP_ACCOUNTS
+              value: {{ join " " .Values.accounts | quote }}
             - name: NATS_ARGS
               value: {{ .Values.extraNatsArgs | quote }}
             - name: NATS_REPLICAS
@@ -65,9 +63,11 @@ spec:
           volumeMounts:
             - name: scripts
               mountPath: /scripts
-            - name: nats-client-tls
-              mountPath: {{ .Values.tls.mountPath }}
+            {{- range $acct := .Values.accounts }}
+            - name: nats-client-tls-{{ $acct }}
+              mountPath: {{ printf "%s/%s" (trimSuffix "/" $.Values.tls.mountPath) $acct }}
               readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
@@ -75,8 +75,11 @@ spec:
           configMap:
             name: {{ include "nats-bootstrap.fullname" . }}
             defaultMode: 0755
-        # The bootstrap identity's certificate (templates/certificate.yaml).
-        # The pod waits in ContainerCreating until cert-manager has written it.
-        - name: nats-client-tls
+        # Each account's bootstrap certificate (templates/certificate.yaml).
+        # The pod waits in ContainerCreating until cert-manager has written
+        # every Secret.
+        {{- range $acct := .Values.accounts }}
+        - name: nats-client-tls-{{ $acct }}
           secret:
-            secretName: {{ .Values.tls.secretName }}
+            secretName: {{ include "nats-bootstrap.secretName" (dict "account" $acct "ctx" $) }}
+        {{- end }}

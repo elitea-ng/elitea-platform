@@ -13,10 +13,7 @@ import (
 // Every identity in the permission table connects; nothing else does.
 func TestOnlyMappedCertificatesConnect(t *testing.T) {
 	s := natstest.Start(t)
-	for _, id := range []string{
-		natsconn.IdentityMain, natsconn.IdentityGateway, natsconn.IdentityScheduler,
-		natsconn.IdentityBootstrap, natsconn.IdentityWorker,
-	} {
+	for _, id := range natsconn.Identities() {
 		if err := s.Probe(id); err != nil {
 			t.Errorf("%s was refused: %v", id, err)
 		}
@@ -37,20 +34,47 @@ func TestOnlyMappedCertificatesConnect(t *testing.T) {
 	}
 }
 
-// The bootstrap creates every asset as its own identity, re-running it is a
-// no-op, and it puts a drifted setting back.
+// Each identity lands in the account the permission table declares it in.
+func TestEveryIdentityIsInItsPlanesAccount(t *testing.T) {
+	s := natstest.Start(t)
+	s.Bootstrap(t, nil)
+	for _, id := range natsconn.Identities() {
+		got, err := s.Account(id)
+		if err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if want := natsconn.AccountOf(id); got != want {
+			t.Errorf("%s is in account %q, want %q", id, got, want)
+		}
+	}
+	// The bootstrap of one plane cannot see another plane's streams: the
+	// stream does not exist in its account (and it holds no grant on it).
+	if out, err := cliAs(t, s, natsconn.IdentityBootstrapMain)("stream", "info", "GATEWAY_BUDGET").CombinedOutput(); err == nil {
+		t.Errorf("MAIN's bootstrap read GATEWAY's counter stream:\n%s", out)
+	}
+	if out, err := cliAs(t, s, natsconn.IdentityBootstrapGateway)("stream", "info", "KV_ELITEA_CANVAS_PRESENCE").CombinedOutput(); err == nil {
+		t.Errorf("GATEWAY's bootstrap read MAIN's presence bucket:\n%s", out)
+	}
+}
+
+// The bootstrap creates every asset as each account's own identity,
+// re-running it is a no-op, and it puts a drifted setting back.
 func TestBootstrapOwnsAndReconcilesTheAssets(t *testing.T) {
 	s := natstest.Start(t)
-	out := s.Bootstrap(t, nil)
-	s.RequireNoViolations(t, natsconn.IdentityBootstrap)
+	out := s.Bootstrap(t, nil) // also asserts no bootstrap identity hit a violation
 	if !strings.Contains(out, "5 of 5 expected assertions") {
 		t.Fatalf("bootstrap did not verify five assets:\n%s", out)
+	}
+	for _, acct := range []string{"main", "gateway", "runtime"} {
+		if !strings.Contains(out, "account "+acct+": reconciling") {
+			t.Errorf("bootstrap never connected to account %s:\n%s", acct, out)
+		}
 	}
 	s.Bootstrap(t, nil) // idempotent
 
 	// Drift: shorten the delta stream's retention, as the gateway's own
 	// CreateOrUpdate used to on every boot. A re-run must restore it.
-	cli := cliAs(t, s, natsconn.IdentityBootstrap)
+	cli := cliAs(t, s, natsconn.IdentityBootstrapGateway)
 	if out, err := cli("stream", "edit", "GATEWAY_BUDGET_DELTAS", "--max-msgs", "500000", "--force").CombinedOutput(); err != nil {
 		t.Fatalf("drift the stream: %v\n%s", err, out)
 	}
@@ -96,7 +120,8 @@ func TestBootstrapOwnsAndReconcilesTheAssets(t *testing.T) {
 func TestServicesCannotCreateStreams(t *testing.T) {
 	s := natstest.Start(t)
 	for _, id := range []string{
-		natsconn.IdentityMain, natsconn.IdentityGateway, natsconn.IdentityScheduler, natsconn.IdentityWorker,
+		natsconn.IdentityMain, natsconn.IdentityGateway, natsconn.IdentityScheduler,
+		natsconn.IdentityMainRuntime, natsconn.IdentityWorker,
 	} {
 		out, err := s.RunBootstrap(id, map[string]string{"NATS_ARGS": "--timeout 1s"})
 		if err == nil {
@@ -111,13 +136,12 @@ func TestServicesCannotCreateStreams(t *testing.T) {
 	}
 }
 
-// Nobody but the bootstrap may delete or purge a stream.
-func TestOnlyTheBootstrapMayDeleteOrPurge(t *testing.T) {
+// Nobody deletes or purges a stream: not the services, and not the
+// bootstraps either (bootstrap.sh never does, so no identity holds the grant).
+func TestNobodyMayDeleteOrPurge(t *testing.T) {
 	s := natstest.Start(t)
 	s.Bootstrap(t, nil)
-	for _, id := range []string{
-		natsconn.IdentityMain, natsconn.IdentityGateway, natsconn.IdentityScheduler, natsconn.IdentityWorker,
-	} {
+	for _, id := range natsconn.Identities() {
 		cli := cliAs(t, s, id)
 		for _, args := range [][]string{
 			{"stream", "purge", "GATEWAY_BUDGET", "--force"},
@@ -130,15 +154,15 @@ func TestOnlyTheBootstrapMayDeleteOrPurge(t *testing.T) {
 		}
 	}
 	// The CLI reads a stream's info before it purges or deletes, so for an
-	// identity without INFO on that stream the refusal lands there. Assert the
-	// destructive subjects directly for the identity that may read the info.
+	// identity without INFO on that stream (or without the stream in its
+	// account) the refusal lands there. Assert the destructive subjects
+	// directly for the identities that may read the info.
 	s.RequireViolation(t, natsconn.IdentityGateway, "Publish", "$JS.API.STREAM.PURGE.GATEWAY_BUDGET")
 	s.RequireViolation(t, natsconn.IdentityGateway, "Publish", "$JS.API.STREAM.DELETE.GATEWAY_BUDGET_DELTAS")
+	s.RequireViolation(t, natsconn.IdentityBootstrapGateway, "Publish", "$JS.API.STREAM.PURGE.GATEWAY_BUDGET")
+	s.RequireViolation(t, natsconn.IdentityBootstrapGateway, "Publish", "$JS.API.STREAM.DELETE.GATEWAY_BUDGET_DELTAS")
 	s.RequireViolation(t, natsconn.IdentityMain, "Publish", "$JS.API.STREAM.DELETE.KV_ELITEA_CANVAS_PRESENCE")
-	cli := cliAs(t, s, natsconn.IdentityBootstrap)
-	if out, err := cli("stream", "purge", "GATEWAY_BUDGET", "--force").CombinedOutput(); err != nil {
-		t.Errorf("the bootstrap identity could not purge: %v\n%s", err, out)
-	}
+	s.RequireViolation(t, natsconn.IdentityBootstrapMain, "Publish", "$JS.API.STREAM.DELETE.KV_ELITEA_CANVAS_PRESENCE")
 }
 
 func cliAs(t *testing.T, s *natstest.Server, identity string) func(args ...string) *exec.Cmd {

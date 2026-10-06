@@ -10,9 +10,9 @@
 // service's own test, before it is a broken budget path in a cluster.
 //
 // The JetStream assets are created the way a cluster creates them: by running
-// deploy/helm/nats-bootstrap/files/bootstrap.sh with the nats CLI, as the
-// bootstrap identity. So the bootstrap's own grants are exercised by every
-// test that uses this package.
+// deploy/helm/nats-bootstrap/files/bootstrap.sh with the nats CLI, once per
+// account, as that account's bootstrap identity. So the bootstrap's own
+// grants are exercised by every test that uses this package.
 //
 // Environment (all three are required; see Start for what a missing one does):
 //
@@ -173,23 +173,70 @@ func (s *Server) Lookup(prefix, identity string, extra map[string]string) func(s
 	}
 }
 
-// Bootstrap runs deploy/helm/nats-bootstrap/files/bootstrap.sh as the
-// bootstrap identity, exactly as the Job does, and fails the test if it
-// fails. env overrides the script's tuning variables.
+// BootstrapIdentities are the three per-account bootstrap identities, keyed
+// by the account name bootstrap.sh takes (NATS_BOOTSTRAP_ACCOUNTS).
+var BootstrapIdentities = map[string]string{
+	"main":    natsconn.IdentityBootstrapMain,
+	"gateway": natsconn.IdentityBootstrapGateway,
+	"runtime": natsconn.IdentityBootstrapRuntime,
+}
+
+// Bootstrap runs deploy/helm/nats-bootstrap/files/bootstrap.sh exactly as
+// the Job does — one run, connecting to each account as that account's
+// bootstrap identity (NATS_TLS_DIR) — and fails the test if it fails. env
+// overrides the script's tuning variables.
 func (s *Server) Bootstrap(t testing.TB, env map[string]string) string {
 	t.Helper()
-	out, err := s.RunBootstrap(natsconn.IdentityBootstrap, env)
+	tlsDir := filepath.Join(s.dir, "bootstrap-tls")
+	if _, err := os.Stat(tlsDir); err != nil {
+		if err := os.MkdirAll(tlsDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for acct, id := range BootstrapIdentities {
+			if err := os.Symlink(s.clientDir(id), filepath.Join(tlsDir, acct)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	vars := map[string]string{"NATS_TLS_DIR": tlsDir}
+	for k, v := range env {
+		vars[k] = v
+	}
+	out, err := s.runBootstrap(vars)
 	if err != nil {
-		t.Fatalf("bootstrap.sh as %s: %v\n%s\nserver log:\n%s", natsconn.IdentityBootstrap, err, out, s.Log())
+		t.Fatalf("bootstrap.sh: %v\n%s\nserver log:\n%s", err, out, s.Log())
+	}
+	for _, id := range BootstrapIdentities {
+		s.RequireNoViolations(t, id)
 	}
 	return out
 }
 
-// RunBootstrap runs bootstrap.sh presenting identity's certificate and
-// returns its output.
+// RunBootstrap runs bootstrap.sh for identity's account only, presenting
+// identity's certificate, and returns its output. It is how a test proves a
+// service identity cannot do the bootstrap's job.
 func (s *Server) RunBootstrap(identity string, env map[string]string) (string, error) {
-	script := filepath.Join(s.repoRoot, "deploy", "helm", "nats-bootstrap", "files", "bootstrap.sh")
+	acct := strings.ToLower(natsconn.AccountOf(identity))
+	if acct == "" {
+		acct = "main"
+	}
 	m := s.Material(identity)
+	vars := map[string]string{
+		"NATS_BOOTSTRAP_ACCOUNTS": acct,
+		"NATS_TLS_CA_FILE":        m.CAFile,
+		"NATS_TLS_CERT_FILE":      m.CertFile,
+		"NATS_TLS_KEY_FILE":       m.KeyFile,
+		"NATS_INBOX_PREFIX":       natsconn.InboxPrefix(identity),
+		"NATS_CONNECT_WAIT":       "0",
+	}
+	for k, v := range env {
+		vars[k] = v
+	}
+	return s.runBootstrap(vars)
+}
+
+func (s *Server) runBootstrap(vars map[string]string) (string, error) {
+	script := filepath.Join(s.repoRoot, "deploy", "helm", "nats-bootstrap", "files", "bootstrap.sh")
 	binDir := filepath.Join(s.dir, "bin")
 	if err := os.MkdirAll(binDir, 0o700); err != nil {
 		return "", err
@@ -206,12 +253,12 @@ func (s *Server) RunBootstrap(identity string, env map[string]string) (string, e
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"HOME="+s.dir, // keep the CLI away from the developer's contexts
 		"NATS_URL="+s.URL(),
-		"NATS_TLS_CA_FILE="+m.CAFile,
-		"NATS_TLS_CERT_FILE="+m.CertFile,
-		"NATS_TLS_KEY_FILE="+m.KeyFile,
-		"NATS_INBOX_PREFIX="+natsconn.InboxPrefix(identity),
+		// The server is up by the time a test calls this; the Job's longer
+		// wait is for a pod that starts before cert-manager issued its
+		// certificate.
+		"NATS_CONNECT_WAIT=10",
 	)
-	for k, v := range env {
+	for k, v := range vars {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
 	out, err := cmd.CombinedOutput()
@@ -314,7 +361,7 @@ func (s *Server) localise(conf string) (string, error) {
 		}
 		conf = strings.ReplaceAll(conf, sub.from, sub.to)
 	}
-	for _, needle := range []string{`"verify_and_map": true`, `"authorization"`} {
+	for _, needle := range []string{`"verify_and_map": true`, `"accounts"`} {
 		if !strings.Contains(conf, needle) {
 			return "", fmt.Errorf("the rendered NATS config lacks %s; it is not the secured chart profile", needle)
 		}
@@ -438,10 +485,7 @@ func (s *Server) writePKI() error {
 		return err
 	}
 	client := []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-	for _, id := range []string{
-		natsconn.IdentityMain, natsconn.IdentityGateway, natsconn.IdentityScheduler,
-		natsconn.IdentityBootstrap, natsconn.IdentityWorker,
-	} {
+	for _, id := range natsconn.Identities() {
 		l := leaf{cn: id, uris: []string{natsconn.IdentityURI(natsconn.DefaultTrustDomain, id)}, eku: client}
 		if err := ca.issue(s.clientDir(id), l, ca.pem); err != nil {
 			return err
@@ -516,10 +560,11 @@ type Violation struct {
 
 // Violations returns the permissions violations the server logged for
 // identity, in order. The server logs every refused publish and subscribe
-// with the mapped user name, which is what makes a refusal assertable rather
-// than inferred from a client timeout.
+// with the account and the mapped user name ("<ACCOUNT>/user:<uri>"), which
+// is what makes a refusal assertable rather than inferred from a client
+// timeout.
 func (s *Server) Violations(identity string) []Violation {
-	user := `"$G/user:` + natsconn.IdentityURI(natsconn.DefaultTrustDomain, identity) + `"`
+	user := `/user:` + natsconn.IdentityURI(natsconn.DefaultTrustDomain, identity) + `"`
 	var out []Violation
 	for _, line := range strings.Split(s.Log(), "\n") {
 		if !strings.Contains(line, user) {

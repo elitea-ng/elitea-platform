@@ -12,11 +12,11 @@
 # users in compose to the cluster posture:
 #
 #   * `nats` runs the nats.conf rendered from deploy/helm/nats — TLS required,
-#     verify_and_map, the chart's own permission table — with the dev NATS CA
+#     verify_and_map, the chart's own accounts and permission table — with the dev NATS CA
 #     material mounted at the chart's container paths, so the config needs no
 #     edit;
-#   * `nats-bootstrap` presents the bootstrap identity and creates the assets
-#     with the permissions a cluster gives it;
+#   * `nats-bootstrap` presents each account's bootstrap identity and creates
+#     that account's assets with the permissions a cluster gives it;
 #   * `elitea-main` presents its own identity (URI SAN
 #     spiffe://elitea.internal/nats/elitea-main) over tls://.
 #
@@ -40,12 +40,12 @@ services:
   nats-bootstrap:
     environment:
       NATS_URL: "tls://nats:4222"
-      NATS_TLS_CA_FILE: /etc/nats-client/ca.crt
-      NATS_TLS_CERT_FILE: /etc/nats-client/tls.crt
-      NATS_TLS_KEY_FILE: /etc/nats-client/tls.key
-      NATS_INBOX_PREFIX: _INBOX_elitea-nats-bootstrap
+      # One certificate per account, as the cluster's Job mounts them.
+      NATS_TLS_DIR: /etc/nats-client
     volumes:
-      - ./certs/nats/clients/elitea-nats-bootstrap:/etc/nats-client:ro
+      - ./certs/nats/clients/elitea-nats-bootstrap-main:/etc/nats-client/main:ro
+      - ./certs/nats/clients/elitea-nats-bootstrap-gateway:/etc/nats-client/gateway:ro
+      - ./certs/nats/clients/elitea-nats-bootstrap-runtime:/etc/nats-client/runtime:ro
 
   elitea-main:
     environment:
