@@ -43,8 +43,9 @@ ARG VERSION=dev
 
 # Preserve the repository-relative module layout because elitea-main replaces
 # the generated protobuf module with ../../libs/proto/gen/go, (issue #250) the
-# observability module with ../../libs/go/observability, and the egress
-# allowlist parser with ../../libs/go/egresslib.
+# observability module with ../../libs/go/observability, the egress
+# allowlist parser with ../../libs/go/egresslib, and the NATS client identity
+# helper with ../../libs/go/natsconn.
 #
 # EVERY `replace` target in services/elitea-main/go.mod must appear here. A
 # missing one is not a build-time warning: `go mod download` reads the replace
@@ -54,6 +55,7 @@ ARG VERSION=dev
 COPY libs/proto/gen/go ./libs/proto/gen/go
 COPY libs/go/observability ./libs/go/observability
 COPY libs/go/egresslib ./libs/go/egresslib
+COPY libs/go/natsconn ./libs/go/natsconn
 COPY services/elitea-main/go.mod services/elitea-main/go.sum ./services/elitea-main/
 WORKDIR /src/services/elitea-main
 # A TRANSIENT proxy.golang.org failure must not fail the build.

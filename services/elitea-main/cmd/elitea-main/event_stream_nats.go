@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
 
 	v2canvaspresence "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
@@ -29,9 +30,24 @@ import (
 // to the SSE stream. In the shipped chart both resolve to the same server
 // (the top-level `nats` block), so one broker serves both.
 //
-// The URL takes any form nats.go accepts: nats://host:4222, a comma-separated
-// list for a cluster, tls://… for TLS, and user:password@ or token@ userinfo.
+// The URL takes any form nats.go accepts: nats://host:4222 or a
+// comma-separated list for a cluster. With the client identity below set it
+// must be tls:// and carry no credential (#1076); the chart renders exactly
+// that.
 const eventsNATSURLEnv = "ELITEA_EVENTS_NATS_URL"
+
+// elitea-main's NATS client identity (#1076): a certificate from the
+// dedicated NATS CA whose URI SAN spiffe://elitea.internal/nats/elitea-main
+// the server maps to main's user in the chart's permission table. All three
+// or none (natsconn.FromEnv); the files are re-read on every handshake, so a
+// cert-manager renewal is picked up on reconnect. None of them is the
+// compose posture: plaintext, no identity, logged at WARN.
+const (
+	eventsNATSPrefix         = "ELITEA_EVENTS"
+	eventsNATSTLSCAFileEnv   = "ELITEA_EVENTS_NATS_TLS_CA_FILE"
+	eventsNATSTLSCertFileEnv = "ELITEA_EVENTS_NATS_TLS_CERT_FILE"
+	eventsNATSTLSKeyFileEnv  = "ELITEA_EVENTS_NATS_TLS_KEY_FILE"
+)
 
 // eventsNATSConnectTimeout bounds the boot dial. Generous next to the
 // natsbus.ConnectTimeout used per publish, because it is paid once and a slow
@@ -46,8 +62,8 @@ const eventsNATSConnectTimeout = 5 * time.Second
 // stays per-replica. That is a
 // declared state, not an accident, and main.go logs it.
 //
-// The server must have JetStream enabled (canvas presence keeps its rosters
-// in a KV bucket, newCanvasPresenceStore); the shipped NATS chart does.
+// The server must have JetStream enabled and the presence KV bucket the
+// nats-bootstrap Job creates (newCanvasPresenceStore binds to it).
 //
 // A CONFIGURED server that cannot be reached FAILS STARTUP. It is the same
 // posture the REDIS_URL ping it replaced had, and for the same reason: the
@@ -69,8 +85,29 @@ func newEventsNATSConn(lookup func(string) (string, bool), logger *slog.Logger) 
 	if logger == nil {
 		logger = slog.Default()
 	}
+	material, err := natsconn.FromEnv(eventsNATSPrefix, lookup)
+	if err != nil {
+		return nil, err
+	}
+	if err := material.CheckURL(url); err != nil {
+		return nil, fmt.Errorf("%s: %w", eventsNATSURLEnv, err)
+	}
+	if err := material.Check(); err != nil {
+		return nil, err
+	}
 
-	conn, err := nats.Connect(url,
+	opts := []nats.Option{
+		// The permission table lets main subscribe to its own inbox prefix
+		// only (JetStream API replies, the presence watcher's deliveries).
+		nats.CustomInboxPrefix(natsconn.InboxPrefix(natsconn.IdentityMain)),
+	}
+	if material.Enabled() {
+		opts = append(opts,
+			nats.Secure(natsconn.BaseTLSConfig()),
+			nats.ClientTLSConfig(material.ClientCertificate, material.RootCAs),
+		)
+	}
+	conn, err := nats.Connect(url, append(opts,
 		nats.Name("elitea-main"),
 		nats.Timeout(eventsNATSConnectTimeout),
 		nats.MaxReconnects(-1),
@@ -85,10 +122,16 @@ func newEventsNATSConn(lookup func(string) (string, bool), logger *slog.Logger) 
 		// Bounds the drain natsbus.EventBus.Close starts at shutdown, on the
 		// client side too.
 		nats.DrainTimeout(natsbus.CloseTimeout),
-	)
+	)...)
 	if err != nil {
 		// The URL may carry credentials, so it is never echoed.
 		return nil, fmt.Errorf("connect %s: %w", eventsNATSURLEnv, err)
+	}
+	if material.Enabled() {
+		logger.Info("live-update NATS connected", "server", conn.ConnectedUrlRedacted(), "nats_auth", material.Mode(), "tls", true)
+	} else {
+		logger.Warn("live-update NATS connected without TLS or a client identity (compose posture only; a cluster's NATS refuses this)",
+			"server", conn.ConnectedUrlRedacted(), "nats_auth", material.Mode(), "tls", false)
 	}
 	return conn, nil
 }
@@ -169,36 +212,23 @@ func (l *asyncErrorLogger) handle(_ *nats.Conn, sub *nats.Subscription, err erro
 	l.logger.Warn("live-update NATS async error", attrs...)
 }
 
-// eventsNATSReplicasEnv sets the replica count of the JetStream KV bucket
-// canvas presence keeps its rosters in. Unset means 1, right for the scale-1
-// NATS profile; an HA (3-node) server may take 3. Presence is ephemeral, so
-// R1 on an HA server only empties rosters for one heartbeat on a node loss.
-const eventsNATSReplicasEnv = "ELITEA_EVENTS_NATS_REPLICAS"
-
-// newCanvasPresenceStore opens (creating it if absent) the presence KV bucket
-// on the live-update connection and starts the replica's mirror of it
-// (v2canvaspresence.NATSStore; the caller must Close it). Errors stop startup: a configured
-// live-update plane whose JetStream is missing would otherwise serve presence
-// from a per-replica roster while claiming to be shared.
-func newCanvasPresenceStore(
-	ctx context.Context,
-	conn *nats.Conn,
-	lookup func(string) (string, bool),
-) (*v2canvaspresence.NATSStore, error) {
+// newCanvasPresenceStore binds to the presence KV bucket on the live-update
+// connection and starts the replica's mirror of it (v2canvaspresence.NATSStore;
+// the caller must Close it). It does not create the bucket: the nats-bootstrap
+// Job owns it (#1076), and a missing one stops startup with that Job named,
+// rather than serving presence from a per-replica roster while claiming to be
+// shared.
+func newCanvasPresenceStore(ctx context.Context, conn *nats.Conn) (*v2canvaspresence.NATSStore, error) {
 	if conn == nil {
 		return nil, errors.New("a NATS connection is required")
-	}
-	replicas, err := eventsNATSReplicas(lookup)
-	if err != nil {
-		return nil, err
 	}
 	js, err := jetstream.New(conn)
 	if err != nil {
 		return nil, fmt.Errorf("open JetStream: %w", err)
 	}
-	createCtx, cancel := context.WithTimeout(ctx, eventsNATSConnectTimeout)
+	bindCtx, cancel := context.WithTimeout(ctx, eventsNATSConnectTimeout)
 	defer cancel()
-	store, err := v2canvaspresence.NewNATSStore(createCtx, js, v2canvaspresence.NATSStoreConfig{Replicas: replicas})
+	store, err := v2canvaspresence.NewNATSStore(bindCtx, js, v2canvaspresence.NATSStoreConfig{})
 	if err != nil {
 		return nil, err
 	}
@@ -215,20 +245,4 @@ func newCanvasPresenceStore(
 		store.Resync()
 	})
 	return store, nil
-}
-
-// eventsNATSReplicas reads ELITEA_EVENTS_NATS_REPLICAS: unset or blank is 1,
-// anything but a positive integer is refused rather than defaulted, so a typo
-// cannot quietly downgrade an HA bucket to one replica.
-func eventsNATSReplicas(lookup func(string) (string, bool)) (int, error) {
-	raw, present := lookup(eventsNATSReplicasEnv)
-	raw = strings.TrimSpace(raw)
-	if !present || raw == "" {
-		return 1, nil
-	}
-	parsed, err := strconv.Atoi(raw)
-	if err != nil || parsed < 1 {
-		return 0, fmt.Errorf("%s must be a positive integer", eventsNATSReplicasEnv)
-	}
-	return parsed, nil
 }

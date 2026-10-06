@@ -2242,10 +2242,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// Canvas presence's cross-replica wiring: the roster in a JetStream KV
 	// bucket on the live-update NATS server, published on the live-update
 	// bus. Both halves or neither — see v2canvaspresence.Backend. A server
-	// without JetStream fails startup here, like an unreachable one does.
+	// without JetStream, or without the bucket the nats-bootstrap Job creates
+	// (main binds, it does not create — #1076), fails startup here, like an
+	// unreachable one does.
 	var canvasPresence v2canvaspresence.Backend
 	if eventsNATS != nil {
-		presenceStore, err := newCanvasPresenceStore(ctx, eventsNATS, os.LookupEnv)
+		presenceStore, err := newCanvasPresenceStore(ctx, eventsNATS)
 		if err != nil {
 			return fmt.Errorf("compose canvas presence store: %w", err)
 		}

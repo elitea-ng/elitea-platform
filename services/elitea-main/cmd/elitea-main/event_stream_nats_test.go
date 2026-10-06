@@ -12,7 +12,29 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	v2canvaspresence "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 )
+
+// bootstrapPresenceBucket creates the presence bucket with the settings
+// deploy/helm/nats-bootstrap/files/bootstrap.sh gives it, on a plaintext test
+// server that has no bootstrap of its own.
+func bootstrapPresenceBucket(t *testing.T, conn *nats.Conn) {
+	t.Helper()
+	js, err := jetstream.New(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: v2canvaspresence.PresenceBucket, History: 1, TTL: 2 * time.Minute, Storage: jetstream.FileStorage,
+	}); err != nil {
+		t.Fatalf("bootstrap the presence bucket: %v", err)
+	}
+}
 
 func envLookup(pairs map[string]string) func(string) (string, bool) {
 	return func(key string) (string, bool) {
@@ -85,35 +107,74 @@ func TestEventsNATSConnFailsWhenTheServerIsUnreachable(t *testing.T) {
 	}
 }
 
-func TestEventsNATSReplicas(t *testing.T) {
+// The client identity and the URL must agree before anything is dialled:
+// with a certificate every URL is tls:// with no credential, and a tls://
+// URL needs a certificate (#1076).
+func TestEventsNATSConnRefusesAnIdentityAndURLThatDisagree(t *testing.T) {
 	t.Parallel()
 
-	for value, want := range map[string]int{"": 1, "  ": 1, "1": 1, "3": 3, " 3 ": 3} {
-		got, err := eventsNATSReplicas(envLookup(map[string]string{eventsNATSReplicasEnv: value}))
-		if err != nil || got != want {
-			t.Errorf("%s=%q: got (%d, %v), want (%d, nil)", eventsNATSReplicasEnv, value, got, err, want)
-		}
+	material := map[string]string{
+		eventsNATSTLSCAFileEnv:   "/etc/nats-client/ca.crt",
+		eventsNATSTLSCertFileEnv: "/etc/nats-client/tls.crt",
+		eventsNATSTLSKeyFileEnv:  "/etc/nats-client/tls.key",
 	}
-	if got, err := eventsNATSReplicas(envLookup(nil)); err != nil || got != 1 {
-		t.Errorf("unset: got (%d, %v), want (1, nil)", got, err)
-	}
-	for _, value := range []string{"0", "-1", "three", "1.5"} {
-		if _, err := eventsNATSReplicas(envLookup(map[string]string{eventsNATSReplicasEnv: value})); err == nil {
-			t.Errorf("%s=%q was accepted; a typo must not silently become a replica count", eventsNATSReplicasEnv, value)
+	with := func(url string, drop ...string) map[string]string {
+		env := map[string]string{eventsNATSURLEnv: url}
+		for k, v := range material {
+			env[k] = v
 		}
+		for _, k := range drop {
+			delete(env, k)
+		}
+		return env
+	}
+	for name, env := range map[string]map[string]string{
+		"tls url, no identity":     {eventsNATSURLEnv: "tls://elitea-nats:4222"},
+		"nats url with identity":   with("nats://elitea-nats:4222"),
+		"credential with identity": with("tls://user:s3cret@elitea-nats:4222"),
+		"identity without its key": with("tls://elitea-nats:4222", eventsNATSTLSKeyFileEnv),
+		"identity without the CA":  with("tls://elitea-nats:4222", eventsNATSTLSCAFileEnv),
+		"unreadable identity":      with("tls://elitea-nats:4222"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			conn, err := newEventsNATSConn(envLookup(env), nil)
+			if conn != nil {
+				conn.Close()
+			}
+			if err == nil {
+				t.Fatal("newEventsNATSConn() accepted it")
+			}
+			if strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("error %q leaks the credential", err)
+			}
+		})
+	}
+}
+
+// The three TLS variables are the ones natsconn reads for this prefix; the
+// constants exist so the env-drift gate can see them.
+func TestEventsNATSTLSEnvNamesMatchNatsconn(t *testing.T) {
+	t.Parallel()
+
+	got := natsconn.EnvNames(eventsNATSPrefix)
+	want := [3]string{eventsNATSTLSCAFileEnv, eventsNATSTLSCertFileEnv, eventsNATSTLSKeyFileEnv}
+	if got != want {
+		t.Fatalf("natsconn.EnvNames(%q) = %v, the constants say %v", eventsNATSPrefix, got, want)
 	}
 }
 
 func TestCanvasPresenceStoreRequiresAConnection(t *testing.T) {
 	t.Parallel()
 
-	if _, err := newCanvasPresenceStore(context.Background(), nil, envLookup(nil)); err == nil {
+	if _, err := newCanvasPresenceStore(context.Background(), nil); err == nil {
 		t.Fatal("newCanvasPresenceStore(nil conn) error = nil, want an error")
 	}
 }
 
 // The boot path end to end against a real JetStream server: the URL dials,
-// and the presence bucket is created on that connection.
+// and the store binds to the presence bucket the bootstrap created (created
+// here the way the nats-bootstrap Job creates it).
 func TestEventsNATSBootComposesThePresenceStore(t *testing.T) {
 	url := os.Getenv("ELITEA_TEST_NATS_URL")
 	if url == "" {
@@ -125,7 +186,8 @@ func TestEventsNATSBootComposesThePresenceStore(t *testing.T) {
 	}
 	t.Cleanup(conn.Close)
 
-	store, err := newCanvasPresenceStore(context.Background(), conn, envLookup(nil))
+	bootstrapPresenceBucket(t, conn)
+	store, err := newCanvasPresenceStore(context.Background(), conn)
 	if err != nil || store == nil {
 		t.Fatalf("newCanvasPresenceStore() = (%v, %v), want a store", store, err)
 	}

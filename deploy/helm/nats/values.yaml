@@ -135,13 +135,19 @@ nats:
             permissions:
               publish:
                 allow:
+                  # canvas.editors rosters onto the project's subject.
                   - "gateway.events.project.*.events"
+                  # Presence Put/Delete.
                   - "$KV.ELITEA_CANVAS_PRESENCE.>"
+                  # Bind (js.KeyValue) and the bucket status check.
                   - "$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE"
-                  - "$JS.API.CONSUMER.CREATE.KV_ELITEA_CANVAS_PRESENCE"
+                  # The mirror's watcher is an ordered consumer: created with
+                  # a name and filter, deleted and re-created on every resync.
                   - "$JS.API.CONSUMER.CREATE.KV_ELITEA_CANVAS_PRESENCE.>"
-                  - "$JS.API.CONSUMER.INFO.KV_ELITEA_CANVAS_PRESENCE.*"
                   - "$JS.API.CONSUMER.DELETE.KV_ELITEA_CANVAS_PRESENCE.*"
+                  # Its flow-control replies. The server only asks for them
+                  # when a watcher falls behind, so no test exercises this
+                  # grant; without it a slow replica's watcher stalls.
                   - "$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>"
                 deny:
                   - "gateway.budget.>"
