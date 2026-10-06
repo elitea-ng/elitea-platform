@@ -94,6 +94,14 @@ pub trait IndexStore: Send + Sync {
 
     /// `_name_rows`: `LOWER(symbol_name) = lower(name)` (`exact`) or
     /// `LIKE '%lower(name)%'` (with `LIKE`'s own `%` and `_`), `LIMIT`.
+    ///
+    /// [`PgIndex`] lowers both sides with PostgreSQL's `lower()` (Unicode
+    /// under the database's `LC_CTYPE`), so "Ärger" finds "Ärger". Python
+    /// lowered the name with `str.lower()` (Unicode) and the column with
+    /// `SQLite`'s `LOWER()` (ASCII only), so it never found a name with a
+    /// non-ASCII capital. [`ReplayIndex`] lowers ASCII only on both sides
+    /// (`SQLite`'s `LOWER()` and `LIKE`): the recorded names are ASCII,
+    /// where the three agree.
     fn name_rows(
         &self,
         name: &str,
@@ -102,7 +110,9 @@ pub trait IndexStore: Send + Sync {
     ) -> impl Future<Output = Result<Vec<NodeRecord>, EngineError>> + Send;
 
     /// `_get_code_from_unified_db`'s fallback: the `LIKE` match with the
-    /// shortest name (`ORDER BY length(symbol_name) LIMIT 1`).
+    /// shortest name (`ORDER BY length(symbol_name) LIMIT 1`). `SQLite`
+    /// broke ties by rowid (insertion order); the published table has no
+    /// such column, so [`PgIndex`] breaks them by node id.
     fn shortest_like(
         &self,
         name: &str,
@@ -306,14 +316,19 @@ impl IndexStore for PgIndex {
         if name.is_empty() {
             return Ok(Vec::new());
         }
-        let lowered = super::pyfmt::sqlite_lower(name);
+        // The name is bound as given and both sides go through the same
+        // `lower()`, so a non-ASCII capital ("Ärger") matches itself.
         if exact {
-            self.nodes_where("lower(symbol_name) = $2", vec![Some(lowered)], limit)
-                .await
+            self.nodes_where(
+                "lower(symbol_name) = lower($2)",
+                vec![Some(name.to_owned())],
+                limit,
+            )
+            .await
         } else {
             self.nodes_where(
-                "lower(symbol_name) LIKE $2",
-                vec![Some(format!("%{}%", like_sqlite(&lowered)))],
+                "lower(symbol_name) LIKE lower($2)",
+                vec![Some(format!("%{}%", like_sqlite(name)))],
                 limit,
             )
             .await
@@ -321,15 +336,16 @@ impl IndexStore for PgIndex {
     }
 
     async fn shortest_like(&self, name: &str) -> Result<Option<NodeRecord>, EngineError> {
-        let lowered = super::pyfmt::sqlite_lower(name);
+        // Ties on length break on node id: the table has no insertion
+        // order (SQLite's rowid) to break them by.
         let sql = format!(
-            "{} WHERE wiki_id = $1 AND lower(symbol_name) LIKE $2 \
-             ORDER BY length(symbol_name) LIMIT 1",
+            "{} WHERE wiki_id = $1 AND lower(symbol_name) LIKE lower($2) \
+             ORDER BY length(symbol_name), node_id LIMIT 1",
             adapter::NODE_SELECT
         );
         let row = sqlx::query(&sql)
             .bind(self.wiki())
-            .bind(format!("%{}%", like_sqlite(&lowered)))
+            .bind(format!("%{}%", like_sqlite(name)))
             .fetch_optional(self.pool())
             .await
             .map_err(database)?;

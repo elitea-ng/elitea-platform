@@ -305,3 +305,81 @@ async fn an_unpublished_wiki_is_reported_not_found() {
         "no model call for a missing wiki"
     );
 }
+
+/// A published wiki of `nodes` only, staged in this order.
+async fn published_nodes(name: &str, wiki: &str, nodes: &[(&str, &str)]) -> Option<PgIndex> {
+    let pool = storage_common::fresh_database(name).await?;
+    let space = BuildSpace::new(pool.clone(), "ask");
+    let mut build = space.begin(wiki).await.expect("begin");
+    let nodes: Vec<IndexNode> = nodes
+        .iter()
+        .map(|(id, symbol)| IndexNode {
+            node_id: (*id).to_owned(),
+            rel_path: "src/lib.py".to_owned(),
+            file_name: "lib.py".to_owned(),
+            language: "python".to_owned(),
+            start_line: 1,
+            end_line: 2,
+            symbol_name: (*symbol).to_owned(),
+            symbol_type: "class".to_owned(),
+            source_text: format!("class {symbol}: pass"),
+            ..IndexNode::default()
+        })
+        .collect();
+    build.stage_nodes(nodes).await.expect("stage nodes");
+    build
+        .publish(&WikiRecord::default())
+        .await
+        .expect("publish");
+    Some(PgIndex::new(UnifiedDb::new(pool, wiki)))
+}
+
+fn ids(rows: &[elitea_deepwiki_engine::ask::store::NodeRecord]) -> Vec<&str> {
+    rows.iter().map(|n| n.node_id.as_str()).collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_name_with_a_non_ascii_capital_is_found() {
+    let Some(index) = published_nodes(
+        "ask_unicode",
+        "acme--umlaut--main",
+        &[("n-arger", "Ärger"), ("n-other", "Other")],
+    )
+    .await
+    else {
+        return;
+    };
+    // Both sides go through the same lower(): the name as written and an
+    // ASCII-only change of case match under any server locale.
+    for name in ["Ärger", "ÄRGER"] {
+        let exact = index.name_rows(name, true, 5).await.expect("exact");
+        assert_eq!(ids(&exact), ["n-arger"], "{name}");
+    }
+    let like = index.name_rows("RGE", false, 5).await.expect("like");
+    assert_eq!(ids(&like), ["n-arger"]);
+    let shortest = index.shortest_like("Ärg").await.expect("shortest");
+    assert_eq!(shortest.map(|n| n.node_id).as_deref(), Some("n-arger"));
+    // LIKE's own wildcards keep their meaning (Python passed them on), and
+    // a backslash is literal.
+    let wildcard = index.name_rows("Ä_ger", false, 5).await.expect("wildcard");
+    assert_eq!(ids(&wildcard), ["n-arger"]);
+    let backslash = index.name_rows("\\", false, 5).await.expect("backslash");
+    assert!(backslash.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_shortest_name_ties_break_on_node_id() {
+    // Staged (and so stored) in the reverse of the id order: the heap
+    // order would give "z-box".
+    let Some(index) = published_nodes(
+        "ask_ties",
+        "acme--ties--main",
+        &[("z-box", "BoxB"), ("a-box", "BoxA"), ("m-box", "LongBox")],
+    )
+    .await
+    else {
+        return;
+    };
+    let shortest = index.shortest_like("box").await.expect("shortest");
+    assert_eq!(shortest.map(|n| n.node_id).as_deref(), Some("a-box"));
+}
