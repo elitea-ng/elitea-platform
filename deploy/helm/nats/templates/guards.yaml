@@ -113,6 +113,21 @@ value and says why.
 {{- if not (dig "config" "cluster" "tls" "enabled" false $n) -}}
 {{- fail "nats.config.cluster.enabled with cluster.tls.enabled false: the routes between servers would carry every message in plaintext. values-ha.yaml enables it." -}}
 {{- end -}}
+{{- /* The route identity (#1076 F5): its own Secret, verified against its own CA. */ -}}
+{{- $rtls := dig "config" "cluster" "tls" dict $n -}}
+{{- if or (not $rtls.secretName) (eq $rtls.secretName $n.config.nats.tls.secretName) -}}
+{{- fail "nats.config.cluster.tls.secretName must name the ROUTE certificate's own Secret (values-ha.yaml: elitea-nats-route-tls), not the client-port certificate's. Routes have their own identity, from their own CA." -}}
+{{- end -}}
+{{- $rmerge := $rtls.merge | default dict -}}
+{{- if ne (toString (get $rmerge "verify")) "true" -}}
+{{- fail "nats.config.cluster.tls.merge.verify must be true: a route that does not verify its peer's certificate accepts any TLS client as a cluster peer." -}}
+{{- end -}}
+{{- if ne (toString (get $rmerge "ca_file")) "/etc/nats-certs/cluster/ca.crt" -}}
+{{- fail "nats.config.cluster.tls.merge.ca_file must be /etc/nats-certs/cluster/ca.crt, the ROUTE CA cert-manager writes into the route certificate's Secret. Without it the upstream chart verifies routes against nats.tlsCA — the CLIENT CA — and any service's client certificate joins the cluster as a peer (#1076)." -}}
+{{- end -}}
+{{- if and (not .Values.security.ca.create) (eq .Values.security.routeIssuerRef.name .Values.security.issuerRef.name) -}}
+{{- fail "security.routeIssuerRef names the same issuer as security.issuerRef. The route CA must be a different CA from the one that signs client identities, or a client certificate can join the cluster as a peer." -}}
+{{- end -}}
 {{- end -}}
 {{- if and (not .Values.networkPolicy.enabled) (not .Values.networkPolicy.externallyManaged) -}}
 {{- fail "networkPolicy.enabled is false. The ingress policy is the half of #1076 that keeps pods without a NATS identity off the port; mTLS alone still lets any pod hold a connection open to the TLS handshake. If your own policy already does this, say so with networkPolicy.externallyManaged=true." -}}

@@ -29,17 +29,23 @@ nats:
     cluster:
       enabled: true
       replicas: 3
-      # Routes are TLS with mutual verification (#1076): each server presents
-      # the server certificate (it carries `client auth` and a
-      # *.<headless> SAN) and verifies its peer against the NATS CA. Without
-      # this, every message crosses the cluster network in plaintext and any
-      # pod that reaches 6222 could join as a route. templates/guards.yaml
-      # refuses a clustered render without it.
+      # Routes are TLS with mutual verification (#1076), on their OWN
+      # identity: each server presents the route certificate
+      # (templates/route-certificate.yaml: `server auth` + `client auth`, the
+      # *.<headless> names) and verifies its peer against the ROUTE CA, whose
+      # ca.crt cert-manager writes into the same Secret — not the client CA,
+      # or any service's client certificate could join the cluster as a
+      # peer. Without TLS every message crosses the cluster network in
+      # plaintext. templates/guards.yaml refuses a clustered render without
+      # either.
       tls:
         enabled: true
-        secretName: elitea-nats-server-tls
+        secretName: elitea-nats-route-tls
         merge:
           verify: true
+          # The upstream chart would otherwise point this at nats.tlsCA, the
+          # CLIENT CA.
+          ca_file: /etc/nats-certs/cluster/ca.crt
           timeout: 3
 
   container:

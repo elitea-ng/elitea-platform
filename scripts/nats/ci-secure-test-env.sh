@@ -4,8 +4,9 @@
 #
 #   scripts/nats/ci-secure-test-env.sh
 #
-# 1. Renders the NATS chart's own nats.conf (render-secure-conf.sh) — the
-#    permission table under test is the chart's, never a copy.
+# 1. Renders the NATS chart's own nats.conf (render-secure-conf.sh), scale-1
+#    and HA — the permission table and the route TLS under test are the
+#    chart's, never a copy.
 # 2. Downloads the nats CLI the bootstrap script runs (pinned version and
 #    SHA-256), because the tests create the JetStream assets with the real
 #    bootstrap.sh exactly as the hook Job does.
@@ -28,6 +29,9 @@ python3 -c 'import yaml' 2>/dev/null \
 
 conf="${RUNNER_TEMP}/nats-secure.conf"
 bash "${root}/scripts/nats/render-secure-conf.sh" "$conf"
+# The HA profile, for the route identity test (natstest.StartCluster).
+ha_conf="${RUNNER_TEMP}/nats-secure-ha.conf"
+bash "${root}/scripts/nats/render-secure-conf.sh" "$ha_conf" "${root}/deploy/helm/nats/values-ha.yaml"
 
 zip="${RUNNER_TEMP}/natscli.zip"
 curl -fsSL -o "$zip" \
@@ -51,6 +55,7 @@ fi
 
 {
   echo "ELITEA_TEST_NATS_SECURE_CONF=${conf}"
+  echo "ELITEA_TEST_NATS_SECURE_HA_CONF=${ha_conf}"
   echo "ELITEA_TEST_NATS_CLI_BIN=${cli}"
   echo "ELITEA_TEST_NATS_SERVER_BIN=${server}"
   echo "ELITEA_REQUIRE_NATS_SECURE_TEST=1"

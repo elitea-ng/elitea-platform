@@ -95,6 +95,11 @@ refuse "nats: another plane's bootstrap"      "is a bootstrap identity in accoun
 mutate "$TMP/m-password.yaml" 'user("MAIN","elitea-main")["password"] = "x"'
 refuse "nats: a password user"                "carries a password"           "${NA[@]}" -f "$TMP/m-password.yaml"
 refuse "nats: NetworkPolicy off, unstated"    "networkPolicy.enabled is false" "${NA[@]}" --set networkPolicy.enabled=false
+HA=(elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml")
+refuse "nats: HA routes trust the client CA"   "must be /etc/nats-certs/cluster/ca.crt" "${HA[@]}" --set nats.config.cluster.tls.merge.ca_file=/etc/nats-ca-cert/ca.crt
+refuse "nats: HA routes reuse the client cert" "ROUTE certificate's own Secret" "${HA[@]}" --set nats.config.cluster.tls.secretName=elitea-nats-server-tls
+refuse "nats: HA routes do not verify"         "verify must be true"          "${HA[@]}" --set nats.config.cluster.tls.merge.verify=false
+refuse "nats: HA route issuer = client issuer" "same issuer as security.issuerRef" "${HA[@]}" --set security.ca.create=false --set security.issuerRef.name=nats-ca --set security.routeIssuerRef.name=nats-ca
 refuse "nats: HA routes in plaintext"         "cluster.tls.enabled false"    elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml" --set nats.config.cluster.tls.enabled=false
 refuse "bootstrap: nats:// URL"               "is not tls://"                elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=nats://elitea-nats:4222
 refuse "bootstrap: credential URL"            "user information"             elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=tls://u:p@elitea-nats:4222
@@ -209,12 +214,24 @@ issuers = {x["metadata"]["name"]: x["spec"] for x in kinds(scale1, "Issuer")}
 check("the dedicated NATS CA chain renders (selfSigned -> CA cert -> CA Issuer)", "elitea-nats-ca-selfsigned" in issuers and "ca" in issuers.get("elitea-nats-ca", {}))
 ca_certs = [x for x in kinds(scale1, "Certificate") if x["spec"].get("isCA")]
 check("the CA is its own, not elitea-internal-ca", ca_certs and ca_certs[0]["spec"]["secretName"] == "elitea-nats-ca")
-srv = [x for x in kinds(scale1, "Certificate") if not x["spec"].get("isCA")]
+srv = [x for x in kinds(scale1, "Certificate") if not x["spec"].get("isCA") and x["metadata"]["name"].endswith("-server")]
 check("the server certificate is issued by the NATS CA Issuer", srv and srv[0]["spec"]["issuerRef"]["name"] == "elitea-nats-ca")
 fqdn = f"elitea-nats.{ns}.svc.cluster.local"
 check("the server certificate names the client URL host", srv and fqdn in srv[0]["spec"]["dnsNames"])
-srv_ha = [x for x in kinds(ha, "Certificate") if not x["spec"].get("isCA")]
-check("HA: the server certificate covers the routes and is usable as a route client", srv_ha and "*.elitea-nats-headless" in srv_ha[0]["spec"]["dnsNames"] and "client auth" in srv_ha[0]["spec"]["usages"])
+# The route identity (#1076 F5): its own certificate from its own CA.
+hacerts = {x["metadata"]["name"]: x["spec"] for x in kinds(ha, "Certificate")}
+haiss = {x["metadata"]["name"]: x["spec"] for x in kinds(ha, "Issuer")}
+route = hacerts.get("elitea-nats-route", {})
+check("scale-1: no route CA or route certificate", not [x for x in kinds(scale1, "Certificate") if "route" in x["metadata"]["name"]])
+check("HA: the route CA is its own chain (not the client CA)", hacerts.get("elitea-nats-route-ca", {}).get("isCA") and haiss.get("elitea-nats-route-ca", {}).get("ca", {}).get("secretName") == "elitea-nats-route-ca")
+check("HA: the route certificate is issued by the ROUTE CA", route.get("issuerRef", {}).get("name") == "elitea-nats-route-ca", route.get("issuerRef"))
+check("HA: the route certificate covers the headless names and serves both route directions", "*.elitea-nats-headless" in route.get("dnsNames", []) and set(route.get("usages", [])) == {"server auth", "client auth"})
+check("HA: the client-port certificate is no route certificate (server auth only, no headless names)",
+      hacerts.get("elitea-nats-server", {}).get("usages") == ["server auth"] and not any("headless" in n for n in hacerts.get("elitea-nats-server", {}).get("dnsNames", [])))
+rtls = c3.get("cluster", {}).get("tls", {})
+check("HA: routes verify peers against the ROUTE CA in the route Secret's mount", rtls.get("ca_file") == "/etc/nats-certs/cluster/ca.crt" and rtls.get("cert_file", "").startswith("/etc/nats-certs/cluster/"), rtls)
+hasts = kinds(ha, "StatefulSet")[0]["spec"]["template"]["spec"]
+check("HA: the StatefulSet mounts the route Secret as the cluster TLS", {v["name"]: v.get("secret", {}).get("secretName") for v in hasts["volumes"]}.get("cluster-tls") == route.get("secretName"))
 sts = kinds(scale1, "StatefulSet")[0]
 mounted = {v.get("secret", {}).get("secretName") for v in sts["spec"]["template"]["spec"]["volumes"]}
 check("the server mounts the certificate Secret it is issued into", srv[0]["spec"]["secretName"] in mounted)

@@ -4,7 +4,8 @@
 #
 #   scripts/nats/render-secure-conf.sh OUT_FILE [VALUES_FILE]
 #
-# Renders deploy/helm/nats with its scale-1 profile (or VALUES_FILE) through
+# Renders deploy/helm/nats with its scale-1 profile (or VALUES_FILE, e.g.
+# values-ha.yaml for the route identity test) through
 # `helm template` and extracts data."nats.conf" from the server ConfigMap. The
 # tests in libs/go/natsconn/natstest, elitea-main, elitea-scheduler and
 # elitea-llm-gateway read OUT_FILE through ELITEA_TEST_NATS_SECURE_CONF and run

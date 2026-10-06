@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
 	"github.com/EliteaAI/elitea-platform/libs/go/natsconn/natstest"
@@ -203,5 +204,41 @@ func cliAs(t *testing.T, s *natstest.Server, identity string) func(args ...strin
 		cmd := exec.Command(natstest.CLI(), full...)
 		cmd.Env = append(cmd.Environ(), "HOME="+s.Dir())
 		return cmd
+	}
+}
+
+// The cluster's routes have their own identity (#1076 F5): a peer presenting
+// a route certificate from the ROUTE CA joins; a certificate from the CLIENT
+// CA — any service's NATS identity — is refused on the route port, though it
+// is a valid TLS client and server certificate from a CA the deployment
+// trusts for clients. Run on the HA profile's own cluster block.
+func TestRoutesAcceptOnlyRouteCertificates(t *testing.T) {
+	c := natstest.StartCluster(t)
+	if n := c.Routes(t); n != 0 {
+		t.Fatalf("a fresh node has %d routes", n)
+	}
+
+	c.Peer(t, natstest.RouteFromClientCA)
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(c.Log(), "TLS route handshake error") && !strings.Contains(c.Log(), "TLS handshake error") {
+		if time.Now().After(deadline) {
+			t.Fatalf("the node logged no TLS refusal for a client-CA certificate on the route port:\n%s", c.Log())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if n := c.Routes(t); n != 0 {
+		t.Fatalf("a certificate from the client CA joined the cluster as a route (%d routes):\n%s", n, c.Log())
+	}
+
+	// The control: a real route certificate does join (as a route pool, so
+	// one or more route connections), so the refusal above is about the CA,
+	// not a broken cluster block.
+	c.Peer(t, natstest.RouteIdentity)
+	deadline = time.Now().Add(10 * time.Second)
+	for c.Routes(t) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("a route certificate from the route CA did not join (routes=%d):\n%s\npeer:\n%s", c.Routes(t), c.Log(), c.LogOf("peer-"+natstest.RouteIdentity))
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }

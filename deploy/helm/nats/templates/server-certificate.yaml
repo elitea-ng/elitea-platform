@@ -1,13 +1,12 @@
 {{- $svc := include "elitea-nats.serviceName" . -}}
 {{- $headless := include "elitea-nats.headlessServiceName" . -}}
 {{- $ns := include "elitea-nats.namespace" . -}}
-# The NATS server certificate (#1076). The Secret it writes holds tls.crt,
-# tls.key and ca.crt; values.yaml mounts it as the client-port certificate and
-# as the CA clients are verified against. The upstream config reloader watches
-# the mount, so a renewal is applied without a restart.
-#
-# `client auth` is in the usages because the HA profile's cluster routes are
-# TLS with `verify`: each server presents this certificate to its peers.
+# The NATS server certificate for the CLIENT port (#1076). The Secret it
+# writes holds tls.crt, tls.key and ca.crt; values.yaml mounts it as the
+# client-port certificate and as the CA clients are verified against. The
+# upstream config reloader watches the mount, so a renewal is applied without
+# a restart. Cluster routes do NOT use it: they have their own certificate
+# from their own CA (templates/route-certificate.yaml).
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -22,7 +21,6 @@ spec:
   isCA: false
   usages:
     - server auth
-    - client auth
   commonName: {{ $svc }}
   dnsNames:
     # The client URL: tls://{{ $svc }}.{{ $ns }}.svc.cluster.local:4222
@@ -30,13 +28,6 @@ spec:
     - {{ $svc }}.{{ $ns }}
     - {{ $svc }}.{{ $ns }}.svc
     - {{ $svc }}.{{ $ns }}.svc.cluster.local
-    {{- if dig "config" "cluster" "enabled" false .Values.nats }}
-    # Cluster routes dial each pod by its headless name.
-    - "*.{{ $headless }}"
-    - "*.{{ $headless }}.{{ $ns }}"
-    - "*.{{ $headless }}.{{ $ns }}.svc"
-    - "*.{{ $headless }}.{{ $ns }}.svc.cluster.local"
-    {{- end }}
   privateKey:
     algorithm: ECDSA
     size: 256

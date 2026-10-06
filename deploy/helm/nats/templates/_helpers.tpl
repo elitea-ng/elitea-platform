@@ -52,6 +52,18 @@ app.kubernetes.io/part-of: elitea-nats
 The issuer that signs NATS certificates: the chart's own CA Issuer, or the
 operator's when security.ca.create is false.
 */}}
+{{- define "elitea-nats.routeIssuerRef" -}}
+{{- if .Values.security.ca.create -}}
+name: {{ .Values.security.routeCA.name }}
+kind: Issuer
+group: cert-manager.io
+{{- else -}}
+name: {{ required "security.ca.create is false and the cluster is enabled, so security.routeIssuerRef.name must name the issuer of a dedicated NATS ROUTE CA" .Values.security.routeIssuerRef.name }}
+kind: {{ .Values.security.routeIssuerRef.kind | default "ClusterIssuer" }}
+group: cert-manager.io
+{{- end -}}
+{{- end }}
+
 {{- define "elitea-nats.issuerRef" -}}
 {{- if .Values.security.ca.create -}}
 name: {{ .Values.security.ca.name }}

@@ -31,10 +31,23 @@ posture is compose's (`deploy/docker-compose.yml`), and
   as narrow as read access to the Secrets it writes.
   `security.ca.create: false` + `security.issuerRef` uses an issuer you run
   instead (it must sign NATS identities only).
-* **Server certificate** (`templates/server-certificate.yaml`): the Service
-  names, plus `*.<release>-headless` for the HA routes; `server auth` and
-  `client auth` (routes verify each other). The upstream config reloader picks
-  up a renewal without a restart.
+* **Server certificate** (`templates/server-certificate.yaml`): the client
+  port only — the Service names, `server auth`. The upstream config reloader
+  picks up a renewal without a restart.
+* **Route identity (HA)**: cluster routes do NOT trust the client CA. A
+  separate ROUTE CA (`templates/ca.yaml`: `Certificate elitea-nats-route-ca` →
+  `Issuer elitea-nats-route-ca`) signs one route certificate
+  (`templates/route-certificate.yaml`: `*.<release>-headless`, `server auth` +
+  `client auth`), mounted at `/etc/nats-certs/cluster`, and the route TLS
+  block verifies peers against that Secret's `ca.crt` (`values-ha.yaml`
+  `cluster.tls.merge.ca_file`). Before this, routes verified against the
+  client CA, so any service's client certificate could join the cluster as a
+  peer and see every account's traffic. `TestRoutesAcceptOnlyRouteCertificates`
+  (`libs/go/natsconn/natstest`) starts a node from the HA profile's own
+  cluster block and proves a client-CA certificate is refused on the route
+  port while a route certificate joins. With `security.ca.create: false`, set
+  `security.routeIssuerRef` to an issuer of a different CA than
+  `security.issuerRef` (the guards refuse the same one).
 * **Client certificates** carry a URI SAN `spiffe://elitea.internal/nats/<identity>`.
   The server requires TLS, verifies the certificate against the NATS CA, and
   maps the SAN to a user (`verify_and_map`). A certificate without the SAN —
@@ -156,7 +169,8 @@ ELITEA_TEST_NATS_CLI_BIN=$(command -v nats) \
 ```
 
 `templates/guards.yaml` refuses a render that turns TLS, `verify_and_map`, the
-NetworkPolicy or route TLS off; sets `no_auth_user`, `allow_non_tls` or a
+NetworkPolicy or route TLS off, points route TLS at the client certificate or
+the client CA, or turns route verification off; sets `no_auth_user`, `allow_non_tls` or a
 top-level `authorization` block; declares accounts other than exactly `MAIN`,
 `GATEWAY` and `RUNTIME`, or one without JetStream; declares an identity twice,
 a non-URI, password, nkey or token user, or an account without exactly its own
@@ -221,7 +235,8 @@ helm upgrade --install elitea-nats deploy/helm/nats \
 
 ### HA (`values-ha.yaml`) — opt-in
 
-3 nodes, assets at `replicas = 3`, routes over TLS with mutual verification.
+3 nodes, assets at `replicas = 3`, routes over TLS with mutual verification
+against the route CA (their own identity, not a client's).
 HA operators MUST also set the gateway's `LLM_BUDGET_EXPECTED_REPLICAS` to the
 real gateway replica count and run the bootstrap with `replicas=3`.
 

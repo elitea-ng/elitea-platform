@@ -50,9 +50,27 @@ security:
   issuerRef:
     name: ""
     kind: ClusterIssuer
+  # The ROUTE CA (HA only). Cluster routes are verified against their own CA,
+  # not the client CA: a route TLS block that trusted the client CA would
+  # admit ANY client certificate (any service's NATS identity) as a cluster
+  # peer, and a peer sees every account's traffic. With ca.create the chain is
+  #   Issuer <ca.name>-selfsigned -> Certificate <routeCA.name> (isCA) -> Issuer <routeCA.name>
+  # and it signs only the route certificate (templates/route-certificate.yaml).
+  routeCA:
+    name: elitea-nats-route-ca
+  # Used only when ca.create is false and the cluster is enabled: the issuer
+  # of the route certificate. It MUST NOT be the client issuer above.
+  routeIssuerRef:
+    name: ""
+    kind: ClusterIssuer
   # The server certificate. Its secret name is nats.config.nats.tls.secretName
   # below (one value, so the mount and the Certificate cannot disagree).
   serverCertificate:
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+  # The route certificate (HA only). Its secret name is
+  # nats.config.cluster.tls.secretName (values-ha.yaml).
+  routeCertificate:
     duration: 2160h    # 90d
     renewBefore: 360h  # 15d
 
