@@ -445,8 +445,6 @@ func compiledAttemptConfig(key []byte) authattempt.Config {
 		FormBegin:            authattempt.Policy{MaxAttempts: 20, Window: time.Minute},
 		FormCredentialClient: authattempt.Policy{MaxAttempts: 5, Window: time.Minute},
 		FormCredentialLogin:  authattempt.Policy{MaxAttempts: 25, Window: time.Minute},
-		OIDCBegin:            authattempt.Policy{MaxAttempts: 20, Window: time.Minute},
-		OIDCCallback:         authattempt.Policy{MaxAttempts: 30, Window: time.Minute},
 	}
 }
 

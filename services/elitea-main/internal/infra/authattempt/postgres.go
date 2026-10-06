@@ -68,8 +68,6 @@ type Config struct {
 	FormBegin            Policy
 	FormCredentialClient Policy
 	FormCredentialLogin  Policy
-	OIDCBegin            Policy
-	OIDCCallback         Policy
 	// MaxConcurrentAdmissions is the per-replica bound on admissions that
 	// reach the database. Zero selects DefaultMaxConcurrentAdmissions.
 	MaxConcurrentAdmissions int
@@ -95,29 +93,24 @@ type attemptKey [sha256.Size]byte
 // lock_timeout and statement_timeout. Every dependency failure and every
 // timeout fails closed with ErrUnavailable.
 type PostgresAdmitter struct {
-	pool         *pgxpool.Pool
-	keySecret    [sha256.Size]byte
-	global       Policy
-	formBegin    Policy
-	formClient   Policy
-	formLogin    Policy
-	oidcBegin    Policy
-	oidcCallback Policy
-	slots        chan struct{}
-	denied       *deniedCache
-	now          func() time.Time
+	pool       *pgxpool.Pool
+	keySecret  [sha256.Size]byte
+	global     Policy
+	formBegin  Policy
+	formClient Policy
+	formLogin  Policy
+	slots      chan struct{}
+	denied     *deniedCache
+	now        func() time.Time
 }
 
 func NewPostgresAdmitter(pool *pgxpool.Pool, config Config) (*PostgresAdmitter, error) {
 	if pool == nil || !validKeySecret(config.KeySecret) ||
 		!validPolicy(config.Global) || !validPolicy(config.FormBegin) ||
 		!validPolicy(config.FormCredentialClient) || !validPolicy(config.FormCredentialLogin) ||
-		!validPolicy(config.OIDCBegin) || !validPolicy(config.OIDCCallback) ||
 		config.Global.Window < config.FormBegin.Window ||
 		config.Global.Window < config.FormCredentialClient.Window ||
 		config.Global.Window < config.FormCredentialLogin.Window ||
-		config.Global.Window < config.OIDCBegin.Window ||
-		config.Global.Window < config.OIDCCallback.Window ||
 		config.MaxConcurrentAdmissions < 0 {
 		return nil, ErrInvalidConfiguration
 	}
@@ -126,17 +119,15 @@ func NewPostgresAdmitter(pool *pgxpool.Pool, config Config) (*PostgresAdmitter, 
 		slots = DefaultMaxConcurrentAdmissions
 	}
 	return &PostgresAdmitter{
-		pool:         pool,
-		keySecret:    sha256.Sum256(config.KeySecret),
-		global:       config.Global,
-		formBegin:    config.FormBegin,
-		formClient:   config.FormCredentialClient,
-		formLogin:    config.FormCredentialLogin,
-		oidcBegin:    config.OIDCBegin,
-		oidcCallback: config.OIDCCallback,
-		slots:        make(chan struct{}, slots),
-		denied:       newDeniedCache(maxDeniedEntries),
-		now:          time.Now,
+		pool:       pool,
+		keySecret:  sha256.Sum256(config.KeySecret),
+		global:     config.Global,
+		formBegin:  config.FormBegin,
+		formClient: config.FormCredentialClient,
+		formLogin:  config.FormCredentialLogin,
+		slots:      make(chan struct{}, slots),
+		denied:     newDeniedCache(maxDeniedEntries),
+		now:        time.Now,
 	}, nil
 }
 
@@ -394,10 +385,6 @@ func (a *PostgresAdmitter) policies(stage browserapp.BrowserAttemptStage) ([]Pol
 		return []Policy{a.global, a.formBegin}, true
 	case browserapp.BrowserAttemptFormCredential:
 		return []Policy{a.global, a.formClient, a.formLogin}, true
-	case browserapp.BrowserAttemptOIDCBegin:
-		return []Policy{a.global, a.oidcBegin}, true
-	case browserapp.BrowserAttemptOIDCCallback:
-		return []Policy{a.global, a.oidcCallback}, true
 	default:
 		return nil, false
 	}

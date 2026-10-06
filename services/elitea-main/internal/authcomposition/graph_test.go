@@ -170,8 +170,7 @@ func TestDerivedPoliciesPreserveTypedBaselineAndSecurityCorrections(t *testing.T
 	clear(key)
 	if allZero(attempts.KeySecret) || attempts.Global.MaxAttempts != 1000 || attempts.Global.Window != time.Minute ||
 		attempts.FormBegin.MaxAttempts != 20 || attempts.FormCredentialClient.MaxAttempts != 5 ||
-		attempts.FormCredentialLogin.MaxAttempts != 25 || attempts.OIDCBegin.MaxAttempts != 20 ||
-		attempts.OIDCCallback.MaxAttempts != 30 {
+		attempts.FormCredentialLogin.MaxAttempts != 25 {
 		t.Fatalf("unexpected compiled attempt policy: %+v", attempts)
 	}
 

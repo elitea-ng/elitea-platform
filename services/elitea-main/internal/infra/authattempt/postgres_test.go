@@ -35,10 +35,10 @@ func TestNewPostgresAdmitterRejectsIncompleteConfiguration(t *testing.T) {
 			return config
 		}(),
 		func() Config { config := valid; config.FormCredentialLogin.Window = 0; return config }(),
-		func() Config { config := valid; config.OIDCBegin.Window = time.Millisecond; return config }(),
+		func() Config { config := valid; config.FormBegin.Window = time.Millisecond; return config }(),
 		func() Config {
 			config := valid
-			config.OIDCCallback.Window = maxWindow + time.Millisecond
+			config.FormCredentialClient.Window = maxWindow + time.Millisecond
 			return config
 		}(),
 		func() Config { config := valid; config.MaxConcurrentAdmissions = -1; return config }(),
@@ -79,7 +79,7 @@ func TestPostgresAdmitterHashesStageClientAndLoginIntoSeparateKeys(t *testing.T)
 	attempts := []browserapp.BrowserAttempt{
 		{ClientKey: "192.0.2.7", Stage: browserapp.BrowserAttemptFormBegin},
 		{ClientKey: "192.0.2.8", Stage: browserapp.BrowserAttemptFormBegin},
-		{ClientKey: "192.0.2.7", Stage: browserapp.BrowserAttemptOIDCBegin},
+		{ClientKey: "192.0.2.7", Stage: browserapp.BrowserAttemptFormCredential, LoginDigest: digestA},
 		{ClientKey: "192.0.2.7", Stage: browserapp.BrowserAttemptFormCredential, LoginDigest: digestA},
 		{ClientKey: "192.0.2.7", Stage: browserapp.BrowserAttemptFormCredential, LoginDigest: digestB},
 	}
@@ -172,7 +172,8 @@ func TestPostgresAdmitterIsAtomicAcrossInstancesAndDoesNotGrowDeniedBacklog(t *t
 	// A distinct stage has an independent window, and the window's end
 	// admits again.
 	if _, err := second.Admit(context.Background(), browserapp.BrowserAttempt{
-		ClientKey: attempt.ClientKey, Stage: browserapp.BrowserAttemptOIDCBegin,
+		ClientKey: attempt.ClientKey, Stage: browserapp.BrowserAttemptFormCredential,
+		LoginDigest: sha256.Sum256([]byte("admin")),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -452,8 +453,6 @@ func validConfig() Config {
 		FormBegin:            Policy{MaxAttempts: 20, Window: time.Minute},
 		FormCredentialClient: Policy{MaxAttempts: 5, Window: time.Minute},
 		FormCredentialLogin:  Policy{MaxAttempts: 25, Window: time.Minute},
-		OIDCBegin:            Policy{MaxAttempts: 20, Window: time.Minute},
-		OIDCCallback:         Policy{MaxAttempts: 30, Window: time.Minute},
 	}
 }
 

@@ -79,8 +79,6 @@ type AttemptAdmitter = browserapp.AttemptAdmitter
 const (
 	BrowserAttemptFormBegin      = browserapp.BrowserAttemptFormBegin
 	BrowserAttemptFormCredential = browserapp.BrowserAttemptFormCredential
-	BrowserAttemptOIDCBegin      = browserapp.BrowserAttemptOIDCBegin
-	BrowserAttemptOIDCCallback   = browserapp.BrowserAttemptOIDCCallback
 )
 
 type Config struct {
@@ -508,4 +506,37 @@ type headResponseWriter struct {
 
 func (writer headResponseWriter) Write(value []byte) (int, error) {
 	return len(value), nil
+}
+
+// admitAttempt resolves the trusted client key and asks the shared limiter.
+// It answers 429 with Retry-After when the attempt is limited, and 503 for any
+// other failure: the limiter fails closed.
+func admitAttempt(
+	writer http.ResponseWriter,
+	request *http.Request,
+	attempts AttemptAdmitter,
+	clientKeys ClientKeyResolver,
+	attempt BrowserAttempt,
+) bool {
+	clientKey, err := clientKeys.ResolveClientKey(request)
+	if err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable)
+		return false
+	}
+	attempt.ClientKey = clientKey
+	if err := attempt.Validate(); err != nil {
+		writeProblem(writer, http.StatusServiceUnavailable)
+		return false
+	}
+	retryAfter, err := attempts.Admit(request.Context(), attempt)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, ErrAttemptLimited) {
+		setRetryAfter(writer, retryAfter)
+		writeProblem(writer, http.StatusTooManyRequests)
+		return false
+	}
+	writeProblem(writer, http.StatusServiceUnavailable)
+	return false
 }
