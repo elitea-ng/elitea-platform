@@ -648,7 +648,7 @@ func writeWorkerConfig(t *testing.T, root, name string, redisPort, controlPort, 
 	t.Helper()
 	value := map[string]any{
 		"schema_version":       "elitea.runtime-deploy.v1",
-		"limits_revision":      "elitea.runtime.limits.conformance.v2",
+		"limits_revision":      "elitea.runtime.limits.conformance.v3",
 		"workload_session_id":  workloadSession,
 		"producer_id":          producerID,
 		"consumer_id":          "worker-" + name,

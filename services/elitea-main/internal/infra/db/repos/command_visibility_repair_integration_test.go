@@ -270,13 +270,13 @@ func newVisibilityRepairDispatcher(
 		ProtocolRevision:       "elitea.runtime.v1",
 		EnvelopeSchemaRevision: "elitea.runtime.signed-worker-command.v1",
 		Limits: redisdispatch.Limits{
-			Revision:               policy.LimitsRevision,
-			MaxWorkerCommandBytes:  32 * 1024,
-			MaxSignedEnvelopeBytes: 48 * 1024,
-			MaxRedisFieldBytes:     48 * 1024,
-			MaxRedisEntryBytes:     64 * 1024,
-			MaxSignatureBytes:      256,
-			MaxStringBytes:         256,
+			Revision:                 policy.LimitsRevision,
+			MaxWorkerCommandBytes:    32 * 1024,
+			MaxSignedEnvelopeBytes:   48 * 1024,
+			MaxTransportPayloadBytes: 48 * 1024,
+			MaxTransportMessageBytes: 64 * 1024,
+			MaxSignatureBytes:        256,
+			MaxStringBytes:           256,
 		},
 	}, signer, appender)
 	if err != nil {

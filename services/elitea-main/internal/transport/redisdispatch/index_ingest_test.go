@@ -228,19 +228,19 @@ func TestIndexIngestProducerRejectsWrongOrMalformedContractBeforeSigning(t *test
 func TestIndexIngestProducerRejectsInclusive64KiBLimitAndOversizedCommand(t *testing.T) {
 	config := validIndexIngestProducerConfig()
 	config.Limits = Limits{
-		Revision:               config.Limits.Revision,
-		MaxWorkerCommandBytes:  32 * 1024,
-		MaxSignedEnvelopeBytes: 48 * 1024,
-		MaxRedisFieldBytes:     48 * 1024,
-		MaxRedisEntryBytes:     64 * 1024,
-		MaxSignatureBytes:      128,
-		MaxStringBytes:         50 * 1024,
+		Revision:                 config.Limits.Revision,
+		MaxWorkerCommandBytes:    32 * 1024,
+		MaxSignedEnvelopeBytes:   48 * 1024,
+		MaxTransportPayloadBytes: 48 * 1024,
+		MaxTransportMessageBytes: 64 * 1024,
+		MaxSignatureBytes:        128,
+		MaxStringBytes:           50 * 1024,
 	}
 	if _, err := NewIndexIngestProducer(config, &signerStub{}, &appenderStub{}); err == nil || !strings.Contains(err.Error(), "less than 64 KiB") {
 		t.Fatalf("inclusive 64 KiB index entry limit was accepted: %v", err)
 	}
 
-	config.Limits.MaxRedisEntryBytes = (64 * 1024) - 1
+	config.Limits.MaxTransportMessageBytes = (64 * 1024) - 1
 	config.Limits.MaxWorkerCommandBytes = 1024
 	producer, err := NewIndexIngestProducer(config, &signerStub{}, &appenderStub{})
 	if err != nil {

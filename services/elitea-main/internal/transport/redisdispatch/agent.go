@@ -68,7 +68,7 @@ func NewAgentExecutionProducer(config AgentExecutionProducerConfig, signer Comma
 			return nil, errors.New("invalid agent execution capability version")
 		}
 	}
-	if config.Limits.MaxRedisEntryBytes <= 0 || config.Limits.MaxRedisEntryBytes > maxAgentRedisEntryBytes {
+	if config.Limits.MaxTransportMessageBytes <= 0 || config.Limits.MaxTransportMessageBytes > maxAgentRedisEntryBytes {
 		return nil, errors.New("agent execution Redis entry limit must be less than 64 KiB")
 	}
 	producer, err := NewProducer(ProducerConfig{

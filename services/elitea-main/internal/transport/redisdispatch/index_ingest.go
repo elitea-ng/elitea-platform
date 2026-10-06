@@ -57,7 +57,7 @@ func NewIndexIngestProducer(config IndexIngestProducerConfig, signer CommandSign
 	if config.CapabilityVersion == "" || len(config.CapabilityVersion) > config.Limits.MaxStringBytes || strings.ContainsAny(config.CapabilityVersion, "\r\n\x00") {
 		return nil, errors.New("invalid index ingest capability version")
 	}
-	if config.Limits.MaxRedisEntryBytes <= 0 || config.Limits.MaxRedisEntryBytes > maxIndexIngestRedisEntryBytes {
+	if config.Limits.MaxTransportMessageBytes <= 0 || config.Limits.MaxTransportMessageBytes > maxIndexIngestRedisEntryBytes {
 		return nil, errors.New("index ingest Redis entry limit must be less than 64 KiB")
 	}
 	producer, err := NewProducer(ProducerConfig{

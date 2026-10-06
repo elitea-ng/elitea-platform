@@ -50,8 +50,8 @@ func NewToolkitAvailableToolsProducer(
 		strings.ContainsAny(config.CapabilityVersion, "\r\n\x00") {
 		return nil, errors.New("invalid toolkit discovery capability version")
 	}
-	if config.Limits.MaxRedisEntryBytes <= 0 ||
-		config.Limits.MaxRedisEntryBytes > maxAgentRedisEntryBytes {
+	if config.Limits.MaxTransportMessageBytes <= 0 ||
+		config.Limits.MaxTransportMessageBytes > maxAgentRedisEntryBytes {
 		return nil, errors.New("toolkit discovery Redis entry limit must be less than 64 KiB")
 	}
 	producer, err := NewProducer(ProducerConfig{

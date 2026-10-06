@@ -1,6 +1,6 @@
 {
   "schema_version": "elitea.runtime-deploy.v1",
-  "limits_revision": "elitea.runtime.limits.conformance.v2",
+  "limits_revision": "elitea.runtime.limits.conformance.v3",
   "workload_session_id": "standalone-agent-worker-1",
   "producer_id": "standalone-agent-worker-1",
   "consumer_id": "standalone-agent-worker-1-consumer",

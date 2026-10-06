@@ -55,7 +55,7 @@ const (
 	capabilityVersion      = "1"
 	indexCapabilityVersion = "2"
 	agentCapabilityVersion = "1"
-	limitsRevision         = "elitea.runtime.limits.conformance.v2"
+	limitsRevision         = "elitea.runtime.limits.conformance.v3"
 
 	resourceClass          = "validation-small"
 	isolationClass         = "shared-claim-scoped-authority"
@@ -65,7 +65,7 @@ const (
 
 	maxWorkerCommandBytes         = 32 * 1024
 	maxSignedEnvelopeBytes        = 48 * 1024
-	maxRedisFieldBytes            = 48 * 1024
+	maxTransportPayloadBytes      = 48 * 1024
 	maxInputManifestBytes         = 64 * 1024
 	maxInputEntries               = 16
 	maxInputContentBytes          = executiondomain.MaxAgentExecutionInputBytes
@@ -230,19 +230,19 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}()
 
 	limits := redisdispatch.Limits{
-		Revision:               limitsRevision,
-		MaxWorkerCommandBytes:  maxWorkerCommandBytes,
-		MaxSignedEnvelopeBytes: maxSignedEnvelopeBytes,
-		MaxRedisFieldBytes:     maxRedisFieldBytes,
-		MaxRedisEntryBytes:     productionRedisEntrySize,
-		MaxSignatureBytes:      256,
-		MaxStringBytes:         maxSafeStringBytes,
+		Revision:                 limitsRevision,
+		MaxWorkerCommandBytes:    maxWorkerCommandBytes,
+		MaxSignedEnvelopeBytes:   maxSignedEnvelopeBytes,
+		MaxTransportPayloadBytes: maxTransportPayloadBytes,
+		MaxTransportMessageBytes: productionRedisEntrySize,
+		MaxSignatureBytes:        256,
+		MaxStringBytes:           maxSafeStringBytes,
 	}
 	appenderConfig := redisdispatch.RedisStreamAppenderConfig{
 		MaxEntries:    config.StreamMaxEntries,
 		MaxEntryBytes: productionRedisEntrySize,
 	}
-	if appenderConfig.MaxEntryBytes > limits.MaxRedisEntryBytes {
+	if appenderConfig.MaxEntryBytes > limits.MaxTransportMessageBytes {
 		return nil, errors.New("runtime Redis appender entry bound exceeds the producer bound")
 	}
 	appender, err := redisdispatch.NewRedisStreamAppender(controlRedis, appenderConfig)
@@ -448,7 +448,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var toolkitDiscoveryProducer *redisdispatch.ToolkitAvailableToolsProducer
 	if config.IndexIngestDispatchEnabled {
 		indexLimits := limits
-		indexLimits.MaxRedisEntryBytes = productionIndexRedisEntrySize
+		indexLimits.MaxTransportMessageBytes = productionIndexRedisEntrySize
 		indexAppender, err := redisdispatch.NewRedisStreamAppender(controlRedis, redisdispatch.RedisStreamAppenderConfig{
 			MaxEntries:    config.IndexIngestStreamMaxEntries,
 			MaxEntryBytes: productionIndexRedisEntrySize,
@@ -491,7 +491,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	if toolkitRoute.enabled {
 		toolkitLimits := limits
-		toolkitLimits.MaxRedisEntryBytes = productionIndexRedisEntrySize
+		toolkitLimits.MaxTransportMessageBytes = productionIndexRedisEntrySize
 		toolkitAppender, buildErr := redisdispatch.NewRedisStreamAppender(controlRedis, redisdispatch.RedisStreamAppenderConfig{MaxEntries: toolkitRoute.maxEntries, MaxEntryBytes: productionIndexRedisEntrySize})
 		if buildErr != nil {
 			return nil, buildErr
@@ -546,7 +546,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var agentNestedVersions storage.CurrentApplicationVersionSource
 	if config.AgentExecutionDispatchEnabled {
 		agentLimits := limits
-		agentLimits.MaxRedisEntryBytes = productionIndexRedisEntrySize
+		agentLimits.MaxTransportMessageBytes = productionIndexRedisEntrySize
 		agentAppender, err := redisdispatch.NewRedisStreamAppender(controlRedis, redisdispatch.RedisStreamAppenderConfig{
 			MaxEntries:    config.AgentExecutionStreamMaxEntries,
 			MaxEntryBytes: productionIndexRedisEntrySize,

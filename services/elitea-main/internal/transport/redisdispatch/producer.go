@@ -113,7 +113,7 @@ func (p *Producer) prepareCommand(ctx context.Context, command *runtimev1.Worker
 	if err != nil {
 		return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("encode signed worker command: %w", err)
 	}
-	if len(envelopeBytes) > p.config.Limits.MaxSignedEnvelopeBytes || len(envelopeBytes) > p.config.Limits.MaxRedisFieldBytes || encodedRedisEntryBytes(redisEnvelopeField, envelopeBytes) > p.config.Limits.MaxRedisEntryBytes {
+	if len(envelopeBytes) > p.config.Limits.MaxSignedEnvelopeBytes || len(envelopeBytes) > p.config.Limits.MaxTransportPayloadBytes || encodedRedisEntryBytes(redisEnvelopeField, envelopeBytes) > p.config.Limits.MaxTransportMessageBytes {
 		return executionapp.PreparedCommandEnvelope{}, ErrControlMessageLimitExceeded
 	}
 	prepared := executionapp.PreparedCommandEnvelope{
@@ -183,7 +183,7 @@ func (p *Producer) validatePrepared(prepared executionapp.PreparedCommandEnvelop
 	if err := prepared.Validate(); err != nil {
 		return err
 	}
-	if len(prepared.Bytes) > p.config.Limits.MaxSignedEnvelopeBytes || len(prepared.Bytes) > p.config.Limits.MaxRedisFieldBytes || encodedRedisEntryBytes(redisEnvelopeField, prepared.Bytes) > p.config.Limits.MaxRedisEntryBytes {
+	if len(prepared.Bytes) > p.config.Limits.MaxSignedEnvelopeBytes || len(prepared.Bytes) > p.config.Limits.MaxTransportPayloadBytes || encodedRedisEntryBytes(redisEnvelopeField, prepared.Bytes) > p.config.Limits.MaxTransportMessageBytes {
 		return ErrControlMessageLimitExceeded
 	}
 

@@ -68,7 +68,7 @@ func TestIndexIngestRedisServiceBackedDedicatedBoundedStream(t *testing.T) {
 	config.ConsumerGroup = indexGroup
 	appender, err := NewRedisStreamAppender(client, RedisStreamAppenderConfig{
 		MaxEntries:    1,
-		MaxEntryBytes: config.Limits.MaxRedisEntryBytes,
+		MaxEntryBytes: config.Limits.MaxTransportMessageBytes,
 	})
 	if err != nil {
 		t.Fatal(err)

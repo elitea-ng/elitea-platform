@@ -39,7 +39,9 @@ prototype shortcuts into new code merely to preserve current behavior.
 - Do not preserve Pylon plugin loading, Arbiter pickle payloads, global service
   locators, internal Python RPC aliases, or hot-installed dependencies as target
   architecture.
-- Use Redis Streams for durable asynchronous worker commands and events. Use an
+- Durable asynchronous worker commands use the runtime command bus, NATS
+  JetStream (docs/runtime-command-bus.md); PostgreSQL is the authority and the
+  bus is transport only. Use an
   authenticated mTLS HTTP/JSON API for identity, credential redemption,
   provider catalogs, artifact grants, health, and capability discovery. Do not
   introduce gRPC until profiling proves it solves a measured control-plane
@@ -47,12 +49,12 @@ prototype shortcuts into new code merely to preserve current behavior.
 - Durable messages contain identifiers, immutable revisions, encrypted
   references and non-sensitive bounded metadata. Plaintext prompts, repository
   content, tool payloads, secret values, bearer credentials, arbitrary
-  serialized objects and raw internal errors do not enter shared Redis streams.
+  serialized objects and raw internal errors do not enter the command bus.
 - Sign the exact serialized envelope body bytes and verify before decode; never
   call protobuf canonical. At-least-once exact redelivery is valid and must
   reach durable inbox/claim idempotency.
-- PostgreSQL is the source of truth for execution state. Redis is transport, not
-  the workflow database. Consumers must be idempotent and generation-fenced.
+- PostgreSQL is the source of truth for execution state. The command bus is
+  transport, not the workflow database. Consumers must be idempotent and generation-fenced.
 - Go owns product data and migrations. Python owns LangGraph checkpoints and
   execution-local state only; vector stores and LiteLLM keep explicit separate
   ownership.

@@ -54,8 +54,8 @@ func NewToolkitCallToolProducer(
 		strings.ContainsAny(config.CapabilityVersion, "\r\n\x00") {
 		return nil, errors.New("invalid tool-run capability version")
 	}
-	if config.Limits.MaxRedisEntryBytes <= 0 ||
-		config.Limits.MaxRedisEntryBytes > maxAgentRedisEntryBytes {
+	if config.Limits.MaxTransportMessageBytes <= 0 ||
+		config.Limits.MaxTransportMessageBytes > maxAgentRedisEntryBytes {
 		return nil, errors.New("tool-run Redis entry limit must be less than 64 KiB")
 	}
 	producer, err := NewProducer(ProducerConfig{

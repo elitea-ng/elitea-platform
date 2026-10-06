@@ -52,7 +52,7 @@ func TestReferenceOnlyCommandDoesNotScaleWith32MiBDataPlaneObject(t *testing.T) 
 	if difference := abs(len(largeEnvelope) - len(smallEnvelope)); difference > 16 {
 		t.Fatalf("control envelope scaled with referenced content: small=%d large=%d delta=%d", len(smallEnvelope), len(largeEnvelope), difference)
 	}
-	if encodedRedisEntryBytes(redisEnvelopeField, largeEnvelope) > validProducerConfig().Limits.MaxRedisEntryBytes {
+	if encodedRedisEntryBytes(redisEnvelopeField, largeEnvelope) > validProducerConfig().Limits.MaxTransportMessageBytes {
 		t.Fatalf("32 MiB data-plane reference exceeded Redis entry bound: envelope=%d", len(largeEnvelope))
 	}
 }

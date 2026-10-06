@@ -61,19 +61,19 @@ func TestRedisStreamServiceBackedControlPlane(t *testing.T) {
 	}
 
 	limits, err := LimitsFromProto(&runtimev1.ProtocolLimitsV1{
-		LimitsRevision:         "elitea.runtime.limits.conformance.v2",
-		MaxWorkerCommandBytes:  32 * 1024,
-		MaxSignedEnvelopeBytes: 48 * 1024,
-		MaxRedisFieldBytes:     48 * 1024,
-		MaxRedisEntryBytes:     64 * 1024,
-		MaxSafeStringBytes:     256,
+		LimitsRevision:           "elitea.runtime.limits.conformance.v3",
+		MaxWorkerCommandBytes:    32 * 1024,
+		MaxSignedEnvelopeBytes:   48 * 1024,
+		MaxTransportPayloadBytes: 48 * 1024,
+		MaxTransportMessageBytes: 64 * 1024,
+		MaxSafeStringBytes:       256,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	appender, err := NewRedisStreamAppender(client, RedisStreamAppenderConfig{
 		MaxEntries:    2,
-		MaxEntryBytes: limits.MaxRedisEntryBytes,
+		MaxEntryBytes: limits.MaxTransportMessageBytes,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -240,7 +240,7 @@ func TestRedisStreamServiceBackedControlPlane(t *testing.T) {
 	}()
 	secondAppender, err := NewRedisStreamAppender(secondClient, RedisStreamAppenderConfig{
 		MaxEntries:    2,
-		MaxEntryBytes: limits.MaxRedisEntryBytes,
+		MaxEntryBytes: limits.MaxTransportMessageBytes,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -428,11 +428,11 @@ func assertReferenceOnlyRedisMessage(t *testing.T, message redis.XMessage, limit
 	default:
 		t.Fatalf("Redis control field used non-binary-safe type %T", raw)
 	}
-	if len(value) > limits.MaxRedisFieldBytes {
-		t.Fatalf("Redis control field is %d bytes, limit %d", len(value), limits.MaxRedisFieldBytes)
+	if len(value) > limits.MaxTransportPayloadBytes {
+		t.Fatalf("Redis control field is %d bytes, limit %d", len(value), limits.MaxTransportPayloadBytes)
 	}
-	if size := encodedRedisEntryBytes(redisEnvelopeField, value); size > limits.MaxRedisEntryBytes {
-		t.Fatalf("complete Redis control entry is %d bytes, limit %d", size, limits.MaxRedisEntryBytes)
+	if size := encodedRedisEntryBytes(redisEnvelopeField, value); size > limits.MaxTransportMessageBytes {
+		t.Fatalf("complete Redis control entry is %d bytes, limit %d", size, limits.MaxTransportMessageBytes)
 	}
 	for _, canary := range forbidden {
 		if bytes.Contains(value, canary) {

@@ -119,8 +119,8 @@ func TestProducerRejectsCompleteRedisEntryAboveBoundBeforeAppend(t *testing.T) {
 	config := validProducerConfig()
 	config.Limits.MaxWorkerCommandBytes = len(baselineSigner.exact)
 	config.Limits.MaxSignedEnvelopeBytes = len(baselineAppender.value)
-	config.Limits.MaxRedisFieldBytes = len(baselineAppender.value)
-	config.Limits.MaxRedisEntryBytes = encodedRedisEntryBytes(redisEnvelopeField, baselineAppender.value) - 1
+	config.Limits.MaxTransportPayloadBytes = len(baselineAppender.value)
+	config.Limits.MaxTransportMessageBytes = encodedRedisEntryBytes(redisEnvelopeField, baselineAppender.value) - 1
 	appender := &appenderStub{}
 	producer, err := NewProducer(config, &signerStub{}, appender)
 	if err != nil {
@@ -207,7 +207,7 @@ func TestLimitsFromProtoMatchesCheckedConformanceProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if limits.Revision != "elitea.runtime.limits.conformance.v2" || limits.MaxWorkerCommandBytes != 32768 || limits.MaxSignedEnvelopeBytes != 49152 || limits.MaxRedisFieldBytes != 49152 || limits.MaxRedisEntryBytes != 65536 || limits.MaxStringBytes != 256 {
+	if limits.Revision != "elitea.runtime.limits.conformance.v3" || limits.MaxWorkerCommandBytes != 32768 || limits.MaxSignedEnvelopeBytes != 49152 || limits.MaxTransportPayloadBytes != 49152 || limits.MaxTransportMessageBytes != 65536 || limits.MaxStringBytes != 256 {
 		t.Fatalf("Go Redis limits drifted from checked protocol profile: %+v", limits)
 	}
 }
@@ -219,13 +219,13 @@ func validProducerConfig() ProducerConfig {
 		EnvelopeSchemaRevision: "signed-command-v1",
 		AllowTestOnlyHMAC:      true,
 		Limits: Limits{
-			Revision:               "limits-v1",
-			MaxWorkerCommandBytes:  8 * 1024,
-			MaxSignedEnvelopeBytes: 12 * 1024,
-			MaxRedisFieldBytes:     12 * 1024,
-			MaxRedisEntryBytes:     16 * 1024,
-			MaxSignatureBytes:      128,
-			MaxStringBytes:         512,
+			Revision:                 "limits-v1",
+			MaxWorkerCommandBytes:    8 * 1024,
+			MaxSignedEnvelopeBytes:   12 * 1024,
+			MaxTransportPayloadBytes: 12 * 1024,
+			MaxTransportMessageBytes: 16 * 1024,
+			MaxSignatureBytes:        128,
+			MaxStringBytes:           512,
 		},
 	}
 }
