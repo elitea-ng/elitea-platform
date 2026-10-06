@@ -76,6 +76,9 @@ pub const MAX_STEP_LIMIT: usize = 1_000;
 /// limit).
 pub const MAX_DOC_RESULTS_LIMIT: usize = 100;
 const NO_OVERVIEW: &str = "No repository overview available.";
+/// The embedding model of a query that names none (the ask and
+/// deep-research workers' default).
+pub const DEFAULT_EMBEDDING_MODEL: &str = "text-embedding-3-large";
 
 /// The step limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,6 +236,43 @@ fn text(arguments: &Map<String, Value>, key: &str) -> String {
         None | Some(Value::Null) => String::new(),
         Some(value) => pyfmt::str_of(value),
     }
+}
+
+/// The embedding model of `ask` / `deep_research`.
+///
+/// None given (absent, `null`, blank, or an object without `model_name`):
+/// [`DEFAULT_EMBEDDING_MODEL`], as the Python workers did, with a warning.
+/// A gateway that does not serve that model fails the embedding call and
+/// the search is lexical only, as in Python; a wiki embedded with another
+/// model has another dimension, and its search tools report the failure.
+///
+/// # Errors
+///
+/// A `ValueError` for another shape (a number, a list, a `model_name`
+/// that is not a string). Python used the default for a number or a
+/// list and failed at the first embedding call for such a `model_name`;
+/// this engine refuses them all at once, as its `generate_wiki` does.
+pub fn query_embedding_model(arguments: &Map<String, Value>) -> Result<String, EngineError> {
+    let value = arguments.get("embedding_model").unwrap_or(&Value::Null);
+    let blank = |text: &str| text.trim().is_empty();
+    let missing = match value {
+        Value::Null => true,
+        Value::String(text) => blank(text),
+        Value::Object(map) => match map.get("model_name") {
+            None | Some(Value::Null) => true,
+            Some(Value::String(text)) => blank(text),
+            Some(_) => false,
+        },
+        _ => false,
+    };
+    if missing {
+        tracing::warn!(
+            model = DEFAULT_EMBEDDING_MODEL,
+            "the query names no embedding_model; using the Python default"
+        );
+        return Ok(DEFAULT_EMBEDDING_MODEL.to_owned());
+    }
+    crate::llm::embedding_model_name(value)
 }
 
 /// `ask` / `deep_research` argument handling (`tool_operations.ask` and
@@ -530,7 +570,8 @@ pub async fn run_agent<S: IndexStore, M: Model>(
 ///
 /// # Errors
 ///
-/// An unknown tool (`KeyError`), malformed `llm_settings` (`ValueError`),
+/// An unknown tool (`KeyError`), malformed `llm_settings` or
+/// `embedding_model` (`ValueError`),
 /// a model failure, or the stop line.
 pub async fn run_tool(
     tool: &str,
@@ -564,18 +605,12 @@ pub async fn run_tool(
     let streaming = settings.streaming;
     let model_name = settings.model_name.clone();
     let anthropic = settings.provider == crate::llm::Provider::Anthropic;
-    let embedder = match arguments
-        .get("embedding_model")
-        .map(crate::llm::embedding_model_name)
-    {
-        Some(Ok(name)) => Embedder::Client(EmbeddingClient::new(
-            deps.transport.clone(),
-            settings.clone(),
-            name,
-            deps.embedding_options,
-        )),
-        _ => Embedder::None,
-    };
+    let embedder = Embedder::Client(EmbeddingClient::new(
+        deps.transport.clone(),
+        settings.clone(),
+        query_embedding_model(arguments)?,
+        deps.embedding_options,
+    ));
     let client = ChatClient::new(deps.transport.clone(), settings);
     let spec = match mode {
         Mode::Ask => ask_spec(
@@ -656,6 +691,50 @@ mod tests {
             ok.map(|r| r.wiki_id).ok().as_deref(),
             Some("org--proj--repo--main")
         );
+    }
+
+    #[test]
+    fn a_missing_embedding_model_is_the_python_default() {
+        let model = |value: Value| {
+            let mut arguments = Map::new();
+            arguments.insert("embedding_model".to_owned(), value);
+            query_embedding_model(&arguments).map_err(|e| (e.error_type, e.message))
+        };
+        assert_eq!(
+            query_embedding_model(&Map::new()).as_deref(),
+            Ok(DEFAULT_EMBEDDING_MODEL)
+        );
+        for missing in [
+            Value::Null,
+            json!(""),
+            json!("  "),
+            json!({}),
+            json!({"model_name": null}),
+            json!({"model_name": " "}),
+        ] {
+            assert_eq!(
+                model(missing.clone()).as_deref(),
+                Ok(DEFAULT_EMBEDDING_MODEL),
+                "{missing}"
+            );
+        }
+        assert_eq!(model(json!(" emb-1 ")).as_deref(), Ok("emb-1"));
+        assert_eq!(
+            model(json!({"model_name": "emb-2"})).as_deref(),
+            Ok("emb-2")
+        );
+        for malformed in [
+            json!(5),
+            json!(["emb"]),
+            json!({"model_name": 7}),
+            json!(true),
+        ] {
+            let refused = model(malformed.clone());
+            assert!(
+                matches!(&refused, Err((ErrorType::Value, m)) if m.contains("embedding_model")),
+                "{malformed}: {refused:?}"
+            );
+        }
     }
 
     #[test]

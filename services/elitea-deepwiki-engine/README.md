@@ -912,6 +912,14 @@ the parity gate drives.
   `glob`, `grep`; writes apply after the step, results over 80 000
   characters are evicted to `/large_tool_results/`); progress as the
   worker's display lines (`🔧 Calling: …`, `✓ tool: …`), no tokens.
+* **`embedding_model`**: absent, `null`, blank, or an object without
+  `model_name` is `text-embedding-3-large`, the Python workers' default
+  (a warning is logged). The gateway must serve it and the wiki must have
+  been embedded with it: a gateway without it makes the search lexical
+  only, a wiki of another dimension makes the search tools report the
+  failure. Another shape (a number, a list, a `model_name` that is not a
+  string) is a `ValueError` at once (Python used the default for a number
+  or a list, and failed at the first embedding for such a `model_name`).
 * **`resolve_wiki`**: one user message, temperature 0, `{api_base}/v1`,
   `max_tokens` or 4000; a model failure is an unsuccessful result.
 * **Prompts** are the Python values in `src/ask/prompts/*.txt`;
