@@ -545,6 +545,15 @@ Dead in that path and not ported: the hierarchical and agentic modes
   seed order; the reference is patched to match).
 - `DEEPWIKI_MAX_SYMBOLS_PER_PAGE` below 1 is ignored (Python looped
   forever); the structure timestamp is UTC.
+- **The sanitizer is time-bounded.** One page gets 5 s of wall clock
+  (`SANITIZE_BUDGET`) and one search at most 1,000,000 backtracking steps;
+  past either, the page keeps its unsanitised text with a warning (the
+  path Python took when the sanitizer raised). Python had no bound. The
+  per-character `match` loops are anchored and pre-tested in O(1), and the
+  identifier-led substitutions carry a leading `(?<![A-Za-z0-9_\-])` (same
+  matches, proved by `leading_lookbehind_keeps_every_substitution`), so a
+  normal page is byte-identical and a 7,900-character line takes
+  milliseconds (it took minutes).
 
 Quirks kept: the context and the related-files list are joined with the
 two characters `\n`; the sanitizer's literal `'\1'` template, its

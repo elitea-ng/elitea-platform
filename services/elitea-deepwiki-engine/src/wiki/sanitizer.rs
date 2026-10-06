@@ -21,15 +21,23 @@
 //!
 //! Lengths and indices are in characters (Python `str`), never bytes.
 //! The regular expressions go through [`super::pyregex`]. A failure
-//! (a regex error, the backtrack cap) is returned as an error: the caller
-//! keeps the page unsanitised, as `generate_page_content`'s `except` did.
+//! (a regex error, the backtrack cap, the [`SANITIZE_BUDGET`]) is returned
+//! as an error: the caller keeps the page unsanitised, as
+//! `generate_page_content`'s `except` did.
+//!
+//! Performance changes that keep every result (see the tests): the
+//! identifier-led substitutions start with `(?<![A-Za-z0-9_\-])` (a match
+//! inside an identifier run implies one at the run's start, which the
+//! left-to-right search finds first), and the per-character `match` loops
+//! test in O(1) whether the pattern can match before running it.
 
-use super::pyregex::{Flags, PyRe, ReError, escape};
+use super::pyregex::{DEADLINE_EXCEEDED, Flags, PyRe, ReError, escape, with_deadline};
 use crate::graph::pystr;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use unicode_normalization::UnicodeNormalization;
 
 /// A pattern compiled once. `return`s the compile error from the
@@ -969,6 +977,27 @@ fn top_level_commas(content: &[char]) -> Vec<String> {
     tokens
 }
 
+/// For every byte offset of `bytes`, the end of the run of bytes that
+/// satisfy `class` starting there (the offset itself when its byte does
+/// not). One extra entry for `bytes.len()`.
+fn run_ends(bytes: &[u8], class: impl Fn(u8) -> bool) -> Vec<usize> {
+    let mut ends = vec![bytes.len(); bytes.len() + 1];
+    for i in (0..bytes.len()).rev() {
+        ends[i] = if class(bytes[i]) { ends[i + 1] } else { i };
+    }
+    ends
+}
+
+/// For every byte offset of `bytes` (and `bytes.len()`), the first offset
+/// at or after it whose byte satisfies `class`, else `bytes.len()`.
+fn next_of(bytes: &[u8], class: impl Fn(u8) -> bool) -> Vec<usize> {
+    let mut next = vec![bytes.len(); bytes.len() + 1];
+    for i in (0..bytes.len()).rev() {
+        next[i] = if class(bytes[i]) { i } else { next[i + 1] };
+    }
+    next
+}
+
 /// `_normalize_generics` inside `fix_inner`.
 #[allow(clippy::many_single_char_names)] // Python's `s`, `n`, `i`, `j`, `m`
 fn normalize_generics(s: &str) -> Result<(String, bool), ReError> {
@@ -978,11 +1007,21 @@ fn normalize_generics(s: &str) -> Result<(String, bool), ReError> {
     // `^` and no look-behind.
     let offsets: Vec<usize> = s.char_indices().map(|(at, _)| at).collect();
     let head = re!(r"([A-Za-z0-9_]+)\[");
+    // The pattern matches at a character exactly when the run of word
+    // bytes from there ends in `[`; tested in O(1) before the regex runs.
+    let ends = run_ends(s.as_bytes(), |b| b.is_ascii_alphanumeric() || b == b'_');
     let mut out = String::new();
     let mut changed = false;
     let mut i = 0;
     while i < n {
-        let Some(m) = head.match_at(s, offsets[i])? else {
+        let at = offsets[i];
+        let possible = ends[at] > at && s.as_bytes().get(ends[at]) == Some(&b'[');
+        let found = if possible {
+            head.match_at(s, at)?
+        } else {
+            None
+        };
+        let Some(m) = found else {
             out.push(chars[i]);
             i += 1;
             continue;
@@ -1179,31 +1218,53 @@ fn unquote_generic(type_name: &str, content: &str) -> Result<String, ReError> {
 
 /// `_normalize_label_generics`.
 fn normalize_label_generics(t: &str, fixes: &mut Fixes) -> Result<String, ReError> {
-    re!(r#"(?P<id>[A-Za-z0-9_\-]+)\["(?P<inner>(?:[^"\\]|\\.(?!\]))*)"\]"#).sub_with(t, |m| {
-        let inner = m.name("inner").replace("\\\"", "\"");
-        let inner = re!(r#"([A-Za-z0-9_])"\["#).sub(&inner, r"\1[")?;
-        let new_inner = re!(r"([A-Za-z0-9_]+)\[\s*([^\[\]]*?,[^\[\]]*?)\s*\]")
-            .sub_with(&inner, |g| {
-                unquote_generic(g.group(1), &g.group(2).replace("\\\"", "\""))
-            })?;
-        if new_inner != inner {
-            fixes.push_once("label_generic_bracket_tokens_unquote");
-        }
-        Ok(format!("{}[\"{}\"]", m.name("id"), new_inner))
-    })
+    re!(r#"(?<![A-Za-z0-9_\-])(?P<id>[A-Za-z0-9_\-]+)\["(?P<inner>(?:[^"\\]|\\.(?!\]))*)"\]"#)
+        .sub_with(t, |m| {
+            let inner = m.name("inner").replace("\\\"", "\"");
+            let inner = re!(r#"([A-Za-z0-9_])"\["#).sub(&inner, r"\1[")?;
+            let new_inner = re!(r"(?<![A-Za-z0-9_])([A-Za-z0-9_]+)\[\s*([^\[\]]*?,[^\[\]]*?)\s*\]")
+                .sub_with(&inner, |g| {
+                    unquote_generic(g.group(1), &g.group(2).replace("\\\"", "\""))
+                })?;
+            if new_inner != inner {
+                fixes.push_once("label_generic_bracket_tokens_unquote");
+            }
+            Ok(format!("{}[\"{}\"]", m.name("id"), new_inner))
+        })
 }
 
 /// `_late_label_quote`: quote `id[label]` outside double quotes when the
 /// label has a space or punctuation.
+///
+/// Python tries `pat.match(line, pos)` at every character. The pattern can
+/// match at `pos` only when the identifier run that starts there ends in
+/// `[` and the label after it reaches a `]` before any `"` or newline;
+/// that test is O(1) here (two tables per line), so the regular expression
+/// runs only where it matches. Every start inside one identifier run sees
+/// the same `[label]`, so after a match without a trigger the rest of the
+/// run is skipped (Python found the same trigger-less match there).
 fn late_label_quote(t: &str, fixes: &mut Fixes) -> Result<String, ReError> {
     let pat = re!(r#"(?P<id>[A-Za-z0-9_\-]+)\[(?P<label>(?!")[^"\]\n]+)\]"#);
     let triggers: Vec<char> = " ()/:.<>{}!?\"".chars().collect();
     let mut changed = false;
     let mut out_lines = Vec::new();
     for line in t.split('\n') {
+        let bytes = line.as_bytes();
+        let ends = run_ends(bytes, |b| {
+            b.is_ascii_alphanumeric() || b == b'_' || b == b'-'
+        });
+        let stops = next_of(bytes, |b| matches!(b, b'"' | b']' | b'\n'));
+        let can_match = |pos: usize| {
+            let e = ends[pos];
+            e > pos
+                && bytes.get(e) == Some(&b'[')
+                && stops[e + 1] > e + 1
+                && bytes.get(stops[e + 1]) == Some(&b']')
+        };
         let mut res = String::with_capacity(line.len());
         let mut pos = 0;
         let mut in_q = false;
+        let mut same_run_until = 0;
         while pos < line.len() {
             let Some(ch) = line[pos..].chars().next() else {
                 break;
@@ -1214,7 +1275,11 @@ fn late_label_quote(t: &str, fixes: &mut Fixes) -> Result<String, ReError> {
                 pos += 1;
                 continue;
             }
-            if !in_q && let Some(m) = pat.match_at(line, pos)? {
+            if !in_q
+                && pos >= same_run_until
+                && can_match(pos)
+                && let Some(m) = pat.match_at(line, pos)?
+            {
                 let lab = m.name("label");
                 if lab.chars().any(|c| triggers.contains(&c)) {
                     let _ = write!(res, "{}[\"{}\"]", m.name("id"), lab);
@@ -1222,6 +1287,7 @@ fn late_label_quote(t: &str, fixes: &mut Fixes) -> Result<String, ReError> {
                     changed = true;
                     continue;
                 }
+                same_run_until = ends[pos];
             }
             res.push(ch);
             pos += ch.len_utf8();
@@ -1265,8 +1331,9 @@ fn normalize_inner_quotes(t: &str, fixes: &mut Fixes) -> Result<String, ReError>
         }
         if converted != new_inner {
             new_inner = converted;
-            let new_inner2 = re!(r"([A-Za-z0-9_]+)\[\s*([^\[\]]*?,[^\[\]]*?)\s*\]")
-                .sub_with(&new_inner, |g| unquote_generic(g.group(1), g.group(2)))?;
+            let new_inner2 =
+                re!(r"(?<![A-Za-z0-9_])([A-Za-z0-9_]+)\[\s*([^\[\]]*?,[^\[\]]*?)\s*\]")
+                    .sub_with(&new_inner, |g| unquote_generic(g.group(1), g.group(2)))?;
             if new_inner2 != new_inner {
                 new_inner = new_inner2;
                 changed = true;
@@ -1517,21 +1584,23 @@ fn final_flow_label_cleanup(t: &str, fixes: &mut Fixes) -> Result<String, ReErro
     if t2 != t {
         t = t2;
     }
-    let t3 = re!(r#"(?P<id>[A-Za-z0-9_\-]+)\["(?P<inner>[^"\]\n]+)"\]"#).sub_with(&t, |m| {
-        let inner = m.name("inner");
-        let new_inner = re!(r#"Return\s+\["\]"#).sub(inner, "Return []")?;
-        if new_inner != inner {
-            return Ok(format!("{}[\"{}\"]", m.name("id"), new_inner));
-        }
-        Ok(m.whole().to_owned())
-    })?;
+    let t3 = re!(r#"(?<![A-Za-z0-9_\-])(?P<id>[A-Za-z0-9_\-]+)\["(?P<inner>[^"\]\n]+)"\]"#)
+        .sub_with(&t, |m| {
+            let inner = m.name("inner");
+            let new_inner = re!(r#"Return\s+\["\]"#).sub(inner, "Return []")?;
+            if new_inner != inner {
+                return Ok(format!("{}[\"{}\"]", m.name("id"), new_inner));
+            }
+            Ok(m.whole().to_owned())
+        })?;
     if t3 != t {
         t = t3;
         fixes.push_once("collapse_extra_label_quotes");
     }
-    let t3 = re!(r#"(?P<id>[A-Za-z0-9_\-]+)\["(?P<label>[^"\]\n]+)\]"#).sub_with(&t, |m| {
-        Ok(format!("{}[\"{}\"]", m.name("id"), m.name("label")))
-    })?;
+    let t3 = re!(r#"(?<![A-Za-z0-9_\-])(?P<id>[A-Za-z0-9_\-]+)\["(?P<label>[^"\]\n]+)\]"#)
+        .sub_with(&t, |m| {
+            Ok(format!("{}[\"{}\"]", m.name("id"), m.name("label")))
+        })?;
     if t3 != t {
         t = t3;
         fixes.push_once("restore_label_trailing_quote");
@@ -1705,7 +1774,8 @@ pub fn sanitize_mermaid_diagram(
         text2 = final3;
         fixes.push_once("label_index_quote_single");
     }
-    let node_label = re!(r#"(?P<id>[A-Za-z0-9_\-]+)\["(?P<inner>(?:[^"\\]|\\.(?!\]))*)"\]"#);
+    let node_label =
+        re!(r#"(?<![A-Za-z0-9_\-])(?P<id>[A-Za-z0-9_\-]+)\["(?P<inner>(?:[^"\\]|\\.(?!\]))*)"\]"#);
     let mut strip_hit = false;
     let late = node_label.sub_with(&text2, |m| {
         let inner = m.name("inner");
@@ -1803,6 +1873,14 @@ fn normalize_fences(md: &str) -> Result<(String, Vec<String>), ReError> {
     Ok((out.join("\n"), fx))
 }
 
+/// The wall-clock budget of one [`sanitize_content`] call. Python
+/// sanitises a pathological 8,000-character diagram in well under a
+/// second; a page that takes longer here keeps its unsanitised text.
+pub const SANITIZE_BUDGET: Duration = Duration::from_secs(5);
+
+/// The error of a sanitisation that a stop request ended.
+pub const SANITIZE_STOPPED: &str = "sanitization stopped";
+
 /// `sanitize_content`: sanitise every fenced Mermaid block of a page.
 ///
 /// The page path replaces the content only when `summary.total > 0`
@@ -1810,10 +1888,49 @@ fn normalize_fences(md: &str) -> Result<(String, Vec<String>), ReError> {
 ///
 /// # Errors
 ///
-/// A regular-expression failure (the caller keeps the page as it was).
+/// A regular-expression failure, or a run longer than
+/// [`SANITIZE_BUDGET`] (the caller keeps the page as it was, Python's
+/// `except` path).
 pub fn sanitize_content(
     content: &str,
     cfg: &SanitizerConfig,
+) -> Result<(String, SanitizationSummary), ReError> {
+    sanitize_content_within(content, cfg, SANITIZE_BUDGET, &|| false)
+}
+
+/// [`sanitize_content`] with an explicit wall-clock `budget` and a stop
+/// test that is read between diagrams.
+///
+/// DELIBERATE DIFFERENCE: Python had no time bound. When the budget runs
+/// out (or `stop` answers true) this returns an error and the caller
+/// keeps the unsanitised text, as for any other sanitizer failure.
+///
+/// # Errors
+///
+/// A regular-expression failure, the budget, or a stop.
+pub fn sanitize_content_within(
+    content: &str,
+    cfg: &SanitizerConfig,
+    budget: Duration,
+    stop: &dyn Fn() -> bool,
+) -> Result<(String, SanitizationSummary), ReError> {
+    let deadline = Instant::now() + budget;
+    let result = with_deadline(deadline, || sanitize_all(content, cfg, stop));
+    if let Err(error) = &result
+        && error.0 == DEADLINE_EXCEEDED
+    {
+        tracing::warn!(
+            budget_ms = u64::try_from(budget.as_millis()).unwrap_or(u64::MAX),
+            "Mermaid sanitization ran out of time; the page keeps its text"
+        );
+    }
+    result
+}
+
+fn sanitize_all(
+    content: &str,
+    cfg: &SanitizerConfig,
+    stop: &dyn Fn() -> bool,
 ) -> Result<(String, SanitizationSummary), ReError> {
     let (content, fence_fixes) = normalize_fences(content)?;
     let fence = re!(
@@ -1828,6 +1945,9 @@ pub fn sanitize_content(
     let mut records: Vec<DiagramRecord> = Vec::new();
     let mut last = 0;
     for (index, m) in fence.find_all(&content)?.iter().enumerate() {
+        if stop() {
+            return Err(ReError(SANITIZE_STOPPED.to_owned()));
+        }
         let (start, end) = (m.start(), m.end());
         let body = m.group(1);
         output.push_str(&content[last..start]);
@@ -1917,5 +2037,182 @@ mod tests {
             "## Overview\n\n```mermaid\nflowchart LR\n  api --> store\n```\nSee.\n"
         );
         assert_eq!((summary.total, summary.valid), (1, 1));
+    }
+
+    /// Lines that made `late_label_quote` (one search per character, each
+    /// scanning the rest of the line) cubic: 20 s for 2,000 characters,
+    /// over 600 s for 7,900. Python returns each page unchanged
+    /// (`sanitize_content` in the engine venv: 0.05 s, 0.7 s, 0.1 s, 0.01 s).
+    #[test]
+    fn long_unbracketed_lines_are_sanitised_in_linear_time() {
+        let lines = [
+            "a".repeat(2000),
+            "a".repeat(7900),
+            "a[".repeat(3900),
+            format!("{} ", "x".repeat(50)).repeat(150),
+        ];
+        for line in lines {
+            let page = format!("```mermaid\nflowchart TD\n  {line}\n```\n");
+            let started = std::time::Instant::now();
+            let (text, summary) = sanitize_content(&page, &SanitizerConfig::default()).unwrap();
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed < Duration::from_secs(1),
+                "{} chars took {elapsed:?}",
+                line.len()
+            );
+            assert_eq!(text, page);
+            assert_eq!((summary.total, summary.valid), (1, 1));
+        }
+    }
+
+    /// The leading `(?<![A-Za-z0-9_\-])` added to the identifier-led
+    /// substitutions changes no result: a match that starts inside an
+    /// identifier run implies one at the run's start, which a left-to-right
+    /// search finds first. Checked on random texts over the characters the
+    /// patterns care about.
+    #[test]
+    fn leading_lookbehind_keeps_every_substitution() {
+        let pairs = [
+            (
+                r#"(?P<id>[A-Za-z0-9_\-]+)\["(?P<inner>(?:[^"\\]|\\.(?!\]))*)"\]"#,
+                r#"(?<![A-Za-z0-9_\-])(?P<id>[A-Za-z0-9_\-]+)\["(?P<inner>(?:[^"\\]|\\.(?!\]))*)"\]"#,
+            ),
+            (
+                r#"(?P<id>[A-Za-z0-9_\-]+)\["(?P<inner>[^"\]\n]+)"\]"#,
+                r#"(?<![A-Za-z0-9_\-])(?P<id>[A-Za-z0-9_\-]+)\["(?P<inner>[^"\]\n]+)"\]"#,
+            ),
+            (
+                r#"(?P<id>[A-Za-z0-9_\-]+)\["(?P<label>[^"\]\n]+)\]"#,
+                r#"(?<![A-Za-z0-9_\-])(?P<id>[A-Za-z0-9_\-]+)\["(?P<label>[^"\]\n]+)\]"#,
+            ),
+            (
+                r"([A-Za-z0-9_]+)\[\s*([^\[\]]*?,[^\[\]]*?)\s*\]",
+                r"(?<![A-Za-z0-9_])([A-Za-z0-9_]+)\[\s*([^\[\]]*?,[^\[\]]*?)\s*\]",
+            ),
+        ];
+        let alphabet: Vec<char> = "ab-_[]\"\\, \n".chars().collect();
+        let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for (old, new) in pairs {
+            let old = PyRe::new(old, Flags::NONE).unwrap();
+            let new = PyRe::new(new, Flags::NONE).unwrap();
+            for _ in 0..3000 {
+                let len = usize::try_from(next() % 24).unwrap();
+                let text: String = (0..len)
+                    .map(|_| alphabet[usize::try_from(next()).unwrap() % alphabet.len()])
+                    .collect();
+                let template = r"<\1|\2>";
+                assert_eq!(
+                    old.sub(&text, template),
+                    new.sub(&text, template),
+                    "{text:?}"
+                );
+            }
+        }
+    }
+
+    /// `late_label_quote` and `normalize_generics` with their O(1)
+    /// pre-tests against a plain transcription of Python's per-character
+    /// `match` loop.
+    #[test]
+    fn pretested_loops_match_the_plain_python_loop() {
+        fn plain_late(t: &str) -> String {
+            let pat = PyRe::new(
+                r#"(?P<id>[A-Za-z0-9_\-]+)\[(?P<label>(?!")[^"\]\n]+)\]"#,
+                Flags::NONE,
+            )
+            .unwrap();
+            let triggers: Vec<char> = " ()/:.<>{}!?\"".chars().collect();
+            let mut lines = Vec::new();
+            for line in t.split('\n') {
+                let (mut res, mut pos, mut in_q) = (String::new(), 0, false);
+                while let Some(ch) = line[pos..].chars().next() {
+                    if ch == '"' {
+                        in_q = !in_q;
+                        res.push(ch);
+                        pos += 1;
+                        continue;
+                    }
+                    if !in_q && let Some(m) = pat.match_at(line, pos).unwrap() {
+                        let lab = m.name("label");
+                        if lab.chars().any(|c| triggers.contains(&c)) {
+                            let _ = write!(res, "{}[\"{}\"]", m.name("id"), lab);
+                            pos = m.end();
+                            continue;
+                        }
+                    }
+                    res.push(ch);
+                    pos += ch.len_utf8();
+                }
+                lines.push(res);
+            }
+            lines.join("\n")
+        }
+        let alphabet: Vec<char> = "ab-[]\" .,'é".chars().collect();
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+        for _ in 0..5000 {
+            let len = usize::try_from(next() % 20).unwrap();
+            let text: String = (0..len)
+                .map(|_| alphabet[usize::try_from(next()).unwrap() % alphabet.len()])
+                .collect();
+            let mut fixes = Fixes::default();
+            assert_eq!(
+                late_label_quote(&text, &mut fixes).unwrap(),
+                plain_late(&text),
+                "{text:?}"
+            );
+            // normalize_generics: the pre-test only skips characters where
+            // the head pattern cannot match.
+            let head = PyRe::new(r"([A-Za-z0-9_]+)\[", Flags::NONE).unwrap();
+            let ends = run_ends(text.as_bytes(), |b| b.is_ascii_alphanumeric() || b == b'_');
+            for (at, _) in text.char_indices() {
+                let possible = ends[at] > at && text.as_bytes().get(ends[at]) == Some(&b'[');
+                assert_eq!(
+                    possible,
+                    head.match_at(&text, at).unwrap().is_some(),
+                    "{text:?} @{at}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn match_at_is_anchored_and_sees_the_text_before_pos() {
+        let p = PyRe::new(r"(?<![a-z])b+", Flags::NONE).unwrap();
+        assert!(p.match_at("abb", 1).unwrap().is_none());
+        assert_eq!(p.match_at("-bb", 1).unwrap().unwrap().whole(), "bb");
+        assert!(p.match_at("-xbb", 1).unwrap().is_none());
+        let caret = PyRe::new("^b", Flags::NONE).unwrap();
+        assert!(caret.match_at("ab", 1).unwrap().is_none());
+    }
+
+    #[test]
+    fn an_exhausted_budget_or_a_stop_fails_the_sanitisation() {
+        let page = "```mermaid\nflowchart TD\n  A[x y] --> B\n```\n";
+        let cfg = SanitizerConfig::default();
+        let timed_out = sanitize_content_within(page, &cfg, Duration::ZERO, &|| false);
+        assert_eq!(
+            timed_out.map(|r| r.0),
+            Err(ReError(DEADLINE_EXCEEDED.to_owned()))
+        );
+        let stopped = sanitize_content_within(page, &cfg, SANITIZE_BUDGET, &|| true);
+        assert_eq!(
+            stopped.map(|r| r.0),
+            Err(ReError(SANITIZE_STOPPED.to_owned()))
+        );
+        // The deadline does not outlive the call.
+        assert!(sanitize_content(page, &cfg).is_ok());
     }
 }

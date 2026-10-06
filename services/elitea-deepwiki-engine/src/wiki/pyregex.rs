@@ -27,8 +27,10 @@
 //! the next character. No sanitizer pattern can match both empty and
 //! non-empty at one position with the empty match preferred.
 
-use fancy_regex::{Captures, Regex, RegexBuilder};
+use fancy_regex::{Captures, Regex, RegexBuilder, RegexInput};
+use std::cell::Cell;
 use std::fmt::{self, Write as _};
+use std::time::Instant;
 
 /// `re.MULTILINE`, `re.DOTALL`, `re.IGNORECASE`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -68,11 +70,37 @@ impl fmt::Display for ReError {
 
 impl std::error::Error for ReError {}
 
-/// The backtracking cap. `sre` has none; a diagram is at most 8,000
-/// characters (`max_diagram_chars`), so a pattern that reaches this is
+/// The backtracking cap of ONE search. `sre` has none; a diagram is at
+/// most 8,000 characters (`max_diagram_chars`), and every search is
+/// anchored or linear in the line, so a search that reaches this is
 /// pathological and the page keeps its unsanitised text (Python's
-/// fail-soft path).
-const BACKTRACK_LIMIT: usize = 50_000_000;
+/// fail-soft path). [`with_deadline`] bounds the sum of all searches.
+const BACKTRACK_LIMIT: usize = 1_000_000;
+
+thread_local! {
+    /// The wall-clock end of the current [`with_deadline`] scope.
+    static DEADLINE: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// Run `work` with a wall-clock deadline: every search that starts after
+/// `deadline` fails with [`ReError`]. The deadline is per thread and the
+/// previous one is restored after `work`.
+pub fn with_deadline<T>(deadline: Instant, work: impl FnOnce() -> T) -> T {
+    let previous = DEADLINE.with(|cell| cell.replace(Some(deadline)));
+    let result = work();
+    DEADLINE.with(|cell| cell.set(previous));
+    result
+}
+
+/// The message of a search that started after the deadline.
+pub const DEADLINE_EXCEEDED: &str = "regular-expression time budget exceeded";
+
+fn check_deadline() -> Result<(), ReError> {
+    match DEADLINE.with(Cell::get) {
+        Some(deadline) if Instant::now() >= deadline => Err(ReError(DEADLINE_EXCEEDED.to_owned())),
+        _ => Ok(()),
+    }
+}
 
 const WORD: &str = r"[\p{L}\p{N}_]";
 
@@ -255,22 +283,23 @@ impl PyRe {
     ///
     /// # Errors
     ///
-    /// The backtrack cap.
+    /// The backtrack cap or the deadline.
     pub fn search_from<'t>(&self, text: &'t str, pos: usize) -> Result<Option<Match<'t>>, ReError> {
         if pos > text.len() {
             return Ok(None);
         }
+        check_deadline()?;
         self.regex
             .captures_from_pos(text, pos)
             .map(|c| c.map(|caps| Match::from_captures(text, &caps, &self.regex)))
-            .map_err(|e| ReError(e.to_string()))
+            .map_err(|e| ReError(format!("{e} ({})", self.regex.as_str())))
     }
 
     /// `re.search(pattern, text)`.
     ///
     /// # Errors
     ///
-    /// The backtrack cap.
+    /// The backtrack cap or the deadline.
     pub fn search<'t>(&self, text: &'t str) -> Result<Option<Match<'t>>, ReError> {
         self.search_from(text, 0)
     }
@@ -279,27 +308,36 @@ impl PyRe {
     ///
     /// # Errors
     ///
-    /// The backtrack cap.
+    /// The backtrack cap or the deadline.
     pub fn is_match(&self, text: &str) -> Result<bool, ReError> {
         Ok(self.search(text)?.is_some())
     }
 
-    /// `pattern.match(text, pos)`: a match that starts at `pos`. A search
-    /// tries `pos` first, so its match is the one `match` finds when it
-    /// starts there.
+    /// `pattern.match(text, pos)`: a match that starts at `pos`. The
+    /// search is ANCHORED at `pos` (one attempt, not a scan of the rest of
+    /// the text), on the whole text: look-behind still sees the text before
+    /// `pos` and `^` still matches only at 0 (or after a newline under
+    /// `MULTILINE`), as in Python.
     ///
     /// # Errors
     ///
-    /// The backtrack cap.
+    /// The backtrack cap or the deadline.
     pub fn match_at<'t>(&self, text: &'t str, pos: usize) -> Result<Option<Match<'t>>, ReError> {
-        Ok(self.search_from(text, pos)?.filter(|m| m.start() == pos))
+        if pos > text.len() {
+            return Ok(None);
+        }
+        check_deadline()?;
+        self.regex
+            .captures_input(RegexInput::new(text).from_pos(pos).anchored(true))
+            .map(|c| c.map(|caps| Match::from_captures(text, &caps, &self.regex)))
+            .map_err(|e| ReError(format!("{e} ({})", self.regex.as_str())))
     }
 
     /// `re.match(pattern, text)`.
     ///
     /// # Errors
     ///
-    /// The backtrack cap.
+    /// The backtrack cap or the deadline.
     pub fn match_start<'t>(&self, text: &'t str) -> Result<Option<Match<'t>>, ReError> {
         self.match_at(text, 0)
     }
@@ -308,7 +346,7 @@ impl PyRe {
     ///
     /// # Errors
     ///
-    /// The backtrack cap.
+    /// The backtrack cap or the deadline.
     pub fn find_all<'t>(&self, text: &'t str) -> Result<Vec<Match<'t>>, ReError> {
         let mut found = Vec::new();
         let mut pos = 0;
@@ -340,7 +378,7 @@ impl PyRe {
     ///
     /// # Errors
     ///
-    /// The backtrack cap, or an error from `repl`.
+    /// The backtrack cap, the deadline, or an error from `repl`.
     pub fn sub_with<'t>(
         &self,
         text: &'t str,
@@ -365,7 +403,7 @@ impl PyRe {
     ///
     /// # Errors
     ///
-    /// The backtrack cap, or a template that names a missing group.
+    /// The backtrack cap, the deadline, or a template that names a missing group.
     pub fn sub(&self, text: &str, template: &str) -> Result<String, ReError> {
         let parts = parse_template(template)?;
         self.sub_with(text, |m| expand(&parts, m))
