@@ -497,7 +497,30 @@ impl PyRe {
     /// The backtrack cap, the deadline, or a template that names a missing group.
     pub fn sub(&self, text: &str, template: &str) -> Result<String, ReError> {
         let parts = parse_template(template)?;
+        self.check_template(&parts)?;
         self.sub_with(text, |m| expand(&parts, m))
+    }
+
+    /// `re._compile_template`: every group a template names must exist in
+    /// the pattern. Python checks this BEFORE it searches, so a bad
+    /// template fails even on a text the pattern does not match.
+    fn check_template(&self, pieces: &[Piece]) -> Result<(), ReError> {
+        for piece in pieces {
+            match piece {
+                Piece::Literal(_) => {}
+                Piece::Group(index) => {
+                    if *index >= self.regex.captures_len() {
+                        return Err(ReError(format!("invalid group reference {index}")));
+                    }
+                }
+                Piece::Named(name) => {
+                    if !self.regex.capture_names().any(|n| n == Some(name.as_str())) {
+                        return Err(ReError(format!("unknown group name '{name}'")));
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
@@ -742,6 +765,20 @@ mod tests {
         // Python and Rust both fold the Kelvin sign and the long s.
         assert!(re("k", Flags::I).is_match("\u{212a}").unwrap());
         assert!(re("s", Flags::I).is_match("\u{17f}").unwrap());
+    }
+
+    /// python3 -c 'import re;re.sub("(a)", r"\2", "xyz")' raises
+    /// `invalid group reference 2` although nothing matches.
+    #[test]
+    fn a_template_naming_a_missing_group_fails_before_the_search() {
+        let p = re("(a)", Flags::NONE);
+        assert!(p.sub("xyz", r"\2").is_err());
+        assert!(p.sub("xyz", r"\g<name>").is_err());
+        assert_eq!(p.sub("xyz", r"\1").unwrap(), "xyz");
+        assert_eq!(
+            re("(?P<n>a)", Flags::NONE).sub("ab", r"<\g<n>>").unwrap(),
+            "<a>b"
+        );
     }
 
     #[test]

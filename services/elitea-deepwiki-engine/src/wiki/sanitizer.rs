@@ -12,7 +12,9 @@
 //!   `deactivate ` and `alt `, and then removes every empty line;
 //! * a `subgraph` representative that starts with a digit makes the
 //!   template `\1<digits>` a missing group reference, which fails the whole
-//!   sanitisation (Python raised; the page kept its text);
+//!   sanitisation (Python raised; the page kept its text) — also when no
+//!   edge names the subgraph, because Python checks a template before it
+//!   searches;
 //! * `_ensure_flowchart_direction` keeps the bad direction token after the
 //!   default one (`flowchart XY` → `flowchart TD XY`);
 //! * the blank line after a diagram's closing fence is dropped (the fence
