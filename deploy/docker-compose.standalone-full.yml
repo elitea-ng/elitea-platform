@@ -1263,6 +1263,44 @@ services:
       retries: 6
       start_period: 15s
 
+  # The scheduler runs the database housekeeping elitea-main relies on but does
+  # not do itself. In THIS stack the load-bearing one is the browser sign-in
+  # state sweep (internal/authstateretention): this is the stack that mounts
+  # deploy/runtime/auth.form.yml, so Form sessions, login transactions and
+  # attempt windows (shared migration 0145) land in PostgreSQL, and without a
+  # scheduler expired rows are never removed. Correctness does not depend on
+  # it (every read filters on expiry); table growth does. It also runs the
+  # audit and sync-tombstone retention sweeps with the docker-compose.yml
+  # defaults. Price sync and budget write-back stay off (their defaults): the
+  # gateway here does not publish budget deltas (GATEWAY_NATS_URL is unset).
+  #
+  # Direct to postgres, not through pgbouncer, like the migration jobs: its
+  # sweeps are short batched statements, and the pooler budget is main's.
+  elitea-scheduler:
+    image: ghcr.io/elitea-ng/elitea-scheduler:standalone
+    build:
+      # Repo root: the Containerfile COPYs libs/go/observability from there.
+      context: ..
+      dockerfile: services/elitea-scheduler/Containerfile
+    environment:
+      DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
+      HTTP_ADDR: ":8081"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      AUDIT_RETENTION_DAYS: "365"
+      SYNC_TOMBSTONE_RETENTION_DAYS: "97"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # The tables it sweeps exist only after the shared history ran.
+      elitea-migrate:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+    # No container healthcheck: the image is distroless and the binary has no
+    # -healthcheck flag (see docker-compose.yml). /healthz is on :8081 inside
+    # the network; no host port.
+    restart: unless-stopped
+
   # ── The DeepWiki provider, SPI shell over the FIXTURE runner ─────────────
   # ELITEA_DEEPWIKI_RUNNER=fixture is the real LegacyToolRunner with its tools
   # injected (the P0 composition tests' own mechanism): parameter merge,
