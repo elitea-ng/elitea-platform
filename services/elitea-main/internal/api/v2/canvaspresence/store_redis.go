@@ -7,9 +7,6 @@ import (
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
-
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/redis"
 )
 
 // RedisStore is the cross-replica Store. One Redis HASH per canvas: field =
@@ -114,40 +111,3 @@ func (s *RedisStore) List(ctx context.Context, key string) ([]Editor, error) {
 	}
 	return sortRoster(live), nil
 }
-
-// WithRedis is the PRODUCTION wiring in one option: it makes the roster
-// cross-replica and turns the publish on.
-//
-// It takes the client rather than a Store and an Emitter because the two must
-// not be able to drift apart. A roster shared across replicas whose event is
-// published nowhere is a heartbeat only the beating tab can see; an event
-// published from a per-replica roster tells the other tabs a roster that is
-// missing half its editors. #152 is this repository's record of what happens
-// when the two arms of one surface are allowed to be configured separately.
-//
-// A NIL CLIENT IS A NO-OP, deliberately. The route keeps serving on the
-// in-process store, so a deployment without Redis still answers its own tab
-// correctly (see NewHandler). This is what lets router.go call it
-// unconditionally instead of branching on cfg.RedisClient — a nil-comparison
-// there is read by TestNilGatedRouterFieldsAreWiredOrDeclared as a gate that
-// decides REGISTRATION, which this is not: the route registers either way.
-//
-// THE TRANSPORT MATCHES THE SSE STREAM'S. The project stream this publishes
-// onto is mounted from cfg.RedisClient in every shipped deployment — the reason
-// is written out in cmd/elitea-main/event_stream_redis.go: every elitea-main
-// deployment here passes REDIS_URL and none is given a NATS endpoint. When
-// elitea-main's own bus moves to NATS, this option and that mount move
-// together.
-func WithRedis(client *goredis.Client) Option {
-	return func(h *Handler) {
-		if client == nil {
-			return
-		}
-		h.store = NewRedisStore(client)
-		h.emitter = events.NewPublisher(redis.NewEventBus(client, eventSource))
-	}
-}
-
-// eventSource is the `source` field stamped on every event this package
-// publishes (redis.Event.Source).
-const eventSource = "elitea-main"

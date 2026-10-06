@@ -7,7 +7,6 @@ package canvaspresence_test
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -132,60 +131,5 @@ func TestRedisStoreListsAnAbsentRosterAsEmpty(t *testing.T) {
 func TestNewRedisStoreOnANilClientIsNil(t *testing.T) {
 	if store := v2canvaspresence.NewRedisStore(nil); store != nil {
 		t.Fatalf("NewRedisStore(nil) = %#v, want nil so WithStore leaves the in-process default in place", store)
-	}
-}
-
-// WithRedis on a nil client leaves the handler on its in-process store, which is
-// what lets the route register in a deployment with no Redis.
-func TestWithRedisOnANilClientKeepsServingLocally(t *testing.T) {
-	handler := v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithRedis(nil))
-	recorder := post(t, route(handler), "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "1", "ada@example.com")
-	if recorder.Code != 200 {
-		t.Fatalf("status = %d, want 200 from the in-process default", recorder.Code)
-	}
-}
-
-// The PRODUCTION wiring end to end: WithRedis is the single option router.go
-// calls, and it has to give the handler BOTH a shared roster and a live
-// publisher. A test that only checked the roster would pass over a build that
-// published nothing, which is the state the route would ship in if the two arms
-// were configurable separately.
-func TestWithRedisSharesTheRosterAndPublishes(t *testing.T) {
-	server := miniredis.RunT(t)
-	client := goredis.NewClient(&goredis.Options{Addr: server.Addr()})
-	t.Cleanup(func() { _ = client.Close() })
-
-	handler := v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithRedis(client))
-	router := route(handler)
-
-	subscription := client.Subscribe(context.Background(), "project:7:events")
-	t.Cleanup(func() { _ = subscription.Close() })
-	if _, err := subscription.Receive(context.Background()); err != nil {
-		t.Fatalf("subscribe: %v", err)
-	}
-	messages := subscription.Channel()
-
-	post(t, router, "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "1", "ada@example.com")
-	second := post(t, router, "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "2", "grace@example.com")
-
-	roster := decodeResponse(t, second).Editors
-	if len(roster) != 2 {
-		t.Fatalf("roster = %#v, want both editors out of the shared Redis roster", roster)
-	}
-
-	// The frame a browser's EventSource would receive, read off the same channel
-	// internal/api/v2/events subscribes to.
-	deadline := time.After(5 * time.Second)
-	seen := 0
-	for seen < 2 {
-		select {
-		case message := <-messages:
-			if !strings.Contains(message.Payload, v2canvaspresence.EventType) {
-				t.Fatalf("frame %q does not carry the %s event type", message.Payload, v2canvaspresence.EventType)
-			}
-			seen++
-		case <-deadline:
-			t.Fatalf("only %d of 2 presence frames reached project 7's channel", seen)
-		}
 	}
 }

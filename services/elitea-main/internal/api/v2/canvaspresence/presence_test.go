@@ -569,3 +569,56 @@ func TestNilOptionsLeaveTheDefaultsInPlace(t *testing.T) {
 		t.Fatalf("status = %d, want 200 from the in-process defaults", recorder.Code)
 	}
 }
+
+// A Backend missing either half is a no-op: router.go calls WithBackend
+// unconditionally, and a deployment without a live-update plane must still
+// serve the route on the in-process roster.
+func TestAHalfBackendKeepsServingLocally(t *testing.T) {
+	for name, backend := range map[string]v2canvaspresence.Backend{
+		"zero":       {},
+		"store only": {Store: v2canvaspresence.NewMemoryStore()},
+		"bus only":   {Bus: &recordingBus{}},
+	} {
+		handler := v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithBackend(backend))
+		recorder := post(t, route(handler), "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "1", "ada@example.com")
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200 from the in-process default", name, recorder.Code)
+		}
+	}
+	// "bus only" must not have published: a roster from the per-replica
+	// store is exactly the half-wired state Backend exists to rule out.
+	bus := &recordingBus{}
+	handler := v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithBackend(v2canvaspresence.Backend{Bus: bus}))
+	post(t, route(handler), "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "1", "ada@example.com")
+	if len(bus.published) != 0 {
+		t.Fatalf("a bus-only Backend published %d event(s), want none", len(bus.published))
+	}
+}
+
+// The PRODUCTION wiring end to end: WithBackend is the single option router.go
+// calls, and it has to give the handler BOTH a shared roster and a live
+// publisher. Two handlers stand in for two replicas over one store.
+func TestWithBackendSharesTheRosterAndPublishes(t *testing.T) {
+	shared := v2canvaspresence.NewMemoryStore()
+	bus := &recordingBus{}
+	backend := v2canvaspresence.Backend{Store: shared, Bus: bus}
+
+	replicaA := route(v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithBackend(backend)))
+	replicaB := route(v2canvaspresence.NewHandler(twoProjectResolver(), v2canvaspresence.WithBackend(backend)))
+
+	post(t, replicaA, "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "1", "ada@example.com")
+	second := post(t, replicaB, "/canvas/prompt_lib/7/1/presence", `{"state":"editing"}`, "2", "grace@example.com")
+
+	if roster := decodeResponse(t, second).Editors; len(roster) != 2 {
+		t.Fatalf("roster = %#v, want both editors out of the shared store", roster)
+	}
+	published := bus.onChannel(events.ProjectChannel("7"))
+	if len(published) != 2 {
+		t.Fatalf("published %d frames on project 7's channel, want 2", len(published))
+	}
+	for _, frame := range published {
+		if frame.eventType != v2canvaspresence.EventType {
+			t.Fatalf("event type = %q, want %q", frame.eventType, v2canvaspresence.EventType)
+		}
+	}
+}

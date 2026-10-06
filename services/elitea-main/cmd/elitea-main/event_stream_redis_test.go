@@ -7,13 +7,6 @@ import (
 	"testing"
 )
 
-func envLookup(pairs map[string]string) func(string) (string, bool) {
-	return func(key string) (string, bool) {
-		value, present := pairs[key]
-		return value, present
-	}
-}
-
 func TestEventStreamRedisClientIsAbsentWithoutRedisURL(t *testing.T) {
 	t.Parallel()
 
@@ -56,10 +49,8 @@ func TestEventStreamRedisClientRejectsInvalidRedisURL(t *testing.T) {
 	}
 }
 
-// A configured-but-unreachable Redis must fail startup rather than leave
-// RouterConfig.RedisClient nil: a nil client silently unregisters
-// /api/v2/events/prompt_lib/{projectID} again, which is the whole failure mode
-// of #152. Better to refuse to boot than to boot without the route.
+// A configured-but-unreachable Redis must fail startup rather than silently
+// leave canvas presence on a per-replica roster.
 func TestEventStreamRedisClientFailsWhenRedisIsUnreachable(t *testing.T) {
 	t.Parallel()
 

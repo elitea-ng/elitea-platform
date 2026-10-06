@@ -9,8 +9,6 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/redis"
 )
 
 // fakeConn is an in-memory natsConn: Publish fans out to every ChanSubscribe
@@ -149,7 +147,7 @@ func TestPublish_EnvelopeAndSubject(t *testing.T) {
 	if subj != "gateway.events.project.7.events" {
 		t.Errorf("subject = %q", subj)
 	}
-	var evt redis.Event
+	var evt Event
 	if err := json.Unmarshal([]byte(data), &evt); err != nil {
 		t.Fatalf("envelope not decodable: %v", err)
 	}
@@ -187,6 +185,25 @@ func TestPublish_FlushError(t *testing.T) {
 	}
 }
 
+// A buffered bus never waits on the server: the same flush failure that the
+// default bus reports must not reach a request-path caller, and the message
+// must still have been handed to the connection.
+func TestPublish_BufferedSkipsFlush(t *testing.T) {
+	fc := &fakeConn{flushErr: errors.New("flush timeout")}
+	eb := New(fc, "src", WithBufferedPublish())
+	if err := eb.Publish(context.Background(), "project:7:events", "t", map[string]int{"a": 1}); err != nil {
+		t.Fatalf("buffered publish returned %v, want nil", err)
+	}
+	if len(fc.published) != 1 || fc.published[0][0] != "gateway.events.project.7.events" {
+		t.Fatalf("published = %v, want one message on gateway.events.project.7.events", fc.published)
+	}
+	// A transport error is still reported.
+	failing := New(&fakeConn{publishErr: errors.New("closed")}, "src", WithBufferedPublish())
+	if err := failing.Publish(context.Background(), "c", "t", nil); err == nil {
+		t.Fatal("buffered publish swallowed a transport error")
+	}
+}
+
 func TestSubscribe_RoundTrip(t *testing.T) {
 	fc := &fakeConn{}
 	eb := New(fc, "src")
@@ -194,10 +211,10 @@ func TestSubscribe_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	got := make(chan redis.Event, 1)
+	got := make(chan Event, 1)
 	// Subscribe to the "project:*" catch-all → gateway.events.project.>, which
 	// matches the published gateway.events.project.9.events subject.
-	eb.Subscribe(ctx, "project:*", func(_ context.Context, e redis.Event) error {
+	eb.Subscribe(ctx, "project:*", func(_ context.Context, e Event) error {
 		got <- e
 		return nil
 	})
@@ -226,7 +243,7 @@ func TestSubscribe_MalformedSkippedHandlerErrorLogged(t *testing.T) {
 
 	var calls int
 	var mu sync.Mutex
-	eb.Subscribe(ctx, "c", func(_ context.Context, _ redis.Event) error {
+	eb.Subscribe(ctx, "c", func(_ context.Context, _ Event) error {
 		mu.Lock()
 		calls++
 		mu.Unlock()
@@ -264,14 +281,14 @@ func TestSubscribe_SubError(t *testing.T) {
 	fc := &fakeConn{subErr: errors.New("no sub")}
 	eb := New(fc, "src")
 	// Must not panic; simply logs and returns.
-	eb.Subscribe(context.Background(), "c", func(context.Context, redis.Event) error { return nil })
+	eb.Subscribe(context.Background(), "c", func(context.Context, Event) error { return nil })
 }
 
 func TestSubscribe_CtxCancelStops(t *testing.T) {
 	fc := &fakeConn{}
 	eb := New(fc, "src")
 	ctx, cancel := context.WithCancel(context.Background())
-	eb.Subscribe(ctx, "c", func(context.Context, redis.Event) error { return nil })
+	eb.Subscribe(ctx, "c", func(context.Context, Event) error { return nil })
 	waitForSubs(t, fc, 1)
 	fc.mu.Lock()
 	sub := fc.subs[0]

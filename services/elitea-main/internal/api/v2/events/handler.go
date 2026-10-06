@@ -2,29 +2,27 @@ package events
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	goredis "github.com/redis/go-redis/v9"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/redis"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/ssewriter"
 )
 
-// EventSource is the transport-agnostic seam the SSE handler consumes. It yields
-// decoded redis.Event values on the given channel until the caller invokes the
-// returned cancel func or the request context is cancelled. Both transports
-// implement it: the NATS EventBus (internal/infra/natsbus.EventBus.Raw) and the
-// Redis adapter (redisSource) below. This keeps the project SSE stream on the
-// same transport as the rest of the EventBus so re-pointing to NATS does not
-// split event delivery.
+// EventSource is the seam the SSE handler consumes. It yields decoded events on
+// the given channel until the caller invokes the returned cancel func or the
+// request context is cancelled. The live-update NATS bus
+// (internal/infra/natsbus.EventBus.Raw) implements it — the same bus every
+// domain-event publisher writes to, so the stream and its producers cannot be
+// on different transports. The Redis adapter that used to sit beside it was
+// deleted with the plain Redis at REDIS_URL.
 type EventSource interface {
-	Raw(ctx context.Context, channel string) (<-chan redis.Event, func(), error)
+	Raw(ctx context.Context, channel string) (<-chan natsbus.Event, func(), error)
 }
 
 // StreamPermission gates the project event stream (#496).
@@ -34,9 +32,8 @@ type EventSource interface {
 //
 // The stream is the project's own activity feed. Its declared vocabulary is
 // application, skill, folder, conversation and message change notices plus the
-// LLM gateway's budget.soft_alert (internal/events/publisher.go), and the only
-// publisher a shipped stack actually has today is that soft alert, which carries
-// the project's accrued cost. The platform already has a name for "this caller
+// LLM gateway's budget.soft_alert (internal/events/publisher.go). The soft
+// alert carries the project's accrued cost. The platform already has a name for "this caller
 // may observe this project": `models.project_context.view`. It gates
 // GET /api/v2/elitea_core/project_info/{mode}/{projectID}/project-info and every
 // project-scoped budget read — /usage/prompt_lib/{projectID}/usage and
@@ -73,15 +70,8 @@ func WithPermissionResolver(resolver auth.PermissionResolver) Option {
 	return func(h *Handler) { h.permissionResolver = resolver }
 }
 
-// NewHandler wraps a raw *goredis.Client for the Redis transport (preserves the
-// existing call site). NewHandlerFromSource takes any EventSource (used for the
-// NATS transport).
-func NewHandler(rdb *goredis.Client, opts ...Option) *Handler {
-	return newHandler(&redisSource{client: rdb}, opts...)
-}
-
-// NewHandlerFromSource builds the handler over an explicit EventSource (e.g. the
-// NATS EventBus), used when the platform EventBus is re-pointed to NATS.
+// NewHandlerFromSource builds the handler over an EventSource (the live-update
+// NATS bus in production).
 func NewHandlerFromSource(src EventSource, opts ...Option) *Handler {
 	return newHandler(src, opts...)
 }
@@ -162,54 +152,4 @@ func (h *Handler) Stream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-}
-
-// redisSource adapts a *goredis.Client to EventSource, preserving the original
-// Redis pub/sub subscription behaviour (decode the {type,payload} envelope).
-type redisSource struct {
-	client *goredis.Client
-}
-
-func (rs *redisSource) Raw(ctx context.Context, channel string) (<-chan redis.Event, func(), error) {
-	sub := rs.client.Subscribe(ctx, channel)
-	out := make(chan redis.Event, 64)
-	done := make(chan struct{})
-	cancel := func() {
-		select {
-		case <-done:
-		default:
-			close(done)
-		}
-	}
-
-	go func() {
-		defer close(out)
-		defer func() { _ = sub.Close() }()
-		ch := sub.Channel()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-done:
-				return
-			case msg, ok := <-ch:
-				if !ok {
-					return
-				}
-				var evt redis.Event
-				if err := json.Unmarshal([]byte(msg.Payload), &evt); err != nil {
-					continue
-				}
-				select {
-				case out <- evt:
-				case <-ctx.Done():
-					return
-				case <-done:
-					return
-				}
-			}
-		}
-	}()
-
-	return out, cancel, nil
 }

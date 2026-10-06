@@ -85,6 +85,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -227,6 +228,38 @@ func WithEmitter(emitter Emitter) Option {
 		if emitter != nil {
 			h.emitter = emitter
 		}
+	}
+}
+
+// Backend is the PRODUCTION wiring: a roster store every replica shares, and
+// the bus the roster is published on (the live-update NATS bus). The zero
+// value means "neither" — the route serves on the in-process store and
+// publishes nothing.
+//
+// It is one value rather than a Store option and an Emitter option because
+// the two must not be able to drift apart. A roster shared across replicas
+// whose event is published nowhere is a heartbeat only the beating tab can
+// see; an event published from a per-replica roster tells the other tabs a
+// roster that is missing half its editors. #152 is this repository's record
+// of what happens when the two arms of one surface are configured separately.
+type Backend struct {
+	Store Store
+	Bus   events.Bus
+}
+
+// WithBackend installs b. A Backend missing EITHER half is a no-op, so the
+// route keeps serving on the in-process store (see NewHandler). This is what
+// lets router.go call it unconditionally instead of branching on a config
+// field — a nil-comparison there is read by
+// TestNilGatedRouterFieldsAreWiredOrDeclared as a gate that decides
+// REGISTRATION, which this is not: the route registers either way.
+func WithBackend(b Backend) Option {
+	return func(h *Handler) {
+		if b.Store == nil || b.Bus == nil {
+			return
+		}
+		h.store = b.Store
+		h.emitter = events.NewPublisher(b.Bus)
 	}
 }
 

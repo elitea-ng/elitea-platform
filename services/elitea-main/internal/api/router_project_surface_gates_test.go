@@ -11,7 +11,7 @@ import (
 
 	v2skills "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/skills"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/webhook"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/redis"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
 )
 
 // ---------------------------------------------------------------------------
@@ -163,12 +163,12 @@ func (emptyWebhookRepo) Delete(context.Context, string, string) error { return n
 // A REFUSED one never reaches it, and channelAsked records which.
 type closedEventSource struct{ asked chan string }
 
-func (s closedEventSource) Raw(_ context.Context, channel string) (<-chan redis.Event, func(), error) {
+func (s closedEventSource) Raw(_ context.Context, channel string) (<-chan natsbus.Event, func(), error) {
 	select {
 	case s.asked <- channel:
 	default:
 	}
-	events := make(chan redis.Event)
+	events := make(chan natsbus.Event)
 	close(events)
 	return events, func() {}, nil
 }

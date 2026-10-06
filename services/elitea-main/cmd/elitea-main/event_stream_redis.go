@@ -11,29 +11,16 @@ import (
 )
 
 // eventStreamPingTimeout bounds the startup reachability probe. A configured but
-// unreachable Redis is a misconfiguration we want to surface at boot, not a
-// 500 on the first SSE subscribe hours later.
+// unreachable Redis is a misconfiguration we want to surface at boot.
 const eventStreamPingTimeout = 5 * time.Second
 
-// newEventStreamRedisClient opens the Redis connection that backs the project
-// SSE stream (`RouterConfig.RedisClient`, mounted at
-// `/api/v2/events/prompt_lib/{projectID}` by internal/api/router.go).
+// newEventStreamRedisClient opens the plain Redis at REDIS_URL. Its one
+// remaining use is canvas presence's roster store (v2canvaspresence.RedisStore);
+// the project SSE stream and every publisher moved to the live-update NATS bus
+// (event_stream_nats.go).
 //
-// Why Redis and not the `EventSource` (NATS) arm of that same gate: every
-// elitea-main deployment in this repository already runs Redis and already
-// passes REDIS_URL — deploy/docker-compose.yml, deploy/docker-compose.e2e-
-// standalone.yml and deploy/helm/elitea-main/values-staging.yaml all set it —
-// while no elitea-main deployment is given a NATS endpoint. The NATS EventBus
-// (internal/infra/natsbus) is wired for elitea-llm-gateway, and elitea-main's
-// only NATS-shaped env var is GATEWAY_NATS_URL, which is the gateway *client*.
-// Choosing EventSource here would mount the route against a broker that is not
-// deployed. When elitea-main's own bus moves to NATS, this returns the
-// EventBus instead and the router's first branch takes over unchanged.
-//
-// Returns (nil, nil) when REDIS_URL is absent or empty, so deployments that
-// genuinely have no Redis keep starting — the route then stays unmounted, which
-// TestNilGatedRouterFieldsAreWiredOrDeclared's fallback-pair rule now makes a
-// visible, declared state rather than an accidental one.
+// Returns (nil, nil) when REDIS_URL is absent or empty; canvas presence then
+// stays on its per-replica in-process roster.
 func newEventStreamRedisClient(
 	ctx context.Context,
 	lookup func(string) (string, bool),
