@@ -1745,6 +1745,28 @@ export const getSendChatMessageMockHandler = (
   );
 };
 
+export const getCancelChatExecutionMockHandler = (
+  overrideResponse?:
+    | void
+    | ((
+        info: Parameters<Parameters<typeof http.delete>[1]>[0],
+      ) => Promise<void> | void),
+  options?: RequestHandlerOptions,
+) => {
+  return http.delete(
+    "*/elitea_core/task/prompt_lib/:projectId/:responseMessageId",
+    async (info: Parameters<Parameters<typeof http.delete>[1]>[0]) => {
+      await delay(0);
+      if (typeof overrideResponse === "function") {
+        await overrideResponse(info);
+      }
+
+      return new HttpResponse(null, { status: 204 });
+    },
+    options,
+  );
+};
+
 export const getRegenerateChatMessageMockHandler = (
   overrideResponse?:
     | ChatExecutionStarted
@@ -2172,6 +2194,7 @@ export const getChatMock = () => [
   getListParticipantCandidatesMockHandler(),
   getListConversationMessagesMockHandler(),
   getSendChatMessageMockHandler(),
+  getCancelChatExecutionMockHandler(),
   getRegenerateChatMessageMockHandler(),
   getContinueChatExecutionMockHandler(),
   getUploadConversationAttachmentMockHandler(),

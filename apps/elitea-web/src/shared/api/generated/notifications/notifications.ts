@@ -709,6 +709,11 @@ export type deleteNotificationsResponse403 = {
   status: 403;
 };
 
+export type deleteNotificationsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type deleteNotificationsResponse500 = {
   data: NotificationErrorResponse;
   status: 500;
@@ -722,6 +727,7 @@ export type deleteNotificationsResponseError = (
   | deleteNotificationsResponse400
   | deleteNotificationsResponse401
   | deleteNotificationsResponse403
+  | deleteNotificationsResponse426
   | deleteNotificationsResponse500
 ) & {
   headers: Headers;
@@ -735,6 +741,7 @@ export const getDeleteNotificationsUrl = (projectId: string) => {
 };
 
 /**
+ * Deletes the listed notifications of the CALLER; an id that is not the caller's is skipped, and `deleted` counts what was removed. Each deletion reaches the caller's other devices as a `deleted` tombstone in the `changes_since` delta of listNotifications (shared migration 0144's AFTER DELETE trigger), so a dismissed item does not come back on another device.
  * @summary Delete several of the caller's notifications
  */
 export const deleteNotifications = async (
@@ -790,7 +797,11 @@ export const getDeleteNotificationsQueryKey = (
 
 export const getDeleteNotificationsQueryOptions = <
   TData = Awaited<ReturnType<typeof deleteNotifications>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationBulkDeleteRequest: NotificationBulkDeleteRequest,
@@ -835,11 +846,18 @@ export type DeleteNotificationsQueryResult = NonNullable<
   Awaited<ReturnType<typeof deleteNotifications>>
 >;
 export type DeleteNotificationsQueryError =
-  NotificationErrorResponse | N401Response | N403Response;
+  | NotificationErrorResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse;
 
 export function useDeleteNotifications<
   TData = Awaited<ReturnType<typeof deleteNotifications>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationBulkDeleteRequest: NotificationBulkDeleteRequest,
@@ -867,7 +885,11 @@ export function useDeleteNotifications<
 };
 export function useDeleteNotifications<
   TData = Awaited<ReturnType<typeof deleteNotifications>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationBulkDeleteRequest: NotificationBulkDeleteRequest,
@@ -895,7 +917,11 @@ export function useDeleteNotifications<
 };
 export function useDeleteNotifications<
   TData = Awaited<ReturnType<typeof deleteNotifications>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationBulkDeleteRequest: NotificationBulkDeleteRequest,
@@ -919,7 +945,11 @@ export function useDeleteNotifications<
 
 export function useDeleteNotifications<
   TData = Awaited<ReturnType<typeof deleteNotifications>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationBulkDeleteRequest: NotificationBulkDeleteRequest,
@@ -1250,6 +1280,11 @@ export type deleteNotificationResponse403 = {
   status: 403;
 };
 
+export type deleteNotificationResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type deleteNotificationResponse500 = {
   data: NotificationErrorResponse;
   status: 500;
@@ -1263,6 +1298,7 @@ export type deleteNotificationResponseError = (
   | deleteNotificationResponse400
   | deleteNotificationResponse401
   | deleteNotificationResponse403
+  | deleteNotificationResponse426
   | deleteNotificationResponse500
 ) & {
   headers: Headers;
@@ -1279,6 +1315,7 @@ export const getDeleteNotificationUrl = (
 };
 
 /**
+ * Deletes one notification of the CALLER. The deletion reaches the caller's other devices as a `deleted` tombstone in the `changes_since` delta of listNotifications (shared migration 0144).
  * @summary Delete one of the caller's notifications
  */
 export const deleteNotification = async (
@@ -1307,7 +1344,11 @@ export const getDeleteNotificationQueryKey = (
 
 export const getDeleteNotificationQueryOptions = <
   TData = Awaited<ReturnType<typeof deleteNotification>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationId: number,
@@ -1356,11 +1397,18 @@ export type DeleteNotificationQueryResult = NonNullable<
   Awaited<ReturnType<typeof deleteNotification>>
 >;
 export type DeleteNotificationQueryError =
-  NotificationErrorResponse | N401Response | N403Response;
+  | NotificationErrorResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse;
 
 export function useDeleteNotification<
   TData = Awaited<ReturnType<typeof deleteNotification>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationId: number,
@@ -1388,7 +1436,11 @@ export function useDeleteNotification<
 };
 export function useDeleteNotification<
   TData = Awaited<ReturnType<typeof deleteNotification>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationId: number,
@@ -1416,7 +1468,11 @@ export function useDeleteNotification<
 };
 export function useDeleteNotification<
   TData = Awaited<ReturnType<typeof deleteNotification>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationId: number,
@@ -1440,7 +1496,11 @@ export function useDeleteNotification<
 
 export function useDeleteNotification<
   TData = Awaited<ReturnType<typeof deleteNotification>>,
-  TError = NotificationErrorResponse | N401Response | N403Response,
+  TError =
+    | NotificationErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   notificationId: number,

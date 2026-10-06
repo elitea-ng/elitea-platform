@@ -62,7 +62,10 @@ export function useApplicationsData(
     {},
     { query: { enabled: projectId !== undefined && isPublicProject } },
   );
-  const latestList = latestQuery.data?.data;
+  // A resolved envelope is the 200 (eliteaFetch throws otherwise); the status
+  // check selects it from the union, which names the native-client 400/426.
+  const latestListEnvelope = latestQuery.data;
+  const latestList = latestListEnvelope?.status === 200 ? latestListEnvelope.data : undefined;
 
   const applicationsQuery = useListApplications(
     projectId ?? '',

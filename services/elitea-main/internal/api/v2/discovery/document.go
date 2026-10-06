@@ -20,7 +20,7 @@ const Path = "/.well-known/elitea-client"
 
 // ClientContract is the client contract version this server speaks
 // (ADR-0025 decision 6). WP5 adds the contract lock that pins it.
-const ClientContract = "1.2"
+const ClientContract = "1.3"
 
 // Deployment kinds (ADR-0025 decision 1). The value is process configuration
 // (ELITEA_DEPLOYMENT_KIND), not an admin setting: it states who operates the
@@ -107,12 +107,28 @@ type PublicPolicy struct {
 	// means none. A client's entry in Document.MinClientVersion, when present,
 	// is its effective minimum and is never lower than this.
 	MinClientVersion string `json:"min_client_version"`
+
+	// The data controls (client contract 1.3), the same values as the token
+	// response's client_policy. They are public so that a part of the app
+	// that runs without a token (a share extension, a widget) obeys them.
+	AllowShareOut            bool   `json:"allow_share_out"`
+	AllowShareIn             bool   `json:"allow_share_in"`
+	AllowCloudSTT            bool   `json:"allow_cloud_stt"`
+	NotificationPreview      string `json:"notification_preview"`
+	AllowNotificationActions bool   `json:"allow_notification_actions"`
+	AllowSystemSurfaces      bool   `json:"allow_system_surfaces"`
 }
 
-// DefaultPublicPolicy is the subset served until the native_client_policy
-// section exists (WP4): no device lock, offline allowed, no minimum.
+// DefaultPublicPolicy is the subset served without a policy source: no device
+// lock, offline allowed, no minimum, and the data-control defaults of
+// platformconfig.DefaultNativeClientPolicy (TestDefaultPublicPolicyMatchesThePlatformDefault
+// in internal/api ties the two together).
 func DefaultPublicPolicy() PublicPolicy {
-	return PublicPolicy{RequireDeviceLock: false, OfflineEnabled: true, MinClientVersion: ""}
+	return PublicPolicy{
+		RequireDeviceLock: false, OfflineEnabled: true, MinClientVersion: "",
+		AllowShareOut: true, AllowShareIn: true, AllowCloudSTT: false,
+		NotificationPreview: "none", AllowNotificationActions: true, AllowSystemSurfaces: false,
+	}
 }
 
 // MajorMinor reduces a build version ("v1.62.3", "1.62.0-rc.1") to

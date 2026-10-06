@@ -46,7 +46,10 @@ export function usePipelinesData(projectId: string | undefined, hasAdminPermissi
     {},
     { query: { enabled: projectId !== undefined && isPublicProject } },
   );
-  const latestWire = latestQuery.data?.data;
+  // A resolved envelope is the 200 (eliteaFetch throws otherwise); the status
+  // check selects it from the union, which names the native-client 400/426.
+  const latestWireEnvelope = latestQuery.data;
+  const latestWire = latestWireEnvelope?.status === 200 ? latestWireEnvelope.data : undefined;
   const latestTotal = useMemo(() => {
     if (latestWire === undefined) return undefined;
     return normaliseAppPage(latestWire).rows.filter((app) => app.agentType === 'pipeline').length;

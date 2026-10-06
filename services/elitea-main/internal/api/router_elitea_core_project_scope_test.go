@@ -158,7 +158,9 @@ var eliteaCoreProjectScopedRoutes = []eliteaCoreProjectScopedRoute{
 	{http.MethodPost, "/api/v2/elitea_core/participants/prompt_lib/7/1", "/api/v2/elitea_core/participants/prompt_lib/8/1", "models.chat.participants.create"},
 	{http.MethodDelete, "/api/v2/elitea_core/participant/prompt_lib/7/1/2", "/api/v2/elitea_core/participant/prompt_lib/8/1/2", "models.chat.participant.delete"},
 	{http.MethodPut, "/api/v2/elitea_core/entity_settings/prompt_lib/7/1/2", "/api/v2/elitea_core/entity_settings/prompt_lib/8/1/2", "models.chat.entity_settings.update"},
-	{http.MethodPost, "/api/v2/elitea_core/regenerate/prompt_lib/7/1", "/api/v2/elitea_core/regenerate/prompt_lib/8/1", "models.chat.conversations.regenerate"},
+	// No regenerate row: the conversations group no longer mounts a stub on
+	// it. The reviewed regeneration declares the same permission
+	// (agentexecution.CurrentRegenerationPermission, pinned in its route_test).
 	{http.MethodPost, "/api/v2/elitea_core/canvases/prompt_lib/7", "/api/v2/elitea_core/canvases/prompt_lib/8", "models.chat.canvas.create"},
 	{http.MethodGet, "/api/v2/elitea_core/canvas/prompt_lib/7/1", "/api/v2/elitea_core/canvas/prompt_lib/8/1", "models.chat.canvas.details"},
 	{http.MethodPut, "/api/v2/elitea_core/canvas/prompt_lib/7/1", "/api/v2/elitea_core/canvas/prompt_lib/8/1", "models.chat.canvas.update"},

@@ -104,3 +104,67 @@ func TestNotificationChangesArePerUserAndCarryMarkSeenAndDeletes(t *testing.T) {
 		t.Fatalf("back-dated cursor: err = %v, want ErrCursorExpired", err)
 	}
 }
+
+// TestNotificationBulkDeleteReachesTheDeltaAsTombstones — client contract 1.3
+// tags deleteNotifications, and a swipe-dismissed item must not come back on
+// the caller's other devices: every row the bulk delete removes is a
+// `deleted` tombstone in the caller's delta, and an id that is another user's
+// is neither deleted nor told to this caller.
+func TestNotificationBulkDeleteReachesTheDeltaAsTombstones(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	insert := func(user int) int64 {
+		var id int64
+		if err := pool.QueryRow(ctx, `INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
+			VALUES (gen_random_uuid(), FALSE, 1, $1, '{}'::jsonb, 'test') RETURNING id`, user).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		backdate(t, pool, "centry.notifications", id, time.Hour)
+		return id
+	}
+	first, second, kept, theirs := insert(42), insert(42), insert(42), insert(77)
+
+	repository, err := NewCurrentNotificationRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full, err := repository.ListChanges(ctx, 42, "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(full.Rows) != 3 {
+		t.Fatalf("full sync rows = %+v, want user 42's three notifications", full.Rows)
+	}
+
+	deleted, err := repository.BulkDelete(ctx, 42, []int64{first, second, theirs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 2 {
+		t.Fatalf("bulk delete removed %d rows, want 2 (another user's id is skipped)", deleted)
+	}
+	delta, err := repository.ListChanges(ctx, 42, full.NextCursor, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tombstoned := map[int64]string{}
+	for _, tombstone := range delta.Tombstones {
+		tombstoned[tombstone.ID] = tombstone.Reason
+	}
+	if len(tombstoned) != 2 || tombstoned[first] != changesync.ReasonDeleted || tombstoned[second] != changesync.ReasonDeleted {
+		t.Fatalf("tombstones = %+v, want deleted tombstones for %d and %d only", delta.Tombstones, first, second)
+	}
+	if _, ok := tombstoned[kept]; ok {
+		t.Fatalf("the kept notification %d was tombstoned", kept)
+	}
+
+	var stillThere bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM centry.notifications WHERE id = $1)`, theirs).Scan(&stillThere); err != nil {
+		t.Fatal(err)
+	}
+	if !stillThere {
+		t.Fatal("another user's notification was deleted")
+	}
+}

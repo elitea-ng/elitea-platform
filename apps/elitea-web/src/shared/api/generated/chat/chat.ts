@@ -1634,6 +1634,11 @@ export type exportConversationResponse404 = {
   status: 404;
 };
 
+export type exportConversationResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type exportConversationResponse500 = {
   data: N500Response;
   status: 500;
@@ -1650,6 +1655,7 @@ export type exportConversationResponseError = (
   | exportConversationResponse401
   | exportConversationResponse403
   | exportConversationResponse404
+  | exportConversationResponse426
   | exportConversationResponse500
 ) & {
   headers: Headers;
@@ -1723,7 +1729,12 @@ export const getExportConversationQueryKey = (
 export const getExportConversationQueryOptions = <
   TData = Awaited<ReturnType<typeof exportConversation>>,
   TError =
-    ErrorResponse | N401Response | N403Response | N404Response | N500Response,
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -1773,12 +1784,22 @@ export type ExportConversationQueryResult = NonNullable<
   Awaited<ReturnType<typeof exportConversation>>
 >;
 export type ExportConversationQueryError =
-  ErrorResponse | N401Response | N403Response | N404Response | N500Response;
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useExportConversation<
   TData = Awaited<ReturnType<typeof exportConversation>>,
   TError =
-    ErrorResponse | N401Response | N403Response | N404Response | N500Response,
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -1808,7 +1829,12 @@ export function useExportConversation<
 export function useExportConversation<
   TData = Awaited<ReturnType<typeof exportConversation>>,
   TError =
-    ErrorResponse | N401Response | N403Response | N404Response | N500Response,
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -1838,7 +1864,12 @@ export function useExportConversation<
 export function useExportConversation<
   TData = Awaited<ReturnType<typeof exportConversation>>,
   TError =
-    ErrorResponse | N401Response | N403Response | N404Response | N500Response,
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -1864,7 +1895,12 @@ export function useExportConversation<
 export function useExportConversation<
   TData = Awaited<ReturnType<typeof exportConversation>>,
   TError =
-    ErrorResponse | N401Response | N403Response | N404Response | N500Response,
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   conversationId: string,
@@ -4853,6 +4889,292 @@ export function useSendChatMessage<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type cancelChatExecutionResponse204 = {
+  data: void;
+  status: 204;
+};
+
+export type cancelChatExecutionResponse400 = {
+  data: ErrorResponse;
+  status: 400;
+};
+
+export type cancelChatExecutionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type cancelChatExecutionResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type cancelChatExecutionResponse409 = {
+  data: ErrorResponse;
+  status: 409;
+};
+
+export type cancelChatExecutionResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type cancelChatExecutionResponse502 = {
+  data: ErrorResponse;
+  status: 502;
+};
+
+export type cancelChatExecutionResponse504 = {
+  data: ErrorResponse;
+  status: 504;
+};
+
+export type cancelChatExecutionResponseSuccess =
+  cancelChatExecutionResponse204 & {
+    headers: Headers;
+  };
+export type cancelChatExecutionResponseError = (
+  | cancelChatExecutionResponse400
+  | cancelChatExecutionResponse401
+  | cancelChatExecutionResponse403
+  | cancelChatExecutionResponse409
+  | cancelChatExecutionResponse426
+  | cancelChatExecutionResponse502
+  | cancelChatExecutionResponse504
+) & {
+  headers: Headers;
+};
+
+export type cancelChatExecutionResponse =
+  cancelChatExecutionResponseSuccess | cancelChatExecutionResponseError;
+
+export const getCancelChatExecutionUrl = (
+  projectId: string,
+  responseMessageId: string,
+) => {
+  return `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}`;
+};
+
+/**
+ * Client contract 1.3. Stops the turn that is writing this answer: the
+ * execution's desired state becomes CANCELLED, which both workers
+ * observe (the Python worker on its next lease poll or output
+ * acknowledgement, after any synchronous SDK step already running; the
+ * Rust worker through its lease monitor, which stops the model run) and
+ * settle as cancelled. Dropping the stream alone does
+ * NOT stop the run; it keeps spending the budget.
+ *
+ * What happens to the answer: a turn stopped before any output is
+ * removed together with its question; a turn with partial output keeps
+ * what was written. After a 204, close the stream and reload the
+ * transcript rather than waiting for a terminal frame.
+ *
+ * Only the conversation's author, or the user who asked the question,
+ * may stop it (internal/api/v2/agentexecution/cancel.go).
+ *
+ * Idempotent for the same caller: stopping an answer that this caller
+ * already stopped answers 204 again, also after the run has settled.
+ * An answer that completed (or failed) on its own, one that is not this
+ * caller's, or one that does not exist answers 409 without saying
+ * which; for a completed answer the transcript already holds it.
+ * @summary Stop a running answer on the server
+ */
+export const cancelChatExecution = async (
+  projectId: string,
+  responseMessageId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<cancelChatExecutionResponse> => {
+  return eliteaFetch<cancelChatExecutionResponse>(
+    getCancelChatExecutionUrl(projectId, responseMessageId),
+    {
+      ...options,
+      method: "DELETE",
+    },
+  );
+};
+
+export const getCancelChatExecutionQueryKey = (
+  projectId: string,
+  responseMessageId: string,
+) => {
+  return [
+    "DELETE",
+    `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}`,
+  ] as const;
+};
+
+export const getCancelChatExecutionQueryOptions = <
+  TData = Awaited<ReturnType<typeof cancelChatExecution>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelChatExecution>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCancelChatExecutionQueryKey(projectId, responseMessageId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof cancelChatExecution>>
+  > = ({ signal }) =>
+    cancelChatExecution(projectId, responseMessageId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      responseMessageId !== null &&
+      responseMessageId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof cancelChatExecution>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CancelChatExecutionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof cancelChatExecution>>
+>;
+export type CancelChatExecutionQueryError =
+  ErrorResponse | N401Response | N403Response | ClientUpgradeRequiredResponse;
+
+export function useCancelChatExecution<
+  TData = Awaited<ReturnType<typeof cancelChatExecution>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelChatExecution>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof cancelChatExecution>>,
+          TError,
+          Awaited<ReturnType<typeof cancelChatExecution>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCancelChatExecution<
+  TData = Awaited<ReturnType<typeof cancelChatExecution>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelChatExecution>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof cancelChatExecution>>,
+          TError,
+          Awaited<ReturnType<typeof cancelChatExecution>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCancelChatExecution<
+  TData = Awaited<ReturnType<typeof cancelChatExecution>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelChatExecution>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Stop a running answer on the server
+ */
+
+export function useCancelChatExecution<
+  TData = Awaited<ReturnType<typeof cancelChatExecution>>,
+  TError =
+    ErrorResponse | N401Response | N403Response | ClientUpgradeRequiredResponse,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof cancelChatExecution>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCancelChatExecutionQueryOptions(
+    projectId,
+    responseMessageId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type regenerateChatMessageResponse200 = {
   data: ChatExecutionStarted;
   status: 200;
@@ -7230,6 +7552,11 @@ export type listMemoriesResponse200 = {
   status: 200;
 };
 
+export type listMemoriesResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type listMemoriesResponse401 = {
   data: N401Response;
   status: 401;
@@ -7238,6 +7565,11 @@ export type listMemoriesResponse401 = {
 export type listMemoriesResponse403 = {
   data: N403Response;
   status: 403;
+};
+
+export type listMemoriesResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type listMemoriesResponse500 = {
@@ -7249,7 +7581,11 @@ export type listMemoriesResponseSuccess = listMemoriesResponse200 & {
   headers: Headers;
 };
 export type listMemoriesResponseError = (
-  listMemoriesResponse401 | listMemoriesResponse403 | listMemoriesResponse500
+  | listMemoriesResponse400
+  | listMemoriesResponse401
+  | listMemoriesResponse403
+  | listMemoriesResponse426
+  | listMemoriesResponse500
 ) & {
   headers: Headers;
 };
@@ -7310,7 +7646,12 @@ export const getListMemoriesQueryKey = (
 
 export const getListMemoriesQueryOptions = <
   TData = Awaited<ReturnType<typeof listMemories>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListMemoriesParams,
@@ -7345,11 +7686,21 @@ export const getListMemoriesQueryOptions = <
 export type ListMemoriesQueryResult = NonNullable<
   Awaited<ReturnType<typeof listMemories>>
 >;
-export type ListMemoriesQueryError = N401Response | N403Response | N500Response;
+export type ListMemoriesQueryError =
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useListMemories<
   TData = Awaited<ReturnType<typeof listMemories>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params: undefined | ListMemoriesParams,
@@ -7373,7 +7724,12 @@ export function useListMemories<
 };
 export function useListMemories<
   TData = Awaited<ReturnType<typeof listMemories>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListMemoriesParams,
@@ -7397,7 +7753,12 @@ export function useListMemories<
 };
 export function useListMemories<
   TData = Awaited<ReturnType<typeof listMemories>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListMemoriesParams,
@@ -7417,7 +7778,12 @@ export function useListMemories<
 
 export function useListMemories<
   TData = Awaited<ReturnType<typeof listMemories>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: ListMemoriesParams,
@@ -7688,6 +8054,11 @@ export type clearMemoriesResponse200 = {
   status: 200;
 };
 
+export type clearMemoriesResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type clearMemoriesResponse401 = {
   data: N401Response;
   status: 401;
@@ -7696,6 +8067,11 @@ export type clearMemoriesResponse401 = {
 export type clearMemoriesResponse403 = {
   data: N403Response;
   status: 403;
+};
+
+export type clearMemoriesResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type clearMemoriesResponse500 = {
@@ -7707,7 +8083,11 @@ export type clearMemoriesResponseSuccess = clearMemoriesResponse200 & {
   headers: Headers;
 };
 export type clearMemoriesResponseError = (
-  clearMemoriesResponse401 | clearMemoriesResponse403 | clearMemoriesResponse500
+  | clearMemoriesResponse400
+  | clearMemoriesResponse401
+  | clearMemoriesResponse403
+  | clearMemoriesResponse426
+  | clearMemoriesResponse500
 ) & {
   headers: Headers;
 };
@@ -7741,7 +8121,12 @@ export const getClearMemoriesQueryKey = (projectId: string) => {
 
 export const getClearMemoriesQueryOptions = <
   TData = Awaited<ReturnType<typeof clearMemories>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   options?: {
@@ -7776,11 +8161,20 @@ export type ClearMemoriesQueryResult = NonNullable<
   Awaited<ReturnType<typeof clearMemories>>
 >;
 export type ClearMemoriesQueryError =
-  N401Response | N403Response | N500Response;
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useClearMemories<
   TData = Awaited<ReturnType<typeof clearMemories>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   options: {
@@ -7803,7 +8197,12 @@ export function useClearMemories<
 };
 export function useClearMemories<
   TData = Awaited<ReturnType<typeof clearMemories>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   options?: {
@@ -7826,7 +8225,12 @@ export function useClearMemories<
 };
 export function useClearMemories<
   TData = Awaited<ReturnType<typeof clearMemories>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   options?: {
@@ -7845,7 +8249,12 @@ export function useClearMemories<
 
 export function useClearMemories<
   TData = Awaited<ReturnType<typeof clearMemories>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   options?: {
@@ -8138,6 +8547,11 @@ export type deleteMemoryResponse204 = {
   status: 204;
 };
 
+export type deleteMemoryResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type deleteMemoryResponse401 = {
   data: N401Response;
   status: 401;
@@ -8146,6 +8560,11 @@ export type deleteMemoryResponse401 = {
 export type deleteMemoryResponse403 = {
   data: N403Response;
   status: 403;
+};
+
+export type deleteMemoryResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type deleteMemoryResponse500 = {
@@ -8157,7 +8576,11 @@ export type deleteMemoryResponseSuccess = deleteMemoryResponse204 & {
   headers: Headers;
 };
 export type deleteMemoryResponseError = (
-  deleteMemoryResponse401 | deleteMemoryResponse403 | deleteMemoryResponse500
+  | deleteMemoryResponse400
+  | deleteMemoryResponse401
+  | deleteMemoryResponse403
+  | deleteMemoryResponse426
+  | deleteMemoryResponse500
 ) & {
   headers: Headers;
 };
@@ -8203,7 +8626,12 @@ export const getDeleteMemoryQueryKey = (
 
 export const getDeleteMemoryQueryOptions = <
   TData = Awaited<ReturnType<typeof deleteMemory>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryId: string,
@@ -8242,11 +8670,21 @@ export const getDeleteMemoryQueryOptions = <
 export type DeleteMemoryQueryResult = NonNullable<
   Awaited<ReturnType<typeof deleteMemory>>
 >;
-export type DeleteMemoryQueryError = N401Response | N403Response | N500Response;
+export type DeleteMemoryQueryError =
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useDeleteMemory<
   TData = Awaited<ReturnType<typeof deleteMemory>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryId: string,
@@ -8270,7 +8708,12 @@ export function useDeleteMemory<
 };
 export function useDeleteMemory<
   TData = Awaited<ReturnType<typeof deleteMemory>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryId: string,
@@ -8294,7 +8737,12 @@ export function useDeleteMemory<
 };
 export function useDeleteMemory<
   TData = Awaited<ReturnType<typeof deleteMemory>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryId: string,
@@ -8314,7 +8762,12 @@ export function useDeleteMemory<
 
 export function useDeleteMemory<
   TData = Awaited<ReturnType<typeof deleteMemory>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   memoryId: string,
@@ -8347,6 +8800,11 @@ export type getMessageFeedbackResponse200 = {
   status: 200;
 };
 
+export type getMessageFeedbackResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type getMessageFeedbackResponse401 = {
   data: N401Response;
   status: 401;
@@ -8355,6 +8813,11 @@ export type getMessageFeedbackResponse401 = {
 export type getMessageFeedbackResponse403 = {
   data: N403Response;
   status: 403;
+};
+
+export type getMessageFeedbackResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type getMessageFeedbackResponse500 = {
@@ -8367,8 +8830,10 @@ export type getMessageFeedbackResponseSuccess =
     headers: Headers;
   };
 export type getMessageFeedbackResponseError = (
+  | getMessageFeedbackResponse400
   | getMessageFeedbackResponse401
   | getMessageFeedbackResponse403
+  | getMessageFeedbackResponse426
   | getMessageFeedbackResponse500
 ) & {
   headers: Headers;
@@ -8416,7 +8881,12 @@ export const getGetMessageFeedbackQueryKey = (
 
 export const getGetMessageFeedbackQueryOptions = <
   TData = Awaited<ReturnType<typeof getMessageFeedback>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -8462,11 +8932,20 @@ export type GetMessageFeedbackQueryResult = NonNullable<
   Awaited<ReturnType<typeof getMessageFeedback>>
 >;
 export type GetMessageFeedbackQueryError =
-  N401Response | N403Response | N500Response;
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useGetMessageFeedback<
   TData = Awaited<ReturnType<typeof getMessageFeedback>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -8494,7 +8973,12 @@ export function useGetMessageFeedback<
 };
 export function useGetMessageFeedback<
   TData = Awaited<ReturnType<typeof getMessageFeedback>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -8522,7 +9006,12 @@ export function useGetMessageFeedback<
 };
 export function useGetMessageFeedback<
   TData = Awaited<ReturnType<typeof getMessageFeedback>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -8546,7 +9035,12 @@ export function useGetMessageFeedback<
 
 export function useGetMessageFeedback<
   TData = Awaited<ReturnType<typeof getMessageFeedback>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -8603,6 +9097,11 @@ export type setMessageFeedbackResponse404 = {
   status: 404;
 };
 
+export type setMessageFeedbackResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type setMessageFeedbackResponse500 = {
   data: N500Response;
   status: 500;
@@ -8617,6 +9116,7 @@ export type setMessageFeedbackResponseError = (
   | setMessageFeedbackResponse401
   | setMessageFeedbackResponse403
   | setMessageFeedbackResponse404
+  | setMessageFeedbackResponse426
   | setMessageFeedbackResponse500
 ) & {
   headers: Headers;
@@ -8695,7 +9195,12 @@ export const getSetMessageFeedbackQueryKey = (
 
 export const getSetMessageFeedbackQueryOptions = <
   TData = Awaited<ReturnType<typeof setMessageFeedback>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -8745,11 +9250,20 @@ export type SetMessageFeedbackQueryResult = NonNullable<
   Awaited<ReturnType<typeof setMessageFeedback>>
 >;
 export type SetMessageFeedbackQueryError =
-  ErrorResponse | N401Response | N403Response | N500Response;
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useSetMessageFeedback<
   TData = Awaited<ReturnType<typeof setMessageFeedback>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -8778,7 +9292,12 @@ export function useSetMessageFeedback<
 };
 export function useSetMessageFeedback<
   TData = Awaited<ReturnType<typeof setMessageFeedback>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -8807,7 +9326,12 @@ export function useSetMessageFeedback<
 };
 export function useSetMessageFeedback<
   TData = Awaited<ReturnType<typeof setMessageFeedback>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -8832,7 +9356,12 @@ export function useSetMessageFeedback<
 
 export function useSetMessageFeedback<
   TData = Awaited<ReturnType<typeof setMessageFeedback>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -8871,6 +9400,11 @@ export type deleteMessageFeedbackResponse200 = {
   status: 200;
 };
 
+export type deleteMessageFeedbackResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type deleteMessageFeedbackResponse401 = {
   data: N401Response;
   status: 401;
@@ -8879,6 +9413,11 @@ export type deleteMessageFeedbackResponse401 = {
 export type deleteMessageFeedbackResponse403 = {
   data: N403Response;
   status: 403;
+};
+
+export type deleteMessageFeedbackResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type deleteMessageFeedbackResponse500 = {
@@ -8891,8 +9430,10 @@ export type deleteMessageFeedbackResponseSuccess =
     headers: Headers;
   };
 export type deleteMessageFeedbackResponseError = (
+  | deleteMessageFeedbackResponse400
   | deleteMessageFeedbackResponse401
   | deleteMessageFeedbackResponse403
+  | deleteMessageFeedbackResponse426
   | deleteMessageFeedbackResponse500
 ) & {
   headers: Headers;
@@ -8940,7 +9481,12 @@ export const getDeleteMessageFeedbackQueryKey = (
 
 export const getDeleteMessageFeedbackQueryOptions = <
   TData = Awaited<ReturnType<typeof deleteMessageFeedback>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -8986,11 +9532,20 @@ export type DeleteMessageFeedbackQueryResult = NonNullable<
   Awaited<ReturnType<typeof deleteMessageFeedback>>
 >;
 export type DeleteMessageFeedbackQueryError =
-  N401Response | N403Response | N500Response;
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useDeleteMessageFeedback<
   TData = Awaited<ReturnType<typeof deleteMessageFeedback>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -9018,7 +9573,12 @@ export function useDeleteMessageFeedback<
 };
 export function useDeleteMessageFeedback<
   TData = Awaited<ReturnType<typeof deleteMessageFeedback>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -9046,7 +9606,12 @@ export function useDeleteMessageFeedback<
 };
 export function useDeleteMessageFeedback<
   TData = Awaited<ReturnType<typeof deleteMessageFeedback>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,
@@ -9070,7 +9635,12 @@ export function useDeleteMessageFeedback<
 
 export function useDeleteMessageFeedback<
   TData = Awaited<ReturnType<typeof deleteMessageFeedback>>,
-  TError = N401Response | N403Response | N500Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   messageId: string,

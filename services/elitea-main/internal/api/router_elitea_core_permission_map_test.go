@@ -61,6 +61,10 @@ var reviewedRoutePermissions = []string{
 	// listed here so both invariants above cover it: the catalogue check proves
 	// pylon declares it, and the grant check proves shared/0120 seeds it.
 	agentexecutionapi.CurrentApplicationTaskStatusPermission,
+	// Client contract 1.3 removed the conversations group's stub regenerate
+	// from router.go; the reviewed agent-execution regeneration is the only
+	// route that declares `models.chat.conversations.regenerate` now.
+	agentexecutionapi.CurrentRegenerationPermission,
 }
 
 // projectPermissionCall matches the router's own gate helper, including the

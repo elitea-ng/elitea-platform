@@ -54,6 +54,7 @@ import type {
 
 import type {
   BudgetWrite,
+  ClientUpgradeRequiredResponse,
   ErrorResponse,
   GetProjectUsageParams,
   ListProjectBudgetsParams,
@@ -111,6 +112,11 @@ export type getProjectBudgetResponse403 = {
   status: 403;
 };
 
+export type getProjectBudgetResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type getProjectBudgetResponse500 = {
   data: N500Response;
   status: 500;
@@ -123,6 +129,7 @@ export type getProjectBudgetResponseError = (
   | getProjectBudgetResponse400
   | getProjectBudgetResponse401
   | getProjectBudgetResponse403
+  | getProjectBudgetResponse426
   | getProjectBudgetResponse500
 ) & {
   headers: Headers;
@@ -187,7 +194,12 @@ export const getGetProjectBudgetQueryKey = (projectId: string) => {
 
 export const getGetProjectBudgetQueryOptions = <
   TData = Awaited<ReturnType<typeof getProjectBudget>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   options?: {
@@ -227,11 +239,20 @@ export type GetProjectBudgetQueryResult = NonNullable<
   Awaited<ReturnType<typeof getProjectBudget>>
 >;
 export type GetProjectBudgetQueryError =
-  N400Response | N401Response | N403Response | N500Response;
+  | N400Response
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useGetProjectBudget<
   TData = Awaited<ReturnType<typeof getProjectBudget>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   options: {
@@ -258,7 +279,12 @@ export function useGetProjectBudget<
 };
 export function useGetProjectBudget<
   TData = Awaited<ReturnType<typeof getProjectBudget>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   options?: {
@@ -285,7 +311,12 @@ export function useGetProjectBudget<
 };
 export function useGetProjectBudget<
   TData = Awaited<ReturnType<typeof getProjectBudget>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   options?: {
@@ -308,7 +339,12 @@ export function useGetProjectBudget<
 
 export function useGetProjectBudget<
   TData = Awaited<ReturnType<typeof getProjectBudget>>,
-  TError = N400Response | N401Response | N403Response | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   options?: {
@@ -1316,6 +1352,11 @@ export type getMemberBudgetResponse403 = {
   status: 403;
 };
 
+export type getMemberBudgetResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type getMemberBudgetResponse500 = {
   data: N500Response;
   status: 500;
@@ -1328,6 +1369,7 @@ export type getMemberBudgetResponseError = (
   | getMemberBudgetResponse400
   | getMemberBudgetResponse401
   | getMemberBudgetResponse403
+  | getMemberBudgetResponse426
   | getMemberBudgetResponse500
 ) & {
   headers: Headers;
@@ -1375,7 +1417,12 @@ export const getGetMemberBudgetQueryKey = (
 
 export const getGetMemberBudgetQueryOptions = <
   TData = Awaited<ReturnType<typeof getMemberBudget>>,
-  TError = N400Response | N401Response | ErrorResponse | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   userId: number,
@@ -1419,11 +1466,20 @@ export type GetMemberBudgetQueryResult = NonNullable<
   Awaited<ReturnType<typeof getMemberBudget>>
 >;
 export type GetMemberBudgetQueryError =
-  N400Response | N401Response | ErrorResponse | N500Response;
+  | N400Response
+  | N401Response
+  | ErrorResponse
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useGetMemberBudget<
   TData = Awaited<ReturnType<typeof getMemberBudget>>,
-  TError = N400Response | N401Response | ErrorResponse | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   userId: number,
@@ -1451,7 +1507,12 @@ export function useGetMemberBudget<
 };
 export function useGetMemberBudget<
   TData = Awaited<ReturnType<typeof getMemberBudget>>,
-  TError = N400Response | N401Response | ErrorResponse | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   userId: number,
@@ -1479,7 +1540,12 @@ export function useGetMemberBudget<
 };
 export function useGetMemberBudget<
   TData = Awaited<ReturnType<typeof getMemberBudget>>,
-  TError = N400Response | N401Response | ErrorResponse | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   userId: number,
@@ -1503,7 +1569,12 @@ export function useGetMemberBudget<
 
 export function useGetMemberBudget<
   TData = Awaited<ReturnType<typeof getMemberBudget>>,
-  TError = N400Response | N401Response | ErrorResponse | N500Response,
+  TError =
+    | N400Response
+    | N401Response
+    | ErrorResponse
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   userId: number,
@@ -2756,6 +2827,11 @@ export type getProjectUsageResponse403 = {
   status: 403;
 };
 
+export type getProjectUsageResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type getProjectUsageResponse500 = {
   data: N500Response;
   status: 500;
@@ -2768,6 +2844,7 @@ export type getProjectUsageResponseError = (
   | getProjectUsageResponse400
   | getProjectUsageResponse401
   | getProjectUsageResponse403
+  | getProjectUsageResponse426
   | getProjectUsageResponse500
 ) & {
   headers: Headers;
@@ -2847,7 +2924,12 @@ export const getGetProjectUsageQueryKey = (
 
 export const getGetProjectUsageQueryOptions = <
   TData = Awaited<ReturnType<typeof getProjectUsage>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: GetProjectUsageParams,
@@ -2887,11 +2969,20 @@ export type GetProjectUsageQueryResult = NonNullable<
   Awaited<ReturnType<typeof getProjectUsage>>
 >;
 export type GetProjectUsageQueryError =
-  ErrorResponse | N401Response | N403Response | N500Response;
+  | ErrorResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
 
 export function useGetProjectUsage<
   TData = Awaited<ReturnType<typeof getProjectUsage>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params: undefined | GetProjectUsageParams,
@@ -2919,7 +3010,12 @@ export function useGetProjectUsage<
 };
 export function useGetProjectUsage<
   TData = Awaited<ReturnType<typeof getProjectUsage>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: GetProjectUsageParams,
@@ -2947,7 +3043,12 @@ export function useGetProjectUsage<
 };
 export function useGetProjectUsage<
   TData = Awaited<ReturnType<typeof getProjectUsage>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: GetProjectUsageParams,
@@ -2971,7 +3072,12 @@ export function useGetProjectUsage<
 
 export function useGetProjectUsage<
   TData = Awaited<ReturnType<typeof getProjectUsage>>,
-  TError = ErrorResponse | N401Response | N403Response | N500Response,
+  TError =
+    | ErrorResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
 >(
   projectId: string,
   params?: GetProjectUsageParams,
