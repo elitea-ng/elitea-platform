@@ -86,6 +86,28 @@ if grep -q 'lagThreshold:' "$work/on.yaml" && ! grep -q 'pendingEntriesCount:' "
 else
   fail "the trigger does not measure JetStream consumer lag"
 fi
+# KEDA's metric is num_pending + num_ack_pending (v2.10..v2.21 getMaxMsgLag),
+# so the default threshold is one replica's in-flight share.
+want_lag=$(grep -o '"delivery_max_concurrency":[0-9]*' "$work/on.yaml" | head -1 | cut -d: -f2)
+got_lag=$(awk '/type: nats-jetstream/{f=1} f && /^ *lagThreshold:/{gsub(/.*lagThreshold: "|"/,""); print; exit}' "$work/on.yaml")
+if [ -n "$want_lag" ] && [ "$got_lag" = "$want_lag" ]; then
+  pass "the default lagThreshold is one replica's delivery_max_concurrency ($got_lag)"
+else
+  fail "lagThreshold is '$got_lag', want delivery_max_concurrency '$want_lag' (KEDA counts pulled-but-unacked work too)"
+fi
+if helm template ac "$CHART" "${BASE[@]}" "${KEDA[@]}" --set worker.autoscaling.enabled=true \
+     --set-string worker.autoscaling.lagThreshold=500 >/dev/null 2>&1; then
+  fail "a lagThreshold above one replica's in-flight capacity rendered"
+else
+  pass "a lagThreshold above one replica's in-flight capacity is refused"
+fi
+# The HA fallback builds <server_name>.<endpoint host>: only the headless
+# service has those pod DNS names.
+if grep -qE 'natsServerMonitoringEndpoint: "elitea-nats-headless\.[^"]+:8222"' "$work/on.yaml"; then
+  pass "the scaler reads the headless NATS service (per-node /jsz on a cluster)"
+else
+  fail "the scaler's endpoint is not the headless NATS service; on the HA cluster KEDA cannot reach the consumer leader by name"
+fi
 if grep -qE 'natsServerMonitoringEndpoint: "[^"]+:8222"' "$work/on.yaml"; then
   pass "the scaler reads the NATS monitoring port"
 else

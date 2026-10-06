@@ -34,7 +34,33 @@
 {{- if lt (int $a.maxReplicas) (int $a.minReplicas) }}
 {{- fail (printf "worker.autoscaling.maxReplicas (%d) is below minReplicas (%d)." (int $a.maxReplicas) (int $a.minReplicas)) }}
 {{- end }}
-{{- $endpoint := $a.natsMonitoringEndpoint | default (printf "%s:8222" (include "elitea.serviceHost" (dict "svc" .Values.nats "ctx" .))) }}
+{{- /*
+  The monitoring endpoint defaults to the NATS chart's HEADLESS service. On a
+  single server either name works. On the HA cluster the scaler must reach the
+  CONSUMER LEADER's /jsz (a follower reports its own, stale view): it reads
+  /varz connect_urls and queries each advertised node, and when a server
+  advertises none it falls back to <server_name>.<endpoint host> — a pod DNS
+  name that resolves only under the headless service (KEDA
+  pkg/scalers/nats_jetstream_scaler.go getNATSJetStreamMonitoringNodeURLByNode).
+*/}}
+{{- $headless := dict "service" (printf "%s-headless" .Values.nats.service) "namespace" .Values.nats.namespace -}}
+{{- $endpoint := $a.natsMonitoringEndpoint | default (printf "%s:8222" (include "elitea.serviceHost" (dict "svc" $headless "ctx" .))) }}
+{{- /*
+  The target per replica. KEDA's metric is num_pending + num_ack_pending of
+  the durable (KEDA v2.10 through v2.21, getMaxMsgLag): the backlog PLUS every
+  command a replica has pulled and not yet acked. A worker pulls only for its
+  free delivery slots plus at most nats_fetch_batch of prefetch, so one
+  replica's share of that metric is about delivery_max_concurrency; that is
+  the default threshold, and the fleet KEDA asks for is "enough replicas to
+  run everything that is waiting or running". A threshold above what one
+  replica can hold means the backlog waits while KEDA thinks it is covered.
+*/}}
+{{- $limits := .Values.worker.runtime.limits -}}
+{{- $perReplica := add (int $limits.delivery_max_concurrency) (int $limits.nats_fetch_batch) -}}
+{{- $lag := int ($a.lagThreshold | default $limits.delivery_max_concurrency) -}}
+{{- if or (lt $lag 1) (gt $lag (int $perReplica)) }}
+{{- fail (printf "worker.autoscaling.lagThreshold (%d) must be between 1 and what one replica holds in flight, delivery_max_concurrency + nats_fetch_batch (%d). KEDA's metric counts pulled-but-unacked commands too, so a higher threshold leaves a backlog waiting while the fleet looks sized." $lag (int $perReplica)) }}
+{{- end }}
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -62,8 +88,8 @@ spec:
           stabilizationWindowSeconds: {{ $a.cooldownSeconds }}
   triggers:
     # The worker's own durable consumer on the command bus
-    # (docs/runtime-command-bus.md). The scaler reads /jsz on the NATS
-    # monitoring port — plain HTTP, no credential, so no
+    # (docs/runtime-command-bus.md). The scaler reads /jsz (and, on a
+    # cluster, /varz) on the NATS monitoring port — plain HTTP, no credential, so no
     # TriggerAuthentication; deploy/helm/nats admits the KEDA operator there
     # (networkPolicy.monitoringFrom).
     - type: nats-jetstream
@@ -75,10 +101,10 @@ spec:
         # cannot watch a different stream or durable than the fleet pulls.
         stream: {{ .Values.worker.runtime.natsStream | quote }}
         consumer: {{ .Values.worker.runtime.natsConsumer | quote }}
-        # Consumer LAG (num_pending: published, not yet delivered), not the
-        # old Redis pending-entries count (delivered, not yet acked). Work a
-        # replica already holds no longer counts toward the target.
-        lagThreshold: {{ $a.lagThreshold | quote }}
+        # KEDA's metric is num_pending + num_ack_pending: commands waiting
+        # AND commands a replica holds (running, or in its small prefetch).
+        # The threshold is one replica's in-flight capacity (see above).
+        lagThreshold: {{ $lag | toString | quote }}
         activationLagThreshold: {{ $a.activationLagThreshold | quote }}
         useHttps: "false"
 {{- end }}

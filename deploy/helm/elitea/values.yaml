@@ -3395,18 +3395,24 @@ worker:
     minReplicas: 1
     maxReplicas: 10
 
-    # Consumer LAG per replica: commands published and not yet delivered to
-    # any worker (num_pending). KEDA divides the observed lag by this to get a
-    # replica count. This is NOT the old Redis pendingEntriesCount, which
-    # counted DELIVERED-but-unacked entries: work a replica already holds no
-    # longer counts, so the threshold is lower — a lag of 8 means eight
-    # commands are waiting while every replica's fetch window is full.
-    lagThreshold: 8
+    # The per-replica target of KEDA's nats-jetstream metric, which is
+    # num_pending + num_ack_pending of the durable (KEDA v2.10..v2.21
+    # getMaxMsgLag): commands waiting AND commands a replica has pulled and not
+    # yet acked. A worker pulls only for its free delivery slots plus at most
+    # nats_fetch_batch of prefetch, so one replica holds about
+    # delivery_max_concurrency; empty (the default) uses exactly that, and KEDA
+    # asks for enough replicas to run everything waiting or running. The chart
+    # refuses a value above delivery_max_concurrency + nats_fetch_batch.
+    lagThreshold: ""
     # Lag that wakes a fleet scaled to zero (minReplicas 0); 1 = any waiting
     # command.
     activationLagThreshold: 1
     # The NATS monitoring endpoint (host:port) the scaler reads. Empty: the
-    # top-level `nats` block's service on port 8222.
+    # top-level `nats` block's HEADLESS service (<nats.service>-headless) on
+    # port 8222. On the HA cluster the scaler must reach the consumer leader:
+    # it follows /varz connect_urls, and when servers advertise none it builds
+    # <server_name>.<this host>, a pod DNS name that exists only under the
+    # headless service. A plain ClusterIP Service name breaks that fallback.
     natsMonitoringEndpoint: ""
     # The NATS account the command bus streams live in, as /jsz reports it
     # (the scaler asks /jsz?acc=<this> and matches account_details[].name).
@@ -3575,8 +3581,11 @@ worker:
     sensitiveTools: '{"*":["delete_file"]}'
     # The delivery cap and the synchronous SDK pool cap the same executions in
     # series. Raise delivery_max_concurrency together with sync_max_workers and
-    # sync_max_in_flight, or the pool bounds the delivery cap. The queue holds
-    # one item per delivery slot. nats_fetch_batch stays at 4.
+    # sync_max_in_flight, or the pool bounds the delivery cap. A worker pulls
+    # only for free delivery slots plus at most nats_fetch_batch (4) of
+    # prefetch, so the queue behind running work stays short and another
+    # replica can take what this one cannot start; delivery_queue_capacity is
+    # the upper bound of that queue.
     limits:
       nats_fetch_batch: 4
       nats_fetch_expires_millis: 5000

@@ -681,12 +681,18 @@ directory and one SDK thread. The chart sizes the pod for 32 at once:
 `worker.resources` requests 2 CPU and 4 Gi, and limits 8 CPU and 16 Gi.
 The measured worker CPU was about 0.4 at cap 2.
 
-`nats_fetch_batch` stays at 4. The KEDA `nats-jetstream` scaler reads the
-worker's durable consumer LAG (published, not yet delivered) on the NATS
-monitoring port: `lagThreshold` is 8, `activationLagThreshold` 1. Lag is not
-the old Redis pending count: work a replica already holds no longer counts,
-so a lag at all means every replica's fetch window is full. One replica holds
-32 in-flight and 64 queued entries.
+`nats_fetch_batch` stays at 4. A worker pulls only for its free delivery
+slots plus at most those 4 of prefetch, and a pull returns on its first
+message, so commands it cannot start stay in the stream for another replica.
+The KEDA `nats-jetstream` scaler reads `num_pending + num_ack_pending` of the
+worker's durable (KEDA v2.10 through v2.21, `getMaxMsgLag`): commands waiting
+AND commands a replica holds. `lagThreshold` therefore defaults to one
+replica's `delivery_max_concurrency` (32), and the chart refuses a value
+above `delivery_max_concurrency + nats_fetch_batch`; `activationLagThreshold`
+is 1. The scaler reads the NATS chart's HEADLESS service on 8222: on the HA
+cluster it must reach the consumer leader's `/jsz`, and its fallback when
+servers advertise no client URLs is `<server_name>.<endpoint host>`, a pod
+DNS name only the headless service has.
 
 The default `maxReplicas` of 10 caps a KEDA fleet at 320 concurrent flows.
 A manual fleet has no such ceiling. Raise `maxReplicas` when you serve more.
