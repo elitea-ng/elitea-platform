@@ -2200,10 +2200,12 @@ scheduler:
     # (deploy/argocd/applications/nats.yaml) while this chart's Application
     # targets `elitea`. Change it if your topology differs.
     #
-    # A NATS that does not answer is NOT fatal: cmd/elitea-scheduler logs
-    # "budget write-back: NATS connect failed; consumer disabled" and keeps
-    # running its other jobs. So this default degrades loudly instead of
-    # preventing a deployment that has no NATS from starting.
+    # A NATS that does not answer, or a consumer the nats-bootstrap Job has
+    # not created yet, is NOT fatal and NOT final: cmd/elitea-scheduler keeps
+    # running its other jobs and keeps attaching with backoff (one WARN per
+    # outage), and GET /readyz/budget-writeback on its health port reports
+    # attached / waiting (503) / disabled / misconfigured (503). Deltas wait
+    # in GATEWAY_BUDGET_DELTAS meanwhile, for up to its MaxAge (72h).
     # Empty means the top-level `nats` block, resolved in this namespace.
     GATEWAY_NATS_URL: ""
     BUDGET_WRITEBACK_BATCH_SIZE: "500"

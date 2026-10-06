@@ -78,7 +78,8 @@ func NewConsumer(fetch Fetcher, store *Store, logger *slog.Logger) *Consumer {
 	return &Consumer{fetch: fetch, store: store, logger: logger}
 }
 
-// Run drains the stream until ctx is cancelled. Each pass fetches a batch,
+// Run drains the stream until ctx is cancelled or the consumer is gone (see
+// consumerLost; the Supervisor re-attaches). Each pass fetches a batch,
 // coalesces per (scope, scope_id, period_start), and applies each key-group in
 // its own transaction; messages are ACK'd only after their group's transaction
 // commits (§8.6). A fetch error is logged and retried after a short backoff so a
@@ -95,6 +96,12 @@ func (c *Consumer) Run(ctx context.Context) {
 		if err != nil {
 			if ctx.Err() != nil {
 				c.logger.Info("budgetwriteback: consumer stopping")
+				return
+			}
+			if consumerLost(err) {
+				// No retry of this handle can succeed; the Supervisor binds
+				// again once the bootstrap has re-created the consumer.
+				c.logger.Warn("budgetwriteback: the consumer is gone; stopping this drain loop", "err", err)
 				return
 			}
 			c.logger.Warn("budgetwriteback: fetch failed; retrying", "err", err)

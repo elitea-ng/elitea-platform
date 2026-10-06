@@ -11,8 +11,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/nats-io/nats.go"
-	"github.com/nats-io/nats.go/jetstream"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/EliteaAI/elitea-platform/libs/go/observability"
@@ -75,6 +73,12 @@ func main() {
 	// Health server
 	mux := http.NewServeMux()
 	mux.Handle("/healthz", health.New(pool))
+	// The budget write-back consumer's state (attached / waiting / disabled /
+	// misconfigured). Not the pod's probe: a NATS outage must not restart a
+	// scheduler whose other jobs are fine; it is what an operator reads to
+	// tell "draining" from "silently not draining".
+	writeBackStatus := budgetwriteback.NewStatus()
+	mux.Handle("/readyz/budget-writeback", writeBackStatus)
 
 	srv := &http.Server{
 		Addr:        cfg.HTTPAddr,
@@ -188,37 +192,42 @@ func main() {
 		go authStateSweeper.Run(ctx)
 	}
 
-	// Budget write-back consumer (design §8.6): durable pull consumer draining
-	// GATEWAY_BUDGET_DELTAS into gateway.llm_budget_accumulators. Disabled unless
-	// both the flag and a NATS URL are set, so environments without NATS are
-	// unaffected. A NATS blip at boot is non-fatal (the scheduler keeps running
-	// its other jobs); the consumer resumes when NATS recovers on next restart.
-	var natsConn *nats.Conn
+	// Budget write-back consumer (design §8.6): drains GATEWAY_BUDGET_DELTAS
+	// into gateway.llm_budget_accumulators through the durable pull consumer
+	// the nats-bootstrap Job creates. Disabled unless both the flag and a NATS
+	// URL are set. A NATS that is down, or a consumer the bootstrap has not
+	// created yet, is NOT a reason to give up: the Supervisor keeps
+	// attaching with backoff (one WARN per outage) and re-attaches when the
+	// consumer is lost, and /readyz/budget-writeback reports the state. A
+	// refused configuration is the one permanent failure.
+	var natsConn *budgetwriteback.Connector
 	if cfg.BudgetWriteBackEnabled && cfg.BudgetWriteBackNATSURL != "" {
-		nc, err := budgetwriteback.Dial(budgetwriteback.DialConfig{
+		dialCfg := budgetwriteback.DialConfig{
 			URL:         cfg.BudgetWriteBackNATSURL,
 			TLSCAFile:   cfg.BudgetWriteBackNATSTLSCAFile,
 			TLSCertFile: cfg.BudgetWriteBackNATSTLSCertFile,
 			TLSKeyFile:  cfg.BudgetWriteBackNATSTLSKeyFile,
-		}, logger)
-		if err != nil {
-			slog.Warn("budget write-back: NATS connect failed; consumer disabled", "err", err)
-		} else if js, jerr := jetstream.New(nc); jerr != nil {
-			slog.Warn("budget write-back: JetStream init failed; consumer disabled", "err", jerr)
-			nc.Close()
+		}
+		if err := budgetwriteback.CheckDialConfig(dialCfg); err != nil {
+			slog.Error("budget write-back: the NATS settings are refused; consumer disabled", "err", err)
+			writeBackStatus.SetMisconfigured(err)
 		} else {
+			natsConn = &budgetwriteback.Connector{Config: dialCfg, Logger: logger}
 			wbCfg := budgetwriteback.Config{BatchSize: cfg.BudgetWriteBackBatchSize}
-			bindCtx, bc := context.WithTimeout(ctx, 5*time.Second)
-			consumer, berr := budgetwriteback.Bind(bindCtx, js, budgetwriteback.NewPoolDB(pool), wbCfg, logger)
-			bc()
-			if berr != nil {
-				slog.Warn("budget write-back: bind consumer failed; consumer disabled", "err", berr)
-				nc.Close()
-			} else {
-				natsConn = nc
-				slog.Info("starting budget write-back consumer", "batch", wbCfg.BatchSize)
-				go consumer.Run(ctx)
+			db := budgetwriteback.NewPoolDB(pool)
+			supervisor := &budgetwriteback.Supervisor{
+				Bind: func(ctx context.Context) (*budgetwriteback.Consumer, error) {
+					js, err := natsConn.JetStream()
+					if err != nil {
+						return nil, err
+					}
+					return budgetwriteback.Bind(ctx, js, db, wbCfg, logger)
+				},
+				Status: writeBackStatus,
+				Logger: logger,
 			}
+			slog.Info("starting budget write-back consumer", "batch", wbCfg.BatchSize)
+			go supervisor.Run(ctx)
 		}
 	}
 

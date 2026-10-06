@@ -166,6 +166,92 @@ func TestSecuredWriteBackWithoutBootstrapNamesTheJob(t *testing.T) {
 	s.RequireNoViolations(t, natsconn.IdentityScheduler)
 }
 
+// R1: the scheduler that boots while NATS is down and before the bootstrap
+// ran keeps attaching, and drains once both are there — the path a single
+// Bind at boot lost deltas on.
+func TestSecuredWriteBackAttachesAfterNATSAndTheBootstrapArrive(t *testing.T) {
+	s := natstest.Start(t)
+	s.Stop() // NATS is down when the scheduler starts
+	m := s.Material(natsconn.IdentityScheduler)
+	conn := &Connector{Config: DialConfig{URL: s.URL(), TLSCAFile: m.CAFile, TLSCertFile: m.CertFile, TLSKeyFile: m.KeyFile}}
+	t.Cleanup(conn.Close)
+	tbl := newAcctTable()
+	status := NewStatus()
+	sup := &Supervisor{
+		Bind: func(ctx context.Context) (*Consumer, error) {
+			js, err := conn.JetStream()
+			if err != nil {
+				return nil, err
+			}
+			return Bind(ctx, js, &tableDB{tbl: tbl}, Config{BatchSize: 10, FetchWait: 200 * time.Millisecond}, nil)
+		},
+		Status:     status,
+		MinBackoff: 50 * time.Millisecond,
+		MaxBackoff: 200 * time.Millisecond,
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { sup.Run(ctx); close(done) }()
+	t.Cleanup(func() { stop(); <-done })
+
+	waitState := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for status.Snapshot().State != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("write-back state = %+v, want %s\nserver log:\n%s", status.Snapshot(), want, s.Log())
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	waitState(StateWaiting)
+
+	s.Restart(t) // NATS is up; the consumer does not exist yet
+	time.Sleep(500 * time.Millisecond)
+	if st := status.Snapshot(); st.State != StateWaiting {
+		t.Fatalf("attached before the bootstrap created the consumer: %+v", st)
+	}
+	s.Bootstrap(t, nil)
+	waitState(StateAttached)
+
+	gw, err := jetstream.New(dialAs(t, s, natsconn.IdentityGateway))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const period = int64(1_700_000_000)
+	d := deltaFor("00000000-0000-0000-0000-0000000000a1", "project", "7", period, 2_000_000_000)
+	body, err := json.Marshal(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := gw.Publish(context.Background(), DeltaSubject, body, jetstream.WithMsgID(d.EventID)); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := jetstream.New(dialAs(t, s, natsconn.IdentityBootstrapGateway))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		c, err := admin.Consumer(context.Background(), DeltasStream, DurableName)
+		if err == nil {
+			if info, err := c.Info(context.Background()); err == nil && info.Delivered.Consumer >= 1 && info.NumAckPending == 0 && info.NumPending == 0 {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the late-attached consumer never acked the delta\nserver log:\n%s", s.Log())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	stop()
+	<-done
+	if got := tbl.rows[deltaKey{scope: "project", scopeID: "7", periodStart: period}]; got == nil || got.accumulatedNano != 2_000_000_000 {
+		t.Fatalf("accumulator = %+v, want 2 USD", got)
+	}
+	s.RequireNoViolations(t, natsconn.IdentityScheduler)
+}
+
 // Dial refuses what the server would refuse.
 func TestSecuredWriteBackDialRefusals(t *testing.T) {
 	s := natstest.Start(t)
