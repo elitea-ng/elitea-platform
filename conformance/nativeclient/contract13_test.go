@@ -138,6 +138,9 @@ func (s *suite) discoverStartChat(ctx context.Context, t *testing.T) {
 	api := s.main.api
 	project := s.projectID
 	name := fmt.Sprintf("native conformance catalogue %s", strconv.FormatInt(time.Now().UnixNano(), 36))
+	// Publish refuses a model that is not the public project's
+	// (`model_project_id`), so the agent names the mock model there.
+	public := s.publicProject(ctx, t)
 
 	created := mustJSON(t, need(t)(api.Do(ctx, http.MethodPost,
 		fmt.Sprintf("/api/v2/elitea_core/applications/prompt_lib/%d", project),
@@ -153,7 +156,7 @@ func (s *suite) discoverStartChat(ctx context.Context, t *testing.T) {
 				"welcome_message":       "Ask me anything short.",
 				"conversation_starters": []string{"Say hello.", "What is two plus two?"},
 				"tags":                  []map[string]any{{"name": "release-notes", "data": map[string]any{}}},
-				"llm_settings":          map[string]any{"model_name": s.cfg.Model},
+				"llm_settings":          map[string]any{"model_name": s.cfg.Model, "model_project_id": public},
 			}},
 		}, nil)), http.StatusCreated)
 	sourceAgent, _ := asInt64(created["id"])
@@ -206,8 +209,8 @@ func (s *suite) discoverStartChat(ctx context.Context, t *testing.T) {
 	if agentID <= 0 || catalogueProject <= 0 || versionID <= 0 {
 		t.Fatalf("catalogue row lacks id/project_id/version_id: %v", row)
 	}
-	if catalogueProject == project {
-		t.Fatalf("catalogue row names the caller's own project %d, not the public one: %v", project, row)
+	if catalogueProject != public {
+		t.Fatalf("catalogue row names project %d, not the public project %d: %v", catalogueProject, public, row)
 	}
 
 	conversationID, conversationUUID := s.createConversation(ctx, t, "native conformance discover")
@@ -281,6 +284,26 @@ func (s *suite) discoverStartChat(ctx context.Context, t *testing.T) {
 	default:
 		t.Errorf("adding an agent of non-public project %d: %s, want a 4xx refusal or a 200 the send refuses", foreign, response)
 	}
+}
+
+// publicProject is the deployment's public (catalogue) project, as
+// platform_settings publishes it; ELITEA_CONFORMANCE_PUBLIC_PROJECT_ID
+// overrides it.
+func (s *suite) publicProject(ctx context.Context, t *testing.T) int64 {
+	t.Helper()
+	if raw := env("ELITEA_CONFORMANCE_PUBLIC_PROJECT_ID", ""); raw != "" {
+		id, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || id <= 0 {
+			t.Fatalf("ELITEA_CONFORMANCE_PUBLIC_PROJECT_ID=%q", raw)
+		}
+		return id
+	}
+	settings := mustJSON(t, need(t)(s.main.api.Get(ctx, "/api/v2/elitea_core/platform_settings/prompt_lib")), http.StatusOK)
+	id, ok := asInt64(settings["public_project_id"])
+	if !ok || id <= 0 {
+		t.Fatalf("platform_settings has no public_project_id: %v", settings)
+	}
+	return id
 }
 
 // foreignProject is a project that exists and is neither the public catalogue
