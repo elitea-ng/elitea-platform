@@ -71,7 +71,6 @@ func TestProductionRuntimeCrossProcessSystem(t *testing.T) {
 	writeFile(t, workerPasswordPath, []byte(workerPassword), 0o600)
 
 	postgresPort := freePort(t)
-	legacyRedisPort := freePort(t)
 	controlRedisPort := freePort(t)
 	publicPort := freePort(t)
 	controlPort := freePort(t)
@@ -90,12 +89,6 @@ func TestProductionRuntimeCrossProcessSystem(t *testing.T) {
 			"-p", fmt.Sprintf("127.0.0.1:%d:5432", postgresPort),
 		},
 	)
-	legacyRedisName := containers.start(t,
-		"legacy-redis", "redis:7-alpine",
-		[]string{"-p", fmt.Sprintf("127.0.0.1:%d:6379", legacyRedisPort)},
-		"redis-server", "--save", "", "--appendonly", "no",
-	)
-	_ = legacyRedisName
 
 	redisConfigDir := filepath.Join(root, "redis")
 	mustMkdir(t, redisConfigDir, 0o755)
@@ -143,7 +136,6 @@ func TestProductionRuntimeCrossProcessSystem(t *testing.T) {
 	mainLog := filepath.Join(root, "elitea-main.log")
 	mainEnvironment := runtimeMainEnvironment(
 		databaseURL,
-		legacyRedisPort,
 		controlRedisPort,
 		publicPort,
 		controlPort,

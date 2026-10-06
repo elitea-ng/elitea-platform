@@ -1,12 +1,19 @@
 {{- if .Values.main.enabled }}
 {{- /*
-  Shared connection addresses, computed once from the top-level `nats` and
-  `redis` blocks and namespace-relative by default. An explicit env entry
-  under this component still wins. These are the settings that drifted when
-  each chart carried its own default.
+  Shared connection addresses, computed once from the top-level `nats`
+  block and namespace-relative by default. An explicit env entry under this
+  component still wins. These are the settings that drifted when each chart
+  carried its own default. The live-update plane dials the SAME effective NATS
+  the gateway uses (elitea.eventsNatsUrl: an explicit
+  llmGateway.env.GATEWAY_NATS_URL first, then the `nats` block), so one broker
+  serves all three; nothing naming a NATS leaves it unset (no live-update
+  plane). A main.secrets entry for it wins and nothing is rendered here.
 */ -}}
+{{- include "elitea-main.validateEventsNats" . }}
 {{- $env := .Values.main.env | default dict }}
-{{- if not (get $env "REDIS_URL") }}{{- $env = merge (deepCopy $env) (dict "REDIS_URL" (include "elitea.serviceAddr" (dict "svc" $.Values.redis "ctx" $))) }}{{- end }}
+{{- $eventsNatsUrl := include "elitea.eventsNatsUrl" . }}
+{{- if and (not (get $env "ELITEA_EVENTS_NATS_URL")) (not (hasKey (.Values.main.secrets | default dict) "ELITEA_EVENTS_NATS_URL")) $eventsNatsUrl }}{{- $env = merge (deepCopy $env) (dict "ELITEA_EVENTS_NATS_URL" $eventsNatsUrl) }}{{- end }}
+{{- if hasKey (.Values.main.secrets | default dict) "ELITEA_EVENTS_NATS_URL" }}{{- $env = omit $env "ELITEA_EVENTS_NATS_URL" }}{{- end }}
 {{- /*
   The public project, from the ONE place an operator sets it. Filled only when
   something names a project: with the Configurations plane off, elitea-main

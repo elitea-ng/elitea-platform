@@ -8,7 +8,7 @@
 #                                      (Bifrost), wired into elitea-main's /llm.
 #   centry-hybrid/                     legacy mixed deployment. Not needed here.
 #
-# The postgres/redis/rustfs/rustfs-bucket-init/oidc-mock blocks below are
+# The postgres/nats/rustfs/rustfs-bucket-init/oidc-mock blocks below are
 # hand-duplicated from docker-compose.e2e-standalone.yml rather than layered
 # with `-f base -f overlay`: this file's postgres also needs an explicit PGDATA
 # mount and elitea-main/elitea-web need the gateway's extra env/volumes, so a
@@ -124,7 +124,6 @@
 #   8084  traefik (entry point)     STANDALONE_PORT
 #   8085  gateway, direct (debug)   STANDALONE_GATEWAY_PORT
 #   15433 postgres                  STANDALONE_PG_PORT
-#   16380 redis                     STANDALONE_REDIS_PORT
 #   8090  llm-mock journal          STANDALONE_MOCK_PORT — see the llm-mock comment
 #   8096  qtest-mock journal        STANDALONE_QTEST_PORT
 #   8097  ado-mock journal          STANDALONE_ADO_PORT — see the ado-mock comment
@@ -240,12 +239,18 @@ services:
       timeout: 5s
       retries: 10
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "${STANDALONE_REDIS_PORT:-16380}:6379"
+  # The live-update plane (elitea-main's ELITEA_EVENTS_NATS_URL): the project
+  # SSE stream and canvas presence (its publish and its JetStream KV
+  # bucket); domain events go to webhooks only. It replaced the plain Redis
+  # that sat at REDIS_URL. JetStream (-js)
+  # is required — elitea-main refuses to start without it; -m serves the
+  # healthcheck. Not published to the host: only elitea-main dials it. The
+  # gateway does NOT use it (GATEWAY_NATS_URL stays unset, see below).
+  nats:
+    image: nats:2.12-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz?js-enabled-only=true"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -516,8 +521,9 @@ services:
       # X-Elitea-Project-Id / X-Elitea-User-Id / X-Elitea-Tenant-Id headers that
       # elitea-main signs and the gateway verifies.
       GATEWAY_IDENTITY_SECRET: "${GATEWAY_IDENTITY_SECRET:-standalone-dev-identity-secret}"
-      # ISSUE #304 — the documented local-development opt-out. This stack runs
-      # no NATS on purpose, so the budget gate is never wired and no ceiling in
+      # ISSUE #304 — the documented local-development opt-out. The gateway is
+      # given no NATS on purpose (the `nats` service is elitea-main's
+      # live-update plane only), so the budget gate is never wired and no ceiling in
       # gateway.project_budget or gateway.user_budget applies. The default
       # "auto" posture refuses to start in exactly that state, once a budget row
       # exists. That is right for a cluster and wrong for a laptop.
@@ -878,7 +884,7 @@ services:
       # Keep the gateway and Main on one vault-key source. Empty preserves the
       # unwrapped E2E seed; a restored deployment can supply its existing key.
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY-}"
-      REDIS_URL: "redis:6379"
+      ELITEA_EVENTS_NATS_URL: "nats://nats:4222"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       APPLICATION_SECRET_KEY: "changeme-standalone"
       OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
@@ -1234,7 +1240,7 @@ services:
         condition: service_healthy
       elitea-inventory:
         condition: service_healthy
-      redis:
+      nats:
         condition: service_healthy
       elitea-migrate:
         condition: service_completed_successfully

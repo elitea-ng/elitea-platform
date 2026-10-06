@@ -266,7 +266,6 @@ install_infra() {
     --dry-run=client -o yaml | kc apply -f -
 
   kc -n "$NS" rollout status deployment/postgres --timeout=300s
-  kc -n "$NS" rollout status deployment/redis --timeout=300s
   kc -n "$NS" rollout status deployment/rustfs --timeout=300s
 
   say "Creating the artifact bucket"

@@ -28,6 +28,36 @@ Usage: {{ include "elitea.serviceHost" (dict "svc" .Values.nats "ctx" .) }}
 {{- end }}
 
 {{/*
+elitea.eventsNatsUrl — the NATS URL elitea-main's live-update plane
+(ELITEA_EVENTS_NATS_URL) gets when main.env does not state one: the SAME
+effective NATS the LLM gateway uses, because the gateway publishes
+budget.soft_alert onto the subject the project SSE stream reads. Deriving it
+from the top-level `nats` block alone, while the gateway honours an explicit
+llmGateway.env.GATEWAY_NATS_URL, sent main to a host that may not exist
+(CrashLoop: a configured but unreachable NATS stops elitea-main) and split
+soft alerts onto a broker nobody streams from.
+
+Order: llmGateway.env.GATEWAY_NATS_URL (gateway enabled), then
+scheduler.env.GATEWAY_NATS_URL (scheduler enabled), then the `nats` block.
+Empty when none names a NATS — elitea-main then runs with no live-update plane.
+
+A GATEWAY_NATS_URL the gateway reads from a Secret (llmGateway.secrets) is not
+visible here, so elitea-main.validateEventsNats refuses that shape unless main
+names its own URL too.
+*/}}
+{{- define "elitea.eventsNatsUrl" -}}
+{{- $gw := .Values.llmGateway.env | default dict -}}
+{{- $sched := .Values.scheduler.env | default dict -}}
+{{- if and .Values.llmGateway.enabled (get $gw "GATEWAY_NATS_URL") -}}
+{{- get $gw "GATEWAY_NATS_URL" -}}
+{{- else if and .Values.scheduler.enabled (get $sched "GATEWAY_NATS_URL") -}}
+{{- get $sched "GATEWAY_NATS_URL" -}}
+{{- else if .Values.nats.service -}}
+{{- printf "nats://%s" (include "elitea.serviceAddr" (dict "svc" .Values.nats "ctx" .)) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Image pull secrets, applied to every component's pod spec.
 
 Defined here rather than per component because a private registry is a property

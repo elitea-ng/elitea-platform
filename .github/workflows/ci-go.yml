@@ -192,9 +192,9 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
-      # Backs ELITEA_TEST_REDIS_ADDR below (#423). Twelve tests across
-      # internal/transport/redisdispatch, internal/infra/db/repos,
-      # internal/infra/authsvc and internal/infra/redis want a real Redis.
+      # Backs ELITEA_TEST_REDIS_ADDR below (#423). Tests across
+      # internal/transport/redisdispatch, internal/infra/db/repos and
+      # internal/infra/authsvc want a real Redis.
       # Every one of them skipped itself on every run, so the transport that
       # carries every worker command had no service-backed coverage at all.
       # A Redis container costs a few seconds.
@@ -278,6 +278,33 @@ jobs:
       - name: Start storage emulators
         run: docker compose -f deploy/docker-compose.storage-test.yml up -d --wait
 
+      # Backs ELITEA_TEST_NATS_URL below: elitea-main's live-update plane
+      # (internal/api/v2/canvaspresence's JetStream KV store and the boot
+      # path in cmd/elitea-main). A step rather than a `services:` entry
+      # because JetStream needs the `-js` argument and a service container
+      # cannot take one. The undeclared-skip gate fails the run if those
+      # tests skip, so losing this container cannot read as green.
+      - name: Start NATS (JetStream)
+        run: |
+          set -euo pipefail
+          docker run -d --name ci-nats -p 4222:4222 -p 8222:8222 nats:2.12-alpine -js -m 8222
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:8222/healthz?js-enabled-only=true" >/dev/null; then
+              # The same server binary, out of the container, for the
+              # restart test (TestNATSStoreFollowsTheBucketAcrossAServerRestart
+              # stops and starts its own server). Its path is read from the
+              # image, not assumed.
+              bin=$(docker exec ci-nats sh -c 'command -v nats-server')
+              docker cp "ci-nats:${bin}" "${RUNNER_TEMP}/nats-server"
+              chmod +x "${RUNNER_TEMP}/nats-server"
+              "${RUNNER_TEMP}/nats-server" --version
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs ci-nats
+          exit 1
+
       - name: Run tests (workspace)
         env:
           S3_ENDPOINT_URL: "http://127.0.0.1:19000"
@@ -329,6 +356,10 @@ jobs:
 
           # The Redis service above.
           ELITEA_TEST_REDIS_ADDR: "localhost:6379"
+
+          # The NATS (JetStream) container started above.
+          ELITEA_TEST_NATS_URL: "nats://127.0.0.1:4222"
+          ELITEA_TEST_NATS_SERVER_BIN: "${{ runner.temp }}/nats-server"
 
           # Opt-in real-service reliability tests. Each needs only the
           # PostgreSQL and Redis services this job already runs. Measured

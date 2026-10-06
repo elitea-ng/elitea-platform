@@ -135,6 +135,24 @@ false
 {{- end -}}
 
 {{/*
+elitea-main.validateEventsNats — refuse a render where elitea-main cannot know
+the NATS the gateway uses. When the gateway reads GATEWAY_NATS_URL from a Secret
+(llmGateway.secrets), the chart cannot see the value, so deriving main's URL
+from the `nats` block could point it at a different broker: soft alerts would
+never reach the project stream, or main would crash on a host that does not
+exist. The operator names main's URL as well — main.secrets (preferred when it
+carries credentials) or main.env.
+*/}}
+{{- define "elitea-main.validateEventsNats" -}}
+{{- $mainEnv := .Values.main.env | default dict -}}
+{{- $mainSecrets := .Values.main.secrets | default dict -}}
+{{- $gwSecrets := .Values.llmGateway.secrets | default dict -}}
+{{- if and .Values.llmGateway.enabled (hasKey $gwSecrets "GATEWAY_NATS_URL") (not (get $mainEnv "ELITEA_EVENTS_NATS_URL")) (not (hasKey $mainSecrets "ELITEA_EVENTS_NATS_URL")) -}}
+{{- fail "llmGateway.secrets supplies GATEWAY_NATS_URL from a Secret, so the chart cannot derive elitea-main's ELITEA_EVENTS_NATS_URL from it, and the `nats` block may name a different broker (budget soft alerts would never reach the project stream, or elitea-main would refuse to start on an unreachable host). Set main.secrets.ELITEA_EVENTS_NATS_URL to the same Secret and key." -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 elitea-main.validateCapabilities — issue #382.
 
 The composition root gates whole capabilities on environment variables, and it

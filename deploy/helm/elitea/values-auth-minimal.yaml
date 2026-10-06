@@ -69,7 +69,6 @@
 #   helm install elitea deploy/helm/elitea \
 #     -f deploy/helm/elitea/values-auth-minimal.yaml \
 #     --set-string main.env.DATABASE_URL=... \
-#     --set-string main.env.REDIS_URL=... \
 #     --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://your-host/llm/v1 \
 #     --set-string llmGateway.egressPosture=public-unrestricted
 #
@@ -194,9 +193,8 @@ main:
             users_json_file: /run/elitea-auth/auth-form-users.json
 
   env:
-    # Endpoints the chart cannot guess. Override both at install time.
+    # The endpoint the chart cannot guess. Override it at install time.
     DATABASE_URL: ""
-    REDIS_URL: ""
 
     # This file is the recipe for the FORM sign-in plane — a login page this
     # deployment owns, with no external identity provider — and Form sign-in

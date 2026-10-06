@@ -285,11 +285,72 @@ case "$allow_own_llms" in
     ;;
 esac
 
-if yq eval-all 'select(.kind == "ConfigMap") | .data | has("REDIS_URL")' \
-  "$WORK/default.yaml" | grep -qx true; then
-  pass "the chart exposes REDIS_URL, the project event stream transport"
+# The live-update plane (project SSE stream, canvas presence) rides the SAME
+# NATS the gateway and the scheduler use. A default install must
+# render it from the top-level `nats` block as an FQDN, or the SSE route stays
+# unregistered (#152); and the retired plain Redis must not come back.
+events_nats="$(data ELITEA_EVENTS_NATS_URL "$WORK/default.yaml")"
+case "$events_nats" in
+  nats://elitea-nats.*.svc.cluster.local:4222)
+    pass "ELITEA_EVENTS_NATS_URL renders \"$events_nats\" from the top-level nats block"
+    ;;
+  *)
+    fail "ELITEA_EVENTS_NATS_URL renders \"$events_nats\"; the project event stream and canvas presence need the shared NATS"
+    ;;
+esac
+# ...and it follows the GATEWAY's effective NATS, not just the `nats` block:
+# the gateway publishes budget.soft_alert onto the subject the stream reads,
+# and an explicit llmGateway.env.GATEWAY_NATS_URL used to leave elitea-main on
+# the derived (possibly non-existent) host. These renders keep the gateway ON.
+main_events_nats() {
+  yq eval-all 'select(.kind == "ConfigMap") | select(.metadata.name == "elitea-main-config") | .data.ELITEA_EVENTS_NATS_URL // ""' "$1"
+}
+helm template ${GATEWAY_RENDER_POSTURE} test-release "$CHART" \
+  --set-string llmGateway.env.GATEWAY_NATS_URL=nats://nats.elitea-gateway.svc.cluster.local:4222 \
+  >"$WORK/gateway-nats.yaml"
+if [ "$(main_events_nats "$WORK/gateway-nats.yaml")" = "nats://nats.elitea-gateway.svc.cluster.local:4222" ]; then
+  pass "ELITEA_EVENTS_NATS_URL follows an explicit llmGateway.env.GATEWAY_NATS_URL"
 else
-  fail "the chart does not expose REDIS_URL, so the project event stream stays unregistered"
+  fail "ELITEA_EVENTS_NATS_URL renders \"$(main_events_nats "$WORK/gateway-nats.yaml")\" while the gateway names nats://nats.elitea-gateway.svc.cluster.local:4222"
+fi
+helm template ${GATEWAY_RENDER_POSTURE} test-release "$CHART" \
+  --set-string llmGateway.env.GATEWAY_NATS_URL=nats://nats.elitea-gateway.svc.cluster.local:4222 \
+  --set-string main.env.ELITEA_EVENTS_NATS_URL=nats://main-own.example.invalid:4222 \
+  >"$WORK/main-explicit-nats.yaml"
+if [ "$(main_events_nats "$WORK/main-explicit-nats.yaml")" = "nats://main-own.example.invalid:4222" ]; then
+  pass "an explicit main.env.ELITEA_EVENTS_NATS_URL still wins"
+else
+  fail "an explicit main.env.ELITEA_EVENTS_NATS_URL was overridden"
+fi
+# A gateway URL from a Secret is invisible to the chart: the render must
+# refuse rather than guess main's URL from the `nats` block.
+if helm template ${GATEWAY_RENDER_POSTURE} test-release "$CHART" \
+  --set llmGateway.secrets.GATEWAY_NATS_URL.secretName=gw-nats --set llmGateway.secrets.GATEWAY_NATS_URL.key=url \
+  >"$WORK/gateway-secret-nats.yaml" 2>"$WORK/gateway-secret-nats.err"; then
+  fail "the chart rendered with GATEWAY_NATS_URL from a Secret and no ELITEA_EVENTS_NATS_URL for elitea-main"
+elif grep -q "main.secrets.ELITEA_EVENTS_NATS_URL" "$WORK/gateway-secret-nats.err"; then
+  pass "a Secret-backed GATEWAY_NATS_URL without main's own URL is refused with the fix named"
+else
+  fail "the Secret-backed GATEWAY_NATS_URL render failed for another reason: $(tail -1 "$WORK/gateway-secret-nats.err")"
+fi
+# The Secret-backed path for main itself (credentials never in a ConfigMap):
+# a main.secrets entry renders as secretKeyRef and the ConfigMap carries no
+# ELITEA_EVENTS_NATS_URL at all.
+helm template ${GATEWAY_RENDER_POSTURE} test-release "$CHART" \
+  --set llmGateway.secrets.GATEWAY_NATS_URL.secretName=gw-nats --set llmGateway.secrets.GATEWAY_NATS_URL.key=url \
+  --set main.secrets.ELITEA_EVENTS_NATS_URL.secretName=gw-nats --set main.secrets.ELITEA_EVENTS_NATS_URL.key=url \
+  >"$WORK/main-secret-nats.yaml"
+if [ "$(yq eval-all 'select(.kind == "ConfigMap") | select(.metadata.name == "elitea-main-config") | .data | has("ELITEA_EVENTS_NATS_URL")' "$WORK/main-secret-nats.yaml")" = "false" ] \
+  && [ "$(yq eval-all 'select(.kind == "Deployment") | select(.metadata.name == "elitea-main") | .spec.template.spec.containers[] | select(.name == "elitea-main") | .env[] | select(.name == "ELITEA_EVENTS_NATS_URL") | .valueFrom.secretKeyRef.name' "$WORK/main-secret-nats.yaml")" = "gw-nats" ]; then
+  pass "main.secrets.ELITEA_EVENTS_NATS_URL renders as a secretKeyRef and stays out of the ConfigMap"
+else
+  fail "main.secrets.ELITEA_EVENTS_NATS_URL did not render as a secretKeyRef only"
+fi
+if yq eval-all 'select(.kind == "ConfigMap") | .data | (has("REDIS_URL") or has("REDIS_USERNAME"))' \
+  "$WORK/default.yaml" | grep -qx true; then
+  fail "a ConfigMap still renders REDIS_URL/REDIS_USERNAME; nothing reads the plain Redis any more"
+else
+  pass "no ConfigMap renders the retired plain-Redis REDIS_URL"
 fi
 
 # ---------------------------------------------------------------------------

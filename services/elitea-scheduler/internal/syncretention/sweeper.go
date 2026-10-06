@@ -80,7 +80,7 @@ type Store interface {
 }
 
 // Gate reports an active maintenance window
-// (scheduler.(*Scheduler).MaintenanceActive).
+// (maintenance.(*Switch).Active).
 type Gate func(ctx context.Context) bool
 
 // Config tunes the sweeper.

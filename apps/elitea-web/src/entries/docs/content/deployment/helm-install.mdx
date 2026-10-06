@@ -63,7 +63,7 @@ The full capability set, matching `docker-compose.standalone-full.yml` — every
 The cheapest install that can seed an AI provider credential through the product's own API instead of hand-written SQL: production (Form) authentication plus `ELITEA_CONFIGURATIONS_ENABLED`, **no runtime plane** — no agent execution, no chat. Needs the auth material Secret and a TLS Redis (`runtimeRedis.enabled: true`), but no runtime material Secret and no worker.
 </Tab>
 <Tab title="values-staging.yaml">
-A minimal single-replica shape (image tag `shadow-v0.1`, `DATABASE_URL`/`REDIS_URL` inlined for a throwaway environment, autoscaling and the pod disruption budget both off). Use it for a disposable smoke/shadow environment, not as a production starting point.
+A minimal single-replica shape (image tag `shadow-v0.1`, `DATABASE_URL` inlined for a throwaway environment, autoscaling and the pod disruption budget both off). Use it for a disposable smoke/shadow environment, not as a production starting point.
 </Tab>
 </Tabs>
 
@@ -170,8 +170,8 @@ See [Troubleshooting](/support/troubleshooting#operator-checks) for what each en
 ## What a Kubernetes install does NOT give you
 
 <AccordionGroup>
-<Accordion title="No PostgreSQL and no Redis">
-No chart provisions either. The migration hook fails against a cluster where they do not already exist or where the Secret/host settings have not been pointed at them.
+<Accordion title="No PostgreSQL and no NATS">
+No chart provisions either (the runtime's TLS Redis is the one exception: `runtimeRedis`). elitea-main's live updates — the project SSE stream and canvas presence — need the shared NATS with JetStream (`ELITEA_EVENTS_NATS_URL`, derived from the top-level `nats` block). The migration hook fails against a cluster where they do not already exist or where the Secret/host settings have not been pointed at them.
 </Accordion>
 <Accordion title="No ingress by default">
 No Ingress renders until `main.ingress.enabled: true`. A cluster serving the web app needs per-route rules to avoid the SPA backend swallowing them.

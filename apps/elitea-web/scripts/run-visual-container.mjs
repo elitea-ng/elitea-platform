@@ -27,7 +27,7 @@
  * Against a SECOND, parameterised stack:
  *
  *   E2E_PROJECT=elitea-e2e-b E2E_PORT=8083 E2E_PG_PORT=15433 \
- *   E2E_REDIS_PORT=16380 E2E_OIDC_PORT=9401 ./scripts/e2e-stack.sh up && … seed
+ *   E2E_OIDC_PORT=9401 ./scripts/e2e-stack.sh up && … seed
  *
  *   E2E_PORT=8083 E2E_OIDC_PORT=9401 PLAYWRIGHT_BASE_URL=http://localhost:8083 \
  *   npm run e2e:visual

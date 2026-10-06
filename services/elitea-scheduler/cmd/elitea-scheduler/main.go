@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
-	goredis "github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"github.com/EliteaAI/elitea-platform/libs/go/observability"
@@ -21,10 +20,9 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/budgetwriteback"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/config"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/health"
+	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/maintenance"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/nativeauthretention"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/pricesync"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/rpc"
-	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/scheduler"
 	"github.com/EliteaAI/elitea-platform/services/elitea-scheduler/internal/syncretention"
 )
 
@@ -67,16 +65,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Redis
-	rdb := goredis.NewClient(&goredis.Options{Addr: cfg.RedisURL})
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		slog.Error("redis unreachable", "err", err)
-		os.Exit(1)
-	}
-	defer func() { _ = rdb.Close() }()
-
-	rpcClient := rpc.New(rdb, cfg.RPCChannel, cfg.RPCHMACKey)
-	sched := scheduler.New(pool, rdb, rpcClient, cfg)
+	// The maintenance switch the retention sweepers share. The legacy
+	// centry.schedule → `elitea_rpc` Redis dispatcher that used to live here
+	// was deleted: nothing in the Go stack consumed that channel (issue #305),
+	// and with it went this daemon's only use of Redis.
+	maintenanceSwitch := maintenance.New(pool)
 
 	// Health server
 	mux := http.NewServeMux()
@@ -94,9 +87,6 @@ func main() {
 			slog.Error("health server error", "err", err)
 		}
 	}()
-
-	slog.Info("starting scheduler", "instance", cfg.InstanceID, "rpc_channel", cfg.RPCChannel)
-	go sched.Run(ctx)
 
 	// Price-catalog sync worker (design §8.8): refreshes gateway.gateway_models
 	// from ordered PriceSources on a ~24h cadence, off the /llm hot path.
@@ -126,9 +116,9 @@ func main() {
 	// leave the table unbounded and look exactly like one that is running with
 	// nothing to remove.
 	//
-	// sched.MaintenanceActive is the SAME gate the dispatch tick consults, not
-	// a second reading of the switch — see internal/scheduler/maintenance.go.
-	auditSweeper, auditErr := auditretention.New(pool, sched.MaintenanceActive, auditretention.Config{
+	// maintenanceSwitch.Active is the SAME gate the sync sweep consults, not
+	// a second reading of the switch — see internal/maintenance.
+	auditSweeper, auditErr := auditretention.New(pool, maintenanceSwitch.Active, auditretention.Config{
 		RetentionDays:     cfg.AuditRetentionDays,
 		Interval:          cfg.AuditRetentionInterval,
 		BatchSize:         cfg.AuditRetentionBatchSize,
@@ -141,8 +131,8 @@ func main() {
 			"audit_retention_days", cfg.AuditRetentionDays)
 	case auditErr != nil:
 		// A refused window is a configuration mistake, not a reason to take the
-		// whole daemon down: the schedule poller, price sync and budget
-		// write-back are unrelated to it and an operator needs them running
+		// whole daemon down: price sync, budget write-back and the other
+		// sweepers are unrelated to it and an operator needs them running
 		// while they correct the value.
 		slog.Error("audit retention sweep did not start; centry.audit_events grows without bound",
 			"err", auditErr, "audit_retention_days", cfg.AuditRetentionDays)
@@ -157,7 +147,7 @@ func main() {
 	// the window elitea-main still serves a `changes_since` cursor for. The
 	// window can only be raised above that floor. Gated on maintenance like
 	// the audit sweep, since it writes to every tenant schema.
-	if syncSweeper, raised, syncErr := syncretention.New(pool, sched.MaintenanceActive, syncretention.Config{
+	if syncSweeper, raised, syncErr := syncretention.New(pool, maintenanceSwitch.Active, syncretention.Config{
 		RetentionDays: cfg.SyncTombstoneRetentionDays,
 	}, logger); syncErr != nil {
 		slog.Error("sync tombstone retention sweep did not start; tombstone tables grow without bound", "err", syncErr)
@@ -232,5 +222,4 @@ func main() {
 	if err := srv.Shutdown(shutCtx); err != nil {
 		slog.Error("health server shutdown error", "err", err)
 	}
-	sched.Stop()
 }

@@ -200,11 +200,11 @@ main:
             users_json_file: /run/elitea-auth/auth-form-users.json
 
   env:
-    # Endpoints the chart cannot guess. Override both at install time.
+    # The endpoint the chart cannot guess. Override it at install time.
     DATABASE_URL: ""
-    # The general-purpose Redis that carries the project event stream. Without
-    # it the events route is never registered and answers 404.
-    REDIS_URL: ""
+    # The live-update plane (project event stream, canvas presence) dials the
+    # top-level `nats` block unless ELITEA_EVENTS_NATS_URL is set here; see
+    # values.yaml.
 
     # --- Current-compatibility plane -------------------------------------------
     # Eight configuration and model-catalogue routes, and the dependency that
@@ -347,9 +347,9 @@ main:
     indexScheduling:
       enabled: false
 
-    # The runtime's own mutually authenticated Redis, separate from the
-    # general-purpose one in env.REDIS_URL above. The password comes from the
-    # redis-producer-password file in the material volume, never from this URL.
+    # The runtime's own mutually authenticated Redis. The password comes from
+    # the redis-producer-password file in the material volume, never from this
+    # URL.
     redis:
       url: "rediss://producer@elitea-runtime-redis:6380/0"
       poolSize: 8

@@ -11,12 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alicebob/miniredis/v2"
 	"github.com/go-chi/chi/v5"
-	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/redis"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
 )
 
 // fakeSource is an in-memory EventSource: it hands the test a send channel it
@@ -26,16 +24,16 @@ import (
 type fakeSource struct {
 	mu          sync.Mutex
 	channel     string
-	events      chan redis.Event
+	events      chan natsbus.Event
 	err         error
 	cancelCalls int
 }
 
 func newFakeSource() *fakeSource {
-	return &fakeSource{events: make(chan redis.Event, 8)}
+	return &fakeSource{events: make(chan natsbus.Event, 8)}
 }
 
-func (f *fakeSource) Raw(_ context.Context, channel string) (<-chan redis.Event, func(), error) {
+func (f *fakeSource) Raw(_ context.Context, channel string) (<-chan natsbus.Event, func(), error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.channel = channel
@@ -77,7 +75,7 @@ func TestStream_DeliversEventThenClosesOnCtxCancel(t *testing.T) {
 	}()
 
 	// Push an event, then cancel the request context to end the stream.
-	src.events <- redis.Event{Type: "message.created", Payload: json.RawMessage(`{"n":1}`)}
+	src.events <- natsbus.Event{Type: "budget.soft_alert", Payload: json.RawMessage(`{"n":1}`)}
 	// Give the handler a moment to write it before we cancel.
 	time.Sleep(50 * time.Millisecond)
 	cancel()
@@ -99,11 +97,85 @@ func TestStream_DeliversEventThenClosesOnCtxCancel(t *testing.T) {
 	if !strings.Contains(body, ": connected") {
 		t.Errorf("missing connected comment; body=%q", body)
 	}
-	if !strings.Contains(body, "event: message.created") || !strings.Contains(body, `data: {"n":1}`) {
+	if !strings.Contains(body, "event: budget.soft_alert") || !strings.Contains(body, `data: {"n":1}`) {
 		t.Errorf("event not written; body=%q", body)
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
 		t.Errorf("Content-Type = %q", ct)
+	}
+}
+
+// Only forwardedEventTypes reach the client. Domain events (conversation.created
+// carries a private conversation's name and creator) and anything forged onto
+// the shared subject by another workload are dropped, payload and all, while
+// the allowed frames around them still arrive in order (PR #1074 review).
+func TestStream_ForwardsOnlyAllowlistedEventTypes(t *testing.T) {
+	src := newFakeSource()
+	h := NewHandlerFromSource(src)
+
+	rec := httptest.NewRecorder()
+	req := newRequestWithProjectID(context.Background(), "42")
+	done := make(chan struct{})
+	go func() {
+		h.Stream(rec, req)
+		close(done)
+	}()
+
+	frames := []natsbus.Event{
+		{Type: "conversation.created", Payload: json.RawMessage(`{"name":"secret-conversation","created_by":9}`)},
+		{Type: "canvas.editors", Payload: json.RawMessage(`{"editors":[]}`)},
+		{Type: "artifact.uploaded", Payload: json.RawMessage(`{"object":"secret-file"}`)},
+		{Type: "pipeline.run.failed", Payload: json.RawMessage(`{"error":"secret-error"}`)},
+		{Type: "", Payload: json.RawMessage(`{"forged":"secret-empty-type"}`)},
+		{Type: "budget.soft_alert ", Payload: json.RawMessage(`{"forged":"secret-near-miss"}`)},
+		{Type: "budget.soft_alert", Payload: json.RawMessage(`{"cost_just_billed_nano":5}`)},
+	}
+	// The channel holds 8, so every frame is queued before the close that ends
+	// the stream: the handler drains them all, then returns.
+	for _, frame := range frames {
+		src.events <- frame
+	}
+	close(src.events)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stream did not return after the source closed")
+	}
+
+	body := rec.Body.String()
+	if strings.Contains(body, "secret") {
+		t.Fatalf("a non-allowlisted frame reached the client; body=%q", body)
+	}
+	for _, unwanted := range []string{"conversation.created", "artifact.uploaded", "pipeline.run.failed"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("event %q reached the client; body=%q", unwanted, body)
+		}
+	}
+	editors := strings.Index(body, "event: canvas.editors")
+	alert := strings.Index(body, "event: budget.soft_alert\n")
+	if editors < 0 || alert < 0 || editors > alert {
+		t.Fatalf("allowlisted frames missing or out of order; body=%q", body)
+	}
+}
+
+func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
+	for _, eventType := range []string{"canvas.editors", "budget.soft_alert"} {
+		if !Forwarded(eventType) {
+			t.Errorf("Forwarded(%q) = false, want true", eventType)
+		}
+	}
+	for _, eventType := range []string{
+		"conversation.created", "artifact.uploaded", "pipeline.run.started",
+		"pipeline.run.succeeded", "pipeline.run.failed", "schedule.fired",
+		"moderation.request.decided", "agent.version.published", "", "canvas.*",
+	} {
+		if Forwarded(eventType) {
+			t.Errorf("Forwarded(%q) = true; every forwarded type is readable by any project viewer", eventType)
+		}
+	}
+	if len(forwardedEventTypes) != 2 {
+		t.Errorf("forwardedEventTypes has %d entries, want 2; widening it is a privacy decision — update this test deliberately", len(forwardedEventTypes))
 	}
 }
 
@@ -396,85 +468,5 @@ func TestTheProjectStreamRefusesADifferentPermission(t *testing.T) {
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d for a caller holding an unrelated permission, want %d",
 			rec.Code, http.StatusForbidden)
-	}
-}
-
-func TestNewHandler_WrapsRedisClient(t *testing.T) {
-	// Construction only — no live server required. Confirms the Redis path
-	// builds a redisSource-backed handler.
-	rdb := goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:0"})
-	defer func() { _ = rdb.Close() }()
-	h := NewHandler(rdb)
-	if _, ok := h.source.(*redisSource); !ok {
-		t.Errorf("NewHandler source = %T, want *redisSource", h.source)
-	}
-}
-
-func TestRedisSource_RoundTripAndMalformedSkip(t *testing.T) {
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatalf("miniredis: %v", err)
-	}
-	defer mr.Close()
-
-	rdb := goredis.NewClient(&goredis.Options{Addr: mr.Addr()})
-	defer func() { _ = rdb.Close() }()
-	rs := &redisSource{client: rdb}
-
-	ctx := context.Background()
-	out, cancel, err := rs.Raw(ctx, "project:5:events")
-	if err != nil {
-		t.Fatalf("Raw: %v", err)
-	}
-	defer cancel()
-
-	// Wait for the goroutine's subscription to be live before publishing.
-	deadline := time.After(2 * time.Second)
-	for len(mr.PubSubChannels("*")) == 0 {
-		select {
-		case <-deadline:
-			t.Fatal("subscription never registered")
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
-
-	// A malformed message is skipped; a valid envelope is decoded and forwarded.
-	mr.Publish("project:5:events", "{not json")
-	valid, _ := json.Marshal(redis.Event{Type: "conversation.created", Payload: json.RawMessage(`{"id":"c1"}`)})
-	mr.Publish("project:5:events", string(valid))
-
-	select {
-	case e := <-out:
-		if e.Type != "conversation.created" {
-			t.Errorf("type = %q, want conversation.created", e.Type)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("valid event not delivered")
-	}
-}
-
-func TestRedisSource_CancelIsIdempotent(t *testing.T) {
-	// Subscribe against a client pointed at an unroutable addr; we never
-	// receive events, but the cancel func must close the channel exactly once
-	// even when invoked twice.
-	rdb := goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:0"})
-	defer func() { _ = rdb.Close() }()
-	rs := &redisSource{client: rdb}
-
-	out, cancel, err := rs.Raw(context.Background(), "project:1:events")
-	if err != nil {
-		t.Fatalf("Raw: %v", err)
-	}
-	cancel()
-	cancel() // must not panic (double close guard)
-
-	select {
-	case _, ok := <-out:
-		if ok {
-			// Drain a possible buffered value, then expect close.
-			<-out
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("channel not closed after cancel")
 	}
 }

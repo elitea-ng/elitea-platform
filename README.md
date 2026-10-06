@@ -9,7 +9,7 @@ elitea-platform/
 ├── services/
 │   ├── elitea-llm-gateway/  # LLM gateway service
 │   ├── elitea-main/         # Go API server (chi/v5, pgx/v5, go-redis/v9)
-│   ├── elitea-scheduler/    # Scheduled job runner (Go, cron + Redis RPC)
+│   ├── elitea-scheduler/    # Background workers: price sync, budget write-back, retention sweeps (Go)
 │   └── elitea-worker-python/# Python worker runtime and SDK
 ├── apps/
 │   ├── elitea-ui/           # React SPA (git submodule)
@@ -89,7 +89,7 @@ alone.
 Or via Task: `task standalone:up` / `task standalone:down`.
 
 Compose project `elitea-standalone`. Ports: `8084` entry (Traefik), `8085`
-gateway (direct, debug), `15433` postgres, `16380` redis, `9400` oidc-mock
+gateway (direct, debug), `15433` postgres, `9400` oidc-mock
 (**fixed** — the mock's issuer is derived from its Host header, so the port
 cannot be remapped). Because of that fixed port, this stack and the E2E stack
 (`apps/elitea-web/scripts/e2e-stack.sh`, also on 9400 by default) cannot run at
@@ -165,7 +165,7 @@ prints only fixed generic failures and never prints the file path or contents.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | — | PostgreSQL connection string |
-| `REDIS_URL` | — | Redis host:port |
+| `ELITEA_EVENTS_NATS_URL` | — | NATS (JetStream) for live updates: project SSE stream and canvas presence (domain events go to webhooks only). Unset disables them; set but unreachable stops startup |
 
 ### The index plane, and the service that used to serve it
 

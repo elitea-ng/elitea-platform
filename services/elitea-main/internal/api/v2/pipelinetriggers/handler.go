@@ -99,11 +99,10 @@
 // resume". The two BEHAVIOURS are honoured exactly, and are the reason this
 // paragraph exists rather than a silent deviation on placement.
 //
-// elitea-scheduler has exactly one dispatch primitive: a Redis PUBLISH of an
-// `rpc_func` name onto the arbiter channel. Its own code records that this
-// channel has no consumer in a Go stack — "legacy Pylon is the only consumer of
-// the arbiter wire format" (services/elitea-scheduler/internal/scheduler/
-// scheduler.go, issue 305). Admitting a pipeline run means freezing a version
+// elitea-scheduler's only dispatch primitive was a Redis PUBLISH of an
+// `rpc_func` name onto the arbiter channel, which had no consumer in a Go stack
+// (issue 305); it has since been deleted and the daemon dispatches nothing.
+// Admitting a pipeline run means freezing a version
 // snapshot and writing chat rows and the runtime outbox in ONE transaction,
 // which is elitea-main's, and which has no remote entry point. So firing from
 // that daemon would need a NEW service credential and a NEW inbound route whose

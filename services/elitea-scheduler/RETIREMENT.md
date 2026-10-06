@@ -1,56 +1,52 @@
 # `elitea-scheduler` ownership disposition
 
-This process is not the owner of product schedule occurrences.
+This process is not the owner of product schedule occurrences, and it no longer
+dispatches anything.
 
-The current `internal/scheduler` implementation polls `centry.schedule`, takes a
-Redis tick lock, and publishes legacy Pylon/Arbiter RPC payloads. It has no
-PostgreSQL occurrence ledger, lease epoch, or fence. Running it for the same job
-as the `elitea-main` scheduling kernel would create two clocks and is forbidden.
+## The legacy schedule dispatcher was deleted
 
-For the focused indexing transition:
+Until this change the daemon ran a once-a-minute tick that polled
+`centry.schedule`, took a `scheduler_tick` lock in Redis (Valkey), and PUBLISHed
+legacy Pylon/Arbiter pickle RPC payloads to the `elitea_rpc` channel. Nothing in
+the Go stack subscribed to that channel (issue #305): in a Go-only deployment
+every publish reached zero subscribers, and the guard added for #305 only
+stopped the tick from recording those runs as done.
 
-- the current `index_scheduling` row is disabled in the hybrid deployment;
-- `elitea-main` registers `index.schedule.scan.v1` on its one-minute cadence;
-- PostgreSQL `elitea_runtime.scheduled_job_cursors` and
-  `elitea_runtime.scheduled_occurrences` own planning, takeover, and completion;
-- pipeline and other current `centry.schedule` rows remain owned by the current
-  Pylon scheduling plugin until each receives a typed Go disposition; and
-- the legacy Redis/Pylon scheduler must not be enabled as a fallback for a job
-  registered in `elitea-main`.
+The tick, its Redis lock, the RPC client, `REDIS_URL`, `RPC_CHANNEL`,
+`RPC_HMAC_KEY` and `SCHEDULER_INSTANCE_ID` were removed together. The daemon no
+longer connects to Redis at all.
 
-## Dispatch is only recorded when it is received
+What owns scheduled work now:
 
-The tick publishes to the `elitea_rpc` Redis channel, whose only consumer is
-legacy Pylon — no Go service in this repository subscribes to it. Redis
-`PUBLISH` to zero subscribers returns 0 and no error, so until issue #305 the
-scheduler stamped `centry.schedule.last_run` after every publish and a Go-only
-deployment recorded every due schedule as run while executing none of them. The
-healthier the schedule history looked, the more completely the product was
-broken.
+- `elitea-main` registers `index.schedule.scan.v1` and the pipeline schedule
+  tick on its own platform scheduler; PostgreSQL
+  `elitea_runtime.scheduled_job_cursors` and
+  `elitea_runtime.scheduled_occurrences` own planning, takeover, and completion.
+- `centry.schedule` rows are still listed and edited by the admin Schedules
+  surface. In a hybrid deployment, a legacy Pylon scheduling plugin running
+  against the same database is the only thing that executes them; nothing in
+  this repository does.
 
-The scheduler now reads the subscriber count `PUBLISH` returns and **refuses to
-stamp `last_run` when it is zero**, logging at ERROR with the channel name. The
-row is left untouched rather than advanced, so the job is still due on the next
-tick and a consumer that was restarting picks it up instead of losing its
-window. The hybrid deployment, where Pylon subscribes, is unaffected — the count
-is at least 1 and the stamp happens as before. This note is not the guard; the
-guard is `internal/scheduler/dispatch_test.go`, which asserts the stored
-`last_run`, not that a publish happened.
+## What this binary still runs
 
-The price-catalog sync, budget write-back and audit-retention workers currently
-sharing this binary are independent lifecycle responsibilities. They require an
-explicit relocation or retained-service decision before this image can be
-deleted. This note does not claim that work is complete.
+The price-catalog sync, budget write-back, audit-retention, sync-tombstone
+retention and native-auth retention workers are independent lifecycle
+responsibilities that share this binary. They require an explicit relocation or
+retained-service decision before this image can be deleted. This note does not
+claim that work is complete.
+
+The retention sweeps honour the platform maintenance switch through
+`internal/maintenance`, which reads the same `centry.platform_config` row the
+admin Configuration page writes.
 
 ## The audit-retention sweep is not a schedule
 
 `internal/auditretention` (issue #619) deletes rows of `centry.audit_events`
 that are older than a configured window. It is NOT a `centry.schedule` row and
-it is not registered with the `elitea-main` scheduling kernel, so the two-clocks
-prohibition above does not apply to it: there is no occurrence ledger to
-disagree about, no lease epoch and no cursor. The cutoff is recomputed from the
-clock on every pass, the DELETE is idempotent, and a pass that never runs costs
-only a later pass.
+it is not registered with the `elitea-main` scheduling kernel: there is no
+occurrence ledger to disagree about, no lease epoch and no cursor. The cutoff is
+recomputed from the clock on every pass, the DELETE is idempotent, and a pass
+that never runs costs only a later pass.
 
 It takes its own loop, started from `cmd/elitea-scheduler`, in the shape the
 price-sync and budget write-back workers already use. When this image is

@@ -89,7 +89,6 @@ import (
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/jackc/pgx/v5/pgxpool"
-	goredis "github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -325,17 +324,24 @@ type RouterConfig struct {
 	SharedChatStore      sharedchat.Store
 	SharedChatTranscript sharedchat.TranscriptStore
 	WebhookRepo          webhook.Repository
-	RedisClient          *goredis.Client
-	EventSource          v2events.EventSource
+	// EventSource is the project SSE stream's transport — the live-update
+	// NATS bus (internal/infra/natsbus). nil means the deployment has no
+	// live-update plane and /events/prompt_lib/{projectID} is not registered.
+	EventSource v2events.EventSource
+	// CanvasPresence is canvas presence's cross-replica wiring (roster store
+	// plus the bus the roster is published on). The zero value serves the
+	// route on the in-process roster; it is not a registration gate.
+	CanvasPresence v2canvaspresence.Backend
 	// DomainEvents is #876's second half: the ONE domain-events Publisher
 	// every producer below (conversation create, artifact upload, agent
 	// publish/unpublish, moderation decision, pipeline run admission) emits
-	// through, which fans out to the project SSE bus AND — via the webhook
-	// Dispatcher composed as one of its Sinks in cmd/elitea-main/main.go —
-	// to every registered webhook subscribed to that event.
+	// through, which fans out — via the webhook Dispatcher composed as its
+	// Sink in cmd/elitea-main/main.go — to every registered webhook
+	// subscribed to that event. Its Bus is always events.NoopBus: domain
+	// events never reach the project SSE stream (newDomainEventsPublisher).
 	//
 	// main.go builds this UNCONDITIONALLY, never leaving it nil: even with
-	// no Redis and no webhook repository it is a Publisher over
+	// no webhook repository it is a Publisher over
 	// events.NoopBus with zero sinks, so every `.WithEvents(cfg.DomainEvents)`
 	// call below can pass it straight through with no nil check — passing a
 	// nil *events.Publisher through an interface-typed Option parameter
@@ -3467,15 +3473,15 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 					// is not a wider claim than reading it, and reusing the
 					// string is what keeps this route out of a new migration.
 					//
-					// WithRedis is called UNCONDITIONALLY on purpose. It is a
-					// no-op on a nil client, and the route serves either way on
-					// the package's in-process store, so this is not a
+					// WithBackend is called UNCONDITIONALLY on purpose. It is a
+					// no-op on the zero Backend, and the route serves either way
+					// on the package's in-process store, so this is not a
 					// registration gate — see the option's own note.
 					r.With(projectPermission(v2canvaspresence.Permission)).
 						Post("/canvas/prompt_lib/{projectID}/{canvasID}/presence",
 							v2canvaspresence.NewHandler(
 								cfg.ConvsRepo,
-								v2canvaspresence.WithRedis(cfg.RedisClient),
+								v2canvaspresence.WithBackend(cfg.CanvasPresence),
 							).Heartbeat)
 					// attachment_storage has no pylon module; it writes the
 					// conversation's own storage setting, so it takes
@@ -4530,19 +4536,12 @@ func newProductionRouter(cfg RouterConfig) chi.Router {
 			//
 			// The project event stream. Until #496 it carried no gate, so any
 			// authenticated caller could subscribe to
-			// events.ProjectChannel({projectID}) for any tenant. Both transport
-			// arms take the same resolver: two registrations of one surface must
-			// not carry two authorization contracts, and #152 records what
-			// happens when the two arms of this exact fallback are allowed to
-			// drift.
+			// events.ProjectChannel({projectID}) for any tenant. It had a second,
+			// Redis transport arm until that bus was retired; #152 records what
+			// happened when both arms of that fallback were left unwired.
 			if cfg.EventSource != nil {
 				r.Mount("/events/prompt_lib/{projectID}", v2events.NewHandlerFromSource(
 					cfg.EventSource,
-					v2events.WithPermissionResolver(coreResolver),
-				).Routes())
-			} else if cfg.RedisClient != nil {
-				r.Mount("/events/prompt_lib/{projectID}", v2events.NewHandler(
-					cfg.RedisClient,
 					v2events.WithPermissionResolver(coreResolver),
 				).Routes())
 			}

@@ -60,7 +60,7 @@ installed cert-manager are reused, and the chart install is a
    tree a compose stack already minted is reused untouched — and puts it into
    the two Secrets the chart names;
 5. applies `manifests/infra.yaml` — PostgreSQL (`pgvector/pgvector:0.8.5-pg16`,
-   with `CREATE EXTENSION vector` in its initdb), Redis and an S3-compatible
+   with `CREATE EXTENSION vector` in its initdb) and an S3-compatible
    object store (rustfs) — and the four other Secrets the chart names by name;
 6. creates the artifact bucket **before** elitea-main starts, because
    `configureObjectStoreRetentionLifecycle` has no tolerance for a missing one
@@ -177,7 +177,7 @@ LLM gateway stay off throughout.
 | `kind-stack.sh` | `up` / `verify` / `down` |
 | `values-kind.yaml` | the minimal chart values |
 | `manifests/ca-issuer.yaml` | the self-signed CA and the `elitea-internal-ca` ClusterIssuer |
-| `manifests/infra.yaml` | PostgreSQL, Redis, rustfs |
+| `manifests/infra.yaml` | PostgreSQL, rustfs |
 | `seed.sql` | the wiki toolkit, its credential, the bucket row, the PAT |
 
 ## The real engine

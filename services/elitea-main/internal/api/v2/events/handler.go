@@ -2,29 +2,29 @@ package events
 
 import (
 	"context"
-	"encoding/json"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	goredis "github.com/redis/go-redis/v9"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/redis"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/ssewriter"
 )
 
-// EventSource is the transport-agnostic seam the SSE handler consumes. It yields
-// decoded redis.Event values on the given channel until the caller invokes the
-// returned cancel func or the request context is cancelled. Both transports
-// implement it: the NATS EventBus (internal/infra/natsbus.EventBus.Raw) and the
-// Redis adapter (redisSource) below. This keeps the project SSE stream on the
-// same transport as the rest of the EventBus so re-pointing to NATS does not
-// split event delivery.
+// EventSource is the seam the SSE handler consumes. It yields decoded events on
+// the given channel until the caller invokes the returned cancel func or the
+// request context is cancelled. The live-update NATS bus
+// (internal/infra/natsbus.EventBus.Raw) implements it — the same bus canvas
+// presence publishes on and the subject the LLM gateway's soft alert uses. The
+// Redis adapter that used to sit beside it was deleted with the plain Redis at
+// REDIS_URL. Whatever arrives, only forwardedEventTypes reach a client.
 type EventSource interface {
-	Raw(ctx context.Context, channel string) (<-chan redis.Event, func(), error)
+	Raw(ctx context.Context, channel string) (<-chan natsbus.Event, func(), error)
 }
 
 // StreamPermission gates the project event stream (#496).
@@ -32,11 +32,9 @@ type EventSource interface {
 // THE LEGACY MATRIX HAS NO ENTRY FOR THIS ROUTE — the reference serves no
 // project SSE stream — so this is a proposal, and this is its reason.
 //
-// The stream is the project's own activity feed. Its declared vocabulary is
-// application, skill, folder, conversation and message change notices plus the
-// LLM gateway's budget.soft_alert (internal/events/publisher.go), and the only
-// publisher a shipped stack actually has today is that soft alert, which carries
-// the project's accrued cost. The platform already has a name for "this caller
+// The stream is the project's own live feed. What it forwards is exactly
+// forwardedEventTypes: canvas presence rosters and the LLM gateway's
+// budget.soft_alert. The soft alert carries the project's accrued cost. The platform already has a name for "this caller
 // may observe this project": `models.project_context.view`. It gates
 // GET /api/v2/elitea_core/project_info/{mode}/{projectID}/project-info and every
 // project-scoped budget read — /usage/prompt_lib/{projectID}/usage and
@@ -57,6 +55,35 @@ type EventSource interface {
 // permission that describes none of its payloads.
 const StreamPermission = "models.project_context.view"
 
+// forwardedEventTypes is the COMPLETE set of event types the stream relays to
+// a client. Everything else that arrives on the project's subject is dropped.
+//
+// It is an allowlist, not a denylist, because the subject is a shared broker
+// subject (gateway.events.project.<id>.events) that any workload holding NATS
+// publish rights can write to, and because the stream's gate
+// (StreamPermission, which project viewers hold) is wider than many payloads a
+// project can produce. Domain events — conversation.created carries a private
+// conversation's name and creator — are kept off the bus at the composition
+// root (cmd/elitea-main, newDomainEventsPublisher); this list is the second
+// layer, so a regression there, or a forged frame from another workload,
+// still never reaches a browser. Adding a type here is a decision that every
+// project viewer may read its payload.
+var forwardedEventTypes = map[string]struct{}{
+	// The canvas editor roster (#622): who has a canvas open. Every viewer of
+	// the canvas sees the same roster in the heartbeat's own response.
+	canvaspresence.EventType: {},
+	// The LLM gateway's 80% budget soft alert (design §8.3): the project's
+	// accrued cost, already readable through the project-scoped budget routes
+	// gated on the same permission.
+	events.EventBudgetSoftAlert: {},
+}
+
+// Forwarded reports whether the stream relays eventType to clients.
+func Forwarded(eventType string) bool {
+	_, ok := forwardedEventTypes[eventType]
+	return ok
+}
+
 type Handler struct {
 	source EventSource
 	// permissionResolver gates Stream. nil answers 403 — see require below.
@@ -73,15 +100,8 @@ func WithPermissionResolver(resolver auth.PermissionResolver) Option {
 	return func(h *Handler) { h.permissionResolver = resolver }
 }
 
-// NewHandler wraps a raw *goredis.Client for the Redis transport (preserves the
-// existing call site). NewHandlerFromSource takes any EventSource (used for the
-// NATS transport).
-func NewHandler(rdb *goredis.Client, opts ...Option) *Handler {
-	return newHandler(&redisSource{client: rdb}, opts...)
-}
-
-// NewHandlerFromSource builds the handler over an explicit EventSource (e.g. the
-// NATS EventBus), used when the platform EventBus is re-pointed to NATS.
+// NewHandlerFromSource builds the handler over an EventSource (the live-update
+// NATS bus in production).
 func NewHandlerFromSource(src EventSource, opts ...Option) *Handler {
 	return newHandler(src, opts...)
 }
@@ -155,6 +175,14 @@ func (h *Handler) Stream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
+			if !Forwarded(evt.Type) {
+				// Type only, never the payload: an unlisted frame is either a
+				// regression upstream or a forgery, and either way its body is
+				// not ours to copy into logs.
+				slog.Debug("events: dropped an event type the project stream does not forward",
+					"type", evt.Type, "source", evt.Source)
+				continue
+			}
 			_ = sse.Event(evt.Type, string(evt.Payload))
 		case <-heartbeat.C:
 			if err := sse.Comment("heartbeat"); err != nil {
@@ -162,54 +190,4 @@ func (h *Handler) Stream(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-}
-
-// redisSource adapts a *goredis.Client to EventSource, preserving the original
-// Redis pub/sub subscription behaviour (decode the {type,payload} envelope).
-type redisSource struct {
-	client *goredis.Client
-}
-
-func (rs *redisSource) Raw(ctx context.Context, channel string) (<-chan redis.Event, func(), error) {
-	sub := rs.client.Subscribe(ctx, channel)
-	out := make(chan redis.Event, 64)
-	done := make(chan struct{})
-	cancel := func() {
-		select {
-		case <-done:
-		default:
-			close(done)
-		}
-	}
-
-	go func() {
-		defer close(out)
-		defer func() { _ = sub.Close() }()
-		ch := sub.Channel()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-done:
-				return
-			case msg, ok := <-ch:
-				if !ok {
-					return
-				}
-				var evt redis.Event
-				if err := json.Unmarshal([]byte(msg.Payload), &evt); err != nil {
-					continue
-				}
-				select {
-				case out <- evt:
-				case <-ctx.Done():
-					return
-				case <-done:
-					return
-				}
-			}
-		}
-	}()
-
-	return out, cancel, nil
 }

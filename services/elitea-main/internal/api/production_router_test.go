@@ -10,11 +10,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/oapiserver"
@@ -2441,16 +2439,6 @@ func TestProductionBrowserAuthSurfaceNeverSucceedsWithoutCredentials(t *testing.
 			}
 		})
 	}
-}
-
-// newUnreachableRedisClient returns a redis client pointed at a loopback
-// address nothing listens on. A test that composes a redis-backed route group
-// and expects requests to reach it needs a non-nil client to avoid a
-// nil-pointer panic; pointing it at an unreachable address instead of a real
-// redis instance gives a fast, deterministic connection error, which the
-// production code already treats as "this source has nothing to give".
-func newUnreachableRedisClient() *goredis.Client {
-	return goredis.NewClient(&goredis.Options{Addr: "127.0.0.1:1", DialTimeout: 50 * time.Millisecond})
 }
 
 func newCompleteProductionRouter(sessionSecret string) chi.Router {

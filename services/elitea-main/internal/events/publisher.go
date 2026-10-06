@@ -143,9 +143,9 @@ type Bus interface {
 }
 
 // NoopBus discards every publish. It is the composition root's fallback Bus
-// when no Redis (and no NATS) EventBus is configured, so a deployment with
-// neither still gets a working domain-events Publisher: the project SSE
-// stream simply has nothing to read (it is nil-gated separately in
+// when no live-update NATS bus is configured (ELITEA_EVENTS_NATS_URL unset),
+// so such a deployment still gets a working domain-events Publisher: the
+// project SSE stream is not registered at all (it is nil-gated separately in
 // router.go), but webhook delivery — which reaches this Publisher's Sinks,
 // not its Bus — still works, because Emit calls both regardless of whether
 // the Bus publish succeeds.
@@ -195,6 +195,10 @@ func (p *Publisher) Emit(ctx context.Context, projectID, eventType string, paylo
 	}
 }
 
+// ProjectChannel is the logical channel of one project's live event stream.
+// The live-update bus maps it to the NATS subject
+// gateway.events.project.<id>.events (internal/infra/natsbus, subjectFor) —
+// the same subject the LLM gateway publishes budget.soft_alert on.
 func ProjectChannel(projectID string) string {
 	return fmt.Sprintf("project:%s:events", projectID)
 }

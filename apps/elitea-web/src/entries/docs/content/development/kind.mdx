@@ -50,7 +50,7 @@ Installs cert-manager, then applies `manifests/ca-issuer.yaml`: a self-signed `C
 Mints (or reuses) the production-authentication material through `deploy/scripts/gen-runtime-certs.sh` — the same idempotent script the compose stacks use — and writes it into the Secrets the chart names.
 </Step>
 <Step title="Apply infrastructure manifests">
-Applies `manifests/infra.yaml`: PostgreSQL (`pgvector/pgvector`, with `CREATE EXTENSION vector` run in its `initdb`), Redis, and an S3-compatible object store (rustfs), plus the remaining Secrets the chart names.
+Applies `manifests/infra.yaml`: PostgreSQL (`pgvector/pgvector`, with `CREATE EXTENSION vector` run in its `initdb`) and an S3-compatible object store (rustfs), plus the remaining Secrets the chart names.
 </Step>
 <Step title="Create the artifact bucket">
 Creates it before elitea-main starts; omitting it causes the Deployment to crash-loop.

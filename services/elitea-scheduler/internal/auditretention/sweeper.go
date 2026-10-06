@@ -50,9 +50,8 @@
 // `FOR UPDATE SKIP LOCKED` in the inner select is what makes a second replica
 // harmless rather than merely unlikely: two sweepers select disjoint row sets
 // instead of blocking on each other. That is also why there is no distributed
-// lock here, unlike the dispatch tick — a duplicated DELETE removes rows that
-// were going to be removed anyway, while a duplicated `last_run` stamp is a
-// claim that work ran.
+// lock here: a duplicated DELETE removes rows that were going to be removed
+// anyway.
 //
 // # The floor
 //
@@ -87,7 +86,7 @@
 // So the admin Audit Trail page gains nothing here and no platform-settings key
 // is added. If the window later becomes an operator-editable setting, this
 // package reads it from `centry.platform_config` the way
-// internal/scheduler/maintenance.go reads the maintenance switch, the env value
+// internal/maintenance reads the maintenance switch, the env value
 // becomes the default for a deployment that has never set it, and the admin
 // field owes the permission, the floor and the change record listed above.
 package auditretention
@@ -154,7 +153,7 @@ type Store interface {
 }
 
 // Gate reports whether the platform is in a maintenance window. It is supplied
-// by the caller — scheduler.(*Scheduler).MaintenanceActive — rather than
+// by the caller — maintenance.(*Switch).Active — rather than
 // re-implemented here, because the `centry.platform_config` section and key it
 // reads are a database contract with no compiler behind them, and a second copy
 // of those strings is a second thing that can drift.
@@ -335,7 +334,7 @@ func (s *Sweeper) passTimeout() time.Duration {
 func (s *Sweeper) Sweep(ctx context.Context) (Stats, error) {
 	stats := Stats{}
 
-	// Asked ONCE per pass, as the dispatch tick asks it once per tick. A pass
+	// Asked ONCE per pass. A pass
 	// is bounded to MaxBatchesPerPass batches, so it cannot straddle a window
 	// for long, and asking per batch would put a point read in front of every
 	// DELETE for a window that opens a few times a year.

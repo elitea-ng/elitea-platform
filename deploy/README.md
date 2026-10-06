@@ -452,7 +452,7 @@ file whose capability set matches `docker-compose.standalone-full.yml`.
 | `ELITEA_CONFIGURATIONS_MUTATION_ENABLED` | off | off | `ELITEA_CONFIGURATIONS_ENABLED` **and** `runtime.enabled` — read below |
 | `ELITEA_INDEX_TYPES_ENABLED` | off | **on** | production authentication |
 | `ELITEA_APPLICATION_SKILLS_ENABLED` | off | **on** | production authentication |
-| `REDIS_URL` | empty | **set at install** | a Redis the cluster can reach |
+| `ELITEA_EVENTS_NATS_URL` | **derived** from `nats` | derived | the shared NATS, with JetStream (the plain Redis/Valkey it replaced is gone) |
 | `ADMIN_UI_STATIC_DIR` | **set** | set | the image ships the bundle at it |
 | `ELITEA_RUNTIME_ENABLED` and its block | off | **on** | production authentication **and** runtime material — read below |
 
@@ -1117,9 +1117,12 @@ the Application values instead. The order is the same.
 
 Stated plainly, because the gap between compose and Helm is where deploys break:
 
-- **No PostgreSQL and no Redis.** No chart here provisions them. The migration
-  hook fails against a cluster where they do not already exist, and against one
-  where `postgresql.existingSecret` and `redis` have not been pointed at them.
+- **No PostgreSQL and no NATS.** No chart here provisions them (the runtime's
+  TLS Redis, `runtimeRedis`, is the one store the chart does render). The
+  migration hook fails against a cluster where PostgreSQL does not already
+  exist or `postgresql.existingSecret` has not been pointed at it, and
+  elitea-main stops at startup when the NATS named by `nats` (its
+  `ELITEA_EVENTS_NATS_URL`) is unreachable or has no JetStream.
   The table in [Values an operator supplies](#values-an-operator-supplies-and-where-each-one-goes-475)
   names both.
   The database itself may be **empty**. `elitea-migrate` embeds the pylon-era

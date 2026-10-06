@@ -14,10 +14,19 @@
 # was scaffolded at deploy/helm/elitea-platform/ (an empty .gitkeep, removed in
 # the same change). One composition mechanism, not two — see deploy/README.md.
 #
-# EXTERNAL PREREQUISITES this root does NOT install: PostgreSQL and Redis.
-# No chart in deploy/helm provisions them, so the wave-1 elitea-main migration
-# hook will fail against a cluster where they do not already exist and where
-# each Application's values have not been pointed at them.
+# EXTERNAL PREREQUISITES this root does NOT install: PostgreSQL, and the
+# runtime's TLS Redis (`runtimeRedis`, the chat runtime's command/output
+# streams — only when chat is on). No chart in deploy/helm provisions them, so
+# the wave-1 elitea-main migration hook will fail against a cluster where they
+# do not already exist and where each Application's values have not been
+# pointed at them. The plain Redis this root once listed is gone.
+#
+# NATS WITH JETSTREAM is installed HERE (applications/nats.yaml, wave -2, plus
+# its bootstrap at -1) in the elitea-gateway namespace. The gateway's budget
+# counters, the scheduler and elitea-main's live-update plane (project SSE
+# stream, canvas presence KV) all dial it; applications/elitea.yaml points
+# nats.namespace at it. A NATS you bring yourself must run JetStream, or
+# elitea-main refuses to start.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

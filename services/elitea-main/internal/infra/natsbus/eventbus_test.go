@@ -4,13 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats.go"
-
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/redis"
 )
 
 // fakeConn is an in-memory natsConn: Publish fans out to every ChanSubscribe
@@ -28,6 +29,12 @@ type fakeConn struct {
 	drainCalled bool
 	closeCalled bool
 	subErr      error
+	// calls records FlushTimeout/Drain/Close in order (Close tests).
+	calls []string
+	// closed is what IsClosed reports; drainCloses makes Drain set it, the
+	// way a drain that finishes does.
+	closed      bool
+	drainCloses bool
 }
 
 type fakeSub struct {
@@ -79,10 +86,38 @@ func (f *fakeConn) ChanSubscribe(subj string, ch chan *nats.Msg) (subscription, 
 	return fs, nil
 }
 
-func (f *fakeConn) FlushTimeout(time.Duration) error { return f.flushErr }
-func (f *fakeConn) RTT() (time.Duration, error)      { return time.Millisecond, f.rttErr }
-func (f *fakeConn) Drain() error                     { f.drainCalled = true; return f.drainErr }
-func (f *fakeConn) Close()                           { f.closeCalled = true }
+func (f *fakeConn) FlushTimeout(time.Duration) error {
+	f.record("flush")
+	return f.flushErr
+}
+func (f *fakeConn) RTT() (time.Duration, error) { return time.Millisecond, f.rttErr }
+func (f *fakeConn) Drain() error {
+	f.record("drain")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.drainCalled = true
+	if f.drainErr == nil && f.drainCloses {
+		f.closed = true
+	}
+	return f.drainErr
+}
+func (f *fakeConn) IsClosed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.closed
+}
+func (f *fakeConn) Close() {
+	f.record("close")
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closeCalled = true
+	f.closed = true
+}
+func (f *fakeConn) record(call string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, call)
+}
 
 // subjectMatches implements NATS subject matching for tests ('*' one token,
 // '>' tail).
@@ -149,7 +184,7 @@ func TestPublish_EnvelopeAndSubject(t *testing.T) {
 	if subj != "gateway.events.project.7.events" {
 		t.Errorf("subject = %q", subj)
 	}
-	var evt redis.Event
+	var evt Event
 	if err := json.Unmarshal([]byte(data), &evt); err != nil {
 		t.Fatalf("envelope not decodable: %v", err)
 	}
@@ -187,6 +222,25 @@ func TestPublish_FlushError(t *testing.T) {
 	}
 }
 
+// A buffered bus never waits on the server: the same flush failure that the
+// default bus reports must not reach a request-path caller, and the message
+// must still have been handed to the connection.
+func TestPublish_BufferedSkipsFlush(t *testing.T) {
+	fc := &fakeConn{flushErr: errors.New("flush timeout")}
+	eb := New(fc, "src", WithBufferedPublish())
+	if err := eb.Publish(context.Background(), "project:7:events", "t", map[string]int{"a": 1}); err != nil {
+		t.Fatalf("buffered publish returned %v, want nil", err)
+	}
+	if len(fc.published) != 1 || fc.published[0][0] != "gateway.events.project.7.events" {
+		t.Fatalf("published = %v, want one message on gateway.events.project.7.events", fc.published)
+	}
+	// A transport error is still reported.
+	failing := New(&fakeConn{publishErr: errors.New("closed")}, "src", WithBufferedPublish())
+	if err := failing.Publish(context.Background(), "c", "t", nil); err == nil {
+		t.Fatal("buffered publish swallowed a transport error")
+	}
+}
+
 func TestSubscribe_RoundTrip(t *testing.T) {
 	fc := &fakeConn{}
 	eb := New(fc, "src")
@@ -194,10 +248,10 @@ func TestSubscribe_RoundTrip(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	got := make(chan redis.Event, 1)
+	got := make(chan Event, 1)
 	// Subscribe to the "project:*" catch-all → gateway.events.project.>, which
 	// matches the published gateway.events.project.9.events subject.
-	eb.Subscribe(ctx, "project:*", func(_ context.Context, e redis.Event) error {
+	eb.Subscribe(ctx, "project:*", func(_ context.Context, e Event) error {
 		got <- e
 		return nil
 	})
@@ -226,7 +280,7 @@ func TestSubscribe_MalformedSkippedHandlerErrorLogged(t *testing.T) {
 
 	var calls int
 	var mu sync.Mutex
-	eb.Subscribe(ctx, "c", func(_ context.Context, _ redis.Event) error {
+	eb.Subscribe(ctx, "c", func(_ context.Context, _ Event) error {
 		mu.Lock()
 		calls++
 		mu.Unlock()
@@ -264,14 +318,14 @@ func TestSubscribe_SubError(t *testing.T) {
 	fc := &fakeConn{subErr: errors.New("no sub")}
 	eb := New(fc, "src")
 	// Must not panic; simply logs and returns.
-	eb.Subscribe(context.Background(), "c", func(context.Context, redis.Event) error { return nil })
+	eb.Subscribe(context.Background(), "c", func(context.Context, Event) error { return nil })
 }
 
 func TestSubscribe_CtxCancelStops(t *testing.T) {
 	fc := &fakeConn{}
 	eb := New(fc, "src")
 	ctx, cancel := context.WithCancel(context.Background())
-	eb.Subscribe(ctx, "c", func(context.Context, redis.Event) error { return nil })
+	eb.Subscribe(ctx, "c", func(context.Context, Event) error { return nil })
 	waitForSubs(t, fc, 1)
 	fc.mu.Lock()
 	sub := fc.subs[0]
@@ -376,17 +430,95 @@ func TestPing(t *testing.T) {
 }
 
 func TestClose(t *testing.T) {
-	// Clean drain: Close should not fall through to Close().
-	fc := &fakeConn{}
+	// Clean shutdown: flush, then drain, and the drain closes the connection
+	// itself — no forced Close().
+	fc := &fakeConn{drainCloses: true}
 	New(fc, "s").Close()
-	if !fc.drainCalled || fc.closeCalled {
-		t.Errorf("drain=%v close=%v; want drain only", fc.drainCalled, fc.closeCalled)
+	if got := strings.Join(fc.calls, ","); got != "flush,drain" {
+		t.Errorf("calls = %q, want flush,drain", got)
 	}
-	// Drain error: falls back to Close().
+	// Drain error (nats.go returns one while reconnecting): falls back to Close().
 	fc2 := &fakeConn{drainErr: errors.New("drain fail")}
 	New(fc2, "s").Close()
 	if !fc2.closeCalled {
 		t.Error("expected Close() fallback on drain error")
+	}
+	// A failed flush is logged, not fatal: the drain still runs.
+	fc3 := &fakeConn{flushErr: errors.New("flush timeout"), drainCloses: true}
+	New(fc3, "s").Close()
+	if !fc3.drainCalled || fc3.closeCalled {
+		t.Errorf("after a flush error: drain=%v close=%v; want drain only", fc3.drainCalled, fc3.closeCalled)
+	}
+	// An already-closed connection is left alone.
+	fc4 := &fakeConn{closed: true}
+	New(fc4, "s").Close()
+	if len(fc4.calls) != 0 {
+		t.Errorf("calls on a closed connection = %v, want none", fc4.calls)
+	}
+}
+
+// A drain that never finishes (Drain is async in nats.go) must not hold
+// shutdown past the bound: Close() is forced at the deadline.
+func TestCloseIsBoundedWhenTheDrainHangs(t *testing.T) {
+	fc := &fakeConn{} // Drain succeeds but never closes the connection
+	start := time.Now()
+	New(fc, "s").closeWithin(100 * time.Millisecond)
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("closeWithin took %v, want it bounded near 100ms", elapsed)
+	}
+	if got := strings.Join(fc.calls, ","); got != "flush,drain,close" {
+		t.Errorf("calls = %q, want flush,drain,close", got)
+	}
+}
+
+// Against a real server: publishes still in the client's buffer when Close
+// is called reach a subscriber on another connection. Under
+// WithBufferedPublish nothing else flushes them.
+func TestCloseDeliversBufferedPublishes(t *testing.T) {
+	url := os.Getenv("ELITEA_TEST_NATS_URL")
+	if url == "" {
+		t.Skip("set ELITEA_TEST_NATS_URL to run the NATS shutdown test")
+	}
+	sub, err := nats.Connect(url)
+	if err != nil {
+		t.Fatalf("connect subscriber: %v", err)
+	}
+	defer sub.Close()
+	channel := fmt.Sprintf("project:%d:events", time.Now().UnixNano())
+	msgs := make(chan *nats.Msg, 1024)
+	if _, err := sub.ChanSubscribe(subjectFor(channel), msgs); err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	if err := sub.Flush(); err != nil {
+		t.Fatalf("flush subscription: %v", err)
+	}
+
+	// A large flusher interval keeps nats.go's background flusher out of the
+	// way, so the bytes are still buffered when Close runs.
+	pub, err := nats.Connect(url, nats.FlusherTimeout(time.Minute))
+	if err != nil {
+		t.Fatalf("connect publisher: %v", err)
+	}
+	eb := NewFromConn(pub, "test", WithBufferedPublish())
+	const n = 200
+	for i := 0; i < n; i++ {
+		if err := eb.Publish(context.Background(), channel, "budget.soft_alert", map[string]int{"i": i}); err != nil {
+			t.Fatalf("publish %d: %v", i, err)
+		}
+	}
+	eb.Close()
+	if !pub.IsClosed() {
+		t.Fatal("Close returned with the connection still open")
+	}
+
+	deadline := time.After(5 * time.Second)
+	for got := 0; got < n; {
+		select {
+		case <-msgs:
+			got++
+		case <-deadline:
+			t.Fatalf("only %d of %d buffered publishes reached the server", got, n)
+		}
 	}
 }
 

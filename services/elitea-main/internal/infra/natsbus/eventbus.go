@@ -1,33 +1,42 @@
-// Package natsbus is the NATS-backed EventBus for elitea-main.
+// Package natsbus is elitea-main's live-update bus: NATS core pub/sub.
 //
-// It is a drop-in replacement for internal/infra/redis.EventBus, re-pointing
-// the platform event stream from Redis pub/sub onto NATS core pub/sub (design
-// §8.1 "the EventBus is re-pointed from Redis pub/sub to NATS gateway.events.*";
-// ADR-0015 "events on gateway.events.*"). It carries the identical
-// redis.Event envelope on the wire so existing consumers — the webhook
-// dispatcher (internal/api/webhook) and the project SSE handler
-// (internal/api/v2/events) — decode messages unchanged; only the transport
-// differs.
+// It carries the project event stream — canvas presence rosters and the LLM
+// gateway's budget.soft_alert — to the project SSE route
+// (internal/api/v2/events), on every replica. elitea-main's domain events
+// (conversation create, artifact upload, pipeline runs, …) are deliberately
+// NOT published here: they go to webhook sinks only (cmd/elitea-main,
+// newDomainEventsPublisher), and the SSE route forwards an allowlist of types. It replaced the plain Redis
+// (Valkey) pub/sub client that used to sit at REDIS_URL.
 //
-// Channel↔subject mapping. Redis channels use ':' as a separator
-// ("project:123:events", "elitea:*"); NATS subjects use '.' and reserve '*'/'>'
-// as single-/multi-token wildcards. subjectFor translates a Redis channel to a
-// NATS subject by replacing ':' with '.' under a fixed root, so
-// "project:123:events" → "gateway.events.project.123.events" and the
-// "elitea:*" catch-all → "gateway.events.>" (NATS multi-token wildcard). The
-// gateway.events.* / gateway.events.> subject space is exactly the one the
-// design/ADR reserve for soft-alert and governance events.
+// # Subject scheme
 //
-// Soft-alert path (design §8.3): the gateway emits an alert event on
-// gateway.events.project.<id>.events when accumulated_cost/hard_limit crosses
-// the configured threshold (default 80%); elitea-main subscribers receive it
-// here. The alert contract is defined in the gateway
-// (services/elitea-llm-gateway/internal/llmproxy/budget_gate.go); the
-// canonical payload struct for reference is events.SoftAlertPayload.
+// Callers name a LOGICAL channel (events.ProjectChannel → "project:<id>:events")
+// and subjectFor maps it under SubjectRoot by replacing ':' with '.':
 //
-// Every operation is bounded: connection Timeout is 1s (matching the gateway's
-// NATS client hardening, design §8.5) and Publish flushes so a failed send
-// surfaces synchronously rather than silently buffering.
+//	project:123:events → gateway.events.project.123.events
+//
+// That is the subject space ADR-0015 / design §8.1 reserve for platform events
+// ("the EventBus is re-pointed from Redis pub/sub to NATS gateway.events.*"),
+// and it is the subject the LLM gateway already publishes budget.soft_alert on
+// (services/elitea-llm-gateway/internal/infra/nats, EventSubjectRoot). Keeping
+// elitea-main's events in the same per-project subject is what makes one SSE
+// subscription receive both: a second scheme (e.g. elitea.events.project.<id>)
+// would need a second subscription per stream, and the soft alert would stay
+// invisible to the SPA exactly as it was over Redis. A Redis-style "prefix:*"
+// catch-all maps to the NATS multi-token wildcard ("gateway.events.prefix.>").
+//
+// Project ids are positive integers by the time a channel is built
+// (legacyrbac refuses anything else before the SSE handler runs), so no
+// caller-controlled '.', '*' or '>' reaches a subject.
+//
+// # Delivery
+//
+// Core NATS, not JetStream: at-most-once and live only, which is exactly the
+// contract of an SSE stream with no replay. A subscriber that is not connected
+// when an event is published does not get it, as with Redis PUBLISH.
+//
+// The envelope on the wire is Event (type, source, payload, timestamp) — the
+// shape the Redis bus used — so a consumer decodes it unchanged.
 package natsbus
 
 import (
@@ -39,12 +48,21 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
-
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/redis"
 )
 
+// Event is the envelope every message on the bus carries.
+type Event struct {
+	Type      string          `json:"type"`
+	Source    string          `json:"source"`
+	Payload   json.RawMessage `json:"payload"`
+	Timestamp time.Time       `json:"timestamp"`
+}
+
+// EventHandler consumes one decoded Event (Subscribe).
+type EventHandler func(ctx context.Context, event Event) error
+
 // SubjectRoot is the reserved subject prefix for all platform events on NATS
-// (design/ADR: gateway.events.*). Every Redis channel is mapped under it.
+// (design/ADR: gateway.events.*). Every logical channel is mapped under it.
 const SubjectRoot = "gateway.events"
 
 // ConnectTimeout bounds the initial dial and every request the client makes so
@@ -61,6 +79,7 @@ type natsConn interface {
 	FlushTimeout(timeout time.Duration) error
 	RTT() (time.Duration, error)
 	Drain() error
+	IsClosed() bool
 	Close()
 }
 
@@ -71,8 +90,8 @@ type subscription interface {
 	Drain() error
 }
 
-// realConn adapts a *nats.Conn to natsConn. Publish/FlushTimeout/RTT/Drain/Close
-// are promoted from the embedded connection unchanged; only ChanSubscribe is
+// realConn adapts a *nats.Conn to natsConn. Publish/FlushTimeout/RTT/Drain/
+// IsClosed/Close are promoted from the embedded connection unchanged; only ChanSubscribe is
 // overridden to return the narrower subscription interface (the concrete
 // *nats.Subscription already satisfies it).
 type realConn struct{ *nats.Conn }
@@ -82,34 +101,65 @@ func (c realConn) ChanSubscribe(subj string, ch chan *nats.Msg) (subscription, e
 }
 
 // EventBus publishes and subscribes to platform events over NATS core pub/sub.
-// Its method set mirrors redis.EventBus so it is a drop-in at the call sites.
 type EventBus struct {
 	conn   natsConn
 	source string
+	// flush makes Publish wait for the server to acknowledge the write
+	// (FlushTimeout). On by default; see WithBufferedPublish.
+	flush bool
+}
+
+// Option configures an EventBus.
+type Option func(*EventBus)
+
+// WithBufferedPublish makes Publish return as soon as the message is in the
+// client's outbound buffer, without a FlushTimeout round trip.
+//
+// elitea-main's composition root uses it, because Publish runs on request
+// paths (conversation create, artifact upload, the canvas heartbeat) and the
+// stream it feeds is best-effort live UI. With a flush per publish every one
+// of those requests pays a NATS round trip, and while NATS is reconnecting
+// each of them waits the full ConnectTimeout before failing. Buffered, a
+// publish during a reconnect is held in nats.go's reconnect buffer and sent
+// when the connection returns; Publish still errors once the connection is
+// closed for good or that buffer is full.
+func WithBufferedPublish() Option {
+	return func(eb *EventBus) { eb.flush = false }
 }
 
 // Connect dials NATS and returns an EventBus. url is the NATS server URL
 // (nats://host:4222); name identifies the client in NATS monitoring; source is
-// stamped into every published Event. A dial failure is returned to the caller
-// (main.go treats it as non-fatal and falls back to Redis).
-func Connect(url, name, source string) (*EventBus, error) {
+// stamped into every published Event. A dial failure is returned to the
+// caller. After the first successful dial the client reconnects forever.
+func Connect(url, name, source string, opts ...Option) (*EventBus, error) {
 	nc, err := nats.Connect(url,
 		nats.Name(name),
 		nats.Timeout(ConnectTimeout),
 		nats.MaxReconnects(-1),
+		nats.ReconnectWait(500*time.Millisecond),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("natsbus: connect: %w", err)
 	}
-	return New(realConn{Conn: nc}, source), nil
+	return New(realConn{Conn: nc}, source, opts...), nil
+}
+
+// NewFromConn wraps a connection the caller dialled itself — the composition
+// root does, because the same connection also backs JetStream KV.
+func NewFromConn(nc *nats.Conn, source string, opts ...Option) *EventBus {
+	return New(realConn{Conn: nc}, source, opts...)
 }
 
 // New wraps an already-connected NATS connection. Exposed for wiring and tests.
-func New(conn natsConn, source string) *EventBus {
-	return &EventBus{conn: conn, source: source}
+func New(conn natsConn, source string, opts ...Option) *EventBus {
+	eb := &EventBus{conn: conn, source: source, flush: true}
+	for _, opt := range opts {
+		opt(eb)
+	}
+	return eb
 }
 
-// subjectFor maps a Redis channel name to a NATS subject under SubjectRoot.
+// subjectFor maps a logical channel name to a NATS subject under SubjectRoot.
 // ':' → '.'; a trailing ':*' (Redis catch-all) becomes the NATS multi-token
 // wildcard '>' so an "elitea:*" subscription still receives every event.
 func subjectFor(channel string) string {
@@ -132,16 +182,17 @@ func subjectFor(channel string) string {
 	return SubjectRoot + "." + strings.ReplaceAll(channel, ":", ".")
 }
 
-// Publish marshals payload into a redis.Event envelope and publishes it to the
-// NATS subject derived from channel. It flushes so a transport error surfaces
-// synchronously (bounded by ConnectTimeout) rather than being silently buffered.
+// Publish marshals payload into an Event envelope and publishes it to the
+// NATS subject derived from channel. Unless WithBufferedPublish was given it
+// flushes, so a transport error surfaces synchronously (bounded by
+// ConnectTimeout) rather than being silently buffered.
 func (eb *EventBus) Publish(_ context.Context, channel string, eventType string, payload interface{}) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("natsbus: marshal payload: %w", err)
 	}
 
-	evt := redis.Event{
+	evt := Event{
 		Type:      eventType,
 		Source:    eb.source,
 		Payload:   data,
@@ -156,6 +207,9 @@ func (eb *EventBus) Publish(_ context.Context, channel string, eventType string,
 	if err := eb.conn.Publish(subjectFor(channel), msg); err != nil {
 		return fmt.Errorf("natsbus: publish: %w", err)
 	}
+	if !eb.flush {
+		return nil
+	}
 	if err := eb.conn.FlushTimeout(ConnectTimeout); err != nil {
 		return fmt.Errorf("natsbus: flush: %w", err)
 	}
@@ -163,13 +217,10 @@ func (eb *EventBus) Publish(_ context.Context, channel string, eventType string,
 }
 
 // Subscribe asynchronously consumes events on the subject derived from channel,
-// decoding each into a redis.Event and invoking handler. It reuses
-// redis.EventHandler so the webhook dispatcher's HandleEvent(ctx, redis.Event)
-// method value is passed unchanged and both buses share one signature. The
-// goroutine exits (and drains the subscription) when ctx is cancelled. A
-// malformed message is logged and skipped; a handler error is logged but does
-// not stop the loop — identical semantics to redis.EventBus.Subscribe.
-func (eb *EventBus) Subscribe(ctx context.Context, channel string, handler redis.EventHandler) {
+// decoding each into an Event and invoking handler. The goroutine exits (and
+// drains the subscription) when ctx is cancelled. A malformed message is
+// logged and skipped; a handler error is logged but does not stop the loop.
+func (eb *EventBus) Subscribe(ctx context.Context, channel string, handler EventHandler) {
 	subject := subjectFor(channel)
 	msgCh := make(chan *nats.Msg, 64)
 	sub, err := eb.conn.ChanSubscribe(subject, msgCh)
@@ -188,7 +239,7 @@ func (eb *EventBus) Subscribe(ctx context.Context, channel string, handler redis
 				if !ok {
 					return
 				}
-				var evt redis.Event
+				var evt Event
 				if err := json.Unmarshal(msg.Data, &evt); err != nil {
 					slog.Error("natsbus: unmarshal event", "err", err, "subject", subject)
 					continue
@@ -206,7 +257,7 @@ func (eb *EventBus) Subscribe(ctx context.Context, channel string, handler redis
 // (internal/api/v2/events) uses this so it can multiplex events with its own
 // heartbeat ticker instead of supplying a callback. The channel closes when the
 // caller invokes cancel or ctx is cancelled.
-func (eb *EventBus) Raw(ctx context.Context, channel string) (<-chan redis.Event, func(), error) {
+func (eb *EventBus) Raw(ctx context.Context, channel string) (<-chan Event, func(), error) {
 	subject := subjectFor(channel)
 	msgCh := make(chan *nats.Msg, 64)
 	sub, err := eb.conn.ChanSubscribe(subject, msgCh)
@@ -214,7 +265,7 @@ func (eb *EventBus) Raw(ctx context.Context, channel string) (<-chan redis.Event
 		return nil, nil, fmt.Errorf("natsbus: subscribe: %w", err)
 	}
 
-	out := make(chan redis.Event, 64)
+	out := make(chan Event, 64)
 	done := make(chan struct{})
 	cancel := func() {
 		select {
@@ -237,7 +288,7 @@ func (eb *EventBus) Raw(ctx context.Context, channel string) (<-chan redis.Event
 				if !ok {
 					return
 				}
-				var evt redis.Event
+				var evt Event
 				if err := json.Unmarshal(msg.Data, &evt); err != nil {
 					slog.Error("natsbus: unmarshal event", "err", err, "subject", subject)
 					continue
@@ -257,8 +308,9 @@ func (eb *EventBus) Raw(ctx context.Context, channel string) (<-chan redis.Event
 }
 
 // Ping verifies connectivity via the connection round-trip time. It satisfies
-// the health.Checker interface (internal/api/health) so /health/ready reports
-// NATS the same way it reported Redis.
+// the health.Checker interface (internal/api/health). elitea-main does NOT put
+// it on /readyz: the stream is best-effort live UI, and a NATS blip must not
+// take every API replica out of the load balancer.
 func (eb *EventBus) Ping(_ context.Context) error {
 	if _, err := eb.conn.RTT(); err != nil {
 		return fmt.Errorf("natsbus: ping: %w", err)
@@ -266,11 +318,52 @@ func (eb *EventBus) Ping(_ context.Context) error {
 	return nil
 }
 
-// Close drains in-flight messages then closes the connection. Drain is
-// preferred over a bare Close so buffered subscription messages are processed
-// (nats.go guidance). A drain error falls back to Close.
+// CloseTimeout bounds shutdown: half for the flush of buffered publishes, the
+// rest for the drain to finish. Past it the connection is closed regardless,
+// so a dead server cannot hold a terminating pod.
+const CloseTimeout = 4 * time.Second
+
+// closePollInterval is how often Close checks that the drain has finished.
+const closePollInterval = 10 * time.Millisecond
+
+// Close flushes, drains and closes the connection, each step bounded by
+// CloseTimeout, so publishes still in the client's buffer — every publish is
+// buffered under WithBufferedPublish — reach the server before exit.
+//
+// Drain alone does not guarantee that: in nats.go it is ASYNC (it starts a
+// goroutine and returns), and while the client is reconnecting it calls
+// Close() at once, discarding the reconnect buffer. So:
+//
+//  1. FlushTimeout first. A PING/PONG round trip proves everything written
+//     before it is on the server; during a reconnect it waits (bounded) for
+//     the connection to come back, which is when the reconnect buffer is sent.
+//  2. Drain, then wait (bounded) for the connection to report closed, which
+//     is when the drain has delivered pending subscription messages and
+//     flushed again. Polling IsClosed rather than installing a closed
+//     callback keeps any callback the dialler set.
+//  3. Anything that fails or overruns falls back to Close().
 func (eb *EventBus) Close() {
+	eb.closeWithin(CloseTimeout)
+}
+
+func (eb *EventBus) closeWithin(timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	if eb.conn.IsClosed() {
+		return
+	}
+	if err := eb.conn.FlushTimeout(timeout / 2); err != nil {
+		slog.Warn("natsbus: shutdown flush did not complete; buffered publishes may be lost", "err", err)
+	}
 	if err := eb.conn.Drain(); err != nil {
 		eb.conn.Close()
+		return
+	}
+	for !eb.conn.IsClosed() {
+		if !time.Now().Before(deadline) {
+			slog.Warn("natsbus: drain did not finish before the shutdown deadline; closing", "timeout", timeout)
+			eb.conn.Close()
+			return
+		}
+		time.Sleep(closePollInterval)
 	}
 }

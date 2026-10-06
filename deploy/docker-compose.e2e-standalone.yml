@@ -8,11 +8,10 @@
 #   8082 → traefik (E2E entry point)  — set via E2E_PORT env (default 8082)
 #   9400 → oidc-provider-mock
 #   15432 → postgres                  (separate from centry's 5432)
-#   16379 → redis                     (separate from centry's 6379)
 #
 # `E2E_IMAGE_TAG` (default `e2e`) names the two application images. It exists so
 # a second stack can run beside the first without the two sharing a mutable tag:
-# `E2E_PROJECT`, `E2E_PORT`, `E2E_PG_PORT`, `E2E_REDIS_PORT` and `E2E_OIDC_PORT`
+# `E2E_PROJECT`, `E2E_PORT`, `E2E_PG_PORT` and `E2E_OIDC_PORT`
 # already isolate the containers and their ports, but with a hardcoded `:e2e`
 # both stacks' `build:` writes landed on the SAME tag, so whichever built last
 # silently owned what the other would get on its next restart. CI sets none of
@@ -27,7 +26,7 @@
 #   E2E_PORT=8080 COMPOSE_BIN="docker compose" … up -d
 #   PLAYWRIGHT_BASE_URL=http://localhost:8080 npx playwright test
 #
-# The postgres/redis/rustfs/rustfs-bucket-init/oidc-mock blocks below are
+# The postgres/nats/rustfs/rustfs-bucket-init/oidc-mock blocks below are
 # hand-duplicated (not layered) in docker-compose.standalone-full.yml — see
 # that file's header for why. A shared-behaviour fix here (a healthcheck
 # workaround, a volume fix) belongs in both files.
@@ -53,12 +52,17 @@ services:
       timeout: 5s
       retries: 10
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "${E2E_REDIS_PORT:-16379}:6379"
+  # The live-update plane (elitea-main's ELITEA_EVENTS_NATS_URL): the project
+  # SSE stream and canvas presence (its publish and its JetStream KV
+  # bucket); domain events go to webhooks only. It replaced the plain Redis
+  # that sat at REDIS_URL. JetStream (-js)
+  # is required — elitea-main refuses to start without it; -m serves the
+  # healthcheck. Not published to the host: only elitea-main dials it.
+  nats:
+    image: nats:2.12-alpine
+    command: ["-js", "-sd", "/data", "-m", "8222"]
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz?js-enabled-only=true"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -178,7 +182,7 @@ services:
       target: e2e
     environment:
       DATABASE_URL: "postgres://elitea:elitea@postgres:5432/elitea?sslmode=disable"
-      REDIS_URL: "redis:6379"
+      ELITEA_EVENTS_NATS_URL: "nats://nats:4222"
       # The brand pack's FILE layer (ADR-0024); empty means the journeys brand
       # from the database layer over the product default, as a fresh install
       # does. See docker-compose.standalone-full.yml for the mount recipe.
@@ -326,7 +330,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      redis:
+      nats:
         condition: service_healthy
       oidc-mock:
         condition: service_healthy
