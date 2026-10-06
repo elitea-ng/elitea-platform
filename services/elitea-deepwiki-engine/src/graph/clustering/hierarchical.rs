@@ -9,6 +9,7 @@ use super::partitioner::{Level, PartitionRequest, Partitioner};
 use super::sizing::dir_of;
 use super::{ALGORITHM, AlgorithmMetadata, ClusterError, ClusterGraph, Clustering, Pages};
 use indexmap::{IndexMap, IndexSet};
+use std::collections::HashMap;
 
 /// The contracted graph: files (path → nodes) and file-pair weights.
 pub type FileGraph<'g> = (IndexMap<&'g str, Vec<usize>>, IndexMap<(usize, usize), f64>);
@@ -139,17 +140,10 @@ pub fn hierarchical_leiden_cluster(
                 .entry(dir_of(file_name(f)))
                 .or_insert(0) += 1;
         }
+        let (by_dir, first) = isolated_targets(&section_dirs);
         for &f in &isolated {
             let dir = dir_of(file_name(f));
-            // `max(sec_dirs, key=...)`: the FIRST section with the most.
-            let mut best: Option<(usize, usize)> = None;
-            for (&section, dirs) in &section_dirs {
-                let count = dirs.get(dir).copied().unwrap_or(0);
-                if best.is_none_or(|(_, top)| count > top) {
-                    best = Some((section, count));
-                }
-            }
-            if let Some((section, _)) = best {
+            if let Some(section) = by_dir.get(dir).copied().or(first) {
                 file_to_section.insert(f, section);
             }
         }
@@ -251,6 +245,31 @@ pub fn hierarchical_leiden_cluster(
     })
 }
 
+/// Where an isolated file goes, as `max(sec_dirs, key=lambda s:
+/// sec_dirs[s].get(dir, 0))` decides it: per directory, the FIRST section
+/// with the most files in it; for a directory no section has, the first
+/// section. Computed once for all isolated files (one scan of every section
+/// per file was quadratic when both are many).
+fn isolated_targets<'a>(
+    section_dirs: &IndexMap<usize, IndexMap<&'a str, usize>>,
+) -> (HashMap<&'a str, usize>, Option<usize>) {
+    let mut best: HashMap<&str, (usize, usize)> = HashMap::new();
+    for (&section, dirs) in section_dirs {
+        for (&dir, &count) in dirs {
+            let top = best.entry(dir).or_insert((section, count));
+            if count > top.1 {
+                *top = (section, count);
+            }
+        }
+    }
+    (
+        best.into_iter()
+            .map(|(dir, (section, _))| (dir, section))
+            .collect(),
+        section_dirs.keys().next().copied(),
+    )
+}
+
 /// `_to_weighted_undirected` of the section subgraph, as vertex pairs of
 /// `sorted` (the section's nodes in id order): parallel and opposite edges
 /// summed per unordered pair, self-loops kept.
@@ -264,7 +283,7 @@ fn section_edges(
     sorted: &[usize],
     member: &[bool],
 ) -> Vec<(usize, usize, f64)> {
-    let mut vertex: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut vertex: HashMap<usize, usize> = HashMap::new();
     for (i, n) in sorted.iter().enumerate() {
         vertex.insert(*n, i);
     }
@@ -301,5 +320,54 @@ fn partition(
             expected: request.names.len(),
         }
         .into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The per-file scan `isolated_targets` replaced: the reference.
+    fn reference_target(
+        section_dirs: &IndexMap<usize, IndexMap<&str, usize>>,
+        dir: &str,
+    ) -> Option<usize> {
+        let mut best: Option<(usize, usize)> = None;
+        for (&section, dirs) in section_dirs {
+            let count = dirs.get(dir).copied().unwrap_or(0);
+            if best.is_none_or(|(_, top)| count > top) {
+                best = Some((section, count));
+            }
+        }
+        best.map(|(section, _)| section)
+    }
+
+    #[test]
+    fn isolated_targets_equal_the_per_file_scan() {
+        let mut seed: u64 = 5;
+        let mut next = move |bound: usize| {
+            seed = seed
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            usize::try_from(seed >> 33).unwrap() % bound
+        };
+        let names: Vec<String> = (0..10).map(|d| format!("d{d}")).collect();
+        for round in 0..200 {
+            let mut section_dirs: IndexMap<usize, IndexMap<&str, usize>> = IndexMap::new();
+            for _ in 0..next(12) {
+                let dirs = section_dirs.entry(next(30)).or_default();
+                for _ in 0..next(5) {
+                    *dirs.entry(names[next(8)].as_str()).or_insert(0) += 1 + next(3);
+                }
+            }
+            let (by_dir, first) = isolated_targets(&section_dirs);
+            for dir in &names {
+                assert_eq!(
+                    by_dir.get(dir.as_str()).copied().or(first),
+                    reference_target(&section_dirs, dir),
+                    "round {round}: {dir}"
+                );
+            }
+        }
     }
 }

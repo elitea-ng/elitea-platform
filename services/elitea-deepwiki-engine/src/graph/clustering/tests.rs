@@ -166,6 +166,52 @@ fn without_cross_file_edges_every_file_is_a_section_and_lone_pages_are_sorted() 
 }
 
 #[test]
+fn many_isolated_files_join_many_sections_in_linear_time() {
+    // 20k connected files, each its own section, and 30k isolated files:
+    // one scan of every section per isolated file took 18 s (debug build,
+    // as tests run) and 1.3 s (release).
+    const CONNECTED: usize = 20_000;
+    const ISOLATED: usize = 30_000;
+    let node = |i: usize| ClusterNode {
+        id: format!("n{i:06}"),
+        rel_path: format!("d{}/f{i}.py", i % 500),
+        file_name: String::new(),
+        is_doc: false,
+    };
+    let nodes: Vec<ClusterNode> = (0..CONNECTED + ISOLATED).map(node).collect();
+    let mut preds: Vec<Vec<String>> = vec![Vec::new(); nodes.len()];
+    let edges: Vec<(String, String, f64)> = (0..CONNECTED / 2)
+        .map(|i| {
+            preds[2 * i + 1].push(nodes[2 * i].id.clone());
+            (nodes[2 * i].id.clone(), nodes[2 * i + 1].id.clone(), 1.0)
+        })
+        .collect();
+    let g = ClusterGraph::from_parts(nodes, &edges, &preds).unwrap();
+    let mut partitioner = scripted(|request: &PartitionRequest<'_>| match request.level {
+        Level::Section => (0..request.names.len()).collect(),
+        Level::Page => vec![0; request.names.len()],
+    });
+    let started = std::time::Instant::now();
+    let clustering = hierarchical_leiden_cluster(
+        &g,
+        &vec![true; CONNECTED + ISOLATED],
+        &IndexSet::new(),
+        1.0,
+        1.0,
+        SEED,
+        &mut partitioner,
+    )
+    .unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(clustering.metadata.isolated_files, Some(ISOLATED));
+    assert_eq!(clustering.sections.len(), CONNECTED);
+    assert!(
+        elapsed < std::time::Duration::from_secs(3),
+        "{elapsed:?} for {ISOLATED} isolated files"
+    );
+}
+
+#[test]
 fn no_cluster_nodes_gives_an_empty_result_with_a_note() {
     let g = graph(&[("h", "a.py", "")], &[]);
     let hubs: IndexSet<usize> = IndexSet::from([0]);
