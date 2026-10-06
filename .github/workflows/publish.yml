@@ -190,9 +190,10 @@ jobs:
   # The contract the note called unsettled is settled here and gated:
   # `schema_version` is a Literal["elitea.runtime-deploy.v1"] with
   # extra="forbid" (services/elitea-worker-python/src/elitea_worker/config.py),
-  # Redis Streams dispatch is implemented on both sides
-  # (services/elitea-main/internal/transport/redisdispatch, the worker's
-  # transport/redis_asyncio.py), and testdata/proto/runtime/v1 is a shared
+  # the NATS JetStream command bus is implemented on both sides
+  # (services/elitea-main/internal/transport/commandbus, the worker's
+  # transport/nats_jetstream.py; docs/runtime-command-bus.md), and
+  # testdata/proto/runtime/v1 is a shared
   # conformance corpus both languages run in CI.
   #
   # Meanwhile compose declares this service mandatory for agent execution —

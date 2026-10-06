@@ -32,22 +32,22 @@ flowchart TB
     SubappHost --> DB
 
     Main --> NATS
-    Main -. mTLS .-> RuntimeRedis[("Runtime Redis (dispatch)")]
-    Worker -. mTLS .-> RuntimeRedis
+    Main -. mTLS .-> NATS
+    Worker -. "mTLS (command bus)" .-> NATS
 
     Main --> Object[("Object storage")]
     SubappHost --> Object
 ```
 
-Every arrow into the worker and the runtime Redis is mutually authenticated (mTLS or a TLS Redis ACL) — that plane's material is described in [Install with Helm](/deployment/helm-install#secrets-to-create-beforehand) and `deploy/runtime/README.md`. DeepWiki and Inventory are two instances of the same `subapp-host` pattern: a Go host process reaching a Python engine sidecar over a Unix socket inside one pod.
+Every arrow into the worker and the NATS command bus is mutually authenticated (mTLS; the command bus is NATS JetStream, elitea-main publishing as its own identity and the workers pulling from their own account) — that plane's material is described in [Install with Helm](/deployment/helm-install#secrets-to-create-beforehand) and `deploy/runtime/README.md`. DeepWiki and Inventory are two instances of the same `subapp-host` pattern: a Go host process reaching a Python engine sidecar over a Unix socket inside one pod.
 
 ## What the chart creates, and what you bring
 
-The chart is **one release** — elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the runtime Redis, the OTel collector, the database-preparation Job, and (opt-in) the DeepWiki and Inventory provider services with their own migration Jobs. `nats` and `nats-bootstrap` are separate charts, synced first.
+The chart is **one release** — elitea-main and its migration Job, elitea-web, the scheduler, the LLM gateway, the agent worker, the OTel collector, the database-preparation Job, and (opt-in) the DeepWiki and Inventory provider services with their own migration Jobs. `nats` and `nats-bootstrap` are separate charts, synced first.
 
 <CardGroup cols={2}>
   <Card title="PostgreSQL" icon="database">No chart provisions it. Point `postgresql.existingSecret` at a Secret holding the DSN; the database may start empty (the migration Job bootstraps the schema itself), but a superuser DSN is still needed for `CREATE DATABASE` and `CREATE EXTENSION vector`.</Card>
-  <Card title="Redis" icon="server">Two separate instances: a plaintext general-purpose Redis (sessions, project SSE) and, only if the runtime plane is on, a mutually authenticated TLS Redis for agent dispatch. Neither is provisioned by this chart.</Card>
+  <Card title="Redis" icon="server">A plaintext general-purpose Redis (sessions, project SSE), not provisioned by this chart. Agent dispatch no longer uses Redis: it is the NATS JetStream command bus.</Card>
   <Card title="NATS JetStream" icon="waypoints">The `nats` and `nats-bootstrap` charts ship the coordination substrate the LLM gateway's budget counters and the scheduler dial — install them, but they are commodity infrastructure this chart points at rather than owns.</Card>
   <Card title="Object storage" icon="package">An S3-compatible endpoint for artifacts and DeepWiki/Inventory output. The bucket must exist before the first sync (or set `objectInit.enabled: true` for a self-hosted S3-compatible store you administer directly); a missing bucket lets the deployment look green and then crash-loop on the next boot step.</Card>
   <Card title="Ingress" icon="route">No Ingress or HTTPRoute renders until `main.ingress.enabled` is on, and even then it is one `/` rule with elitea-main as the sole backend — see [Install with Helm](/deployment/helm-install) for the edge caveat.</Card>

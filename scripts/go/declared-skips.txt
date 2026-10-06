@@ -57,7 +57,7 @@ github.com/EliteaAI/elitea-platform/services/elitea-main/tests/system	TestExisti
 
 # ── The test needs the Python SDK, which is a separate repository ────────────
 
-github.com/EliteaAI/elitea-platform/services/elitea-main/tests/system	TestProductionRuntimeCrossProcessSystem	Imports elitea_sdk with grpc, h2, httpx, pydantic and redis in one Python runtime. The SDK lives in the sibling elitea-sdk repository, which CI does not check out.
+github.com/EliteaAI/elitea-platform/services/elitea-main/tests/system	TestProductionRuntimeCrossProcessSystem	Imports elitea_sdk with grpc, h2, httpx, pydantic and nats-py in one Python runtime. The SDK lives in the sibling elitea-sdk repository, which CI does not check out.
 github.com/EliteaAI/elitea-platform/services/elitea-main/tests/system	TestIndexEmbeddingBindingMainWorkerCrossProcess	Same Python runtime as above. It runs the real delivery processor in a second process.
 github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/pgvector	TestCurrentIndexMetaWriterRealPgvector/installed_SDK_owns_one_completed_run_entry	ELITEA_TEST_SDK_PYTHON must name a Python that holds the installed SDK. The rest of this test runs in CI.
 github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos	TestPostgresPgvectorSameTargetSerializationAcrossInstalledSDKProcess	Calls the pinned SDK entrypoint inside the running centry-elitea-indexer-worker-1 container, and checks an exact image digest. CI runs no worker container.
