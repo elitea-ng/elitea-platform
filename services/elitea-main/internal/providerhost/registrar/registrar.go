@@ -140,24 +140,46 @@ func (r *Registrar) Once(ctx context.Context) error {
 	return nil
 }
 
-// Run performs Once now and on every interval until ctx ends.
+// registrarRetryFirst is the first pause after a failed Once. Failures back
+// off by doubling up to Interval, so a provider that starts after
+// elitea-main (the usual order in a fresh install) registers within seconds
+// rather than a full Interval later, and an absent one is not hammered.
+const registrarRetryFirst = 2 * time.Second
+
+// Run performs Once now, then again every Interval while it succeeds and
+// sooner — 2s, doubling, capped at Interval — while it fails.
 func (r *Registrar) Run(ctx context.Context) {
-	tick := func() {
-		if err := r.Once(ctx); err != nil && ctx.Err() == nil {
-			r.logger.Warn("provider registration probe failed", "origin", r.Origin(), "error", err)
-		}
-	}
-	tick()
-	ticker := time.NewTicker(r.opts.Interval)
-	defer ticker.Stop()
+	retry := time.Duration(0)
 	for {
+		next := r.opts.Interval
+		if err := r.Once(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			r.logger.Warn("provider registration probe failed", "origin", r.Origin(), "error", err)
+			retry = nextRegistrarRetry(retry, r.opts.Interval)
+			next = retry
+		} else {
+			retry = 0
+		}
+		timer := time.NewTimer(next)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
-			tick()
+		case <-timer.C:
 		}
 	}
+}
+
+// nextRegistrarRetry doubles the previous retry pause (starting at
+// registrarRetryFirst) and caps it at interval.
+func nextRegistrarRetry(previous, interval time.Duration) time.Duration {
+	next := registrarRetryFirst
+	if previous > 0 {
+		next = previous * 2
+	}
+	return min(next, interval)
 }
 
 func (r *Registrar) get(ctx context.Context, path string) (*http.Response, error) {

@@ -49,8 +49,7 @@ func TestReadiness_NoDeps(t *testing.T) {
 
 func TestReadiness_AllHealthy(t *testing.T) {
 	r := health.RoutesWithDeps(health.Deps{
-		DB:    &mockChecker{},
-		Redis: &mockChecker{},
+		DB: &mockChecker{},
 	})
 	req := httptest.NewRequest("GET", "/readyz", nil)
 	rec := httptest.NewRecorder()
@@ -67,15 +66,16 @@ func TestReadiness_AllHealthy(t *testing.T) {
 	if s.Checks["db"] != "ok" {
 		t.Errorf("expected db ok, got %q", s.Checks["db"])
 	}
-	if s.Checks["redis"] != "ok" {
-		t.Errorf("expected redis ok, got %q", s.Checks["redis"])
+	// Redis no longer decides readiness: the Form sign-in state is in the
+	// database (shared migration 0153).
+	if _, present := s.Checks["redis"]; present || len(s.Checks) != 1 {
+		t.Errorf("readiness checks = %v, want the database alone", s.Checks)
 	}
 }
 
 func TestReadiness_DBDown(t *testing.T) {
 	r := health.RoutesWithDeps(health.Deps{
-		DB:    &mockChecker{err: errors.New("connection refused")},
-		Redis: &mockChecker{},
+		DB: &mockChecker{err: errors.New("connection refused")},
 	})
 	req := httptest.NewRequest("GET", "/readyz", nil)
 	rec := httptest.NewRecorder()
@@ -94,20 +94,6 @@ func TestReadiness_DBDown(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "connection refused") {
 		t.Fatal("readiness response leaked the dependency error")
-	}
-}
-
-func TestReadiness_RedisDown(t *testing.T) {
-	r := health.RoutesWithDeps(health.Deps{
-		DB:    &mockChecker{},
-		Redis: &mockChecker{err: errors.New("redis timeout")},
-	})
-	req := httptest.NewRequest("GET", "/readyz", nil)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503, got %d", rec.Code)
 	}
 }
 

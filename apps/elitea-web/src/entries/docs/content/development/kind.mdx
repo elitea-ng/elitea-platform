@@ -68,7 +68,7 @@ This stack has no OIDC provider and no edge — the Form provider's user list ex
 </Note>
 
 <Accordion title="A harmless restart in the first 20 seconds">
-`elitea-main` may restart briefly while its Auth Redis listener starts; Kubernetes' restart backoff resolves it in under a minute. This is expected and harmless.
+`elitea-main` may restart briefly while the runtime Redis listener starts; Kubernetes' restart backoff resolves it in under a minute. This is expected and harmless.
 </Accordion>
 
 ## Reaching the API — there is no UI here

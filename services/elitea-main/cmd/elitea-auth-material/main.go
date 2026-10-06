@@ -3,9 +3,8 @@
 //
 // # Why the command exists
 //
-// internal/authcomposition/material.go opens five files through securefile:
-// the Auth Redis password, the Auth Redis CA, the browser-attempt key, the PAT
-// signing key and the Form users JSON. securefile refuses a path that resolves
+// internal/authcomposition/material.go opens three files through securefile:
+// the browser-attempt key, the PAT signing key and the Form users JSON. securefile refuses a path that resolves
 // through a symlink, and it requires owner-only bits on private material. A
 // Kubernetes Secret volume gives neither. internal/security/materialinstall
 // holds the copy that answers this, and its package comment gives the full
@@ -15,7 +14,7 @@
 // cmd/elitea-runtime-material is its command. This command is the same
 // mechanism for the authentication plane. Both call one copy engine.
 //
-// # Where the five paths come from
+// # Where the three paths come from
 //
 // They come from the operator's authentication-configuration document, not
 // from a chart value. So the Helm chart cannot know them: the document lives in
@@ -24,7 +23,7 @@
 // This command closes that gap. It reads the SAME document that the service
 // reads, through the same loader, and it derives:
 //
-//   - the five paths, from Config.MaterialFiles;
+//   - the three paths, from Config.MaterialFiles;
 //   - the destination directory, from Config.MaterialDirectory.
 //
 // The chart states only the directory that it mounts, and it gives that
@@ -104,10 +103,10 @@ func install(configuration, source, mount string) ([]string, error) {
 		return nil, err
 	}
 	// The chart mounts one directory. The authentication document names the
-	// five paths. Neither one can see the other, so compare them here.
+	// three paths. Neither one can see the other, so compare them here.
 	if destination != filepath.Clean(mount) {
 		return nil, fmt.Errorf(
-			"the authentication configuration %s keeps its material in %s, and the pod mounts %s. Set the chart value that mounts the material to %s, or move the five file paths in the authentication configuration into %s",
+			"the authentication configuration %s keeps its material in %s, and the pod mounts %s. Set the chart value that mounts the material to %s, or move the three file paths in the authentication configuration into %s",
 			configuration, destination, mount, destination, filepath.Clean(mount),
 		)
 	}

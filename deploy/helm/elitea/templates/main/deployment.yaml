@@ -93,9 +93,8 @@ spec:
       {{- end }}
       {{- if $authMaterialInit }}
         # Install the AUTHENTICATION material where securefile can read it
-        # (issue #444). internal/authcomposition/material.go opens five files:
-        # the Auth Redis password, the Auth Redis CA, the browser-attempt key,
-        # the PAT signing key and the Form users JSON.
+        # (issue #444). internal/authcomposition/material.go opens three files:
+        # the browser-attempt key, the PAT signing key and the Form users JSON.
         #
         # Same defect as the runtime material above, so the SAME mechanism.
         # There is one copy engine, internal/security/materialinstall, and both
@@ -103,10 +102,10 @@ spec:
         #
         # One difference, and it decides the arguments below. The chart owns
         # every runtime file NAME, so the runtime command derives its whole
-        # destination from the ConfigMap. The five authentication paths belong
+        # destination from the ConfigMap. The three authentication paths belong
         # to the operator's authentication document instead. So this command
         # READS THAT DOCUMENT: -config gives it the very file the service reads,
-        # and it derives the five paths and their directory from it. -mount
+        # and it derives the three paths and their directory from it. -mount
         # states what the pod mounts, and the command refuses a disagreement by
         # name. Neither value can drift into silence.
         - name: auth-material
@@ -228,12 +227,12 @@ spec:
               mountPath: {{ .Values.main.fileConfig.authConfig.mountPath }}
               subPath: {{ .Values.main.fileConfig.authConfig.key }}
               readOnly: true
-            # The five files that the authentication configuration above names
-            # (issue #444): the Auth Redis password, the Auth Redis CA, the
-            # browser-attempt key, the PAT signing key and the Form users JSON.
+            # The three files that the authentication configuration above names
+            # (issue #444): the browser-attempt key, the PAT signing key and the
+            # Form users JSON.
             # A WHOLE-DIRECTORY mount, deliberately, for the same reason as the
             # runtime material below: securefile refuses a path that resolves
-            # through a symlink, so the five must be real files in one
+            # through a symlink, so the three must be real files in one
             # directory.
             #
             # This container never mounts the raw Secret. With

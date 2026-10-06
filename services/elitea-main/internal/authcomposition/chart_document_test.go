@@ -37,7 +37,7 @@ type chartValues struct {
 // parses it, so a document that this package refuses would render cleanly, pass
 // helm lint, pass kubeconform, and then stop the pod at boot.
 //
-// It also proves that the five material paths agree with the directory that
+// It also proves that the three material paths agree with the directory that
 // the chart mounts. The chart states the directory, the document states the
 // paths, and cmd/elitea-auth-material compares them at pod start. This makes
 // the same comparison in the build.

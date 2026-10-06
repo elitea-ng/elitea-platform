@@ -7,9 +7,8 @@ metadata:
     {{- include "elitea-runtime-redis.labels" . | nindent 4 }}
 spec:
   replicas: 1
-  # The dispatch streams and the auth session store are single-primary by
-  # contract (topology: single_primary_endpoint). Recreate, not RollingUpdate:
-  # two pods behind one Service would split both.
+  # The dispatch streams are single-primary by contract. Recreate, not
+  # RollingUpdate: two pods behind one Service would split them.
   strategy:
     type: Recreate
   selector:

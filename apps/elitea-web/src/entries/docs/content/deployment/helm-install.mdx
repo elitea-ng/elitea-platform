@@ -32,7 +32,7 @@ Agent-execution signing keys and listener certificates (from `deploy/scripts/gen
 </Accordion>
 
 <Accordion title="fileConfig.authConfig.material.secretName (production auth)">
-Auth Redis password, CA, browser-attempt key, PAT signing key, Form users JSON. Required if using Form or mixed authentication. The Form users JSON is a sign-in path only when `main.env.ELITEA_FORM_LOGIN_ENABLED` is `"true"`; Form sign-in is off by default.
+Three files: the browser-attempt key, the PAT signing key and the Form users JSON. Required if using Form or mixed authentication. The auth document is `elitea.auth.form.v2`: it has no `redis` block, because the Form sign-in state is in PostgreSQL, and the attempt key is `credentials.attempt_key_file`. The Form users JSON is a sign-in path only when `main.env.ELITEA_FORM_LOGIN_ENABLED` is `"true"`; Form sign-in is off by default.
 </Accordion>
 
 <Accordion title="Gateway identity secret (GATEWAY_IDENTITY_SECRET)">
@@ -60,7 +60,7 @@ The chart's own defaults: a **default install has no production authentication**
 The full capability set, matching `docker-compose.standalone-full.yml` — every capability flag on, the runtime plane on (agent execution, index ingest), sized for `postgresql.maxConnections: 200` across up to `main.autoscaling.maxReplicas: 4`. Needs both the runtime material Secret and the auth material Secret. This is the reference production shape.
 </Tab>
 <Tab title="values-auth-minimal.yaml">
-The cheapest install that can seed an AI provider credential through the product's own API instead of hand-written SQL: production (Form) authentication plus `ELITEA_CONFIGURATIONS_ENABLED`, **no runtime plane** — no agent execution, no chat. Needs the auth material Secret and a TLS Redis (`runtimeRedis.enabled: true`), but no runtime material Secret and no worker.
+The cheapest install that can seed an AI provider credential through the product's own API instead of hand-written SQL: production (Form) authentication plus `ELITEA_CONFIGURATIONS_ENABLED`, **no runtime plane** — no agent execution, no chat. Needs the auth material Secret, but no Redis, no runtime material Secret and no worker: the Form sign-in state is in PostgreSQL.
 </Tab>
 <Tab title="values-staging.yaml">
 A minimal single-replica shape (image tag `shadow-v0.1`, `DATABASE_URL` inlined for a throwaway environment, autoscaling and the pod disruption budget both off). Use it for a disposable smoke/shadow environment, not as a production starting point.

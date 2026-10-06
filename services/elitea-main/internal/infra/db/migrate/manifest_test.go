@@ -628,7 +628,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// Code authority, workspace, broker, debug, and saved source require 0145 through 0152.
 	// Their SQL bytes remain unchanged after incoming history claims the former slots.
 	// HTTP schema remains inactive until its runtime gate is enabled.
-	require.EqualValues(t, 152, Head(shared))
+	//
+	// 153: shared/0153_form_auth_state.sql, the Form graph's sign-in state off
+	// Redis: elitea_auth.form_sessions, form_login_transactions and
+	// browser_attempt_windows (bytea records, expiry read on every access,
+	// swept by elitea-scheduler's authstateretention). No permission.
+	require.EqualValues(t, 153, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/redis/go-redis/v9"
 
 	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
@@ -33,16 +32,14 @@ func TestFormGraphSignsAPATWithTheKeyItValidatesWith(t *testing.T) {
 			PostgreSQL:           pool,
 			MainRoutePublicRules: []forwardapp.PublicRule{},
 		},
-		func(_ context.Context, _ Config, material *materializedFiles) (*redis.Client, error) {
+		func(material *materializedFiles) {
 			// Copy: the snapshot is wiped before newFormGraph returns.
 			patKey = append([]byte(nil), material.patSigningKey...)
-			return redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", MaxRetries: -1}), nil
 		},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = graph.Close() }()
 
 	if len(patKey) == 0 {
 		t.Fatal("the fixture produced no PAT signing key")
