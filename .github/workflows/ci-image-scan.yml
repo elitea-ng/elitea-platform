@@ -376,6 +376,10 @@ jobs:
             target: final
             expect_type: gobinary
             blocking: true
+          # The two nginx images sit on nginx:stable-trixie (Debian 13), like
+          # every image this repository builds. Until 2026-10 they were
+          # nginx:stable-alpine and reported an `alpine` Result. Trivy now
+          # reports the nginx runtime's package database as `debian`.
           - name: elitea-ui
             context: .
             dockerfile: ./deploy/docker/Containerfile.elitea-ui
