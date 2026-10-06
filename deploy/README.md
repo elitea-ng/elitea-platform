@@ -1163,7 +1163,9 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   `nats.tls.issuerRef` (platform), `tls.certificate.issuerRef` (bootstrap) and
   `security.issuerRef` + `security.ca.create=false` (NATS) at it, set
   `nats.namespace`, and add the platform's namespace to the NATS chart's
-  `networkPolicy.clients`.
+  `networkPolicy.clients` and, with approver-policy installed, to
+  `security.approverPolicy.clientNamespaces` (otherwise no policy approves
+  the platform's client certificates).
   The mount itself is no longer missing. `LLM_GATEWAY_CLIENT_CERT` and its two
   siblings are *file paths* (`llmproxy.Config.ClientCertFile`), and issue #463
   moved them out of the `secrets:` block — where a `secretKeyRef` had been

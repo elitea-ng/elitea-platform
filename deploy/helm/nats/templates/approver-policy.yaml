@@ -81,6 +81,11 @@ spec:
     namespace:
       matchNames:
         - {{ $ns }}
+        {{- range $extra := .Values.security.approverPolicy.clientNamespaces }}
+        {{- if ne $extra $ns }}
+        - {{ $extra }}
+        {{- end }}
+        {{- end }}
 ---
 # The client-port server certificate: the Service names only.
 apiVersion: policy.cert-manager.io/v1alpha1

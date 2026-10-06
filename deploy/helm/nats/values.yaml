@@ -90,6 +90,14 @@ security:
     enabled: auto
     # Longest client certificate the client-identity policy signs.
     maxClientDuration: 2160h
+    # Namespaces besides this release's whose CertificateRequests the
+    # client-identity policy approves. Needed when the platform runs in
+    # another namespace against a ClusterIssuer ("NATS in another namespace"):
+    # without its namespace here, approver-policy matches no policy for the
+    # platform's client certificates, approves none of them, and elitea-main,
+    # the gateway and the scheduler never get a NATS identity. The server,
+    # route and CA policies stay scoped to this namespace.
+    clientNamespaces: []
     # cert-manager's controller, which submits every CertificateRequest and
     # must be allowed to `use` the policies.
     certManagerServiceAccount:

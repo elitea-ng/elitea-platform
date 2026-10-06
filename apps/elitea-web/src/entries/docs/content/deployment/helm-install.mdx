@@ -182,7 +182,7 @@ The platform chart provisions neither (the runtime's TLS Redis is the one except
 No Ingress renders until `main.ingress.enabled: true`. A cluster serving the web app needs per-route rules to avoid the SPA backend swallowing them.
 </Accordion>
 <Accordion title="NATS in another namespace">
-The reference install puts NATS in the platform's namespace. To run it elsewhere, back a cert-manager `ClusterIssuer` with a CA used for NATS only, point the NATS chart (`security.ca.create=false`, `security.issuerRef`), the bootstrap (`tls.certificate.issuerRef`) and the platform (`nats.tls.issuerRef`, `nats.namespace`) at it, and add the platform's namespace to the NATS chart's `networkPolicy.clients`. The platform chart renders fully qualified `tls://` URLs from `nats.namespace`.
+The reference install puts NATS in the platform's namespace. To run it elsewhere, back a cert-manager `ClusterIssuer` with a CA used for NATS only, point the NATS chart (`security.ca.create=false`, `security.issuerRef`), the bootstrap (`tls.certificate.issuerRef`) and the platform (`nats.tls.issuerRef`, `nats.namespace`) at it, and add the platform's namespace to the NATS chart's `networkPolicy.clients` — and, where cert-manager's approver-policy is installed, to `security.approverPolicy.clientNamespaces`, or the platform's certificates are never approved. The platform chart renders fully qualified `tls://` URLs from `nats.namespace`.
 </Accordion>
 <Accordion title="Who can mint a NATS identity">
 Anyone who may create a cert-manager `Certificate` in the NATS namespace, or read its Secrets (the CA key is one), can obtain any NATS client identity. Restrict both with RBAC; the NATS chart's optional approver-policy limits what its issuers sign. See `deploy/helm/nats/README.md`.
