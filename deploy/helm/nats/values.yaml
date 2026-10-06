@@ -175,10 +175,15 @@ nats:
                   - "$JS.API.STREAM.INFO.GATEWAY_RATELIMIT"
                   - "$JS.API.STREAM.INFO.GATEWAY_BUDGET_DELTAS"
                   - "$JS.API.STREAM.INFO.KV_GATEWAY_ALERT_COOLDOWN"
+                  # ReadBudget / ReadRateLimit (GetLastMsgForSubject). The
+                  # bootstrap creates the counter streams with allow_direct,
+                  # so nats.go reads them with a direct get.
                   - "$JS.API.DIRECT.GET.GATEWAY_BUDGET.>"
                   - "$JS.API.DIRECT.GET.GATEWAY_RATELIMIT.>"
-                  - "$JS.API.STREAM.MSG.GET.GATEWAY_BUDGET"
-                  - "$JS.API.STREAM.MSG.GET.GATEWAY_RATELIMIT"
+                  # kv.Create on a key that exists reads it back to tell a
+                  # live key from a delete marker (TryAlertCooldown's second
+                  # crossing inside the cooldown).
+                  - "$JS.API.DIRECT.GET.KV_GATEWAY_ALERT_COOLDOWN.>"
                 deny:
                   - "$JS.API.STREAM.CREATE.>"
                   - "$JS.API.STREAM.UPDATE.>"

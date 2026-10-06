@@ -38,11 +38,11 @@ const (
 	// would change what the operator's number means.
 	RateLimitWindow = time.Minute
 
-	// rateLimitMaxAge expires a window's counter well after the window closes.
-	// It is several windows long rather than exactly one so a request that
-	// arrives at the very end of a window still reads a counter that exists,
-	// and short enough that the stream's subject space stays bounded.
-	rateLimitMaxAge = 5 * time.Minute
+	// The stream's MaxAge (5m, set by the nats-bootstrap Job) expires a
+	// window's counter well after the window closes: several windows long so
+	// a request at the very end of one still reads a counter that exists,
+	// and short enough that the subject space stays bounded. bindAssets
+	// refuses a MaxAge that does not outlive one window.
 
 	// RateKindRequests and RateKindTokens are the two counter families. They
 	// are separate subjects so a token count can never be read as a request
@@ -125,33 +125,4 @@ func (c *Client) ReadRateLimit(ctx context.Context, subject string) (int64, erro
 		return 0, mapErr(err)
 	}
 	return total, nil
-}
-
-// ensureRateLimitAssets creates and binds the rate-limit counter stream. It is
-// called from ensureAssets and follows the same idempotent CreateOrUpdate
-// pattern as the budget stream.
-func (c *Client) ensureRateLimitAssets(ctx context.Context, prov assetProvisioner) error {
-	if _, err := prov.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
-		Name:            RateLimitStream,
-		Subjects:        []string{rateLimitSubjectRoot + ".>"},
-		Storage:         jetstream.FileStorage,
-		Replicas:        c.cfg.Replicas,
-		Retention:       jetstream.LimitsPolicy,
-		AllowMsgCounter: true,
-		// Only the running total matters, exactly as for the budget stream.
-		MaxMsgsPerSubject: 1,
-		// The bound that keeps one-subject-per-minute-per-scope from growing
-		// without limit. There is deliberately no Duplicates window: a
-		// rate-limit increment is never replayed, so a dedup window would only
-		// cost memory.
-		MaxAge: rateLimitMaxAge,
-	}); err != nil {
-		return fmt.Errorf("nats: ensure rate-limit counter stream: %w", err)
-	}
-	st, err := prov.Stream(ctx, RateLimitStream)
-	if err != nil {
-		return fmt.Errorf("nats: bind rate-limit stream: %w", err)
-	}
-	c.ratelimit = st
-	return nil
 }

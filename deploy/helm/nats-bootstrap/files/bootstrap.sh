@@ -131,7 +131,9 @@ ensure_kv() {
 
 # ── GATEWAY_BUDGET: the budget counter stream ───────────────────────────────
 # AllowMsgCounter makes every publish carrying Nats-Incr an atomic add whose
-# running total comes back in the PubAck. Only the total matters, so one
+# running total comes back in the PubAck. allow_direct is what the gateway
+# reads the total with (a direct get); its NATS permissions grant that and not
+# the stream API's MSG.GET, and it refuses to bind a stream without it. Only the total matters, so one
 # message per subject. The duplicate window lets the gateway's recovery replay
 # reuse a Nats-Msg-Id across retries without double counting (design §8.5).
 ensure_stream GATEWAY_BUDGET file \
@@ -140,6 +142,7 @@ ensure_stream GATEWAY_BUDGET file \
   --retention limits \
   --discard old \
   --allow-counter \
+  --allow-direct \
   --max-msgs-per-subject 1 \
   --max-msgs=-1 \
   --max-bytes=-1 \
@@ -159,6 +162,7 @@ ensure_stream GATEWAY_RATELIMIT file \
   --retention limits \
   --discard old \
   --allow-counter \
+  --allow-direct \
   --max-msgs-per-subject 1 \
   --max-msgs=-1 \
   --max-bytes=-1 \
