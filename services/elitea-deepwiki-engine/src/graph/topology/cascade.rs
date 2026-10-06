@@ -572,7 +572,20 @@ mod tests {
         Absent,
         Failing,
         Refusing,
+        TimingOut,
         Standin,
+    }
+
+    /// An embedder whose model service times out after its retries.
+    struct TimingOutEmbedder;
+
+    impl TextEmbedder for TimingOutEmbedder {
+        fn embed(&mut self, _text: &str) -> Result<Vec<f64>, StoreError> {
+            Err(StoreError::from_engine(crate::errors::EngineError::new(
+                crate::errors::ErrorType::Runtime,
+                "Embeddings request for model 'e' hit a timeout after 3 attempt(s)",
+            )))
+        }
     }
 
     /// An embedder whose model service refuses the credential.
@@ -600,11 +613,13 @@ mod tests {
         let mut failing = FailingEmbedder::default();
         let mut standin = super::super::replay::StandinEmbedder;
         let mut refusing = RefusingEmbedder;
+        let mut timing_out = TimingOutEmbedder;
         let stats = {
             let embedder: Option<&mut dyn TextEmbedder> = match model {
                 Model::Absent => None,
                 Model::Failing => Some(&mut failing),
                 Model::Refusing => Some(&mut refusing),
+                Model::TimingOut => Some(&mut timing_out),
                 Model::Standin => Some(&mut standin),
             };
             let mut ctx = Ctx::new(&mut graph, store, embedder, CalibrationProfile::Calibrated);
@@ -650,6 +665,18 @@ mod tests {
         assert_eq!(
             cause.map(|e| (e.error_type, e.category())),
             Some((crate::errors::ErrorType::Value, "invalid_input"))
+        );
+    }
+
+    #[test]
+    fn a_timeout_or_busy_model_leaves_the_orphan_without_a_vector() {
+        // Transient after the client's retries: as in Python, no vector,
+        // and the phase goes on — only a refusal that would recur fails it.
+        let timed_out = resolve(&mut FakeStore::default(), Model::TimingOut).unwrap();
+        let without = resolve(&mut FakeStore::default(), Model::Absent).unwrap();
+        assert_eq!(
+            (&timed_out.stats, &timed_out.edges),
+            (&without.stats, &without.edges)
         );
     }
 

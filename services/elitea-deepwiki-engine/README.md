@@ -115,10 +115,11 @@ argument errors are `ValueError`, index failures `RuntimeError`
 (`timeout_error`, `service_busy`, …). Deliberate difference: a failed
 embedding request fails the run (Python skipped the batch and published a
 wiki with part of its vectors). That includes an orphan's fallback
-embedding in Phase 2: a gateway refusal or timeout there fails the run with
-the gateway's own error type and category ("Embedding an orphan node with
-<model> failed: …"), not as a generic index failure (Python went on without
-the vector).
+embedding in Phase 2: a credential, budget or model refusal there fails the
+run with the gateway's own error type and category ("Embedding an orphan
+node with <model> failed: …"), not as a generic index failure. A timeout or
+a busy service that remains after the client's retries leaves that orphan
+without a vector, as Python does.
 
 **What the engine trusts.** The wiki is named by the clone, never by the
 caller: `wiki_id` is `normalize_wiki_id(repo:branch:sha8)` of the repository

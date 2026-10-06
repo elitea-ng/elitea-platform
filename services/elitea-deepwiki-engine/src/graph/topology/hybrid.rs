@@ -145,10 +145,12 @@ pub fn resolve_orphan_hybrid(
             (Some(text), Some(embedder)) => match embedder.embed(&text) {
                 Ok(vector) => Some(vector),
                 // The model service refused or timed out after its
-                // retries: the run fails with that error's type, as the
-                // node embedding does (DELIBERATE DIFFERENCE: Python went
-                // on without the vector).
-                Err(error) if error.engine_error().is_some() => return Err(error),
+                // retries with a refusal that will recur (credential,
+                // budget, model): the run fails with that error's type, as
+                // the node embedding does (DELIBERATE DIFFERENCE: Python
+                // went on without the vector). A timeout or a busy service
+                // falls through to "no vector", as in Python.
+                Err(error) if error.fails_the_phase() => return Err(error),
                 Err(_) => {
                     // Python's `embedding_fn` failing meant "no vector": the
                     // orphan goes on to the lexical pass. The error text is

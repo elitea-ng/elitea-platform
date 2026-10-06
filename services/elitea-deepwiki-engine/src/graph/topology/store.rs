@@ -70,6 +70,21 @@ impl StoreError {
     pub fn engine_error(&self) -> Option<&EngineError> {
         self.cause.as_ref()
     }
+
+    /// Whether a failed orphan embedding must fail Phase 2.
+    ///
+    /// A refusal that will recur for every later model call — a rejected
+    /// credential, an exhausted budget, an unknown model, a malformed
+    /// reply — fails the run with its own type (the pages would fail on it
+    /// minutes later anyway). A timeout or a busy service that outlasted the
+    /// client's retries does NOT: like Python's `embedding_fn` failing, the
+    /// orphan goes on without a vector to the lexical pass.
+    #[must_use]
+    pub fn fails_the_phase(&self) -> bool {
+        self.cause
+            .as_ref()
+            .is_some_and(|cause| !matches!(cause.category(), "timeout_error" | "service_busy"))
+    }
 }
 
 /// The columns of one stored node (`repo_nodes` / `wiki_nodes`) that
