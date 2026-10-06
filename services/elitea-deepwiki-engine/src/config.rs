@@ -61,7 +61,8 @@ pub enum RunnerKind {
     Native,
 }
 
-/// The default address-space cap of a generation worker (16 GiB).
+/// The address-space cap of a generation worker when neither the setting
+/// nor a cgroup memory limit gives one (16 GiB).
 ///
 /// `RLIMIT_AS` counts reserved address space, not resident memory: thread
 /// stacks (the Python parser pool reserves 256 MiB per thread) and malloc
@@ -69,6 +70,23 @@ pub enum RunnerKind {
 /// peak of a large repository (1.3–3.2 GB measured on elitea-platform);
 /// it stops a runaway, it does not size the pod.
 pub const DEFAULT_WORKER_MEMORY_BYTES: u64 = 16 << 30;
+
+/// The share of the container's memory limit (cgroup v2 `memory.max`) the
+/// default address-space cap takes: 85 %, the rest for the parent and the
+/// page cache.
+pub const CGROUP_MEMORY_PERCENT: u64 = 85;
+
+/// The default address-space cap: 85 % of the cgroup memory limit when one
+/// is set, at least [`MIN_WORKER_MEMORY_BYTES`]; else
+/// [`DEFAULT_WORKER_MEMORY_BYTES`].
+#[must_use]
+pub fn default_worker_memory(cgroup_memory_max: Option<u64>) -> u64 {
+    cgroup_memory_max.map_or(DEFAULT_WORKER_MEMORY_BYTES, |limit| {
+        (limit / 100)
+            .saturating_mul(CGROUP_MEMORY_PERCENT)
+            .max(MIN_WORKER_MEMORY_BYTES)
+    })
+}
 
 /// The smallest address-space cap the settings accept (1 GiB): below it a
 /// worker cannot even start its thread pools.
@@ -106,7 +124,8 @@ pub fn worker_memory_needed(threads: u64) -> u64 {
 /// request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerSettings {
-    /// `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES`: `RLIMIT_AS`, default 16 GiB.
+    /// `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES`: `RLIMIT_AS`, default 85 % of
+    /// the cgroup memory limit, else 16 GiB ([`default_worker_memory`]).
     pub memory_bytes: u64,
     /// `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS`: `RLIMIT_CPU` (soft; the hard
     /// limit is 10 s above it), default 4 h.
@@ -334,9 +353,16 @@ fn build_owner(
     Ok(owner)
 }
 
-fn worker_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<WorkerSettings, ConfigError> {
+fn worker_settings(
+    raw: &impl Fn(&str) -> Option<String>,
+    cgroup_memory_max: Option<u64>,
+) -> Result<WorkerSettings, ConfigError> {
     let defaults = WorkerSettings::default();
-    let memory_bytes = positive_count(raw, "WORKER_MEMORY_BYTES", defaults.memory_bytes)?;
+    let memory_bytes = positive_count(
+        raw,
+        "WORKER_MEMORY_BYTES",
+        default_worker_memory(cgroup_memory_max),
+    )?;
     if memory_bytes < MIN_WORKER_MEMORY_BYTES {
         return Err(ConfigError(format!(
             "{ENV_PREFIX}WORKER_MEMORY_BYTES must be at least {MIN_WORKER_MEMORY_BYTES} (1 GiB of address space), got {memory_bytes}"
@@ -408,6 +434,23 @@ impl Settings {
     ///
     /// A [`ConfigError`] naming the variable and the value it refused.
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        Self::from_lookup_and_memory_limit(
+            lookup,
+            crate::cgroup::Cgroup::discover().and_then(|c| c.memory_max()),
+        )
+    }
+
+    /// [`Settings::from_lookup`] with the container's memory limit given
+    /// (cgroup v2 `memory.max`, `None` for none), which sets the default of
+    /// `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Settings::from_lookup`].
+    pub fn from_lookup_and_memory_limit(
+        lookup: impl Fn(&str) -> Option<String>,
+        cgroup_memory_max: Option<u64>,
+    ) -> Result<Self, ConfigError> {
         let raw = |name: &str| lookup(&format!("{ENV_PREFIX}{name}")).filter(|v| !v.is_empty());
         let runner = match raw("RUNNER").as_deref().map(str::trim) {
             None | Some("unavailable") => RunnerKind::Unavailable,
@@ -466,7 +509,7 @@ impl Settings {
             )));
         }
         let publish = publish_settings(&raw)?;
-        let worker = worker_settings(&raw)?;
+        let worker = worker_settings(&raw, cgroup_memory_max)?;
         if runner == RunnerKind::Native {
             check_worker_fits(&worker)?;
         }
@@ -509,7 +552,7 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect();
-        Settings::from_lookup(|name| map.get(name).cloned())
+        Settings::from_lookup_and_memory_limit(|name| map.get(name).cloned(), None)
     }
 
     #[test]
@@ -773,6 +816,31 @@ mod tests {
             let key = format!("ELITEA_DEEPWIKI_{name}");
             assert!(settings(&[(key.as_str(), bad)]).is_err(), "{name}={bad}");
         }
+    }
+
+    #[test]
+    fn the_memory_cap_defaults_to_the_cgroup_limit() {
+        let read = |limit: Option<u64>, pairs: &[(&str, &str)]| {
+            let map: HashMap<String, String> = pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect();
+            Settings::from_lookup_and_memory_limit(|name| map.get(name).cloned(), limit)
+                .map(|s| s.worker.memory_bytes)
+        };
+        assert_eq!(read(None, &[]), Ok(DEFAULT_WORKER_MEMORY_BYTES));
+        // 85 % of an 8 GiB container.
+        assert_eq!(read(Some(8 << 30), &[]), Ok((8 << 30) / 100 * 85));
+        // Never below the floor.
+        assert_eq!(read(Some(512 << 20), &[]), Ok(MIN_WORKER_MEMORY_BYTES));
+        // The setting beats the cgroup.
+        assert_eq!(
+            read(
+                Some(8 << 30),
+                &[("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "2147483648")]
+            ),
+            Ok(2 << 30)
+        );
     }
 
     #[test]

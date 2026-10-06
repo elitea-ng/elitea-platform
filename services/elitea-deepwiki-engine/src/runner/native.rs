@@ -26,6 +26,7 @@
 //! land (ADR-0026 phase 6).
 
 use super::{Context, prepare_arguments};
+use crate::cgroup::Cgroup;
 use crate::config::{ConfigError, Settings};
 use crate::errors::{EngineError, ErrorType};
 use crate::storage::build::{delete_build, new_boot_id, process_boot_id};
@@ -81,6 +82,33 @@ pub struct NativeRunner {
     worker: Arc<WorkerCommand>,
     /// For deleting the build of a child that was killed.
     pool: PgPool,
+    /// This process's cgroup (v2), whose OOM-kill count explains a SIGKILL
+    /// this runner did not send.
+    cgroup: Option<Arc<Cgroup>>,
+}
+
+/// What the parent saw of a child that ended without a last line.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ExitFacts {
+    /// The child's stderr reported a failed allocation.
+    allocation_failed: bool,
+    /// This runner sent the child SIGKILL.
+    killed_by_parent: bool,
+    /// The child's stdout ended inside a line.
+    cut_off: Option<String>,
+    /// The cgroup's `oom_kill` count when the child started and after it
+    /// ended, when readable.
+    oom_kills: Option<(u64, u64)>,
+}
+
+/// How a child's stdout could not be read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReadFailure {
+    /// A line too long or not JSON: the child is misbehaving.
+    Unreadable(String),
+    /// The stream ended inside a line: the child ended while writing it,
+    /// and its exit status says why.
+    CutOff(String),
 }
 
 fn runtime(message: impl Into<String>) -> EngineError {
@@ -132,7 +160,15 @@ impl NativeRunner {
             settings: Arc::new(settings),
             worker: Arc::new(worker),
             pool,
+            cgroup: Cgroup::discover().map(Arc::new),
         })
+    }
+
+    /// The runner with `cgroup` as this process's cgroup (tests).
+    #[must_use]
+    pub fn with_cgroup(mut self, cgroup: Option<Cgroup>) -> Self {
+        self.cgroup = cgroup.map(Arc::new);
+        self
     }
 
     /// Run one tool.
@@ -191,6 +227,16 @@ impl NativeRunner {
                 self.settings.worker.threads.to_string(),
             )
             .env("MALLOC_ARENA_MAX", "2")
+            // The limits this parent resolved (the memory default reads
+            // the cgroup), so parent and child agree on them.
+            .env(
+                "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES",
+                self.settings.worker.memory_bytes.to_string(),
+            )
+            .env(
+                "ELITEA_DEEPWIKI_WORKER_THREADS",
+                self.settings.worker.threads.to_string(),
+            )
             .envs(
                 self.worker
                     .env
@@ -216,6 +262,7 @@ impl NativeRunner {
             .spawn()
             .map_err(|e| runtime(format!("The wiki worker could not start: {e}")))?;
         let pid = child.id();
+        let oom_kills_before = self.cgroup.as_deref().and_then(Cgroup::oom_kills);
         context.thinking(format!(
             "DeepWiki worker started (pid {})",
             pid.map_or_else(|| "?".to_owned(), |p| p.to_string())
@@ -252,6 +299,8 @@ impl NativeRunner {
         let mut lines_open = true;
         let mut build_id: Option<String> = None;
         let mut last: Option<Result<Value, EngineError>> = None;
+        let mut killed_by_parent = false;
+        let mut cut_off: Option<String> = None;
         let status = loop {
             tokio::select! {
                 message = lines.recv(), if lines_open => match message {
@@ -259,10 +308,16 @@ impl NativeRunner {
                     Some(Ok(line)) => {
                         relay(line, context, stopped, &mut build_id, &mut last);
                     }
-                    Some(Err(error)) => {
+                    Some(Err(ReadFailure::Unreadable(error))) => {
                         tracing::error!(%error, "the wiki worker's output is unreadable; killing it");
                         last = Some(Err(unreadable(&error)));
                         signal(pid, rustix::process::Signal::KILL);
+                        killed_by_parent = true;
+                        lines_open = false;
+                    }
+                    // The child is ending; its exit status says why.
+                    Some(Err(ReadFailure::CutOff(error))) => {
+                        cut_off = Some(error);
                         lines_open = false;
                     }
                 },
@@ -274,6 +329,7 @@ impl NativeRunner {
                 () = sleep_until(kill_at), if kill_at.is_some() => {
                     tracing::warn!(pid, "the wiki worker did not stop within 3 s of SIGTERM; killing it");
                     signal(pid, rustix::process::Signal::KILL);
+                    killed_by_parent = true;
                     kill_at = None;
                 }
                 status = child.wait() => break status,
@@ -287,10 +343,11 @@ impl NativeRunner {
                         Ok(line) => relay(line, context, stopped, &mut build_id, &mut last),
                         // The same as in the loop above (the child has
                         // ended, so there is nothing to kill).
-                        Err(error) => {
+                        Err(ReadFailure::Unreadable(error)) => {
                             tracing::error!(%error, "the wiki worker's output is unreadable");
                             last = Some(Err(unreadable(&error)));
                         }
+                        Err(ReadFailure::CutOff(error)) => cut_off = Some(error),
                     }
                 }
             };
@@ -310,7 +367,16 @@ impl NativeRunner {
             (Some(Ok(result)), _) => Ok(result),
             (_, true) => Err(EngineError::cancelled()),
             (Some(Err(error)), false) => Err(error),
-            (None, false) => Err(self.exit_failure(status, out_of_memory.load(Ordering::Acquire))),
+            (None, false) => {
+                let facts = ExitFacts {
+                    allocation_failed: out_of_memory.load(Ordering::Acquire),
+                    killed_by_parent,
+                    cut_off,
+                    oom_kills: oom_kills_before
+                        .zip(self.cgroup.as_deref().and_then(Cgroup::oom_kills)),
+                };
+                Err(exit_failure(&self.settings.worker, status, &facts))
+            }
         };
         if let Some(build_id) = build_id {
             match delete_build(&self.pool, &build_id).await {
@@ -325,34 +391,60 @@ impl NativeRunner {
         }
         outcome
     }
+}
 
-    /// The failure of a child that ended without a last line.
-    fn exit_failure(
-        &self,
-        status: std::io::Result<std::process::ExitStatus>,
-        out_of_memory: bool,
-    ) -> EngineError {
-        let limits = self.settings.worker;
-        let cpu_signal = rustix::process::Signal::XCPU.as_raw();
-        match status {
-            _ if out_of_memory => EngineError::new(
-                ErrorType::Memory,
-                format!(
-                    "The wiki worker ran out of memory: it reached its address-space limit of {} bytes (ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES)",
-                    limits.memory_bytes
-                ),
+/// The failure of a child that ended without a last line, by its cause, in
+/// this order: a failed allocation; SIGXCPU (the CPU limit); a SIGKILL
+/// this parent did not send, which on Linux is the kernel's OOM killer
+/// (the cgroup's `oom_kill` count confirms it when readable); a line cut
+/// off or unreadable; any other end.
+fn exit_failure(
+    limits: &crate::config::WorkerSettings,
+    status: std::io::Result<std::process::ExitStatus>,
+    facts: &ExitFacts,
+) -> EngineError {
+    let cpu_signal = rustix::process::Signal::XCPU.as_raw();
+    let kill_signal = rustix::process::Signal::KILL.as_raw();
+    let signal = status.as_ref().ok().and_then(ExitStatusExt::signal);
+    if facts.allocation_failed {
+        return EngineError::new(
+            ErrorType::Memory,
+            format!(
+                "The wiki worker ran out of memory: it reached its address-space limit of {} bytes (ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES)",
+                limits.memory_bytes
             ),
-            Ok(status) if status.signal() == Some(cpu_signal) => runtime(format!(
-                "Wiki generation timeout: the worker used its CPU time limit of {} s (ELITEA_DEEPWIKI_WORKER_CPU_SECONDS)",
-                limits.cpu_seconds
-            )),
-            Ok(status) => runtime(format!(
-                "The wiki worker process ended without a result ({status})"
-            )),
-            Err(error) => runtime(format!(
-                "The wiki worker process could not be awaited: {error}"
-            )),
-        }
+        );
+    }
+    if signal == Some(cpu_signal) {
+        return runtime(format!(
+            "Wiki generation timeout: the worker used its CPU time limit of {} s (ELITEA_DEEPWIKI_WORKER_CPU_SECONDS)",
+            limits.cpu_seconds
+        ));
+    }
+    if signal == Some(kill_signal) && !facts.killed_by_parent {
+        let cause = match facts.oom_kills {
+            Some((before, after)) if after > before => {
+                "the container reached its memory limit (the cgroup counted an OOM kill)"
+            }
+            _ => "the kernel's out-of-memory killer is the likely cause",
+        };
+        return EngineError::new(
+            ErrorType::Memory,
+            format!(
+                "The wiki worker ran out of memory: it was killed (SIGKILL) and {cause}; lower ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES below the container limit or give the container more memory"
+            ),
+        );
+    }
+    if let Some(cut_off) = &facts.cut_off {
+        return unreadable(cut_off);
+    }
+    match status {
+        Ok(status) => runtime(format!(
+            "The wiki worker process ended without a result ({status})"
+        )),
+        Err(error) => runtime(format!(
+            "The wiki worker process could not be awaited: {error}"
+        )),
     }
 }
 
@@ -413,7 +505,10 @@ async fn sleep_until(deadline: Option<tokio::time::Instant>) {
 }
 
 /// Read the child's NDJSON lines into `sender` until its stdout closes.
-async fn read_lines(stdout: ChildStdout, sender: mpsc::UnboundedSender<Result<Value, String>>) {
+async fn read_lines(
+    stdout: ChildStdout,
+    sender: mpsc::UnboundedSender<Result<Value, ReadFailure>>,
+) {
     let mut reader = BufReader::new(stdout);
     loop {
         let mut buffer = Vec::new();
@@ -425,21 +520,30 @@ async fn read_lines(stdout: ChildStdout, sender: mpsc::UnboundedSender<Result<Va
         {
             Ok(0) => return,
             Ok(_) if buffer.len() > MAX_RESULT_LINE => {
-                let _ = sender.send(Err(format!(
+                let _ = sender.send(Err(ReadFailure::Unreadable(format!(
                     "a line is longer than {MAX_RESULT_LINE} bytes"
-                )));
+                ))));
                 return;
             }
             Ok(_) => {
-                let parsed = serde_json::from_slice::<Value>(&buffer)
-                    .map_err(|e| format!("a line is not JSON: {e}"));
+                let complete = buffer.ends_with(b"\n");
+                let parsed = serde_json::from_slice::<Value>(&buffer).map_err(|e| {
+                    if complete {
+                        ReadFailure::Unreadable(format!("a line is not JSON: {e}"))
+                    } else {
+                        ReadFailure::CutOff(format!(
+                            "its last line ends after {} bytes without a newline",
+                            buffer.len()
+                        ))
+                    }
+                });
                 let failed = parsed.is_err();
-                if sender.send(parsed).is_err() || failed {
+                if sender.send(parsed).is_err() || failed || !complete {
                     return;
                 }
             }
             Err(error) => {
-                let _ = sender.send(Err(error.to_string()));
+                let _ = sender.send(Err(ReadFailure::Unreadable(error.to_string())));
                 return;
             }
         }
@@ -594,6 +698,75 @@ exit 0
             error.message
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_sigkill_the_parent_did_not_send_is_out_of_memory() {
+        // A partial last line, then the kernel's kill: the exit status, not
+        // the cut-off line, is the cause.
+        let (runner, root) =
+            scripted("#!/bin/sh\nprintf '{\"thinking\": \"x\"}\\n{\"resu'\nkill -9 $$\n");
+        let (context, _receiver, _stop) = context();
+        let outcome = runner.run("generate_wiki", Map::new(), &context).await;
+        let error = outcome
+            .err()
+            .unwrap_or_else(|| panic!("a killed worker succeeded"));
+        assert_eq!(error.error_type, ErrorType::Memory, "{}", error.message);
+        assert_eq!(error.category(), "out_of_memory");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_exit_is_classified_by_its_cause() {
+        use std::os::unix::process::ExitStatusExt;
+        let limits = crate::config::WorkerSettings::default();
+        let killed = || Ok(std::process::ExitStatus::from_raw(9));
+        let classify = |facts: ExitFacts| exit_failure(&limits, killed(), &facts);
+        // Not sent by the parent: memory; the cgroup count confirms it.
+        let error = classify(ExitFacts {
+            oom_kills: Some((3, 4)),
+            cut_off: Some("cut".to_owned()),
+            ..ExitFacts::default()
+        });
+        assert_eq!(error.error_type, ErrorType::Memory);
+        assert!(
+            error.message.contains("cgroup counted an OOM kill"),
+            "{error}"
+        );
+        let error = classify(ExitFacts {
+            oom_kills: Some((4, 4)),
+            ..ExitFacts::default()
+        });
+        assert_eq!(error.error_type, ErrorType::Memory);
+        assert!(error.message.contains("likely cause"), "{error}");
+        // Sent by the parent: not memory; a cut-off line is the cause then.
+        let error = classify(ExitFacts {
+            killed_by_parent: true,
+            cut_off: Some("its last line ends after 5 bytes".to_owned()),
+            ..ExitFacts::default()
+        });
+        assert_eq!(error.error_type, ErrorType::Runtime);
+        assert!(error.message.contains("output is unreadable"), "{error}");
+        // SIGXCPU is the CPU limit; an allocation failure beats everything.
+        let error = exit_failure(
+            &limits,
+            Ok(std::process::ExitStatus::from_raw(24)),
+            &ExitFacts::default(),
+        );
+        assert_eq!(error.category(), "timeout_error");
+        let error = classify(ExitFacts {
+            allocation_failed: true,
+            killed_by_parent: true,
+            ..ExitFacts::default()
+        });
+        assert!(error.message.contains("address-space limit"), "{error}");
+        // A plain exit.
+        let error = exit_failure(
+            &limits,
+            Ok(std::process::ExitStatus::from_raw(3 << 8)),
+            &ExitFacts::default(),
+        );
+        assert!(error.message.contains("ended without a result"), "{error}");
     }
 
     #[tokio::test]

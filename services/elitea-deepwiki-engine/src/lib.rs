@@ -5,6 +5,7 @@
 //! `fixture` and `native`, the engine itself, whose `generate_wiki` runs in
 //! a worker child process (`worker`, `generate`).
 
+pub mod cgroup;
 pub mod config;
 pub mod errors;
 pub mod generate;

@@ -176,11 +176,16 @@ worker threads"); it does not index the repository with every file of that
 language marked as failed. A child that dies without a last line is
 reported by its cause: an
 allocation failure (`MemoryError`, `out_of_memory`), SIGXCPU
-(`timeout_error`), anything else `RuntimeError`.
+(`timeout_error`), a SIGKILL the parent did not send (`MemoryError`: on
+Linux that is the kernel's OOM killer; the message says so for certain when
+the cgroup v2 `memory.events` `oom_kill` count rose during the run), anything
+else `RuntimeError`. A last line cut off by the child's death does not hide
+the exit status: it is reported ("output is unreadable") only when the exit
+explains nothing.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` | 16 GiB (at least 1 GiB) | `RLIMIT_AS`. It counts reserved address space (each parser thread reserves its stack, up to 256 MiB), not resident memory; it stops a runaway, the pod limit sizes the job. macOS does not enforce it (a warning is logged). |
+| `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` | 85 % of the container's cgroup v2 `memory.max` when it is set, else 16 GiB (at least 1 GiB) | `RLIMIT_AS`. It counts reserved address space (each parser thread reserves its stack, up to 256 MiB), not resident memory; it stops a runaway, the pod limit sizes the job. macOS does not enforce it (a warning is logged). |
 | `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS` | 14400 (at least 60) | `RLIMIT_CPU`, hard limit 10 s above |
 | `ELITEA_DEEPWIKI_WORKER_THREADS` | available parallelism, at most 8 (at most 256), lowered until it fits the memory cap | the child's runtime and parser threads. With the native runner, `threads × 256 MiB + 1 GiB` (each parser thread's stack reservation plus headroom) must fit `WORKER_MEMORY_BYTES`, or the start is refused. |
 | `ELITEA_DEEPWIKI_SCRATCH_PATH` | `/tmp/deepwiki` | root of the job directories |
