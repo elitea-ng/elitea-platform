@@ -53,7 +53,57 @@ names its own URL too.
 {{- else if and .Values.scheduler.enabled (get $sched "GATEWAY_NATS_URL") -}}
 {{- get $sched "GATEWAY_NATS_URL" -}}
 {{- else if .Values.nats.service -}}
-{{- printf "nats://%s" (include "elitea.serviceAddr" (dict "svc" .Values.nats "ctx" .)) -}}
+{{- include "elitea.natsUrl" . -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+elitea.natsUrl — the URL every component gets from the top-level `nats` block:
+tls:// when nats.tls.enabled (the NATS chart requires TLS, #1076), nats://
+only in the acknowledged plaintext posture. Never a credential.
+*/}}
+{{- define "elitea.natsUrl" -}}
+{{- printf "%s://%s" (ternary "tls" "nats" (.Values.nats.tls.enabled | default false)) (include "elitea.serviceAddr" (dict "svc" .Values.nats "ctx" .)) -}}
+{{- end }}
+
+{{/*
+elitea.natsClientFile — one file of the mounted NATS client certificate
+(ca.crt, tls.crt or tls.key). Each component writes its three
+<PREFIX>_NATS_TLS_*_FILE names LITERALLY in its own template, so the
+env-drift gate (services/elitea-llm-gateway/scripts/env-drift-check.sh) sees
+the chart set the names the code reads.
+*/}}
+{{- define "elitea.natsClientFile" -}}
+{{- printf "%s/%s" (trimSuffix "/" .ctx.Values.nats.tls.mountPath) .file | quote -}}
+{{- end }}
+
+{{/*
+elitea.natsClientVolumeMount / elitea.natsClientVolume — the client
+certificate Secret (tls.crt, tls.key, ca.crt) cert-manager writes for one
+component. A whole-directory mount: natsconn reads the files with
+tls.LoadX509KeyPair / os.ReadFile on every handshake, so the Secret volume's
+symlink swap on renewal is exactly what it should see.
+*/}}
+{{- define "elitea.natsClientVolumeMount" -}}
+- name: nats-client-tls
+  mountPath: {{ .Values.nats.tls.mountPath }}
+  readOnly: true
+{{- end }}
+
+{{- define "elitea.natsClientVolume" -}}
+- name: nats-client-tls
+  secret:
+    secretName: {{ .secretName }}
+{{- end }}
+
+{{/*
+elitea-main.usesNats — "true" when elitea-main dials NATS at all: a URL from
+its own env, from a Secret, or derived from the gateway / the `nats` block.
+*/}}
+{{- define "elitea-main.usesNats" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- if or (get $env "ELITEA_EVENTS_NATS_URL") (hasKey (.Values.main.secrets | default dict) "ELITEA_EVENTS_NATS_URL") (include "elitea.eventsNatsUrl" .) -}}
+true
 {{- end -}}
 {{- end }}
 

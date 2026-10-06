@@ -258,6 +258,43 @@ nats:
   namespace: ""
   port: 4222
 
+  # ── Client identity (#1076) ──────────────────────────────────────────────
+  #
+  # The NATS server (deploy/helm/nats) requires TLS and a client certificate
+  # whose URI SAN, spiffe://<trustDomain>/nats/<identity>, names a user in its
+  # permission table. With `enabled` this chart:
+  #   * issues one Certificate per client from the DEDICATED NATS CA:
+  #       elitea-main        -> Secret elitea-main-nats-client-tls
+  #       elitea-llm-gateway -> Secret elitea-llm-gateway-nats-client-tls
+  #       elitea-scheduler   -> Secret elitea-scheduler-nats-client-tls
+  #   * mounts it at mountPath and sets <PREFIX>_NATS_TLS_{CA,CERT,KEY}_FILE
+  #     (ELITEA_EVENTS_ for main, GATEWAY_ for the gateway and scheduler);
+  #   * renders every derived URL as tls://<service>.<ns>.svc.cluster.local:4222
+  #     — no credential, so the ConfigMaps hold nothing secret.
+  # The services re-read the certificate files on every TLS handshake, so a
+  # cert-manager renewal is picked up on the next reconnect.
+  #
+  # templates/natsClient.yaml refuses: a nats:// URL (or a tls:// one with
+  # TLS off), and user:password@ or token@ in any NATS URL this chart renders
+  # into a ConfigMap. Plaintext is compose's posture; to render it in a cluster
+  # anyway set enabled: false AND allowPlaintext: true, and accept that any pod
+  # that reaches the server can read every tenant's events and reset budget
+  # counters.
+  tls:
+    enabled: true
+    allowPlaintext: false
+    # The NATS CA issuer deploy/helm/nats renders (security.ca.name). It is a
+    # NAMESPACED Issuer, so it signs only in the namespace both releases share;
+    # with NATS elsewhere, name a ClusterIssuer backed by a dedicated NATS CA.
+    issuerRef:
+      name: elitea-nats-ca
+      kind: Issuer
+    # Must match the URI SANs the NATS chart's permission table names.
+    trustDomain: elitea.internal
+    duration: 2160h    # 90d
+    renewBefore: 360h  # 15d
+    mountPath: /etc/elitea/nats-client
+
 # The top-level `redis` block (the plaintext "general purpose" Redis, service
 # elitea-valkey, rendered into REDIS_URL for elitea-main and the scheduler) is
 # GONE. Its three uses moved or were deleted: the project SSE stream to NATS
@@ -921,24 +958,27 @@ main:
     # and elitea-main runs with no live-update plane (route unregistered,
     # presence per-replica), which it logs at startup.
     #
-    # CREDENTIALS DO NOT GO HERE: this map is rendered into a ConfigMap. For a
-    # NATS that needs user:password, a token or an nkey, leave this empty and
-    # supply the whole URL from a Secret through `main.secrets` (rendered as
-    # valueFrom.secretKeyRef; the ConfigMap then carries no such key):
+    # NO CREDENTIALS, and with nats.tls.enabled (the default) tls:// only: the
+    # client certificate the chart mounts is main's identity (#1076), and
+    # templates/natsClient.yaml refuses user:password@/token@ here because
+    # this map is rendered into a ConfigMap. An externally managed NATS whose
+    # URL must stay private can still come from a Secret through
+    # `main.secrets` (rendered as valueFrom.secretKeyRef; the ConfigMap then
+    # carries no such key):
     #
     #   main:
     #     secrets:
     #       ELITEA_EVENTS_NATS_URL:
-    #         secretName: elitea-nats-credentials
-    #         key: url        # e.g. tls://user:pass@nats.example:4222
+    #         secretName: elitea-nats-url
+    #         key: url
     #
     # The chart refuses to render when the gateway reads GATEWAY_NATS_URL from
     # a Secret (llmGateway.secrets) and elitea-main names no URL of its own,
     # because it cannot then tell which NATS the gateway uses.
+    #
+    # The presence KV bucket's replicas are the nats-bootstrap Job's to set
+    # (deploy/helm/nats-bootstrap `replicas`); main binds to it.
     ELITEA_EVENTS_NATS_URL: ""
-    # Replica count of the presence KV bucket. Empty means 1 (the scale-1 NATS
-    # profile); set "3" on the HA profile. Presence is ephemeral either way.
-    ELITEA_EVENTS_NATS_REPLICAS: ""
 
     # --- Admin console ---------------------------------------------------------
     # Directory the admin single-page application is served from. The published

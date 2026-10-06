@@ -1,0 +1,84 @@
+{{- /*
+NATS client identities and the render gates for NATS URLs (#1076).
+
+The NATS server requires TLS and maps each client certificate's URI SAN to a
+user with subject-level permissions (deploy/helm/nats/values.yaml). This file
+issues one certificate per component that dials NATS, from the dedicated NATS
+CA, and refuses the URL shapes that would either fail every handshake or put
+a credential into a ConfigMap.
+*/ -}}
+{{- $tls := .Values.nats.tls -}}
+{{- /* ── Which components dial NATS, and the URLs this chart renders ── */ -}}
+{{- $clients := list -}}
+{{- $urls := dict -}}
+{{- if and .Values.main.enabled (include "elitea-main.usesNats" .) -}}
+{{- $clients = append $clients (dict "identity" "elitea-main" "fullname" (include "elitea-main.fullname" .) "labels" (include "elitea-main.labels" .)) -}}
+{{- with get (.Values.main.env | default dict) "ELITEA_EVENTS_NATS_URL" }}{{ $_ := set $urls "main.env.ELITEA_EVENTS_NATS_URL" . }}{{ end -}}
+{{- end -}}
+{{- if .Values.llmGateway.enabled -}}
+{{- $clients = append $clients (dict "identity" "elitea-llm-gateway" "fullname" (include "elitea-llm-gateway.fullname" .) "labels" (include "elitea-llm-gateway.labels" .)) -}}
+{{- with get (.Values.llmGateway.env | default dict) "GATEWAY_NATS_URL" }}{{ $_ := set $urls "llmGateway.env.GATEWAY_NATS_URL" . }}{{ end -}}
+{{- end -}}
+{{- if .Values.scheduler.enabled -}}
+{{- $clients = append $clients (dict "identity" "elitea-scheduler" "fullname" (include "elitea-scheduler.fullname" .) "labels" (include "elitea-scheduler.labels" .)) -}}
+{{- with get (.Values.scheduler.env | default dict) "GATEWAY_NATS_URL" }}{{ $_ := set $urls "scheduler.env.GATEWAY_NATS_URL" . }}{{ end -}}
+{{- end -}}
+{{- if and $clients .Values.nats.service -}}
+{{- $_ := set $urls "the `nats` block (derived)" (include "elitea.natsUrl" .) -}}
+{{- end -}}
+
+{{- /* ── Gate 1: plaintext only on purpose ── */ -}}
+{{- if and $clients (not $tls.enabled) (not $tls.allowPlaintext) -}}
+{{- fail "nats.tls.enabled is false while elitea-main, the LLM gateway or the scheduler dials NATS. The NATS chart (deploy/helm/nats) requires TLS and a client certificate, so these components would fail every connection; a plaintext NATS lets any pod read every tenant's events and reset budget counters (#1076). Keep nats.tls.enabled, or — for a NATS you run plaintext on purpose — also set nats.tls.allowPlaintext=true." -}}
+{{- end -}}
+
+{{- /* ── Gate 2: every rendered URL agrees with the posture, and carries no credential ── */ -}}
+{{- range $where, $raw := $urls -}}
+{{- range $one := splitList "," ($raw | toString) -}}
+{{- $one = trim $one -}}
+{{- if $one -}}
+{{- if contains "@" $one -}}
+{{- fail (printf "%s carries user information (user:password@ or token@). It is rendered into a ConfigMap, and with mTLS the client certificate is the identity. Remove the credential; an externally managed NATS URL that must stay private goes in main.secrets / llmGateway.secrets / scheduler.secrets." $where) -}}
+{{- end -}}
+{{- if and $tls.enabled (not (hasPrefix "tls://" $one)) -}}
+{{- fail (printf "%s is %q, not tls://. nats.tls.enabled mounts a client certificate, and the NATS server requires TLS (#1076); a nats:// URL beside it reads as plaintext to every reviewer, and the service refuses it at boot." $where $one) -}}
+{{- end -}}
+{{- if and (not $tls.enabled) (hasPrefix "tls://" $one) -}}
+{{- fail (printf "%s is tls:// but nats.tls.enabled is false, so no client certificate is mounted and the service refuses the URL at boot." $where) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /* ── The certificates ── */ -}}
+{{- if $tls.enabled -}}
+{{- range $c := $clients }}
+---
+# {{ $c.identity }}'s NATS identity (#1076): its URI SAN is the user the NATS
+# server's permission table names. Issued by the dedicated NATS CA, never by
+# elitea-internal-ca.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $c.fullname }}-nats-client
+  labels:
+    {{- $c.labels | nindent 4 }}
+spec:
+  secretName: {{ $c.fullname }}-nats-client-tls
+  duration: {{ $tls.duration }}
+  renewBefore: {{ $tls.renewBefore }}
+  isCA: false
+  usages:
+    - client auth
+  commonName: {{ $c.identity }}
+  uris:
+    - spiffe://{{ $tls.trustDomain }}/nats/{{ $c.identity }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ required "nats.tls.issuerRef.name names the dedicated NATS CA issuer" $tls.issuerRef.name }}
+    kind: {{ $tls.issuerRef.kind | default "Issuer" }}
+    group: cert-manager.io
+{{- end }}
+{{- end }}

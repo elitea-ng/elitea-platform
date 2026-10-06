@@ -6,7 +6,9 @@
   and two components on two clusters of one counter enforce nothing.
 */ -}}
 {{- $env := .Values.llmGateway.env | default dict }}
-{{- if not (get $env "GATEWAY_NATS_URL") }}{{- $env = merge (deepCopy $env) (dict "GATEWAY_NATS_URL" (printf "nats://%s" (include "elitea.serviceAddr" (dict "svc" $.Values.nats "ctx" $)))) }}{{- end }}
+{{- if not (get $env "GATEWAY_NATS_URL") }}{{- $env = merge (deepCopy $env) (dict "GATEWAY_NATS_URL" (include "elitea.natsUrl" $)) }}{{- end }}
+{{- /* The chart owns GATEWAY_NATS_TLS_* when it mounts the certificate (env list below). */ -}}
+{{- if .Values.nats.tls.enabled }}{{- $env = omit $env "GATEWAY_NATS_TLS_CA_FILE" "GATEWAY_NATS_TLS_CERT_FILE" "GATEWAY_NATS_TLS_KEY_FILE" }}{{- end }}
 {{- /*
   The public project, from the ONE place an operator sets it — the same value
   elitea-main gets. Set on one side only, the picker offers shared models the
@@ -122,6 +124,17 @@ spec:
             - name: GATEWAY_TLS_CA_FILE
               value: {{ .Values.llmGateway.mtls.mountPath }}/ca.crt
             {{- end }}
+            {{- if .Values.nats.tls.enabled }}
+            # The gateway's NATS identity (#1076): the client certificate
+            # templates/natsClient.yaml issues, mounted below. Re-read on every
+            # TLS handshake, so a renewal needs no restart.
+            - name: GATEWAY_NATS_TLS_CA_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "ca.crt" "ctx" $) }}
+            - name: GATEWAY_NATS_TLS_CERT_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "tls.crt" "ctx" $) }}
+            - name: GATEWAY_NATS_TLS_KEY_FILE
+              value: {{ include "elitea.natsClientFile" (dict "file" "tls.key" "ctx" $) }}
+            {{- end }}
             {{- range $name, $ref := $secrets }}
             # Sensitive vars from Kubernetes Secrets (never plaintext in env map).
             - name: {{ $name }}
@@ -201,6 +214,10 @@ spec:
               mountPath: {{ .Values.llmGateway.mtls.mountPath }}
               readOnly: true
             {{- end }}
+            {{- if .Values.nats.tls.enabled }}
+            # The gateway's NATS client certificate (templates/natsClient.yaml).
+            {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -208,6 +225,9 @@ spec:
         - name: mtls
           secret:
             secretName: {{ .Values.llmGateway.mtls.serverSecretName }}
+        {{- end }}
+        {{- if .Values.nats.tls.enabled }}
+        {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-llm-gateway.fullname" .))) | nindent 8 }}
         {{- end }}
       {{- with .Values.llmGateway.nodeSelector }}
       nodeSelector:
