@@ -27,7 +27,7 @@ TOTAL="${5:-0}"
 # `du -sb` fails on BSD and on plain BusyBox. awk then succeeds with no input,
 # so the fallback never runs, and the script writes
 # `model_cache_size_bytes ` — a Prometheus line with an EMPTY value. A scrape
-# reads that as a parse error, not as a failed measurement. The alpine image
+# reads that as a parse error, not as a failed measurement. The Debian image
 # installs coreutils, so this is dormant in the image and live for a local run.
 # `find ... | wc -l` has the same shape: the status of a pipeline is the status
 # of its LAST element, so a failing find gives a confident 0.
