@@ -6,7 +6,7 @@ same Unix socket. The Go sub-application host (`services/elitea-subapp-host`)
 keeps the provider SPI, admission, the parameter merge, the egress check,
 composition and upload. This crate runs the tools.
 
-**Status: ADR-0026 phase 3.** Phase 1 delivered the sidecar protocol, the
+**Status: ADR-0026 phase 7.** Phase 1 delivered the sidecar protocol, the
 `unavailable` and `fixture` runners, and the container probe. Phase 2 adds
 the front half of the engine: repository ingest, the eight language parsers,
 and the code graph (Phase 1 build plus the Phase 1c passes), each proven equal
@@ -17,6 +17,11 @@ structure planner, the pages and the export, and wires `generate_wiki` end to
 end as the [`native` runner](#the-native-runner-generate_wiki): a worker
 child process per generation. Phase 6 adds `ask`, `deep_research` and
 `resolve_wiki`, which the native runner serves in process over PostgreSQL.
+Phase 7 packages it: the released image
+`ghcr.io/elitea-ng/elitea-deepwiki-engine-native`, the Helm switch
+`deepwiki.engine.runner: native` and the compose overlay (see the
+[runbook](#runbook-deploy-migrate-operate)). The Python `-engine` image stays
+available behind `runner: legacy` until the parity sign-off.
 
 ## The socket protocol
 
@@ -1238,3 +1243,205 @@ STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native.yml deploy/scripts/stan
 
 The Go host then runs `ELITEA_DEEPWIKI_RUNNER=native` and `GET /health`
 reports `runner: native`.
+
+## Runbook: deploy, migrate, operate
+
+### The image
+
+`ghcr.io/elitea-ng/elitea-deepwiki-engine-native:<release>`, built by
+`docker buildx bake elitea-deepwiki-engine-native` from
+`services/elitea-deepwiki-engine/Containerfile` with the repository root as
+the context. One binary (`/usr/local/bin/elitea-deepwiki-engine`) on
+`gcr.io/distroless/cc-debian12:nonroot`, built with `cargo auditable`, runs as
+uid 10001; `/run/deepwiki` is in the image, owned by 10001, mode 0777.
+Subcommands: `serve` (the default CMD), `healthcheck`, `migrate`, `worker`
+(started by `serve`, never by hand), `--version`.
+
+The binary embeds the service migrations from
+`services/elitea-deepwiki/src/elitea_deepwiki/migrations/` (`include_str!`,
+a path outside the crate), so the Containerfile copies that directory too.
+A build context without it fails to compile.
+
+Release wiring, held together by `scripts/ci/image-matrix.sh --verify`:
+the bake target, `publish.yml` (`build`, `scan`, `publish-image` matrices and
+the `IMAGES` rollback array) and `ci-image-scan.yml` (`expect_type:
+rustbinary`, blocking). The crate's `Cargo.lock` is in the Dependabot `cargo`
+group; the repository has no `docker` ecosystem entry for any image.
+
+### Kubernetes (Helm, `deploy/helm/elitea`)
+
+```yaml
+deepwiki:
+  enabled: true
+  engine:
+    runner: native            # the one switch; legacy = Python, fixture = Python canned
+    native:
+      image:
+        repository: ghcr.io/elitea-ng/elitea-deepwiki-engine-native
+        tag: ""               # empty = the chart-wide image.tag
+      resources:
+        requests: {cpu: 500m, memory: 2Gi}
+        limits: {memory: 16Gi} # also the worker's RLIMIT_AS (WORKER_MEMORY_BYTES)
+      workerCpuSeconds: 14400  # the worker's RLIMIT_CPU
+  env:
+    ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+postgresql:
+  existingSecret: elitea-main-db  # or deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL
+  key: database-url
+```
+
+What `runner: native` renders:
+
+- the `engine` sidecar from the native image, no `command` (the image's
+  `serve`), probes `exec: /usr/local/bin/elitea-deepwiki-engine healthcheck`;
+- the host's `ELITEA_DEEPWIKI_RUNNER` as `native` (`GET /health` reports
+  `runner: native`), whatever `deepwiki.env` says;
+- `ELITEA_DEEPWIKI_DATABASE_URL` from the secret the migrate Job uses;
+- `ELITEA_DEEPWIKI_BUILD_OWNER` from the pod name (downward API);
+- `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` computed from `limits.memory` (Gi or
+  Mi, at least 1Gi), so a runaway generation ends as an engine `MemoryError`
+  before the kubelet OOM-kills the sidecar; `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS`
+  from `workerCpuSeconds`. No CPU limit, as elsewhere in the chart;
+- the `scratch` emptyDir at `ELITEA_DEEPWIKI_SCRATCH_PATH`, the socket
+  emptyDir at `/run/deepwiki`, `/tmp` as an emptyDir (read-only root).
+
+The chart refuses to render `runner: native` without a database URL, a host
+runner of `native` with a Python sidecar, an unknown `engine.runner`, and a
+memory limit that is not Gi/Mi or is below 1Gi. The `-engine` tag guard
+still applies to `legacy`. `deploy/helm/tests/render-deepwiki.sh` asserts
+all of it.
+
+### Migrations
+
+**Decision: with `runner: native` the migrate Job runs the native image
+(`args: ["migrate"]`); a native install pulls no Python image.** It is the
+same schema, not a fork: the binary embeds the same SQL files and writes the
+same `schema_migrations` ledger with the same SHA-256 checksums
+(`tests/storage_migrate.rs` compares them with `migrate.py`), so either runner
+can migrate a database the other one migrated and a switch back to `legacy`
+needs no migration step. The Rust runner also holds a session advisory lock,
+so two Jobs cannot apply one file twice. The role needs `CREATE` on the
+database (migration 0003 creates the `deepwiki_build` schema; see
+`services/elitea-deepwiki/README.md`). By hand:
+
+```bash
+ELITEA_DEEPWIKI_DATABASE_URL=postgresql://… elitea-deepwiki-engine migrate
+# exit 0: at the newest migration (applied now or before); 1: not
+```
+
+Connect directly to PostgreSQL, not through a transaction-mode pooler
+(pgbouncer): the migration and the publish use session advisory locks.
+
+### Compose
+
+`deploy/docker-compose.deepwiki-native.yml` on the standalone stack: the
+native sidecar (`runner native`), a one-shot `elitea-deepwiki-migrate`
+service from the same image, the stack's PostgreSQL (`elitea` database,
+direct, not pgbouncer) and a fixed build owner. `DEEPWIKI_NATIVE_RUNNER=fixture`
+keeps the canned results for the fixture journeys
+(`apps/elitea-web/scripts/deepwiki-e2e.sh`).
+
+```bash
+STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native.yml deploy/scripts/standalone-stack.sh up
+```
+
+### Real-engine journey (DWIKI-014)
+
+`apps/elitea-web/scripts/deepwiki-real-engine.sh` and
+`.github/workflows/deepwiki-real-engine.yml` drive the PYTHON engine only.
+They have no native variant, because the journey's git fixture does not
+reach the native clone: the overlay serves the seeded repository from a
+`git daemon` and rewrites `https://github.com/` to `git://deepwiki-git/`
+with `GIT_CONFIG_*` `url.insteadOf`. The native clone opens the repository
+ISOLATED (no environment git configuration, so no `insteadOf`), speaks
+HTTPS only in a release build and follows no redirect. A native variant
+needs an HTTPS smart-HTTP git server under a name the seeded toolkit
+resolves to, with its CA trusted by the engine. Until then the native
+end-to-end proof is `tests/native_generate.rs` (worker child, `git
+http-backend`, mock gateway, PostgreSQL) in `ci-deepwiki-engine.yml`.
+
+### Settings
+
+Every variable the binary reads. All are strict-parsed: a value that does
+not parse refuses the start (and the probe) with a message naming it.
+
+| Variable | Default | Limits / notes |
+| --- | --- | --- |
+| `ELITEA_DEEPWIKI_RUNNER` | `unavailable` | `unavailable`, `fixture`, `native`; `legacy` is refused (Python image) |
+| `ELITEA_DEEPWIKI_ENGINE_SOCKET` | `/run/deepwiki/engine.sock` | the host dials the same path |
+| `ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS` | `1` | `fixture` only; not negative |
+| `ELITEA_DEEPWIKI_DATABASE_URL` | unset | required by `native` and `migrate`; never logged |
+| `ELITEA_DEEPWIKI_BUILD_OWNER` | `HOSTNAME`, else `elitea-deepwiki-engine` | with a database the shared default is refused; unique per replica, stable across restarts |
+| `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS` | `7200` | at least 300; the sweep runs every quarter of it (10 s–10 min) |
+| `ELITEA_DEEPWIKI_PUBLISH_STATEMENT_TIMEOUT_SECONDS` | `1800` | above 0, at most a day |
+| `ELITEA_DEEPWIKI_PUBLISH_LOCK_TIMEOUT_SECONDS` | `30` | above 0, at most a day |
+| `ELITEA_DEEPWIKI_PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS` | `5` | the best-effort `ANALYZE` after a publish |
+| `ELITEA_DEEPWIKI_PUBLISH_WORK_MEM_MB` | `64` | 1–4096 |
+| `ELITEA_DEEPWIKI_PUBLISH_SLOTS` | `2` | 1–64 concurrent publishes per database |
+| `ELITEA_DEEPWIKI_GIT_ALLOWLIST` | empty = refuse every clone | comma-separated hosts, `*.` wildcards, `*` for any |
+| `ELITEA_DEEPWIKI_MAX_CLONE_BYTES` | 2 GiB | at least 1 |
+| `ELITEA_DEEPWIKI_MAX_FILE_COUNT` | 100 000 | at least 1 |
+| `ELITEA_DEEPWIKI_MAX_FILE_BYTES` | 100 MiB | also the clone's object allocation limit |
+| `ELITEA_DEEPWIKI_MAX_PARSED_BYTES` | 512 MiB | at least 1 |
+| `ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS` | `600` | above 0 |
+| `ELITEA_DEEPWIKI_SCRATCH_PATH` | `/tmp/deepwiki` | clones and worker job directories |
+| `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` | 16 GiB | at least 1 GiB; `RLIMIT_AS` of a generation worker (Helm: from `limits.memory`) |
+| `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS` | `14400` | at least 60; `RLIMIT_CPU` (hard limit 10 s above) |
+| `ELITEA_DEEPWIKI_WORKER_THREADS` | available parallelism, at most 8 | at most 256 |
+| `ELITEA_DEEPWIKI_EMBED_CONCURRENCY` | `4` | embedding requests in flight |
+| `ELITEA_DEEPWIKI_TLS_CA_FILE` | unset | extra PEM roots for the model gateway |
+| `ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS` | `15` | 1–100, `deep_research` |
+| `WIKI_EMBED_BATCH_SIZE` | `64` | inputs per embedding request (the Python name) |
+| `DEEPWIKI_ASK_MAX_ITERATIONS` | `8` | 1–100, `ask` tool calls |
+| `HOSTNAME` | set by the runtime | the build owner when `ELITEA_DEEPWIKI_BUILD_OWNER` is unset |
+| `RUST_LOG` | `info` | `tracing` filter; logs go to stderr |
+
+The Python engine's tuning names are read with its defaults, for parity, and
+normally stay unset: `DEEPWIKI_EXCLUDE_TESTS`, `DEEPWIKI_MAX_SYMBOLS_PER_PAGE`,
+`DEEPWIKI_SKIP_REPO_CONTEXT_FOR_PAGES`, `DEEPWIKI_STRUCTURE_PLANNER`,
+`DEEPWIKI_USE_STRUCTURED_REPO_ANALYSIS`, `DEEPWIKI_DEEPAGENTS_FILE_THRESHOLD`,
+`DEEPWIKI_DEEPAGENTS_REPOCTX_TOKENS`, `DEEPWIKI_TEST_LINKER`,
+`DEEPWIKI_WEIGHT_CALIBRATION_PROFILE`, `DEEPWIKI_NAMING_ORDER` /
+`WIKI_NAMING_ORDER`, `DEEPWIKI_NAMING_BATCHED` / `WIKI_NAMING_BATCHED`.
+The Python sidecar's `ELITEA_DEEPWIKI_MODEL_ALLOWLIST` is not read: the
+native engine downloads no model, every model call goes to the invocation's
+`llm_settings.api_base`.
+
+### Troubleshooting
+
+- **The sidecar never becomes ready; the host waits.** Read the engine's
+  stderr. A refused setting is one line naming the variable. The probe
+  re-reads the settings, so a bad value fails the probe too.
+- **`cannot bind the engine socket`.** The socket directory is not writable
+  by uid 10001 (a volume that arrived `root:root 0755`), or a non-socket file
+  sits at the socket path (`… exists and is not a socket`; it is never
+  deleted, remove it). The image creates `/run/deepwiki` as 10001 0777 for
+  that reason; a compose named volume copies it on first mount, an emptyDir
+  is writable already.
+- **The host gets `permission denied` on connect.** The socket is created
+  0777; a umask or a mount option that strips it, or a host container that
+  does not mount the same directory, breaks the hop.
+- **`the build owner is the shared default`.** A database is set and neither
+  `ELITEA_DEEPWIKI_BUILD_OWNER` nor `HOSTNAME` is. Set an owner unique per
+  replica that survives restarts (the pod name; a fixed name in compose). Two
+  engines with ONE owner delete each other's builds at startup.
+- **`RUNNER=native needs ELITEA_DEEPWIKI_DATABASE_URL`.** Point it at the
+  database the migrate Job migrated.
+- **Staging rows grow (`deepwiki_build` schema).** Builds of a replaced pod
+  (a new owner) are removed by the stale sweep after
+  `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS` (2 h) without a heartbeat; the log
+  line is `swept builds with a stale heartbeat`. A failing sweep logs
+  `build sweep failed; retrying` and retries at the next tick. A restarted
+  engine deletes its own owner's earlier builds at once.
+- **A publish fails with `canceling statement due to statement timeout` or
+  `lock timeout`.** Raise `…_PUBLISH_STATEMENT_TIMEOUT_SECONDS` (large
+  repositories) or `…_PUBLISH_LOCK_TIMEOUT_SECONDS` (a long reader on the
+  live tables). Waiting for a publish slot or for a publish of the same wiki
+  has no timeout; fewer slots trade latency for `work_mem`.
+- **A generation ends `out_of_memory` / `timeout_error`.** The worker hit
+  `RLIMIT_AS` / `RLIMIT_CPU`. In Helm raise `limits.memory` (the cap moves
+  with it) or `workerCpuSeconds`. A sidecar restart with `OOMKilled` instead
+  means resident memory of the parent plus the child passed the limit before
+  the address-space cap did; lower `ELITEA_DEEPWIKI_WORKER_THREADS`.
+- **`migrate` exits 1 with `permission denied for database`.** The role
+  lacks `CREATE` on the database (migration 0003).

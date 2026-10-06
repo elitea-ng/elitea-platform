@@ -780,12 +780,26 @@ and staging tables for the engine's `ANALYZE` after a publish.
 
 ### Two images, and the default one refuses every tool
 
-`docker buildx bake elitea-deepwiki` builds the shipping image: the whole SPI,
-the engine SOURCE, and none of its ~92-package closure. It refuses every tool
-and `GET /health` names the refusing runner, so it cannot look like it has an
-engine. `docker buildx bake elitea-deepwiki-engine` builds the one that can
-actually generate a wiki. Only the first is released — publishing a multi-GB ML
-closure needs a scan-threshold decision that P3 does not make.
+**The shipping engine is the Rust-native one (ADR-0026 phase 7):**
+`ghcr.io/elitea-ng/elitea-deepwiki-engine-native`, built by `docker buildx
+bake elitea-deepwiki-engine-native` from `services/elitea-deepwiki-engine`,
+released, scanned and signed with the other images, and selected in Helm by
+`deepwiki.engine.runner: native` (the migrate Job then runs that image's
+`migrate` subcommand against the same ledger). Its runbook is
+`services/elitea-deepwiki-engine/README.md`. It embeds this package's
+`migrations/` directory, so the SQL files stay here, one set for both runners.
+
+The two Python images below are the LEGACY engine path, kept behind
+`deepwiki.engine.runner: legacy` until the native engine's parity sign-off:
+
+`docker buildx bake elitea-deepwiki` builds the released Python image: the
+whole SPI, the engine SOURCE, and none of its ~92-package closure. It refuses
+every tool and `GET /health` names the refusing runner, so it cannot look like
+it has an engine. `docker buildx bake elitea-deepwiki-engine` builds the
+Python one that can actually generate a wiki (the `-engine` tag the chart's
+`legacy` runner requires). Only the first is released — publishing a multi-GB
+ML closure needs a scan-threshold decision that P3 does not make, and the
+native engine is what removes the need to make it.
 
 ### Kubernetes
 
