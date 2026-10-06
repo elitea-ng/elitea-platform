@@ -1,11 +1,9 @@
 # syntax=docker/dockerfile:1.7
 
 # ── Stage 1: build SPA ───────────────────────────────────────────────────────
-FROM node:26-trixie-slim AS builder
+FROM node:26-alpine AS builder
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates git \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache git
 
 WORKDIR /app
 COPY apps/elitea-ui/package.json ./
@@ -15,19 +13,16 @@ ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN npm run build
 
 # ── Stage 2: serve with nginx ─────────────────────────────────────────────────
-# Debian 13 (trixie), like every image this repository builds. The alias tag,
-# the release-file stamps and the package upgrade, all three for the reasons
+# The alias tag, the index stamp and `apk upgrade`, all three for the reasons
 # spelled out in the same block of apps/elitea-web/Containerfile: a branch tag
 # (1.27-alpine, then 1.29-alpine) stops being rebuilt and freezes the base, and
 # the upgrade layer is served from the GHA layer cache unless something above it
-# moves. Both images carried the identical 22 HIGH findings on 2026-09-06
-# because both made the same two assumptions. Keep the two blocks in step.
-FROM nginx:stable-trixie
-ADD https://deb.debian.org/debian-security/dists/trixie-security/InRelease /usr/share/debian-stamps/trixie-security.InRelease
-ADD https://deb.debian.org/debian/dists/trixie-updates/InRelease /usr/share/debian-stamps/trixie-updates.InRelease
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+# moves. Both images carried the identical 22 HIGH findings on 2026-09-06 —
+# curl/libcurl 8.20.0-r0 and libuuid 2.41.4-r0 — because both made the same two
+# assumptions. Keep the two blocks in step.
+FROM nginx:stable-alpine
+ADD https://dl-cdn.alpinelinux.org/alpine/latest-stable/main/x86_64/APKINDEX.tar.gz /usr/share/alpine-apkindex-stamp.tar.gz
+RUN apk upgrade --no-cache
 
 COPY --from=builder /app/dist /usr/share/nginx/html/spa
 

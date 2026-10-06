@@ -338,7 +338,7 @@ jobs:
           # The key holds an underscore, not a hyphen: a GitHub expression reads
           # `matrix.image.expect-type` as a subtraction.
           #   gobinary    the Go binary in a distroless image;
-          #   debian      the package database of the nginx runtime image (trixie);
+          #   alpine      the package database of the nginx runtime image;
           #   python-pkg  the site-packages of a Python service image.
           # Each value names the APPLICATION content, not only the operating
           # system, so a scan that reads the base layers and stops short still
@@ -376,21 +376,21 @@ jobs:
             target: final
             expect_type: gobinary
             blocking: true
-          # The two nginx images sit on nginx:stable-trixie (Debian 13), like
-          # every image this repository builds. Until 2026-10 they were
-          # nginx:stable-alpine and reported an `alpine` Result. Trivy now
-          # reports the nginx runtime's package database as `debian`.
+          # The two nginx images stay on nginx:stable-alpine, the one OS
+          # exception besides nats-box (owner decision 2026-10-06): every
+          # Debian userland carries HIGH findings with no fixed version, and
+          # these scans are blocking. See deploy/README.md, upgrade notes.
           - name: elitea-ui
             context: .
             dockerfile: ./deploy/docker/Containerfile.elitea-ui
             target: ""
-            expect_type: debian
+            expect_type: alpine
             blocking: true
           - name: elitea-web
             context: .
             dockerfile: ./apps/elitea-web/Containerfile
             target: ""
-            expect_type: debian
+            expect_type: alpine
             blocking: true
           # Exemption recorded in #553 (findings) and #554 (what ends it).
           # See the header: this is the mixed case, not an upstream-only one.

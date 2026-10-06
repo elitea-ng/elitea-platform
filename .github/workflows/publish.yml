@@ -458,10 +458,10 @@ jobs:
             expect_type: gobinary
             blocking: true
           - name: elitea-ui
-            expect_type: debian
+            expect_type: alpine
             blocking: true
           - name: elitea-web
-            expect_type: debian
+            expect_type: alpine
             blocking: true
           - name: elitea-llm-gateway
             expect_type: gobinary
@@ -610,10 +610,10 @@ jobs:
             expect_type: gobinary
             blocking: true
           - name: elitea-ui
-            expect_type: debian
+            expect_type: alpine
             blocking: true
           - name: elitea-web
-            expect_type: debian
+            expect_type: alpine
             blocking: true
           - name: elitea-llm-gateway
             expect_type: gobinary

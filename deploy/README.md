@@ -146,9 +146,16 @@ demo now that the sidecar's fixture is populated by default.
 builds, and every helper container it runs, is on Debian 13 (trixie):
 distroless `*-debian13` runtimes, `*-trixie` builders, `debian:trixie-slim`
 helpers. NATS runs the `scratch` image `nats:2.12.0` (no OS), with a
-`nats-health` sidecar for its compose health check. One documented
-exception: the short-lived `nats-bootstrap` job keeps `natsio/nats-box`,
-which NATS publishes on Alpine only (owner decision, 2026-10-06).
+`nats-health` sidecar for its compose health check. Two documented
+exceptions (owner decisions, 2026-10-06):
+
+- the short-lived `nats-bootstrap` job keeps `natsio/nats-box`, which NATS
+  publishes on Alpine only;
+- the two nginx images, `elitea-web` and `elitea-ui`, stay on
+  `nginx:stable-alpine`. Their image scans are blocking, and every Debian
+  userland carries HIGH findings with no fixed version (measured
+  2026-10-06: `debian:trixie-slim` 43, `nginx:stable-trixie` 67, none
+  fixable), where Alpine scans clean.
 
 **Debian 13 PostgreSQL image (2026-10).** The `postgres` service moved from
 `pgvector/pgvector:0.8.1-pg18` (Debian 12) to `pgvector/pgvector:0.8.1-pg18-trixie`.
