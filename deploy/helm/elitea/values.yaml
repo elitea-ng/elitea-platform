@@ -2893,13 +2893,14 @@ deepwiki:
       # A generation runs in a worker child process with its own limits
       # (ADR-0026 decision 10).
       #
-      # limits.memory IS the worker's address-space cap: the chart renders
-      # ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES from it (Gi or Mi only, at least
-      # 1Gi), so a runaway generation ends as an engine MemoryError the caller
-      # can read rather than an OOM-killed sidecar. 16Gi is the engine's own
-      # default cap. It counts reserved address space, not resident memory
-      # (1.3–3.2 GB resident measured on a large repository), so the request
-      # is far below it.
+      # limits.memory sets the worker's address-space cap: the chart renders
+      # ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES as 85 % of it (Gi or Mi only, at
+      # least 1205Mi), the share the engine takes of its cgroup limit by
+      # itself; the rest is for the serving parent (ask, deep_research) and
+      # the page cache. So a runaway generation ends as an engine MemoryError
+      # the caller can read rather than an OOM-killed sidecar. The cap counts
+      # reserved address space, not resident memory (1.3–3.2 GB resident
+      # measured on a large repository), so the request is far below it.
       #
       # No CPU limit, as elsewhere in this chart. CPU is bounded per
       # generation by workerCpuSeconds below (RLIMIT_CPU, CPU time, not a

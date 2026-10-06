@@ -1281,7 +1281,7 @@ deepwiki:
         tag: ""               # empty = the chart-wide image.tag
       resources:
         requests: {cpu: 500m, memory: 2Gi}
-        limits: {memory: 16Gi} # also the worker's RLIMIT_AS (WORKER_MEMORY_BYTES)
+        limits: {memory: 16Gi} # the worker's RLIMIT_AS is 85 % of it (WORKER_MEMORY_BYTES)
       workerCpuSeconds: 14400  # the worker's RLIMIT_CPU
   env:
     ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
@@ -1296,11 +1296,13 @@ What `runner: native` renders:
   `serve`), probes `exec: /usr/local/bin/elitea-deepwiki-engine healthcheck`;
 - the host's `ELITEA_DEEPWIKI_RUNNER` as `native` (`GET /health` reports
   `runner: native`), whatever `deepwiki.env` says;
-- `ELITEA_DEEPWIKI_DATABASE_URL` from the secret the migrate Job uses;
+- `ELITEA_DEEPWIKI_DATABASE_URL` from the secret the migrate Job uses (a
+  plain `deepwiki.env` value is refused: the Job would not get it);
 - `ELITEA_DEEPWIKI_BUILD_OWNER` from the pod name (downward API);
-- `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` computed from `limits.memory` (Gi or
-  Mi, at least 1Gi), so a runaway generation ends as an engine `MemoryError`
-  before the kubelet OOM-kills the sidecar; `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS`
+- `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` as 85 % of `limits.memory` (Gi or
+  Mi, at least 1205Mi; the rest is for the serving parent and the page
+  cache), so a runaway generation ends as an engine `MemoryError` before the
+  kubelet OOM-kills the sidecar; `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS`
   from `workerCpuSeconds`. No CPU limit, as elsewhere in the chart;
 - the `scratch` emptyDir at `ELITEA_DEEPWIKI_SCRATCH_PATH`, the socket
   emptyDir at `/run/deepwiki`, `/tmp` as an emptyDir (read-only root).
@@ -1392,7 +1394,7 @@ not parse refuses the start (and the probe) with a message naming it.
 | `ELITEA_DEEPWIKI_MAX_PARSED_BYTES` | 512 MiB | at least 1 |
 | `ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS` | `600` | above 0 |
 | `ELITEA_DEEPWIKI_SCRATCH_PATH` | `/tmp/deepwiki` | clones and worker job directories |
-| `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` | 16 GiB | at least 1 GiB; `RLIMIT_AS` of a generation worker (Helm: from `limits.memory`) |
+| `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` | 16 GiB | at least 1 GiB; `RLIMIT_AS` of a generation worker (Helm: 85 % of `limits.memory`) |
 | `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS` | `14400` | at least 60; `RLIMIT_CPU` (hard limit 10 s above) |
 | `ELITEA_DEEPWIKI_WORKER_THREADS` | available parallelism, at most 8 | at most 256 |
 | `ELITEA_DEEPWIKI_EMBED_CONCURRENCY` | `4` | embedding requests in flight |

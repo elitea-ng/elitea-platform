@@ -276,7 +276,7 @@ done
 expect "build owner" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_BUILD_OWNER") | .valueFrom.fieldRef.fieldPath')" "metadata.name"
 expect "engine database URL secret" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_DATABASE_URL") | .valueFrom.secretKeyRef.name')" "elitea-main-db"
 expect "engine git allowlist" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_GIT_ALLOWLIST") | .value')" "github.com"
-expect "worker memory cap = limits.memory 16Gi" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES") | .value')" "17179869184"
+expect "worker memory cap = 85% of limits.memory 16Gi" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES") | .value')" "14602888735"
 expect "container memory limit" "$(dw '.spec.template.spec.containers[1].resources.limits.memory')" "16Gi"
 expect "worker CPU seconds" "$(dw '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_CPU_SECONDS") | .value')" "14400"
 expect "engine scratch mount" "$(dw '.spec.template.spec.containers[1].volumeMounts[] | select(.name == "scratch") | .mountPath')" "/var/scratch/deepwiki"
@@ -287,7 +287,7 @@ expect "native migrate command" "$(job '.spec.template.spec.containers[0].comman
 expect "a smaller limit moves the cap with it" \
   "$(render $COMPLETE --set deepwiki.engine.runner=native --set deepwiki.engine.native.resources.limits.memory=6144Mi \
       | yq eval-all 'select(.kind == "Deployment" and .metadata.name == "elitea-deepwiki") | .spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES") | .value' -)" \
-  "6442450944"
+  "5476083265"
 
 if render $COMPLETE --set deepwiki.engine.runner=native --set deepwiki.engine.image.tag=1.2.3 >/dev/null 2>&1; then
   note "runner=native ignores the Python -engine tag guard"
@@ -297,9 +297,11 @@ fi
 
 echo "== the native runner's refusals =="
 refuses "native with no database URL"            --set deepwiki.engine.runner=native --set postgresql.existingSecret=
+refuses "native with an env-only database URL"   --set deepwiki.engine.runner=native --set postgresql.existingSecret= --set deepwiki.env.ELITEA_DEEPWIKI_DATABASE_URL=postgresql://x@db/deepwiki
 refuses "host runner native, Python sidecar"     --set deepwiki.env.ELITEA_DEEPWIKI_RUNNER=native
 refuses "an unknown engine runner"               --set deepwiki.engine.runner=rust
 refuses "native memory limit below 1Gi"          --set deepwiki.engine.runner=native --set deepwiki.engine.native.resources.limits.memory=512Mi
+refuses "native memory limit whose 85% cap is below 1GiB" --set deepwiki.engine.runner=native --set deepwiki.engine.native.resources.limits.memory=1Gi
 refuses "native memory limit not in Gi or Mi"    --set deepwiki.engine.runner=native --set deepwiki.engine.native.resources.limits.memory=16G
 
 echo "== the fixture runner keeps the Python sidecar =="

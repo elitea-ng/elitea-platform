@@ -84,13 +84,15 @@ go read logs for, and this is a message in the terminal that ran the command.
   database (ADR-0026 decision 5) and has no other index storage, so it
   REFUSES to start without ELITEA_DEEPWIKI_DATABASE_URL. Without this guard
   that refusal is a sidecar in CrashLoopBackOff and a host that never becomes
-  ready. The URL comes from the same place the migrate Job reads it:
+  ready. The URL must come from the place the migrate Job reads it:
   deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL, else postgresql.existingSecret.
+  A plain deepwiki.env value is not enough: the Job never receives it, so the
+  pre-install migration would fail after a render that passed.
 */}}
 {{- if eq $sidecar "native" -}}
 {{- $secrets := fromJson (include "elitea.provider.databaseSecret" (dict "ctx" . "provider" "deepwiki" "urlKey" "ELITEA_DEEPWIKI_DATABASE_URL")) -}}
-{{- if not (or (hasKey $secrets "ELITEA_DEEPWIKI_DATABASE_URL") (get $env "ELITEA_DEEPWIKI_DATABASE_URL")) -}}
-{{- fail "deepwiki.engine.runner is \"native\" but no ELITEA_DEEPWIKI_DATABASE_URL reaches the engine: neither deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL nor postgresql.existingSecret is set. The native engine stages and publishes every index in the deepwiki PostgreSQL database and has no other storage, so it refuses to start without one, and the pod would never become ready. Name the secret that holds the database URL (the one the migrate Job uses), or use runner legacy or fixture." -}}
+{{- if not (hasKey $secrets "ELITEA_DEEPWIKI_DATABASE_URL") -}}
+{{- fail "deepwiki.engine.runner is \"native\" but no ELITEA_DEEPWIKI_DATABASE_URL secret reaches the engine and its migrate Job: neither deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL nor postgresql.existingSecret is set (a plain deepwiki.env value reaches the engine but not the migrate Job). The native engine stages and publishes every index in the deepwiki PostgreSQL database and has no other storage, so it refuses to start without one, and the pod would never become ready. Name the secret that holds the database URL, or use runner legacy or fixture." -}}
 {{- end -}}
 {{- end -}}
 {{- end }}
@@ -152,13 +154,17 @@ else the chart-wide tag. It is its own repository, so no suffix.
 {{/*
 elitea-deepwiki.nativeWorkerMemoryBytes — ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES
 for the native engine, DERIVED from the container's memory limit so the two
-cannot disagree. The worker child's RLIMIT_AS counts address space, which is
-never below resident memory, so with the cap equal to the limit a runaway
-generation fails inside the engine as MemoryError / out_of_memory (a result
-the caller can read) before the kubelet OOM-kills the container (a sidecar
-restart and a lost invocation). The default limit, 16Gi, is the engine's own
-default cap. Only Gi and Mi quantities are accepted, and at least 1Gi (the
-engine refuses a smaller cap).
+cannot disagree: 85 % of it, the share the engine itself takes of its cgroup
+`memory.max` when the variable is unset (config.rs CGROUP_MEMORY_PERCENT).
+The rest is for the serving parent (the in-process ask, deep_research and
+resolve_wiki, the pools) and the page cache, which share the container
+limit with the worker. The worker child's RLIMIT_AS counts address space,
+which is never below resident memory, so a runaway generation fails inside
+the engine as MemoryError / out_of_memory (a result the caller can read)
+before the kubelet OOM-kills the container (a sidecar restart and every
+in-flight invocation lost). Only Gi and Mi quantities are accepted, and the
+cap must be at least 1 GiB (the engine refuses a smaller one), so the limit
+must be at least 1205Mi.
 */}}
 {{- define "elitea-deepwiki.nativeWorkerMemoryBytes" -}}
 {{- $limit := (((.Values.deepwiki.engine.native.resources | default dict).limits | default dict).memory | default "") | toString -}}
@@ -170,10 +176,11 @@ engine refuses a smaller cap).
 {{- else -}}
 {{- fail (printf "deepwiki.engine.native.resources.limits.memory must be a whole number of Gi or Mi (it sets the generation worker's address-space cap, ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES), got %q" $limit) -}}
 {{- end -}}
-{{- if lt (int64 $bytes) 1073741824 -}}
-{{- fail (printf "deepwiki.engine.native.resources.limits.memory is %s, below 1Gi: the engine refuses a worker address-space cap under 1 GiB, because a generation worker cannot start its thread pools in less" $limit) -}}
+{{- $cap := mul (div (int64 $bytes) 100) 85 -}}
+{{- if lt (int64 $cap) 1073741824 -}}
+{{- fail (printf "deepwiki.engine.native.resources.limits.memory is %s, so the worker's address-space cap (85%% of it) is below 1 GiB, which the engine refuses because a generation worker cannot start its thread pools in less. Set at least 1205Mi" $limit) -}}
 {{- end -}}
-{{- $bytes -}}
+{{- $cap -}}
 {{- end }}
 
 {{/*
