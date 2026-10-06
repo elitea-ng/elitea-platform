@@ -44,8 +44,7 @@
 #   and each piece drags in real provisioning:
 #     * The runtime command bus: NATS JetStream on the `nats` service, streams
 #       and durables created by `nats-bootstrap` (docs/runtime-command-bus.md).
-#       `runtime-redis` has no client left (Form auth is on PostgreSQL);
-#       it is removed with the next change.
+#       There is no Redis (Form auth is on PostgreSQL).
 #     * Three mTLS listeners, not one: control gRPC :9443, output gRPC :9444,
 #       content HTTPS :9445, each with its own cert/key/client-CA.
 #     * An Ed25519 command-signing keypair whose public half must appear in the
@@ -130,10 +129,10 @@
 #   (llm-real, the `real-llm` profile, publishes nothing — see its comment)
 #   9400  oidc-provider-mock        E2E_OIDC_PORT — see the oidc-mock comment
 #
-#   The runtime plane is NOT published to the host. runtime-redis:6380 and
-#   elitea-main:9443/9444/9445 are reachable only on the compose network, which
-#   is where the worker (#282) runs. Publishing them would expose three mTLS
-#   listeners and a command bus on the developer's LAN for no test benefit.
+#   The runtime plane is NOT published to the host. elitea-main:9443/9444/9445
+#   are reachable only on the compose network, which is where the worker (#282)
+#   runs. Publishing them would expose three mTLS listeners on the developer's
+#   LAN for no test benefit.
 #
 # NOTE: oidc-mock's published port must equal its container port, so it is
 # pinned at 9400 and CANNOT be remapped. This stack therefore cannot run at the
@@ -221,8 +220,8 @@ services:
     # leaks onto; the 2026-09-01 measurement is recorded in
     # deploy/helm/elitea/values.yaml.
     #
-    # The config is committed at deploy/runtime/pgbouncer.ini (the redis.conf
-    # precedent); the entrypoint uses the file as-is when it exists.
+    # The config is committed at deploy/runtime/pgbouncer.ini; the entrypoint
+    # uses the file as-is when it exists.
     #
     # No host port: the pooler is an internal hop, and pgbouncer's own console
     # (SHOW POOLS / SHOW SERVERS) is reached through podman exec when needed.
@@ -272,9 +271,9 @@ services:
       nats:
         condition: service_healthy
 
-  # ── Runtime plane: material, TLS Redis, stream bootstrap (issue #281) ───────
+  # ── Runtime plane: material (issue #281) ────────────────────────────────────
 
-  # Installs deploy/certs/runtime/ into three per-consumer named volumes with
+  # Installs deploy/certs/runtime/ into per-consumer named volumes with
   # the uid and mode each reader needs. See deploy/runtime/install-material.sh
   # for why a bind mount cannot do this job: securefile demands exactly 0600 on
   # private material, and under rootless podman a bind-mounted host file arrives
@@ -286,34 +285,9 @@ services:
       - ./runtime/install-material.sh:/opt/install-material.sh:ro
       - ./certs/runtime:/src:ro
       - standalone_runtime_main:/dst/main
-      - standalone_runtime_redis:/dst/redis
       - standalone_runtime_worker:/dst/worker
       - standalone_runtime_edge:/dst/edge
     restart: "no"
-
-  # The runtime dispatch bus. Separate from the plaintext `redis` above because
-  # runtimecomposition/config.go accepts only rediss:// with an ACL username,
-  # and dials at MinVersion TLS 1.3. Config: deploy/runtime/redis.conf.
-  runtime-redis:
-    image: redis:7-alpine
-    command: ["redis-server", "/etc/redis/redis.conf"]
-    volumes:
-      - ./runtime/redis.conf:/etc/redis/redis.conf:ro
-      - standalone_runtime_redis:/run/elitea-runtime:ro
-      - standalone_runtime_redis_data:/data
-    depends_on:
-      runtime-material:
-        condition: service_completed_successfully
-    healthcheck:
-      # `redis-cli ping` cannot work here: cleartext is off (`port 0`) and the
-      # default user is disabled, so the probe must speak TLS and AUTH as a real
-      # ACL user. A PONG therefore proves the cert, the ACL file and the TLS
-      # listener are all good — which is exactly what dependents need to know.
-      test: ["CMD-SHELL", "redis-cli --tls --cacert /run/elitea-runtime/runtime-ca.crt -h runtime-redis -p 6380 --user bootstrap --pass \"$$(cat /run/elitea-runtime/redis-bootstrap-password)\" --no-auth-warning ping | grep -q PONG"]
-      interval: 3s
-      timeout: 5s
-      retries: 20
-      start_period: 5s
 
   # ── Schema bootstrap ────────────────────────────────────────────────────────
   # Previously both steps lived inside `standalone-stack.sh seed`, which runs
@@ -471,7 +445,7 @@ services:
     #
     # DEFAULT 9400 — unset, this stack behaves exactly as it always has, and CI
     # (which sets nothing) is unchanged. Set it only to run this stack beside
-    # another one, together with STANDALONE_PORT/PG/REDIS/MOCK.
+    # another one, together with STANDALONE_PORT/PG/MOCK.
     command: ["--port", "${E2E_OIDC_PORT:-9400}"]
     ports:
       - "${E2E_OIDC_PORT:-9400}:${E2E_OIDC_PORT:-9400}"
@@ -493,7 +467,6 @@ services:
   #            opt-out explicitly with LLM_BUDGET_REQUIRE_ENFORCEMENT below
   #            (issue #304): without it, the gateway refuses to start as soon as
   #            somebody authors a budget row in this database.
-  #   Redis  — not a dependency at all; the module does not import a redis client.
   #   Vault  — SECRETS_MASTER_KEY is optional as long as seeded credentials carry
   #            a literal api_key rather than a {{secret.NAME}} reference.
   #   PG     — pgxpool.New only parses the DSN, never dials, so an unreachable
@@ -611,7 +584,7 @@ services:
       # egress-facing service; ./certs is also the parent of ./certs/runtime,
       # which holds the PAT signing key, the command signing key + keyring, the
       # worker client key, the content/control/output server keys, the vault
-      # master key and all four Redis passwords — plus ca.key at the top level,
+      # master key — plus ca.key at the top level,
       # which would let a compromised gateway mint its own elitea-main client
       # certificate. None of that is gateway material.
       #
@@ -1233,8 +1206,6 @@ services:
         condition: service_completed_successfully
       elitea-migrate:
         condition: service_completed_successfully
-      runtime-redis:
-        condition: service_healthy
       oidc-mock:
         condition: service_healthy
       rustfs-bucket-init:
@@ -1821,12 +1792,9 @@ volumes:
   inventory-engine-sock:
   standalone_pg_data:
   standalone_rustfs_data:
-  # Runtime Redis AOF data. Preserve it during scoped service replacement.
-  standalone_runtime_redis_data:
   # Runtime material, split per consumer so no service holds a key it does not
   # use. Populated by runtime-material from deploy/certs/runtime.
   standalone_runtime_main:
-  standalone_runtime_redis:
   standalone_runtime_worker:
   standalone_runtime_edge:
   # The worker's output spool. Private (0700, uid 10001) — prepared by

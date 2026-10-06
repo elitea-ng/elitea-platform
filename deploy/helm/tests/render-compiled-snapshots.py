@@ -430,8 +430,8 @@ class Installer(unittest.TestCase):
             'runtime-ca.crt control-server.crt output-server.crt content-server.crt '
             'command-signing-keyring.json control-server.key output-server.key content-server.key '
             'command-signing-key.pem auth-attempt-key '
-            'auth-pat-signing-key auth-form-users.json vault-master-key redis-server.crt redis-server.key '
-            'redis-users.acl redis-bootstrap-password agent-worker-client.crt agent-worker-client.key '
+            'auth-pat-signing-key auth-form-users.json vault-master-key '
+            'agent-worker-client.crt agent-worker-client.key '
             'worker-output-spool-key agent-checkpoint-connection '
             'platform-edge.crt platform-edge.key'
         ).split()

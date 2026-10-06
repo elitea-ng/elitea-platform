@@ -1615,7 +1615,7 @@ PY
     RUNTIME_CERTS="${REPO_ROOT}/deploy/certs/runtime"
     probe() {
       # postgres:18 rather than the alpine-based images: this needs the openssl
-      # CLI, and neither alpine:3.20 nor redis:7-alpine ships one.
+      # CLI, and alpine:3.20 does not ship one.
       $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" \
         --entrypoint sh docker.io/library/postgres:18 -c "$1" 2>&1 || true
     }
