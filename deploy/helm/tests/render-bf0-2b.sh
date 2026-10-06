@@ -70,7 +70,7 @@ bad()  { FAIL=$((FAIL+1)); echo "  FAIL: $1" >&2; }
 
 echo "== NATS profile values (design §8.1.1) =="
 # scale-1: single node, replicas=1, HA waived, file storage, NATS 2.12.0+
-python3 - "$DIR/helm/nats/values-scale1.yaml" <<'PY' && ok "scale-1: cluster disabled, replicas=1, file store, image 2.12.0-alpine" || bad "scale-1 profile shape"
+python3 - "$DIR/helm/nats/values-scale1.yaml" <<'PY' && ok "scale-1: cluster disabled, replicas=1, file store, image 2.12.0" || bad "scale-1 profile shape"
 import sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))["nats"]
 assert d["config"]["cluster"]["enabled"] is False, "cluster must be disabled at scale-1"

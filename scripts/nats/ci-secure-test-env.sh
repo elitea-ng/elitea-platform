@@ -44,8 +44,11 @@ chmod +x "$cli"
 
 server="${ELITEA_TEST_NATS_SERVER_BIN:-}"
 if [ -z "$server" ]; then
-  path_in_image="$(docker run --rm --entrypoint sh nats:2.12.0-alpine -c 'command -v nats-server')"
-  ctr="$(docker create nats:2.12.0-alpine)"
+  # The scratch image has no shell, so read the binary's path from the
+  # image's entrypoint instead of asking a shell inside the container.
+  ctr="$(docker create nats:2.12.0)"
+  path_in_image="$(docker inspect --format '{{index .Config.Entrypoint 0}}' nats:2.12.0)"
+  [ -n "$path_in_image" ]
   server="${RUNNER_TEMP}/nats-server"
   docker cp "${ctr}:${path_in_image}" "$server"
   docker rm "$ctr" >/dev/null

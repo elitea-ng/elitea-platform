@@ -1638,11 +1638,15 @@ PY
     echo "→ command bus (JetStream):"
     STREAM="ELITEA_RT_V1_AGENT"
     DURABLE="elitea-agent-worker-v1"
-    NATS_CONTAINER="$($ENGINE ps --format '{{.Names}}' | grep -m1 "${PROJECT}.*-nats-[0-9]" || true)"
-    # /jsz?consumers=true from the server's own monitoring port, read inside
-    # its container: it names the stream AND its durable, so a stream the
-    # bootstrap created without the consumer does not pass.
-    jsz="$($ENGINE exec "$NATS_CONTAINER" wget -qO- 'http://127.0.0.1:8222/jsz?consumers=true' 2>&1 || true)"
+    # The server image is scratch (no shell, no wget), so the monitoring port
+    # is read from the nats-health sidecar, which has Python on the same
+    # network.
+    NATS_HEALTH_CONTAINER="$($ENGINE ps --format '{{.Names}}' | grep -m1 "${PROJECT}.*-nats-health-[0-9]" || true)"
+    # /jsz?consumers=true from the server's own monitoring port: it names the
+    # stream AND its durable, so a stream the bootstrap created without the
+    # consumer does not pass.
+    jsz="$($ENGINE exec "$NATS_HEALTH_CONTAINER" python3 -c \
+      "import urllib.request; print(urllib.request.urlopen('http://nats:8222/jsz?consumers=true', timeout=10).read().decode())" 2>&1 || true)"
     case "$jsz" in
       *"${STREAM}"*"${DURABLE}"*) ok "${STREAM} has its durable consumer ${DURABLE}" ;;
       *) fail "${STREAM} or its durable ${DURABLE} is missing — nats-bootstrap did not run" ;;
@@ -1701,17 +1705,22 @@ PY
     #
     # WAITED FOR, not sampled once: the worker has no healthcheck, so
     # `compose up -d --wait` does not wait for it, and it connects only after a
-    # start-up that imports the whole SDK. The poll runs inside the NATS
-    # container; the last reply is printed either way.
-    connz="$($ENGINE exec "$NATS_CONTAINER" sh -c \
-      "deadline=\$(( \$(date +%s) + ${WORKER_JOIN_TIMEOUT} ))
-       while : ; do
-         reply=\$(wget -qO- 'http://127.0.0.1:8222/connz?limit=1024' 2>&1 || true)
-         case \"\$reply\" in *standalone-agent-worker*) break ;; esac
-         [ \$(date +%s) -lt \$deadline ] || break
-         sleep 2
-       done
-       printf '%s' \"\$reply\"" 2>&1 || true)"
+    # start-up that imports the whole SDK. The poll runs in the nats-health
+    # sidecar; the last reply is printed either way.
+    connz="$($ENGINE exec "$NATS_HEALTH_CONTAINER" python3 -c '
+import sys, time, urllib.request
+deadline = time.time() + float(sys.argv[1])
+reply = ""
+while True:
+    try:
+        reply = urllib.request.urlopen("http://nats:8222/connz?limit=1024", timeout=10).read().decode()
+    except Exception as exc:
+        reply = str(exc)
+    if "standalone-agent-worker" in reply or time.time() >= deadline:
+        break
+    time.sleep(2)
+sys.stdout.write(reply)
+' "${WORKER_JOIN_TIMEOUT}" 2>&1 || true)"
     case "$connz" in
       *standalone-agent-worker*) ok "worker connected to the command bus" ;;
       *)

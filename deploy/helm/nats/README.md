@@ -340,7 +340,13 @@ refuses the stream ("insufficient storage resources").
 ## NATS Server version
 
 **NATS Server 2.12.0+ is required** for `Nats-Incr` (ADR-49). Both profiles
-pin `nats:2.12.0-alpine`. The bootstrap needs natscli 0.3.0+ (`--allow-counter`;
+pin `nats:2.12.0`, the scratch image (no OS; it was `2.12.0-alpine` until
+2026-10, and NATS publishes no Debian variant). The upstream chart runs no
+shell in the server container: its probes are `httpGet` on the monitoring
+port, and its preStop hook execs `nats-server`, which is on the image's `PATH`.
+Compose, CI and the test scripts run the same tag (render-nats-security.sh
+asserts it); compose probes readiness from the `nats-health` sidecar. The
+bootstrap needs natscli 0.3.0+ (`--allow-counter`;
 nats-box 0.19.7 ships 0.4.0).
 
 ## Profiles (design §8.1.1)
