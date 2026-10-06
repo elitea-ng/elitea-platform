@@ -21,11 +21,13 @@
 #     of the `accounts` below, and the user's permissions decide what it may
 #     publish and subscribe to. There is no `no_auth_user` and no
 #     `allow_non_tls`: a connection without a mapped certificate is refused.
-#   * One account per plane (MAIN, GATEWAY, RUNTIME), each with its own
-#     subject space and JetStream, so nothing one plane's identities can do —
-#     including a consumer's deliver subject, which the server does not
-#     check against permissions — reaches another plane's streams. The only
-#     cross-account flow is GATEWAY's soft-alert stream export to MAIN.
+#   * One account per plane (MAIN, GATEWAY, SCHEDULER, RUNTIME), each with
+#     its own subject space, so nothing one plane's identities can do —
+#     including a consumer's deliver subject or a request's reply subject,
+#     neither of which the server checks against permissions — reaches
+#     another plane's streams. Every account's only writer is its owner.
+#     The cross-account flows are GATEWAY's soft-alert stream export to MAIN
+#     and its budget write-back service exports to SCHEDULER.
 #   * templates/networkpolicy.yaml admits only the named clients to 4222.
 #
 # There is no "security off" switch. The chart ships for clusters, and the
@@ -191,19 +193,39 @@ nats:
       #   GATEWAY  the LLM gateway's budget plane: the counter streams
       #            (GATEWAY_BUDGET, GATEWAY_RATELIMIT), the write-behind deltas
       #            (GATEWAY_BUDGET_DELTAS) the scheduler drains, and the
-      #            soft-alert cooldown KV (GATEWAY_ALERT_COOLDOWN).
+      #            soft-alert cooldown KV (GATEWAY_ALERT_COOLDOWN). Its only
+      #            client is the gateway (and its bootstrap).
+      #   SCHEDULER  elitea-scheduler alone, with NO JetStream. It drains
+      #            GATEWAY's budget-writeback consumer through service
+      #            imports, so it is not in the account that holds the
+      #            streams: the server answers a JetStream API request on the
+      #            requester's reply subject WITHOUT checking it against the
+      #            requester's permissions (only $JS.ACK. and _GR_. replies
+      #            are refused), so a client in GATEWAY allowed to pull could
+      #            name gateway.budget.delta (or a counter or KV subject) as
+      #            the reply and have the server store the answer there —
+      #            copying deltas back into GATEWAY_BUDGET_DELTAS. Across a
+      #            service import, the answer goes to the reply subject in
+      #            SCHEDULER, where nothing stores anything.
       #   RUNTIME  RESERVED for the runtime command bus (elitea.rt.v1.>,
       #            streams ELITEA_RT_V1_*): elitea-main's producer identity and
       #            the agent worker. Nothing presents these identities yet.
       #
-      # The ONLY cross-account flow: GATEWAY exports the stream of its
-      # per-project soft-alert subject to MAIN, and MAIN imports it, so the
-      # project SSE relay can forward budget.soft_alert. Nothing else crosses.
+      # Every account's sole WRITER is its owner: MAIN's is elitea-main,
+      # GATEWAY's the gateway, RUNTIME's (reserved) its producer and worker;
+      # SCHEDULER stores nothing. The ONLY cross-account flows:
+      #   * GATEWAY exports the stream of its per-project soft-alert subject
+      #     to MAIN, and MAIN imports it, so the project SSE relay can forward
+      #     budget.soft_alert;
+      #   * GATEWAY exports, as services, the INFO / MSG.NEXT / ACK subjects
+      #     of exactly the budget-writeback consumer to SCHEDULER.
+      # Nothing else crosses.
       #
-      # Each account has its own bootstrap identity
+      # Each account with JetStream has its own bootstrap identity
       # (elitea-nats-bootstrap-<plane>): the only user in that account that
       # may create or update a stream or create a consumer. Nobody may delete
-      # or purge a stream. The bootstrap Job connects once per account.
+      # or purge a stream. The bootstrap Job connects once per such account;
+      # SCHEDULER has no JetStream and no bootstrap.
       #
       # One user per client identity; a user name is the URI SAN its
       # certificate carries, and verify_and_map finds it in whichever account
@@ -216,8 +238,9 @@ nats:
       # (libs/go/natsconn/natstest, run by ci-go.yml and ci-gateway.yml). A
       # grant that is missing fails that test; a grant nothing uses is noise
       # to be removed. templates/guards.yaml refuses a render without the
-      # three accounts, with a user outside them, or with a grant that lets
-      # anyone delete or purge a stream.
+      # four accounts, with a user outside them, with an export or import
+      # other than the two flows above, or with a grant that lets anyone
+      # delete or purge a stream.
       accounts:
         MAIN:
           jetstream: enabled
@@ -290,10 +313,31 @@ nats:
           exports:
             # The soft alert (budget.soft_alert), per project, to MAIN only.
             # gateway.events.ops.> (the operator-only loss record) is NOT
-            # exported, and neither is anything else.
+            # exported.
             - stream: "gateway.events.project.*.events"
               accounts:
                 - MAIN
+            # The budget write-back drain, to SCHEDULER only: exactly the
+            # three JetStream subjects a bound pull consumer uses, on exactly
+            # the one durable the GATEWAY bootstrap creates. Service exports,
+            # so each answer goes back to the requester's reply subject IN
+            # SCHEDULER — where no stream lives — and never onto a GATEWAY
+            # subject of the requester's choosing.
+            #   Bind (js.Consumer) and the readiness check.
+            - service: "$JS.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
+              accounts:
+                - SCHEDULER
+            #   The pull: one request, a batch of deliveries (plus status
+            #   messages), hence response_type stream.
+            - service: "$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"
+              response_type: stream
+              accounts:
+                - SCHEDULER
+            #   Ack/nak/term on what was delivered (each delivery's reply
+            #   subject). An AckSync gets one answer.
+            - service: "$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
+              accounts:
+                - SCHEDULER
           users:
             # elitea-llm-gateway: the budget and rate-limit counter streams
             # (Nats-Incr), the write-behind delta stream, the soft-alert
@@ -333,35 +377,6 @@ nats:
                   allow:
                     - "_INBOX_elitea-llm-gateway.>"
 
-            # elitea-scheduler: BINDS to the budget write-back durable pull
-            # consumer on GATEWAY_BUDGET_DELTAS, which the GATEWAY bootstrap
-            # creates. It reads the consumer's info, pulls and acks — and may
-            # not create, redefine or delete a consumer, so it cannot turn
-            # budget-writeback into a push consumer delivering spend deltas
-            # onto another subject.
-            - user: "spiffe://elitea.internal/nats/elitea-scheduler"
-              permissions:
-                publish:
-                  allow:
-                    # Bind (js.Consumer) and the readiness check.
-                    - "$JS.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
-                    # The drain loop: pull, then ack/nak/term.
-                    - "$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"
-                    - "$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
-                  deny:
-                    - "$JS.API.STREAM.CREATE.>"
-                    - "$JS.API.STREAM.UPDATE.>"
-                    - "$JS.API.STREAM.DELETE.>"
-                    - "$JS.API.STREAM.PURGE.>"
-                    - "$JS.API.STREAM.MSG.DELETE.>"
-                    - "$JS.API.ACCOUNT.PURGE.>"
-                    - "$JS.API.CONSUMER.CREATE.>"
-                    - "$JS.API.CONSUMER.DURABLE.CREATE.>"
-                    - "$JS.API.CONSUMER.DELETE.>"
-                subscribe:
-                  allow:
-                    - "_INBOX_elitea-scheduler.>"
-
             # elitea-nats-bootstrap-gateway: creates and reconciles GATEWAY's
             # four assets and the scheduler's budget-writeback pull consumer.
             # Publishes no data.
@@ -389,6 +404,51 @@ nats:
                 subscribe:
                   allow:
                     - "_INBOX_elitea-nats-bootstrap-gateway.>"
+
+        SCHEDULER:
+          # NO JetStream and no streams: the scheduler's account holds nothing
+          # it could write into. It reaches GATEWAY's budget-writeback
+          # consumer only through the three service imports below. The pull
+          # API arrives under the JetStream API prefix JS.GATEWAY.API
+          # (natsconn.SchedulerGatewayJSAPIPrefix; the scheduler opens
+          # JetStream with it), because an account without JetStream answers
+          # every $JS.API request itself with "JetStream not enabled". The
+          # ack subjects keep their own name: they are what each delivery's
+          # reply subject says.
+          imports:
+            - service:
+                account: GATEWAY
+                subject: "$JS.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
+              to: "JS.GATEWAY.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
+            - service:
+                account: GATEWAY
+                subject: "$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"
+              to: "JS.GATEWAY.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"
+            - service:
+                account: GATEWAY
+                subject: "$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
+          users:
+            # elitea-scheduler: BINDS to the budget write-back durable pull
+            # consumer on GATEWAY_BUDGET_DELTAS, which the GATEWAY bootstrap
+            # creates. It reads the consumer's info, pulls and acks — and can
+            # do nothing else to GATEWAY: no consumer create (which would let
+            # it redefine budget-writeback as a push consumer delivering spend
+            # deltas onto any subject), and no request whose answer the server
+            # publishes inside GATEWAY. In the GATEWAY account a pull request
+            # with reply subject gateway.budget.delta made the server copy
+            # deltas back into GATEWAY_BUDGET_DELTAS (the server checks a
+            # publisher's permissions on the subject, not on its reply); here
+            # that reply subject is SCHEDULER's, where nothing stores it.
+            - user: "spiffe://elitea.internal/nats/elitea-scheduler"
+              permissions:
+                publish:
+                  allow:
+                    - "JS.GATEWAY.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
+                    - "JS.GATEWAY.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"
+                    - "$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
+                subscribe:
+                  allow:
+                    - "_INBOX_elitea-scheduler.>"
 
         RUNTIME:
           jetstream: enabled

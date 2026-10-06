@@ -20,23 +20,29 @@ value and says why.
 {{- $merge := $n.config.merge | default dict -}}
 {{- range $k := list "no_auth_user" "allow_non_tls" "authorization" -}}
 {{- if hasKey $merge $k -}}
-{{- fail (printf "nats.config.merge.%s is set. no_auth_user and allow_non_tls let a connection in without a mapped certificate, and a top-level authorization block puts users in the global account, outside the per-plane accounts that keep one plane's streams out of another's reach (#1076). Users belong in nats.config.merge.accounts.<MAIN|GATEWAY|RUNTIME>.users." $k) -}}
+{{- fail (printf "nats.config.merge.%s is set. no_auth_user and allow_non_tls let a connection in without a mapped certificate, and a top-level authorization block puts users in the global account, outside the per-plane accounts that keep one plane's streams out of another's reach (#1076). Users belong in nats.config.merge.accounts.<MAIN|GATEWAY|SCHEDULER|RUNTIME>.users." $k) -}}
 {{- end -}}
 {{- end -}}
-{{- /* The three planes, each its own account (#1076 F1). */ -}}
+{{- /* The planes, each its own account (#1076 F1). */ -}}
 {{- $accounts := dict -}}
 {{- range $k, $v := (get $merge "accounts" | default dict) -}}
 {{- if $v }}{{ $_ := set $accounts $k $v }}{{ end -}}
 {{- end -}}
-{{- $want := list "GATEWAY" "MAIN" "RUNTIME" -}}
+{{- $want := list "GATEWAY" "MAIN" "RUNTIME" "SCHEDULER" -}}
 {{- if ne (keys $accounts | sortAlpha | join ",") ($want | join ",") -}}
-{{- fail (printf "nats.config.merge.accounts must declare exactly MAIN, GATEWAY and RUNTIME, and declares [%s]. Each plane is its own account so that a consumer's deliver subject (which the server does not check against permissions) can only land inside its creator's own plane (#1076)." (keys $accounts | sortAlpha | join ", ")) -}}
+{{- fail (printf "nats.config.merge.accounts must declare exactly MAIN, GATEWAY, SCHEDULER and RUNTIME, and declares [%s]. Each plane is its own account so that a consumer's deliver subject or a request's reply subject (which the server does not check against permissions) can only land inside its sender's own plane (#1076)." (keys $accounts | sortAlpha | join ", ")) -}}
 {{- end -}}
+{{- /* SCHEDULER holds no streams: it has no JetStream, and so no bootstrap. */ -}}
+{{- $streamless := list "SCHEDULER" -}}
 {{- $seen := dict -}}
 {{- range $acct := $want -}}
 {{- $a := get $accounts $acct | default dict -}}
-{{- if ne (toString (get $a "jetstream")) "enabled" -}}
-{{- fail (printf "nats.config.merge.accounts.%s.jetstream must be \"enabled\": every plane keeps its streams in its own account's JetStream." $acct) -}}
+{{- $hasJS := has $acct (list "GATEWAY" "MAIN" "RUNTIME") -}}
+{{- if and $hasJS (ne (toString (get $a "jetstream")) "enabled") -}}
+{{- fail (printf "nats.config.merge.accounts.%s.jetstream must be \"enabled\": every plane that owns streams keeps them in its own account's JetStream." $acct) -}}
+{{- end -}}
+{{- if and (not $hasJS) (hasKey $a "jetstream") (ne (toString (get $a "jetstream")) "disabled") -}}
+{{- fail (printf "nats.config.merge.accounts.%s.jetstream is %v. %s holds NO streams — that is what makes a reply subject its client chooses harmless — so it has no JetStream (#1076)." $acct (get $a "jetstream") $acct) -}}
 {{- end -}}
 {{- $users := get $a "users" | default list -}}
 {{- $bootstrap := printf "/nats/elitea-nats-bootstrap-%s" (lower $acct) -}}
@@ -55,6 +61,12 @@ value and says why.
 {{- fail (printf "user %q is declared in accounts %s and %s. An identity belongs to exactly one plane." $name (get $seen $name) $acct) -}}
 {{- end -}}
 {{- $_ := set $seen $name $acct -}}
+{{- if and (hasSuffix "/nats/elitea-scheduler" $name) (ne $acct "SCHEDULER") -}}
+{{- fail (printf "user %q is declared in account %s. The scheduler belongs in SCHEDULER, which holds no streams: in an account with streams, a pull or info request whose reply subject names a stream's subject makes the server store the answer there, because a reply subject is not checked against permissions (#1076)." $name $acct) -}}
+{{- end -}}
+{{- if and (eq $acct "SCHEDULER") (not (hasSuffix "/nats/elitea-scheduler" $name)) -}}
+{{- fail (printf "user %q is declared in account SCHEDULER, which is elitea-scheduler's alone." $name) -}}
+{{- end -}}
 {{- $isBootstrap := hasSuffix $bootstrap $name -}}
 {{- if $isBootstrap }}{{ $bootstraps = add1 $bootstraps }}{{ end -}}
 {{- if and (contains "/nats/elitea-nats-bootstrap" $name) (not $isBootstrap) -}}
@@ -80,33 +92,67 @@ value and says why.
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- if ne $bootstraps 1 -}}
+{{- if and $hasJS (ne $bootstraps 1) -}}
 {{- fail (printf "account %s must have exactly one bootstrap user (spiffe://<trust domain>%s) and has %d: the bootstrap Job connects to each account as that account's own identity." $acct $bootstrap $bootstraps) -}}
 {{- end -}}
+{{- if and (not $hasJS) (ne (len $users) 1) -}}
+{{- fail (printf "account %s must declare exactly one user, elitea-scheduler, and declares %d." $acct (len $users)) -}}
 {{- end -}}
-{{- /* The one cross-account flow: GATEWAY's soft alerts, exported to MAIN only. */ -}}
+{{- if and (not $hasJS) (ne $bootstraps 0) -}}
+{{- fail (printf "account %s has a bootstrap user, but it holds no streams for one to administer." $acct) -}}
+{{- end -}}
+{{- end -}}
+{{- /*
+The two cross-account flows, and nothing else (#1076):
+  * GATEWAY's soft alerts, a STREAM export to MAIN only;
+  * GATEWAY's budget-writeback consumer, three SERVICE exports to SCHEDULER
+    only — its INFO and MSG.NEXT API subjects (imported under the
+    JS.GATEWAY.API prefix) and its ack subjects.
+*/ -}}
 {{- $alerts := "gateway.events.project.*.events" -}}
-{{- range $acct := list "MAIN" "RUNTIME" -}}
+{{- $wb := "GATEWAY_BUDGET_DELTAS.budget-writeback" -}}
+{{- $services := dict (printf "$JS.API.CONSUMER.INFO.%s" $wb) "" (printf "$JS.API.CONSUMER.MSG.NEXT.%s" $wb) "stream" (printf "$JS.ACK.%s.>" $wb) "" -}}
+{{- $serviceTo := dict (printf "$JS.API.CONSUMER.INFO.%s" $wb) (printf "JS.GATEWAY.API.CONSUMER.INFO.%s" $wb) (printf "$JS.API.CONSUMER.MSG.NEXT.%s" $wb) (printf "JS.GATEWAY.API.CONSUMER.MSG.NEXT.%s" $wb) (printf "$JS.ACK.%s.>" $wb) "" -}}
+{{- range $acct := list "MAIN" "SCHEDULER" "RUNTIME" -}}
 {{- if get (get $accounts $acct) "exports" -}}
-{{- fail (printf "account %s exports subjects. The only export is GATEWAY's %s to MAIN; any other turns a plane boundary back into a shared subject space (#1076)." $acct $alerts) -}}
+{{- fail (printf "account %s exports subjects. GATEWAY is the only exporter (its soft alerts to MAIN, its budget-writeback drain to SCHEDULER); any other export turns a plane boundary back into a shared subject space (#1076)." $acct) -}}
 {{- end -}}
 {{- end -}}
 {{- range $acct := list "GATEWAY" "RUNTIME" -}}
 {{- if get (get $accounts $acct) "imports" -}}
-{{- fail (printf "account %s imports subjects. The only import is MAIN's of GATEWAY's %s (#1076)." $acct $alerts) -}}
+{{- fail (printf "account %s imports subjects. The only imports are MAIN's of GATEWAY's %s and SCHEDULER's of GATEWAY's budget-writeback services (#1076)." $acct $alerts) -}}
 {{- end -}}
 {{- end -}}
 {{- $exports := get (get $accounts "GATEWAY") "exports" | default list -}}
+{{- $exported := dict -}}
 {{- range $e := $exports -}}
-{{- if or (hasKey $e "service") (ne (toString (get $e "stream")) $alerts) (ne ((get $e "accounts") | default list | join ",") "MAIN") -}}
-{{- fail (printf "GATEWAY export %v is not the soft-alert stream %s to accounts [MAIN]. A service export, another subject or an unrestricted export would let another plane reach the gateway's subjects (#1076)." $e $alerts) -}}
+{{- $okAlert := and (hasKey $e "stream") (not (hasKey $e "service")) (eq (toString (get $e "stream")) $alerts) (eq ((get $e "accounts") | default list | join ",") "MAIN") (eq (len (keys $e)) 2) -}}
+{{- $svc := toString (get $e "service") -}}
+{{- $okService := and (hasKey $e "service") (not (hasKey $e "stream")) (hasKey $services $svc) (eq ((get $e "accounts") | default list | join ",") "SCHEDULER") (eq (toString (get $e "response_type" | default "")) (get $services $svc)) -}}
+{{- if $okService -}}
+{{- range $k := keys $e -}}
+{{- if not (has $k (list "service" "accounts" "response_type")) -}}{{- $okService = false -}}{{- end -}}
 {{- end -}}
+{{- end -}}
+{{- if not (or $okAlert $okService) -}}
+{{- fail (printf "GATEWAY export %v is neither the soft-alert stream %s to accounts [MAIN] nor one of the budget-writeback services (%s) to accounts [SCHEDULER] with its response type. Another subject, another account or an unrestricted export would let another plane reach the gateway's subjects (#1076)." $e $alerts (keys $services | sortAlpha | join ", ")) -}}
+{{- end -}}
+{{- if $okService }}{{ $_ := set $exported $svc true }}{{ end -}}
 {{- end -}}
 {{- $imports := get (get $accounts "MAIN") "imports" | default list -}}
 {{- range $i := $imports -}}
 {{- $st := get $i "stream" | default dict -}}
 {{- if or (hasKey $i "service") (ne (toString (get $st "account")) "GATEWAY") (ne (toString (get $st "subject")) $alerts) (hasKey $st "to") (hasKey $i "to") -}}
 {{- fail (printf "MAIN import %v is not GATEWAY's soft-alert stream %s, unmapped. Anything else widens what MAIN receives from another plane (#1076)." $i $alerts) -}}
+{{- end -}}
+{{- end -}}
+{{- $simports := get (get $accounts "SCHEDULER") "imports" | default list -}}
+{{- range $i := $simports -}}
+{{- $sv := get $i "service" | default dict -}}
+{{- $subj := toString (get $sv "subject") -}}
+{{- $to := toString (get $i "to" | default "") -}}
+{{- if or (hasKey $i "stream") (ne (toString (get $sv "account")) "GATEWAY") (not (hasKey $services $subj)) (ne $to (get $serviceTo $subj)) (not (hasKey $exported $subj)) -}}
+{{- fail (printf "SCHEDULER import %v is not one of GATEWAY's exported budget-writeback services, mapped as the scheduler's JetStream API prefix (JS.GATEWAY.API) expects. Anything else widens what the scheduler reaches in GATEWAY (#1076)." $i) -}}
 {{- end -}}
 {{- end -}}
 {{- if dig "config" "cluster" "enabled" false $n -}}

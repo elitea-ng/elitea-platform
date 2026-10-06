@@ -91,9 +91,12 @@ refuse "nats: TLS off"                        "tls.enabled is false"         "${
 refuse "nats: no_auth_user"                   "no_auth_user"                 "${NA[@]}" --set nats.config.merge.no_auth_user=anyone
 refuse "nats: allow_non_tls"                  "allow_non_tls"                "${NA[@]}" --set nats.config.merge.allow_non_tls=true
 refuse "nats: users in the global account"    "authorization is set"         "${NA[@]}" --set 'nats.config.merge.authorization.users[0].user=spiffe://elitea.internal/nats/elitea-main'
-refuse "nats: a plane's account removed"      "exactly MAIN, GATEWAY and RUNTIME" "${NA[@]}" --set nats.config.merge.accounts.RUNTIME=null
-refuse "nats: an extra account"               "exactly MAIN, GATEWAY and RUNTIME" "${NA[@]}" --set nats.config.merge.accounts.EXTRA.jetstream=enabled
-refuse "nats: GATEWAY export widened"         "is not the soft-alert stream" "${NA[@]}" --set 'nats.config.merge.accounts.GATEWAY.exports[0].stream=gateway.>' --set 'nats.config.merge.accounts.GATEWAY.exports[0].accounts[0]=MAIN'
+refuse "nats: a plane's account removed"      "exactly MAIN, GATEWAY, SCHEDULER and RUNTIME" "${NA[@]}" --set nats.config.merge.accounts.RUNTIME=null
+refuse "nats: the scheduler's account removed" "exactly MAIN, GATEWAY, SCHEDULER and RUNTIME" "${NA[@]}" --set nats.config.merge.accounts.SCHEDULER=null
+refuse "nats: an extra account"               "exactly MAIN, GATEWAY, SCHEDULER and RUNTIME" "${NA[@]}" --set nats.config.merge.accounts.EXTRA.jetstream=enabled
+refuse "nats: GATEWAY export widened"         "is neither the soft-alert stream" "${NA[@]}" --set 'nats.config.merge.accounts.GATEWAY.exports[0].stream=gateway.>' --set 'nats.config.merge.accounts.GATEWAY.exports[0].accounts[0]=MAIN'
+refuse "nats: SCHEDULER gets JetStream"       "holds NO streams"             "${NA[@]}" --set nats.config.merge.accounts.SCHEDULER.jetstream=enabled
+refuse "nats: SCHEDULER exports"              "account SCHEDULER exports"    "${NA[@]}" --set 'nats.config.merge.accounts.SCHEDULER.exports[0].stream=elitea.>'
 refuse "nats: MAIN exports"                   "account MAIN exports"         "${NA[@]}" --set 'nats.config.merge.accounts.MAIN.exports[0].stream=elitea.>'
 refuse "nats: RUNTIME imports"                "account RUNTIME imports"      "${NA[@]}" --set 'nats.config.merge.accounts.RUNTIME.imports[0].stream.account=GATEWAY' --set 'nats.config.merge.accounts.RUNTIME.imports[0].stream.subject=gateway.events.project.*.events'
 # Mutations of one user's grants: a values file derived from values.yaml, so
@@ -114,8 +117,24 @@ mutate "$TMP/m-bootstrap-purge.yaml" 'user("GATEWAY","elitea-nats-bootstrap-gate
 refuse "nats: a bootstrap may purge"          "Nobody deletes or purges"     "${NA[@]}" -f "$TMP/m-bootstrap-purge.yaml"
 mutate "$TMP/m-gw-create.yaml" 'user("GATEWAY","elitea-llm-gateway")["permissions"]["publish"]["allow"].append("$JS.API.STREAM.CREATE.GATEWAY_BUDGET")'
 refuse "nats: a service may create a stream"  "Only the account's bootstrap" "${NA[@]}" -f "$TMP/m-gw-create.yaml"
-mutate "$TMP/m-sched-consumer.yaml" 'user("GATEWAY","elitea-scheduler")["permissions"]["publish"]["allow"].append("$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback.>")'
+mutate "$TMP/m-sched-consumer.yaml" 'user("SCHEDULER","elitea-scheduler")["permissions"]["publish"]["allow"].append("$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback.>")'
 refuse "nats: the scheduler may create its consumer" "only the account's bootstrap creates consumers" "${NA[@]}" -f "$TMP/m-sched-consumer.yaml"
+# The scheduler's way into GATEWAY is exactly three service subjects on its
+# one consumer, imported under its JetStream API prefix (#1076 reply-subject fix).
+mutate "$TMP/m-sched-back.yaml" 'accts["GATEWAY"]["users"].append(dict(user("SCHEDULER","elitea-scheduler"))); accts["SCHEDULER"]["users"] = [u for u in accts["SCHEDULER"]["users"] if not u["user"].endswith("/elitea-scheduler")]'
+refuse "nats: the scheduler back in GATEWAY"  "The scheduler belongs in SCHEDULER"   "${NA[@]}" -f "$TMP/m-sched-back.yaml"
+mutate "$TMP/m-svc-any-consumer.yaml" 'next(e for e in accts["GATEWAY"]["exports"] if "MSG.NEXT" in e.get("service",""))["service"] = "$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.*"'
+refuse "nats: pull export widened to any consumer" "budget-writeback services" "${NA[@]}" -f "$TMP/m-svc-any-consumer.yaml"
+mutate "$TMP/m-svc-to-main.yaml" 'next(e for e in accts["GATEWAY"]["exports"] if "MSG.NEXT" in e.get("service",""))["accounts"] = ["SCHEDULER", "MAIN"]'
+refuse "nats: pull export to another account" "budget-writeback services"   "${NA[@]}" -f "$TMP/m-svc-to-main.yaml"
+mutate "$TMP/m-svc-api.yaml" 'accts["GATEWAY"]["exports"].append({"service": "$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback.>", "accounts": ["SCHEDULER"]})'
+refuse "nats: a consumer-create service export" "budget-writeback services"  "${NA[@]}" -f "$TMP/m-svc-api.yaml"
+mutate "$TMP/m-svc-rt.yaml" 'next(e for e in accts["GATEWAY"]["exports"] if "MSG.NEXT" in e.get("service","")).pop("response_type")'
+refuse "nats: pull export loses response_type stream" "budget-writeback services" "${NA[@]}" -f "$TMP/m-svc-rt.yaml"
+mutate "$TMP/m-imp-to.yaml" 'next(i for i in accts["SCHEDULER"]["imports"] if "MSG.NEXT" in i["service"]["subject"])["to"] = "$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"'
+refuse "nats: SCHEDULER import off the API prefix" "SCHEDULER import"        "${NA[@]}" -f "$TMP/m-imp-to.yaml"
+mutate "$TMP/m-imp-other.yaml" 'accts["SCHEDULER"]["imports"].append({"service": {"account": "GATEWAY", "subject": "gateway.budget.delta"}})'
+refuse "nats: SCHEDULER imports another subject" "SCHEDULER import"          "${NA[@]}" -f "$TMP/m-imp-other.yaml"
 mutate "$TMP/m-main-consumer.yaml" 'user("MAIN","elitea-main")["permissions"]["publish"]["allow"].append("$JS.API.CONSUMER.CREATE.KV_OTHER.>")'
 refuse "nats: main may create a consumer off its bucket" "only the account's bootstrap creates consumers" "${NA[@]}" -f "$TMP/m-main-consumer.yaml"
 mutate "$TMP/m-dup.yaml" 'accts["RUNTIME"]["users"].append(dict(user("MAIN","elitea-main")))'
@@ -184,7 +203,8 @@ def conf_json(text):
 
 IDS = {
     "MAIN": ["elitea-main", "elitea-nats-bootstrap-main"],
-    "GATEWAY": ["elitea-llm-gateway", "elitea-scheduler", "elitea-nats-bootstrap-gateway"],
+    "GATEWAY": ["elitea-llm-gateway", "elitea-nats-bootstrap-gateway"],
+    "SCHEDULER": ["elitea-scheduler"],
     "RUNTIME": ["elitea-main-runtime", "elitea-worker", "elitea-nats-bootstrap-runtime"],
 }
 ALL = [i for ids in IDS.values() for i in ids]
@@ -205,10 +225,13 @@ for label, c in (("scale-1", c1), ("HA", c3)):
     check(f"{label}: http monitor stays on 8222 (exporter over localhost, kubelet probes)", c.get("http_port") == 8222)
 check("both profiles carry the SAME accounts and permission table", c1["accounts"] == c3["accounts"])
 accts = c1["accounts"]
-check("one account per plane: exactly MAIN, GATEWAY and RUNTIME", set(accts) == set(IDS), sorted(accts))
+check("one account per plane: exactly MAIN, GATEWAY, SCHEDULER and RUNTIME", set(accts) == set(IDS), sorted(accts))
 users = {}
 for acct, a in accts.items():
-    check(f"{acct}: JetStream enabled in the account", a.get("jetstream") == "enabled")
+    if acct == "SCHEDULER":
+        check("SCHEDULER: no JetStream (it holds no stream a reply subject could land in)", a.get("jetstream") in (None, "disabled"), a.get("jetstream"))
+    else:
+        check(f"{acct}: JetStream enabled in the account", a.get("jetstream") == "enabled")
     names = [u["user"] for u in a.get("users", [])]
     check(f"{acct}: declares exactly its plane's identities", set(names) == {URI(i) for i in IDS.get(acct, [])}, sorted(names))
     for u in a.get("users", []):
@@ -236,8 +259,24 @@ for i in ALL:
         check(f"{i} may create and update streams", made, pub)
     else:
         check(f"{i} may not create or update a stream", not made, made)
-check("GATEWAY exports exactly the soft-alert stream, to MAIN only",
-      accts["GATEWAY"].get("exports") == [{"stream": ALERTS, "accounts": ["MAIN"]}], accts["GATEWAY"].get("exports"))
+WB = "GATEWAY_BUDGET_DELTAS.budget-writeback"
+check("GATEWAY exports exactly the soft-alert stream to MAIN and the budget-writeback services to SCHEDULER",
+      accts["GATEWAY"].get("exports") == [
+          {"stream": ALERTS, "accounts": ["MAIN"]},
+          {"service": f"$JS.API.CONSUMER.INFO.{WB}", "accounts": ["SCHEDULER"]},
+          {"service": f"$JS.API.CONSUMER.MSG.NEXT.{WB}", "response_type": "stream", "accounts": ["SCHEDULER"]},
+          {"service": f"$JS.ACK.{WB}.>", "accounts": ["SCHEDULER"]},
+      ], accts["GATEWAY"].get("exports"))
+check("SCHEDULER imports exactly those services, the API under the scheduler's prefix JS.GATEWAY.API",
+      accts["SCHEDULER"].get("imports") == [
+          {"service": {"account": "GATEWAY", "subject": f"$JS.API.CONSUMER.INFO.{WB}"}, "to": f"JS.GATEWAY.API.CONSUMER.INFO.{WB}"},
+          {"service": {"account": "GATEWAY", "subject": f"$JS.API.CONSUMER.MSG.NEXT.{WB}"}, "to": f"JS.GATEWAY.API.CONSUMER.MSG.NEXT.{WB}"},
+          {"service": {"account": "GATEWAY", "subject": f"$JS.ACK.{WB}.>"}},
+      ], accts["SCHEDULER"].get("imports"))
+schedp = users.get(URI("elitea-scheduler"), {}).get("publish", {}).get("allow", [])
+check("elitea-scheduler publishes only its three imported subjects",
+      sorted(schedp) == sorted([f"JS.GATEWAY.API.CONSUMER.INFO.{WB}", f"JS.GATEWAY.API.CONSUMER.MSG.NEXT.{WB}", f"$JS.ACK.{WB}.>"]), schedp)
+check("SCHEDULER exports nothing", not accts["SCHEDULER"].get("exports"))
 check("MAIN imports exactly GATEWAY's soft-alert stream",
       accts["MAIN"].get("imports") == [{"stream": {"account": "GATEWAY", "subject": ALERTS}}], accts["MAIN"].get("imports"))
 mainp = users.get(URI("elitea-main"), {})
@@ -426,6 +465,13 @@ for p in sorted(prefixes):
     names = [f"{p}_NATS_TLS_{k}_FILE" for k in ("CA", "CERT", "KEY")]
     check(f"the chart renders all three of {p}_NATS_TLS_*_FILE the code builds", all(n in rendered_env for n in names), [n for n in names if n not in rendered_env])
 check("the prefixes the code uses are the ones this suite expects", prefixes == {"ELITEA_EVENTS", "GATEWAY"}, sorted(prefixes))
+# The scheduler opens JetStream with natsconn.SchedulerGatewayJSAPIPrefix; the
+# SCHEDULER imports must map GATEWAY's consumer API under that same prefix,
+# or every bind answers "JetStream not enabled for account".
+hit = re.search(r'SchedulerGatewayJSAPIPrefix\s*=\s*"([^"]+)"', (root / "libs/go/natsconn/natsconn.go").read_text())
+code_prefix = hit.group(1) if hit else None
+tos = [i.get("to", "") for i in accts["SCHEDULER"].get("imports", []) if "$JS.API." in i["service"]["subject"]]
+check("the SCHEDULER imports use the scheduler code's JetStream API prefix", code_prefix and tos and all(t.startswith(code_prefix + ".") for t in tos), (code_prefix, tos))
 
 # ── one NATS server version everywhere (R9) ───────────────────────────────
 # The chart pins the server; CI's plaintext suites, the secured tests' server

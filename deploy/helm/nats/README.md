@@ -5,7 +5,7 @@ One NATS JetStream server (or 3-node cluster) serves three clients:
 | Client | Uses |
 |--------|------|
 | `elitea-llm-gateway` | budget and rate-limit counters (`Nats-Incr`), write-behind deltas, the soft-alert cooldown KV, `budget.soft_alert` / ops events |
-| `elitea-scheduler` | the `budget-writeback` durable consumer that drains the deltas into Postgres |
+| `elitea-scheduler` | the `budget-writeback` durable consumer that drains the deltas into Postgres (from its own `SCHEDULER` account, through service imports) |
 | `elitea-main` | the project SSE relay (`gateway.events.project.>`) and canvas presence (KV + `canvas.editors` rosters) |
 
 and one owner: the `nats-bootstrap` hook Job (`../nats-bootstrap`), which
@@ -125,13 +125,18 @@ What narrows them:
 ### Accounts: one per plane
 
 `values.yaml` → `nats.config.merge.accounts`. Each plane is its own NATS
-account — its own subject space and its own JetStream — and every user is
-declared in exactly one:
+account — its own subject space and, where it owns assets, its own
+JetStream — and every user is declared in exactly one. **Every account's sole
+writer is its owner**: MAIN's assets are written by elitea-main alone,
+GATEWAY's by the gateway alone (its bootstrap creates them and publishes no
+data), RUNTIME's (reserved) by its producer and worker; SCHEDULER stores
+nothing.
 
 | Account | Identities | Assets |
 |---|---|---|
 | `MAIN` | `elitea-main`, `elitea-nats-bootstrap-main` | `ELITEA_CANVAS_PRESENCE` (KV) |
-| `GATEWAY` | `elitea-llm-gateway`, `elitea-scheduler`, `elitea-nats-bootstrap-gateway` | `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `GATEWAY_BUDGET_DELTAS`, `GATEWAY_ALERT_COOLDOWN` (KV) |
+| `GATEWAY` | `elitea-llm-gateway`, `elitea-nats-bootstrap-gateway` | `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `GATEWAY_BUDGET_DELTAS`, `GATEWAY_ALERT_COOLDOWN` (KV) |
+| `SCHEDULER` | `elitea-scheduler` | none — no JetStream, no bootstrap |
 | `RUNTIME` (reserved) | `elitea-main-runtime`, `elitea-worker`, `elitea-nats-bootstrap-runtime` | the command bus's `ELITEA_RT_V1_*` streams and `ELITEA_RT_QUARANTINE` (KV), with that change |
 
 Why accounts and not only per-user permissions: a JetStream **push
@@ -146,11 +151,41 @@ other plane's streams do not exist. `TestSecuredRedirectedDeliveryStaysInMain`
 (elitea-main) reproduces the attack against the rendered config and asserts
 that nothing reaches `GATEWAY_BUDGET_DELTAS`.
 
-**The one cross-account flow**: `GATEWAY` exports the stream
-`gateway.events.project.*.events` (the per-project `budget.soft_alert`) to
-`MAIN` only, and `MAIN` imports it, so the project SSE relay can forward it.
-`gateway.events.ops.>` (the operator-only loss record) is not exported, and
-nothing else crosses.
+Why the scheduler has an account of its own: a **request's reply subject is
+not checked against the requester's permissions** either. The server checks a
+publish against the subject published to, and answers a permitted JetStream
+API request — a pull's deliveries, a consumer's info, an ack's confirmation —
+on whatever reply subject the request named (only `$JS.ACK.` and `_GR_.`
+replies are refused). As a GATEWAY user, the scheduler's pull grant on
+`budget-writeback` was enough to send `MSG.NEXT` with reply
+`gateway.budget.delta` and have the server copy deltas back into
+`GATEWAY_BUDGET_DELTAS` (double-counted spend once past the 12m dedup window;
+with discard-old, a flood evicts real deltas), or steer answers into the
+cooldown KV. In `SCHEDULER` the same reply subject is SCHEDULER's, where no
+stream exists. `TestSecuredSchedulerCannotStoreIntoGatewayByReplySubject`
+(elitea-scheduler) makes every such request as the scheduler and asserts
+that no GATEWAY stream gains a message; against the previous single-account
+table the same test sees `GATEWAY_BUDGET_DELTAS` go from 4 to 11 messages.
+
+**The cross-account flows**, and nothing else crosses:
+
+* `GATEWAY` exports the stream `gateway.events.project.*.events` (the
+  per-project `budget.soft_alert`) to `MAIN` only, and `MAIN` imports it, so
+  the project SSE relay can forward it. `gateway.events.ops.>` (the
+  operator-only loss record) is not exported.
+* `GATEWAY` exports to `SCHEDULER` only, as **services**, exactly what a bound
+  pull consumer uses on exactly one durable:
+  `$JS.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback`,
+  `$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback`
+  (`response_type: stream` — one pull, a batch of deliveries) and
+  `$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>`. `SCHEDULER` imports the
+  two API subjects under the JetStream API prefix `JS.GATEWAY.API`
+  (`natsconn.SchedulerGatewayJSAPIPrefix`; the scheduler opens JetStream with
+  `jetstream.NewWithAPIPrefix`), because an account without JetStream answers
+  every `$JS.API` request itself with "JetStream not enabled". The ack
+  subjects keep their name: they are each delivery's reply subject. A
+  service's answer goes back to the requester's reply subject in the
+  requester's account.
 
 **One subject family per producer.** The project SSE route
 (`GET /api/v2/events/prompt_lib/{projectID}`) reads two subjects and accepts
@@ -174,7 +209,8 @@ anywhere in the account. The one exception is elitea-main's presence watcher
 (an ordered consumer on its own bucket, inside MAIN). So the scheduler binds
 to the `budget-writeback` pull consumer the GATEWAY bootstrap creates (with
 the AckWait and MaxDeliver in `deploy/helm/nats-bootstrap` `deltas.writeback`)
-and cannot redefine it, and the gateway holds no consumer grant at all.
+and cannot redefine it (SCHEDULER is not even exported a consumer-create
+subject), and the gateway holds no consumer grant at all.
 
 ### The permission table
 
@@ -183,8 +219,8 @@ and cannot redefine it, and the gateway holds no consumer grant at all.
 | MAIN | `elitea-main` | `elitea.events.project.*.presence` (its presence family); `$KV.ELITEA_CANVAS_PRESENCE.>`; `$JS.API.STREAM.INFO.KV_ELITEA_CANVAS_PRESENCE`; `$JS.API.CONSUMER.{CREATE.KV_ELITEA_CANVAS_PRESENCE.>,DELETE.KV_ELITEA_CANVAS_PRESENCE.*}` (the presence watcher); `$JS.FC.KV_ELITEA_CANVAS_PRESENCE.>`. Denied: `gateway.>` (it never speaks for the gateway), stream admin | `elitea.events.project.*.presence`, `gateway.events.project.*.events` (imported), `_INBOX_elitea-main.>` |
 | MAIN | `elitea-nats-bootstrap-main` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}.KV_ELITEA_CANVAS_PRESENCE` | `_INBOX_elitea-nats-bootstrap-main.>` |
 | GATEWAY | `elitea-llm-gateway` | `gateway.budget.counter.>`, `gateway.ratelimit.counter.>`, `gateway.budget.delta`, `gateway.events.project.*.events`, `gateway.events.ops.>`, `$KV.GATEWAY_ALERT_COOLDOWN.>`; `STREAM.INFO` on its four assets; `DIRECT.GET` on `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `KV_GATEWAY_ALERT_COOLDOWN`. Denied: stream admin, every `$JS.API.CONSUMER.>` | `_INBOX_elitea-llm-gateway.>` |
-| GATEWAY | `elitea-scheduler` | `$JS.API.CONSUMER.{INFO,MSG.NEXT}.GATEWAY_BUDGET_DELTAS.budget-writeback`, `$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>` — it binds to the consumer the bootstrap creates. Denied: stream admin, consumer create/delete | `_INBOX_elitea-scheduler.>` |
 | GATEWAY | `elitea-nats-bootstrap-gateway` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on its four assets, `CONSUMER.{CREATE,INFO}` on `GATEWAY_BUDGET_DELTAS.budget-writeback` | `_INBOX_elitea-nats-bootstrap-gateway.>` |
+| SCHEDULER | `elitea-scheduler` | `JS.GATEWAY.API.CONSUMER.{INFO,MSG.NEXT}.GATEWAY_BUDGET_DELTAS.budget-writeback`, `$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>` — the three imported services, nothing else; it binds to the consumer the GATEWAY bootstrap creates | `_INBOX_elitea-scheduler.>` |
 | RUNTIME | `elitea-main-runtime` (reserved) | `elitea.rt.v1.*.d.*`; `STREAM.INFO` and `CONSUMER.INFO` on `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}`. Denied: stream admin, consumer create/delete | `_INBOX_elitea-main-runtime.>` |
 | RUNTIME | `elitea-worker` (reserved) | `CONSUMER.{INFO,MSG.NEXT}` and `$JS.ACK` on `elitea-<route>-worker-v1` of `ELITEA_RT_V1_<ROUTE>`; `$KV.ELITEA_RT_QUARANTINE.>` + its `STREAM.INFO` (dead letters). Denied: `elitea.rt.v1.*.d.>` (no command injection), stream admin, consumer create/delete | `_INBOX_elitea-worker.>` |
 | RUNTIME | `elitea-nats-bootstrap-runtime` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on the three route streams and `KV_ELITEA_RT_QUARANTINE`, `CONSUMER.{CREATE,INFO}` on the three route durables | `_INBOX_elitea-nats-bootstrap-runtime.>` |
@@ -215,12 +251,15 @@ ELITEA_TEST_NATS_CLI_BIN=$(command -v nats) \
 NetworkPolicy or route TLS off, points route TLS at the client certificate or
 the client CA, or turns route verification off; sets `no_auth_user`, `allow_non_tls` or a
 top-level `authorization` block; declares accounts other than exactly `MAIN`,
-`GATEWAY` and `RUNTIME`, or one without JetStream; declares an identity twice,
-a non-URI, password, nkey or token user, or an account without exactly its own
-bootstrap; lets a user subscribe to `_INBOX.>`/`>`/`$JS.API…`; lets anyone
-delete or purge a stream or anyone but the account's bootstrap create or
-update one; or widens the export/import beyond GATEWAY's soft-alert stream to
-MAIN.
+`GATEWAY`, `SCHEDULER` and `RUNTIME`, MAIN/GATEWAY/RUNTIME without JetStream
+or SCHEDULER with it; puts `elitea-scheduler` anywhere but SCHEDULER or
+anyone else in it; declares an identity twice, a non-URI, password, nkey or
+token user, or a JetStream account without exactly its own bootstrap; lets a
+user subscribe to `_INBOX.>`/`>`/`$JS.API…`; lets anyone delete or purge a
+stream or anyone but the account's bootstrap create or update one; or widens
+the exports/imports beyond GATEWAY's soft-alert stream to MAIN and the three
+budget-writeback services to SCHEDULER (subject, account, response type and
+the `JS.GATEWAY.API` mapping are all pinned).
 
 ### Network
 

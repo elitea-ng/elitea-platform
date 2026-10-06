@@ -37,7 +37,7 @@ cms = [d for d in docs if d.get("kind") == "ConfigMap" and "nats.conf" in (d.get
 if len(cms) != 1:
     sys.exit(f"expected exactly one ConfigMap carrying nats.conf, found {len(cms)}")
 conf = cms[0]["data"]["nats.conf"]
-for needle in ('"verify_and_map": true', '"accounts"', '"MAIN"', '"GATEWAY"', '"RUNTIME"', '"users"'):
+for needle in ('"verify_and_map": true', '"accounts"', '"MAIN"', '"GATEWAY"', '"SCHEDULER"', '"RUNTIME"', '"users"'):
     if needle not in conf:
         sys.exit(f"the rendered nats.conf lacks {needle}: this is not the secured profile")
 open(sys.argv[2], "w").write(conf)

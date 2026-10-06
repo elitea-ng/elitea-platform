@@ -7,7 +7,7 @@ description: >-
   (replicas=1, HA waived) or HA (replicas>=3, RAFT quorum). Secured (#1076):
   TLS with a dedicated cert-manager NATS CA, client certificates mapped to
   per-service users (verify_and_map) in one NATS account per plane (MAIN,
-  GATEWAY, RUNTIME), and an ingress NetworkPolicy.
+  GATEWAY, SCHEDULER, RUNTIME), and an ingress NetworkPolicy.
   NATS Server 2.12.0+ (required for Nats-Incr).
 type: application
 version: 0.1.0

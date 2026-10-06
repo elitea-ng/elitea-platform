@@ -325,13 +325,15 @@ func (f *jsFetcher) Fetch(ctx context.Context) ([]Message, error) {
 
 // Bind binds to the durable pull consumer on GATEWAY_BUDGET_DELTAS, verifies
 // it, and returns a Consumer ready to Run. js is the scheduler's JetStream
-// handle.
+// handle (DialConfig.JetStream: in a cluster, the SCHEDULER account's import
+// prefix onto GATEWAY's consumer API).
 //
 // It creates nothing (#1076). The nats-bootstrap Job creates the consumer,
 // and the scheduler's NATS identity may read its info, pull and ack, but not
 // create or redefine a consumer: that grant would also let it turn the
 // consumer into a push consumer delivering spend deltas onto any subject in
-// the GATEWAY account.
+// the GATEWAY account. GATEWAY exports SCHEDULER exactly those three
+// subjects, so nothing else the scheduler sends reaches GATEWAY at all.
 func Bind(ctx context.Context, js jetstream.JetStream, db DB, cfg Config, logger *slog.Logger) (*Consumer, error) {
 	cfg = cfg.withDefaults()
 	cons, err := js.Consumer(ctx, DeltasStream, DurableName)

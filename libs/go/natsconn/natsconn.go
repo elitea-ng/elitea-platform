@@ -52,8 +52,12 @@ const (
 
 	// GATEWAY account.
 	IdentityGateway          = "elitea-llm-gateway"
-	IdentityScheduler        = "elitea-scheduler"
 	IdentityBootstrapGateway = "elitea-nats-bootstrap-gateway"
+
+	// SCHEDULER account: no JetStream, no streams, no bootstrap. The
+	// scheduler drains GATEWAY's budget-writeback consumer through service
+	// imports (SchedulerGatewayJSAPIPrefix).
+	IdentityScheduler = "elitea-scheduler"
 
 	// RUNTIME account, RESERVED for the runtime command bus (elitea.rt.v1.>).
 	// No client presents IdentityMainRuntime or IdentityWorker yet.
@@ -69,13 +73,34 @@ const (
 )
 
 // The accounts, one per plane. A subject or a stream in one account is not
-// reachable from another; the only cross-account flow is GATEWAY's export of
-// the per-project soft-alert subject to MAIN.
+// reachable from another, and every account's only writer is its owner. The
+// cross-account flows are GATEWAY's export of the per-project soft-alert
+// subject to MAIN, and GATEWAY's service exports of the budget-writeback
+// consumer's INFO, MSG.NEXT and ACK subjects to SCHEDULER.
 const (
-	AccountMain    = "MAIN"
-	AccountGateway = "GATEWAY"
-	AccountRuntime = "RUNTIME"
+	AccountMain      = "MAIN"
+	AccountGateway   = "GATEWAY"
+	AccountScheduler = "SCHEDULER"
+	AccountRuntime   = "RUNTIME"
 )
+
+// SchedulerGatewayJSAPIPrefix is the JetStream API prefix under which the
+// SCHEDULER account imports GATEWAY's budget-writeback consumer API
+// ($JS.API.CONSUMER.{INFO,MSG.NEXT}.GATEWAY_BUDGET_DELTAS.budget-writeback).
+// SCHEDULER has no JetStream of its own, and an account without JetStream
+// answers every $JS.API request itself ("JetStream not enabled for
+// account"), so the import is mapped to this prefix and the scheduler opens
+// JetStream with jetstream.NewWithAPIPrefix(nc, SchedulerGatewayJSAPIPrefix).
+// The NATS chart's import "to" subjects must carry the same prefix
+// (templates/guards.yaml pins them).
+//
+// Why the scheduler is not simply a GATEWAY user: the server publishes a
+// JetStream API answer (a pull's deliveries, a consumer's info) to the
+// requester's reply subject without checking it against the requester's
+// permissions, so in GATEWAY a pull with reply gateway.budget.delta copied
+// deltas back into GATEWAY_BUDGET_DELTAS. Across a service import the answer
+// lands on that reply subject in SCHEDULER, where nothing stores it.
+const SchedulerGatewayJSAPIPrefix = "JS.GATEWAY.API"
 
 // EnvPrefixRuntime is RESERVED for the runtime command bus producer
 // (IdentityMainRuntime): ELITEA_RUNTIME_NATS_URL and the three
@@ -88,8 +113,10 @@ func AccountOf(identity string) string {
 	switch identity {
 	case IdentityMain, IdentityBootstrapMain:
 		return AccountMain
-	case IdentityGateway, IdentityScheduler, IdentityBootstrapGateway:
+	case IdentityGateway, IdentityBootstrapGateway:
 		return AccountGateway
+	case IdentityScheduler:
+		return AccountScheduler
 	case IdentityMainRuntime, IdentityWorker, IdentityBootstrapRuntime:
 		return AccountRuntime
 	}
@@ -100,7 +127,8 @@ func AccountOf(identity string) string {
 func Identities() []string {
 	return []string{
 		IdentityMain, IdentityBootstrapMain,
-		IdentityGateway, IdentityScheduler, IdentityBootstrapGateway,
+		IdentityGateway, IdentityBootstrapGateway,
+		IdentityScheduler,
 		IdentityMainRuntime, IdentityWorker, IdentityBootstrapRuntime,
 	}
 }

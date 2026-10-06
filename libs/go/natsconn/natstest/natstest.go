@@ -217,8 +217,13 @@ func (s *Server) Bootstrap(t testing.TB, env map[string]string) string {
 // service identity cannot do the bootstrap's job.
 func (s *Server) RunBootstrap(identity string, env map[string]string) (string, error) {
 	acct := strings.ToLower(natsconn.AccountOf(identity))
-	if acct == "" {
+	switch acct {
+	case "":
 		acct = "main"
+	case strings.ToLower(natsconn.AccountScheduler):
+		// SCHEDULER has no assets of its own to bootstrap; the scheduler's
+		// attempt is at GATEWAY's, the ones it drains.
+		acct = "gateway"
 	}
 	m := s.Material(identity)
 	vars := map[string]string{

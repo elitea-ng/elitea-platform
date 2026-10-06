@@ -53,7 +53,7 @@ func TestSecuredWriteBackRunsOnTheChartsPermissions(t *testing.T) {
 		t.Fatalf("Dial as the scheduler: %v\nserver log:\n%s", err, s.Log())
 	}
 	t.Cleanup(nc.Close)
-	js, err := jetstream.New(nc)
+	js, err := dial.JetStream(nc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +107,9 @@ func TestSecuredWriteBackRunsOnTheChartsPermissions(t *testing.T) {
 
 	// What the scheduler's identity must NOT do: inject deltas, read events,
 	// read another client's replies, make or remove other consumers, purge.
+	// (Its publishes and subscriptions are in SCHEDULER, so even a granted
+	// one would not reach GATEWAY's subjects; the permissions refuse them
+	// first.)
 	_ = nc.Publish(DeltaSubject, []byte("{}"))
 	if _, err := nc.SubscribeSync("gateway.events.>"); err != nil {
 		t.Fatal(err)
@@ -127,7 +130,7 @@ func TestSecuredWriteBackRunsOnTheChartsPermissions(t *testing.T) {
 	if _, err := js.CreateOrUpdateConsumer(op(), DeltasStream, jetstream.ConsumerConfig{Durable: "rogue", FilterSubject: DeltaSubject}); err == nil {
 		t.Error("the scheduler created a consumer")
 	}
-	s.RequireViolation(t, natsconn.IdentityScheduler, "Publish", "$JS.API.CONSUMER.CREATE."+DeltasStream+".rogue."+DeltaSubject)
+	s.RequireViolation(t, natsconn.IdentityScheduler, "Publish", natsconn.SchedulerGatewayJSAPIPrefix+".CONSUMER.CREATE."+DeltasStream+".rogue."+DeltaSubject)
 	// Redefining its own consumer as a push consumer would deliver every
 	// spend delta onto a subject of the scheduler's choosing (#1076 F1).
 	if _, err := js.CreateOrUpdatePushConsumer(op(), DeltasStream, jetstream.ConsumerConfig{
@@ -136,11 +139,11 @@ func TestSecuredWriteBackRunsOnTheChartsPermissions(t *testing.T) {
 	}); err == nil {
 		t.Error("the scheduler redefined budget-writeback as a push consumer")
 	}
-	s.RequireViolation(t, natsconn.IdentityScheduler, "Publish", "$JS.API.CONSUMER.CREATE."+DeltasStream+"."+DurableName+"."+DeltaSubject)
+	s.RequireViolation(t, natsconn.IdentityScheduler, "Publish", natsconn.SchedulerGatewayJSAPIPrefix+".CONSUMER.CREATE."+DeltasStream+"."+DurableName+"."+DeltaSubject)
 	if err := js.DeleteConsumer(op(), DeltasStream, DurableName); err == nil {
 		t.Error("the scheduler deleted its durable consumer")
 	}
-	s.RequireViolation(t, natsconn.IdentityScheduler, "Publish", "$JS.API.CONSUMER.DELETE."+DeltasStream+"."+DurableName)
+	s.RequireViolation(t, natsconn.IdentityScheduler, "Publish", natsconn.SchedulerGatewayJSAPIPrefix+".CONSUMER.DELETE."+DeltasStream+"."+DurableName)
 }
 
 // A scheduler that starts before the bootstrap ran cannot bind, says which
@@ -148,12 +151,13 @@ func TestSecuredWriteBackRunsOnTheChartsPermissions(t *testing.T) {
 func TestSecuredWriteBackWithoutBootstrapNamesTheJob(t *testing.T) {
 	s := natstest.Start(t)
 	m := s.Material(natsconn.IdentityScheduler)
-	nc, err := Dial(DialConfig{URL: s.URL(), TLSCAFile: m.CAFile, TLSCertFile: m.CertFile, TLSKeyFile: m.KeyFile}, nil)
+	dial := DialConfig{URL: s.URL(), TLSCAFile: m.CAFile, TLSCertFile: m.CertFile, TLSKeyFile: m.KeyFile}
+	nc, err := Dial(dial, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(nc.Close)
-	js, err := jetstream.New(nc)
+	js, err := dial.JetStream(nc)
 	if err != nil {
 		t.Fatal(err)
 	}

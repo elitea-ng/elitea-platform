@@ -27,8 +27,9 @@ type DialConfig struct {
 // URL must be tls:// and carry no credential; a tls:// URL without material
 // is refused (CheckDialConfig is the same check without a dial). The certificate callbacks re-read their files on every
 // handshake, so a cert-manager renewal is presented on the next reconnect.
-// The permission table lets this identity subscribe to _INBOX_elitea-scheduler
-// only and touch nothing but its own durable consumer.
+// The permission table puts this identity in the SCHEDULER account, lets it
+// subscribe to _INBOX_elitea-scheduler only and reach nothing but its own
+// durable consumer in GATEWAY (JetStream opens it with the import prefix).
 func Dial(cfg DialConfig, logger *slog.Logger) (*nats.Conn, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -93,9 +94,30 @@ func (cfg DialConfig) material() (natsconn.Material, error) {
 }
 
 // envPrefix is the scheduler's NATS environment prefix: GATEWAY_NATS_URL and
-// GATEWAY_NATS_TLS_*, the GATEWAY account's names (the scheduler is a
-// GATEWAY-account client, like the LLM gateway).
+// GATEWAY_NATS_TLS_*, the names of the NATS that holds the GATEWAY plane the
+// scheduler drains. The scheduler's own identity is in the SCHEDULER account.
 const envPrefix = "GATEWAY"
+
+// JetStream opens the scheduler's JetStream handle on nc, a connection Dial
+// made with cfg.
+//
+// With a client identity the server is the NATS chart's, where the scheduler
+// is in the SCHEDULER account: no JetStream of its own, and GATEWAY's
+// budget-writeback consumer API imported under
+// natsconn.SchedulerGatewayJSAPIPrefix, so the handle uses that prefix (#1076).
+// Without one (compose's plaintext posture, one global account) the stream is
+// in the scheduler's own account and the default $JS.API prefix reaches it.
+// Ack subjects come from each delivery's reply subject either way.
+func (cfg DialConfig) JetStream(nc *nats.Conn) (jetstream.JetStream, error) {
+	material, err := cfg.material()
+	if err != nil {
+		return nil, err
+	}
+	if material.Enabled() {
+		return jetstream.NewWithAPIPrefix(nc, natsconn.SchedulerGatewayJSAPIPrefix)
+	}
+	return jetstream.New(nc)
+}
 
 // Connector dials lazily and keeps the connection: the Supervisor calls
 // JetStream on every attach attempt, so a server that was down at boot is
@@ -122,7 +144,7 @@ func (c *Connector) JetStream() (jetstream.JetStream, error) {
 	if err != nil {
 		return nil, err
 	}
-	js, err := jetstream.New(nc)
+	js, err := c.Config.JetStream(nc)
 	if err != nil {
 		nc.Close()
 		return nil, fmt.Errorf("open JetStream: %w", err)
