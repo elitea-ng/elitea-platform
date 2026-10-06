@@ -263,7 +263,7 @@ nats:
   # The NATS server (deploy/helm/nats) requires TLS and a client certificate
   # whose URI SAN, spiffe://<trustDomain>/nats/<identity>, names a user in its
   # permission table. With `enabled` this chart:
-  #   * issues one Certificate per client from the DEDICATED NATS CA:
+  #   * issues one Certificate per client from the NATS CA:
   #       elitea-main        -> Secret elitea-main-nats-client-tls
   #       elitea-llm-gateway -> Secret elitea-llm-gateway-nats-client-tls
   #       elitea-scheduler   -> Secret elitea-scheduler-nats-client-tls

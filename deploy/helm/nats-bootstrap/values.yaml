@@ -38,7 +38,7 @@ tls:
   #   runtime: my-bootstrap-runtime-tls
   certificate:
     create: true
-    # The DEDICATED NATS CA issuer deploy/helm/nats renders (security.ca.name).
+    # The NATS CA issuer deploy/helm/nats renders (security.ca.name).
     # A namespaced Issuer signs only in its own namespace, so this release
     # must share the NATS release's namespace — or name a ClusterIssuer.
     issuerRef:

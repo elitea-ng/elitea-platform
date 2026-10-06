@@ -265,7 +265,7 @@ jobs:
       # The NATS security posture (#1076), on the rendered output of the three
       # charts that must agree about it: every client certificate the platform
       # and the bootstrap issue names a user in the NATS chart's permission
-      # table and comes from the dedicated NATS CA Issuer, every client pod is
+      # table and comes from the NATS CA Issuer, every client pod is
       # one the NATS NetworkPolicy admits, every rendered URL is tls:// with no
       # credential, and each refusal (TLS off, verify_and_map off,
       # no_auth_user, plaintext routes, nats:// or credential URLs, plaintext

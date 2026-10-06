@@ -5,9 +5,17 @@
 # server, because it must not differ between profiles:
 #
 #   * TLS is required on the client port, with a server certificate issued by
-#     a DEDICATED NATS CA (templates/ca.yaml), not by elitea-internal-ca. The
-#     CA is separate so that the right to create a Certificate against the
-#     platform's internal issuer is not also the right to mint a NATS identity.
+#     a SEPARATE NATS CA (templates/ca.yaml), not by elitea-internal-ca, so a
+#     Certificate against the platform's internal issuer is not a NATS
+#     identity. That separation is all it buys. The NATS CA's Issuer is
+#     namespaced, so anyone who may create a cert-manager Certificate (or
+#     CertificateRequest) in this namespace can obtain ANY NATS identity from
+#     it — a service's, a bootstrap's, a route certificate — and anyone who may
+#     read Secrets here can read the CA key (Secret elitea-nats-ca) and mint
+#     offline. Restrict both with RBAC; security.approverPolicy pins what each
+#     issuer will sign; a ClusterIssuer whose key lives outside the namespace
+#     (security.ca.create: false) takes the key out of reach. README: "Who can
+#     mint a NATS identity".
 #   * Every client presents a certificate from that CA. `verify_and_map` maps
 #     its URI SAN, spiffe://elitea.internal/nats/<identity>, to a user in one
 #     of the `accounts` below, and the user's permissions decide what it may
@@ -26,7 +34,7 @@
 # that turns TLS, verify_and_map or the accounts off.
 
 security:
-  # The dedicated NATS CA. With `create: true` this chart renders the chain
+  # The NATS CA. With `create: true` this chart renders the chain
   # cert-manager needs, all NAMESPACED in this release's namespace:
   #   Issuer <name>-selfsigned -> Certificate <name> (isCA) -> Issuer <name>
   # The server certificate below, the bootstrap Job's certificate and every
@@ -45,8 +53,9 @@ security:
     duration: 87600h   # 10y
     renewBefore: 8760h # 1y
   # Used only when ca.create is false: the issuer that signs the server
-  # certificate. It MUST be backed by a CA that signs nothing but NATS
-  # identities.
+  # certificate and every client identity. It MUST be backed by a CA that
+  # signs nothing but NATS identities, and its key should live outside this
+  # namespace (that is the point of choosing it over create: true).
   issuerRef:
     name: ""
     kind: ClusterIssuer
@@ -68,6 +77,24 @@ security:
   serverCertificate:
     duration: 2160h    # 90d
     renewBefore: 360h  # 15d
+  # cert-manager approver-policy (templates/approver-policy.yaml): pins what
+  # each NATS issuer will sign — the permission table's URI SANs for client
+  # identities, the Service names for the server, the headless names for
+  # routes, the two CAs for the self-signed issuer. "auto" renders the
+  # CertificateRequestPolicies when the cluster serves
+  # policy.cert-manager.io/v1alpha1; true requires it; false never renders.
+  # Effective only with cert-manager's built-in approver disabled. It limits
+  # WHAT can be minted, not WHO may ask: see the README's "Who can mint a NATS
+  # identity" for the RBAC that decides that.
+  approverPolicy:
+    enabled: auto
+    # Longest client certificate the client-identity policy signs.
+    maxClientDuration: 2160h
+    # cert-manager's controller, which submits every CertificateRequest and
+    # must be allowed to `use` the policies.
+    certManagerServiceAccount:
+      name: cert-manager
+      namespace: cert-manager
   # The route certificate (HA only). Its secret name is
   # nats.config.cluster.tls.secretName (values-ha.yaml).
   routeCertificate:

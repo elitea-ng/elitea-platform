@@ -27,7 +27,7 @@ type Config struct {
 	BudgetWriteBackNATSURL string
 	// The scheduler's NATS client identity (#1076), the same variable names
 	// the gateway reads (GATEWAY_NATS_TLS_*), because the scheduler already
-	// shares GATEWAY_NATS_URL with it. A certificate from the dedicated NATS
+	// shares GATEWAY_NATS_URL with it. A certificate from the NATS
 	// CA whose URI SAN spiffe://elitea.internal/nats/elitea-scheduler the
 	// server maps to the scheduler's user. All three or none.
 	BudgetWriteBackNATSTLSCAFile   string

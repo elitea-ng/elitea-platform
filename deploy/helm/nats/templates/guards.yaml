@@ -15,7 +15,7 @@ value and says why.
 {{- fail "nats.config.nats.tls.merge.verify_and_map must be true: it is what maps a client certificate's URI SAN to a user in the permission table. Without it every client is anonymous." -}}
 {{- end -}}
 {{- if not (and $n.tlsCA.enabled (eq $n.tlsCA.secretName $n.config.nats.tls.secretName)) -}}
-{{- fail "nats.tlsCA must be enabled and name the server certificate's Secret (nats.config.nats.tls.secretName): its ca.crt is the dedicated NATS CA client certificates are verified against." -}}
+{{- fail "nats.tlsCA must be enabled and name the server certificate's Secret (nats.config.nats.tls.secretName): its ca.crt is the NATS CA client certificates are verified against." -}}
 {{- end -}}
 {{- $merge := $n.config.merge | default dict -}}
 {{- range $k := list "no_auth_user" "allow_non_tls" "authorization" -}}

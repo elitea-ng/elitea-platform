@@ -22,15 +22,14 @@ posture is compose's (`deploy/docker-compose.yml`), and
 
 ### Identity: mTLS with `verify_and_map`
 
-* **A dedicated NATS CA.** `templates/ca.yaml` renders the cert-manager chain
+* **A separate NATS CA.** `templates/ca.yaml` renders the cert-manager chain
   `Issuer elitea-nats-ca-selfsigned → Certificate elitea-nats-ca (isCA) →
   Issuer elitea-nats-ca`, namespaced in this release's namespace. It is NOT
-  `elitea-internal-ca`: whoever may create a `Certificate` against an issuer
-  may mint any identity it signs, and a NATS identity carries publish rights
-  on the budget counters. Keep `Certificate`-create RBAC on `elitea-nats-ca`
-  as narrow as read access to the Secrets it writes.
-  `security.ca.create: false` + `security.issuerRef` uses an issuer you run
-  instead (it must sign NATS identities only).
+  `elitea-internal-ca`, so a Certificate against the platform's internal
+  issuer is not a NATS identity. That is ALL the separation buys — see "Who
+  can mint a NATS identity" below. `security.ca.create: false` +
+  `security.issuerRef` uses an issuer you run instead (it must sign NATS
+  identities only).
 * **Server certificate** (`templates/server-certificate.yaml`): the client
   port only — the Service names, `server auth`. The upstream config reloader
   picks up a renewal without a restart.
@@ -74,10 +73,51 @@ posture is compose's (`deploy/docker-compose.yml`), and
   `user:pass@`/`token@`, in any NATS URL it renders.
 
 Because the CA Issuer is namespaced, **install NATS, its bootstrap and the
-platform in the same namespace** (the Argo CD sample uses `elitea`). To run
-NATS elsewhere, back a `ClusterIssuer` with a dedicated NATS CA and point
-`security.issuerRef`, the bootstrap's `tls.certificate.issuerRef` and the
-platform's `nats.tls.issuerRef` at it.
+platform in the same namespace** (the Argo CD sample uses `elitea`). To run NATS elsewhere, back a `ClusterIssuer` with a CA
+used for NATS only and point `security.issuerRef`, the bootstrap's
+`tls.certificate.issuerRef` and the platform's `nats.tls.issuerRef` at it.
+
+### Who can mint a NATS identity
+
+A NATS identity is a certificate the server's CA signed with the right URI
+SAN. Three groups can get one:
+
+1. **Anyone who may create a cert-manager `Certificate` or
+   `CertificateRequest` in the NATS namespace.** The namespaced Issuer signs
+   whatever such a request asks for — any service's identity, a bootstrap's
+   (which may create streams), a server or route certificate. cert-manager's
+   default approver approves every request.
+2. **Anyone who may read Secrets in the NATS namespace.** The CA key is
+   Secret `elitea-nats-ca` (and `elitea-nats-route-ca` in HA); with it a
+   certificate is minted offline, and nothing in the cluster sees it.
+3. **Anyone who may read a client's Secret** (`<component>-nats-client-tls`)
+   holds that one identity until the certificate expires.
+
+What narrows them:
+
+* **RBAC.** Grant `create` on `certificates.cert-manager.io` and
+  `certificaterequests.cert-manager.io`, and `get`/`list`/`watch` on
+  `secrets`, in the NATS namespace to the deployer (Argo CD, Helm) and
+  cluster operators only — not to workloads or to every namespace member.
+  An admin role that already holds those verbs everywhere holds every NATS
+  identity.
+* **approver-policy** (`security.approverPolicy`, `templates/approver-policy.yaml`).
+  With [cert-manager approver-policy](https://cert-manager.io/docs/policy/approval/approver-policy/)
+  installed and cert-manager's built-in approver disabled
+  (`--controllers=*,-certificaterequests-approver`), the chart's
+  `CertificateRequestPolicy` objects pin what each issuer signs: client
+  identities only with exactly one of the permission table's URI SANs, `client
+  auth`, no DNS names, no CA, at most `maxClientDuration`; the server
+  certificate only for the Service names; the route certificate only for the
+  headless names; the self-signed issuer only the two CA certificates. It
+  stops arbitrary or CA certificates; it does NOT stop a permitted identity
+  being requested by someone with `create` on Certificates — cert-manager's
+  service account submits every request, so the policy cannot tell who asked.
+  `enabled: auto` renders the policies when the API is served.
+* **A CA key outside the namespace.** `security.ca.create: false` with a
+  `ClusterIssuer` (or an external issuer) whose key lives elsewhere removes
+  group 2. Group 1 remains for any namespace that may reference that
+  ClusterIssuer; pair it with approver-policy.
 
 ### Accounts: one per plane
 

@@ -3,7 +3,7 @@ NATS client identities and the render gates for NATS URLs (#1076).
 
 The NATS server requires TLS and maps each client certificate's URI SAN to a
 user with subject-level permissions (deploy/helm/nats/values.yaml). This file
-issues one certificate per component that dials NATS, from the dedicated NATS
+issues one certificate per component that dials NATS, from the NATS
 CA, and refuses the URL shapes that would either fail every handshake or put
 a credential into a ConfigMap.
 */ -}}
@@ -55,7 +55,7 @@ a credential into a ConfigMap.
 {{- range $c := $clients }}
 ---
 # {{ $c.identity }}'s NATS identity (#1076): its URI SAN is the user the NATS
-# server's permission table names. Issued by the dedicated NATS CA, never by
+# server's permission table names. Issued by the NATS CA, never by
 # elitea-internal-ca.
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -77,7 +77,7 @@ spec:
     algorithm: ECDSA
     size: 256
   issuerRef:
-    name: {{ required "nats.tls.issuerRef.name names the dedicated NATS CA issuer" $tls.issuerRef.name }}
+    name: {{ required "nats.tls.issuerRef.name names the NATS CA issuer" $tls.issuerRef.name }}
     kind: {{ $tls.issuerRef.kind | default "Issuer" }}
     group: cert-manager.io
 {{- end }}

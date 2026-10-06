@@ -1,9 +1,15 @@
 {{- if .Values.security.ca.create }}
-# The DEDICATED NATS CA (#1076). Separate from elitea-internal-ca on purpose:
-# whoever may create a Certificate against an issuer may mint an identity it
-# signs, and a NATS identity carries publish rights on the budget counters.
-# Keep Certificate-create RBAC on Issuer {{ .Values.security.ca.name }} as
-# narrow as you keep the Secrets it writes.
+# The NATS CA (#1076). Separate from elitea-internal-ca, so a Certificate
+# against the platform's internal issuer is not a NATS identity — and that is
+# all the separation buys. This Issuer is NAMESPACED: anyone who may create a
+# Certificate or CertificateRequest in {{ include "elitea-nats.namespace" . }} can obtain any
+# NATS identity from it (a bootstrap's included), and anyone who may read
+# Secrets there can read the CA key (Secret {{ .Values.security.ca.name }}) and mint
+# offline. A NATS identity carries publish rights on the budget counters.
+# Restrict create on certificates/certificaterequests and get/list on
+# secrets in this namespace; security.approverPolicy pins what this issuer
+# signs (templates/approver-policy.yaml); for a key outside the namespace,
+# set security.ca.create: false and name a ClusterIssuer.
 #
 # The usual cert-manager bootstrap chain, namespaced:
 #   selfSigned Issuer -> CA Certificate (isCA) -> CA Issuer

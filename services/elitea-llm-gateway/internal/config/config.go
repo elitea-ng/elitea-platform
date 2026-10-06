@@ -204,7 +204,7 @@ type Config struct {
 	// startup does not hard-fail when no NATS cluster is reachable.
 	NATSURL string
 	// NATSTLSCAFile, NATSTLSCertFile and NATSTLSKeyFile are the gateway's NATS
-	// client identity (#1076): a certificate from the dedicated NATS CA whose
+	// client identity (#1076): a certificate from the NATS CA whose
 	// URI SAN spiffe://elitea.internal/nats/elitea-llm-gateway the server maps
 	// to the gateway's user in the chart's permission table. All three or
 	// none; with them GATEWAY_NATS_URL must be tls:// and carry no credential.

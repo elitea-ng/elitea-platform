@@ -6,9 +6,11 @@
 #
 # SECURED (#1076): TLS with client certificates only, every client mapped to a
 # user in the chart's permission table, and an ingress NetworkPolicy. The chart
-# renders its own DEDICATED CA as a NAMESPACED cert-manager Issuer
-# (elitea-nats-ca), which signs only in this namespace — so NATS, its bootstrap
-# and the platform all install into `elitea`. cert-manager must be installed.
+# renders its own NATS CA as a NAMESPACED cert-manager Issuer (elitea-nats-ca),
+# which signs only in this namespace — so NATS, its bootstrap and the platform
+# all install into `elitea`. cert-manager must be installed. Whoever may create
+# Certificates or read Secrets in `elitea` can mint a NATS identity: restrict
+# both (deploy/helm/nats/README.md, "Who can mint a NATS identity").
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

@@ -2,7 +2,7 @@
 # render-nats-security.sh — the NATS security posture (#1076), asserted on the
 # RENDERED output of all three charts that have to agree about it:
 #
-#   deploy/helm/nats            the server: dedicated CA, server certificate,
+#   deploy/helm/nats            the server: NATS CA, server certificate,
 #                               TLS + verify_and_map, the permission table,
 #                               the ingress NetworkPolicy, its refusals
 #   deploy/helm/nats-bootstrap  the bootstrap identity and its connection
@@ -35,6 +35,9 @@ fi
 NS=elitea
 "$HELM" template elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-scale1.yaml" > "$TMP/nats-scale1.yaml"
 "$HELM" template elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml"     > "$TMP/nats-ha.yaml"
+# The same HA render on a cluster that serves approver-policy (#1076 F3).
+"$HELM" template elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml" \
+  --api-versions policy.cert-manager.io/v1alpha1/CertificateRequestPolicy > "$TMP/nats-ha-ap.yaml"
 "$HELM" template elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" -n "$NS"                    > "$TMP/bootstrap.yaml"
 "$HELM" template elitea "$DIR/helm/elitea" -n "$NS" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
@@ -100,6 +103,7 @@ refuse "nats: HA routes trust the client CA"   "must be /etc/nats-certs/cluster/
 refuse "nats: HA routes reuse the client cert" "ROUTE certificate's own Secret" "${HA[@]}" --set nats.config.cluster.tls.secretName=elitea-nats-server-tls
 refuse "nats: HA routes do not verify"         "verify must be true"          "${HA[@]}" --set nats.config.cluster.tls.merge.verify=false
 refuse "nats: HA route issuer = client issuer" "same issuer as security.issuerRef" "${HA[@]}" --set security.ca.create=false --set security.issuerRef.name=nats-ca --set security.routeIssuerRef.name=nats-ca
+refuse "nats: approver-policy required, not served" "does not serve policy.cert-manager.io" "${NA[@]}" --set security.approverPolicy.enabled=true
 refuse "nats: HA routes in plaintext"         "cluster.tls.enabled false"    elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-ha.yaml" --set nats.config.cluster.tls.enabled=false
 refuse "bootstrap: nats:// URL"               "is not tls://"                elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=nats://elitea-nats:4222
 refuse "bootstrap: credential URL"            "user information"             elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=tls://u:p@elitea-nats:4222
@@ -211,7 +215,7 @@ check("HA: routes are tls:// with peer verification", cl.get("tls", {}).get("ver
 def kinds(d, k):
     return [x for x in d if x["kind"] == k]
 issuers = {x["metadata"]["name"]: x["spec"] for x in kinds(scale1, "Issuer")}
-check("the dedicated NATS CA chain renders (selfSigned -> CA cert -> CA Issuer)", "elitea-nats-ca-selfsigned" in issuers and "ca" in issuers.get("elitea-nats-ca", {}))
+check("the NATS CA chain renders (selfSigned -> CA cert -> CA Issuer)", "elitea-nats-ca-selfsigned" in issuers and "ca" in issuers.get("elitea-nats-ca", {}))
 ca_certs = [x for x in kinds(scale1, "Certificate") if x["spec"].get("isCA")]
 check("the CA is its own, not elitea-internal-ca", ca_certs and ca_certs[0]["spec"]["secretName"] == "elitea-nats-ca")
 srv = [x for x in kinds(scale1, "Certificate") if not x["spec"].get("isCA") and x["metadata"]["name"].endswith("-server")]
@@ -251,6 +255,28 @@ for label, d in (("scale-1", scale1), ("HA", ha)):
     check(f"{label}: 8222 (monitoring) has no ingress rule", 8222 not in rules)
     if label == "HA":
         check("HA: 6222 is admitted only from the NATS pods", 6222 in rules and all("namespaceSelector" not in p for p in rules[6222]["from"]))
+
+# ── approver-policy (#1076 F3) ─────────────────────────────────────────────
+check("no CertificateRequestPolicy where the API is not served (enabled: auto)", not kinds(ha, "CertificateRequestPolicy"))
+ap = docs("nats-ha-ap.yaml")
+pols = {x["metadata"]["name"]: x["spec"] for x in kinds(ap, "CertificateRequestPolicy")}
+check("approver-policy renders where the API is served", len(pols) == 5, sorted(pols))
+cli = pols.get("elitea-nats-elitea-client-identities", {})
+check("client identities: exactly the permission table's URI SANs, required", sorted(cli.get("allowed", {}).get("uris", {}).get("values", [])) == sorted(users) and cli["allowed"]["uris"].get("required") is True)
+check("client identities: no DNS names, no CA, client auth, from the client issuer",
+      "dnsNames" not in cli.get("allowed", {}) and cli.get("allowed", {}).get("isCA") is False
+      and "server auth" not in cli.get("allowed", {}).get("usages", []) and cli.get("selector", {}).get("issuerRef", {}).get("name") == "elitea-nats-ca")
+srvpol = pols.get("elitea-nats-elitea-server", {})
+check("server: exactly the server certificate's names", sorted(srvpol.get("allowed", {}).get("dnsNames", {}).get("values", [])) == sorted(hacerts["elitea-nats-server"]["dnsNames"]))
+rpol = pols.get("elitea-nats-elitea-routes", {})
+check("routes: exactly the route certificate's names, from the route issuer",
+      sorted(rpol.get("allowed", {}).get("dnsNames", {}).get("values", [])) == sorted(route.get("dnsNames", []))
+      and rpol.get("selector", {}).get("issuerRef", {}).get("name") == "elitea-nats-route-ca")
+check("the self-signed issuer may sign only the two CAs", sorted(p["allowed"]["commonName"]["value"] for n, p in pols.items() if p["allowed"].get("isCA")) == ["elitea-nats-ca", "elitea-nats-route-ca"])
+role = kinds(ap, "ClusterRole")
+check("cert-manager may `use` exactly these policies", role and sorted(role[0]["rules"][0]["resourceNames"]) == sorted(pols) and role[0]["rules"][0]["verbs"] == ["use"])
+binding = kinds(ap, "ClusterRoleBinding")
+check("the binding names cert-manager's service account", binding and binding[0]["subjects"] == [{"kind": "ServiceAccount", "name": "cert-manager", "namespace": "cert-manager"}])
 
 # ── the bootstrap ─────────────────────────────────────────────────────────
 bs = docs("bootstrap.yaml")

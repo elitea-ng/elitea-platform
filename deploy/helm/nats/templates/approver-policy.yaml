@@ -1,0 +1,238 @@
+{{- /*
+cert-manager approver-policy for the NATS issuers (#1076).
+
+WHAT THIS DOES, AND WHAT IT DOES NOT. Without a policy, cert-manager's default
+approver signs ANY CertificateRequest against an issuer: whoever may create a
+Certificate (or a CertificateRequest) in this namespace can obtain any NATS
+identity from Issuer elitea-nats-ca — elitea-llm-gateway's, a bootstrap's — or
+a route certificate. These policies pin what each issuer will sign: exactly
+the URI SANs of the permission table (no DNS name, no CA, client auth only,
+bounded lifetime) for client identities, the Service names for the server
+certificate, the headless names for the route certificate, and the two CA
+certificates for the self-signed issuer. They do NOT decide WHO may ask:
+cert-manager's own service account submits every request, so anyone who can
+create a Certificate in the namespace can still obtain a permitted identity.
+That control is RBAC — create on certificates/certificaterequests and read on
+Secrets in this namespace (the CA key is Secret elitea-nats-ca) — or a
+ClusterIssuer whose CA key lives outside the namespace (security.ca.create:
+false). See README "Who can mint a NATS identity".
+
+They take effect only where approver-policy is installed AND cert-manager's
+built-in approver is disabled (--controllers=*,-certificaterequests-approver);
+with the built-in approver on, every request is still approved.
+
+security.approverPolicy.enabled: "auto" (default) renders when the API
+policy.cert-manager.io/v1alpha1 CertificateRequestPolicy is served, true
+requires it, false never renders.
+*/ -}}
+{{- $ap := .Values.security.approverPolicy | default dict -}}
+{{- $mode := ternary (toString (get $ap "enabled")) "auto" (hasKey $ap "enabled") -}}
+{{- $served := .Capabilities.APIVersions.Has "policy.cert-manager.io/v1alpha1/CertificateRequestPolicy" -}}
+{{- if and (eq $mode "true") (not $served) -}}
+{{- fail "security.approverPolicy.enabled is true, but the cluster does not serve policy.cert-manager.io/v1alpha1 CertificateRequestPolicy. Install cert-manager approver-policy first, or set it to \"auto\" or false." -}}
+{{- end -}}
+{{- if or (eq $mode "true") (and (eq $mode "auto") $served) -}}
+{{- $ns := include "elitea-nats.namespace" . -}}
+{{- $svc := include "elitea-nats.serviceName" . -}}
+{{- $headless := include "elitea-nats.headlessServiceName" . -}}
+{{- $full := include "elitea-nats.fullname" . -}}
+{{- $clustered := dig "config" "cluster" "enabled" false (.Values.nats | default dict) -}}
+{{- $issuer := include "elitea-nats.issuerRef" . | fromYaml -}}
+{{- /* Every identity the permission table declares, and nothing else. */ -}}
+{{- $uris := list -}}
+{{- range $acct, $a := (dig "config" "merge" "accounts" dict (.Values.nats | default dict)) -}}
+{{- range $u := ($a.users | default list) -}}
+{{- $uris = append $uris ($u.user | toString) -}}
+{{- end -}}
+{{- end -}}
+{{- $maxClient := $ap.maxClientDuration | default "2160h" }}
+---
+# Client identities: one of the permission table's URI SANs, nothing else.
+apiVersion: policy.cert-manager.io/v1alpha1
+kind: CertificateRequestPolicy
+metadata:
+  name: {{ $full }}-{{ $ns }}-client-identities
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+spec:
+  allowed:
+    commonName:
+      value: "elitea-*"
+    uris:
+      values:
+        {{- range $u := ($uris | sortAlpha) }}
+        - {{ $u | quote }}
+        {{- end }}
+      required: true
+    usages:
+      - client auth
+      - digital signature
+      - key encipherment
+    isCA: false
+  constraints:
+    maxDuration: {{ $maxClient }}
+    privateKey:
+      algorithm: ECDSA
+  selector:
+    issuerRef:
+      name: {{ $issuer.name }}
+      kind: {{ $issuer.kind }}
+      group: cert-manager.io
+    namespace:
+      matchNames:
+        - {{ $ns }}
+---
+# The client-port server certificate: the Service names only.
+apiVersion: policy.cert-manager.io/v1alpha1
+kind: CertificateRequestPolicy
+metadata:
+  name: {{ $full }}-{{ $ns }}-server
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+spec:
+  allowed:
+    commonName:
+      value: {{ $svc | quote }}
+    dnsNames:
+      values:
+        - {{ $svc | quote }}
+        - {{ printf "%s.%s" $svc $ns | quote }}
+        - {{ printf "%s.%s.svc" $svc $ns | quote }}
+        - {{ printf "%s.%s.svc.cluster.local" $svc $ns | quote }}
+      required: true
+    usages:
+      - server auth
+      - digital signature
+      - key encipherment
+    isCA: false
+  constraints:
+    maxDuration: {{ .Values.security.serverCertificate.duration }}
+    privateKey:
+      algorithm: ECDSA
+  selector:
+    issuerRef:
+      name: {{ $issuer.name }}
+      kind: {{ $issuer.kind }}
+      group: cert-manager.io
+    namespace:
+      matchNames:
+        - {{ $ns }}
+{{- if $clustered }}
+{{- $route := include "elitea-nats.routeIssuerRef" . | fromYaml }}
+---
+# The route certificate: the headless names only, from the route issuer.
+apiVersion: policy.cert-manager.io/v1alpha1
+kind: CertificateRequestPolicy
+metadata:
+  name: {{ $full }}-{{ $ns }}-routes
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+spec:
+  allowed:
+    commonName:
+      value: {{ printf "%s-route" $full | quote }}
+    dnsNames:
+      values:
+        - {{ printf "*.%s" $headless | quote }}
+        - {{ printf "*.%s.%s" $headless $ns | quote }}
+        - {{ printf "*.%s.%s.svc" $headless $ns | quote }}
+        - {{ printf "*.%s.%s.svc.cluster.local" $headless $ns | quote }}
+      required: true
+    usages:
+      - server auth
+      - client auth
+      - digital signature
+      - key encipherment
+    isCA: false
+  constraints:
+    maxDuration: {{ .Values.security.routeCertificate.duration }}
+    privateKey:
+      algorithm: ECDSA
+  selector:
+    issuerRef:
+      name: {{ $route.name }}
+      kind: {{ $route.kind }}
+      group: cert-manager.io
+    namespace:
+      matchNames:
+        - {{ $ns }}
+{{- end }}
+{{- if .Values.security.ca.create }}
+{{- $cas := list .Values.security.ca.name -}}
+{{- if $clustered }}{{ $cas = append $cas .Values.security.routeCA.name }}{{ end -}}
+{{- range $ca := $cas }}
+---
+# The self-signed issuer signs the CA certificate {{ $ca }}, and nothing else.
+apiVersion: policy.cert-manager.io/v1alpha1
+kind: CertificateRequestPolicy
+metadata:
+  name: {{ $full }}-{{ $ns }}-ca-{{ $ca }}
+  labels:
+    {{- include "elitea-nats.labels" $ | nindent 4 }}
+spec:
+  allowed:
+    commonName:
+      value: {{ $ca | quote }}
+      required: true
+    usages:
+      - cert sign
+      - crl sign
+      - digital signature
+      - key encipherment
+    isCA: true
+  constraints:
+    maxDuration: {{ $.Values.security.ca.duration }}
+    privateKey:
+      algorithm: ECDSA
+  selector:
+    issuerRef:
+      name: {{ $.Values.security.ca.name }}-selfsigned
+      kind: Issuer
+      group: cert-manager.io
+    namespace:
+      matchNames:
+        - {{ $ns }}
+{{- end }}
+{{- end }}
+---
+# approver-policy evaluates a policy for a request only when the requester —
+# cert-manager's controller, which submits every CertificateRequest a
+# Certificate creates — may `use` it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $full }}-{{ $ns }}-approver-policy
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["policy.cert-manager.io"]
+    resources: ["certificaterequestpolicies"]
+    verbs: ["use"]
+    resourceNames:
+      - {{ $full }}-{{ $ns }}-client-identities
+      - {{ $full }}-{{ $ns }}-server
+      {{- if $clustered }}
+      - {{ $full }}-{{ $ns }}-routes
+      {{- end }}
+      {{- if .Values.security.ca.create }}
+      - {{ $full }}-{{ $ns }}-ca-{{ .Values.security.ca.name }}
+      {{- if $clustered }}
+      - {{ $full }}-{{ $ns }}-ca-{{ .Values.security.routeCA.name }}
+      {{- end }}
+      {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $full }}-{{ $ns }}-approver-policy
+  labels:
+    {{- include "elitea-nats.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $full }}-{{ $ns }}-approver-policy
+subjects:
+  - kind: ServiceAccount
+    name: {{ ($ap.certManagerServiceAccount | default dict).name | default "cert-manager" }}
+    namespace: {{ ($ap.certManagerServiceAccount | default dict).namespace | default "cert-manager" }}
+{{- end }}

@@ -1152,10 +1152,12 @@ Stated plainly, because the gap between compose and Helm is where deploys break:
   CI until every edge routes it (#568).
 - **One namespace for NATS and the platform.** The Argo CD sample installs
   NATS, its bootstrap and the platform into `elitea`. That is not a
-  convenience: the NATS chart's dedicated CA is a NAMESPACED cert-manager
-  Issuer (`elitea-nats-ca`), and the platform's NATS client Certificates are
-  issued by it, so they must live in its namespace (#1076). To run NATS in
-  another namespace, back a `ClusterIssuer` with a dedicated NATS CA, point
+  convenience: the NATS chart's CA is a NAMESPACED cert-manager Issuer
+  (`elitea-nats-ca`), and the platform's NATS client Certificates are issued
+  by it, so they must live in its namespace (#1076). It also means whoever may create Certificates or read Secrets in that namespace can
+  mint a NATS identity — restrict both (`deploy/helm/nats/README.md`, "Who
+  can mint a NATS identity"). To run NATS in another namespace, back a
+  `ClusterIssuer` with a CA used for NATS only, point
   `nats.tls.issuerRef` (platform), `tls.certificate.issuerRef` (bootstrap) and
   `security.issuerRef` + `security.ca.create=false` (NATS) at it, set
   `nats.namespace`, and add the platform's namespace to the NATS chart's

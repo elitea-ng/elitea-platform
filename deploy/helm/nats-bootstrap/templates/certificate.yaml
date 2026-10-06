@@ -2,7 +2,7 @@
 {{- range $acct := .Values.accounts }}
 ---
 # The {{ $acct }} account's bootstrap identity (#1076): a client certificate
-# from the dedicated NATS CA whose URI SAN the server maps to the one user in
+# from the NATS CA whose URI SAN the server maps to the one user in
 # that account that may create streams and consumers.
 #
 # It exists only while an install or upgrade runs. It is a hook in the Job's
