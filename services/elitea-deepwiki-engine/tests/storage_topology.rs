@@ -240,13 +240,14 @@ async fn replaced_edges_are_collapsed_and_clusters_written() {
     })
     .await
     .unwrap();
-    let staged: Vec<(String, f32)> = sqlx::query_as(
-        "SELECT rel_type, weight FROM deepwiki_build.wiki_edges WHERE build_id = $1 ORDER BY rel_type",
+    let mut staged: Vec<(String, f32)> = sqlx::query_as(
+        "SELECT rel_type, weight FROM deepwiki_build.wiki_edges WHERE build_id = $1",
     )
     .bind(&build_id)
     .fetch_all(&pool)
     .await
     .unwrap();
+    staged.sort_by(|a, b| a.0.cmp(&b.0));
     // The last weight of the parallel pair; a zero weight is 1.0.
     assert_eq!(
         staged,
@@ -265,14 +266,17 @@ async fn replaced_edges_are_collapsed_and_clusters_written() {
         .await
         .unwrap();
     assert_eq!(written, 2);
-    let clusters: Vec<(String, Option<i32>, Option<i32>)> = sqlx::query_as(
+    // Sorted here, in byte order: the server's order depends on its
+    // collation (en_US.utf8 puts "api…" before "README…").
+    let mut clusters: Vec<(String, Option<i32>, Option<i32>)> = sqlx::query_as(
         "SELECT node_id, macro_cluster, micro_cluster FROM deepwiki_build.wiki_nodes \
-         WHERE build_id = $1 AND macro_cluster IS NOT NULL ORDER BY node_id COLLATE \"C\"",
+         WHERE build_id = $1 AND macro_cluster IS NOT NULL",
     )
     .bind(&build_id)
     .fetch_all(&pool)
     .await
     .unwrap();
+    clusters.sort();
     assert_eq!(
         clusters,
         [

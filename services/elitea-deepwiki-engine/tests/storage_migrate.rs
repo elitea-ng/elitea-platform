@@ -107,14 +107,15 @@ async fn the_ledger_is_written_once_and_guarded() {
     assert_eq!(rows, expected);
 
     // The build space exists, unlogged where ADR-0026 says so.
-    let unlogged: Vec<String> = sqlx::query_scalar(
+    // Sorted here: the server's order depends on its collation.
+    let mut unlogged: Vec<String> = sqlx::query_scalar(
         "SELECT c.relname::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
-         WHERE n.nspname = 'deepwiki_build' AND c.relkind = 'r' AND c.relpersistence = 'u' \
-         ORDER BY 1",
+         WHERE n.nspname = 'deepwiki_build' AND c.relkind = 'r' AND c.relpersistence = 'u'",
     )
     .fetch_all(&pool)
     .await
     .expect("catalog");
+    unlogged.sort();
     assert_eq!(
         unlogged,
         [
