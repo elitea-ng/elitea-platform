@@ -106,7 +106,7 @@ refuse "nats: the worker's account removed"   "exactly MAIN, GATEWAY, SCHEDULER,
 refuse "nats: an extra account"               "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER" "${NA[@]}" --set nats.config.merge.accounts.EXTRA.jetstream=enabled
 refuse "nats: WORKER JetStream unbounded"     "max_streams: 1"               "${NA[@]}" --set nats.config.merge.accounts.WORKER.jetstream=enabled
 refuse "nats: WORKER JetStream widened"       "max_streams: 1"               "${NA[@]}" --set nats.config.merge.accounts.WORKER.jetstream.max_streams=5
-refuse "nats: WORKER exports"                 "account WORKER exports"       "${NA[@]}" --set 'nats.config.merge.accounts.WORKER.exports[0].stream=elitea.>' 
+refuse "nats: WORKER exports"                 "account WORKER exports"       "${NA[@]}" --set 'nats.config.merge.accounts.WORKER.exports[0].stream=elitea.>'
 refuse "nats: GATEWAY export widened"         "is neither the soft-alert stream" "${NA[@]}" --set 'nats.config.merge.accounts.GATEWAY.exports[0].stream=gateway.>' --set 'nats.config.merge.accounts.GATEWAY.exports[0].accounts[0]=MAIN'
 refuse "nats: SCHEDULER gets JetStream"       "holds NO streams"             "${NA[@]}" --set nats.config.merge.accounts.SCHEDULER.jetstream=enabled
 refuse "nats: SCHEDULER exports"              "account SCHEDULER exports"    "${NA[@]}" --set 'nats.config.merge.accounts.SCHEDULER.exports[0].stream=elitea.>'
