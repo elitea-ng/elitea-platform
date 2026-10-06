@@ -24,6 +24,16 @@ on:
       # that matrix and touches nothing under deploy/helm/ never runs the gate
       # that exists to catch it — the #429/#518 shape again.
       - ".github/workflows/publish.yml"
+      # render-nats-security.sh reads the NATS env prefixes the services pass
+      # to libs/go/natsconn (the names are built by concatenation, so the
+      # env-drift gate cannot see them) and asserts the chart renders all
+      # three <PREFIX>_NATS_TLS_*_FILE names for each. A change to a caller
+      # must run it.
+      - "libs/go/natsconn/**"
+      - "services/elitea-main/cmd/elitea-main/event_stream_nats*.go"
+      - "services/elitea-main/cmd/cutover-ctl/budgetcheck*.go"
+      - "services/elitea-llm-gateway/internal/infra/nats/**"
+      - "services/elitea-scheduler/internal/budgetwriteback/**"
   push:
     branches:
       - main
@@ -37,6 +47,11 @@ on:
       - "scripts/runtime/*code*"
       - "services/elitea-code-runner/Containerfile.code-platform"
       - ".github/workflows/publish.yml"
+      - "libs/go/natsconn/**"
+      - "services/elitea-main/cmd/elitea-main/event_stream_nats*.go"
+      - "services/elitea-main/cmd/cutover-ctl/budgetcheck*.go"
+      - "services/elitea-llm-gateway/internal/infra/nats/**"
+      - "services/elitea-scheduler/internal/budgetwriteback/**"
       # This workflow's own file. The pull_request arm above names it and this
       # arm did not, so a push that edited only the gate could not start the
       # gate it edited (#518).

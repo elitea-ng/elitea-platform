@@ -69,9 +69,12 @@ only in the acknowledged plaintext posture. Never a credential.
 {{/*
 elitea.natsClientFile — one file of the mounted NATS client certificate
 (ca.crt, tls.crt or tls.key). Each component writes its three
-<PREFIX>_NATS_TLS_*_FILE names LITERALLY in its own template, so the
-env-drift gate (services/elitea-llm-gateway/scripts/env-drift-check.sh) sees
-the chart set the names the code reads.
+<PREFIX>_NATS_TLS_*_FILE names literally in its own template. The code does
+NOT name them literally: libs/go/natsconn builds them by concatenation
+(EnvNames(prefix)), which the env-drift gate
+(services/elitea-llm-gateway/scripts/env-drift-check.sh) cannot see. So
+deploy/helm/tests/render-nats-security.sh reads every prefix the code passes
+to natsconn and asserts the rendered chart sets all three names for it.
 */}}
 {{- define "elitea.natsClientFile" -}}
 {{- printf "%s/%s" (trimSuffix "/" .ctx.Values.nats.tls.mountPath) .file | quote -}}

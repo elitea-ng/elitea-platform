@@ -359,6 +359,47 @@ for ident, (pfx, cm, urlvar) in prefix.items():
     url = envmap.get(urlvar, "")
     check(f"{ident}: {urlvar} is tls://{fqdn}:4222, no credential", url == f"tls://{fqdn}:4222", url)
 
+# ── the env names the code builds (R7) ────────────────────────────────────
+# natsconn.FromEnv / EnvNames build <PREFIX>_NATS_TLS_{CA,CERT,KEY}_FILE by
+# concatenation, so no grep of the code finds them and the env-drift gate
+# cannot compare them with the chart. Read every prefix the services pass to
+# natsconn (a string literal or a constant), and require the rendered chart
+# to set all three names for each.
+root = pathlib.Path(sys.argv[3]).parents[2]
+call = re.compile(r"natsconn\.(?:FromEnv|EnvNames)\(\s*(\"[A-Z_]+\"|[A-Za-z_][A-Za-z0-9_.]*)")
+prefixes, sites = set(), 0
+for go in (root / "services").rglob("*.go"):
+    if go.name.endswith("_test.go") or "/vendor/" in str(go):
+        continue
+    text = go.read_text(errors="replace")
+    for m in call.finditer(text):
+        sites += 1
+        arg = m.group(1)
+        if arg.startswith('"'):
+            prefixes.add(arg.strip('"'))
+            continue
+        pkgdir, name = (root / "libs/go/natsconn", arg.split(".", 1)[1]) if arg.startswith("natsconn.") else (go.parent, arg)
+        found = None
+        for src in pkgdir.glob("*.go"):
+            hit = re.search(r"\b" + re.escape(name) + r"\s*=\s*\"([A-Z_]+)\"", src.read_text(errors="replace"))
+            if hit:
+                found = hit.group(1)
+                break
+        check(f"env prefix {arg} ({go.relative_to(root)}) resolves to a string", found, arg)
+        if found:
+            prefixes.add(found)
+check("the code passes natsconn a prefix at three or more call sites (else this check reads nothing)", sites >= 3, sites)
+rendered_env = set()
+for d in kinds(el, "Deployment"):
+    for c in d["spec"]["template"]["spec"]["containers"]:
+        rendered_env |= {e["name"] for e in c.get("env", [])}
+for data in cms.values():
+    rendered_env |= set(data)
+for p in sorted(prefixes):
+    names = [f"{p}_NATS_TLS_{k}_FILE" for k in ("CA", "CERT", "KEY")]
+    check(f"the chart renders all three of {p}_NATS_TLS_*_FILE the code builds", all(n in rendered_env for n in names), [n for n in names if n not in rendered_env])
+check("the prefixes the code uses are the ones this suite expects", prefixes == {"ELITEA_EVENTS", "GATEWAY"}, sorted(prefixes))
+
 # ── the Argo CD sample ────────────────────────────────────────────────────
 def app(f):
     return yaml.safe_load(open(apps / f))
