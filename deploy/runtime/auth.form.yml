@@ -64,7 +64,7 @@ cookie:
 
 # No `redis:` block. The Form sign-in state (sessions, one-time login
 # transactions, attempt windows) is in PostgreSQL (elitea-main shared migration
-# 0145), and cmd/elitea-main refuses the retired elitea.auth.form.v1 document
+# 0153), and cmd/elitea-main refuses the retired elitea.auth.form.v1 document
 # that carried one.
 credentials:
   # 32 to 64 private bytes. They key the HMAC that names each stored attempt
