@@ -32,6 +32,12 @@ a credential into a ConfigMap.
 {{- fail "nats.tls.enabled is false while elitea-main, the LLM gateway or the scheduler dials NATS. The NATS chart (deploy/helm/nats) requires TLS and a client certificate, so these components would fail every connection; a plaintext NATS lets any pod read every tenant's events and reset budget counters (#1076). Keep nats.tls.enabled, or — for a NATS you run plaintext on purpose — also set nats.tls.allowPlaintext=true." -}}
 {{- end -}}
 
+{{- /* ── Gate 1b: a namespaced issuer signs only in its own namespace ── */ -}}
+{{- $natsNs := .Values.nats.namespace | default .Release.Namespace -}}
+{{- if and $clients $tls.enabled (eq ($tls.issuerRef.kind | default "Issuer") "Issuer") (ne $natsNs .Release.Namespace) -}}
+{{- fail (printf "nats.namespace is %q but this release installs into %q, and nats.tls.issuerRef is a namespaced Issuer (%s). The NATS chart's CA Issuer lives in the NATS namespace and signs only there, so the client Certificates this chart creates in %q would never be issued and every pod would wait for its Secret forever. Install the platform into %q, or back a ClusterIssuer with a CA used for NATS only and set nats.tls.issuerRef.kind=ClusterIssuer (deploy/helm/nats README)." $natsNs .Release.Namespace $tls.issuerRef.name .Release.Namespace $natsNs) -}}
+{{- end -}}
+
 {{- /* ── Gate 2: every rendered URL agrees with the posture, and carries no credential ── */ -}}
 {{- range $where, $raw := $urls -}}
 {{- range $one := splitList "," ($raw | toString) -}}

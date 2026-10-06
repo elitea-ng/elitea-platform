@@ -113,7 +113,14 @@ refuse "elitea: plaintext unacknowledged"     "allowPlaintext"               "${
 refuse "elitea: nats:// gateway URL"          "not tls://"                   "${EL[@]}" --set-string llmGateway.env.GATEWAY_NATS_URL=nats://elitea-nats:4222
 refuse "elitea: nats:// main URL"             "not tls://"                   "${EL[@]}" --set-string main.env.ELITEA_EVENTS_NATS_URL=nats://elitea-nats:4222
 refuse "elitea: credential in a scheduler URL" "user information"            "${EL[@]}" --set-string scheduler.env.GATEWAY_NATS_URL=tls://u:p@elitea-nats:4222
+refuse "elitea: NATS in another namespace, namespaced Issuer" "is a namespaced Issuer" "${EL[@]}" --set nats.namespace=nats-elsewhere
 refuse "elitea: tls:// with TLS off"          "tls:// but nats.tls.enabled is false" "${EL[@]}" --set nats.tls.enabled=false --set nats.tls.allowPlaintext=true --set-string llmGateway.env.GATEWAY_NATS_URL=tls://elitea-nats:4222
+# NATS in another namespace renders with a ClusterIssuer.
+if "$HELM" template "${EL[@]}" --set nats.namespace=nats-elsewhere --set nats.tls.issuerRef.kind=ClusterIssuer --set nats.tls.issuerRef.name=nats-ca > /dev/null 2> "$TMP/ci.err"; then
+  echo "ok	elitea: NATS elsewhere with a ClusterIssuer renders" >> "$TMP/refusals"
+else
+  echo "REFUSED-A-VALID-TOPOLOGY	elitea: NATS elsewhere with a ClusterIssuer	$(tail -1 "$TMP/ci.err")" >> "$TMP/refusals"
+fi
 # And the one acknowledged way out renders.
 if "$HELM" template "${EL[@]}" --set nats.tls.enabled=false --set nats.tls.allowPlaintext=true > "$TMP/plain.yaml" 2> "$TMP/plain.err"; then
   echo "ok	elitea: acknowledged plaintext renders" >> "$TMP/refusals"

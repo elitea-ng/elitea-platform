@@ -285,7 +285,9 @@ nats:
     allowPlaintext: false
     # The NATS CA issuer deploy/helm/nats renders (security.ca.name). It is a
     # NAMESPACED Issuer, so it signs only in the namespace both releases share;
-    # with NATS elsewhere, name a ClusterIssuer backed by a dedicated NATS CA.
+    # templates/natsClient.yaml refuses nats.namespace other than this
+    # release's while kind is Issuer. With NATS elsewhere, name a
+    # ClusterIssuer backed by a CA used for NATS only.
     issuerRef:
       name: elitea-nats-ca
       kind: Issuer

@@ -73,7 +73,10 @@ posture is compose's (`deploy/docker-compose.yml`), and
   `user:pass@`/`token@`, in any NATS URL it renders.
 
 Because the CA Issuer is namespaced, **install NATS, its bootstrap and the
-platform in the same namespace** (the Argo CD sample uses `elitea`). To run NATS elsewhere, back a `ClusterIssuer` with a CA
+platform in the same namespace** (the Argo CD sample uses `elitea`; the
+platform chart refuses a different `nats.namespace` while its issuer is a
+namespaced `Issuer`, because its client Certificates would never be issued).
+To run NATS elsewhere, back a `ClusterIssuer` with a CA
 used for NATS only and point `security.issuerRef`, the bootstrap's
 `tls.certificate.issuerRef` and the platform's `nats.tls.issuerRef` at it.
 
