@@ -54,7 +54,7 @@ Last updated: 2026-09-07
 - **Auth middleware** (`internal/api/middleware/auth.go`) — Traefik edge-auth headers + Bearer/Basic decode + Redis cache (SHA-256 key, 60s TTL) + RPC delegation to pylon_auth
 - **RBAC middleware** (`internal/api/middleware/rbac.go`) — permission expansion (dot-separated prefixes) + set intersection
 - **Auth RPC client** (`internal/infra/authsvc/rpc.go`) — Redis pub/sub RPC to pylon_auth, 2s timeout, reply channels
-- **Event bus** (`internal/infra/redis/events.go`) — publish/subscribe with typed Event struct
+- **Event bus** (`internal/infra/natsbus/eventbus.go`) — NATS core pub/sub with typed Event struct (originally `internal/infra/redis/events.go`; that package and the plain Redis at `REDIS_URL` are deleted)
 - **Health handler** (`internal/api/health/handler.go`) — /healthz, /readyz, /startupz with dependency checking
 - **OTel middleware** (`internal/api/middleware/otel.go`) — request duration histogram, total counter, active gauge
 - **Shadow comparator** (`internal/api/shadow/shadow.go`) — forward to legacy, JSON diff, latency comparison
@@ -65,7 +65,7 @@ Last updated: 2026-09-07
 - `internal/api/middleware/` — 15 tests (auth: 6, rbac: 7, otel: 2)
 - `internal/infra/authsvc/` — 5 integration tests
 - `internal/api/health/` — 6 tests
-- `internal/infra/redis/` — 2 integration tests
+- `internal/infra/natsbus/` — unit tests plus real-server tests under `ELITEA_TEST_NATS_URL` (replaced the deleted `internal/infra/redis/` integration tests)
 - `internal/api/shadow/` — 6 tests
 - `internal/domain/applications/` — 4 tests
 
@@ -84,7 +84,7 @@ Last updated: 2026-09-07
 | conversations | `/conversations` | GET, POST, GET/:id, PUT/:id, DELETE/:id, GET/:id/messages | `infra/db/repos/conversations.go` |
 
 ### Event System
-- **Publisher** (`internal/events/publisher.go`) — typed constants, project-scoped Redis channels
+- **Publisher** (`internal/events/publisher.go`) — typed constants; delivers domain events to webhook sinks only (its bus is a no-op — the project SSE stream carries canvas presence and budget soft alerts, not domain events)
 - **Webhook handler** (`internal/api/webhook/handler.go`) — CRUD for webhook registrations
 - **Webhook dispatcher** (`internal/api/webhook/dispatcher.go`) — event→HTTP delivery with HMAC-SHA256
 - **Webhook repo** (`infra/db/repos/webhooks.go`) — full pgx impl with ListByEvent
@@ -240,7 +240,7 @@ internal/events/                     — publisher, event constants
 internal/infra/authsvc/              — Redis RPC to pylon_auth
 internal/infra/indexersvc/           — Redis RPC to pylon_indexer (predict/chat/pipelines)
 internal/infra/db/repos/             — pgx repository implementations
-internal/infra/redis/                — event bus
+internal/infra/natsbus/              — live-update bus (NATS core pub/sub; replaced internal/infra/redis/)
 internal/cutover/                    — tracker, routing middleware, inventory, gates, decommission
 cmd/cutover-ctl/                     — CLI for endpoint promotion/rollback/decommission
 tests/contract/                      — integration contract tests (Go vs legacy)

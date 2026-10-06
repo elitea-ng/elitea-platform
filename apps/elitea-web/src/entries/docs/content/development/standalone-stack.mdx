@@ -67,7 +67,7 @@ Verifies the gateway's mTLS hop, the runtime plane, the chat critical path (via 
 | `GATEWAY_IDENTITY_SECRET` | `standalone-dev-identity-secret` | HMAC key elitea-main and the gateway share to sign/verify the project/user/tenant identity headers. |
 | `GATEWAY_EGRESS_ALLOWLIST` | `llm-mock:8090,llm-real:8090,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | `host:port` allowlist the gateway checks a saved credential's base URL against. Add your own model host before saving a credential that points there. |
 | `GATEWAY_SELF_LLM_ORIGINS` | `http://elitea-main:8080/llm/v1,http://localhost:8080/llm/v1` | The origins the gateway advertises to itself, for the self-referential-origin guard. |
-| `GATEWAY_NATS_URL` | unset | Optional. This stack runs no NATS, so budget enforcement stays disabled with a startup warning — set `LLM_BUDGET_REQUIRE_ENFORCEMENT` if you need the cluster's stricter posture locally. |
+| `GATEWAY_NATS_URL` | unset | Optional. The stack's NATS serves only elitea-main's live updates (`ELITEA_EVENTS_NATS_URL`: the project SSE stream and canvas presence); the gateway is not pointed at it, so budget enforcement stays disabled with a startup warning — set `GATEWAY_NATS_URL=nats://nats:4222` (and `LLM_BUDGET_REQUIRE_ENFORCEMENT` if you need the cluster's stricter posture) to enforce budgets locally. |
 | `STANDALONE_WORKER` | `python` | Set to `rust` to layer the `docker-compose.standalone-rust-agent.yml` overlay and select the native worker (see [Overlays](#overlays)). |
 
 ## Ports

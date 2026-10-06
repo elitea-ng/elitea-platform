@@ -165,7 +165,7 @@ prints only fixed generic failures and never prints the file path or contents.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DATABASE_URL` | — | PostgreSQL connection string |
-| `ELITEA_EVENTS_NATS_URL` | — | NATS (JetStream) for live updates: project SSE stream, domain events, canvas presence. Unset disables them; set but unreachable stops startup |
+| `ELITEA_EVENTS_NATS_URL` | — | NATS (JetStream) for live updates: project SSE stream and canvas presence (domain events go to webhooks only). Unset disables them; set but unreachable stops startup |
 
 ### The index plane, and the service that used to serve it
 
