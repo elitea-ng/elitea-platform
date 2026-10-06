@@ -1362,17 +1362,69 @@ STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native.yml deploy/scripts/stan
 ### Real-engine journey (DWIKI-014)
 
 `apps/elitea-web/scripts/deepwiki-real-engine.sh` and
-`.github/workflows/deepwiki-real-engine.yml` drive the PYTHON engine only.
-They have no native variant, because the journey's git fixture does not
-reach the native clone: the overlay serves the seeded repository from a
-`git daemon` and rewrites `https://github.com/` to `git://deepwiki-git/`
-with `GIT_CONFIG_*` `url.insteadOf`. The native clone opens the repository
-ISOLATED (no environment git configuration, so no `insteadOf`), speaks
-HTTPS only in a release build and follows no redirect. A native variant
-needs an HTTPS smart-HTTP git server under a name the seeded toolkit
-resolves to, with its CA trusted by the engine. Until then the native
-end-to-end proof is `tests/native_generate.rs` (worker child, `git
-http-backend`, mock gateway, PostgreSQL) in `ci-deepwiki-engine.yml`.
+`.github/workflows/deepwiki-real-engine.yml` run the journey on either
+engine. `DEEPWIKI_REAL_ENGINE=legacy` (the default) is the Python engine
+over a `git daemon` fixture. `DEEPWIKI_REAL_ENGINE=native` is this engine.
+
+The native clone cannot reach the git daemon: it opens the repository
+isolated (no `insteadOf`), speaks HTTPS only in a release build and follows
+no redirect. So the native run analyses a real public repository,
+`https://github.com/kharkevich-engineering-lab/floe` (its owner agreed to
+this use), through the allowlist entry `github.com`. The runner needs
+internet access.
+
+What the native run uses:
+
+- `deploy/docker-compose.deepwiki-native.yml` and then
+  `deploy/docker-compose.deepwiki-native-real-engine.yml` on the
+  standalone stack. The second overlay runs the prebuilt image
+  (`DEEPWIKI_ENGINE_IMAGE`, default
+  `ghcr.io/eliteaai/elitea-deepwiki-engine-native:local`, the bake target
+  `elitea-deepwiki-engine-native` with `TAG=local`) for the migration and
+  the engine, forces `runner native`, and puts the deterministic LLM stub
+  (`services/elitea-deepwiki/e2e/llm_stub.py`) at `llm-mock:8090`.
+- `standalone-stack.sh seed-deepwiki-public`: an anonymous GitHub
+  repository toolkit (configuration 9011, no token). The seed's toolkit
+  9010 has a literal token, and GitHub refuses a bad credential with 401
+  also for a public repository.
+- The commit pin. The product clones a branch or tag head (depth 1), never
+  a commit. So the runner script resolves `DEEPWIKI_NATIVE_REF` (default
+  `main`) with `git ls-remote` before it builds anything, and stops when the
+  head is not `DEEPWIKI_NATIVE_COMMIT` (default
+  `89c2197fa88a910c9b8344ae3c4dd06618ed28ae`). `none` (or empty) analyses
+  the head as it is. When floe's `main` moves, the native leg fails at
+  this check. Move the pin (the workflow input default, the `schedule`
+  fallback in the job env, the script default), or use a tag at the pin.
+
+What the native run asserts, through the product: the generation completes
+and the host uploads the objects; one manifest and its pages land under
+`kharkevich-engineering-lab--floe--<ref>`; the manifest names the
+repository, the ref and the resolved commit; the wiki title is
+`floe — Technical Documentation` (`derive_wiki_title`, the cluster
+planner); every page of the structure artifact landed, at least one is
+named from floe's own symbols (`working-with-…`, the stub's naming answer
+from the symbols the engine put in the prompt) and none is a page of the
+stub's canned structure; the README index renders in the browser with that
+title; the wiki chat answers over the published index.
+
+Run it on GitHub (weekly, the schedule runs both engines; or by hand):
+
+```bash
+gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native
+# a tag at the pin, or no pin:
+gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native -f native_ref=<tag>
+gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native -f native_commit=none
+```
+
+Locally (podman; builds the native image once when the tag is absent):
+
+```bash
+DEEPWIKI_REAL_ENGINE=native apps/elitea-web/scripts/deepwiki-real-engine.sh
+```
+
+The crate-level proof stays `tests/native_generate.rs` (worker child, `git
+http-backend`, mock gateway, PostgreSQL) in `ci-deepwiki-engine.yml`, on
+every change.
 
 ### Settings
 

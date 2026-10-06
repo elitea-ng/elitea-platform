@@ -27,8 +27,10 @@
 # Helm chart's default (postgresql.existingSecret) makes the platform database
 # the service database too.
 #
-# The real-engine journey (DWIKI-014) does NOT run on this overlay yet: see
-# "Real-engine journey" in services/elitea-deepwiki-engine/README.md.
+# The real-engine journey (DWIKI-014) runs on this overlay with
+# docker-compose.deepwiki-native-real-engine.yml applied after it
+# (apps/elitea-web/scripts/deepwiki-real-engine.sh, DEEPWIKI_REAL_ENGINE=native):
+# see "Real-engine journey" in services/elitea-deepwiki-engine/README.md.
 services:
   elitea-deepwiki:
     environment:

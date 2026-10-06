@@ -1,10 +1,31 @@
 name: CI — DeepWiki real engine
 
 # DWIKI-014/014b — the REAL DeepWiki analysis engine driven through the product,
-# by `apps/elitea-web/scripts/deepwiki-real-engine.sh`: the standalone stack
-# plus deploy/docker-compose.deepwiki-real-engine.yml, which puts the `-engine`
-# image behind the Go sub-app host, serves the repository under analysis from a
-# git daemon, and answers the engine's model calls with a deterministic stub.
+# by `apps/elitea-web/scripts/deepwiki-real-engine.sh`, on one of two engines
+# (the `engine` matrix axis):
+#
+#   legacy — the standalone stack plus deploy/docker-compose.deepwiki-real-engine.yml,
+#     which puts the Python `-engine` image behind the Go sub-app host, serves
+#     the repository under analysis from a git daemon, and answers the
+#     engine's model calls with a deterministic stub;
+#   native — the Rust-native engine (ADR-0026): the standalone stack plus
+#     deploy/docker-compose.deepwiki-native.yml and
+#     deploy/docker-compose.deepwiki-native-real-engine.yml (the bake target
+#     `elitea-deepwiki-engine-native`, the same stub). The native clone speaks
+#     HTTPS only and reads no git configuration, so the git daemon cannot
+#     serve it: the repository under analysis is the public
+#     github.com/kharkevich-engineering-lab/floe (its owner agreed to this
+#     use), allowlisted as github.com. The product clones a branch or tag
+#     head, never a commit, so the pin (`native_commit`) is CHECKED by the
+#     runner script before anything is built, and the journey requires the
+#     published manifest to name it. When floe's `main` moves past the pin
+#     the native leg fails at that check, by design: re-verify and move the
+#     pin (the input default below, the `schedule` fallback in the job env
+#     and the runner script's default), or dispatch with `native_ref` set to
+#     a tag at the pin.
+#
+# The weekly run covers BOTH engines (two matrix jobs on separate runners,
+# well inside the 20-job cap); a dispatch runs the one `engine` it names.
 #
 # ── WHY THIS IS NOT ON `pull_request` OR `push` ──────────────────────────────
 #
@@ -30,7 +51,10 @@ name: CI — DeepWiki real engine
 #
 # So: a weekly cadence plus `workflow_dispatch`, the same shape and for the same
 # reason as ci-web-mutation.yml. Dispatch it deliberately when a change touches
-# services/elitea-deepwiki/src/elitea_deepwiki/engine/** or the engine extras.
+# services/elitea-deepwiki/src/elitea_deepwiki/engine/** or the engine extras
+# (engine=legacy), or services/elitea-deepwiki-engine/** (engine=native):
+#
+#   gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native
 #
 # There is no push arm at all, which the workflow-branch-coverage gate
 # (scripts/ci/check_workflow_branch_coverage.py) requires to be a recorded
@@ -45,10 +69,37 @@ on:
     - cron: "23 4 * * 0"
   workflow_dispatch:
     inputs:
+      engine:
+        description: >-
+          Which engine to run: `legacy` (the Python -engine image over the git
+          daemon fixture) or `native` (the Rust engine over
+          github.com/kharkevich-engineering-lab/floe). The weekly run covers both.
+        type: choice
+        options:
+          - legacy
+          - native
+        default: legacy
+      native_ref:
+        description: >-
+          Native only: the floe branch or tag the product clones (it clones a
+          head, never a commit).
+        type: string
+        required: false
+        default: main
+      native_commit:
+        description: >-
+          Native only: the commit `native_ref` must be at; the run stops before
+          building anything when it is not, and the published wiki must name
+          it. `none` analyses whatever the head is (the wiki must still name
+          the head the runner resolved).
+        type: string
+        required: false
+        default: 89c2197fa88a910c9b8344ae3c4dd06618ed28ae
       engine_image:
         description: >-
-          Optional: an already-built engine image to run instead of building one
-          here (for example a tag pushed by hand, or a previous run's). When set
+          Optional: an already-built engine image (of the selected `engine`) to
+          run instead of building one here (for example a tag pushed by hand,
+          or a previous run's). When set
           the image is PULLED and the bake step is skipped, so a run in this mode
           says nothing about whether the engine still builds from this revision.
           Leave blank for the normal path.
@@ -71,12 +122,33 @@ permissions:
 
 jobs:
   real-engine:
-    name: DeepWiki journeys against the real engine (DWIKI-014)
+    name: DeepWiki journeys against the real engine (DWIKI-014, ${{ matrix.engine }})
     runs-on: ubuntu-latest
     # A cold engine build plus the stack plus a real analysis pass. Generous,
     # because a run that is killed at the default 360 min tells us nothing, and
     # this job has no PR to hold up.
     timeout-minutes: 120
+    strategy:
+      # One engine's failure says nothing about the other's.
+      fail-fast: false
+      matrix:
+        # A dispatch runs the engine it names; the weekly `schedule` run (whose
+        # `inputs` context is null) runs both.
+        engine: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.engine) || '["legacy","native"]') }}
+    env:
+      DEEPWIKI_REAL_ENGINE: ${{ matrix.engine }}
+      # At JOB level, not on the journey step alone: the third-party pull step
+      # resolves the overlays with `compose config`, and without this the
+      # overlay's own default tag (which no step builds) reads as an image to
+      # PULL, fails five attempts and fails the job. The bake below writes
+      # exactly these tags (TAG=local, the bake file's default REGISTRY).
+      DEEPWIKI_ENGINE_IMAGE: ${{ inputs.engine_image || (matrix.engine == 'native' && 'ghcr.io/eliteaai/elitea-deepwiki-engine-native:local' || 'ghcr.io/eliteaai/elitea-deepwiki:local-engine') }}
+      DEEPWIKI_BAKE_TARGET: ${{ matrix.engine == 'native' && 'elitea-deepwiki-engine-native' || 'elitea-deepwiki-engine' }}
+      # Native only (the legacy runner ignores them). On `schedule` the inputs
+      # are null and the fallbacks apply; keep the commit in step with the
+      # input default above.
+      DEEPWIKI_NATIVE_REF: ${{ inputs.native_ref || 'main' }}
+      DEEPWIKI_NATIVE_COMMIT: ${{ inputs.native_commit || '89c2197fa88a910c9b8344ae3c4dd06618ed28ae' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -127,16 +199,20 @@ jobs:
             || echo "::warning::pull of the pinned Playwright image failed or timed out; the journey step will retry it"
 
       - name: Build the engine image (bake, GHA layer cache)
-        # `docker buildx bake elitea-deepwiki-engine` rather than a bare
-        # `docker build`: the bake target is the ONE definition of the engine
-        # build (EXTRAS=[engine,storage-postgres]) and it already declares
-        # `type=gha,scope=elitea-deepwiki-engine`, which is the cache the publish
-        # matrix uses for every other image. A second copy of the build line here
-        # would be free to drift from what a release would produce.
+        # `docker buildx bake <target>` rather than a bare `docker build`: the
+        # bake target is the ONE definition of the engine build
+        # (`elitea-deepwiki-engine`: EXTRAS=[engine,storage-postgres];
+        # `elitea-deepwiki-engine-native`: the Rust binary on distroless) and it
+        # already declares its `type=gha` cache scope, which is the cache the
+        # publish matrix uses for every other image. A second copy of the build
+        # line here would be free to drift from what a release would produce.
         #
         # TAG=local makes bake write `ghcr.io/eliteaai/elitea-deepwiki:local-engine`
-        # — byte for byte the tag the overlay and the runner script default to,
-        # so nothing has to be retagged or overridden.
+        # (legacy) or `ghcr.io/eliteaai/elitea-deepwiki-engine-native:local`
+        # (native) — byte for byte DEEPWIKI_ENGINE_IMAGE above, which the
+        # overlays and the runner script read, so nothing has to be retagged.
+        # `--set '*.platform=linux/amd64'` also narrows the native target's
+        # two-platform list to the runner's own.
         #
         # `--load` is load-bearing and is the bug ci-web-e2e.yml's image step
         # records: a bake without it leaves the result in the BUILDER's cache
@@ -148,7 +224,7 @@ jobs:
         if: ${{ !inputs.engine_image }}
         env:
           TAG: local
-        run: docker buildx bake --set '*.platform=linux/amd64' --load elitea-deepwiki-engine
+        run: docker buildx bake --set '*.platform=linux/amd64' --load "$DEEPWIKI_BAKE_TARGET"
 
       - name: Pull the supplied engine image
         # The dispatch override. Pulling here (rather than letting compose do it)
@@ -164,10 +240,20 @@ jobs:
         # deepwiki-real-engine.sh assembles (standalone-full plus this
         # workflow's real-engine overlay) before it delegates to
         # chat-stream-e2e.sh for `compose up`.
+        #
+        # The overlay list is the one deepwiki-real-engine.sh assembles for the
+        # engine of this leg.
         run: |
+          case "$DEEPWIKI_REAL_ENGINE" in
+            native)
+              overlays="deploy/docker-compose.deepwiki-native.yml deploy/docker-compose.deepwiki-native-real-engine.yml" ;;
+            *)
+              overlays="deploy/docker-compose.deepwiki-real-engine.yml" ;;
+          esac
+          # The overlay list is deliberately word-split.
+          # shellcheck disable=SC2086
           bash scripts/ci/pull-third-party-images.sh \
-            deploy/docker-compose.standalone-full.yml \
-            deploy/docker-compose.deepwiki-real-engine.yml
+            deploy/docker-compose.standalone-full.yml $overlays
 
       - name: Run the DeepWiki journeys against the real engine
         # The script owns the whole lifecycle — it applies the real-engine
@@ -175,9 +261,12 @@ jobs:
         # the seeds and Playwright, and tears down on exit. Its own compose
         # project and port keep it off the other stacks' state.
         #
-        # DEEPWIKI_ENGINE_IMAGE is set unconditionally so the value this job ran
-        # is visible in the log, and so the script's "is it already built?" probe
-        # finds the image the step above produced instead of rebuilding it.
+        # DEEPWIKI_ENGINE_IMAGE (job env) is set unconditionally so the value
+        # this job ran is visible in the log, and so the script's "is it
+        # already built?" probe finds the image the step above produced instead
+        # of rebuilding it. DEEPWIKI_REAL_ENGINE (job env) selects the engine;
+        # on `native` the script first checks floe's DEEPWIKI_NATIVE_REF
+        # against DEEPWIKI_NATIVE_COMMIT (`git ls-remote`, network).
         #
         # PLAYWRIGHT_CONTAINER_IMAGE runs the specs inside the pinned container.
         # The tag is written HERE and not in the script on purpose:
@@ -187,7 +276,6 @@ jobs:
         env:
           COMPOSE_BIN: docker compose
           CI: "true"
-          DEEPWIKI_ENGINE_IMAGE: ${{ inputs.engine_image || 'ghcr.io/eliteaai/elitea-deepwiki:local-engine' }}
           DEEPWIKI_REAL_PROJECT: elitea-deepwiki-real-ci
           # NOT 8087: that is `deepwiki-stack`'s port in ci-web-e2e.yml. They run
           # on separate runners today; keeping the numbers distinct means that
@@ -207,7 +295,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-report-deepwiki-real-engine
+          # The legacy leg keeps the artifact name it always had.
+          name: playwright-report-deepwiki-real-engine${{ matrix.engine == 'native' && '-native' || '' }}
           path: |
             apps/elitea-web/playwright-report/
             apps/elitea-web/playwright-results/
@@ -225,5 +314,4 @@ jobs:
         working-directory: apps/elitea-web
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEEPWIKI_ENGINE_IMAGE: ${{ inputs.engine_image || 'ghcr.io/eliteaai/elitea-deepwiki:local-engine' }}
         run: node scripts/deepwiki-real-engine-incident.mjs

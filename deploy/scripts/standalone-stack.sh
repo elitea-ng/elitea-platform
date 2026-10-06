@@ -40,7 +40,15 @@
 #                native client: the suite does that itself through the admin
 #                API, after it has proved the "no client, no endpoints" leg.
 #                deploy/scripts/native-conformance.sh calls it
-#   check        verify the gateway mTLS hop, the runtime plane and the chat
+#   seed-deepwiki-public
+#                DEEPWIKI NATIVE REAL-ENGINE CONVENIENCE, not required for a
+#                working stack: an ANONYMOUS GitHub repository toolkit
+#                (p_90200.configuration 9011, no token) beside the seed's
+#                9010, whose literal token GitHub refuses with 401 even for a
+#                public repository. Run after `seed`.
+#                apps/elitea-web/scripts/deepwiki-real-engine.sh calls it
+#                for DEEPWIKI_REAL_ENGINE=native
+#   check       verify the gateway mTLS hop, the runtime plane and the chat
 #                critical path (delegates the last to chat-smoke.py), plus the
 #                embedding path (embedding-path-check.sh) and a REAL elitea-sdk
 #                EliteAClient (sdk-client-check.sh). It counts
@@ -1346,6 +1354,38 @@ SELECT gen_random_uuid(), false, 90100 + u.id, u.id,
        'native_conformance'
 FROM public.auth_core__user u
 WHERE u.email = current_setting('native.user');
+SQL
+    ;;
+
+  seed-deepwiki-public)
+    # The DeepWiki real-engine journey on the NATIVE engine clones a public
+    # repository from github.com (the native clone speaks HTTPS only, so the
+    # git daemon the legacy run uses cannot serve it). The seed's repository
+    # toolkit 9010 carries the literal token `e2e-not-a-real-token`, and the
+    # native clone sends it as Basic auth: GitHub answers 401 for a bad
+    # credential even on a public repository, so the clone would fail. This
+    # row is the same toolkit with no token at all, which the engine clones
+    # anonymously. The journey points its wiki toolkit at it through the
+    # settings panel (E2E_REAL_ENGINE_CODE_TOOLKIT). Fails loudly when the
+    # seed has not run (no tenant schema), rather than leaving the journey
+    # to report a missing row as a product defect.
+    echo "→ Seeding the anonymous GitHub repository toolkit (p_90200.configuration 9011)…"
+    $COMPOSE_BIN $COMPOSE_F exec -T postgres \
+      psql -v ON_ERROR_STOP=1 -U elitea -d elitea <<'SQL'
+DO $$
+BEGIN
+  IF to_regclass('p_90200.configuration') IS NULL THEN
+    RAISE EXCEPTION 'seed-deepwiki-public: p_90200.configuration does not exist; run seed first';
+  END IF;
+END $$;
+INSERT INTO p_90200.configuration
+    (id, project_id, elitea_title, type, section, data, meta, shared, status_ok, source, created_at, updated_at)
+VALUES
+    (9011, 90200, 'e2e-github-public', 'github', 'toolkits',
+     '{"base_url":"https://api.github.com"}',
+     '{}', false, true, 'user', NOW(), NOW())
+ON CONFLICT (id) DO UPDATE
+    SET type = EXCLUDED.type, section = EXCLUDED.section, data = EXCLUDED.data, updated_at = NOW();
 SQL
     ;;
 
