@@ -142,7 +142,7 @@ impl TextEmbedder for BlockingEmbedder {
         self.handle
             .block_on(self.client.embed_query(text, &self.stop))
             .map(|vector| vector.into_iter().map(f64::from).collect())
-            .map_err(|error| StoreError::new(error.wire_message().to_owned()))
+            .map_err(StoreError::from_engine)
     }
 }
 

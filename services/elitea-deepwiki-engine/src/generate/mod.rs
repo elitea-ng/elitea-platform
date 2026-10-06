@@ -87,6 +87,11 @@ pub struct Job<'a> {
     /// Told the build id as soon as the build is open, so the parent can
     /// delete it if the child is killed before it abandons the build.
     pub on_build: &'a (dyn Fn(&str) + Send + Sync),
+    /// Told `true` just before the publish starts and `false` when it has
+    /// ended (committed or not). The parent defers a stop's kill while the
+    /// publish runs, so a stop never cuts a commit in two halves it cannot
+    /// tell apart.
+    pub on_publishing: &'a (dyn Fn(bool) + Send + Sync),
 }
 
 fn runtime(message: impl Into<String>) -> EngineError {
@@ -161,7 +166,7 @@ pub async fn generate_wiki(
             storage::DSN_ENV
         )));
     };
-    let pool = storage::lazy_pool(url.expose(), POOL_CONNECTIONS)
+    let pool = storage::worker_pool(url.expose(), POOL_CONNECTIONS)
         .map_err(|error| value_error(error.to_string()))?;
     let mut slot: Option<Build> = None;
     let outcome = Pipeline {
@@ -215,6 +220,27 @@ fn cluster_columns(assignments: &[ClusterAssignment]) -> ClusterColumns {
             )
         })
         .collect()
+}
+
+/// The run's error for a failed Phase 2: the stop line after a stop; the
+/// model service's own type (and so its category) when the gateway failed,
+/// worded as the node embedding words it; else a `RuntimeError`.
+fn phase2_failure(error: &topology::StoreError, stopped: bool, model: &str) -> EngineError {
+    if stopped {
+        return EngineError::cancelled();
+    }
+    match error.engine_error() {
+        Some(cause) => EngineError::new(
+            cause.error_type,
+            format!(
+                "Embedding an orphan node with {model} failed: {}",
+                cause.message
+            ),
+        ),
+        None => runtime(format!(
+            "Repository indexing failed: Phase 2 graph topology failed: {error}"
+        )),
+    }
 }
 
 /// `run_phase2`'s summary line, as `_write_unified_db` logged it.
@@ -345,8 +371,9 @@ impl Pipeline<'_> {
                 .unwrap_or_default()
         ));
 
-        // Phase 2 on the staged rows.
+        // Phase 2 on the staged rows, with statistics that describe them.
         context.checkpoint()?;
+        open_build(slot)?.refresh_statistics().await;
         let (mut graph, outcome) = self.phase2(graph, &embeddings, slot).await?;
         context.thinking(phase2_summary(&outcome.stats));
 
@@ -506,9 +533,19 @@ impl Pipeline<'_> {
         context.thinking(format!("[worker] Wiki ID for folder structure: {wiki_id}"));
         let mut result = pages.composed.result;
 
-        // The publish, before the result line.
+        // The publish, before the result line; never for a result the
+        // host could not read.
         context.checkpoint()?;
-        self.publish(&mut result, slot).await;
+        check_result_size(&mut result, MAX_RESULT_BYTES)?;
+        // The critical section: a stop that arrives from here on waits for
+        // the publish. A publish that committed reports its result; one
+        // that did not reports the stop.
+        (self.job.on_publishing)(true);
+        let committed = self.publish(&mut result, slot).await;
+        (self.job.on_publishing)(false);
+        if !committed && context.stop_signal().is_requested() {
+            return Err(EngineError::cancelled());
+        }
         context.thinking("[worker] Done");
         Ok(Value::Object(result))
     }
@@ -556,12 +593,12 @@ impl Pipeline<'_> {
         let flags = self.environment.phase1c;
         let build_root = root.to_owned();
         let (graph, discovery) = tokio::task::spawn_blocking(move || {
-            let (graph, _report, _phase1c) =
-                builder::build_index_graph_parsed(&build_root, &discovery, &flags);
-            (graph, discovery)
+            let built = builder::try_build_index_graph_parsed(&build_root, &discovery, &flags);
+            built.map(|(graph, _report, _phase1c)| (graph, discovery))
         })
         .await
-        .map_err(|e| join_failure(&e))?;
+        .map_err(|e| join_failure(&e))?
+        .map_err(|failure| runtime(format!("Repository indexing failed: {failure}")))?;
         if graph.node_count() == 0 {
             return Err(runtime(
                 "No documents found in repository. The repository may be empty, all files may be filtered out, or the branch may not exist.",
@@ -599,23 +636,17 @@ impl Pipeline<'_> {
         .await
         .map_err(|e| join_failure(&e))?;
         *slot = Some(parts.build);
-        let outcome = outcome.map_err(|error| {
-            if stop.is_requested() {
-                EngineError::cancelled()
-            } else {
-                runtime(format!(
-                    "Repository indexing failed: Phase 2 graph topology failed: {error}"
-                ))
-            }
-        })?;
+        let outcome = outcome
+            .map_err(|error| phase2_failure(&error, stop.is_requested(), embeddings.model()))?;
         Ok((graph, outcome))
     }
 
     /// Publish the build as the wiki's live index. A failure is reported in
     /// band (`errors`), as `LegacyToolRunner._publish` did: the pages and the
     /// manifest are genuine and land; what is lost is answering questions
-    /// about the wiki. The build is left for the caller to abandon.
-    async fn publish(&self, result: &mut Map<String, Value>, slot: &mut Option<Build>) {
+    /// about the wiki. The build is left for the caller to abandon. Returns
+    /// whether the publish committed.
+    async fn publish(&self, result: &mut Map<String, Value>, slot: &mut Option<Build>) -> bool {
         let context = self.context;
         context.thinking("Publishing the index for query replicas");
         let registry: Map<String, Value> = [
@@ -646,6 +677,7 @@ impl Pipeline<'_> {
                     "Published {} nodes and {} vectors",
                     counts.nodes, counts.embeddings
                 ));
+                true
             }
             Err(error) => {
                 tracing::error!(%error, "publishing the index failed");
@@ -659,9 +691,40 @@ impl Pipeline<'_> {
                     }
                 }
                 context.thinking("Publishing the index FAILED");
+                false
             }
         }
     }
+}
+
+/// What the publish can add to the result line (an error in `errors`).
+const PUBLISH_MARGIN: usize = 64 * 1024;
+
+/// The largest result line, newline included, that is published: the
+/// host's line limit less [`PUBLISH_MARGIN`].
+const MAX_RESULT_BYTES: usize = crate::runner::native::MAX_RESULT_LINE - PUBLISH_MARGIN;
+
+/// Refuse a result whose line (`{"result": …}` and its newline) is longer
+/// than `limit` bytes: the host could not read it, so the run fails before
+/// anything is published.
+///
+/// # Errors
+///
+/// A `RuntimeError` naming the size and the limit.
+fn check_result_size(result: &mut Map<String, Value>, limit: usize) -> Result<(), EngineError> {
+    let line = json!({ "result": Value::Object(std::mem::take(result)) });
+    let size = crate::pyjson::dumps(&line).len() + 1;
+    if let Value::Object(mut line) = line
+        && let Some(Value::Object(back)) = line.remove("result")
+    {
+        *result = back;
+    }
+    if size > limit {
+        return Err(runtime(format!(
+            "The wiki result is too large: its line is {size} bytes and the host reads at most {limit}; nothing was published"
+        )));
+    }
+    Ok(())
 }
 
 /// The cluster planner's index: the rows in graph order with the cluster
@@ -695,6 +758,71 @@ pub fn job_directory(scratch_root: &Path, name: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_gateway_failure_in_phase_2_keeps_its_type_and_category() {
+        let refusals = [
+            EngineError::new(
+                ErrorType::Runtime,
+                "Embeddings inference refused: the gateway rejected the credential for model 'e' (HTTP 401)",
+            ),
+            EngineError::new(
+                ErrorType::Value,
+                "The model budget is exhausted: HTTP 402 for model 'e'",
+            ),
+            EngineError::new(
+                ErrorType::Runtime,
+                "Embeddings request for model 'e' hit a timeout after 3 attempt(s)",
+            ),
+            EngineError::new(
+                ErrorType::Runtime,
+                "The model service is busy: HTTP 429 for model 'e'",
+            ),
+        ];
+        for cause in refusals {
+            let error = topology::StoreError::from_engine(cause.clone());
+            let failure = phase2_failure(&error, false, "text-embedding-3-small");
+            assert_eq!(failure.error_type, cause.error_type, "{failure}");
+            assert_eq!(failure.category(), cause.category(), "{failure}");
+            assert!(failure.message.contains(&cause.message), "{failure}");
+        }
+        // An index failure stays a runtime error; a stop is the stop line.
+        let index = topology::StoreError::new("the build space could not answer: x");
+        let failure = phase2_failure(&index, false, "m");
+        assert_eq!(failure.error_type, ErrorType::Runtime);
+        assert!(
+            failure
+                .message
+                .starts_with("Repository indexing failed: Phase 2")
+        );
+        assert_eq!(
+            phase2_failure(
+                &topology::StoreError::from_engine(EngineError::new(ErrorType::Value, "x")),
+                true,
+                "m"
+            ),
+            EngineError::cancelled()
+        );
+    }
+
+    #[test]
+    fn an_oversized_result_is_refused_before_the_publish() {
+        let mut result = Map::new();
+        result.insert("result".to_owned(), json!("x".repeat(100)));
+        let exact =
+            crate::pyjson::dumps(&json!({"result": Value::Object(result.clone())})).len() + 1;
+        let kept = result.clone();
+        assert_eq!(check_result_size(&mut result, exact), Ok(()));
+        assert_eq!(result, kept, "the result is handed back whole");
+        let refused = check_result_size(&mut result, exact - 1);
+        let Err(error) = refused else {
+            panic!("an oversized result passed");
+        };
+        assert_eq!(error.error_type, ErrorType::Runtime);
+        assert!(error.message.contains("nothing was published"), "{error}");
+        assert_eq!(result, kept);
+        const { assert!(MAX_RESULT_BYTES < crate::runner::native::MAX_RESULT_LINE) };
+    }
 
     #[test]
     fn the_phase2_line_reads_the_stats() {

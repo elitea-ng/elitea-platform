@@ -488,7 +488,8 @@ pub struct Build {
 /// Rows per cluster-column `UPDATE` ([`Build::set_clusters`]).
 const CLUSTER_ROUND: usize = 10_000;
 
-/// Delete the build `build_id` and, by cascade, everything it staged. The
+/// Delete the build `build_id` and, by cascade, everything it staged, with
+/// a [`DELETE_LOCK_TIMEOUT`] and a [`DELETE_STATEMENT_TIMEOUT`]. The
 /// generation worker's parent calls this after the child ended, so a child
 /// that was killed before it could abandon its build leaves no staging
 /// rows. Returns whether a build was deleted (a published or abandoned
@@ -498,12 +499,34 @@ const CLUSTER_ROUND: usize = 10_000;
 ///
 /// [`StorageError::Database`].
 pub async fn delete_build(pool: &PgPool, build_id: &str) -> Result<bool> {
+    let mut tx = pool.begin().await?;
+    // Bounded: a killed child's backend can still hold the build row (a
+    // publish's `FOR UPDATE`) until the server notices the client is gone.
+    // On a timeout the build is left for the sweep.
+    apply_settings(
+        &mut tx,
+        &[
+            ("lock_timeout", millis(DELETE_LOCK_TIMEOUT)),
+            ("statement_timeout", millis(DELETE_STATEMENT_TIMEOUT)),
+        ],
+    )
+    .await?;
     let done = sqlx::query("DELETE FROM deepwiki_build.builds WHERE build_id = $1")
         .bind(build_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
     Ok(done.rows_affected() > 0)
 }
+
+/// `lock_timeout` of [`delete_build`] (15 s): longer than a dead worker's
+/// backend takes to notice its client is gone
+/// ([`super::CLIENT_CHECK_INTERVAL_MS`]).
+pub const DELETE_LOCK_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// `statement_timeout` of [`delete_build`] (2 min): the cascade over a
+/// large build's staged rows.
+pub const DELETE_STATEMENT_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// The node `COPY`'s column list (no `fts`: it is generated).
 const NODE_COPY: &str = "COPY deepwiki_build.wiki_nodes (build_id, node_id, rel_path, file_name, \
@@ -777,6 +800,28 @@ impl Build {
             .rows_affected();
         }
         Ok(updated)
+    }
+
+    /// `ANALYZE` the staging tables, best effort (each with the publish's
+    /// `analyze_lock_timeout`; a table another `ANALYZE` holds is skipped).
+    /// Phase 2 queries the rows just staged, and without statistics that
+    /// describe them the planner chooses its plans for empty tables. Returns
+    /// whether every table was analyzed.
+    pub async fn refresh_statistics(&self) -> bool {
+        match self.pool.acquire().await {
+            Ok(mut connection) => {
+                analyze_best_effort(
+                    &mut connection,
+                    &STAGING_TABLES,
+                    self.publish.analyze_lock_timeout,
+                )
+                .await
+            }
+            Err(error) => {
+                tracing::warn!(%error, "no connection to refresh the staging statistics");
+                false
+            }
+        }
     }
 
     /// The pool the build reads and writes through.

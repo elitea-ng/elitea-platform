@@ -184,6 +184,9 @@ async fn serve() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if let elitea_deepwiki_engine::runner::Runner::Native(native) = &runner {
+        native.remove_stale_jobs();
+    }
     start_reconciler(&settings);
     let listener = match server::bind(&settings.engine_socket) {
         Ok(listener) => listener,

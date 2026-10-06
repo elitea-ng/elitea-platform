@@ -114,7 +114,12 @@ argument errors are `ValueError`, index failures `RuntimeError`
 ("Repository indexing failed: …"), model failures the client's own
 (`timeout_error`, `service_busy`, …). Deliberate difference: a failed
 embedding request fails the run (Python skipped the batch and published a
-wiki with part of its vectors).
+wiki with part of its vectors). That includes an orphan's fallback
+embedding in Phase 2: a credential, budget or model refusal there fails the
+run with the gateway's own error type and category ("Embedding an orphan
+node with <model> failed: …"), not as a generic index failure. A timeout or
+a busy service that remains after the client's retries leaves that orphan
+without a vector, as Python does.
 
 **What the engine trusts.** The wiki is named by the clone, never by the
 caller: `wiki_id` is `normalize_wiki_id(repo:branch:sha8)` of the repository
@@ -141,36 +146,81 @@ decision), so fewer than `k` hits can come back. The hub flags and the meta
 entries have no column in the ADR-0022 schema; the store returns them to the
 caller. Each call checks the stop first.
 
+Before Phase 2 the staging tables are `ANALYZE`d (best effort), so the
+planner plans for the rows just staged. Dense search does not scan every
+vector in SQL per orphan: the build's vectors are read into memory once
+(on the first dense search; `nodes × dimensions × 4` bytes, about 600 MB
+for 100k nodes of 1536 dimensions) and each search ranks them in process,
+in parallel. The vectors within 0.1 % of the k-th nearest distance are the
+candidates, and one indexed query over them computes pgvector's own
+distances and order, so the hits are the full-scan query's, row for row and
+bit for bit (`tests/storage_topology.rs` compares both). Measured (release
+build, 5000 nodes × 1536 dimensions, 300 searches): 1.9 s in process,
+including the read, against 72 s for the full-scan query.
+
 ### The worker child
 
 `elitea-deepwiki-engine worker` (ADR-0026 decision 10). The parent:
 
 - makes `{ELITEA_DEEPWIKI_SCRATCH_PATH}/jobs/job-…` (mode 0700) and removes
-  it after the child ends;
+  it after the child ends, also when the request's reader went away and
+  the supervising task was dropped (a drop guard removes the directory and
+  schedules the build's delete). At `serve` startup it removes every
+  `jobs/*` entry an earlier process left: on Linux their workers died with
+  it (`PR_SET_PDEATHSIG`); on macOS, which has no such signal, an orphaned
+  worker only stops at its next checkpoint (its stdin closed), so the
+  startup clean-up can remove a directory under a worker that is still
+  ending;
 - starts the child with `RAYON_NUM_THREADS` and `MALLOC_ARENA_MAX=2` and
   sends the request on its STDIN (the arguments carry credentials, so never
   `argv` or the environment); stdin stays open and its end stops the child;
 - relays the child's NDJSON `thinking` / `token` lines, keeps its
   `{"build": id}` line, takes the last line as the result or the error, and
-  copies its stderr (the logs) to its own;
+  copies its stderr (the logs) to its own. A line is at most 64 MiB, the Go
+  host's own line limit (`MAX_RESULT_LINE`, tested against `engine.go`);
+  the child refuses a larger result BEFORE it publishes (`RuntimeError`
+  "The wiki result is too large: …; nothing was published"), so a wiki the
+  host could never receive does not replace the live index;
 - on a stop, or a reader that went away, sends SIGTERM, then SIGKILL after
   3 s (the child stops at its next checkpoint, abandons its build and writes
   the stop line);
+- treats the publish as a critical section: the child writes a
+  `{"publishing": true}` control line (kept, never relayed) before it
+  publishes and `{"publishing": false}` after. A stop meanwhile is deferred:
+  the child does not interrupt the publish, and the parent moves its SIGKILL
+  out to the publish `statement_timeout` plus 30 s. A publish that
+  committed reports its result even though a stop came (never "cancelled"
+  for a wiki that is live); one that did not commit reports the stop. A
+  child killed inside the publish after the commit is reported as a
+  `RuntimeError` saying the index is live but the result was lost. The
+  child's connections set `client_connection_check_interval` (5 s), so the
+  backend of a killed child aborts its statement and releases its locks;
 - after the child ended, deletes its build if it reported one, so a killed
-  child leaves no staging rows (a no-op after a publish or an abandon).
+  child leaves no staging rows (a no-op after a publish or an abandon). The
+  delete has a 15 s `lock_timeout` and a 2 min `statement_timeout`; on a
+  timeout the sweep removes the build.
 
 The child limits itself before it reads the request (`rustix`'s safe
 `setrlimit`, so the crate stays `unsafe_code = "forbid"`), never above the
 hard limits it inherited, and on Linux asks for SIGKILL when its parent dies.
-A child that dies without a last line is reported by its cause: an
+A parser pool that cannot start its threads fails the run
+("Repository indexing failed: Parse error: the … parser could not start its
+worker threads"); it does not index the repository with every file of that
+language marked as failed. A child that dies without a last line is
+reported by its cause: an
 allocation failure (`MemoryError`, `out_of_memory`), SIGXCPU
-(`timeout_error`), anything else `RuntimeError`.
+(`timeout_error`), a SIGKILL the parent did not send (`MemoryError`: on
+Linux that is the kernel's OOM killer; the message says so for certain when
+the cgroup v2 `memory.events` `oom_kill` count rose during the run), anything
+else `RuntimeError`. A last line cut off by the child's death does not hide
+the exit status: it is reported ("output is unreadable") only when the exit
+explains nothing.
 
 | Setting | Default | |
 | --- | --- | --- |
-| `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` | 16 GiB (at least 1 GiB) | `RLIMIT_AS`. It counts reserved address space (each parser thread reserves its stack, up to 256 MiB), not resident memory; it stops a runaway, the pod limit sizes the job. macOS does not enforce it (a warning is logged). |
+| `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` | 85 % of the container's cgroup v2 `memory.max` when it is set, else 16 GiB (at least 1 GiB) | `RLIMIT_AS`. It counts reserved address space (each parser thread reserves its stack, up to 256 MiB), not resident memory; it stops a runaway, the pod limit sizes the job. macOS does not enforce it (a warning is logged). |
 | `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS` | 14400 (at least 60) | `RLIMIT_CPU`, hard limit 10 s above |
-| `ELITEA_DEEPWIKI_WORKER_THREADS` | available parallelism, at most 8 (at most 256) | the child's runtime and parser threads |
+| `ELITEA_DEEPWIKI_WORKER_THREADS` | available parallelism, at most 8 (at most 256), lowered until it fits the memory cap | the child's runtime and parser threads. With the native runner, `threads × 256 MiB + 1 GiB` (each parser thread's stack reservation plus headroom) must fit `WORKER_MEMORY_BYTES`, or the start is refused. |
 | `ELITEA_DEEPWIKI_SCRATCH_PATH` | `/tmp/deepwiki` | root of the job directories |
 
 All are strict-parsed. Not ported: the deepagents planner (5d; a request

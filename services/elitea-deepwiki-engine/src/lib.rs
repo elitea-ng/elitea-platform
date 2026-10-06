@@ -6,6 +6,7 @@
 //! a worker child process (`worker`, `generate`).
 
 pub mod ask;
+pub mod cgroup;
 pub mod config;
 pub mod errors;
 pub mod generate;

@@ -305,7 +305,8 @@ pub fn find_orphans(graph: &CodeGraph, profile: CalibrationProfile, strict: bool
 ///
 /// A [`StoreError`] when the index fails; the graph may then hold part of
 /// the phase's edges. An embedder failure only costs that orphan its
-/// vector (a warning is logged), as in Python.
+/// vector (a warning is logged), as in Python, unless it is the model
+/// service's error ([`StoreError::from_engine`]), which fails the phase.
 pub fn run_phase2<'a>(
     graph: &'a mut CodeGraph,
     store: &'a mut dyn TopologyStore,
