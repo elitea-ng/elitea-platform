@@ -2324,7 +2324,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		DelegatedAuthToolkitSettings: delegatedAuthToolkitSettings,
 		WorkerImplementation:         workerImplementation,
 		// Readiness is the database alone. The Form graph's sign-in state is
-		// in this same database (shared migration 0145), so it adds no
+		// in this same database (shared migration 0153), so it adds no
 		// dependency of its own; the auth Redis it once pinged is gone.
 		HealthDeps: health.Deps{
 			DB: &poolChecker{pool: pool},

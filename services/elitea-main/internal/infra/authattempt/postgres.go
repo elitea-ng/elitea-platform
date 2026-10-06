@@ -1,5 +1,5 @@
 // Package authattempt implements shared browser-authentication admission on
-// PostgreSQL (elitea_auth.browser_attempt_windows, shared migration 0145).
+// PostgreSQL (elitea_auth.browser_attempt_windows, shared migration 0153).
 package authattempt
 
 import (

@@ -403,14 +403,14 @@ here would drift from it.
 {{/*
   The retired schema. elitea.auth.form.v1 carried a `redis:` block for the
   auth Redis that held the Form sign-in state. That state is in PostgreSQL
-  now (elitea-main shared migration 0145), and cmd/elitea-main refuses a v1
+  now (elitea-main shared migration 0153), and cmd/elitea-main refuses a v1
   document at boot. Refuse it here, while the operator is at the terminal. A
   v1 document in an external ConfigMap is still caught at pod start by
   cmd/elitea-auth-material, which uses the same loader.
 */}}
 {{- if $auth.document -}}
 {{- if hasKey $auth.document "redis" -}}
-{{- fail "fileConfig.authConfig.document has a redis block, and the auth Redis is gone: the Form sign-in state is in PostgreSQL (elitea-main shared migration 0145). Delete document.redis, move document.redis.attempt_key_file to document.credentials.attempt_key_file, and set document.schema_version to elitea.auth.form.v2. Remove the redis-auth-password and Redis CA keys from the material Secret; they are not read." -}}
+{{- fail "fileConfig.authConfig.document has a redis block, and the auth Redis is gone: the Form sign-in state is in PostgreSQL (elitea-main shared migration 0153). Delete document.redis, move document.redis.attempt_key_file to document.credentials.attempt_key_file, and set document.schema_version to elitea.auth.form.v2. Remove the redis-auth-password and Redis CA keys from the material Secret; they are not read." -}}
 {{- end -}}
 {{- if ne (get $auth.document "schema_version" | toString) "elitea.auth.form.v2" -}}
 {{- fail (printf "fileConfig.authConfig.document.schema_version is %q, and cmd/elitea-main accepts only elitea.auth.form.v2. A v1 document must drop its redis block and move redis.attempt_key_file to credentials.attempt_key_file." (get $auth.document "schema_version" | toString)) -}}

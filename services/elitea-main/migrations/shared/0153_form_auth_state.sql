@@ -1,4 +1,4 @@
--- 0145_form_auth_state.sql — the Form graph's sign-in state, moved off Redis.
+-- 0153_form_auth_state.sql — the Form graph's sign-in state, moved off Redis.
 --
 -- WHAT MOVES. The Form graph (internal/authcomposition) kept three stores in
 -- a dedicated "auth" Redis user until now:

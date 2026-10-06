@@ -610,7 +610,7 @@ main:
       # deploy/runtime/auth.form.yml for a complete example with comments.
       # The schema is elitea.auth.form.v2. The chart refuses a v1 document and
       # any `redis:` block: the Form sign-in state is in PostgreSQL (elitea-main
-      # shared migration 0145), and the attempt key is
+      # shared migration 0153), and the attempt key is
       # credentials.attempt_key_file.
       document: {}
 
@@ -3595,7 +3595,7 @@ runtimeRedis:
   # It is the chart's ONLY Redis now: the plaintext `elitea-valkey` that served
   # elitea-main's REDIS_URL (project SSE, canvas presence) was retired in
   # favour of NATS, and production Form authentication keeps its sign-in state
-  # in PostgreSQL (elitea-main shared migration 0145). Its one consumer accepts
+  # in PostgreSQL (elitea-main shared migration 0153). Its one consumer accepts
   # nothing but TLS:
   #
   #   - internal/runtimecomposition/config.go — rediss:// only, ACL username,

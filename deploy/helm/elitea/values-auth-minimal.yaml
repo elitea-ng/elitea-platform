@@ -39,7 +39,7 @@
 # WHAT THIS FILE IS
 # authConfig, and NO runtime plane and NO Redis. The Form sign-in state
 # (sessions, login transactions, attempt windows) is in PostgreSQL (elitea-main
-# shared migration 0145), so this shape needs only the database. It is the
+# shared migration 0153), so this shape needs only the database. It is the
 # cheapest one that composes the Configurations write path.
 #
 # It is ADDITIVE. values.yaml still ships every OTHER capability flag "false".

@@ -1,7 +1,7 @@
 package authstateretention
 
 // The sweep against a real PostgreSQL holding the REAL tables: the statements
-// read elitea-main's shared migrations 0117 and 0145, so a column rename there
+// read elitea-main's shared migrations 0117 and 0153, so a column rename there
 // fails here instead of diverging. Runs when ELITEA_TEST_DATABASE_URL is set
 // (CI sets it); skips otherwise.
 
@@ -20,7 +20,7 @@ import (
 
 var schemaFiles = []string{
 	"../../../elitea-main/migrations/shared/0117_browser_sessions.sql",
-	"../../../elitea-main/migrations/shared/0145_form_auth_state.sql",
+	"../../../elitea-main/migrations/shared/0153_form_auth_state.sql",
 }
 
 func newAuthStatePool(t *testing.T, files []string) *pgxpool.Pool {
@@ -198,7 +198,7 @@ func TestSweepDrainsInBatchesAndReportsTheCeiling(t *testing.T) {
 	}
 }
 
-// The scheduler can start before elitea-main applies 0145. The tables it
+// The scheduler can start before elitea-main applies 0153. The tables it
 // does not find are skipped and named, and the pass still sweeps the rest.
 func TestSweepSkipsTablesTheDatabaseDoesNotHaveYet(t *testing.T) {
 	pool := newAuthStatePool(t, schemaFiles[:1])

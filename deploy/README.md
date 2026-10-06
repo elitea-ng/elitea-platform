@@ -503,7 +503,7 @@ configuration write path, and that path decides `status_ok` in the request
 `ELITEA_CONFIGURATIONS_ENABLED` + the public project (`platform.aiProjectId`)
 on top. Production Form authentication keeps its sign-in state (sessions,
 login transactions, attempt windows) in PostgreSQL (elitea-main shared
-migration 0145), so the database is its only dependency.
+migration 0153), so the database is its only dependency.
 
 Two things it does **not** change:
 
@@ -762,7 +762,7 @@ install of the runtime plane needs them.
 The authentication document is `elitea.auth.form.v2`. It has **no `redis`
 block**: the Form sign-in state (sessions, one-time login transactions, attempt
 windows) is in PostgreSQL, in the `elitea_auth` tables of elitea-main shared
-migration 0145, and elitea-scheduler's `authstateretention` sweep removes the
+migration 0153, and elitea-scheduler's `authstateretention` sweep removes the
 expired rows. The attempt key is `credentials.attempt_key_file`. The chart, the
 init container and elitea-main all refuse a v1 document.
 

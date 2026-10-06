@@ -118,7 +118,7 @@ main:
   #     --from-file=deploy/certs/runtime/auth-form-users.json
   #
   # The Form sign-in state (sessions, login transactions, attempt windows) is in
-  # PostgreSQL (elitea-main shared migration 0145), so this plane needs no Redis
+  # PostgreSQL (elitea-main shared migration 0153), so this plane needs no Redis
   # password and no Redis CA.
   fileConfig:
     # The /llm hop's client material. The three LLM_GATEWAY_* paths below are

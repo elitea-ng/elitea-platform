@@ -1,5 +1,5 @@
 // Package authsession persists Form browser authentication sessions in
-// PostgreSQL (elitea_auth.form_sessions, shared migration 0145).
+// PostgreSQL (elitea_auth.form_sessions, shared migration 0153).
 //
 // The session ID is the browser cookie's bearer value. A row never holds it:
 // every row is keyed on IDHash(id), the hex SHA-256 of the ID. PostgreSQL is

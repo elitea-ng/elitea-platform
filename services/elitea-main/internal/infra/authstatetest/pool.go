@@ -3,7 +3,7 @@
 // integration tests. Only test files import it.
 //
 // WHY THE REAL CORPUS. The properties under test are properties of shared
-// migration 0145 (the checks, the primary keys, the column types) and of the
+// migration 0153 (the checks, the primary keys, the column types) and of the
 // SQL that reads them. A test that wrote its own CREATE TABLE would assert its
 // own CREATE TABLE.
 package authstatetest

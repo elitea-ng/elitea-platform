@@ -173,7 +173,7 @@ func main() {
 		go nativeSweeper.Run(ctx)
 	}
 
-	// Browser sign-in state retention (elitea-main shared 0145 and 0117):
+	// Browser sign-in state retention (elitea-main shared 0153 and 0117):
 	// bounded batched deletes of expired Form sessions, Form login
 	// transactions and attempt windows, and of expired OIDC/SAML browser
 	// sessions, whose store had a DeleteExpired that nothing called.

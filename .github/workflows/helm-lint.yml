@@ -523,7 +523,7 @@ jobs:
       # The auth-minimal capability set. It is the combination NO other pass
       # renders: production authentication and the Configurations write path ON
       # with the runtime plane OFF and no Redis at all (the Form sign-in state
-      # is in PostgreSQL, elitea-main shared migration 0145).
+      # is in PostgreSQL, elitea-main shared migration 0153).
       #
       # A guard that tied production authentication to the runtime plane or to
       # runtimeRedis by accident would break the cheapest supported install

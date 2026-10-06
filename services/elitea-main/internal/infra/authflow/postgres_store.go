@@ -1,5 +1,5 @@
 // Package authflow persists one-time browser authentication transactions in
-// PostgreSQL (elitea_auth.form_login_transactions, shared migration 0145).
+// PostgreSQL (elitea_auth.form_login_transactions, shared migration 0153).
 //
 // The originating session ID is the Form session cookie's bearer value. A row
 // never holds it: the binding column and the record's originating_session_id

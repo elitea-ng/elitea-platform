@@ -13,7 +13,7 @@ newest entry is first.
 
 - The Form graph's sign-in state — browser sessions, one-time login
   transactions and the attempt limiter — is in PostgreSQL now, in the
-  `elitea_auth` tables of shared migration 0145. The auth Redis client and the
+  `elitea_auth` tables of shared migration 0153. The auth Redis client and the
   `auth` Redis ACL user are gone, and readiness no longer checks Redis.
 - The authentication document schema is `elitea.auth.form.v2`. It has no
   `redis:` block, and the attempt key moved to `credentials.attempt_key_file`.

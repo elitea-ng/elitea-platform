@@ -58,7 +58,7 @@ type FormGraphDependencies struct {
 
 // FormGraph owns the Form browser routes and the separate current-Main gateway
 // authorization edge. Its sign-in state (sessions, login transactions, attempt
-// windows) lives in the injected PostgreSQL pool (shared migration 0145),
+// windows) lives in the injected PostgreSQL pool (shared migration 0153),
 // which remains caller-owned. The graph owns no connection of its own.
 type FormGraph struct {
 	routes            http.Handler

@@ -1054,7 +1054,7 @@ refuses "a material path outside the mounted directory" \
   --set main.fileConfig.authConfig.document.credentials.attempt_key_file=/etc/elsewhere/auth-attempt-key
 
 # The retired schema. The Form sign-in state is in PostgreSQL (elitea-main
-# shared migration 0145), so a document that still carries the auth Redis
+# shared migration 0153), so a document that still carries the auth Redis
 # block, or names elitea.auth.form.v1, is refused while the chart renders.
 refuses "an authentication document that still carries a redis block" \
   "has a redis block" \

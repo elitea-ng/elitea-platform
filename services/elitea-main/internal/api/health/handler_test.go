@@ -67,7 +67,7 @@ func TestReadiness_AllHealthy(t *testing.T) {
 		t.Errorf("expected db ok, got %q", s.Checks["db"])
 	}
 	// Redis no longer decides readiness: the Form sign-in state is in the
-	// database (shared migration 0145).
+	// database (shared migration 0153).
 	if _, present := s.Checks["redis"]; present || len(s.Checks) != 1 {
 		t.Errorf("readiness checks = %v, want the database alone", s.Checks)
 	}

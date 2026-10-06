@@ -20,7 +20,7 @@ type Checker interface {
 
 // Deps are the readiness dependencies. The database is the only one: the
 // Form graph's sign-in state moved from the auth Redis into it (shared
-// migration 0145), so no Redis decides readiness any more.
+// migration 0153), so no Redis decides readiness any more.
 type Deps struct {
 	DB Checker
 }

@@ -1267,7 +1267,7 @@ services:
   # not do itself. In THIS stack the load-bearing one is the browser sign-in
   # state sweep (internal/authstateretention): this is the stack that mounts
   # deploy/runtime/auth.form.yml, so Form sessions, login transactions and
-  # attempt windows (shared migration 0145) land in PostgreSQL, and without a
+  # attempt windows (shared migration 0153) land in PostgreSQL, and without a
   # scheduler expired rows are never removed. Correctness does not depend on
   # it (every read filters on expiry); table growth does. It also runs the
   # audit and sync-tombstone retention sweeps with the docker-compose.yml

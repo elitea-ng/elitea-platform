@@ -276,7 +276,7 @@ PY
 #   bootstrap  seed-only: creates the consumer group from 0-0.
 #
 # There is no `auth` user. The production Form auth plane keeps its sign-in
-# state in PostgreSQL (elitea-main shared migration 0145).
+# state in PostgreSQL (elitea-main shared migration 0153).
 #
 # `user default off` is what makes the ACL meaningful: without it every client
 # that skips AUTH lands on an unrestricted default user.
