@@ -6,7 +6,7 @@
 # build identically. Modules first, so a source change does not re-download
 # the driver; the retry loop is the scheduler's (a broken proxy stream is
 # not retried by Go itself).
-FROM golang:1.25-alpine AS builder
+FROM golang:1.25-trixie AS builder
 WORKDIR /src/services/elitea-subapp-host
 COPY services/elitea-subapp-host/go.mod services/elitea-subapp-host/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -26,7 +26,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/elitea-subapp-host ./cmd/elitea-subapp-host
 
-FROM gcr.io/distroless/static-debian12:nonroot AS final
+FROM gcr.io/distroless/static-debian13:nonroot AS final
 COPY --from=builder /out/elitea-subapp-host /elitea-subapp-host
 # distroless has no shell: probe GET /health (or /ready) over HTTP from the
 # orchestrator. The probes bypass mutual TLS and identity, by design.

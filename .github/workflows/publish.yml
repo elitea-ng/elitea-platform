@@ -235,7 +235,7 @@ jobs:
             context: .
             dockerfile: ./apps/elitea-web/Containerfile
           # Standalone module outside go.work. Its Containerfile builds from
-          # golang:1.26-alpine and carries its own toolchain, so no runner-image
+          # golang:1.26-trixie and carries its own toolchain, so no runner-image
           # bump is required here. scripts/ci/check-gateway-toolchain.sh holds
           # that tag and the ci-gateway.yml pin together (#506).
           #
