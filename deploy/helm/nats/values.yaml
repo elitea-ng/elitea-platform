@@ -21,13 +21,14 @@
 #     of the `accounts` below, and the user's permissions decide what it may
 #     publish and subscribe to. There is no `no_auth_user` and no
 #     `allow_non_tls`: a connection without a mapped certificate is refused.
-#   * One account per plane (MAIN, GATEWAY, SCHEDULER, RUNTIME), each with
-#     its own subject space, so nothing one plane's identities can do —
+#   * One account per plane (MAIN, GATEWAY, SCHEDULER, RUNTIME, WORKER), each
+#     with its own subject space, so nothing one plane's identities can do —
 #     including a consumer's deliver subject or a request's reply subject,
 #     neither of which the server checks against permissions — reaches
 #     another plane's streams. Every account's only writer is its owner.
-#     The cross-account flows are GATEWAY's soft-alert stream export to MAIN
-#     and its budget write-back service exports to SCHEDULER.
+#     The cross-account flows are GATEWAY's soft-alert stream export to MAIN,
+#     its budget write-back service exports to SCHEDULER, and RUNTIME's
+#     worker-durable service exports to WORKER.
 #   * templates/networkpolicy.yaml admits only the named clients to 4222.
 #
 # There is no "security off" switch. The chart ships for clusters, and the
@@ -243,18 +244,27 @@ nats:
       #            SCHEDULER, where nothing stores anything.
       #   RUNTIME  the runtime command bus (elitea.rt.v1.>,
       #            docs/runtime-command-bus.md): the ELITEA_RT_V1_* WorkQueue
-      #            streams, their durable pull consumers, the
-      #            ELITEA_RT_V1_DEADLETTER bucket and the execution-replay
-      #            wake-up. elitea-main's producer identity and the workers.
+      #            streams, their durable pull consumers and the
+      #            execution-replay wake-up. elitea-main's producer identity
+      #            (and its bootstrap) only.
+      #   WORKER   the command bus CONSUMER, both workers' elitea-worker
+      #            identity, for the same reason SCHEDULER exists: in RUNTIME
+      #            a pull or info request whose reply named a command subject
+      #            made the server store the answer in that command stream.
+      #            Its JetStream holds the ELITEA_RT_V1_DEADLETTER bucket and
+      #            nothing else.
       #
       # Every account's sole WRITER is its owner: MAIN's is elitea-main,
-      # GATEWAY's the gateway, RUNTIME's its producer and worker;
-      # SCHEDULER stores nothing. The ONLY cross-account flows:
+      # GATEWAY's the gateway, RUNTIME's its producer, WORKER's (the
+      # dead-letter bucket) the worker; SCHEDULER stores nothing. The ONLY
+      # cross-account flows:
       #   * GATEWAY exports the stream of its per-project soft-alert subject
       #     to MAIN, and MAIN imports it, so the project SSE relay can forward
       #     budget.soft_alert;
       #   * GATEWAY exports, as services, the INFO / MSG.NEXT / ACK subjects
-      #     of exactly the budget-writeback consumer to SCHEDULER.
+      #     of exactly the budget-writeback consumer to SCHEDULER;
+      #   * RUNTIME exports, as services, the INFO / MSG.NEXT / ACK subjects
+      #     of exactly its three worker durables to WORKER.
       # Nothing else crosses.
       #
       # Each account with JetStream has its own bootstrap identity
@@ -274,8 +284,8 @@ nats:
       # (libs/go/natsconn/natstest, run by ci-go.yml and ci-gateway.yml). A
       # grant that is missing fails that test; a grant nothing uses is noise
       # to be removed. templates/guards.yaml refuses a render without the
-      # four accounts, with a user outside them, with an export or import
-      # other than the two flows above, or with a grant that lets anyone
+      # five accounts, with a user outside them, with an export or import
+      # other than the three flows above, or with a grant that lets anyone
       # delete or purge a stream.
       accounts:
         MAIN:
@@ -488,6 +498,46 @@ nats:
 
         RUNTIME:
           jetstream: enabled
+          exports:
+            # The command bus's consumer side, to WORKER only: exactly the
+            # three JetStream subjects a bound pull consumer uses, on exactly
+            # the three durables the RUNTIME bootstrap creates. Service
+            # exports, so each answer goes back to the requester's reply
+            # subject IN WORKER — whose only stream is the worker's own
+            # dead-letter bucket — and never onto a RUNTIME subject of the
+            # requester's choosing (a command stream's subject, before #1081's
+            # review: MSG.NEXT copied a signed command across routes and
+            # INFO answers filled ELITEA_RT_V1_AGENT to its MaxMsgs).
+            - service: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+              response_type: stream
+              accounts:
+                - WORKER
+            - service: "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+              response_type: stream
+              accounts:
+                - WORKER
+            - service: "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+              accounts:
+                - WORKER
+            - service: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+              response_type: stream
+              accounts:
+                - WORKER
+            - service: "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
+              accounts:
+                - WORKER
           users:
             # elitea-main-runtime: elitea-main's SECOND identity, the PRODUCER
             # of the command bus (ELITEA_RUNTIME_NATS_URL,
@@ -535,54 +585,9 @@ nats:
                     - "_INBOX_elitea-main-runtime.>"
                     - "elitea.rt.v1.replay.wake"
 
-            # elitea-worker: the CONSUMER of the command bus, presented by the
-            # Rust and the Python worker alike. It binds to the durables the
-            # RUNTIME bootstrap created, pulls, sends in-progress heartbeats,
-            # acks after settlement and naks with a delay, and records a
-            # poison command in the dead-letter bucket. It can never publish a
-            # command or the wake-up (the deny below wins over any allow),
-            # create a consumer, or touch a stream's configuration.
-            - user: "spiffe://elitea.internal/nats/elitea-worker"
-              permissions:
-                publish:
-                  allow:
-                    # Bind: the stream and the durable must exist and match.
-                    - "$JS.API.STREAM.INFO.ELITEA_RT_V1_VALIDATE"
-                    - "$JS.API.STREAM.INFO.ELITEA_RT_V1_AGENT"
-                    - "$JS.API.STREAM.INFO.ELITEA_RT_V1_INDEX"
-                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
-                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
-                    - "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
-                    # Pull.
-                    - "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
-                    - "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
-                    - "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
-                    # Ack, double ack, nak with delay, +WPI. The reply subject
-                    # of a delivery is $JS.ACK.<stream>.<durable>.<...>.
-                    - "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
-                    - "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
-                    - "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
-                    # The dead-letter record: KV put, and the bucket bind.
-                    - "$KV.ELITEA_RT_V1_DEADLETTER.>"
-                    - "$JS.API.STREAM.INFO.KV_ELITEA_RT_V1_DEADLETTER"
-                  deny:
-                    - "elitea.rt.v1.>"
-                    - "$JS.API.STREAM.CREATE.>"
-                    - "$JS.API.STREAM.UPDATE.>"
-                    - "$JS.API.STREAM.DELETE.>"
-                    - "$JS.API.STREAM.PURGE.>"
-                    - "$JS.API.STREAM.MSG.DELETE.>"
-                    - "$JS.API.ACCOUNT.PURGE.>"
-                    - "$JS.API.CONSUMER.CREATE.>"
-                    - "$JS.API.CONSUMER.DURABLE.CREATE.>"
-                    - "$JS.API.CONSUMER.DELETE.>"
-                subscribe:
-                  allow:
-                    - "_INBOX_elitea-worker.>"
-
             # elitea-nats-bootstrap-runtime: creates and reconciles RUNTIME's
-            # three command streams, their per-route durable pull consumers
-            # and the dead-letter bucket. Publishes no data.
+            # three command streams and their per-route durable pull
+            # consumers. Publishes no data.
             - user: "spiffe://elitea.internal/nats/elitea-nats-bootstrap-runtime"
               permissions:
                 publish:
@@ -599,9 +604,6 @@ nats:
                     - "$JS.API.STREAM.INFO.ELITEA_RT_V1_INDEX"
                     - "$JS.API.STREAM.CREATE.ELITEA_RT_V1_INDEX"
                     - "$JS.API.STREAM.UPDATE.ELITEA_RT_V1_INDEX"
-                    - "$JS.API.STREAM.INFO.KV_ELITEA_RT_V1_DEADLETTER"
-                    - "$JS.API.STREAM.CREATE.KV_ELITEA_RT_V1_DEADLETTER"
-                    - "$JS.API.STREAM.UPDATE.KV_ELITEA_RT_V1_DEADLETTER"
                     - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
                     - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
                     - "$JS.API.CONSUMER.CREATE.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
@@ -611,3 +613,115 @@ nats:
                 subscribe:
                   allow:
                     - "_INBOX_elitea-nats-bootstrap-runtime.>"
+
+        WORKER:
+          # The command bus CONSUMER's own account. Its JetStream holds ONE
+          # stream, the dead-letter bucket ELITEA_RT_V1_DEADLETTER (its
+          # bootstrap creates it; max_streams keeps anything else out, a
+          # stream a steered reply could otherwise try to create included).
+          # It reaches RUNTIME's three durables only through the service
+          # imports below. The pull and info API arrive under the JetStream
+          # API prefix JS.RUNTIME.API (natsconn.WorkerRuntimeJSAPIPrefix; the
+          # workers open their command-bus JetStream context with it when
+          # they present an identity), because WORKER's own $JS.API is its
+          # own JetStream's. The ack subjects keep their name: they are what
+          # each delivery's reply subject says.
+          jetstream:
+            max_streams: 1
+            max_file: 134217728
+            max_mem: 0
+          imports:
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+              to: "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+              to: "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+              to: "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+              to: "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+              to: "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+              to: "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+            - service:
+                account: RUNTIME
+                subject: "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
+          users:
+            # elitea-worker: the CONSUMER of the command bus, presented by the
+            # Rust and the Python worker alike. It binds to the durables the
+            # RUNTIME bootstrap created, pulls, sends in-progress heartbeats,
+            # acks after settlement, naks with a delay or terminates, and
+            # records a poison command in its own account's dead-letter
+            # bucket. It cannot publish a command or the wake-up (those
+            # subjects are RUNTIME's, and nothing imports them here), create a
+            # consumer, read a command stream's info, or touch a stream's
+            # configuration; and a reply subject it names lands in WORKER,
+            # where nothing stores it but the dead letters it may write anyway.
+            - user: "spiffe://elitea.internal/nats/elitea-worker"
+              permissions:
+                publish:
+                  allow:
+                    # Bind (CONSUMER.INFO) and pull (MSG.NEXT), imported.
+                    - "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.INFO.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1"
+                    - "JS.RUNTIME.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_INDEX.elitea-index-worker-v1"
+                    - "$JS.ACK.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1.>"
+                    - "$JS.ACK.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1.>"
+                    - "$JS.ACK.ELITEA_RT_V1_INDEX.elitea-index-worker-v1.>"
+                    # The dead-letter record: KV put, and the bucket bind, in
+                    # WORKER's own JetStream.
+                    - "$KV.ELITEA_RT_V1_DEADLETTER.>"
+                    - "$JS.API.STREAM.INFO.KV_ELITEA_RT_V1_DEADLETTER"
+                  deny:
+                    # Nothing in WORKER would store it; denied so a worker
+                    # that tries is a logged violation, not silence.
+                    - "elitea.rt.v1.>"
+                    - "$JS.API.STREAM.CREATE.>"
+                    - "$JS.API.STREAM.UPDATE.>"
+                    - "$JS.API.STREAM.DELETE.>"
+                    - "$JS.API.STREAM.PURGE.>"
+                    - "$JS.API.STREAM.MSG.DELETE.>"
+                    - "$JS.API.ACCOUNT.PURGE.>"
+                    - "$JS.API.CONSUMER.CREATE.>"
+                    - "$JS.API.CONSUMER.DURABLE.CREATE.>"
+                    - "$JS.API.CONSUMER.DELETE.>"
+                subscribe:
+                  allow:
+                    - "_INBOX_elitea-worker.>"
+
+            # elitea-nats-bootstrap-worker: creates and reconciles WORKER's one
+            # asset, the dead-letter bucket. Publishes no data.
+            - user: "spiffe://elitea.internal/nats/elitea-nats-bootstrap-worker"
+              permissions:
+                publish:
+                  allow:
+                    - "$JS.API.INFO"
+                    - "$JS.API.STREAM.NAMES"
+                    - "$JS.API.STREAM.LIST"
+                    - "$JS.API.STREAM.INFO.KV_ELITEA_RT_V1_DEADLETTER"
+                    - "$JS.API.STREAM.CREATE.KV_ELITEA_RT_V1_DEADLETTER"
+                    - "$JS.API.STREAM.UPDATE.KV_ELITEA_RT_V1_DEADLETTER"
+                subscribe:
+                  allow:
+                    - "_INBOX_elitea-nats-bootstrap-worker.>"

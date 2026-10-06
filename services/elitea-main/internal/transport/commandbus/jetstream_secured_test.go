@@ -220,19 +220,51 @@ func securedJetStream(t *testing.T, s *natstest.Server, identity string) jetstre
 		t.Fatalf("connect as %s: %v", identity, err)
 	}
 	t.Cleanup(conn.Close)
-	js, err := jetstream.New(conn, jetstream.WithDefaultTimeout(5*time.Second))
+	// The worker reaches RUNTIME's durables from its own WORKER account,
+	// through service imports mapped under natsconn.WorkerRuntimeJSAPIPrefix;
+	// that is the prefix both workers open the command-bus context with.
+	var js jetstream.JetStream
+	if identity == natsconn.IdentityWorker {
+		js, err = jetstream.NewWithAPIPrefix(conn, natsconn.WorkerRuntimeJSAPIPrefix, jetstream.WithDefaultTimeout(5*time.Second))
+	} else {
+		js, err = jetstream.New(conn, jetstream.WithDefaultTimeout(5*time.Second))
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	return js
 }
 
+// securedConn is a raw connection as identity, for requests whose reply
+// subject the test chooses.
+func securedConn(t *testing.T, s *natstest.Server, identity string) *nats.Conn {
+	t.Helper()
+	m := s.Material(identity)
+	conn, err := nats.Connect(s.URL(),
+		nats.Name(identity),
+		nats.CustomInboxPrefix(natsconn.InboxPrefix(identity)),
+		nats.Secure(natsconn.BaseTLSConfig()),
+		nats.ClientTLSConfig(m.ClientCertificate, m.RootCAs),
+		nats.Timeout(5*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("connect as %s: %v", identity, err)
+	}
+	t.Cleanup(conn.Close)
+	return conn
+}
+
 func bootstrapCLI(t *testing.T, s *natstest.Server, args ...string) {
 	t.Helper()
-	m := s.Material(natsconn.IdentityBootstrapRuntime)
+	bootstrapCLIAs(t, s, natsconn.IdentityBootstrapRuntime, args...)
+}
+
+func bootstrapCLIAs(t *testing.T, s *natstest.Server, identity string, args ...string) {
+	t.Helper()
+	m := s.Material(identity)
 	full := append([]string{
 		"--server", s.URL(), "--tlsca", m.CAFile, "--tlscert", m.CertFile, "--tlskey", m.KeyFile,
-		"--inbox-prefix", natsconn.InboxPrefix(natsconn.IdentityBootstrapRuntime), "--timeout", "5s",
+		"--inbox-prefix", natsconn.InboxPrefix(identity), "--timeout", "5s",
 	}, args...)
 	cmd := exec.Command(natstest.CLI(), full...)
 	cmd.Env = append(cmd.Environ(), "HOME="+s.Dir())

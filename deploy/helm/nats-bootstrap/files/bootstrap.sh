@@ -32,6 +32,8 @@
 #     stream ELITEA_RT_V1_AGENT      } elitea.rt.v1.<route>.d.<sha256(delivery_id)>,
 #     stream ELITEA_RT_V1_INDEX      } each with its durable pull consumer
 #                                      elitea-{configuration,agent,index}-worker-v1
+#   account WORKER (the command bus consumer; it reaches RUNTIME's durables
+#                   through service imports only)
 #     KV     ELITEA_RT_V1_DEADLETTER poison commands the workers recorded (7d)
 #
 # Create when absent, EDIT when present: re-running this script puts a drifted
@@ -46,8 +48,8 @@
 # Requires: nats CLI 0.3.0+ (--allow-counter) against NATS Server 2.12.0+.
 #
 # Which accounts:
-#   NATS_BOOTSTRAP_ACCOUNTS  space-separated, of main, gateway, runtime
-#                            (default: all three, in that order)
+#   NATS_BOOTSTRAP_ACCOUNTS  space-separated, of main, gateway, runtime, worker
+#                            (default: all four, in that order)
 #
 # Connection (one of three postures):
 #   NATS_URL                server URL (tls://… in a cluster; nats://… in compose)
@@ -94,7 +96,7 @@
 #   NATS_RT_DEADLETTER_TTL      ELITEA_RT_V1_DEADLETTER TTL (default 168h)
 set -eu
 
-ACCOUNTS="${NATS_BOOTSTRAP_ACCOUNTS:-main gateway runtime}"
+ACCOUNTS="${NATS_BOOTSTRAP_ACCOUNTS:-main gateway runtime worker}"
 REPLICAS="${NATS_REPLICAS:-1}"
 ALERT_COOLDOWN="${NATS_ALERT_COOLDOWN:-4h}"
 BUDGET_DUPE_WINDOW="${NATS_BUDGET_DUPE_WINDOW:-12m}"
@@ -129,8 +131,8 @@ done
 NUM_ACCOUNTS=0
 for a in $ACCOUNTS; do
   case "$a" in
-    main|gateway|runtime) NUM_ACCOUNTS=$((NUM_ACCOUNTS + 1)) ;;
-    *) log "FAILED: unknown account '${a}' in NATS_BOOTSTRAP_ACCOUNTS (main, gateway, runtime)."; exit 1 ;;
+    main|gateway|runtime|worker) NUM_ACCOUNTS=$((NUM_ACCOUNTS + 1)) ;;
+    *) log "FAILED: unknown account '${a}' in NATS_BOOTSTRAP_ACCOUNTS (main, gateway, runtime, worker)."; exit 1 ;;
   esac
 done
 if [ "$NUM_ACCOUNTS" -eq 0 ]; then
@@ -463,7 +465,7 @@ ensure_rt_consumer() {
 }
 
 bootstrap_runtime() {
-  expect 7
+  expect 6
   rt_stream ELITEA_RT_V1_VALIDATE validate "${RT_VALIDATE_MAX_MSGS}" "${RT_VALIDATE_MAX_AGE}"
   rt_stream ELITEA_RT_V1_AGENT agent "${RT_AGENT_MAX_MSGS}" "${RT_AGENT_MAX_AGE}"
   rt_stream ELITEA_RT_V1_INDEX index "${RT_INDEX_MAX_MSGS}" "${RT_INDEX_MAX_AGE}"
@@ -471,11 +473,31 @@ bootstrap_runtime() {
   ensure_rt_consumer ELITEA_RT_V1_AGENT elitea-agent-worker-v1 agent
   ensure_rt_consumer ELITEA_RT_V1_INDEX elitea-index-worker-v1 index
 
+  assert_asset stream ELITEA_RT_V1_VALIDATE
+  assert_asset stream ELITEA_RT_V1_AGENT
+  assert_asset stream ELITEA_RT_V1_INDEX
+  assert_asset consumer ELITEA_RT_V1_VALIDATE elitea-configuration-worker-v1
+  assert_asset consumer ELITEA_RT_V1_AGENT elitea-agent-worker-v1
+  assert_asset consumer ELITEA_RT_V1_INDEX elitea-index-worker-v1
+}
+
+# ── account WORKER ──────────────────────────────────────────────────────────
+bootstrap_worker() {
+  expect 1
   # ELITEA_RT_V1_DEADLETTER: poison commands (owner decision Q3). One record
   # per poison delivery, key <route>.<sha256(delivery_id)>, written by the
   # worker that could not verify or decode it. The record names where to
   # look, never what the command said. The alert is the bucket being
   # non-empty.
+  #
+  # It lives in WORKER, the worker's own account, and not in RUNTIME with the
+  # command streams: the server answers a JetStream API request on a reply
+  # subject it does not check against the requester's permissions, so a
+  # bucket in RUNTIME could be written by elitea-main-runtime naming
+  # $KV.ELITEA_RT_V1_DEADLETTER.<key> as the reply of a stream-info request
+  # (a forged dead letter), and the worker could not be kept out of the
+  # command streams the same way. WORKER holds this bucket and nothing else
+  # (its account JetStream allows one stream).
   ensure_kv ELITEA_RT_V1_DEADLETTER \
     --replicas "${REPLICAS}" \
     --history 1 \
@@ -484,12 +506,6 @@ bootstrap_runtime() {
     --max-bucket-size 67108864 \
     --description "runtime command bus dead letters (poison commands; TTL-bounded)"
 
-  assert_asset stream ELITEA_RT_V1_VALIDATE
-  assert_asset stream ELITEA_RT_V1_AGENT
-  assert_asset stream ELITEA_RT_V1_INDEX
-  assert_asset consumer ELITEA_RT_V1_VALIDATE elitea-configuration-worker-v1
-  assert_asset consumer ELITEA_RT_V1_AGENT elitea-agent-worker-v1
-  assert_asset consumer ELITEA_RT_V1_INDEX elitea-index-worker-v1
   assert_asset kv ELITEA_RT_V1_DEADLETTER
 }
 

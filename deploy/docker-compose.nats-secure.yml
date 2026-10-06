@@ -50,6 +50,7 @@ services:
       - ./certs/nats/clients/elitea-nats-bootstrap-main:/etc/nats-client/main:ro
       - ./certs/nats/clients/elitea-nats-bootstrap-gateway:/etc/nats-client/gateway:ro
       - ./certs/nats/clients/elitea-nats-bootstrap-runtime:/etc/nats-client/runtime:ro
+      - ./certs/nats/clients/elitea-nats-bootstrap-worker:/etc/nats-client/worker:ro
 
   elitea-main:
     environment:

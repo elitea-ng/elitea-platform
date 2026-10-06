@@ -201,10 +201,15 @@ func TestNobodyMayDeleteOrPurge(t *testing.T) {
 	s.RequireViolation(t, natsconn.IdentityBootstrapGateway, "Publish", "$JS.API.STREAM.DELETE.GATEWAY_BUDGET_DELTAS")
 	s.RequireViolation(t, natsconn.IdentityMain, "Publish", "$JS.API.STREAM.DELETE.KV_ELITEA_CANVAS_PRESENCE")
 	s.RequireViolation(t, natsconn.IdentityBootstrapMain, "Publish", "$JS.API.STREAM.DELETE.KV_ELITEA_CANVAS_PRESENCE")
-	for _, id := range []string{natsconn.IdentityMainRuntime, natsconn.IdentityWorker, natsconn.IdentityBootstrapRuntime} {
+	for _, id := range []string{natsconn.IdentityMainRuntime, natsconn.IdentityBootstrapRuntime} {
 		s.RequireViolation(t, id, "Publish", "$JS.API.STREAM.PURGE.ELITEA_RT_V1_AGENT")
 		s.RequireViolation(t, id, "Publish", "$JS.API.STREAM.DELETE.ELITEA_RT_V1_INDEX")
 		s.RequireViolation(t, id, "Publish", "$JS.API.CONSUMER.DELETE.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1")
+	}
+	// WORKER: the worker and its bootstrap may read the dead-letter bucket's
+	// info and neither may delete it.
+	for _, id := range []string{natsconn.IdentityWorker, natsconn.IdentityBootstrapWorker} {
+		s.RequireViolation(t, id, "Publish", "$JS.API.STREAM.DELETE.KV_ELITEA_RT_V1_DEADLETTER")
 	}
 }
 
@@ -334,12 +339,17 @@ func TestBootstrapCreatesTheCommandBus(t *testing.T) {
 			t.Errorf("%s/%s is not the contract's consumer: %+v", stream, want.durable, cc)
 		}
 	}
-	if out, err := cli("stream", "info", "KV_ELITEA_RT_V1_DEADLETTER", "--json").CombinedOutput(); err != nil {
+	// The dead-letter bucket is WORKER's, created by WORKER's bootstrap; the
+	// command streams' account holds no bucket.
+	if out, err := cli("stream", "info", "KV_ELITEA_RT_V1_DEADLETTER", "--json").CombinedOutput(); err == nil {
+		t.Errorf("RUNTIME holds the dead-letter bucket; it belongs to WORKER:\n%s", out)
+	}
+	if out, err := cliAs(t, s, natsconn.IdentityBootstrapWorker)("stream", "info", "KV_ELITEA_RT_V1_DEADLETTER", "--json").CombinedOutput(); err != nil {
 		t.Fatalf("dead-letter bucket: %v\n%s", err, out)
 	} else if !strings.Contains(string(out), `"max_age": 604800000000000`) {
 		t.Errorf("the dead-letter bucket's TTL is not 7 days:\n%s", out)
 	}
-	s.RequireNoViolations(t, natsconn.IdentityBootstrapRuntime)
+	s.RequireNoViolations(t, natsconn.IdentityBootstrapWorker)
 }
 
 // The command bus's two identities each do their own half only: the producer
@@ -351,6 +361,11 @@ func TestCommandBusIdentitiesDoTheirOwnHalfOnly(t *testing.T) {
 	s.Bootstrap(t, nil)
 	main := cliAs(t, s, natsconn.IdentityMainRuntime)
 	worker := cliAs(t, s, natsconn.IdentityWorker)
+	// The worker reaches RUNTIME's durables from WORKER through the imported
+	// API prefix; its own JetStream (the dead-letter bucket) is the default.
+	workerRT := func(args ...string) *exec.Cmd {
+		return worker(append([]string{"--js-api-prefix", natsconn.WorkerRuntimeJSAPIPrefix}, args...)...)
+	}
 	subject := "elitea.rt.v1.agent.d.ff7cc06fb9d124826b7f491676dc63e28a1572194bbe1dda72437bfe84b42164"
 
 	if out, err := main("pub", "--jetstream", subject, "body").CombinedOutput(); err != nil {
@@ -364,7 +379,7 @@ func TestCommandBusIdentitiesDoTheirOwnHalfOnly(t *testing.T) {
 		t.Errorf("the producer pulled a command:\n%s", out)
 	}
 	s.RequireViolation(t, natsconn.IdentityMainRuntime, "Publish", "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.elitea-agent-worker-v1")
-	if out, err := worker("consumer", "next", "ELITEA_RT_V1_AGENT", "elitea-agent-worker-v1", "--count", "1", "--ack").CombinedOutput(); err != nil || !strings.Contains(string(out), "body") {
+	if out, err := workerRT("consumer", "next", "ELITEA_RT_V1_AGENT", "elitea-agent-worker-v1", "--count", "1", "--ack").CombinedOutput(); err != nil || !strings.Contains(string(out), "body") {
 		t.Errorf("the worker could not pull and ack the command: %v\n%s", err, out)
 	}
 	if out, err := worker("kv", "put", "ELITEA_RT_V1_DEADLETTER", "agent.ff7cc06fb9d124826b7f491676dc63e28a1572194bbe1dda72437bfe84b42164", "{}").CombinedOutput(); err != nil {
@@ -372,6 +387,8 @@ func TestCommandBusIdentitiesDoTheirOwnHalfOnly(t *testing.T) {
 	}
 	for _, args := range [][]string{
 		{"consumer", "add", "ELITEA_RT_V1_AGENT", "rogue", "--pull", "--defaults"},
+		{"--js-api-prefix", natsconn.WorkerRuntimeJSAPIPrefix, "consumer", "add", "ELITEA_RT_V1_AGENT", "rogue", "--pull", "--defaults"},
+		{"--js-api-prefix", natsconn.WorkerRuntimeJSAPIPrefix, "stream", "info", "ELITEA_RT_V1_AGENT"},
 		{"kv", "put", "ELITEA_CANVAS_PRESENCE", "x", "y"},
 		{"pub", "elitea.rt.v1.replay.wake", "x"},
 	} {
@@ -392,7 +409,7 @@ func TestCommandBusIdentitiesDoTheirOwnHalfOnly(t *testing.T) {
 		}
 	}
 
-	// Cross-account isolation: neither RUNTIME identity reaches a MAIN or
+	// Cross-account isolation: neither command-bus identity reaches a MAIN or
 	// GATEWAY asset (the streams do not exist in RUNTIME, and no grant names
 	// them), and MAIN's elitea-main identity cannot inject a command.
 	for id, cli := range map[string]func(args ...string) *exec.Cmd{

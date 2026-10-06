@@ -205,12 +205,14 @@ func (s *Server) Lookup(prefix, identity string, extra map[string]string) func(s
 	}
 }
 
-// BootstrapIdentities are the three per-account bootstrap identities, keyed
-// by the account name bootstrap.sh takes (NATS_BOOTSTRAP_ACCOUNTS).
+// BootstrapIdentities are the per-account bootstrap identities, keyed by the
+// account name bootstrap.sh takes (NATS_BOOTSTRAP_ACCOUNTS). SCHEDULER has no
+// JetStream and so no bootstrap.
 var BootstrapIdentities = map[string]string{
 	"main":    natsconn.IdentityBootstrapMain,
 	"gateway": natsconn.IdentityBootstrapGateway,
 	"runtime": natsconn.IdentityBootstrapRuntime,
+	"worker":  natsconn.IdentityBootstrapWorker,
 }
 
 // Bootstrap runs deploy/helm/nats-bootstrap/files/bootstrap.sh exactly as

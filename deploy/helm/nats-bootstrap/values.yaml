@@ -20,11 +20,13 @@ natsUrl: "tls://elitea-nats:4222"
 # and each account has its own bootstrap identity, URI SAN
 # spiffe://<trustDomain>/nats/elitea-nats-bootstrap-<account>, that may
 # administer that account's assets and nothing else. The Job connects once
-# per account with that account's certificate, so it needs all three.
+# per account with that account's certificate, so it needs all four. (The
+# SCHEDULER account holds no assets and has no bootstrap identity.)
 accounts:
   - main
   - gateway
   - runtime
+  - worker
 
 tls:
   # Each account's certificate Secret (tls.crt, tls.key, ca.crt) is mounted at
@@ -36,6 +38,7 @@ tls:
   #   main: my-bootstrap-main-tls
   #   gateway: my-bootstrap-gateway-tls
   #   runtime: my-bootstrap-runtime-tls
+  #   worker: my-bootstrap-worker-tls
   certificate:
     create: true
     # The NATS CA issuer deploy/helm/nats renders (security.ca.name).

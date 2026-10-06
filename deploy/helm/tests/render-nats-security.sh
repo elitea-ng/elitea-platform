@@ -96,9 +96,13 @@ refuse "nats: TLS off"                        "tls.enabled is false"         "${
 refuse "nats: no_auth_user"                   "no_auth_user"                 "${NA[@]}" --set nats.config.merge.no_auth_user=anyone
 refuse "nats: allow_non_tls"                  "allow_non_tls"                "${NA[@]}" --set nats.config.merge.allow_non_tls=true
 refuse "nats: users in the global account"    "authorization is set"         "${NA[@]}" --set 'nats.config.merge.authorization.users[0].user=spiffe://elitea.internal/nats/elitea-main'
-refuse "nats: a plane's account removed"      "exactly MAIN, GATEWAY, SCHEDULER and RUNTIME" "${NA[@]}" --set nats.config.merge.accounts.RUNTIME=null
-refuse "nats: the scheduler's account removed" "exactly MAIN, GATEWAY, SCHEDULER and RUNTIME" "${NA[@]}" --set nats.config.merge.accounts.SCHEDULER=null
-refuse "nats: an extra account"               "exactly MAIN, GATEWAY, SCHEDULER and RUNTIME" "${NA[@]}" --set nats.config.merge.accounts.EXTRA.jetstream=enabled
+refuse "nats: a plane's account removed"      "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER" "${NA[@]}" --set nats.config.merge.accounts.RUNTIME=null
+refuse "nats: the scheduler's account removed" "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER" "${NA[@]}" --set nats.config.merge.accounts.SCHEDULER=null
+refuse "nats: the worker's account removed"   "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER" "${NA[@]}" --set nats.config.merge.accounts.WORKER=null
+refuse "nats: an extra account"               "exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER" "${NA[@]}" --set nats.config.merge.accounts.EXTRA.jetstream=enabled
+refuse "nats: WORKER JetStream unbounded"     "max_streams: 1"               "${NA[@]}" --set nats.config.merge.accounts.WORKER.jetstream=enabled
+refuse "nats: WORKER JetStream widened"       "max_streams: 1"               "${NA[@]}" --set nats.config.merge.accounts.WORKER.jetstream.max_streams=5
+refuse "nats: WORKER exports"                 "account WORKER exports"       "${NA[@]}" --set 'nats.config.merge.accounts.WORKER.exports[0].stream=elitea.>' 
 refuse "nats: GATEWAY export widened"         "is neither the soft-alert stream" "${NA[@]}" --set 'nats.config.merge.accounts.GATEWAY.exports[0].stream=gateway.>' --set 'nats.config.merge.accounts.GATEWAY.exports[0].accounts[0]=MAIN'
 refuse "nats: SCHEDULER gets JetStream"       "holds NO streams"             "${NA[@]}" --set nats.config.merge.accounts.SCHEDULER.jetstream=enabled
 refuse "nats: SCHEDULER exports"              "account SCHEDULER exports"    "${NA[@]}" --set 'nats.config.merge.accounts.SCHEDULER.exports[0].stream=elitea.>'
@@ -140,6 +144,26 @@ mutate "$TMP/m-imp-to.yaml" 'next(i for i in accts["SCHEDULER"]["imports"] if "M
 refuse "nats: SCHEDULER import off the API prefix" "SCHEDULER import"        "${NA[@]}" -f "$TMP/m-imp-to.yaml"
 mutate "$TMP/m-imp-other.yaml" 'accts["SCHEDULER"]["imports"].append({"service": {"account": "GATEWAY", "subject": "gateway.budget.delta"}})'
 refuse "nats: SCHEDULER imports another subject" "SCHEDULER import"          "${NA[@]}" -f "$TMP/m-imp-other.yaml"
+# The worker's way into RUNTIME (#1081 review S1): nine service subjects on its
+# three durables, imported under its JetStream API prefix.
+mutate "$TMP/m-worker-back.yaml" 'accts["RUNTIME"]["users"].append(dict(user("WORKER","elitea-worker"))); accts["WORKER"]["users"] = [u for u in accts["WORKER"]["users"] if not u["user"].endswith("/elitea-worker")]'
+refuse "nats: the worker back in RUNTIME"     "The worker belongs in WORKER"  "${NA[@]}" -f "$TMP/m-worker-back.yaml"
+mutate "$TMP/m-worker-extra.yaml" 'accts["WORKER"]["users"].append({"user": "spiffe://elitea.internal/nats/elitea-other"})'
+refuse "nats: another user in WORKER"         "holds elitea-worker and its bootstrap only" "${NA[@]}" -f "$TMP/m-worker-extra.yaml"
+mutate "$TMP/m-rt-any-consumer.yaml" 'next(e for e in accts["RUNTIME"]["exports"] if "MSG.NEXT.ELITEA_RT_V1_AGENT" in e.get("service",""))["service"] = "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_AGENT.*"'
+refuse "nats: RUNTIME pull export widened"    "worker-durable services"      "${NA[@]}" -f "$TMP/m-rt-any-consumer.yaml"
+mutate "$TMP/m-rt-to-main.yaml" 'next(e for e in accts["RUNTIME"]["exports"] if "MSG.NEXT" in e.get("service",""))["accounts"] = ["WORKER", "MAIN"]'
+refuse "nats: RUNTIME export to another account" "worker-durable services"   "${NA[@]}" -f "$TMP/m-rt-to-main.yaml"
+mutate "$TMP/m-rt-stream-info.yaml" 'accts["RUNTIME"]["exports"].append({"service": "$JS.API.STREAM.INFO.ELITEA_RT_V1_AGENT", "accounts": ["WORKER"]})'
+refuse "nats: RUNTIME exports stream info"    "worker-durable services"      "${NA[@]}" -f "$TMP/m-rt-stream-info.yaml"
+mutate "$TMP/m-rt-rt.yaml" 'next(e for e in accts["RUNTIME"]["exports"] if "MSG.NEXT" in e.get("service","")).pop("response_type")'
+refuse "nats: RUNTIME pull export loses response_type stream" "worker-durable services" "${NA[@]}" -f "$TMP/m-rt-rt.yaml"
+mutate "$TMP/m-rt-missing.yaml" 'accts["RUNTIME"]["exports"] = [e for e in accts["RUNTIME"]["exports"] if "INDEX" not in e["service"]]; accts["WORKER"]["imports"] = [i for i in accts["WORKER"]["imports"] if "INDEX" not in i["service"]["subject"]]'
+refuse "nats: a worker durable not exported"  "worker-durable services"      "${NA[@]}" -f "$TMP/m-rt-missing.yaml"
+mutate "$TMP/m-wimp-to.yaml" 'next(i for i in accts["WORKER"]["imports"] if "MSG.NEXT" in i["service"]["subject"])["to"] = "$JS.API.CONSUMER.MSG.NEXT.ELITEA_RT_V1_VALIDATE.elitea-configuration-worker-v1"'
+refuse "nats: WORKER import off the API prefix" "WORKER import"              "${NA[@]}" -f "$TMP/m-wimp-to.yaml"
+mutate "$TMP/m-wimp-other.yaml" 'accts["WORKER"]["imports"].append({"service": {"account": "RUNTIME", "subject": "elitea.rt.v1.agent.d.*"}})'
+refuse "nats: WORKER imports a command subject" "WORKER import"             "${NA[@]}" -f "$TMP/m-wimp-other.yaml"
 mutate "$TMP/m-main-consumer.yaml" 'user("MAIN","elitea-main")["permissions"]["publish"]["allow"].append("$JS.API.CONSUMER.CREATE.KV_OTHER.>")'
 refuse "nats: main may create a consumer off its bucket" "only the account's bootstrap creates consumers" "${NA[@]}" -f "$TMP/m-main-consumer.yaml"
 mutate "$TMP/m-dup.yaml" 'accts["RUNTIME"]["users"].append(dict(user("MAIN","elitea-main")))'
@@ -159,7 +183,7 @@ refuse "nats: HA routes in plaintext"         "cluster.tls.enabled false"    eli
 refuse "bootstrap: nats:// URL"               "is not tls://"                elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=nats://elitea-nats:4222
 refuse "bootstrap: credential URL"            "user information"             elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set natsUrl=tls://u:p@elitea-nats:4222
 refuse "bootstrap: connectWait eats the deadline" "leaves the Job under a minute" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set connectWait=590
-refuse "bootstrap: an account left out"       "must be [main, gateway, runtime]" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set 'accounts={main,gateway}'
+refuse "bootstrap: an account left out"       "must be [main, gateway, runtime, worker]" elitea-nats-bootstrap "$DIR/helm/nats-bootstrap" --set 'accounts={main,gateway,runtime}'
 refuse "elitea: plaintext unacknowledged"     "allowPlaintext"               "${EL[@]}" --set nats.tls.enabled=false
 refuse "elitea: nats:// gateway URL"          "not tls://"                   "${EL[@]}" --set-string llmGateway.env.GATEWAY_NATS_URL=nats://elitea-nats:4222
 refuse "elitea: nats:// main URL"             "not tls://"                   "${EL[@]}" --set-string main.env.ELITEA_EVENTS_NATS_URL=nats://elitea-nats:4222
@@ -210,7 +234,8 @@ IDS = {
     "MAIN": ["elitea-main", "elitea-nats-bootstrap-main"],
     "GATEWAY": ["elitea-llm-gateway", "elitea-nats-bootstrap-gateway"],
     "SCHEDULER": ["elitea-scheduler"],
-    "RUNTIME": ["elitea-main-runtime", "elitea-worker", "elitea-nats-bootstrap-runtime"],
+    "RUNTIME": ["elitea-main-runtime", "elitea-nats-bootstrap-runtime"],
+    "WORKER": ["elitea-worker", "elitea-nats-bootstrap-worker"],
 }
 ALL = [i for ids in IDS.values() for i in ids]
 URI = lambda i: f"spiffe://elitea.internal/nats/{i}"
@@ -230,11 +255,13 @@ for label, c in (("scale-1", c1), ("HA", c3)):
     check(f"{label}: http monitor stays on 8222 (exporter over localhost, kubelet probes)", c.get("http_port") == 8222)
 check("both profiles carry the SAME accounts and permission table", c1["accounts"] == c3["accounts"])
 accts = c1["accounts"]
-check("one account per plane: exactly MAIN, GATEWAY, SCHEDULER and RUNTIME", set(accts) == set(IDS), sorted(accts))
+check("one account per plane: exactly MAIN, GATEWAY, SCHEDULER, RUNTIME and WORKER", set(accts) == set(IDS), sorted(accts))
 users = {}
 for acct, a in accts.items():
     if acct == "SCHEDULER":
         check("SCHEDULER: no JetStream (it holds no stream a reply subject could land in)", a.get("jetstream") in (None, "disabled"), a.get("jetstream"))
+    elif acct == "WORKER":
+        check("WORKER: JetStream bounded to one stream (its dead-letter bucket)", isinstance(a.get("jetstream"), dict) and a["jetstream"].get("max_streams") == 1, a.get("jetstream"))
     else:
         check(f"{acct}: JetStream enabled in the account", a.get("jetstream") == "enabled")
     names = [u["user"] for u in a.get("users", [])]
@@ -293,7 +320,24 @@ check("elitea-main reads exactly the two families the SSE route forwards",
       sorted(mainp.get("subscribe", {}).get("allow", [])) == sorted(["elitea.events.project.*.presence", ALERTS, "_INBOX_elitea-main.>"]), mainp.get("subscribe"))
 gwp = users.get(URI("elitea-llm-gateway"), {}).get("publish", {}).get("allow", [])
 check("the gateway cannot publish on elitea-main's presence family", not any(p.startswith("elitea.") for p in gwp), gwp)
-check("RUNTIME neither exports nor imports", not accts["RUNTIME"].get("exports") and not accts["RUNTIME"].get("imports"))
+RT_DURABLES = (("ELITEA_RT_V1_VALIDATE", "elitea-configuration-worker-v1"), ("ELITEA_RT_V1_AGENT", "elitea-agent-worker-v1"), ("ELITEA_RT_V1_INDEX", "elitea-index-worker-v1"))
+want_rt_exports = []
+want_w_imports = []
+for st, du in RT_DURABLES:
+    want_rt_exports += [
+        {"service": f"$JS.API.CONSUMER.INFO.{st}.{du}", "accounts": ["WORKER"]},
+        {"service": f"$JS.API.CONSUMER.MSG.NEXT.{st}.{du}", "response_type": "stream", "accounts": ["WORKER"]},
+        {"service": f"$JS.ACK.{st}.{du}.>", "accounts": ["WORKER"]},
+    ]
+    want_w_imports += [
+        {"service": {"account": "RUNTIME", "subject": f"$JS.API.CONSUMER.INFO.{st}.{du}"}, "to": f"JS.RUNTIME.API.CONSUMER.INFO.{st}.{du}"},
+        {"service": {"account": "RUNTIME", "subject": f"$JS.API.CONSUMER.MSG.NEXT.{st}.{du}"}, "to": f"JS.RUNTIME.API.CONSUMER.MSG.NEXT.{st}.{du}"},
+        {"service": {"account": "RUNTIME", "subject": f"$JS.ACK.{st}.{du}.>"}},
+    ]
+check("RUNTIME exports exactly its three worker durables' INFO, MSG.NEXT and ACK services to WORKER, and imports nothing",
+      accts["RUNTIME"].get("exports") == want_rt_exports and not accts["RUNTIME"].get("imports"), accts["RUNTIME"].get("exports"))
+check("WORKER imports exactly those services, the API under the workers' prefix JS.RUNTIME.API, and exports nothing",
+      accts["WORKER"].get("imports") == want_w_imports and not accts["WORKER"].get("exports"), accts["WORKER"].get("imports"))
 check("MAIN neither exports nor does GATEWAY import", not accts["MAIN"].get("exports") and not accts["GATEWAY"].get("imports"))
 # The runtime command bus (docs/runtime-command-bus.md): the producer publishes
 # commands and cannot consume them; the worker consumes and cannot publish one.
@@ -307,10 +351,12 @@ check("elitea-main-runtime may not pull or ack a command",
       not [p for p in rt_main.get("allow", []) if p.startswith(("$JS.ACK", "$JS.API.CONSUMER.MSG.NEXT"))] and "$JS.ACK.>" in rt_main.get("deny", []))
 check("elitea-worker may not publish a command or the wake-up (denied, not merely unlisted)",
       "elitea.rt.v1.>" in rt_worker.get("deny", []) and not [p for p in rt_worker.get("allow", []) if p.startswith("elitea.rt.")])
-check("elitea-worker pulls and acks its route durables only",
-      sorted(p for p in rt_worker.get("allow", []) if p.startswith(("$JS.ACK", "$JS.API.CONSUMER.MSG.NEXT"))) == sorted(
-          [f"$JS.API.CONSUMER.MSG.NEXT.{s}.{d}" for s, d in (("ELITEA_RT_V1_VALIDATE", "elitea-configuration-worker-v1"), ("ELITEA_RT_V1_AGENT", "elitea-agent-worker-v1"), ("ELITEA_RT_V1_INDEX", "elitea-index-worker-v1"))]
-          + [f"$JS.ACK.{s}.{d}.>" for s, d in (("ELITEA_RT_V1_VALIDATE", "elitea-configuration-worker-v1"), ("ELITEA_RT_V1_AGENT", "elitea-agent-worker-v1"), ("ELITEA_RT_V1_INDEX", "elitea-index-worker-v1"))]),
+check("elitea-worker publishes exactly its imported durable subjects and its dead-letter bucket's",
+      sorted(rt_worker.get("allow", [])) == sorted(
+          [f"JS.RUNTIME.API.CONSUMER.INFO.{s}.{d}" for s, d in RT_DURABLES]
+          + [f"JS.RUNTIME.API.CONSUMER.MSG.NEXT.{s}.{d}" for s, d in RT_DURABLES]
+          + [f"$JS.ACK.{s}.{d}.>" for s, d in RT_DURABLES]
+          + ["$KV.ELITEA_RT_V1_DEADLETTER.>", "$JS.API.STREAM.INFO.KV_ELITEA_RT_V1_DEADLETTER"]),
       rt_worker.get("allow"))
 check("elitea-worker writes the dead-letter bucket only",
       [p for p in rt_worker.get("allow", []) if p.startswith("$KV.")] == ["$KV.ELITEA_RT_V1_DEADLETTER.>"])
@@ -389,7 +435,7 @@ check("the binding names cert-manager's service account", binding and binding[0]
 # ── the bootstrap ─────────────────────────────────────────────────────────
 bs = docs("bootstrap.yaml")
 bcerts = {c["spec"]["commonName"]: c for c in kinds(bs, "Certificate")}
-check("the bootstrap issues one certificate per account", set(bcerts) == {f"elitea-nats-bootstrap-{a}" for a in ("main", "gateway", "runtime")}, sorted(bcerts))
+check("the bootstrap issues one certificate per account", set(bcerts) == {f"elitea-nats-bootstrap-{a}" for a in ("main", "gateway", "runtime", "worker")}, sorted(bcerts))
 for name, c in bcerts.items():
     check(f"{name}: URI SAN names its account's bootstrap user", c["spec"]["uris"] == [URI(name)] and URI(name) in users)
     check(f"{name}: issued by the NATS CA Issuer", c["spec"]["issuerRef"]["name"] == "elitea-nats-ca")
@@ -406,7 +452,7 @@ for name, c in bcerts.items():
 job = kinds(bs, "Job")[0]["spec"]["template"]["spec"]
 env = {e["name"]: e.get("value") for e in job["containers"][0]["env"]}
 check("the bootstrap dials tls:// with no credential", env.get("NATS_URL", "").startswith("tls://") and "@" not in env.get("NATS_URL", ""))
-check("the bootstrap connects to every account", env.get("NATS_BOOTSTRAP_ACCOUNTS") == "main gateway runtime", env.get("NATS_BOOTSTRAP_ACCOUNTS"))
+check("the bootstrap connects to every account", env.get("NATS_BOOTSTRAP_ACCOUNTS") == "main gateway runtime worker", env.get("NATS_BOOTSTRAP_ACCOUNTS"))
 check("the bootstrap presents no single identity (NATS_TLS_*_FILE)", not any(k.startswith("NATS_TLS_") and k.endswith("_FILE") for k in env))
 check("the bootstrap Job pod is what the NetworkPolicy admits", kinds(bs, "Job")[0]["spec"]["template"]["metadata"]["labels"].get("app.kubernetes.io/name") == "nats-bootstrap")
 bvols = {v["name"]: v.get("secret", {}).get("secretName") for v in job["volumes"]}
@@ -540,6 +586,18 @@ hit = re.search(r'SchedulerGatewayJSAPIPrefix\s*=\s*"([^"]+)"', (root / "libs/go
 code_prefix = hit.group(1) if hit else None
 tos = [i.get("to", "") for i in accts["SCHEDULER"].get("imports", []) if "$JS.API." in i["service"]["subject"]]
 check("the SCHEDULER imports use the scheduler code's JetStream API prefix", code_prefix and tos and all(t.startswith(code_prefix + ".") for t in tos), (code_prefix, tos))
+# Likewise the workers (#1081 review S1): natsconn.WorkerRuntimeJSAPIPrefix,
+# the Rust worker's and the Python worker's own constants, and the WORKER
+# imports must all name the same prefix, or a secured worker's bind answers
+# "JetStream not enabled" / no responders.
+hit = re.search(r'WorkerRuntimeJSAPIPrefix\s*=\s*"([^"]+)"', (root / "libs/go/natsconn/natsconn.go").read_text())
+wprefix = hit.group(1) if hit else None
+wtos = [i.get("to", "") for i in accts["WORKER"].get("imports", []) if "$JS.API." in i["service"]["subject"]]
+check("the WORKER imports use natsconn.WorkerRuntimeJSAPIPrefix", wprefix and wtos and all(t.startswith(wprefix + ".") for t in wtos), (wprefix, wtos))
+py = re.search(r'RUNTIME_API_PREFIX\s*=\s*"([^"]+)"', (root / "services/elitea-worker-python/src/elitea_worker/transport/nats_jetstream.py").read_text())
+rs = re.search(r'RUNTIME_API_PREFIX:\s*&str\s*=\s*"([^"]+)"', (root / "services/elitea-worker-rust/src/transport/command_bus.rs").read_text())
+check("the Python worker's prefix is the chart's", py and py.group(1) == wprefix, py and py.group(1))
+check("the Rust worker's prefix is the chart's", rs and rs.group(1) == wprefix, rs and rs.group(1))
 
 # ── one NATS server version everywhere (R9) ───────────────────────────────
 # The chart pins the server; CI's plaintext suites, the secured tests' server

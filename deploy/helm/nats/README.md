@@ -12,8 +12,8 @@ One NATS JetStream server (or 3-node cluster) serves three clients:
 
 and one owner: the `nats-bootstrap` hook Job (`../nats-bootstrap`), which
 creates every asset, connecting to each plane's account as that account's own
-bootstrap identity — including the command bus's streams, durable consumers and
-dead-letter bucket in `RUNTIME`.
+bootstrap identity — including the command bus's streams and durable consumers
+in `RUNTIME`, and its dead-letter bucket in `WORKER`.
 
 ## Security (#1076)
 
@@ -130,15 +130,17 @@ account — its own subject space and, where it owns assets, its own
 JetStream — and every user is declared in exactly one. **Every account's sole
 writer is its owner**: MAIN's assets are written by elitea-main alone,
 GATEWAY's by the gateway alone (its bootstrap creates them and publishes no
-data), RUNTIME's by its producer and worker; SCHEDULER stores
-nothing.
+data), RUNTIME's command streams by its producer (the workers only pull,
+ack and nak them, from WORKER), WORKER's dead-letter bucket by the workers;
+SCHEDULER stores nothing.
 
 | Account | Identities | Assets |
 |---|---|---|
 | `MAIN` | `elitea-main`, `elitea-nats-bootstrap-main` | `ELITEA_CANVAS_PRESENCE` (KV) |
 | `GATEWAY` | `elitea-llm-gateway`, `elitea-nats-bootstrap-gateway` | `GATEWAY_BUDGET`, `GATEWAY_RATELIMIT`, `GATEWAY_BUDGET_DELTAS`, `GATEWAY_ALERT_COOLDOWN` (KV) |
 | `SCHEDULER` | `elitea-scheduler` | none — no JetStream, no bootstrap |
-| `RUNTIME` | `elitea-main-runtime`, `elitea-worker`, `elitea-nats-bootstrap-runtime` | the command bus: `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}` streams, their worker durables, `ELITEA_RT_V1_DEADLETTER` (KV), the replay wake-up |
+| `RUNTIME` | `elitea-main-runtime`, `elitea-nats-bootstrap-runtime` | the command bus: `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}` streams, their worker durables, the replay wake-up |
+| `WORKER` | `elitea-worker`, `elitea-nats-bootstrap-worker` | `ELITEA_RT_V1_DEADLETTER` (KV) — and nothing else (`jetstream.max_streams: 1`) |
 
 Why accounts and not only per-user permissions: a JetStream **push
 consumer's deliver subject is not checked against its creator's publish
@@ -168,6 +170,24 @@ stream exists. `TestSecuredSchedulerCannotStoreIntoGatewayByReplySubject`
 that no GATEWAY stream gains a message; against the previous single-account
 table the same test sees `GATEWAY_BUDGET_DELTAS` go from 4 to 11 messages.
 
+The worker has an account of its own for the same reason (#1081 review). As a
+RUNTIME user, its pull and info grants let it name a command subject
+(`elitea.rt.v1.<route>.d.<token>`) as the reply: `MSG.NEXT` copied a signed
+command into another route's stream, and info answers filled
+`ELITEA_RT_V1_AGENT` to its `MaxMsgs` — the producer was then refused
+"maximum messages exceeded", and with no delete or purge grant the junk
+stayed until `MaxAge` (up to 26h). In `WORKER` every such reply lands in
+WORKER, whose JetStream holds the dead-letter bucket alone (which the worker
+writes anyway). The bucket is WORKER's and not RUNTIME's so that the producer,
+which stays in RUNTIME as the streams' writer, cannot steer one of its own
+answers into `$KV.ELITEA_RT_V1_DEADLETTER.<key>` and forge a dead letter.
+`TestSecuredWorkerCannotStoreIntoCommandStreamsByReplySubject`
+(elitea-main, `internal/transport/commandbus`) makes every request the worker
+may make with replies on every route's command subject and on WORKER's own
+JetStream API, and the producer's requests with replies on the bucket, and
+asserts that no stream changes; against the previous table the same attack
+took `ELITEA_RT_V1_VALIDATE` from 0 to 4 messages.
+
 **The cross-account flows**, and nothing else crosses:
 
 * `GATEWAY` exports the stream `gateway.events.project.*.events` (the
@@ -187,6 +207,16 @@ table the same test sees `GATEWAY_BUDGET_DELTAS` go from 4 to 11 messages.
   subjects keep their name: they are each delivery's reply subject. A
   service's answer goes back to the requester's reply subject in the
   requester's account.
+* `RUNTIME` exports to `WORKER` only, as **services**, the same three subjects
+  for each of the three worker durables (`elitea-configuration-worker-v1` on
+  `ELITEA_RT_V1_VALIDATE`, `elitea-agent-worker-v1`, `elitea-index-worker-v1`):
+  `CONSUMER.INFO`, `CONSUMER.MSG.NEXT` (`response_type: stream`) and
+  `$JS.ACK.<stream>.<durable>.>`. `WORKER` imports the API subjects under the
+  prefix `JS.RUNTIME.API` (`natsconn.WorkerRuntimeJSAPIPrefix`; the Rust and
+  Python workers open their command-bus JetStream context with it when they
+  present an identity, and use WORKER's own `$JS.API` for the dead-letter
+  bucket). No `STREAM.INFO` is exported: the workers verify their durable,
+  elitea-main verifies the streams.
 
 **One subject family per producer.** The project SSE route
 (`GET /api/v2/events/prompt_lib/{projectID}`) reads two subjects and accepts
@@ -223,10 +253,11 @@ subject), and the gateway holds no consumer grant at all.
 | GATEWAY | `elitea-nats-bootstrap-gateway` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on its four assets, `CONSUMER.{CREATE,INFO}` on `GATEWAY_BUDGET_DELTAS.budget-writeback` | `_INBOX_elitea-nats-bootstrap-gateway.>` |
 | SCHEDULER | `elitea-scheduler` | `JS.GATEWAY.API.CONSUMER.{INFO,MSG.NEXT}.GATEWAY_BUDGET_DELTAS.budget-writeback`, `$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>` — the three imported services, nothing else; it binds to the consumer the GATEWAY bootstrap creates | `_INBOX_elitea-scheduler.>` |
 | RUNTIME | `elitea-main-runtime` | `elitea.rt.v1.{validate,agent,index}.d.*` (commands), `elitea.rt.v1.replay.wake`; `STREAM.INFO` and `DIRECT.GET` on `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}`; `CONSUMER.INFO` on their durables. Denied: `$JS.ACK.>`, `MSG.NEXT`, `$KV.>`, stream admin, consumer create/delete | `_INBOX_elitea-main-runtime.>`, `elitea.rt.v1.replay.wake` |
-| RUNTIME | `elitea-worker` | `STREAM.INFO` on the three streams; `CONSUMER.{INFO,MSG.NEXT}` and `$JS.ACK` on their own durables only (`elitea-configuration-worker-v1` on `ELITEA_RT_V1_VALIDATE`, `elitea-agent-worker-v1`, `elitea-index-worker-v1`); `$KV.ELITEA_RT_V1_DEADLETTER.>` + its `STREAM.INFO` (dead letters). Denied: `elitea.rt.v1.>` (no command injection, no wake-up), stream admin, consumer create/delete | `_INBOX_elitea-worker.>` |
-| RUNTIME | `elitea-nats-bootstrap-runtime` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on the three route streams and `KV_ELITEA_RT_V1_DEADLETTER`, `CONSUMER.{CREATE,INFO}` on the three route durables | `_INBOX_elitea-nats-bootstrap-runtime.>` |
+| RUNTIME | `elitea-nats-bootstrap-runtime` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on the three route streams, `CONSUMER.{CREATE,INFO}` on the three route durables | `_INBOX_elitea-nats-bootstrap-runtime.>` |
+| WORKER | `elitea-worker` | `JS.RUNTIME.API.CONSUMER.{INFO,MSG.NEXT}` and `$JS.ACK` on its three durables only — the nine imported services, nothing else in RUNTIME; `$KV.ELITEA_RT_V1_DEADLETTER.>` + its `STREAM.INFO` (dead letters, WORKER's own JetStream). Denied: `elitea.rt.v1.>`, stream admin, consumer create/delete | `_INBOX_elitea-worker.>` |
+| WORKER | `elitea-nats-bootstrap-worker` | `$JS.API.INFO`, `STREAM.{NAMES,LIST}`, `STREAM.{INFO,CREATE,UPDATE}` on `KV_ELITEA_RT_V1_DEADLETTER` | `_INBOX_elitea-nats-bootstrap-worker.>` |
 
-The RUNTIME rows are the runtime command bus (`../../../docs/runtime-command-bus.md`):
+The RUNTIME and WORKER rows are the runtime command bus (`../../../docs/runtime-command-bus.md`):
 elitea-main presents `elitea-main-runtime` with `ELITEA_RUNTIME_NATS_URL` and
 `ELITEA_RUNTIME_NATS_TLS_{CA,CERT,KEY}_FILE`, separate from its live-update
 identity; the Rust and Python workers present `elitea-worker`
@@ -255,15 +286,17 @@ ELITEA_TEST_NATS_CLI_BIN=$(command -v nats) \
 NetworkPolicy or route TLS off, points route TLS at the client certificate or
 the client CA, or turns route verification off; sets `no_auth_user`, `allow_non_tls` or a
 top-level `authorization` block; declares accounts other than exactly `MAIN`,
-`GATEWAY`, `SCHEDULER` and `RUNTIME`, MAIN/GATEWAY/RUNTIME without JetStream
-or SCHEDULER with it; puts `elitea-scheduler` anywhere but SCHEDULER or
-anyone else in it; declares an identity twice, a non-URI, password, nkey or
+`GATEWAY`, `SCHEDULER`, `RUNTIME` and `WORKER`, MAIN/GATEWAY/RUNTIME without
+JetStream, SCHEDULER with it, or WORKER's without `max_streams: 1`; puts
+`elitea-scheduler` anywhere but SCHEDULER, `elitea-worker` anywhere but
+WORKER, or anyone else in either; declares an identity twice, a non-URI, password, nkey or
 token user, or a JetStream account without exactly its own bootstrap; lets a
 user subscribe to `_INBOX.>`/`>`/`$JS.API…`; lets anyone delete or purge a
 stream or anyone but the account's bootstrap create or update one; or widens
-the exports/imports beyond GATEWAY's soft-alert stream to MAIN and the three
-budget-writeback services to SCHEDULER (subject, account, response type and
-the `JS.GATEWAY.API` mapping are all pinned).
+the exports/imports beyond GATEWAY's soft-alert stream to MAIN, the three
+budget-writeback services to SCHEDULER and RUNTIME's nine worker-durable
+services to WORKER (subject, account, response type and the `JS.GATEWAY.API`
+/ `JS.RUNTIME.API` mappings are all pinned).
 
 ### Network
 
@@ -289,7 +322,7 @@ subject to NetworkPolicy.
 | `GATEWAY_BUDGET_DELTAS` / `budget-writeback` | GATEWAY | durable pull consumer (explicit ack, AckWait 30s, MaxDeliver 10) | the scheduler's write-back drain; it binds only |
 | `ELITEA_RT_V1_{VALIDATE,AGENT,INDEX}` | RUNTIME | WorkQueue streams (discard new + per subject, 1 msg/subject, ≤1024 msgs, 64 MiB, 64 KiB msgs, MaxAge 3h/26h/26h, 2m dedup, allow_direct, deny delete/purge) | the runtime command bus, one stream per route |
 | `elitea-{configuration,agent,index}-worker-v1` | RUNTIME | durable pull consumers (AckWait 60s, MaxDeliver -1, MaxWaiting 512) | the workers' shared consumer, one per stream; they bind only |
-| `ELITEA_RT_V1_DEADLETTER` | RUNTIME | KV (TTL 7d, history 1) | poison commands the workers recorded |
+| `ELITEA_RT_V1_DEADLETTER` | WORKER | KV (TTL 7d, history 1) | poison commands the workers recorded |
 
 Every JetStream write is synced before it is acknowledged:
 `jetstream { sync_interval: always }` (`values.yaml`, owner decision for the

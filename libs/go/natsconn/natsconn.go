@@ -68,22 +68,29 @@ const (
 	// separate from the live-update plane's elitea-main identity so that
 	// neither plane's grants reach the other's account.
 	IdentityMainRuntime = "elitea-main-runtime"
-	// IdentityWorker is the consumer of the command bus, presented by the
-	// Rust and the Python worker alike.
-	IdentityWorker           = "elitea-worker"
 	IdentityBootstrapRuntime = "elitea-nats-bootstrap-runtime"
+
+	// WORKER account: the command bus CONSUMER, presented by the Rust and the
+	// Python worker alike, and the bootstrap of the one asset WORKER owns,
+	// the ELITEA_RT_V1_DEADLETTER bucket. The worker reaches RUNTIME's
+	// durables only through service imports (WorkerRuntimeJSAPIPrefix).
+	IdentityWorker          = "elitea-worker"
+	IdentityBootstrapWorker = "elitea-nats-bootstrap-worker"
 )
 
 // The accounts, one per plane. A subject or a stream in one account is not
 // reachable from another, and every account's only writer is its owner. The
 // cross-account flows are GATEWAY's export of the per-project soft-alert
-// subject to MAIN, and GATEWAY's service exports of the budget-writeback
-// consumer's INFO, MSG.NEXT and ACK subjects to SCHEDULER.
+// subject to MAIN, GATEWAY's service exports of the budget-writeback
+// consumer's INFO, MSG.NEXT and ACK subjects to SCHEDULER, and RUNTIME's
+// service exports of the three worker durables' INFO, MSG.NEXT and ACK
+// subjects to WORKER.
 const (
 	AccountMain      = "MAIN"
 	AccountGateway   = "GATEWAY"
 	AccountScheduler = "SCHEDULER"
 	AccountRuntime   = "RUNTIME"
+	AccountWorker    = "WORKER"
 )
 
 // SchedulerGatewayJSAPIPrefix is the JetStream API prefix under which the
@@ -104,6 +111,27 @@ const (
 // lands on that reply subject in SCHEDULER, where nothing stores it.
 const SchedulerGatewayJSAPIPrefix = "JS.GATEWAY.API"
 
+// WorkerRuntimeJSAPIPrefix is the JetStream API prefix under which the
+// WORKER account imports RUNTIME's command-bus consumer API: exactly
+// $JS.API.CONSUMER.{INFO,MSG.NEXT}.<stream>.<durable> for the three worker
+// durables. The workers open the command-bus JetStream context with this
+// prefix when they present a client identity (async-nats
+// jetstream::with_prefix, nats-py nc.jetstream(prefix=...)); WORKER's own
+// JetStream, which holds only the dead-letter bucket, keeps the default
+// $JS.API prefix. The NATS chart's import "to" subjects must carry the same
+// prefix (templates/guards.yaml pins them).
+//
+// Why the worker is not a RUNTIME user: the server publishes a JetStream API
+// answer (a pull's deliveries, a consumer's or stream's info) to the
+// requester's reply subject without checking it against the requester's
+// permissions, so in RUNTIME a pull or info request whose reply named
+// elitea.rt.v1.<route>.d.<token> made the server store the answer in that
+// command stream — a signed command copied across routes, or junk filling a
+// stream to its MaxMsgs so the producer is refused, with no grant that could
+// remove it. Across a service import the answer lands on that reply subject
+// in WORKER, whose only stream is the worker's own dead-letter bucket.
+const WorkerRuntimeJSAPIPrefix = "JS.RUNTIME.API"
+
 // EnvPrefixRuntime configures the runtime command bus producer
 // (IdentityMainRuntime): ELITEA_RUNTIME_NATS_URL and the three
 // ELITEA_RUNTIME_NATS_TLS_*_FILE names EnvNames returns for it.
@@ -119,8 +147,10 @@ func AccountOf(identity string) string {
 		return AccountGateway
 	case IdentityScheduler:
 		return AccountScheduler
-	case IdentityMainRuntime, IdentityWorker, IdentityBootstrapRuntime:
+	case IdentityMainRuntime, IdentityBootstrapRuntime:
 		return AccountRuntime
+	case IdentityWorker, IdentityBootstrapWorker:
+		return AccountWorker
 	}
 	return ""
 }
@@ -131,7 +161,8 @@ func Identities() []string {
 		IdentityMain, IdentityBootstrapMain,
 		IdentityGateway, IdentityBootstrapGateway,
 		IdentityScheduler,
-		IdentityMainRuntime, IdentityWorker, IdentityBootstrapRuntime,
+		IdentityMainRuntime, IdentityBootstrapRuntime,
+		IdentityWorker, IdentityBootstrapWorker,
 	}
 }
 

@@ -317,7 +317,15 @@ func preflightJetStream(t *testing.T, server *natstest.Server, identity string) 
 		t.Fatal(err)
 	}
 	t.Cleanup(conn.Close)
-	js, err := jetstream.New(conn)
+	// The worker binds RUNTIME's durables from WORKER through the imported
+	// API prefix, as both workers do.
+	newJS := func() (jetstream.JetStream, error) { return jetstream.New(conn) }
+	if identity == natsconn.IdentityWorker {
+		newJS = func() (jetstream.JetStream, error) {
+			return jetstream.NewWithAPIPrefix(conn, natsconn.WorkerRuntimeJSAPIPrefix)
+		}
+	}
+	js, err := newJS()
 	if err != nil {
 		t.Fatal(err)
 	}

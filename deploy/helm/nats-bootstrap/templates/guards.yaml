@@ -17,12 +17,12 @@ authorization error.
 {{- if and (ne (include "nats-bootstrap.name" .) "nats-bootstrap") (not .Values.networkPolicyClientNameManaged) -}}
 {{- fail (printf "nameOverride labels the Job pod app.kubernetes.io/name=%s, but the NATS chart's NetworkPolicy admits the bootstrap as nats-bootstrap (deploy/helm/nats networkPolicy.clients); the Job would time out at the NATS port. Add %q there, then set networkPolicyClientNameManaged=true." (include "nats-bootstrap.name" .) (include "nats-bootstrap.name" .)) -}}
 {{- end -}}
-{{- if ne (.Values.accounts | default list | join ",") "main,gateway,runtime" -}}
-{{- fail (printf "accounts is [%s], and must be [main, gateway, runtime]. The NATS server has one account per plane and each plane's assets are created by that account's own bootstrap identity (#1076); an account left out is an account whose streams nobody creates." (.Values.accounts | default list | join ", ")) -}}
+{{- if ne (.Values.accounts | default list | join ",") "main,gateway,runtime,worker" -}}
+{{- fail (printf "accounts is [%s], and must be [main, gateway, runtime, worker]. The NATS server has one account per plane and each plane's assets are created by that account's own bootstrap identity (#1076); an account left out is an account whose streams nobody creates." (.Values.accounts | default list | join ", ")) -}}
 {{- end -}}
 {{- if and .Values.tls.certificate.create (gt (int (.Values.connectWait | default 0)) (sub (int .Values.activeDeadlineSeconds) 60)) -}}
 {{- fail (printf "connectWait (%vs) leaves the Job under a minute of its %vs activeDeadlineSeconds to reconcile the assets." .Values.connectWait .Values.activeDeadlineSeconds) -}}
 {{- end -}}
-{{- if and (not .Values.tls.certificate.create) (ne (len (.Values.tls.secretNames | default dict)) 3) -}}
-{{- fail "tls.certificate.create is false, so tls.secretNames must name an existing certificate Secret for each of main, gateway and runtime." -}}
+{{- if and (not .Values.tls.certificate.create) (ne (len (.Values.tls.secretNames | default dict)) 4) -}}
+{{- fail "tls.certificate.create is false, so tls.secretNames must name an existing certificate Secret for each of main, gateway, runtime and worker." -}}
 {{- end -}}
