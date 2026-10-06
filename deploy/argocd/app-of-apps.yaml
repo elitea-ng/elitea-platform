@@ -29,6 +29,8 @@
 # is why it shares the platform's namespace. cert-manager is a prerequisite.
 # A NATS you bring yourself must run JetStream, require the same client
 # identities, and have the bootstrap's assets, or elitea-main refuses to start.
+# Moving NATS here from `elitea-gateway` starts it on an EMPTY JetStream
+# volume — budget counters reset for the current period (docs/UPGRADING.md).
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

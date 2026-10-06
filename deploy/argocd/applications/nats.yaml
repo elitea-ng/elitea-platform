@@ -11,6 +11,12 @@
 # all install into `elitea`. cert-manager must be installed. Whoever may create
 # Certificates or read Secrets in `elitea` can mint a NATS identity: restrict
 # both (deploy/helm/nats/README.md, "Who can mint a NATS identity").
+#
+# MOVED from `elitea-gateway` (#1076). A new namespace is a new StatefulSet
+# with a NEW, EMPTY JetStream volume: budget counters and rate-limit windows
+# restart at zero for the current period, undrained write-behind deltas and
+# the soft-alert cooldowns are lost (greenfield, by decision). The old PVC in
+# `elitea-gateway` is not pruned; delete it. docs/UPGRADING.md has the steps.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
