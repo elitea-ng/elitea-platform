@@ -427,4 +427,5 @@ Worker startup now retains the selected dependency cohort for exact compiled pro
 Fresh unmatched Rust jobs keep ordinary execution; recorded compiled work retains its original recovery fence.
 Main's exact profile admission remains unchanged.
 The [source mapping](docs/source-mapping/code-compiled-cohort-selection-20261006.md) separates the failed four-language fixture from passing Cargo browser runs.
-Replacement CI and deployed correction acceptance remain required.
+The unchanged four-language fixture and Cargo regression pass after the Worker-only correction deploys.
+Replacement CI and complete-cohort restart acceptance remain required.

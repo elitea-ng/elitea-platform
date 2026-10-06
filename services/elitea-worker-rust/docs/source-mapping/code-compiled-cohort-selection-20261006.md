@@ -54,7 +54,25 @@ The 33 focused tests pass with no failures or skipped cases.
 Strict all-feature, all-target Clippy passes with warnings denied.
 The final edited test passes again after the test-only lint correction.
 These checks use the locked dependencies and one compiler job.
-Image deployment and the original four-language UI rerun still require separate evidence.
+Worker source `dfd0d6d6f` builds and deploys in rehearsal without changing Main, Supervisor, Web, or either database schema.
+Its image is `sha256:eba818c6dd1afd1e397aa9d63250b9b05eee648abcb6bfa57c300bb251e795b1`.
+The retained August backlog keeps its exact row fingerprints, expired commands, and zero live leases.
+
+The unchanged four-language fixture completes execution `5285977bc0d74431d45691c9e4584e5e` in about 16 seconds.
+Its UI result shows `PASS`, five records, sorted IDs `e,b,d,a,c`, and total 31.
+All seven sandbox dispatches resolve without a compiled descriptor.
+The preceding failed run has only six resolved dispatches and no Rust dispatch.
+
+The Cargo regression completes execution `1ce8695086c238b83a6d528a8116c521` in about five seconds.
+Its two dispatches resolve, including one compiled execution descriptor.
+The expected three accepted records and total 30 remain visible after persistent chat reload.
+These timings are local fixture measurements, not production throughput results.
+
+The user's repeated error reference is `06087c4f-48f9-55b0-8288-01bb83809875`.
+Its execution `4f7e917641cce6ada7bcbe5d86266f4e` fails at 12:25:56 UTC on the prior Worker.
+The corrected Worker starts at 12:28:51 UTC, before both passing executions.
+
 The previous complete CI matrix has 69 successful checks and three configured skips at `ca8fee8f4`.
 That matrix precedes this correction and does not verify it.
+Replacement CI runs on the corrected source. Its final result remains a separate delivery check.
 The Main migration transition and current-cohort restart acceptance remain separate open gates.

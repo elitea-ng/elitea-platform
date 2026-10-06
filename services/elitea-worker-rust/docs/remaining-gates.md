@@ -929,5 +929,10 @@ The worker applies a dependency-enabled compiled profile to a dependency-free Ru
 The [cohort mapping](source-mapping/code-compiled-cohort-selection-20261006.md) records the source cause, persisted evidence, correction, and proof limits.
 Fresh unmatched jobs must use ordinary execution before compiled authority admission.
 Recorded compiled work must never fall back or move to another supervisor.
-The focused correction requires replacement CI, deployment, and the original fixture rerun.
-The passing Cargo fixture does not close that failure.
+Worker source `dfd0d6d6f` deploys alone after its 33 focused tests and strict Clippy pass.
+The unchanged four-language fixture then passes in about 16 seconds, with total 31 and all four expected steps.
+Its seven dispatches resolve through ordinary execution.
+The Cargo regression passes in about five seconds and retains its result after persistent chat reload.
+Its compiled execution descriptor remains present.
+The replacement CI result remains required before merge.
+The new Main migration transition and complete-cohort restart acceptance remain separate open gates.
