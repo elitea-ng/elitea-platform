@@ -28,8 +28,11 @@
 //! A delayed nak is never followed by a `+WPI` for the same delivery: the
 //! server treats `+WPI` as progress and resets the redelivery timer to
 //! `AckWait`, which would turn a 24h or retry delay into a 60s loop. The
-//! disposition stops owning the delivery and answers it while holding the same
-//! gate a heartbeat round holds for its whole send.
+//! disposition stops owning the delivery under the same gate a heartbeat round
+//! holds for its whole send (so the round that included it has finished and no
+//! later round includes it), then releases the gate before answering: the
+//! answer is a request/reply bounded by the request timeout, and holding the
+//! gate across it would queue every heartbeat round behind slow answers.
 
 #![allow(dead_code)] // Production bootstrap remains capability-disabled.
 
@@ -39,7 +42,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, mpsc, watch};
+use tokio::sync::{Mutex as AsyncMutex, mpsc, watch};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 use tokio::task::{Id as TaskId, JoinError, JoinSet};
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
@@ -254,17 +257,20 @@ impl OwnedCommandDelivery {
         self.settlement.retired()
     }
 
-    /// Stop owning this delivery so it can be answered: no heartbeat round
-    /// that started before can still be sending, and none that starts after
-    /// will include it, until the returned guard is dropped. Returns the reply
-    /// subject of the newest copy of the message.
-    async fn release_for_answer(&mut self) -> (OwnedMutexGuard<()>, String) {
-        let gate = Arc::clone(&self.owned.gate).lock_owned().await;
+    /// Stop owning this delivery so it can be answered. The removal happens
+    /// under the heartbeat gate: a round holds the gate for its whole send, so
+    /// acquiring it means any round that included this delivery has finished,
+    /// and every later round snapshots the ledger without it. The gate is
+    /// released before returning, so the (possibly slow) answer never delays
+    /// a heartbeat round for the other deliveries. Returns the reply subject
+    /// of the newest copy of the message.
+    async fn release_for_answer(&mut self) -> String {
+        let _gate = self.owned.gate.lock().await;
         let reply = lock_owned(&self.owned.owned)
             .remove(&self.key)
             .unwrap_or_else(|| self.coordinates.reply.clone());
         self.released = true;
-        (gate, reply)
+        reply
     }
 }
 
@@ -326,8 +332,9 @@ where
     }
 
     /// Send `+WPI` for every queued or active message. The gate is held for
-    /// the whole round, so a delivery being answered with a delayed nak is
-    /// either in a round that finished before the nak or in none.
+    /// the whole round, and a delivery leaves the ledger only under the gate
+    /// before it is answered, so a delivery answered with a delayed nak is
+    /// either in a round that finished before the nak was sent or in none.
     pub(crate) async fn heartbeat_owned(&self) -> Result<usize, NatsJetStreamError> {
         let _round = self.owned.gate.lock().await;
         let replies: Vec<String> = lock_owned(&self.owned.owned).values().cloned().collect();
@@ -788,7 +795,7 @@ async fn release_unstarted<C>(connection: &C, mut delivery: OwnedCommandDelivery
 where
     C: CommandBusConnection + ?Sized,
 {
-    let (_gate, reply) = delivery.release_for_answer().await;
+    let reply = delivery.release_for_answer().await;
     let released = connection.nak(&reply, Duration::ZERO).await;
     tracing::info!(
         event = "command_delivery_released_at_shutdown",
@@ -832,7 +839,7 @@ where
             (answer, disposition)
         }
     };
-    let (_gate, reply) = delivery.release_for_answer().await;
+    let reply = delivery.release_for_answer().await;
     send_answer(connection, &reply, answer).await;
     disposition
 }

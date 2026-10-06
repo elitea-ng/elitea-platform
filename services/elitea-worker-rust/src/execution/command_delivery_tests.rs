@@ -53,6 +53,10 @@ struct FakeConnection {
     /// reaches the (fake) server: a round paused mid-send.
     heartbeat_pause: Option<Arc<Semaphore>>,
     heartbeat_entered: Notify,
+    /// When set, a nak or term waits for a permit before it reaches the
+    /// (fake) server: an answer stuck in its request/reply timeout.
+    answer_pause: Option<Arc<Semaphore>>,
+    answer_entered: Notify,
     wpi_replies: Mutex<Vec<Vec<String>>>,
     operations: Mutex<Vec<FakeOperation>>,
     operation_changed: Notify,
@@ -68,6 +72,8 @@ impl FakeConnection {
             dead_letter_fails: false,
             heartbeat_pause: None,
             heartbeat_entered: Notify::new(),
+            answer_pause: None,
+            answer_entered: Notify::new(),
             wpi_replies: Mutex::new(Vec::new()),
             operations: Mutex::new(Vec::new()),
             operation_changed: Notify::new(),
@@ -93,6 +99,13 @@ impl FakeConnection {
             .expect("operation log")
             .push(operation);
         self.operation_changed.notify_waiters();
+    }
+
+    async fn answer_paused(&self) {
+        self.answer_entered.notify_waiters();
+        if let Some(pause) = &self.answer_pause {
+            pause.acquire().await.expect("answer pause").forget();
+        }
     }
 
     fn operations(&self) -> Vec<FakeOperation> {
@@ -177,6 +190,7 @@ impl CommandBusConnection for FakeConnection {
     }
 
     async fn nak(&self, reply: &str, delay: Duration) -> Result<(), NatsJetStreamError> {
+        self.answer_paused().await;
         self.record(FakeOperation::Nak {
             sequence: sequence_of(reply),
             delivered: delivered_of(reply),
@@ -186,6 +200,7 @@ impl CommandBusConnection for FakeConnection {
     }
 
     async fn term(&self, reply: &str) -> Result<(), NatsJetStreamError> {
+        self.answer_paused().await;
         self.record(FakeOperation::Term(sequence_of(reply)));
         Ok(())
     }
@@ -1069,6 +1084,71 @@ async fn no_wpi_follows_a_retry_later_nak() {
 #[tokio::test]
 async fn no_wpi_follows_a_poison_nak() {
     no_wpi_follows_a_delayed_nak(Script::Poison(PoisonReason::EnvelopeInvalid), POISON_DELAY).await;
+}
+
+/// A delayed answer stuck in its request/reply timeout must not hold the
+/// heartbeat gate: a concurrent round for the other owned deliveries still
+/// completes (and no longer includes the delivery being answered), or a slow
+/// answer per delivery would starve every `+WPI` past `AckWait`.
+#[tokio::test]
+async fn a_slow_answer_does_not_block_a_concurrent_heartbeat_round() {
+    let mut fake = FakeConnection::new(2);
+    let answer_pause = Arc::new(Semaphore::new(0));
+    fake.answer_pause = Some(Arc::clone(&answer_pause));
+    let connection = Arc::new(fake);
+    let intake = Arc::new(intake(Arc::clone(&connection), config(2, 2)));
+    connection.push_fetch(Ok(vec![delivery(7), delivery(8)]));
+    let mut batch = intake.next_batch().await.expect("owned deliveries");
+    let other = batch.commands.pop().expect("delivery 8");
+    let mut owned = batch.commands.pop().expect("delivery 7");
+    assert_eq!(owned.coordinates().stream_sequence, 7);
+
+    let processor = TestProcessor::scripted(BTreeMap::from([(7, Script::RetryLater)]));
+    processor.release(1);
+    let verdict = owned.process(&processor).await.expect("processing");
+    let entered = connection.answer_entered.notified();
+    let dispose = tokio::spawn({
+        let connection = Arc::clone(&connection);
+        async move {
+            let disposition = super::command_delivery::test_dispose_processed(
+                connection.as_ref(),
+                &mut owned,
+                verdict,
+                RETRY_DELAY,
+            )
+            .await;
+            drop(owned);
+            disposition
+        }
+    });
+    // The nak for 7 is now in flight and stuck.
+    entered.await;
+
+    let round = tokio::time::timeout(Duration::from_secs(5), intake.heartbeat_owned())
+        .await
+        .expect("the heartbeat round is not queued behind the slow answer")
+        .expect("+WPI round");
+    assert_eq!(round, 1);
+    assert_eq!(
+        connection
+            .wpi_replies
+            .lock()
+            .expect("wpi replies")
+            .last()
+            .map(|replies| replies
+                .iter()
+                .map(|reply| sequence_of(reply))
+                .collect::<Vec<_>>()),
+        Some(vec![8]),
+        "the round heartbeats the other delivery only"
+    );
+    assert!(naks(&connection).is_empty(), "the nak is still in flight");
+
+    answer_pause.add_permits(1);
+    assert_eq!(dispose.await.expect("disposition"), "retry_later");
+    assert_eq!(naks(&connection), [(7, RETRY_DELAY)]);
+    assert!(wpi_after_nak(&connection, 7).is_empty());
+    drop(other);
 }
 
 #[tokio::test]
