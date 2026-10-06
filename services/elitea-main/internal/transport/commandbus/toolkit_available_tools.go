@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"context"
@@ -7,19 +7,15 @@ import (
 
 	runtimev1 "github.com/EliteaAI/elitea-platform/libs/proto/gen/go/elitea/runtime/v1"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	toolkitcalltoolapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitcalltool"
+	toolkitdiscoveryapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
-var ErrInvalidToolkitCallToolCommand = errors.New("invalid tool-run command")
+var ErrInvalidToolkitAvailableToolsCommand = errors.New("invalid toolkit discovery command")
 
-// ToolkitCallToolProducerConfig binds one tool-run capability to one bounded
-// control stream. The command carries entry REFERENCES only: the redeemed
-// toolkit settings and the caller's arguments are input-bundle entries and
-// never reach Redis.
-type ToolkitCallToolProducerConfig struct {
+type ToolkitAvailableToolsProducerConfig struct {
 	Stream                 string
-	ConsumerGroup          string
+	Consumer               string
 	ValidationStream       string
 	ProtocolRevision       string
 	EnvelopeSchemaRevision string
@@ -28,35 +24,35 @@ type ToolkitCallToolProducerConfig struct {
 	AllowTestOnlyHMAC      bool
 }
 
-type ToolkitCallToolProducer struct {
+type ToolkitAvailableToolsProducer struct {
 	producer          *Producer
 	stream            string
-	consumerGroup     string
+	consumer          string
 	protocolRevision  string
 	capabilityVersion string
 }
 
-func NewToolkitCallToolProducer(
-	config ToolkitCallToolProducerConfig,
+func NewToolkitAvailableToolsProducer(
+	config ToolkitAvailableToolsProducerConfig,
 	signer CommandSigner,
 	appender StreamAppender,
-) (*ToolkitCallToolProducer, error) {
-	for _, route := range []string{config.Stream, config.ConsumerGroup, config.ValidationStream} {
+) (*ToolkitAvailableToolsProducer, error) {
+	for _, route := range []string{config.Stream, config.Consumer, config.ValidationStream} {
 		if !validAgentRoutingName(route) {
-			return nil, errors.New("invalid tool-run Redis route")
+			return nil, errors.New("invalid toolkit discovery command bus route")
 		}
 	}
-	if redisRouteKeysOverlap(config.Stream, config.ValidationStream) {
-		return nil, errors.New("a tool run cannot share the configuration-validation Redis stream")
+	if routesOverlap(config.Stream, config.ValidationStream) {
+		return nil, errors.New("a toolkit discovery cannot share the configuration-validation command stream")
 	}
 	if config.CapabilityVersion == "" ||
 		len(config.CapabilityVersion) > config.Limits.MaxStringBytes ||
 		strings.ContainsAny(config.CapabilityVersion, "\r\n\x00") {
-		return nil, errors.New("invalid tool-run capability version")
+		return nil, errors.New("invalid toolkit discovery capability version")
 	}
 	if config.Limits.MaxTransportMessageBytes <= 0 ||
-		config.Limits.MaxTransportMessageBytes > maxAgentRedisEntryBytes {
-		return nil, errors.New("tool-run Redis entry limit must be less than 64 KiB")
+		config.Limits.MaxTransportMessageBytes > maxAgentMessageBytes {
+		return nil, errors.New("toolkit discovery message limit must be less than 64 KiB")
 	}
 	producer, err := NewProducer(ProducerConfig{
 		Stream:                 config.Stream,
@@ -68,40 +64,40 @@ func NewToolkitCallToolProducer(
 	if err != nil {
 		return nil, err
 	}
-	return &ToolkitCallToolProducer{
+	return &ToolkitAvailableToolsProducer{
 		producer:          producer,
 		stream:            config.Stream,
-		consumerGroup:     config.ConsumerGroup,
+		consumer:          config.Consumer,
 		protocolRevision:  config.ProtocolRevision,
 		capabilityVersion: config.CapabilityVersion,
 	}, nil
 }
 
-func (p *ToolkitCallToolProducer) Stream() string { return p.stream }
+func (p *ToolkitAvailableToolsProducer) Stream() string { return p.stream }
 
-func (p *ToolkitCallToolProducer) ConsumerGroup() string { return p.consumerGroup }
+func (p *ToolkitAvailableToolsProducer) Consumer() string { return p.consumer }
 
-func (p *ToolkitCallToolProducer) PrepareToolkitCallTool(
+func (p *ToolkitAvailableToolsProducer) PrepareToolkitAvailableTools(
 	ctx context.Context,
-	dispatch toolkitcalltoolapp.Dispatch,
+	dispatch toolkitdiscoveryapp.Dispatch,
 ) (executionapp.PreparedCommandEnvelope, error) {
 	if dispatch.CapabilityVersion != p.capabilityVersion ||
 		dispatch.LimitsRevision != p.producer.config.Limits.Revision {
-		return executionapp.PreparedCommandEnvelope{}, toolkitcalltoolapp.ErrInvalidToolRunDispatch
+		return executionapp.PreparedCommandEnvelope{}, toolkitdiscoveryapp.ErrInvalidDiscoveryDispatch
 	}
-	command, err := toolkitCallToolWorkerCommand(p.protocolRevision, dispatch)
+	command, err := toolkitAvailableToolsWorkerCommand(p.protocolRevision, dispatch)
 	if err != nil {
 		return executionapp.PreparedCommandEnvelope{}, err
 	}
 	return p.Prepare(ctx, command)
 }
 
-func (p *ToolkitCallToolProducer) Prepare(
+func (p *ToolkitAvailableToolsProducer) Prepare(
 	ctx context.Context,
 	command *runtimev1.WorkerCommandV1,
 ) (executionapp.PreparedCommandEnvelope, error) {
 	if ctx == nil || command == nil || hasUnknownFields(command.ProtoReflect()) {
-		return executionapp.PreparedCommandEnvelope{}, ErrInvalidToolkitCallToolCommand
+		return executionapp.PreparedCommandEnvelope{}, ErrInvalidToolkitAvailableToolsCommand
 	}
 	if err := p.validateCommand(command); err != nil {
 		return executionapp.PreparedCommandEnvelope{}, err
@@ -109,7 +105,7 @@ func (p *ToolkitCallToolProducer) Prepare(
 	return p.producer.prepareCommand(ctx, command)
 }
 
-func (p *ToolkitCallToolProducer) AppendPrepared(
+func (p *ToolkitAvailableToolsProducer) AppendPrepared(
 	ctx context.Context,
 	deliveryID string,
 	prepared executionapp.PreparedCommandEnvelope,
@@ -124,58 +120,48 @@ func (p *ToolkitCallToolProducer) AppendPrepared(
 	return p.producer.appendPreparedCommand(ctx, deliveryID, prepared, command)
 }
 
-func (p *ToolkitCallToolProducer) validateCommand(command *runtimev1.WorkerCommandV1) error {
+func (p *ToolkitAvailableToolsProducer) validateCommand(command *runtimev1.WorkerCommandV1) error {
 	if command.GetProtocolRevision() != p.protocolRevision ||
 		command.GetLimitsRevision() != p.producer.config.Limits.Revision ||
-		command.GetCapabilityId() != executiondomain.ToolkitCallToolCapability ||
+		command.GetCapabilityId() != executiondomain.ToolkitAvailableToolsCapability ||
 		command.GetCapabilityVersion() != p.capabilityVersion {
-		return ErrInvalidToolkitCallToolCommand
+		return ErrInvalidToolkitAvailableToolsCommand
 	}
 	input := command.GetInputBundleRef()
-	run := command.GetToolkitCallTool()
-	if command.GetCommandType() != runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_TOOLKIT_CALL_TOOL ||
+	run := command.GetToolkitAvailableTools()
+	if command.GetCommandType() != runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_TOOLKIT_AVAILABLE_TOOLS ||
 		input == nil || run == nil ||
 		command.GetRootExecutionId() != command.GetExecutionId() ||
 		command.GetParentExecutionId() != "" || command.GetParentCallId() != "" {
-		return ErrInvalidToolkitCallToolCommand
+		return ErrInvalidToolkitAvailableToolsCommand
 	}
 	values := []string{
 		command.GetCommandId(), command.GetIdempotencyKey(), command.GetExecutionId(),
 		command.GetTenantId(), command.GetResourceProjectId(), command.GetProjectionProjectId(),
 		command.GetPrincipalRef(), command.GetResourceClass(), command.GetIsolationClass(),
 		input.GetInputBundleId(), input.GetImmutableVersion(), input.GetMediaType(),
-		run.GetToolkitType(), run.GetToolName(), run.GetToolkitId(),
-		run.GetSettingsEntryId(), run.GetArgumentsEntryId(),
+		run.GetToolkitType(),
+		run.GetSettingsEntryId(),
 	}
 	for _, value := range values {
 		if !validAgentText(value, p.producer.config.Limits.MaxStringBytes) {
-			return ErrInvalidToolkitCallToolCommand
+			return ErrInvalidToolkitAvailableToolsCommand
 		}
-	}
-	if version := run.GetToolkitVersion(); version != "" &&
-		!validAgentText(version, p.producer.config.Limits.MaxStringBytes) {
-		return ErrInvalidToolkitCallToolCommand
-	}
-	// The two roles must be two entries. One entry serving as both would put
-	// caller-supplied arguments where the platform's own redeemed settings
-	// belong, which is the single thing this command's shape exists to prevent.
-	if run.GetSettingsEntryId() == run.GetArgumentsEntryId() {
-		return ErrInvalidToolkitCallToolCommand
 	}
 	if command.GetGeneration() == 0 || command.GetDispatchOrdinal() == 0 ||
 		command.GetPriority() == 0 || command.GetDeadlineUnixMillis() <= 0 ||
 		input.GetByteLength() == 0 || !validSHA256Digest(input.GetDigest()) {
-		return ErrInvalidToolkitCallToolCommand
+		return ErrInvalidToolkitAvailableToolsCommand
 	}
 	if err := validateBoundedStrings(command, p.producer.config.Limits.MaxStringBytes); err != nil {
-		return ErrInvalidToolkitCallToolCommand
+		return ErrInvalidToolkitAvailableToolsCommand
 	}
 	return nil
 }
 
-func toolkitCallToolWorkerCommand(
+func toolkitAvailableToolsWorkerCommand(
 	protocolRevision string,
-	dispatch toolkitcalltoolapp.Dispatch,
+	dispatch toolkitdiscoveryapp.Dispatch,
 ) (*runtimev1.WorkerCommandV1, error) {
 	if protocolRevision == "" || len(protocolRevision) > 128 {
 		return nil, errors.New("invalid protocol revision")
@@ -187,7 +173,7 @@ func toolkitCallToolWorkerCommand(
 		ProtocolRevision:    protocolRevision,
 		CommandId:           dispatch.CommandID,
 		IdempotencyKey:      dispatch.OutboxID,
-		CommandType:         runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_TOOLKIT_CALL_TOOL,
+		CommandType:         runtimev1.WorkerCommandTypeV1_WORKER_COMMAND_TYPE_V1_TOOLKIT_AVAILABLE_TOOLS,
 		ExecutionId:         dispatch.ExecutionID,
 		Generation:          dispatch.Generation,
 		DispatchOrdinal:     dispatch.DispatchOrdinal,
@@ -212,17 +198,14 @@ func toolkitCallToolWorkerCommand(
 		Traceparent:        dispatch.Traceparent,
 		Tracestate:         dispatch.Tracestate,
 		LimitsRevision:     dispatch.LimitsRevision,
-		CapabilityCommand: &runtimev1.WorkerCommandV1_ToolkitCallTool{
-			ToolkitCallTool: &runtimev1.ToolkitCallToolCommandV1{
-				ToolkitType:      dispatch.ToolkitType,
-				SettingsEntryId:  dispatch.SettingsEntryID,
-				ToolName:         dispatch.ToolName,
-				ArgumentsEntryId: dispatch.ArgumentsEntryID,
-				ToolkitId:        dispatch.ToolkitID,
-				ToolkitVersion:   dispatch.ToolkitVersion,
+		CapabilityCommand: &runtimev1.WorkerCommandV1_ToolkitAvailableTools{
+			ToolkitAvailableTools: &runtimev1.ToolkitAvailableToolsCommandV1{
+				ToolkitType:     dispatch.ToolkitType,
+				ToolkitId:       dispatch.ToolkitID,
+				SettingsEntryId: dispatch.SettingsEntryID,
 			},
 		},
 	}, nil
 }
 
-var _ toolkitcalltoolapp.ReferenceCommandProducer = (*ToolkitCallToolProducer)(nil)
+var _ toolkitdiscoveryapp.ReferenceCommandProducer = (*ToolkitAvailableToolsProducer)(nil)

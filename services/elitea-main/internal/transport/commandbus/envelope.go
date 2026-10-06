@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"errors"
@@ -12,8 +12,6 @@ import (
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 )
-
-const redisEnvelopeField = "signed_envelope"
 
 func validationWorkerCommand(protocolRevision string, dispatch executionapp.ValidationDispatch) (*runtimev1.WorkerCommandV1, error) {
 	if protocolRevision == "" || len(protocolRevision) > 128 {

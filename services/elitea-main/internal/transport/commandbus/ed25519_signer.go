@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"context"

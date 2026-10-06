@@ -17,9 +17,7 @@ func codeConsumerEnvironment(t *testing.T) map[string]string {
 	values := oneDirectoryEnvironment()
 	values["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
 	values["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://main.invalid"
-	values["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "commands.v1.agent.execute.agents.shared.1.0"
-	values["ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP"] = "elitea-agent-worker-v1"
-	values["ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES"] = "64"
+	values["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	values["ELITEA_RUNTIME_SANDBOX_AUDIENCES"] = owner.Supervisors[0].Audience
 	values["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED"] = "true"
 	values["ELITEA_RUNTIME_CODE_WORKSPACE_ENABLED"] = "true"

@@ -25,7 +25,6 @@ const (
 	caName          = "runtime-ca.crt"
 	keyringName     = "command-signing-keyring.json"
 	signingKeyName  = "command-signing-key.pem"
-	redisPassword   = "redis-producer-password"
 	signingKeyID    = "runtime-test-v1"
 	sourceDirectory = "source"
 	targetDirectory = "material"
@@ -52,8 +51,7 @@ func newMaterialFixture(t *testing.T) materialFixture {
 	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.der})
 
 	keys := map[string][]byte{
-		caName:        caPEM,
-		redisPassword: []byte("a-runtime-redis-password\n"),
+		caName: caPEM,
 	}
 	for _, listener := range []string{"control", "output", "content"} {
 		certificatePEM, privateKeyPEM := issueCertificate(t, ca, listener+".runtime.test", x509.ExtKeyUsageServerAuth)
@@ -157,14 +155,13 @@ func (d deployment) path(name string) string { return filepath.Join(d.destinatio
 // deploy/scripts/gen-runtime-certs.sh writes.
 func runtimeEnvironment(directory string) map[string]string {
 	values := map[string]string{
-		"ELITEA_RUNTIME_ENABLED":                   "true",
-		"ELITEA_RUNTIME_COMMAND_STREAM":            "commands.v1.configuration.validate.v1.validation-small.shared-credential-free.1.0",
-		"ELITEA_RUNTIME_MAX_OUTSTANDING":           "64",
-		"ELITEA_RUNTIME_STREAM_MAX_ENTRIES":        "1024",
-		"ELITEA_RUNTIME_REDIS_URL":                 "rediss://producer@elitea-runtime-redis:6380/0",
-		"ELITEA_RUNTIME_REDIS_POOL_SIZE":           "8",
-		"ELITEA_RUNTIME_REDIS_PASSWORD_FILE":       filepath.Join(directory, redisPassword),
-		"ELITEA_RUNTIME_REDIS_CA_FILE":             filepath.Join(directory, caName),
+		"ELITEA_RUNTIME_ENABLED":         "true",
+		"ELITEA_RUNTIME_COMMAND_STREAM":  "ELITEA_RT_V1_VALIDATE",
+		"ELITEA_RUNTIME_MAX_OUTSTANDING": "64",
+		// The runtime NATS identity is its own cert-manager Secret, not
+		// runtime material; plaintext here keeps this test about the
+		// material directory.
+		"ELITEA_RUNTIME_NATS_URL":                  "nats://elitea-nats:4222",
 		"ELITEA_RUNTIME_SIGNING_KEY_ID":            signingKeyID,
 		"ELITEA_RUNTIME_SIGNING_KEY_FILE":          filepath.Join(directory, signingKeyName),
 		"ELITEA_RUNTIME_VERIFICATION_KEYRING_FILE": filepath.Join(directory, keyringName),

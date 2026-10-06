@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ func validToolkitAvailableToolsProducerConfig() ToolkitAvailableToolsProducerCon
 	base := validProducerConfig()
 	return ToolkitAvailableToolsProducerConfig{
 		Stream:                 "commands.v1.index.ingest.indexing.shared.1.0",
-		ConsumerGroup:          "elitea-indexer-worker-v1",
+		Consumer:               "elitea-indexer-worker-v1",
 		ValidationStream:       base.Stream,
 		ProtocolRevision:       base.ProtocolRevision,
 		EnvelopeSchemaRevision: base.EnvelopeSchemaRevision,

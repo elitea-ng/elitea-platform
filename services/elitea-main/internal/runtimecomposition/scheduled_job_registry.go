@@ -12,7 +12,7 @@ import (
 // New()'s inline construction so a composition-level test can call this
 // exact function (the same one New() calls) and assert both jobs are
 // present via Registry.RegisteredJobs(), without needing New()'s full
-// dependency graph (Redis, gRPC TLS, signing keys, five Postgres pools).
+// dependency graph (NATS, gRPC TLS, signing keys, five Postgres pools).
 // This is what catches a Handler that's correctly implemented and
 // unit-tested but never reaches the registry — the failure mode S14's plan
 // text calls out explicitly (see artifact_retention_sweep.go's package

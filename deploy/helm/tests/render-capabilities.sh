@@ -438,6 +438,9 @@ else
   pass "the Deployment mounts the runtime material at $mount_path"
   while read -r key; do
     case "$key" in
+      # The runtime NATS identity is its own cert-manager Secret, mounted on
+      # its own (templates/natsClient.yaml), not runtime material.
+      ELITEA_RUNTIME_NATS_TLS_*) : ;;
       *_FILE)
         value="$(data "$key" "$WORK/all-planes-render.yaml")"
         case "$value" in
@@ -1003,10 +1006,20 @@ refuses "toolkit discovery without worker dispatch" \
   --set main.runtime.agentExecutionDispatch.enabled=false \
   --set main.runtime.indexIngestDispatch.enabled=false
 
-refuses "two dispatch planes sharing a stream with different consumer groups" \
-  "consumer group" \
+refuses "a Redis-era consumerGroup on a dispatch plane" \
+  "consumerGroup is gone" \
   -f "$CHART/values-standalone.yaml" \
   --set main.runtime.indexIngestDispatch.consumerGroup=elitea-index-worker-v1
+
+refuses "a Redis-era runtime.redis block" \
+  "runtime.redis is gone" \
+  -f "$CHART/values-standalone.yaml" \
+  --set main.runtime.redis.url=rediss://producer@elitea-runtime-redis:6380/0
+
+refuses "a command stream outside the command bus contract" \
+  "not one of the command bus's streams" \
+  -f "$CHART/values-standalone.yaml" \
+  --set main.runtime.agentExecutionDispatch.commandStream=commands.v1.agent.execute.agent.shared.1.0
 
 refuses "a runtime name set through the env map" \
   "ELITEA_RUNTIME_COMMAND_STREAM" \

@@ -5,58 +5,47 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"errors"
-	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/redis/go-redis/v9"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn"
+	"github.com/EliteaAI/elitea-platform/libs/go/natsconn/natstest"
+
+	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 )
 
-const (
-	visibilityRepairServiceOptIn  = "ELITEA_RUNTIME_VISIBILITY_REPAIR_TEST"
-	visibilityRepairRedisAddress  = "ELITEA_TEST_REDIS_ADDR"
-	visibilityDeliveryIndexSuffix = ":delivery-index.v1"
-)
+const visibilityRepairServiceOptIn = "ELITEA_RUNTIME_VISIBILITY_REPAIR_TEST"
 
-// TestPostgresRedisServiceBackedVisibilityRepair is an opt-in, real-service
-// integration test. It proves PostgreSQL periodically re-offers the exact
-// prepared envelope, Redis deduplicates an ambiguous successful append retry,
-// partial stream/index loss fails without mutation, coordinated two-key loss
-// is repairable, and independent publishers converge on one entry/mapping. It
-// is not a Redis primary-failover, Python-worker, or cross-process system test.
-func TestPostgresRedisServiceBackedVisibilityRepair(t *testing.T) {
+// TestPostgresNATSServiceBackedVisibilityRepair is an opt-in, real-service
+// integration test of PostgreSQL's visibility lease over the JetStream
+// command bus, as the elitea-main-runtime identity on the NATS chart's own
+// permissions. It proves PostgreSQL re-offers the exact prepared envelope,
+// the bus de-duplicates an ambiguous successful publish retry and a re-offer
+// of a live delivery, a lost stream is repaired from the PostgreSQL winner
+// without re-signing, and independent publishers converge on one message.
+// (The Redis-era partial "one key lost" states cannot exist: there is no
+// second key.) It is not a NATS cluster-failover or cross-process test.
+func TestPostgresNATSServiceBackedVisibilityRepair(t *testing.T) {
 	if os.Getenv(visibilityRepairServiceOptIn) != "1" {
-		t.Skipf("set %s=1 with %s and %s to run the visibility-repair integration test", visibilityRepairServiceOptIn, postgresIntegrationDatabaseURL, visibilityRepairRedisAddress)
+		t.Skipf("set %s=1 with %s and the secured NATS test environment to run the visibility-repair integration test", visibilityRepairServiceOptIn, postgresIntegrationDatabaseURL)
 	}
-	redisAddress := os.Getenv(visibilityRepairRedisAddress)
-	if redisAddress == "" {
-		t.Skipf("set %s with %s", visibilityRepairRedisAddress, visibilityRepairServiceOptIn)
-	}
+	server := natstest.Start(t)
+	server.Bootstrap(t, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	pool := newMigratedPostgresIntegrationPool(t)
 
-	stream := fmt.Sprintf("elitea:test:visibility-repair:%d", time.Now().UnixNano())
-	indexKey := stream + visibilityDeliveryIndexSuffix
-	primaryRedis := newVisibilityRepairRedisClient(t, redisAddress)
-	t.Cleanup(func() { closeVisibilityRepairRedisClient(t, primaryRedis) })
-	if err := primaryRedis.Ping(ctx).Err(); err != nil {
-		t.Fatalf("ping Redis visibility-repair service: %v", err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cleanupCancel()
-		if err := primaryRedis.Del(cleanupCtx, stream, indexKey).Err(); err != nil {
-			t.Errorf("delete visibility-repair Redis keys: %v", err)
-		}
-	})
+	stream := commandbus.StreamValidate
+	primary := newVisibilityRepairJetStream(t, server)
 
 	policy := testDispatchPolicy()
 	policy.StreamName = stream
@@ -79,11 +68,11 @@ func TestPostgresRedisServiceBackedVisibilityRepair(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	signer, err := redisdispatch.NewEd25519CommandSigner("visibility-repair-ed25519-v1", privateKey)
+	signer, err := commandbus.NewEd25519CommandSigner("visibility-repair-ed25519-v1", privateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstDispatcher := newVisibilityRepairDispatcher(t, pool, primaryRedis, policy, signer)
+	firstDispatcher := newVisibilityRepairDispatcher(t, ctx, pool, primary, policy, signer)
 	publisher, err := executionapp.NewOutboxPublisher(
 		mustVisibilityRepairOutbox(t, pool, stream),
 		firstDispatcher,
@@ -101,109 +90,52 @@ func TestPostgresRedisServiceBackedVisibilityRepair(t *testing.T) {
 	if err := publisher.RunOnce(ctx); err != nil {
 		t.Fatalf("initial visibility publication: %v", err)
 	}
-	initialEntryID, initialEnvelope := assertVisibilityRepairRedisState(t, ctx, primaryRedis, stream, indexKey, outboxID)
+	initialEnvelope := assertVisibilityRepairBusState(t, ctx, primary, stream, outboxID)
 	storedEnvelope, attempts := visibilityRepairPostgresState(t, ctx, pool, outboxID)
 	if !bytes.Equal(storedEnvelope, initialEnvelope) || attempts != 1 {
 		t.Fatalf("initial durable publication bytes_equal=%t attempts=%d, want true/1", bytes.Equal(storedEnvelope, initialEnvelope), attempts)
 	}
 
-	// Model an ambiguous append/MarkValidationPublished response loss by
-	// retrying the exact durable envelope. Redis must return the existing
-	// mapping rather than consume a second capacity slot.
+	// An ambiguous publish/MarkValidationPublished response loss: the retry
+	// of the exact durable envelope must not take a second slot.
 	if err := firstDispatcher.Dispatch(ctx, outboxID); err != nil {
 		t.Fatalf("deduplicate ambiguous publication retry: %v", err)
 	}
-	retriedEntryID, retriedEnvelope := assertVisibilityRepairRedisState(t, ctx, primaryRedis, stream, indexKey, outboxID)
+	retriedEnvelope := assertVisibilityRepairBusState(t, ctx, primary, stream, outboxID)
 	storedEnvelope, attempts = visibilityRepairPostgresState(t, ctx, pool, outboxID)
-	if retriedEntryID != initialEntryID || !bytes.Equal(retriedEnvelope, initialEnvelope) || !bytes.Equal(storedEnvelope, initialEnvelope) || attempts != 2 {
-		t.Fatalf("ambiguous retry entry_equal=%t redis_equal=%t postgres_equal=%t attempts=%d, want true/true/true/2", retriedEntryID == initialEntryID, bytes.Equal(retriedEnvelope, initialEnvelope), bytes.Equal(storedEnvelope, initialEnvelope), attempts)
+	if !bytes.Equal(retriedEnvelope, initialEnvelope) || !bytes.Equal(storedEnvelope, initialEnvelope) || attempts != 2 {
+		t.Fatalf("ambiguous retry bus_equal=%t postgres_equal=%t attempts=%d, want true/true/2", bytes.Equal(retriedEnvelope, initialEnvelope), bytes.Equal(storedEnvelope, initialEnvelope), attempts)
 	}
 
-	// Losing only the stream entry is an ambiguous partial state. Publication
-	// must fail closed and leave the surviving mapping untouched.
-	if deleted, err := primaryRedis.XDel(ctx, stream, initialEntryID).Result(); err != nil || deleted != 1 {
-		t.Fatalf("inject hash-only Redis state: deleted=%d err=%v", deleted, err)
-	}
-	ageVisibilityRepairRow(t, ctx, pool, outboxID)
-	if err := publisher.RunOnce(ctx); !errors.Is(err, redisdispatch.ErrControlDeliveryIndexInconsistent) {
-		t.Fatalf("hash-only Redis state did not fail closed: %v", err)
-	}
-	storedEnvelope, attempts = visibilityRepairPostgresState(t, ctx, pool, outboxID)
-	if length, err := primaryRedis.XLen(ctx, stream).Result(); err != nil || length != 0 {
-		t.Fatalf("hash-only rejection mutated stream: length=%d err=%v", length, err)
-	}
-	if mapped, err := primaryRedis.HGet(ctx, indexKey, outboxID).Result(); err != nil || mapped != initialEntryID {
-		t.Fatalf("hash-only rejection mutated mapping=%q err=%v, want %q", mapped, err, initialEntryID)
-	}
-	if !bytes.Equal(storedEnvelope, initialEnvelope) || attempts != 2 {
-		t.Fatalf("hash-only rejection changed PostgreSQL bytes=%t attempts=%d, want false/2", !bytes.Equal(storedEnvelope, initialEnvelope), attempts)
-	}
-
-	// A coordinated loss/restore of both Redis keys is repaired from the
-	// PostgreSQL winner without re-signing or re-encoding.
-	if err := primaryRedis.Del(ctx, stream, indexKey).Err(); err != nil {
-		t.Fatalf("inject coordinated Redis key loss: %v", err)
-	}
+	// PostgreSQL's periodic re-offer of the still-unclaimed, still-live
+	// delivery is idempotent too.
 	ageVisibilityRepairRow(t, ctx, pool, outboxID)
 	if err := publisher.RunOnce(ctx); err != nil {
-		t.Fatalf("repair coordinated Redis key loss: %v", err)
+		t.Fatalf("re-offer of a live delivery: %v", err)
 	}
-	_, restoredEnvelope := assertVisibilityRepairRedisState(t, ctx, primaryRedis, stream, indexKey, outboxID)
+	reofferedEnvelope := assertVisibilityRepairBusState(t, ctx, primary, stream, outboxID)
 	_, attempts = visibilityRepairPostgresState(t, ctx, pool, outboxID)
-	if !bytes.Equal(restoredEnvelope, initialEnvelope) || attempts != 3 {
-		t.Fatalf("coordinated-key repair changed bytes=%t attempts=%d, want true/3", !bytes.Equal(restoredEnvelope, initialEnvelope), attempts)
+	if !bytes.Equal(reofferedEnvelope, initialEnvelope) || attempts != 3 {
+		t.Fatalf("re-offer changed bytes=%t attempts=%d, want false/3", !bytes.Equal(reofferedEnvelope, initialEnvelope), attempts)
 	}
 
-	// Losing only the mapping is the inverse partial state. It must also fail
-	// without replacing or deleting the surviving stream entry.
-	currentEntries, err := primaryRedis.XRangeN(ctx, stream, "-", "+", 2).Result()
-	if err != nil || len(currentEntries) != 1 {
-		t.Fatalf("read stream before stream-only loss: entries=%v err=%v", currentEntries, err)
-	}
-	if deleted, err := primaryRedis.HDel(ctx, indexKey, outboxID).Result(); err != nil || deleted != 1 {
-		t.Fatalf("inject stream-only Redis state: deleted=%d err=%v", deleted, err)
-	}
+	// Stream loss (the JetStream store was lost; the bootstrap re-created
+	// the stream empty) is repaired from the PostgreSQL winner without re-signing.
+	recreateVisibilityRepairStream(t, server, primary, stream)
 	ageVisibilityRepairRow(t, ctx, pool, outboxID)
-	if err := publisher.RunOnce(ctx); !errors.Is(err, redisdispatch.ErrControlDeliveryIndexInconsistent) {
-		t.Fatalf("stream-only Redis state did not fail closed: %v", err)
-	}
-	unchangedEntries, err := primaryRedis.XRangeN(ctx, stream, "-", "+", 2).Result()
-	if err != nil || len(unchangedEntries) != 1 || unchangedEntries[0].ID != currentEntries[0].ID {
-		t.Fatalf("stream-only rejection mutated entries=%v err=%v", unchangedEntries, err)
-	}
-	unchangedEnvelope, ok := unchangedEntries[0].Values["signed_envelope"].(string)
-	if !ok || !bytes.Equal([]byte(unchangedEnvelope), initialEnvelope) {
-		t.Fatalf("stream-only rejection mutated envelope type=%T bytes=%d", unchangedEntries[0].Values["signed_envelope"], len(unchangedEnvelope))
-	}
-	if mappings, err := primaryRedis.HLen(ctx, indexKey).Result(); err != nil || mappings != 0 {
-		t.Fatalf("stream-only rejection mutated mappings=%d err=%v", mappings, err)
-	}
-	_, attempts = visibilityRepairPostgresState(t, ctx, pool, outboxID)
-	if attempts != 3 {
-		t.Fatalf("stream-only rejection incremented publication attempts=%d, want 3", attempts)
-	}
-
-	if err := primaryRedis.Del(ctx, stream, indexKey).Err(); err != nil {
-		t.Fatalf("clear both Redis keys after partial-loss proof: %v", err)
-	}
 	if err := publisher.RunOnce(ctx); err != nil {
-		t.Fatalf("repair second coordinated Redis key loss: %v", err)
+		t.Fatalf("repair the lost stream: %v", err)
 	}
-	_, restoredEnvelope = assertVisibilityRepairRedisState(t, ctx, primaryRedis, stream, indexKey, outboxID)
+	restoredEnvelope := assertVisibilityRepairBusState(t, ctx, primary, stream, outboxID)
 	_, attempts = visibilityRepairPostgresState(t, ctx, pool, outboxID)
 	if !bytes.Equal(restoredEnvelope, initialEnvelope) || attempts != 4 {
-		t.Fatalf("second coordinated-key repair changed bytes=%t attempts=%d, want true/4", !bytes.Equal(restoredEnvelope, initialEnvelope), attempts)
+		t.Fatalf("stream-loss repair changed bytes=%t attempts=%d, want true/4", bytes.Equal(restoredEnvelope, initialEnvelope), attempts)
 	}
 
-	// Independent process-local clients/dispatchers may race on the same stale
-	// durable row. Redis must admit exactly one stable-ID mapping and one entry;
-	// both callers must observe success for the same exact prepared bytes.
-	if err := primaryRedis.Del(ctx, stream, indexKey).Err(); err != nil {
-		t.Fatalf("reset Redis before scale-out race: %v", err)
-	}
-	secondaryRedis := newVisibilityRepairRedisClient(t, redisAddress)
-	t.Cleanup(func() { closeVisibilityRepairRedisClient(t, secondaryRedis) })
-	secondDispatcher := newVisibilityRepairDispatcher(t, pool, secondaryRedis, policy, signer)
+	// Independent processes may race on the same stale durable row. The bus
+	// must hold exactly one message and both callers must see success.
+	recreateVisibilityRepairStream(t, server, primary, stream)
+	secondDispatcher := newVisibilityRepairDispatcher(t, ctx, pool, newVisibilityRepairJetStream(t, server), policy, signer)
 	start := make(chan struct{})
 	results := make(chan error, 2)
 	var racers sync.WaitGroup
@@ -224,52 +156,81 @@ func TestPostgresRedisServiceBackedVisibilityRepair(t *testing.T) {
 			t.Fatalf("scale-out visibility publisher failed: %v", err)
 		}
 	}
-	_, racedEnvelope := assertVisibilityRepairRedisState(t, ctx, primaryRedis, stream, indexKey, outboxID)
+	racedEnvelope := assertVisibilityRepairBusState(t, ctx, primary, stream, outboxID)
 	_, attempts = visibilityRepairPostgresState(t, ctx, pool, outboxID)
 	if !bytes.Equal(racedEnvelope, initialEnvelope) || attempts != 6 {
 		t.Fatalf("scale-out dedupe changed bytes=%t attempts=%d, want false/6", !bytes.Equal(racedEnvelope, initialEnvelope), attempts)
 	}
+	server.RequireNoViolations(t, natsconn.IdentityMainRuntime)
 }
 
-func newVisibilityRepairRedisClient(t *testing.T, address string) *redis.Client {
+func newVisibilityRepairJetStream(t *testing.T, server *natstest.Server) jetstream.JetStream {
 	t.Helper()
-	return redis.NewClient(&redis.Options{
-		Addr:         address,
-		DialTimeout:  2 * time.Second,
-		ReadTimeout:  2 * time.Second,
-		WriteTimeout: 2 * time.Second,
-		PoolSize:     4,
-		MaxRetries:   -1,
-	})
+	m := server.Material(natsconn.IdentityMainRuntime)
+	conn, err := nats.Connect(server.URL(),
+		nats.CustomInboxPrefix(natsconn.InboxPrefix(natsconn.IdentityMainRuntime)),
+		nats.Secure(natsconn.BaseTLSConfig()),
+		nats.ClientTLSConfig(m.ClientCertificate, m.RootCAs),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(conn.Close)
+	js, err := jetstream.New(conn, jetstream.WithDefaultTimeout(5*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return js
 }
 
-func closeVisibilityRepairRedisClient(t *testing.T, client *redis.Client) {
+func recreateVisibilityRepairStream(t *testing.T, server *natstest.Server, js jetstream.JetStream, stream string) {
 	t.Helper()
-	if err := client.Close(); err != nil {
-		t.Errorf("close visibility-repair Redis client: %v", err)
+	// No identity may delete a stream (#1076), so the loss is the store's:
+	// the server comes back with an empty JetStream and the RUNTIME
+	// bootstrap re-creates stream and durable empty.
+	server.ResetJetStream(t)
+	server.Bootstrap(t, nil)
+	// The test's own connection reconnects on its own; wait until it reads
+	// the re-created stream, so the next publish is not a reconnect race.
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_, err := js.Stream(ctx, stream)
+		cancel()
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the test connection did not see the re-created %s: %v", stream, err)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
 func newVisibilityRepairDispatcher(
 	t *testing.T,
+	ctx context.Context,
 	pool *pgxpool.Pool,
-	client *redis.Client,
+	js jetstream.JetStream,
 	policy ValidationDispatchPolicy,
-	signer redisdispatch.CommandSigner,
+	signer commandbus.CommandSigner,
 ) *executionapp.ValidationDispatcher {
 	t.Helper()
-	appender, err := redisdispatch.NewRedisStreamAppender(client, redisdispatch.RedisStreamAppenderConfig{
-		MaxEntries:    policy.MaxOutstanding,
-		MaxEntryBytes: 64 * 1024,
+	handle, err := commandbus.BindStream(ctx, js, commandbus.StreamRequirement{
+		Stream: policy.StreamName, MinMaxAge: policy.DeadlineTTL + commandbus.MaxAgeMargin, MaxMessageBytes: commandbus.MaxMessageBytes,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	producer, err := redisdispatch.NewProducer(redisdispatch.ProducerConfig{
+	appender, err := commandbus.NewJetStreamAppender(js, handle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	producer, err := commandbus.NewProducer(commandbus.ProducerConfig{
 		Stream:                 policy.StreamName,
 		ProtocolRevision:       "elitea.runtime.v1",
 		EnvelopeSchemaRevision: "elitea.runtime.signed-worker-command.v1",
-		Limits: redisdispatch.Limits{
+		Limits: commandbus.Limits{
 			Revision:                 policy.LimitsRevision,
 			MaxWorkerCommandBytes:    32 * 1024,
 			MaxSignedEnvelopeBytes:   48 * 1024,
@@ -331,25 +292,28 @@ WHERE outbox_id = $1`, outboxID).Scan(&envelope, &publishedAt, &lastVisibilityAt
 	return append([]byte(nil), envelope...), attempts
 }
 
-func assertVisibilityRepairRedisState(t *testing.T, ctx context.Context, client *redis.Client, stream, indexKey, outboxID string) (string, []byte) {
+// assertVisibilityRepairBusState requires exactly one live message on the
+// stream, on the delivery's subject, and returns its bytes.
+func assertVisibilityRepairBusState(t *testing.T, ctx context.Context, js jetstream.JetStream, stream, outboxID string) []byte {
 	t.Helper()
-	entries, err := client.XRangeN(ctx, stream, "-", "+", 2).Result()
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("Redis visibility entries=%d err=%v, want 1", len(entries), err)
+	handle, err := js.Stream(ctx, stream)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(entries[0].Values) != 1 {
-		t.Fatalf("Redis visibility entry fields=%d, want 1", len(entries[0].Values))
+	info, err := handle.Info(ctx)
+	if err != nil || info.State.Msgs != 1 || info.State.NumSubjects != 1 {
+		t.Fatalf("bus visibility state msgs=%d subjects=%d err=%v, want 1/1", info.State.Msgs, info.State.NumSubjects, err)
 	}
-	raw, ok := entries[0].Values["signed_envelope"].(string)
-	if !ok || raw == "" {
-		t.Fatalf("Redis visibility envelope type=%T bytes=%d", entries[0].Values["signed_envelope"], len(raw))
+	subject, err := commandbus.DeliverySubject(stream, outboxID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	mappedEntryID, err := client.HGet(ctx, indexKey, outboxID).Result()
-	if err != nil || mappedEntryID != entries[0].ID {
-		t.Fatalf("Redis visibility mapping=%q entry=%q err=%v", mappedEntryID, entries[0].ID, err)
+	live, err := handle.GetLastMsgForSubject(ctx, subject)
+	if err != nil || len(live.Data) == 0 {
+		t.Fatalf("the delivery's subject holds no live command: %v", err)
 	}
-	if mappings, err := client.HLen(ctx, indexKey).Result(); err != nil || mappings != 1 {
-		t.Fatalf("Redis visibility mapping count=%d err=%v, want 1", mappings, err)
+	if got := live.Header.Get(commandbus.HeaderDeliveryID); got != outboxID || !strings.HasSuffix(subject, live.Header.Get(commandbus.HeaderMsgID)) {
+		t.Fatalf("headers %v do not name the delivery %q", live.Header, outboxID)
 	}
-	return entries[0].ID, []byte(raw)
+	return append([]byte(nil), live.Data...)
 }

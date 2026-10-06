@@ -227,7 +227,7 @@ func validateCodeConsumerConfig(c Config) error {
 			return err
 		}
 		// Private encryption keys cannot share a named file with other runtime material.
-		paths := []string{c.SigningKeyFile, c.VerificationKeyringFile, c.RedisPasswordFile, c.RedisCAFile,
+		paths := []string{c.SigningKeyFile, c.VerificationKeyringFile, c.NATSMaterial.CAFile, c.NATSMaterial.CertFile, c.NATSMaterial.KeyFile,
 			c.ControlTLS.CertificateChainPath, c.ControlTLS.PrivateKeyPath, c.ControlTLS.ClientCAPath,
 			c.OutputTLS.CertificateChainPath, c.OutputTLS.PrivateKeyPath, c.OutputTLS.ClientCAPath,
 			c.ContentTLS.CertificateChainPath, c.ContentTLS.PrivateKeyPath, c.ContentTLS.ClientCAPath,

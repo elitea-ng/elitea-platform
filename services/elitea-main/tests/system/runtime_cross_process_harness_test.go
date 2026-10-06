@@ -655,7 +655,7 @@ func writeWorkerConfig(t *testing.T, root, name string, redisPort, controlPort, 
 		"redis_url":            fmt.Sprintf("rediss://worker@localhost:%d/0", redisPort),
 		"redis_password_path":  redisPasswordPath,
 		"redis_stream":         commandStream,
-		"redis_group":          consumerGroup,
+		"redis_group":          consumer,
 		"control_target":       fmt.Sprintf("localhost:%d", controlPort),
 		"output_target":        fmt.Sprintf("localhost:%d", outputPort),
 		"content_origin":       fmt.Sprintf("https://localhost:%d", contentPort),
@@ -804,7 +804,7 @@ func waitForWorkerConsumer(t *testing.T, ctx context.Context, client *redis.Clie
 	t.Helper()
 	if err := eventually(ctx, 100*time.Millisecond, func() (bool, error) {
 		process.ensureRunning(t)
-		consumers, err := client.XInfoConsumers(ctx, commandStream, consumerGroup).Result()
+		consumers, err := client.XInfoConsumers(ctx, commandStream, consumer).Result()
 		if err != nil {
 			return false, nil
 		}
@@ -829,7 +829,7 @@ func waitForPendingDelivery(t *testing.T, ctx context.Context, client *redis.Cli
 		}
 		pending, err := client.XPendingExt(ctx, &redis.XPendingExtArgs{
 			Stream: commandStream,
-			Group:  consumerGroup,
+			Group:  consumer,
 			Start:  "-",
 			End:    "+",
 			Count:  1,
@@ -853,7 +853,7 @@ func agePendingDelivery(t *testing.T, ctx context.Context, port int, caPath, con
 	defer func() { _ = worker.Close() }()
 	pending, err := worker.XPendingExt(ctx, &redis.XPendingExtArgs{
 		Stream: commandStream,
-		Group:  consumerGroup,
+		Group:  consumer,
 		Start:  "-",
 		End:    "+",
 		Count:  1,
@@ -865,7 +865,7 @@ func agePendingDelivery(t *testing.T, ctx context.Context, port int, caPath, con
 		ctx,
 		"XCLAIM",
 		commandStream,
-		consumerGroup,
+		consumer,
 		consumer,
 		0,
 		pending[0].ID,
@@ -893,7 +893,7 @@ func waitForSettlementAndRetirement(t *testing.T, ctx context.Context, pool *pgx
 		if err != nil || length != 0 {
 			return false, nil
 		}
-		pending, err := client.XPending(ctx, commandStream, consumerGroup).Result()
+		pending, err := client.XPending(ctx, commandStream, consumer).Result()
 		if err != nil || pending.Count != 0 {
 			return false, nil
 		}

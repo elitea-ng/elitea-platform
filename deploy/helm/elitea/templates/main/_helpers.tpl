@@ -878,10 +878,11 @@ and the term that actually moves is the one this counts.
 {{- $ingest := $runtime.indexIngestDispatch | default dict -}}
 {{- $discovery := $runtime.toolkitDiscovery | default dict -}}
 {{- $scheduling := $runtime.indexScheduling | default dict -}}
-{{- $redis := $runtime.redis | default dict -}}
+{{- $runtimeNats := $runtime.nats | default dict -}}
 {{- $listeners := $runtime.listeners | default dict -}}
 {{- $material := $runtime.material | default dict -}}
 {{- $env := .Values.main.env | default dict -}}
+{{- $streams := list "ELITEA_RT_V1_VALIDATE" "ELITEA_RT_V1_AGENT" "ELITEA_RT_V1_INDEX" -}}
 
 {{- if not $runtime.enabled -}}
 {{/*
@@ -894,8 +895,8 @@ and the term that actually moves is the one this counts.
 {{- fail (printf "runtime.%s is set but runtime.enabled is false, so the runtime plane stays dark and the setting does nothing. Set runtime.enabled=true, or clear runtime.%s." $field $field) -}}
 {{- end -}}
 {{- end -}}
-{{- if get $redis "url" -}}
-{{- fail "runtime.redis.url is set but runtime.enabled is false, so the runtime plane stays dark and the setting does nothing. Set runtime.enabled=true, or clear runtime.redis.url." -}}
+{{- if get $runtimeNats "url" -}}
+{{- fail "runtime.nats.url is set but runtime.enabled is false, so the runtime plane stays dark and the setting does nothing. Set runtime.enabled=true, or clear runtime.nats.url." -}}
 {{- end -}}
 {{- if get $material "secretName" -}}
 {{- fail "runtime.material.secretName is set but runtime.enabled is false. Set runtime.enabled=true, or clear runtime.material.secretName." -}}
@@ -915,15 +916,22 @@ and the term that actually moves is the one this counts.
 {{- fail "runtime.enabled=true needs production authentication. Set fileConfig.authConfig.enabled=true and point fileConfig.authConfig.configMapName at an auth configuration ConfigMap. cmd/elitea-main refuses to compose the runtime without a PrincipalValidator and a ForwardedIdentityVerifier, and both are built from that file." -}}
 {{- end -}}
 
-{{/* The base plane. config.go asks for all three unconditionally. */}}
+{{/* The base plane. config.go asks for both unconditionally. The stream is
+     one of the command bus's three (docs/runtime-command-bus.md); its
+     capacity is the nats-bootstrap chart's runtime.*.maxMsgs, not main's. */}}
 {{- if not $runtime.commandStream -}}
 {{- fail "runtime.enabled=true needs runtime.commandStream (ELITEA_RUNTIME_COMMAND_STREAM). internal/runtimecomposition/config.go requires it and the process exits without it." -}}
+{{- end -}}
+{{- if not (has ($runtime.commandStream | toString) $streams) -}}
+{{- fail (printf "runtime.commandStream is %q. The command bus has three streams, %v, created by the nats-bootstrap chart and named in the NATS permission table; config.go refuses any other name." ($runtime.commandStream | toString) $streams) -}}
 {{- end -}}
 {{- if not $runtime.maxOutstanding -}}
 {{- fail "runtime.enabled=true needs runtime.maxOutstanding (ELITEA_RUNTIME_MAX_OUTSTANDING), a positive integer no greater than 1024." -}}
 {{- end -}}
-{{- if not $runtime.streamMaxEntries -}}
-{{- fail "runtime.enabled=true needs runtime.streamMaxEntries (ELITEA_RUNTIME_STREAM_MAX_ENTRIES), a positive integer no greater than 1024." -}}
+{{- range $legacy := list "streamMaxEntries" "redis" -}}
+{{- if hasKey $runtime $legacy -}}
+{{- fail (printf "runtime.%s is gone: the runtime command bus is NATS JetStream (docs/runtime-command-bus.md). A stream's capacity is the nats-bootstrap chart's runtime.<route>.maxMsgs, and the connection is runtime.nats (default: the top-level nats block). Remove runtime.%s." $legacy $legacy) -}}
+{{- end -}}
 {{- end -}}
 
 {{/* The SSE stream caps. Optional: the built-in defaults (16/4/8) stay when
@@ -943,19 +951,12 @@ and the term that actually moves is the one this counts.
 {{- fail (printf "runtime.sse.maxStreamsPerProject (%d) exceeds runtime.sse.maxStreams (%d). internal/runtimecomposition/config.go refuses it at boot: \"ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT must not exceed ELITEA_RUNTIME_SSE_MAX_STREAMS\"." $sseProject $sseGlobal) -}}
 {{- end -}}
 
-{{/* Redis. config.go demands a rediss:// URL that carries an ACL username, no
-     password, and an explicit /0 database. A redis:// URL is refused. */}}
-{{- if not $redis.url -}}
-{{- fail "runtime.enabled=true needs runtime.redis.url (ELITEA_RUNTIME_REDIS_URL)." -}}
-{{- end -}}
-{{- if not (hasPrefix "rediss://" ($redis.url | toString)) -}}
-{{- fail (printf "runtime.redis.url must be a rediss:// URL. internal/runtimecomposition/config.go refuses anything else: \"runtime Redis URL must be a rediss URL with an ACL username\". Got %q." ($redis.url | toString)) -}}
-{{- end -}}
-{{- if not (hasSuffix "/0" ($redis.url | toString)) -}}
-{{- fail (printf "runtime.redis.url must select database zero explicitly, so it must end with \"/0\". Got %q." ($redis.url | toString)) -}}
-{{- end -}}
-{{- if not $redis.poolSize -}}
-{{- fail "runtime.enabled=true needs runtime.redis.poolSize (ELITEA_RUNTIME_REDIS_POOL_SIZE), a positive integer no greater than 64." -}}
+{{/* The runtime plane's NATS connection (ELITEA_RUNTIME_NATS_URL), as the
+     elitea-main-runtime identity. Empty means the top-level `nats` block;
+     templates/natsClient.yaml issues the certificate and refuses a URL that
+     disagrees with nats.tls. */}}
+{{- if and (get $runtimeNats "url") (contains "@" (get $runtimeNats "url" | toString)) -}}
+{{- fail "runtime.nats.url carries user information. With mTLS the client certificate is the identity, and this URL is rendered into a ConfigMap." -}}
 {{- end -}}
 
 {{/* Command signing. composition.go cross-checks the key id against the
@@ -1029,16 +1030,21 @@ and the term that actually moves is the one this counts.
 {{- fail "runtime.toolkitDiscovery.enabled=true needs an active agentExecutionDispatch or indexIngestDispatch." -}}
 {{- end -}}
 
+{{- range $block := list (list "agentExecutionDispatch" $agent) (list "indexIngestDispatch" $ingest) -}}
+{{- range $legacy := list "consumerGroup" "streamMaxEntries" -}}
+{{- if hasKey (index $block 1) $legacy -}}
+{{- fail (printf "runtime.%s.%s is gone: a command stream's durable consumer is fixed by the stream (docs/runtime-command-bus.md) and its capacity is the nats-bootstrap chart's runtime.<route>.maxMsgs. Remove it." (index $block 0) $legacy) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Agent-execution dispatch: the four agent turn routes. */}}
 {{- if $agent.enabled -}}
 {{- if not $agent.commandStream -}}
 {{- fail "runtime.agentExecutionDispatch.enabled=true needs runtime.agentExecutionDispatch.commandStream." -}}
 {{- end -}}
-{{- if not $agent.consumerGroup -}}
-{{- fail "runtime.agentExecutionDispatch.enabled=true needs runtime.agentExecutionDispatch.consumerGroup." -}}
-{{- end -}}
-{{- if not $agent.streamMaxEntries -}}
-{{- fail "runtime.agentExecutionDispatch.enabled=true needs runtime.agentExecutionDispatch.streamMaxEntries." -}}
+{{- if not (has ($agent.commandStream | toString) $streams) -}}
+{{- fail (printf "runtime.agentExecutionDispatch.commandStream is %q, not one of the command bus's streams %v." ($agent.commandStream | toString) $streams) -}}
 {{- end -}}
 {{/*
   currentMainBaseUrl is OPTIONAL. Empty means "call my own listener": elitea-main
@@ -1056,7 +1062,7 @@ and the term that actually moves is the one this counts.
 {{- fail "runtime.agentExecutionDispatch.commandStream must differ from runtime.commandStream. config.go: \"runtime agent execution cannot share the configuration-validation stream\"." -}}
 {{- end -}}
 {{- else -}}
-{{- if or $agent.commandStream $agent.consumerGroup $agent.currentMainBaseUrl -}}
+{{- if or $agent.commandStream $agent.currentMainBaseUrl -}}
 {{- fail "runtime.agentExecutionDispatch settings are present but runtime.agentExecutionDispatch.enabled is false. config.go refuses that combination: \"runtime agent execution dispatch settings require explicit enablement\"." -}}
 {{- end -}}
 {{- end -}}
@@ -1074,27 +1080,19 @@ and the term that actually moves is the one this counts.
 {{- if not $ingest.commandStream -}}
 {{- fail "runtime.indexIngestDispatch.enabled=true needs runtime.indexIngestDispatch.commandStream." -}}
 {{- end -}}
-{{- if not $ingest.consumerGroup -}}
-{{- fail "runtime.indexIngestDispatch.enabled=true needs runtime.indexIngestDispatch.consumerGroup." -}}
-{{- end -}}
-{{- if not $ingest.streamMaxEntries -}}
-{{- fail "runtime.indexIngestDispatch.enabled=true needs runtime.indexIngestDispatch.streamMaxEntries." -}}
+{{- if not (has ($ingest.commandStream | toString) $streams) -}}
+{{- fail (printf "runtime.indexIngestDispatch.commandStream is %q, not one of the command bus's streams %v." ($ingest.commandStream | toString) $streams) -}}
 {{- end -}}
 {{- if eq ($ingest.commandStream | toString) ($runtime.commandStream | toString) -}}
 {{- fail "runtime.indexIngestDispatch.commandStream must differ from runtime.commandStream. config.go: \"runtime index ingest requires a dedicated command stream\"." -}}
 {{- end -}}
 {{/*
   Sharing ONE stream with the agent plane is supported, and the standalone
-  compose stack does exactly that so a single worker serves both capabilities.
-  config.go allows it only when the consumer group matches too.
+  compose stack does exactly that so a single worker serves both capabilities:
+  one stream has one durable consumer, so they share it by construction.
 */}}
-{{- if and $agent.enabled (eq ($ingest.commandStream | toString) ($agent.commandStream | toString)) -}}
-{{- if ne ($ingest.consumerGroup | toString) ($agent.consumerGroup | toString) -}}
-{{- fail "runtime.indexIngestDispatch and runtime.agentExecutionDispatch share a command stream but not a consumer group. config.go: \"runtime agent execution sharing the index stream must share its consumer group\". Give them the same consumerGroup, or give each its own commandStream." -}}
-{{- end -}}
-{{- end -}}
 {{- else -}}
-{{- if or $ingest.commandStream $ingest.consumerGroup -}}
+{{- if $ingest.commandStream -}}
 {{- fail "runtime.indexIngestDispatch settings are present but runtime.indexIngestDispatch.enabled is false. config.go: \"runtime index ingest dispatch settings require explicit enablement\"." -}}
 {{- end -}}
 {{- end -}}
@@ -1131,7 +1129,7 @@ carries the material must use those names as its keys.
 {{- $agent := $runtime.agentExecutionDispatch | default dict -}}
 {{- $ingest := $runtime.indexIngestDispatch | default dict -}}
 {{- $scheduling := $runtime.indexScheduling | default dict -}}
-{{- $redis := $runtime.redis | default dict -}}
+{{- $runtimeNats := $runtime.nats | default dict -}}
 {{- $listeners := $runtime.listeners | default dict -}}
 {{- $dir := $runtime.material.mountPath | toString | trimSuffix "/" -}}
 {{- $sse := $runtime.sse | default dict -}}
@@ -1151,7 +1149,6 @@ ELITEA_RUNTIME_RUST_COMPILED_SNAPSHOTS_{{ $suffix }}: {{ include "elitea.compile
 ELITEA_RUNTIME_ENABLED: "true"
 ELITEA_RUNTIME_COMMAND_STREAM: {{ $runtime.commandStream | quote }}
 ELITEA_RUNTIME_MAX_OUTSTANDING: {{ $runtime.maxOutstanding | toString | quote }}
-ELITEA_RUNTIME_STREAM_MAX_ENTRIES: {{ $runtime.streamMaxEntries | toString | quote }}
 ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED: {{ ((get $runtime "toolkitDiscovery" | default dict).enabled | default false) | toString | quote }}
 {{/* The SSE stream caps. Optional: the built-in defaults (16/4/8) stay when
      runtime.sse is absent. The cap is process-local, so the cluster admits
@@ -1162,8 +1159,6 @@ ELITEA_RUNTIME_SSE_MAX_STREAMS_PER_PROJECT: {{ $sse.maxStreamsPerProject | defau
 {{- if $agent.enabled }}
 ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED: "true"
 ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM: {{ $agent.commandStream | quote }}
-ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP: {{ $agent.consumerGroup | quote }}
-ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES: {{ $agent.streamMaxEntries | toString | quote }}
 {{- if $agent.currentMainBaseUrl }}
 ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: {{ $agent.currentMainBaseUrl | quote }}
 {{- end }}
@@ -1171,17 +1166,19 @@ ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL: {{ $agent.currentMainBaseUrl | quote }}
 {{- if $ingest.enabled }}
 ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED: "true"
 ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM: {{ $ingest.commandStream | quote }}
-ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP: {{ $ingest.consumerGroup | quote }}
-ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES: {{ $ingest.streamMaxEntries | toString | quote }}
 {{- end }}
 {{- if $scheduling.enabled }}
 ELITEA_RUNTIME_INDEX_SCHEDULING_ENABLED: "true"
 ELITEA_RUNTIME_SCHEDULER_INSTANCE_ID: {{ $scheduling.instanceId | quote }}
 {{- end }}
-ELITEA_RUNTIME_REDIS_URL: {{ $redis.url | quote }}
-ELITEA_RUNTIME_REDIS_POOL_SIZE: {{ $redis.poolSize | toString | quote }}
-ELITEA_RUNTIME_REDIS_PASSWORD_FILE: {{ printf "%s/redis-producer-password" $dir | quote }}
-ELITEA_RUNTIME_REDIS_CA_FILE: {{ printf "%s/runtime-ca.crt" $dir | quote }}
+{{/* The runtime command bus (docs/runtime-command-bus.md), as the
+     elitea-main-runtime NATS identity (templates/natsClient.yaml). */}}
+ELITEA_RUNTIME_NATS_URL: {{ include "elitea-main.runtimeNatsUrl" . | quote }}
+{{- if .Values.nats.tls.enabled }}
+ELITEA_RUNTIME_NATS_TLS_CA_FILE: {{ printf "%s/ca.crt" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
+ELITEA_RUNTIME_NATS_TLS_CERT_FILE: {{ printf "%s/tls.crt" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
+ELITEA_RUNTIME_NATS_TLS_KEY_FILE: {{ printf "%s/tls.key" (include "elitea-main.runtimeNatsMountPath" .) | quote }}
+{{- end }}
 ELITEA_RUNTIME_SANDBOX_AUDIENCES: {{ join "," ($runtime.sandboxAudiences | default list) | quote }}
 ELITEA_RUNTIME_SIGNING_KEY_ID: {{ $runtime.signingKeyId | quote }}
 ELITEA_RUNTIME_SIGNING_KEY_FILE: {{ printf "%s/command-signing-key.pem" $dir | quote }}
@@ -1226,4 +1223,24 @@ reads the Secret; the service reads the copies.
 */}}
 {{- define "elitea-main.runtimeMaterialSourcePath" -}}
 {{- printf "%s-source" (.Values.main.runtime.material.mountPath | toString | trimSuffix "/") -}}
+{{- end }}
+
+{{/*
+elitea-main.runtimeNatsUrl — the runtime plane's NATS URL: runtime.nats.url,
+else the top-level `nats` block (the same broker as every other client; the
+runtime is a separate identity, not a separate server).
+*/}}
+{{- define "elitea-main.runtimeNatsUrl" -}}
+{{- $runtimeNats := (.Values.main.runtime | default dict).nats | default dict -}}
+{{- get $runtimeNats "url" | default (include "elitea.natsUrl" .) -}}
+{{- end }}
+
+{{/*
+elitea-main.runtimeNatsMountPath — where elitea-main-runtime's client
+certificate Secret is mounted. A directory of its own: the live-update plane's
+identity sits at nats.tls.mountPath in the same pod.
+*/}}
+{{- define "elitea-main.runtimeNatsMountPath" -}}
+{{- $runtimeNats := (.Values.main.runtime | default dict).nats | default dict -}}
+{{- get $runtimeNats "mountPath" | default "/etc/elitea/runtime-nats-client" | trimSuffix "/" -}}
 {{- end }}

@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"context"
@@ -17,7 +17,7 @@ func validToolkitCallToolProducerConfig() ToolkitCallToolProducerConfig {
 	base := validProducerConfig()
 	return ToolkitCallToolProducerConfig{
 		Stream:                 "commands.v1.index.ingest.indexing.shared.1.0",
-		ConsumerGroup:          "elitea-indexer-worker-v1",
+		Consumer:               "elitea-indexer-worker-v1",
 		ValidationStream:       base.Stream,
 		ProtocolRevision:       base.ProtocolRevision,
 		EnvelopeSchemaRevision: base.EnvelopeSchemaRevision,
@@ -60,7 +60,7 @@ func validToolkitCallToolDispatch() toolkitcalltoolapp.Dispatch {
 }
 
 // The command must carry entry REFERENCES and nothing else: neither the
-// redeemed settings nor the caller's arguments may reach Redis.
+// redeemed settings nor the caller's arguments may reach the bus.
 func TestToolkitCallToolCommandCarriesOnlyReferences(t *testing.T) {
 	producer, err := NewToolkitCallToolProducer(
 		validToolkitCallToolProducerConfig(), &signerStub{}, &appenderStub{},
@@ -173,9 +173,9 @@ func TestToolkitCallToolProducerRefusesTheValidationStream(t *testing.T) {
 	}
 }
 
-// Preparation must not reach Redis: the durable winner is selected first, so a
+// Preparation must not reach the bus: the durable winner is selected first, so a
 // retry appends the same bytes rather than signing a second command.
-func TestToolkitCallToolPreparationDoesNotReachRedis(t *testing.T) {
+func TestToolkitCallToolPreparationDoesNotReachTheBus(t *testing.T) {
 	appender := &appenderStub{}
 	producer, err := NewToolkitCallToolProducer(
 		validToolkitCallToolProducerConfig(), &signerStub{}, appender,
@@ -188,7 +188,7 @@ func TestToolkitCallToolPreparationDoesNotReachRedis(t *testing.T) {
 		t.Fatal(err)
 	}
 	if appender.calls != 0 {
-		t.Fatal("preparation reached Redis before durable envelope selection")
+		t.Fatal("preparation reached the bus before durable envelope selection")
 	}
 	if err := producer.AppendPrepared(context.Background(), "tool-outbox-1", prepared); err != nil {
 		t.Fatal(err)
@@ -196,8 +196,8 @@ func TestToolkitCallToolPreparationDoesNotReachRedis(t *testing.T) {
 	if appender.calls != 1 || appender.stream != validToolkitCallToolProducerConfig().Stream {
 		t.Fatalf("unexpected append: %+v", appender)
 	}
-	if encodedRedisEntryBytes(redisEnvelopeField, prepared.Bytes) >= 64<<10 {
-		t.Fatalf("tool-run Redis entry is not strictly below 64 KiB: %d",
-			encodedRedisEntryBytes(redisEnvelopeField, prepared.Bytes))
+	if encodedTransportMessageBytes(prepared.Bytes) >= 64<<10 {
+		t.Fatalf("tool-run bus message is not strictly below 64 KiB: %d",
+			encodedTransportMessageBytes(prepared.Bytes))
 	}
 }

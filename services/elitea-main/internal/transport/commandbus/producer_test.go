@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"bytes"
@@ -34,16 +34,14 @@ func (s *signerStub) SignWorkerCommand(_ context.Context, exact []byte) (Signatu
 
 type appenderStub struct {
 	stream     string
-	field      string
 	deliveryID string
 	value      []byte
 	calls      int
 }
 
-func (a *appenderStub) Append(_ context.Context, stream, field, deliveryID string, value []byte) (string, error) {
+func (a *appenderStub) Append(_ context.Context, stream, deliveryID string, value []byte) (string, error) {
 	a.calls++
 	a.stream = stream
-	a.field = field
 	a.deliveryID = deliveryID
 	a.value = append([]byte(nil), value...)
 	return "1-0", nil
@@ -62,13 +60,13 @@ func TestProducerEmitsBoundedReferenceOnlyGeneratedContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	if appender.calls != 0 {
-		t.Fatal("preparation reached Redis before durable envelope selection")
+		t.Fatal("preparation reached the bus before durable envelope selection")
 	}
 	if err := producer.AppendPrepared(context.Background(), dispatch.OutboxID, prepared); err != nil {
 		t.Fatal(err)
 	}
-	if prepared.Digest != runtimedomain.SHA256(appender.value) || appender.stream != "commands.v1.configuration.validate.cpu-small.credential-free.1.0" || appender.field != redisEnvelopeField || appender.deliveryID != dispatch.OutboxID {
-		t.Fatalf("unexpected append: stream=%q field=%q digest=%s", appender.stream, appender.field, prepared.Digest)
+	if prepared.Digest != runtimedomain.SHA256(appender.value) || appender.stream != "commands.v1.configuration.validate.cpu-small.credential-free.1.0" || appender.deliveryID != dispatch.OutboxID {
+		t.Fatalf("unexpected append: stream=%q digest=%s", appender.stream, prepared.Digest)
 	}
 
 	var envelope runtimev1.SignedWorkerCommandEnvelopeV1
@@ -96,12 +94,12 @@ func TestProducerEmitsBoundedReferenceOnlyGeneratedContract(t *testing.T) {
 	}
 	for _, forbidden := range [][]byte{[]byte(`{"auth_type":"Digest"}`), []byte("normalized_settings"), []byte("client_secret"), []byte("result")} {
 		if bytes.Contains(envelope.GetWorkerCommandBytes(), forbidden) || bytes.Contains(appender.value, forbidden) {
-			t.Fatalf("Redis control entry contains forbidden body material %q", forbidden)
+			t.Fatalf("command bus message contains forbidden body material %q", forbidden)
 		}
 	}
 }
 
-func TestProducerRejectsCompleteRedisEntryAboveBoundBeforeAppend(t *testing.T) {
+func TestProducerRejectsCompleteBusMessageAboveBoundBeforeAppend(t *testing.T) {
 	baselineSigner := &signerStub{}
 	baselineAppender := &appenderStub{}
 	baseline, err := NewProducer(validProducerConfig(), baselineSigner, baselineAppender)
@@ -120,7 +118,7 @@ func TestProducerRejectsCompleteRedisEntryAboveBoundBeforeAppend(t *testing.T) {
 	config.Limits.MaxWorkerCommandBytes = len(baselineSigner.exact)
 	config.Limits.MaxSignedEnvelopeBytes = len(baselineAppender.value)
 	config.Limits.MaxTransportPayloadBytes = len(baselineAppender.value)
-	config.Limits.MaxTransportMessageBytes = encodedRedisEntryBytes(redisEnvelopeField, baselineAppender.value) - 1
+	config.Limits.MaxTransportMessageBytes = encodedTransportMessageBytes(baselineAppender.value) - 1
 	appender := &appenderStub{}
 	producer, err := NewProducer(config, &signerStub{}, appender)
 	if err != nil {
@@ -131,7 +129,7 @@ func TestProducerRejectsCompleteRedisEntryAboveBoundBeforeAppend(t *testing.T) {
 		t.Fatalf("expected complete-entry limit rejection, got %v", err)
 	}
 	if appender.calls != 0 {
-		t.Fatal("oversized control entry reached Redis")
+		t.Fatal("oversized control entry reached the bus")
 	}
 }
 
@@ -149,11 +147,11 @@ func TestProducerRejectsStringBoundBeforeSigning(t *testing.T) {
 		t.Fatalf("expected string limit rejection, got %v", err)
 	}
 	if signer.calls != 0 || appender.calls != 0 {
-		t.Fatal("unbounded command reached signer or Redis")
+		t.Fatal("unbounded command reached signer or the bus")
 	}
 }
 
-func TestProducerRejectsCorruptPreparedBytesBeforeRedisAppend(t *testing.T) {
+func TestProducerRejectsCorruptPreparedBytesBeforeAppend(t *testing.T) {
 	appender := &appenderStub{}
 	producer, err := NewProducer(validProducerConfig(), &signerStub{}, appender)
 	if err != nil {
@@ -168,7 +166,7 @@ func TestProducerRejectsCorruptPreparedBytesBeforeRedisAppend(t *testing.T) {
 		t.Fatalf("expected corrupt prepared envelope rejection, got %v", err)
 	}
 	if appender.calls != 0 {
-		t.Fatal("corrupt prepared bytes reached Redis")
+		t.Fatal("corrupt prepared bytes reached the bus")
 	}
 }
 
@@ -185,7 +183,7 @@ func TestProducerRejectsTestProfileWithoutExplicitConformanceSignatureOptIn(t *t
 		t.Fatal("production producer accepted the public test-only HMAC profile")
 	}
 	if signer.calls != 1 || appender.calls != 0 {
-		t.Fatal("rejected test-only signature reached Redis")
+		t.Fatal("rejected test-only signature reached the bus")
 	}
 }
 
@@ -208,7 +206,7 @@ func TestLimitsFromProtoMatchesCheckedConformanceProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if limits.Revision != "elitea.runtime.limits.conformance.v3" || limits.MaxWorkerCommandBytes != 32768 || limits.MaxSignedEnvelopeBytes != 49152 || limits.MaxTransportPayloadBytes != 49152 || limits.MaxTransportMessageBytes != 65536 || limits.MaxStringBytes != 256 {
-		t.Fatalf("Go Redis limits drifted from checked protocol profile: %+v", limits)
+		t.Fatalf("Go command bus limits drifted from checked protocol profile: %+v", limits)
 	}
 }
 

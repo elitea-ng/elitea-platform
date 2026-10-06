@@ -338,6 +338,24 @@ func (s *Server) Restart(t testing.TB) {
 	s.start(t)
 }
 
+// ResetJetStream stops the server, deletes its JetStream store and starts it
+// again on the same port, empty: every account loses every stream, consumer
+// and bucket. It is how a test simulates the loss of an asset now that no
+// identity may delete one; Bootstrap re-creates them. Connected clients
+// reconnect on their own.
+func (s *Server) ResetJetStream(t testing.TB) {
+	t.Helper()
+	s.Stop()
+	js := filepath.Join(s.dir, "js")
+	if err := os.RemoveAll(js); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(js, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	s.start(t)
+}
+
 func (s *Server) start(t testing.TB) {
 	t.Helper()
 	if err := s.startErr(); err != nil {

@@ -28,7 +28,7 @@ import (
 const (
 	indexReliabilityOptIn = "ELITEA_INDEX_RELIABILITY_SYSTEM_TEST"
 	indexCommandStream    = "commands.v1.index.ingest.indexing.shared.2.0"
-	indexConsumerGroup    = "elitea-indexer-worker-v2"
+	indexConsumer         = "elitea-indexer-worker-v2"
 	indexWorkerService    = "elitea-indexer-worker"
 	syntheticConsumer     = "reliability-crashed-consumer"
 )
@@ -292,7 +292,7 @@ func loadIndexReliabilityConfig(t *testing.T) indexReliabilityConfig {
 		"ELITEA_CONFIGURATIONS_MUTATION_ENABLED=true",
 		"ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED=true",
 		"ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM="+indexCommandStream,
-		"ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP="+indexConsumerGroup,
+		"ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP="+indexConsumer,
 		"ELITEA_RUNTIME_INDEX_INGEST_STREAM_MAX_ENTRIES=64",
 		"ELITEA_INDEX_ROUTE_FILE=./hybrid_auth/traefik-index-routes.yml",
 	)
@@ -878,7 +878,7 @@ local rows = redis.call(
 if not rows then return '' end
 return rows[1][2][1][1]`
 	output, err := h.redis(ctx, "indexer-worker", "--raw", "EVAL", script, "1",
-		indexCommandStream, indexConsumerGroup, syntheticConsumer)
+		indexCommandStream, indexConsumer, syntheticConsumer)
 	if err != nil {
 		t.Fatalf("inject synthetic crashed consumer: %v", err)
 	}
@@ -902,7 +902,7 @@ if #rows ~= 1 then return '' end
 return rows[1][1]`
 	output, err := h.redis(ctx, "indexer-worker", "--raw",
 		"EVAL", script, "1", indexCommandStream,
-		indexConsumerGroup, syntheticConsumer, entryID)
+		indexConsumer, syntheticConsumer, entryID)
 	if err != nil {
 		t.Fatalf("age synthetic pending reference: %v", err)
 	}
@@ -922,7 +922,7 @@ func (h *indexComposeHarness) pendingEntries(t *testing.T, ctx context.Context) 
 
 func (h *indexComposeHarness) pendingEntriesResult(ctx context.Context) ([]indexPendingEntry, error) {
 	output, err := h.redis(ctx, "indexer-worker", "--json",
-		"XPENDING", indexCommandStream, indexConsumerGroup, "-", "+", "10")
+		"XPENDING", indexCommandStream, indexConsumer, "-", "+", "10")
 	if err != nil {
 		return nil, err
 	}

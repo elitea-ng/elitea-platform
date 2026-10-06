@@ -20,9 +20,7 @@ func codeMaterialDeployment(t *testing.T) deployment {
 	pod := newDeployment(t, fixture, secretVolumeMode)
 	pod.environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
 	pod.environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://main.invalid"
-	pod.environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "commands.v1.agent.execute.agents.shared.1.0"
-	pod.environment["ELITEA_RUNTIME_AGENT_EXECUTION_CONSUMER_GROUP"] = "elitea-agent-worker-v1"
-	pod.environment["ELITEA_RUNTIME_AGENT_EXECUTION_STREAM_MAX_ENTRIES"] = "64"
+	pod.environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
 	pod.environment["ELITEA_RUNTIME_SANDBOX_AUDIENCES"] = "spiffe://elitea/supervisor/one"
 	pod.environment["ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED"] = "true"
 	pod.environment["ELITEA_RUNTIME_CODE_PLATFORM_ENABLED"] = "true"

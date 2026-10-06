@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"errors"
@@ -21,10 +21,10 @@ type Limits struct {
 
 func (l Limits) validate() error {
 	if l.Revision == "" || l.MaxWorkerCommandBytes <= 0 || l.MaxSignedEnvelopeBytes <= 0 || l.MaxTransportPayloadBytes <= 0 || l.MaxTransportMessageBytes <= 0 || l.MaxSignatureBytes <= 0 || l.MaxStringBytes <= 0 {
-		return errors.New("invalid Redis dispatch limits")
+		return errors.New("invalid command bus limits")
 	}
-	if l.MaxWorkerCommandBytes > l.MaxSignedEnvelopeBytes || l.MaxSignedEnvelopeBytes > l.MaxTransportPayloadBytes || l.MaxTransportPayloadBytes > l.MaxTransportMessageBytes {
-		return errors.New("redis dispatch limits are not monotonic")
+	if l.MaxWorkerCommandBytes > l.MaxSignedEnvelopeBytes || l.MaxSignedEnvelopeBytes > l.MaxTransportPayloadBytes || l.MaxTransportPayloadBytes > l.MaxTransportMessageBytes || l.MaxTransportMessageBytes > MaxMessageBytes {
+		return errors.New("command bus limits are not monotonic")
 	}
 	return nil
 }

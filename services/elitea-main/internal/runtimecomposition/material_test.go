@@ -12,8 +12,6 @@ import (
 // one directory, which is the layout that deployment mounts.
 func oneDirectoryEnvironment() map[string]string {
 	values := validEnvironment()
-	values["ELITEA_RUNTIME_REDIS_PASSWORD_FILE"] = "/run/elitea-runtime/redis-producer-password"
-	values["ELITEA_RUNTIME_REDIS_CA_FILE"] = "/run/elitea-runtime/runtime-ca.crt"
 	values["ELITEA_RUNTIME_SIGNING_KEY_FILE"] = "/run/elitea-runtime/command-signing-key.pem"
 	values["ELITEA_RUNTIME_VERIFICATION_KEYRING_FILE"] = "/run/elitea-runtime/command-signing-keyring.json"
 	for _, prefix := range []string{"CONTROL", "OUTPUT", "CONTENT"} {
@@ -50,8 +48,8 @@ func TestMaterialFilesCoverEveryFilePathTheConfigurationCarries(t *testing.T) {
 			t.Fatalf("the configuration names %s, and MaterialFiles does not list it", path)
 		}
 	}
-	if len(listed) != 10 {
-		t.Fatalf("expected 10 distinct material files, got %d: %v", len(listed), listed)
+	if len(listed) != 9 {
+		t.Fatalf("expected 9 distinct material files, got %d: %v", len(listed), listed)
 	}
 }
 
@@ -63,6 +61,11 @@ func configuredFilePaths(t *testing.T, value reflect.Value) []string {
 	structType := value.Type()
 	for index := range structType.NumField() {
 		field := structType.Field(index)
+		// The runtime NATS client identity is a cert-manager Secret mounted on
+		// its own, not runtime material (MaterialFiles' comment).
+		if field.Name == "NATSMaterial" {
+			continue
+		}
 		switch value.Field(index).Kind() {
 		case reflect.Struct:
 			paths = append(paths, configuredFilePaths(t, value.Field(index))...)
@@ -91,7 +94,6 @@ func TestMaterialFilesKeepsTheStricterProfileForASharedPath(t *testing.T) {
 	expected := map[string]securefile.Permissions{
 		"/run/elitea-runtime/command-signing-key.pem":      securefile.PrivateMaterial,
 		"/run/elitea-runtime/command-signing-keyring.json": securefile.PublicMaterial,
-		"/run/elitea-runtime/redis-producer-password":      securefile.PrivateMaterial,
 		"/run/elitea-runtime/runtime-ca.crt":               securefile.PublicMaterial,
 		"/run/elitea-runtime/control-server.crt":           securefile.PublicMaterial,
 		"/run/elitea-runtime/control-server.key":           securefile.PrivateMaterial,

@@ -77,7 +77,7 @@ main:
   # KEY NAMES are the contract:
   #
   #   PRIVATE:
-  #     command-signing-key.pem  redis-producer-password
+  #     command-signing-key.pem
   #     control-server.key       output-server.key       content-server.key
   #   PUBLIC:
   #     runtime-ca.crt           command-signing-keyring.json
@@ -302,16 +302,13 @@ main:
     enabled: true
 
     # The base plane: configuration validation.
-    commandStream: "commands.v1.configuration.validate.v1.validation-small.shared-credential-free.1.0"
+    commandStream: "ELITEA_RT_V1_VALIDATE"
     maxOutstanding: 64
-    streamMaxEntries: 1024
 
     # The four agent turn routes — the chat send path.
     agentExecutionDispatch:
       enabled: true
-      commandStream: "commands.v1.agent.execute.agent.shared.1.0"
-      consumerGroup: "elitea-agent-worker-v1"
-      streamMaxEntries: 1024
+      commandStream: "ELITEA_RT_V1_AGENT"
       # DELIBERATELY empty. elitea-main calls itself for the next-input-suggestion
       # policy, and it serves cleartext, so the origin is derived from its own
       # listener: http://127.0.0.1:<port>. This used to be
@@ -322,28 +319,18 @@ main:
 
     # Index start, index cancel and index metadata.
     #
-    # DELIBERATELY the same stream AND the same consumer group as the agent plane
-    # above, exactly as the compose stack sets them. The worker dispatches on the
-    # command's capability id rather than on its stream, so one worker serves
-    # both capabilities: no second worker, no second consumer group, no extra
-    # Redis ACL grant. Sharing the stream with a DIFFERENT group is refused.
+    # DELIBERATELY the same stream as the agent plane above, exactly as the
+    # compose stack sets it. The worker dispatches on the command's capability
+    # id rather than on its stream, and one stream has one durable consumer, so
+    # one worker serves both capabilities.
     indexIngestDispatch:
       enabled: true
-      commandStream: "commands.v1.agent.execute.agent.shared.1.0"
-      consumerGroup: "elitea-agent-worker-v1"
-      streamMaxEntries: 1024
+      commandStream: "ELITEA_RT_V1_AGENT"
 
     # Left OFF, as the compose stack leaves it. Turn it on to serve the index
     # schedule write and delete routes, and give it an instanceId.
     indexScheduling:
       enabled: false
-
-    # The runtime's own mutually authenticated Redis. The password comes from
-    # the redis-producer-password file in the material volume, never from this
-    # URL.
-    redis:
-      url: "rediss://producer@elitea-runtime-redis:6380/0"
-      poolSize: 8
 
     # Must equal the key id inside command-signing-keyring.json. The composition
     # cross-checks the two and refuses to start on a mismatch.
@@ -363,7 +350,6 @@ main:
       #     --from-file=deploy/certs/runtime/runtime-ca.crt \
       #     --from-file=deploy/certs/runtime/command-signing-key.pem \
       #     --from-file=deploy/certs/runtime/command-signing-keyring.json \
-      #     --from-file=deploy/certs/runtime/redis-producer-password \
       #     --from-file=deploy/certs/runtime/control-server.crt \
       #     --from-file=deploy/certs/runtime/control-server.key \
       #     --from-file=deploy/certs/runtime/output-server.crt \

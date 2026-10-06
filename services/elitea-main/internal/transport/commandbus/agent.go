@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"context"
@@ -12,18 +12,18 @@ import (
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 )
 
-const maxAgentRedisEntryBytes = (64 << 10) - 1
+const maxAgentMessageBytes = (64 << 10) - 1
 
 var ErrInvalidAgentExecutionCommand = errors.New("invalid agent execution command")
 
 // AgentExecutionProducerConfig binds both current agent semantics to one
 // bounded control stream. The capability ID and command type select the
-// semantic entry point without exposing request content on Redis. Runtime
+// semantic entry point without exposing request content on the command bus. Runtime
 // composition may deliberately share this stream with the same worker pool
 // that executes indexing; configuration validation remains isolated.
 type AgentExecutionProducerConfig struct {
 	Stream                       string
-	ConsumerGroup                string
+	Consumer                     string
 	ValidationStream             string
 	IndexIngestStream            string
 	ProtocolRevision             string
@@ -38,26 +38,26 @@ type AgentExecutionProducerConfig struct {
 type AgentExecutionProducer struct {
 	producer           *Producer
 	stream             string
-	consumerGroup      string
+	consumer           string
 	protocolRevision   string
 	capabilityVersions map[string]string
 }
 
 func NewAgentExecutionProducer(config AgentExecutionProducerConfig, signer CommandSigner, appender StreamAppender) (*AgentExecutionProducer, error) {
-	for _, route := range []string{config.Stream, config.ConsumerGroup, config.ValidationStream} {
+	for _, route := range []string{config.Stream, config.Consumer, config.ValidationStream} {
 		if !validAgentRoutingName(route) {
-			return nil, errors.New("invalid agent execution Redis route")
+			return nil, errors.New("invalid agent execution command bus route")
 		}
 	}
 	if config.IndexIngestStream != "" && !validAgentRoutingName(config.IndexIngestStream) {
-		return nil, errors.New("invalid agent execution Redis route")
+		return nil, errors.New("invalid agent execution command bus route")
 	}
-	if redisRouteKeysOverlap(config.Stream, config.ValidationStream) {
-		return nil, errors.New("agent execution cannot share the configuration-validation Redis stream")
+	if routesOverlap(config.Stream, config.ValidationStream) {
+		return nil, errors.New("agent execution cannot share the configuration-validation command stream")
 	}
 	if config.IndexIngestStream != "" && config.Stream != config.IndexIngestStream &&
-		redisRouteKeysOverlap(config.Stream, config.IndexIngestStream) {
-		return nil, errors.New("agent execution Redis stream overlaps the index delivery index")
+		routesOverlap(config.Stream, config.IndexIngestStream) {
+		return nil, errors.New("agent execution stream overlaps the index stream")
 	}
 	for _, version := range []string{
 		config.ApplicationCapabilityVersion,
@@ -68,8 +68,8 @@ func NewAgentExecutionProducer(config AgentExecutionProducerConfig, signer Comma
 			return nil, errors.New("invalid agent execution capability version")
 		}
 	}
-	if config.Limits.MaxTransportMessageBytes <= 0 || config.Limits.MaxTransportMessageBytes > maxAgentRedisEntryBytes {
-		return nil, errors.New("agent execution Redis entry limit must be less than 64 KiB")
+	if config.Limits.MaxTransportMessageBytes <= 0 || config.Limits.MaxTransportMessageBytes > maxAgentMessageBytes {
+		return nil, errors.New("agent execution message limit must be less than 64 KiB")
 	}
 	producer, err := NewProducer(ProducerConfig{
 		Stream:                 config.Stream,
@@ -84,7 +84,7 @@ func NewAgentExecutionProducer(config AgentExecutionProducerConfig, signer Comma
 	return &AgentExecutionProducer{
 		producer:         producer,
 		stream:           config.Stream,
-		consumerGroup:    config.ConsumerGroup,
+		consumer:         config.Consumer,
 		protocolRevision: config.ProtocolRevision,
 		capabilityVersions: map[string]string{
 			executiondomain.AgentApplicationCapability:   config.ApplicationCapabilityVersion,
@@ -114,8 +114,8 @@ func (p *AgentExecutionProducer) Stream() string {
 	return p.stream
 }
 
-func (p *AgentExecutionProducer) ConsumerGroup() string {
-	return p.consumerGroup
+func (p *AgentExecutionProducer) Consumer() string {
+	return p.consumer
 }
 
 func (p *AgentExecutionProducer) PrepareAgentExecution(ctx context.Context, dispatch agentexecutionapp.AgentExecutionDispatch) (executionapp.PreparedCommandEnvelope, error) {

@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"bytes"
@@ -21,7 +21,7 @@ type failingAppenderStub struct {
 	calls int
 }
 
-func (a *failingAppenderStub) Append(context.Context, string, string, string, []byte) (string, error) {
+func (a *failingAppenderStub) Append(context.Context, string, string, []byte) (string, error) {
 	a.calls++
 	return "", a.err
 }
@@ -34,8 +34,8 @@ func TestIndexIngestProducerUsesDedicatedBoundedRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if producer.Stream() != config.Stream || producer.ConsumerGroup() != config.ConsumerGroup {
-		t.Fatalf("unexpected index ingest route: stream=%q group=%q", producer.Stream(), producer.ConsumerGroup())
+	if producer.Stream() != config.Stream || producer.Consumer() != config.Consumer {
+		t.Fatalf("unexpected index ingest route: stream=%q group=%q", producer.Stream(), producer.Consumer())
 	}
 
 	command := validIndexIngestCommand()
@@ -44,10 +44,10 @@ func TestIndexIngestProducerUsesDedicatedBoundedRoute(t *testing.T) {
 		t.Fatal(err)
 	}
 	if appender.calls != 0 {
-		t.Fatal("preparation reached Redis before durable envelope selection")
+		t.Fatal("preparation reached the bus before durable envelope selection")
 	}
-	if encodedRedisEntryBytes(redisEnvelopeField, prepared.Bytes) >= 64<<10 {
-		t.Fatalf("index ingest Redis entry is not strictly below 64 KiB: %d", encodedRedisEntryBytes(redisEnvelopeField, prepared.Bytes))
+	if encodedTransportMessageBytes(prepared.Bytes) >= 64<<10 {
+		t.Fatalf("index ingest message is not strictly below 64 KiB: %d", encodedTransportMessageBytes(prepared.Bytes))
 	}
 	if err := producer.AppendPrepared(context.Background(), command.GetIdempotencyKey(), prepared); err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestIndexIngestProducerBuildsTypedReferenceOnlyCommand(t *testing.T) {
 	}
 }
 
-func TestIndexIngestProducerKeepsBulkAndProtectedValuesOffRedis(t *testing.T) {
+func TestIndexIngestProducerKeepsBulkAndProtectedValuesOffTheBus(t *testing.T) {
 	producer, err := NewIndexIngestProducer(validIndexIngestProducerConfig(), &signerStub{}, &appenderStub{})
 	if err != nil {
 		t.Fatal(err)
@@ -219,7 +219,7 @@ func TestIndexIngestProducerRejectsWrongOrMalformedContractBeforeSigning(t *test
 				t.Fatalf("malformed index command error = %v", err)
 			}
 			if signer.calls != 0 || appender.calls != 0 {
-				t.Fatalf("malformed command crossed signing/Redis boundary: signer=%d appender=%d", signer.calls, appender.calls)
+				t.Fatalf("malformed command crossed signing/bus boundary: signer=%d appender=%d", signer.calls, appender.calls)
 			}
 		})
 	}
@@ -276,7 +276,7 @@ func TestIndexIngestProducerRejectsValidationEnvelopeOnDedicatedStream(t *testin
 	}
 }
 
-func TestIndexIngestProducerPropagatesNonDroppingBackpressureAndRedisFailure(t *testing.T) {
+func TestIndexIngestProducerPropagatesNonDroppingBackpressureAndPublishFailure(t *testing.T) {
 	tests := []struct {
 		name    string
 		failure error
@@ -285,17 +285,17 @@ func TestIndexIngestProducerPropagatesNonDroppingBackpressureAndRedisFailure(t *
 		{
 			name: "saturated",
 			failure: &ControlStreamSaturatedError{
-				CurrentEntries:  8,
-				CurrentMappings: 8,
-				MaxEntries:      8,
+				Stream:          "ELITEA_RT_V1_INDEX",
+				CurrentMessages: 8,
+				MaxMessages:     8,
 			},
 			check: func(err error) bool {
 				return errors.Is(err, ErrControlStreamSaturated) && errors.Is(err, executionapp.ErrDispatchBackpressured)
 			},
 		},
 		{
-			name:    "Redis unavailable",
-			failure: errors.New("test Redis unavailable"),
+			name:    "bus unavailable",
+			failure: errors.New("test bus unavailable"),
 			check: func(err error) bool {
 				return err != nil && strings.Contains(err.Error(), "append worker command reference")
 			},
@@ -335,21 +335,9 @@ func TestIndexIngestProducerRequiresDedicatedRoute(t *testing.T) {
 			},
 		},
 		{
-			name: "index stream aliases validation delivery index",
+			name: "missing consumer",
 			mutate: func(config *IndexIngestProducerConfig) {
-				config.Stream = deliveryIndexKey(config.ValidationStream)
-			},
-		},
-		{
-			name: "validation stream aliases index delivery index",
-			mutate: func(config *IndexIngestProducerConfig) {
-				config.ValidationStream = deliveryIndexKey(config.Stream)
-			},
-		},
-		{
-			name: "missing consumer group",
-			mutate: func(config *IndexIngestProducerConfig) {
-				config.ConsumerGroup = ""
+				config.Consumer = ""
 			},
 		},
 	}
@@ -358,7 +346,7 @@ func TestIndexIngestProducerRequiresDedicatedRoute(t *testing.T) {
 			config := validIndexIngestProducerConfig()
 			test.mutate(&config)
 			if _, err := NewIndexIngestProducer(config, &signerStub{}, &appenderStub{}); err == nil {
-				t.Fatal("invalid index Redis route was accepted")
+				t.Fatal("invalid index bus route was accepted")
 			}
 		})
 	}
@@ -368,7 +356,7 @@ func validIndexIngestProducerConfig() IndexIngestProducerConfig {
 	base := validProducerConfig()
 	return IndexIngestProducerConfig{
 		Stream:                 "commands.v1.index.ingest.indexing.shared.1.0",
-		ConsumerGroup:          "elitea-indexer-worker-v1",
+		Consumer:               "elitea-indexer-worker-v1",
 		ValidationStream:       base.Stream,
 		ProtocolRevision:       base.ProtocolRevision,
 		EnvelopeSchemaRevision: base.EnvelopeSchemaRevision,

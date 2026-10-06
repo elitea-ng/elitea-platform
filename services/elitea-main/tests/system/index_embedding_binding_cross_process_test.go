@@ -18,7 +18,7 @@ import (
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 )
 
 const indexBindingCrossProcessOptIn = "ELITEA_INDEX_BINDING_CROSS_PROCESS_TEST"
@@ -136,10 +136,9 @@ func (indexBindingNoopAppender) Append(
 	context.Context,
 	string,
 	string,
-	string,
 	[]byte,
 ) (string, error) {
-	return "", fmt.Errorf("cross-process binding test must not append to Redis")
+	return "", fmt.Errorf("cross-process binding test must not append to the command bus")
 }
 
 type indexBindingCrossProcessVector struct {
@@ -187,7 +186,7 @@ func TestIndexEmbeddingBindingMainWorkerCrossProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	const keyID = "index-binding-cross-process-key"
-	signer, err := redisdispatch.NewEd25519CommandSigner(keyID, privateKey)
+	signer, err := commandbus.NewEd25519CommandSigner(keyID, privateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,22 +365,22 @@ func buildIndexBindingCrossProcessBundle(
 
 func prepareIndexBindingCrossProcessEnvelope(
 	t *testing.T,
-	signer redisdispatch.CommandSigner,
+	signer commandbus.CommandSigner,
 	bundle executiondomain.InputBundle,
 	binding executiondomain.IndexIngestBinding,
 	capabilityVersion string,
 	suffix string,
 ) []byte {
 	t.Helper()
-	producer, err := redisdispatch.NewIndexIngestProducer(
-		redisdispatch.IndexIngestProducerConfig{
+	producer, err := commandbus.NewIndexIngestProducer(
+		commandbus.IndexIngestProducerConfig{
 			Stream:                 "commands.v1.index.ingest.indexing.shared.1.0",
-			ConsumerGroup:          "elitea-indexer-worker-v1",
+			Consumer:               "elitea-indexer-worker-v1",
 			ValidationStream:       "commands.v1.configuration.validate.short-validation.1.0",
 			ProtocolRevision:       "elitea.runtime.v1",
 			EnvelopeSchemaRevision: "elitea.runtime.signed-worker-command.v1",
 			CapabilityVersion:      capabilityVersion,
-			Limits: redisdispatch.Limits{
+			Limits: commandbus.Limits{
 				Revision:                 "elitea.runtime.limits.conformance.v3",
 				MaxWorkerCommandBytes:    32 * 1024,
 				MaxSignedEnvelopeBytes:   48 * 1024,
@@ -662,4 +661,4 @@ var _ indexingapp.CurrentToolkitReader = indexBindingToolkitReader{}
 var _ indexingapp.CurrentModelCatalog = (*indexBindingModelCatalog)(nil)
 var _ indexingapp.CurrentToolkitSettingsValidator = indexBindingSettingsResolver{}
 var _ indexingapp.CurrentEmbeddingConfigurationReader = (*indexBindingConfigurationReader)(nil)
-var _ redisdispatch.StreamAppender = indexBindingNoopAppender{}
+var _ commandbus.StreamAppender = indexBindingNoopAppender{}

@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"context"
@@ -16,7 +16,7 @@ func TestBothStandaloneToolkitContractsPublishToRustAgentStream(t *testing.T) {
 	t.Run("call_tool", func(t *testing.T) {
 		config := validToolkitCallToolProducerConfig()
 		config.Stream = stream
-		config.ConsumerGroup = group
+		config.Consumer = group
 		appended := &appenderStub{}
 		producer, err := NewToolkitCallToolProducer(config, &signerStub{}, appended)
 		require.NoError(t, err)
@@ -32,7 +32,7 @@ func TestBothStandaloneToolkitContractsPublishToRustAgentStream(t *testing.T) {
 	t.Run("available_tools", func(t *testing.T) {
 		config := validToolkitAvailableToolsProducerConfig()
 		config.Stream = stream
-		config.ConsumerGroup = group
+		config.Consumer = group
 		appended := &appenderStub{}
 		producer, err := NewToolkitAvailableToolsProducer(config, &signerStub{}, appended)
 		require.NoError(t, err)

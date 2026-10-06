@@ -72,7 +72,7 @@ type PendingDispatchStore interface {
 }
 
 // PreparedCommandEnvelope is the exact bounded byte sequence selected for one
-// outbox identity before any Redis append. Bytes are immutable once stored;
+// outbox identity before any command bus publish. Bytes are immutable once stored;
 // retries and competing publisher instances must append the durable winner
 // rather than invoking the signer again.
 type PreparedCommandEnvelope struct {
@@ -99,7 +99,7 @@ func (e PreparedCommandEnvelope) Clone() PreparedCommandEnvelope {
 
 // StoredPreparedEnvelope adds the latest PostgreSQL publication observation to
 // a validated durable envelope. Published is not a permanent worker receipt;
-// a visibility-expired row is intentionally offered to Redis again.
+// a visibility-expired row is intentionally offered to the command bus again.
 type StoredPreparedEnvelope struct {
 	Envelope  PreparedCommandEnvelope
 	Published bool
@@ -170,7 +170,7 @@ func (d *ValidationDispatcher) Dispatch(ctx context.Context, outboxID string) er
 	}
 	// Published is only the latest PostgreSQL visibility observation, not a
 	// permanent delivery acknowledgement. The publisher may deliberately call
-	// Dispatch again after the bounded visibility interval. Redis suppresses a
+	// Dispatch again after the bounded visibility interval. The bus suppresses a
 	// duplicate for the same stable outbox identity and exact envelope bytes.
 	if err := d.producer.AppendPrepared(ctx, outboxID, stored.Envelope.Clone()); err != nil {
 		return fmt.Errorf("append prepared validation reference: %w", err)
@@ -179,7 +179,7 @@ func (d *ValidationDispatcher) Dispatch(ctx context.Context, outboxID string) er
 		if errors.Is(err, ErrDispatchRetired) {
 			return nil
 		}
-		// An unknown Redis success remains safely reconcilable because the next
+		// An unknown publish success remains safely reconcilable because the next
 		// attempt reloads and appends these exact durable bytes.
 		return fmt.Errorf("mark validation reference published: %w", err)
 	}

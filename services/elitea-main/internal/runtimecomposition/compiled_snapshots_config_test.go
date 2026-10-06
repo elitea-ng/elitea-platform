@@ -141,9 +141,7 @@ func TestCompiledSnapshotMaterialInventoryIncludesOriginalAgentState(t *testing.
 	}
 	c.AgentExecutionDispatchEnabled = true
 	c.CurrentMainBaseURL = "http://127.0.0.1:8080"
-	c.AgentExecutionCommandStream = "commands.v1.agent.execute.agents.shared.1.0"
-	c.AgentExecutionConsumerGroup = "elitea-agent-worker-v1"
-	c.AgentExecutionStreamMaxEntries = 64
+	c.AgentExecutionCommandStream = "ELITEA_RT_V1_AGENT"
 	c.SandboxAudiences = []string{"elitea.supervisor"}
 	cfg := compiledTestConfig()
 	c.RustCompiledSnapshots = &cfg

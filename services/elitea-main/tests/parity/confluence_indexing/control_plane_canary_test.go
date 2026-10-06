@@ -12,7 +12,7 @@ import (
 	indexingapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/indexing"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/redisdispatch"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/transport/commandbus"
 )
 
 const (
@@ -23,9 +23,9 @@ const (
 
 type testSigner struct{}
 
-func (testSigner) SignWorkerCommand(_ context.Context, command []byte) (redisdispatch.Signature, error) {
+func (testSigner) SignWorkerCommand(_ context.Context, command []byte) (commandbus.Signature, error) {
 	digest := sha256.Sum256(command)
-	return redisdispatch.Signature{
+	return commandbus.Signature{
 		Profile: runtimev1.SignatureProfileV1_SIGNATURE_PROFILE_V1_TEST_ONLY_HMAC_SHA256,
 		KeyID:   "confluence-parity",
 		Value:   digest[:],
@@ -36,7 +36,7 @@ type recordingAppender struct {
 	value []byte
 }
 
-func (a *recordingAppender) Append(_ context.Context, _, _, _ string, value []byte) (string, error) {
+func (a *recordingAppender) Append(_ context.Context, _, _ string, value []byte) (string, error) {
 	a.value = append([]byte(nil), value...)
 	return "1-0", nil
 }
@@ -46,16 +46,16 @@ func TestConfluenceBulkAndImageBytesNeverEnterRedis(t *testing.T) {
 
 	payloadDigest, canaries := confluenceProductionScaleDigest()
 	appender := &recordingAppender{}
-	producer, err := redisdispatch.NewIndexIngestProducer(
-		redisdispatch.IndexIngestProducerConfig{
+	producer, err := commandbus.NewIndexIngestProducer(
+		commandbus.IndexIngestProducerConfig{
 			Stream:                 "commands.v1.index.ingest.parity",
-			ConsumerGroup:          "workers.v1.index.ingest.parity",
+			Consumer:               "workers.v1.index.ingest.parity",
 			ValidationStream:       "commands.v1.configuration.validate",
 			ProtocolRevision:       "runtime.v1",
 			EnvelopeSchemaRevision: "signed-worker-command.v1",
 			CapabilityVersion:      "1",
 			AllowTestOnlyHMAC:      true,
-			Limits: redisdispatch.Limits{
+			Limits: commandbus.Limits{
 				Revision:                 "parity-limits-v1",
 				MaxWorkerCommandBytes:    16 << 10,
 				MaxSignedEnvelopeBytes:   32 << 10,

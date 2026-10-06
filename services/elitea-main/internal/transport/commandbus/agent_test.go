@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"bytes"
@@ -36,8 +36,8 @@ func TestAgentProducerBuildsReferenceOnlyCommandsForBothCurrentSemantics(t *test
 			if err != nil {
 				t.Fatal(err)
 			}
-			if encodedRedisEntryBytes(redisEnvelopeField, prepared.Bytes) >= 64<<10 {
-				t.Fatal("agent Redis entry reached the forbidden 64 KiB boundary")
+			if encodedTransportMessageBytes(prepared.Bytes) >= 64<<10 {
+				t.Fatal("agent bus message reached the forbidden 64 KiB boundary")
 			}
 			if err := producer.AppendPrepared(context.Background(), dispatch.OutboxID, prepared); err != nil {
 				t.Fatal(err)
@@ -61,7 +61,7 @@ func TestAgentProducerBuildsReferenceOnlyCommandsForBothCurrentSemantics(t *test
 	}
 }
 
-func TestAgentProducerKeepsRequestCredentialsAndOutputOffRedis(t *testing.T) {
+func TestAgentProducerKeepsRequestCredentialsAndOutputOffTheBus(t *testing.T) {
 	producer, err := NewAgentExecutionProducer(validAgentProducerConfig(), &signerStub{}, &appenderStub{})
 	if err != nil {
 		t.Fatal(err)
@@ -166,7 +166,7 @@ func validAgentProducerConfig() AgentExecutionProducerConfig {
 	base := validIndexIngestProducerConfig()
 	return AgentExecutionProducerConfig{
 		Stream:                       "elitea:runtime:agent:commands",
-		ConsumerGroup:                "elitea-runtime-agent-workers",
+		Consumer:                     "elitea-runtime-agent-workers",
 		ValidationStream:             base.ValidationStream,
 		IndexIngestStream:            base.Stream,
 		ProtocolRevision:             base.ProtocolRevision,

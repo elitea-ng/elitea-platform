@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"bytes"
@@ -13,7 +13,6 @@ import (
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	runtimedomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
-	"github.com/redis/go-redis/v9"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -33,8 +32,11 @@ type CommandSigner interface {
 	SignWorkerCommand(ctx context.Context, exactCommandBytes []byte) (Signature, error)
 }
 
+// StreamAppender publishes one prepared envelope for one delivery. The
+// production implementation is JetStreamAppender; it returns the stored
+// message's "<stream>:<sequence>".
 type StreamAppender interface {
-	Append(ctx context.Context, stream, field, deliveryID string, value []byte) (entryID string, err error)
+	Append(ctx context.Context, stream, deliveryID string, value []byte) (entryID string, err error)
 }
 
 type ProducerConfig struct {
@@ -55,10 +57,10 @@ type Producer struct {
 
 func NewProducer(config ProducerConfig, signer CommandSigner, appender StreamAppender) (*Producer, error) {
 	if signer == nil || appender == nil {
-		return nil, errors.New("redis signer and stream appender are required")
+		return nil, errors.New("command signer and stream appender are required")
 	}
 	if config.Stream == "" || len(config.Stream) > 256 || strings.ContainsAny(config.Stream, " \r\n\x00") {
-		return nil, errors.New("invalid Redis command stream")
+		return nil, errors.New("invalid command stream")
 	}
 	if config.ProtocolRevision == "" || config.EnvelopeSchemaRevision == "" {
 		return nil, errors.New("protocol and envelope revisions are required")
@@ -113,7 +115,7 @@ func (p *Producer) prepareCommand(ctx context.Context, command *runtimev1.Worker
 	if err != nil {
 		return executionapp.PreparedCommandEnvelope{}, fmt.Errorf("encode signed worker command: %w", err)
 	}
-	if len(envelopeBytes) > p.config.Limits.MaxSignedEnvelopeBytes || len(envelopeBytes) > p.config.Limits.MaxTransportPayloadBytes || encodedRedisEntryBytes(redisEnvelopeField, envelopeBytes) > p.config.Limits.MaxTransportMessageBytes {
+	if len(envelopeBytes) > p.config.Limits.MaxSignedEnvelopeBytes || len(envelopeBytes) > p.config.Limits.MaxTransportPayloadBytes || encodedTransportMessageBytes(envelopeBytes) > p.config.Limits.MaxTransportMessageBytes {
 		return executionapp.PreparedCommandEnvelope{}, ErrControlMessageLimitExceeded
 	}
 	prepared := executionapp.PreparedCommandEnvelope{
@@ -129,7 +131,7 @@ func (p *Producer) prepareCommand(ctx context.Context, command *runtimev1.Worker
 }
 
 // AppendPrepared appends only a previously selected exact envelope. It never
-// signs or re-encodes the command, so an unknown Redis success and every
+// signs or re-encodes the command, so an unknown publish success and every
 // competing publisher retry use byte-identical control-plane data.
 func (p *Producer) AppendPrepared(ctx context.Context, deliveryID string, prepared executionapp.PreparedCommandEnvelope) error {
 	command, err := p.preparedCommand(prepared)
@@ -146,7 +148,7 @@ func (p *Producer) appendPreparedCommand(ctx context.Context, deliveryID string,
 	if !validDeliveryID(deliveryID) || command == nil || command.GetIdempotencyKey() != deliveryID {
 		return executionapp.ErrInvalidPreparedEnvelope
 	}
-	if _, err := p.appender.Append(ctx, p.config.Stream, redisEnvelopeField, deliveryID, append([]byte(nil), prepared.Bytes...)); err != nil {
+	if _, err := p.appender.Append(ctx, p.config.Stream, deliveryID, append([]byte(nil), prepared.Bytes...)); err != nil {
 		return fmt.Errorf("append worker command reference: %w", err)
 	}
 	return nil
@@ -183,7 +185,7 @@ func (p *Producer) validatePrepared(prepared executionapp.PreparedCommandEnvelop
 	if err := prepared.Validate(); err != nil {
 		return err
 	}
-	if len(prepared.Bytes) > p.config.Limits.MaxSignedEnvelopeBytes || len(prepared.Bytes) > p.config.Limits.MaxTransportPayloadBytes || encodedRedisEntryBytes(redisEnvelopeField, prepared.Bytes) > p.config.Limits.MaxTransportMessageBytes {
+	if len(prepared.Bytes) > p.config.Limits.MaxSignedEnvelopeBytes || len(prepared.Bytes) > p.config.Limits.MaxTransportPayloadBytes || encodedTransportMessageBytes(prepared.Bytes) > p.config.Limits.MaxTransportMessageBytes {
 		return ErrControlMessageLimitExceeded
 	}
 
@@ -218,61 +220,4 @@ func (p *Producer) acceptsSignature(profile runtimev1.SignatureProfileV1, size i
 	default:
 		return false
 	}
-}
-
-func encodedRedisEntryBytes(field string, value []byte) int {
-	// RESP array/bulk headers and the server-assigned stream ID are bounded by
-	// this fixed conservative overhead for the one-field entry.
-	const protocolOverhead = 128
-	return len(field) + len(value) + protocolOverhead
-}
-
-type RedisStreamAppender struct {
-	client redis.Scripter
-	config RedisStreamAppenderConfig
-}
-
-func NewRedisStreamAppender(client redis.Scripter, config RedisStreamAppenderConfig) (*RedisStreamAppender, error) {
-	if client == nil {
-		return nil, errors.New("dedicated Redis control client is required")
-	}
-	// Runtime v1 atomically mutates the stream and its delivery-index hash in
-	// one script. Phase one therefore requires one logical Redis primary
-	// (standalone or Sentinel/failover). Cluster and Ring clients are rejected
-	// until the protocol assigns both keys a validated common hash slot and has
-	// real-cluster failover coverage.
-	switch client.(type) {
-	case *redis.ClusterClient, *redis.Ring:
-		return nil, errors.New("redis control stream requires a single logical primary")
-	}
-	if err := config.validate(); err != nil {
-		return nil, err
-	}
-	return &RedisStreamAppender{client: client, config: config}, nil
-}
-
-func (a *RedisStreamAppender) Append(ctx context.Context, stream, field, deliveryID string, value []byte) (string, error) {
-	if !validDeliveryID(deliveryID) {
-		return "", executionapp.ErrInvalidPreparedEnvelope
-	}
-	if encodedRedisEntryBytes(field, value) > a.config.MaxEntryBytes {
-		return "", ErrControlMessageLimitExceeded
-	}
-	result, err := appendWithinCapacityScript.Run(
-		ctx,
-		a.client,
-		[]string{stream, deliveryIndexKey(stream)},
-		a.config.MaxEntries,
-		field,
-		append([]byte(nil), value...),
-		deliveryID,
-	).Result()
-	if err != nil {
-		return "", err
-	}
-	return parseCapacityAppendResult(result, a.config.MaxEntries)
-}
-
-func deliveryIndexKey(stream string) string {
-	return stream + ":delivery-index.v1"
 }

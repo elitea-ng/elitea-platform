@@ -85,7 +85,7 @@ const ReplayWakeSubject = SubjectRoot + ".replay.wake"
 // Consumer and redelivery timing.
 const (
 	// AckWait is the consumer's redelivery timer: twice the 30s claim lease,
-	// the floor the Redis reclaim idle time had.
+	// the floor the old reclaim idle time had.
 	AckWait = 60 * time.Second
 	// InProgressInterval is how often a worker sends +WPI for every message
 	// it owns. Well under AckWait, so two lost heartbeats do not redeliver.

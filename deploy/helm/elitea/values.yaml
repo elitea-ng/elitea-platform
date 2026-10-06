@@ -1660,9 +1660,9 @@ main:
   # the volume must present exactly these names:
   #   runtime-ca.crt                 command-signing-key.pem
   #   control-server.crt             command-signing-keyring.json
-  #   control-server.key             redis-producer-password
-  #   output-server.crt              content-server.crt
-  #   output-server.key              content-server.key
+  #   control-server.key             content-server.crt
+  #   output-server.crt              content-server.key
+  #   output-server.key
   runtime:
     # OFF by default, because turning it on requires production Form
     # authentication, and that needs `fileConfig.authConfig.document.public_origin`
@@ -1674,16 +1674,29 @@ main:
     # none of it — silently, with nothing in any log. templates/guards.yaml
     # refuses that combination at render time rather than letting it install.
     #
-    # To turn chat on, set all three together:
-    #   main.runtime.enabled, worker.enabled, runtimeRedis.enabled
-    # plus fileConfig.authConfig (see below).
+    # To turn chat on, set both together:
+    #   main.runtime.enabled, worker.enabled
+    # plus fileConfig.authConfig (see below), and run the nats-bootstrap chart:
+    # it creates the command bus's streams and durable consumers
+    # (docs/runtime-command-bus.md), which elitea-main and the worker only bind.
     enabled: false
 
     # The base plane: configuration validation. Always required when enabled.
-    # The stream name must differ from every dispatch stream below.
+    # One of the command bus's streams — ELITEA_RT_V1_VALIDATE in every shipped
+    # profile — and different from every dispatch stream below. A stream's
+    # capacity is the nats-bootstrap chart's runtime.<route>.maxMsgs.
     commandStream: ""
     maxOutstanding: 64
-    streamMaxEntries: 1024
+
+    # The runtime plane's NATS connection: the command bus producer and the
+    # execution-replay wake-up, as its OWN NATS identity, elitea-main-runtime
+    # (spiffe://<nats.tls.trustDomain>/nats/elitea-main-runtime), whose
+    # certificate templates/natsClient.yaml issues into Secret
+    # <main fullname>-runtime-nats-client-tls and the pod mounts at mountPath.
+    nats:
+      # Empty: the top-level `nats` block (tls://<service>.<ns>...:4222).
+      url: ""
+      mountPath: /etc/elitea/runtime-nats-client
 
     # The execution-event SSE streams this replica admits (issue #963). The
     # cap is process-local by design: every main replica admits its own share,
@@ -1708,9 +1721,8 @@ main:
     # The four agent turn routes — the chat send path.
     agentExecutionDispatch:
       enabled: false
+      # ELITEA_RT_V1_AGENT. Its durable consumer is fixed by the stream.
       commandStream: ""
-      consumerGroup: ""
-      streamMaxEntries: 1024
       # OPTIONAL. The origin elitea-main calls for the next-input-suggestion
       # policy. Empty is the normal value: the call is a SELF call and this
       # process serves cleartext, so the origin is derived from its own listener
@@ -1728,21 +1740,14 @@ main:
     # Configurations dependency, and the embedding binding resolves from the same
     # configuration rows.
     #
-    # Giving this the SAME commandStream AND the SAME consumerGroup as
-    # agentExecutionDispatch is supported, and it is what the standalone compose
+    # Giving this the SAME commandStream as agentExecutionDispatch
+    # (ELITEA_RT_V1_AGENT) is supported, and it is what the standalone compose
     # stack does: one worker then serves both capabilities, because the worker
-    # dispatches on the command's capability id rather than on its stream. Doing
-    # that costs no second worker, no second consumer group and no extra Redis
-    # ACL grant. Sharing the stream with a DIFFERENT group is refused.
+    # dispatches on the command's capability id rather than on its stream, and
+    # one stream has one durable consumer. Otherwise ELITEA_RT_V1_INDEX.
     indexIngestDispatch:
-      # The SAME stream and group as agentExecutionDispatch on purpose: the
-      # worker dispatches on the command's capability id, not on its stream, so
-      # one worker serves both and this costs no second consumer group and no
-      # extra Redis ACL grant.
       enabled: false
       commandStream: ""
-      consumerGroup: ""
-      streamMaxEntries: 1024
 
     # Saved toolkit discovery requires an active worker dispatch.
     toolkitDiscovery:
@@ -1754,17 +1759,6 @@ main:
       # Lowercase letters, digits, dot, underscore and hyphen; it must start with
       # a letter or a digit.
       instanceId: ""
-
-    # The runtime's OWN Redis — mutually authenticated. (The plaintext
-    # general-purpose Redis this used to be contrasted with is gone.)
-    redis:
-      # Must be a rediss:// URL that carries an ACL USERNAME and NO password, and
-      # it must select database zero explicitly, e.g.
-      #   "rediss://producer@elitea-runtime-redis:6380/0"
-      # The password comes from the redis-producer-password file in the material
-      # volume, never from the URL.
-      url: ""
-      poolSize: 8
 
     # Must equal the key id inside command-signing-keyring.json. The composition
     # cross-checks the two and refuses to start on a mismatch.
@@ -1828,11 +1822,10 @@ main:
     # file path from mountPath plus one of these names, and they are the names
     # deploy/scripts/gen-runtime-certs.sh writes:
     #
-    #   runtime-ca.crt                the trust root: the Redis CA, and the
-    #                                 client CA of all three listeners
+    #   runtime-ca.crt                the trust root: the client CA of all
+    #                                 three listeners
     #   command-signing-key.pem       Ed25519 PKCS#8, signs dispatch envelopes
     #   command-signing-keyring.json  its public half, keyed by signingKeyId
-    #   redis-producer-password       the runtime Redis ACL password
     #   control-server.crt / .key     the control listener keypair
     #   output-server.crt / .key      the output listener keypair
     #   content-server.crt / .key     the content listener keypair

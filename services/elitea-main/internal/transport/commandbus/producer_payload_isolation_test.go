@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"bytes"
@@ -14,7 +14,7 @@ import (
 // This is a protocol/unit invariant, not evidence that the current 256 KiB
 // PostgreSQL content backend can serve a production-scale 32 MiB image. It
 // proves that once bulk content is on a separate data plane, its size and bytes
-// cannot scale the Redis command: Redis receives only the bounded bundle ref.
+// cannot scale the bus command: the bus receives only the bounded bundle ref.
 func TestReferenceOnlyCommandDoesNotScaleWith32MiBDataPlaneObject(t *testing.T) {
 	marker := []byte("ELITEA_32_MIB_DATA_PLANE_BODY_CANARY")
 	smallManifest := referenceManifest(t, marker, 1<<10)
@@ -42,7 +42,7 @@ func TestReferenceOnlyCommandDoesNotScaleWith32MiBDataPlaneObject(t *testing.T) 
 			t.Fatal(err)
 		}
 		if bytes.Contains(prepared.Bytes, marker) {
-			t.Fatal("Redis command contains a data-plane body canary")
+			t.Fatal("bus command contains a data-plane body canary")
 		}
 		return prepared.Bytes
 	}
@@ -52,8 +52,8 @@ func TestReferenceOnlyCommandDoesNotScaleWith32MiBDataPlaneObject(t *testing.T) 
 	if difference := abs(len(largeEnvelope) - len(smallEnvelope)); difference > 16 {
 		t.Fatalf("control envelope scaled with referenced content: small=%d large=%d delta=%d", len(smallEnvelope), len(largeEnvelope), difference)
 	}
-	if encodedRedisEntryBytes(redisEnvelopeField, largeEnvelope) > validProducerConfig().Limits.MaxTransportMessageBytes {
-		t.Fatalf("32 MiB data-plane reference exceeded Redis entry bound: envelope=%d", len(largeEnvelope))
+	if encodedTransportMessageBytes(largeEnvelope) > validProducerConfig().Limits.MaxTransportMessageBytes {
+		t.Fatalf("32 MiB data-plane reference exceeded bus message bound: envelope=%d", len(largeEnvelope))
 	}
 }
 

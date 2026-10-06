@@ -188,3 +188,24 @@ the old Redis pending-entries count (delivered, not yet acked), so the
 threshold is lower and an activation threshold of 1 wakes a scaled-to-zero
 fleet. The scaler reads `/jsz` on the NATS monitoring port, which the NATS
 chart's NetworkPolicy admits from the KEDA operator only.
+
+## Worker configuration (`runtime.json`, schema `elitea.runtime-deploy.v1`)
+
+Both workers read the same document (Helm renders one for either image). The
+command-bus fields replace every `redis_*` field; unknown fields are refused.
+
+| Field | Meaning |
+| --- | --- |
+| `nats_url` | `tls://host:4222` with the client material below, `nats://host:4222` without it (compose only). No user information. A comma-separated list is a cluster seed list |
+| `nats_ca_path`, `nats_certificate_path`, `nats_private_key_path` | the `elitea-worker` identity's mTLS material: all three or none. Read again on every reconnect where the client library allows it |
+| `nats_stream` | `ELITEA_RT_V1_VALIDATE`, `ELITEA_RT_V1_AGENT` or `ELITEA_RT_V1_INDEX` |
+| `nats_consumer` | that stream's durable (table above); any other pairing is refused |
+| `consumer_id` | the NATS connection name (observability only; not an identity) |
+| `limits.nats_fetch_batch` | messages per pull, 1..64 (never more than the free delivery permits) |
+| `limits.nats_fetch_expires_millis` | how long one pull waits, 100..30000 |
+| `limits.nats_in_progress_interval_millis` | the `+WPI` period, 1000..15000 (at most a quarter of AckWait) |
+| `limits.nats_retry_delay_millis` | the retry-later nak delay, 1000..300000 |
+
+The inbox prefix is `_INBOX_elitea-worker` (the permission table allows that
+one only). The poison delay (24h) and the dead-letter bucket name are
+constants of the contract, not configuration.

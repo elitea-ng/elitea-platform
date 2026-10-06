@@ -42,6 +42,11 @@ NS=elitea
 "$HELM" template elitea "$DIR/helm/elitea" -n "$NS" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
   --set-string llmGateway.egressPosture=public-unrestricted > "$TMP/elitea.yaml"
+# The standalone profile: the runtime plane on, so the command bus's
+# identities (elitea-main-runtime, elitea-worker) render too.
+"$HELM" template elitea "$DIR/helm/elitea" -n "$NS" -f "$DIR/helm/elitea/values-standalone.yaml" \
+  --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
+  --set-string llmGateway.egressPosture=public-unrestricted > "$TMP/elitea-runtime.yaml"
 
 # Schema validation of the NATS renders (R9). The template job in helm-lint.yml
 # runs kubeconform on the charts it can template without network; these two
@@ -447,6 +452,29 @@ for ident, (pfx, cm, urlvar) in prefix.items():
     url = envmap.get(urlvar, "")
     check(f"{ident}: {urlvar} is tls://{fqdn}:4222, no credential", url == f"tls://{fqdn}:4222", url)
 
+# ── the runtime command bus's identities (standalone profile) ─────────────
+rt = docs("elitea-runtime.yaml")
+rtcerts = {c["spec"]["commonName"]: c for c in kinds(rt, "Certificate") if c["spec"].get("uris")}
+check("runtime on: elitea-main-runtime gets its own NATS certificate", "elitea-main-runtime" in rtcerts, sorted(rtcerts))
+mc = rtcerts.get("elitea-main-runtime")
+if mc:
+    check("elitea-main-runtime: URI SAN names its user in the permission table", mc["spec"]["uris"] == [URI("elitea-main-runtime")] and URI("elitea-main-runtime") in users)
+    check("elitea-main-runtime: issued by the NATS CA Issuer", mc["spec"]["issuerRef"]["name"] == "elitea-nats-ca")
+    rdeps = {d["metadata"]["name"]: d for d in kinds(rt, "Deployment")}
+    rcms = {d["metadata"]["name"]: d.get("data", {}) for d in kinds(rt, "ConfigMap")}
+    md = rdeps.get("elitea-main")
+    spec = md["spec"]["template"]["spec"] if md else {}
+    vol = [v for v in spec.get("volumes", []) if v["name"] == "runtime-nats-client-tls"]
+    mnt = [m for m in (spec.get("containers") or [{}])[0].get("volumeMounts", []) if m["name"] == "runtime-nats-client-tls"]
+    check("elitea-main mounts the runtime identity's Secret", vol and vol[0]["secret"]["secretName"] == mc["spec"]["secretName"] and mnt)
+    env = {}
+    for d in rcms.values():
+        env.update({k: v for k, v in d.items() if k.startswith("ELITEA_RUNTIME_NATS")})
+    base = mnt[0]["mountPath"] if mnt else "<unmounted>"
+    check("ELITEA_RUNTIME_NATS_TLS_* point into its mount",
+          [env.get(f"ELITEA_RUNTIME_NATS_TLS_{k}_FILE") for k in ("CA", "CERT", "KEY")] == [f"{base}/ca.crt", f"{base}/tls.crt", f"{base}/tls.key"], env)
+    check(f"ELITEA_RUNTIME_NATS_URL is tls://{fqdn}:4222, no credential", env.get("ELITEA_RUNTIME_NATS_URL") == f"tls://{fqdn}:4222", env.get("ELITEA_RUNTIME_NATS_URL"))
+
 # ── the env names the code builds (R7) ────────────────────────────────────
 # natsconn.FromEnv / EnvNames build <PREFIX>_NATS_TLS_{CA,CERT,KEY}_FILE by
 # concatenation, so no grep of the code finds them and the env-drift gate
@@ -483,10 +511,17 @@ for d in kinds(el, "Deployment"):
         rendered_env |= {e["name"] for e in c.get("env", [])}
 for data in cms.values():
     rendered_env |= set(data)
+# The runtime plane's producer identity (ELITEA_RUNTIME) renders only with the
+# runtime plane on: the standalone profile's render.
+for d in kinds(docs("elitea-runtime.yaml"), "Deployment"):
+    for c in d["spec"]["template"]["spec"]["containers"]:
+        rendered_env |= {e["name"] for e in c.get("env", [])}
+for d in kinds(docs("elitea-runtime.yaml"), "ConfigMap"):
+    rendered_env |= set(d.get("data", {}) or {})
 for p in sorted(prefixes):
     names = [f"{p}_NATS_TLS_{k}_FILE" for k in ("CA", "CERT", "KEY")]
     check(f"the chart renders all three of {p}_NATS_TLS_*_FILE the code builds", all(n in rendered_env for n in names), [n for n in names if n not in rendered_env])
-check("the prefixes the code uses are the ones this suite expects", prefixes == {"ELITEA_EVENTS", "GATEWAY"}, sorted(prefixes))
+check("the prefixes the code uses are the ones this suite expects", prefixes == {"ELITEA_EVENTS", "GATEWAY", "ELITEA_RUNTIME"}, sorted(prefixes))
 # The scheduler opens JetStream with natsconn.SchedulerGatewayJSAPIPrefix; the
 # SCHEDULER imports must map GATEWAY's consumer API under that same prefix,
 # or every bind answers "JetStream not enabled for account".

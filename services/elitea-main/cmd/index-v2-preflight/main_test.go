@@ -47,16 +47,16 @@ func TestRunRejectsInvalidUsageBeforeReadingEnvironment(t *testing.T) {
 	}
 }
 
-func TestPreflightConfigRequiresOnlyOldIndexRouteAndRedisReadCredentials(t *testing.T) {
+func TestPreflightConfigRequiresOnlyTheIndexRouteAndTheRuntimeNATSIdentity(t *testing.T) {
 	environment := map[string]string{
 		"DATABASE_URL":           "postgres://preflight@postgres/elitea",
 		"ELITEA_RUNTIME_ENABLED": "true",
 		"ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED": "true",
-		"ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM":   "commands.v1.index.ingest.old",
-		"ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP":   "elitea-indexer-worker-v1",
-		"ELITEA_RUNTIME_REDIS_URL":                     "rediss://preflight@redis:6379/0",
-		"ELITEA_RUNTIME_REDIS_PASSWORD_FILE":           "/run/secrets/redis-password",
-		"ELITEA_RUNTIME_REDIS_CA_FILE":                 "/run/secrets/redis-ca.pem",
+		"ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM":   "ELITEA_RT_V1_INDEX",
+		"ELITEA_RUNTIME_NATS_URL":                      "tls://elitea-nats:4222",
+		"ELITEA_RUNTIME_NATS_TLS_CA_FILE":              "/etc/elitea/runtime-nats-client/ca.crt",
+		"ELITEA_RUNTIME_NATS_TLS_CERT_FILE":            "/etc/elitea/runtime-nats-client/tls.crt",
+		"ELITEA_RUNTIME_NATS_TLS_KEY_FILE":             "/etc/elitea/runtime-nats-client/tls.key",
 		"ELITEA_RUNTIME_SIGNING_KEY_FILE":              "not-mounted",
 		"ELITEA_RUNTIME_VERIFICATION_KEYRING_FILE":     "not-mounted",
 		"ELITEA_RUNTIME_CONTROL_TLS_KEY_FILE":          "not-mounted",
@@ -72,11 +72,8 @@ func TestPreflightConfigRequiresOnlyOldIndexRouteAndRedisReadCredentials(t *test
 	}
 	if config.databaseURL != environment["DATABASE_URL"] ||
 		config.commandStream != environment["ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM"] ||
-		config.consumerGroup != environment["ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP"] ||
-		config.redis.URL != environment["ELITEA_RUNTIME_REDIS_URL"] ||
-		config.redis.PasswordFile != environment["ELITEA_RUNTIME_REDIS_PASSWORD_FILE"] ||
-		config.redis.CAFile != environment["ELITEA_RUNTIME_REDIS_CA_FILE"] ||
-		config.redis.PoolSize != preflightRedisPoolSize {
+		config.nats.URL != environment["ELITEA_RUNTIME_NATS_URL"] ||
+		config.nats.Material.CertFile != environment["ELITEA_RUNTIME_NATS_TLS_CERT_FILE"] {
 		t.Fatalf("config=%+v", config)
 	}
 
@@ -85,10 +82,9 @@ func TestPreflightConfigRequiresOnlyOldIndexRouteAndRedisReadCredentials(t *test
 		"ELITEA_RUNTIME_ENABLED",
 		"ELITEA_RUNTIME_INDEX_INGEST_DISPATCH_ENABLED",
 		"ELITEA_RUNTIME_INDEX_INGEST_COMMAND_STREAM",
-		"ELITEA_RUNTIME_INDEX_INGEST_CONSUMER_GROUP",
-		"ELITEA_RUNTIME_REDIS_URL",
-		"ELITEA_RUNTIME_REDIS_PASSWORD_FILE",
-		"ELITEA_RUNTIME_REDIS_CA_FILE",
+		"ELITEA_RUNTIME_NATS_URL",
+		// A half-configured identity is refused, not silently plaintext.
+		"ELITEA_RUNTIME_NATS_TLS_KEY_FILE",
 	} {
 		t.Run(missing, func(t *testing.T) {
 			copy := make(map[string]string, len(environment))

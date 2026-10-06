@@ -278,6 +278,13 @@ spec:
             # (templates/natsClient.yaml).
             {{- include "elitea.natsClientVolumeMount" . | nindent 12 }}
             {{- end }}
+            {{- if and .Values.nats.tls.enabled (.Values.main.runtime | default dict).enabled }}
+            # The runtime plane's NATS identity, elitea-main-runtime: the
+            # command bus producer (templates/natsClient.yaml).
+            - name: runtime-nats-client-tls
+              mountPath: {{ include "elitea-main.runtimeNatsMountPath" . }}
+              readOnly: true
+            {{- end }}
             {{- if .Values.main.fileConfig.brandPack.enabled }}
             # BRAND_PACK_PATH is "one pack file per deployment" (branding
             # package doc), read with os.ReadFile — a subPath mount, same as
@@ -399,6 +406,11 @@ spec:
         {{- end }}
         {{- if and .Values.nats.tls.enabled (include "elitea-main.usesNats" .) }}
         {{- include "elitea.natsClientVolume" (dict "secretName" (printf "%s-nats-client-tls" (include "elitea-main.fullname" .))) | nindent 8 }}
+        {{- end }}
+        {{- if and .Values.nats.tls.enabled (.Values.main.runtime | default dict).enabled }}
+        - name: runtime-nats-client-tls
+          secret:
+            secretName: {{ printf "%s-runtime-nats-client-tls" (include "elitea-main.fullname" .) }}
         {{- end }}
         {{- if .Values.main.fileConfig.brandPack.enabled }}
         - name: brand-pack

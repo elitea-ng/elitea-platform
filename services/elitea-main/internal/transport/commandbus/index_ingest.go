@@ -1,4 +1,4 @@
-package redisdispatch
+package commandbus
 
 import (
 	"context"
@@ -13,19 +13,19 @@ import (
 
 const (
 	indexIngestCapabilityID        = "index.ingest.v1"
-	maxIndexIngestRedisEntryBytes  = (64 << 10) - 1
+	maxIndexIngestMessageBytes     = (64 << 10) - 1
 	maxIndexIngestRoutingNameBytes = 256
 )
 
 var ErrInvalidIndexIngestCommand = errors.New("invalid index ingest command")
 
 // IndexIngestProducerConfig binds index ingestion to a stream that is distinct
-// from the configuration-validation stream. ConsumerGroup is retained as part
+// from the configuration-validation stream. Consumer is retained as part
 // of the same route contract so producer and worker composition cannot select
 // the stream and group independently.
 type IndexIngestProducerConfig struct {
 	Stream                 string
-	ConsumerGroup          string
+	Consumer               string
 	ValidationStream       string
 	ProtocolRevision       string
 	EnvelopeSchemaRevision string
@@ -36,29 +36,29 @@ type IndexIngestProducerConfig struct {
 }
 
 // IndexIngestProducer prepares and publishes only index.ingest.v1 commands.
-// It has no in-memory retry queue: saturation or Redis failure is returned
+// It has no in-memory retry queue: saturation or a publish failure is returned
 // without mutation, so its caller can retain the immutable prepared envelope
 // in the durable outbox.
 type IndexIngestProducer struct {
 	producer          *Producer
 	stream            string
-	consumerGroup     string
+	consumer          string
 	protocolRevision  string
 	capabilityVersion string
 }
 
 func NewIndexIngestProducer(config IndexIngestProducerConfig, signer CommandSigner, appender StreamAppender) (*IndexIngestProducer, error) {
-	if !validIndexIngestRoutingName(config.Stream) || !validIndexIngestRoutingName(config.ConsumerGroup) || !validIndexIngestRoutingName(config.ValidationStream) {
-		return nil, errors.New("invalid index ingest Redis route")
+	if !validIndexIngestRoutingName(config.Stream) || !validIndexIngestRoutingName(config.Consumer) || !validIndexIngestRoutingName(config.ValidationStream) {
+		return nil, errors.New("invalid index ingest command bus route")
 	}
-	if redisRouteKeysOverlap(config.Stream, config.ValidationStream) {
-		return nil, errors.New("index ingest requires a dedicated Redis stream and delivery index")
+	if routesOverlap(config.Stream, config.ValidationStream) {
+		return nil, errors.New("index ingest requires a stream of its own")
 	}
 	if config.CapabilityVersion == "" || len(config.CapabilityVersion) > config.Limits.MaxStringBytes || strings.ContainsAny(config.CapabilityVersion, "\r\n\x00") {
 		return nil, errors.New("invalid index ingest capability version")
 	}
-	if config.Limits.MaxTransportMessageBytes <= 0 || config.Limits.MaxTransportMessageBytes > maxIndexIngestRedisEntryBytes {
-		return nil, errors.New("index ingest Redis entry limit must be less than 64 KiB")
+	if config.Limits.MaxTransportMessageBytes <= 0 || config.Limits.MaxTransportMessageBytes > maxIndexIngestMessageBytes {
+		return nil, errors.New("index ingest message limit must be less than 64 KiB")
 	}
 	producer, err := NewProducer(ProducerConfig{
 		Stream:                 config.Stream,
@@ -73,7 +73,7 @@ func NewIndexIngestProducer(config IndexIngestProducerConfig, signer CommandSign
 	return &IndexIngestProducer{
 		producer:          producer,
 		stream:            config.Stream,
-		consumerGroup:     config.ConsumerGroup,
+		consumer:          config.Consumer,
 		protocolRevision:  config.ProtocolRevision,
 		capabilityVersion: config.CapabilityVersion,
 	}, nil
@@ -83,8 +83,8 @@ func (p *IndexIngestProducer) Stream() string {
 	return p.stream
 }
 
-func (p *IndexIngestProducer) ConsumerGroup() string {
-	return p.consumerGroup
+func (p *IndexIngestProducer) Consumer() string {
+	return p.consumer
 }
 
 // PrepareIndexIngest builds the wire command from the application-owned typed
@@ -198,10 +198,8 @@ func validIndexIngestRoutingName(value string) bool {
 	return value != "" && len(value) <= maxIndexIngestRoutingNameBytes && !strings.ContainsAny(value, " \r\n\x00")
 }
 
-func redisRouteKeysOverlap(firstStream, secondStream string) bool {
-	return firstStream == secondStream ||
-		firstStream == deliveryIndexKey(secondStream) ||
-		deliveryIndexKey(firstStream) == secondStream
+func routesOverlap(firstStream, secondStream string) bool {
+	return firstStream == secondStream
 }
 
 func validIndexIngestText(value string, maximum int) bool {

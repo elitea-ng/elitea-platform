@@ -24,7 +24,7 @@ import (
 const (
 	systemTestOptIn = "ELITEA_RUNTIME_SYSTEM_TEST"
 	commandStream   = "elitea:runtime:commands"
-	consumerGroup   = "elitea-runtime-v1"
+	consumer        = "elitea-runtime-v1"
 	workloadSession = "system-session-1"
 	producerID      = "system-producer-1"
 	workloadID      = "spiffe://elitea.test/runtime/python-worker"
@@ -121,7 +121,7 @@ func TestProductionRuntimeCrossProcessSystem(t *testing.T) {
 	observer := newControlRedisClient(t, controlRedisPort, "observer", observerPassword, pki.caPath)
 	defer func() { _ = observer.Close() }()
 	waitForRedis(t, ctx, observer, containers, controlRedisName)
-	if err := observer.XGroupCreateMkStream(ctx, commandStream, consumerGroup, "0-0").Err(); err != nil {
+	if err := observer.XGroupCreateMkStream(ctx, commandStream, consumer, "0-0").Err(); err != nil {
 		t.Fatalf("provision single runtime consumer group: %v", err)
 	}
 	assertBrokerLeastPrivilege(t, ctx, controlRedisPort, pki.caPath, observer)
@@ -254,18 +254,18 @@ func assertBrokerLeastPrivilege(t *testing.T, ctx context.Context, port int, caP
 	assertNOPERM("worker PUBLISH", worker.Publish(ctx, commandStream, "forbidden").Err())
 	assertNOPERM("worker HSET", worker.HSet(ctx, commandStream+":delivery-index.v1", "forbidden", "0-0").Err())
 	assertNOPERM("producer XREADGROUP", producer.XReadGroup(ctx, &redis.XReadGroupArgs{
-		Group:    consumerGroup,
+		Group:    consumer,
 		Consumer: "forbidden-producer",
 		Streams:  []string{commandStream, ">"},
 		Count:    1,
 	}).Err())
-	assertNOPERM("producer XACK", producer.XAck(ctx, commandStream, consumerGroup, "0-0").Err())
+	assertNOPERM("producer XACK", producer.XAck(ctx, commandStream, consumer, "0-0").Err())
 	assertNOPERM("producer XDEL", producer.XDel(ctx, commandStream, "0-0").Err())
 	assertNOPERM("observer XCLAIM", observer.Do(
 		ctx,
 		"XCLAIM",
 		commandStream,
-		consumerGroup,
+		consumer,
 		"forbidden-observer",
 		0,
 		"0-0",
