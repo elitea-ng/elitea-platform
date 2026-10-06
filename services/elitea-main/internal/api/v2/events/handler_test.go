@@ -75,7 +75,7 @@ func TestStream_DeliversEventThenClosesOnCtxCancel(t *testing.T) {
 	}()
 
 	// Push an event, then cancel the request context to end the stream.
-	src.events <- natsbus.Event{Type: "message.created", Payload: json.RawMessage(`{"n":1}`)}
+	src.events <- natsbus.Event{Type: "budget.soft_alert", Payload: json.RawMessage(`{"n":1}`)}
 	// Give the handler a moment to write it before we cancel.
 	time.Sleep(50 * time.Millisecond)
 	cancel()
@@ -97,11 +97,85 @@ func TestStream_DeliversEventThenClosesOnCtxCancel(t *testing.T) {
 	if !strings.Contains(body, ": connected") {
 		t.Errorf("missing connected comment; body=%q", body)
 	}
-	if !strings.Contains(body, "event: message.created") || !strings.Contains(body, `data: {"n":1}`) {
+	if !strings.Contains(body, "event: budget.soft_alert") || !strings.Contains(body, `data: {"n":1}`) {
 		t.Errorf("event not written; body=%q", body)
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "text/event-stream" {
 		t.Errorf("Content-Type = %q", ct)
+	}
+}
+
+// Only forwardedEventTypes reach the client. Domain events (conversation.created
+// carries a private conversation's name and creator) and anything forged onto
+// the shared subject by another workload are dropped, payload and all, while
+// the allowed frames around them still arrive in order (PR #1074 review).
+func TestStream_ForwardsOnlyAllowlistedEventTypes(t *testing.T) {
+	src := newFakeSource()
+	h := NewHandlerFromSource(src)
+
+	rec := httptest.NewRecorder()
+	req := newRequestWithProjectID(context.Background(), "42")
+	done := make(chan struct{})
+	go func() {
+		h.Stream(rec, req)
+		close(done)
+	}()
+
+	frames := []natsbus.Event{
+		{Type: "conversation.created", Payload: json.RawMessage(`{"name":"secret-conversation","created_by":9}`)},
+		{Type: "canvas.editors", Payload: json.RawMessage(`{"editors":[]}`)},
+		{Type: "artifact.uploaded", Payload: json.RawMessage(`{"object":"secret-file"}`)},
+		{Type: "pipeline.run.failed", Payload: json.RawMessage(`{"error":"secret-error"}`)},
+		{Type: "", Payload: json.RawMessage(`{"forged":"secret-empty-type"}`)},
+		{Type: "budget.soft_alert ", Payload: json.RawMessage(`{"forged":"secret-near-miss"}`)},
+		{Type: "budget.soft_alert", Payload: json.RawMessage(`{"cost_just_billed_nano":5}`)},
+	}
+	// The channel holds 8, so every frame is queued before the close that ends
+	// the stream: the handler drains them all, then returns.
+	for _, frame := range frames {
+		src.events <- frame
+	}
+	close(src.events)
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stream did not return after the source closed")
+	}
+
+	body := rec.Body.String()
+	if strings.Contains(body, "secret") {
+		t.Fatalf("a non-allowlisted frame reached the client; body=%q", body)
+	}
+	for _, unwanted := range []string{"conversation.created", "artifact.uploaded", "pipeline.run.failed"} {
+		if strings.Contains(body, unwanted) {
+			t.Errorf("event %q reached the client; body=%q", unwanted, body)
+		}
+	}
+	editors := strings.Index(body, "event: canvas.editors")
+	alert := strings.Index(body, "event: budget.soft_alert\n")
+	if editors < 0 || alert < 0 || editors > alert {
+		t.Fatalf("allowlisted frames missing or out of order; body=%q", body)
+	}
+}
+
+func TestForwardedIsExactlyPresenceAndSoftAlert(t *testing.T) {
+	for _, eventType := range []string{"canvas.editors", "budget.soft_alert"} {
+		if !Forwarded(eventType) {
+			t.Errorf("Forwarded(%q) = false, want true", eventType)
+		}
+	}
+	for _, eventType := range []string{
+		"conversation.created", "artifact.uploaded", "pipeline.run.started",
+		"pipeline.run.succeeded", "pipeline.run.failed", "schedule.fired",
+		"moderation.request.decided", "agent.version.published", "", "canvas.*",
+	} {
+		if Forwarded(eventType) {
+			t.Errorf("Forwarded(%q) = true; every forwarded type is readable by any project viewer", eventType)
+		}
+	}
+	if len(forwardedEventTypes) != 2 {
+		t.Errorf("forwardedEventTypes has %d entries, want 2; widening it is a privacy decision — update this test deliberately", len(forwardedEventTypes))
 	}
 }
 

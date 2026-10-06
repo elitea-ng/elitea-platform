@@ -1,10 +1,11 @@
 // Package natsbus is elitea-main's live-update bus: NATS core pub/sub.
 //
-// It carries the project event stream — every domain event elitea-main emits
-// through internal/events.Publisher (conversation create, artifact upload,
-// agent publish, pipeline runs, moderation decisions, canvas presence) and the
-// LLM gateway's budget.soft_alert — to the project SSE route
-// (internal/api/v2/events), on every replica. It replaced the plain Redis
+// It carries the project event stream — canvas presence rosters and the LLM
+// gateway's budget.soft_alert — to the project SSE route
+// (internal/api/v2/events), on every replica. elitea-main's domain events
+// (conversation create, artifact upload, pipeline runs, …) are deliberately
+// NOT published here: they go to webhook sinks only (cmd/elitea-main,
+// newDomainEventsPublisher), and the SSE route forwards an allowlist of types. It replaced the plain Redis
 // (Valkey) pub/sub client that used to sit at REDIS_URL.
 //
 // # Subject scheme
@@ -78,6 +79,7 @@ type natsConn interface {
 	FlushTimeout(timeout time.Duration) error
 	RTT() (time.Duration, error)
 	Drain() error
+	IsClosed() bool
 	Close()
 }
 
@@ -88,8 +90,8 @@ type subscription interface {
 	Drain() error
 }
 
-// realConn adapts a *nats.Conn to natsConn. Publish/FlushTimeout/RTT/Drain/Close
-// are promoted from the embedded connection unchanged; only ChanSubscribe is
+// realConn adapts a *nats.Conn to natsConn. Publish/FlushTimeout/RTT/Drain/
+// IsClosed/Close are promoted from the embedded connection unchanged; only ChanSubscribe is
 // overridden to return the narrower subscription interface (the concrete
 // *nats.Subscription already satisfies it).
 type realConn struct{ *nats.Conn }
@@ -316,11 +318,52 @@ func (eb *EventBus) Ping(_ context.Context) error {
 	return nil
 }
 
-// Close drains in-flight messages then closes the connection. Drain is
-// preferred over a bare Close so buffered subscription messages are processed
-// (nats.go guidance). A drain error falls back to Close.
+// CloseTimeout bounds shutdown: half for the flush of buffered publishes, the
+// rest for the drain to finish. Past it the connection is closed regardless,
+// so a dead server cannot hold a terminating pod.
+const CloseTimeout = 4 * time.Second
+
+// closePollInterval is how often Close checks that the drain has finished.
+const closePollInterval = 10 * time.Millisecond
+
+// Close flushes, drains and closes the connection, each step bounded by
+// CloseTimeout, so publishes still in the client's buffer — every publish is
+// buffered under WithBufferedPublish — reach the server before exit.
+//
+// Drain alone does not guarantee that: in nats.go it is ASYNC (it starts a
+// goroutine and returns), and while the client is reconnecting it calls
+// Close() at once, discarding the reconnect buffer. So:
+//
+//  1. FlushTimeout first. A PING/PONG round trip proves everything written
+//     before it is on the server; during a reconnect it waits (bounded) for
+//     the connection to come back, which is when the reconnect buffer is sent.
+//  2. Drain, then wait (bounded) for the connection to report closed, which
+//     is when the drain has delivered pending subscription messages and
+//     flushed again. Polling IsClosed rather than installing a closed
+//     callback keeps any callback the dialler set.
+//  3. Anything that fails or overruns falls back to Close().
 func (eb *EventBus) Close() {
+	eb.closeWithin(CloseTimeout)
+}
+
+func (eb *EventBus) closeWithin(timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	if eb.conn.IsClosed() {
+		return
+	}
+	if err := eb.conn.FlushTimeout(timeout / 2); err != nil {
+		slog.Warn("natsbus: shutdown flush did not complete; buffered publishes may be lost", "err", err)
+	}
 	if err := eb.conn.Drain(); err != nil {
 		eb.conn.Close()
+		return
+	}
+	for !eb.conn.IsClosed() {
+		if !time.Now().Before(deadline) {
+			slog.Warn("natsbus: drain did not finish before the shutdown deadline; closing", "timeout", timeout)
+			eb.conn.Close()
+			return
+		}
+		time.Sleep(closePollInterval)
 	}
 }

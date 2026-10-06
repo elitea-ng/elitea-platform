@@ -335,12 +335,13 @@ type RouterConfig struct {
 	// DomainEvents is #876's second half: the ONE domain-events Publisher
 	// every producer below (conversation create, artifact upload, agent
 	// publish/unpublish, moderation decision, pipeline run admission) emits
-	// through, which fans out to the project SSE bus AND — via the webhook
-	// Dispatcher composed as one of its Sinks in cmd/elitea-main/main.go —
-	// to every registered webhook subscribed to that event.
+	// through, which fans out — via the webhook Dispatcher composed as its
+	// Sink in cmd/elitea-main/main.go — to every registered webhook
+	// subscribed to that event. Its Bus is always events.NoopBus: domain
+	// events never reach the project SSE stream (newDomainEventsPublisher).
 	//
 	// main.go builds this UNCONDITIONALLY, never leaving it nil: even with
-	// no Redis and no webhook repository it is a Publisher over
+	// no webhook repository it is a Publisher over
 	// events.NoopBus with zero sinks, so every `.WithEvents(cfg.DomainEvents)`
 	// call below can pass it straight through with no nil check — passing a
 	// nil *events.Publisher through an interface-typed Option parameter

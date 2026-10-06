@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"log/slog"
 	"net"
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nats-io/nats.go"
 )
 
 func envLookup(pairs map[string]string) func(string) (string, bool) {
@@ -123,4 +129,50 @@ func TestEventsNATSBootComposesThePresenceStore(t *testing.T) {
 	if err != nil || store == nil {
 		t.Fatalf("newCanvasPresenceStore() = (%v, %v), want a store", store, err)
 	}
+	t.Cleanup(store.Close)
+	if conn.Opts.ReconnectedCB == nil {
+		t.Fatal("the presence store did not hook the connection's reconnect handler for its resync")
+	}
+}
+
+// The async error handler logs a slow consumer with its subject (never a
+// payload) and collapses a burst into one line per interval.
+func TestAsyncErrorLoggerDeduplicatesBursts(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	now := time.Unix(1_000, 0)
+	l := newAsyncErrorLogger(logger, time.Minute, func() time.Time { return now })
+	sub := &nats.Subscription{Subject: "gateway.events.project.7.events"}
+
+	for i := 0; i < 500; i++ {
+		l.handle(nil, sub, nats.ErrSlowConsumer)
+	}
+	if got := strings.Count(buf.String(), "msg=\"live-update NATS slow consumer"); got != 1 {
+		t.Fatalf("logged %d slow-consumer lines for one burst, want 1; log=%q", got, buf.String())
+	}
+	if !strings.Contains(buf.String(), "subject=gateway.events.project.7.events") {
+		t.Fatalf("slow-consumer line does not name the subject; log=%q", buf.String())
+	}
+
+	// A different subject is its own key.
+	l.handle(nil, &nats.Subscription{Subject: "gateway.events.project.8.events"}, nats.ErrSlowConsumer)
+	if got := strings.Count(buf.String(), "msg=\"live-update NATS slow consumer"); got != 2 {
+		t.Fatalf("a second subject was suppressed by the first one's window; log=%q", buf.String())
+	}
+
+	// After the interval the next one logs and reports what was suppressed.
+	now = now.Add(2 * time.Minute)
+	l.handle(nil, sub, nats.ErrSlowConsumer)
+	if !strings.Contains(buf.String(), "suppressed_since_last_log=499") {
+		t.Fatalf("the post-window line does not report the suppressed count; log=%q", buf.String())
+	}
+
+	// A connection-level error (no subscription) logs too.
+	l.handle(nil, nil, errors.New("permissions violation"))
+	if !strings.Contains(buf.String(), "async error") {
+		t.Fatalf("a non-slow-consumer async error was not logged; log=%q", buf.String())
+	}
+	l.handle(nil, nil, nil) // must not panic
 }

@@ -9,7 +9,10 @@ package canvaspresence_test
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"os/exec"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -51,7 +54,29 @@ func newNATSStore(t *testing.T) (*v2canvaspresence.NATSStore, jetstream.JetStrea
 	if err != nil {
 		t.Fatalf("NewNATSStore: %v", err)
 	}
+	t.Cleanup(store.Close)
 	return store, js, conn
+}
+
+// eventuallyRoster polls List until want accepts the roster: another
+// replica's write reaches this replica's mirror through its watcher, so
+// cross-replica visibility is near-immediate but not synchronous.
+func eventuallyRoster(t *testing.T, store *v2canvaspresence.NATSStore, key string, want func([]v2canvaspresence.Editor) bool) []v2canvaspresence.Editor {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		roster, err := store.List(context.Background(), key)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if want(roster) {
+			return roster
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("roster never converged; last = %#v", roster)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 var rosterSeq atomic.Int64
@@ -105,13 +130,123 @@ func TestNATSStoreIsSharedAcrossReplicas(t *testing.T) {
 	if err := replicaA.Touch(ctx, key, v2canvaspresence.Editor{UserID: "1", UserName: "ada"}, v2canvaspresence.TTL); err != nil {
 		t.Fatalf("touch: %v", err)
 	}
-	roster, err := replicaB.List(ctx, key)
+	eventuallyRoster(t, replicaB, key, func(r []v2canvaspresence.Editor) bool {
+		return len(r) == 1 && r[0].UserID == "1"
+	})
+
+	// A leave on B reaches A's mirror too.
+	if err := replicaB.Remove(ctx, key, "1"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	eventuallyRoster(t, replicaA, key, func(r []v2canvaspresence.Editor) bool { return len(r) == 0 })
+}
+
+// The writing replica reads its own write at once — the heartbeat's response
+// is built from List right after Touch/Remove — without waiting for the
+// watcher.
+func TestNATSStoreReadsItsOwnWrites(t *testing.T) {
+	store, _, _ := newNATSStore(t)
+	ctx := context.Background()
+	for i := 0; i < 20; i++ {
+		key := uniqueRoster(t)
+		if err := store.Touch(ctx, key, v2canvaspresence.Editor{UserID: "1", UserName: "ada"}, v2canvaspresence.TTL); err != nil {
+			t.Fatalf("touch: %v", err)
+		}
+		if roster, _ := store.List(ctx, key); len(roster) != 1 {
+			t.Fatalf("iteration %d: roster right after Touch = %#v, want the writer's own entry", i, roster)
+		}
+		if err := store.Remove(ctx, key, "1"); err != nil {
+			t.Fatalf("remove: %v", err)
+		}
+		if roster, _ := store.List(ctx, key); len(roster) != 0 {
+			t.Fatalf("iteration %d: roster right after Remove = %#v, want empty", i, roster)
+		}
+	}
+}
+
+// A replica started AFTER entries were written sees them: the mirror's
+// initial sync reads the bucket's current contents before NewNATSStore
+// returns.
+func TestNATSStoreInitialSyncSeesExistingEntries(t *testing.T) {
+	writer, _, _ := newNATSStore(t)
+	key := uniqueRoster(t)
+	if err := writer.Touch(context.Background(), key, v2canvaspresence.Editor{UserID: "7", UserName: "lin"}, v2canvaspresence.TTL); err != nil {
+		t.Fatalf("touch: %v", err)
+	}
+	late, _, _ := newNATSStore(t)
+	roster, err := late.List(context.Background(), key)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(roster) != 1 || roster[0].UserID != "1" {
-		t.Fatalf("replica B roster = %#v, want the editor replica A recorded", roster)
+	if len(roster) != 1 || roster[0].UserID != "7" {
+		t.Fatalf("a replica started later read %#v, want the existing entry", roster)
 	}
+}
+
+// Resync (what a reconnect triggers) rebuilds the mirror from a fresh watch
+// and loses nothing: entries written before and during it are all there
+// afterwards, and the mirror keeps following new writes.
+func TestNATSStoreResyncKeepsTheMirrorConsistent(t *testing.T) {
+	store, _, _ := newNATSStore(t)
+	other, _, _ := newNATSStore(t)
+	ctx := context.Background()
+	key := uniqueRoster(t)
+
+	_ = store.Touch(ctx, key, v2canvaspresence.Editor{UserID: "1", UserName: "ada"}, v2canvaspresence.TTL)
+	for i := 0; i < 5; i++ {
+		store.Resync()
+		_ = other.Touch(ctx, key, v2canvaspresence.Editor{UserID: fmt.Sprintf("o%d", i), UserName: "o"}, v2canvaspresence.TTL)
+		// Read-your-writes holds even while a resync is in flight.
+		_ = store.Touch(ctx, key, v2canvaspresence.Editor{UserID: fmt.Sprintf("s%d", i), UserName: "s"}, v2canvaspresence.TTL)
+		if roster, _ := store.List(ctx, key); !containsUser(roster, fmt.Sprintf("s%d", i)) {
+			t.Fatalf("resync %d hid the writer's own entry: %#v", i, roster)
+		}
+	}
+	eventuallyRoster(t, store, key, func(r []v2canvaspresence.Editor) bool { return len(r) == 11 })
+
+	_ = other.Remove(ctx, key, "o0")
+	eventuallyRoster(t, store, key, func(r []v2canvaspresence.Editor) bool {
+		return len(r) == 10 && !containsUser(r, "o0")
+	})
+}
+
+// List must not create server-side state: the previous design opened and
+// deleted an ordered consumer per List (per heartbeat). Many Lists leave the
+// bucket's consumer count where it was.
+func TestNATSStoreListCreatesNoConsumers(t *testing.T) {
+	store, js, _ := newNATSStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	stream, err := js.Stream(ctx, "KV_"+v2canvaspresence.PresenceBucket)
+	if err != nil {
+		t.Fatalf("open bucket stream: %v", err)
+	}
+	consumers := func() int {
+		info, err := stream.Info(ctx)
+		if err != nil {
+			t.Fatalf("stream info: %v", err)
+		}
+		return info.State.Consumers
+	}
+	before := consumers()
+	key := uniqueRoster(t)
+	for i := 0; i < 50; i++ {
+		if _, err := store.List(ctx, key); err != nil {
+			t.Fatalf("list: %v", err)
+		}
+	}
+	if after := consumers(); after > before {
+		t.Fatalf("50 Lists raised the consumer count from %d to %d", before, after)
+	}
+}
+
+func containsUser(roster []v2canvaspresence.Editor, userID string) bool {
+	for _, editor := range roster {
+		if editor.UserID == userID {
+			return true
+		}
+	}
+	return false
 }
 
 // The reference's leave path removes nobody unless the leaver is the LAST
@@ -275,4 +410,113 @@ func TestNATSBackendSharesTheRosterAndPublishes(t *testing.T) {
 			t.Fatalf("only %d of 2 presence frames reached project %s's subject", seen, projectID)
 		}
 	}
+}
+
+// A real NATS restart under a live store: the connection reconnects, the
+// reconnect hook resyncs the mirror, and the mirror both keeps what survived
+// and follows writes made after the restart. Needs a nats-server binary
+// (ELITEA_TEST_NATS_SERVER_BIN), because the test owns that server's process.
+func TestNATSStoreFollowsTheBucketAcrossAServerRestart(t *testing.T) {
+	bin := os.Getenv("ELITEA_TEST_NATS_SERVER_BIN")
+	if bin == "" {
+		t.Skip("set ELITEA_TEST_NATS_SERVER_BIN (a nats-server binary) to run the restart test")
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve a port: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	storeDir := t.TempDir()
+	start := func() *exec.Cmd {
+		cmd := exec.Command(bin, "-js", "-a", "127.0.0.1", "-p", strconv.Itoa(port), "-sd", storeDir)
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("start nats-server: %v", err)
+		}
+		return cmd
+	}
+	stopServer := func(cmd *exec.Cmd) {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
+	server := start()
+	t.Cleanup(func() { stopServer(server) })
+
+	url := fmt.Sprintf("nats://127.0.0.1:%d", port)
+	var current atomic.Pointer[v2canvaspresence.NATSStore]
+	reconnected := make(chan struct{}, 4)
+	dial := func(onReconnect bool) *nats.Conn {
+		t.Helper()
+		opts := []nats.Option{nats.MaxReconnects(-1), nats.ReconnectWait(50 * time.Millisecond)}
+		if onReconnect {
+			opts = append(opts, nats.ReconnectHandler(func(*nats.Conn) {
+				if s := current.Load(); s != nil {
+					s.Resync()
+				}
+				reconnected <- struct{}{}
+			}))
+		}
+		var conn *nats.Conn
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			conn, err = nats.Connect(url, opts...)
+			if err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("connect: %v", err)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		t.Cleanup(conn.Close)
+		return conn
+	}
+	open := func(conn *nats.Conn) *v2canvaspresence.NATSStore {
+		t.Helper()
+		js, err := jetstream.New(conn)
+		if err != nil {
+			t.Fatalf("jetstream: %v", err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		store, err := v2canvaspresence.NewNATSStore(ctx, js, v2canvaspresence.NATSStoreConfig{})
+		if err != nil {
+			t.Fatalf("NewNATSStore: %v", err)
+		}
+		t.Cleanup(store.Close)
+		return store
+	}
+
+	reader := open(dial(true))
+	current.Store(reader)
+	writer := open(dial(false))
+	ctx := context.Background()
+	key := uniqueRoster(t)
+
+	_ = writer.Touch(ctx, key, v2canvaspresence.Editor{UserID: "before", UserName: "b"}, v2canvaspresence.TTL)
+	eventuallyRoster(t, reader, key, func(r []v2canvaspresence.Editor) bool { return containsUser(r, "before") })
+
+	stopServer(server)
+	server = start()
+	select {
+	case <-reconnected:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the reader never reconnected after the restart")
+	}
+
+	// The writer's own connection reconnects too; retry its write until it
+	// lands, then the reader's mirror must show it.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if err := writer.Touch(ctx, key, v2canvaspresence.Editor{UserID: "after", UserName: "a"}, v2canvaspresence.TTL); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the writer could not write after the restart")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	eventuallyRoster(t, reader, key, func(r []v2canvaspresence.Editor) bool {
+		return containsUser(r, "before") && containsUser(r, "after")
+	})
 }

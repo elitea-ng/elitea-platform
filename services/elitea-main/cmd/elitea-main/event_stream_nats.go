@@ -7,17 +7,20 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
 	v2canvaspresence "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
 )
 
 // eventsNATSURLEnv names the NATS server elitea-main's live-update plane uses:
-// the project SSE stream (/api/v2/events/prompt_lib/{projectID}), every
-// domain-event publisher, and the cross-replica canvas presence roster.
+// the project SSE stream (/api/v2/events/prompt_lib/{projectID}) and the
+// cross-replica canvas presence roster and its publish. Domain events are not
+// on it (newDomainEventsPublisher).
 //
 // It is a NEW name rather than a reuse of GATEWAY_NATS_URL on purpose. That
 // variable already means "the NATS the LLM gateway's budget counters live in"
@@ -39,8 +42,8 @@ const eventsNATSConnectTimeout = 5 * time.Second
 //
 // Returns (nil, nil) when ELITEA_EVENTS_NATS_URL is absent or blank: the
 // deployment has no live-update plane, the project SSE route stays unmounted
-// (RouterConfig.EventSource is nil-gated in router.go), domain events reach
-// only their webhook sinks, and canvas presence stays per-replica. That is a
+// (RouterConfig.EventSource is nil-gated in router.go) and canvas presence
+// stays per-replica. That is a
 // declared state, not an accident, and main.go logs it.
 //
 // The server must have JetStream enabled (canvas presence keeps its rosters
@@ -78,12 +81,92 @@ func newEventsNATSConn(lookup func(string) (string, bool), logger *slog.Logger) 
 		nats.ReconnectHandler(func(c *nats.Conn) {
 			logger.Info("live-update NATS reconnected", "server", c.ConnectedUrlRedacted())
 		}),
+		nats.ErrorHandler(newAsyncErrorLogger(logger, asyncErrorLogInterval, time.Now).handle),
+		// Bounds the drain natsbus.EventBus.Close starts at shutdown, on the
+		// client side too.
+		nats.DrainTimeout(natsbus.CloseTimeout),
 	)
 	if err != nil {
 		// The URL may carry credentials, so it is never echoed.
 		return nil, fmt.Errorf("connect %s: %w", eventsNATSURLEnv, err)
 	}
 	return conn, nil
+}
+
+// asyncErrorLogInterval is the shortest gap between two log lines for the same
+// (error, subject) pair. A slow SSE client trips ErrSlowConsumer on every
+// message nats.go has to drop, which in a burst is thousands a second.
+const asyncErrorLogInterval = 30 * time.Second
+
+// asyncErrorLogMaxKeys caps the dedup table. Subjects are per project, so the
+// table is bounded only by the number of projects; past the cap it is reset,
+// which at worst logs a few extra lines.
+const asyncErrorLogMaxKeys = 1024
+
+// asyncErrorLogger is the connection's nats.ErrorHandler. Without one, nats.go
+// drops messages for a slow consumer (a subscription whose pending buffer is
+// full — e.g. an SSE client that stopped reading) silently.
+//
+// It logs the error and the SUBJECT only, never a payload, and at most once
+// per asyncErrorLogInterval for each (error, subject) pair, reporting how many
+// occurrences were suppressed in between.
+type asyncErrorLogger struct {
+	logger   *slog.Logger
+	interval time.Duration
+	now      func() time.Time
+
+	mu    sync.Mutex
+	state map[string]*asyncErrorState
+}
+
+type asyncErrorState struct {
+	lastLogged time.Time
+	suppressed int
+}
+
+func newAsyncErrorLogger(logger *slog.Logger, interval time.Duration, now func() time.Time) *asyncErrorLogger {
+	return &asyncErrorLogger{logger: logger, interval: interval, now: now, state: map[string]*asyncErrorState{}}
+}
+
+func (l *asyncErrorLogger) handle(_ *nats.Conn, sub *nats.Subscription, err error) {
+	if err == nil {
+		return
+	}
+	subject := ""
+	if sub != nil {
+		subject = sub.Subject
+	}
+	key := err.Error() + "\x00" + subject
+
+	l.mu.Lock()
+	now := l.now()
+	st, ok := l.state[key]
+	if ok && now.Sub(st.lastLogged) < l.interval {
+		st.suppressed++
+		l.mu.Unlock()
+		return
+	}
+	suppressed := 0
+	if ok {
+		suppressed = st.suppressed
+	}
+	if !ok && len(l.state) >= asyncErrorLogMaxKeys {
+		l.state = map[string]*asyncErrorState{}
+	}
+	l.state[key] = &asyncErrorState{lastLogged: now}
+	l.mu.Unlock()
+
+	attrs := []any{"subject", subject, "err", err, "suppressed_since_last_log", suppressed}
+	if errors.Is(err, nats.ErrSlowConsumer) {
+		if sub != nil {
+			if dropped, derr := sub.Dropped(); derr == nil {
+				attrs = append(attrs, "dropped_total", dropped)
+			}
+		}
+		l.logger.Warn("live-update NATS slow consumer: messages dropped for a subscriber that is not keeping up", attrs...)
+		return
+	}
+	l.logger.Warn("live-update NATS async error", attrs...)
 }
 
 // eventsNATSReplicasEnv sets the replica count of the JetStream KV bucket
@@ -93,7 +176,8 @@ func newEventsNATSConn(lookup func(string) (string, bool), logger *slog.Logger) 
 const eventsNATSReplicasEnv = "ELITEA_EVENTS_NATS_REPLICAS"
 
 // newCanvasPresenceStore opens (creating it if absent) the presence KV bucket
-// on the live-update connection. Errors stop startup: a configured
+// on the live-update connection and starts the replica's mirror of it
+// (v2canvaspresence.NATSStore; the caller must Close it). Errors stop startup: a configured
 // live-update plane whose JetStream is missing would otherwise serve presence
 // from a per-replica roster while claiming to be shared.
 func newCanvasPresenceStore(
@@ -114,7 +198,23 @@ func newCanvasPresenceStore(
 	}
 	createCtx, cancel := context.WithTimeout(ctx, eventsNATSConnectTimeout)
 	defer cancel()
-	return v2canvaspresence.NewNATSStore(createCtx, js, v2canvaspresence.NATSStoreConfig{Replicas: replicas})
+	store, err := v2canvaspresence.NewNATSStore(createCtx, js, v2canvaspresence.NATSStoreConfig{Replicas: replicas})
+	if err != nil {
+		return nil, err
+	}
+	// Resync the presence mirror after every reconnect, chained after the
+	// logging handler newEventsNATSConn installed rather than replacing it.
+	// The ordered consumer behind the mirror recovers from a reconnect on its
+	// own; the resync is what also covers a server that came back without the
+	// messages it had (an R1 bucket on a replaced node).
+	previous := conn.Opts.ReconnectedCB
+	conn.SetReconnectHandler(func(c *nats.Conn) {
+		if previous != nil {
+			previous(c)
+		}
+		store.Resync()
+	})
+	return store, nil
 }
 
 // eventsNATSReplicas reads ELITEA_EVENTS_NATS_REPLICAS: unset or blank is 1,

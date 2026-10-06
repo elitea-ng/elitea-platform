@@ -72,7 +72,6 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/wikichat"
-	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/identityproviders"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/authsvc"
 	infradb "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db"
@@ -288,11 +287,16 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// would mean two independent dispatch paths that could disagree about
 	// what already fired.
 	//
-	// Its Bus is the live-update NATS bus (liveBus, composed just below),
-	// so every event a producer emits also reaches the project SSE stream of
-	// every replica. Without ELITEA_EVENTS_NATS_URL it is events.NoopBus{}:
-	// webhook delivery does not need the Bus at all — it reaches the
-	// Dispatcher Sink below regardless.
+	// Its Bus is events.NoopBus{} — ALWAYS, including when the live-update
+	// NATS bus below is configured. Domain events are a WEBHOOK contract
+	// (the per-project, owner-configured, signed sinks), not a project-feed
+	// one: their payloads carry data the project SSE stream's gate
+	// (models.project_context.view, which viewers hold) does not cover — a
+	// conversation.created carries a private conversation's name and
+	// creator — and no web client listens for them. See
+	// newDomainEventsPublisher, whose signature takes no Bus so this cannot
+	// drift back by accident, and the SSE handler's own type allowlist
+	// (internal/api/v2/events, forwardedEventTypes) as the second layer.
 	//
 	// Its one Sink is the webhook Dispatcher, wired only when the webhooks
 	// table's repository composes (webhooksRepository never returns nil, but
@@ -335,8 +339,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	webhookDispatcher := webhook.NewDispatcher(webhooksRepository(pool), webhookDeliveries, webhook.WithGuard(webhookDestinationGuard))
 
 	// The live-update plane: NATS core pub/sub (internal/infra/natsbus). One
-	// connection carries the project SSE stream (EventSource), every
-	// domain-event publish (domainEvents' Bus) and canvas presence's publish.
+	// connection carries the project SSE stream (EventSource) and canvas
+	// presence's roster (KV) and publish. Domain events are NOT on it — see
+	// domainEvents above.
 	// Unset ELITEA_EVENTS_NATS_URL leaves the plane absent; a configured but
 	// unreachable server stops startup — see newEventsNATSConn for both.
 	//
@@ -349,23 +354,21 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("compose live-update plane: %w", err)
 	}
 	var (
-		liveBus     events.Bus = events.NoopBus{}
 		eventSource v2events.EventSource
 		liveNATSBus *natsbus.EventBus
 	)
 	if eventsNATS != nil {
 		liveNATSBus = natsbus.NewFromConn(eventsNATS, "elitea-main", natsbus.WithBufferedPublish())
-		// Drain, not Close: in-flight publishes reach the server before exit.
+		// Flush then drain, both bounded: buffered publishes reach the
+		// server before exit (natsbus.EventBus.Close).
 		defer liveNATSBus.Close()
-		liveBus = liveNATSBus
 		eventSource = liveNATSBus
 		logger.Info("live-update plane enabled (nats transport)", "server", eventsNATS.ConnectedUrlRedacted())
 	} else {
 		logger.Warn("live-update plane disabled: " + eventsNATSURLEnv + " is unset, so " +
-			"/api/v2/events/prompt_lib/{projectID} is not registered, domain events reach " +
-			"webhooks only, and canvas presence is per-replica")
+			"/api/v2/events/prompt_lib/{projectID} is not registered and canvas presence is per-replica")
 	}
-	domainEvents := events.NewPublisher(liveBus, webhookDispatcher)
+	domainEvents := newDomainEventsPublisher(webhookDispatcher)
 
 	// public.pipeline_runs' repository (migrations/shared/0124) — the write
 	// half (pipelinetriggers.WithRunTracker, below) and the read half
@@ -2253,6 +2256,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		if err != nil {
 			return fmt.Errorf("compose canvas presence store: %w", err)
 		}
+		// Stops the bucket watcher. Deferred after liveNATSBus.Close, so it
+		// runs first: the watcher is gone before the connection drains.
+		defer presenceStore.Close()
 		canvasPresence = v2canvaspresence.Backend{Store: presenceStore, Bus: liveNATSBus}
 	}
 

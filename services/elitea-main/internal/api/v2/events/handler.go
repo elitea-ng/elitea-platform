@@ -2,12 +2,14 @@ package events
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/canvaspresence"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/events"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/natsbus"
@@ -17,10 +19,10 @@ import (
 // EventSource is the seam the SSE handler consumes. It yields decoded events on
 // the given channel until the caller invokes the returned cancel func or the
 // request context is cancelled. The live-update NATS bus
-// (internal/infra/natsbus.EventBus.Raw) implements it — the same bus every
-// domain-event publisher writes to, so the stream and its producers cannot be
-// on different transports. The Redis adapter that used to sit beside it was
-// deleted with the plain Redis at REDIS_URL.
+// (internal/infra/natsbus.EventBus.Raw) implements it — the same bus canvas
+// presence publishes on and the subject the LLM gateway's soft alert uses. The
+// Redis adapter that used to sit beside it was deleted with the plain Redis at
+// REDIS_URL. Whatever arrives, only forwardedEventTypes reach a client.
 type EventSource interface {
 	Raw(ctx context.Context, channel string) (<-chan natsbus.Event, func(), error)
 }
@@ -30,10 +32,9 @@ type EventSource interface {
 // THE LEGACY MATRIX HAS NO ENTRY FOR THIS ROUTE — the reference serves no
 // project SSE stream — so this is a proposal, and this is its reason.
 //
-// The stream is the project's own activity feed. Its declared vocabulary is
-// application, skill, folder, conversation and message change notices plus the
-// LLM gateway's budget.soft_alert (internal/events/publisher.go). The soft
-// alert carries the project's accrued cost. The platform already has a name for "this caller
+// The stream is the project's own live feed. What it forwards is exactly
+// forwardedEventTypes: canvas presence rosters and the LLM gateway's
+// budget.soft_alert. The soft alert carries the project's accrued cost. The platform already has a name for "this caller
 // may observe this project": `models.project_context.view`. It gates
 // GET /api/v2/elitea_core/project_info/{mode}/{projectID}/project-info and every
 // project-scoped budget read — /usage/prompt_lib/{projectID}/usage and
@@ -53,6 +54,35 @@ type EventSource interface {
 // notifications: it carries no notification event and would then be gated on a
 // permission that describes none of its payloads.
 const StreamPermission = "models.project_context.view"
+
+// forwardedEventTypes is the COMPLETE set of event types the stream relays to
+// a client. Everything else that arrives on the project's subject is dropped.
+//
+// It is an allowlist, not a denylist, because the subject is a shared broker
+// subject (gateway.events.project.<id>.events) that any workload holding NATS
+// publish rights can write to, and because the stream's gate
+// (StreamPermission, which project viewers hold) is wider than many payloads a
+// project can produce. Domain events — conversation.created carries a private
+// conversation's name and creator — are kept off the bus at the composition
+// root (cmd/elitea-main, newDomainEventsPublisher); this list is the second
+// layer, so a regression there, or a forged frame from another workload,
+// still never reaches a browser. Adding a type here is a decision that every
+// project viewer may read its payload.
+var forwardedEventTypes = map[string]struct{}{
+	// The canvas editor roster (#622): who has a canvas open. Every viewer of
+	// the canvas sees the same roster in the heartbeat's own response.
+	canvaspresence.EventType: {},
+	// The LLM gateway's 80% budget soft alert (design §8.3): the project's
+	// accrued cost, already readable through the project-scoped budget routes
+	// gated on the same permission.
+	events.EventBudgetSoftAlert: {},
+}
+
+// Forwarded reports whether the stream relays eventType to clients.
+func Forwarded(eventType string) bool {
+	_, ok := forwardedEventTypes[eventType]
+	return ok
+}
 
 type Handler struct {
 	source EventSource
@@ -144,6 +174,14 @@ func (h *Handler) Stream(w http.ResponseWriter, r *http.Request) {
 		case evt, ok := <-evCh:
 			if !ok {
 				return
+			}
+			if !Forwarded(evt.Type) {
+				// Type only, never the payload: an unlisted frame is either a
+				// regression upstream or a forgery, and either way its body is
+				// not ours to copy into logs.
+				slog.Debug("events: dropped an event type the project stream does not forward",
+					"type", evt.Type, "source", evt.Source)
+				continue
 			}
 			_ = sse.Event(evt.Type, string(evt.Payload))
 		case <-heartbeat.C:
