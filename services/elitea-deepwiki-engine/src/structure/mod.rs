@@ -65,10 +65,11 @@ impl PlannerChoice {
 pub struct StructureSettings {
     /// `DEEPWIKI_USE_STRUCTURED_REPO_ANALYSIS=1`: the JSON analysis prompt.
     pub structured_analysis: bool,
-    /// `DEEPWIKI_DEEPAGENTS_FILE_THRESHOLD` (2000).
-    pub deepagents_file_threshold: usize,
-    /// `DEEPWIKI_DEEPAGENTS_REPOCTX_TOKENS` (8000).
-    pub deepagents_token_threshold: usize,
+    /// `DEEPWIKI_DEEPAGENTS_FILE_THRESHOLD` (2000). Python's `int`: a
+    /// negative value means "always" (for a non-empty file list).
+    pub deepagents_file_threshold: i64,
+    /// `DEEPWIKI_DEEPAGENTS_REPOCTX_TOKENS` (8000), as the file threshold.
+    pub deepagents_token_threshold: i64,
     pub cluster: ClusterSettings,
 }
 
@@ -84,12 +85,16 @@ impl Default for StructureSettings {
 }
 
 impl StructureSettings {
-    /// From an environment lookup. A threshold that is not an integer is
-    /// the default (`_get_env_int`).
+    /// From an environment lookup. A threshold is read as Python's
+    /// `int()` reads it; one that is not an integer is the default
+    /// (`_get_env_int`).
     #[must_use]
     pub fn from_lookup(exclude_tests: bool, lookup: impl Fn(&str) -> Option<String>) -> Self {
-        let int = |name: &str, default: usize| match lookup(name) {
-            Some(value) if !value.is_empty() => value.trim().parse().unwrap_or(default),
+        let int = |name: &str, default: i64| match lookup(name) {
+            Some(value) if !value.is_empty() => py_int(&value).unwrap_or_else(|| {
+                tracing::warn!("Invalid int for {name}='{value}', using default {default}");
+                default
+            }),
             _ => default,
         };
         Self {
@@ -128,11 +133,47 @@ pub fn auto_uses_deepagents(
     repository_context: &str,
     settings: &StructureSettings,
 ) -> Result<bool, EngineError> {
-    if files > 0 && files >= settings.deepagents_file_threshold {
+    let as_i64 = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
+    if files > 0 && as_i64(files) >= settings.deepagents_file_threshold {
         return Ok(true);
     }
     Ok(!repository_context.is_empty()
-        && count_tokens(repository_context)? >= settings.deepagents_token_threshold)
+        && as_i64(count_tokens(repository_context)?) >= settings.deepagents_token_threshold)
+}
+
+/// Python's `int(text)` for base 10: surrounding whitespace, an optional
+/// sign, ASCII digits with single underscores between them. A value past
+/// the `i64` range saturates (Python's integers are unbounded, and a
+/// threshold that large is never reached either way). `None` where Python
+/// raises `ValueError`. Python also takes non-ASCII decimal digits
+/// (`int("٣")`); those read as invalid here.
+#[must_use]
+pub fn py_int(text: &str) -> Option<i64> {
+    let text = crate::graph::pystr::strip(text);
+    let (negative, digits) = match text.as_bytes().first() {
+        Some(b'-') => (true, &text[1..]),
+        Some(b'+') => (false, &text[1..]),
+        _ => (false, text),
+    };
+    if digits.is_empty() || digits.starts_with('_') || digits.ends_with('_') {
+        return None;
+    }
+    let mut value: i128 = 0;
+    let mut previous_underscore = false;
+    for c in digits.chars() {
+        if c == '_' {
+            if previous_underscore {
+                return None;
+            }
+            previous_underscore = true;
+            continue;
+        }
+        previous_underscore = false;
+        let digit = c.to_digit(10).filter(|_| c.is_ascii_digit())?;
+        value = value.saturating_mul(10).saturating_add(i128::from(digit));
+    }
+    let value = if negative { -value } else { value };
+    Some(i64::try_from(value).unwrap_or(if negative { i64::MIN } else { i64::MAX }))
 }
 
 /// `generate_wiki_structure`.
@@ -297,6 +338,35 @@ mod tests {
         );
         assert_eq!(PlannerChoice::resolve(Some("classic")), PlannerChoice::Auto);
         assert_eq!(PlannerChoice::resolve(None), PlannerChoice::Auto);
+    }
+
+    /// Python's `int()` (python3.12): `int(" -5 ")` = -5, `int("1_000")` =
+    /// 1000, `int("+007")` = 7; `int("1__0")`, `int("_1")`, `int("1_")`,
+    /// `int("1.0")`, `int("")`, `int("- 1")` raise `ValueError`.
+    #[test]
+    fn thresholds_parse_as_python_int() {
+        assert_eq!(py_int(" -5 "), Some(-5));
+        assert_eq!(py_int("1_000"), Some(1000));
+        assert_eq!(py_int("+007"), Some(7));
+        assert_eq!(py_int("\u{3000}12\n"), Some(12));
+        assert_eq!(py_int("99999999999999999999999"), Some(i64::MAX));
+        assert_eq!(py_int("-99999999999999999999999"), Some(i64::MIN));
+        for bad in ["1__0", "_1", "1_", "1.0", "", "- 1", "+", "0x10", "1e3"] {
+            assert_eq!(py_int(bad), None, "{bad:?}");
+        }
+        // A negative threshold: any non-empty file list or context.
+        let always = StructureSettings::from_lookup(false, |name| {
+            name.starts_with("DEEPWIKI_DEEPAGENTS_")
+                .then(|| "-1".to_owned())
+        });
+        assert_eq!(always.deepagents_file_threshold, -1);
+        assert_eq!(auto_uses_deepagents(1, "", &always), Ok(true));
+        assert_eq!(auto_uses_deepagents(0, "x", &always), Ok(true));
+        assert_eq!(auto_uses_deepagents(0, "", &always), Ok(false));
+        let underscored = StructureSettings::from_lookup(false, |name| {
+            (name == "DEEPWIKI_DEEPAGENTS_FILE_THRESHOLD").then(|| " 1_500 ".to_owned())
+        });
+        assert_eq!(underscored.deepagents_file_threshold, 1500);
     }
 
     #[test]
