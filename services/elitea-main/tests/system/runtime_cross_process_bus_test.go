@@ -129,19 +129,6 @@ func (b *runtimeBus) deadLetterState(t *testing.T, ctx context.Context, key stri
 	return info.State.Subjects[subject], info.State.LastSeq
 }
 
-// waitForWorkerPulling waits until a worker has a pull request open on the
-// shared durable: the JetStream form of "joined the consumer group".
-func (b *runtimeBus) waitForWorkerPulling(t *testing.T, ctx context.Context, process *childProcess) {
-	t.Helper()
-	if err := eventually(ctx, 100*time.Millisecond, func() (bool, error) {
-		process.ensureRunning(t)
-		_, consumer, err := b.state(ctx)
-		return err == nil && consumer.NumWaiting > 0, nil
-	}); err != nil {
-		t.Fatalf("worker never pulled from %s/%s: %v\n%s", commandStream, commandConsumer, err, process.logs())
-	}
-}
-
 // waitForUnsettledDelivery waits until the one live command was delivered
 // again after previousDelivery (a consumer sequence) and is still owned:
 // ack-pending, not acked, PostgreSQL still DISPATCHED. It returns the new
