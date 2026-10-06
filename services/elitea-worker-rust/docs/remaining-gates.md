@@ -100,7 +100,13 @@ The existing CI harness selects three new PostgreSQL regressions; its PostgreSQL
 The corrected Supervisor is deployed from that revision. The v5 restart retest still fails before JavaScript sequence 2 commits.
 The original runtime and checkpoint-attested replacement claim remain unchanged.
 The [Worker pump lifetime correction](../../../docs/source-mapping/code-platform-pump-lifetime-20261006.md) keeps one scoped broker future across Pending/Busy replies, grant refresh, and backoff.
-Sixteen selected tests and strict Clippy pass. Worker deployment and the exact v6 restart acceptance remain open.
+Sixteen selected tests and strict Clippy pass. The corrected Worker is deployed from `fee3d059d`.
+The v6 restart retest commits JavaScript sequence 2 but still fails before TypeScript admission.
+The original JavaScript container exits successfully with a valid result receipt.
+The Supervisor loses its request-owned result collector after Worker disconnection. Its unrenewed lease expires before receipt persistence.
+The [Supervisor task ownership correction](source-mapping/code-supervisor-task-ownership-20261006.md) passes 24 focused tests and strict Clippy.
+Its deployment and unchanged restart retest remain required.
+Successful restart acceptance and confirmed runtime cleanup remain open.
 The [empty-document editor correction](../../../apps/elitea-web/docs/source-mapping/point5-web-empty-document-ci-20261006.md) passes 110 focused tests and real-backend first-node browser checks.
 The completed prior CI has one failed visual job and two configured skips. The replacement-head visual result remains required.
 Recovery latency and its generic public error remain explicit gates. No recovery success is claimed for this probe.

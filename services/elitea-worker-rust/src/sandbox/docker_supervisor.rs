@@ -40,6 +40,7 @@ pub struct DockerSupervisor {
     runtime: Box<dyn CodeJobRuntime>,
     owner: String,
     capacity: Semaphore,
+    concurrency: usize,
     stop_capacity: Semaphore,
     admission_policy: Option<(String, Vec<Language>)>,
     preparation_policy: Option<String>,
@@ -146,6 +147,7 @@ impl DockerSupervisor {
             runtime,
             owner,
             capacity: Semaphore::new(concurrency),
+            concurrency,
             stop_capacity: Semaphore::new(concurrency.min(16)),
             admission_policy: None,
             preparation_policy: None,
@@ -153,6 +155,10 @@ impl DockerSupervisor {
             native_platform: None,
             compiled_profile: None,
         })
+    }
+
+    pub(crate) fn configured_concurrency(&self) -> usize {
+        self.concurrency
     }
 
     /// Enable submission for one deployment-selected immutable policy revision.

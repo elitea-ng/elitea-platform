@@ -84,6 +84,7 @@ pub struct SupervisorService<R> {
     verifier: Arc<GrantVerifier<R>>,
     supervisor: Arc<DockerSupervisor>,
     content: Option<Arc<DependencyContentClient>>,
+    job_owners: Arc<job_owners::JobOwners>,
 }
 
 impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
@@ -91,6 +92,9 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
     pub fn new(verifier: GrantVerifier<R>, supervisor: Arc<DockerSupervisor>) -> Self {
         Self {
             verifier: Arc::new(verifier),
+            job_owners: Arc::new(job_owners::JobOwners::new(
+                supervisor.configured_concurrency(),
+            )),
             supervisor,
             content: None,
         }
@@ -113,6 +117,9 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
         shutdown: impl Future<Output = ()> + Send + 'static,
     ) -> Result<(), SupervisorServeError> {
         crate::diagnostics::install_tls_crypto_provider()?;
+        let job_owners = Arc::clone(&self.job_owners);
+        let _owners_guard = job_owners.serve_guard();
+        let shutdown_owners = Arc::clone(&job_owners);
         let supervisor = Arc::clone(&self.supervisor);
         let owner_reads =
             CodeOwnerJsonService::new(Arc::clone(&self.verifier), Arc::clone(&self.supervisor));
@@ -137,17 +144,25 @@ impl<R: Ed25519PublicKeyResolver + 'static> SupervisorService<R> {
             .add_service(platform_owner_reads)
             .serve_with_incoming_shutdown(
                 tokio_stream::wrappers::TcpListenerStream::new(listener),
-                shutdown,
+                async move {
+                    shutdown.await;
+                    // Abort and join owned jobs before listener shutdown completes.
+                    shutdown_owners.shutdown().await;
+                },
             );
         // Both futures are owned by the listener. Shutdown drops recovery; its
         // durable intent and lease remain available to the replacement process.
-        tokio::select! {
-            result = server => { result?; },
-            () = supervisor.recover_cancellations() => {},
-        }
-        Ok(())
+        let result = tokio::select! {
+            result = server => result,
+            () = supervisor.recover_cancellations() => Ok(()),
+        };
+        job_owners.shutdown().await;
+        result.map_err(SupervisorServeError::from)
     }
 }
+
+#[path = "service_job_owners.rs"]
+mod job_owners;
 
 #[path = "service_code_recovery.rs"]
 mod code_recovery;
@@ -215,11 +230,16 @@ impl<R: Ed25519PublicKeyResolver + 'static> SandboxSupervisorService for Supervi
                     "The preparation grant is expired or does not authorize this request.",
                 )
             })?;
+        let supervisor = Arc::clone(&self.supervisor);
         let outcome = self
-            .supervisor
-            .prepare_authorized(&authorization, &prepared)
-            .await
-            .map_err(|error| service_error(&error))?;
+            .job_owners
+            .run(async move {
+                supervisor
+                    .prepare_authorized(&authorization, &prepared)
+                    .await
+                    .map_err(|error| service_error(&error))
+            })
+            .await?;
         Ok(Response::new(preparation_response(outcome)?))
     }
 
@@ -362,14 +382,10 @@ impl<R: Ed25519PublicKeyResolver + 'static> SandboxSupervisorService for Supervi
         let prepared = PreparedJob::from_transport(&input.prepared_job_json).map_err(|_| {
             Status::invalid_argument("The sandbox job has invalid code, state, runtime, or limits.")
         })?;
+        let now = chrono::Utc::now().timestamp_millis();
         let authorization = self
             .verifier
-            .verify(
-                &grant,
-                &peer,
-                &prepared,
-                chrono::Utc::now().timestamp_millis(),
-            )
+            .verify(&grant, &peer, &prepared, now)
             .map_err(|_| {
                 Status::permission_denied(
                     "The sandbox job grant is expired or does not authorize this request.",
@@ -387,7 +403,7 @@ impl<R: Ed25519PublicKeyResolver + 'static> SandboxSupervisorService for Supervi
                     generation,
                     dispatch,
                     &prepared,
-                    chrono::Utc::now().timestamp_millis(),
+                    now,
                 )
                 .map_err(|_| {
                     Status::permission_denied(
@@ -419,29 +435,43 @@ impl<R: Ed25519PublicKeyResolver + 'static> SandboxSupervisorService for Supervi
                 })
             })
             .transpose()?;
-        let delivery = if let Some(content_authority) = content_authority.as_ref() {
-            Some(DependencyDelivery {
-                client: self.content.as_deref().ok_or_else(|| {
+        let delivery = if let Some(content_authority) = content_authority {
+            Some((
+                Arc::clone(self.content.as_ref().ok_or_else(|| {
                     Status::failed_precondition(
                         "Shared dependency storage is not configured on this supervisor.",
                     )
-                })?,
-                grant: input.dependency_content_grant.as_ref().ok_or_else(|| {
+                })?),
+                input.dependency_content_grant.ok_or_else(|| {
                     Status::invalid_argument("Dependency content authority is missing.")
                 })?,
-                authorization: content_authority,
-                bundle: bundle
-                    .as_ref()
+                content_authority,
+                bundle
                     .ok_or_else(|| Status::invalid_argument("Dependency metadata is missing."))?,
-            })
+            ))
         } else {
             None
         };
+        let supervisor = Arc::clone(&self.supervisor);
         let outcome = self
-            .supervisor
-            .submit_authorized_with_dependencies(&authorization, &prepared, delivery)
-            .await
-            .map_err(|error| service_error(&error))?;
+            .job_owners
+            .run(async move {
+                let delivery = delivery
+                    .as_ref()
+                    .map(
+                        |(client, grant, authorization, bundle)| DependencyDelivery {
+                            client,
+                            grant,
+                            authorization,
+                            bundle,
+                        },
+                    );
+                supervisor
+                    .submit_authorized_with_dependencies(&authorization, &prepared, delivery)
+                    .await
+                    .map_err(|error| service_error(&error))
+            })
+            .await?;
         Ok(Response::new(response(outcome)?))
     }
 }
