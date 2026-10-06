@@ -20,8 +20,10 @@
 //! `rustix`'s safe wrapper): `RLIMIT_AS` to
 //! `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` and `RLIMIT_CPU` to
 //! `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS` (hard limit 10 s above: SIGXCPU,
-//! then SIGKILL). A limit is only lowered, never raised past the hard limit
-//! the process already has. On Linux the child also asks for SIGKILL when
+//! then SIGKILL) and `RLIMIT_CORE` to 0 (no core file: the address space
+//! holds credentials and source). A limit is only lowered: the hard limit
+//! never past the one the process already has, the soft limit never past
+//! an inherited lower soft limit. On Linux the child also asks for SIGKILL when
 //! its parent dies (`PR_SET_PDEATHSIG`). macOS does not enforce
 //! `RLIMIT_AS`; the call is still made there.
 
@@ -43,6 +45,12 @@ const MAX_REQUEST_BYTES: u64 = 64 * 1024 * 1024;
 
 /// The CPU hard limit's margin over the soft one.
 const CPU_HARD_MARGIN: u64 = 10;
+
+/// `RLIMIT_CORE` of the worker: no core file, soft or hard.
+const NO_CORE: rustix::process::Rlimit = rustix::process::Rlimit {
+    current: Some(0),
+    maximum: Some(0),
+};
 
 /// What the parent sends.
 #[derive(Debug)]
@@ -79,12 +87,19 @@ fn parse_request(line: &[u8]) -> Result<WorkerRequest, EngineError> {
     })
 }
 
-/// A soft and hard limit, each at most the hard limit the process already
-/// has (an unprivileged process cannot raise it).
+/// The limits to set: the hard limit is at most the one the process
+/// already has (an unprivileged process cannot raise it), and the soft
+/// limit is the lowest of the configured one, the new hard limit and the
+/// soft limit the process already has. An inherited soft limit lower than
+/// the configured one is kept: an operator's `ulimit` is never raised.
 fn lowered(current: rustix::process::Rlimit, soft: u64, hard: u64) -> rustix::process::Rlimit {
     let maximum = current.maximum.map_or(hard, |existing| existing.min(hard));
+    let soft = current
+        .current
+        .map_or(soft, |existing| existing.min(soft))
+        .min(maximum);
     rustix::process::Rlimit {
-        current: Some(soft.min(maximum)),
+        current: Some(soft),
         maximum: Some(maximum),
     }
 }
@@ -113,6 +128,10 @@ pub fn apply_limits(limits: &WorkerSettings) -> std::io::Result<()> {
         limits.cpu_seconds.saturating_add(CPU_HARD_MARGIN),
     );
     setrlimit(Resource::Cpu, cpu)?;
+    // No core dump: the worker's memory holds the request's credentials
+    // and the repository's source, and a dump of an address space this
+    // large would fill the scratch volume.
+    setrlimit(Resource::Core, NO_CORE)?;
     #[cfg(target_os = "linux")]
     rustix::process::set_parent_process_death_signal(Some(rustix::process::Signal::KILL))?;
     Ok(())
@@ -288,6 +307,57 @@ mod tests {
             maximum: Some(60),
         };
         let applied = lowered(capped, 100, 110);
-        assert_eq!((applied.current, applied.maximum), (Some(60), Some(60)));
+        assert_eq!((applied.current, applied.maximum), (Some(50), Some(60)));
+        // An inherited soft limit below the configured one is kept.
+        let low_soft = rustix::process::Rlimit {
+            current: Some(20),
+            maximum: None,
+        };
+        let applied = lowered(low_soft, 100, 110);
+        assert_eq!((applied.current, applied.maximum), (Some(20), Some(110)));
+        // A configured soft limit below the inherited one lowers it.
+        let high_soft = rustix::process::Rlimit {
+            current: Some(500),
+            maximum: Some(1000),
+        };
+        let applied = lowered(high_soft, 100, 110);
+        assert_eq!((applied.current, applied.maximum), (Some(100), Some(110)));
+    }
+
+    #[test]
+    fn the_worker_writes_no_core_file() {
+        // In a child process: the limits apply to the whole process.
+        let child = std::process::Command::new(std::env::current_exe().unwrap_or_default())
+            .args(["--exact", "worker::tests::core_probe", "--nocapture"])
+            .env("DW_CORE_PROBE", "1")
+            .output();
+        let Ok(output) = child else {
+            panic!("the probe did not start");
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{text}");
+        assert!(text.contains("core=0/0"), "{text}");
+    }
+
+    /// Run by [`the_worker_writes_no_core_file`] in its own process.
+    #[test]
+    fn core_probe() {
+        use rustix::process::{Resource, getrlimit};
+        if std::env::var_os("DW_CORE_PROBE").is_none() {
+            return;
+        }
+        let limits = WorkerSettings {
+            memory_bytes: 64 << 30,
+            cpu_seconds: 3600,
+            threads: 1,
+        };
+        let applied = apply_limits(&limits);
+        assert!(applied.is_ok(), "{applied:?}");
+        let core = getrlimit(Resource::Core);
+        println!(
+            "core={}/{}",
+            core.current.map_or(-1, |v| i64::try_from(v).unwrap_or(-1)),
+            core.maximum.map_or(-1, |v| i64::try_from(v).unwrap_or(-1))
+        );
     }
 }
