@@ -15,7 +15,7 @@
 //! Every read is PostgreSQL ([`store`]); there is no `.wiki.db`.
 //!
 //! The runner hook is [`run_tool`]; the generic entry points
-//! ([`run_ask`], [`run_deep_research`]) take any [`store::IndexStore`] and
+//! ([`run_agent`] with [`ask_spec`] or [`research_spec`]) take any [`store::IndexStore`] and
 //! [`agent::Model`], which is how the parity gate drives them.
 //!
 //! Deliberate differences from the Python workers, besides those of each

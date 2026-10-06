@@ -645,3 +645,57 @@ async fn the_live_client_streams_the_answer() {
     assert_eq!(tokens, vec![json!("Notes live "), json!("in NoteStore.")]);
     assert_eq!(result["answer"], json!("Notes live in NoteStore."));
 }
+
+#[tokio::test]
+async fn a_long_history_is_summarised_before_the_next_call() {
+    let think = |id: &str| call(id, "think", json!({"reflection": "x".repeat(400)}));
+    let script = json!([
+        {"tool_calls": [think("a")]},
+        {"tool_calls": [think("b")]},
+        {"tool_calls": [think("c")]},
+        {"tool_calls": [think("d")]},
+        {"content": "answer"},
+    ]);
+    let mut spec = ask::research_spec(
+        &request(),
+        None,
+        "some-model",
+        false,
+        Limits::default(),
+        clock(),
+    )
+    .expect("spec");
+    // No profile: keep the last 6 messages; a low trigger for the test.
+    spec.policy.trigger_tokens = 300;
+    let model = common::ScriptedModel::new(&script);
+    let (context, _receiver, _) = common::context();
+    let outcome = agent::run(
+        &spec,
+        &model,
+        &common::replay_index(),
+        &Embedder::None,
+        &context,
+    )
+    .await
+    .expect("runs");
+    assert_eq!(outcome.answer, "answer");
+    let bodies = model.bodies();
+    let summary_calls: Vec<&Value> = bodies.iter().filter(|b| b.get("tools").is_none()).collect();
+    assert!(!summary_calls.is_empty(), "a summary was asked for");
+    let asked = summary_calls[0]["messages"][0]["content"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(asked.starts_with("<role>\nContext Extraction Assistant\n</role>"));
+    assert!(asked.contains("<message type=\"human\">## Research Question"));
+    assert!(asked.ends_with("</messages>"));
+    // The next agent call starts from the summary.
+    let after = bodies
+        .iter()
+        .skip_while(|b| b.get("tools").is_some())
+        .find(|b| b.get("tools").is_some())
+        .expect("an agent call after the summary");
+    assert_eq!(
+        after["messages"][1]["content"],
+        json!("Here is a summary of the conversation to date:\n\nsummary")
+    );
+}
