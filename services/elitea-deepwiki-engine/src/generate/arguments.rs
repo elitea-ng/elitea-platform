@@ -42,7 +42,10 @@ use serde_json::{Map, Value};
 pub const PLANNER_ENV: &str = "DEEPWIKI_STRUCTURE_PLANNER";
 
 /// One `generate_wiki` request, parsed.
-#[derive(Debug, Clone)]
+///
+/// `Debug` is safe to print: `repo_config` (it carries the repository
+/// credential) is redacted and the model key is a secret.
+#[derive(Clone)]
 pub struct GenerateRequest {
     pub query: String,
     pub model: ModelSettings,
@@ -57,6 +60,20 @@ pub struct GenerateRequest {
     pub planner_mode: Option<String>,
     /// `exclude_tests` when the request set it (`None`: the environment).
     pub exclude_tests: Option<bool>,
+}
+
+impl std::fmt::Debug for GenerateRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GenerateRequest")
+            .field("query", &self.query)
+            .field("model", &self.model)
+            .field("embedding_model", &self.embedding_model)
+            .field("repo_config", &"<redacted>")
+            .field("requested_branch", &self.requested_branch)
+            .field("planner_mode", &self.planner_mode)
+            .field("exclude_tests", &self.exclude_tests)
+            .finish()
+    }
 }
 
 fn value_error(message: impl Into<String>) -> EngineError {
@@ -169,6 +186,22 @@ mod tests {
             "exclude_tests": null,
             "run_in_subprocess": true,
         })
+    }
+
+    #[test]
+    fn the_debug_form_holds_no_credential() {
+        let mut value = base();
+        value["llm_settings"]["api_key"] = json!("sk-model-secret-1");
+        value["repo_config"]["provider_config"] =
+            json!({"token": "ghp-repo-secret-2", "base_url": "https://u:pw-secret-3@git.example"});
+        let Ok(request) = GenerateRequest::parse(&arguments(value)) else {
+            panic!("refused");
+        };
+        let text = format!("{request:?} {request:#?}");
+        for secret in ["sk-model-secret-1", "ghp-repo-secret-2", "pw-secret-3"] {
+            assert!(!text.contains(secret), "{text}");
+        }
+        assert!(text.contains("Document it"), "{text}");
     }
 
     #[test]

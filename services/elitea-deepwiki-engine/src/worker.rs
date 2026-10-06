@@ -52,12 +52,29 @@ const NO_CORE: rustix::process::Rlimit = rustix::process::Rlimit {
     maximum: Some(0),
 };
 
-/// What the parent sends.
-#[derive(Debug)]
+/// What the parent sends. `Debug` names the argument keys only: their
+/// values carry credentials (`repo_config`, `llm_settings`).
 struct WorkerRequest {
     arguments: Map<String, Value>,
     scratch: PathBuf,
     boot_id: Option<String>,
+}
+
+impl std::fmt::Debug for WorkerRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WorkerRequest")
+            .field(
+                "arguments",
+                &self
+                    .arguments
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            )
+            .field("scratch", &self.scratch)
+            .field("boot_id", &self.boot_id)
+            .finish()
+    }
 }
 
 fn parse_request(line: &[u8]) -> Result<WorkerRequest, EngineError> {
@@ -292,6 +309,23 @@ mod tests {
         ] {
             assert!(parse_request(bad).is_err());
         }
+    }
+
+    #[test]
+    fn the_request_debug_form_holds_no_credential() {
+        let parsed = parse_request(
+            br#"{"arguments": {"llm_settings": {"api_key": "sk-secret-1"}, "repo_config": {"provider_config": {"token": "ghp-secret-2"}}}, "scratch": "/s/job-1"}"#,
+        );
+        let Ok(parsed) = parsed else {
+            panic!("refused");
+        };
+        let text = format!("{parsed:?} {parsed:#?}");
+        assert!(!text.contains("sk-secret-1"), "{text}");
+        assert!(!text.contains("ghp-secret-2"), "{text}");
+        assert!(
+            text.contains("llm_settings") && text.contains("/s/job-1"),
+            "{text}"
+        );
     }
 
     #[test]
