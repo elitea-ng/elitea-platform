@@ -64,26 +64,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # starting it: no system OpenSSL linked or shipped, CA roots present, and the
 # whole closure found inside the runtime root. A base change that drops a
 # library fails HERE, not as a sidecar that cannot start.
-RUN --mount=from=runtime-base,target=/runtime-root,readonly <<'VERIFY'
-set -eu
-artifact=/usr/local/bin/elitea-deepwiki-engine
-readelf --sections --wide "$artifact" | grep -q '[.]dep-v0 '
-if readelf --dynamic "$artifact" | grep -Eq 'Shared library: \[(libssl|libcrypto)[.]'; then
-    echo 'System OpenSSL is not part of this runtime.' >&2
-    exit 1
-fi
-test -z "$(find /runtime-root/var/lib/dpkg/status.d -name 'libssl*')"
-test -z "$(find /runtime-root -name 'libssl.so*' -o -name 'libcrypto.so*')"
-test -s /runtime-root/etc/ssl/certs/ca-certificates.crt
-interpreter="$(readelf --program-headers --wide "$artifact" | sed -n 's/.*Requesting program interpreter: \(.*\)]/\1/p')"
-test -n "$interpreter"
-triplet="$(gcc -dumpmachine)"
-"/runtime-root$interpreter" --inhibit-cache \
-    --library-path "/runtime-root/lib/$triplet:/runtime-root/usr/lib/$triplet:/runtime-root/lib:/runtime-root/usr/lib" \
-    --list "$artifact" > /tmp/runtime-libraries
-cat /tmp/runtime-libraries
-awk '$2 == "=>" && $3 !~ /^\/runtime-root\// { exit 1 }' /tmp/runtime-libraries
-VERIFY
+COPY services/elitea-deepwiki-engine/scripts/verify-runtime.sh /usr/local/bin/verify-runtime
+RUN --mount=type=bind,from=runtime-base,source=/,target=/runtime-root,readonly \
+    sh /usr/local/bin/verify-runtime /usr/local/bin/elitea-deepwiki-engine
 
 # The socket directory, built here because the runtime image has no shell.
 # A compose named volume (and Docker's fresh volume in particular) takes the

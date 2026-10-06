@@ -56,7 +56,15 @@ export CHAT_STREAM_SKIP_CHECK=1
 export SEED_EXTRA_PROJECTS="${SEED_EXTRA_PROJECTS:-90200}"
 export CHAT_STREAM_PROJECT="${DEEPWIKI_REAL_PROJECT:-elitea-deepwiki-real}"
 export CHAT_STREAM_PORT="${DEEPWIKI_REAL_PORT:-8087}"
-CONTAINER_BIN="${CONTAINER_BIN:-$(command -v podman || command -v docker)}"
+# The runtime that holds the images is the one compose runs on: CI sets
+# COMPOSE_BIN="docker compose" and bakes the engine into docker's store,
+# while the runner ALSO has podman, which would not see that image and would
+# build it again (with a builder that lacks Dockerfile heredocs).
+case "${COMPOSE_BIN:-}" in
+  docker*) CONTAINER_BIN="${CONTAINER_BIN:-docker}" ;;
+  podman*) CONTAINER_BIN="${CONTAINER_BIN:-podman}" ;;
+  *) CONTAINER_BIN="${CONTAINER_BIN:-$(command -v podman || command -v docker)}" ;;
+esac
 
 ENGINE="${DEEPWIKI_REAL_ENGINE:-legacy}"
 case "$ENGINE" in
