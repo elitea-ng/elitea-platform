@@ -2184,13 +2184,11 @@ scheduler:
     PRICE_SYNC_LITELLM_URL: ""
 
     # Budget write-back consumer (design §8.6). Requires BOTH the flag AND
-    # GATEWAY_NATS_URL; with either unset the consumer never starts.
-    #
-    # CROSS-NAMESPACE: NATS is installed by deploy/helm/nats into the
-    # `elitea-gateway` namespace (deploy/argocd/applications/nats.yaml) while this
-    # chart's ArgoCD Application targets `elitea`. The short name `nats` does NOT
-    # resolve across namespaces — use the FQDN below if you enable this.
-    # ON by default since issue #464, with the FQDN filled in.
+    # a NATS URL; with either unset the consumer never starts. ON by default
+    # since issue #464. NATS is installed by deploy/helm/nats into THIS
+    # release's namespace (the Argo CD sample: `elitea`, #1076), and the URL
+    # comes from the top-level `nats` block unless GATEWAY_NATS_URL below
+    # overrides it.
     #
     # WHY THIS IS NOT AN OPTIONAL EXTRA. gateway.llm_budget_accumulators is not
     # only the table the budget screens read. The gateway's fail-mode FSM reads it
@@ -2208,10 +2206,11 @@ scheduler:
     # spend_available=false, which is the honest "no figure was collected" signal
     # rather than a zero.
     BUDGET_WRITEBACK_ENABLED: "true"
-    # CROSS-NAMESPACE, so this is an FQDN and not the short name `nats`. NATS is
-    # installed by deploy/helm/nats into `elitea-gateway`
-    # (deploy/argocd/applications/nats.yaml) while this chart's Application
-    # targets `elitea`. Change it if your topology differs.
+    # Empty (the default) renders tls://<nats.service>.<namespace>.svc.cluster.local:4222
+    # from the top-level `nats` block — the FQDN, with nats.namespace (empty =
+    # this release's) — next to the scheduler's client certificate
+    # (GATEWAY_NATS_TLS_*). An override must be tls:// and carry no
+    # credential (templates/natsClient.yaml).
     #
     # A NATS that does not answer, or a consumer the nats-bootstrap Job has
     # not created yet, is NOT fatal and NOT final: cmd/elitea-scheduler keeps
@@ -2219,7 +2218,6 @@ scheduler:
     # outage), and GET /readyz/budget-writeback on its health port reports
     # attached / waiting (503) / disabled / misconfigured (503). Deltas wait
     # in GATEWAY_BUDGET_DELTAS meanwhile, for up to its MaxAge (72h).
-    # Empty means the top-level `nats` block, resolved in this namespace.
     GATEWAY_NATS_URL: ""
     BUDGET_WRITEBACK_BATCH_SIZE: "500"
     # The consumer's AckWait and MaxDeliver are the consumer's own
