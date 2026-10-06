@@ -802,6 +802,28 @@ impl Build {
         Ok(updated)
     }
 
+    /// `ANALYZE` the staging tables, best effort (each with the publish's
+    /// `analyze_lock_timeout`; a table another `ANALYZE` holds is skipped).
+    /// Phase 2 queries the rows just staged, and without statistics that
+    /// describe them the planner chooses its plans for empty tables. Returns
+    /// whether every table was analyzed.
+    pub async fn refresh_statistics(&self) -> bool {
+        match self.pool.acquire().await {
+            Ok(mut connection) => {
+                analyze_best_effort(
+                    &mut connection,
+                    &STAGING_TABLES,
+                    self.publish.analyze_lock_timeout,
+                )
+                .await
+            }
+            Err(error) => {
+                tracing::warn!(%error, "no connection to refresh the staging statistics");
+                false
+            }
+        }
+    }
+
     /// The pool the build reads and writes through.
     #[must_use]
     pub fn pool(&self) -> &PgPool {

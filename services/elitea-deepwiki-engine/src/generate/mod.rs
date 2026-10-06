@@ -371,8 +371,9 @@ impl Pipeline<'_> {
                 .unwrap_or_default()
         ));
 
-        // Phase 2 on the staged rows.
+        // Phase 2 on the staged rows, with statistics that describe them.
         context.checkpoint()?;
+        open_build(slot)?.refresh_statistics().await;
         let (mut graph, outcome) = self.phase2(graph, &embeddings, slot).await?;
         context.thinking(phase2_summary(&outcome.stats));
 

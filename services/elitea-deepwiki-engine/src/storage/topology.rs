@@ -23,6 +23,18 @@
 //!   hits can come back, as in Python. (Filtering first, pgvector's natural
 //!   order, made 3–10× more semantic edges on the parity corpora.)
 //!
+//!   The ranking is done in process: the build's vectors are read ONCE
+//!   (on the first dense search) and every search computes its distances
+//!   in memory, in parallel. That selects the candidates — every vector
+//!   within [`DENSE_MARGIN`] of the k-th nearest — and ONE indexed query
+//!   over those candidates computes pgvector's own distances and order.
+//!   The result is the full-scan query's, row for row and bit for bit
+//!   (pgvector sums in `float4`, so the in-process `f64` distances differ
+//!   in the last bits; the margin is far wider than that difference), and
+//!   no orphan scans every vector in SQL. A query vector the in-process
+//!   path cannot rank (another dimension, a non-finite value) takes the
+//!   full-scan query, which reports what pgvector reports.
+//!
 //! Writes: `replace_edges` replaces the staged edges (collapsed onto the
 //! primary key, as the publish would collapse them). The hub flags and the
 //! meta entries have no column in the ADR-0022 schema (`publish.py` never
@@ -45,6 +57,68 @@ use serde_json::Value;
 use sqlx::Row;
 use std::collections::HashMap;
 use tokio::runtime::Handle;
+
+/// The relative margin around the k-th nearest in-process distance inside
+/// which a vector is a candidate for pgvector's own ranking. pgvector's
+/// `float4` sum of squares is off by at most about `dimension × 2^-24`
+/// relative (under 1e-4 for 1536 dimensions); 1e-3 covers it with room.
+pub const DENSE_MARGIN: f64 = 1e-3;
+
+/// The absolute margin added to [`DENSE_MARGIN`], for a k-th distance of 0.
+const DENSE_ABSOLUTE_MARGIN: f64 = 1e-6;
+
+/// The build's vectors, read once for the phase: node ids and one flat
+/// `f32` array, `dimension` values per node.
+#[derive(Debug, Default)]
+struct DenseIndex {
+    ids: Vec<String>,
+    dimension: usize,
+    values: Vec<f32>,
+}
+
+impl DenseIndex {
+    /// The ids within the margin of the k-th nearest vector to `query`
+    /// (all of them when there are at most `k`). `None` when `query` has
+    /// another dimension or a non-finite value: the SQL query decides then.
+    fn candidates(&self, query: &[f64], k: usize) -> Option<Vec<&str>> {
+        use rayon::prelude::*;
+        if query.len() != self.dimension || query.iter().any(|v| !v.is_finite()) {
+            return None;
+        }
+        // As pgvector parses the literal: `float4` values.
+        #[allow(clippy::cast_possible_truncation)]
+        let query: Vec<f32> = query.iter().map(|v| *v as f32).collect();
+        if self.ids.len() <= k {
+            return Some(self.ids.iter().map(String::as_str).collect());
+        }
+        let distances: Vec<f64> = self
+            .values
+            .par_chunks(self.dimension.max(1))
+            .map(|vector| {
+                vector
+                    .iter()
+                    .zip(&query)
+                    .map(|(a, b)| {
+                        let d = f64::from(*a) - f64::from(*b);
+                        d * d
+                    })
+                    .sum::<f64>()
+                    .sqrt()
+            })
+            .collect();
+        let mut sorted = distances.clone();
+        let (_, kth, _) = sorted.select_nth_unstable_by(k.saturating_sub(1), f64::total_cmp);
+        let limit = *kth * (1.0 + DENSE_MARGIN) + DENSE_ABSOLUTE_MARGIN;
+        Some(
+            distances
+                .iter()
+                .zip(&self.ids)
+                .filter(|(distance, _)| **distance <= limit)
+                .map(|(_, id)| id.as_str())
+                .collect(),
+        )
+    }
+}
 
 /// Rows per `= ANY($ids)` lookup.
 const LOOKUP_ROUND: usize = 5_000;
@@ -77,6 +151,8 @@ pub struct PgTopologyStore {
     /// nodes do not change during the phase.
     document_frequency: HashMap<String, f64>,
     node_count: Option<u64>,
+    /// The build's vectors, read on the first dense search.
+    dense: Option<DenseIndex>,
     hubs: Vec<String>,
     meta: Vec<(String, Value)>,
 }
@@ -121,6 +197,7 @@ impl PgTopologyStore {
             corpus: None,
             document_frequency: HashMap::new(),
             node_count: None,
+            dense: None,
             hubs: Vec::new(),
             meta: Vec::new(),
         }
@@ -174,6 +251,119 @@ impl PgTopologyStore {
         };
         self.corpus = Some(corpus);
         Ok(corpus)
+    }
+
+    /// The build's vectors (those with a staged node, as the dense query
+    /// joins them), read once.
+    fn dense_index(&mut self) -> Result<&DenseIndex, StoreError> {
+        if self.dense.is_none() {
+            use tokio_stream::StreamExt;
+            let pool = self.build.pool().clone();
+            let build = self.build.build_id().to_owned();
+            let index = self.handle.block_on(async move {
+                let mut index = DenseIndex::default();
+                let mut rows = sqlx::query(
+                    "SELECT e.node_id, e.embedding::real[] AS embedding \
+                     FROM deepwiki_build.wiki_node_embeddings e \
+                     JOIN deepwiki_build.wiki_nodes n \
+                       ON n.build_id = e.build_id AND n.node_id = e.node_id \
+                     WHERE e.build_id = $1",
+                )
+                .bind(&build)
+                .fetch(&pool);
+                while let Some(row) = rows.next().await {
+                    let row = row.map_err(database)?;
+                    let vector: Vec<f32> = row.try_get("embedding").map_err(database)?;
+                    if index.ids.is_empty() {
+                        index.dimension = vector.len();
+                    } else if vector.len() != index.dimension {
+                        return Err(StoreError::new(format!(
+                            "the build's vectors have {} and {} dimensions",
+                            index.dimension,
+                            vector.len()
+                        )));
+                    }
+                    index.ids.push(row.try_get("node_id").map_err(database)?);
+                    index.values.extend_from_slice(&vector);
+                }
+                Ok(index)
+            })?;
+            self.dense = Some(index);
+        }
+        self.dense
+            .as_ref()
+            .ok_or_else(|| StoreError::new("the build's vectors were not read"))
+    }
+
+    /// `search_dense` as one SQL query over every vector of the build (or
+    /// over `only` when given): the reference [`TopologyStore::search_dense`]
+    /// reproduces.
+    ///
+    /// # Errors
+    ///
+    /// A [`StoreError`] when the database cannot answer, or after a stop.
+    pub fn search_dense_in_database(
+        &mut self,
+        embedding: &[f64],
+        k: usize,
+        path_prefix: Option<&str>,
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        self.check_stop()?;
+        if embedding.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.dense_query(embedding, k, path_prefix, None)
+    }
+
+    fn dense_query(
+        &self,
+        embedding: &[f64],
+        k: usize,
+        path_prefix: Option<&str>,
+        only: Option<Vec<String>>,
+    ) -> Result<Vec<SearchHit>, StoreError> {
+        let pool = self.build.pool().clone();
+        let build = self.build.build_id().to_owned();
+        let (start, end) = prefix_range(path_prefix);
+        let rows = self
+            .handle
+            .block_on(
+                sqlx::query(
+                    "SELECT x.node_id, x.rel_path, x.symbol_type, x.distance FROM ( \
+                         SELECT n.node_id, n.rel_path, n.symbol_type, \
+                             e.embedding <-> $2::text::vector AS distance \
+                         FROM deepwiki_build.wiki_node_embeddings e \
+                         JOIN deepwiki_build.wiki_nodes n \
+                           ON n.build_id = e.build_id AND n.node_id = e.node_id \
+                         WHERE e.build_id = $1 \
+                           AND ($6::text[] IS NULL OR e.node_id = ANY($6)) \
+                         ORDER BY distance, n.node_id COLLATE \"C\" \
+                         LIMIT $3) AS x \
+                     WHERE $4::text IS NULL \
+                        OR (x.rel_path COLLATE \"C\" >= $4 AND x.rel_path COLLATE \"C\" < $5) \
+                     ORDER BY x.distance, x.node_id COLLATE \"C\"",
+                )
+                .bind(&build)
+                .bind(super::search::vector_literal(embedding))
+                .bind(i64::try_from(k).unwrap_or(i64::MAX))
+                .bind(start)
+                .bind(end)
+                .bind(only)
+                .fetch_all(&pool),
+            )
+            .map_err(database)?;
+        rows.iter()
+            .map(|row| {
+                Ok(SearchHit {
+                    node_id: row.try_get("node_id").map_err(database)?,
+                    rel_path: row.try_get("rel_path").map_err(database)?,
+                    symbol_type: row.try_get("symbol_type").map_err(database)?,
+                    fts_rank: None,
+                    score_norm: None,
+                    vec_distance: Some(row.try_get("distance").map_err(database)?),
+                })
+            })
+            .collect()
     }
 
     /// The document frequency of each of `terms` (lexemes), cached.
@@ -433,46 +623,15 @@ impl TopologyStore for PgTopologyStore {
         if embedding.is_empty() {
             return Ok(Vec::new());
         }
-        let pool = self.build.pool().clone();
-        let build = self.build.build_id().to_owned();
-        let (start, end) = prefix_range(path_prefix);
-        let rows = self
-            .handle
-            .block_on(
-                sqlx::query(
-                    "SELECT x.node_id, x.rel_path, x.symbol_type, x.distance FROM ( \
-                         SELECT n.node_id, n.rel_path, n.symbol_type, \
-                             e.embedding <-> $2::text::vector AS distance \
-                         FROM deepwiki_build.wiki_node_embeddings e \
-                         JOIN deepwiki_build.wiki_nodes n \
-                           ON n.build_id = e.build_id AND n.node_id = e.node_id \
-                         WHERE e.build_id = $1 \
-                         ORDER BY distance, n.node_id COLLATE \"C\" \
-                         LIMIT $3) AS x \
-                     WHERE $4::text IS NULL \
-                        OR (x.rel_path COLLATE \"C\" >= $4 AND x.rel_path COLLATE \"C\" < $5) \
-                     ORDER BY x.distance, x.node_id COLLATE \"C\"",
-                )
-                .bind(&build)
-                .bind(super::search::vector_literal(embedding))
-                .bind(i64::try_from(k).unwrap_or(i64::MAX))
-                .bind(start)
-                .bind(end)
-                .fetch_all(&pool),
-            )
-            .map_err(database)?;
-        rows.iter()
-            .map(|row| {
-                Ok(SearchHit {
-                    node_id: row.try_get("node_id").map_err(database)?,
-                    rel_path: row.try_get("rel_path").map_err(database)?,
-                    symbol_type: row.try_get("symbol_type").map_err(database)?,
-                    fts_rank: None,
-                    score_norm: None,
-                    vec_distance: Some(row.try_get("distance").map_err(database)?),
-                })
-            })
-            .collect()
+        let candidates = self
+            .dense_index()?
+            .candidates(embedding, k)
+            .map(|ids| ids.into_iter().map(str::to_owned).collect::<Vec<String>>());
+        match candidates {
+            Some(ids) if ids.is_empty() => Ok(Vec::new()),
+            Some(ids) => self.dense_query(embedding, k, path_prefix, Some(ids)),
+            None => self.dense_query(embedding, k, path_prefix, None),
+        }
     }
 
     fn set_hubs(&mut self, hubs: &[&str]) -> Result<(), StoreError> {

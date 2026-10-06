@@ -289,3 +289,136 @@ async fn replaced_edges_are_collapsed_and_clusters_written() {
     );
     build.abandon().await.unwrap();
 }
+
+/// A deterministic pseudo-random stream (64-bit LCG).
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        #[allow(clippy::cast_precision_loss)]
+        let unit = (self.0 >> 11) as f64 / (1_u64 << 53) as f64;
+        unit * 2.0 - 1.0
+    }
+}
+
+fn setting(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+/// The in-process dense search against the full-scan SQL query, on a
+/// medium synthetic build: `DEEPWIKI_DENSE_NODES` nodes (default 2000) of
+/// `DEEPWIKI_DENSE_DIMENSIONS` (default 64) in 20 directories, with
+/// repeated vectors (exact ties, broken by node id) and near-duplicates.
+/// Every probe, `k` and prefix gives the same hits, row for row and bit for
+/// bit. The two paths are timed over the same probes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn the_in_process_dense_search_is_the_sql_search() {
+    let Some(pool) = storage_common::fresh_database("topology_dense").await else {
+        return;
+    };
+    let nodes = setting("DEEPWIKI_DENSE_NODES", 2000);
+    let dimensions = setting("DEEPWIKI_DENSE_DIMENSIONS", 64);
+    let probes = setting("DEEPWIKI_DENSE_PROBES", 60);
+    let space = BuildSpace::new(pool.clone(), "topology-dense");
+    let mut build = space.begin("acme--dense--main").await.unwrap();
+    let mut random = Lcg(42);
+    let mut rows = Vec::with_capacity(nodes);
+    let mut vectors: Vec<(String, Vec<f64>)> = Vec::with_capacity(nodes);
+    for i in 0..nodes {
+        let directory = format!("pkg{:02}/sub{}", i % 20, i % 3);
+        let id = format!("{directory}/m{i}.py::f{i}");
+        let vector: Vec<f64> = match i % 10 {
+            // An exact copy of an earlier vector: a tie.
+            7 if i > 10 => vectors[i - 7].1.clone(),
+            // A near-duplicate of an earlier vector.
+            8 if i > 10 => vectors[i - 3]
+                .1
+                .iter()
+                .map(|v| v + random.next() * 1e-6)
+                .collect(),
+            _ => (0..dimensions).map(|_| random.next()).collect(),
+        };
+        rows.push(elitea_deepwiki_engine::storage::rows::IndexNode {
+            node_id: id.clone(),
+            rel_path: format!("{directory}/m{i}.py"),
+            file_name: format!("m{i}.py"),
+            language: "python".to_owned(),
+            symbol_name: format!("f{i}"),
+            symbol_type: "function".to_owned(),
+            source_text: format!("def f{i}(): pass"),
+            ..Default::default()
+        });
+        vectors.push((id, vector));
+    }
+    build.stage_nodes(rows).await.unwrap();
+    build
+        .stage_embeddings(vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())))
+        .await
+        .unwrap();
+    assert!(build.refresh_statistics().await);
+    let mut queries: Vec<Vec<f64>> = Vec::new();
+    for p in 0..probes {
+        queries.push(if p % 3 == 0 {
+            // A stored vector (distance 0, and its copies tie at 0).
+            vectors[(p * 7 + 7) % nodes].1.clone()
+        } else {
+            (0..dimensions).map(|_| random.next()).collect()
+        });
+    }
+    let store = PgTopologyStore::new(build, Handle::current(), StopSignal::default());
+    let (store, timings) = tokio::task::spawn_blocking(move || {
+        let mut store = store;
+        let cases: Vec<(usize, Option<&str>)> = vec![
+            (20, None),
+            (20, Some("pkg03")),
+            (20, Some("pkg03/sub1")),
+            (1, None),
+            (5, Some("pkg1")),
+            (nodes + 5, Some("pkg07")),
+        ];
+        let started = std::time::Instant::now();
+        let mut in_process = Vec::new();
+        for query in &queries {
+            for (k, prefix) in &cases {
+                in_process.push(store.search_dense(query, *k, *prefix).unwrap());
+            }
+        }
+        let process_time = started.elapsed();
+        let started = std::time::Instant::now();
+        let mut in_database = Vec::new();
+        for query in &queries {
+            for (k, prefix) in &cases {
+                in_database.push(store.search_dense_in_database(query, *k, *prefix).unwrap());
+            }
+        }
+        let database_time = started.elapsed();
+        assert_eq!(in_process.len(), in_database.len());
+        for (index, (a, b)) in in_process.iter().zip(&in_database).enumerate() {
+            assert_eq!(a, b, "search {index} differs");
+        }
+        // The fixture has ties at distance 0 and directory-scoped hits.
+        assert!(in_process.iter().any(|hits| hits.len() > 1
+            && hits[0].vec_distance == Some(0.0)
+            && hits[1].vec_distance == Some(0.0)));
+        assert!(in_process.iter().any(Vec::is_empty));
+        // A query of another dimension fails as pgvector fails.
+        assert!(store.search_dense(&[0.5; 3], 5, None).is_err());
+        (store, (process_time, database_time))
+    })
+    .await
+    .unwrap();
+    let searches = probes * 6;
+    eprintln!(
+        "dense search, {nodes} nodes x {dimensions} dimensions, {searches} searches: in process (vectors read once) {:?}, full SQL scan {:?}",
+        timings.0, timings.1
+    );
+    store.into_parts().build.abandon().await.unwrap();
+}

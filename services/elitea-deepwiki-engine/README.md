@@ -145,6 +145,18 @@ decision), so fewer than `k` hits can come back. The hub flags and the meta
 entries have no column in the ADR-0022 schema; the store returns them to the
 caller. Each call checks the stop first.
 
+Before Phase 2 the staging tables are `ANALYZE`d (best effort), so the
+planner plans for the rows just staged. Dense search does not scan every
+vector in SQL per orphan: the build's vectors are read into memory once
+(on the first dense search; `nodes × dimensions × 4` bytes, about 600 MB
+for 100k nodes of 1536 dimensions) and each search ranks them in process,
+in parallel. The vectors within 0.1 % of the k-th nearest distance are the
+candidates, and one indexed query over them computes pgvector's own
+distances and order, so the hits are the full-scan query's, row for row and
+bit for bit (`tests/storage_topology.rs` compares both). Measured (release
+build, 5000 nodes × 1536 dimensions, 300 searches): 1.9 s in process,
+including the read, against 72 s for the full-scan query.
+
 ### The worker child
 
 `elitea-deepwiki-engine worker` (ADR-0026 decision 10). The parent:
