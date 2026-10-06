@@ -22,7 +22,9 @@ Existing shared workspace foundation code remains intact.
 | Main static pause persistence and continuation | [Main consumers](../../../../docs/source-mapping/graph-main-static-consumers-20261006.md) | Generated SQL, repository selectors, content inspection, and focused tests pass. | Real PostgreSQL locking, duplicate consumption, and deployed continuation remain open. |
 | Web recovery and ordered YAML callers | [Web consumers](../../../../apps/elitea-web/docs/source-mapping/point5-web-consumer-composition-20261006.md) | Focused tests, typechecking, strict lint, and the editor checks below pass. | Deployed recovery controls and nested static execution remain open. |
 | Same-consumer restart delivery | [Pending recovery](code-same-consumer-pending-recovery-20261006.md) | 45 focused tests and strict Worker Clippy pass. | Deployed recovery remains open until the exact restart probe passes. |
-| Retained hydration recovery | [Shared Supervisor correction](code-retained-hydration-recovery-20261006.md) | Twelve selected tests and strict Clippy pass. The existing CI harness selects three new PostgreSQL regressions. | Deployed restart and the new PostgreSQL fixtures remain open. |
+| Retained hydration recovery | [Shared Supervisor correction](code-retained-hydration-recovery-20261006.md) | Twelve selected tests and strict Clippy pass. PostgreSQL CI passes at `9ae93a9ee`; the corrected Supervisor is deployed. | The v5 restart still fails at the separate Worker observation boundary. |
+| Continuous Code platform observation | [Worker pump lifetime](../../../../docs/source-mapping/code-platform-pump-lifetime-20261006.md) | Sixteen selected tests and strict Clippy pass. | Worker image replacement and exact v6 restart acceptance remain open. |
+| First-node YAML authoring | [Empty-document correction](../../../../apps/elitea-web/docs/source-mapping/point5-web-empty-document-ci-20261006.md) | 110 selected tests, typechecking, lint, and real-backend LLM/Agent first-node checks pass. | Replacement-head visual CI remains required. |
 | Fixed Parallel and data-driven Map | Existing distinct contracts and preserved Worker source | Both designs remain present. | Admission stays disabled until assembled acceptance passes. |
 | SplitOut and Aggregate | Data shaping catalog | Planned contracts and operation families remain documented. | Rust execution, editor integration, and acceptance remain open. |
 | HTTP and database actions | Remaining gates 5d and 5e | Scope remains explicit. | Executable consumers and acceptance remain open. |
@@ -105,7 +107,13 @@ The running submission retains that slot until the original runtime completes.
 Restored indexed hydration requests another slot before recognizing its already-dispatched job.
 It therefore delays the concurrent broker pump until the original deadline releases capacity.
 The [exact-ledger hydration correction](code-retained-hydration-recovery-20261006.md) now passes its selected source checks.
-The dedicated Supervisor image build and repeated deployed restart probe remain required.
+The corrected Supervisor is deployed as image `sha256:308e7cd075d0e78927e603d5d9906e1f0d7da86afd60bc2c0f743a8fde72569c` from `9ae93a9ee`.
+The v5 restart retest retains the original JavaScript runtime but commits only its first platform read.
+It still ends at the original deadline. The failed container remains stopped and present.
+Source review finds that each fast Pending/Busy submission can drop the concurrent multistage broker step.
+The [Worker correction](../../../../docs/source-mapping/code-platform-pump-lifetime-20261006.md) keeps the pump alive across the unchanged reconciliation loop.
+It does not change deadlines, Main authority, Supervisor capacity, or effect identities.
+Worker deployment and a fresh exact restart acceptance remain required.
 
 The graph recovery failure also loses its specific public category through the ADK legacy error wrapper.
 The UI therefore displays `INTERNAL` and the generic runtime error.

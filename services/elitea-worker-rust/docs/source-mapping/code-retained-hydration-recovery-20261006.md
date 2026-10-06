@@ -54,3 +54,22 @@ All 15 tests in that harness compile and remain ignored locally because isolated
 The existing `ci-rust.yml` fixture-TLS step runs `sandbox::docker_supervisor::hydration::deadline_tests` with `--ignored`.
 That command selects the three new regressions without a workflow change.
 Local checks do not prove that CI, PostgreSQL fixtures, Docker recovery, or Kubernetes recovery passed.
+
+## Deployed retest, 2026-10-06
+
+The Supervisor-only rollout uses source `9ae93a9eee2121beea76c79d24572ec0095d1563`
+and image `sha256:308e7cd075d0e78927e603d5d9906e1f0d7da86afd60bc2c0f743a8fde72569c`.
+All eight profile listeners start. Main, Web, Worker, runtime limits, and concurrency remain unchanged.
+
+Persistent chat 825 retests the same saved pipeline version 166.
+Execution `f7200bb11a4e9ff2578fa69b44377298`, generation 1, confirms Worker loss while the original JavaScript runtime remains active.
+The Worker restarts and acquires claim attempt 2, but the execution still fails.
+Only three platform reads commit. The JavaScript node journal records `authorization_denied`;
+the retained runtime reaches `sandbox.deadline_exceeded`.
+These records do not establish that authorization was the initial cause.
+The final generic `INTERNAL` error persists after browser reload.
+
+Source inspection identifies another cancellation boundary: each fast nonterminal Submit response drops the concurrent platform pump before retry/backoff.
+Retained execution can still report Busy while the original runtime owns the capacity permit.
+A single claim-bound pump must cover the complete observation loop before this recovery gate can close.
+This retest proves neither successful recovery nor deployed Kubernetes behavior.

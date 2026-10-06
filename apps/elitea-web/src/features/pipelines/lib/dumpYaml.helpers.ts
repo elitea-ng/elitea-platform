@@ -32,7 +32,7 @@
  * the modern (non-"compat") style unconditionally, so this is a type-only
  * no-op, not a behaviour change.
  */
-import { dump, load } from 'js-yaml';
+import { dump, load, loadAll } from 'js-yaml';
 import type { Document, MappingNode, Node } from 'js-yaml';
 
 import {
@@ -122,7 +122,8 @@ export function serializePipelineYaml(data: unknown, options: DumpYamlOptions = 
   validatePipelineStateOrder(data, stateOrder);
   const fingerprint = pipelineValueFingerprint(data, stateOrder);
   if (options.originalYaml !== undefined) {
-    const original = load(options.originalYaml || '');
+    // Blank and comment-only editor source represents an empty mapping, with no YAML document yet.
+    const [original = {}] = loadAll(options.originalYaml);
     if (fingerprint === pipelineValueFingerprint(original, originalOrder)) return options.originalYaml;
   }
   const result = dump(reorderNodeKeys(data), {

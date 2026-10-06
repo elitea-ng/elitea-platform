@@ -96,7 +96,13 @@ The same-consumer pending-delivery correction passes 45 focused tests and strict
 The deployed retest acquires its replacement claim about 254 milliseconds after lease expiry.
 It exposes an indexed hydration capacity deadlock before the restored broker starts.
 The [shared Supervisor correction](source-mapping/code-retained-hydration-recovery-20261006.md) passes twelve selected tests and strict Clippy.
-The existing CI harness selects three new PostgreSQL regressions. Supervisor deployment and the exact restart retest remain open.
+The existing CI harness selects three new PostgreSQL regressions; its PostgreSQL job passes at `9ae93a9ee`.
+The corrected Supervisor is deployed from that revision. The v5 restart retest still fails before JavaScript sequence 2 commits.
+The original runtime and checkpoint-attested replacement claim remain unchanged.
+The [Worker pump lifetime correction](../../../docs/source-mapping/code-platform-pump-lifetime-20261006.md) keeps one scoped broker future across Pending/Busy replies, grant refresh, and backoff.
+Sixteen selected tests and strict Clippy pass. Worker deployment and the exact v6 restart acceptance remain open.
+The [empty-document editor correction](../../../apps/elitea-web/docs/source-mapping/point5-web-empty-document-ci-20261006.md) passes 110 focused tests and real-backend first-node browser checks.
+The completed prior CI has one failed visual job and two configured skips. The replacement-head visual result remains required.
 Recovery latency and its generic public error remain explicit gates. No recovery success is claimed for this probe.
 
 Code-node backend selection is tracked in the [isolation assessment](source-mapping/code-node-isolation-assessment-20260928.md).
