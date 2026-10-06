@@ -1,0 +1,4 @@
+import { Shape } from '../lib/shapes';
+export class dog extends Shape {
+  bark() { this.describe(); super.describe(); this.bark(); }
+}

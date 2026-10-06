@@ -60,7 +60,9 @@ func TestCodeDebugExactSnapshotAndIntentShape(t *testing.T) {
 func TestCodeDebugPolicyRequiresOriginalSavedDebugAndLiteralSource(t *testing.T) {
 	a, _ := debugFixture(t)
 	var config map[string]any
-	json.Unmarshal([]byte(a.ConfigurationJSON), &config)
+	if err := json.Unmarshal([]byte(a.ConfigurationJSON), &config); err != nil {
+		t.Fatal(err)
+	}
 	yamlSource := "state: {input: str}\nentry_point: run\nnodes:\n  - id: run\n    type: code\n    debug: true\n    code: " + string(mustDebugJSON(t, config["code"].(map[string]any)["value"])) + "\n"
 	policies, err := CodeDebugPolicies(yamlSource)
 	if err != nil {

@@ -151,7 +151,8 @@ func (s *CodeOwnerGrantSigner) VerifyCodeWorkspaceRead(connection *tls.Connectio
 		return CodeWorkspaceReadAuthority{}, code.ErrRejected
 	}
 	view := CodeWorkspaceReadView{SupervisorIdentity: audience, PreparedSHA256: job.PreparedSHA256, PreparedFingerprint: job.Fingerprint}
-	if prefix.Revision == 1 {
+	switch prefix.Revision {
+	case 1:
 		if codeWorkspaceUnknown(prefix.ProtoReflect()) || prefix.CancelOnly || len(prefix.DependencyBundleSha256) != 0 {
 			return CodeWorkspaceReadAuthority{}, code.ErrRejected
 		}
@@ -166,12 +167,14 @@ func (s *CodeOwnerGrantSigner) VerifyCodeWorkspaceRead(connection *tls.Connectio
 		if prefix.ExpiresAtUnixMillis < view.ExpiresAtUnixMillis {
 			view.ExpiresAtUnixMillis = prefix.ExpiresAtUnixMillis
 		}
-	} else if prefix.Revision == 4 {
+
+	case 4:
 		var compiled runtimev1.RustCompiledSnapshotGrantClaimsV1
 		if proto.Unmarshal(grant.ClaimsBytes, &compiled) != nil || codeWorkspaceUnknown(compiled.ProtoReflect()) || job.Language != "rust" || job.Broker != nil && job.PolicyRevision != "cargo-broker-execute-v1" || !bytes.Equal(compiled.BasePreparedRequestSha256, digestCodeBytes(job.Fingerprint)) {
 			return CodeWorkspaceReadAuthority{}, code.ErrRejected
 		}
-		if compiled.Purpose == runtimev1.RustCompiledSnapshotPurposeV1_RUST_COMPILED_SNAPSHOT_PURPOSE_V1_COMPILE {
+		switch compiled.Purpose {
+		case runtimev1.RustCompiledSnapshotPurposeV1_RUST_COMPILED_SNAPSHOT_PURPOSE_V1_COMPILE:
 			access := compiled.OriginalCodeVisitAccess
 			if len(intentJSON) != 0 || access == nil || access.OriginalVisit == nil || len(compiled.DescriptorSha256) != 0 || !recovery.ValidExecutionID(access.ClaimId) || access.ClaimAttempt == 0 || access.ClaimAttempt > math.MaxInt64 || access.LeaseEpoch == 0 || access.LeaseEpoch > math.MaxInt64 || len(access.FenceSha256) != 32 || access.OriginalVisit.Revision != 1 {
 				return CodeWorkspaceReadAuthority{}, code.ErrRejected
@@ -181,7 +184,8 @@ func (s *CodeOwnerGrantSigner) VerifyCodeWorkspaceRead(connection *tls.Connectio
 				return CodeWorkspaceReadAuthority{}, code.ErrRejected
 			}
 			view = CodeWorkspaceReadView{Mode: CodeWorkspaceCompileMode, SupervisorIdentity: audience, WorkerIdentity: compiled.SubmitterWorkloadIdentity, TenantID: compiled.TenantId, ProjectID: int64(compiled.ProjectId), ExecutionID: compiled.ExecutionId, Generation: compiled.Generation, ClaimID: access.ClaimId, ClaimAttempt: access.ClaimAttempt, LeaseEpoch: access.LeaseEpoch, FenceSHA256: hex.EncodeToString(access.FenceSha256), OriginalVisit: ref, JobActivation: compiled.ActivationId, RequestDigest: hex.EncodeToString(compiled.RequestDigest), PreparedSHA256: job.PreparedSHA256, PreparedFingerprint: job.Fingerprint, ExpiresAtUnixMillis: compiled.ExpiresAtUnixMillis}
-		} else if compiled.Purpose == runtimev1.RustCompiledSnapshotPurposeV1_RUST_COMPILED_SNAPSHOT_PURPOSE_V1_EXECUTE {
+
+		case runtimev1.RustCompiledSnapshotPurposeV1_RUST_COMPILED_SNAPSHOT_PURPOSE_V1_EXECUTE:
 			if compiled.OriginalCodeVisitAccess != nil || len(compiled.DescriptorSha256) != 32 {
 				return CodeWorkspaceReadAuthority{}, code.ErrRejected
 			}
@@ -190,8 +194,10 @@ func (s *CodeOwnerGrantSigner) VerifyCodeWorkspaceRead(connection *tls.Connectio
 				return CodeWorkspaceReadAuthority{}, code.ErrRejected
 			}
 			view = workspaceExecuteView(intent, job)
-		} else {
+
+		default:
 			return CodeWorkspaceReadAuthority{}, code.ErrRejected
+
 		}
 		if len(compiled.SnapshotKeySha256) != 32 || len(compiled.CompilationJobKey) != 0 || compiled.CompilationRuntimeId != "" || len(compiled.CompilationRequestDigest) != 0 || compiled.CompilationLeaseEpoch != 0 || !workspaceJobMatches(view, compiled.TenantId, int64(compiled.ProjectId), compiled.ExecutionId, compiled.Generation, compiled.ActivationId, compiled.SubmitterWorkloadIdentity, compiled.Audience, compiled.RequestDigest, compiled.IssuedAtUnixMillis, compiled.ExpiresAtUnixMillis, audience, now) {
 			return CodeWorkspaceReadAuthority{}, code.ErrRejected
@@ -199,8 +205,10 @@ func (s *CodeOwnerGrantSigner) VerifyCodeWorkspaceRead(connection *tls.Connectio
 		if compiled.ExpiresAtUnixMillis < view.ExpiresAtUnixMillis {
 			view.ExpiresAtUnixMillis = compiled.ExpiresAtUnixMillis
 		}
-	} else {
+
+	default:
 		return CodeWorkspaceReadAuthority{}, code.ErrRejected
+
 	}
 	return CodeWorkspaceReadAuthority{valid: true, view: view}, nil
 }

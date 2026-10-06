@@ -1,0 +1,14 @@
+using Geometry.Core;
+using Geometry.Shapes;
+
+var app = Builder.Create(args);
+var circle = new Circle(2);
+Console.WriteLine(circle.Area());
+app.Run();
+
+static void LocalHelper() => Helper.Run();
+
+public partial class Program
+{
+    public Program() { }
+}

@@ -14,7 +14,7 @@ type CurrentCodeSecretPolicy struct{ pool *pgxpool.Pool }
 
 func NewCurrentCodeSecretPolicy(pool *pgxpool.Pool) (*CurrentCodeSecretPolicy, error) {
 	if pool == nil {
-		return nil, errors.New("Code secret policy database is required")
+		return nil, errors.New("code secret policy database is required")
 	}
 	return &CurrentCodeSecretPolicy{pool: pool}, nil
 }

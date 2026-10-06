@@ -1,5 +1,5 @@
 import type { NodeRecoveryBinding } from '@/shared/lib/nodeRecovery';
-import type { StaticPauseBinding } from './staticPipelinePause';
+import type { StaticPauseBinding } from './staticPipelinePause.types';
 import type { MessageItemWire } from '@/entities/message/lib/wire';
 import type { SubAgentGroupable } from '@/entities/message/lib/subAgentGrouping';
 

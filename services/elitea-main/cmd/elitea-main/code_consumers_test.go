@@ -33,7 +33,7 @@ func codeStartupConfig(t *testing.T, dsn string) runtimecomposition.Config {
 }
 
 func TestCodeConsumerStartupDisabledDoesNotReadMaterialOrOpenPools(t *testing.T) {
-	result, err := openCodeConsumerStartupWithFactory(nil, runtimecomposition.Config{}, runtimePoolResource{}, func(context.Context, string, runtimePoolSpec) (runtimePoolResource, error) {
+	result, err := openCodeConsumerStartupWithFactory(context.Background(), runtimecomposition.Config{}, runtimePoolResource{}, func(context.Context, string, runtimePoolSpec) (runtimePoolResource, error) {
 		t.Fatal("disabled Code consumer opened a database pool")
 		return runtimePoolResource{}, nil
 	})

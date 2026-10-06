@@ -47,7 +47,7 @@ func openCodeConsumerStartupWithFactory(ctx context.Context, config runtimecompo
 		return result, nil
 	}
 	if ctx == nil || !config.Enabled || !config.AgentExecutionDispatchEnabled || config.CodeOwnerRecovery == nil {
-		return result, errors.New("Code consumer startup requires original Code owner composition")
+		return result, errors.New("code consumer startup requires original Code owner composition")
 	}
 	defer func() {
 		if err != nil {
@@ -76,7 +76,7 @@ func openCodeConsumerStartupWithFactory(ctx context.Context, config runtimecompo
 		}
 		if config.RustCompiledSnapshots != nil && config.CodeDebugArtifacts.AgentStateDSNFile == config.RustCompiledSnapshots.AgentStateDSNFile {
 			if compiledState.pool == nil || compiledState.close == nil {
-				return result, errors.New("Code debug shared AgentState pool is unavailable")
+				return result, errors.New("code debug shared AgentState pool is unavailable")
 			}
 			result.debugStatePool = compiledState.pool
 		} else {
@@ -93,16 +93,16 @@ func openCodeConsumerStartupWithFactory(ctx context.Context, config runtimecompo
 
 func openCodeDebugStatePoolWithFactory(ctx context.Context, config runtimecomposition.CodeDebugArtifactsConfig, factory runtimePoolFactory) (runtimePoolResource, error) {
 	if ctx == nil || factory == nil || config.Validate() != nil {
-		return runtimePoolResource{}, errors.New("Code debug state pool configuration is invalid")
+		return runtimePoolResource{}, errors.New("code debug state pool configuration is invalid")
 	}
 	raw, err := securefile.Read(config.AgentStateDSNFile, 16*1024, securefile.PrivateMaterial)
 	if err != nil {
-		return runtimePoolResource{}, errors.New("Code debug private AgentState DSN file is unreadable")
+		return runtimePoolResource{}, errors.New("code debug private AgentState DSN file is unreadable")
 	}
 	defer clear(raw)
 	dsn := strings.TrimSuffix(string(raw), "\n")
 	if dsn == "" || strings.ContainsAny(dsn, "\r\n\x00") {
-		return runtimePoolResource{}, errors.New("Code debug private AgentState DSN file is malformed")
+		return runtimePoolResource{}, errors.New("code debug private AgentState DSN file is malformed")
 	}
 	openCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -117,13 +117,13 @@ func openCodeDebugStatePoolWithFactory(ctx context.Context, config runtimecompos
 		if errors.Is(err, context.DeadlineExceeded) {
 			return runtimePoolResource{}, context.DeadlineExceeded
 		}
-		return runtimePoolResource{}, errors.New("Code debug original AgentState database pool could not open")
+		return runtimePoolResource{}, errors.New("code debug original AgentState database pool could not open")
 	}
 	if resource.pool == nil || resource.close == nil {
 		if resource.close != nil {
 			resource.close()
 		}
-		return runtimePoolResource{}, errors.New("Code debug original AgentState database pool is incomplete")
+		return runtimePoolResource{}, errors.New("code debug original AgentState database pool is incomplete")
 	}
 	return resource, nil
 }

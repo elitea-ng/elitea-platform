@@ -130,7 +130,7 @@ func codePreparedPolicy(value string) bool {
 		return false
 	}
 	for _, b := range []byte(value) {
-		if !(b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || strings.ContainsRune("._-", rune(b))) {
+		if (b < 'a' || b > 'z') && (b < 'A' || b > 'Z') && (b < '0' || b > '9') && !strings.ContainsRune("._-", rune(b)) {
 			return false
 		}
 	}

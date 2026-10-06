@@ -6,4 +6,4 @@
  * `renderRunHistory`-shaped slot.
  */
 export { RunHistoryPanel } from './ui/RunHistoryPanel';
-export type { RunHistoryEntityName, RunHistoryPanelProps } from './ui/RunHistoryPanel';
+export type { RunHistoryEntityName, RunHistoryPanelProps } from './ui/RunHistoryPanel.types';

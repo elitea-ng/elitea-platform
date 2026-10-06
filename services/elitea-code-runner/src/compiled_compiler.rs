@@ -98,9 +98,61 @@ pub(crate) async fn run(command: Command, base: &Path, deadline: Instant) -> io:
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    use std::process::Child;
     use std::time::Duration;
+
+    const CHILD_TEST: &str = "ELITEA_CODE_COMPILER_TEST_CHILD";
+    const SUCCESS_TEST: &str =
+        "compiled_compiler::tests::successful_compiler_cannot_leave_setsid_writer_before_capture";
+    const FAILURE_TEST: &str =
+        "compiled_compiler::tests::failing_compiler_also_reaps_before_returning_error";
+
+    struct FixtureChild(Child);
+
+    impl Drop for FixtureChild {
+        fn drop(&mut self) {
+            if !matches!(self.0.try_wait(), Ok(Some(_))) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+    }
+
+    fn isolated_test(name: &str) -> bool {
+        if std::env::var(CHILD_TEST).as_deref() == Ok(name) {
+            // The child runs one exact fixture, with the production sole-owner model.
+            let arguments: Vec<_> = std::env::args().collect();
+            assert!(arguments.windows(2).any(|pair| pair == ["--exact", name]));
+            return false;
+        }
+        // /proc-wide compiler reaping must not share a process with other fixtures.
+        // Keep Cargo, hydration and finalization tests concurrent in their own process.
+        let mut child = FixtureChild(
+            Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", name, "--nocapture"])
+                .env(CHILD_TEST, name)
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            if let Some(status) = child.0.try_wait().unwrap() {
+                assert!(status.success(), "isolated compiler fixture failed");
+                return true;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "isolated compiler fixture expired"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn successful_compiler_cannot_leave_setsid_writer_before_capture() {
+        if isolated_test(SUCCESS_TEST) {
+            return;
+        }
         let root = tempfile::tempdir().unwrap();
         let mut command = Command::new("/bin/sh");
         command.current_dir(root.path()).arg("-c").arg("setsid /bin/sh -c 'echo $$ > escaped.pid; while :; do printf poison > later-output; sleep 1; done' </dev/null >/dev/null 2>&1 & while [ ! -f escaped.pid ]; do :; done; exit 0");
@@ -130,6 +182,9 @@ mod tests {
     }
     #[tokio::test(flavor = "current_thread")]
     async fn failing_compiler_also_reaps_before_returning_error() {
+        if isolated_test(FAILURE_TEST) {
+            return;
+        }
         let root = tempfile::tempdir().unwrap();
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg("sleep 60 & exit 7");
@@ -147,6 +202,17 @@ mod tests {
                 .unwrap()
                 .trim()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn compiler_fixture_preserves_another_process_owner() {
+        let mut unrelated = FixtureChild(Command::new("/bin/sleep").arg("60").spawn().unwrap());
+        assert!(isolated_test(SUCCESS_TEST));
+        assert!(unrelated.0.try_wait().unwrap().is_none());
+        assert!(
+            rustix::process::test_kill_process(rustix::process::Pid::from_child(&unrelated.0))
+                .is_ok()
         );
     }
 }

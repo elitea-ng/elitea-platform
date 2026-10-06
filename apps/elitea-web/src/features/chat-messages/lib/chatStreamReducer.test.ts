@@ -405,6 +405,25 @@ describe('the tool lifecycle', () => {
     expect(action['original_name']).toBe('get_plan_status');
   });
 
+  it('settles a paused call (agent_tool_paused, #1066) without marking it failed', () => {
+    const history = applyChatStreamFrame(
+      withStartedTool(),
+      toolFrame(SocketMessageType.AgentToolPaused, {
+        finish_reason: 'awaiting_approval',
+        error: null,
+        timestamp_finish: '2026-10-05T00:00:01Z',
+        pause: { interrupt_id: 'hitl_1', guardrail_type: 'sensitive_tool' },
+      }),
+      CONTEXT,
+    );
+    const action = history[0]?.toolActions?.[0] as ToolAction;
+
+    expect(history[0]?.toolActions).toHaveLength(1);
+    expect(action.status).toBe('complete');
+    expect(action['isError']).toBeUndefined();
+    expect(action['ended_at']).toBe('2026-10-05T00:00:01Z');
+  });
+
   it('does not duplicate an action when the same run id starts twice', () => {
     const once = withStartedTool();
     const twice = applyChatStreamFrame(once, toolFrame(SocketMessageType.AgentToolStart, {}), CONTEXT);

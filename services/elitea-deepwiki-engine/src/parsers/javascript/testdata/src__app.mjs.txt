@@ -1,0 +1,2 @@
+import { add } from '../lib/util';
+export async function main() { const m = await import('./lazy.js'); return add(1, m.x); }

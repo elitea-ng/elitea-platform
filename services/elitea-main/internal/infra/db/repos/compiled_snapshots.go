@@ -97,7 +97,7 @@ func (r *CompiledSnapshotsRepository) Candidate(ctx context.Context, scope domai
 	if err != nil {
 		return domain.SnapshotCandidate{}, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	c, err := snapshotCandidate(ctx, tx, scope, key, job, complete)
 	if err != nil {
 		return c, err
@@ -162,7 +162,7 @@ func originalSnapshotExecution(ctx context.Context, q snapshotQuery, scope domai
 	if phase == "reserved" {
 		return result, false, nil
 	}
-	if runtimeID == nil || *runtimeID == "" || len(*runtimeID) > 512 || !(phase == "dispatched" || phase == "completed" || phase == "failed" || phase == "cancelled" || phase == "uncertain") {
+	if runtimeID == nil || *runtimeID == "" || len(*runtimeID) > 512 || (phase != "dispatched" && phase != "completed" && phase != "failed" && phase != "cancelled" && phase != "uncertain") {
 		return result, true, domain.ErrSnapshotUnavailable
 	}
 	result.DescriptorJSON = append([]byte(nil), descriptor...)
@@ -174,7 +174,7 @@ func (r *CompiledSnapshotsRepository) OriginalExecution(ctx context.Context, sco
 	if err != nil {
 		return domain.SnapshotExecution{}, false, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	result, found, err := originalSnapshotExecution(ctx, tx, scope, key, job, root)
 	if err != nil {
 		return result, found, err
@@ -201,7 +201,7 @@ func (r *CompiledSnapshotsRepository) Reserve(ctx context.Context, c domain.Snap
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, snapshotQuotaLock); err != nil {
 		return err
 	}
@@ -249,7 +249,7 @@ func (r *CompiledSnapshotsRepository) WithPublishing(ctx context.Context, c doma
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	row, state, live, err := snapshotRow(ctx, tx, c.Scope, c.Key, "FOR SHARE")
 	if err != nil {
 		return err
@@ -280,7 +280,7 @@ func (r *CompiledSnapshotsRepository) WithReady(ctx context.Context, scope domai
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	c, state, live, err := snapshotRow(ctx, tx, scope, key, "FOR SHARE")
 	if err != nil {
 		return err
@@ -301,7 +301,7 @@ func (r *CompiledSnapshotsRepository) CommitReady(ctx context.Context, c domain.
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	row, state, live, err := snapshotRow(ctx, tx, c.Scope, c.Key, "FOR UPDATE")
 	if err != nil {
 		return err
@@ -339,7 +339,7 @@ func (r *CompiledSnapshotsRepository) ClaimExpired(ctx context.Context, owner st
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	rows, err := tx.Query(ctx, `WITH candidates AS (SELECT tenant_id,project_id,snapshot_key FROM elitea_runtime.rust_compiled_snapshots WHERE expires_at<=clock_timestamp() AND (eviction_until IS NULL OR eviction_until<=clock_timestamp()) ORDER BY expires_at,tenant_id,project_id,snapshot_key FOR UPDATE SKIP LOCKED LIMIT $1)
  UPDATE elitea_runtime.rust_compiled_snapshots s SET state='evicting',eviction_owner=$2,eviction_until=clock_timestamp()+$3*interval '1 millisecond',eviction_epoch=s.eviction_epoch+1 FROM candidates c WHERE s.tenant_id=c.tenant_id AND s.project_id=c.project_id AND s.snapshot_key=c.snapshot_key RETURNING s.tenant_id,s.project_id,s.snapshot_key,s.descriptor_root,s.descriptor_json,s.compilation_job_key,s.compilation_request_digest,s.compilation_runtime_id,s.compilation_lease_epoch,s.compilation_receipt_sha256,s.eviction_epoch`, limit, owner, lease.Milliseconds())
 	if err != nil {
@@ -384,7 +384,7 @@ func (r *CompiledSnapshotsRepository) CompleteEviction(ctx context.Context, row 
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	var root []byte
 	var owner string
 	var epoch int64

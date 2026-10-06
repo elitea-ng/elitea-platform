@@ -73,17 +73,3 @@ func (service *CurrentApplicationStartService) captureAdhocSource(ctx context.Co
 	target.OriginalSource = &ref
 	return nil
 }
-func (service *CurrentApplicationStartService) restoreSource(ctx context.Context, request RootSourceRestoreRequest) (*scope.SourceDefinition, error) {
-	if service.originalSources == nil {
-		return nil, nil
-	}
-	source, err := service.originalSources.RestoreOriginalRootSource(ctx, request)
-	if err != nil || source.Reference.Validate() != nil || source.ResourceProjectID != request.ProjectID || source.ActorID != request.ActorID {
-		return nil, ErrUnsupportedCurrentAgentStart
-	}
-	verified, err := scope.DecodeSourceWire(source.CanonicalWire, source.PreRedemptionVersion, source.Reference, request.ProjectID, request.ActorID)
-	if err != nil || verified.Instructions != source.Instructions {
-		return nil, ErrUnsupportedCurrentAgentStart
-	}
-	return &verified, nil
-}

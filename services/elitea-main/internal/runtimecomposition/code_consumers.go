@@ -22,12 +22,12 @@ func configureCodeSourceCapture(config Config, deps Dependencies) (*repos.Execut
 	}
 	if config.CodeOwnerRecovery == nil {
 		if deps.CodeWorkspaceCapabilities != nil || deps.CodeWorkspacePolicy != nil || deps.CodeDebugStatePool != nil || deps.CodePlatform != nil && deps.CodePlatform.Enabled {
-			return nil, nil, errors.New("Code consumers require original Code owner composition")
+			return nil, nil, errors.New("code consumers require original Code owner composition")
 		}
 		return nil, deps.OriginalCodeDefinitions, nil
 	}
 	if (deps.CodeWorkspaceCapabilities == nil) != (deps.CodeWorkspacePolicy == nil) {
-		return nil, nil, errors.New("Code workspace requires its exact operator policy and capabilities")
+		return nil, nil, errors.New("code workspace requires its exact operator policy and capabilities")
 	}
 	purposes := []scope.Purpose{scope.CodeRecovery}
 	if deps.CodeWorkspaceCapabilities != nil {
@@ -54,17 +54,17 @@ func configureCodeSourceCapture(config Config, deps Dependencies) (*repos.Execut
 
 func validateCodeConsumerDependencies(config Config, deps Dependencies) error {
 	if config.CodeWorkspace != nil && (deps.CodeWorkspaceCapabilities == nil || deps.CodeWorkspacePolicy == nil || *deps.CodeWorkspacePolicy != config.CodeWorkspace.Policy) {
-		return errors.New("Code workspace requires its configured capabilities and exact policy")
+		return errors.New("code workspace requires its configured capabilities and exact policy")
 	}
 	if config.CodePlatform != nil && (deps.CodePlatform == nil || !deps.CodePlatform.Enabled ||
 		deps.CodePlatform.ContentKeysFile != config.CodePlatform.ContentKeysFile || !slices.Equal(deps.CodeBrokerPolicies, config.CodePlatform.BrokerPolicies)) {
-		return errors.New("Code platform requires its configured private material and exact policies")
+		return errors.New("code platform requires its configured private material and exact policies")
 	}
 	if config.CodeDebugArtifacts != nil && deps.CodeDebugStatePool == nil {
-		return errors.New("Code debug requires its configured AgentState pool")
+		return errors.New("code debug requires its configured AgentState pool")
 	}
 	if (deps.CodeWorkspaceCapabilities != nil || deps.CodeDebugStatePool != nil || deps.CodePlatform != nil && deps.CodePlatform.Enabled) && deps.ObjectStore == nil {
-		return errors.New("Code consumers require native object storage")
+		return errors.New("code consumers require native object storage")
 	}
 	return nil
 }
@@ -94,7 +94,7 @@ func attachCodeConsumers(server *storage.ContentServer, config Config, deps Depe
 	}
 	if deps.CodePlatform != nil && deps.CodePlatform.Enabled {
 		if config.CodeOwnerRecovery == nil || sandbox == nil || deps.CurrentConfigurations == nil || runs == nil {
-			return errors.New("Code platform requires the original owner and native toolkit run service")
+			return errors.New("code platform requires the original owner and native toolkit run service")
 		}
 		journal, err := repos.NewCodePlatformCallsRepository(deps.AdmissionPool)
 		if err != nil {
@@ -149,7 +149,7 @@ func attachCodeConsumers(server *storage.ContentServer, config Config, deps Depe
 			return err
 		}
 		if maintenance == nil || maintenance.pruner == nil {
-			return errors.New("Code debug requires its bounded cleanup owner")
+			return errors.New("code debug requires its bounded cleanup owner")
 		}
 		maintenance.pruner = &codeDebugMaintenance{replay: maintenance.pruner, artifacts: artifacts}
 		server.WithCodeDebugArtifacts(debug)

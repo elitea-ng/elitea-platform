@@ -145,7 +145,7 @@ func TestCompiledSnapshotOriginalExecutionRecoveryWithoutCacheRead(t *testing.T)
 				t.Fatal(err)
 			}
 			purpose := "execute"
-			var role *string = &purpose
+			role := &purpose
 			runtimeID := "original-execution-runtime"
 			phase := name
 			digest, _ := domain.SnapshotJobDigest("execute", d.Binding, root)

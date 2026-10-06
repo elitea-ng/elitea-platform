@@ -93,6 +93,50 @@ _LOAD_SKILL_ALREADY_ACTIVE_RE = re.compile(
     r'^Skill "([^"]+)" is already (?:loaded|active)'
 )
 _CUSTOM_STATE_TRANSCRIPT_FIELDS = ("messages", "chat_history")
+# The SDK graph events and the fields they echo besides `state` (review F3
+# on #1067): scrubbed of inline binary like state, and dropped when the event
+# would not fit one frame. Routing fields (next_step, condition) are not here.
+_GRAPH_EVENT_TYPES = frozenset(
+    {
+        "agent_on_tool_node",
+        "agent_on_function_tool_node",
+        "agent_on_loop_tool_node",
+        "agent_on_loop_node",
+        "agent_on_conditional_edge",
+        "agent_on_decision_edge",
+        "agent_on_transitional_edge",
+    }
+)
+_GRAPH_EVENT_ECHO_FIELDS = (
+    "tool_result",
+    "accumulated_response",
+    "input_variables",
+    "input_mapping",
+    "decisional_inputs",
+)
+_GRAPH_EVENT_SCRUBBED_FIELDS = (*_GRAPH_EVENT_ECHO_FIELDS, "condition")
+# INLINE BINARY IN ECHOED GRAPH STATE (issue 1065).
+#
+# elitea-main hands an image attachment to the model inline, as a base64 data
+# URL, up to `inline_image_max_bytes` (discovery; 48 KiB raw, about 64 KiB of
+# text). The SDK's graph events echo the whole state, and its `input` channel
+# (and any pipeline variable a node copied it into) carries that URL, so the
+# progress event alone was larger than the 60 KiB frame and _emit failed the
+# turn before the model was called. A progress event is a projection for the
+# flow view, never the authoritative copy of the input, so the payload is
+# replaced by a short reference naming its media type and size. Short data
+# URLs (a few hundred characters) are left alone: they cost nothing and may be
+# a pipeline's own value.
+_INLINE_DATA_URL_RE = re.compile(
+    r"data:([A-Za-z0-9.+-]+/[A-Za-z0-9.+-]+)((?:;[A-Za-z0-9.+=-]+)*);base64,([A-Za-z0-9+/=_-]{512,})"
+)
+_INLINE_DATA_URL_MARKER = ";base64,"
+# The SDK's GraphInterrupt is how a tool PAUSES (a sensitive-tool approval, a
+# clarifying question); LangChain reports it through on_tool_error. Such a
+# call ends with this frame and a pause finish reason (`awaiting_approval`,
+# `awaiting_input`, `interrupted`), never as an error (issue 1066).
+TOOL_PAUSED_EVENT = "agent_tool_paused"
+_CLARIFYING_QUESTION_GUARDRAIL = "clarifying_question"
 _AUTHORIZATION_PRIVATE_KEYS = frozenset(
     {
         "access_token",
@@ -668,7 +712,48 @@ class CurrentAgentNodeEventCallback(BaseCallbackHandler):
                 kwargs.get("name"),
             )
             return
+        if _is_graph_interrupt(error):
+            self._guard(self._tool_pause, run_id, error)
+            return
         self._guard(self._tool_finish, run_id, error, True)
+
+    def _tool_pause(self, run_id: Any, error: BaseException) -> None:
+        """End a tool call that paused for the user, without calling it failed.
+
+        The interrupt's value is the SDK's own pause payload: it carries the
+        call's arguments and the pending assistant messages, so none of it is
+        copied here except the two identity fields a client needs to tie this
+        call to the approval card that `agent_hitl_interrupt` delivers next.
+        """
+
+        selected = _run_id(run_id)
+        value = _graph_interrupt_value(error)
+        guardrail_type = value.get("guardrail_type")
+        if guardrail_type == _CLARIFYING_QUESTION_GUARDRAIL:
+            finish_reason = "awaiting_input"
+        elif value.get("type") == "hitl" or isinstance(guardrail_type, str):
+            finish_reason = "awaiting_approval"
+        else:
+            finish_reason = "interrupted"
+        pause: dict[str, Any] = {}
+        for key in ("interrupt_id", "guardrail_type"):
+            item = value.get(key)
+            if isinstance(item, str) and item:
+                pause[key] = _bounded_text(item, "")
+        with self._lock:
+            previous = self._tools.get(selected)
+            if previous is None:
+                return
+            entry = dict(previous)
+            entry["timestamp_finish"] = _now()
+            entry["finish_reason"] = finish_reason
+            entry["tool_output"] = None
+            entry["error"] = None
+            entry["pause"] = pause
+            self._tool_skill_identities.pop(selected, None)
+            self._tools[selected] = entry
+        self._emit(TOOL_PAUSED_EVENT, response_metadata=entry)
+        self._emit_partial(tool_calls={selected: entry})
 
     def _pause_for_authorization(
         self,
@@ -967,25 +1052,76 @@ class CurrentAgentNodeEventCallback(BaseCallbackHandler):
         fields so consumers can distinguish a bounded projection.
         """
 
+        graph_event = event_type in _GRAPH_EVENT_TYPES
         state = payload.get("state")
-        if not isinstance(state, dict):
+        if not isinstance(state, dict) and not graph_event:
             return payload
-        projected_state = dict(state)
-        omitted = [
-            field
-            for field in _CUSTOM_STATE_TRANSCRIPT_FIELDS
-            if field in projected_state
-        ]
-        if not omitted:
-            return payload
-        for field in omitted:
-            projected_state.pop(field, None)
         projected = dict(payload)
-        projected["state"] = projected_state
-        projected["state_projection"] = {
-            "omitted_duplicate_fields": omitted,
-        }
+        projection: dict[str, Any] = {}
+        counter = [0]
+        if isinstance(state, dict):
+            projected_state = dict(state)
+            omitted = [
+                field
+                for field in _CUSTOM_STATE_TRANSCRIPT_FIELDS
+                if field in projected_state
+            ]
+            for field in omitted:
+                projected_state.pop(field, None)
+            projected["state"] = _without_inline_data(projected_state, counter)
+            if omitted:
+                projection["omitted_duplicate_fields"] = omitted
+        if graph_event:
+            # Every other field a graph event echoes from the SDK (a node's
+            # tool_result, a loop's accumulated_response, its inputs) can
+            # repeat the multimodal input just as `state` does.
+            for field in _GRAPH_EVENT_SCRUBBED_FIELDS:
+                if field in projected:
+                    projected[field] = _without_inline_data(projected[field], counter)
+        if counter[0]:
+            projection["omitted_inline_data"] = counter[0]
+        if projection:
+            projected["state_projection"] = projection
+        # A graph event is progress, not the turn's outcome. A state still too
+        # large for one frame (a pipeline variable holding a whole document)
+        # loses its state snapshot, keeps its routing fields, and says so:
+        # failing the whole turn over a progress echo is what issue 1065 was.
+        if self._event_exceeds_frame(event_type, projected) and isinstance(state, dict):
+            projected["state"] = {}
+            projection = dict(projection)
+            projection["state_omitted"] = "exceeds_frame"
+            projected["state_projection"] = projection
+        # The same holds for the other echoes: a pipeline node's tool_result
+        # is capped by the SDK far above one frame and a loop node's
+        # accumulated_response not at all. The largest go first, until the
+        # event fits; the routing fields (next_step, condition) stay.
+        if graph_event and self._event_exceeds_frame(event_type, projected):
+            echoes = sorted(
+                (
+                    field
+                    for field in _GRAPH_EVENT_ECHO_FIELDS
+                    if projected.get(field) is not None
+                ),
+                key=lambda field: len(_event_value_json(projected[field])),
+                reverse=True,
+            )
+            dropped: list[str] = []
+            for field in echoes:
+                projected[field] = None
+                dropped.append(field)
+                if not self._event_exceeds_frame(event_type, projected):
+                    break
+            if dropped:
+                projection = dict(projection)
+                projection["fields_omitted"] = sorted(dropped)
+                projected["state_projection"] = projection
+        if not projection:
+            return payload
         return projected
+
+    def _event_exceeds_frame(self, event_type: str, payload: dict[str, Any]) -> bool:
+        rendered = self._event_json(event_type, response_metadata=payload)
+        return len(rendered) > MAX_CURRENT_NODE_EVENT_JSON_BYTES
 
     def _chunk_tool_output(self, selected: str, entry: dict[str, Any]) -> list[str] | None:
         """Split one tool result when, and only when, it will not fit a frame.
@@ -1133,6 +1269,55 @@ class CurrentAgentNodeEventCallback(BaseCallbackHandler):
             failure = self._failure
         if failure is not None:
             raise failure
+
+
+def _is_graph_interrupt(error: BaseException) -> bool:
+    try:
+        from langgraph.errors import GraphInterrupt
+    except ImportError:  # pragma: no cover - langgraph is a hard dependency
+        return False
+    return isinstance(error, GraphInterrupt)
+
+
+def _graph_interrupt_value(error: BaseException) -> dict[str, Any]:
+    """The first interrupt's value, when it is the SDK's dict payload."""
+
+    interrupts = error.args[0] if error.args else ()
+    if not isinstance(interrupts, (list, tuple)):
+        return {}
+    for interrupt in interrupts:
+        value = getattr(interrupt, "value", None)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _inline_data_reference(match: re.Match[str]) -> str:
+    media_type = match.group(1)
+    encoded = len(match.group(3))
+    return f"[inline {media_type} omitted from event: {encoded} base64 characters]"
+
+
+def _event_value_json(value: Any) -> str:
+    """The rendered size proxy of one (already JSON-safe) event field."""
+
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), default=str)
+
+
+def _without_inline_data(value: Any, counter: list[int]) -> Any:
+    """Replace every long base64 data URL inside a JSON value (issue 1065)."""
+
+    if isinstance(value, str):
+        if _INLINE_DATA_URL_MARKER not in value:
+            return value
+        replaced, count = _INLINE_DATA_URL_RE.subn(_inline_data_reference, value)
+        counter[0] += count
+        return replaced
+    if isinstance(value, dict):
+        return {key: _without_inline_data(item, counter) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_without_inline_data(item, counter) for item in value]
+    return value
 
 
 def _tool_output_digest(output: str) -> str:

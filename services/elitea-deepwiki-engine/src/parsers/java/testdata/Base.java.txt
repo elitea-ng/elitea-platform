@@ -1,0 +1,2 @@
+package com.acme.model;
+public class Base { protected Base(int n) {} public String name() { return "base"; } }

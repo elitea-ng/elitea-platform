@@ -80,7 +80,7 @@ func (r *CodePlatformCallsRepository) Lookup(ctx context.Context, a domain.Admis
 	if err != nil {
 		return domain.Record{}, false, domain.ErrUnavailable
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if err = lockCodeCallClaim(ctx, tx, a); err != nil {
 		return domain.Record{}, false, err
 	}
@@ -156,7 +156,7 @@ func (r *CodePlatformCallsRepository) Begin(ctx context.Context, a domain.Admiss
 	if err != nil {
 		return domain.Record{}, domain.ErrUnavailable
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if err = lockCodeCallClaim(ctx, tx, a); err != nil {
 		return domain.Record{}, err
 	}
@@ -213,7 +213,7 @@ func (r *CodePlatformCallsRepository) Dispatch(ctx context.Context, a domain.Adm
 	if err != nil {
 		return false, domain.ErrUnavailable
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if err = lockCodeCallClaim(ctx, tx, a); err != nil {
 		return false, err
 	}
@@ -250,7 +250,7 @@ func (r *CodePlatformCallsRepository) Commit(ctx context.Context, a domain.Admis
 	if err != nil {
 		return domain.ErrUnavailable
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if err = lockCodeCallClaim(ctx, tx, a); err != nil {
 		return err
 	}
@@ -295,7 +295,7 @@ func (r *CodePlatformCallsRepository) VerifyCommittedCodeCall(ctx context.Contex
 	if err != nil {
 		return domain.ErrUnavailable
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if err = lockCodeCallClaim(ctx, tx, a); err != nil {
 		return err
 	}

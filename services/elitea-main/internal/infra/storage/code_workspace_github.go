@@ -157,7 +157,7 @@ func githubWorkspaceRepository(value string) (string, error) {
 			return "", ErrCodeWorkspaceCapability
 		}
 		for _, b := range []byte(part) {
-			if !(b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || strings.ContainsRune("._-", rune(b))) {
+			if (b < 'a' || b > 'z') && (b < 'A' || b > 'Z') && (b < '0' || b > '9') && !strings.ContainsRune("._-", rune(b)) {
 				return "", ErrCodeWorkspaceCapability
 			}
 		}
@@ -249,7 +249,7 @@ func githubWorkspaceAuthorization(configuration map[string]any, request *http.Re
 	return nil
 }
 
-func (g *CodeWorkspaceGitHub) get(ctx context.Context, base *url.URL, configuration map[string]any, path string, limit uint64, output any) error {
+func (g *CodeWorkspaceGitHub) get(ctx context.Context, base *url.URL, configuration map[string]any, path string, limit uint64, output any) (err error) {
 	endpoint := *base
 	endpoint.Path = strings.TrimSuffix(base.Path, "/") + "/repos/" + path
 	if strings.Contains(path, "?") {
@@ -270,7 +270,11 @@ func (g *CodeWorkspaceGitHub) get(ctx context.Context, base *url.URL, configurat
 	if err != nil {
 		return ErrCodeWorkspaceUnavailable
 	}
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil && err == nil {
+			err = ErrCodeWorkspaceUnavailable
+		}
+	}()
 	if response.StatusCode != http.StatusOK || response.ContentLength > int64(limit) {
 		return ErrCodeWorkspaceUnavailable
 	}

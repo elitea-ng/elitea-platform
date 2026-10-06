@@ -8,14 +8,7 @@ import {
 } from "@/shared/api/generated/model";
 import type { ChatMessage } from "./convertMessagesToChatHistory.types";
 
-export type StaticPauseBinding = {
-  readonly messageId: string;
-  readonly generation: string;
-  readonly threadId: string;
-} & (
-  | { readonly kind: "root"; readonly proof: StaticPipelinePauseProof }
-  | { readonly kind: "tools"; readonly inventory: StaticPipelineToolInventory }
-);
+import type { StaticPauseBinding } from './staticPipelinePause.types';
 export const STATIC_CONTINUATION_CONTRACT = "agent.continue.static.v1";
 const utf8 = (value: string): number => new TextEncoder().encode(value).length;
 const identity = (value: unknown, max: number): value is string =>

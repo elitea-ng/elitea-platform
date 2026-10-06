@@ -48,20 +48,6 @@ func captureMainSourceReference(ctx context.Context, tx sqlExecutor, project, ac
 	return ref, nil
 }
 
-// Source selectors are emitted by the capture owner. A declaration consumer
-// does not create its own reference from a current definition or a YAML hash.
-func readMainCapturedSourceForDefinition(ctx context.Context, tx sqlExecutor, project, actor int64, application, version uint64, full string) (scope.SourceDefinition, error) {
-	var raw, definition []byte
-	if tx.QueryRow(ctx, `SELECT r.canonical_wire,d.definition_bytes FROM elitea_runtime.execution_definition_source_refs r JOIN elitea_runtime.execution_captured_definitions d USING(resource_project_id,application_id,version_id,definition_sha256) WHERE r.resource_project_id=$1 AND r.actor_id=$2 AND r.application_id=$3 AND r.version_id=$4 AND r.definition_sha256=$5 FOR SHARE OF r,d`, project, actor, application, version, full).Scan(&raw, &definition) != nil {
-		return scope.SourceDefinition{}, scope.ErrDenied
-	}
-	var wire scope.SourceWire
-	if json.Unmarshal(raw, &wire) != nil || wire.SourceDefinitionSHA256 != full {
-		return scope.SourceDefinition{}, scope.ErrDenied
-	}
-	return scope.DecodeSourceWire(raw, definition, wire.Reference(), project, actor)
-}
-
 func readCapturedRootSource(ctx context.Context, tx sqlExecutor, ref scope.SourceReference, project, actor int64) (scope.SourceDefinition, error) {
 	if tx == nil || ref.Validate() != nil {
 		return scope.SourceDefinition{}, scope.ErrDenied

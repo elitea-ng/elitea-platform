@@ -33,20 +33,20 @@ func codeOwnerConfigFromEnv(lookup LookupEnv, enabled, agents bool, audiences []
 	flag, _ := lookup("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED")
 	if flag == "" || flag == "false" {
 		if raw, _ := lookup("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG"); raw != "" {
-			return nil, errors.New("Code owner recovery settings require explicit enablement")
+			return nil, errors.New("code owner recovery settings require explicit enablement")
 		}
 		return nil, nil
 	}
 	if flag != "true" || !enabled || !agents {
-		return nil, errors.New("Code owner recovery requires native Agent dispatch")
+		return nil, errors.New("code owner recovery requires native Agent dispatch")
 	}
 	raw, _ := lookup("ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG")
 	if len(raw) == 0 || len(raw) > 16384 {
-		return nil, errors.New("Code owner recovery configuration is required")
+		return nil, errors.New("code owner recovery configuration is required")
 	}
 	var cfg CodeOwnerConfig
 	if code.Decode([]byte(raw), &cfg, 16384) != nil || !codeOwnerConfigFields([]byte(raw)) {
-		return nil, errors.New("Code owner recovery configuration is invalid")
+		return nil, errors.New("code owner recovery configuration is invalid")
 	}
 	if err := validateCodeOwnerConfig(&cfg, enabled, agents, audiences); err != nil {
 		return nil, err
@@ -78,24 +78,24 @@ func configureCodeOwner(config Config, pool *pgxpool.Pool, key ed25519.PrivateKe
 	cfg := config.CodeOwnerRecovery
 	certificateBytes, err := securefile.Read(cfg.CertificateChainPath, 1<<20, securefile.PublicMaterial)
 	if err != nil {
-		return nil, nil, nil, errors.New("Code owner client TLS identity unavailable")
+		return nil, nil, nil, errors.New("code owner client TLS identity unavailable")
 	}
 	keyBytes, err := securefile.Read(cfg.PrivateKeyPath, 1<<20, securefile.PrivateMaterial)
 	if err != nil {
-		return nil, nil, nil, errors.New("Code owner client TLS identity unavailable")
+		return nil, nil, nil, errors.New("code owner client TLS identity unavailable")
 	}
 	defer clear(keyBytes)
 	certificate, err := tls.X509KeyPair(certificateBytes, keyBytes)
 	if err != nil {
-		return nil, nil, nil, errors.New("Code owner client TLS identity unavailable")
+		return nil, nil, nil, errors.New("code owner client TLS identity unavailable")
 	}
 	ca, err := securefile.Read(cfg.ServerCAPath, 1<<20, securefile.PublicMaterial)
 	if err != nil {
-		return nil, nil, nil, errors.New("Code owner server CA unavailable")
+		return nil, nil, nil, errors.New("code owner server CA unavailable")
 	}
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(ca) {
-		return nil, nil, nil, errors.New("Code owner server CA invalid")
+		return nil, nil, nil, errors.New("code owner server CA invalid")
 	}
 	endpoints := make([]storage.CodeOwnerEndpoint, 0, len(cfg.Supervisors))
 	audiences := make([]string, 0, len(cfg.Supervisors))
@@ -125,11 +125,11 @@ func validateCodeOwnerConfig(cfg *CodeOwnerConfig, enabled, agents bool, audienc
 		return nil
 	}
 	if !enabled || !agents || !code.Identity(cfg.MainWorkloadIdentity) || len(cfg.Supervisors) == 0 || len(cfg.Supervisors) > 16 {
-		return errors.New("Code owner recovery requires active Agent dispatch and exact identities")
+		return errors.New("code owner recovery requires active Agent dispatch and exact identities")
 	}
 	for _, path := range []string{cfg.CertificateChainPath, cfg.PrivateKeyPath, cfg.ServerCAPath} {
 		if !validPrivateConfigPath(path) {
-			return errors.New("Code owner recovery TLS paths are invalid")
+			return errors.New("code owner recovery TLS paths are invalid")
 		}
 	}
 	allowed := map[string]bool{}
@@ -140,7 +140,7 @@ func validateCodeOwnerConfig(cfg *CodeOwnerConfig, enabled, agents bool, audienc
 	for _, supervisor := range cfg.Supervisors {
 		u, err := url.Parse(supervisor.HTTPSOrigin)
 		if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || u.Path != "" && u.Path != "/" || !code.Identity(supervisor.Audience) || !allowed[supervisor.Audience] || seen[supervisor.Audience] {
-			return errors.New("Code owner Supervisor must match configured sandbox audience and fixed HTTPS origin")
+			return errors.New("code owner Supervisor must match configured sandbox audience and fixed HTTPS origin")
 		}
 		seen[supervisor.Audience] = true
 	}

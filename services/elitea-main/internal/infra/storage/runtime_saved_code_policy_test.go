@@ -205,7 +205,9 @@ func TestSavedCodePlatformClientMatchesSkipFalseProducerAndRejectsNulls(t *testi
 	}
 	for _, field := range []string{"platform_client", "input", "output", "debug", "structured_output"} {
 		var value map[string]any
-		json.Unmarshal([]byte(base), &value)
+		if err := json.Unmarshal([]byte(base), &value); err != nil {
+			t.Fatal(err)
+		}
 		value[field] = nil
 		policy, _ := json.Marshal(value)
 		if _, err := MatchOriginalSavedCodeConfiguration(policy, string(policy)); err == nil {

@@ -26,7 +26,7 @@
   },
   "indexing_capability_profile": {
     "schema_revision": "elitea.indexing-runtime-capability-profile.v1",
-    "profile_sha256": "84c7dafb9fe281474fb3dbaf83f09cb87aace78a65a40d00dd845ae5b7484202",
+    "profile_sha256": "37eeacf3782e23435a066f6b97d10219a976ef7b3d488c2e0815afc414022431",
     "python_requirements": [
       "anthropic==0.76.0",
       "aiofiles==25.1.0",
@@ -53,7 +53,7 @@
       "langchain-openai==1.1.7",
       "langchain-postgres==0.0.16",
       "langchain-text-splitters==1.1.2",
-      "langgraph-checkpoint==3.0.0",
+      "langgraph-checkpoint==4.1.1",
       "langgraph-prebuilt==1.0.7",
       "langdetect==1.0.9",
       "lxml==6.1.0",
@@ -61,7 +61,7 @@
       "markdownify==1.1.0",
       "msrest==0.7.1",
       "numpy==1.26.4",
-      "oauthlib==3.3.1",
+      "oauthlib==4.0.0",
       "openpyxl==3.1.5",
       "nltk==3.10.3",
       "nest-asyncio==1.6.0",
@@ -74,7 +74,7 @@
       "psycopg-pool==3.3.1",
       "pytesseract==0.3.13",
       "pymupdf==1.24.9",
-      "pypdf==6.14.2",
+      "pypdf==6.19.0",
       "pypdfium2==5.8.0",
       "PyGithub==2.3.0",
       "python-iso639==2026.7.23",
@@ -135,7 +135,7 @@
       "langchain-postgres": "0.0.16",
       "langchain-text-splitters": "1.1.2",
       "langgraph": "1.0.7",
-      "langgraph-checkpoint": "3.0.0",
+      "langgraph-checkpoint": "4.1.1",
       "langgraph-prebuilt": "1.0.7",
       "langdetect": "1.0.9",
       "lxml": "6.1.0",
@@ -145,7 +145,7 @@
       "nest-asyncio": "1.6.0",
       "nltk": "3.10.3",
       "numpy": "1.26.4",
-      "oauthlib": "3.3.1",
+      "oauthlib": "4.0.0",
       "openpyxl": "3.1.5",
       "pandas": "2.2.3",
       "pdf2image": "1.16.3",
@@ -157,7 +157,7 @@
       "psycopg-pool": "3.3.1",
       "pytesseract": "0.3.13",
       "pymupdf": "1.24.9",
-      "pypdf": "6.14.2",
+      "pypdf": "6.19.0",
       "pypdfium2": "5.8.0",
       "python-iso639": "2026.7.23",
       "python-magic": "0.4.27",
@@ -195,7 +195,7 @@
       "isodate==0.7.2",
       "joblib==1.5.3",
       "msrest==0.7.1",
-      "oauthlib==3.3.1",
+      "oauthlib==4.0.0",
       "PyGithub==2.3.0",
       "pytesseract==0.3.13",
       "python-gitlab==4.5.0",
@@ -266,10 +266,10 @@
         "sha256": "21120a810e1233e5e6cc7fe40b474eeb4ec6f757a15d7cf86702c369f9567c32"
       },
       "oauthlib": {
-        "filename": "oauthlib-3.3.1-py3-none-any.whl",
+        "filename": "oauthlib-4.0.0-py3-none-any.whl",
         "origin": "PyPI",
-        "pin_basis": "PoV compatibility pin observed in the shared runtime on 2026-07-28",
-        "sha256": "88119c938d2b8fb88561af5f6ee0eec8cc8d552b7bb1f712743136eb7523b7a1"
+        "pin_basis": "raised from the 2026-07-28 PoV pin 3.3.1; 4.0.0 breaking changes are server-side only (revocation JSONP, grant validation order), requests-oauthlib 2.0.0 admits oauthlib>=3.0.0",
+        "sha256": "624c28c13a0a59cabf9747dfa52af63be3e512a7f2714df16e91b5b3a145e6cd"
       },
       "pytesseract": {
         "filename": "pytesseract-0.3.13-py3-none-any.whl",
@@ -483,14 +483,14 @@
   },
   "agent_current_capability_profile": {
     "schema_revision": "elitea.agent-current-runtime-capability-profile.v1",
-    "profile_sha256": "ea7c08df74e318569e21cda638e146380169cd5b73009bdbe8b018833e98daca",
+    "profile_sha256": "10672a655e2d47ed65b09cacb3d9152caea3834dfcf3d7d933bc22fe069c0509",
     "python_requirements": [
       "elitea-sdk==0.9.8",
       "langchain-core==1.3.3",
       "langgraph==1.0.7",
       "langchain-mcp-adapters==0.1.14",
       "mcp==1.28.1",
-      "langgraph-checkpoint-postgres==3.0.0"
+      "langgraph-checkpoint-postgres==3.1.1"
     ],
     "verified_distributions": {
       "elitea-sdk": "0.9.8",
@@ -498,7 +498,7 @@
       "langchain-mcp-adapters": "0.1.14",
       "mcp": "1.28.1",
       "langgraph": "1.0.7",
-      "langgraph-checkpoint-postgres": "3.0.0"
+      "langgraph-checkpoint-postgres": "3.1.1"
     },
     "required_imports": [
       "elitea_sdk",

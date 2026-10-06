@@ -7,11 +7,40 @@ import {
   preparePipelineYamlEdit,
 } from './pipelineYamlDocument.helpers';
 import { patchStateVariableMap } from './stateVariableSpec.helpers';
+import { InitialNodeData } from './flow-editor/constants/nodeDefaults.constants';
+import { collectGraphAdmissionIssues } from './graphAdmission.helpers';
+import type { YamlPipelineDocument } from './flow-editor/helpers/pipelineFlow.types';
 
 const SOURCE =
   '# original\r\nstate:\r\n  "2": list\r\n  "10": {type: dict, value: null, unknown: {keep: [1, null]}}\r\n  absent: {type: str}\r\n  nullable: null\r\nnodes: []\r\n';
 
 describe('pipeline document caller boundary', () => {
+  it('serializes a fresh HITL seed with its optional edit key omitted and legal routes intact', () => {
+    const parsed = parsePipelineYamlDocument('state: {input: str}\nentry_point: HITL_1\nnodes: []\n');
+    const node = { id: 'HITL_1', type: 'hitl', ...InitialNodeData['hitl'] };
+    expect(Object.hasOwn(node, 'edit_state_key')).toBe(false);
+    const saved = preparePipelineYamlEdit(parsed, { ...parsed.yamlJsonObject, nodes: [node] });
+    const stored = load(saved.yamlCode) as YamlPipelineDocument;
+    expect(stored.nodes?.[0]).toEqual(node);
+    expect(stored.nodes?.[0]?.routes).toEqual({ approve: 'END', reject: 'END' });
+    expect(collectGraphAdmissionIssues(stored)).toEqual([]);
+  });
+
+  it('retains malformed authored HITL keys for admission refusal and rejects undefined YAML values', () => {
+    const parsed = parsePipelineYamlDocument('state: {input: str}\nentry_point: HITL_1\nnodes: []\n');
+    const node = { id: 'HITL_1', type: 'hitl', ...InitialNodeData['hitl'], edit_state_key: '' };
+    const saved = preparePipelineYamlEdit(parsed, { ...parsed.yamlJsonObject, nodes: [node] });
+    const stored = load(saved.yamlCode) as YamlPipelineDocument;
+    expect(stored.nodes?.[0]?.edit_state_key).toBe('');
+    expect(collectGraphAdmissionIssues(stored).some((issue) => issue.field === 'edit_state_key')).toBe(true);
+    expect(() => preparePipelineYamlEdit(parsed, {
+      ...parsed.yamlJsonObject, nodes: [{ ...node, edit_state_key: undefined }],
+    })).toThrow();
+    expect(() => preparePipelineYamlEdit(parsed, {
+      ...parsed.yamlJsonObject, state: { input: { type: 'str', value: undefined } },
+    })).toThrow();
+  });
+
   it('reads quoted numeric roots from YAML syntax and retains every raw declaration', () => {
     const parsed = parsePipelineYamlDocument(SOURCE);
     expect(parsed.stateKeyOrder).toEqual(['2', '10', 'absent', 'nullable']);

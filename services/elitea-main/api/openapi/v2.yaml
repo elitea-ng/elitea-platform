@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.1"
+  x-elitea-client-contract: "1.2"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -2366,8 +2366,8 @@ components:
       x-elitea-passthrough: >-
         NOTE(W2): one tool call entry
         (services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py:618,
-        `entry`), identical in `agent_tool_start`, `agent_tool_end` and
-        `agent_tool_error`; keyed by `tool_run_id`.
+        `entry`), identical in `agent_tool_start`, `agent_tool_end`,
+        `agent_tool_error` and `agent_tool_paused`; keyed by `tool_run_id`.
       required: [tool_name, tool_run_id]
       properties:
         tool_name: { type: string }
@@ -2396,7 +2396,12 @@ components:
         finish_reason:
           type: string
           nullable: true
-          description: '`stop` on success, `error` on failure; absent or null while running.'
+          description: >-
+            `stop` on success, `error` on failure; absent or null while
+            running. Contract 1.2: `awaiting_approval`, `awaiting_input` or
+            `interrupted` on an `agent_tool_paused` call, which paused for the
+            user and did NOT fail. A client treats an unknown value as "not
+            failed" unless `error` is set.
         tool_output:
           type: string
           nullable: true
@@ -2407,6 +2412,20 @@ components:
           type: string
           nullable: true
           description: The failure text of an `agent_tool_error`.
+        pause:
+          type: object
+          nullable: true
+          description: >-
+            Contract 1.2. Set on an `agent_tool_paused` call: which pause it
+            waits on. `interrupt_id` matches the `interrupt_id` of the
+            `agent_hitl_interrupt` card that follows, so a client can show the
+            call as awaiting that decision.
+          properties:
+            interrupt_id: { type: string, nullable: true }
+            guardrail_type:
+              type: string
+              nullable: true
+              description: '`sensitive_tool` for an approval, `clarifying_question` for a question.'
         tool_output_chunks:
           type: object
           nullable: true
@@ -2437,6 +2456,24 @@ components:
         A tool call finished (`agent_tool_end`) or failed
         (`agent_tool_error`; `content` repeats the error). A client that
         missed the start builds the call from this frame alone. Not terminal.
+      allOf:
+        - $ref: '#/components/schemas/ClientFrameEnvelope'
+        - type: object
+          required: [response_metadata]
+          properties:
+            response_metadata:
+              $ref: '#/components/schemas/ClientFrameToolCall'
+
+    ClientFrameAgentToolPaused:
+      description: >-
+        Contract 1.2. A tool call paused for the user — a sensitive tool
+        waiting for approval, or a clarifying question — instead of finishing.
+        It is NOT a failure: `error` is null and `finish_reason` is
+        `awaiting_approval`, `awaiting_input` or `interrupted`. The pause
+        itself arrives next as `agent_hitl_interrupt`. A server before 1.2
+        sent `agent_tool_error` for the same call. Not terminal. NOTE(W2):
+        services/elitea-worker-python/src/elitea_worker/handlers/agent_events.py
+        `_tool_pause`.
       allOf:
         - $ref: '#/components/schemas/ClientFrameEnvelope'
         - type: object
@@ -3414,10 +3451,21 @@ components:
         parent_agent_call_id: { type: string, nullable: true }
         started_at: { type: string, format: date-time, nullable: true }
         finished_at: { type: string, format: date-time, nullable: true }
-        is_error: { type: boolean }
+        is_error:
+          type: boolean
+          description: >-
+            True for a tool call that failed. A call that paused for the user
+            (contract 1.2, `finish_reason` `awaiting_approval`,
+            `awaiting_input` or `interrupted`) is not an error.
         step_type: { type: string, nullable: true }
         model_name: { type: string, nullable: true }
-        finish_reason: { type: string, nullable: true }
+        finish_reason:
+          type: string
+          nullable: true
+          description: >-
+            For a tool call: `stop`, `error`, or (contract 1.2) a pause reason
+            — `awaiting_approval`, `awaiting_input`, `interrupted`. A client
+            treats an unknown value by `is_error`.
         attrs:
           type: object
           nullable: true
@@ -3481,6 +3529,15 @@ components:
                 sanitized:
                   type: boolean
                   description: A NUL byte was stripped from at least one chunk.
+            pause:
+              type: object
+              description: >-
+                Contract 1.2. Present on a tool call that paused for the user:
+                the `interrupt_id` of the approval card it waited on and the
+                `guardrail_type` (`sensitive_tool`, `clarifying_question`).
+              properties:
+                interrupt_id: { type: string }
+                guardrail_type: { type: string }
 
     MessageTraceStepDetail:
       allOf:
@@ -12424,6 +12481,7 @@ x-elitea-client-frames:
   agent_tool_start: '#/components/schemas/ClientFrameAgentToolStart'
   agent_tool_end: '#/components/schemas/ClientFrameAgentToolEnd'
   agent_tool_error: '#/components/schemas/ClientFrameAgentToolEnd'
+  agent_tool_paused: '#/components/schemas/ClientFrameAgentToolPaused'
   agent_tool_output_chunk: '#/components/schemas/ClientFrameAgentToolOutputChunk'
   agent_hitl_interrupt: '#/components/schemas/ClientFrameHitlInterrupt'
   mcp_authorization_required: '#/components/schemas/ClientFrameMcpAuthorizationRequired'
@@ -22776,7 +22834,17 @@ paths:
         centry.social_users joined to auth_core__user; on no matching row or
         any query error, falls back to a defaulted response built from the
         auth context (:98-107) — still 200, never surfaced as an error.
-      tags: [social]
+
+        Client contract 1.2: this is the client's "who am I" read. `id` is
+        the caller's user id, `name` the display name, `email`, `avatar` (a
+        URL, absolute or relative to the deployment origin such as
+        `/avatars/{project_id}/{file}`; "" when none is set) and `personal_project_id` — the project
+        a client opens by default. `personal_project_id` is "" while the
+        account's personal project is still being provisioned (a fresh
+        account's first read starts it); a client polls until it is set.
+      tags: [social, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
         '200':
           description: Author profile
@@ -22784,7 +22852,9 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SocialAuthorProfile'
+        '400': { $ref: '#/components/responses/400' }
         '401': { $ref: '#/components/responses/401' }
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
 
     put:
       operationId: updateCurrentAuthor

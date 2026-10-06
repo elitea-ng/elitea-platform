@@ -96,7 +96,9 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 		body = append([]byte(nil), request.Body.Value...)
 	case "text":
 		var text string
-		json.Unmarshal(request.Body.Value, &text)
+		if err := json.Unmarshal(request.Body.Value, &text); err != nil {
+			return Receipt{}, ErrInvalid
+		}
 		body = []byte(text)
 	case "artifact":
 		if s.artifacts == nil {
@@ -180,9 +182,12 @@ func (s *Service) Execute(ctx context.Context, inv Invocation) (Receipt, error) 
 		return s.finish(ctx, admitted, receipt)
 	}
 	if response.ContentLength > int64(request.Response.MaxBytes) {
-		response.Body.Close()
+		closeErr := response.Body.Close()
 		receipt.State = "uncertain"
 		receipt.FailureCode = code("resource_exhausted")
+		if closeErr != nil {
+			receipt.FailureCode = code("reconciliation_required")
+		}
 		return s.finish(ctx, admitted, receipt)
 	}
 	captured, readErr := io.ReadAll(io.LimitReader(response.Body, int64(request.Response.MaxBytes)+1))

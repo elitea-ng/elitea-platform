@@ -118,12 +118,16 @@ func (r *CodeIntentRepository) lockAccessIdentity(ctx context.Context, tx sqlExe
 	// Restored claims remain checkpoint-only. This admission never mints Begin/Invoke.
 	if desired == "RUNNING" && a.mode != "NONE" {
 		var authorized bool
-		if a.mode == "AGENT_MODEL_CHECKPOINT" {
+		switch a.mode {
+		case "AGENT_MODEL_CHECKPOINT":
 			err = tx.QueryRow(ctx, `SELECT model_checkpoint_digest IS NOT NULL FROM elitea_runtime.execution_claims WHERE claim_id=$1 AND execution_id=$2 AND generation=$3`, claim.ClaimID, claim.ExecutionID, int64(claim.Generation)).Scan(&authorized)
-		} else if a.mode == "NODE_RECOVERY" {
+
+		case "NODE_RECOVERY":
 			err = tx.QueryRow(ctx, `SELECT status='RESUMED' FROM elitea_runtime.node_recovery_visits WHERE execution_id=$1 AND generation=$2 ORDER BY created_at DESC,journal_revision DESC LIMIT 1 FOR SHARE`, claim.ExecutionID, int64(claim.Generation)).Scan(&authorized)
-		} else {
+
+		default:
 			return codeAccess{}, storage.ErrContentUnauthorized
+
 		}
 		if err != nil || !authorized {
 			return codeAccess{}, storage.ErrContentUnauthorized

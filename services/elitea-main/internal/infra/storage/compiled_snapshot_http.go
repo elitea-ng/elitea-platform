@@ -91,16 +91,20 @@ func (s *CompiledSnapshotContentService) authorize(r *http.Request, root string)
 	}
 	read := runtimev1.RustCompiledSnapshotPurposeV1_RUST_COMPILED_SNAPSHOT_PURPOSE_V1_READ
 	publish := runtimev1.RustCompiledSnapshotPurposeV1_RUST_COMPILED_SNAPSHOT_PURPOSE_V1_PUBLISH
-	if r.Method == http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
 		if c.Purpose != read || len(c.CompilationJobKey) != 0 || c.CompilationRuntimeId != "" || len(c.CompilationRequestDigest) != 0 || c.CompilationLeaseEpoch != 0 {
 			return nil, ErrContentUnauthorized
 		}
-	} else if r.Method == http.MethodPut || r.Method == http.MethodPost {
+
+	case http.MethodPut, http.MethodPost:
 		if c.Purpose != publish || len(c.CompilationJobKey) != 32 || c.CompilationRuntimeId == "" || len(c.CompilationRuntimeId) > 512 || len(c.CompilationRequestDigest) != 32 || c.CompilationLeaseEpoch == 0 || domain.SnapshotActivationKey(c.ExecutionId, c.ActivationId) != hex.EncodeToString(c.CompilationJobKey) {
 			return nil, ErrContentUnauthorized
 		}
-	} else {
+
+	default:
 		return nil, ErrContentUnauthorized
+
 	}
 	return c, nil
 }

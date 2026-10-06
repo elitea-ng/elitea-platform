@@ -117,9 +117,11 @@ func (s *Server) AuthorizeRustCompiledSnapshot(ctx context.Context, r *runtimev1
 	scope := domain.SnapshotScope{TenantID: binding.TenantID, ProjectID: binding.ProjectID}
 	var c domain.SnapshotCandidate
 	var digest string
-	if r.Purpose == compile {
+	switch r.Purpose {
+	case compile:
 		digest, err = domain.SnapshotJobDigest("compile", binding, "")
-	} else if r.Purpose == publish {
+
+	case publish:
 		job := hex.EncodeToString(r.CompilationJobKey)
 		if job != domain.SnapshotActivationKey(fence.ExecutionID, r.ActivationId) {
 			return nil, status.Error(codes.PermissionDenied, "Publication must use its original compilation activation.")
@@ -128,7 +130,8 @@ func (s *Server) AuthorizeRustCompiledSnapshot(ctx context.Context, r *runtimev1
 		if err == nil {
 			digest = c.CompilationRequestDigest
 		}
-	} else {
+
+	default:
 		var original domain.SnapshotExecution
 		recovered := false
 		if r.Purpose == execute {
@@ -156,6 +159,7 @@ func (s *Server) AuthorizeRustCompiledSnapshot(ctx context.Context, r *runtimev1
 		if err == nil {
 			digest, err = domain.SnapshotJobDigest("execute", binding, c.Root)
 		}
+
 	}
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "The selected compiled snapshot is unavailable or does not match its original provenance.")

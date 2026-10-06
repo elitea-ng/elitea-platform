@@ -1,0 +1,7 @@
+package com.acme.api;
+public class Duplicate {
+    void go(int a) { log(a); log(a); }
+    void go(String s) { Registry.lookup(s); }
+    void log(Object o) {}
+}
+class Registry { static void lookup(String s) {} }

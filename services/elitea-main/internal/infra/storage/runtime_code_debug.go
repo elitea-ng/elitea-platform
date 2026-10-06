@@ -75,7 +75,7 @@ type RuntimeCodeDebugArtifactService struct {
 
 func NewRuntimeCodeDebugArtifactService(artifacts CodeDebugArtifactRepository) (*RuntimeCodeDebugArtifactService, error) {
 	if artifacts == nil {
-		return nil, errors.New("Code debug dependencies are required")
+		return nil, errors.New("code debug dependencies are required")
 	}
 	return &RuntimeCodeDebugArtifactService{artifacts: artifacts, slots: make(chan struct{}, 4)}, nil
 }

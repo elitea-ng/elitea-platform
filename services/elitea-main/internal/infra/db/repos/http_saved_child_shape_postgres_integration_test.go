@@ -20,7 +20,7 @@ func TestPostgresHTTPChildShapeRejectsEveryPartialNullTuple(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tx.Rollback(t.Context())
+	defer func() { _ = tx.Rollback(t.Context()) }()
 	var definition string
 	if err = tx.QueryRow(t.Context(), `SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid='elitea_runtime.execution_http_effects'::regclass AND conname='execution_http_effects_saved_child_shape'`).Scan(&definition); err != nil {
 		t.Fatal(err)

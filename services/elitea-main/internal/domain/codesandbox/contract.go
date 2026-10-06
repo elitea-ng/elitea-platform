@@ -406,7 +406,7 @@ func VisitBounds(activation, node, thread string, step uint64, attempt uint16) b
 		return false
 	}
 	for _, c := range node {
-		if !(c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || strings.ContainsRune("_.:-", c)) {
+		if (c < 'A' || c > 'Z') && (c < 'a' || c > 'z') && (c < '0' || c > '9') && !strings.ContainsRune("_.:-", c) {
 			return false
 		}
 	}

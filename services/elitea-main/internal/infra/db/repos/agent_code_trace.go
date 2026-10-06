@@ -62,7 +62,7 @@ func codeTraceNodeID(value string) bool {
 		return false
 	}
 	for _, b := range []byte(value) {
-		if !(b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || strings.ContainsRune("_-.:", rune(b))) {
+		if (b < 'a' || b > 'z') && (b < 'A' || b > 'Z') && (b < '0' || b > '9') && !strings.ContainsRune("_-.:", rune(b)) {
 			return false
 		}
 	}
@@ -112,7 +112,7 @@ func validateCurrentAgentCodeTraceDelta(delta currentAgentTraceDelta, frame outp
 			continue
 		}
 		if proof.ExecutionID != frame.Fence.ExecutionID || proof.Generation != strconv.FormatUint(frame.Fence.Generation, 10) {
-			return errors.New("Code lifecycle trace conflicts with signed execution identity")
+			return errors.New("code lifecycle trace conflicts with signed execution identity")
 		}
 		if err := validateCurrentAgentCodeEntry(call.key, call.entry, proof); err != nil {
 			return err
@@ -166,22 +166,22 @@ func mergeCurrentAgentCodeTrace(previous, incoming map[string]any) (map[string]a
 		return incoming, nil
 	}
 	if !nextPresent {
-		return nil, errors.New("Code lifecycle trace cannot change kind")
+		return nil, errors.New("code lifecycle trace cannot change kind")
 	}
 	if !oldPresent {
 		if previous != nil {
-			return nil, errors.New("Code lifecycle trace cannot replace another trace")
+			return nil, errors.New("code lifecycle trace cannot replace another trace")
 		}
 		return incoming, nil
 	}
 	oldStatus, nextStatus := old.Status, next.Status
 	old.Status, next.Status = "", ""
 	if old != next {
-		return nil, errors.New("Code lifecycle replay identity conflicts")
+		return nil, errors.New("code lifecycle replay identity conflicts")
 	}
 	if oldStatus != "started" {
 		if nextStatus != "started" && nextStatus != oldStatus {
-			return nil, errors.New("Code lifecycle terminal result conflicts")
+			return nil, errors.New("code lifecycle terminal result conflicts")
 		}
 		return previous, nil
 	}
@@ -192,7 +192,7 @@ func mergeCurrentAgentCodeTrace(previous, incoming map[string]any) (map[string]a
 	result["timestamp_start"] = previous["timestamp_start"]
 	// Preserve the first observed start across recovery. This is display evidence.
 	if start, finish := parseCurrentAgentTime(result["timestamp_start"]), parseCurrentAgentTime(result["timestamp_finish"]); start != nil && finish != nil && finish.Before(*start) {
-		return nil, errors.New("Code lifecycle timestamps conflict")
+		return nil, errors.New("code lifecycle timestamps conflict")
 	}
 	return result, nil
 }

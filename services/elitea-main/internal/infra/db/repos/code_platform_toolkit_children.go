@@ -71,7 +71,7 @@ func (r *CodePlatformCallsRepository) ReadCodeToolkitChild(ctx context.Context, 
 	if err != nil {
 		return CodeToolkitChild{}, false, domain.ErrUnavailable
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if err = lockCodeCallClaim(ctx, tx, a); err != nil {
 		return CodeToolkitChild{}, false, err
 	}
@@ -135,7 +135,7 @@ func (r *CodePlatformCallsRepository) CommitCodeToolkitReconciliation(ctx contex
 	if err != nil {
 		return domain.ErrUnavailable
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
+	defer func() { _ = tx.Rollback(context.WithoutCancel(ctx)) }()
 	if err = lockCodeCallClaim(ctx, tx, a); err != nil {
 		return err
 	}

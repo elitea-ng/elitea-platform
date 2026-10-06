@@ -56,7 +56,7 @@ const LIVE_TEST_CONVERSATIONS = new Map<string, State>();
 export function resetPipelineTestConversationsForTests(): void {
   LIVE_TEST_CONVERSATIONS.clear();
 }
-export function editorTestIdentityKey(
+function editorTestIdentityKey(
   identity: PipelineTestChatIdentity,
 ): string | undefined {
   const values = [

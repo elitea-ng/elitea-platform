@@ -961,6 +961,23 @@ func TestDeprovisionRemovesAProjectThatRanAnExecution(t *testing.T) {
 	projectID := created.ProjectID
 	execution := seedExecutionGraph(ctx, t, pool, projectID)
 
+	// Keep another project's complete definition and source rows unchanged.
+	if _, err := pool.Exec(ctx, `
+INSERT INTO elitea_runtime.execution_captured_definitions(resource_project_id,application_id,version_id,definition_sha256,definition_bytes,byte_length)
+VALUES(1,1,1,repeat('c',64),'bystander-definition'::bytea,octet_length('bystander-definition'::bytea));
+INSERT INTO elitea_runtime.execution_definition_source_refs(source_id,revision,digest_sha256,resource_project_id,actor_id,application_id,version_id,definition_sha256,canonical_wire)
+VALUES(repeat('d',64),1,repeat('c',64),1,1,1,1,repeat('c',64),'bystander-source'::bytea)`); err != nil {
+		t.Fatal(err)
+	}
+	const bystanderSQL = `SELECT to_jsonb(d)::text,to_jsonb(r)::text
+FROM elitea_runtime.execution_captured_definitions d
+JOIN elitea_runtime.execution_definition_source_refs r USING(resource_project_id,application_id,version_id,definition_sha256)
+WHERE r.source_id=repeat('d',64)`
+	var beforeDefinition, beforeSource string
+	if err := pool.QueryRow(ctx, bystanderSQL).Scan(&beforeDefinition, &beforeSource); err != nil {
+		t.Fatal(err)
+	}
+
 	// Premise: the rows really are there. Without this the "gone" assertions
 	// below would pass against a project that never ran anything, which is what
 	// every delete test in this file did before #374.
@@ -979,6 +996,14 @@ func TestDeprovisionRemovesAProjectThatRanAnExecution(t *testing.T) {
 		if rows != 0 {
 			t.Errorf("%s kept %d row(s) that name the deleted project", table, rows)
 		}
+	}
+
+	var afterDefinition, afterSource string
+	if err := pool.QueryRow(ctx, bystanderSQL).Scan(&afterDefinition, &afterSource); err != nil {
+		t.Fatal("bystander source was removed", err)
+	}
+	if beforeDefinition != afterDefinition || beforeSource != afterSource {
+		t.Fatal("deprovision changed another project's complete source rows")
 	}
 
 	var rowSurvived, schemaSurvived bool
@@ -1185,7 +1210,7 @@ ORDER BY 1`, removed)
 // test those packages instead of the delete.
 func seedExecutionGraph(ctx context.Context, t *testing.T, pool *pgxpool.Pool, projectID int64) string {
 	t.Helper()
-	execution := fmt.Sprintf("execution-delete-%d", projectID)
+	execution := fmt.Sprintf("%032x", projectID)
 	bundle := fmt.Sprintf("bundle-delete-%d", projectID)
 	claim := fmt.Sprintf("claim-delete-%d", projectID)
 	record := fmt.Sprintf("storage-record-%d", projectID)
@@ -1289,7 +1314,36 @@ INSERT INTO elitea_runtime.index_generation_counters (
 			t.Fatalf("seed %s: %v", seed.what, err)
 		}
 	}
+	seedCodeRecoveryDeleteGraph(ctx, t, pool, projectID, execution, claim)
 	return execution
+}
+
+// These rows exercise retention edges only. They never grant runtime authority.
+func seedCodeRecoveryDeleteGraph(ctx context.Context, t *testing.T, pool *pgxpool.Pool, projectID int64, execution, claim string) {
+	t.Helper()
+	for _, seed := range []struct{ name, sql string }{
+		{"node recovery visit", `INSERT INTO elitea_runtime.node_recovery_visits(execution_id,generation,activation_id,journal_revision,node_id,graph_thread,step,attempt,receipt_json,receipt_digest,source_event_id,source_claim_id,status) SELECT execution,1,repeat('e',64),1,'node','thread',0,1,'{}'::bytea,decode(repeat('00',32),'hex'),execution||':recovery',claim,'RECONCILED' FROM fixture`},
+		{"node recovery control", `INSERT INTO elitea_runtime.node_recovery_control_outbox(execution_id,generation,activation_id,expected_revision,request_id,request_json,action_json,actor_id) SELECT execution,1,repeat('e',64),1,repeat('f',64),'{}'::bytea,'{}'::bytea,'1' FROM fixture`},
+		{"node recovery audit", `INSERT INTO elitea_runtime.node_recovery_audit(execution_id,generation,request_id,transition,actor_id,activation_id,journal_revision) SELECT execution,1,repeat('f',64),'AUTHORIZED','1',repeat('e',64),1 FROM fixture`},
+		{"original Code visit", `INSERT INTO elitea_runtime.original_code_visits(execution_id,generation,visit_id,visit_digest,activation_id,attempt,record_json,registered_claim_id) SELECT execution,1,repeat('b',64),repeat('a',64),repeat('e',64),1,'{}'::bytea,claim FROM fixture`},
+		{"original Code intent", `INSERT INTO elitea_runtime.original_code_intents(execution_id,generation,visit_id,dispatch_activation,binding_json,binding_digest,compiled_selector_json,registered_claim_id) SELECT execution,1,repeat('b',64),repeat('e',64),'{}'::bytea,repeat('a',64),'{}'::bytea,claim FROM fixture`},
+		{"original Code receipt", `INSERT INTO elitea_runtime.original_code_owner_receipts(execution_id,generation,dispatch_activation,node_receipt_sha256,receipt_wire,receipt_sha256,admitted_claim_id) SELECT execution,1,repeat('e',64),repeat('a',64),'{}'::bytea,repeat('a',64),claim FROM fixture`},
+		{"workspace snapshot", `INSERT INTO elitea_runtime.code_workspace_snapshots(execution_id,generation,visit_id,visit_digest_sha256,activation_id,tenant_id,resource_project_id,actor_id,base_prepared_sha256,selection_sha256,policy_sha256) SELECT execution,1,repeat('b',64),repeat('a',64),repeat('e',64),project::text,project,1,repeat('a',64),repeat('a',64),repeat('a',64) FROM fixture`},
+		{"broker binding", `INSERT INTO elitea_runtime.original_code_broker_bindings(execution_id,original_generation,visit_id,prepared_sha256,prepared_fingerprint,policy_sha256,dependency_bundle_sha256,broker_json) SELECT execution,1,repeat('b',64),repeat('a',64),repeat('a',64),repeat('a',64),'','{}'::bytea FROM fixture`},
+		{"Code debug artifact", `INSERT INTO elitea_runtime.code_debug_artifacts(tenant_id,project_id,execution_id,original_visit_id,original_visit_revision,original_visit_digest,attempt,activation_id,actor_id,original_generation,admission_json,object_key,state) SELECT project::text,project,execution,decode(repeat('bb',32),'hex'),1,decode(repeat('aa',32),'hex'),1,decode(repeat('ee',32),'hex'),1,1,'{}'::bytea,repeat('f',64)||'.json','staging' FROM fixture`},
+		{"captured definition", `INSERT INTO elitea_runtime.execution_captured_definitions(resource_project_id,application_id,version_id,definition_sha256,definition_bytes,byte_length) SELECT project,1,1,repeat('a',64),'{}'::bytea,2 FROM fixture`},
+		{"definition source", `INSERT INTO elitea_runtime.execution_definition_source_refs(source_id,revision,digest_sha256,resource_project_id,actor_id,application_id,version_id,definition_sha256,canonical_wire) SELECT md5(project::text)||md5('source'||project::text),1,repeat('a',64),project,1,1,1,repeat('a',64),'{}'::bytea FROM fixture`},
+		{"parent child scope", `INSERT INTO elitea_runtime.execution_saved_child_scopes(execution_id,generation,scope_id,revision,digest_sha256,canonical_wire,state,registration_claim_id,registration_lease_epoch) SELECT execution,1,repeat('c',64),1,repeat('a',64),'{}'::bytea,'retired',claim,1 FROM fixture`},
+		{"nested child scope", `INSERT INTO elitea_runtime.execution_saved_child_scopes(execution_id,generation,scope_id,revision,digest_sha256,canonical_wire,parent_scope_id,state,registration_claim_id,registration_lease_epoch) SELECT execution,1,repeat('d',64),1,repeat('a',64),'{}'::bytea,repeat('c',64),'retired',claim,1 FROM fixture`},
+		{"saved child definition", `INSERT INTO elitea_runtime.execution_saved_child_definitions(execution_id,generation,scope_id,member_path,graph_thread_id,resource_project_id,application_id,version_id,definition_sha256,yaml_sha256) SELECT execution,1,repeat('d',64),'member','nested-thread',project,1,1,repeat('a',64),repeat('a',64) FROM fixture`},
+		{"saved child capture", `INSERT INTO elitea_runtime.execution_saved_child_captures(execution_id,generation,application_id,version_id,definition_sha256,root_input_sha256,resource_project_id,actor_id,source_id,source_digest_sha256) SELECT execution,1,1,1,repeat('a',64),repeat('a',64),project,1,md5(project::text)||md5('source'||project::text),repeat('a',64) FROM fixture`},
+		{"saved child HTTP effect", `INSERT INTO elitea_runtime.execution_http_effects(execution_id,generation,activation_id,effect_id,request_digest,request_bytes,credential_revision,dispatch_claim_id,dispatch_lease_epoch,state,frozen_binding_digest,policy_digest,output_bucket,saved_child_scope_id,saved_child_scope_revision,saved_child_scope_digest,saved_child_graph_thread) SELECT execution,1,repeat('e',64),md5(execution)||md5('effect'||execution),repeat('a',64),'{}'::bytea,'',claim,1,'dispatching',repeat('a',64),repeat('a',64),'outputs',repeat('d',64),1,repeat('a',64),'nested-thread' FROM fixture`},
+	} {
+		const fixture = `WITH fixture AS (SELECT $1::bigint AS project,$2::text AS execution,$3::text AS claim) `
+		if _, err := pool.Exec(ctx, fixture+seed.sql, projectID, execution, claim); err != nil {
+			t.Fatalf("seed %s: %v", seed.name, err)
+		}
+	}
 }
 
 // executionGraphRowCounts counts what the seed wrote, per table. The two
@@ -1332,6 +1386,35 @@ func executionGraphRowCounts(
 			t.Fatalf("count rows in %s: %v", check.table, err)
 		}
 		counts[check.table] = rows
+	}
+
+	for _, table := range []string{
+		"elitea_runtime.node_recovery_visits",
+		"elitea_runtime.node_recovery_control_outbox",
+		"elitea_runtime.node_recovery_audit",
+		"elitea_runtime.original_code_visits",
+		"elitea_runtime.original_code_intents",
+		"elitea_runtime.original_code_owner_receipts",
+		"elitea_runtime.code_workspace_snapshots",
+		"elitea_runtime.original_code_broker_bindings",
+		"elitea_runtime.code_debug_artifacts",
+		"elitea_runtime.execution_saved_child_scopes",
+		"elitea_runtime.execution_saved_child_definitions",
+		"elitea_runtime.execution_saved_child_captures",
+		"elitea_runtime.execution_http_effects",
+	} {
+		var rows int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM "+table+" WHERE execution_id=$1", execution).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		counts[table] = rows
+	}
+	for _, table := range []string{"elitea_runtime.execution_captured_definitions", "elitea_runtime.execution_definition_source_refs"} {
+		var rows int
+		if err := pool.QueryRow(ctx, "SELECT count(*) FROM "+table+" WHERE resource_project_id=$1", projectID).Scan(&rows); err != nil {
+			t.Fatal(err)
+		}
+		counts[table] = rows
 	}
 	return counts
 }

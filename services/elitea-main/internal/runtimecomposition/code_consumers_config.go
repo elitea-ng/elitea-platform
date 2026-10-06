@@ -42,12 +42,12 @@ func codeConsumerFlag(lookup LookupEnv, feature, materialName string) (bool, err
 	flag, _ := lookup("ELITEA_RUNTIME_CODE_" + feature + "_ENABLED")
 	if flag == "" || flag == "false" {
 		if raw, _ := lookup(materialName); raw != "" {
-			return false, errors.New("Code consumer settings require explicit enablement")
+			return false, errors.New("code consumer settings require explicit enablement")
 		}
 		return false, nil
 	}
 	if flag != "true" {
-		return false, errors.New("Code consumer enablement must be true or false")
+		return false, errors.New("code consumer enablement must be true or false")
 	}
 	return true, nil
 }
@@ -66,7 +66,7 @@ func codeConsumerConfigFromEnv(lookup LookupEnv, owner *CodeOwnerConfig) (*CodeW
 		return nil, nil, nil, err
 	}
 	if (workspaceEnabled || platformEnabled || debugEnabled) && owner == nil {
-		return nil, nil, nil, errors.New("Code consumers require original Code owner composition")
+		return nil, nil, nil, errors.New("code consumers require original Code owner composition")
 	}
 	var workspace *CodeWorkspaceConfig
 	var platform *CodePlatformDeploymentConfig
@@ -76,7 +76,7 @@ func codeConsumerConfigFromEnv(lookup LookupEnv, owner *CodeOwnerConfig) (*CodeW
 		workspace = new(CodeWorkspaceConfig)
 		if code.Decode([]byte(raw), workspace, codeConsumerConfigLimit) != nil ||
 			!codeWorkspaceConfigFields([]byte(raw)) || workspace.Validate() != nil {
-			return nil, nil, nil, errors.New("Code workspace operator configuration is invalid")
+			return nil, nil, nil, errors.New("code workspace operator configuration is invalid")
 		}
 	}
 	if platformEnabled {
@@ -84,14 +84,14 @@ func codeConsumerConfigFromEnv(lookup LookupEnv, owner *CodeOwnerConfig) (*CodeW
 		platform = new(CodePlatformDeploymentConfig)
 		if code.Decode([]byte(raw), platform, codeConsumerConfigLimit) != nil ||
 			!codePlatformConfigFields([]byte(raw)) || platform.Validate() != nil {
-			return nil, nil, nil, errors.New("Code platform operator configuration is invalid")
+			return nil, nil, nil, errors.New("code platform operator configuration is invalid")
 		}
 	}
 	if debugEnabled {
 		path, _ := lookup(CodeDebugAgentStateDSNFileEnv)
 		debug = &CodeDebugArtifactsConfig{AgentStateDSNFile: path}
 		if debug.Validate() != nil {
-			return nil, nil, nil, errors.New("Code debug AgentState material path is invalid")
+			return nil, nil, nil, errors.New("code debug AgentState material path is invalid")
 		}
 	}
 	return workspace, platform, debug, nil
@@ -127,7 +127,7 @@ func codePlatformConfigFields(raw []byte) bool {
 
 func (c CodeWorkspaceConfig) Validate() error {
 	if c.Revision != 1 || len(c.RepositoryCapabilities) != 1 || c.RepositoryCapabilities[0] != "github" || c.Policy.Validate() != nil {
-		return errors.New("Code workspace capability or policy is invalid")
+		return errors.New("code workspace capability or policy is invalid")
 	}
 	_, err := c.egressPolicy()
 	return err
@@ -135,7 +135,7 @@ func (c CodeWorkspaceConfig) Validate() error {
 
 func (c CodeWorkspaceConfig) egressPolicy() (*egresslib.Allowlist, error) {
 	if len(c.EgressAllowlist) < 1 || len(c.EgressAllowlist) > 16 {
-		return nil, errors.New("Code workspace requires bounded exact egress entries")
+		return nil, errors.New("code workspace requires bounded exact egress entries")
 	}
 	seen := make(map[string]bool, len(c.EgressAllowlist))
 	for _, raw := range c.EgressAllowlist {
@@ -147,7 +147,7 @@ func (c CodeWorkspaceConfig) egressPolicy() (*egresslib.Allowlist, error) {
 			splitErr != nil || portErr != nil || number == 0 || strconv.FormatUint(number, 10) != port ||
 			urlErr != nil || origin.Host != raw || origin.User != nil || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" ||
 			!codeRepositoryHost(host) {
-			return nil, errors.New("Code workspace egress requires canonical exact host and port entries")
+			return nil, errors.New("code workspace egress requires canonical exact host and port entries")
 		}
 		seen[raw] = true
 	}
@@ -197,7 +197,7 @@ func (c CodeWorkspaceConfig) OpenCapabilities() (*storage.CodeRepositoryCapabili
 
 func (c CodePlatformDeploymentConfig) Validate() error {
 	if c.Revision != 1 || !validPrivateConfigPath(c.ContentKeysFile) {
-		return errors.New("Code platform revision or material path is invalid")
+		return errors.New("code platform revision or material path is invalid")
 	}
 	_, err := storage.NewCodeBrokerPolicies(c.BrokerPolicies)
 	return err
@@ -205,7 +205,7 @@ func (c CodePlatformDeploymentConfig) Validate() error {
 
 func (c CodeDebugArtifactsConfig) Validate() error {
 	if !validPrivateConfigPath(c.AgentStateDSNFile) {
-		return errors.New("Code debug AgentState material path is invalid")
+		return errors.New("code debug AgentState material path is invalid")
 	}
 	return nil
 }
@@ -215,7 +215,7 @@ func validateCodeConsumerConfig(c Config) error {
 		return nil
 	}
 	if c.CodeOwnerRecovery == nil || !c.Enabled || !c.AgentExecutionDispatchEnabled {
-		return errors.New("Code consumers require active Agent dispatch and original Code owner composition")
+		return errors.New("code consumers require active Agent dispatch and original Code owner composition")
 	}
 	if c.CodeWorkspace != nil {
 		if err := c.CodeWorkspace.Validate(); err != nil {
@@ -240,7 +240,7 @@ func validateCodeConsumerConfig(c Config) error {
 		}
 		for _, path := range paths {
 			if c.CodePlatform.ContentKeysFile == path {
-				return errors.New("Code platform content keys require separate private material")
+				return errors.New("code platform content keys require separate private material")
 			}
 		}
 	}

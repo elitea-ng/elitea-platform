@@ -18,7 +18,7 @@ type PostgresCodeDebugAuthority struct{ agentstate *pgxpool.Pool }
 
 func NewPostgresCodeDebugAuthority(agentstate *pgxpool.Pool) (*PostgresCodeDebugAuthority, error) {
 	if agentstate == nil {
-		return nil, errors.New("Code debug writer database is required")
+		return nil, errors.New("code debug writer database is required")
 	}
 	return &PostgresCodeDebugAuthority{agentstate: agentstate}, nil
 }

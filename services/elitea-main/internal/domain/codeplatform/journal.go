@@ -11,10 +11,10 @@ import (
 )
 
 var (
-	ErrUnauthorized = errors.New("Code platform authority refused")
-	ErrUnavailable  = errors.New("Code platform dependency unavailable")
-	ErrUnknown      = errors.New("Code platform effect requires reconciliation")
-	ErrConflict     = errors.New("Code platform immutable identity conflicts")
+	ErrUnauthorized = errors.New("code platform authority refused")
+	ErrUnavailable  = errors.New("code platform dependency unavailable")
+	ErrUnknown      = errors.New("code platform effect requires reconciliation")
+	ErrConflict     = errors.New("code platform immutable identity conflicts")
 )
 
 func jsonResource(request Request) ([]byte, error) { return json.Marshal(request.Resource) }

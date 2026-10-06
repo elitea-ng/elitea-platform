@@ -25,15 +25,15 @@ import (
 
 // ErrCodePlatformNotReady is a verified read-only admission observation.
 // It never represents an HTTP refusal, a missing lease, or runtime authority.
-var ErrCodePlatformNotReady = errors.New("Code platform runtime is not ready")
+var ErrCodePlatformNotReady = errors.New("code platform runtime is not ready")
 
 // ErrCodePlatformCompleted is an authenticated read-only completion observation.
 // It carries no runtime authority, execution result, or publication permission.
-var ErrCodePlatformCompleted = errors.New("Code platform runtime is completed")
+var ErrCodePlatformCompleted = errors.New("code platform runtime is completed")
 
 // ErrCodePlatformCompleting observes a stopped runtime awaiting its Submit receipt.
 // It grants no runtime authority, execution result, or publication permission.
-var ErrCodePlatformCompleting = errors.New("Code platform runtime is completing")
+var ErrCodePlatformCompleting = errors.New("code platform runtime is completing")
 
 // CodeOwnerGrantSigner owns a copied key and one configured Main certificate identity.
 // It signs no ordinary invocation, sandbox execution, content or checkpoint grants.
@@ -223,7 +223,7 @@ func (c *CodeOwnerClient) Read(ctx context.Context, claims code.GrantClaims, gra
 
 // boundedCodeOwnerPost is private: callers below choose fixed purpose-specific routes.
 // No retry, redirect, caller origin, query or automatic credential forwarding is exposed.
-func boundedCodeOwnerPost(ctx context.Context, endpoint codeOwnerEndpoint, path string, body []byte, max int, deadline time.Duration) ([]byte, error) {
+func boundedCodeOwnerPost(ctx context.Context, endpoint codeOwnerEndpoint, path string, body []byte, max int, deadline time.Duration) (raw []byte, err error) {
 	limited, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
 	request, err := http.NewRequestWithContext(limited, http.MethodPost, endpoint.origin+path, bytes.NewReader(body))
@@ -239,12 +239,16 @@ func boundedCodeOwnerPost(ctx context.Context, endpoint codeOwnerEndpoint, path 
 		}
 		return nil, code.ErrRejected
 	}
-	defer response.Body.Close()
+	defer func() {
+		if closeErr := response.Body.Close(); closeErr != nil && err == nil {
+			raw, err = nil, code.ErrRejected
+		}
+	}()
 	media, params, err := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if err != nil || media != "application/json" || len(params) != 0 || response.StatusCode != http.StatusOK || response.ContentLength > int64(max) || response.Header.Get("Content-Encoding") != "" {
 		return nil, code.ErrRejected
 	}
-	raw, err := io.ReadAll(io.LimitReader(response.Body, int64(max)+1))
+	raw, err = io.ReadAll(io.LimitReader(response.Body, int64(max)+1))
 	if err != nil || len(raw) > max || response.ContentLength >= 0 && int64(len(raw)) != response.ContentLength {
 		return nil, code.ErrRejected
 	}

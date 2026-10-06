@@ -196,4 +196,4 @@ export {
 } from './model/canvasFileTransfer';
 
 export { currentStaticPause, staticPauseKey, staticContinuationBody, consumeStaticPause, STATIC_CONTINUATION_CONTRACT } from './lib/staticPipelinePause';
-export type { StaticPauseBinding } from './lib/staticPipelinePause';
+export type { StaticPauseBinding } from './lib/staticPipelinePause.types';

@@ -1,0 +1,11 @@
+(function (global) {
+  function inner() { return global.thing(); }
+  global.api = { run() { return inner(); } };
+})(this);
+
+;(() => { setup(); })();
+
+function* gen() { yield 1; }
+async function* agen() { yield* gen(); }
+
+export default async function () { return gen(); }

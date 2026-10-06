@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -60,7 +61,7 @@ func TestCodeBrokerNoEffectFactsRequireRegistrationAndNoObservation(t *testing.T
 			t.Fatal("partial or uncertain call proved whole-Code no effect")
 		}
 	}
-	if _, err := (*CodeBrokerPolicies)(nil).ReadOriginalCodeBrokerEffects(nil, nil, "", 0, "", "", ""); err == nil {
+	if _, err := (*CodeBrokerPolicies)(nil).ReadOriginalCodeBrokerEffects(context.Background(), nil, "", 0, "", "", ""); err == nil {
 		t.Fatal("missing reader proved no effect")
 	}
 }

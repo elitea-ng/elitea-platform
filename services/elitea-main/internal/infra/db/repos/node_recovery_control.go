@@ -236,12 +236,15 @@ VALUES($1,$2,$3,'APPLIED',$4,$5,$6,$7)`, claim.ExecutionID, int64(claim.Generati
 			}
 		}
 		outcome = storage.NodeRecoveryAckOutcome{Schema: "elitea.pipeline.node-recovery-ack.v1", ExecutionID: claim.ExecutionID, Generation: claim.Generation, RequestID: ack.RequestID, AppliedRevision: ack.AppliedRevision, Replay: replay}
-		if branch.status == "RESUMED" {
+		switch branch.status {
+		case "RESUMED":
 			outcome.RecoveryResumeAuthorized = true
 			outcome.Resumption = &storage.NodeRecoveryResumption{Schema: "elitea.pipeline.node-recovery-resumption.v1", ExecutionID: claim.ExecutionID, Generation: claim.Generation, RequestID: ack.RequestID, ActivationID: ack.ActivationID, JournalRevision: ack.AppliedRevision, InputBundleID: scope.bundleID, InputManifestSHA256: hex.EncodeToString(scope.manifestDigest), ReceiptSHA256: ack.ReceiptSHA256, ClaimID: claim.ClaimID, FailureRouteContinuation: ack.FailureRouteContinuation}
-		} else if branch.status == "STOPPED" {
+
+		case "STOPPED":
 			outcome.TerminalSettlementAuthorized = true
 			outcome.TerminalAuthorization = &storage.NodeRecoveryTerminalSettlement{Schema: "elitea.pipeline.node-recovery-terminal-settlement.v1", ExecutionID: claim.ExecutionID, Generation: claim.Generation, RequestID: ack.RequestID, ActivationID: ack.ActivationID, JournalRevision: ack.AppliedRevision, ReceiptSHA256: ack.ReceiptSHA256, ClaimID: claim.ClaimID, StopReason: *ack.TerminalStopReason}
+
 		}
 		return nil
 	})

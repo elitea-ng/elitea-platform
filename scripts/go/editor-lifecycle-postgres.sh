@@ -21,14 +21,15 @@ if [ -z "$artifact_dir" ]; then
 fi
 mkdir -p "$artifact_dir"
 log="$artifact_dir/editor-postgres.jsonl"
+stderr_log="$artifact_dir/editor-postgres.stderr.log"
 cd "$repo_root/services/elitea-main"
 if go test -p 2 -race -json -count=1 -timeout=5m ./internal/infra/db/repos \
-    -run '^(TestEditorLifecycle.*|TestEditorEmptyStopPostgres)$' >"$log" 2>&1; then
+    -run '^(TestEditorLifecycle.*|TestEditorEmptyStopPostgres)$' >"$log" 2>"$stderr_log"; then
     python3 "$script_dir/editor-lifecycle-gate.py" "$log" \
         >"$artifact_dir/summary.json"
     cat "$artifact_dir/summary.json"
 else
     status=$?
-    echo "editor lifecycle: Go tests failed; see ${log}" >&2
+    echo "editor lifecycle: Go tests failed; see ${log} and ${stderr_log}" >&2
     exit "$status"
 fi

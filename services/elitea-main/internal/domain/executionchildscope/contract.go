@@ -211,7 +211,7 @@ func ValidNodeID(node string) bool {
 		return false
 	}
 	for _, ch := range node {
-		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-' || ch == '.' || ch == ':') {
+		if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') && ch != '_' && ch != '-' && ch != '.' && ch != ':' {
 			return false
 		}
 	}
@@ -250,7 +250,7 @@ func ValidDigest(value string) bool {
 		return false
 	}
 	for _, ch := range value {
-		if !(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f') {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
 			return false
 		}
 	}

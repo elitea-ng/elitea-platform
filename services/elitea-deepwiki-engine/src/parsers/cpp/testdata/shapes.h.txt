@@ -1,0 +1,96 @@
+#pragma once
+#include <memory>
+#include <vector>
+#include "base.hpp"
+#define SHAPES_API
+#define SQUARE(x) ((x) * (x))
+#define MAX_SHAPES 64
+
+namespace geo {
+namespace detail { struct Impl; }
+
+/// A shape.
+class Shape {
+public:
+    Shape() = default;
+    virtual ~Shape();
+    virtual double area() const = 0;
+    virtual void draw(int level) const;
+    Shape& operator=(const Shape& other);
+    bool operator==(const Shape& other) const;
+protected:
+    int id_;
+    detail::Impl* impl_;
+};
+
+class Circle : public Shape, private Named {
+public:
+    explicit Circle(double r);
+    double area() const override;
+    void draw(int level) const override final;
+    static Circle unit();
+private:
+    double radius_;
+    std::vector<Point> points_;
+    std::unique_ptr<Shape> child_;
+    Point* origin_, *extent_;
+    Point& anchor_;
+    int grid_[4][4];
+    unsigned flags : 3;
+};
+
+template <typename T, int N = 3>
+class Array {
+public:
+    T& operator[](int i) { return data_[i]; }
+    const T& get(int i) const;
+    template <typename U> void assign(const U& u);
+    int size() const { return N; }
+private:
+    T data_[N];
+    std::vector<T> extra_;
+};
+
+template <>
+class Array<bool, 1> {
+    bool bit_;
+};
+
+template <typename T>
+class Array<T*, 2> {
+    T* ptr_;
+};
+
+template <typename Derived>
+struct Crtp {
+    void run() { static_cast<Derived*>(this)->step(); }
+};
+
+struct Walker : Crtp<Walker> {
+    void step();
+};
+
+using ShapePtr = std::shared_ptr<Shape>;
+typedef std::vector<ShapePtr> ShapeList;
+typedef void (*Callback)(int, Shape*);
+typedef struct { int x, y; } Coord;
+enum class Color : unsigned char { Red, Green = 2, Blue };
+enum { kAnon = 1, kOther };
+
+extern const int kLimit;
+constexpr int kSize = 16;
+const char* const kName = "geo";
+
+inline namespace v2 {
+int version();
+}
+
+}  // namespace geo
+
+namespace a::b::c {
+struct Deep { int v; };
+}
+
+namespace {
+int hidden() { return 1; }
+}

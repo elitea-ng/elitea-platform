@@ -1,0 +1,9 @@
+namespace Geometry.Unicode;
+
+/// <summary>Größe — 形状 😀</summary>
+public class Größe : IShape
+{
+    private string _ä = "ünïcödé 😀";
+    public double Area() => Calc.Run("日本語");
+    public Owner Owner { get; set; }
+}

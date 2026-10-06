@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.1",
+  "client_contract": "1.2",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -3158,6 +3158,17 @@
                       },
                       "open": true
                     },
+                    "pause": {
+                      "type": "object",
+                      "properties": {
+                        "guardrail_type": {
+                          "type": "string"
+                        },
+                        "interrupt_id": {
+                          "type": "string"
+                        }
+                      }
+                    },
                     "response_metadata": {
                       "type": "object",
                       "open": true
@@ -3485,6 +3496,17 @@
                               }
                             },
                             "open": true
+                          },
+                          "pause": {
+                            "type": "object",
+                            "properties": {
+                              "guardrail_type": {
+                                "type": "string"
+                              },
+                              "interrupt_id": {
+                                "type": "string"
+                              }
+                            }
                           },
                           "response_metadata": {
                             "type": "object",
@@ -5313,6 +5335,177 @@
                   "type": "string"
                 },
                 "error_description": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "GET /social/author": {
+      "operation_id": "getCurrentAuthor",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "avatar",
+                "description",
+                "email",
+                "id",
+                "name",
+                "personal_project_id"
+              ],
+              "properties": {
+                "avatar": {
+                  "type": "string"
+                },
+                "default_context_management": {
+                  "type": "object",
+                  "properties": {
+                    "budget_mode": {
+                      "type": "string",
+                      "enum": [
+                        "balanced",
+                        "full"
+                      ]
+                    },
+                    "enable_context_editing": {
+                      "type": "boolean"
+                    },
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "max_context_tokens": {
+                      "type": "integer",
+                      "minimum": 1000
+                    },
+                    "preserve_recent_messages": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 99
+                    }
+                  }
+                },
+                "default_summarization": {
+                  "type": "object",
+                  "properties": {
+                    "enable_summarization": {
+                      "type": "boolean"
+                    },
+                    "min_messages_for_summary": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "summary_instructions": {
+                      "type": "string"
+                    },
+                    "summary_model_name": {
+                      "type": "string"
+                    },
+                    "summary_model_project_id": {
+                      "type": "integer"
+                    },
+                    "summary_trigger_ratio": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1,
+                      "exclusive_minimum": true
+                    },
+                    "target_summary_tokens": {
+                      "type": "integer",
+                      "minimum": 100
+                    }
+                  }
+                },
+                "description": {
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "personal_project_id": {
+                  "type": "string"
+                },
+                "personalization": {
+                  "nullable": true
+                },
+                "provider_refs": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
                   "type": "string"
                 }
               }
@@ -8531,6 +8724,20 @@
               },
               "open": true
             },
+            "pause": {
+              "type": "object",
+              "nullable": true,
+              "properties": {
+                "guardrail_type": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "interrupt_id": {
+                  "type": "string",
+                  "nullable": true
+                }
+              }
+            },
             "timestamp_finish": {
               "type": "string",
               "nullable": true
@@ -8655,6 +8862,20 @@
               },
               "open": true
             },
+            "pause": {
+              "type": "object",
+              "nullable": true,
+              "properties": {
+                "guardrail_type": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "interrupt_id": {
+                  "type": "string",
+                  "nullable": true
+                }
+              }
+            },
             "timestamp_finish": {
               "type": "string",
               "nullable": true
@@ -8776,6 +8997,144 @@
       },
       "open": true
     },
+    "agent_tool_paused": {
+      "type": "object",
+      "required": [
+        "response_metadata",
+        "type"
+      ],
+      "properties": {
+        "content": {
+          "nullable": true
+        },
+        "created_at": {
+          "type": "string",
+          "nullable": true
+        },
+        "message_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "response_metadata": {
+          "type": "object",
+          "required": [
+            "tool_name",
+            "tool_run_id"
+          ],
+          "properties": {
+            "error": {
+              "type": "string",
+              "nullable": true
+            },
+            "finish_reason": {
+              "type": "string",
+              "nullable": true
+            },
+            "metadata": {
+              "type": "object",
+              "properties": {
+                "display_name": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "original_name": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "parent_agent_call_id": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "parent_agent_name": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "toolkit_name": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "toolkit_type": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "open": true
+            },
+            "pause": {
+              "type": "object",
+              "nullable": true,
+              "properties": {
+                "guardrail_type": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "interrupt_id": {
+                  "type": "string",
+                  "nullable": true
+                }
+              }
+            },
+            "timestamp_finish": {
+              "type": "string",
+              "nullable": true
+            },
+            "timestamp_start": {
+              "type": "string",
+              "nullable": true
+            },
+            "tool_inputs": {
+              "nullable": true
+            },
+            "tool_meta": {
+              "type": "object",
+              "nullable": true,
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "nullable": true
+                }
+              },
+              "open": true
+            },
+            "tool_name": {
+              "type": "string"
+            },
+            "tool_output": {
+              "type": "string",
+              "nullable": true
+            },
+            "tool_output_chunks": {
+              "type": "object",
+              "nullable": true,
+              "required": [
+                "tool_output_sha256",
+                "total"
+              ],
+              "properties": {
+                "tool_output_sha256": {
+                  "type": "string"
+                },
+                "total": {
+                  "type": "integer"
+                }
+              }
+            },
+            "tool_run_id": {
+              "type": "string"
+            }
+          },
+          "open": true
+        },
+        "stream_id": {
+          "type": "string",
+          "nullable": true
+        },
+        "type": {
+          "type": "string"
+        }
+      },
+      "open": true
+    },
     "agent_tool_start": {
       "type": "object",
       "required": [
@@ -8838,6 +9197,20 @@
                 }
               },
               "open": true
+            },
+            "pause": {
+              "type": "object",
+              "nullable": true,
+              "properties": {
+                "guardrail_type": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "interrupt_id": {
+                  "type": "string",
+                  "nullable": true
+                }
+              }
             },
             "timestamp_finish": {
               "type": "string",

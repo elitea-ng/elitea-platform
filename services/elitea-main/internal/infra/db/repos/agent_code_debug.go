@@ -92,29 +92,29 @@ func validateCurrentAgentCodeDebugDelta(ctx context.Context, tx sqlExecutor, del
 			continue
 		}
 		if p.ExecutionID != frame.Fence.ExecutionID || p.Generation != strconv.FormatUint(frame.Fence.Generation, 10) || call.key != p.runID() || call.entry["run_id"] != call.key || call.entry["tool_run_id"] != call.key || call.entry["tool_name"] != p.NodeID+" / debug export" || call.entry["tool_output"] != nil || call.entry["error"] != nil || currentAgentMap(call.entry, "tool_meta")["name"] != p.NodeID+" / debug export" || call.entry["finish_reason"] != "stop" {
-			return errors.New("Code debug trace identity conflicts")
+			return errors.New("code debug trace identity conflicts")
 		}
 		start, finish := parseCurrentAgentTime(call.entry["timestamp_start"]), parseCurrentAgentTime(call.entry["timestamp_finish"])
 		if start == nil || finish == nil || !finish.Equal(*start) {
-			return errors.New("Code debug completion time conflicts")
+			return errors.New("code debug completion time conflicts")
 		}
 		if input, ok := call.entry["tool_inputs"].(map[string]any); !ok || len(input) != 0 {
-			return errors.New("Code debug trace contains inputs")
+			return errors.New("code debug trace contains inputs")
 		}
 		if p.Artifact == nil {
 			continue
 		}
 		if strconv.FormatInt(p.Artifact.ProjectID, 10) != frame.ResourceProjectID {
-			return errors.New("Code debug artifact project conflicts")
+			return errors.New("code debug artifact project conflicts")
 		}
 		var key string
 		var raw []byte
 		if err = tx.QueryRow(ctx, `SELECT object_key,admission_json FROM elitea_runtime.code_debug_artifacts WHERE tenant_id=$1 AND project_id=$2 AND execution_id=$3 AND original_generation=$4 AND original_visit_id=$5 AND original_visit_revision=$6 AND original_visit_digest=$7 AND state='committed'`, frame.TenantID, p.Artifact.ProjectID, p.ExecutionID, int64(frame.Fence.Generation), codeDebugBytes(p.OriginalVisit.VisitID), int64(p.OriginalVisit.Revision), codeDebugBytes(p.OriginalVisit.DigestSHA256)).Scan(&key, &raw); err != nil {
-			return errors.New("Code debug receipt is unavailable")
+			return errors.New("code debug receipt is unavailable")
 		}
 		var a storage.CodeDebugAdmission
 		if json.Unmarshal(raw, &a) != nil || storage.ValidateCodeDebugAdmission(a) != nil || a.OriginalVisit != p.OriginalVisit || a.Attempt != p.Attempt || a.ActivationID != p.ActivationID || a.NodeID != p.NodeID || a.RequestSHA256 != p.RequestSHA256 || a.SnapshotSHA256 != p.Artifact.SHA256 || a.ByteLength != p.Artifact.ByteLength || key != p.Artifact.Name {
-			return errors.New("Code debug artifact conflicts with committed receipt")
+			return errors.New("code debug artifact conflicts with committed receipt")
 		}
 	}
 	return nil
@@ -132,17 +132,17 @@ func mergeCurrentAgentCodeDebug(previous, incoming map[string]any) (map[string]a
 		return incoming, nil
 	}
 	if !b || !a && previous != nil {
-		return nil, errors.New("Code debug trace cannot change kind")
+		return nil, errors.New("code debug trace cannot change kind")
 	}
 	if !a {
 		return incoming, nil
 	}
 	if old.ExecutionID != next.ExecutionID || old.Generation != next.Generation || old.OriginalVisit != next.OriginalVisit || old.Attempt != next.Attempt || old.NodeID != next.NodeID || old.ActivationID != next.ActivationID || old.RequestSHA256 != next.RequestSHA256 {
-		return nil, errors.New("Code debug replay identity conflicts")
+		return nil, errors.New("code debug replay identity conflicts")
 	}
 	if old.Artifact != nil {
 		if next.Artifact != nil && !reflect.DeepEqual(old.Artifact, next.Artifact) {
-			return nil, errors.New("Code debug artifact replay conflicts")
+			return nil, errors.New("code debug artifact replay conflicts")
 		}
 		return previous, nil
 	}

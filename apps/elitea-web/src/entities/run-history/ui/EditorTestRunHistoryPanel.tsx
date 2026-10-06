@@ -27,7 +27,7 @@ import { t } from "@/shared/i18n";
 import { NoResultsMessage } from "@/shared/ui/NoResultsMessage";
 
 import { EditorTestRunHistoryList, editorTestRunKey } from "./RunHistoryList";
-import type { RunHistoryPanelProps } from "./RunHistoryPanel";
+import type { RunHistoryPanelProps } from "./RunHistoryPanel.types";
 import { RunHistoryTrace } from "./RunHistoryTrace";
 import { HistoryLoading, PageControls } from "./EditorTestRunHistoryControls";
 

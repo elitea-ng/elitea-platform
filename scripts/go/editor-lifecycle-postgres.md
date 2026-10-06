@@ -18,7 +18,9 @@ It enables the race detector and records Go JSON events.
 The JSON gate requires all thirteen acceptance scenarios and both fixture parents to pass exactly once.
 Any failure, skip, missing scenario, or missing package result fails the job.
 The summary reports nine lifecycle scenarios and four empty Stop scenarios separately.
-The job uploads the log and measured summary.
+The runner stores compiler and download diagnostics in a separate stderr log.
+The JSON gate reads only Go test events.
+The job uploads both logs and the measured summary.
 
 The broad workspace job retains its PostgreSQL 16 harness.
 Its editor skips refer to the separate required job in the skip ledger.

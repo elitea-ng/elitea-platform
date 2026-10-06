@@ -903,3 +903,7 @@ This transition must preserve retained execution state and verify backup restora
 Main's updated Form sign-in default also requires an explicit operator setting for rehearsals that use Form authentication.
 The conflict-resolution checks do not change live services or the migration ledger.
 Code acceptance remains open until the replacement cohort passes its remaining runtime gates.
+
+Main advances again to `7ec27cd07fe0c01f32da6c8630f0ae2f169e959b` after the first reconciliation.
+The second merge and failed CI repairs are recorded in [the repair mapping](source-mapping/code-ci-main-20261006.md).
+Keep the Code delivery gate open until the composed source and replacement CI head pass.

@@ -1,0 +1,10 @@
+package com.acme.api;
+
+import java.util.List;
+
+public class Owner {
+    private String name;
+    private List<Pet> pets;
+    public void rename(String n) { this.name = n; }
+    public static class Pet { String kind; }
+}

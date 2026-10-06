@@ -1,5 +1,4 @@
 /** Private Gate 5a/5c authoring contracts. Runtime admission stays separate. */
-export type GraphExtensionType = 'map' | 'split_out' | 'aggregate';
 export type ExtensionRecord = Readonly<Record<string, unknown>>;
 export interface ExtensionSettingsProps {
   readonly node: ExtensionRecord;

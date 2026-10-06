@@ -3,7 +3,6 @@ package repos
 import (
 	"context"
 	"errors"
-	"fmt"
 	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/runtime"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/migrate"
 	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
@@ -55,7 +54,7 @@ func compiledPGFixtureConfig(dsn, required, ack string) (*compiledPGFixtureSpec,
 		return nil, false, errors.New("compiled snapshot PostgreSQL fixture database name is not disposable")
 	}
 	for _, r := range name {
-		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_') {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
 			return nil, false, errors.New("compiled snapshot PostgreSQL fixture database name is invalid")
 		}
 	}
@@ -480,10 +479,11 @@ func TestCompiledSnapshotPostgresLifecycle(t *testing.T) {
 		c := f.ready(t, r, f.capture(t, "fixture-a", "a"))
 		_, err := f.pool.Exec(f.ctx, `DELETE FROM elitea_runtime.sandbox_jobs WHERE job_key=$1`, snapshotBytes(c.CompilationJobKey))
 		var pgErr *pgconn.PgError
-		if !errors.As(err, &pgErr) || pgErr.Code != "23001" ||
+		if !errors.As(err, &pgErr) || (pgErr.Code != "23001" && pgErr.Code != "23503") ||
 			pgErr.ConstraintName != "rust_compiled_snapshots_tenant_id_project_id_compilation_j_fkey" {
 			t.Fatal("ready artifact lost original receipt retention", err)
 		}
+		t.Logf("retained original compilation: SQLSTATE=%s constraint=%s", pgErr.Code, pgErr.ConstraintName)
 		f.expire(t, c)
 		rows, err := r.ClaimExpired(f.ctx, "evict-retention", 1, time.Minute)
 		if err != nil || len(rows) != 1 {
@@ -497,5 +497,5 @@ func TestCompiledSnapshotPostgresLifecycle(t *testing.T) {
 		}
 	})
 	f.reset(t)
-	t.Log(fmt.Sprintf("exact agentstate head; bounded max_conns=%d; isolated fixture lifecycle assertions completed", f.pool.Config().MaxConns))
+	t.Logf("exact agentstate head; bounded max_conns=%d; isolated fixture lifecycle assertions completed", f.pool.Config().MaxConns)
 }

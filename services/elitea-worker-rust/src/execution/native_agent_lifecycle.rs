@@ -274,7 +274,7 @@ where
                     error_code = error.code().as_str(),
                     "native agent requires connection authorization; user notice published"
                 );
-                return Box::pin(finish_after_stream(
+                return finish_after_stream(
                     run,
                     None,
                     FreshAgentTerminalSelection::Completed,
@@ -282,7 +282,7 @@ where
                     retirer,
                     clock,
                     terminal_recovery,
-                ))
+                )
                 .await;
             }
             tracing::error!(
@@ -581,7 +581,7 @@ where
                     "native agent completion selection failed"
                 );
                 failure = Some(assembly_failure(&error));
-                return Box::pin(finish_after_stream(
+                return finish_after_stream(
                     run,
                     failure,
                     FreshAgentTerminalSelection::Completed,
@@ -589,7 +589,7 @@ where
                     retirer,
                     clock,
                     terminal_recovery,
-                ))
+                )
                 .await;
             }
             Err(ClaimLeaseError::Cancelled(_)) => {
@@ -620,7 +620,7 @@ where
                     "native agent completion projection failed"
                 );
                 failure = Some(projection_failure(&error));
-                return Box::pin(finish_after_stream(
+                return finish_after_stream(
                     run,
                     failure,
                     FreshAgentTerminalSelection::Completed,
@@ -628,7 +628,7 @@ where
                     retirer,
                     clock,
                     terminal_recovery,
-                ))
+                )
                 .await;
             }
         };
@@ -643,7 +643,7 @@ where
         }
     }
 
-    Box::pin(finish_after_stream(
+    finish_after_stream(
         run,
         failure,
         successful_terminal,
@@ -651,7 +651,7 @@ where
         retirer,
         clock,
         terminal_recovery,
-    ))
+    )
     .await
 }
 
@@ -1143,7 +1143,36 @@ where
     BatchPublication::Acknowledged
 }
 
-async fn finish_after_stream<C, R, RC, K>(
+// Keep terminal-future construction out of the active stream poll frame.
+// Caller boxing retains the construction temporary in that same stack frame.
+#[inline(never)]
+fn finish_after_stream<C, R, RC, K>(
+    run: CursorBoundAuthorizedAgentRun<C>,
+    failure: Option<RuntimeFailureKind>,
+    successful_terminal: FreshAgentTerminalSelection,
+    control: Arc<AgentControlClient<R>>,
+    retirer: Arc<RedisCommandRetirer<RC>>,
+    clock: Arc<K>,
+    terminal_recovery: AgentTerminalRecoveryConfig,
+) -> std::pin::Pin<Box<impl Future<Output = AgentAuthorizedLifecycleCompletion>>>
+where
+    C: AgentProgressConnector + AgentTerminalReplay,
+    R: ControlRpc + 'static,
+    RC: RedisRetirementClient + 'static,
+    K: UnixMillisClock,
+{
+    Box::pin(finish_after_stream_owned(
+        run,
+        failure,
+        successful_terminal,
+        control,
+        retirer,
+        clock,
+        terminal_recovery,
+    ))
+}
+
+async fn finish_after_stream_owned<C, R, RC, K>(
     run: CursorBoundAuthorizedAgentRun<C>,
     mut failure: Option<RuntimeFailureKind>,
     successful_terminal: FreshAgentTerminalSelection,
@@ -1238,7 +1267,7 @@ where
     RC: RedisRetirementClient + 'static,
     K: UnixMillisClock,
 {
-    Box::pin(finish_after_stream(
+    finish_after_stream(
         run,
         Some(failure),
         FreshAgentTerminalSelection::Completed,
@@ -1246,7 +1275,7 @@ where
         retirer,
         clock,
         terminal_recovery,
-    ))
+    )
     .await
 }
 

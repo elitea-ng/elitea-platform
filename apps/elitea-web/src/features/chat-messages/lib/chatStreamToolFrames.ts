@@ -1,7 +1,7 @@
 /**
  * lib/chatStreamToolFrames.ts — the tool-lifecycle family.
  *
- * Owns `agent_tool_start`/`agent_tool_end`/`agent_tool_error` and the
+ * Owns `agent_tool_start`/`agent_tool_end`/`agent_tool_error`/`agent_tool_paused` and the
  * `mcp_authorization_required` card, together with the toolkit-identity and
  * MCP-token-key helpers only these frames need, and `mcpSessionFromFrame` —
  * the one piece of this family a CALLER consumes (it is re-exported from
@@ -317,6 +317,32 @@ export function reduceToolFrame(
             ...(isError ? { isError: true } : {}),
             ended_at: assembled && !assembled.chunk.final ? action['ended_at'] : frame.response_metadata?.timestamp_finish ?? frame.created_at,
             created_at: frame.response_metadata?.timestamp_start ?? action['created_at'],
+            toolMeta: { ...action.toolMeta, ...metadata, ...hierarchy },
+          };
+        }),
+      });
+    }
+
+    // The call paused for the user (contract 1.2, #1066). It did not fail, so
+    // it settles like a reloaded trace step with no error: not an error badge,
+    // and not a spinner left behind once the turn hands over to the approval
+    // card. The continued run starts the call again under a new run id.
+    case SocketMessageType.AgentToolPaused: {
+      if (index === -1) return history;
+      const original = history[index];
+      const runId = frame.response_metadata?.tool_run_id;
+      if (!original || !runId) return history;
+      const current = withToolAction(original, frame, runId);
+      const metadata = toolMetadata(frame);
+      return replaceAt(history, index, {
+        toolActions: replaceToolAction(current, runId, (action) => {
+          const hierarchy = normalizeExecutionHierarchy(metadata, action, action.toolMeta);
+          return {
+            ...action,
+            ...hierarchy,
+            message: undefined,
+            status: action.status === ToolActionStatus.actionRequired ? action.status : ToolActionStatus.complete,
+            ended_at: frame.response_metadata?.timestamp_finish ?? frame.created_at,
             toolMeta: { ...action.toolMeta, ...metadata, ...hierarchy },
           };
         }),

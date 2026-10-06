@@ -230,7 +230,7 @@ func (capture *catalogCapture) saved(ctx context.Context, id [2]uint64, path str
 		if path != "" {
 			next = path + "/" + nodeID
 		}
-		if capture.blocked[path] || owned[nodeID] && !(path == "" && capture.rootOwnedNode == nodeID) {
+		if capture.blocked[path] || owned[nodeID] && (path != "" || capture.rootOwnedNode != nodeID) {
 			capture.blocked[next] = true
 		}
 		if err = capture.saved(ctx, child, next, depth+1); err != nil {

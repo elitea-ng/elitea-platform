@@ -1,0 +1,9 @@
+package com.acme.model;
+
+import com.acme.api.Measurable;
+
+public non-sealed class Square extends Shape<Square> implements Measurable {
+    @Override public double area() { return 1; }
+    @java.lang.Override public String name() { return "sq"; }
+    public double measure() { return area(); }
+}

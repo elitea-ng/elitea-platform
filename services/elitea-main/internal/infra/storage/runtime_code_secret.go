@@ -13,9 +13,9 @@ import (
 )
 
 var (
-	ErrCodeSecretSharingDenied = errors.New("Code personal secret sharing denied")
-	ErrCodeSecretNotFound      = errors.New("Code authorized secret not found")
-	ErrCodeSecretPolicyDenied  = errors.New("Code protected secret denied")
+	ErrCodeSecretSharingDenied = errors.New("code personal secret sharing denied")
+	ErrCodeSecretNotFound      = errors.New("code authorized secret not found")
+	ErrCodeSecretPolicyDenied  = errors.New("code protected secret denied")
 	codeSecretName             = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 )
 
@@ -45,7 +45,7 @@ type RuntimeCodeSecretService struct {
 
 func NewRuntimeCodeSecretService(authorizer AgentRuntimeContextAuthorizer, permissions auth.PermissionResolver, personal CodePersonalScope, vaults SecretVaultLoader, policy CodeSecretPolicy) (*RuntimeCodeSecretService, error) {
 	if authorizer == nil || permissions == nil || personal == nil || vaults == nil || policy == nil {
-		return nil, errors.New("Code secret dependencies are required")
+		return nil, errors.New("code secret dependencies are required")
 	}
 	return &RuntimeCodeSecretService{authorizer: authorizer, permissions: permissions, personal: personal, vaults: vaults, policy: policy}, nil
 }

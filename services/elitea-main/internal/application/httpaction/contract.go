@@ -245,7 +245,7 @@ func ValidDigest(s string) bool {
 		return false
 	}
 	for _, c := range []byte(s) {
-		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}
@@ -294,7 +294,7 @@ func (r *Request) Validate() error {
 			return ErrInvalid
 		}
 		for _, c := range []byte(r.IdempotencyKey) {
-			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("._:-", rune(c))) {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && !strings.ContainsRune("._:-", rune(c)) {
 				return ErrInvalid
 			}
 		}
@@ -358,7 +358,7 @@ func validMedia(v string) bool {
 			return false
 		}
 		for _, c := range []byte(part) {
-			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("!#$&^_.+-", rune(c))) {
+			if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && !strings.ContainsRune("!#$&^_.+-", rune(c)) {
 				return false
 			}
 		}
@@ -371,7 +371,7 @@ func validHeaderName(v string) bool {
 		return false
 	}
 	for _, c := range []byte(v) {
-		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || strings.ContainsRune("!#$%&'*+-.^_`|~", rune(c))) {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && !strings.ContainsRune("!#$%&'*+-.^_`|~", rune(c)) {
 			return false
 		}
 	}
@@ -495,7 +495,7 @@ func Project(r Request, status uint16, contentType string, body []byte, artifact
 		}
 		result.Data = Data{Kind: "json", Value: v}
 	case "text":
-		if !utf8.Valid(body) || !(strings.HasPrefix(media, "text/") || media == "application/json" || media == "application/xml" || strings.HasSuffix(media, "+json") || strings.HasSuffix(media, "+xml")) {
+		if !utf8.Valid(body) || (!strings.HasPrefix(media, "text/") && media != "application/json" && media != "application/xml" && !strings.HasSuffix(media, "+json") && !strings.HasSuffix(media, "+xml")) {
 			return nil, "invalid_response"
 		}
 		result.Data = Data{Kind: "text", Value: string(body)}

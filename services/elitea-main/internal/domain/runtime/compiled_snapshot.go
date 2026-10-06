@@ -45,7 +45,7 @@ func SnapshotDigest(v string) bool {
 		return false
 	}
 	for _, b := range []byte(v) {
-		if !(b >= '0' && b <= '9' || b >= 'a' && b <= 'f') {
+		if (b < '0' || b > '9') && (b < 'a' || b > 'f') {
 			return false
 		}
 	}
@@ -56,7 +56,7 @@ func snapshotIdentity(v string, policy bool) bool {
 		return false
 	}
 	for _, b := range []byte(v) {
-		if !(b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_' || b == '-' || policy && b == '.') {
+		if (b < 'a' || b > 'z') && (b < 'A' || b > 'Z') && (b < '0' || b > '9') && b != '_' && b != '-' && (!policy || b != '.') {
 			return false
 		}
 	}
@@ -66,7 +66,7 @@ func (b RustSnapshotBinding) Validate() error {
 	if b.Revision != 1 || b.ReusePolicy != "snapshot_v1" || !snapshotIdentity(b.TenantID, false) || b.ProjectID <= 0 || !snapshotIdentity(b.PolicyRevision, true) || b.CompilationImageDigest != b.ExecutionImageDigest || !strings.HasPrefix(b.CompilationImageDigest, "sha256:") || !SnapshotDigest(strings.TrimPrefix(b.CompilationImageDigest, "sha256:")) {
 		return ErrSnapshotInvalid
 	}
-	if !(b.Platform == "linux/arm64/gnu" && b.Target == "aarch64-unknown-linux-gnu" || b.Platform == "linux/amd64/gnu" && b.Target == "x86_64-unknown-linux-gnu") {
+	if (b.Platform != "linux/arm64/gnu" || b.Target != "aarch64-unknown-linux-gnu") && (b.Platform != "linux/amd64/gnu" || b.Target != "x86_64-unknown-linux-gnu") {
 		return ErrSnapshotInvalid
 	}
 	for _, v := range []string{b.BasePreparedRequestSHA256, b.SourceSHA256, b.CargoManifestSHA256, b.CargoLockSHA256, b.CargoConfigSHA256, b.VendorSHA256, b.ToolchainSHA256, b.AdapterSHA256, b.WrapperSHA256, b.CompilerFlagsSHA256} {
@@ -167,7 +167,7 @@ func (b RustSnapshotBinding) MatchPrepared(body []byte) (string, error) {
 		Timeout  uint64                     `json:"timeout_seconds"`
 		Bundle   string                     `json:"dependency_bundle_sha256"`
 	}
-	if json.Unmarshal(body, &request) != nil || !(request.Revision == 1 || request.Revision == 3) || request.Language != "rust" || request.Input == nil || len(request.Source) > 256*1024 || request.Timeout < 1 || request.Timeout > 3600 || request.Image != b.ExecutionImageDigest || request.Policy != b.PolicyRevision || SnapshotContentSHA256([]byte(request.Source)) != b.SourceSHA256 {
+	if json.Unmarshal(body, &request) != nil || (request.Revision != 1 && request.Revision != 3) || request.Language != "rust" || request.Input == nil || len(request.Source) > 256*1024 || request.Timeout < 1 || request.Timeout > 3600 || request.Image != b.ExecutionImageDigest || request.Policy != b.PolicyRevision || SnapshotContentSHA256([]byte(request.Source)) != b.SourceSHA256 {
 		return "", ErrSnapshotInvalid
 	}
 	if request.Revision == 1 && request.Bundle != "" || request.Revision == 3 && !SnapshotDigest(request.Bundle) {

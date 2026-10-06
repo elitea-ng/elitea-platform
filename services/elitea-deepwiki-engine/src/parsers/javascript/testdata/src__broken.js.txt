@@ -1,0 +1,8 @@
+import { x } from './missing';
+class Broken extends {
+  method( {
+    return x(;
+  }
+}
+function after() { return x(); }
+const z = new Broken(

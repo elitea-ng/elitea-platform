@@ -65,7 +65,7 @@ export const ClientFrameToolCall = zod.object({
     .string()
     .nullish()
     .describe(
-      "`stop` on success, `error` on failure; absent or null while running.",
+      '`stop` on success, `error` on failure; absent or null while running. Contract 1.2: `awaiting_approval`, `awaiting_input` or `interrupted` on an `agent_tool_paused` call, which paused for the user and did NOT fail. A client treats an unknown value as "not failed" unless `error` is set.',
     ),
   tool_output: zod
     .string()
@@ -77,6 +77,20 @@ export const ClientFrameToolCall = zod.object({
     .string()
     .nullish()
     .describe("The failure text of an `agent_tool_error`."),
+  pause: zod
+    .object({
+      interrupt_id: zod.string().nullish(),
+      guardrail_type: zod
+        .string()
+        .nullish()
+        .describe(
+          "`sensitive_tool` for an approval, `clarifying_question` for a question.",
+        ),
+    })
+    .nullish()
+    .describe(
+      "Contract 1.2. Set on an `agent_tool_paused` call: which pause it waits on. `interrupt_id` matches the `interrupt_id` of the `agent_hitl_interrupt` card that follows, so a client can show the call as awaiting that decision.",
+    ),
   tool_output_chunks: zod
     .object({
       total: zod.int(),

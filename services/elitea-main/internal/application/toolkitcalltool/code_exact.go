@@ -12,9 +12,9 @@ import (
 	"strconv"
 )
 
-var ErrCodeToolkitRevisionConflict = errors.New("Code toolkit revision changed")
-var ErrCodeToolApprovalRequired = errors.New("Code toolkit sensitive approval required")
-var ErrCodeToolPolicyDenied = errors.New("Code toolkit policy denied")
+var ErrCodeToolkitRevisionConflict = errors.New("code toolkit revision changed")
+var ErrCodeToolApprovalRequired = errors.New("code toolkit sensitive approval required")
+var ErrCodeToolPolicyDenied = errors.New("code toolkit policy denied")
 
 // CheckCodeTool evaluates the existing frozen native guardrails before admission.
 // No user argument or broker field can represent sensitive approval.

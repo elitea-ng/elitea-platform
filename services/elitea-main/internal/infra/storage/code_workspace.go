@@ -44,10 +44,10 @@ func (p CodeWorkspacePolicy) Validate() error {
 }
 
 var (
-	ErrCodeWorkspaceInvalid             = errors.New("Code workspace identity or content is invalid")
-	ErrCodeWorkspaceUnavailable         = errors.New("Code workspace content is unavailable")
+	ErrCodeWorkspaceInvalid             = errors.New("code workspace identity or content is invalid")
+	ErrCodeWorkspaceUnavailable         = errors.New("code workspace content is unavailable")
 	ErrCodeWorkspaceCapability          = errors.New("the saved toolkit has no supported repository read capability")
-	ErrCodeWorkspaceWritableUnavailable = errors.New("Code repository readwrite requires durable quota-backed workspace storage; use read with bounded scratch")
+	ErrCodeWorkspaceWritableUnavailable = errors.New("code repository readwrite requires durable quota-backed workspace storage; use read with bounded scratch")
 )
 
 // Bounds errors contain safe operator limits. They contain no repository data.
@@ -111,7 +111,7 @@ func workspacePath(value string, p CodeWorkspacePolicy) error {
 			return ErrCodeWorkspaceInvalid
 		}
 		for _, b := range []byte(part) {
-			if !(b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || strings.ContainsRune("._-+@", rune(b))) {
+			if (b < 'a' || b > 'z') && (b < 'A' || b > 'Z') && (b < '0' || b > '9') && !strings.ContainsRune("._-+@", rune(b)) {
 				return ErrCodeWorkspaceInvalid
 			}
 		}

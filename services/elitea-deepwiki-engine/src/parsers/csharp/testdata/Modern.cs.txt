@@ -1,0 +1,28 @@
+namespace Geometry.Modern;
+
+public class Primary(IShapeService service, ILogger<Primary> logger) : Base(service), IPrimary
+{
+    public required int Id { get; init; }
+    public string Name { get; set; } = "";
+    public Owner? Maybe => null;
+    public List<Owner> Owners { get; } = [];
+    public field_like Weird { get; set; }
+    public int Computed { get { return Helper.Value(); } }
+    public Owner Expr => new Owner("a", null, null);
+    public void Use() { service.Validate(); logger.LogInformation("x"); }
+    public static int operator +(Primary a, int b) => b;
+    public ref int RefReturn(ref int x) => ref x;
+    public (int A, string B) Tuple() => (1, "b");
+    public int[] Array() => [];
+    public Owner[]? Arrays() => null;
+    public Geometry.Core.Owner Qualified() => null;
+    public System.Text.StringBuilder Builder() => new();
+    protected internal virtual void Both() { }
+    private protected abstract sealed override void Weird2() { }
+    file class FileLocal { }
+}
+
+public class Base(IShapeService s)
+{
+    public Base() : this(null) { }
+}

@@ -13,14 +13,21 @@
 # finding it can make.
 #
 # HOW THE ECOSYSTEMS ARE SPLIT. ONE ENTRY PER ECOSYSTEM, listing every
-# manifest directory under `directories`, with ONE group over every package.
-# That is what makes dependabot open ONE pull request per ecosystem per week —
-# five at most — instead of one per directory: a group is scoped to its entry,
-# and an entry per directory (the previous shape) meant 20 grouped pull
-# requests that each fired the full CI matrix. The directories are listed
-# rather than globbed so that a new module is a deliberate addition here, and
+# manifest directory under `directories`, and EVERY entry that opens pull
+# requests joins the one multi-ecosystem group `weekly` with `patterns: ["*"]`.
+# That makes dependabot open ONE pull request per week for the whole
+# repository — actions, Go, Cargo, pip and npm together — so CI runs once on
+# the combined change instead of once per ecosystem against the free plan's
+# 20-job cap. (Before: one grouped PR per ecosystem, five a week; before that,
+# an entry per directory and 20.) The directories are listed rather than
+# globbed so that a new module is a deliberate addition here, and
 # scripts/ci/check-dependabot-coverage.sh refuses a manifest this file does
 # not name.
+#
+# THE COST OF ONE PULL REQUEST: one red bump holds every other one. Fix it on
+# the branch (pin the package back with a reason and an `ignore` entry below),
+# never by merging the PR red. Security-alert updates still arrive as their
+# own pull requests; GitHub opens those outside the group.
 #
 # GROUPING IS DELIBERATE. Each group takes ALL update levels (major, minor,
 # patch) into the same pull request. A major bump landing alongside minor and
@@ -39,9 +46,11 @@
 # regenerated deliberately, not by a scanner. The coverage gate carries the
 # matching exemption.
 #
-# SCHEDULE. Every ecosystem on Saturday 03:00 Europe/Warsaw: one burst of at
-# most five pull requests, outside working hours and outside the free plan's
-# 20-job concurrency window that a weekday push competes for.
+# SCHEDULE. The group's: Saturday 03:00 Europe/Warsaw, outside working hours
+# and outside the 20-job concurrency window a weekday push competes for. An
+# entry inside the group carries no schedule of its own (the group's wins).
+# The two silenced pip entries keep theirs — they open nothing and sit outside
+# the group.
 #
 # WHAT DEPENDABOT CANNOT DO HERE, stated so the next reader does not assume
 # coverage that is absent:
@@ -58,18 +67,21 @@
 #   - The Debian base layers. Those are the majority of every image-scan
 #     finding, and they move with the Containerfile's FROM line.
 version: 2
-updates:
-  - package-ecosystem: github-actions
-    directory: /
+
+multi-ecosystem-groups:
+  weekly:
     schedule:
       interval: weekly
       day: saturday
       time: "03:00"
       timezone: "Europe/Warsaw"
-    open-pull-requests-limit: 2
-    groups:
-      actions:
-        patterns: ["*"]
+    open-pull-requests-limit: 1
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    multi-ecosystem-group: weekly
+    patterns: ["*"]
 
   - package-ecosystem: gomod
     directories:
@@ -86,15 +98,8 @@ updates:
       - /libs/proto/gen/go
       - /tools/uictl
       - /conformance/nativeclient
-    schedule:
-      interval: weekly
-      day: saturday
-      time: "03:00"
-      timezone: "Europe/Warsaw"
-    open-pull-requests-limit: 2
-    groups:
-      go-all:
-        patterns: ["*"]
+    multi-ecosystem-group: weekly
+    patterns: ["*"]
     ignore:
       # bifrost core 1.8 requires Go 1.27; the gateway ships on golang:1.26-alpine
       # with GOTOOLCHAIN=local and is tested on the 1.26 series
@@ -109,15 +114,8 @@ updates:
       - /services/elitea-code-runner
       - /services/elitea-code-runner/adapters/rust
       - /services/elitea-deepwiki-engine
-    schedule:
-      interval: weekly
-      day: saturday
-      time: "03:00"
-      timezone: "Europe/Warsaw"
-    open-pull-requests-limit: 2
-    groups:
-      cargo-all:
-        patterns: ["*"]
+    multi-ecosystem-group: weekly
+    patterns: ["*"]
     ignore:
       # sqlx 0.x minors change the query/executor associated types the SQL
       # client and the checkpointer are written against (0.9 broke both, #661).
@@ -161,15 +159,8 @@ updates:
   - package-ecosystem: pip
     directories:
       - /libs/proto
-    schedule:
-      interval: weekly
-      day: saturday
-      time: "03:00"
-      timezone: "Europe/Warsaw"
-    open-pull-requests-limit: 2
-    groups:
-      pip-all:
-        patterns: ["*"]
+    multi-ecosystem-group: weekly
+    patterns: ["*"]
     ignore:
       # libs/proto is installed next to the python worker, which requires
       # protobuf < 7; a major here cannot resolve with it (#667).
@@ -191,15 +182,8 @@ updates:
     directories:
       - /apps/elitea-web
       - /tools/parity-extract
-    schedule:
-      interval: weekly
-      day: saturday
-      time: "03:00"
-      timezone: "Europe/Warsaw"
-    open-pull-requests-limit: 2
-    groups:
-      npm-all:
-        patterns: ["*"]
+    multi-ecosystem-group: weekly
+    patterns: ["*"]
     ignore:
       # Babel 8 plugins need @babel/core 8, and the web app is on core 7 (#682).
       - dependency-name: "@babel/*"
@@ -262,6 +246,25 @@ updates:
       # FormData internals; re-run `npm run test:unit` to confirm.
       - dependency-name: jsdom
         versions: [">= 30.1.0"]
+      # msw 3 is a migration, not a bump (PR #1049 tried 3.0.1). Measured on
+      # that tree, swapping ONLY msw back to 2.15.0 turns the same files green:
+      #   - `server.listen({ onUnhandledRequest })` is gone (now
+      #     `onUnhandledFrame`): TS2353 in src/test/setup.ts, and at runtime
+      #     the R-M5 'error' fence silently falls back to 'warn';
+      #   - multipart bodies die in handler lookup ("AbortError ... Premature
+      #     close" / "unhandled exception during the handler lookup"), taking
+      #     out every upload test (artifacts, skill/application icon, branding,
+      #     support-assistant attachments);
+      #   - the XHR interceptor now surfaces the CORS preflight, so cross-origin
+      #     XHR tests hit an unhandled `OPTIONS`; the abort-wiring test fails;
+      #   - unhandled peripheral requests (support_assistant/config,
+      #     project_budget) now break the render in AppShell/ToolMenu/
+      #     GenerateAgentButton tests (~30 tests in ~20 files in all).
+      # Do it in its own PR: rename the option (setup.ts, the R-M5 selftest and
+      # fixtures, ~20 test comments), re-check multipart on a later 3.x, add the
+      # missing handlers.
+      - dependency-name: msw
+        update-types: ["version-update:semver-major"]
       # playwright 1.63.0 stops exposing the body of a response the PAGE has
       # consumed as a Blob. `Response.text()` returns "" where 1.62.1 returns the
       # document, so chat.sharing S4/S5 — which read the conversation_export

@@ -102,7 +102,7 @@ class EditorLifecycleGateTests(unittest.TestCase):
 
 
 class EditorLifecycleRunnerTests(unittest.TestCase):
-    def run_script(self, events=None, status=0, configured=True):
+    def run_script(self, events=None, status=0, configured=True, stderr_text=""):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             fake_go = directory / "go"
@@ -112,6 +112,7 @@ class EditorLifecycleRunnerTests(unittest.TestCase):
                 "from pathlib import Path\n"
                 "record={'args':sys.argv[1:],'required':os.environ.get('ELITEA_REQUIRE_EDITOR_POSTGRES_TEST'),'gomaxprocs':os.environ.get('GOMAXPROCS'),'service_vars_present':any(key in os.environ for key in ('ELITEA_TEST_DATABASE_URL','ELITEA_TEST_USE_SERVICE_DATABASE_URL','DATABASE_URL'))}\n"
                 "Path(os.environ['EDITOR_GATE_TEST_RECORD']).write_text(json.dumps(record))\n"
+                "sys.stderr.write(os.environ['EDITOR_GATE_TEST_STDERR'])\n"
                 "for event in json.loads(os.environ['EDITOR_GATE_TEST_EVENTS']): print(json.dumps(event))\n"
                 "sys.exit(int(os.environ['EDITOR_GATE_TEST_STATUS']))\n"
             )
@@ -124,6 +125,7 @@ class EditorLifecycleRunnerTests(unittest.TestCase):
                 EDITOR_GATE_TEST_RECORD=str(directory / "record.json"),
                 EDITOR_GATE_TEST_EVENTS=json.dumps(passed_events() if events is None else events),
                 EDITOR_GATE_TEST_STATUS=str(status),
+                EDITOR_GATE_TEST_STDERR=stderr_text,
                 ELITEA_TEST_DATABASE_URL="must-not-reach-editor-process",
                 ELITEA_TEST_USE_SERVICE_DATABASE_URL="must-not-reach-editor-process",
                 DATABASE_URL="must-not-reach-editor-process",
@@ -137,7 +139,17 @@ class EditorLifecycleRunnerTests(unittest.TestCase):
             result = subprocess.run(["bash", str(SCRIPT)], env=environment, text=True, capture_output=True, timeout=10)
             record_path = directory / "record.json"
             record = json.loads(record_path.read_text()) if record_path.exists() else None
+            stderr_path = directory / "artifacts/editor-postgres.stderr.log"
+            if record is not None:
+                record["stderr_output"] = stderr_path.read_text() if stderr_path.exists() else None
             return result, record
+
+    def test_download_diagnostics_remain_separate_from_required_json_events(self):
+        diagnostics = "go: downloading example.invalid/fixture v1.0.0\n"
+        result, record = self.run_script(stderr_text=diagnostics)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["scenarios"], 13)
+        self.assertEqual(record["stderr_output"], diagnostics)
 
     def test_runner_clears_product_sources_and_bounds_actual_go_command(self):
         result, record = self.run_script()

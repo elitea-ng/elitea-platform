@@ -223,8 +223,13 @@ Every operation tagged `client` in `api/openapi/v2.yaml`. `client` is always the
 | Agents, skills, toolkits (1.1) | `listApplications`, `getApplication`, `listApplicationSkills`, `listToolkitInstances`, `listToolkitAvailableTools` |
 | Tool history (1.1) | `listMessageTraces`, `getMessageTrace` |
 | Attachments (1.1) | `downloadConversationAttachment` |
+| Current user (1.2) | `getCurrentAuthor` (`GET /api/v2/social/author`) |
 
 Contract 1.1 also adds the discovery document's `attachments` policy, typed attachment items on messages (`AttachmentMessageItem`), the `sender` of a `chat_user_mentioned` notification, and the agent progress frame catalogue below. A client gates each on `client_contract` ≥ 1.1 and treats a 404 or 501 from an older server as "not available".
+
+Contract 1.2 adds the client's "who am I" read and a distinct frame for a paused tool call:
+- `getCurrentAuthor` (`GET /api/v2/social/author`) answers the caller's `id` (user id), `name` (display name), `email`, `avatar` (a URL, absolute or relative to the deployment origin; `""` when none) and `personal_project_id`. `personal_project_id` is `""` while a fresh account's personal project is still being provisioned (the first read starts it): poll until it is set. Every other key in the answer is outside the client's concern and may be ignored.
+- `agent_tool_paused` (below). A tool call that pauses for the user — a sensitive tool awaiting approval, or a clarifying question — is no longer reported as `agent_tool_error`, and its stored trace step (`listMessageTraces`) has `is_error: false` with a pause `finish_reason`. A 1.1 server sends `agent_tool_error` with the LangGraph interrupt as its text for the same call.
 
 The client policy has no operation of its own. Its public part is in the discovery document, and the full policy is `client_policy` in every token response.
 
@@ -298,7 +303,7 @@ The lock diff is how a reviewer sees the new promise. `-update` refuses to recor
 - These rules describe the current reference client (`apps/elitea-web/src/features/chat-messages/lib/chatStreamTurnEnd.ts`). A dedicated terminal event is not part of contract 1.x.
 - **Robust settle check:** after the stream closes or breaks, read the message list. An answer is settled when its group has no `is_streaming` and `metadata.is_error` is **present**. An absent `is_error` means the turn is still running.
 
-### Agent progress frames (contract 1.1)
+### Agent progress frames (contract 1.1, 1.2)
 
 The `data` of an `execution.node_event` names its frame in `data.type`. The frames a client renders tool activity and pauses from are a catalogue: `x-elitea-client-frames` at the root of `v2.yaml` maps each type to the schema of its `data`, and `internal/api/clientcontract` locks those schemas like a response (additive only). Both workers' unit tests capture these frames into `testdata/client-frames/{python,rust}.json`, and `TestClientFrameCatalogueAcceptsWorkerFrames` validates the captures against the catalogue, so a worker cannot change a catalogued frame silently.
 
@@ -309,6 +314,7 @@ Every frame is `{type, stream_id, message_id, content, response_metadata, create
 | `agent_tool_start` | One tool call: `tool_name`, `tool_run_id` (the call's key), `tool_inputs` (the arguments; may be sensitive — show on demand), `tool_meta.name`, `metadata.toolkit_name`/`toolkit_type`/`display_name`/`parent_agent_name`, `timestamp_start`. | No |
 | `agent_tool_end` | The same call completed: `finish_reason: stop`, `tool_output` (text), `timestamp_finish`. A client that missed the start builds the call from this frame. When the output was too large for one frame, `tool_output` is `""` and `tool_output_chunks: {total, tool_output_sha256}` names the chunks that came before. | No |
 | `agent_tool_error` | The same call failed: `finish_reason: error`, `error`; `content` repeats the error. | No |
+| `agent_tool_paused` (1.2) | The same call paused for the user and did **not** fail: `error: null`, `finish_reason` `awaiting_approval` (a sensitive tool), `awaiting_input` (a clarifying question) or `interrupted` (another interrupt), and `pause: {interrupt_id, guardrail_type}` — `interrupt_id` is the one on the `agent_hitl_interrupt` that follows. Show the call as waiting on that card. After the pause is answered, the continued run starts the call again under a new `tool_run_id`. | No |
 | `agent_tool_output_chunk` | `tool_output_chunk: {tool_call_id, index, total, tool_output_sha256}`; `content` is the slice. Concatenate the slices of one `tool_call_id` in `index` order; the SHA-256 of the result is `tool_output_sha256`. | No |
 | `agent_hitl_interrupt` | `hitl_interrupt` (the pending interrupt: `interrupt_id`, `tool_call_id`, `message`, `available_actions`, `guardrail_type`, `action_label`, `policy_message`, `tool_name`, `toolkit_name`, `tool_args`, `questions`), `hitl_interrupts` (every pending one; a parallel pause has several), `thread_id`. | Yes, except a fan-out child pause (see "Execution event stream") |
 | `mcp_authorization_required` | `server_url`, `resource_metadata_url`, `resource_metadata`, `www_authenticate`, `tool_run_id`, `tool_name`, `toolkit_name`, `toolkit_type`. Sent twice: first as progress, then as the terminal frame, which also carries `authorization_requests[]` (one entry per toolkit that needs sign-in) and `thread_id`. The tool has not run. | Only with `authorization_requests` |

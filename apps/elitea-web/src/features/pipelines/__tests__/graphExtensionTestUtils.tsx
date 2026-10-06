@@ -14,7 +14,7 @@ beforeAll(() => {
     observe(): void {} unobserve(): void {} disconnect(): void {}
   };
 });
-export const extensionStateYaml = `state:
+const extensionStateYaml = `state:
   '10': {type: list, value: []}
   '2': dict
   source_rows: {type: list, value: [null, 1, {vendor: [true, {deep: x}]}]}

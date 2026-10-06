@@ -1,0 +1,24 @@
+#define DEBUG_SHAPES
+#nullable enable
+using System;
+
+namespace Geometry.Diagnostics
+{
+#if DEBUG_SHAPES
+    public class Tracer
+    {
+#region Fields
+        private readonly Owner _owner;
+#endregion
+        [Conditional("DEBUG")]
+        public void Trace(string message)
+        {
+#pragma warning disable CS0618
+            Console.WriteLine(message);
+#pragma warning restore CS0618
+        }
+    }
+#else
+    public class Tracer { }
+#endif
+}

@@ -1,0 +1,29 @@
+namespace Geometry.Services
+{
+    using System.Linq;
+
+    public partial class ShapeService
+    {
+        partial void OnCreated() { Validate(); }
+        public IEnumerable<string> Names(IEnumerable<Shape> shapes) =>
+            from s in shapes where s.Area() > 0 orderby s.Area() select s.ToString();
+        public int Count(IEnumerable<Shape> shapes) => shapes.Where(s => s.Area() > 1).Select(x => x.Perimeter()).Count();
+        public void Validate() { Helper.Run(null); Run<int>(1); this.Validate(); base.ToString(); }
+        static T Run<T>(T value) where T : struct => value;
+    }
+
+    public interface IShapeService { }
+
+    namespace Inner
+    {
+        public class Nested
+        {
+            public class Deeper
+            {
+                public struct Leaf { public int Value; }
+                public void Go() { new Leaf(); new Geometry.Core.Point(1, 2); new Dictionary<string, Owner>(); }
+            }
+            private Deeper.Leaf _leaf;
+        }
+    }
+}

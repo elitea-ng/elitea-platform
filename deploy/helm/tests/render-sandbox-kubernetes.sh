@@ -49,7 +49,7 @@ for namespace in platform default kube-system ''; do
       --set "sandboxKubernetes.executionNamespace=$namespace" > "$work/invalid" 2>&1; then
     echo "Unsafe namespace accepted: $namespace" >&2; exit 1
   fi
-  rg -q 'sandboxKubernetes.executionNamespace' "$work/invalid"
+  grep -Fq 'sandboxKubernetes.executionNamespace' "$work/invalid"
 done
 for count in 0 4097 1.5; do
   if helm template sandbox "$chart" "${base[@]}" --set sandboxKubernetes.enabled=true \
@@ -57,7 +57,7 @@ for count in 0 4097 1.5; do
       --set "sandboxKubernetes.maxPods=$count" > "$work/invalid" 2>&1; then
     echo "Invalid capacity accepted: $count" >&2; exit 1
   fi
-  rg -q 'sandboxKubernetes.maxPods' "$work/invalid"
+  grep -Fq 'sandboxKubernetes.maxPods' "$work/invalid"
 done
 supervisor=(--set sandboxKubernetes.enabled=true
   --set sandboxKubernetes.executionNamespace=code-execution
@@ -101,7 +101,7 @@ for invalid in 'sandboxKubernetes.supervisor.image=runtime:latest' \
   if helm template sandbox "$chart" "${base[@]}" "${supervisor[@]}" --set "$invalid" > "$work/invalid" 2>&1; then
     echo "Unsafe supervisor configuration accepted: $invalid" >&2; exit 1
   fi
-  rg -q 'Kubernetes' "$work/invalid"
+  grep -Fq 'Kubernetes' "$work/invalid"
 done
 cat > "$work/preparation-values.yaml" <<'YAML'
 sandboxKubernetes:
@@ -246,7 +246,7 @@ for invalid in 'sandboxKubernetes.preparation.namespace=platform' \
       --set "$invalid" > "$work/invalid" 2>&1; then
     echo "Unsafe preparation configuration accepted: $invalid" >&2; exit 1
   fi
-  rg -q 'Kubernetes|sandboxKubernetes' "$work/invalid"
+  grep -Eq 'Kubernetes|sandboxKubernetes' "$work/invalid"
 done
 for invalid in 'sandboxKubernetes.preparation.resolverCidrs=[]' \
     'sandboxKubernetes.preparation.dnsNamespaceLabels=null' \
@@ -255,7 +255,7 @@ for invalid in 'sandboxKubernetes.preparation.resolverCidrs=[]' \
       --set-json "$invalid" > "$work/invalid" 2>&1; then
     echo "Unscoped preparation configuration accepted" >&2; exit 1
   fi
-  rg -q 'Kubernetes' "$work/invalid"
+  grep -Fq 'Kubernetes' "$work/invalid"
 done
 python3 - "$work" <<'PYTEST'
 import pathlib, sys, yaml
@@ -316,11 +316,11 @@ for invalid in 'sandboxKubernetes.supervisor.profiles[8].file=ninth.json' \
       --set "$invalid" > "$work/invalid" 2>&1; then
     echo "Unsafe eight-profile configuration accepted: $invalid" >&2; exit 1
   fi
-  rg -q 'Kubernetes' "$work/invalid"
+  grep -Fq 'Kubernetes' "$work/invalid"
 done
 if helm template sandbox "$chart" "${base[@]}" -f "$work/profiles-8.yaml" \
     --set-json 'sandboxKubernetes.supervisor.profiles=[]' > "$work/invalid" 2>&1; then
   echo 'Empty supervisor profile list accepted' >&2; exit 1
 fi
-rg -q 'one to eight profiles' "$work/invalid"
+grep -Fq 'one to eight profiles' "$work/invalid"
 echo 'Kubernetes sandbox and optional Python preparation rendering checks passed'
