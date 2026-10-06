@@ -513,6 +513,15 @@ def test_record_dead_letter_records_where_to_look_never_what_it_said() -> None:
     asyncio.run(run())
 
 
+def test_release_naks_without_delay() -> None:
+    async def run() -> None:
+        message = _message("unstarted")
+        await _consumer().release(_delivery_of(message))
+        assert message.calls == [("nak", None)]
+
+    asyncio.run(run())
+
+
 def test_terminate_terms_once_and_only_an_unanswered_message() -> None:
     async def run() -> None:
         message = _message("unverifiable")

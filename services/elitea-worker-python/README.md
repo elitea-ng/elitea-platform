@@ -82,7 +82,7 @@ hash token to equal `sha256(command.idempotency_key)` before it claims.
 | poison that can never verify: the signed envelope's digest or signature fails, or the subject does not name the signed command | one record in the `ELITEA_RT_V1_DEADLETTER` bucket FIRST, then `Term` (frees its stream capacity) and the ERROR line `worker_command.dead_lettered`. A PostgreSQL re-offer of the same delivery fails the same check before any claim and is terminated again |
 | any other poison: a decode failure, a command it cannot serve, any non-retryable failure | one record in the `ELITEA_RT_V1_DEADLETTER` bucket FIRST, then `NakWithDelay(24h)` and an ERROR line `worker_command.dead_lettered`. Never `Term`: that frees the subject and PostgreSQL would re-offer the poison every 30s |
 | poison whose record the bucket refused | not parked: `NakWithDelay(nats_retry_delay_millis)`, an ERROR line `worker_command.dead_letter_write_failed` carrying `dead_letter_write_failures_total`; the next delivery retries the record without running the command again |
-| SIGTERM | stop pulling, keep heartbeating owned work until it ends or the deadline passes, exit without ack or nak (AckWait redelivers) |
+| SIGTERM | stop pulling; nak WITHOUT delay every fetched message no worker task has started (another replica takes it now); keep heartbeating running work until it ends or the deadline passes, exit without acking or nak'ing it (AckWait redelivers) |
 
 The dead-letter record (`schema: elitea.runtime.dead-letter.v1`) holds the
 stream, consumer, subject, stream sequence, delivery count, a stable reason code,

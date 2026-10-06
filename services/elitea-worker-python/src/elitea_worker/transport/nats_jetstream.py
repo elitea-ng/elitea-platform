@@ -449,6 +449,18 @@ class JetStreamCommandConsumer:
 
         await self._nak(delivery, POISON_DELAY_SECONDS)
 
+    async def release(self, delivery: CommandDelivery) -> None:
+        """A nak WITHOUT delay: give a message this worker never started back.
+
+        Graceful shutdown answers every queued, unstarted message this way, so
+        another replica takes it now instead of after AckWait.
+        """
+
+        message = delivery.message
+        if message is None or delivery.is_settled:
+            return
+        await message.nak()
+
     async def terminate(self, delivery: CommandDelivery) -> None:
         """``Term``: only for :data:`TERMINAL_POISON`, only after its record."""
 

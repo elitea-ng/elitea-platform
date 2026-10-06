@@ -125,6 +125,9 @@ class FakeConsumer:
         self.answers.append("term")
         self.terminated.append(delivery)
 
+    async def release(self, delivery: CommandDelivery) -> None:
+        self.answers.append("release")
+
     async def record_dead_letter(self, delivery: CommandDelivery, *, reason: str) -> None:
         if self.dead_letter_error is not None:
             self.dead_letter_failures.append((delivery, reason))
@@ -1298,5 +1301,49 @@ def test_a_redelivered_owned_message_is_answered_on_its_newest_copy_once() -> No
         assert nak[2] > 1, consumer.wire
         assert all(delivery.num_delivered > 1 for delivery in consumer.retried[:1])
         _no_wpi_after_nak(consumer.wire, 1)
+
+    asyncio.run(run())
+
+
+# ── D4: unstarted work goes back at shutdown ────────────────────────────────
+
+
+def test_shutdown_releases_queued_unstarted_deliveries_without_delay() -> None:
+    async def run() -> None:
+        released: list[int] = []
+
+        class ReleasingConsumer(FakeConsumer):
+            async def release(self, delivery: CommandDelivery) -> None:
+                released.append(delivery.stream_sequence)
+
+        consumer = ReleasingConsumer((_delivery(1), _delivery(2), _delivery(3)), batch=3)
+        stop = asyncio.Event()
+        started: list[int] = []
+        running = asyncio.Event()
+        finish = asyncio.Event()
+
+        async def process(delivery: CommandDelivery) -> DeliveryResult:
+            started.append(delivery.stream_sequence)
+            running.set()
+            await finish.wait()
+            return DeliveryResult(DeliveryDisposition.EXECUTED_SETTLED_ACKED)
+
+        loop = _runtime(consumer, process, max_concurrency=1, queue_capacity=2)
+        task = asyncio.create_task(loop.run(stop))
+        await asyncio.wait_for(running.wait(), timeout=1.0)
+        # 1 runs; 2 and 3 are fetched and owned but never started.
+        while len(loop._owned) < 3:  # noqa: SLF001
+            await asyncio.sleep(0)
+        stop.set()
+        while sorted(released) != [2, 3]:
+            await asyncio.sleep(0)
+        # The running one drains normally, and nothing else starts.
+        finish.set()
+        await asyncio.wait_for(task, timeout=1.0)
+
+        assert started == [1]
+        assert sorted(released) == [2, 3]
+        assert consumer.retried == consumer.parked == []
+        assert loop._owned == {}  # noqa: SLF001
 
     asyncio.run(run())

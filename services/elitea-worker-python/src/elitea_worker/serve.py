@@ -113,6 +113,8 @@ class DeliveryConsumer(Protocol):
 
     async def park(self, delivery: CommandDelivery) -> None: ...
 
+    async def release(self, delivery: CommandDelivery) -> None: ...
+
     async def terminate(self, delivery: CommandDelivery) -> None: ...
 
     async def record_dead_letter(
@@ -269,6 +271,9 @@ class WorkerServeLoop:
         # delivery of the key retries the record instead of being parked.
         # Bounded like the quarantine it belongs to.
         self._unrecorded: dict[str, WorkerError] = {}
+        # Fetched and owned, but never queued because shutdown cancelled the
+        # intake mid-put. Released (nak without delay) by the shutdown path.
+        self._unqueued: list[CommandDelivery] = []
 
     async def run(self, stop: asyncio.Event) -> None:
         if stop.is_set():
@@ -301,11 +306,15 @@ class WorkerServeLoop:
                 failed = next(task for task in background if task in done)
                 await _raise_unexpected_background_exit(failed)
 
-            # Graceful shutdown: stop pulling, keep heartbeating what is owned
-            # until it ends or the deadline passes. Nothing is acked or naked
-            # on the way out; AckWait redelivers whatever is left.
+            # Graceful shutdown: stop pulling; give every fetched-but-unstarted
+            # message back NOW (a nak without delay, so another replica takes
+            # it instead of this one starting it only to be cut off); keep
+            # heartbeating what is running until it ends or the deadline
+            # passes. Running work is never acked or naked on the way out;
+            # AckWait redelivers whatever is left.
             intake.cancel()
             await asyncio.gather(intake, return_exceptions=True)
+            await self._release_unstarted()
             drain = asyncio.create_task(
                 self._queue.join(),
                 name="elitea-delivery-drain",
@@ -371,6 +380,27 @@ class WorkerServeLoop:
                 await _wait_or_stop(stop, self._dependency_retry)
             finally:
                 self._release_delivery_capacity(reserved)
+
+    async def _release_unstarted(self) -> None:
+        """Nak, without delay, every owned message no worker task has started."""
+
+        unstarted = list(self._unqueued)
+        self._unqueued.clear()
+        while True:
+            try:
+                delivery = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            # Taken off the queue here, so no worker task can start it.
+            self._queue.task_done()
+            if delivery is not None:
+                unstarted.append(delivery)
+        for delivery in unstarted:
+            await self._answer_owned(
+                self._consumer.release, delivery, "nats_release"
+            )
+        if unstarted:
+            self._event_sink("deliveries_released_on_shutdown", None)
 
     async def _load_durable_quarantine(self) -> None:
         """Adopt this worker's earlier refusals before pulling any command.
@@ -538,11 +568,10 @@ class WorkerServeLoop:
                 await self._queue.put(delivery)
                 queued += 1
         except BaseException:
-            for delivery in accepted[queued:]:
-                key = (delivery.stream, delivery.stream_sequence)
-                if key in self._owned:
-                    del self._owned[key]
-                    self._release_delivery_capacity(1)
+            # Still owned (and heartbeated): the shutdown path gives these
+            # back with a nak without delay rather than leaving them to
+            # AckWait.
+            self._unqueued.extend(accepted[queued:])
             raise
 
     async def _answer(
