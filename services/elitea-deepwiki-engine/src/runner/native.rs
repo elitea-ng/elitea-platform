@@ -472,6 +472,103 @@ mod tests {
         (Context::new(sender, stop.clone()), receiver, stop)
     }
 
+    /// A runner whose "worker" is a shell script.
+    fn scripted(script: &str) -> (NativeRunner, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "dw-native-{}-{}",
+            std::process::id(),
+            new_boot_id()
+        ));
+        std::fs::create_dir_all(&root).unwrap_or_else(|e| panic!("{e}"));
+        let program = root.join("worker.sh");
+        std::fs::write(&program, script).unwrap_or_else(|e| panic!("{e}"));
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .unwrap_or_else(|e| panic!("{e}"));
+        let scratch = root.join("scratch").to_string_lossy().into_owned();
+        let settings = Settings::from_lookup(|name| match name {
+            "ELITEA_DEEPWIKI_RUNNER" => Some("native".to_owned()),
+            "ELITEA_DEEPWIKI_DATABASE_URL" => Some("postgresql://u:p@127.0.0.1:1/x".to_owned()),
+            "ELITEA_DEEPWIKI_BUILD_OWNER" => Some("unit".to_owned()),
+            "ELITEA_DEEPWIKI_SCRATCH_PATH" => Some(scratch.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|e| panic!("{e}"));
+        let runner = NativeRunner::with_worker(
+            settings,
+            WorkerCommand {
+                program,
+                env: Vec::new(),
+            },
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+        (runner, root)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_worker_that_ignores_sigterm_is_killed_after_three_seconds() {
+        // The worker ignores SIGTERM and never ends on its own.
+        let (runner, root) = scripted(
+            "#!/bin/sh\ntrap '' TERM\necho '{\"thinking\": \"working\"}'\nexec sleep 60\n",
+        );
+        let (context, mut receiver, stop) = context();
+        let task = {
+            let runner = runner.clone();
+            tokio::spawn(async move { runner.run("generate_wiki", Map::new(), &context).await })
+        };
+        // Wait for the worker's own line, then stop.
+        loop {
+            match receiver.recv().await {
+                Some(super::super::Line::Thinking(text)) if text == "working" => break,
+                Some(_) => {}
+                None => panic!("the run ended before the worker spoke"),
+            }
+        }
+        let started = std::time::Instant::now();
+        stop.request();
+        let outcome = tokio::time::timeout(Duration::from_secs(20), task)
+            .await
+            .unwrap_or_else(|_| panic!("the worker was never killed"))
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(outcome, Err(EngineError::cancelled()));
+        assert!(started.elapsed() >= KILL_AFTER, "{:?}", started.elapsed());
+        // The job's scratch directory is gone.
+        let jobs = std::fs::read_dir(root.join("scratch/jobs")).map_or(0, Iterator::count);
+        assert_eq!(jobs, 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_worker_that_dies_without_a_last_line_is_a_runtime_error() {
+        let (runner, root) = scripted("#!/bin/sh\nexit 3\n");
+        let (context, _receiver, _stop) = context();
+        let outcome = runner.run("generate_wiki", Map::new(), &context).await;
+        let error = outcome
+            .err()
+            .unwrap_or_else(|| panic!("a dead worker succeeded"));
+        assert_eq!(error.error_type, ErrorType::Runtime);
+        assert!(
+            error.message.contains("ended without a result"),
+            "{}",
+            error.message
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn the_query_tools_are_refused_until_their_port() {
+        let (runner, root) = scripted("#!/bin/sh\nexit 0\n");
+        let (context, _receiver, _stop) = context();
+        for tool in ["ask", "deep_research", "resolve_wiki"] {
+            let error = runner.run(tool, Map::new(), &context).await.err();
+            assert!(
+                error.is_some_and(|e| e.message.contains("not supported by the native engine yet")),
+                "{tool}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn the_worker_lines_are_relayed_or_kept() {
         let (context, mut receiver, _stop) = context();

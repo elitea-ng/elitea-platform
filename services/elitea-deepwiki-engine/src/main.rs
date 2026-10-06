@@ -59,7 +59,7 @@ fn on_runtime(threads: Option<usize>, future: impl Future<Output = ExitCode>) ->
             let code = runtime.block_on(future);
             // A blocking read never ends on its own (the worker's stdin
             // stays open while its parent lives): do not wait for it.
-            runtime.shutdown_timeout(Duration::from_secs(1));
+            runtime.shutdown_background();
             code
         }
         Err(error) => {

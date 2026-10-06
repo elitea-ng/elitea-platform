@@ -374,13 +374,22 @@ impl Engine {
     }
 
     async fn post(&self, path: &str, body: &Value) -> hyper::Response<hyper::body::Incoming> {
+        self.send("POST", path, body).await
+    }
+
+    async fn send(
+        &self,
+        method: &str,
+        path: &str,
+        body: &Value,
+    ) -> hyper::Response<hyper::body::Incoming> {
         let stream = UnixStream::connect(&self.socket).await.unwrap();
         let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
             .await
             .unwrap();
         tokio::spawn(connection);
         let request = hyper::Request::builder()
-            .method("POST")
+            .method(method)
             .uri(path)
             .header("host", "engine")
             .header("content-type", "application/json")
@@ -496,6 +505,12 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
     let git_port = serve_git(served).await;
     let (gateway_port, gateway) = serve_gateway(false).await;
     let engine = Engine::start(&root, "native_generate");
+    let health = engine.send("GET", "/engine/health", &Value::Null).await;
+    let health = health.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&health).unwrap(),
+        json!({"status": "UP", "runner": "native", "active": 0})
+    );
 
     let mut lines = engine
         .invoke("inv-native-1", &arguments(git_port, gateway_port))
