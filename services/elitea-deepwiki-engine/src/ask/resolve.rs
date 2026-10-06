@@ -140,7 +140,7 @@ pub async fn resolve_wiki(
         };
         let client = ChatClient::new(transport.clone(), model);
         let chat = request(prompt(&question, &wikis)?, max_tokens);
-        client.complete(&chat, context.stop_signal()).await
+        client.complete(&chat, &context.stop_signal()).await
     }
     .await;
     match outcome {

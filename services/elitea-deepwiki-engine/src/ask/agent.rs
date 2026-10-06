@@ -428,7 +428,8 @@ pub async fn run<S: IndexStore, M: Model>(
     embedder: &Embedder,
     context: &Context,
 ) -> Result<Outcome, EngineError> {
-    let stop = context.stop_signal();
+    let stop_signal = context.stop_signal();
+    let stop = &stop_signal;
     let mut events = Events::new(context, spec.mode, spec.clock.clone());
     let runner = Runner {
         codebase: Codebase {

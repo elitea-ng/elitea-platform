@@ -15,8 +15,8 @@ adds the [index storage](#index-storage-srcstorage): PostgreSQL only, with a
 build space, a transactional publish and the read path. Phase 5 adds the
 structure planner, the pages and the export, and wires `generate_wiki` end to
 end as the [`native` runner](#the-native-runner-generate_wiki): a worker
-child process per generation. `ask`, `deep_research` and `resolve_wiki` are
-still refused by it (phase 6).
+child process per generation. Phase 6 adds `ask`, `deep_research` and
+`resolve_wiki`, which the native runner serves in process over PostgreSQL.
 
 ## The socket protocol
 
@@ -59,7 +59,7 @@ keeps that refusal: the host resolves the attachments for every engine.
 | --- | --- |
 | `unavailable` (default) | Refuses every tool with `FileNotFoundError` / `resource_not_found`. |
 | `fixture` | Canned results with paced progress (`ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS`, default 1). A port of the Python `fixture_runner.py`; the Go host's own fixture is a third copy. |
-| `native` | The engine: `generate_wiki` in a worker child process (see [below](#the-native-runner-generate_wiki)); the other three tools are refused (`RuntimeError`, phase 6). Needs `ELITEA_DEEPWIKI_DATABASE_URL`, or the start is refused. |
+| `native` | The engine: `generate_wiki` in a worker child process (see [below](#the-native-runner-generate_wiki)); `ask`, `deep_research` and `resolve_wiki` in process (see [below](#ask-deep-research-and-resolve_wiki-srcask)). Needs `ELITEA_DEEPWIKI_DATABASE_URL`, or the start is refused. |
 | `legacy` | Refused: that is the Python engine image. |
 
 The fixture's JSON artifacts are written as Python's `json.dumps(…,
@@ -173,9 +173,9 @@ allocation failure (`MemoryError`, `out_of_memory`), SIGXCPU
 | `ELITEA_DEEPWIKI_WORKER_THREADS` | available parallelism, at most 8 (at most 256) | the child's runtime and parser threads |
 | `ELITEA_DEEPWIKI_SCRATCH_PATH` | `/tmp/deepwiki` | root of the job directories |
 
-All are strict-parsed. Still refused or not ported: `ask`, `deep_research`,
-`resolve_wiki` (phase 6), the deepagents planner (5d), artifact-folder
-sources.
+All are strict-parsed. Not ported: the deepagents planner (5d; a request
+for it falls back to the classic planner, as Python does when deepagents
+fails) and artifact-folder sources.
 
 `tests/native_generate.rs` runs the whole runner: the sidecar on a Unix
 socket, the real worker child, a repository served by `git http-backend`,
@@ -821,11 +821,14 @@ duplicate sums, `reduceat` and pairwise sums, and the power iteration.
 
 ## Ask, deep research and `resolve_wiki` (`src/ask/`)
 
-ADR-0026 phase 6 (decision 8). Not wired to a runner yet: the native runner
-calls `ask::run_tool(tool, &arguments, &QueryDeps { pool, transport,
-embedding_options, limits: Limits::from_env()?, clock: Clock::System },
-repository_analysis, context)` for `ask`, `deep_research` and
-`resolve_wiki`, after `runner::prepare_arguments`. The generic entry points
+ADR-0026 phase 6 (decision 8). The native runner serves these three tools in
+its own process — they are I/O-bound and stop at every model and tool step —
+through `ask::run_tool(tool, &arguments, &QueryDeps { pool, transport,
+embedding_options, limits, clock: Clock::System }, None, context)` after
+`runner::prepare_arguments`. The step limits are read once at start, so a bad
+value fails the start, not a request. No repository analysis is passed: the
+Python ask read it from the analysis store on scratch, which a query replica
+does not have (decision 5). The generic entry points
 (`ask::run_agent` over any `store::IndexStore` and `agent::Model`) are what
 the parity gate drives.
 

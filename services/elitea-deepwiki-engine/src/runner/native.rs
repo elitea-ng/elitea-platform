@@ -22,8 +22,10 @@
 //!    deleted, so a killed child leaves no staging rows (a published or
 //!    abandoned build is already gone and the delete is a no-op).
 //!
-//! `ask`, `deep_research` and `resolve_wiki` are refused until their ports
-//! land (ADR-0026 phase 6).
+//! `ask`, `deep_research` and `resolve_wiki` run IN this process, not in a
+//! worker: they are I/O-bound (model and database calls), read only
+//! PostgreSQL (ADR-0026 decision 5) and stop at every model and tool step
+//! ([`crate::ask`]).
 
 use super::{Context, prepare_arguments};
 use crate::config::{ConfigError, Settings};
@@ -73,8 +75,12 @@ pub struct WorkerCommand {
 pub struct NativeRunner {
     settings: Arc<Settings>,
     worker: Arc<WorkerCommand>,
-    /// For deleting the build of a child that was killed.
+    /// For deleting the build of a child that was killed, and for the
+    /// query tools' reads.
     pool: PgPool,
+    /// The query tools' step limits, read once at start so a bad value
+    /// fails the start rather than a request.
+    query_limits: crate::ask::Limits,
 }
 
 fn runtime(message: impl Into<String>) -> EngineError {
@@ -117,11 +123,37 @@ impl NativeRunner {
         })?;
         let pool =
             crate::storage::lazy_pool(url.expose(), 2).map_err(|e| ConfigError(e.to_string()))?;
+        let query_limits =
+            crate::ask::Limits::from_env().map_err(|e| ConfigError(e.message.clone()))?;
         Ok(Self {
             settings: Arc::new(settings),
             worker: Arc::new(worker),
             pool,
+            query_limits,
         })
+    }
+
+    /// `ask`, `deep_research` or `resolve_wiki`, in this process.
+    ///
+    /// No repository analysis is passed: the Python ask loaded it from the
+    /// analysis store on scratch, which a query replica does not have
+    /// (ADR-0026 decision 5); the README records it.
+    async fn query(
+        &self,
+        tool: &str,
+        arguments: &Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        let transport =
+            crate::llm::Transport::new(&crate::llm::TransportSettings::from(&self.settings.model))?;
+        let deps = crate::ask::QueryDeps {
+            pool: self.pool.clone(),
+            transport,
+            embedding_options: crate::llm::EmbeddingOptions::from(&self.settings.model),
+            limits: self.query_limits,
+            clock: crate::ask::agent::Clock::System,
+        };
+        crate::ask::run_tool(tool, arguments, &deps, None, context).await
     }
 
     /// Run one tool.
@@ -136,10 +168,16 @@ impl NativeRunner {
         arguments: Map<String, Value>,
         context: &Context,
     ) -> Result<Value, EngineError> {
+        if matches!(tool, "ask" | "deep_research" | "resolve_wiki") {
+            let arguments = prepare_arguments(tool, arguments)?;
+            context.checkpoint()?;
+            return self.query(tool, &arguments, context).await;
+        }
         if tool != "generate_wiki" {
-            return Err(runtime(format!(
-                "{tool} is not supported by the native engine yet (ADR-0026 phase 6); run the fixture runner or the Python engine for it"
-            )));
+            return Err(EngineError::new(
+                ErrorType::Key,
+                format!("Unknown tool: {tool}"),
+            ));
         }
         let arguments = prepare_arguments(tool, arguments)?;
         context.checkpoint()?;
@@ -556,16 +594,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_query_tools_are_refused_until_their_port() {
-        let (runner, root) = scripted("#!/bin/sh\nexit 0\n");
+    async fn the_query_tools_run_in_process_and_never_spawn_a_worker() {
+        // A worker that would fail loudly if spawned: the query tools must
+        // reach `ask::run_tool`, whose first step (the model settings)
+        // refuses an argument set with no llm_settings.
+        let (runner, root) = scripted("#!/bin/sh\necho spawned >&2\nexit 7\n");
         let (context, _receiver, _stop) = context();
         for tool in ["ask", "deep_research", "resolve_wiki"] {
-            let error = runner.run(tool, Map::new(), &context).await.err();
+            let mut arguments = Map::new();
+            arguments.insert("question".to_owned(), Value::String("q".to_owned()));
+            let outcome = runner.run(tool, arguments, &context).await;
+            let text = match &outcome {
+                Ok(value) => value.to_string(),
+                Err(error) => error.message.clone(),
+            };
+            assert!(!text.contains("ended without a result"), "{tool}: {text}");
             assert!(
-                error.is_some_and(|e| e.message.contains("not supported by the native engine yet")),
-                "{tool}"
+                !text.contains("not supported by the native engine"),
+                "{tool}: {text}"
             );
         }
+        let unknown = runner.run("list_wikis", Map::new(), &context).await.err();
+        assert_eq!(unknown.map(|e| e.error_type), Some(ErrorType::Key));
         let _ = std::fs::remove_dir_all(&root);
     }
 
