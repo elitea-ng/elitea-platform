@@ -34,7 +34,7 @@ Replaces `pylon_main`: the central API gateway and domain logic service.
 - Domain logic: applications, conversations, predict, analytics, toolkits,
   publishing, admin, indexer integration
 - Tenant-aware PostgreSQL access (schema-per-tenant)
-- Redis for caching and rate limiting
+- NATS (JetStream) for the runtime command bus, live updates and presence
 - SSE streaming for long-running operations
 
 **Ports:**
@@ -58,7 +58,7 @@ Replaces `pylon_main`: the central API gateway and domain logic service.
 |-----------|--------|-----------|
 | HTTP Router | `go-chi/chi` | Lightweight, stdlib-compatible, excellent middleware ecosystem |
 | PostgreSQL | `jackc/pgx/v5` | Best performance, native PostgreSQL protocol support |
-| Redis | `redis/go-redis/v9` | Official Go Redis client |
+| Messaging | `nats-io/nats.go` | NATS core + JetStream; replaced Redis (removed) |
 | Tracing/Metrics | `go.opentelemetry.io/otel` | Vendor-neutral, CNCF standard |
 | Query generation | `sqlc` | Type-safe SQL, no ORM overhead |
 
@@ -72,7 +72,7 @@ schema transparently.
 
 The migration from Python/Flask proceeds domain by domain:
 
-1. Infrastructure layer (DB pool, Redis, health probes) — **done**
+1. Infrastructure layer (DB pool, NATS, health probes) — **done**
 2. Auth middleware — in progress
 3. Domain services (one per sprint)
 4. Deprecate `pylon_main` once all routes are validated in production

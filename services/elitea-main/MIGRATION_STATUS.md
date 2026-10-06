@@ -30,7 +30,12 @@ Last updated: 2026-09-07
 > `internal/cutover/index_v2_preflight.go` STAYS. It is a different cutover —
 > the index capability v1-to-v2 move from issues #337/#339 — and it is live:
 > `cmd/index-v2-preflight`, `internal/infra/db/repos/index_v2_cutover.go` and
-> `internal/transport/redisdispatch/index_v2_cutover.go` all call it.
+> `internal/transport/commandbus/index_v2_cutover.go` all call it.
+>
+> **Redis itself is gone.** Every "Redis" below is history: the command bus is
+> NATS JetStream, live updates and presence are on NATS, Form sign-in state is
+> in PostgreSQL, and the last Redis (`runtime-redis`) was removed — see
+> `docs/UPGRADING.md`, "runtime-redis removed".
 >
 > `internal/api/TestNoPylonBridgeWiringReturns` fails if any of the deleted
 > wiring comes back.

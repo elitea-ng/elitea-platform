@@ -3,7 +3,7 @@ title: "Run the standalone stack"
 description: "Bring up the full Compose stack locally with deploy/scripts/standalone-stack.sh: certs, seeding, a real model, and the overlays."
 ---
 
-The standalone stack (`deploy/docker-compose.standalone-full.yml`) runs Elitea's whole one-host topology — elitea-web, elitea-main, the LLM gateway, an agent worker, PostgreSQL, NATS (live updates), the runtime's TLS Redis, and a mock identity provider — driven by `deploy/scripts/standalone-stack.sh`. [Install Elitea](/getting-started/install) covers the same stack from an operator's perspective; this page covers the local-development path: seeding fixtures, pointing the gateway at a real model, and the overlays that swap in the Rust worker or the DeepWiki real engine.
+The standalone stack (`deploy/docker-compose.standalone-full.yml`) runs Elitea's whole one-host topology — elitea-web, elitea-main, the LLM gateway, an agent worker, PostgreSQL, NATS (live updates and the runtime command bus), and a mock identity provider — driven by `deploy/scripts/standalone-stack.sh`. [Install Elitea](/getting-started/install) covers the same stack from an operator's perspective; this page covers the local-development path: seeding fixtures, pointing the gateway at a real model, and the overlays that swap in the Rust worker or the DeepWiki real engine.
 
 ## Bring it up
 
@@ -80,7 +80,7 @@ Verifies the gateway's mTLS hop, the runtime plane, the chat critical path (via 
 | 8090 | llm-mock journal | `STANDALONE_MOCK_PORT` |
 | 9400 | oidc-provider-mock | fixed — cannot be remapped |
 
-The runtime plane (`runtime-redis`, and elitea-main's mTLS listeners) is not published to the host at all — only the worker, on the compose network, needs it.
+The runtime plane (elitea-main's mTLS listeners) is not published to the host at all — only the worker, on the compose network, needs it.
 
 ## The mock LLM and mock MCP services
 

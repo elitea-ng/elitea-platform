@@ -18,13 +18,13 @@ import (
 
 const postgresReliabilityOptIn = "ELITEA_RUNTIME_POSTGRES_RELIABILITY_TEST"
 
-// TestPostgresServiceBackedRedisOutageBacklogReliability is an opt-in real
-// PostgreSQL 16 service-integration reliability test with an injected Redis
-// adapter outage. It proves bounded concurrent admission, atomic input/job/
+// TestPostgresServiceBackedCommandBusOutageBacklogReliability is an opt-in
+// real PostgreSQL 16 service-integration reliability test with an injected
+// command-bus adapter outage. It proves bounded concurrent admission, atomic input/job/
 // outbox persistence, unpublished backlog retention, and exact-envelope reuse
-// by replacement publisher instances. It does not stop a real Redis process
+// by replacement publisher instances. It does not stop a real NATS server
 // and is not a cross-process E2E, failover, or soak claim.
-func TestPostgresServiceBackedRedisOutageBacklogReliability(t *testing.T) {
+func TestPostgresServiceBackedCommandBusOutageBacklogReliability(t *testing.T) {
 	if os.Getenv(postgresReliabilityOptIn) != "1" {
 		t.Skipf("set %s=1 with %s to run the PostgreSQL backlog reliability test", postgresReliabilityOptIn, postgresIntegrationDatabaseURL)
 	}
@@ -91,7 +91,7 @@ func TestPostgresServiceBackedRedisOutageBacklogReliability(t *testing.T) {
 	}
 	assertPostgresAdmissionRowCounts(t, ctx, pool, maxOutstanding, maxOutstanding, maxOutstanding)
 
-	outage := errors.New("injected Redis unavailable")
+	outage := errors.New("injected command bus unavailable")
 	first := &backlogReliabilityProducer{appendFailure: outage}
 	runBacklogPublisherCycle(t, ctx, pool, policy.StreamName, first, publisherWorkers, outage)
 	assertBacklogPublicationState(t, ctx, pool, maxOutstanding, 0, 0)
