@@ -26,10 +26,35 @@
 //!
 //! Requests run `concurrency` at a time (the Python engine ran them one by
 //! one); a stop aborts every request in flight.
+//!
+//! # The context-length fallback
+//!
+//! The windows are counted in `cl100k_base` tokens, but the model counts
+//! with its own tokenizer. A model whose tokenizer counts more tokens for
+//! the same text (Qwen3-Embedding behind vLLM, 8192 tokens of context)
+//! refuses a full window with HTTP 400. `LangChain` sent the cl100k token
+//! IDS, which never passed the limit but gave meaningless vectors to a
+//! non-OpenAI model; this client sends text, so it must recover:
+//!
+//! 1. A request refused by [`is_context_length_refusal`] is sent again one
+//!    window at a time, in the same task (so within `concurrency`).
+//! 2. A window refused on its own is cut in two with the same tokenizer;
+//!    each half is embedded the same way (and cut again if needed), and
+//!    the halves' vectors are averaged by token count, exactly as the
+//!    windows of a long text are. The window's place and weight do not
+//!    change.
+//! 3. A window of [`MIN_SPLIT_TOKENS`] or fewer is not cut: the run fails
+//!    and names `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS`. The extra requests of
+//!    one client are capped at [`FALLBACK_REQUESTS_PER_WINDOW`] per window
+//!    plus [`FALLBACK_REQUESTS_BASE`]; past the cap the run fails too.
+//!
+//! Any other refusal fails the call, as before. The client counts the
+//! windows it cut ([`EmbeddingClient::split_windows`]) and logs the count
+//! once, when the run's last client handle goes.
 
 use super::settings::ModelSettings;
 use super::tokens::{EMBEDDING_CTX_LENGTH, Window, embedding_split};
-use super::transport::{BodyError, Call, Transport, read_limited};
+use super::transport::{BodyError, Call, PostError, Transport, read_limited};
 use crate::errors::{EngineError, ErrorType};
 use crate::runner::StopSignal;
 use serde_json::{Value, json};
@@ -48,6 +73,55 @@ pub const DEFAULT_BATCH_SIZE: usize = 64;
 
 /// Requests in flight at once.
 pub const DEFAULT_CONCURRENCY: usize = 4;
+
+/// The smallest window the context-length fallback cuts in two, in
+/// `cl100k_base` tokens; also the smallest `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS`.
+pub const MIN_SPLIT_TOKENS: usize = 256;
+
+/// The fallback's extra requests allowed per window this client embedded.
+/// Sending a refused batch again one window at a time costs one per
+/// window; each cut costs two.
+pub const FALLBACK_REQUESTS_PER_WINDOW: u64 = 4;
+
+/// Extra requests allowed on top of the per-window share, so that a small
+/// run with one long window can still cut it down to the floor.
+pub const FALLBACK_REQUESTS_BASE: u64 = 64;
+
+/// The name an operator sets to shrink the windows.
+const CTX_SETTING: &str = "ELITEA_DEEPWIKI_EMBED_CTX_TOKENS";
+
+/// Phrases that mark a refusal as a context-length refusal, lower case.
+///
+/// * `maximum context length`: `OpenAI` ("This model's maximum context
+///   length is 8192 tokens, however you requested …") and vLLM's
+///   OpenAI-compatible server (same sentence);
+/// * `context_length_exceeded`: `OpenAI`'s error `code`;
+/// * `max context`: vLLM's newer wording ("max context 8192 tokens, the
+///   prompt had at least 8193");
+/// * `maximum model length`: vLLM's prompt check ("… is longer than the
+///   maximum model length of 8192").
+const CONTEXT_PHRASES: [&str; 4] = [
+    "maximum context length",
+    "context_length_exceeded",
+    "max context",
+    "maximum model length",
+];
+
+/// Whether a refusal is the model saying an input is over its context.
+///
+/// Only HTTP 400 counts, and only when the body names the context limit:
+/// every other 400 (a bad model name, a malformed request) and every other
+/// status keeps failing the call. The body is matched as raw text, so a
+/// gateway that wraps the provider's error in its own envelope still
+/// matches.
+#[must_use]
+pub fn is_context_length_refusal(status: u16, body: &str) -> bool {
+    if status != 400 {
+        return false;
+    }
+    let body = body.to_lowercase();
+    CONTEXT_PHRASES.iter().any(|phrase| body.contains(phrase))
+}
 
 /// A response body cap: 64 inputs of 4096 dimensions as JSON floats is
 /// about 6 MiB, so this leaves room without being unbounded.
@@ -81,6 +155,27 @@ struct Inner {
     options: EmbeddingOptions,
     dimension: OnceLock<usize>,
     prompt_tokens: AtomicU64,
+    /// Windows embedded (the fallback's request budget grows with it).
+    windows: AtomicU64,
+    /// Windows the context-length fallback cut in two.
+    split_windows: AtomicU64,
+    /// Requests the context-length fallback added.
+    fallback_requests: AtomicU64,
+}
+
+impl Drop for Inner {
+    fn drop(&mut self) {
+        let split = *self.split_windows.get_mut();
+        if split > 0 {
+            tracing::warn!(
+                model = %self.model,
+                split_windows = split,
+                extra_requests = *self.fallback_requests.get_mut(),
+                ctx_tokens = self.options.ctx_length,
+                "the embedding model refused windows as over its context; they were cut and their halves averaged. Set {CTX_SETTING} below the model's context to avoid the extra requests"
+            );
+        }
+    }
 }
 
 /// The embedding client of one invocation. Clones share the discovered
@@ -113,6 +208,9 @@ impl EmbeddingClient {
                 },
                 dimension: OnceLock::new(),
                 prompt_tokens: AtomicU64::new(0),
+                windows: AtomicU64::new(0),
+                split_windows: AtomicU64::new(0),
+                fallback_requests: AtomicU64::new(0),
             }),
         }
     }
@@ -133,6 +231,19 @@ impl EmbeddingClient {
     #[must_use]
     pub fn prompt_tokens(&self) -> u64 {
         self.inner.prompt_tokens.load(Ordering::Relaxed)
+    }
+
+    /// Windows the context-length fallback cut so far. A window counts
+    /// once, however many times its pieces were cut again.
+    #[must_use]
+    pub fn split_windows(&self) -> u64 {
+        self.inner.split_windows.load(Ordering::Relaxed)
+    }
+
+    /// Requests the context-length fallback added so far.
+    #[must_use]
+    pub fn fallback_requests(&self) -> u64 {
+        self.inner.fallback_requests.load(Ordering::Relaxed)
     }
 
     /// One vector per text, in order.
@@ -166,6 +277,9 @@ impl EmbeddingClient {
         for (text, text_windows) in windows.into_iter().enumerate() {
             inputs.extend(text_windows.into_iter().map(|window| (text, window)));
         }
+        self.inner
+            .windows
+            .fetch_add(inputs.len() as u64, Ordering::Relaxed);
         let requests = plan_requests(&inputs, self.inner.options.batch_size);
         let vectors = self.run_requests(&inputs, &requests, stop).await?;
 
@@ -218,15 +332,14 @@ impl EmbeddingClient {
         let mut next = 0;
         loop {
             while next < requests.len() && tasks.len() < self.inner.options.concurrency {
-                let batch: Vec<String> = inputs[requests[next].clone()]
+                let batch: Vec<Window> = inputs[requests[next].clone()]
                     .iter()
-                    .map(|(_, window)| window.text.clone())
+                    .map(|(_, window)| window.clone())
                     .collect();
                 let client = self.clone();
                 let stop = stop.clone();
                 let index = next;
-                tasks
-                    .spawn(async move { (index, client.request(Value::from(batch), &stop).await) });
+                tasks.spawn(async move { (index, client.embed_batch(batch, &stop).await) });
                 next += 1;
             }
             let Some(joined) = tasks.join_next().await else {
@@ -238,6 +351,107 @@ impl EmbeddingClient {
             results[index] = Some(result?);
         }
         Ok(results.into_iter().flatten().flatten().collect())
+    }
+
+    /// One planned request, with the context-length fallback.
+    async fn embed_batch(&self, batch: Vec<Window>, stop: &StopSignal) -> BatchResult {
+        let texts: Vec<String> = batch.iter().map(|window| window.text.clone()).collect();
+        match self.request_classified(Value::from(texts), stop).await {
+            Ok(vectors) => Ok(vectors),
+            Err(failure) if refused_for_context(&failure) => {
+                tracing::debug!(
+                    model = %self.inner.model,
+                    windows = batch.len(),
+                    "embedding request refused as over the model's context; sending its windows one at a time"
+                );
+                let single = batch.len() == 1;
+                let mut vectors = Vec::with_capacity(batch.len());
+                for window in batch {
+                    let vector = if single {
+                        // That request WAS this window alone.
+                        self.split_refused(window, 0, stop).await?
+                    } else {
+                        self.embed_alone(window, 0, stop).await?
+                    };
+                    vectors.push(vector);
+                }
+                Ok(vectors)
+            }
+            Err(failure) => Err(failure.error),
+        }
+    }
+
+    /// Embed one window in its own request; cut it if the model refuses it
+    /// for context. `depth` is 0 for a planned window, more for a piece.
+    async fn embed_alone(
+        &self,
+        window: Window,
+        depth: u32,
+        stop: &StopSignal,
+    ) -> Result<Vec<f32>, EngineError> {
+        self.take_fallback_requests(1)?;
+        match self
+            .request_classified(Value::from(vec![window.text.clone()]), stop)
+            .await
+        {
+            Ok(mut vectors) => vectors
+                .pop()
+                .ok_or_else(|| self.call().protocol_error("no vector for a window")),
+            Err(failure) if refused_for_context(&failure) => {
+                Box::pin(self.split_refused(window, depth, stop)).await
+            }
+            Err(failure) => Err(failure.error),
+        }
+    }
+
+    /// A window the model refused on its own: cut it in two, embed the
+    /// pieces, and average them by token count.
+    async fn split_refused(
+        &self,
+        window: Window,
+        depth: u32,
+        stop: &StopSignal,
+    ) -> Result<Vec<f32>, EngineError> {
+        if window.tokens <= MIN_SPLIT_TOKENS {
+            return Err(runtime(format!(
+                "Embedding inference failed for model '{}': the model refused a window of {} cl100k_base tokens as over its context, and a window of {MIN_SPLIT_TOKENS} tokens or fewer is not cut further; check the model's maximum context and set {CTX_SETTING} (now {}) below it",
+                self.inner.model, window.tokens, self.inner.options.ctx_length
+            )));
+        }
+        if stop.is_requested() {
+            return Err(EngineError::cancelled());
+        }
+        let Window { text, tokens } = window;
+        let pieces = tokio::task::spawn_blocking(move || halve(&text, tokens))
+            .await
+            .map_err(|_| runtime("the embedding tokenizer task stopped unexpectedly"))??;
+        if depth == 0 {
+            self.inner.split_windows.fetch_add(1, Ordering::Relaxed);
+        }
+        let mut parts = Vec::with_capacity(pieces.len());
+        for piece in pieces {
+            let weight = piece.tokens;
+            parts.push((self.embed_alone(piece, depth + 1, stop).await?, weight));
+        }
+        Ok(weighted_average(&parts))
+    }
+
+    /// Reserve `count` fallback requests, or fail past the cap.
+    fn take_fallback_requests(&self, count: u64) -> Result<(), EngineError> {
+        let inner = &self.inner;
+        let cap = inner
+            .windows
+            .load(Ordering::Relaxed)
+            .saturating_mul(FALLBACK_REQUESTS_PER_WINDOW)
+            .saturating_add(FALLBACK_REQUESTS_BASE);
+        let used = inner.fallback_requests.fetch_add(count, Ordering::Relaxed) + count;
+        if used > cap {
+            return Err(runtime(format!(
+                "Embedding inference failed for model '{}': the model refused so many windows as over its context that the fallback reached its cap of {cap} extra requests; set {CTX_SETTING} (now {}) below the model's maximum context",
+                inner.model, inner.options.ctx_length
+            )));
+        }
+        Ok(())
     }
 
     async fn embed_empty(&self, stop: &StopSignal) -> Result<Vec<f32>, EngineError> {
@@ -262,6 +476,17 @@ impl EmbeddingClient {
 
     /// One `/embeddings` call; `input` is a list of texts or one text.
     async fn request(&self, input: Value, stop: &StopSignal) -> Result<Vec<Vec<f32>>, EngineError> {
+        self.request_classified(input, stop)
+            .await
+            .map_err(|failure| failure.error)
+    }
+
+    /// [`EmbeddingClient::request`], keeping a refusal for the fallback.
+    async fn request_classified(
+        &self,
+        input: Value,
+        stop: &StopSignal,
+    ) -> Result<Vec<Vec<f32>>, PostError> {
         let expected = input.as_array().map_or(1, Vec::len);
         let call = self.call();
         let body = json!({
@@ -273,21 +498,31 @@ impl EmbeddingClient {
         });
         let body = serde_json::to_vec(&body)
             .map_err(|_| runtime("the embedding request cannot be encoded"))?;
-        let mut response = self.inner.transport.post(&call, body, stop).await?;
+        let mut response = self
+            .inner
+            .transport
+            .post_classified(&call, body, stop)
+            .await?;
         let read = tokio::select! {
             read = read_limited(&mut response, MAX_RESPONSE_BYTES, self.inner.transport.timeouts().request) => read,
-            () = stop.stopped() => return Err(EngineError::cancelled()),
+            () = stop.stopped() => return Err(EngineError::cancelled().into()),
         };
         let bytes = match read {
             Ok(bytes) => bytes,
             Err(BodyError::Timeout) => {
-                return Err(call.timeout_error(self.inner.transport.timeouts().request));
+                return Err(call
+                    .timeout_error(self.inner.transport.timeouts().request)
+                    .into());
             }
             Err(BodyError::TooLarge) => {
-                return Err(call.protocol_error("the response exceeded its size cap"));
+                return Err(call
+                    .protocol_error("the response exceeded its size cap")
+                    .into());
             }
             Err(BodyError::Transport(detail)) => {
-                return Err(call.protocol_error(&format!("the response broke off: {detail}")));
+                return Err(call
+                    .protocol_error(&format!("the response broke off: {detail}"))
+                    .into());
             }
         };
         let vectors = self.parse(&call, &bytes, expected)?;
@@ -371,6 +606,28 @@ impl EmbeddingClient {
 
 fn runtime(message: impl Into<String>) -> EngineError {
     EngineError::new(ErrorType::Runtime, message)
+}
+
+fn refused_for_context(failure: &PostError) -> bool {
+    failure
+        .refusal
+        .as_ref()
+        .is_some_and(|refusal| is_context_length_refusal(refusal.status, &refusal.body))
+}
+
+/// Cut a window of `tokens` `cl100k_base` tokens into pieces of at most
+/// half of that. Decoding and encoding again can merge tokens across the
+/// old window edges, so when the first cut gives one piece, cut by the
+/// piece's own count.
+fn halve(text: &str, tokens: usize) -> Result<Vec<Window>, EngineError> {
+    let mut pieces = embedding_split(text, tokens.div_ceil(2))?;
+    if let [only] = pieces.as_slice()
+        && only.tokens > 1
+    {
+        let again = only.tokens.div_ceil(2);
+        pieces = embedding_split(text, again)?;
+    }
+    Ok(pieces)
 }
 
 /// `LangChain`'s request grouping: up to `batch_size` inputs, closing a
@@ -463,5 +720,92 @@ mod tests {
         #[allow(clippy::cast_possible_truncation)]
         let expected = [(0.75 / norm) as f32, (0.25 / norm) as f32];
         assert_eq!(averaged, expected);
+    }
+
+    #[test]
+    fn context_refusals_are_recognised_by_status_and_phrase() {
+        // vLLM's OpenAI-compatible server (0.6–0.9).
+        let vllm = r#"{"object":"error","message":"This model's maximum context length is 8192 tokens. However, you requested 8193 tokens in the input for embedding generation. Please reduce the length of the input.","type":"BadRequestError","param":null,"code":400}"#;
+        // vLLM's newer wording, as the benchmark saw it.
+        let vllm_new = r#"{"error":{"message":"max context 8192 tokens, the prompt had at least 8193","type":"BadRequestError","param":null,"code":400}}"#;
+        // vLLM's prompt-length check.
+        let vllm_prompt = r#"{"object":"error","message":"The decoder prompt (length 8193) is longer than the maximum model length of 8192. Make sure that `max_model_len` is no smaller than the number of text tokens.","type":"BadRequestError","code":400}"#;
+        // OpenAI.
+        let openai = r#"{"error":{"message":"This model's maximum context length is 8192 tokens, however you requested 9100 tokens (9100 in your prompt; 0 for the completion). Please reduce your prompt; or completion length.","type":"invalid_request_error","param":null,"code":"context_length_exceeded"}}"#;
+        let openai_code_only =
+            r#"{"error":{"message":"Input too long.","code":"context_length_exceeded"}}"#;
+        // A gateway that wraps the provider's text in its own envelope.
+        let wrapped = r#"{"error":{"message":"provider error: {\"message\":\"This model's Maximum Context Length is 8192 tokens\"}","type":"provider_error"}}"#;
+        for body in [
+            vllm,
+            vllm_new,
+            vllm_prompt,
+            openai,
+            openai_code_only,
+            wrapped,
+        ] {
+            assert!(is_context_length_refusal(400, body), "{body}");
+        }
+        // The phrase under another status is not this refusal.
+        for status in [413, 422, 429, 500, 503] {
+            assert!(!is_context_length_refusal(status, openai), "{status}");
+        }
+        // Other 400s keep failing.
+        for body in [
+            r#"{"error":{"message":"The model `emb` does not exist.","type":"NotFoundError","code":400}}"#,
+            r#"{"error":{"message":"'input' is a required property","type":"invalid_request_error"}}"#,
+            r#"{"detail":"bad request"}"#,
+            "",
+            "<html>Bad Request</html>",
+        ] {
+            assert!(!is_context_length_refusal(400, body), "{body}");
+        }
+    }
+
+    #[test]
+    fn a_window_is_halved_by_its_own_tokenizer() {
+        let text = "alpha beta gamma delta epsilon zeta eta theta iota kappa ".repeat(60);
+        let whole = embedding_split(&text, usize::MAX).unwrap_or_default();
+        assert_eq!(whole.len(), 1);
+        let tokens = whole[0].tokens;
+        let halves = halve(&text, tokens).unwrap_or_default();
+        assert!(halves.len() >= 2, "{}", halves.len());
+        assert!(halves.iter().all(|h| h.tokens <= tokens.div_ceil(2)));
+        let joined: String = halves.iter().map(|h| h.text.as_str()).collect();
+        assert_eq!(joined, text);
+    }
+
+    #[test]
+    fn the_fallback_requests_are_capped() {
+        let transport = Transport::new(&super::super::TransportSettings::default())
+            .unwrap_or_else(|e| panic!("{e}"));
+        let settings = ModelSettings::from_llm_settings(&json!({
+            "api_base": "http://127.0.0.1:9/v1",
+            "api_key": "sk-test",
+            "model_name": "m",
+        }))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let client = EmbeddingClient::new(transport, settings, "emb", EmbeddingOptions::default());
+        // No window yet: the base allowance only.
+        assert!(
+            client
+                .take_fallback_requests(FALLBACK_REQUESTS_BASE)
+                .is_ok()
+        );
+        let refused = client.take_fallback_requests(1);
+        assert!(
+            refused
+                .as_ref()
+                .is_err_and(|e| e.message.contains(CTX_SETTING)),
+            "{refused:?}"
+        );
+        // The allowance grows with the windows embedded.
+        client.inner.windows.store(10, Ordering::Relaxed);
+        assert!(
+            client
+                .take_fallback_requests(10 * FALLBACK_REQUESTS_PER_WINDOW - 1)
+                .is_ok()
+        );
+        assert!(client.take_fallback_requests(1).is_err());
     }
 }

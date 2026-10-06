@@ -437,9 +437,36 @@ runner), `ask` and deep research use it.
   defaulting to `gpt-4o-mini` / `text-embedding-3-large`.
 - `EmbeddingClient`: batches of `WIKI_EMBED_BATCH_SIZE` (64), at most
   300 000 tokens per request, `ELITEA_DEEPWIKI_EMBED_CONCURRENCY` (4) in
-  flight. Texts above 8191 `cl100k_base` tokens are embedded in windows
-  and averaged, as LangChain did. The dimension comes from the first
-  response and is enforced for the rest of the run.
+  flight. Texts above 8191 `cl100k_base` tokens
+  (`ELITEA_DEEPWIKI_EMBED_CTX_TOKENS`) are embedded in windows and
+  averaged by token count, as LangChain did. The dimension comes from the
+  first response and is enforced for the rest of the run.
+- The context-length fallback. The windows are counted in `cl100k_base`
+  tokens, but the model counts with its own tokenizer, which can count
+  more for the same text (Qwen3-Embedding-4B on vLLM, 8192 tokens of
+  context, refuses a full window: `max context 8192 tokens, the prompt
+  had at least 8193`). When a request comes back HTTP 400 and its body
+  names the context limit (`maximum context length`,
+  `context_length_exceeded`, `max context`, `maximum model length`), the
+  client sends that request's windows again one at a time. A window the
+  model refuses on its own is cut in two with the same tokenizer, the
+  halves are embedded (and cut again if needed), and their vectors are
+  averaged by token count into the window's vector; the window keeps its
+  place and weight. A window of 256 tokens or fewer is not cut: the run
+  fails with an error that names `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS`. The
+  extra requests of one client are capped at 4 per window it embedded
+  plus 64; past the cap the run fails the same way. Any other refusal
+  fails the run, as before. The fallback runs inside the refused request's
+  slot (so within `ELITEA_DEEPWIKI_EMBED_CONCURRENCY`), honours the stop,
+  and keeps the vectors in order. The client counts the cut windows
+  (`split_windows()`, `fallback_requests()`) and logs one warning with the
+  count when the run ends. Each cut costs requests: for such a model, set
+  `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS` below its context (7000 for
+  Qwen3-Embedding at 8192).
+  Deliberate difference from Python: LangChain sent the windows' cl100k
+  token IDS, which a non-OpenAI model reads as meaningless input, so it
+  never hit the limit and never got a useful vector. This client sends
+  text and recovers from the refusal instead.
 - `ChatClient`: blocking and SSE-streamed completions with tool calls
   (streamed deltas assembled by `index`; a new id, or a new name once a
   call's arguments began, on a used index starts another call; a skipped
@@ -1455,6 +1482,7 @@ not parse refuses the start (and the probe) with a message naming it.
 | `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS` | `14400` | at least 60; `RLIMIT_CPU` (hard limit 10 s above) |
 | `ELITEA_DEEPWIKI_WORKER_THREADS` | available parallelism, at most 8 | at most 256 |
 | `ELITEA_DEEPWIKI_EMBED_CONCURRENCY` | `4` | embedding requests in flight |
+| `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS` | `8191` | at least 256; the embedding window in `cl100k_base` tokens. Set it below the embedding model's context when its tokenizer counts more tokens (a refused window is cut and retried, at extra requests) |
 | `ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS` | `7200` | the longest one streamed model call may run (Python: no limit); a stalled stream ends after 300 s of silence |
 | `ELITEA_DEEPWIKI_TLS_CA_FILE` | unset | extra PEM roots for the model gateway |
 | `ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS` | `15` | 1–100, `deep_research` |

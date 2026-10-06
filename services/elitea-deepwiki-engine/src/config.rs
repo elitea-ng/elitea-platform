@@ -8,7 +8,8 @@
 use crate::ingest::IngestSettings;
 use crate::ingest::egress::EgressPolicy;
 use crate::ingest::limits::IngestLimits;
-use crate::llm::embeddings::{DEFAULT_BATCH_SIZE, DEFAULT_CONCURRENCY};
+use crate::llm::embeddings::{DEFAULT_BATCH_SIZE, DEFAULT_CONCURRENCY, MIN_SPLIT_TOKENS};
+use crate::llm::tokens::EMBEDDING_CTX_LENGTH;
 use crate::storage::build::{MIN_STALE_AFTER, PublishSettings};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -210,6 +211,12 @@ pub struct ModelEnvSettings {
     /// `ELITEA_DEEPWIKI_EMBED_CONCURRENCY`: embedding requests in flight,
     /// default 4. The Python engine sent them one at a time.
     pub embed_concurrency: usize,
+    /// `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS`: the embedding window, in
+    /// `cl100k_base` tokens, default 8191 (`LangChain`'s). Set it below the
+    /// embedding model's own context when that model's tokenizer counts
+    /// more tokens than `cl100k_base` for the same text. At least
+    /// [`MIN_SPLIT_TOKENS`].
+    pub embed_ctx_tokens: usize,
     /// `ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS`: the longest one model
     /// stream may run, default 7200 (Python had no limit).
     pub stream_total: Duration,
@@ -231,11 +238,21 @@ fn model_settings(
         },
     };
     let concurrency = positive_count(raw, "EMBED_CONCURRENCY", DEFAULT_CONCURRENCY as u64)?;
+    let ctx_tokens = positive_count(raw, "EMBED_CTX_TOKENS", EMBEDDING_CTX_LENGTH as u64)?;
+    let embed_ctx_tokens = usize::try_from(ctx_tokens)
+        .ok()
+        .filter(|tokens| *tokens >= MIN_SPLIT_TOKENS)
+        .ok_or_else(|| {
+            ConfigError(format!(
+                "{ENV_PREFIX}EMBED_CTX_TOKENS must be a whole number of at least {MIN_SPLIT_TOKENS}, got '{ctx_tokens}'"
+            ))
+        })?;
     Ok(ModelEnvSettings {
         tls_ca_file: raw("TLS_CA_FILE").map(PathBuf::from),
         embed_batch_size: batch,
         embed_concurrency: usize::try_from(concurrency)
             .map_err(|_| ConfigError(format!("{ENV_PREFIX}EMBED_CONCURRENCY is out of range")))?,
+        embed_ctx_tokens,
         stream_total: positive_seconds(
             raw,
             "MODEL_STREAM_TOTAL_SECONDS",
@@ -956,6 +973,7 @@ mod tests {
                 tls_ca_file: None,
                 embed_batch_size: DEFAULT_BATCH_SIZE,
                 embed_concurrency: DEFAULT_CONCURRENCY,
+                embed_ctx_tokens: EMBEDDING_CTX_LENGTH,
                 stream_total: Duration::from_hours(2),
             })
         );
@@ -963,6 +981,7 @@ mod tests {
             ("ELITEA_DEEPWIKI_TLS_CA_FILE", "/etc/ca.pem"),
             ("WIKI_EMBED_BATCH_SIZE", "16"),
             ("ELITEA_DEEPWIKI_EMBED_CONCURRENCY", "2"),
+            ("ELITEA_DEEPWIKI_EMBED_CTX_TOKENS", "4096"),
             ("ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS", "10800"),
         ])
         .map(|s| s.model);
@@ -972,10 +991,25 @@ mod tests {
                 tls_ca_file: Some(PathBuf::from("/etc/ca.pem")),
                 embed_batch_size: 16,
                 embed_concurrency: 2,
+                embed_ctx_tokens: 4096,
                 stream_total: Duration::from_hours(3),
             })
         );
         assert!(settings(&[("WIKI_EMBED_BATCH_SIZE", "0")]).is_err());
+        for bad in ["0", "255", "-1", "8k"] {
+            let refused = settings(&[("ELITEA_DEEPWIKI_EMBED_CTX_TOKENS", bad)]);
+            assert!(
+                refused
+                    .as_ref()
+                    .is_err_and(|e| e.to_string().contains("EMBED_CTX_TOKENS")),
+                "'{bad}': {refused:?}"
+            );
+        }
+        assert_eq!(
+            settings(&[("ELITEA_DEEPWIKI_EMBED_CTX_TOKENS", "256")])
+                .map(|s| s.model.embed_ctx_tokens),
+            Ok(256)
+        );
         assert!(settings(&[("ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS", "0")]).is_err());
     }
 }

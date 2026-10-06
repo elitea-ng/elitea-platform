@@ -17,7 +17,9 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use elitea_deepwiki_engine::errors::EngineError;
+use elitea_deepwiki_engine::llm::embeddings::MIN_SPLIT_TOKENS;
 use elitea_deepwiki_engine::llm::sse::SseLimits;
+use elitea_deepwiki_engine::llm::tokens::embedding_split;
 use elitea_deepwiki_engine::llm::transport::Backoff;
 use elitea_deepwiki_engine::llm::{
     ChatClient, ChatMessage, ChatRequest, EmbeddingClient, EmbeddingOptions, ModelSettings,
@@ -378,6 +380,164 @@ async fn a_long_text_is_embedded_in_windows_and_averaged() {
         .as_array()
         .map_or(0, Vec::len);
     assert!(windows >= 3, "{windows}");
+}
+
+/// A text of about `words` words, each its own `cl100k_base` token or two.
+fn prose(words: usize) -> String {
+    use std::fmt::Write as _;
+    (0..words).fold(String::new(), |mut text, i| {
+        let _ = write!(text, "word{i} ");
+        text
+    })
+}
+
+/// The inputs of one embeddings request.
+fn inputs_of(seen: &Seen) -> Vec<String> {
+    match &seen.body["input"] {
+        Value::Array(items) => items
+            .iter()
+            .map(|i| i.as_str().unwrap_or("").to_owned())
+            .collect(),
+        Value::String(text) => vec![text.clone()],
+        _ => Vec::new(),
+    }
+}
+
+/// vLLM's context refusal, as its OpenAI-compatible server sends it.
+fn vllm_context_refusal() -> Reply {
+    Reply::Json(
+        StatusCode::BAD_REQUEST,
+        json!({
+            "object": "error",
+            "message": "This model's maximum context length is 8192 tokens. However, you requested 8193 tokens in the input for embedding generation. Please reduce the length of the input.",
+            "type": "BadRequestError",
+            "param": null,
+            "code": 400
+        }),
+        Vec::new(),
+    )
+}
+
+/// A model that refuses, with vLLM's 400, every request holding an input
+/// longer than `max_chars`; otherwise each text's vector is
+/// `[chars, 1]`.
+fn context_limited(seen: &Seen, max_chars: usize) -> Reply {
+    let inputs = inputs_of(seen);
+    if inputs.iter().any(|text| text.chars().count() > max_chars) {
+        return vllm_context_refusal();
+    }
+    let data: Vec<Value> = inputs
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            #[allow(clippy::cast_precision_loss)]
+            let chars = text.chars().count() as f64;
+            json!({"index": index, "embedding": [chars, 1.0]})
+        })
+        .collect();
+    Reply::Json(StatusCode::OK, json!({"data": data}), Vec::new())
+}
+
+#[tokio::test]
+async fn a_window_over_the_models_context_is_cut_and_averaged() {
+    let long = prose(400);
+    let max_chars = long.chars().count() * 3 / 5;
+    let (gw, base) = gateway(move |_, seen| context_limited(seen, max_chars)).await;
+    let client = embedder(&base, EmbeddingOptions::default());
+    let texts = vec!["t1".to_owned(), long.clone(), "t2 t2".to_owned()];
+    let vectors = ok(client.embed_documents(&texts, &StopSignal::default()).await);
+
+    // The short texts keep their own vectors, in their places.
+    assert_eq!(vectors.len(), 3);
+    assert_eq!(vectors[0], [2.0, 1.0]);
+    assert_eq!(vectors[2], [5.0, 1.0]);
+
+    // The long text is the token-weighted, normalised average of its
+    // halves' vectors.
+    let whole = ok(embedding_split(&long, usize::MAX));
+    let halves = ok(embedding_split(&long, whole[0].tokens.div_ceil(2)));
+    assert_eq!(halves.len(), 2);
+    #[allow(clippy::cast_precision_loss)]
+    let (mut x, mut y, mut total) = (0.0_f64, 0.0_f64, 0.0_f64);
+    for half in &halves {
+        #[allow(clippy::cast_precision_loss)]
+        let (chars, weight) = (half.text.chars().count() as f64, half.tokens as f64);
+        x += chars * weight;
+        y += weight;
+        total += weight;
+    }
+    let (x, y) = (x / total, y / total);
+    let norm = x.hypot(y);
+    let expected = [x / norm, y / norm];
+    for (got, want) in vectors[1].iter().zip(expected) {
+        assert!(
+            (f64::from(*got) - want).abs() < 1e-6,
+            "{:?} vs {expected:?}",
+            vectors[1]
+        );
+    }
+
+    // The batch, then each window alone, then the two halves.
+    let sizes: Vec<usize> = gw.requests().iter().map(|r| inputs_of(r).len()).collect();
+    assert_eq!(sizes, [3, 1, 1, 1, 1, 1]);
+    assert_eq!(client.split_windows(), 1);
+    assert_eq!(client.fallback_requests(), 5);
+}
+
+#[tokio::test]
+async fn a_lone_refused_window_is_cut_without_a_repeat() {
+    let long = prose(400);
+    let max_chars = long.chars().count() * 3 / 5;
+    let (gw, base) = gateway(move |_, seen| context_limited(seen, max_chars)).await;
+    let client = embedder(&base, EmbeddingOptions::default());
+    let vector = ok(client.embed_query(&long, &StopSignal::default()).await);
+    assert_eq!(vector.len(), 2);
+    // The refused request held only this window: the next two are halves.
+    assert_eq!(gw.requests().len(), 3);
+    assert_eq!(client.split_windows(), 1);
+}
+
+#[tokio::test]
+async fn another_bad_request_still_fails_the_call() {
+    let (gw, base) = gateway(|_, _| {
+        Reply::Json(
+            StatusCode::BAD_REQUEST,
+            json!({"error": {"message": "The model `emb-model` does not exist.", "type": "NotFoundError", "code": 400}}),
+            Vec::new(),
+        )
+    })
+    .await;
+    let client = embedder(&base, EmbeddingOptions::default());
+    let error = err(client
+        .embed_documents(&[prose(400), "t1".to_owned()], &StopSignal::default())
+        .await);
+    assert!(error.message.contains("HTTP 400"), "{error}");
+    assert!(error.message.contains("does not exist"), "{error}");
+    assert_eq!(gw.requests().len(), 1);
+    assert_eq!(client.split_windows(), 0);
+    assert_eq!(client.fallback_requests(), 0);
+}
+
+#[tokio::test]
+async fn a_context_refusal_below_the_floor_fails_naming_the_setting() {
+    // Refuses every request as over its context.
+    let (gw, base) = gateway(|_, _| vllm_context_refusal()).await;
+    let client = embedder(&base, EmbeddingOptions::default());
+    let error = err(client
+        .embed_documents(&[prose(400)], &StopSignal::default())
+        .await);
+    assert!(
+        error.message.contains("ELITEA_DEEPWIKI_EMBED_CTX_TOKENS"),
+        "{error}"
+    );
+    assert!(
+        error.message.contains(&MIN_SPLIT_TOKENS.to_string()),
+        "{error}"
+    );
+    assert_eq!(error.category(), "inference_failed");
+    // Cut down to the floor, never past it: a few requests, not hundreds.
+    let sent = gw.requests().len();
+    assert!((3..=16).contains(&sent), "{sent}");
 }
 
 #[tokio::test]

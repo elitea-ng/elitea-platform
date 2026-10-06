@@ -430,6 +430,35 @@ impl Call<'_> {
     }
 }
 
+/// A gateway's final refusal: its status and the start of its body.
+///
+/// The body is raw (not sanitised) and capped at `MAX_ERROR_BODY_BYTES`.
+/// It is for a caller that must classify the refusal, and must never be
+/// formatted into an error or a log line; the [`PostError::error`] beside
+/// it is the sanitised form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Refusal {
+    pub status: u16,
+    pub body: String,
+}
+
+/// A failed [`Transport::post_classified`]: the engine error, and the
+/// refusal when the gateway answered with a status that ended the call.
+#[derive(Debug)]
+pub(crate) struct PostError {
+    pub error: EngineError,
+    pub refusal: Option<Refusal>,
+}
+
+impl From<EngineError> for PostError {
+    fn from(error: EngineError) -> Self {
+        Self {
+            error,
+            refusal: None,
+        }
+    }
+}
+
 impl Transport {
     /// POST `body`, retrying as the SDK does, and return the first
     /// successful response (its body unread).
@@ -442,8 +471,22 @@ impl Transport {
         body: Vec<u8>,
         stop: &StopSignal,
     ) -> Result<Response, EngineError> {
+        self.post_classified(call, body, stop)
+            .await
+            .map_err(|failure| failure.error)
+    }
+
+    /// [`Transport::post`], but a final non-success status also gives the
+    /// caller the [`Refusal`], so that it can recognise one refusal (the
+    /// embedding client's context-length fallback) and react to it.
+    pub(crate) async fn post_classified(
+        &self,
+        call: &Call<'_>,
+        body: Vec<u8>,
+        stop: &StopSignal,
+    ) -> Result<Response, PostError> {
         if stop.is_requested() {
-            return Err(EngineError::cancelled());
+            return Err(EngineError::cancelled().into());
         }
         let headers = call.headers()?;
         let attempt_timeout = if call.streaming {
@@ -465,14 +508,14 @@ impl Transport {
             }
             let sent = tokio::select! {
                 sent = tokio::time::timeout(attempt_timeout, request.send()) => sent,
-                () = stop.stopped() => return Err(EngineError::cancelled()),
+                () = stop.stopped() => return Err(EngineError::cancelled().into()),
             };
             let attempts = retry + 1;
             let can_retry = retry < call.max_retries;
             match sent {
                 Err(_) => {
                     if !can_retry {
-                        return Err(call.timeout_error(attempt_timeout));
+                        return Err(call.timeout_error(attempt_timeout).into());
                     }
                     tracing::warn!(
                         what = call.what,
@@ -485,7 +528,7 @@ impl Transport {
                 Ok(Err(error)) => {
                     let transient = error.is_timeout() || error.is_connect() || error.is_request();
                     if !transient || !can_retry {
-                        return Err(call.transport_error(&error, attempts));
+                        return Err(call.transport_error(&error, attempts).into());
                     }
                     tracing::warn!(what = call.what, model = call.model, attempt = attempts, error = %sanitize(&error_chain(&error), call.key), "model request failed; retrying");
                     wait(retry_delay(self.backoff, retry, &HeaderMap::new()), stop).await?;
@@ -512,7 +555,13 @@ impl Transport {
                         )
                         .await
                         .unwrap_or_default();
-                        return Err(call.status_error(status, &body, attempts));
+                        return Err(PostError {
+                            error: call.status_error(status, &body, attempts),
+                            refusal: Some(Refusal {
+                                status: status.as_u16(),
+                                body: String::from_utf8_lossy(&body).into_owned(),
+                            }),
+                        });
                     }
                 }
             }
