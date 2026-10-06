@@ -438,7 +438,8 @@ func compiledAttemptConfig(key []byte) authattempt.Config {
 	// These named security defaults intentionally remain code-owned to avoid
 	// another collection of lightly understood knobs. Production mount still
 	// requires capacity/load evidence and an explicit reviewed change if the
-	// measured workload cannot use these exact limits.
+	// measured workload cannot use these exact limits. Global counts
+	// credential attempts only, never a login begin (authattempt.Config.Global).
 	return authattempt.Config{
 		KeySecret:            append([]byte(nil), key...),
 		Global:               authattempt.Policy{MaxAttempts: 1000, Window: time.Minute},

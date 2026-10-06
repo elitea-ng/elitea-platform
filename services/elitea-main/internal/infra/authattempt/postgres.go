@@ -27,8 +27,8 @@ const (
 	keyDomain         = "elitea-browser-attempt-v1\x00"
 
 	// DefaultMaxConcurrentAdmissions bounds the database work of one replica.
-	// Every attempt touches the shared global row, so a flood above the
-	// limits must queue here, in memory, and not as lock waiters holding
+	// Every credential attempt touches the shared global row, so a flood above
+	// the limits must queue here, in memory, and not as lock waiters holding
 	// connections of the service's one pool.
 	DefaultMaxConcurrentAdmissions = 4
 	// slotWait is how long an attempt waits for an admission slot. Past it
@@ -42,6 +42,13 @@ const (
 	statementTimeout = "2s"
 	// maxDeniedEntries bounds the in-process denial cache. See deniedCache.
 	maxDeniedEntries = 8192
+	// windowOvershootSlack is how far past its policy a stored window's
+	// remaining time may read and still be taken as the policy window. A
+	// window is written as (writer's clock + policy) and read against the
+	// reader's clock; the two are one database clock, but the read happens
+	// at a slightly different instant. Anything longer than this is state
+	// this limiter did not write, and fails closed (see deny).
+	windowOvershootSlack = time.Second
 )
 
 var (
@@ -63,7 +70,19 @@ type Config struct {
 	// resolver. It prevents low-entropy client addresses and logins from being
 	// recovered by enumerating the stored keys offline. Live rotation is
 	// unsupported: every replica must change it only in a coordinated cutover.
-	KeySecret            []byte
+	KeySecret []byte
+	// Global is one deployment-wide row that every CREDENTIAL attempt counts
+	// against. Its job is to cap the rate of password verification across all
+	// clients and logins, which neither per-client nor per-login limits can
+	// bound under a distributed guessing attack; refusing every credential
+	// attempt while it is full is the intended fail-closed trade.
+	//
+	// A login BEGIN does not count against it. Begin verifies nothing; its
+	// cost is one small pre-login session and transaction row, short-lived
+	// and swept. Counting begins globally let anyone who can spread requests
+	// over many client keys (an IPv6 /48 holds 65,536 /64s) stop every user
+	// from even reaching the sign-in form. FormBegin's per-client limit
+	// bounds begin on its own.
 	Global               Policy
 	FormBegin            Policy
 	FormCredentialClient Policy
@@ -108,7 +127,6 @@ func NewPostgresAdmitter(pool *pgxpool.Pool, config Config) (*PostgresAdmitter, 
 	if pool == nil || !validKeySecret(config.KeySecret) ||
 		!validPolicy(config.Global) || !validPolicy(config.FormBegin) ||
 		!validPolicy(config.FormCredentialClient) || !validPolicy(config.FormCredentialLogin) ||
-		config.Global.Window < config.FormBegin.Window ||
 		config.Global.Window < config.FormCredentialClient.Window ||
 		config.Global.Window < config.FormCredentialLogin.Window ||
 		config.MaxConcurrentAdmissions < 0 {
@@ -178,7 +196,7 @@ func (a *PostgresAdmitter) Admit(ctx context.Context, attempt browserapp.Browser
 
 	// Layer 2: the lock-free read. A stale read can only under-deny; the
 	// locked path below checks again.
-	windows, err := a.readWindows(opCtx, keys)
+	windows, err := a.readWindows(opCtx, keys, policies)
 	if err != nil {
 		return 0, dependencyError(ctx)
 	}
@@ -209,15 +227,45 @@ type window struct {
 	remaining time.Duration
 }
 
-func (a *PostgresAdmitter) readWindows(ctx context.Context, keys []attemptKey) (map[attemptKey]window, error) {
+// readWindows measures each window against clock_timestamp(), the instant
+// the row is read, as the locked path does. now() is the transaction's START,
+// which precedes the snapshot this statement reads: a window committed in
+// between would read longer than its policy and turn a 429 into a 503.
+func (a *PostgresAdmitter) readWindows(
+	ctx context.Context,
+	keys []attemptKey,
+	policies []Policy,
+) (map[attemptKey]window, error) {
 	rows, err := a.pool.Query(ctx, `
-		SELECT key, attempts, (extract(epoch FROM window_ends_at - now()) * 1000000)::bigint
+		SELECT key, attempts, (extract(epoch FROM window_ends_at - clock_timestamp()) * 1000000)::bigint
 		FROM elitea_auth.browser_attempt_windows
 		WHERE key = ANY($1)`, keyArguments(keys))
 	if err != nil {
 		return nil, err
 	}
-	return collectWindows(rows)
+	windows, err := collectWindows(rows)
+	if err != nil {
+		return nil, err
+	}
+	clampWindows(keys, policies, windows)
+	return windows, nil
+}
+
+// clampWindows takes a remaining time that reads at most
+// windowOvershootSlack past its key's policy window as that window. A larger
+// overshoot is left as read, so deny still fails it closed.
+func clampWindows(keys []attemptKey, policies []Policy, windows map[attemptKey]window) {
+	for index, key := range keys {
+		current, found := windows[key]
+		if !found {
+			continue
+		}
+		limit := policies[index].Window
+		if current.remaining > limit && current.remaining <= limit+windowOvershootSlack {
+			current.remaining = limit
+			windows[key] = current
+		}
+	}
 }
 
 func collectWindows(rows pgx.Rows) (map[attemptKey]window, error) {
@@ -301,6 +349,7 @@ func (a *PostgresAdmitter) admitLocked(
 	for key, row := range stored {
 		windows[key] = window{attempts: row.attempts, remaining: row.endsAt.Sub(reference)}
 	}
+	clampWindows(keys, policies, windows)
 
 	if retry, limited := limitedBy(keys, policies, windows); limited {
 		// Rollback (deferred) removes any row this attempt created.
@@ -382,7 +431,8 @@ func (a *PostgresAdmitter) deny(
 func (a *PostgresAdmitter) policies(stage browserapp.BrowserAttemptStage) ([]Policy, bool) {
 	switch stage {
 	case browserapp.BrowserAttemptFormBegin:
-		return []Policy{a.global, a.formBegin}, true
+		// No global policy: see Config.Global.
+		return []Policy{a.formBegin}, true
 	case browserapp.BrowserAttemptFormCredential:
 		return []Policy{a.global, a.formClient, a.formLogin}, true
 	default:
@@ -391,11 +441,12 @@ func (a *PostgresAdmitter) policies(stage browserapp.BrowserAttemptStage) ([]Pol
 }
 
 func (a *PostgresAdmitter) keys(attempt browserapp.BrowserAttempt) []attemptKey {
-	globalKey := a.key("", "global", nil)
 	clientKey := a.key(attempt.Stage, "client", []byte(attempt.ClientKey))
 	if attempt.Stage != browserapp.BrowserAttemptFormCredential {
-		return []attemptKey{globalKey, clientKey}
+		// A begin counts per client only; see Config.Global.
+		return []attemptKey{clientKey}
 	}
+	globalKey := a.key("", "global", nil)
 	// Enforce the credential policy independently per client and per login.
 	// A combined client+login bucket can be bypassed by spraying many accounts
 	// from one client or one account from many clients.
