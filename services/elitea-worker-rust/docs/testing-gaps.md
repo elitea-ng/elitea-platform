@@ -99,6 +99,8 @@ The deployed v7 Worker-only restart retains its execution and original runtime, 
 Eight unique reads commit. Runtime cleanup, one final browser result, and browser reload all pass.
 This exact Worker-loss boundary closes. Supervisor/Main replacement and Kubernetes restart recovery retain separate acceptance requirements.
 Keep typed failure display and complete-cohort acceptance open until their proofs pass.
+The [typed failure source correction](source-mapping/code-terminal-failure-20261006.md) passes 50 Rust tests and 109 Main cases.
+Strict Clippy and vet pass. Deployment, live negative UI acceptance, and actual failed-journal replay remain separate proofs.
 State rename reference rewriting remains a separate editor gap.
 Workspaces remain outside this register in the post-worker backlog.
 

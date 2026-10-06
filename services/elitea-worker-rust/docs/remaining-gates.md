@@ -111,9 +111,11 @@ All seven preparation and execution containers are removed. No owned sandbox lea
 The browser displays one final result, which matches persisted output after reload. No Stop control remains.
 This closes the exact Worker-loss Code recovery boundary. Supervisor/Main replacement and Kubernetes recovery remain separate gates.
 Typed Code failure display and complete-cohort acceptance remain open. Point 5 remains open.
+The [typed Code correction](source-mapping/code-terminal-failure-20261006.md) passes 50 Rust tests and 109 Main cases, with strict Clippy and vet.
+It preserves finite categories after durable commit and projects restored failure classes without re-execution or journal mutation.
+Corrected Worker/Main deployment and live negative UI acceptance remain open.
 The [empty-document editor correction](../../../apps/elitea-web/docs/source-mapping/point5-web-empty-document-ci-20261006.md) passes 110 focused tests and real-backend first-node browser checks.
 The completed prior CI has one failed visual job and two configured skips. The replacement-head visual result remains required.
-Recovery latency and its generic public error remain explicit gates. No recovery success is claimed for this probe.
 
 Code-node backend selection is tracked in the [isolation assessment](source-mapping/code-node-isolation-assessment-20260928.md).
 The deployed Docker path passes Python/Pyodide, JavaScript, TypeScript, and Rust execution through the pipeline test chat.

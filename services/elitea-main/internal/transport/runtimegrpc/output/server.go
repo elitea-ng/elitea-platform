@@ -1086,6 +1086,14 @@ func budgetScopePolicy(safeMessage string) (runtimeFailurePolicy, bool) {
 
 // Input sections use fixed public messages. Never accept an arbitrary worker reason.
 func runtimeFailurePolicyForError(payload *runtimev1.RuntimeErrorV1) (runtimeFailurePolicy, bool) {
+	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_CODE_FAILED {
+		switch payload.GetSafeMessage() {
+		case "Code dependency preparation failed. Later nodes did not run. Share the support reference with your administrator before retrying.",
+			"Code dependency preparation was cancelled. Later nodes did not run. Review the existing attempt before retrying.",
+			"Code dependency preparation could not be confirmed. The preparation job was not restarted. Later nodes did not run. Ask your administrator to reconcile the existing attempt before retrying. Share the support reference.":
+			return runtimeFailurePolicy{Code: "PIPELINE_CODE_FAILED", SafeMessage: payload.GetSafeMessage()}, true
+		}
+	}
 	if payload.GetCode() == runtimev1.RuntimeErrorCodeV1_RUNTIME_ERROR_CODE_V1_PIPELINE_INPUT_INVALID && payload.GetSafeMessage() == childInputTypeSafeMessage {
 		return runtimeFailurePolicy{Code: "PIPELINE_INPUT_INVALID", SafeMessage: childInputTypeSafeMessage}, true
 	}

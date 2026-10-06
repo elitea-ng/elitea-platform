@@ -24,6 +24,7 @@ struct Store {
     inner: MemoryCheckpointer,
     append: Mutex<()>,
     reject_append: AtomicBool,
+    revoke_after_append: Mutex<Option<Arc<Lease>>>,
 }
 #[async_trait]
 impl Checkpointer for Store {
@@ -63,7 +64,11 @@ impl ParallelCheckpointAppender for Store {
         {
             return Err(recovery_error("test.append_conflict"));
         }
-        self.save(candidate).await
+        let saved = self.save(candidate).await?;
+        if let Some(lease) = self.revoke_after_append.lock().await.take() {
+            lease.0.store(false, Ordering::SeqCst);
+        }
+        Ok(saved)
     }
 }
 
@@ -1246,4 +1251,392 @@ async fn code_preparation_cause_survives_the_application_child_event_drain() {
         serde_json::json!("ask_administrator")
     );
     assert!(crate::agents::application_tools::child_failure_report(&error, None, true).is_none());
+}
+
+struct TypedCodeFailure {
+    factory: Arc<Factory>,
+    calls: AtomicU64,
+    class: NodeFailureClass,
+    preparation: Option<super::super::code_runtime::CodePreparationFailure>,
+    reject_append: bool,
+    revoke_after_append: bool,
+}
+
+#[async_trait]
+impl super::super::code_runtime::CodeSandboxRuntime for TypedCodeFailure {
+    async fn execute(
+        &self,
+        _: super::super::code_runtime::CodeInvocation<'_>,
+    ) -> Result<Vec<u8>, GraphError> {
+        panic!("use the typed Code attempt");
+    }
+    async fn execute_attempt(
+        &self,
+        _: super::super::code_runtime::CodeInvocation<'_>,
+        authority: &NodeAttemptAuthority,
+    ) -> Result<Vec<u8>, super::super::code_runtime::CodeAttemptFailure> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.factory
+            .store
+            .reject_append
+            .store(self.reject_append, Ordering::SeqCst);
+        if self.revoke_after_append {
+            *self.factory.store.revoke_after_append.lock().await = Some(self.factory.lease.clone());
+        }
+        let mut failure = super::super::code_runtime::CodeAttemptFailure::new(
+            super::super::code_runtime::CodeAttemptPhase::Observation,
+            self.class,
+            if self.class == NodeFailureClass::AuthorizationDenied {
+                ReplaySafety::UnknownExternalEffect {
+                    effect_id: authority.dispatch_activation(),
+                }
+            } else {
+                ReplaySafety::NoExternalEffect
+            },
+        );
+        failure.preparation = self.preparation;
+        Err(failure)
+    }
+}
+
+fn typed_code_failure(factory: Arc<Factory>, class: NodeFailureClass) -> Arc<TypedCodeFailure> {
+    Arc::new(TypedCodeFailure {
+        factory,
+        calls: AtomicU64::new(0),
+        class,
+        preparation: None,
+        reject_append: false,
+        revoke_after_append: false,
+    })
+}
+
+async fn typed_code_native_failure(
+    factory: Arc<Factory>,
+    runtime: Arc<TypedCodeFailure>,
+    empty_source: bool,
+) -> String {
+    use super::super::{
+        EliteaGraphAgent,
+        compiler::{PipelineDefinition, PipelineNodeRuntimes},
+        node_events::{PipelineNodeEventStreamingAgent, pipeline_node_event_channel},
+    };
+    use crate::agents::runtime::NativeAgentInvocation;
+    use adk_rust::runner::Runner;
+    use adk_rust::session::{CreateRequest, InMemorySessionService, SessionService};
+    use adk_rust::{Content, SessionId, UserId};
+    let source = if empty_source {
+        "{type: variable, value: source}"
+    } else {
+        "'7'"
+    };
+    let yaml = format!(
+        "state:\n  count: {{type: int, value: 2}}\n  source: {{type: str, value: ''}}\nentry_point: run\nnodes:\n  - id: run\n    type: code\n    code: {source}\n    input: [count]\n    output: [count]\n    transition: END\n"
+    );
+    let definition = PipelineDefinition::from_yaml(&yaml).unwrap();
+    let (sender, receiver) = pipeline_node_event_channel();
+    let graph = definition
+        .compile_with_runtime(
+            "typed-code-failure",
+            Arc::new(MemoryCheckpointer::new()),
+            None,
+            &PipelineNodeRuntimes::default()
+                .with_code(runtime)
+                .with_node_recovery_authority(factory)
+                .with_events(sender),
+        )
+        .unwrap();
+    let sessions = Arc::new(InMemorySessionService::new());
+    sessions
+        .create(CreateRequest {
+            app_name: "elitea".into(),
+            user_id: "user-1".into(),
+            session_id: Some("typed-code-failure-thread".into()),
+            state: std::collections::HashMap::default(),
+        })
+        .await
+        .unwrap();
+    let runner = Runner::builder()
+        .app_name("elitea")
+        .agent(Arc::new(PipelineNodeEventStreamingAgent::new(
+            Arc::new(EliteaGraphAgent::new(graph)),
+            receiver,
+        )))
+        .session_service(sessions)
+        .build()
+        .unwrap();
+    let mut running = NativeAgentInvocation::new(
+        runner,
+        UserId::new("user-1").unwrap(),
+        SessionId::new("typed-code-failure-thread").unwrap(),
+        Content::new("user").with_text("run"),
+    )
+    .start()
+    .unwrap();
+    loop {
+        match running.next_event().await {
+            Err(error) => {
+                return error
+                    .upstream_code()
+                    .expect("typed upstream code")
+                    .to_owned();
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("failed Code cannot complete"),
+        }
+    }
+}
+
+fn code_journal(factory: &Factory) -> NodeAttemptJournal {
+    NodeAttemptJournal::bound(
+        factory.store.clone(),
+        factory.lease.clone(),
+        "node-journal".into(),
+        [1; 32],
+        NodeRecoveryPolicy::default(),
+    )
+}
+
+#[tokio::test]
+async fn code_typed_fresh_and_historical_failures_keep_category_without_reexecution() {
+    for (class, expected) in [
+        (NodeFailureClass::InvalidInput, "pipeline.code_failed"),
+        (
+            NodeFailureClass::AuthorizationDenied,
+            "pipeline.code_authorization_failed",
+        ),
+        (NodeFailureClass::Cancelled, "pipeline.code_cancelled"),
+    ] {
+        let factory = factory();
+        let runtime = typed_code_failure(factory.clone(), class);
+        assert_eq!(
+            typed_code_native_failure(factory.clone(), runtime.clone(), false).await,
+            expected
+        );
+        let journal = code_journal(&factory);
+        let before = journal.load().await.unwrap();
+        let checkpoint = factory.store.load("node-journal").await.unwrap().unwrap();
+        assert!(matches!(
+            before.ledger.phase(),
+            NodeAttemptPhase::Failed(RecoveryDecision::Stop(_))
+        ));
+        assert_eq!(before.ledger.effective_failure().unwrap().class, class);
+        assert_eq!(
+            typed_code_native_failure(factory.clone(), runtime.clone(), false).await,
+            expected
+        );
+        let after = journal.load().await.unwrap();
+        assert_eq!(after.ledger.revision(), before.ledger.revision());
+        assert_eq!(after.ledger.history(), before.ledger.history());
+        assert_eq!(
+            factory
+                .store
+                .load("node-journal")
+                .await
+                .unwrap()
+                .unwrap()
+                .checkpoint_id,
+            checkpoint.checkpoint_id
+        );
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn code_source_failure_is_typed_before_any_runtime_call() {
+    let factory = factory();
+    let runtime = typed_code_failure(factory.clone(), NodeFailureClass::Unknown);
+    assert_eq!(
+        typed_code_native_failure(factory.clone(), runtime.clone(), true).await,
+        "pipeline.code_failed"
+    );
+    assert_eq!(runtime.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        code_journal(&factory)
+            .load()
+            .await
+            .unwrap()
+            .ledger
+            .effective_failure()
+            .unwrap()
+            .class,
+        NodeFailureClass::InvalidInput
+    );
+}
+
+#[tokio::test]
+async fn code_typed_signal_requires_accepted_append_and_current_writer_after_commit() {
+    for revoked in [false, true] {
+        let factory = factory();
+        let mut runtime = typed_code_failure(factory.clone(), NodeFailureClass::InvalidInput);
+        let mutable = Arc::get_mut(&mut runtime).unwrap();
+        mutable.reject_append = !revoked;
+        mutable.revoke_after_append = revoked;
+        assert_eq!(
+            typed_code_native_failure(factory.clone(), runtime.clone(), false).await,
+            "agent.legacy"
+        );
+        factory.lease.0.store(true, Ordering::SeqCst);
+        let phase = code_journal(&factory).load().await.unwrap().ledger.phase();
+        if revoked {
+            assert!(matches!(
+                phase,
+                NodeAttemptPhase::Failed(RecoveryDecision::Stop(_))
+            ));
+        } else {
+            assert_eq!(phase, NodeAttemptPhase::Running);
+        }
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn code_preparation_cancel_is_failure_and_unstored_phase_is_not_inferred_on_replay() {
+    let factory = factory();
+    let mut runtime = typed_code_failure(factory.clone(), NodeFailureClass::Unknown);
+    Arc::get_mut(&mut runtime).unwrap().preparation =
+        Some(super::super::code_runtime::CodePreparationFailure::Cancelled);
+    assert_eq!(
+        typed_code_native_failure(factory.clone(), runtime.clone(), false).await,
+        "pipeline.code_preparation_cancelled"
+    );
+    let before = code_journal(&factory).load().await.unwrap();
+    assert_eq!(
+        typed_code_native_failure(factory.clone(), runtime.clone(), false).await,
+        "pipeline.code_failed"
+    );
+    assert_eq!(
+        code_journal(&factory)
+            .load()
+            .await
+            .unwrap()
+            .ledger
+            .revision(),
+        before.ledger.revision()
+    );
+    assert_eq!(runtime.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn code_control_stop_without_attempt_preserves_cancel_and_lost_lease_distinction() {
+    for (class, expected) in [
+        (NodeFailureClass::Cancelled, "pipeline.code_cancelled"),
+        (NodeFailureClass::LeaseLost, "agent.legacy"),
+    ] {
+        let factory = factory();
+        let journal = code_journal(&factory);
+        let empty = journal.load().await.unwrap();
+        let stopped = empty.ledger.record_control_stop(class, 100).unwrap();
+        let before = journal.append(&empty, stopped, None).await.unwrap();
+        let runtime = typed_code_failure(factory.clone(), NodeFailureClass::Unknown);
+        assert_eq!(
+            typed_code_native_failure(factory.clone(), runtime.clone(), false).await,
+            expected
+        );
+        let after = journal.load().await.unwrap();
+        assert_eq!(after.ledger.revision(), before.ledger.revision());
+        assert!(after.ledger.history().is_empty());
+        assert_eq!(runtime.calls.load(Ordering::SeqCst), 0);
+    }
+}
+
+#[tokio::test]
+async fn non_code_body_keeps_generic_failure_and_default_replay_projection() {
+    let factory = factory();
+    let body = body(vec![Err(NodeFailure::new(
+        NodeFailureClass::InvalidInput,
+        ReplaySafety::NoExternalEffect,
+    ))]);
+    let node = wrapper(body.clone(), factory.clone(), NodeRecoveryPolicy::default());
+    assert!(
+        node.execute(&context())
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("pipeline.node_recovery.failed")
+    );
+    let before = code_journal(&factory).load().await.unwrap();
+    assert!(
+        node.execute(&context())
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("pipeline.node_recovery.failed")
+    );
+    assert_eq!(body.calls.lock().await.len(), 1);
+    assert_eq!(
+        code_journal(&factory)
+            .load()
+            .await
+            .unwrap()
+            .ledger
+            .revision(),
+        before.ledger.revision()
+    );
+}
+
+#[tokio::test]
+async fn parent_cancellation_keeps_control_stop_without_attempt_or_code_projection() {
+    use adk_rust::Content;
+    use adk_rust::agent::SequentialAgent;
+    use adk_rust::session::{CreateRequest, InMemorySessionService, SessionService};
+    let factory = factory();
+    let body = report_body(factory.clone(), vec![]);
+    let node = RecoverableNode::new(
+        body.clone(),
+        [2; 32],
+        NodeRecoveryPolicy::default(),
+        factory.clone(),
+        None,
+    );
+    let sessions = InMemorySessionService::new();
+    let session = sessions
+        .create(CreateRequest {
+            app_name: "elitea".into(),
+            user_id: "user-1".into(),
+            session_id: Some("parent".into()),
+            state: std::collections::HashMap::default(),
+        })
+        .await
+        .unwrap();
+    let mut config = adk_rust::runner::Runner::builder()
+        .app_name("elitea")
+        .agent(Arc::new(SequentialAgent::new("parent", vec![])))
+        .session_service(Arc::new(sessions))
+        .build_config();
+    let token = config.cancellation_token.get_or_insert_default().clone();
+    token.cancel();
+    let parent = adk_rust::runner::InvocationContext::new(
+        "parent-invocation".into(),
+        Arc::new(SequentialAgent::new("parent", vec![])),
+        "user-1".into(),
+        "elitea".into(),
+        "parent".into(),
+        Content::new("user"),
+        session.into(),
+    )
+    .unwrap()
+    .with_cancellation_token(token);
+    let mut context = context();
+    context.config.parent_context = Some(Arc::new(parent));
+    assert!(
+        node.execute(&context)
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("pipeline.node_recovery.cancelled")
+    );
+    let stored = code_journal(&factory).load().await.unwrap();
+    assert!(matches!(
+        stored.ledger.phase(),
+        NodeAttemptPhase::ControlStopped {
+            class: NodeFailureClass::Cancelled,
+            ..
+        }
+    ));
+    assert!(stored.ledger.history().is_empty());
+    assert!(body.body.calls.lock().await.is_empty());
+    assert_eq!(body.reports.load(Ordering::SeqCst), 0);
 }
