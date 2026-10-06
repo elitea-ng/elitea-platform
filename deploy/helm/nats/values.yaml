@@ -208,11 +208,10 @@ nats:
             permissions:
               publish:
                 allow:
-                  - "$JS.API.STREAM.INFO.GATEWAY_BUDGET_DELTAS"
-                  - "$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback"
+                  # Bind: CreateOrUpdateConsumer with a name and a filter
+                  # subject (CREATE.<stream>.<durable>.<filter>).
                   - "$JS.API.CONSUMER.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
-                  - "$JS.API.CONSUMER.DURABLE.CREATE.GATEWAY_BUDGET_DELTAS.budget-writeback"
-                  - "$JS.API.CONSUMER.INFO.GATEWAY_BUDGET_DELTAS.budget-writeback"
+                  # The drain loop: pull, then ack/nak/term.
                   - "$JS.API.CONSUMER.MSG.NEXT.GATEWAY_BUDGET_DELTAS.budget-writeback"
                   - "$JS.ACK.GATEWAY_BUDGET_DELTAS.budget-writeback.>"
                 deny:

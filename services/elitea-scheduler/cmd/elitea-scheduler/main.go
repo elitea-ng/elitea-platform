@@ -195,12 +195,12 @@ func main() {
 	// its other jobs); the consumer resumes when NATS recovers on next restart.
 	var natsConn *nats.Conn
 	if cfg.BudgetWriteBackEnabled && cfg.BudgetWriteBackNATSURL != "" {
-		nc, err := nats.Connect(cfg.BudgetWriteBackNATSURL,
-			nats.Name("elitea-scheduler-budget-writeback"),
-			nats.Timeout(time.Second),
-			nats.MaxReconnects(-1),
-			nats.ReconnectWait(500*time.Millisecond),
-		)
+		nc, err := budgetwriteback.Dial(budgetwriteback.DialConfig{
+			URL:         cfg.BudgetWriteBackNATSURL,
+			TLSCAFile:   cfg.BudgetWriteBackNATSTLSCAFile,
+			TLSCertFile: cfg.BudgetWriteBackNATSTLSCertFile,
+			TLSKeyFile:  cfg.BudgetWriteBackNATSTLSKeyFile,
+		}, logger)
 		if err != nil {
 			slog.Warn("budget write-back: NATS connect failed; consumer disabled", "err", err)
 		} else if js, jerr := jetstream.New(nc); jerr != nil {
