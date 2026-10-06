@@ -138,7 +138,7 @@ export function DeepWiki({
         toolkitId={toolkitId}
         settings={settings}
         toolkit={toolkit}
-        hasWiki={open !== undefined}
+        hasWiki={wikiExists(data, open)}
         settingsOpen={settingsOpen}
         onToggleSettings={() => {
           setSettingsOpen((v) => !v);
@@ -212,7 +212,7 @@ interface ToolkitControlsProps {
   readonly toolkitId: string | undefined;
   readonly settings: ToolkitSettings | undefined;
   readonly toolkit: Record<string, unknown> | undefined;
-  readonly hasWiki: boolean;
+  readonly hasWiki: boolean | undefined;
   readonly settingsOpen: boolean;
   readonly onToggleSettings: () => void;
   readonly chatAvailable: boolean;
@@ -232,6 +232,11 @@ function ListingStatus({ pending, failed }: { readonly pending: boolean; readonl
     );
   }
   return null;
+}
+
+/** Whether a wiki exists: unknown (`undefined`) until the list has loaded, see WikiGenerationPanel. */
+function wikiExists(data: unknown, open: WikiManifest | undefined): boolean | undefined {
+  return data === undefined ? undefined : open !== undefined;
 }
 
 /** The stored choice when the listing still holds it, else the first wiki. */

@@ -200,5 +200,8 @@ describe('DeepWiki header controls', () => {
     });
     expect(screen.getByTestId('wiki-settings-panel')).toBeInTheDocument();
     expect(screen.getByTestId('wiki-settings-saved')).toBeVisible();
+    // Whether a wiki exists is unknown until the list loads, so Generate
+    // waits: "no wiki" would skip the regenerate confirmation.
+    expect(screen.getByTestId('wiki-generate')).toBeDisabled();
   });
 });

@@ -57,8 +57,13 @@ interface WikiGenerationPanelProps {
   readonly projectId: string | number;
   readonly toolkitId: string | number;
   readonly settings: ToolkitSettings;
-  /** Whether a wiki already exists, which turns Generate into a confirmed regenerate. */
-  readonly hasWiki: boolean;
+  /**
+   * Whether a wiki already exists, which turns Generate into a confirmed
+   * regenerate. `undefined` while the wiki list is still loading or failed to
+   * load: Generate waits, because "no wiki" there would skip the confirmation
+   * and replace a wiki that exists.
+   */
+  readonly hasWiki: boolean | undefined;
 }
 
 interface SlotsBody {
@@ -216,7 +221,7 @@ export function WikiGenerationPanel({ projectId, toolkitId, settings, hasWiki }:
         <BaseBtn
           variant="elitea"
           size="small"
-          disabled={running || !canStart}
+          disabled={running || !canStart || hasWiki === undefined}
           data-testid="wiki-generate"
           onClick={() => { if (hasWiki) setConfirmOpen(true); else void start(); }}
         >

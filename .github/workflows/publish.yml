@@ -516,8 +516,8 @@ jobs:
           # for elitea-worker-rust's reason: the Containerfile builds with
           # cargo-auditable, and this value makes a report that only reached
           # the distroless base FAIL instead of reading as clean. Blocking,
-          # on the same distroless cc-debian12 base the worker measured with
-          # no HIGH or CRITICAL finding; nothing here is exempt.
+          # on distroless base-nossl-debian13 plus libgcc_s (no system
+          # OpenSSL to scan); nothing here is exempt.
           - name: elitea-deepwiki-engine-native
             expect_type: rustbinary
             blocking: true
@@ -677,8 +677,8 @@ jobs:
           # for elitea-worker-rust's reason: the Containerfile builds with
           # cargo-auditable, and this value makes a report that only reached
           # the distroless base FAIL instead of reading as clean. Blocking,
-          # on the same distroless cc-debian12 base the worker measured with
-          # no HIGH or CRITICAL finding; nothing here is exempt.
+          # on distroless base-nossl-debian13 plus libgcc_s (no system
+          # OpenSSL to scan); nothing here is exempt.
           - name: elitea-deepwiki-engine-native
             expect_type: rustbinary
             blocking: true
