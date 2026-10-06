@@ -3,12 +3,15 @@
 # The Rust-native DeepWiki engine (ADR-0026): one static-ish binary on a
 # distroless base. No Python, no ML closure, no shell.
 #
-# Build from the repository root:
+# Build from the repository root (the context must be the root: see the
+# migrations COPY below):
+#   docker buildx bake elitea-deepwiki-engine-native
 #   podman build -f services/elitea-deepwiki-engine/Containerfile -t elitea-deepwiki-engine-native .
 #
-# Release wiring (docker-bake target, publish.yml and ci-image-scan matrices)
-# lands in ADR-0026 phase 7, together, because the "every copy of the image
-# list agrees" gates require all of them at once.
+# Released as ghcr.io/elitea-ng/elitea-deepwiki-engine-native (ADR-0026
+# phase 7): docker-bake.hcl, publish.yml's build / scan / publish-image
+# matrices and IMAGES array, and ci-image-scan.yml name it together, and
+# scripts/ci/image-matrix.sh holds them in step.
 
 FROM rust:1.97.1-bookworm AS builder
 
@@ -23,7 +26,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 WORKDIR /src/services/elitea-deepwiki-engine
 COPY services/elitea-deepwiki-engine ./
 # The service migrations, which the binary embeds (include_str!) from the
-# Python package's directory: one set of files for both runners.
+# Python package's directory: one set of files for both runners. Load-bearing:
+# src/storage/migrate.rs reads them by a path OUTSIDE the crate
+# (../elitea-deepwiki/...), and without this line the build fails with
+# "couldn't read …/0001_wiki_index_storage.sql". `migrate` writes the same
+# schema_migrations ledger (same SHA-256 checksums) as the Python entry point.
 COPY services/elitea-deepwiki/src/elitea_deepwiki/migrations ../elitea-deepwiki/src/elitea_deepwiki/migrations
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
