@@ -371,8 +371,8 @@ stale against `pyproject.toml`.
 
 ### The closure moves as a set, and Dependabot is silent on it
 
-Same rule as `services/elitea-deepwiki`, same reason, and this package is where
-it was proved twice over:
+Same rule as the retired Python DeepWiki service had, same reason, and this
+package is where it was proved twice over:
 
 * **The pins move together, never one at a time.** #740 moved `fastapi` to
   0.141.1 in the same commit that moved `elitea-sdk` to 0.9.40, which pins

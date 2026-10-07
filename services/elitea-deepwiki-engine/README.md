@@ -1,8 +1,8 @@
 # elitea-deepwiki-engine
 
 The Rust-native DeepWiki engine ([ADR-0026](https://github.com/elitea-ng/elitea-docs/blob/main/docs/internal/03-architecture/adrs/adr-0026-native-deepwiki-engine.mdx)).
-It replaces the Python engine sidecar (`services/elitea-deepwiki`) behind the
-same Unix socket. The Go sub-application host (`services/elitea-subapp-host`)
+It replaced the Python engine sidecar (`services/elitea-deepwiki`, deleted
+after origin/main `1233e1582`) behind the same Unix socket. The Go sub-application host (`services/elitea-subapp-host`)
 keeps the provider SPI, admission, the parameter merge, the egress check,
 composition and upload. This crate runs the tools.
 
@@ -20,8 +20,8 @@ child process per generation. Phase 6 adds `ask`, `deep_research` and
 Phase 7 packages it: the released image
 `ghcr.io/elitea-ng/elitea-deepwiki-engine-native`, the Helm switch
 `deepwiki.engine.runner: native` and the compose overlay (see the
-[runbook](#runbook-deploy-migrate-operate)). The Python `-engine` image stays
-available behind `runner: legacy` until the parity sign-off.
+[runbook](#runbook-deploy-migrate-operate)). It is now the only engine: the
+Python engine and its `runner: legacy` are removed (see `docs/UPGRADING.md`).
 
 ## Benchmark
 
@@ -45,7 +45,7 @@ GET  /engine/health                  {"status": "UP", "runner": …, "active": n
 
 Tools: `generate_wiki`, `ask`, `deep_research`, `resolve_wiki`.
 
-The wire is the Python sidecar's wherever the host can see it:
+The wire is the retired Python sidecar's wherever the host can see it:
 
 - the routes and status codes: 400 for a missing id, an unknown tool or
   non-object arguments; 409 for an id that is already running; 422 for a
@@ -75,7 +75,7 @@ keeps that refusal: the host resolves the attachments for every engine.
 | `unavailable` (default) | Refuses every tool with `FileNotFoundError` / `resource_not_found`. |
 | `fixture` | Canned results with paced progress (`ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS`, default 1). A port of the Python `fixture_runner.py`; the Go host's own fixture is a third copy. |
 | `native` | The engine: `generate_wiki` in a worker child process (see [below](#the-native-runner-generate_wiki)); `ask`, `deep_research` and `resolve_wiki` in process (see [below](#ask-deep-research-and-resolve_wiki-srcask)). Needs `ELITEA_DEEPWIKI_DATABASE_URL`, or the start is refused. |
-| `legacy` | Refused: that is the Python engine image. |
+| `legacy` | Refused: it named the retired Python engine (see `docs/UPGRADING.md`). |
 
 The fixture's JSON artifacts are written as Python's `json.dumps(…,
 indent=2)` writes them (insertion order, `ensure_ascii`), because the real
@@ -829,10 +829,10 @@ Dead in that path and not ported: the hierarchical and agentic modes
 - **The manifest has no `faiss_cache_key`, `graph_cache_key`,
   `docstore_cache_key`/`docstore_files`, `bm25_cache_key`/`bm25_files`,
   `unified_db_key`/`unified_db_files`.** No live consumer reads them: the
-  Go host and `apps/elitea-web` never mention them; in the Python sidecar
-  only `publishing.py` reads `unified_db_key` (with a newest-file
-  fallback) on the legacy-runner path, and the legacy engine's
-  `artifact_manager` / dead `wiki_loader` read the rest.
+  Go host and `apps/elitea-web` never mention them; in the retired Python
+  sidecar only `publishing.py` read `unified_db_key` (with a newest-file
+  fallback), and the Python engine's `artifact_manager` / dead
+  `wiki_loader` read the rest.
   `analysis_cache_key` stays.
 - **Full-text search.** FTS5 is gone (no SQLite); production uses
   `SubstringSearch`: Python's own non-FTS fallback of
@@ -1432,7 +1432,7 @@ group; the repository has no `docker` ecosystem entry for any image.
 deepwiki:
   enabled: true
   engine:
-    runner: native            # the one switch; legacy = Python, fixture = Python canned
+    runner: native            # the one switch: native, or fixture (canned results)
     native:
       image:
         repository: ghcr.io/elitea-ng/elitea-deepwiki-engine-native
@@ -1465,24 +1465,23 @@ What `runner: native` renders:
 - the `scratch` emptyDir at `ELITEA_DEEPWIKI_SCRATCH_PATH`, the socket
   emptyDir at `/run/deepwiki`, `/tmp` as an emptyDir (read-only root).
 
-The chart refuses to render `runner: native` without a database URL, a host
-runner of `native` with a Python sidecar, an unknown `engine.runner`, and a
-memory limit that is not Gi/Mi or is below 1Gi. The `-engine` tag guard
-still applies to `legacy`. `deploy/helm/tests/render-deepwiki.sh` asserts
-all of it.
+The chart refuses to render `runner: native` without a database URL, an
+unknown `engine.runner`, `legacy` on either switch or the Python sidecar's
+old `engine.image` / `engine.resources` keys (each with a pointer to
+`docs/UPGRADING.md`), and a memory limit that is not Gi/Mi or is below 1Gi.
+`deploy/helm/tests/render-deepwiki.sh` asserts all of it.
 
 ### Migrations
 
-**Decision: with `runner: native` the migrate Job runs the native image
-(`args: ["migrate"]`); a native install pulls no Python image.** It is the
-same schema, not a fork: the binary embeds the same SQL files and writes the
-same `schema_migrations` ledger with the same SHA-256 checksums
-(`tests/storage_migrate.rs` pins them), so either runner
-can migrate a database the other one migrated and a switch back to `legacy`
-needs no migration step. The Rust runner also holds a session advisory lock,
-so two Jobs cannot apply one file twice. The role needs `CREATE` on the
-database (migration 0003 creates the `deepwiki_build` schema; see
-`services/elitea-deepwiki/README.md`). By hand:
+**The migrate Job runs the native image (`args: ["migrate"]`).** It is the
+schema the retired Python runner applied, not a fork: the binary embeds the
+same SQL files (now in `migrations/`) and writes the same
+`schema_migrations` ledger with the same SHA-256 checksums
+(`tests/storage_migrate.rs` pins them), so a database the Python runner
+migrated needs no extra step. The Rust runner also holds a session advisory
+lock, so two Jobs cannot apply one file twice. The role needs `CREATE` on
+the database (`migrations/0003_build_space.sql` creates the
+`deepwiki_build` schema). By hand:
 
 ```bash
 ELITEA_DEEPWIKI_DATABASE_URL=postgresql://… elitea-deepwiki-engine migrate
@@ -1584,7 +1583,7 @@ not parse refuses the start (and the probe) with a message naming it.
 
 | Variable | Default | Limits / notes |
 | --- | --- | --- |
-| `ELITEA_DEEPWIKI_RUNNER` | `unavailable` | `unavailable`, `fixture`, `native`; `legacy` is refused (Python image) |
+| `ELITEA_DEEPWIKI_RUNNER` | `unavailable` | `unavailable`, `fixture`, `native`; `legacy` is refused (the retired Python engine) |
 | `ELITEA_DEEPWIKI_ENGINE_SOCKET` | `/run/deepwiki/engine.sock` | the host dials the same path |
 | `ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS` | `1` | `fixture` only; not negative |
 | `ELITEA_DEEPWIKI_DATABASE_URL` | unset | required by `native` and `migrate`; never logged |
@@ -1622,7 +1621,7 @@ normally stay unset: `DEEPWIKI_EXCLUDE_TESTS`, `DEEPWIKI_MAX_SYMBOLS_PER_PAGE`,
 `DEEPWIKI_DEEPAGENTS_REPOCTX_TOKENS`, `DEEPWIKI_TEST_LINKER`,
 `DEEPWIKI_WEIGHT_CALIBRATION_PROFILE`, `DEEPWIKI_NAMING_ORDER` /
 `WIKI_NAMING_ORDER`, `DEEPWIKI_NAMING_BATCHED` / `WIKI_NAMING_BATCHED`.
-The Python sidecar's `ELITEA_DEEPWIKI_MODEL_ALLOWLIST` is not read: the
+The retired Python sidecar's `ELITEA_DEEPWIKI_MODEL_ALLOWLIST` is not read: the
 native engine downloads no model, every model call goes to the invocation's
 `llm_settings.api_base`.
 

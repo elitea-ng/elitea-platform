@@ -87,7 +87,8 @@ the absence of an item.
 ## What is still open
 
 The provider writes wiki content through the same dead path family
-(`services/elitea-deepwiki/src/elitea_deepwiki/engine/artifacts_platform_client.py`).
+(`artifacts_platform_client.py` in the Python engine, which the Rust
+`services/elitea-deepwiki-engine` has since replaced; this note predates that).
 Moving the UI to `/artifacts/objects/…` is necessary and not sufficient: the
 provider has to write where the UI reads. That is provider work, outside this
 track, and it blocks DWIKI-002, DWIKI-003, DWIKI-009 and DWIKI-011 from reaching

@@ -10,7 +10,7 @@ This is a chart- and engine-verification stack, not a place to do day-to-day UI 
 </Warning>
 
 <Note>
-This stack proves one capability end to end: the DeepWiki provider running as the chart ships it in production — a two-container pod (the Go sub-application host and the Python engine sidecar) reached over a mutually authenticated hop. The web app, the LLM gateway, the scheduler, the agent worker, and the OTel collector are all disabled through values.
+This stack proves one capability end to end: the DeepWiki provider running as the chart ships it in production — a two-container pod (the Go sub-application host and the Rust-native engine sidecar) reached over a mutually authenticated hop. The web app, the LLM gateway, the scheduler, the agent worker, and the OTel collector are all disabled through values.
 </Note>
 
 ## Prerequisites
@@ -31,7 +31,7 @@ deploy/kind/kind-stack.sh down     # delete the cluster
 `seed` also exists as its own subcommand (applying `seed.sql` again without a full reinstall), but `up` already runs it as its last step. `up` is idempotent: an existing cluster, an already-built image, and an already-installed cert-manager are all reused, and the chart install itself is a `helm upgrade --install`.
 
 <Accordion title="Measured timing on a developer machine (podman, warm build cache)">
-`up` took **3m50s** end to end, and `verify` about **13s**. That's faster than a fully cold run — the README's own estimate is roughly 2m26s for `up` once images are built, plus about 8 minutes to build them from nothing; a warm podman build cache (layers shared with other local image builds) cut that second number close to 2 minutes here. Only one third-party image (`pgvector/pgvector:0.8.5-pg16-trixie`, ~467 MB) needed a fresh pull; rustfs and the kind node image were already cached locally (that run also side-loaded the since-removed runtime Redis image). Built images: `elitea-subapp-host:kind` (~14 MB), `elitea-main:kind` (~146 MB), `elitea-deepwiki:kind-engine` (~262 MB, built without the `engine` extras — see [Known limits](#known-limits)).
+`up` took **3m50s** end to end, and `verify` about **13s**. That's faster than a fully cold run — the README's own estimate is roughly 2m26s for `up` once images are built, plus about 8 minutes to build them from nothing; a warm podman build cache (layers shared with other local image builds) cut that second number close to 2 minutes here. Only one third-party image (`pgvector/pgvector:0.8.5-pg16-trixie`, ~467 MB) needed a fresh pull; rustfs and the kind node image were already cached locally (that run also side-loaded the since-removed runtime Redis image). Built images: `elitea-subapp-host:kind` (~14 MB), `elitea-main:kind` (~146 MB), and the engine sidecar. That run predates the switch to the Rust-native sidecar (`elitea-deepwiki-engine-native:kind`); compiling it from nothing (~420 crates) is now the longest build in a cold `up`.
 </Accordion>
 
 ## What `up` does, step by step
@@ -88,7 +88,7 @@ curl -H "Authorization: Bearer <token minted from the seeded PAT>" \
 Four checks, each exiting non-zero on failure — this **is** the project's `helm test` equivalent; the chart carries no separate `helm test` hook, and this is exactly what `.github/workflows/helm-install-smoke.yml` runs on every relevant pull request:
 
 1. **Every pod is Ready** (completed migration Jobs are excluded — a `Succeeded` Job is never `Ready`, and counting it as a failure would fail a correct install forever).
-2. **The provider pod's two containers** — `elitea-deepwiki` (host, `legacy` runner, reaches the sidecar over the shared Unix socket) and `engine` (`fixture` runner) — are both present with the runner the chart set.
+2. **The provider pod's two containers** — `elitea-deepwiki` (host, `native` runner, reaches the sidecar over the shared Unix socket) and `engine` (the native image, `fixture` runner) — are both present with the runner the chart set.
 3. **The facade registered the provider.** A `kubectl exec` into PostgreSQL reads `provider_hub.provider_origin_registration` joined to `provider_hub.provider_health_projection` and expects a `wikis` row with `healthy = true` — proof that elitea-main's provider registrar armed itself and its health probe reached the provider over the mTLS hop.
 4. **A fixture generation completes through the facade.** The check port-forwards elitea-main, mints the seeded PAT into a bearer token, `POST`s the same wiki-generation request the web app sends, polls until it completes, then lists the resulting artifact objects — one manifest and a handful of generated pages under `acme--e2e-generated--main/`.
 
@@ -98,7 +98,7 @@ The provider registrar only arms when `ELITEA_AI_PROJECT_ID` names a public proj
 
 ## Known limits
 
-- The engine sidecar's `-engine` image tag doesn't carry the real analysis-engine dependency closure here — it's built with a minimal extras set (`storage-postgres` only), and the sidecar still runs the `fixture` runner. Set `DEEPWIKI_ENGINE_EXTRAS='[engine,storage-postgres]'` to build the real one; see [Run the standalone stack](/development/standalone-stack#overlays) for where the real engine is actually exercised (on compose, not kind).
+- The engine sidecar runs the `fixture` runner (canned results, no repository and no model). The real engine is exercised on compose, not kind; see [Run the standalone stack](/development/standalone-stack#overlays).
 - No browser login and no edge — `verify` authenticates with a PAT, not a session.
 - No web UI, LLM gateway, scheduler, worker, or OTel collector; all disabled through values.
 - Nothing is durable — PostgreSQL and the object store use `emptyDir`, so a node restart loses the database. This is a proving stack, not a place to keep state.

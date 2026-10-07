@@ -44,6 +44,13 @@ file or Argo CD Application that sets `deepwiki.engine.*` or
   engine). `deploy/docker-compose.deepwiki-native.yml` is deleted. The dev
   `deploy/docker-compose.yml` `deepwiki` profile runs the Go host, the
   native sidecar and the native migration.
+- Outside Helm too: the Go host (`elitea-subapp-host`) no longer has a
+  `legacy` runner. `ELITEA_DEEPWIKI_RUNNER=legacy` stops it at start with
+  a pointer to this entry, as the native engine binary already did.
+- The Python service (`services/elitea-deepwiki`) is deleted, and
+  `ghcr.io/elitea-ng/elitea-deepwiki` is no longer built or published.
+  Tags already published stay in the registry; nothing in the chart pulls
+  them.
 
 **What to do.**
 

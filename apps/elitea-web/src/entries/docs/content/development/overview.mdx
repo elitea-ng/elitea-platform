@@ -36,7 +36,7 @@ Install `kind` v0.33 or newer, `kubectl`, and Helm v3 or v4 if you plan to exerc
 
 | Path | What's there |
 |---|---|
-| `services/` | Go services (`elitea-main`, `elitea-scheduler`, `elitea-subapp-host`), the standalone `elitea-llm-gateway`, the `elitea-deepwiki` and `elitea-inventory` providers, and the two agent workers (`elitea-worker-python`, `elitea-worker-rust`) |
+| `services/` | Go services (`elitea-main`, `elitea-scheduler`, `elitea-subapp-host`), the standalone `elitea-llm-gateway`, the provider engines (`elitea-deepwiki-engine`, Rust, and `elitea-inventory`, Python), and the two agent workers (`elitea-worker-python`, `elitea-worker-rust`) |
 | `apps/` | `elitea-web` (the current frontend, a Vite/React monorepo of its own) and `elitea-ui` (a Git submodule, the frontend `elitea-web` is replacing) |
 | `libs/` | Shared code: `libs/go` (Go libraries consumed across services), `libs/proto` (versioned cross-language contracts), `libs/jsonschema`, `libs/provider` |
 | `gen/` | Generated Go bindings from `libs/proto` |
