@@ -4,7 +4,7 @@
  */
 export { Avatar, AVATAR_TONES, initialsOf, toneIndex, type AvatarProps } from './Avatar';
 export { Badge, badgeText } from './Badge';
-export { Button, buttonHeight, buttonLook, type ButtonProps, type ButtonSize, type ButtonVariant } from './Button';
+export { Button, ButtonAlignmentContext, buttonHeight, buttonLook, type ButtonProps, type ButtonSize, type ButtonVariant } from './Button';
 export { ActionCard, ArrowButton, Card, IconTile, type ActionCardProps } from './Card';
 export { Chip, ChipRow, type ChipProps } from './Chip';
 export { EmptyState, type EmptyStateProps } from './EmptyState';

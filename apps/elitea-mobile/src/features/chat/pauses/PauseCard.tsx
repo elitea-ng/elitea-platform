@@ -225,7 +225,14 @@ function HitlCard(props: PauseCardProps & { pause: Extract<TurnPause, { kind: 'h
           label={busy ? 'Sending…' : 'Send decisions'}
           primary
           disabled={disabled || !allDecided}
-          onPress={() => submit(HITL_CONTRACT, (target) => buildHitlContinueBody(target, pause.interrupts.map((_, i) => decisions[i])))}
+          onPress={() =>
+            submit(HITL_CONTRACT, (target) =>
+              buildHitlContinueBody(
+                target,
+                pause.interrupts.map((_, i) => decisions[i]),
+              ),
+            )
+          }
         />
       ) : null}
     </Frame>
@@ -256,17 +263,29 @@ function InterruptBody({
           {interrupt.parentAgentName ? ` (${interrupt.parentAgentName})` : ''}
         </Text>
       ) : null}
-      {subtitle ? <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.subtitle, { color: palette.textSecondary }]}>{subtitle}</Text> : null}
-      {interrupt.policyMessage ? <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.textSecondary }]}>{interrupt.policyMessage}</Text> : null}
+      {subtitle ? (
+        <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.subtitle, { color: palette.textSecondary }]}>
+          {subtitle}
+        </Text>
+      ) : null}
+      {interrupt.policyMessage ? (
+        <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.textSecondary }]}>
+          {interrupt.policyMessage}
+        </Text>
+      ) : null}
       {/* The Python worker sends the policy text as the message as well: say it once. */}
       {interrupt.message && !isAskUser(interrupt) && interrupt.message.trim() !== interrupt.policyMessage?.trim() ? (
-        <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.text }]}>{interrupt.message}</Text>
+        <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.text }]}>
+          {interrupt.message}
+        </Text>
       ) : null}
       {interrupt.toolArgs ? <MaskedArgs args={interrupt.toolArgs} /> : null}
       {isAskUser(interrupt) ? (
         <AskUser interrupt={interrupt} disabled={disabled} onAnswer={(value) => onDecide({ interrupt, action: 'answer', value })} />
       ) : decided ? (
-        <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.subtitle, { color: palette.textSecondary }]}>Chosen: {ACTION_LABEL[decided.action] ?? decided.action}</Text>
+        <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.subtitle, { color: palette.textSecondary }]}>
+          Chosen: {ACTION_LABEL[decided.action] ?? decided.action}
+        </Text>
       ) : (
         <View style={styles.buttons}>
           {interrupt.availableActions
@@ -342,6 +361,7 @@ export function MaskedArgs({ args }: { args: Record<string, unknown> }) {
 
 function AskUser({ interrupt, disabled, onAnswer }: { interrupt: HitlInterrupt; disabled: boolean; onAnswer: (value: unknown) => void }) {
   const palette = usePalette();
+  const design = useDesign();
   const questions = askUserQuestions(interrupt);
   const [picked, setPicked] = useState<Record<string, string[]>>({});
   const [typed, setTyped] = useState<Record<string, string>>({});
@@ -371,9 +391,21 @@ function AskUser({ interrupt, disabled, onAnswer }: { interrupt: HitlInterrupt; 
                     accessibilityState={{ checked: on, disabled }}
                     accessibilityHint={o.description ?? undefined}
                     disabled={disabled}
+                    hitSlop={4}
                     onPress={() => toggle(q.key, o.label, q.multiSelect)}
-                    style={[styles.chip, { borderColor: on ? palette.accent : palette.border, backgroundColor: on ? palette.accent : 'transparent' }]}>
-                    <Text maxFontSizeMultiplier={FONT_SCALE.body} style={{ ...ramp.subheadline, color: on ? palette.onAccent : palette.text }}>{o.label}</Text>
+                    // The kit chip's look (§4.3): chipSelected / chip, 40 pt tall (44 with the slop).
+                    style={[
+                      styles.chip,
+                      {
+                        borderColor: on ? design.colors.chipSelected : design.colors.separator,
+                        backgroundColor: on ? design.colors.chipSelected : design.colors.chip,
+                      },
+                    ]}>
+                    <Text
+                      maxFontSizeMultiplier={FONT_SCALE.body}
+                      style={{ ...ramp.subheadline, fontWeight: on ? '600' : '400', color: on ? design.colors.chipSelectedText : design.colors.chipText }}>
+                      {o.label}
+                    </Text>
                   </Pressable>
                 );
               })}
@@ -392,12 +424,7 @@ function AskUser({ interrupt, disabled, onAnswer }: { interrupt: HitlInterrupt; 
           ) : null}
         </View>
       ))}
-      <Button
-        label="Submit"
-        primary
-        disabled={disabled || missing.length > 0}
-        onPress={() => onAnswer(buildAnswerValue(interrupt, picked, typed))}
-      />
+      <Button label="Submit" primary disabled={disabled || missing.length > 0} onPress={() => onAnswer(buildAnswerValue(interrupt, picked, typed))} />
     </View>
   );
 }
@@ -456,14 +483,23 @@ function EditorBody({
   return (
     <View style={[styles.editor, { backgroundColor: palette.background }]}>
       <View style={styles.editorHeader}>
-        <Pressable accessibilityRole="button" onPress={onCancel}>
-          <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.buttonText, { color: palette.accent }]}>Cancel</Text>
+        <Pressable accessibilityRole="button" onPress={onCancel} style={styles.editorAction}>
+          <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.buttonText, { color: palette.accent }]}>
+            Cancel
+          </Text>
         </Pressable>
         <Text maxFontSizeMultiplier={FONT_SCALE.body} accessibilityRole="header" style={[styles.title, { color: palette.text }]}>
           {mode === 'edit' ? 'Edit' : 'Block with comment'}
         </Text>
-        <Pressable accessibilityRole="button" accessibilityState={{ disabled: problem !== null }} disabled={problem !== null} onPress={() => onDone(text)}>
-          <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.buttonText, { color: palette.accent, opacity: problem ? 0.4 : 1 }]}>Send</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ disabled: problem !== null }}
+          disabled={problem !== null}
+          onPress={() => onDone(text)}
+          style={styles.editorAction}>
+          <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.buttonText, { color: palette.accent, opacity: problem ? 0.4 : 1 }]}>
+            Send
+          </Text>
         </Pressable>
       </View>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.editorBody}>
@@ -478,7 +514,11 @@ function EditorBody({
           onChangeText={setText}
           style={[styles.editorInput, { color: palette.text, borderColor: palette.inputBorder }, jsonObject ? { fontFamily: MONOSPACE_FONT } : null]}
         />
-        {problem && text !== '' ? <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.note, { color: palette.danger }]}>{problem}</Text> : null}
+        {problem && text !== '' ? (
+          <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.note, { color: palette.danger }]}>
+            {problem}
+          </Text>
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -516,7 +556,9 @@ function OutputLimitCard(props: PauseCardProps) {
   const label = props.pause.kind === 'output_limit' && props.pause.action ? props.pause.action : 'Continue';
   return (
     <Frame title="The answer reached its length limit" note={error ?? offlineNote(props)} icon="info">
-      <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.textSecondary }]}>Continue to get the rest of it.</Text>
+      <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.textSecondary }]}>
+        Continue to get the rest of it.
+      </Text>
       <Button label={busy ? 'Continuing…' : label} primary disabled={disabled} onPress={() => submit(OUTPUT_LIMIT_CONTRACT, buildOutputLimitBody)} />
     </Frame>
   );
@@ -539,7 +581,15 @@ const styles = StyleSheet.create({
   button: { flexGrow: 1 },
   buttonText: { ...ramp.subheadline, fontWeight: '600' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.one },
-  chip: { borderWidth: 1, borderRadius: 16, paddingHorizontal: Spacing.two + 2, paddingVertical: Spacing.one + 2 },
+  chip: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 9999,
+    borderCurve: 'continuous',
+    paddingHorizontal: 14,
+    minHeight: 40,
+    justifyContent: 'center',
+  },
+  editorAction: { minHeight: 44, minWidth: 44, justifyContent: 'center' },
   input: { ...ramp.subheadline, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: Spacing.two, paddingVertical: Spacing.two },
   arg: { ...ramp.footnote, fontFamily: MONOSPACE_FONT, paddingVertical: 2 },
   editor: { flex: 1, padding: Spacing.three, gap: Spacing.two },

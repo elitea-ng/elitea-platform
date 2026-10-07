@@ -32,6 +32,8 @@ const MODIFIERS = [
   'bold',
   'opacity',
   'multilineTextAlignment',
+  'minimumScaleFactor',
+  'dynamicTypeSize',
 ];
 
 function normaliseChildren(children: unknown): (WidgetNode | string)[] {

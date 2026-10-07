@@ -95,7 +95,7 @@ describe('ToolDetailSheet', () => {
   it('shows the input pretty-printed, the output on its tab, and copies the shown text', async () => {
     await render(<ToolDetailSheet step={step('a')} projectId={7} onClose={jest.fn()} />, { wrapper });
     expect(screen.getByText('{\n  "state": "open"\n}')).toBeTruthy();
-    await fireEvent.press(screen.getByRole('tab', { name: 'Output' }));
+    await fireEvent.press(screen.getByRole('radio', { name: 'Output' }));
     expect(screen.getByText('{\n  "items": 2\n}')).toBeTruthy();
     await fireEvent.press(screen.getByLabelText('Copy output'));
     expect(Clipboard.setStringAsync).toHaveBeenCalledWith('{\n  "items": 2\n}');
@@ -116,13 +116,15 @@ describe('ToolDetailSheet', () => {
 
   it('says when the output was cut or did not all arrive', async () => {
     await render(<ToolDetailSheet step={step('a', { outputTruncated: true, partial: true })} projectId={7} onClose={jest.fn()} />, { wrapper });
-    await fireEvent.press(screen.getByRole('tab', { name: 'Output' }));
+    await fireEvent.press(screen.getByRole('radio', { name: 'Output' }));
     expect(screen.getByText('Only the first 8 KB is shown.')).toBeTruthy();
     expect(screen.getByText('Part of this output did not arrive.')).toBeTruthy();
   });
 
-  it("opens a failed call on its error", async () => {
-    await render(<ToolDetailSheet step={step('a', { status: 'error', error: 'file not found', output: null })} projectId={7} onClose={jest.fn()} />, { wrapper });
+  it('opens a failed call on its error', async () => {
+    await render(<ToolDetailSheet step={step('a', { status: 'error', error: 'file not found', output: null })} projectId={7} onClose={jest.fn()} />, {
+      wrapper,
+    });
     expect(screen.getByText('file not found')).toBeTruthy();
   });
 });

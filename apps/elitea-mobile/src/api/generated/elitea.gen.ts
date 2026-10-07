@@ -7,7 +7,7 @@
  *
  * upstream sha256:    27c4b5278cbc1415565e9b74214900b8dbe0cc7680cedfc23de341ba21d0f9c6
  * overlay sha256:     a841b06906dceacba2d34407cd109837cb418a101cfa6c4aea80d9b1ef01bf01
- * operations sha256:  8420de61be5f45c314b934fba627a5ce4a20f7272f2366d80d32ed45dd77e0d4
+ * operations sha256:  c19eb8cf8af7cc311fb799a8ce7a5974c8ef7f3566175c38224e7ccdeb6fefaa
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -39,6 +39,55 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/native/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the caller's native devices
+         * @description The caller's own device sessions (refresh-token families, ADR-0025
+         *     decision 4), newest first. `current` marks the device whose token
+         *     authenticated this request. Revoked devices are listed only with
+         *     `include_revoked=true`. Answers 404 while no native client is
+         *     registered. NOTE(W2): internal/api/nativeauth/devices.go:90.
+         */
+        get: operations["listNativeDevices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/native/devices/{device_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Revoke one of the caller's native devices
+         * @description Revokes the device session (reason `user`). Another user's device, or
+         *     an unknown id, is a 404, so ownership is not disclosed. Revoking the
+         *     device in use is allowed; its next call answers `device_revoked`.
+         *     NOTE(W2): internal/api/nativeauth/devices.go:114.
+         */
+        delete: operations["revokeNativeDevice"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2394,6 +2443,32 @@ export interface components {
             /** @description Refuse to run on a device without a passcode or biometric lock. */
             require_device_lock: boolean;
         };
+        /** @description One native device session (refresh-token family). NOTE(W2): internal/api/nativeauth/devices.go:36 (`UserDevice`). */
+        NativeDevice: {
+            client_id: string;
+            client_name: string;
+            client_version: string;
+            /** Format: date-time */
+            created_at: string;
+            /** @description The device whose token authenticated this request. */
+            current: boolean;
+            /** @description The name the app claimed at sign-in. */
+            device_name: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_seen_at: string;
+            /** @description ios, android, macos, windows, linux or other. */
+            platform: string;
+            /** @description signed_out, user, admin, refresh_reuse, code_replay, user_deactivated, client_disabled, client_removed or expired. */
+            revoke_reason: string | null;
+            /** Format: date-time */
+            revoked_at: string | null;
+        };
+        /** @description NOTE(W2) internal/api/nativeauth/devices.go:108. */
+        NativeDeviceList: {
+            devices: components["schemas"]["NativeDevice"][];
+        };
         /** @description RFC 6749 section 5.2 error of the native authorization endpoints. NOTE(W2): internal/api/nativeauth/token.go:271 (`writeOAuthError`). */
         NativeOAuthError: {
             /** @description invalid_request, invalid_client, invalid_grant, unsupported_grant_type, temporarily_unavailable or not_found. */
@@ -3003,6 +3078,78 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+        };
+    };
+    listNativeDevices: {
+        parameters: {
+            query?: {
+                include_revoked?: boolean;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's devices. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NativeDeviceList"];
+                };
+            };
+            400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            /** @description No native client is registered on this deployment. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NativeOAuthError"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
+    revokeNativeDevice: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                device_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            /** @description Not one of the caller's devices. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NativeOAuthError"];
+                };
+            };
+            426: components["responses"]["ClientUpgradeRequired"];
         };
     };
     revokeNativeToken: {

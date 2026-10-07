@@ -1,9 +1,8 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { totalsLine, usageLine, useUsage, type UsageSummary } from '@/api/queries/usage';
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
-import { ramp } from '@/ui';
+import { useDesign } from '@/design/DesignProvider';
+import { Icon, ListSection, Text } from '@/ui';
 
 /**
  * Settings > Usage: this month's spend against the budget, for the caller
@@ -13,56 +12,79 @@ import { ramp } from '@/ui';
  * Hidden entirely when the workspace answers neither scope.
  */
 export function UsageCard({ projectId }: { projectId: number }) {
-  const palette = usePalette();
   const mine = useUsage(projectId, 'user', true);
   const project = useUsage(projectId, 'project', true);
+  return <UsageView you={mine.data ?? null} project={project.data ?? null} />;
+}
+
+/**
+ * The usage section (as Settings shows it, and its `__DEV__` preview): one inset-grouped section
+ * with a row per scope (the line, a meter when there is a percentage, the totals), a warning row
+ * with a symbol when a budget is close (never colour alone), and the period as the footer.
+ */
+export function UsageView({ you, project }: { you: UsageSummary | null; project: UsageSummary | null }) {
   const rows = [
-    { label: 'You', usage: mine.data ?? null },
-    { label: 'Project', usage: project.data ?? null },
+    { label: 'You', usage: you },
+    { label: 'Project', usage: project },
   ].filter((r): r is { label: string; usage: UsageSummary } => r.usage !== null);
   if (rows.length === 0) return null;
   const period = rows[0].usage;
-
   return (
-    <View testID="usage-card" style={[styles.card, { backgroundColor: palette.backgroundElement }]}>
-      <Text style={[styles.label, { color: palette.textSecondary }]}>Usage this month</Text>
-      {rows.map(({ label, usage }) => (
-        <View key={label} style={styles.row} accessible accessibilityLabel={`${label}: ${usageLine(usage)}${usage.warning ? ', close to the limit' : ''}`}>
-          <View style={styles.line}>
-            <Text style={[styles.value, { color: palette.text }]}>{label}</Text>
-            <Text style={[styles.value, styles.right, { color: usage.warning ? palette.danger : palette.text }]}>{usageLine(usage)}</Text>
+    <View testID="usage-card">
+      <ListSection title="Usage this month" footer={`${period.periodStart} to ${period.periodEnd} (UTC); resets ${period.resetsAt.slice(0, 10)}.`}>
+        {rows.map(({ label, usage }) => (
+          <UsageRow key={label} label={label} usage={usage} />
+        ))}
+        {rows.some((r) => r.usage.warning) ? (
+          <View accessible accessibilityRole="alert" style={styles.warning}>
+            <Icon name="warning" size={18} tone="warning" />
+            <Text variant="footnote" tone="warning" style={styles.flex}>
+              Close to the limit. Requests stop when a budget is used up.
+            </Text>
           </View>
-          {usage.percentUsed !== null ? (
-            <View style={[styles.track, { backgroundColor: palette.border }]}>
-              <View
-                style={[
-                  styles.fill,
-                  { width: `${Math.min(100, Math.max(0, usage.percentUsed))}%`, backgroundColor: usage.warning ? palette.danger : palette.accent },
-                ]}
-              />
-            </View>
-          ) : null}
-          {totalsLine(usage) ? <Text style={[styles.small, { color: palette.textSecondary }]}>{totalsLine(usage)}</Text> : null}
+        ) : null}
+      </ListSection>
+    </View>
+  );
+}
+
+function UsageRow({ label, usage }: { label: string; usage: UsageSummary }) {
+  const { colors } = useDesign();
+  const line = usageLine(usage);
+  const totals = totalsLine(usage);
+  const pct = usage.percentUsed === null ? null : Math.min(100, Math.max(0, usage.percentUsed));
+  return (
+    <View
+      style={styles.row}
+      accessible
+      accessibilityLabel={`${label}: ${line}${usage.warning ? ', close to the limit' : ''}`}
+      accessibilityValue={pct !== null ? { min: 0, max: 100, now: Math.round(pct) } : undefined}>
+      <View style={styles.line}>
+        <Text variant="body">{label}</Text>
+        <Text variant="body" tone={usage.warning ? 'warning' : 'secondary'} style={styles.value}>
+          {line}
+        </Text>
+      </View>
+      {pct !== null ? (
+        <View style={[styles.track, { backgroundColor: colors.surfaceSunken, borderColor: colors.separator }]}>
+          <View style={[styles.fill, { width: `${pct}%`, backgroundColor: usage.warning ? colors.warning : colors.accent }]} />
         </View>
-      ))}
-      {rows.some((r) => r.usage.warning) ? (
-        <Text style={[styles.small, { color: palette.danger }]}>Close to the limit. Requests stop when a budget is used up.</Text>
       ) : null}
-      <Text style={[styles.small, { color: palette.textSecondary }]}>
-        {period.periodStart} to {period.periodEnd} (UTC); resets {period.resetsAt.slice(0, 10)}.
-      </Text>
+      {totals ? (
+        <Text variant="footnote" tone="secondary">
+          {totals}
+        </Text>
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  card: { borderRadius: 12, padding: Spacing.three, gap: Spacing.two },
-  label: { ...ramp.footnote, fontWeight: '600' },
-  row: { gap: Spacing.one },
-  line: { flexDirection: 'row', gap: Spacing.two },
-  right: { flex: 1, textAlign: 'right' },
-  value: { ...ramp.body },
-  small: { ...ramp.footnote },
-  track: { height: 6, borderRadius: 3, overflow: 'hidden' },
-  fill: { height: 6, borderRadius: 3 },
+  flex: { flex: 1 },
+  row: { paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
+  line: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'space-between' },
+  value: { flexShrink: 1, textAlign: 'right' },
+  track: { height: 8, borderRadius: 4, overflow: 'hidden', borderWidth: StyleSheet.hairlineWidth },
+  fill: { height: '100%', borderRadius: 4 },
+  warning: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingVertical: 12 },
 });

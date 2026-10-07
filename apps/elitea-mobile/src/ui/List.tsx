@@ -95,6 +95,13 @@ export interface ListRowProps {
   busy?: boolean;
   onLongPress?: () => void;
   numberOfLines?: number;
+  /** Under the title and subtitle, inside the row's text column (an agent's tags, F5). */
+  footer?: ReactNode;
+  /**
+   * The iOS disclosure chevron. Default: shown when the row navigates (it has onPress, is not
+   * destructive and is not a choice). Pass false for a row whose tap acts in place (Add, F3).
+   */
+  chevron?: boolean;
   testID?: string;
 }
 
@@ -122,6 +129,8 @@ export function ListRow({
   busy,
   onLongPress,
   numberOfLines = 1,
+  footer,
+  chevron,
   testID,
 }: ListRowProps) {
   const design = useDesign();
@@ -129,8 +138,9 @@ export function ListRow({
   const tappable = onPress !== undefined || onLongPress !== undefined;
   const centred = destructive && uiPlatform === 'ios' && !leading && !icon && !trailing;
   const valueBelow = accessibilityLayout && value;
-  const body = (
-    <View style={[styles.row, { minHeight: Math.max(hitTarget(), 52) }]}>
+  const minHeight = { minHeight: Math.max(hitTarget(), 52) };
+  const main = (
+    <>
       {leading ?? (icon ? <Icon name={icon} size={22} tone={destructive ? 'danger' : 'accent'} /> : null)}
       <View style={[styles.text, centred ? styles.centred : null]}>
         <Text variant="body" tone={destructive ? 'danger' : 'primary'} numberOfLines={accessibilityLayout ? undefined : numberOfLines}>
@@ -146,17 +156,23 @@ export function ListRow({
             {value}
           </Text>
         ) : null}
+        {footer}
       </View>
       {value && !valueBelow ? (
         <Text variant="body" tone="secondary" numberOfLines={1} style={styles.value}>
           {value}
         </Text>
       ) : null}
+    </>
+  );
+  const check = selected ? <Icon name="check" size={20} tone="accent" weight="semibold" /> : null;
+  const showChevron = chevron ?? (onPress !== undefined && !destructive && selected === undefined);
+  const body = (
+    <View style={[styles.row, minHeight]}>
+      {main}
       {trailing}
-      {selected ? <Icon name="check" size={20} tone="accent" weight="semibold" /> : null}
-      {onPress && uiPlatform === 'ios' && !destructive && selected === undefined ? (
-        <Icon name="chevronRight" size={14} tone="tertiary" weight="semibold" />
-      ) : null}
+      {check}
+      {showChevron && uiPlatform === 'ios' ? <Icon name="chevronRight" size={14} tone="tertiary" weight="semibold" /> : null}
     </View>
   );
   const a11y = {
@@ -167,8 +183,22 @@ export function ListRow({
     testID,
   };
   if (!tappable) {
+    const state = selected !== undefined || busy ? { selected, busy } : undefined;
+    if (trailing) {
+      // A trailing control (Remove, a switch) stays its own accessibility element (F1): an
+      // accessible row is ONE element on iOS, and VoiceOver could never focus a button inside it.
+      return (
+        <View style={[styles.row, minHeight]}>
+          <View accessible {...a11y} accessibilityState={state} style={styles.mainGroup}>
+            {main}
+          </View>
+          {trailing}
+          {check}
+        </View>
+      );
+    }
     return (
-      <View accessible {...a11y} accessibilityState={selected !== undefined || busy ? { selected, busy } : undefined}>
+      <View accessible {...a11y} accessibilityState={state}>
         {body}
       </View>
     );
@@ -192,6 +222,7 @@ const styles = StyleSheet.create({
   section: { gap: 6 },
   sectionTitle: { paddingHorizontal: 16 },
   group: { overflow: 'hidden', borderCurve: 'continuous' },
+  mainGroup: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
   divider: { height: StyleSheet.hairlineWidth, marginStart: 16 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
   text: { flex: 1, gap: 2 },

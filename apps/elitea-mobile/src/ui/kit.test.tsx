@@ -35,10 +35,12 @@ import {
   selectedSegmentStyle,
   sheetOptions,
   symbolFor,
+  Text,
   toneIndex,
   withAlpha,
 } from './index';
 
+import { StatusScreen } from '@/components/StatusScreen';
 import { ProjectChip } from '@/features/projects/ProjectChip';
 
 declare const __dirname: string;
@@ -129,6 +131,78 @@ describe('Button', () => {
     expect(Haptics.impactAsync).toHaveBeenCalledWith('light');
     await inScheme(<Button title="Signing in" loading onPress={onPress} />);
     expect(screen.getByRole('button', { name: 'Signing in' }).props.accessibilityState).toEqual({ disabled: true, busy: true });
+  });
+});
+
+describe('ListRow with a control at its end (F1)', () => {
+  /** True when some ancestor groups the element into one accessibility element (iOS). */
+  const insideAccessibleGroup = (element: { parent: unknown }): boolean => {
+    for (let node = element.parent as { props?: { accessible?: boolean }; parent: unknown } | null; node; node = node.parent as typeof node) {
+      if (node.props?.accessible === true) return true;
+    }
+    return false;
+  };
+
+  it('keeps the Remove button its own element; the row text is still one element with its label', async () => {
+    const onRemove = jest.fn();
+    await inScheme(
+      <ListRow
+        title="Alice"
+        subtitle="Person"
+        trailing={<Button title="Remove" variant="destructivePlain" size="small" accessibilityLabel="Remove Alice" onPress={onRemove} />}
+      />,
+    );
+    const remove = screen.getByRole('button', { name: 'Remove Alice' });
+    expect(insideAccessibleGroup(remove)).toBe(false);
+    expect(screen.getByLabelText('Alice, Person').props.accessible).toBe(true);
+    await fireEvent.press(remove);
+    expect(onRemove).toHaveBeenCalled();
+  });
+
+  it('a row with nothing interactive at its end is still one element', async () => {
+    await inScheme(<ListRow title="Agents can't join a conversation with toolkits." icon="info" />);
+    expect(screen.getByLabelText("Agents can't join a conversation with toolkits.").props.accessible).toBe(true);
+  });
+});
+
+describe('ListRow accessories (F3)', () => {
+  const json = () => JSON.stringify(screen.toJSON());
+
+  it('a row that navigates has the chevron; one that acts in place (Add) does not', async () => {
+    await inScheme(<ListRow title="Add people" onPress={() => {}} />);
+    expect(json()).toContain('"symbolIos":"chevron.right"');
+    await inScheme(<ListRow title="Alice" trailing={<Text>+</Text>} chevron={false} accessibilityLabel="Add Alice" onPress={() => {}} />);
+    expect(json()).not.toContain('chevron.right');
+  });
+
+  it('a row that is already there is disabled, not "selected"', async () => {
+    await inScheme(<ListRow title="Alice" value="Already here" accessibilityLabel="Alice, already here" disabled chevron={false} onPress={() => {}} />);
+    const row = screen.getByRole('button', { name: 'Alice, already here' });
+    expect(row.props.accessibilityState).toMatchObject({ disabled: true });
+    expect(row.props.accessibilityState.selected).toBeUndefined();
+    expect(json()).not.toContain('"symbolIos":"checkmark"');
+  });
+});
+
+describe('Button alignment (S1)', () => {
+  const alignOf = (name: string) => StyleSheet.flatten(screen.getByRole('button', { name }).props.style).alignSelf;
+
+  it('a button that does not stretch sits at the start of a form column', async () => {
+    await inScheme(<Button title="Try again" size="small" variant="tonal" onPress={() => {}} />);
+    expect(alignOf('Try again')).toBe('flex-start');
+  });
+
+  it('is centred under the centred title and body of a status screen; a block button still stretches', async () => {
+    await inScheme(
+      <StatusScreen mascot="bust" title="You're offline" body="Connect and try again.">
+        <Button title="Try again" size="small" variant="tonal" onPress={() => {}} />
+        <Button title="Back to Discover" variant="tonal" block={false} onPress={() => {}} />
+        <Button title="Get the update" onPress={() => {}} />
+      </StatusScreen>,
+    );
+    expect(alignOf('Try again')).toBe('center');
+    expect(alignOf('Back to Discover')).toBe('center');
+    expect(alignOf('Get the update')).toBe('stretch');
   });
 });
 
@@ -244,6 +318,9 @@ describe('sheets (X9, X10)', () => {
   it('are native form sheets with detents and a grabber', () => {
     expect(sheetOptions(light)).toMatchObject({ presentation: 'formSheet', sheetAllowedDetents: [0.5, 1], sheetGrabberVisible: true });
     expect(sheetOptions(dark, 'fit').sheetAllowedDetents).toBe('fitToContents');
+    // A list sheet opens at half; a detail sheet opens full and can rest at half (S5).
+    expect(sheetOptions(light).sheetInitialDetentIndex).toBeUndefined();
+    expect(sheetOptions(light, 'detail')).toMatchObject({ sheetAllowedDetents: [0.5, 1], sheetInitialDetentIndex: 'last' });
     expect(sheetOptions(dark).contentStyle).toEqual({ backgroundColor: dark.colors.elevated });
   });
 });

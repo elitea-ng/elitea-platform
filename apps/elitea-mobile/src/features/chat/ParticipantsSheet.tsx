@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAgents } from '@/api/queries/agents';
 import {
@@ -10,12 +11,11 @@ import {
   useParticipantCandidates,
   type Participant,
 } from '@/api/queries/participants';
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
 import { useModalAnimation } from '@/features/a11y/motion';
 import { participantName, participantUserId } from '@/features/chat/messageModel';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
-import { ramp } from '@/ui';
+import { Avatar, Button, hitTarget, Icon, ListRow, ListSection, maxScale, ramp, Text } from '@/ui';
 
 const KIND_LABEL: Record<string, string> = {
   user: 'Person',
@@ -68,8 +68,19 @@ export function ParticipantsSheet(props: ParticipantsSheetProps) {
 
 type Mode = 'list' | 'people' | 'agents';
 
-function SheetBody({ onClose, projectId, conversationId, participants, selfUserId, offline, canAddAgent = true, onChanged, onAgentAdded }: ParticipantsSheetProps) {
-  const palette = usePalette();
+function SheetBody({
+  onClose,
+  projectId,
+  conversationId,
+  participants,
+  selfUserId,
+  offline,
+  canAddAgent = true,
+  onChanged,
+  onAgentAdded,
+}: ParticipantsSheetProps) {
+  const { colors, radius } = useDesign();
+  const insets = useSafeAreaInsets();
   const [mode, setMode] = useState<Mode>('list');
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
@@ -104,120 +115,134 @@ function SheetBody({ onClose, projectId, conversationId, participants, selfUserI
     participants.filter((p) => p.entity_name === 'application' || p.entity_name === 'pipeline').map((p) => Number(p.entity_meta?.id)),
   );
 
+  const title = mode === 'people' ? 'Add people' : mode === 'agents' ? 'Add agent' : 'Participants';
+  const back = () => {
+    setMode('list');
+    setQuery('');
+  };
+
   return (
-    <View style={[styles.sheet, { backgroundColor: palette.background }]}>
+    <View style={[styles.sheet, { backgroundColor: colors.elevated, paddingTop: Math.max(insets.top, 12) }]}>
       <View style={styles.header}>
-        {mode !== 'list' ? (
-          <Pressable accessibilityRole="button" onPress={() => { setMode('list'); setQuery(''); }} hitSlop={12}>
-            <Text style={[styles.action, { color: palette.accent }]}>Back</Text>
-          </Pressable>
-        ) : null}
-        <Text accessibilityRole="header" style={[styles.title, { color: palette.text }]}>
-          {mode === 'people' ? 'Add people' : mode === 'agents' ? 'Add agent' : 'Participants'}
+        {mode !== 'list' ? <Button title="Back" icon="back" variant="plain" size="small" onPress={back} /> : null}
+        <Text variant="title3" heading style={styles.flex} numberOfLines={1}>
+          {title}
         </Text>
-        <Pressable accessibilityRole="button" onPress={onClose} hitSlop={12}>
-          <Text style={[styles.action, { color: palette.accent }]}>Done</Text>
-        </Pressable>
+        <Button title="Done" variant="plain" size="small" onPress={onClose} />
       </View>
-      {offline ? <Text style={[styles.note, { color: palette.textSecondary }]}>You&apos;re offline.</Text> : null}
-      {error ? (
-        <Text accessibilityRole="alert" style={[styles.note, { color: palette.danger }]}>
-          {error}
-        </Text>
+      {offline ? (
+        <View style={[styles.note, { backgroundColor: colors.warningSoft, borderRadius: radius.md }]}>
+          <Icon name="offline" size={16} tone="warning" />
+          <Text variant="footnote" tone="warning" style={styles.flex}>
+            You&apos;re offline.
+          </Text>
+        </View>
       ) : null}
-      {busy ? <ActivityIndicator color={palette.accent} /> : null}
+      {error ? (
+        <View accessible accessibilityRole="alert" style={[styles.note, { backgroundColor: colors.dangerSoft, borderRadius: radius.md }]}>
+          <Icon name="error" size={16} tone="danger" />
+          <Text variant="footnote" tone="danger" style={styles.flex}>
+            {error}
+          </Text>
+        </View>
+      ) : null}
+      {busy ? <ActivityIndicator color={colors.accent} /> : null}
 
       {mode === 'list' ? (
-        <ScrollView contentContainerStyle={styles.list}>
-          {participants.map((p) => (
-            <View key={p.id} style={[styles.row, { borderColor: palette.border }]}>
-              <View style={styles.texts}>
-                <Text numberOfLines={1} style={[styles.name, { color: palette.text }]}>
-                  {participantName(p) ?? KIND_LABEL[p.entity_name] ?? p.entity_name}
-                  {p.entity_name === 'user' && participantUserId(p) === selfUserId ? ' (you)' : ''}
-                </Text>
-                <Text style={[styles.kind, { color: palette.textSecondary }]}>{KIND_LABEL[p.entity_name] ?? p.entity_name}</Text>
-              </View>
-              {isRemovable(p, selfUserId) ? (
-                <Pressable
-                  accessibilityRole="button"
-                  accessibilityLabel={`Remove ${participantName(p) ?? 'participant'}`}
-                  accessibilityState={{ disabled: offline || busy }}
-                  disabled={offline || busy}
-                  onPress={() => confirmRemove(p)}>
-                  <Text style={[styles.action, { color: palette.danger, opacity: offline ? 0.4 : 1 }]}>Remove</Text>
-                </Pressable>
-              ) : null}
-            </View>
-          ))}
-          <View style={styles.adds}>
-            {peopleAvailable ? (
-              <Pressable accessibilityRole="button" disabled={offline} onPress={() => setMode('people')}>
-                <Text style={[styles.action, { color: palette.accent, opacity: offline ? 0.4 : 1 }]}>Add people</Text>
-              </Pressable>
-            ) : null}
+        <ScrollView contentContainerStyle={[styles.list, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+          <ListSection>
+            {participants.map((p) => {
+              const name = participantName(p) ?? KIND_LABEL[p.entity_name] ?? p.entity_name;
+              const me = p.entity_name === 'user' && participantUserId(p) === selfUserId;
+              return (
+                <ListRow
+                  key={p.id}
+                  title={me ? `${name} (you)` : name}
+                  subtitle={KIND_LABEL[p.entity_name] ?? p.entity_name}
+                  leading={<Avatar name={name} kind={p.entity_name === 'user' ? 'person' : 'agent'} size={36} decorative />}
+                  trailing={
+                    isRemovable(p, selfUserId) ? (
+                      <Button
+                        title="Remove"
+                        variant="destructivePlain"
+                        size="small"
+                        accessibilityLabel={`Remove ${participantName(p) ?? 'participant'}`}
+                        disabled={offline || busy}
+                        onPress={() => confirmRemove(p)}
+                      />
+                    ) : undefined
+                  }
+                />
+              );
+            })}
+          </ListSection>
+          <ListSection>
+            {peopleAvailable ? <ListRow icon="personAdd" title="Add people" disabled={offline} onPress={() => setMode('people')} /> : null}
             {canAddAgent ? (
-              <Pressable accessibilityRole="button" disabled={offline} onPress={() => setMode('agents')}>
-                <Text style={[styles.action, { color: palette.accent, opacity: offline ? 0.4 : 1 }]}>Add agent</Text>
-              </Pressable>
+              <ListRow icon="agent" title="Add agent" disabled={offline} onPress={() => setMode('agents')} />
             ) : (
-              <Text style={[styles.note, { color: palette.textSecondary }]}>Agents can&apos;t join a conversation with toolkits.</Text>
+              <ListRow icon="info" title="Agents can't join a conversation with toolkits." />
             )}
-          </View>
+          </ListSection>
         </ScrollView>
       ) : (
         <>
-          <TextInput
-            accessibilityLabel={mode === 'people' ? 'Search people' : 'Search agents'}
-            placeholder="Search"
-            placeholderTextColor={palette.textSecondary}
-            autoFocus
-            value={query}
-            onChangeText={setQuery}
-            style={[styles.search, { color: palette.text, borderColor: palette.inputBorder }]}
-          />
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.list}>
-            {mode === 'people'
-              ? (candidates.data?.rows ?? []).map((c) => (
-                  <Pressable
-                    key={c.userId}
-                    accessibilityRole="button"
-                    accessibilityLabel={c.alreadyParticipant ? `${c.name}, already here` : `Add ${c.name}`}
-                    disabled={c.alreadyParticipant || busy}
-                    onPress={() => run(async () => void (await addPersonParticipant(projectId, conversationId, c)))}
-                    style={[styles.row, { borderColor: palette.border }]}>
-                    <View style={styles.texts}>
-                      <Text style={[styles.name, { color: palette.text }]}>{c.name}</Text>
-                      {c.email ? <Text style={[styles.kind, { color: palette.textSecondary }]}>{c.email}</Text> : null}
-                    </View>
-                    <Text style={[styles.kind, { color: palette.textSecondary }]}>{c.alreadyParticipant ? 'Already here' : 'Add'}</Text>
-                  </Pressable>
-                ))
-              : (agents.data ?? []).map((a) => (
-                  <Pressable
-                    key={a.id}
-                    accessibilityRole="button"
-                    accessibilityLabel={attachedAgentIds.has(a.id) ? `${a.name}, already here` : `Add ${a.name}`}
-                    disabled={attachedAgentIds.has(a.id) || busy}
-                    onPress={() =>
-                      run(async () => {
-                        const row = await addAgentParticipant(projectId, conversationId, a);
-                        onAgentAdded?.(row.id);
-                      })
-                    }
-                    style={[styles.row, { borderColor: palette.border }]}>
-                    <View style={styles.texts}>
-                      <Text style={[styles.name, { color: palette.text }]}>{a.name}</Text>
-                      {a.description ? (
-                        <Text numberOfLines={1} style={[styles.kind, { color: palette.textSecondary }]}>
-                          {a.description}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <Text style={[styles.kind, { color: palette.textSecondary }]}>{attachedAgentIds.has(a.id) ? 'Already here' : 'Add'}</Text>
-                  </Pressable>
-                ))}
-            {(mode === 'people' ? candidates.isLoading : agents.isLoading) ? <ActivityIndicator color={palette.accent} /> : null}
+          <View style={[styles.search, { backgroundColor: colors.surfaceSunken, borderColor: colors.separatorStrong, borderRadius: radius.md }]}>
+            <Icon name="search" size={18} tone="secondary" />
+            <TextInput
+              accessibilityLabel={mode === 'people' ? 'Search people' : 'Search agents'}
+              placeholder="Search"
+              placeholderTextColor={colors.textTertiary}
+              autoFocus
+              value={query}
+              onChangeText={setQuery}
+              clearButtonMode="while-editing"
+              returnKeyType="search"
+              maxFontSizeMultiplier={maxScale.body}
+              style={[ramp.body, styles.flex, { color: colors.textPrimary, minHeight: hitTarget() }]}
+            />
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[styles.list, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+            <ListSection>
+              {mode === 'people'
+                ? (candidates.data?.rows ?? []).map((c) => (
+                    <ListRow
+                      key={c.userId}
+                      title={c.name}
+                      subtitle={c.email || null}
+                      leading={<Avatar name={c.name} size={36} decorative />}
+                      value={c.alreadyParticipant ? 'Already here' : null}
+                      trailing={c.alreadyParticipant ? undefined : <Icon name="plus" size={20} tone="accent" />}
+                      accessibilityLabel={c.alreadyParticipant ? `${c.name}, already here` : `Add ${c.name}`}
+                      disabled={c.alreadyParticipant || busy}
+                      chevron={false}
+                      onPress={() => run(async () => void (await addPersonParticipant(projectId, conversationId, c)))}
+                    />
+                  ))
+                : (agents.data ?? []).map((a) => {
+                    const here = attachedAgentIds.has(a.id);
+                    return (
+                      <ListRow
+                        key={a.id}
+                        title={a.name}
+                        subtitle={a.description || null}
+                        leading={<Avatar name={a.name} kind="agent" size={36} decorative />}
+                        value={here ? 'Already here' : null}
+                        trailing={here ? undefined : <Icon name="plus" size={20} tone="accent" />}
+                        accessibilityLabel={here ? `${a.name}, already here` : `Add ${a.name}`}
+                        disabled={here || busy}
+                        chevron={false}
+                        onPress={() =>
+                          run(async () => {
+                            const row = await addAgentParticipant(projectId, conversationId, a);
+                            onAgentAdded?.(row.id);
+                          })
+                        }
+                      />
+                    );
+                  })}
+            </ListSection>
+            {(mode === 'people' ? candidates.isLoading : agents.isLoading) ? <ActivityIndicator color={colors.accent} /> : null}
           </ScrollView>
         </>
       )}
@@ -226,16 +251,10 @@ function SheetBody({ onClose, projectId, conversationId, participants, selfUserI
 }
 
 const styles = StyleSheet.create({
-  sheet: { flex: 1, padding: Spacing.three, gap: Spacing.two },
-  header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  title: { ...ramp.headline, flex: 1, fontWeight: '700' },
-  action: { ...ramp.headline, fontWeight: '600' },
-  note: { ...ramp.subheadline },
-  list: { gap: 0, paddingBottom: Spacing.four },
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.two + 2, borderBottomWidth: StyleSheet.hairlineWidth, gap: Spacing.two },
-  texts: { flex: 1 },
-  name: { ...ramp.body },
-  kind: { ...ramp.footnote },
-  adds: { flexDirection: 'row', gap: Spacing.four, paddingTop: Spacing.three },
-  search: { ...ramp.body, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: Spacing.two, paddingVertical: Spacing.two },
+  sheet: { flex: 1, paddingHorizontal: 16, gap: 12 },
+  header: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  flex: { flex: 1 },
+  note: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderCurve: 'continuous' },
+  list: { gap: 20 },
+  search: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, borderWidth: 1, borderCurve: 'continuous' },
 });

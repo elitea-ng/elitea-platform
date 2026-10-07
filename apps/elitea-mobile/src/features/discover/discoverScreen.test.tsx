@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider, type InfiniteData } from '@tanstack/react-query';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 
 import { addedPublicAgent, createdConversation, publicDetail, publicList } from '@/api/__fixtures__/discover13';
@@ -18,6 +18,8 @@ const mockPush = jest.fn();
 const mockReplace = jest.fn();
 const mockBack = jest.fn();
 let mockParams: Record<string, string> = {};
+/** The options the screen last gave its navigation bar (the native search field, the layout button). */
+let mockHeader: Record<string, any> = {};
 jest.mock('expo-router', () => ({
   router: {
     push: (...args: unknown[]) => mockPush(...args),
@@ -25,7 +27,24 @@ jest.mock('expo-router', () => ({
     back: () => mockBack(),
   },
   useLocalSearchParams: () => mockParams,
+  Stack: {
+    Screen: ({ options }: { options: Record<string, unknown> }) => {
+      mockHeader = options;
+      return null;
+    },
+  },
 }));
+/** The navigation bar's one action, whichever form the platform gives it (native bar item or kit button). */
+function headerAction(): { label: string; onPress: () => void } {
+  const items = mockHeader.unstable_headerRightItems?.();
+  if (items) return { label: items[0].accessibilityLabel, onPress: items[0].onPress };
+  const button = mockHeader.headerRight().props.children[0];
+  return { label: button.props.accessibilityLabel, onPress: button.props.onPress };
+}
+/** Types into the native search field of the navigation bar. */
+async function typeSearch(text: string) {
+  await act(async () => mockHeader.headerSearchBarOptions.onChangeText({ nativeEvent: { text } }));
+}
 // Icons are downloaded with redirects refused (expo/fetch, redirect: 'error'), never handed to <Image> as a URL.
 const mockExpoFetch = jest.fn();
 jest.mock('expo/fetch', () => ({ fetch: (...args: unknown[]) => mockExpoFetch(...args) }));
@@ -38,7 +57,13 @@ jest.mock('expo-crypto', () => ({ randomUUID: () => `00000000-0000-4000-8000-${S
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 // The active project: Alice's personal project in the capture.
 jest.mock('@/features/projects/useProjectSelection', () => ({
-  useProjectSelection: () => ({ projectId: 90501, project: { id: 90501, name: 'project_user_8', suspended: false }, noProject: false, isLoading: false, error: null }),
+  useProjectSelection: () => ({
+    projectId: 90501,
+    project: { id: 90501, name: 'project_user_8', suspended: false },
+    noProject: false,
+    isLoading: false,
+    error: null,
+  }),
 }));
 jest.mock('@/state/selfIdentity', () => ({ usePersonalProjectId: () => 90501 }));
 
@@ -123,10 +148,11 @@ describe('Discover list', () => {
     await openCatalogue();
     expect(screen.getByText('Zefir Concierge')).toBeTruthy();
     expect(screen.getByText('Zefir Concierge: a public agent anyone can find in Discover.')).toBeTruthy();
-    expect(screen.getByText('Project Management')).toBeTruthy();
+    // On its card, and as a filter chip (two categories in the catalogue).
+    expect(screen.getAllByText('Project Management')).toHaveLength(2);
     expect(screen.getByText('#planning')).toBeTruthy();
     expect(screen.getByText('#travel')).toBeTruthy();
-    expect(screen.getByText('Other')).toBeTruthy();
+    expect(screen.getAllByText('Other')).toHaveLength(2);
     // The icon is downloaded through the origin guard with redirects refused and shown from its bytes.
     await waitFor(() => expect(screen.getAllByTestId('agent-icon-image')).toHaveLength(1));
     expect(screen.getByTestId('agent-icon-image').props.source).toEqual({ uri: PNG_DATA });
@@ -154,8 +180,9 @@ describe('Discover list', () => {
   it('searches on the server once typing pauses', async () => {
     const server = install('1.3');
     await openCatalogue();
-    await fireEvent.changeText(screen.getByLabelText('Search public agents'), 'trav');
-    await fireEvent.changeText(screen.getByLabelText('Search public agents'), 'travel');
+    expect(mockHeader.headerSearchBarOptions.placeholder).toBe('Search public agents');
+    await typeSearch('trav');
+    await typeSearch('travel');
     expect(server.requests.some((r) => r.url.searchParams.has('query'))).toBe(false);
     await waitFor(() => expect(server.requests.some((r) => r.url.searchParams.get('query') === 'travel')).toBe(true), {
       timeout: SEARCH_DEBOUNCE_MS * 5,
@@ -167,7 +194,41 @@ describe('Discover list', () => {
     const server = install('1.3');
     server.on('GET', LIST, { status: 200, body: { rows: [], total: 0 } });
     await render(withQueries(<DiscoverScreen />));
-    expect(await screen.findByText('This workspace has no public agents yet.')).toBeTruthy();
+    expect(await screen.findByText('No public agents yet')).toBeTruthy();
+  });
+
+  it('a category chip narrows the cards to that category, and All brings them back', async () => {
+    install('1.3');
+    await openCatalogue();
+    expect(screen.getByRole('tab', { name: 'All' }).props.accessibilityState).toMatchObject({ selected: true });
+    await fireEvent.press(screen.getByRole('tab', { name: 'Other' }));
+    expect(screen.queryByText('Zefir Travel Planner')).toBeNull();
+    expect(screen.getByText('Zefir Concierge')).toBeTruthy();
+    await fireEvent.press(screen.getByRole('tab', { name: 'All' }));
+    expect(screen.getByText('Zefir Travel Planner')).toBeTruthy();
+  });
+
+  it('the bar button switches between the card grid and the list, and says what it will do', async () => {
+    install('1.3');
+    await openCatalogue();
+    expect(screen.getByTestId('discover-grid')).toBeTruthy();
+    expect(headerAction().label).toBe('Show as list');
+    await act(async () => headerAction().onPress());
+    expect(screen.getByTestId('discover-list')).toBeTruthy();
+    expect(headerAction().label).toBe('Show as grid');
+    expect(screen.getByRole('button', { name: /^Zefir Travel Planner, Project Management/ })).toBeTruthy();
+  });
+
+  it("the list keeps each agent's category and tags on the row, and in what VoiceOver reads (F5)", async () => {
+    install('1.3');
+    await openCatalogue();
+    await act(async () => headerAction().onPress());
+    const row = within(screen.getByTestId('discover-list'));
+    expect(row.getByText('#planning')).toBeTruthy();
+    expect(row.getByText('#travel')).toBeTruthy();
+    // The category: once on the row, once as its filter chip above the list.
+    expect(screen.getAllByText('Project Management')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: /^Zefir Travel Planner, Project Management, .*tags (travel, planning|planning, travel)$/ })).toBeTruthy();
   });
 
   it('a row opens the agent', async () => {

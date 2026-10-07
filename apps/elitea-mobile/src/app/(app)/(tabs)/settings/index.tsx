@@ -2,15 +2,18 @@ import { router } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
 import { Alert, ScrollView, StyleSheet } from 'react-native';
 
+import { getClientVersion } from '@/api/clientVersion';
 import { speaksContract } from '@/api/discovery';
 import { identity } from '@/config/identity';
 import { useDesign } from '@/design/DesignProvider';
 import { appIconSupported, setAppIcon, useAppIcon } from '@/features/appIcon/appIcon';
 import { displayHost } from '@/features/connect/connectFlow';
 import { useProjectLabel } from '@/features/projects/ProjectChip';
+import { useActiveWorkspace } from '@/features/workspaces/activeWorkspace';
 import { SettingsList } from '@/features/settings/SettingsList';
 import { UsageCard } from '@/features/usage/UsageCard';
 import { usePolicy } from '@/security/policy';
+import { useSelfProfile } from '@/state/selfIdentity';
 import { useSession } from '@/state/session';
 import { useWorkspace } from '@/state/workspace';
 import { useWorkspaceInfo } from '@/state/workspaceInfo';
@@ -29,6 +32,8 @@ export default function SettingsScreen() {
   const { policy, source, managed } = usePolicy();
   const brand = useBrandTheme();
   const workspaceCount = useWorkspaceList().length;
+  const profile = useSelfProfile();
+  const activeWorkspace = useActiveWorkspace();
   const host = serverOrigin ? displayHost(serverOrigin) : null;
   // Client contract 1.3: memory and usage.
   const contract13 = speaksContract(useWorkspaceInfo()?.discovery, 1, 3);
@@ -71,7 +76,9 @@ export default function SettingsScreen() {
       style={{ backgroundColor: colors.background }}
       contentContainerStyle={[styles.content, { paddingHorizontal: space.screenGutterCompact }]}>
       <SettingsList
+        userName={profile?.name ?? null}
         serverOrigin={serverOrigin}
+        workspaceName={activeWorkspace?.name ?? null}
         logoMark={serverOrigin !== null && brand?.origin === serverOrigin ? brand.logoMark : null}
         projectId={projectId}
         projectName={projectName}
@@ -86,10 +93,13 @@ export default function SettingsScreen() {
         securityFooter={`${POLICY_SOURCE_TEXT[source]}${managed ? ' ' + MANAGED_TEXT : ''}`}
         usage={contract13 && projectId !== null ? <UsageCard projectId={projectId} /> : null}
         onMemory={contract13 && projectId !== null ? () => router.push('/memory') : null}
+        // A developer token is no device session: only a native sign-in lists devices.
+        onDevices={credentialKind !== null && credentialKind !== 'pat' ? () => router.push('/devices') : null}
+        onAbout={() => router.push('/about')}
+        appVersion={getClientVersion()}
         onSwitchWorkspace={onSwitchWorkspace}
         onPrivacy={() => void WebBrowser.openBrowserAsync(identity.privacyUrl)}
         onSupport={() => void WebBrowser.openBrowserAsync(identity.supportUrl)}
-        onDesignGallery={__DEV__ ? () => router.push('/design-gallery') : null}
         onLogOut={onLogOut}
       />
     </ScrollView>

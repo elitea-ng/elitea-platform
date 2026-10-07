@@ -1,3 +1,4 @@
+import { createContext, useContext } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, View, type PressableProps } from 'react-native';
 
 import { useDesign } from '@/design/DesignProvider';
@@ -47,6 +48,13 @@ export function buttonLook(variant: ButtonVariant, design: Pick<Design, 'colors'
   }
 }
 
+/**
+ * Where a button that does not stretch sits in its column: at the start (forms, cards) unless a
+ * container centres its content (StatusScreen, EmptyState) and says so here. A plain `alignItems`
+ * on the parent cannot do it: the button's own `alignSelf` wins.
+ */
+export const ButtonAlignmentContext = createContext<'flex-start' | 'center'>('flex-start');
+
 export interface ButtonProps extends Omit<PressableProps, 'children' | 'style'> {
   title: string;
   variant?: ButtonVariant;
@@ -86,6 +94,7 @@ export function Button({
   const height = buttonHeight(size);
   const inactive = disabled === true || loading;
   const stretch = block ?? size === 'regular';
+  const align = useContext(ButtonAlignmentContext);
   return (
     <Pressable
       accessibilityRole="button"
@@ -104,7 +113,7 @@ export function Button({
           minHeight: height,
           paddingHorizontal: size === 'small' ? design.space[4] : design.space[6],
           backgroundColor: pressed && uiPlatform === 'ios' ? look.pressed : look.background,
-          alignSelf: stretch ? 'stretch' : 'flex-start',
+          alignSelf: stretch ? 'stretch' : align,
         },
         look.border ? { borderWidth: StyleSheet.hairlineWidth, borderColor: look.border } : null,
         disabled && look.background !== 'transparent' ? { backgroundColor: disabledContainer(design) } : null,

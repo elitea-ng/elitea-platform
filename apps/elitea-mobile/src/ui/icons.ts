@@ -47,6 +47,19 @@ const KIT_ICONS = {
   speakerOff: ['speaker.slash', 'volume_off'],
   retry: ['arrow.clockwise', 'refresh'],
   photoLibrary: ['photo.on.rectangle', 'photo_library'],
+  list: ['list.bullet', 'view_list'],
+  mention: ['at', 'alternate_email'],
+  personAdd: ['person.badge.plus', 'person_add'],
+  markAllRead: ['checkmark.circle', 'done_all'],
+  phone: ['iphone', 'smartphone'],
+  tablet: ['ipad', 'tablet'],
+  devices: ['laptopcomputer.and.iphone', 'devices'],
+  shield: ['checkmark.shield', 'verified_user'],
+  gauge: ['gauge.with.dots.needle.50percent', 'speed'],
+  cpu: ['cpu', 'memory'],
+  sparkles: ['sparkles', 'auto_awesome'],
+  bellOff: ['bell.slash', 'notifications_off'],
+  version: ['number', 'tag'],
 } as const satisfies Record<string, readonly [SFSymbol, AndroidSymbol]>;
 
 export const ICONS = { ...(tokenIcons as Record<keyof typeof tokenIcons, readonly [SFSymbol, AndroidSymbol]>), ...KIT_ICONS };
@@ -60,7 +73,8 @@ export type IconName = keyof typeof ICONS;
  */
 export function filledSymbol(name: IconName): SFSymbol {
   const sf = ICONS[name][0];
-  const FILLABLE = /^(house|bell|gearshape|mic|hand\.thumbsup|hand\.thumbsdown|folder|lock|pin|archivebox|person\.crop\.circle|person\.2|info\.circle|exclamationmark\.triangle|exclamationmark\.circle|clock|paintpalette|square\.grid\.2x2|bubble\.left\.and\.bubble\.right|moon|sun\.max|trash|camera|photo|doc\.on\.doc|speaker\.wave\.2|building\.2)$/;
+  const FILLABLE =
+    /^(house|bell|gearshape|mic|hand\.thumbsup|hand\.thumbsdown|folder|lock|pin|archivebox|person\.crop\.circle|person\.2|info\.circle|exclamationmark\.triangle|exclamationmark\.circle|clock|paintpalette|square\.grid\.2x2|bubble\.left\.and\.bubble\.right|moon|sun\.max|trash|camera|photo|doc\.on\.doc|speaker\.wave\.2|building\.2)$/;
   return (FILLABLE.test(sf) && !sf.endsWith('.fill') ? `${sf}.fill` : sf) as SFSymbol;
 }
 

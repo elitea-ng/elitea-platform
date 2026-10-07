@@ -1,31 +1,22 @@
 import { useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, RefreshControl } from 'react-native';
 
 import { speaksContract } from '@/api/discovery';
-import {
-  clearMemories,
-  deleteMemory,
-  MemoryError,
-  memoryErrorText,
-  useForgetMemories,
-  useMemories,
-} from '@/api/queries/memories';
-import { SwipeToDelete } from '@/components/SwipeToDelete';
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
+import { clearMemories, deleteMemory, MemoryError, memoryErrorText, useForgetMemories, useMemories } from '@/api/queries/memories';
+import { useDesign } from '@/design/DesignProvider';
+import { MemoryView } from '@/features/settings/MemoryView';
 import { useShareOut } from '@/security/policy';
 import { getSession, useSession } from '@/state/session';
 import { useWorkspaceInfo } from '@/state/workspaceInfo';
-import { ramp } from '@/ui';
 
 /**
  * Settings > Memory: what the workspace remembers about the caller in the
  * selected project (client contract 1.3). Swipe a row to delete it; "Clear
- * all" deletes every one after a confirmation. Online only: nothing here is
+ * all memories" deletes every one after a confirmation. Online only: nothing here is
  * kept on the device.
  */
 export default function MemoryScreen() {
-  const palette = usePalette();
+  const { colors } = useDesign();
   const projectId = useSession((s) => s.projectId);
   const workspace = useWorkspaceInfo();
   const supported = speaksContract(workspace?.discovery, 1, 3);
@@ -37,17 +28,6 @@ export default function MemoryScreen() {
   // A failed refresh keeps the old rows on screen (F3): say so above them. An
   // empty list shows the error in its place instead. A delete or clear note wins.
   const banner = note ?? (memories.error && rows.length > 0 ? memoryErrorText(memories.error) : null);
-
-  if (!supported) {
-    // No discovery document yet (an offline launch; it is re-read on
-    // reconnect) means "unknown", not "not offered" (F1).
-    const why = workspace === null ? memoryErrorText(new MemoryError('offline')) : 'This workspace does not offer memory to mobile yet.';
-    return (
-      <View style={[styles.flex, styles.center, { backgroundColor: palette.background }]}>
-        <Text style={[styles.empty, { color: palette.textSecondary }]}>{why}</Text>
-      </View>
-    );
-  }
 
   const onDelete = async (id: string): Promise<boolean> => {
     if (projectId === null) return false;
@@ -68,7 +48,7 @@ export default function MemoryScreen() {
     // request goes to whichever workspace is active at tap time, so a stale
     // confirmation must clear nothing rather than this project id over there.
     const offeredFor = { workspaceId: getSession().workspaceId, projectId };
-    Alert.alert('Clear all memories', 'The workspace forgets everything it remembers about you in this project. This cannot be undone.', [
+    Alert.alert('Clear all memories?', 'The workspace forgets everything it remembers about you in this project. This cannot be undone.', [
       { text: 'Cancel', style: 'cancel' },
       {
         text: 'Clear all',
@@ -85,73 +65,33 @@ export default function MemoryScreen() {
     ]);
   };
 
+  if (!supported) {
+    // No discovery document yet (an offline launch; it is re-read on
+    // reconnect) means "unknown", not "not offered" (F1).
+    const why = workspace === null ? memoryErrorText(new MemoryError('offline')) : 'This workspace does not offer memory to mobile yet.';
+    return (
+      <MemoryView
+        status={{ kind: 'unavailable', message: why }}
+        rows={[]}
+        banner={null}
+        selectable={false}
+        onDelete={async () => false}
+        onClearAll={() => {}}
+        onRetry={() => {}}
+      />
+    );
+  }
+
   return (
-    <View style={[styles.flex, { backgroundColor: palette.background }]}>
-      {banner ? (
-        <Text accessibilityRole="alert" style={[styles.note, { color: palette.danger }]}>
-          {banner}
-        </Text>
-      ) : null}
-      {rows.length > 0 ? (
-        <Pressable accessibilityRole="button" onPress={onClearAll} style={styles.clear}>
-          <Text style={{ color: palette.danger, fontWeight: '600' }}>Clear all</Text>
-        </Pressable>
-      ) : null}
-      {memories.isLoading ? (
-        <ActivityIndicator style={styles.loading} color={palette.accent} />
-      ) : (
-        <FlatList
-          data={rows}
-          keyExtractor={(m) => m.id}
-          onRefresh={() => void memories.refetch()}
-          refreshing={memories.isRefetching}
-          ListHeaderComponent={
-            <Text style={[styles.hint, { color: palette.textSecondary }]}>
-              What the workspace recalls before it answers you in this project. Swipe left to delete one.
-            </Text>
-          }
-          ListEmptyComponent={
-            <Text style={[styles.empty, { color: palette.textSecondary }]}>
-              {memories.error ? memoryErrorText(memories.error) : 'Nothing remembered yet.'}
-            </Text>
-          }
-          ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: palette.border }]} />}
-          renderItem={({ item }) => (
-            <SwipeToDelete actionLabel="Delete" onDelete={() => onDelete(item.id)} testID={`memory-${item.id}`}>
-              {(a11y) => (
-                <View
-                  {...a11y}
-                  style={styles.row}
-                  accessible
-                  accessibilityLabel={item.enabled ? item.content : `${item.content}, turned off`}>
-                  <Text selectable={selectable} style={[styles.content, { color: item.enabled ? palette.text : palette.textSecondary }]}>
-                    {item.content}
-                  </Text>
-                  {item.tags.length > 0 || !item.enabled ? (
-                    <Text style={[styles.meta, { color: palette.textSecondary }]}>
-                      {[...(item.enabled ? [] : ['Off']), ...item.tags.map((t) => `#${t}`)].join('  ')}
-                    </Text>
-                  ) : null}
-                </View>
-              )}
-            </SwipeToDelete>
-          )}
-        />
-      )}
-    </View>
+    <MemoryView
+      status={memories.isLoading ? { kind: 'loading' } : memories.error ? { kind: 'error', message: memoryErrorText(memories.error) } : { kind: 'ready' }}
+      rows={rows}
+      banner={banner}
+      selectable={selectable}
+      onDelete={(memory) => onDelete(memory.id)}
+      onClearAll={onClearAll}
+      onRetry={() => void memories.refetch()}
+      refreshControl={<RefreshControl refreshing={memories.isRefetching} onRefresh={() => void memories.refetch()} tintColor={colors.accent} />}
+    />
   );
 }
-
-const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  center: { alignItems: 'center', justifyContent: 'center' },
-  loading: { padding: Spacing.four },
-  hint: { ...ramp.footnote, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two },
-  clear: { paddingHorizontal: Spacing.three, paddingTop: Spacing.two, alignItems: 'flex-end' },
-  note: { ...ramp.subheadline, paddingHorizontal: Spacing.three, paddingTop: Spacing.two },
-  empty: { ...ramp.subheadline, textAlign: 'center', padding: Spacing.four },
-  separator: { height: StyleSheet.hairlineWidth, marginLeft: Spacing.three },
-  row: { padding: Spacing.three, gap: Spacing.one },
-  content: { ...ramp.subheadline },
-  meta: { ...ramp.footnote },
-});

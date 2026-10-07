@@ -23,6 +23,16 @@ describe('design-tab previews draw the real screens’ components (D2)', () => {
     ['(app)/(tabs)/(home)/index.tsx', 'design-tabs/home/index.tsx', /<HomeView\b/],
     ['(app)/(tabs)/(home)/index.tsx', 'design-tabs/home/index.tsx', /homeHeaderOptions\(/],
     ['(app)/(tabs)/settings/index.tsx', 'design-tabs/settings/index.tsx', /<SettingsList\b/],
+    ['(app)/(tabs)/discover/index.tsx', 'design-tabs/discover/index.tsx', /<DiscoverView\b/],
+    ['(app)/(tabs)/discover/index.tsx', 'design-secondary/index.tsx', /<DiscoverView\b/],
+    ['(app)/discover/[id].tsx', 'design-secondary/agent.tsx', /<PublicAgentView\b/],
+    ['(app)/notifications.tsx', 'design-secondary/index.tsx', /<NotificationsView\b/],
+    ['(app)/memory.tsx', 'design-secondary/index.tsx', /<MemoryView\b/],
+    ['(app)/devices.tsx', 'design-secondary/index.tsx', /<DevicesView\b/],
+    ['(app)/about.tsx', 'design-secondary/index.tsx', /<AboutView\b/],
+    ['(app)/(tabs)/chats/index.tsx', 'design-secondary/index.tsx', /OFFLINE_EMPTY\.title/],
+    // The agent sheet opens at full height, Start chat in view (S5); the preview as the route.
+    ['(app)/_layout.tsx', 'design-secondary/_layout.tsx', /sheetOptions\(design, 'detail'\)/],
     ['(app)/c/[id].tsx', 'design-chat.tsx', /<ThreadLayout\b/],
     ['(app)/c/[id].tsx', 'design-chat.tsx', /<PersistedMessage\b/],
     ['(app)/c/[id].tsx', 'design-chat.tsx', /<LiveReply\b/],
@@ -37,11 +47,9 @@ describe('design-tab previews draw the real screens’ components (D2)', () => {
 
   it('the preview tab bar has the same tabs, labels and symbols as the real one (EH-9)', () => {
     const triggers = (source: string) =>
-      [...source.matchAll(/<NativeTabs\.Trigger name="([^"]+)">[\s\S]*?<NativeTabs\.Trigger\.Label>([^<]+)<[\s\S]*?sf=\{([^}]+\})/g)].map(([, name, label, sf]) => [
-        name.replace(/^\((.*)\)$/, '$1'),
-        label,
-        sf,
-      ]);
+      [...source.matchAll(/<NativeTabs\.Trigger name="([^"]+)">[\s\S]*?<NativeTabs\.Trigger\.Label>([^<]+)<[\s\S]*?sf=\{([^}]+\})/g)].map(
+        ([, name, label, sf]) => [name.replace(/^\((.*)\)$/, '$1'), label, sf],
+      );
     const real = triggers(read('(app)/(tabs)/_layout.tsx'));
     expect(real.map(([name]) => name)).toEqual(['home', 'chats', 'discover', 'settings']);
     expect(triggers(read('design-tabs/_layout.tsx'))).toEqual(real);

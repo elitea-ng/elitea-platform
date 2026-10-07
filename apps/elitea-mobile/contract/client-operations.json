@@ -44,6 +44,8 @@
     "clearMemories",
     "getProjectUsage",
     "listPublicApplications",
-    "getPublicApplication"
+    "getPublicApplication",
+    "listNativeDevices",
+    "revokeNativeDevice"
   ]
 }

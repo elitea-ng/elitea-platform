@@ -1,11 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { AppState, Pressable, StyleSheet, Text } from 'react-native';
+import { AppState, Pressable, StyleSheet, View } from 'react-native';
 
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
 import { deviceAuth, type DeviceAuth } from '@/security/lock/deviceAuth';
 import type { WorkspaceSummary } from '@/state/workspaceList';
-import { ramp } from '@/ui';
+import { Icon, pressedOverlay, ripple, Text, uiPlatform } from '@/ui';
 
 /** True when the list names a workspace whose policy requires the device lock. */
 export function listNeedsUnlock(workspaces: readonly Pick<WorkspaceSummary, 'requiresLock'>[]): boolean {
@@ -28,7 +27,8 @@ export function WorkspaceListGate({
   children: ReactNode;
   auth?: Pick<DeviceAuth, 'authenticate'>;
 }) {
-  const palette = usePalette();
+  const design = useDesign();
+  const { colors, radius } = design;
   const [revealed, setRevealed] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -56,17 +56,36 @@ export function WorkspaceListGate({
       disabled={busy}
       testID="unlock-workspace-list"
       onPress={() => void unlock()}
-      style={[styles.button, { borderColor: palette.border }]}>
-      <Text style={[styles.text, { color: palette.text }]}>Show your workspaces on this device</Text>
-      <Text style={[styles.small, { color: palette.textSecondary }]}>
-        One of them requires the device lock.
-      </Text>
+      android_ripple={ripple(design)}
+      style={({ pressed }) => [
+        styles.button,
+        {
+          backgroundColor: pressed && uiPlatform === 'ios' ? pressedOverlay(design) : colors.surface,
+          borderColor: colors.separator,
+          borderRadius: radius.listRow,
+        },
+      ]}>
+      <Icon name="lock" size={22} tone="accent" />
+      <View style={styles.text}>
+        <Text variant="headline">Show your workspaces on this device</Text>
+        <Text variant="footnote" tone="secondary">
+          One of them requires the device lock.
+        </Text>
+      </View>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  button: { borderWidth: 1, borderRadius: 10, padding: Spacing.three, gap: 4, marginTop: Spacing.three },
-  text: { ...ramp.headline, fontWeight: '600' },
-  small: { ...ramp.footnote },
+  button: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 16,
+    marginTop: 12,
+    minHeight: 60,
+    borderCurve: 'continuous',
+  },
+  text: { flex: 1, gap: 2 },
 });

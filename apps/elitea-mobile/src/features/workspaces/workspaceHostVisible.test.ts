@@ -14,9 +14,16 @@ const TABS = path.join(__dirname, '../../app/(app)/(tabs)');
 const HOST_IN_CONTENT: Record<string, { file: string; row: RegExp; mounted: RegExp }> = {
   settings: {
     file: path.join(__dirname, '../settings/SettingsList.tsx'),
-    row: /<ListRow\s+title=\{serverOrigin \? workspaceAddressTitle\(serverOrigin\) : 'Not connected'\}/,
+    // The workspace row: its name with the host as the line under it, else the host itself.
+    row: /title=\{workspaceName \?\? \(serverOrigin \? workspaceAddressTitle\(serverOrigin\) : 'Not connected'\)\}[\s\S]{0,200}subtitle=\{workspaceName && serverOrigin \? workspaceAddressTitle\(serverOrigin\) : null\}/,
     mounted: /<SettingsList\b/,
   },
+};
+
+/** Tab roots whose scroll view lives in a shared view: the tag the route renders, and its file. */
+const SHARED_VIEWS: Record<string, string> = {
+  '<ConversationList': '../chats/ConversationList.tsx',
+  '<DiscoverView': '../discover/DiscoverView.tsx',
 };
 
 const roots = fs
@@ -31,8 +38,9 @@ describe('tab roots with a large title keep the workspace host on screen (F1)', 
 
   it.each(roots)('%s is rooted in an inset-adjusting scroll view and shows the host', (dir) => {
     const source = fs.readFileSync(path.join(TABS, dir, 'index.tsx'), 'utf8');
-    // The Chats list's scroll view is the shared ConversationList (the tab and its preview, D2).
-    const scroller = source.includes('<ConversationList') ? fs.readFileSync(path.join(__dirname, '../chats/ConversationList.tsx'), 'utf8') : source;
+    // A list drawn by a shared view (the tab and its preview, D2) has its scroll view there.
+    const shared = Object.entries(SHARED_VIEWS).find(([tag]) => source.includes(tag));
+    const scroller = shared ? fs.readFileSync(path.join(__dirname, shared[1]), 'utf8') : source;
     expect(scroller).toMatch(/contentInsetAdjustmentBehavior="automatic"/);
     const content = HOST_IN_CONTENT[dir];
     if (content) {

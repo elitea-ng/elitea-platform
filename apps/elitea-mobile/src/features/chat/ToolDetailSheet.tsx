@@ -1,17 +1,16 @@
 import * as Clipboard from 'expo-clipboard';
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useMessageTraceDetail, type PersistedToolStep } from '@/api/queries/messageTraces';
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
 import { useModalAnimation } from '@/features/a11y/motion';
 import { toolLabel } from '@/features/chat/ToolCalls';
 import { prettyJson, type ToolStep } from '@/features/chat/toolActivity';
-import { MONOSPACE_FONT } from '@/features/markdown/Markdown';
 import { useShareOut } from '@/security/policy';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
-import { ramp } from '@/ui';
+import { Button, haptic, Icon, SegmentedControl, Text } from '@/ui';
 
 type Tab = 'input' | 'output';
 
@@ -26,15 +25,7 @@ function isPersisted(step: ToolStep): step is PersistedToolStep {
  * the text was cut to the in-memory cap or the output is incomplete. A
  * persisted call's I/O is fetched only now (getMessageTrace).
  */
-export function ToolDetailSheet({
-  step,
-  projectId,
-  onClose,
-}: {
-  step: ToolStep | null;
-  projectId: number | null;
-  onClose: () => void;
-}) {
+export function ToolDetailSheet({ step, projectId, onClose }: { step: ToolStep | null; projectId: number | null; onClose: () => void }) {
   const animation = useModalAnimation('slide');
   return (
     <LockAwareModal visible={step !== null} animationType={animation} presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -44,7 +35,9 @@ export function ToolDetailSheet({
 }
 
 function SheetBody({ step, projectId, onClose }: { step: ToolStep; projectId: number | null; onClose: () => void }) {
-  const palette = usePalette();
+  const design = useDesign();
+  const { colors, radius } = design;
+  const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<Tab>(step.status === 'error' ? 'output' : 'input');
   const [copied, setCopied] = useState(false);
   const detail = useMessageTraceDetail(projectId, isPersisted(step) ? step : null);
@@ -71,81 +64,85 @@ function SheetBody({ step, projectId, onClose }: { step: ToolStep; projectId: nu
   const loading = isPersisted(step) && detail.isLoading;
   // allow_share_out off: no Copy, and no system selection menu either.
   const shareOut = useShareOut();
-  const empty = loading ? null : detail.error ? "Couldn't load this tool call." : remote === null && isPersisted(step) ? 'Not available on this workspace.' : 'Nothing to show.';
+  const empty = loading
+    ? null
+    : detail.error
+      ? "Couldn't load this tool call."
+      : remote === null && isPersisted(step)
+        ? 'Not available on this workspace.'
+        : 'Nothing to show.';
 
   return (
-    <View style={[styles.sheet, { backgroundColor: palette.background }]}>
+    <View style={[styles.sheet, { backgroundColor: colors.elevated, paddingTop: Math.max(insets.top, 12), paddingBottom: Math.max(insets.bottom, 12) }]}>
       <View style={styles.header}>
-        <Text accessibilityRole="header" numberOfLines={2} style={[styles.title, { color: palette.text }]}>
-          {toolLabel(step)}
-        </Text>
-        <Pressable accessibilityRole="button" onPress={onClose} hitSlop={12}>
-          <Text style={[styles.action, { color: palette.accent }]}>Done</Text>
-        </Pressable>
-      </View>
-      {step.parentAgent ? (
-        <Text style={[styles.sub, { color: palette.textSecondary }]}>Run by {step.parentAgent}</Text>
-      ) : null}
-      <View accessibilityRole="tablist" style={[styles.tabs, { borderColor: palette.border }]}>
-        {(['input', 'output'] as Tab[]).map((name) => (
-          <Pressable
-            key={name}
-            accessibilityRole="tab"
-            accessibilityState={{ selected: tab === name }}
-            onPress={() => {
-              setTab(name);
-              setCopied(false);
-            }}
-            style={[styles.tab, tab === name ? { backgroundColor: palette.backgroundElement } : null]}>
-            <Text style={[styles.tabText, { color: palette.text, fontWeight: tab === name ? '700' : '400' }]}>
-              {name === 'input' ? 'Input' : 'Output'}
+        <View style={styles.flex}>
+          <Text variant="title3" heading numberOfLines={design.accessibilityLayout ? undefined : 2}>
+            {toolLabel(step)}
+          </Text>
+          {step.parentAgent ? (
+            <Text variant="footnote" tone="secondary">
+              Run by {step.parentAgent}
             </Text>
-          </Pressable>
-        ))}
+          ) : null}
+        </View>
+        <Button title="Done" variant="plain" size="small" onPress={onClose} />
       </View>
+      <SegmentedControl
+        accessibilityLabel="Show"
+        value={tab}
+        onChange={(next) => {
+          setTab(next);
+          setCopied(false);
+        }}
+        segments={[
+          { value: 'input', label: 'Input' },
+          { value: 'output', label: 'Output' },
+        ]}
+      />
       {banners.map((banner) => (
-        <Text key={banner} accessibilityLiveRegion="polite" style={[styles.banner, { color: palette.textSecondary, borderColor: palette.border }]}>
-          {banner}
-        </Text>
+        <View key={banner} style={[styles.banner, { backgroundColor: colors.warningSoft, borderRadius: radius.md }]}>
+          <Icon name="info" size={16} tone="warning" />
+          <Text variant="footnote" tone="warning" accessibilityLiveRegion="polite" style={styles.flex}>
+            {banner}
+          </Text>
+        </View>
       ))}
-      {loading ? <ActivityIndicator style={styles.loading} color={palette.accent} /> : null}
-      <ScrollView style={[styles.body, { borderColor: palette.border }]} contentContainerStyle={styles.bodyContent}>
+      {loading ? <ActivityIndicator style={styles.loading} color={colors.accent} /> : null}
+      <ScrollView style={[styles.body, { backgroundColor: colors.surfaceSunken, borderRadius: radius.md }]} contentContainerStyle={styles.bodyContent}>
         {shown !== null && shown !== '' ? (
-          <Text selectable={shareOut} style={[styles.code, { color: palette.text }]}>
+          <Text variant="code" selectable={shareOut}>
             {shown}
           </Text>
         ) : empty ? (
-          <Text style={[styles.sub, { color: palette.textSecondary }]}>{empty}</Text>
+          <Text variant="callout" tone="secondary">
+            {empty}
+          </Text>
         ) : null}
       </ScrollView>
       {shown && shareOut ? (
-        <Pressable
-          accessibilityRole="button"
+        <Button
+          title={copied ? 'Copied' : 'Copy'}
+          icon={copied ? 'check' : 'copy'}
+          variant="tonal"
           accessibilityLabel={tab === 'input' ? 'Copy input' : 'Copy output'}
           onPress={() => {
-            void Clipboard.setStringAsync(shown).then(() => setCopied(true));
+            void Clipboard.setStringAsync(shown).then(() => {
+              haptic('copy');
+              setCopied(true);
+            });
           }}
-          style={[styles.copy, { borderColor: palette.border }]}>
-          <Text style={[styles.action, { color: palette.accent }]}>{copied ? 'Copied' : 'Copy'}</Text>
-        </Pressable>
+        />
       ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  sheet: { flex: 1, padding: Spacing.three, gap: Spacing.two },
-  header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  title: { ...ramp.headline, flex: 1, fontWeight: '700' },
-  sub: { ...ramp.footnote },
-  action: { ...ramp.headline, fontWeight: '600' },
-  tabs: { flexDirection: 'row', borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, overflow: 'hidden' },
-  tab: { flex: 1, alignItems: 'center', paddingVertical: Spacing.two },
-  tabText: { ...ramp.subheadline },
-  banner: { ...ramp.footnote, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, padding: Spacing.two },
-  loading: { padding: Spacing.two },
-  body: { flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8 },
-  bodyContent: { padding: Spacing.two },
-  code: { ...ramp.footnote, fontFamily: MONOSPACE_FONT },
-  copy: { alignItems: 'center', paddingVertical: Spacing.two, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10 },
+  sheet: { flex: 1, paddingHorizontal: 16, gap: 12 },
+  header: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+  flex: { flex: 1 },
+  banner: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 10, borderCurve: 'continuous' },
+  loading: { padding: 8 },
+  body: { flex: 1, borderCurve: 'continuous' },
+  bodyContent: { padding: 12 },
 });

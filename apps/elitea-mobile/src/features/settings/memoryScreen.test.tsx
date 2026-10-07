@@ -48,7 +48,7 @@ it('lists the memories with their tags', async () => {
 
 it('deletes one through its row action (the same path as the swipe)', async () => {
   const view = await render(<MemoryScreen />);
-  await fireEvent(screen.getByLabelText('I prefer answers in British English.'), 'accessibilityAction', { nativeEvent: { actionName: 'delete' } });
+  await fireEvent(screen.getByLabelText(/^I prefer answers in British English./), 'accessibilityAction', { nativeEvent: { actionName: 'delete' } });
   expect(api.deleteMemory).toHaveBeenCalledWith(90503, '1');
   expect(mockForget).toHaveBeenCalledWith(['1']);
   await view.rerender(<MemoryScreen />);
@@ -57,17 +57,26 @@ it('deletes one through its row action (the same path as the swipe)', async () =
 
 it('the Delete action sits on the element a screen reader focuses', async () => {
   await render(<MemoryScreen />);
-  const row = screen.getByLabelText('My team ships on Thursdays.');
+  const row = screen.getByLabelText(/^My team ships on Thursdays./);
   expect(row.props.accessible).toBe(true);
   expect(row.props.accessibilityActions).toEqual([{ name: 'delete', label: 'Delete' }]);
   await fireEvent(row, 'accessibilityAction', { nativeEvent: { actionName: 'delete' } });
   expect(api.deleteMemory).toHaveBeenCalledWith(90503, '2');
 });
 
+it('each memory has a visible Delete button, its own element, on the same path as the swipe (S9)', async () => {
+  await render(<MemoryScreen />);
+  const button = screen.getByRole('button', { name: 'Delete memory: My team ships on Thursdays.' });
+  for (let node = button.parent; node; node = node.parent) expect(node.props.accessible).not.toBe(true);
+  await fireEvent.press(button);
+  expect(api.deleteMemory).toHaveBeenCalledWith(90503, '2');
+  expect(screen.queryByText(/Swipe left/)).toBeNull();
+});
+
 it('clears all only after the confirmation', async () => {
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   await render(<MemoryScreen />);
-  await fireEvent.press(screen.getByText('Clear all'));
+  await fireEvent.press(screen.getByText('Clear all memories'));
   expect(api.clearMemories).not.toHaveBeenCalled();
   const buttons = alert.mock.calls[0][2]!;
   buttons.find((b) => b.text === 'Clear all')!.onPress!();
@@ -85,7 +94,7 @@ it.each([
 ])('a confirmation answered after a switch to %s clears nothing', async (_, next) => {
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   await render(<MemoryScreen />);
-  await fireEvent.press(screen.getByText('Clear all'));
+  await fireEvent.press(screen.getByText('Clear all memories'));
   const buttons = alert.mock.calls[0][2]!;
   setSession(next);
   buttons.find((b) => b.text === 'Clear all')!.onPress!();

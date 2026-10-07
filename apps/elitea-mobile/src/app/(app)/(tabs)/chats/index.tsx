@@ -10,6 +10,7 @@ import { StatusScreen } from '@/components/StatusScreen';
 import { useDesign } from '@/design/DesignProvider';
 import { ConversationList, type ChatListItem } from '@/features/chats/ConversationList';
 import { filterConversations } from '@/features/chats/filterConversations';
+import { isOfflineError, OFFLINE_EMPTY } from '@/features/chats/offlineEmpty';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
 import { WorkspacePill } from '@/features/workspaces/WorkspacePill';
 import { formatAge } from '@/lib/time';
@@ -43,6 +44,15 @@ export default function ConversationsScreen() {
     );
   }
   if (conversations.error && all.length === 0) {
+    // No connection and nothing saved on the device yet (§4.9 "offline with no cache"): say so,
+    // with the mascot (no data was lost), instead of a generic failure.
+    if (isOfflineError(conversations.error)) {
+      return (
+        <StatusScreen mascot="bust" title={OFFLINE_EMPTY.title} body={OFFLINE_EMPTY.body}>
+          <Button title="Try again" size="small" variant="tonal" onPress={() => void conversations.refetch()} />
+        </StatusScreen>
+      );
+    }
     return (
       <StatusScreen title="Couldn't load conversations" body="Check your connection and try again.">
         <Button title="Try again" size="small" variant="tonal" onPress={() => void conversations.refetch()} />
@@ -57,24 +67,29 @@ export default function ConversationsScreen() {
         resolve(false);
         return;
       }
-      Alert.alert(`Delete “${row.name || 'Untitled conversation'}”?`, 'The chat and its messages are deleted for you in this workspace. This cannot be undone.', [
-        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            void deleteConversation(projectId, row.id).then((ok) => {
-              if (ok) {
-                haptic('swipeActionThreshold');
-                void queryClient.invalidateQueries({ queryKey: queryKeys.conversations(projectId) });
-              } else {
-                Alert.alert("Couldn't delete the chat", 'Check your connection and try again.');
-              }
-              resolve(ok);
-            });
+      Alert.alert(
+        `Delete “${row.name || 'Untitled conversation'}”?`,
+        'The chat and its messages are deleted for you in this workspace. This cannot be undone.',
+        [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          {
+            text: 'Delete',
+            style: 'destructive',
+            onPress: () => {
+              void deleteConversation(projectId, row.id).then((ok) => {
+                if (ok) {
+                  haptic('swipeActionThreshold');
+                  void queryClient.invalidateQueries({ queryKey: queryKeys.conversations(projectId) });
+                } else {
+                  Alert.alert("Couldn't delete the chat", 'Check your connection and try again.');
+                }
+                resolve(ok);
+              });
+            },
           },
-        },
-      ], { cancelable: true, onDismiss: () => resolve(false) });
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) },
+      );
     });
 
   return (

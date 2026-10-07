@@ -1045,3 +1045,156 @@ Landed on `feat/redesign-chat`:
   finishing the sent message, so the input is still cleared.
 - **Preview** (`__DEV__`): `/design-chat?state=conversation|empty|thinking|streaming|approval|dictation|compose&brand=magenta|green|lemon`
   renders the real components (D2, `fixtureParity.test.tsx`).
+
+## 11. Secondary screens (as built)
+
+Landed on `feat/redesign-secondary`:
+
+- **Discover** (`DiscoverView`): the public agents as cards (agent icon or monogram tile 44, the
+  circular arrow as a visual, name as headline, two lines of description, category and tags) in a
+  grid of 2 columns on a phone and up to 4 on an iPad, one column at accessibility sizes, or as an
+  inset-grouped list (the bar's grid/list button; a list row keeps the category and up to three tags,
+  and its label reads the tags). Category filter chips appear when the catalogue
+  has more than one category. Search is the native field in the navigation bar (server-side,
+  debounced). Each card is ONE button labelled "name, category, description". The mascot only on the
+  empty states; an icon-less catalogue gets monograms (§5, never a wall of Zefircas).
+- **Agent sheet** (`PublicAgentView`, `/discover/[id]`): a sheet with detents and Done that opens at
+  full height (`sheetOptions(design, 'detail')`: half and full detents, initial full, so Start chat is
+  in view; the list switchers still open at half); icon 72,
+  name (title2), "Agent · version v1", tags, the description (selectable), the welcome message on a
+  sunken card, ONE filled "Start chat" with the project it lands in, starters as list rows. No mascot.
+- **Notifications** (`NotificationsView`): sections by local day, a type symbol in a tinted circle
+  (`notificationIcon`), the server's one-line detail, an accent dot AND "unread" in the label, link
+  role plus chevron only on rows that open a conversation, swipe left to dismiss (also the row's
+  accessibility action), kit filter chips, "Mark all as read" as the bar action while anything is
+  unread. At accessibility sizes a row stacks (symbol, age and chevron on top, then the full-width
+  title and detail). Ages older than a week are the local calendar date in the user's locale
+  ("Sep 25"), never a UTC ISO date. Empty: the bust and "You're all caught up". Error: no mascot, Try again.
+- **Settings** (`SettingsList`): an account row (initials avatar, name, "Signed in to {host}"), the
+  workspace row with its name over the host (never the name alone), Appearance, Security (device
+  lock, screenshots, **Signed-in devices**), Usage, Memory, About ("About Agent Zefir" with the
+  version, privacy, support), and Log out & wipe as its own destructive row.
+- **Signed-in devices** (`DevicesView`, `/devices`; `listNativeDevices` / `revokeNativeDevice`): this
+  device apart with no sign-out of its own, the other devices with platform, app version and last
+  activity; each has a visible **Sign out** button (its own accessibility element), with the swipe
+  as the shortcut and the row's accessibility action; either way a destructive confirmation names
+  the host first. Online only, in memory only. No mascot (security surface).
+- **Memory** (`MemoryView`): one inset-grouped section, a visible **Delete** button on each memory
+  with swipe as the shortcut (a swipe is never the only way, HIG), an "Off" badge with a
+  symbol, "Clear all memories" as a destructive row (confirms first); the mascot on the empty state.
+- **Usage** (`UsageView`): a section with a meter per scope (accessibility value 0–100), a warning row
+  with a symbol and words, the period as the footer.
+- **About** (`AboutView`, `/about`): the full mascot at 160, the only place it is named.
+- **New chat**: Cancel in the modal bar, a sunken search field, agents and models as inset-grouped
+  sections (agent monograms, a cpu tile for models).
+- **Sheets inside the chat**: participants and tool details use the kit (header buttons, avatars,
+  segmented control, code role, banners with symbols). The ask-user chips use the chip tokens.
+- **Widgets and Live Activity**: the pastel gradient and Zefir rose per scheme in full colour (pinned
+  to the token values by a test), the system ground and tint on accented / clear home screens, text
+  styles only (Dynamic Type, capped at xLarge on the home screen so a 158 pt widget never clips its
+  counts; the small widget puts unread and running on one line), the waiting count as a rounded hero
+  number; the Live Activity takes the
+  dark accent and night surface in dark mode.
+- **States**: Chats with no connection and nothing saved shows "You're offline" with the bust (§4.9);
+  failures never show the mascot. A status screen centres its buttons (`ButtonAlignmentContext`).
+- **Rows with a control at their end** (`ListRow` with `trailing` and no `onPress`): the control is its
+  own accessibility element, outside the row's label group, so VoiceOver can focus it (participants'
+  Remove). Rows that add in place (Add people / Add agent) pass `chevron={false}`; a row that is
+  already there is disabled, not "selected". A row that is starting work stays at full opacity.
+- **Previews** (`__DEV__`): `/design-secondary?screen=discover|discover-list|discover-empty|discover-error|
+  discover-unavailable|notifications|notifications-empty|memory|memory-empty|devices|about|offline|error`
+  and `/design-secondary/agent` (the sheet), all with `&brand=magenta|green|lemon`; `/design-tabs/discover`
+  and `/design-tabs/settings` render the real views (D2, `fixtureParity.test.tsx`).
+
+## 12. Audit inventory: closed and open (phase-B checklist)
+
+Status of every item of the phase-A audit (`scratchpad/design/audit.md`) after the five redesign
+packages (shell #57, entry/home #58–#59, chat #60, secondary screens). **Closed** means the fix is in
+the code and covered by a test or a preview; **open** items say why.
+
+### Cross-cutting (X1–X18)
+
+| # | Item | Status |
+|---|---|---|
+| X1 | Semantic tokens per scheme, brand overrides only the accent family | Closed (§7, `tokens.test.ts`) |
+| X2 | Type ramp, no hard-coded `fontSize` | Closed (`noHardcodedFontSize.test.ts`; widgets use SwiftUI text styles) |
+| X3 | Fixed heights next to scalable text | Closed (minHeight everywhere in the kit; AX layout switch at 1.35) |
+| X4 | Emoji / Unicode icons | Closed (`Icon`, one semantic map in `src/ui/icons.ts`) |
+| X5 | Text header actions | Closed (native bar items, `headerActionOptions`; text only for Done / Cancel) |
+| X6 | Bordered chip inside the glass capsule | Closed (§8) |
+| X7 | Haptics | Closed (`haptic()` for send, copy, approve/reject, chips, swipe threshold) |
+| X8 | Alerts for non-critical information | Mostly closed: attach success is silent, toasts replace info alerts. **Open:** the "Couldn't delete the chat" alert after a failed delete, and the attach-button disabled reason (`AttachmentTrayView`), are still alerts. Destructive confirmations stay alerts by design (HIG). |
+| X9 | Custom bottom sheets | Closed (native sheets with detents via `sheetOptions`; `ActionMenu` for symbol menus) |
+| X10 | Page sheets with hand-made headers | Partly closed: the switchers and the agent sheet are routes with native headers. **Open:** participants, tool details and the approval editor are still RN `pageSheet` modals (kit-styled headers, Back/Done buttons, 44 pt targets); making them sheet routes is a navigation change, not a restyle. |
+| X11 | Hand-drawn segmented control | Closed (`SegmentedControl`, also in tool details) |
+| X12 | Text links, tappable vs not | Closed (no `Text onPress`; rows that do nothing have no press state or chevron) |
+| X13 | No pressed / ripple states | Closed (kit rows, cards, chips, buttons) |
+| X14 | `Linking.openURL` for links | Closed for privacy and support (`WebBrowser`). **Open by decision:** "Open in web" for a toolkit sign-in still opens the system browser, where the user's web session lives. |
+| X15 | Pure-black dark | Closed (plum night tokens) |
+| X16 | Black on magenta | Closed (`correctAccent`, §3.3) |
+| X17 | Android dynamic colour | Decided: the workspace brand wins, else Zefir (§3.4); no "Match system colours" option in v1. |
+| X18 | iPad locked to portrait | **Open:** `orientation: 'portrait'` with `supportsTablet: true`. Discover's grid already widens to 4 columns, but a split view and rotation need their own package. |
+
+### Per screen
+
+| Screen / surface | Status |
+|---|---|
+| 2.1 Root, splash, status | Closed (Zefirca splash light/dark, branded `StatusScreen`) |
+| 2.2 Connect | Closed (§9; QR hidden until a scanner exists) |
+| 2.3 Connect confirmation | Closed (§9) |
+| 2.4 Sign in | Closed (§9; developer sign-in behind "Other sign-in options", `__DEV__` only) |
+| 2.5 Lock | Closed (§9) |
+| 2.6 Update required | Closed (§9) |
+| 2.7 Privacy cover | Closed (splash-matching ground, bust) |
+| 2.8 Home / Chats | Closed (§9). **Open:** pinned chats and a context menu need contract support (no pin/rename yet). |
+| 2.9 Project switcher | Closed (sheet with detents, Done, checkmark rows) |
+| 2.10 New conversation | Closed (this package: Cancel, search field, sections, avatars). The search is an in-content field, not `headerSearchBarOptions`, because a modal's search bar hides under the iOS 26 sheet chrome. |
+| 2.11 Conversation | Closed (§10). **Open:** the full-screen `/voice` route and the nav-title menu (listed in #60). |
+| 2.12 Notifications | Closed (this package) |
+| 2.13 Settings | Closed (this package; app-icon switch since #58) |
+| 2.14 Participants sheet | Closed visually (avatars, kit). Open: native sheet route (X10). |
+| 2.15 Suggestion strip | Closed (rows grow with text, 52 pt minimum) |
+| Discover (new) | Closed (this package) |
+| Signed-in devices (new) | Closed (this package) |
+| Widgets / Live Activity | Closed for colour and type (this package). Their layouts are checked from the serialised widget source; a simulator home screen cannot be captured headlessly. |
+
+### Review findings on the secondary package (S1–S9, F1–F6)
+
+| # | Finding | Status |
+|---|---|---|
+| S1 | Status-screen buttons sat at the left gutter | Closed (`ButtonAlignmentContext`; `kit.test.tsx`) |
+| S2 | Notification rows kept a horizontal layout at AX sizes | Closed (stacked row; `notificationsScreen.test.tsx`, `notificationRowLayout.test.tsx`) |
+| S3 | Device rows reflowed by string length at AX sizes | Closed (AX layout switch, no flexWrap; `devicesView.test.tsx`) |
+| S4 | Older ages as an unlocalised UTC ISO date | Closed (`formatAge` → local date via `Intl`; `time.test.ts`) |
+| S5 | Agent sheet opened at half with Start chat below the fold | Closed (`'detail'` sheet size, initial full) |
+| S6 | Tag capsules invisible on the dark agent sheet | Closed (`TagList on="elevated"`; `tagList.test.tsx`) |
+| S9 | Device sign-out and memory delete only by swipe | Closed (visible Sign out / Delete, swipe as shortcut) |
+| F1 | VoiceOver could not reach a participant's Remove | Closed (`ListRow` splits an interactive trailing out of the group) |
+| F3 | Add rows showed a navigation chevron; present rows read "selected" | Closed (`chevron={false}`, no `selected`) |
+| F4 | The busy row was dimmed with its spinner | Closed (busy, not disabled; `publicAgentView.test.tsx`) |
+| F5 | Discover list dropped the category and tags | Closed (`ListRow footer`, tags in the label) |
+| F6 | Small widget could clip its counts at large text | Closed in layout (cap at xLarge, one counts line; `CountsWidget.test.ts`). Not captured on a home screen. |
+
+### Platform configuration (§3 of the audit)
+
+| Item | Status |
+|---|---|
+| App icon (Icon Composer) and Android adaptive + monochrome | Closed (foundation, `docs/assets.md`) |
+| Predictive back | Closed (`predictiveBackGestureEnabled: true`) |
+| Edge-to-edge insets | Closed in code (safe-area insets on every screen, IME insets on Android). **Open:** not verified on an Android 16 device or emulator; Android is not built on this machine. |
+| Splash | Closed |
+| Alternate icons | Closed (Zefir Night, #58) |
+| Microphone | Closed (on-device dictation, #60) |
+
+### Phase-B verification checklist (audit §6)
+
+| Check | Status |
+|---|---|
+| iOS Light, Dark, a branded workspace on every screen | Done (simulator screenshots per package; this package: `scratchpad/redesign/secondary-*.png`) |
+| Dynamic Type at the largest accessibility size | Done for the key screens of each package (AX5) |
+| Bold Text, Reduce Transparency, Increase Contrast | Covered by `resolve.test.ts` (opaque glass, strong separators); not screenshot |
+| VoiceOver labels and rotor headings | Covered by screen tests (labels, roles, actions); not run with VoiceOver on a device |
+| Keyboard up/down on notched and home-button devices | Notched simulator only |
+| Android 16: insets, predictive back, 200 % font, themed icon | **Open:** no Android build on this machine; code paths typed and unit-tested |
+| Brands: Zefir, magenta, green, lemon (low contrast, corrected) | Done (`brand.test.ts`, previews) |
+| Touch targets asserted by a test | Done (`kit.test.tsx`) |

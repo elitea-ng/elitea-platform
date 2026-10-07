@@ -14,7 +14,11 @@ export const TURN_ACTIVITY = 'ZefirTurn';
 
 const TurnActivityLayout = (props: TurnActivityProps, environment: LiveActivityEnvironment) => {
   'widget';
-  const accent = environment.isLuminanceReduced ? '#FFFFFF' : '#B4306A';
+  // Zefir rose per scheme (design-tokens.json accent: light #B4306A, dark #FF8CB8); white on the
+  // dimmed Always-On lock screen. Grounds are the app's own: cream (light) and night surface (dark).
+  const dark = environment.colorScheme === 'dark';
+  const accent = environment.isLuminanceReduced ? '#FFFFFF' : dark ? '#FF8CB8' : '#B4306A';
+  const ground = dark ? '#1D1A22' : '#FBF7F9';
   const symbols = {
     working: 'sparkles',
     tool: 'wrench.and.screwdriver.fill',
@@ -43,10 +47,10 @@ const TurnActivityLayout = (props: TurnActivityProps, environment: LiveActivityE
     ) : null;
   return {
     banner: (
-      <HStack spacing={12} modifiers={[padding({ all: 14 }), activityBackgroundTint(environment.colorScheme === 'dark' ? '#1E1A24' : '#FBF7F9')]}>
+      <HStack spacing={12} modifiers={[padding({ all: 14 }), activityBackgroundTint(ground)]}>
         <Image systemName={symbol} color={accent} size={24} />
         <VStack alignment="leading" spacing={2}>
-          <Text modifiers={[font({ textStyle: 'headline' }), lineLimit(1)]}>{props.title}</Text>
+          <Text modifiers={[font({ textStyle: 'headline', design: 'rounded' }), lineLimit(1)]}>{props.title}</Text>
           <Text modifiers={[font({ textStyle: 'subheadline' }), muted, lineLimit(1)]}>{props.detail}</Text>
         </VStack>
         <Spacer />

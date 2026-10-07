@@ -1,18 +1,8 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import {
-  Animated,
-  PanResponder,
-  StyleSheet,
-  Text,
-  View,
-  type AccessibilityActionEvent,
-  type AccessibilityActionInfo,
-  type AccessibilityState,
-} from 'react-native';
+import { Animated, PanResponder, StyleSheet, View, type AccessibilityActionEvent, type AccessibilityActionInfo, type AccessibilityState } from 'react-native';
 
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
-import { ramp } from '@/ui';
+import { useDesign } from '@/design/DesignProvider';
+import { Icon, Text } from '@/ui';
 
 /**
  * A list row that is removed with a swipe to the left (core PanResponder and
@@ -40,8 +30,12 @@ export interface SwipeToDeleteProps {
   /** Removes the item; resolve false to keep the row. Absent: the row cannot be swiped (offline copy, older server). */
   onDelete: (() => Promise<boolean>) | null;
   testID?: string;
-  /** Renders the row; spread `a11y` onto the row's accessible element (the one a screen reader focuses). */
-  children: (a11y: SwipeRowA11y) => ReactNode;
+  /**
+   * Renders the row; spread `a11y` onto the row's accessible element (the one a screen reader
+   * focuses). `remove` runs the same delete as the swipe, for the row's visible control: a swipe
+   * is a shortcut, never the only way (S9).
+   */
+  children: (a11y: SwipeRowA11y, remove: () => void) => ReactNode;
 }
 
 /** What the focused row element carries so a screen reader can offer the delete. */
@@ -95,8 +89,7 @@ function createController(): SwipeController {
       if (!removed) spring();
     },
     responder: PanResponder.create({
-      onMoveShouldSetPanResponder: (_, g) =>
-        ctl.onDelete !== null && !ctl.busy && g.dx < -START_SLOP && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
+      onMoveShouldSetPanResponder: (_, g) => ctl.onDelete !== null && !ctl.busy && g.dx < -START_SLOP && Math.abs(g.dx) > Math.abs(g.dy) * 1.5,
       onPanResponderMove: (_, g) => ctl.offset.setValue(Math.min(0, g.dx)),
       onPanResponderRelease: (_, g) => {
         const commit = -g.dx > ctl.width * SWIPE_COMMIT_FRACTION || g.vx < -FLING_VELOCITY;
@@ -115,7 +108,7 @@ function createController(): SwipeController {
 }
 
 export function SwipeToDelete({ actionLabel, onDelete, testID, children }: SwipeToDeleteProps) {
-  const palette = usePalette();
+  const { colors } = useDesign();
   const [ctl] = useState(createController);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -139,20 +132,26 @@ export function SwipeToDelete({ actionLabel, onDelete, testID, children }: Swipe
         ctl.setWidth(e.nativeEvent.layout.width);
       }}>
       {onDelete !== null ? (
-        <View style={[StyleSheet.absoluteFill, styles.behind, { backgroundColor: palette.danger }]} importantForAccessibility="no-hide-descendants">
-          <Text style={styles.behindText}>{actionLabel}</Text>
+        <View
+          style={[StyleSheet.absoluteFill, styles.behind, { backgroundColor: colors.danger }]}
+          importantForAccessibility="no-hide-descendants"
+          accessibilityElementsHidden>
+          <Icon name="delete" size={20} tone="dangerOn" />
+          <Text variant="subheadline" tone="dangerOn" style={styles.behindText}>
+            {actionLabel}
+          </Text>
         </View>
       ) : null}
       <Animated.View
-        style={{ transform: [{ translateX: ctl.offset }], backgroundColor: palette.background }}
+        style={{ transform: [{ translateX: ctl.offset }], backgroundColor: colors.surface }}
         {...(onDelete !== null ? ctl.responder.panHandlers : {})}>
-        {children(a11y)}
+        {children(a11y, () => void ctl.run())}
       </Animated.View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  behind: { alignItems: 'flex-end', justifyContent: 'center', paddingHorizontal: Spacing.three },
-  behindText: { ...ramp.subheadline, color: '#ffffff', fontWeight: '700' },
+  behind: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, paddingHorizontal: 20 },
+  behindText: { fontWeight: '600' },
 });

@@ -4,7 +4,7 @@ import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { Mascot } from '@/components/Mascot';
 import { MaxContentWidth } from '@/constants/theme';
 import { useDesign } from '@/design/DesignProvider';
-import { GradientBackground, Text } from '@/ui';
+import { ButtonAlignmentContext, GradientBackground, Text } from '@/ui';
 
 /**
  * Full-screen neutral state: launch, "Signing out…", blocking notices. `mascot` adds Agent
@@ -42,7 +42,7 @@ export function StatusScreen({
             {body}
           </Text>
         ) : null}
-        {children}
+        <ButtonAlignmentContext.Provider value="center">{children}</ButtonAlignmentContext.Provider>
       </View>
     </View>
   );

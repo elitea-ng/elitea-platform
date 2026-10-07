@@ -38,10 +38,22 @@ export default function AppLayout() {
       <Stack.Screen name="c/[id]" options={{ title: 'Conversation' }} />
       <Stack.Screen name="projects" options={{ title: 'Projects', ...switcher }} />
       <Stack.Screen name="workspaces" options={{ title: 'Workspaces', ...switcher }} />
-      <Stack.Screen name="new" options={{ title: 'New conversation', presentation: 'modal' }} />
+      {/* A modal always has a visible way out (audit 2.10): Cancel for VoiceOver and Switch Control. */}
+      <Stack.Screen
+        name="new"
+        options={{
+          title: 'New chat',
+          presentation: 'modal',
+          headerLeft: () => <Button title="Cancel" variant="plain" size="small" onPress={() => router.back()} />,
+        }}
+      />
       <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
       <Stack.Screen name="memory" options={{ title: 'Memory' }} />
-      <Stack.Screen name="discover/[id]" options={{ title: 'Agent' }} />
+      <Stack.Screen name="devices" options={{ title: 'Signed-in devices' }} />
+      <Stack.Screen name="about" options={{ title: 'About' }} />
+      {/* An agent from Discover opens as a sheet over the catalogue (docs/screens.md §6), at full
+          height: its one action, Start chat, follows a description of any length (S5). */}
+      <Stack.Screen name="discover/[id]" options={{ title: 'Agent', ...switcher, ...sheetOptions(design, 'detail') }} />
     </Stack>
   );
 }

@@ -1,11 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { Image, StyleSheet, View } from 'react-native';
 
 import { publicAgentIconUrl } from '@/api/queries/discover';
 import { queryKeys } from '@/api/queries/keys';
-import { usePalette } from '@/constants/use-palette';
-import { monogramStyle } from '@/ui';
+import { useDesign } from '@/design/DesignProvider';
+import { monogramStyle, Text } from '@/ui';
 import { fetchPublicAgentIcon } from '@/features/discover/agentIconData';
 import { useSession } from '@/state/session';
 
@@ -42,7 +42,7 @@ export function AgentIcon({
   /** Injectable for tests. */
   fetchIcon?: (uri: string) => Promise<string | null>;
 }) {
-  const palette = usePalette();
+  const { colors } = useDesign();
   const origin = useSession((s) => s.serverOrigin);
   const uri = publicAgentIconUrl(iconPath, origin);
   const icon = useQuery({
@@ -54,7 +54,8 @@ export function AgentIcon({
   });
   const data = uri !== null ? (icon.data ?? null) : null;
   const [failed, setFailed] = useState<string | null>(null);
-  const frame = { width: size, height: size, borderRadius: size / 4 };
+  // A squircle tile (continuous corners on iOS): an agent, never a person's round avatar.
+  const frame = { width: size, height: size, borderRadius: Math.round(size * 0.28), borderCurve: 'continuous' as const };
   if (data !== null && failed !== data) {
     return (
       <Image
@@ -62,15 +63,17 @@ export function AgentIcon({
         source={{ uri: data }}
         onError={() => setFailed(data)}
         accessible={false}
-        style={[frame, { backgroundColor: palette.backgroundElement }]}
+        style={[frame, { backgroundColor: colors.surfaceSunken }]}
       />
     );
   }
   return (
-    <View testID="agent-icon-monogram" accessible={false} style={[frame, styles.center, { backgroundColor: palette.backgroundElement }]}>
-      <Text maxFontSizeMultiplier={1} style={[monogramStyle(size, 0.38), { color: palette.textSecondary, fontWeight: '600' }]}>{monogramOf(name)}</Text>
+    <View testID="agent-icon-monogram" accessible={false} style={[frame, styles.center, { backgroundColor: colors.secondarySoft }]}>
+      <Text maxFontSizeMultiplier={1} color={colors.secondarySoftOn} style={[monogramStyle(size, 0.38), styles.monogram]}>
+        {monogramOf(name)}
+      </Text>
     </View>
   );
 }
 
-const styles = StyleSheet.create({ center: { alignItems: 'center', justifyContent: 'center' } });
+const styles = StyleSheet.create({ center: { alignItems: 'center', justifyContent: 'center' }, monogram: { fontWeight: '600' } });

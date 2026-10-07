@@ -14,8 +14,18 @@ export function parseServerTime(value: unknown): number | null {
   return Number.isNaN(ms) ? null : ms;
 }
 
-/** Short, list-friendly age: "now", "5m", "3h", "2d", then a date. */
-export function formatAge(value: unknown, now: number = Date.now()): string {
+/** How a date is written: the device's locale and time zone unless a test fixes them. */
+export interface DateStyle {
+  locale?: string;
+  timeZone?: string;
+}
+
+/**
+ * Short, list-friendly age: "now", "5m", "3h", "2d", then the local calendar date in the user's
+ * locale ("25 Sep", "Sep 25"; the year only when it is not this year's). The date is the day the
+ * user lived it, in their time zone, never the UTC day (S4).
+ */
+export function formatAge(value: unknown, now: number = Date.now(), style: DateStyle = {}): string {
   const ms = parseServerTime(value);
   if (ms === null) return '';
   const seconds = Math.max(0, Math.round((now - ms) / 1000));
@@ -23,5 +33,17 @@ export function formatAge(value: unknown, now: number = Date.now()): string {
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
   if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
   if (seconds < 7 * 86_400) return `${Math.floor(seconds / 86_400)}d`;
-  return new Date(ms).toISOString().slice(0, 10);
+  return formatShortDate(ms, now, style);
+}
+
+/** "Sep 25" / "25 Sep", with the year when it differs from `now`'s (both in the same zone). */
+export function formatShortDate(ms: number, now: number = Date.now(), { locale, timeZone }: DateStyle = {}): string {
+  const year = (t: number) => new Intl.DateTimeFormat(locale, { year: 'numeric', timeZone }).format(t);
+  const sameYear = year(ms) === year(now);
+  return new Intl.DateTimeFormat(locale, {
+    month: 'short',
+    day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+    timeZone,
+  }).format(ms);
 }

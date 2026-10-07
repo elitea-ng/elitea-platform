@@ -205,6 +205,7 @@ function RoutedStack({ connected, signedIn }: { connected: boolean; signedIn: bo
       <Stack.Protected guard={__DEV__}>
         <Stack.Screen name="design-gallery" options={{ headerShown: true, title: 'Design gallery' }} />
         <Stack.Screen name="design-tabs" options={{ headerShown: false }} />
+        <Stack.Screen name="design-secondary" options={{ headerShown: false }} />
         <Stack.Screen name="design-composer" options={{ headerShown: true, title: 'Conversation' }} />
         <Stack.Screen name="design-chat" options={{ headerShown: true, title: 'Conversation' }} />
         <Stack.Screen name="design-sheet" options={{ headerShown: true, title: 'Workspace', ...sheetOptions(design) }} />

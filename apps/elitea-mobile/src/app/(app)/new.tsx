@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, SectionList, StyleSheet, TextInput, View } from 'react-native';
 
 import { StartConversationError, startConversationWithAgent, useAgents, type Agent } from '@/api/queries/agents';
 import { queryKeys } from '@/api/queries/keys';
@@ -9,16 +9,14 @@ import { startConversationWithModel, useModels, type ChatModel } from '@/api/que
 import { speaksContract } from '@/api/discovery';
 import { useRecommendations } from '@/api/queries/recommendations';
 import { StatusScreen } from '@/components/StatusScreen';
-import { FONT_SCALE } from '@/constants/typeScale';
 import { SuggestionStrip } from '@/features/chat/SuggestionStrip';
 import { useWorkspaceInfo } from '@/state/workspaceInfo';
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
 import { useSession } from '@/state/session';
 import { useLockCovers } from '@/security/lock/useLockController';
 import { markAgentStarted, readHandoff } from '@/features/intents/intentHandoff';
 import { MAX_PREFILL } from '@/features/intents/intentRouter';
-import { ramp } from '@/ui';
+import { Avatar, EmptyState, hitTarget, Icon, IconTile, ListRow, maxScale, ramp, sectionTitle, Text, uiPlatform, useLayoutMargin } from '@/ui';
 
 type Choice = { kind: 'agent'; key: string; agent: Agent } | { kind: 'model'; key: string; model: ChatModel };
 
@@ -34,7 +32,8 @@ type Choice = { kind: 'agent'; key: string; agent: Agent } | { kind: 'model'; ke
  * into the new conversation's composer (never sent by itself).
  */
 export default function NewConversationScreen() {
-  const palette = usePalette();
+  const { colors, radius } = useDesign();
+  const margin = useLayoutMargin();
   const queryClient = useQueryClient();
   const projectId = useSession((s) => s.projectId);
   const { intent } = useLocalSearchParams<{ intent?: string }>();
@@ -60,9 +59,7 @@ export default function NewConversationScreen() {
     setError(null);
     try {
       const created =
-        choice.kind === 'agent'
-          ? await startConversationWithAgent(projectId, choice.agent)
-          : await startConversationWithModel(projectId, choice.model);
+        choice.kind === 'agent' ? await startConversationWithAgent(projectId, choice.agent) : await startConversationWithModel(projectId, choice.model);
       void queryClient.invalidateQueries({ queryKey: queryKeys.conversations(projectId) });
       router.replace({
         pathname: '/c/[id]',
@@ -105,76 +102,103 @@ export default function NewConversationScreen() {
   const failed = agents.error && models.error;
 
   return (
-    <View style={[styles.flex, { backgroundColor: palette.background }]}>
-      <TextInput
-        value={search}
-        onChangeText={setSearch}
-        placeholder="Search agents and models"
-        placeholderTextColor={palette.textSecondary}
-        autoCorrect={false}
-        accessibilityLabel="Search agents and models"
-        style={[styles.search, { color: palette.text, backgroundColor: palette.field }]}
-      />
+    <View style={[styles.flex, { backgroundColor: colors.background }]}>
+      <View
+        style={[
+          styles.search,
+          { marginHorizontal: margin, backgroundColor: colors.surfaceSunken, borderColor: colors.separatorStrong, borderRadius: radius.md },
+        ]}>
+        <Icon name="search" size={18} tone="secondary" />
+        <TextInput
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Search agents and models"
+          placeholderTextColor={colors.textTertiary}
+          autoCorrect={false}
+          autoCapitalize="none"
+          clearButtonMode="while-editing"
+          returnKeyType="search"
+          accessibilityLabel="Search agents and models"
+          maxFontSizeMultiplier={maxScale.body}
+          style={[ramp.body, styles.flex, { color: colors.textPrimary, minHeight: hitTarget() }]}
+        />
+      </View>
       {error ? (
-        <Text accessibilityRole="alert" style={[styles.error, { color: palette.danger }]}>
-          {error}
-        </Text>
+        <View
+          accessible
+          accessibilityRole="alert"
+          style={[styles.error, { marginHorizontal: margin, backgroundColor: colors.dangerSoft, borderRadius: radius.md }]}>
+          <Icon name="error" size={18} tone="danger" />
+          <Text variant="callout" tone="danger" style={styles.flex}>
+            {error}
+          </Text>
+        </View>
       ) : null}
       {loading && sections.length === 0 ? (
-        <ActivityIndicator style={styles.loading} color={palette.accent} />
+        <ActivityIndicator style={styles.loading} color={colors.accent} />
       ) : failed ? (
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => {
-            void agents.refetch();
-            void models.refetch();
+        <EmptyState
+          mascot="none"
+          title="Couldn't load agents or models"
+          body="Check your connection and try again."
+          action={{
+            title: 'Try again',
+            onPress: () => {
+              void agents.refetch();
+              void models.refetch();
+            },
           }}
-          style={styles.loading}>
-          <Text style={{ color: palette.accent }}>Couldn&apos;t load agents or models. Retry</Text>
-        </Pressable>
+        />
       ) : (
         <SectionList
           sections={sections}
           keyExtractor={(choice) => choice.key}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
           stickySectionHeadersEnabled={false}
+          contentContainerStyle={[styles.list, { paddingHorizontal: margin }]}
           ListHeaderComponent={
             suggestions.length > 0 ? (
               <View style={styles.suggested}>
-                <Text accessibilityRole="header" maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.header, { color: palette.textSecondary }]}>
+                <Text heading variant="footnote" tone="secondary" emphasized style={styles.sectionHeader}>
                   Suggested
                 </Text>
-                <View style={styles.suggestedStrip}>
-                  <SuggestionStrip
-                    inline
-                    label="Suggested agents"
-                    state={{
-                      items: suggestions.map((agent) => ({
-                        key: `suggested:${agent.id}`,
-                        title: agent.name,
-                        subtitle: agent.description || 'Agent',
-                        badge: busyKey === `suggested:${agent.id}` ? 'Starting…' : null,
-                      })),
-                    }}
-                    onPick={(item) => {
-                      const agent = suggestions.find((a) => `suggested:${a.id}` === item.key);
-                      if (agent) void start({ kind: 'agent', key: item.key, agent });
-                    }}
-                  />
-                </View>
+                <SuggestionStrip
+                  inline
+                  label="Suggested agents"
+                  state={{
+                    items: suggestions.map((agent) => ({
+                      key: `suggested:${agent.id}`,
+                      title: agent.name,
+                      subtitle: agent.description || 'Agent',
+                      badge: busyKey === `suggested:${agent.id}` ? 'Starting…' : null,
+                    })),
+                  }}
+                  onPick={(item) => {
+                    const agent = suggestions.find((a) => `suggested:${a.id}` === item.key);
+                    if (agent) void start({ kind: 'agent', key: item.key, agent });
+                  }}
+                />
               </View>
             ) : undefined
           }
           ListEmptyComponent={
-            <Text style={[styles.empty, { color: palette.textSecondary }]}>No agents or models found.</Text>
+            needle !== '' ? (
+              <EmptyState mascot="bust" title="No agents or models found" body={`Nothing matches “${search.trim()}”.`} />
+            ) : (
+              <EmptyState mascot="bust" title="No agents or models found" body="This project has no agents or models you can chat with yet." />
+            )
           }
           renderSectionHeader={({ section }) => (
-            <Text accessibilityRole="header" style={[styles.header, { color: palette.textSecondary }]}>
-              {section.title}
+            <Text
+              heading
+              variant={uiPlatform === 'ios' ? 'footnote' : 'subheadline'}
+              tone={uiPlatform === 'ios' ? 'secondary' : 'accent'}
+              style={styles.sectionHeader}>
+              {sectionTitle(section.title)}
             </Text>
           )}
-          ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: palette.border }]} />}
-          renderItem={({ item }) => {
+          renderItem={({ item, index, section }) => {
             const title = item.kind === 'agent' ? item.agent.name : item.model.displayName;
             const subtitle =
               item.kind === 'agent'
@@ -184,25 +208,32 @@ export default function NewConversationScreen() {
                   : item.model.displayName !== item.model.name
                     ? item.model.name
                     : '';
+            const first = index === 0;
+            const last = index === section.data.length - 1;
             return (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityState={{ busy: busyKey === item.key, disabled: busyKey !== null }}
-                disabled={busyKey !== null}
-                onPress={() => void start(item)}
-                style={styles.row}>
-                <View style={styles.flex}>
-                  <Text numberOfLines={1} style={[styles.name, { color: palette.text }]}>
-                    {title}
-                  </Text>
-                  {subtitle ? (
-                    <Text numberOfLines={2} style={[styles.description, { color: palette.textSecondary }]}>
-                      {subtitle}
-                    </Text>
-                  ) : null}
-                </View>
-                {busyKey === item.key ? <ActivityIndicator color={palette.accent} /> : null}
-              </Pressable>
+              <View
+                style={[
+                  styles.cell,
+                  { backgroundColor: colors.surface },
+                  first ? { borderTopLeftRadius: radius.listRow, borderTopRightRadius: radius.listRow } : null,
+                  last ? { borderBottomLeftRadius: radius.listRow, borderBottomRightRadius: radius.listRow, marginBottom: 20 } : null,
+                ]}>
+                {first ? null : <View style={[styles.divider, { backgroundColor: colors.separator }]} />}
+                <ListRow
+                  title={title}
+                  subtitle={subtitle || null}
+                  numberOfLines={1}
+                  leading={
+                    item.kind === 'agent' ? <Avatar name={title} kind="agent" size={36} decorative /> : <IconTile icon="cpu" size={36} tone="secondary" />
+                  }
+                  busy={busyKey === item.key}
+                  // The row that is starting stays at full opacity with its spinner (F4); start()
+                  // refuses a second tap while busyKey is set.
+                  disabled={busyKey !== null && busyKey !== item.key}
+                  trailing={busyKey === item.key ? <ActivityIndicator color={colors.accent} /> : undefined}
+                  onPress={() => void start(item)}
+                />
+              </View>
             );
           }}
         />
@@ -213,15 +244,12 @@ export default function NewConversationScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  search: { ...ramp.body, margin: Spacing.three, borderRadius: 10, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two },
-  loading: { padding: Spacing.four, alignItems: 'center' },
-  error: { ...ramp.subheadline, paddingHorizontal: Spacing.three },
-  empty: { ...ramp.subheadline, textAlign: 'center', padding: Spacing.four },
-  header: { ...ramp.footnote, fontWeight: '600', paddingHorizontal: Spacing.three, paddingTop: Spacing.three, paddingBottom: Spacing.one },
-  separator: { height: StyleSheet.hairlineWidth, marginLeft: Spacing.three },
-  row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, padding: Spacing.three },
-  suggested: { paddingBottom: Spacing.two },
-  suggestedStrip: { paddingHorizontal: Spacing.three },
-  name: { ...ramp.body, fontWeight: '500' },
-  description: { ...ramp.footnote, marginTop: 2 },
+  search: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, marginVertical: 12, borderWidth: 1, borderCurve: 'continuous' },
+  loading: { padding: 32, alignItems: 'center' },
+  error: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, marginBottom: 12, borderCurve: 'continuous' },
+  list: { paddingBottom: 32, flexGrow: 1 },
+  sectionHeader: { paddingHorizontal: 16, paddingBottom: 6 },
+  suggested: { paddingBottom: 20, gap: 6 },
+  cell: { overflow: 'hidden', borderCurve: 'continuous' },
+  divider: { height: StyleSheet.hairlineWidth, marginStart: 64 },
 });

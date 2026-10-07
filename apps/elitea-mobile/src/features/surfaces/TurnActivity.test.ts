@@ -10,7 +10,9 @@ const render = (props: ReturnType<typeof activityProps>) =>
   renderWidgetSource<Record<string, WidgetNode | null>>(layouts.get(TURN_ACTIVITY), props, { colorScheme: 'light', isLuminanceReduced: false });
 
 it('lock screen banner and Dynamic Island: generic headline and phase', () => {
-  const layout = render(activityProps({ phase: 'tool', preview: 'none', conversationTitle: 'Contract review', approximate: false, startedAt: Date.now() - 3 * 60_000 }));
+  const layout = render(
+    activityProps({ phase: 'tool', preview: 'none', conversationTitle: 'Contract review', approximate: false, startedAt: Date.now() - 3 * 60_000 }),
+  );
   expect(texts(layout.banner).filter(Boolean)).toEqual(['Your agent is answering', 'Using a tool…']);
   expect(texts(layout.expandedCenter)).toEqual(['Your agent is answering']);
   expect(layout.minimal?.type).toBe('Image');
@@ -57,4 +59,16 @@ it('the timer keeps to a fixed trailing frame, so the title gets the banner widt
     const mods = (timerOf(slot)?.props.modifiers ?? []) as { modifier: string; args: unknown[] }[];
     expect(mods.find((m) => m.modifier === 'frame')?.args[0]).toMatchObject({ alignment: 'trailing', width: expect.any(Number) });
   }
+});
+
+it('takes Zefir rose and the app ground per scheme, white on the dimmed lock screen', () => {
+  const props = activityProps({ phase: 'working', preview: 'none', conversationTitle: null, approximate: false, startedAt: Date.now() });
+  const draw = (env: Record<string, unknown>) => renderWidgetSource<Record<string, WidgetNode | null>>(layouts.get(TURN_ACTIVITY), props, env);
+  const tint = (layout: Record<string, WidgetNode | null>) =>
+    ((layout.banner!.props.modifiers ?? []) as { modifier: string; args: unknown[] }[]).find((m) => m.modifier === 'activityBackgroundTint')!.args[0];
+  expect(draw({ colorScheme: 'light' }).minimal!.props.color).toBe('#B4306A');
+  expect(draw({ colorScheme: 'dark' }).minimal!.props.color).toBe('#FF8CB8');
+  expect(draw({ colorScheme: 'dark', isLuminanceReduced: true }).minimal!.props.color).toBe('#FFFFFF');
+  expect(tint(draw({ colorScheme: 'light' }))).toBe('#FBF7F9');
+  expect(tint(draw({ colorScheme: 'dark' }))).toBe('#1D1A22');
 });
