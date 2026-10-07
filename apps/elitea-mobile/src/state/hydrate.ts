@@ -5,6 +5,7 @@ import { restoreNativeSession } from '@/auth/nativeSession';
 import { restorePolicy } from '@/security/policyStore';
 import { log } from '@/lib/log';
 import { parseConnectLink } from '@/linking/parseConnectLink';
+import { clearQuickActionsAtLaunch } from '@/features/quickActions/quickActions';
 import { resumePendingWipes, wipeStoredWorkspace } from '@/security/endSession';
 import { checkFreshInstall } from '@/security/freshInstall';
 import { SECURE_KEYS, bindWorkspace, deleteSecureItem, getSecureItem } from '@/security/secureStorage';
@@ -30,7 +31,9 @@ import { restoreBrandTheme } from '@/theme/brandStore';
  *      for it instead would keep a permanently failing key on the splash
  *      screen forever;
  *   4. bind the registry's active workspace and read its origin, credential
- *      and selected project (`restoreWorkspace`, also used by a switch).
+ *      and selected project (`restoreWorkspace`, also used by a switch);
+ *   5. no workspace signed in: clear the home-screen quick actions the OS
+ *      kept from the previous run (a wipe resumed after a kill).
  *
  * Secure items are `WHEN_UNLOCKED_THIS_DEVICE_ONLY`: reading them fails while
  * the device is locked. A read ERROR is therefore "try again when the app is
@@ -61,6 +64,10 @@ export function hydrateSession(options: HydrateOptions = {}): Promise<void> {
       }
     }
     if (!getSession().hydrated) setSession({ hydrated: true });
+    // The OS kept the previous run's quick actions; only the signed-in layout
+    // rebuilds them, so a launch that restores no signed-in workspace (a
+    // resumed wipe, a workspace waiting for sign-in) clears them (QA-SEC-1).
+    if (getSession().credential === null) void clearQuickActionsAtLaunch();
     // The switcher's list (hosts, brand marks); never blocks the launch.
     void refreshWorkspaceList();
   })();

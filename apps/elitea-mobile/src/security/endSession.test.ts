@@ -285,6 +285,31 @@ describe('endSession', () => {
     }
   });
 
+  // QA-SEC-1: what the OS keeps outside the app between launches (iOS quick
+  // actions named after chats) cannot be reached by the wipe resumed at launch,
+  // which runs only stored hooks. Those hooks run before the (up to 3 s) server
+  // revoke, so a kill while "Signing out…" shows cannot leave them behind.
+  it('runs an early wipe hook right after the marker, before the server revoke, and only once', async () => {
+    signedIn();
+    const order: string[] = [];
+    const unregisterRevoke = registerRevokeHook(async () => {
+      order.push('revoke');
+    });
+    const early = jest.fn(() => {
+      order.push('early');
+    });
+    const unregisterEarly = registerWipeHook('early_probe', early, { early: true });
+    const unregisterLate = registerWipeHook('late_probe', () => {
+      order.push('late');
+    });
+    await endSession({ reason: 'user_logout' });
+    expect(order).toEqual(['early', 'revoke', 'late']);
+    expect(early).toHaveBeenCalledTimes(1);
+    unregisterRevoke();
+    unregisterEarly();
+    unregisterLate();
+  });
+
   it('does not call the server revoke when the server already revoked the device', async () => {
     signedIn();
     const revoke = jest.fn(async () => {});

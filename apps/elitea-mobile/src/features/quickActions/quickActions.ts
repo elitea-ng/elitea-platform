@@ -13,9 +13,12 @@ import { registerWipeHook } from '@/security/endSession';
  *
  * An action only opens a screen of the app; the device lock still covers it
  * (the lock gate sits above every route). Each action names the workspace it
- * was built for, and one built for another workspace opens nothing. The
- * items are cleared when a workspace is wiped (log out, revocation) and
- * rebuilt for whichever workspace is active next.
+ * was built for, and one built for another workspace opens nothing; a chat
+ * also names its project and opens nothing in another one. The
+ * items are cleared when a workspace is wiped (log out, revocation; before
+ * the server revoke), at a launch that restores no signed-in workspace (a
+ * wipe resumed after a kill), and rebuilt for whichever workspace is active
+ * next.
  *
  * Conversation titles are iOS only. On Android a launcher can PIN a dynamic
  * shortcut to the home screen, and setItems (setDynamicShortcuts) never
@@ -36,12 +39,14 @@ export interface RecentChat {
 
 export interface QuickActionInput {
   workspaceId: string;
+  /** The project the recent chats were listed in (conversation ids are per project). */
+  projectId?: number | null;
   allowTitles: boolean;
   unread: number;
   recent: readonly RecentChat[];
 }
 
-export type ZefirAction = QuickActions.Action & { params: { href: string; workspace: string } };
+export type ZefirAction = QuickActions.Action & { params: { href: string; workspace: string; project?: string } };
 
 function cleanTitle(name: string): string | null {
   const one = name.replace(/\s+/g, ' ').trim();
@@ -62,12 +67,13 @@ export function buildQuickActions(input: QuickActionInput): ZefirAction[] {
       params: { href: '/notifications', workspace },
     },
   ];
-  if (!input.allowTitles || !titlesCanBeCleared()) return actions;
+  const project = typeof input.projectId === 'number' ? String(input.projectId) : null;
+  if (!input.allowTitles || !titlesCanBeCleared() || project === null) return actions;
   for (const chat of input.recent) {
     if (actions.length >= 2 + MAX_RECENT_CHATS) break;
     const title = cleanTitle(chat.name);
     if (title === null || !/^[0-9A-Za-z-]{1,64}$/.test(chat.ref)) continue;
-    actions.push({ id: `chat:${chat.ref}`, title, icon: 'message', params: { href: `/c/${chat.ref}`, workspace } });
+    actions.push({ id: `chat:${chat.ref}`, title, icon: 'message', params: { href: `/c/${chat.ref}`, workspace, project } });
   }
   return actions;
 }
@@ -76,10 +82,22 @@ function titlesCanBeCleared(): boolean {
   return Platform.OS === 'ios';
 }
 
-/** True when an action may run now: it was built for the workspace that is active. */
-export function actionBelongsTo(action: QuickActions.Action, workspaceId: string | null): boolean {
+/**
+ * True when an action may run now: it was built for the workspace that is
+ * active and, for a chat, for the selected project too. Conversation ids are
+ * per project (each project has its own tenant schema), so a chat built for
+ * another project would open a 404 or a different conversation with the same
+ * id (F2). A chat action naming no project is refused.
+ */
+export function actionBelongsTo(action: QuickActions.Action, workspaceId: string | null, projectId: number | null = null): boolean {
   const owner = action.params?.workspace;
-  return workspaceId !== null && typeof owner === 'string' && owner === workspaceId;
+  if (workspaceId === null || typeof owner !== 'string' || owner !== workspaceId) return false;
+  const href = action.params?.href;
+  if (typeof href === 'string' && href.startsWith('/c/')) {
+    const project = action.params?.project;
+    return projectId !== null && typeof project === 'string' && project === String(projectId);
+  }
+  return true;
 }
 
 let lastKey: string | null = null;
@@ -102,4 +120,18 @@ export function clearQuickActions(): Promise<void> {
   return applyQuickActions([]);
 }
 
-registerWipeHook('quick_actions', clearQuickActions);
+/**
+ * Launch-time clear when no workspace was restored signed in (QA-SEC-1). iOS
+ * keeps the items between launches, and a wipe resumed at launch (the app was
+ * killed while signing out) runs no in-memory hook; only the signed-in layout
+ * rebuilds them. Always sent: what this process last set says nothing about
+ * what the OS kept from the previous one.
+ */
+export function clearQuickActionsAtLaunch(): Promise<void> {
+  lastKey = null;
+  return clearQuickActions();
+}
+
+// Early: before the server revoke of a log out, so a kill during it cannot
+// leave conversation titles on the home screen.
+registerWipeHook('quick_actions', clearQuickActions, { early: true });

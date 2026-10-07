@@ -17,7 +17,8 @@ import { getSession, useSession } from '@/state/session';
 
 /** Runs one action: opens its screen when it belongs to the active workspace. */
 export function handleQuickAction(action: QuickActions.Action, navigate: (href: Href) => void = (href) => router.navigate(href)): boolean {
-  if (!actionBelongsTo(action, getSession().workspaceId)) return false;
+  const session = getSession();
+  if (!actionBelongsTo(action, session.workspaceId, session.projectId)) return false;
   const href = action.params?.href;
   if (typeof href !== 'string' || !href.startsWith('/')) return false;
   navigate(href as Href);
@@ -71,9 +72,9 @@ export function useQuickActions(): void {
   useEffect(() => {
     if (workspaceId === null) return;
     void applyQuickActions(
-      buildQuickActions({ workspaceId, allowTitles, unread, recent: JSON.parse(recentKey) as RecentChat[] }),
+      buildQuickActions({ workspaceId, projectId, allowTitles, unread, recent: JSON.parse(recentKey) as RecentChat[] }),
     );
-  }, [workspaceId, allowTitles, unread, recentKey]);
+  }, [workspaceId, projectId, allowTitles, unread, recentKey]);
 
   useEffect(() => {
     // setTimeout: let the navigator mount before the launch action navigates.

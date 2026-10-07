@@ -1,12 +1,13 @@
 import { AppState, type AppStateStatus } from 'react-native';
 
 import { log } from '@/lib/log';
+import { network } from '@/lib/network';
 import { getSession } from '@/state/session';
 import { refreshWorkspaceInfo } from '@/state/workspaceInfo';
 
 /**
  * Re-reads the connected workspace's discovery document whenever the app
- * comes back from the background (DEF-R1, DEF-R4). It carries the public
+ * comes back from the background (and, below, when the network comes back) (DEF-R1, DEF-R4). It carries the public
  * client policy and the minimum app version, so:
  *  - a workspace that starts requiring a device lock locks a running app on
  *    its next foreground instead of after the next access-token refresh and a
@@ -45,6 +46,25 @@ export function bindForegroundRefresh(deps: ForegroundRefreshDeps): () => void {
   return () => sub.remove();
 }
 
+export interface ReconnectRefreshDeps {
+  network: { subscribe(listener: (online: boolean) => void): () => void };
+  refresh: () => Promise<unknown>;
+  isConnected: () => boolean;
+}
+
+/**
+ * Re-reads discovery when the device comes back online (F1). The document is
+ * kept in memory only, so a launch without network leaves it unknown: the
+ * contract-gated features (Settings > Usage and Memory, swipe-to-dismiss)
+ * would stay off until the next foreground or token refresh.
+ */
+export function bindReconnectRefresh(deps: ReconnectRefreshDeps): () => void {
+  return deps.network.subscribe((online) => {
+    if (!online || !deps.isConnected()) return;
+    deps.refresh().catch((error: unknown) => log.info('discovery refresh on reconnect failed', { error }));
+  });
+}
+
 let started = false;
 
 /** Starts the app's binding (idempotent). */
@@ -53,6 +73,11 @@ export function startForegroundRefresh(): void {
   started = true;
   bindForegroundRefresh({
     appState: AppState,
+    refresh: () => refreshWorkspaceInfo(),
+    isConnected: () => getSession().serverOrigin !== null,
+  });
+  bindReconnectRefresh({
+    network,
     refresh: () => refreshWorkspaceInfo(),
     isConnected: () => getSession().serverOrigin !== null,
   });

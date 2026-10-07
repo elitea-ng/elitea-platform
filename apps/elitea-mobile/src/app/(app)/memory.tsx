@@ -5,6 +5,7 @@ import { speaksContract } from '@/api/discovery';
 import {
   clearMemories,
   deleteMemory,
+  MemoryError,
   memoryErrorText,
   useForgetMemories,
   useMemories,
@@ -32,11 +33,17 @@ export default function MemoryScreen() {
   const selectable = useShareOut();
   const [note, setNote] = useState<string | null>(null);
   const rows = memories.data ?? [];
+  // A failed refresh keeps the old rows on screen (F3): say so above them. An
+  // empty list shows the error in its place instead. A delete or clear note wins.
+  const banner = note ?? (memories.error && rows.length > 0 ? memoryErrorText(memories.error) : null);
 
   if (!supported) {
+    // No discovery document yet (an offline launch; it is re-read on
+    // reconnect) means "unknown", not "not offered" (F1).
+    const why = workspace === null ? memoryErrorText(new MemoryError('offline')) : 'This workspace does not offer memory to mobile yet.';
     return (
       <View style={[styles.flex, styles.center, { backgroundColor: palette.background }]}>
-        <Text style={[styles.empty, { color: palette.textSecondary }]}>This workspace does not offer memory to mobile yet.</Text>
+        <Text style={[styles.empty, { color: palette.textSecondary }]}>{why}</Text>
       </View>
     );
   }
@@ -79,9 +86,9 @@ export default function MemoryScreen() {
 
   return (
     <View style={[styles.flex, { backgroundColor: palette.background }]}>
-      {note ? (
+      {banner ? (
         <Text accessibilityRole="alert" style={[styles.note, { color: palette.danger }]}>
-          {note}
+          {banner}
         </Text>
       ) : null}
       {rows.length > 0 ? (

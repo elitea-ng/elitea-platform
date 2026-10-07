@@ -3,12 +3,13 @@ import { Alert } from 'react-native';
 
 import { memoriesList } from '@/api/__fixtures__/settings13';
 import MemoryScreen from '@/app/(app)/memory';
-import { memoriesOf } from '@/api/queries/memories';
+import { MemoryError, memoriesOf } from '@/api/queries/memories';
 import { __resetSessionForTests, setSession } from '@/state/session';
 
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 
 let mockRows = memoriesOf(memoriesList);
+let mockError: unknown = null;
 const mockForget = jest.fn(async (ids: readonly string[] | 'all') => {
   mockRows = ids === 'all' ? [] : mockRows.filter((m) => !ids.includes(m.id));
 });
@@ -16,16 +17,16 @@ jest.mock('@/api/queries/memories', () => {
   const actual = jest.requireActual('@/api/queries/memories');
   return {
     ...actual,
-    useMemories: () => ({ isLoading: false, error: null, data: mockRows, refetch: jest.fn(), isRefetching: false }),
+    useMemories: () => ({ isLoading: false, error: mockError, data: mockRows, refetch: jest.fn(), isRefetching: false }),
     useForgetMemories: () => mockForget,
     deleteMemory: jest.fn(async () => {}),
     clearMemories: jest.fn(async () => 2),
   };
 });
-let mockContract = '1.3';
+let mockContract: string | null = '1.3';
 jest.mock('@/state/workspaceInfo', () => ({
   ...jest.requireActual('@/state/workspaceInfo'),
-  useWorkspaceInfo: () => ({ origin: 'https://ai.example.com', discovery: { client_contract: mockContract } }),
+  useWorkspaceInfo: () => (mockContract === null ? null : { origin: 'https://ai.example.com', discovery: { client_contract: mockContract } }),
 }));
 
 const api = jest.requireMock<{ deleteMemory: jest.Mock; clearMemories: jest.Mock }>('@/api/queries/memories');
@@ -35,6 +36,7 @@ beforeEach(() => {
   setSession({ serverOrigin: 'https://ai.example.com', workspaceId: 'aaaaaaaaaaaa', projectId: 90503 });
   mockRows = memoriesOf(memoriesList);
   mockContract = '1.3';
+  mockError = null;
   jest.clearAllMocks();
 });
 
@@ -97,4 +99,35 @@ it('a server before client contract 1.3 shows no memory', async () => {
   await render(<MemoryScreen />);
   expect(screen.getByText(/does not offer memory/)).toBeTruthy();
   expect(screen.queryByText('My team ships on Thursdays.')).toBeNull();
+});
+
+// F1: after an offline launch the discovery document is not known yet. That is
+// a missing connection, not a workspace without memory.
+it('no discovery document yet reads as offline, not as "not offered"', async () => {
+  mockContract = null;
+  await render(<MemoryScreen />);
+  expect(screen.getByText('Memory needs a connection to the workspace.')).toBeTruthy();
+  expect(screen.queryByText(/does not offer memory/)).toBeNull();
+  expect(screen.queryByText('My team ships on Thursdays.')).toBeNull();
+});
+
+// F3: a pull-to-refresh that fails keeps the old rows on screen (react-query
+// keeps the previous data). The failure must still be said, not only when the
+// list is empty.
+it.each([
+  ['offline', 'Memory needs a connection to the workspace.'],
+  ['not_allowed', "You can't see memories in this project."],
+  ['failed', "Couldn't load your memories. Try again."],
+] as const)('a failed refresh (%s) is shown above the rows still listed', async (reason, text) => {
+  mockError = new MemoryError(reason);
+  await render(<MemoryScreen />);
+  expect(screen.getByText('My team ships on Thursdays.')).toBeTruthy();
+  expect(screen.getByRole('alert')).toHaveTextContent(text);
+});
+
+it('an empty list with an error says it once', async () => {
+  mockRows = [];
+  mockError = new MemoryError('offline');
+  await render(<MemoryScreen />);
+  expect(screen.getAllByText('Memory needs a connection to the workspace.')).toHaveLength(1);
 });

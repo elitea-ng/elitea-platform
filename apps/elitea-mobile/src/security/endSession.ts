@@ -28,7 +28,8 @@ import { getSession, resetSession, setSession, type EndReason } from '@/state/se
  *
  * Order (each step is attempted; a failure is recorded and the next one runs):
  *   1. crash-resume marker `az.wipe.pending` (in the workspace's namespace),
- *      then `session.ending`;
+ *      then `session.ending`, then the early wipe hooks (what the OS keeps
+ *      outside the app: the home-screen quick actions);
  *   2. abort every in-flight REST call and stream (abort registry);
  *   3. best-effort server revoke, capped at `REVOKE_TIMEOUT_MS` (B4 registers
  *      the native refresh-family revoke; a PAT belongs to the user and is never
@@ -94,12 +95,30 @@ function isStorageFailure(step: string): boolean {
  */
 export type WipeHook = () => void | Promise<void>;
 const wipeHooks = new Map<string, WipeHook>();
+/** Names of the hooks `endSession` runs early (step 1, before the server revoke). */
+const earlyWipeHooks = new Set<string>();
+
+export interface WipeHookOptions {
+  /**
+   * Run right after the crash-resume marker, before the (capped, up to
+   * REVOKE_TIMEOUT_MS) server revoke. For state the OS keeps OUTSIDE the app
+   * between launches (iOS quick actions named after chats): the wipe resumed
+   * at launch runs only stored hooks, so a kill during the revoke would leave
+   * it behind (QA-SEC-1). Must be quick and must not need the network.
+   */
+  early?: boolean;
+}
 
 /** Registers `hook` under `name` (re-registering replaces it). Returns an unregister function. */
-export function registerWipeHook(name: string, hook: WipeHook): () => void {
+export function registerWipeHook(name: string, hook: WipeHook, options: WipeHookOptions = {}): () => void {
   wipeHooks.set(name, hook);
+  if (options.early) earlyWipeHooks.add(name);
+  else earlyWipeHooks.delete(name);
   return () => {
-    if (wipeHooks.get(name) === hook) wipeHooks.delete(name);
+    if (wipeHooks.get(name) === hook) {
+      wipeHooks.delete(name);
+      earlyWipeHooks.delete(name);
+    }
   };
 }
 
@@ -253,6 +272,11 @@ async function run({ reason }: EndSessionOptions): Promise<EndSessionResult> {
     );
   }
   await step('mark_ending', () => setSession({ ending: true, endReason: reason }));
+  // What the OS keeps outside the app (quick actions) goes before anything
+  // that can take seconds: a kill from here on cannot leave it behind.
+  for (const [name, hook] of [...wipeHooks]) {
+    if (earlyWipeHooks.has(name)) await step(`hook:${name}`, hook);
+  }
 
   // 2. Stop everything in flight.
   await step('abort_in_flight', () => abortAll(`session_ended:${reason}`));
@@ -266,7 +290,7 @@ async function run({ reason }: EndSessionOptions): Promise<EndSessionResult> {
 
   // 4. Caches and other registered local state, then the workspace's files.
   for (const [name, hook] of [...wipeHooks]) {
-    await step(`hook:${name}`, hook);
+    if (!earlyWipeHooks.has(name)) await step(`hook:${name}`, hook);
   }
   if (workspaceId !== null) {
     for (const [name, hook] of [...storedWipeHooks]) {

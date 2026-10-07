@@ -6,6 +6,8 @@ import { getPolicyState, resetPolicy } from '@/security/policy';
 import { resetPolicySources } from '@/security/policyStore';
 import { DEVICE_KEYS, SECURE_KEYS, bindWorkspace, boundWorkspace } from '@/security/secureStorage';
 import { MIGRATED_WORKSPACE_ID, __resetRegistryForTests } from '@/security/workspaceRegistry';
+import * as QuickActions from 'expo-quick-actions';
+
 import { __resetHydrateForTests, hydrateSession } from '@/state/hydrate';
 import { __resetSessionForTests, getBearerToken, getSession } from '@/state/session';
 import { TEST_WORKSPACE, registryValue, wsKey, type FakeSecureStore } from '@/test/fakeSecureStore';
@@ -122,6 +124,27 @@ describe('hydrateSession', () => {
     expect(getSession()).toMatchObject({ hydrated: true, serverOrigin: null, credential: null });
     expect(getSession().endReason).toBe('user_logout');
     expect(JSON.parse(fake.values.get(DEVICE_KEYS.workspaces)!)).toEqual({ v: 1, active: null, ids: [] });
+  });
+
+  // QA-SEC-1: iOS keeps the home-screen quick actions between launches, and a
+  // resumed wipe runs no in-memory hook. A launch that restores no signed-in
+  // workspace clears them (only the signed-in layout would rebuild them).
+  it('clears the home-screen quick actions when a resumed wipe leaves no workspace signed in', async () => {
+    stored({
+      wipePending: JSON.stringify({ reason: 'user_logout' }),
+      serverOrigin: ORIGIN,
+      credentialKind: 'pat',
+      pat: 'tok',
+    });
+    await hydrateSession({ devSignIn: true });
+    expect(QuickActions.setItems).toHaveBeenCalledWith([]);
+  });
+
+  it('leaves the quick actions to the signed-in layout when a workspace is restored signed in', async () => {
+    stored({ serverOrigin: ORIGIN, credentialKind: 'pat', pat: 'tok' });
+    await hydrateSession({ devSignIn: true });
+    expect(getBearerToken()).toBe('tok');
+    expect(QuickActions.setItems).not.toHaveBeenCalled();
   });
 
   it('restores nothing while a resumed wipe cannot finish, starts signed out, and wipes again next launch', async () => {
