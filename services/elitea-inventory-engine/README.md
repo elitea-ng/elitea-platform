@@ -3,7 +3,7 @@
 The Rust-native Inventory engine (ADR-0027) behind the sub-application host's
 engine sidecar socket, built on the shared engine crates in `libs/rust`.
 
-**State: P3a, the graph store.** It serves the Inventory tool table on the same
+**State: P3b, ingestion of a source's files.** It serves the Inventory tool table on the same
 socket protocol the Python sidecar spoke, with two runners:
 
 | `ELITEA_INVENTORY_RUNNER` | What answers |
@@ -11,8 +11,9 @@ socket protocol the Python sidecar spoke, with two runners:
 | `unavailable` (default) | every tool is refused (`FileNotFoundError`): an engine that is not wired must look broken |
 | `fixture` | the canned graph every Inventory fixture runner replays |
 
-The knowledge graph and its PostgreSQL store are in (P3a, below); ingestion,
-extraction, retrieval and `investigate` land in P3b–P4.
+The knowledge graph and its PostgreSQL store (P3a) and file ingestion (P3b) are
+in, as a library: no socket tool runs them yet. Parser and LLM extraction,
+communities, embeddings, retrieval and `investigate` land in P3c–P4.
 
 ## The graph and its store
 
@@ -31,6 +32,26 @@ normalisation inside the store.
 applies the migrations (ledger `inventory_graph.schema_migrations`); the
 PostgreSQL tests need `INVENTORY_TEST_DSN` (see the test's header).
 
+## Ingestion (`src/ingest`)
+
+One run reads one source into one toolkit's graph: the ingestion lease (one
+run per graph), the source's status `in_progress`, a shallow clone of its
+branch head (`elitea-repo-ingest`), the SDK loader's file selection, a hash
+diff against the last completed run, and one transaction committing the graph,
+the new hashes and the `completed` status. Differences from the Python engine,
+on purpose:
+
+- **Sources.** It reads the source the facade actually sends: settings and
+  credentials at the top level, patterns as `file_patterns`/`exclude_patterns`.
+  The nested `settings` form is still read.
+- **A clone, not per-file API reads.** It needs `ELITEA_INVENTORY_GIT_ALLOWLIST`
+  in the engine's own environment, set to the same value as elitea-main's. It
+  is fail-closed: unset, no host is admitted.
+- **Changed and deleted files really lose their old entities.** Python's
+  removal step read a citation key the graph no longer had.
+- **Entity ids match Python's.** They are held to ids computed by Python's own
+  `_generate_entity_id` (`tests/fixtures/ingest/generate.py`).
+
 ## Settings
 
 | Variable | Default | |
@@ -39,6 +60,10 @@ PostgreSQL tests need `INVENTORY_TEST_DSN` (see the test's header).
 | `ELITEA_INVENTORY_RUNNER` | `unavailable` | `unavailable` or `fixture` (`legacy` names the Python image and is refused) |
 | `ELITEA_INVENTORY_FIXTURE_STEP_SECONDS` | `0` | pause between the fixture's progress lines |
 | `ELITEA_INVENTORY_FIXTURES` | packaged | a directory holding `spi/graph.json`, instead of the packaged copy |
+| `ELITEA_INVENTORY_SOURCE_TYPES` | `github,ado_repos` | the source types ingestion reads |
+| `ELITEA_INVENTORY_GIT_ALLOWLIST` | unset (no host) | the git hosts a clone may reach |
+| `ELITEA_INVENTORY_MAX_CLONE_BYTES` / `_MAX_FILE_COUNT` / `_MAX_FILE_BYTES` / `_MAX_PARSED_BYTES` / `_CLONE_TIMEOUT_SECONDS` | `elitea-repo-ingest` defaults | clone limits |
+| `ELITEA_INVENTORY_SCRATCH_PATH` | `/var/scratch/inventory` | where a run clones (removed after) |
 | `ELITEA_INVENTORY_DATABASE_URL` | unset | the graph store, read by `migrate` (`postgresql://` URL form) |
 | `OTEL_EXPORTER_OTLP_(TRACES_)ENDPOINT` | unset | span export (`elitea-engine-sidecar::telemetry`) |
 

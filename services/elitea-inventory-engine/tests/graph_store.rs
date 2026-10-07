@@ -185,7 +185,7 @@ async fn database(name: &str) -> Option<PgPool> {
         .database(&database);
     let pool = PgPool::connect_with(options).await.expect("pool");
     let applied = store::migrate(&pool).await.expect("migrate");
-    assert_eq!(applied, vec!["0001".to_owned()]);
+    assert_eq!(applied, vec!["0001".to_owned(), "0002".to_owned()]);
     Some(pool)
 }
 
@@ -332,10 +332,11 @@ async fn migrating_twice_applies_nothing_the_second_time() {
         return;
     };
     assert_eq!(store::migrate(&pool).await.ok(), Some(Vec::new()));
-    let ledger: Vec<String> =
-        sqlx::query_scalar("SELECT version FROM inventory_graph.schema_migrations")
-            .fetch_all(&pool)
-            .await
-            .expect("ledger");
-    assert_eq!(ledger, ["0001"]);
+    let ledger: Vec<String> = sqlx::query_scalar(
+        "SELECT version FROM inventory_graph.schema_migrations ORDER BY version",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("ledger");
+    assert_eq!(ledger, ["0001", "0002"]);
 }

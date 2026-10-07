@@ -22,6 +22,8 @@ use sqlx::{QueryBuilder, Row};
 use std::str::FromStr;
 use std::time::Duration;
 
+pub mod sources;
+
 /// The DSN variable: the engine's database. Unset, the engine stores
 /// nothing (the fixture runner needs no database).
 pub const DSN_ENV: &str = "ELITEA_INVENTORY_DATABASE_URL";
@@ -35,10 +37,16 @@ pub const LEDGER: Ledger = Ledger {
 
 /// `(file name, text)` of every migration, in version order. A test fails
 /// while this list and the `migrations/` directory disagree.
-const EMBEDDED: &[(&str, &str)] = &[(
-    "0001_graph_store.sql",
-    include_str!("../migrations/0001_graph_store.sql"),
-)];
+const EMBEDDED: &[(&str, &str)] = &[
+    (
+        "0001_graph_store.sql",
+        include_str!("../../migrations/0001_graph_store.sql"),
+    ),
+    (
+        "0002_sources.sql",
+        include_str!("../../migrations/0002_sources.sql"),
+    ),
+];
 
 /// Rows per multi-row INSERT: 7 bound columns a row stay far below the 65535
 /// bind parameters a statement may carry.
@@ -260,14 +268,29 @@ fn rows(graph: &Graph) -> Result<(Vec<EntityRow>, Vec<RelationRow>)> {
 /// which `jsonb` refuses), [`StoreError::Database`] otherwise. Nothing is
 /// written on an error.
 pub async fn save(pool: &PgPool, key: GraphKey, graph: &Graph) -> Result<i64> {
+    let mut transaction = pool.begin().await?;
+    let revision = write_graph(&mut transaction, key, graph).await?;
+    transaction.commit().await?;
+    Ok(revision)
+}
+
+/// [`save`] inside a caller's transaction (which commits it): takes the
+/// graph's write lock, replaces its rows, returns the new revision.
+///
+/// # Errors
+///
+/// See [`save`].
+pub async fn write_graph(
+    transaction: &mut sqlx::PgTransaction<'_>,
+    key: GraphKey,
+    graph: &Graph,
+) -> Result<i64> {
     let (entities, relations) = rows(graph)?;
     let mut metadata = graph.metadata.clone();
     for stamped in STAMPED_METADATA {
         metadata.shift_remove(stamped);
     }
-
-    let mut transaction = pool.begin().await?;
-    lock(&mut transaction, key).await?;
+    lock(transaction, key).await?;
     let revision: i64 = sqlx::query_scalar(
         "INSERT INTO inventory_graph.graphs
              (project_id, application_id, attributes, metadata, schema_document)
@@ -285,7 +308,7 @@ pub async fn save(pool: &PgPool, key: GraphKey, graph: &Graph) -> Result<i64> {
     .bind(Json(Value::Object(graph.attributes.clone())))
     .bind(Json(Value::Object(metadata)))
     .bind(graph.schema.clone().map(Json))
-    .fetch_one(&mut *transaction)
+    .fetch_one(&mut **transaction)
     .await
     .map_err(unstorable)?;
     // Relations go with their entities (ON DELETE CASCADE).
@@ -294,11 +317,10 @@ pub async fn save(pool: &PgPool, key: GraphKey, graph: &Graph) -> Result<i64> {
     )
     .bind(key.project_id)
     .bind(key.application_id)
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    insert_entities(&mut transaction, key, &entities).await?;
-    insert_relations(&mut transaction, key, &relations).await?;
-    transaction.commit().await?;
+    insert_entities(transaction, key, &entities).await?;
+    insert_relations(transaction, key, &relations).await?;
     Ok(revision)
 }
 
@@ -464,7 +486,8 @@ pub async fn load(pool: &PgPool, key: GraphKey) -> Result<Option<(Graph, i64)>> 
     Ok(Some((graph, revision)))
 }
 
-/// Delete the stored graph `key`; `true` when there was one.
+/// Delete the stored graph `key` and its sources' state; `true` when there
+/// was a graph.
 ///
 /// # Errors
 ///
@@ -480,6 +503,15 @@ pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
     .execute(&mut *transaction)
     .await?
     .rows_affected();
+    for table in ["inventory_graph.sources", "inventory_graph.source_files"] {
+        sqlx::query(&format!(
+            "DELETE FROM {table} WHERE project_id = $1 AND application_id = $2"
+        ))
+        .bind(key.project_id)
+        .bind(key.application_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
     transaction.commit().await?;
     Ok(deleted > 0)
 }
