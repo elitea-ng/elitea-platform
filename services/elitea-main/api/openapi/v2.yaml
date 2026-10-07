@@ -16202,6 +16202,8 @@ paths:
 
         Idempotent for the same caller: stopping an answer that this caller
         already stopped answers 204 again, also after the run has settled.
+        The response message id may be sent in either case; the server folds
+        it to the lowercase spelling it stored.
         An answer that completed (or failed) on its own, one that is not this
         caller's, or one that does not exist answers 409 without saying
         which; for a completed answer the transcript already holds it.
