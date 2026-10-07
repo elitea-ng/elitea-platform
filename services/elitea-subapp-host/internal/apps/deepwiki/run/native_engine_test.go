@@ -3,11 +3,14 @@ package run_test
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -313,5 +316,118 @@ func TestTheNativeRunnerRechecksTheCloneHostInItsWorker(t *testing.T) {
 	entries, _ := os.ReadDir(filepath.Join(scratch, "jobs"))
 	if len(entries) != 0 {
 		t.Fatalf("the worker's scratch directory was left: %v", entries)
+	}
+}
+
+// An ARTIFACT-FOLDER source through the native runner: the host skips the
+// git allowlist (CheckEgress), and the engine's worker CHILD lists and
+// downloads the folder from the platform's object API at the invocation's
+// own api_base, with its callback bearer, although the engine's git
+// allowlist names another host. The host stops the run once the folder is
+// read (the next step needs PostgreSQL, which this job does not stand up):
+// nothing is uploaded and the job directory is removed. The crate's
+// tests/native_generate.rs runs a whole folder generation.
+func TestTheNativeRunnerReadsAnArtifactFolderInItsWorker(t *testing.T) {
+	var mu sync.Mutex
+	var seen []string
+	objects := map[string]string{
+		"docs/README.md":    "# Handbook\n\nHow the team works.\n",
+		"docs/guide/run.py": "def run():\n    return 1\n",
+	}
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		seen = append(seen, r.Header.Get("Authorization")+" "+r.URL.RequestURI())
+		mu.Unlock()
+		const route = "/api/v2/artifacts/objects/90200/handbook"
+		switch {
+		case r.URL.Path == route:
+			listed := []map[string]any{{"key": "docs/", "size_bytes": 0}}
+			for key, body := range objects {
+				listed = append(listed, map[string]any{"key": key, "size_bytes": len(body), "modified_at": "2026-10-01T10:00:00Z"})
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"objects": listed})
+		case strings.HasPrefix(r.URL.Path, route+"/"):
+			body, ok := objects[strings.TrimPrefix(r.URL.Path, route+"/")]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			_, _ = w.Write([]byte(body))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(platform.Close)
+
+	scratch, err := os.MkdirTemp("/tmp", "dwna")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(scratch) })
+	socket := startNativeEngine(t,
+		"ELITEA_DEEPWIKI_RUNNER=native",
+		"ELITEA_DEEPWIKI_DATABASE_URL=postgresql://deepwiki:deepwiki@127.0.0.1:1/deepwiki",
+		"ELITEA_DEEPWIKI_BUILD_OWNER=native-go-test",
+		"ELITEA_DEEPWIKI_GIT_ALLOWLIST=git.example.com",
+		"ELITEA_DEEPWIKI_SCRATCH_PATH="+scratch,
+	)
+	client := &fakeArtifactClient{}
+	runner := nativeRunner(socket, client)
+	llm := map[string]any{
+		"api_base":     platform.URL + "/llm/v1",
+		"api_key":      "minted",
+		"organization": "90200",
+		"model_name":   "gpt-4o",
+	}
+	request := map[string]any{
+		"configuration": map[string]any{"parameters": map[string]any{
+			"code_toolkit": map[string]any{
+				"artifact_configuration": map[string]any{"bucket": "handbook", "prefix": "docs"},
+				"active_branch":          "main",
+			},
+			"llm_settings":    llm,
+			"embedding_model": "text-embedding-3-small",
+		}},
+		"parameters": map[string]any{"query": "Document it"},
+	}
+	_, events, err := invokeWithEvents(t, runner, spi.Family{Name: "main"}, "generate_wiki", request, "Materialised artifact://")
+	if err == nil {
+		t.Fatal("a stopped run completed")
+	}
+	if strings.Contains(err.Error(), "allowlist") {
+		t.Fatalf("the folder met the git allowlist: %v", err)
+	}
+	text := strings.Join(events, "\n")
+	if !strings.Contains(text, "Materialised artifact://handbook/docs: 2 objects") {
+		t.Fatalf("the folder was not read: %v\n%s", err, text)
+	}
+	mu.Lock()
+	got := append([]string(nil), seen...)
+	mu.Unlock()
+	sort.Strings(got)
+	want := []string{
+		"Bearer minted /api/v2/artifacts/objects/90200/handbook/docs/README.md",
+		"Bearer minted /api/v2/artifacts/objects/90200/handbook/docs/guide/run.py",
+		"Bearer minted /api/v2/artifacts/objects/90200/handbook?prefix=docs%2F",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("object API requests %q, want %q", got, want)
+	}
+	if len(client.uploads) != 0 {
+		t.Fatalf("a stopped run uploaded %v", uploadedNames(client))
+	}
+	// The stopped child is reaped and its job directory removed shortly
+	// after the host reports the stop.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		entries, _ := os.ReadDir(filepath.Join(scratch, "jobs"))
+		if len(entries) == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the worker's scratch directory was left: %v", entries)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
