@@ -143,6 +143,7 @@ export function ApplicationAnswer({
       selectedText: text,
       messageItemId: wholeAnswerItemId,
       kind: 'document',
+      openAfterCreate: true,
     });
   }, [onCreateCanvasFromSelection, wholeAnswerText, wholeAnswerItemId, answer.id]);
 

@@ -18,6 +18,34 @@ func (r *ConversationsRepo) AuthorizeChatResource(ctx context.Context, projectID
 	if err != nil {
 		return err
 	}
+	return r.authorizeChatResource(ctx, projectID, kind, resourceID, func(s string) (string, []any) {
+		return access.Predicate(s, "c", 2, chatauthority.Detail)
+	})
+}
+
+// AuthorizeChatWrite resolves the resource as AuthorizeChatResource does, but
+// admits only a user participant of the owning conversation
+// (chatauthority.ParticipantPredicate). A visible resource the actor may not
+// write answers the same 404 as a missing one, so the refusal does not reveal
+// more than the read already does.
+func (r *ConversationsRepo) AuthorizeChatWrite(ctx context.Context, projectID, kind, resourceID string) error {
+	actor, err := chatauthority.Actor(ctx)
+	if err != nil {
+		return err
+	}
+	return r.authorizeChatResource(ctx, projectID, kind, resourceID, func(s string) (string, []any) {
+		return chatauthority.ParticipantPredicate(s, "c", 2, actor)
+	})
+}
+
+func (r *ConversationsRepo) authorizeChatResource(
+	ctx context.Context,
+	projectID, kind, resourceID string,
+	predicate func(schema string) (string, []any),
+) error {
+	if r.pool == nil {
+		return fmt.Errorf("chat authority storage is unavailable")
+	}
 	s, err := tenantSchema(projectID)
 	if err != nil {
 		return err
@@ -40,7 +68,7 @@ func (r *ConversationsRepo) AuthorizeChatResource(ctx context.Context, projectID
 	default:
 		return apierr.NotFound("chat resource not found")
 	}
-	visible, args := access.Predicate(s, "c", 2, chatauthority.Detail)
+	visible, args := predicate(s)
 	var id int64
 	err = r.pool.QueryRow(ctx, fmt.Sprintf(`SELECT c.id FROM %s.chat_conversations c%s WHERE %s AND %s`, s, join, identity, visible), append([]any{resourceID}, args...)...).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {

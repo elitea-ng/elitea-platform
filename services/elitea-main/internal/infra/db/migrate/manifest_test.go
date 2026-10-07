@@ -818,7 +818,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// counts the sweep's resumes of a run whose process died, so the sweep
 	// fails a run that keeps dying after MaxResumes and not after a fixed age.
 	// A column and no permission, so no shared sibling.
-	require.EqualValues(t, 146, Head(tenant))
+	// 147: tenant/0147_chat_canvas_versions_newest_index.sql, an index on
+	// chat_canvas_versions (canvas_item_id, created_at DESC, id DESC) for the
+	// "newest version of this canvas" lookup the turn resolvers now make for
+	// every canvas on every turn (canvas text in chat history, #1097). An
+	// index and no permission, so no shared sibling.
+	require.EqualValues(t, 147, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own

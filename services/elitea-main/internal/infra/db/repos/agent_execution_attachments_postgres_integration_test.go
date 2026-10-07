@@ -277,8 +277,10 @@ func readCurrentAgentQuestionItems(
 // Before #606 an attachment simply did nothing — no item was written and the
 // conversation carried on — so refusing turn 2 would have been strictly WORSE
 // than the behaviour being replaced. The gates now allow `attachment_message`
-// and still refuse `canvas_message` and `context_message`; see the comment on
-// ResolveCurrentApplicationTurn's gate for why those two are different.
+// (and, since the canvas history projection, `canvas_message` — see
+// agent_execution_canvas_history_postgres_integration_test.go) and still refuse
+// `context_message`; see the comment on ResolveCurrentApplicationTurn's gate
+// for why that one is different.
 //
 // Restore `attachment_message` to any of the four gates and this fails with
 // pgx.ErrNoRows. Note the first turn's streaming response must be completed

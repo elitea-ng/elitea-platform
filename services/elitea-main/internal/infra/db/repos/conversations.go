@@ -1336,6 +1336,13 @@ func (r *ConversationsRepo) CreateCanvas(ctx context.Context, projectID string, 
 	if endsAt < len(oldContent) {
 		postContent = oldContent[endsAt:]
 	}
+	// Refused BEFORE anything is rewritten: the carve below deletes the text
+	// item, so a refusal after it would lose the answer. The cap is what keeps
+	// a canvas inside the chat history's budget (conversations.
+	// MaxCanvasContentBytes explains the number).
+	if err := conversations.CheckCanvasContent(canvasContent); err != nil {
+		return nil, err
+	}
 
 	// 3. Delete old text item (cascades from chat_messages_text)
 	delTextQ := fmt.Sprintf(`DELETE FROM %s.chat_messages_text WHERE id = $1`, s)
@@ -1634,6 +1641,14 @@ func (r *ConversationsRepo) GetCanvas(ctx context.Context, projectID, canvasID s
 // take the newest. Overwriting the current row would make the history a lie
 // and lose the previous text.
 func (r *ConversationsRepo) UpdateCanvas(ctx context.Context, projectID, canvasID string, body map[string]any) error {
+	// New text is held to the cap BEFORE anything is written, so a refused
+	// edit does not leave a renamed canvas behind. A language-only PUT carries
+	// already-stored text forward and is never refused for its size.
+	if content, ok := body["canvas_content"].(string); ok {
+		if err := conversations.CheckCanvasContent(content); err != nil {
+			return err
+		}
+	}
 	s := schema(projectID)
 	row, err := r.readCanvas(ctx, s, canvasID)
 	if err != nil {

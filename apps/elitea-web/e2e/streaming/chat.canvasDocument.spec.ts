@@ -133,19 +133,13 @@ test('a whole reply opens as a document, a heading edited in it round-trips, and
     });
     await openAsDocument.click();
 
-    // The create rewrites the answer into one canvas_message item — the
-    // transcript re-renders it as a block, without a reload.
-    const block = page.getByTestId('canvas-block');
-    await expect(block, 'the whole-reply document canvas must appear in the transcript').toHaveCount(1, {
-      timeout: 30_000,
-    });
-    await expect(block.getByTestId('canvas-block-title')).toHaveText('Edit document');
-    await expect(block.getByTestId('canvas-block-content')).toContainText(headingText);
-
-    // ── the open: a real rich-text pane, not a plain-text preview ──────────
-    await block.getByTestId('canvas-block-open').click();
+    // ── the open: "Open as document" OPENS the editor ──────────────────────
+    // The create rewrites the answer into one canvas_message item AND opens
+    // it. It used to stop at the rewrite: the answer became a block titled
+    // "Edit document" with no editor, which the owner read as a mode with no
+    // way out — and the next send then answered 422.
     const editor = page.getByTestId('chat-canvas-editor');
-    await expect(editor, 'clicking the block must open the canvas editor').toBeVisible({ timeout: 20_000 });
+    await expect(editor, '"Open as document" must open the canvas editor').toBeVisible({ timeout: 30_000 });
     const documentPane = editor.getByTestId('canvas-document-editor');
     await expect(documentPane).toBeVisible({ timeout: 20_000 });
 
@@ -190,6 +184,42 @@ test('a whole reply opens as a document, a heading edited in it round-trips, and
     const uploaded = await uploadResponse;
     expect(uploaded.status(), await uploaded.text()).toBe(201);
     await expect(dialog).toBeHidden({ timeout: 10_000 });
+
+    // ── the exit: Escape closes the editor AND saves the edit ───────────────
+    const canvasSaved = page.waitForResponse(
+      (r) => /\/elitea_core\/canvas\/prompt_lib\/\d+\/[0-9a-f-]+$/.test(new URL(r.url()).pathname) && r.request().method() === 'PUT',
+      { timeout: 20_000 },
+    );
+    await expect(editor.getByRole('button', { name: 'Close editor' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(editor, 'Escape must close the document editor').toBeHidden({ timeout: 10_000 });
+    expect((await canvasSaved).status(), 'closing with Escape must save the edit, not drop it').toBe(200);
+    const block = page.getByTestId('canvas-block');
+    await expect(block).toHaveCount(1, { timeout: 30_000 });
+    await expect(block.getByTestId('canvas-block-title')).toHaveText('Document');
+
+    // ── and the conversation CONTINUES ─────────────────────────────────────
+    // Every turn statement refused a conversation holding a canvas, so this
+    // send answered 422 "This agent turn requires the current execution path."
+    const followToken = uniqueToken('CANVASNEXT');
+    const followStarted = page.waitForResponse((r) => START_RE.test(r.url()) && r.request().method() === 'POST', {
+      timeout: 45_000,
+    });
+    const input = page.getByTestId('chat-message-input');
+    await expect(input).toBeEditable({ timeout: 20_000 });
+    await input.fill(`autotest ${followToken}`);
+    await expect(page.getByTestId('chat-send-button')).toBeEnabled({ timeout: 10_000 });
+    await page.getByTestId('chat-send-button').click();
+    const followResponse = await followStarted;
+    expect(
+      followResponse.status(),
+      `the turn after a document canvas was refused: ${(await followResponse.text()).slice(0, 300)}`,
+    ).toBe(200);
+    await expectStoredAssistantAnswer(page, projectId, conversationId, {
+      timeout: 120_000,
+      message: 'the turn after a document canvas never stored an answer',
+      contains: followToken,
+    });
 
     // ── THE STORE, not the screen: the saved object as plain Markdown ──────
     const downloaded = await page.request.get(`${BASE_URL}/api/v2/artifacts/objects/${projectId}/${bucket}/${fileName}`);

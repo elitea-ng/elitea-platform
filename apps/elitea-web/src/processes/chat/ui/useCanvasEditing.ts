@@ -46,6 +46,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { useEditCanvasMutation } from '@/entities/canvas';
 import type { CanvasEditorHandle } from '@/features/chat-messages';
+import { EliteaApiError } from '@/shared/api/generated/mutator';
+import { t } from '@/shared/i18n';
+import { trackCanvasSave } from '@/shared/lib/canvasSaveGate';
 import { useEditorStateStore } from '@/shared/lib/editorState';
 import { useSelectedProject } from '@/widgets/app-shell';
 
@@ -76,6 +79,42 @@ export interface UseCanvasEditingResult {
   readonly editCanvas: (params: { projectId: string | number; canvasUUID: string; name?: string; canvas_type?: string; code_language?: string }) => Promise<unknown>;
   /** The project the save writes into; `undefined` until one is selected. */
   readonly projectId: string | undefined;
+  /** True while the closing save is in flight; the drawer stays open until it lands. */
+  readonly isSaving: boolean;
+  /**
+   * Why the last closing save failed, in words the server chose for a user
+   * (`safe_message`), or `undefined`. While it is set the editor stays open
+   * with the user's text in it — nothing is dropped.
+   */
+  readonly saveError: string | undefined;
+  /** Closes WITHOUT saving — the explicit way out of a save that keeps failing. */
+  readonly discardAndClose: () => void;
+  /** The canvas the editor last closed on, so its block's control can take focus back. */
+  readonly lastClosedCanvasId: string | undefined;
+}
+
+/**
+ * The server's own words for a refused canvas write, or `undefined`. A
+ * canvas route's `safe_message` (a 413 `canvas_too_large` names the size and
+ * the limit) is meant for a user and is shown as is; anything else — a
+ * transport failure, a body without one — is left to the caller's generic
+ * sentence rather than surfacing a transport string. Shared by the save here
+ * and the create in `./useCanvasCreation.ts`, which hit the same cap.
+ */
+export function canvasRefusalMessage(error: unknown): string | undefined {
+  if (!(error instanceof EliteaApiError) || error.failure.kind !== 'http') return undefined;
+  const body = error.failure.body;
+  if (typeof body !== 'object' || body === null) return undefined;
+  const safe = (body as { readonly safe_message?: unknown }).safe_message;
+  return typeof safe === 'string' && safe.trim() !== '' ? safe : undefined;
+}
+
+/** The words to show for a failed save: the server's, else a generic sentence. */
+function canvasSaveErrorMessage(error: unknown): string {
+  return (
+    canvasRefusalMessage(error) ??
+    t('processes.chat.canvas.saveFailed', 'The document could not be saved. Your changes are still here — try again.')
+  );
 }
 
 /**
@@ -100,6 +139,17 @@ export function toSelectedCodeBlockInfo(payload: CanvasEditPayload): SelectedCod
       : {}),
     ...(payload.viewOnly === true ? { viewOnly: true } : {}),
   };
+}
+
+/**
+ * Whether a close carries an edit worth a PUT: never for a read-only canvas,
+ * and otherwise when the text changed or the language did (the language is
+ * stored on the version too).
+ */
+function closeNeedsSave(open: SelectedCodeBlockInfo | undefined, hasChange: boolean | undefined, language: string | undefined): boolean {
+  if (open?.viewOnly === true) return false;
+  const languageChanged = typeof language === 'string' && language !== open?.language;
+  return hasChange === true || languageChanged;
 }
 
 export function useCanvasEditing(): UseCanvasEditingResult {
@@ -143,36 +193,92 @@ export function useCanvasEditing(): UseCanvasEditingResult {
     [setEditingCanvas],
   );
 
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | undefined>(undefined);
+  const [lastClosedCanvasId, setLastClosedCanvasId] = useState<string | undefined>(undefined);
+  /** Read synchronously: a second Escape while the first save is in flight must not start another. */
+  const savingRef = useRef(false);
+
+  const closeNow = useCallback(() => {
+    setLastClosedCanvasId(openBlockRef.current?.canvasId);
+    setSaveError(undefined);
+    setEditingCanvas(false);
+    setSelectedCodeBlockInfo(undefined);
+  }, [setEditingCanvas]);
+
+  /*
+   * The close WAITS for the save, and a failed save keeps the editor open.
+   *
+   * This was fire-and-forget with the failure swallowed: the drawer closed at
+   * once and a refused PUT — a canvas over the server's size cap answers 413
+   * — dropped the user's edit without a word. Now the drawer stays open while
+   * the save is in flight (so the composer behind its modal cannot send a
+   * turn that reads the previous version), closes when it lands, and on a
+   * failure stays open with the text intact and the server's reason shown
+   * beside it; `discardAndClose` is the explicit way out.
+   *
+   * The save is also registered with `canvasSaveGate`, which the send path
+   * awaits — the belt to the modal's braces, for a close that does not go
+   * through this drawer (the editor mutex swapping the canvas for another
+   * editor).
+   */
   const onCloseCanvasEditor = useCallback(
     (hasChange?: boolean, finalResult?: string, language?: string) => {
-      const open = openBlockRef.current;
-      const canvasUUID = open?.canvasId;
+      if (savingRef.current) return;
+      const canvasUUID = openBlockRef.current?.canvasId;
       const currentProjectId = projectIdRef.current;
-      const languageChanged = typeof language === 'string' && language !== open?.language;
       if (
-        canvasUUID !== undefined &&
-        currentProjectId !== undefined &&
-        typeof finalResult === 'string' &&
-        open?.viewOnly !== true &&
-        (hasChange === true || languageChanged)
+        canvasUUID === undefined ||
+        currentProjectId === undefined ||
+        typeof finalResult !== 'string' ||
+        !closeNeedsSave(openBlockRef.current, hasChange, language)
       ) {
-        // Fire-and-forget, and a failure is swallowed HERE only because this
-        // app has no toast hook at this layer yet (the same statement
-        // `CanvasEditor`'s own `onError` prop carries). The request itself is
-        // what was missing; reporting its failure is a smaller, separate gap
-        // and is recorded as one rather than implied.
-        void saveCanvas({
-          projectId: currentProjectId,
-          canvasUUID,
-          canvas_content: finalResult,
-          ...(typeof language === 'string' ? { code_language: language } : {}),
-        }).catch(() => undefined);
+        closeNow();
+        return;
       }
-      setEditingCanvas(false);
-      setSelectedCodeBlockInfo(undefined);
+      savingRef.current = true;
+      setIsSaving(true);
+      setSaveError(undefined);
+      const save = saveCanvas({
+        projectId: currentProjectId,
+        canvasUUID,
+        canvas_content: finalResult,
+        ...(typeof language === 'string' ? { code_language: language } : {}),
+      });
+      trackCanvasSave(save);
+      save.then(
+        () => {
+          savingRef.current = false;
+          setIsSaving(false);
+          // Only if the canvas that was saved is still the one open.
+          if (openBlockRef.current?.canvasId === canvasUUID) closeNow();
+        },
+        (error: unknown) => {
+          savingRef.current = false;
+          setIsSaving(false);
+          setSaveError(canvasSaveErrorMessage(error));
+        },
+      );
     },
-    [saveCanvas, setEditingCanvas],
+    [closeNow, saveCanvas],
   );
 
-  return { isEditingCanvas, selectedCodeBlockInfo, canvasEditorRef, onShowCanvasEditor, onCloseCanvasEditor, editCanvas, projectId };
+  const discardAndClose = useCallback(() => {
+    if (savingRef.current) return;
+    closeNow();
+  }, [closeNow]);
+
+  return {
+    isEditingCanvas,
+    selectedCodeBlockInfo,
+    canvasEditorRef,
+    onShowCanvasEditor,
+    onCloseCanvasEditor,
+    editCanvas,
+    projectId,
+    isSaving,
+    saveError,
+    discardAndClose,
+    lastClosedCanvasId,
+  };
 }

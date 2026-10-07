@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { findGroup, findSelectedItem } from './useCanvasCreation';
+import { createdCanvasEditPayload, findGroup, findSelectedItem } from './useCanvasCreation';
 
 const textItem = (id: number, content: string) => ({ id, item_type: 'text_message', item_details: { content } });
 
@@ -59,5 +59,29 @@ describe('findSelectedItem', () => {
   it('answers nothing for an empty selection', () => {
     const group = { id: 901, message_items: [textItem(1, 'anything')] };
     expect(findSelectedItem(group, '   ', undefined)).toBeUndefined();
+  });
+});
+
+describe('createdCanvasEditPayload', () => {
+  it('opens the canvas the create named, with the carved text when the route echoes no top-level content', () => {
+    expect(createdCanvasEditPayload({ uuid: 'canvas-1' }, '# Memo', true)).toEqual({
+      rawData: '# Memo',
+      codeBlock: '# Memo',
+      language: 'document',
+      isBlock: true,
+      canvasId: 'canvas-1',
+      viewOnly: false,
+    });
+  });
+
+  it('prefers content the route did echo, and opens a non-document canvas as markdown code', () => {
+    expect(createdCanvasEditPayload({ uuid: 'canvas-2', content: 'stored' }, 'selected', false)).toMatchObject({
+      codeBlock: 'stored',
+      language: 'markdown',
+    });
+  });
+
+  it('opens nothing for a create that named no canvas', () => {
+    expect(createdCanvasEditPayload({ uuid: '' }, 'text', true)).toBeUndefined();
   });
 });

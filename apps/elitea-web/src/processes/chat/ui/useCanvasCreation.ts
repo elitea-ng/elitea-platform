@@ -38,16 +38,19 @@
  * and `useChatBoxData`'s re-seed adopts a NON-EMPTY server answer for the same
  * conversation, so the block appears without a reload.
  */
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
 
 import { conversationApi } from '@/entities/conversation';
 import { useCreateCanvasMutation } from '@/entities/canvas';
-import type { AnswerCanvasSelection } from '@/features/chat-messages';
+import type { AnswerCanvasSelection, CanvasEditPayload } from '@/features/chat-messages';
 import { canvasByteRange, canvasKindForSelection } from '@/features/chat-messages';
+import { t } from '@/shared/i18n';
 import { useSelectedProject } from '@/widgets/app-shell';
+
+import { canvasRefusalMessage } from './useCanvasEditing';
 
 /** One stored item, read defensively off the details payload. */
 interface StoredItem {
@@ -96,15 +99,72 @@ export function findGroup(groups: readonly StoredGroup[], messageGroupUuid: stri
 export interface UseCanvasCreationResult {
   /** Carves the highlighted range of an answer into a canvas, then re-reads the transcript. */
   readonly onCreateCanvasFromSelection: (selection: AnswerCanvasSelection) => void;
+  /**
+   * Why the last create failed, or `undefined`. The server's own
+   * `safe_message` when it sent one (a 413 `canvas_too_large` names the size
+   * and the limit), else a generic sentence. The composition root shows it.
+   */
+  readonly createError: string | undefined;
+  /** Clears `createError` — the alert's close control and its auto-hide. */
+  readonly dismissCreateError: () => void;
 }
 
-export function useCanvasCreation(): UseCanvasCreationResult {
+/**
+ * The editor payload for a canvas this hook just made — the same shape a
+ * stored block's pencil hands the opener. The create answers the canvas's
+ * uuid; its content is not echoed at the top level (the route nests it under
+ * `latest_version`), and it is by construction the range just carved, which
+ * is the selected text.
+ */
+export function createdCanvasEditPayload(
+  created: { readonly uuid: string; readonly content?: string | undefined },
+  selectedText: string,
+  isDocument: boolean,
+): CanvasEditPayload | undefined {
+  if (created.uuid === '') return undefined;
+  const content = created.content ?? selectedText;
+  return {
+    rawData: content,
+    codeBlock: content,
+    language: isDocument ? 'document' : 'markdown',
+    isBlock: true,
+    canvasId: created.uuid,
+    viewOnly: false,
+  };
+}
+
+/** Opens the editor on the created canvas — only for a selection that asked ("Open as document"). */
+function openCreatedIfAsked(
+  selection: AnswerCanvasSelection,
+  created: { readonly uuid: string; readonly content?: string | undefined },
+  isDocument: boolean,
+  onOpenCreated: ((payload: CanvasEditPayload) => void) | undefined,
+): void {
+  if (selection.openAfterCreate !== true || onOpenCreated === undefined) return;
+  const payload = createdCanvasEditPayload(created, selection.selectedText, isDocument);
+  if (payload !== undefined) onOpenCreated(payload);
+}
+
+export interface UseCanvasCreationOptions {
+  /**
+   * Opens the editor on a canvas this hook just created, for a selection that
+   * asked for it (`openAfterCreate` — "Open as document"). The composition
+   * root passes the same opener a stored block's pencil uses, so the editor,
+   * its close control and the mutex are the ones every canvas already has.
+   */
+  readonly onOpenCreated?: ((payload: CanvasEditPayload) => void) | undefined;
+}
+
+export function useCanvasCreation(options: UseCanvasCreationOptions = {}): UseCanvasCreationResult {
+  const { onOpenCreated } = options;
   const { project } = useSelectedProject();
   const projectId = project?.id === undefined ? undefined : String(project.id);
   const params = useParams({ strict: false }) as { conversationId?: string };
   const conversationId = params.conversationId;
   const queryClient = useQueryClient();
   const { mutateAsync: createCanvas } = useCreateCanvasMutation();
+  const [createError, setCreateError] = useState<string | undefined>(undefined);
+  const dismissCreateError = useCallback(() => setCreateError(undefined), []);
 
   const create = useCallback(
     async (selection: AnswerCanvasSelection): Promise<void> => {
@@ -134,7 +194,7 @@ export function useCanvasCreation(): UseCanvasCreationResult {
       const kind = selection.kind ?? canvasKindForSelection(selection.selectedText);
       const isDocument = kind === 'document';
 
-      await createCanvas({
+      const created = await createCanvas({
         projectId,
         message_group_id: Number(group.id),
         message_item_id: Number(item.id),
@@ -142,7 +202,12 @@ export function useCanvasCreation(): UseCanvasCreationResult {
         // header derives from the language — the reference's own string for a
         // canvas whose document is prose or code rather than a table or a
         // diagram.
-        name: isDocument ? 'Edit document' : 'Edit code',
+        //
+        // A document canvas is named with a NOUN. "Edit document" rendered on
+        // the transcript block reads as a mode banner — the owner's report
+        // was "I entered the 'Edit document' mode and have no button to exit"
+        // — while the block is just a stored document with an open control.
+        name: isDocument ? 'Document' : 'Edit code',
         canvas_type: isDocument ? 'document' : 'code',
         code_language: isDocument ? 'document' : 'markdown',
         canvas_content_starts_at: range.startsAt,
@@ -151,21 +216,30 @@ export function useCanvasCreation(): UseCanvasCreationResult {
 
       await queryClient.invalidateQueries({ queryKey: ['conversation', 'messageList'] });
       await queryClient.invalidateQueries({ queryKey: ['conversation', 'details'] });
+
+      openCreatedIfAsked(selection, created, isDocument, onOpenCreated);
     },
-    [conversationId, createCanvas, projectId, queryClient],
+    [conversationId, createCanvas, onOpenCreated, projectId, queryClient],
   );
 
   const onCreateCanvasFromSelection = useCallback(
     (selection: AnswerCanvasSelection) => {
-      // Fire-and-forget, and the failure is swallowed HERE only because this
-      // app has no toast hook at this layer yet — the same statement
-      // `useCanvasEditing`'s own save carries. A refused create leaves the
-      // answer exactly as it was, which is the server's own guarantee: it
-      // refuses an out-of-range selection rather than clamping it.
-      void create(selection).catch(() => undefined);
+      // Fire-and-forget for the caller, but a failure is NOT swallowed: it
+      // was, and a refused create (a selection over the server's canvas size
+      // cap answers 413 `canvas_too_large`) left the user clicking a control
+      // that did nothing. This app has no global toast host, so the reason is
+      // held as `createError` and the composition root renders it in a local
+      // Snackbar. A refused create leaves the answer exactly as it was — the
+      // server refuses rather than clamping — so there is nothing to undo.
+      setCreateError(undefined);
+      void create(selection).catch((error: unknown) => {
+        setCreateError(
+          canvasRefusalMessage(error) ?? t('processes.chat.canvas.createFailed', 'The canvas could not be created. Try again.'),
+        );
+      });
     },
     [create],
   );
 
-  return { onCreateCanvasFromSelection };
+  return { onCreateCanvasFromSelection, createError, dismissCreateError };
 }

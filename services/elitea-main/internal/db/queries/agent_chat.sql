@@ -337,11 +337,79 @@ LEFT JOIN LATERAL (
           ON author.id = message_group.author_participant_id
         JOIN chat_message_items AS message_item
           ON message_item.message_group_id = message_group.id
-         AND message_item.item_type IN ('text_message', 'attachment_message')
+         AND message_item.item_type IN ('text_message', 'attachment_message', 'canvas_message')
         LEFT JOIN chat_messages_text AS message_text
           ON message_text.id = message_item.id
         LEFT JOIN chat_messages_attachment AS message_attachment
           ON message_attachment.id = message_item.id
+        -- A CANVAS contributes its NEWEST version, as pylon's history does
+        -- (elitea_core/utils/chat_history.py:57-66, `message.latest_version`).
+        -- Carving an answer into a canvas DELETES the text item it came from
+        -- (ConversationsRepo.CreateCanvas), so without this branch the words
+        -- the user is looking at would vanish from the model's view of the
+        -- conversation. Newest = the read path's own order (readCanvas:
+        -- created_at DESC, id DESC).
+        LEFT JOIN LATERAL (
+            SELECT canvas_version.canvas_content, canvas_version.code_language,
+                   octet_length(canvas_version.canvas_content) AS content_bytes
+            FROM chat_canvas_versions AS canvas_version
+            WHERE message_item.item_type = 'canvas_message'
+              AND canvas_version.canvas_item_id = message_item.id
+            ORDER BY canvas_version.created_at DESC, canvas_version.id DESC
+            LIMIT 1
+        ) AS message_canvas ON TRUE
+        LEFT JOIN chat_messages_canvas AS message_canvas_meta
+          ON message_item.item_type = 'canvas_message'
+         AND message_canvas_meta.id = message_item.id
+        -- CANVAS TEXT IS BOUNDED, and the bound is EXPLICIT to the model.
+        --
+        -- The worker fetches this history under a 256 KiB ceiling (see the
+        -- attachment bound below), and a canvas is user-editable text with no
+        -- natural size: unbounded, one large document made every later turn
+        -- of its conversation fail — unrecoverably, because history only
+        -- grows. Writes are capped at 64 KiB per canvas
+        -- (conversations.MaxCanvasContentBytes), and here the NEWEST canvases
+        -- are carried in full while their combined size stays within a 64 KiB
+        -- budget (65536 below; the same constant). Worst case, 128 KiB of
+        -- attachment text plus 64 KiB of canvas text, which leaves a quarter
+        -- of the worker's ceiling to the conversation's own words and the
+        -- JSON framing.
+        --
+        -- A canvas past the budget is NOT silently dropped (the owner rejected
+        -- silent truncation): it is replaced by a marker naming the canvas and
+        -- its size, so the model knows the document exists and was withheld,
+        -- and can say so rather than answer as if it had never been written.
+        --
+        -- `canvas_budget.bytes` is the size of this canvas plus every canvas
+        -- positioned after it in the conversation (newest-first prefix sum,
+        -- the attachment bound's own ordering). Counting a canvas after the
+        -- current question too only ever withholds more, never less.
+        LEFT JOIN LATERAL (
+            SELECT COALESCE(sum(octet_length(newer_version.canvas_content)), 0) AS bytes
+            FROM chat_message_items AS newer_item
+            JOIN chat_message_group AS newer_group
+              ON newer_group.id = newer_item.message_group_id
+            CROSS JOIN LATERAL (
+                SELECT newest.canvas_content
+                FROM chat_canvas_versions AS newest
+                WHERE newest.canvas_item_id = newer_item.id
+                ORDER BY newest.created_at DESC, newest.id DESC
+                LIMIT 1
+            ) AS newer_version
+            WHERE message_item.item_type = 'canvas_message'
+              AND newer_group.conversation_id = conversation.id
+              AND newer_item.item_type = 'canvas_message'
+              AND (newer_group.created_at, newer_group.id, newer_item.order_index, newer_item.id)
+                >= (message_group.created_at, message_group.id, message_item.order_index, message_item.id)
+        ) AS canvas_budget ON TRUE
+        -- THE FENCE IS ONE BACKTICK LONGER than the longest backtick run in
+        -- the content (and never shorter than pylon's three), so a canvas
+        -- that itself holds a fenced block cannot close the fence early and
+        -- spill the rest of the document out of it.
+        LEFT JOIN LATERAL (
+            SELECT repeat(chr(96), GREATEST(3, COALESCE(max(length(backtick_run.run[1])), 0) + 1)) AS marks
+            FROM regexp_matches(message_canvas.canvas_content, chr(96) || '+', 'g') AS backtick_run(run)
+        ) AS canvas_fence ON TRUE
         CROSS JOIN LATERAL (
             SELECT jsonb_build_object(
                        'type', 'text', 'text', message_text.content
@@ -349,6 +417,34 @@ LEFT JOIN LATERAL (
                    0 AS chunk_index
             WHERE message_item.item_type = 'text_message'
               AND COALESCE(message_text.content, '') <> ''
+            UNION ALL
+            -- Pylon's rendering: a canvas with a language is fenced as
+            -- ```<lang>\n\n<content>\n\n``` (a longer fence when the content
+            -- holds backticks, see canvas_fence) and one without is its
+            -- content. A canvas past the history budget is a marker instead
+            -- (see canvas_budget). The one deviation is `document` (#879, a type pylon
+            -- never had): its content IS the prose of the answer in Markdown,
+            -- so it goes in as that prose rather than as a code block of a
+            -- language no model knows. chr(96) is the backtick, spelled that
+            -- way because sqlc embeds this text in a Go raw string.
+            SELECT jsonb_build_object(
+                       'type', 'text',
+                       'text', CASE
+                           WHEN canvas_budget.bytes > 65536
+                           THEN '[Canvas "' || COALESCE(NULLIF(message_canvas_meta.name, ''), 'Untitled')
+                                || '" (' || message_canvas.content_bytes::text
+                                || ' bytes) is not included in this history: the conversation''s canvases exceed the '
+                                || '65536-byte budget for canvas text, and only the newest canvases that fit are shown. '
+                                || 'The user can still see and edit it in the conversation.]'
+                           WHEN COALESCE(message_canvas.code_language, '') IN ('', 'document')
+                           THEN message_canvas.canvas_content
+                           ELSE canvas_fence.marks || message_canvas.code_language || chr(10) || chr(10)
+                                || message_canvas.canvas_content || chr(10) || chr(10) || canvas_fence.marks
+                       END
+                   ) AS chunk,
+                   0 AS chunk_index
+            WHERE message_item.item_type = 'canvas_message'
+              AND COALESCE(message_canvas.canvas_content, '') <> ''
             UNION ALL
             SELECT attachment_chunk.value,
                    attachment_chunk.ordinality::integer
@@ -452,12 +548,35 @@ LEFT JOIN LATERAL (
                       JOIN chat_participants AS completed_reply_author
                         ON completed_reply_author.id = completed_reply.author_participant_id
                        AND completed_reply_author.entity_name <> 'user'
+                      -- A reply is "completed" when it holds words the model
+                      -- will be shown: a non-empty text item, or a canvas whose
+                      -- newest version is non-empty. "Open as document" carves
+                      -- the WHOLE answer into one canvas and leaves no text
+                      -- item at all; testing text alone dropped the question
+                      -- that answer replied to from every later turn.
                       JOIN chat_message_items AS completed_reply_item
                         ON completed_reply_item.message_group_id = completed_reply.id
-                       AND completed_reply_item.item_type = 'text_message'
-                      JOIN chat_messages_text AS completed_reply_text
-                        ON completed_reply_text.id = completed_reply_item.id
-                       AND COALESCE(completed_reply_text.content, '') <> ''
+                       AND (
+                           (
+                               completed_reply_item.item_type = 'text_message'
+                               AND EXISTS (
+                                   SELECT 1
+                                   FROM chat_messages_text AS completed_reply_text
+                                   WHERE completed_reply_text.id = completed_reply_item.id
+                                     AND COALESCE(completed_reply_text.content, '') <> ''
+                               )
+                           )
+                           OR (
+                               completed_reply_item.item_type = 'canvas_message'
+                               AND COALESCE((
+                                   SELECT completed_reply_canvas.canvas_content
+                                   FROM chat_canvas_versions AS completed_reply_canvas
+                                   WHERE completed_reply_canvas.canvas_item_id = completed_reply_item.id
+                                   ORDER BY completed_reply_canvas.created_at DESC, completed_reply_canvas.id DESC
+                                   LIMIT 1
+                               ), '') <> ''
+                           )
+                       )
                       WHERE completed_reply.conversation_id = conversation.id
                         AND completed_reply.reply_to_id = message_group.id
                         AND NOT completed_reply.is_streaming
@@ -652,11 +771,18 @@ WHERE conversation.uuid = sqlc.arg(conversation_uuid)::uuid
             -- EXACTLY the position it was in before #606 — proceeding without
             -- the file — which is strictly better than refusing it outright.
             --
-            -- `canvas_message` and `context_message` stay: both change what
-            -- the model must be shown, so serving a turn without them would
-            -- answer a different conversation than the one on screen.
-            historical_item.item_type = 'canvas_message'
-            OR historical_item.item_type = 'context_message'
+            -- `canvas_message` is NOT here any more either: the history
+            -- projection above serves a canvas's newest version to the
+            -- model, so the turn answers the conversation on screen. Gating it
+            -- made every canvas — "Open as document" included — end the
+            -- conversation: the next send answered 422 "This agent turn
+            -- requires the current execution path."
+            --
+            -- `context_message` stays: it changes what the model must be
+            -- shown, and this projection does not render it, so serving a turn
+            -- without it would answer a different conversation than the one
+            -- on screen.
+            historical_item.item_type = 'context_message'
         )
   );
 
@@ -1162,11 +1288,79 @@ LEFT JOIN LATERAL (
           ON author.id = message_group.author_participant_id
         JOIN chat_message_items AS message_item
           ON message_item.message_group_id = message_group.id
-         AND message_item.item_type IN ('text_message', 'attachment_message')
+         AND message_item.item_type IN ('text_message', 'attachment_message', 'canvas_message')
         LEFT JOIN chat_messages_text AS message_text
           ON message_text.id = message_item.id
         LEFT JOIN chat_messages_attachment AS message_attachment
           ON message_attachment.id = message_item.id
+        -- A CANVAS contributes its NEWEST version, as pylon's history does
+        -- (elitea_core/utils/chat_history.py:57-66, `message.latest_version`).
+        -- Carving an answer into a canvas DELETES the text item it came from
+        -- (ConversationsRepo.CreateCanvas), so without this branch the words
+        -- the user is looking at would vanish from the model's view of the
+        -- conversation. Newest = the read path's own order (readCanvas:
+        -- created_at DESC, id DESC).
+        LEFT JOIN LATERAL (
+            SELECT canvas_version.canvas_content, canvas_version.code_language,
+                   octet_length(canvas_version.canvas_content) AS content_bytes
+            FROM chat_canvas_versions AS canvas_version
+            WHERE message_item.item_type = 'canvas_message'
+              AND canvas_version.canvas_item_id = message_item.id
+            ORDER BY canvas_version.created_at DESC, canvas_version.id DESC
+            LIMIT 1
+        ) AS message_canvas ON TRUE
+        LEFT JOIN chat_messages_canvas AS message_canvas_meta
+          ON message_item.item_type = 'canvas_message'
+         AND message_canvas_meta.id = message_item.id
+        -- CANVAS TEXT IS BOUNDED, and the bound is EXPLICIT to the model.
+        --
+        -- The worker fetches this history under a 256 KiB ceiling (see the
+        -- attachment bound below), and a canvas is user-editable text with no
+        -- natural size: unbounded, one large document made every later turn
+        -- of its conversation fail — unrecoverably, because history only
+        -- grows. Writes are capped at 64 KiB per canvas
+        -- (conversations.MaxCanvasContentBytes), and here the NEWEST canvases
+        -- are carried in full while their combined size stays within a 64 KiB
+        -- budget (65536 below; the same constant). Worst case, 128 KiB of
+        -- attachment text plus 64 KiB of canvas text, which leaves a quarter
+        -- of the worker's ceiling to the conversation's own words and the
+        -- JSON framing.
+        --
+        -- A canvas past the budget is NOT silently dropped (the owner rejected
+        -- silent truncation): it is replaced by a marker naming the canvas and
+        -- its size, so the model knows the document exists and was withheld,
+        -- and can say so rather than answer as if it had never been written.
+        --
+        -- `canvas_budget.bytes` is the size of this canvas plus every canvas
+        -- positioned after it in the conversation (newest-first prefix sum,
+        -- the attachment bound's own ordering). Counting a canvas after the
+        -- current question too only ever withholds more, never less.
+        LEFT JOIN LATERAL (
+            SELECT COALESCE(sum(octet_length(newer_version.canvas_content)), 0) AS bytes
+            FROM chat_message_items AS newer_item
+            JOIN chat_message_group AS newer_group
+              ON newer_group.id = newer_item.message_group_id
+            CROSS JOIN LATERAL (
+                SELECT newest.canvas_content
+                FROM chat_canvas_versions AS newest
+                WHERE newest.canvas_item_id = newer_item.id
+                ORDER BY newest.created_at DESC, newest.id DESC
+                LIMIT 1
+            ) AS newer_version
+            WHERE message_item.item_type = 'canvas_message'
+              AND newer_group.conversation_id = conversation.id
+              AND newer_item.item_type = 'canvas_message'
+              AND (newer_group.created_at, newer_group.id, newer_item.order_index, newer_item.id)
+                >= (message_group.created_at, message_group.id, message_item.order_index, message_item.id)
+        ) AS canvas_budget ON TRUE
+        -- THE FENCE IS ONE BACKTICK LONGER than the longest backtick run in
+        -- the content (and never shorter than pylon's three), so a canvas
+        -- that itself holds a fenced block cannot close the fence early and
+        -- spill the rest of the document out of it.
+        LEFT JOIN LATERAL (
+            SELECT repeat(chr(96), GREATEST(3, COALESCE(max(length(backtick_run.run[1])), 0) + 1)) AS marks
+            FROM regexp_matches(message_canvas.canvas_content, chr(96) || '+', 'g') AS backtick_run(run)
+        ) AS canvas_fence ON TRUE
         CROSS JOIN LATERAL (
             SELECT jsonb_build_object(
                        'type', 'text', 'text', message_text.content
@@ -1174,6 +1368,34 @@ LEFT JOIN LATERAL (
                    0 AS chunk_index
             WHERE message_item.item_type = 'text_message'
               AND COALESCE(message_text.content, '') <> ''
+            UNION ALL
+            -- Pylon's rendering: a canvas with a language is fenced as
+            -- ```<lang>\n\n<content>\n\n``` (a longer fence when the content
+            -- holds backticks, see canvas_fence) and one without is its
+            -- content. A canvas past the history budget is a marker instead
+            -- (see canvas_budget). The one deviation is `document` (#879, a type pylon
+            -- never had): its content IS the prose of the answer in Markdown,
+            -- so it goes in as that prose rather than as a code block of a
+            -- language no model knows. chr(96) is the backtick, spelled that
+            -- way because sqlc embeds this text in a Go raw string.
+            SELECT jsonb_build_object(
+                       'type', 'text',
+                       'text', CASE
+                           WHEN canvas_budget.bytes > 65536
+                           THEN '[Canvas "' || COALESCE(NULLIF(message_canvas_meta.name, ''), 'Untitled')
+                                || '" (' || message_canvas.content_bytes::text
+                                || ' bytes) is not included in this history: the conversation''s canvases exceed the '
+                                || '65536-byte budget for canvas text, and only the newest canvases that fit are shown. '
+                                || 'The user can still see and edit it in the conversation.]'
+                           WHEN COALESCE(message_canvas.code_language, '') IN ('', 'document')
+                           THEN message_canvas.canvas_content
+                           ELSE canvas_fence.marks || message_canvas.code_language || chr(10) || chr(10)
+                                || message_canvas.canvas_content || chr(10) || chr(10) || canvas_fence.marks
+                       END
+                   ) AS chunk,
+                   0 AS chunk_index
+            WHERE message_item.item_type = 'canvas_message'
+              AND COALESCE(message_canvas.canvas_content, '') <> ''
             UNION ALL
             SELECT attachment_chunk.value,
                    attachment_chunk.ordinality::integer
@@ -1273,12 +1495,35 @@ LEFT JOIN LATERAL (
                       JOIN chat_participants AS completed_reply_author
                         ON completed_reply_author.id = completed_reply.author_participant_id
                        AND completed_reply_author.entity_name <> 'user'
+                      -- A reply is "completed" when it holds words the model
+                      -- will be shown: a non-empty text item, or a canvas whose
+                      -- newest version is non-empty. "Open as document" carves
+                      -- the WHOLE answer into one canvas and leaves no text
+                      -- item at all; testing text alone dropped the question
+                      -- that answer replied to from every later turn.
                       JOIN chat_message_items AS completed_reply_item
                         ON completed_reply_item.message_group_id = completed_reply.id
-                       AND completed_reply_item.item_type = 'text_message'
-                      JOIN chat_messages_text AS completed_reply_text
-                        ON completed_reply_text.id = completed_reply_item.id
-                       AND COALESCE(completed_reply_text.content, '') <> ''
+                       AND (
+                           (
+                               completed_reply_item.item_type = 'text_message'
+                               AND EXISTS (
+                                   SELECT 1
+                                   FROM chat_messages_text AS completed_reply_text
+                                   WHERE completed_reply_text.id = completed_reply_item.id
+                                     AND COALESCE(completed_reply_text.content, '') <> ''
+                               )
+                           )
+                           OR (
+                               completed_reply_item.item_type = 'canvas_message'
+                               AND COALESCE((
+                                   SELECT completed_reply_canvas.canvas_content
+                                   FROM chat_canvas_versions AS completed_reply_canvas
+                                   WHERE completed_reply_canvas.canvas_item_id = completed_reply_item.id
+                                   ORDER BY completed_reply_canvas.created_at DESC, completed_reply_canvas.id DESC
+                                   LIMIT 1
+                               ), '') <> ''
+                           )
+                       )
                       WHERE completed_reply.conversation_id = conversation.id
                         AND completed_reply.reply_to_id = message_group.id
                         AND NOT completed_reply.is_streaming
@@ -1475,11 +1720,18 @@ WHERE conversation.uuid = sqlc.arg(conversation_uuid)::uuid
             -- EXACTLY the position it was in before #606 — proceeding without
             -- the file — which is strictly better than refusing it outright.
             --
-            -- `canvas_message` and `context_message` stay: both change what
-            -- the model must be shown, so serving a turn without them would
-            -- answer a different conversation than the one on screen.
-            historical_item.item_type = 'canvas_message'
-            OR (
+            -- `canvas_message` is NOT here any more either: the history
+            -- projection above serves a canvas's newest version to the
+            -- model, so the turn answers the conversation on screen. Gating it
+            -- made every canvas — "Open as document" included — end the
+            -- conversation: the next send answered 422 "This agent turn
+            -- requires the current execution path."
+            --
+            -- `context_message` stays: it changes what the model must be
+            -- shown, and this projection does not render it, so serving a turn
+            -- without it would answer a different conversation than the one
+            -- on screen.
+            (
                 historical_item.item_type = 'context_message'
                 AND NOT EXISTS (
                     SELECT 1
@@ -2528,9 +2780,10 @@ WITH resolved AS MATERIALIZED (
                 -- See ResolveCurrentApplicationTurn's gate for why
                 -- `attachment_message` is absent here (#606): admission writes
                 -- those items now, so gating on them refused every turn after
-                -- the one that carried a file.
-                historical_item.item_type = 'canvas_message'
-                OR historical_item.item_type = 'context_message'
+                -- the one that carried a file. Nor is `canvas_message`: the
+                -- resolver projects a canvas into the history it hands the
+                -- model, so a canvas no longer ends the conversation.
+                historical_item.item_type = 'context_message'
             )
       )
 ), question_group AS (
@@ -2852,9 +3105,10 @@ WITH resolved AS MATERIALIZED (
                 -- See ResolveCurrentApplicationTurn's gate for why
                 -- `attachment_message` is absent here (#606): admission writes
                 -- those items now, so gating on them refused every turn after
-                -- the one that carried a file.
-                historical_item.item_type = 'canvas_message'
-                OR (
+                -- the one that carried a file. Nor is `canvas_message`: the
+                -- resolver projects a canvas into the history it hands the
+                -- model, so a canvas no longer ends the conversation.
+                (
                     historical_item.item_type = 'context_message'
                     AND NOT EXISTS (
                         SELECT 1

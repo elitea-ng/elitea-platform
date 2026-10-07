@@ -112,10 +112,23 @@ const TABLE_CANVAS = canvasItem({
   content: TABLE_DOCUMENT,
 });
 
+const DOCUMENT_CANVAS_UUID = 'b2a1f0de-0000-4000-8000-000000000013';
+const DOCUMENT_CANVAS = canvasItem({
+  uuid: DOCUMENT_CANVAS_UUID,
+  name: 'Document',
+  type: 'document',
+  language: 'document',
+  content: ANSWER_TEXT,
+});
+
 /** What the transcript route serves right now — mutated by the create in case 1. */
 let answerItems: readonly Record<string, unknown>[] = [];
 /** Every create body the route received, so the RANGE can be read rather than assumed. */
 let createBodies: Record<string, unknown>[] = [];
+/** Every canvas SAVE (PUT) body — what a close actually wrote. */
+let saveBodies: Record<string, unknown>[] = [];
+/** Every turn START body — the contract a send after a canvas builds. */
+let startBodies: Record<string, unknown>[] = [];
 
 /**
  * The paginated messages route — the read the chat page actually makes. It
@@ -203,7 +216,14 @@ function chatHandlers() {
         ttl_seconds: 120,
       }),
     ),
-    http.put(`${BASE}/elitea_core/canvas/prompt_lib/:projectId/:canvasId`, () => HttpResponse.json({ ok: true })),
+    http.put(`${BASE}/elitea_core/canvas/prompt_lib/:projectId/:canvasId`, async ({ request }) => {
+      saveBodies.push((await request.json()) as Record<string, unknown>);
+      return HttpResponse.json({ ok: true });
+    }),
+    http.post(`${BASE}/elitea_core/messages/prompt_lib/${PROJECT}/:conversationUuid`, async ({ request }) => {
+      startBodies.push((await request.json()) as Record<string, unknown>);
+      return HttpResponse.json({ execution_id: 'execution-1', events_url: `${BASE}/executions/${PROJECT}/execution-1/events` });
+    }),
   ];
 }
 
@@ -261,6 +281,8 @@ beforeEach(() => {
   useSelectedProjectStore.setState({ project: { id: PROJECT, name: 'Project' } });
   answerItems = [];
   createBodies = [];
+  saveBodies = [];
+  startBodies = [];
   server.use(...chatHandlers());
   const original = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
   Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
@@ -320,11 +342,14 @@ describe('the chat route: a canvas can be MADE from a selection', () => {
       // block — the create now asks for a `document` canvas, not `code`.
       expect(body['canvas_type'], 'a prose selection creates a document canvas, not a code one (#879)').toBe('document');
       expect(body['code_language']).toBe('document');
-      expect(body['name']).toBe('Edit document');
+      // A noun, not a verb: the block's title is not an editing mode.
+      expect(body['name']).toBe('Document');
 
       // …and the transcript shows what the server wrote, without a reload.
       const block = await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });
       expect(within(block).getByTestId('canvas-block-content')).toHaveTextContent(SELECTED);
+      // A create that succeeded reports nothing.
+      expect(screen.queryByTestId('chat-canvas-create-error')).not.toBeInTheDocument();
     } finally {
       eventSources.restore();
     }
@@ -521,6 +546,275 @@ describe('the chat route: undo and redo answer the keyboard', () => {
       await waitFor(() => {
         expect(content.textContent ?? '').not.toContain('XYZ');
       });
+    } finally {
+      eventSources.restore();
+    }
+  });
+});
+
+/*
+ * The owner's report against 4.8.0: "I entered the 'Edit document' mode in
+ * chat, have no buttons to exit from it, and I continued the conversation" —
+ * and the next send answered 422 "This agent turn requires the current
+ * execution path."
+ *
+ * Three defects made that one experience:
+ *  1. "Open as document" never OPENED anything. It carved the answer into a
+ *     canvas and stopped, leaving a block titled "Edit document" — a verb
+ *     that reads as a mode — with no editor and no exit.
+ *  2. The editor's Escape/backdrop close called the close contract with NO
+ *     arguments, so it closed WITHOUT saving: the edit was silently dropped.
+ *  3. The server refused any conversation holding a canvas (fixed in
+ *     agent_chat.sql; pinned by agent_execution_canvas_history_postgres_
+ *     integration_test.go). The CLIENT's send was always the ordinary turn —
+ *     the last case here pins that, so the contract the server now admits is
+ *     the one the client builds.
+ */
+describe('the chat route: "Open as document" opens an editor with a way out, and the conversation goes on', () => {
+  it('opens the document editor on the canvas it just made, offers a named exit, and Escape leaves it', async () => {
+    server.use(
+      http.post(`${BASE}/elitea_core/canvases/prompt_lib/${PROJECT}`, async ({ request }) => {
+        createBodies.push((await request.json()) as Record<string, unknown>);
+        answerItems = [DOCUMENT_CANVAS];
+        // The route's real shape: the uuid at the top, the content nested
+        // under `latest_version` — so the opener must not depend on a
+        // top-level `canvas_content`.
+        return HttpResponse.json({ uuid: DOCUMENT_CANVAS_UUID, id: 9102, latest_version: { canvas_content: ANSWER_TEXT } });
+      }),
+    );
+    const eventSources = installTestEventSource();
+    try {
+      renderChatRoute();
+      await screen.findByTestId('answer-text-item', {}, { timeout: 15_000 });
+      const user = userEvent.setup();
+      await user.click(await screen.findByTestId('answer-open-as-document', {}, { timeout: 10_000 }));
+
+      await waitFor(() => expect(createBodies).toHaveLength(1));
+      expect(createBodies[0]?.['canvas_type']).toBe('document');
+      expect(createBodies[0]?.['name']).toBe('Document');
+
+      // THE CLAIM: the click opens the editor — no second click on a block.
+      const drawer = await screen.findByTestId('chat-canvas-editor', {}, { timeout: 15_000 });
+      expect(await within(drawer).findByTestId('canvas-document-editor', {}, { timeout: 15_000 })).toBeInTheDocument();
+      // …on the canvas it just made, so the transcript block steps aside.
+      expect(screen.queryByTestId('canvas-block')).not.toBeInTheDocument();
+
+      // The exit is named, and names its key.
+      const close = within(drawer).getByRole('button', { name: 'Close editor' });
+      expect(close).toHaveAttribute('aria-keyshortcuts', 'Escape');
+      await user.hover(close);
+      expect(await screen.findByRole('tooltip')).toHaveTextContent('Close (Esc)');
+
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByTestId('chat-canvas-editor')).not.toBeInTheDocument());
+      const block = await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });
+      expect(within(block).getByTestId('canvas-block-title')).toHaveTextContent('Document');
+      // Focus lands on the block's own open control — the answer's "Open as
+      // document" button the drawer would restore focus to is gone (the carve
+      // removed it), and focus fell to <body>. The control is named neutrally:
+      // it opens the document, it is not a mode.
+      const open = within(block).getByTestId('canvas-block-open');
+      await waitFor(() => expect(open).toHaveFocus());
+      expect(open).toHaveAccessibleName('Open document');
+    } finally {
+      eventSources.restore();
+    }
+  });
+
+  it('Escape SAVES the open canvas — it closed the drawer and dropped the edit', async () => {
+    answerItems = [CODE_CANVAS];
+    const eventSources = installTestEventSource();
+    try {
+      renderChatRoute();
+      const block = await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });
+      const user = userEvent.setup();
+      await user.click(within(block).getByTestId('canvas-block-open'));
+      const root = await screen.findByTestId('canvas-editor-root', {}, { timeout: 15_000 });
+      const content = root.querySelector('.cm-content');
+      if (!(content instanceof HTMLElement)) throw new Error('the canvas editor mounted no code pane');
+      await user.click(content);
+      await user.keyboard('XYZ');
+      await waitFor(() => expect(content.textContent ?? '').toContain(`XYZ${CODE_DOCUMENT}`));
+
+      await user.keyboard('{Escape}');
+
+      await waitFor(() => expect(screen.queryByTestId('chat-canvas-editor')).not.toBeInTheDocument());
+      await waitFor(() => expect(saveBodies).toHaveLength(1));
+      expect(saveBodies[0]?.['canvas_content']).toBe(`XYZ${CODE_DOCUMENT}`);
+      expect(saveBodies[0]?.['code_language']).toBe('python');
+    } finally {
+      eventSources.restore();
+    }
+  });
+
+  it('a send in a conversation holding a document canvas is an ORDINARY turn — the contract the server admits', async () => {
+    answerItems = [DOCUMENT_CANVAS];
+    const eventSources = installTestEventSource();
+    try {
+      renderChatRoute();
+      await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });
+      const user = userEvent.setup();
+      const input = await screen.findByPlaceholderText('Type your message...');
+      await user.type(input, 'make it shorter{Enter}');
+
+      await waitFor(() => expect(startBodies).toHaveLength(1), { timeout: 10_000 });
+      const body = startBodies[0] ?? {};
+      expect(body['conversation_uuid']).toBe('conversation-uuid-41');
+      expect(body['payload']).toEqual({ user_input: 'make it shorter' });
+      expect(body['llm_settings']).toEqual(expect.objectContaining({ model_name: 'model-1', stream: true }));
+      // Nothing canvas-shaped and nothing regeneration-shaped rides along: the
+      // canvas reaches the model through the server's history projection, not
+      // through the request.
+      for (const key of ['updated_items', 'message_id', 'stream_id', 'canvas_id', 'canvas_uuid', 'attachments_info']) {
+        expect(body, `the send must not carry ${key}`).not.toHaveProperty(key);
+      }
+    } finally {
+      eventSources.restore();
+    }
+  });
+});
+
+/*
+ * Escape belongs to the innermost thing that uses it, and a refused save keeps
+ * the user's edit (#1097 review: L4, M1).
+ */
+describe('the chat route: the canvas drawer and the keys and saves inside it', () => {
+  it('an Escape CodeMirror uses to close its search panel closes the PANEL, not the editor; the next Escape closes the editor', async () => {
+    answerItems = [CODE_CANVAS];
+    const eventSources = installTestEventSource();
+    try {
+      renderChatRoute();
+      const block = await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });
+      const user = userEvent.setup();
+      await user.click(within(block).getByTestId('canvas-block-open'));
+      const root = await screen.findByTestId('canvas-editor-root', {}, { timeout: 15_000 });
+      const content = root.querySelector('.cm-content');
+      if (!(content instanceof HTMLElement)) throw new Error('the canvas editor mounted no code pane');
+      await user.click(content);
+      await user.keyboard('{Control>}f{/Control}');
+      const panel = await waitFor(() => {
+        const found = root.querySelector('.cm-search');
+        if (!(found instanceof HTMLElement)) throw new Error('the search panel did not open');
+        return found;
+      });
+      expect(panel).toBeInTheDocument();
+      // The reader went back to the text with the panel still open — the
+      // search keymap's Escape is bound in the EDITOR scope too, and from
+      // there the press used to reach the drawer as well (the editor content
+      // stays in the page, unlike a search field the panel removes).
+      await user.click(content);
+      expect(content).toHaveFocus();
+
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(root.querySelector('.cm-search')).toBeNull());
+      // The press was the panel's: the editor is still open.
+      expect(screen.getByTestId('chat-canvas-editor')).toBeInTheDocument();
+
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByTestId('chat-canvas-editor')).not.toBeInTheDocument());
+    } finally {
+      eventSources.restore();
+    }
+  });
+
+  it('a save the server refuses as too large keeps the editor OPEN with the text and the reason; discarding is explicit', async () => {
+    const safe = 'This document is too large to save (70.0 KiB; the limit is 64.0 KiB). Shorten it, or save it to artifacts instead.';
+    server.use(
+      http.put(`${BASE}/elitea_core/canvas/prompt_lib/:projectId/:canvasId`, async ({ request }) => {
+        saveBodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({ error: safe, code: 'canvas_too_large', safe_message: safe }, { status: 413 });
+      }),
+    );
+    answerItems = [CODE_CANVAS];
+    const eventSources = installTestEventSource();
+    try {
+      renderChatRoute();
+      const block = await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });
+      const user = userEvent.setup();
+      await user.click(within(block).getByTestId('canvas-block-open'));
+      const root = await screen.findByTestId('canvas-editor-root', {}, { timeout: 15_000 });
+      const content = root.querySelector('.cm-content');
+      if (!(content instanceof HTMLElement)) throw new Error('the canvas editor mounted no code pane');
+      await user.click(content);
+      await user.keyboard('XYZ');
+      await waitFor(() => expect(content.textContent ?? '').toContain(`XYZ${CODE_DOCUMENT}`));
+
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(saveBodies).toHaveLength(1));
+      const alert = await screen.findByTestId('chat-canvas-save-error', {}, { timeout: 10_000 });
+      expect(alert).toHaveTextContent(safe);
+      // Nothing lost: the drawer is open and still holds the edit.
+      expect(screen.getByTestId('chat-canvas-editor')).toBeInTheDocument();
+      expect(screen.getByTestId('canvas-editor-root').querySelector('.cm-content')?.textContent ?? '').toContain(`XYZ${CODE_DOCUMENT}`);
+
+      await user.click(screen.getByTestId('chat-canvas-discard'));
+      await waitFor(() => expect(screen.queryByTestId('chat-canvas-editor')).not.toBeInTheDocument());
+      expect(saveBodies).toHaveLength(1);
+    } finally {
+      eventSources.restore();
+    }
+  });
+});
+
+/*
+ * A REFUSED create. It was swallowed (`.catch(() => undefined)`), so a
+ * selection over the server's 64 KiB canvas cap — answered 413
+ * `canvas_too_large` — was a click that did nothing at all.
+ */
+describe('the chat route: a canvas create the server refuses says why', () => {
+  function refuseCreate(status: number, body: Record<string, unknown>): void {
+    server.use(
+      http.post(`${BASE}/elitea_core/canvases/prompt_lib/${PROJECT}`, async ({ request }) => {
+        createBodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json(body, { status });
+      }),
+    );
+  }
+
+  async function openAsDocument(): Promise<ReturnType<typeof userEvent.setup>> {
+    renderChatRoute();
+    await screen.findByTestId('answer-text-item', {}, { timeout: 15_000 });
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('answer-open-as-document', {}, { timeout: 10_000 }));
+    await waitFor(() => expect(createBodies).toHaveLength(1));
+    return user;
+  }
+
+  it("a 413 canvas_too_large shows the server's own safe_message, and opens no editor", async () => {
+    const safe = 'This document is too large to save (70.0 KiB; the limit is 64.0 KiB). Shorten it, or save it to artifacts instead.';
+    refuseCreate(413, { error: safe, code: 'canvas_too_large', safe_message: safe });
+    const eventSources = installTestEventSource();
+    try {
+      await openAsDocument();
+      const alert = await screen.findByTestId('chat-canvas-create-error', {}, { timeout: 10_000 });
+      expect(alert).toHaveTextContent(safe);
+      expect(screen.queryByTestId('chat-canvas-editor')).not.toBeInTheDocument();
+    } finally {
+      eventSources.restore();
+    }
+  });
+
+  it('a failure without a safe_message shows the generic sentence, not a transport string', async () => {
+    refuseCreate(500, { error: 'pq: something internal' });
+    const eventSources = installTestEventSource();
+    try {
+      await openAsDocument();
+      const alert = await screen.findByTestId('chat-canvas-create-error', {}, { timeout: 10_000 });
+      expect(alert).toHaveTextContent('The canvas could not be created. Try again.');
+      expect(alert).not.toHaveTextContent('pq:');
+    } finally {
+      eventSources.restore();
+    }
+  });
+
+  it('closing the alert clears it', async () => {
+    refuseCreate(413, { code: 'canvas_too_large', safe_message: 'Too large.' });
+    const eventSources = installTestEventSource();
+    try {
+      const user = await openAsDocument();
+      const alert = await screen.findByTestId('chat-canvas-create-error', {}, { timeout: 10_000 });
+      await user.click(within(alert).getByRole('button', { name: /close/i }));
+      await waitFor(() => expect(screen.queryByTestId('chat-canvas-create-error')).not.toBeInTheDocument());
     } finally {
       eventSources.restore();
     }

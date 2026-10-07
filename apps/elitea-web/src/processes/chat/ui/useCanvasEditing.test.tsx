@@ -15,6 +15,7 @@ import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
+import { settleCanvasSaves } from '@/shared/lib/canvasSaveGate';
 import { useEditorStateStore } from '@/shared/lib/editorState';
 import { server } from '@/test/setup';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
@@ -156,8 +157,10 @@ describe('useCanvasEditing — persisting the edit', () => {
     expect(saves[0]?.canvasUUID).toBe('cv-9');
     expect(saves[0]?.body['canvas_content']).toBe('print(2)');
     expect(saves[0]?.body['code_language']).toBe('python');
-    // The editor still closes, whatever the request does.
-    expect(result.current.isEditingCanvas).toBe(false);
+    // The editor closes once the save has landed — and remembers which
+    // canvas it was, so the block's control can take focus back.
+    await waitFor(() => expect(result.current.isEditingCanvas).toBe(false));
+    expect(result.current.lastClosedCanvasId).toBe('cv-9');
   });
 
   it('saves a language switch even when the text is untouched', async () => {
@@ -230,5 +233,79 @@ describe('useCanvasEditing — persisting the edit', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(saves).toEqual([]);
+  });
+});
+
+/*
+ * A REFUSED save keeps the edit. The close used to be fire-and-forget with
+ * the failure swallowed, so a canvas over the server's size cap (413) closed
+ * the drawer and lost the user's text without a word.
+ */
+describe('useCanvasEditing — a save that fails or is still in flight', () => {
+  const SAFE = 'This document is too large to save (70.0 KiB; the limit is 64.0 KiB). Shorten it, or save it to artifacts instead.';
+
+  it('stays open with the server\'s safe_message when the save is refused, and discards only when asked', async () => {
+    server.use(
+      http.put(`${BASE}/elitea_core/canvas/prompt_lib/${PROJECT}/:canvasUUID`, () =>
+        HttpResponse.json({ error: SAFE, code: 'canvas_too_large', safe_message: SAFE }, { status: 413 }),
+      ),
+    );
+    const { result } = renderHook(() => useCanvasEditing(), { wrapper });
+    act(() => result.current.onShowCanvasEditor({ codeBlock: 'x', language: 'document', isBlock: true, canvasId: 'cv-9' }));
+    act(() => { result.current.onCloseCanvasEditor(true, 'x'.repeat(10), 'document'); });
+
+    expect(result.current.isSaving).toBe(true);
+    await waitFor(() => expect(result.current.saveError).toBe(SAFE));
+    expect(result.current.isSaving).toBe(false);
+    // Still open, on the same document: nothing was dropped.
+    expect(result.current.isEditingCanvas).toBe(true);
+    expect(result.current.selectedCodeBlockInfo?.canvasId).toBe('cv-9');
+
+    act(() => result.current.discardAndClose());
+    expect(result.current.isEditingCanvas).toBe(false);
+    expect(result.current.saveError).toBeUndefined();
+  });
+
+  it('answers a generic sentence, not a transport string, for a failure with no safe_message', async () => {
+    server.use(http.put(`${BASE}/elitea_core/canvas/prompt_lib/${PROJECT}/:canvasUUID`, () => HttpResponse.json({}, { status: 500 })));
+    const { result } = renderHook(() => useCanvasEditing(), { wrapper });
+    act(() => result.current.onShowCanvasEditor({ codeBlock: 'x', language: 'python', isBlock: true, canvasId: 'cv-9' }));
+    act(() => { result.current.onCloseCanvasEditor(true, 'y', 'python'); });
+    await waitFor(() => expect(result.current.saveError).toContain('could not be saved'));
+    expect(result.current.saveError).not.toContain('eliteaFetch');
+  });
+
+  /*
+   * The turn reads the canvas's newest version into its history, so a send
+   * must not overtake the closing save: the send path awaits
+   * `settleCanvasSaves()`, and this is what it waits on.
+   */
+  it('registers the closing save so a send waits for it, and closes only once it lands', async () => {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const saves: string[] = [];
+    server.use(
+      http.put(`${BASE}/elitea_core/canvas/prompt_lib/${PROJECT}/:canvasUUID`, async ({ request }) => {
+        await held;
+        saves.push(String(((await request.json()) as Record<string, unknown>)['canvas_content']));
+        return HttpResponse.json({ uuid: 'cv-9' });
+      }),
+    );
+    const { result } = renderHook(() => useCanvasEditing(), { wrapper });
+    act(() => result.current.onShowCanvasEditor({ codeBlock: 'v1', language: 'python', isBlock: true, canvasId: 'cv-9' }));
+    act(() => { result.current.onCloseCanvasEditor(true, 'v2', 'python'); });
+
+    let settled = false;
+    const send = settleCanvasSaves().then(() => { settled = true; });
+    // A second close while the first save is in flight starts nothing.
+    act(() => { result.current.onCloseCanvasEditor(true, 'v3', 'python'); });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    expect(result.current.isEditingCanvas).toBe(true);
+
+    release();
+    await send;
+    expect(saves).toEqual(['v2']);
+    await waitFor(() => expect(result.current.isEditingCanvas).toBe(false));
   });
 });

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,11 +18,13 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 // mockRepo implements conversations.Repository for testing.
 type mockRepo struct {
 	authorizeFn               func(context.Context, string, string) error
+	authorizeWriteFn          func(ctx context.Context, projectID, kind, resourceID string) error
 	listFn                    func(ctx context.Context, projectID string, page, pageSize int) (conversations.ListResponse, error)
 	getFn                     func(ctx context.Context, projectID, conversationID string) (conversations.Conversation, error)
 	createFn                  func(ctx context.Context, projectID string, conv conversations.Conversation) (conversations.Conversation, error)
@@ -1243,6 +1246,123 @@ func TestUpdateCanvas_Error(t *testing.T) {
 	}
 }
 
+// A canvas WRITE is authorized with the participant rule, never the read rule
+// (AuthorizeChatResource), for both the create and the edit; the read keeps
+// the read rule. The Postgres half of this — a non-participant on a PUBLIC
+// conversation refused — is TestChatAuthorityCanvasWritesRequireParticipant.
+func TestCanvasWritesUseTheParticipantRuleAndReadsTheReadRule(t *testing.T) {
+	var writes []string
+	reads := 0
+	repo := &mockRepo{
+		authorizeFn: func(context.Context, string, string) error {
+			reads++
+			return nil
+		},
+		authorizeWriteFn: func(_ context.Context, _, kind, id string) error {
+			writes = append(writes, kind+":"+id)
+			return apierr.NotFound("chat resource not found")
+		},
+		createCanvasFn: func(context.Context, string, map[string]any) (map[string]any, error) {
+			t.Fatal("a refused create reached the repository")
+			return nil, nil
+		},
+		updateCanvasFn: func(context.Context, string, string, map[string]any) error {
+			t.Fatal("a refused edit reached the repository")
+			return nil
+		},
+		getCanvasFn: func(_ context.Context, _, canvasID string) (map[string]any, error) {
+			return map[string]any{"uuid": canvasID}, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+	for _, call := range []struct{ method, path, body string }{
+		{http.MethodPost, "/projects/proj-1/conversations/canvas", `{"message_group_id":7}`},
+		{http.MethodPut, "/projects/proj-1/conversations/canvas/canvas-1", `{"canvas_content":"x"}`},
+	} {
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(call.method, call.path, bytes.NewBufferString(call.body)))
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("%s %s: status %d, want 404", call.method, call.path, w.Code)
+		}
+	}
+	if !reflect.DeepEqual(writes, []string{"message:7", "canvas:canvas-1"}) {
+		t.Fatalf("write authority asked about %v", writes)
+	}
+	if reads != 0 {
+		t.Fatalf("a canvas write consulted the READ rule %d times", reads)
+	}
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/projects/proj-1/conversations/canvas/canvas-1", nil))
+	if w.Code != http.StatusOK || reads != 1 {
+		t.Fatalf("canvas read: status %d, read-rule calls %d", w.Code, reads)
+	}
+}
+
+// An edit above MaxCanvasContentBytes is a 413 carrying a safe_message the
+// editor shows beside its save, and it never reaches the repository. One at
+// the cap is accepted.
+func TestUpdateCanvasRefusesOversizedContentWithASafeMessage(t *testing.T) {
+	stored := 0
+	repo := &mockRepo{
+		updateCanvasFn: func(context.Context, string, string, map[string]any) error {
+			stored++
+			return nil
+		},
+		getCanvasFn: func(_ context.Context, _, canvasID string) (map[string]any, error) {
+			return map[string]any{"uuid": canvasID}, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+	put := func(content string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]any{"canvas_content": content})
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/projects/proj-1/conversations/canvas/canvas-1", bytes.NewReader(body)))
+		return w
+	}
+	w := put(strings.Repeat("a", conversations.MaxCanvasContentBytes+1))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized edit: status %d, want 413", w.Code)
+	}
+	var refusal map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&refusal); err != nil {
+		t.Fatal(err)
+	}
+	if refusal["code"] != "canvas_too_large" || !strings.Contains(fmt.Sprint(refusal["safe_message"]), "too large to save") ||
+		refusal["error"] != refusal["safe_message"] || refusal["limit_bytes"] != float64(conversations.MaxCanvasContentBytes) {
+		t.Fatalf("refusal body %v", refusal)
+	}
+	if stored != 0 {
+		t.Fatal("an oversized edit reached the repository")
+	}
+	if w := put(strings.Repeat("a", conversations.MaxCanvasContentBytes)); w.Code != http.StatusOK || stored != 1 {
+		t.Fatalf("an edit at the cap: status %d stored %d", w.Code, stored)
+	}
+	// A body past the decode bound is refused unread, with the same shape.
+	huge := `{"canvas_content":"` + strings.Repeat("a", 9*conversations.MaxCanvasContentBytes) + `"}`
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/projects/proj-1/conversations/canvas/canvas-1", strings.NewReader(huge)))
+	if w.Code != http.StatusRequestEntityTooLarge || !strings.Contains(w.Body.String(), "canvas_too_large") {
+		t.Fatalf("oversized body: status %d body %s", w.Code, w.Body.String())
+	}
+}
+
+// The repository's refusal of a create (whose text is a slice of a stored
+// message, so only the repository knows its size) reaches the caller as the
+// same 413.
+func TestCreateCanvasAnswersTheRepositorySizeRefusalAs413(t *testing.T) {
+	repo := &mockRepo{
+		createCanvasFn: func(context.Context, string, map[string]any) (map[string]any, error) {
+			return nil, conversations.CheckCanvasContent(strings.Repeat("a", conversations.MaxCanvasContentBytes+1))
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/projects/proj-1/conversations/canvas", bytes.NewBufferString(`{"message_group_id":7}`)))
+	if w.Code != http.StatusRequestEntityTooLarge || !strings.Contains(w.Body.String(), "safe_message") {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+}
+
 // ---------------------------------------------------------------------------
 // UpdateAttachmentStorage
 // ---------------------------------------------------------------------------
@@ -1900,6 +2020,13 @@ func TestCreate_CarriesTheMetaTheFirstSendSends(t *testing.T) {
 func (m *mockRepo) AuthorizeChatResource(ctx context.Context, projectID, resourceKind, conversationID string) error {
 	if m.authorizeFn != nil {
 		return m.authorizeFn(ctx, projectID, conversationID)
+	}
+	return nil
+}
+
+func (m *mockRepo) AuthorizeChatWrite(ctx context.Context, projectID, resourceKind, resourceID string) error {
+	if m.authorizeWriteFn != nil {
+		return m.authorizeWriteFn(ctx, projectID, resourceKind, resourceID)
 	}
 	return nil
 }
