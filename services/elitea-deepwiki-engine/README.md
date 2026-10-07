@@ -63,6 +63,12 @@ user and needs write permission to connect. The shared directory (a pod
 `emptyDir`, a compose volume) is the only scope. A file at the socket path
 that is not a socket is refused, never deleted.
 
+`_elitea_project_id` is the project the host authenticated (a positive
+integer, sent as a decimal string). The host sets it on every call and
+overwrites a caller's value; `generate_wiki`, `ask` and `deep_research`
+refuse a call without it (`ValueError`), because the index is scoped by
+project (see [Tenancy](#tenancy-the-index-is-scoped-by-project)).
+
 `context_paths` and `extra_context` are resolved by the host, which removes
 both keys. A request that still carries a non-empty one is refused with a
 `ValueError`, never answered without its attachments. The native `ask`
@@ -594,7 +600,9 @@ chat, stream and tool-call round trip against the LAN vLLM
 
 ADR-0026 decision 5, with the owner's rule: **no SQLite anywhere**. There is
 no `.wiki.db`, no sqlite-vec, no FAISS and no docstore. The index is the
-ADR-0022 schema in the `deepwiki` database, unchanged.
+ADR-0022 schema in the `deepwiki` database, with one change: since
+migration 0005 every index row belongs to one platform project (see
+[Tenancy](#tenancy-the-index-is-scoped-by-project)).
 
 **Migrations.** The SQL files are in `migrations/` (moved unchanged from
 the retired Python package); the binary embeds them (`include_str!`).
@@ -614,7 +622,10 @@ heartbeat_at)` and UNLOGGED copies of `wiki_nodes` (with the folded
 `wiki_node_embeddings` keyed by `build_id`, plus `bm25_docs` /
 `bm25_postings` (see below). Every staging row cascades from its `builds`
 row. Migration 0004 (additive) adds the nullable `builds.boot_id`; 0003 is
-never edited, because both runners checksum it.
+never edited, because both runners checksum it. Migration 0005 recreates
+the live index tables with `project_id` leading every key and adds
+`builds.project_id` (NOT NULL); it deletes every index and build that
+existed before it (see Tenancy below and `docs/UPGRADING.md`).
 
 **Database privileges.** The role in `ELITEA_DEEPWIKI_DATABASE_URL` that
 runs the migrations needs `CREATE` on the database itself, not only on
@@ -638,8 +649,11 @@ weight of 0 becomes 1.0, `metadata` stays `{}`. Vectors are written as the
 shortest decimal text of each `f64`, the text Python's `repr` gave, so
 pgvector rounds them to the same `float4`.
 
-`Build::publish` is one transaction: lock the build row; queue without a
-timeout behind a publish of the same wiki, then for one of
+`Build::publish` is one transaction: lock the build row (and check it names
+the project and wiki the build was opened for); queue without a timeout
+behind a publish of the same wiki of the same project (the advisory lock
+object is `hashtext('{project_id}/{wiki_id}')`, so two projects publish one
+wiki id at once), then for one of
 `ELITEA_DEEPWIKI_PUBLISH_SLOTS` (default 2) publish slots per database
 (transaction-scoped advisory locks: a publish waits, it does not fail; every
 replica must use the same number); set `statement_timeout`
@@ -648,7 +662,7 @@ replica must use the same number); set `statement_timeout`
 (`…_PUBLISH_WORK_MEM_MB`, default 64, so the slots bound the memory the
 publishes take together); upsert the `wikis` row (`registry_from_result`'s
 fields; an absent field keeps the stored value), refuse an empty build,
-delete the wiki's live rows, `INSERT … SELECT` nodes, edges and vectors,
+delete the wiki's live rows of THIS project, `INSERT … SELECT` nodes, edges and vectors,
 write both `wiki_bm25_*` branches, delete the build, commit. A reader sees
 the old index or the new one. After the commit the live tables are
 `ANALYZE`d one by one, best effort, each with a short `lock_timeout`
@@ -695,6 +709,58 @@ and negated, BM25 from the `'bm25'` statistics — and of `base.rrf_fuse`
 `get_edges_from`, `get_edges_to`, `vec_available`, `get_meta`, with the
 legacy row shapes. Every multi-statement read runs in one `REPEATABLE READ
 READ ONLY` transaction.
+
+### Tenancy: the index is scoped by project
+
+Migration 0005. A `wiki_id` is derived from the repository
+(`owner--repo--branch`, `artifact--bucket--prefix--branch`), not from the
+project, and all projects share this one database. Before 0005 the index
+was keyed by `wiki_id` only. Each index row now belongs to one project, and
+every access is scoped by `(project_id, wiki_id)`.
+
+**The model.** Every live index row carries `project_id` (the platform's
+`centry.project.id`, `INTEGER`), and it leads every primary key, foreign
+key and lookup index: `(project_id, wiki_id, …)`. A build records
+`(project_id, wiki_id)` on its `builds` row; the staging tables stay keyed
+by `build_id`, a server-drawn UUID only that row names. In the code
+(`storage::scope`): `ProjectScope` (a positive id, no `Default`) and
+`WikiKey` (a scope and a wiki id). `IndexReader::new`, `UnifiedDb::new`
+and `BuildSpace::begin` take a `WikiKey`, so no reader or build exists
+without a project, and every statement filters, inserts and deletes by
+`(project_id, wiki_id)`. The owner reconciliation and the sweep work over
+all projects: they delete abandoned BUILDS, never a live index.
+Every lookup of a wiki id is made within the caller's project.
+
+**Where the project comes from.** `generate_wiki`, `ask` and
+`deep_research` refuse to run (`ValueError`) without the reserved argument
+`_elitea_project_id` (`storage::PROJECT_ARG`). Only the Go host sets it
+(`services/elitea-subapp-host/internal/apps/deepwiki/run/project.go`),
+overwriting any value a caller sent: from the HMAC-verified identity of the
+hop (the platform facade signs the project in its URL after authorising the
+caller for it), or, on a host with no identity secret, from the
+`llm_settings.organization` the facade writes over the client's block. The
+engine never reads the project from `llm_settings` itself. `resolve_wiki`
+reads no index (the candidates come from the caller's artifact bucket) and
+`list_wikis` / `delete_wiki` are the host's, over the caller's bucket.
+
+**Trusted inputs and boundaries.**
+
+- *Trusted:* the Go host and this Unix socket (only processes that share
+  the socket directory — the pod's `emptyDir`, a compose volume — reach
+  it), and the facade's signed identity.
+- *Where the project comes from:* the host, never the request body. With
+  `ELITEA_DEEPWIKI_IDENTITY_SECRET` set on both sides, it is the project of
+  the verified identity signature. Without it, the host uses the
+  facade-written `organization`, and mTLS on the hop to the host is the
+  boundary. Set the secret on both sides.
+- *Isolation:* two projects with the same wiki id hold two independent
+  indexes; a read, a write and a publish of one project use only its rows.
+- *Out of scope here:* the wiki PAGES are in the platform artifact store and
+  are scoped by its own project ACLs (the callback bearer is project-bound).
+  `delete_wiki` removes the bucket objects but not the index rows (a known
+  gap; the rows stay scoped to their project). The `deepwiki` database is
+  service-internal: its role must not be shared, because a direct
+  connection is not scoped by project.
 
 ### Deliberate differences from the Python storage
 
@@ -746,7 +812,7 @@ is set as well (CI sets both). Each test creates its own database.
 
 ### End to end on elitea-platform
 
-`deepwiki-parity index-dump <repo> <wiki-id> [--embeddings <dim>]` builds
+`deepwiki-parity index-dump <repo> <project-id> <wiki-id> [--embeddings <dim>]` builds
 the graph, stages it, publishes it into `ELITEA_DEEPWIKI_DATABASE_URL` and
 times a few searches. Measured 2026-10-05 (Apple M4 Pro under load, podman
 VM, pgvector 0.8.5 / PostgreSQL 16, 384-dimension pseudo-vectors, before

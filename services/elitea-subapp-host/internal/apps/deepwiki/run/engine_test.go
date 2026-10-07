@@ -198,7 +198,9 @@ func TestAnUnreachableEngineIsARuntimeErrorNotAHang(t *testing.T) {
 		return "", false
 	})
 	runner := run.NewEngineRunner(settings)
-	request := fixtureRequest("", nil)
+	// The facade's llm_settings carry the project an ask is scoped to
+	// (project.go); without one the ask is refused before the socket.
+	request := fixtureRequest("", transport)
 	request["parameters"] = map[string]any{"question": "?"}
 	body, _, err := invokeWithEvents(t, runner, spi.Family{Name: "main"}, "ask", request, "")
 	if err == nil || body["error_category"] != "runtime_error" || !strings.Contains(str(body["result"]), "not reachable") {

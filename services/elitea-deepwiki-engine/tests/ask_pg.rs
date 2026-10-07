@@ -77,7 +77,10 @@ async fn published(name: &str) -> Option<PgIndex> {
     let pool = storage_common::fresh_database(name).await?;
     let (nodes, edges) = common::rows();
     let space = BuildSpace::new(pool.clone(), "ask");
-    let mut build = space.begin(WIKI).await.expect("begin");
+    let mut build = space
+        .begin(&storage_common::key(WIKI))
+        .await
+        .expect("begin");
     let nodes: Vec<IndexNode> = nodes
         .iter()
         .map(|row| {
@@ -139,7 +142,10 @@ async fn published(name: &str) -> Option<PgIndex> {
         .publish(&WikiRecord::default())
         .await
         .expect("publish");
-    Some(PgIndex::new(UnifiedDb::new(pool, WIKI)))
+    Some(PgIndex::new(UnifiedDb::new(
+        pool,
+        storage_common::key(WIKI),
+    )))
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -276,7 +282,10 @@ async fn an_unpublished_wiki_is_reported_not_found() {
     let Some(pool) = storage_common::fresh_database("ask_missing").await else {
         return;
     };
-    let index = PgIndex::new(UnifiedDb::new(pool, "nobody--nothing--main"));
+    let index = PgIndex::new(UnifiedDb::new(
+        pool,
+        storage_common::key("nobody--nothing--main"),
+    ));
     let payload = json!({"question": "q", "repo_config": {"repository": "nobody/nothing"}});
     let request = ask::parse_request(payload.as_object().expect("object")).expect("request");
     let spec = ask::ask_spec(
@@ -310,7 +319,10 @@ async fn an_unpublished_wiki_is_reported_not_found() {
 async fn published_nodes(name: &str, wiki: &str, nodes: &[(&str, &str)]) -> Option<PgIndex> {
     let pool = storage_common::fresh_database(name).await?;
     let space = BuildSpace::new(pool.clone(), "ask");
-    let mut build = space.begin(wiki).await.expect("begin");
+    let mut build = space
+        .begin(&storage_common::key(wiki))
+        .await
+        .expect("begin");
     let nodes: Vec<IndexNode> = nodes
         .iter()
         .map(|(id, symbol)| IndexNode {
@@ -331,7 +343,10 @@ async fn published_nodes(name: &str, wiki: &str, nodes: &[(&str, &str)]) -> Opti
         .publish(&WikiRecord::default())
         .await
         .expect("publish");
-    Some(PgIndex::new(UnifiedDb::new(pool, wiki)))
+    Some(PgIndex::new(UnifiedDb::new(
+        pool,
+        storage_common::key(wiki),
+    )))
 }
 
 fn ids(rows: &[elitea_deepwiki_engine::ask::store::NodeRecord]) -> Vec<&str> {

@@ -2,7 +2,7 @@
 //! Not shipped in the image.
 //!
 //! ```text
-//! deepwiki-bench search <wiki-id> <questions.jsonl> <out.jsonl>
+//! deepwiki-bench search <project-id> <wiki-id> <questions.jsonl> <out.jsonl>
 //!                       --api-base <url> --embedding-model <name> [--limit 10]
 //! ```
 //!
@@ -13,7 +13,8 @@
 //! `/v1`), then `IndexReader::search_hybrid` — FTS and exact dense KNN fused
 //! by weighted RRF, candidate pools of 30 and 30, as `ask`'s
 //! `repository_docs` asks for them — over the published index of
-//! `<wiki-id>` in `ELITEA_DEEPWIKI_DATABASE_URL`. One line per question:
+//! `<wiki-id>` of project `<project-id>` (the index is scoped by project,
+//! migration 0005) in `ELITEA_DEEPWIKI_DATABASE_URL`. One line per question:
 //! `id`, the ranked `hits` (`node_id`, `rel_path`, `symbol_name`,
 //! `symbol_type`, `combined_score`), `embed_ms` and `search_ms`.
 
@@ -29,7 +30,7 @@ use std::io::{BufRead, BufWriter, Write};
 use std::process::ExitCode;
 use std::time::Instant;
 
-const USAGE: &str = "usage: deepwiki-bench search <wiki-id> <questions.jsonl> <out.jsonl> --api-base <url> --embedding-model <name> [--limit 10]";
+const USAGE: &str = "usage: deepwiki-bench search <project-id> <wiki-id> <questions.jsonl> <out.jsonl> --api-base <url> --embedding-model <name> [--limit 10]";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -61,6 +62,14 @@ fn read_questions(path: &str) -> Result<Vec<Value>, String> {
     Ok(items)
 }
 
+/// `<project-id>`: the project the index belongs to (migration 0005).
+fn project_scope(text: &str) -> Result<storage::ProjectScope, String> {
+    text.parse()
+        .ok()
+        .and_then(storage::ProjectScope::new)
+        .ok_or_else(|| "<project-id> must be a positive project id".to_owned())
+}
+
 fn search(args: &[String]) -> Result<(), String> {
     let mut positional = Vec::new();
     let mut options: HashMap<&str, String> = HashMap::new();
@@ -81,9 +90,10 @@ fn search(args: &[String]) -> Result<(), String> {
             _ => positional.push(arg.clone()),
         }
     }
-    let [wiki_id, questions, out] = positional.as_slice() else {
+    let [project, wiki_id, questions, out] = positional.as_slice() else {
         return Err(USAGE.to_owned());
     };
+    let project = project_scope(project)?;
     let api_base = options.remove("api_base").ok_or(USAGE)?;
     let model = options.remove("model").ok_or(USAGE)?;
     let limit: usize = options
@@ -112,7 +122,10 @@ fn search(args: &[String]) -> Result<(), String> {
     let mut writer = BufWriter::new(std::fs::File::create(out).map_err(|e| format!("{out}: {e}"))?);
     runtime.block_on(async {
         let pool = storage::lazy_pool(&dsn, 2).map_err(|e| e.to_string())?;
-        let reader = IndexReader::new(pool.clone(), wiki_id.as_str());
+        let reader = IndexReader::new(
+            pool.clone(),
+            storage::WikiKey::new(project, wiki_id.as_str()),
+        );
         let params = Hybrid {
             limit,
             fts_pool: 30,

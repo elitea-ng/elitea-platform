@@ -510,8 +510,13 @@ impl Drop for Engine {
     }
 }
 
+/// The host's argument set. `_elitea_project_id` (the host's
+/// authenticated project) is deliberately NOT the `llm_settings.organization`
+/// value: the index must be published into the host's project, and the
+/// assertions read it back under [`storage_common::PROJECT`].
 fn arguments(git_port: u16, gateway_port: u16) -> Value {
     json!({
+        "_elitea_project_id": storage_common::PROJECT.to_string(),
         "query": "Document the notes service",
         "llm_settings": {
             "api_base": format!("http://127.0.0.1:{gateway_port}/llm/v1"),
@@ -736,7 +741,7 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
     // both BM25 branches, the vectors; no build left behind.
     let record = WikiRecord::from_result(&Value::Object(result.clone()));
     let row = sqlx::query_as::<_, (String, String, String, String, String, Option<String>, Option<String>, Option<String>, Option<String>)>(
-        "SELECT repo, branch, provider, host, folder_path, commit_hash, canonical_repo_identifier, analysis_key, wiki_version_id FROM wikis WHERE wiki_id = $1",
+        "SELECT repo, branch, provider, host, folder_path, commit_hash, canonical_repo_identifier, analysis_key, wiki_version_id FROM wikis WHERE wiki_id = $1 AND project_id = 1",
     )
     .bind(&wiki_id)
     .fetch_one(&pool)
@@ -797,7 +802,7 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
         count(&pool, "SELECT count(*) FROM deepwiki_build.wiki_nodes").await,
         0
     );
-    let reader = IndexReader::new(pool.clone(), wiki_id.as_str());
+    let reader = IndexReader::new(pool.clone(), storage_common::key(wiki_id.as_str()));
     let hits = reader.search_fts("NoteStore", 5).await.unwrap();
     assert!(
         hits.iter().any(|h| h.rel_path == "notes/store.py"),
@@ -931,7 +936,7 @@ async fn a_native_generation_reads_an_artifact_folder() {
             .await
             .unwrap();
     assert_eq!(row, ("artifact".to_owned(), Some(identifier.clone())));
-    let reader = IndexReader::new(pool.clone(), wiki_id);
+    let reader = IndexReader::new(pool.clone(), storage_common::key(wiki_id));
     let hits = reader.search_fts("NoteStore", 5).await.unwrap();
     assert!(
         hits.iter().any(|h| h.rel_path == "notes/store.py"),
@@ -1075,7 +1080,11 @@ async fn stop_while_publishing(
         .to_owned();
     sqlx::query("SELECT pg_advisory_lock(hashtext($1), hashtext($2))")
         .bind(elitea_deepwiki_engine::storage::build::PUBLISH_WIKI_LOCK)
-        .bind(&wiki_id)
+        .bind(
+            elitea_deepwiki_engine::storage::build::publish_wiki_lock_object(&storage_common::key(
+                &wiki_id,
+            )),
+        )
         .execute(&mut *holder)
         .await
         .unwrap();
@@ -1149,6 +1158,11 @@ async fn a_stop_during_the_publish_waits_and_keeps_a_committed_result() {
     assert_eq!(result["success"], true);
     assert_eq!(result["errors"], json!([]));
     assert_eq!(count(&pool, "SELECT count(*) FROM wikis").await, 1);
+    // Published into the host's project, not llm_settings.organization's.
+    assert_eq!(
+        count(&pool, "SELECT count(*) FROM wikis WHERE project_id = 1").await,
+        1
+    );
     assert!(count(&pool, "SELECT count(*) FROM wiki_nodes").await > 10);
     assert_eq!(
         count(&pool, "SELECT count(*) FROM deepwiki_build.builds").await,

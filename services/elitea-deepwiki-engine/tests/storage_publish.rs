@@ -63,7 +63,7 @@ async fn publish_version(space: &BuildSpace, wiki: &str, tag: &str, count: usize
             weight: 1.0,
         })
         .collect();
-    let mut build = space.begin(wiki).await.expect("begin");
+    let mut build = space.begin(&common::key(wiki)).await.expect("begin");
     build.stage_nodes(nodes).await.expect("nodes");
     build.stage_edges(&edges).await.expect("edges");
     build
@@ -137,7 +137,7 @@ async fn readers_never_see_a_partial_index() {
         let pool = pool.clone();
         let stop = Arc::clone(&stop);
         readers.push(tokio::spawn(async move {
-            let db = UnifiedDb::new(pool.clone(), wiki);
+            let db = UnifiedDb::new(pool.clone(), common::key(wiki));
             let mut seen = [0_usize; 2];
             while !stop.load(Ordering::Relaxed) {
                 if reader == 0 {
@@ -223,7 +223,7 @@ async fn a_failed_publish_leaves_the_live_index_untouched() {
     let before = observe(&pool, wiki).await;
 
     // An empty build is never published over a possibly good one.
-    let mut empty = space.begin(wiki).await.expect("begin");
+    let mut empty = space.begin(&common::key(wiki)).await.expect("begin");
     let refused = empty.publish(&WikiRecord::default()).await;
     assert!(
         matches!(&refused, Err(StorageError::Publish(m)) if m.contains("staged no nodes")),
@@ -233,7 +233,7 @@ async fn a_failed_publish_leaves_the_live_index_untouched() {
 
     // A value PostgreSQL cannot store is refused before anything is
     // written, naming the row: a non-finite edge weight.
-    let mut build = space.begin(wiki).await.expect("begin");
+    let mut build = space.begin(&common::key(wiki)).await.expect("begin");
     let bad = elitea_deepwiki_engine::storage::rows::IndexEdge {
         source_id: "bad.py::f".into(),
         target_id: "bad.py::g".into(),
@@ -349,7 +349,7 @@ async fn published_graph(name: &str) -> Option<(PgPool, BuildSpace, CodeGraph, U
     let wiki = GRAPH_WIKI;
     let graph = small_graph();
     let space = BuildSpace::new(pool.clone(), "graph");
-    let mut build = space.begin(wiki).await.expect("begin");
+    let mut build = space.begin(&common::key(wiki)).await.expect("begin");
     let staged = build.stage_graph(&graph).await.expect("stage");
     assert_eq!((staged.nodes, staged.edges), (4, 3));
     let record = WikiRecord::from_result(&json!({
@@ -361,7 +361,7 @@ async fn published_graph(name: &str) -> Option<(PgPool, BuildSpace, CodeGraph, U
     }));
     let counts = build.publish(&record).await.expect("publish");
     assert_eq!((counts.nodes, counts.edges, counts.embeddings), (4, 3, 0));
-    let db = UnifiedDb::new(pool.clone(), wiki);
+    let db = UnifiedDb::new(pool.clone(), common::key(wiki));
     Some((pool, space, graph, db))
 }
 
@@ -508,7 +508,7 @@ async fn the_wikis_row_follows_the_generation_result() {
     assert_eq!(display, "Graph");
 
     // A republish with a partial record keeps the stored fields.
-    let mut build = space.begin(wiki).await.expect("begin");
+    let mut build = space.begin(&common::key(wiki)).await.expect("begin");
     build.stage_graph(&graph).await.expect("stage");
     build
         .publish(&WikiRecord {
@@ -540,7 +540,7 @@ async fn vectors_round_trip_as_float4() {
     let space = BuildSpace::new(pool.clone(), "vectors");
     let (nodes, _) = version("alpha", 1);
     let vector = [0.1_f64, -2.5, 1e-7, 0.333_333_333_333_333_3];
-    let mut build = space.begin(wiki).await.expect("begin");
+    let mut build = space.begin(&common::key(wiki)).await.expect("begin");
     build.stage_nodes(nodes.clone()).await.expect("nodes");
     build
         .stage_embeddings([(nodes[0].node_id.as_str(), vector.as_slice())])
@@ -550,7 +550,7 @@ async fn vectors_round_trip_as_float4() {
         .publish(&WikiRecord::default())
         .await
         .expect("publish");
-    let db = UnifiedDb::new(pool, wiki);
+    let db = UnifiedDb::new(pool, common::key(wiki));
     assert!(db.vec_available().await.expect("vec"));
     let stored = db
         .get_embedding(&nodes[0].node_id)
@@ -575,7 +575,7 @@ async fn a_huge_token_counts_in_the_length_but_gets_no_posting() {
     };
     let wiki = "acme--huge--main";
     let space = BuildSpace::new(pool.clone(), "huge");
-    let mut build = space.begin(wiki).await.expect("begin");
+    let mut build = space.begin(&common::key(wiki)).await.expect("begin");
     let node = IndexNode {
         node_id: "min.js::module".into(),
         symbol_name: "min".into(),

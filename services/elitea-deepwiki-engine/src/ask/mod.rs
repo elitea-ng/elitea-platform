@@ -581,7 +581,8 @@ pub async fn run_agent<S: IndexStore, M: Model>(
 /// # Errors
 ///
 /// An unknown tool (`KeyError`), malformed `llm_settings` or
-/// `embedding_model` (`ValueError`),
+/// `embedding_model` or a missing project
+/// ([`crate::storage::PROJECT_ARG`]) (`ValueError`),
 /// a model failure, or the stop line.
 pub async fn run_tool(
     tool: &str,
@@ -603,6 +604,11 @@ pub async fn run_tool(
             ));
         }
     };
+    // The project the host authenticated (migration 0005): the index is
+    // read within it and nowhere else. A wiki id, from
+    // `repo_identifier_override` or from the repository, resolves in the
+    // caller's project only.
+    let project = crate::storage::ProjectScope::from_arguments(arguments)?;
     let request = match parse_request(arguments) {
         Ok(request) => request,
         Err(result) => return Ok(result),
@@ -643,7 +649,7 @@ pub async fn run_tool(
     };
     let store = PgIndex::new(crate::storage::adapter::UnifiedDb::new(
         deps.pool.clone(),
-        request.wiki_id.clone(),
+        crate::storage::WikiKey::new(project, request.wiki_id.clone()),
     ));
     run_agent(&spec, &request, &client, &store, &embedder, context).await
 }
