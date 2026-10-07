@@ -139,6 +139,26 @@ describe('bindOfflineStore', () => {
     expect(gate()).toBe(false);
   });
 
+  it('a workspace switch never wipes: the policy reset while the old workspace is put aside closes the store', () => {
+    // suspendActiveWorkspace runs the reset hooks (policy back to the strict
+    // default) while the session still names the workspace being left.
+    const { store, session, policy } = setup();
+    session.set({ ...signedIn, switching: true });
+    policy.set({ source: 'default', policy: STRICT_DEFAULTS });
+    expect(store.wipe).not.toHaveBeenCalled();
+    expect(store.close).toHaveBeenCalled();
+  });
+
+  it('a policy not yet known (strict default, discovery only) closes the store and never wipes it', () => {
+    const { store, policy } = setup({ policy: { source: 'default', policy: STRICT_DEFAULTS } });
+    expect(store.open).not.toHaveBeenCalled();
+    policy.set({ source: 'discovery', policy: STRICT_DEFAULTS });
+    expect(store.wipe).not.toHaveBeenCalled();
+    expect(store.close).toHaveBeenCalled();
+    policy.set(offlinePolicy);
+    expect(store.open).toHaveBeenLastCalledWith(ORIGIN, WS);
+  });
+
   it("opens the other workspace's store after a switch, and wipes per workspace when offline storage is off", () => {
     const { store, session, policy } = setup();
     expect(store.open).toHaveBeenLastCalledWith(ORIGIN, WS);

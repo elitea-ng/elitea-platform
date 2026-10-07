@@ -12,7 +12,8 @@ import type { SessionState } from '@/state/session';
  * | condition                                   | store  |
  * |---------------------------------------------|--------|
  * | signed out, switching, or the session ending | closed (endSession wipes it) |
- * | policy has no offline storage                | wiped, never created |
+ * | policy not known yet (default, discovery)    | closed, never wiped |
+ * | server policy has no offline storage         | wiped, never created |
  * | locked (or the lock not decided yet)         | closed, key not in memory |
  * | signed in, unlocked, offline allowed         | open   |
  *
@@ -56,12 +57,20 @@ export function bindOfflineStore(deps: OfflineBindingDeps): () => void {
     const session = deps.session.get();
     const policyState = deps.policy.get();
     const signedIn =
-      session.serverOrigin !== null && session.workspaceId !== null && session.credential !== null && !session.ending;
+      session.serverOrigin !== null &&
+      session.workspaceId !== null &&
+      session.credential !== null &&
+      !session.ending &&
+      !session.switching;
     if (!deps.supported || !signedIn) {
       void store.close();
       return;
     }
     if (!offlineAllowed(policyState)) {
+      if (policyState.source !== 'server') {
+        void store.close();
+        return;
+      }
       if (wipedWhileDisabled !== session.workspaceId) {
         wipedWhileDisabled = session.workspaceId;
         store.wipe(session.workspaceId as string).catch((error: unknown) => log.warn('offline store wipe failed', { error }));
