@@ -64,7 +64,9 @@ async function openArtifacts(page: Page): Promise<void> {
  * Enter the route a SECOND time, once the first document has stopped working —
  * the wait the sibling lifecycle spec measured (`reenterArtifacts` there): a
  * navigation started inside the boot traffic is cancelled by WebKit and
- * reported as `page.goto: Frame load interrupted`.
+ * reported as `page.goto: Frame load interrupted`. The cancelling party was
+ * TanStack Router's reload on a cancelled lazy route chunk, since removed
+ * (`src/shared/lib/chunk-load-guard.ts`); the wait is kept for now, as there.
  */
 async function reenterArtifacts(page: Page): Promise<void> {
   await page.waitForLoadState('networkidle');

@@ -43,6 +43,26 @@ async function gotoAndWaitForButton(page: Page, path: string): Promise<void> {
   await expect(createButton(page)).toBeVisible({ timeout: 20_000 });
 }
 
+/**
+ * Let `/toolkits/all` reach its end state before the next `goto`.
+ *
+ * With no toolkits in the project the list page sends the app on to
+ * `/toolkits/create` (`pages/toolkits/Toolkits.tsx`, `navigate(..., { replace:
+ * true })` once the list has loaded empty), which pulls that route's lazy
+ * chunk. A `goto` issued while that chunk was in flight used to come back as
+ * `page.goto: Frame load interrupted` on WebKit: the navigation cancelled the
+ * chunk, and TanStack Router's chunk-error reload replaced the navigation
+ * (fixed in `shared/lib/chunk-load-guard.ts`). Waiting here keeps the step
+ * about the label, not about that hop: whichever way the project's toolkit
+ * list goes, the page is settled before the test moves on.
+ */
+async function settleToolkitsList(page: Page): Promise<void> {
+  const listed = page.getByTestId('toolkits-list-panel').getByTestId('toolkit-card');
+  const createPage = page.getByPlaceholder('Search toolkits', { exact: true });
+  await expect(listed.or(createPage).first()).toBeVisible({ timeout: 20_000 });
+  if (await createPage.isVisible()) await expect(page).toHaveURL(/\/app\/toolkits\/create(\?|$)/);
+}
+
 /* ────────────────────────────────────────────────────────────────────────
  * onetest: ELITEA-1042, ELITEA-1043 — every main section's create button
  * shows the section's own entity label (expanded) and its label-half
@@ -90,6 +110,7 @@ test('CB02: the label never carries a stale value across rapid section navigatio
   await expect(createButton(page)).toHaveText('Chat');
   await gotoAndWaitForButton(page, '/app/toolkits/all');
   await expect(createButton(page)).toHaveText('Toolkit');
+  await settleToolkitsList(page);
   await gotoAndWaitForButton(page, '/app/artifacts');
   await expect(createButton(page)).toHaveText('Artifact Bucket');
   await gotoAndWaitForButton(page, '/app/agents/all');

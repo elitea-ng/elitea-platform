@@ -205,6 +205,14 @@ export function App() {
        * authorize page instead of the page it was loading. A signed-in user who
        * reloads early was thrown into a re-login.
        *
+       * Correction (2026-10): this was not the only thing behind that "Frame
+       * load interrupted". The same unload also cancels any lazy ROUTE CHUNK
+       * still loading, and TanStack Router answered that chunk error with
+       * `window.location.reload()`, which replaced the navigation under way —
+       * the more frequent cause in CI traces, now fixed in
+       * `shared/lib/chunk-load-guard.ts`. The OIDC-landing half of the
+       * measurement is this redirect, and the check below stays for it.
+       *
        * Not redirecting is also the right answer away from that race: when the
        * probe cannot reach elitea-main, the login form it would send the browser
        * to is served by that same unreachable elitea-main.

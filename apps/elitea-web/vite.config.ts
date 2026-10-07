@@ -52,6 +52,40 @@ const compactI18nCatalogue = (): PluginOption => ({
 });
 
 /**
+ * Route chunks load through `shared/lib/chunk-load-guard`'s
+ * `lazyRouteComponent`, not TanStack's, so a chunk import that fails because
+ * the page is being navigated away from cannot reload the page and replace
+ * that navigation (WebKit: "Importing a module script failed." →
+ * `window.location.reload()` → Playwright `page.goto: Frame load
+ * interrupted`, and a bounced navigation in Safari). See that module's header.
+ *
+ * Mechanism: the router plugin's code splitter only adds
+ * `import { lazyRouteComponent } from '@tanstack/react-router'` when the
+ * route file has no `lazyRouteComponent` binding yet (installed
+ * `@tanstack/router-plugin@1.168.42`, `core/code-splitter/compilers.js`,
+ * `hasImportedOrDefinedIdentifier` → `scope.hasBinding`), and then calls
+ * whatever that binding is. This plugin runs just before it and provides the
+ * binding. The import goes on the file's first line so no line number moves.
+ * `src/app/router.lazy-guard.test.ts` runs the real splitter over a route
+ * file to pin that contract against a router-plugin upgrade. A route file
+ * that imports its own `lazyRouteComponent` is left alone.
+ */
+export const GUARDED_LAZY_ROUTE_COMPONENT_MODULE = resolvePath('./src/shared/lib/chunk-load-guard.ts');
+
+export const guardedLazyRouteComponent = (routesDirectory: string): PluginOption => ({
+  name: 'elitea:guarded-lazy-route-component',
+  enforce: 'pre',
+  transform(code, id) {
+    if (id.includes('?') || !id.startsWith(`${routesDirectory}/`) || !/\.tsx?$/.test(id)) return null;
+    if (!code.includes('createFileRoute') || /import\s*\{[^}]*\blazyRouteComponent\b/.test(code)) return null;
+    return {
+      code: `import { lazyRouteComponent } from ${JSON.stringify(GUARDED_LAZY_ROUTE_COMPONENT_MODULE)};${code}`,
+      map: null,
+    };
+  },
+});
+
+/**
  * Five build targets (spec §7.4), selected via `vite build --mode <target>`:
  *
  *  - (default)      main SPA        base './' (contract C4), outDir dist/app
@@ -222,7 +256,8 @@ export default defineConfig(({ mode }): UserConfig => {
       // Must run before @vitejs/plugin-react (react()): it rewrites route
       // files' exports (autoCodeSplitting) before JSX/compiler transforms
       // see them. Verified via the installed package's own vite.js plugin
-      // ordering example.
+      // ordering example. `guardedLazyRouteComponent` must run before it.
+      guardedLazyRouteComponent(resolvePath('./src/routes')),
       tanstackRouter({
         target: 'react',
         autoCodeSplitting: true,

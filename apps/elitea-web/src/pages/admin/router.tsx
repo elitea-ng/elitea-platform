@@ -40,16 +40,16 @@
  * of it would only delay the first paint. `AdminRoutePending` below is static
  * for the same reason: it is what the shell shows while a page chunk is in
  * flight, so a lazy fallback could not render.
+ *
+ * `lazyRouteComponent` comes from `shared/lib/chunk-load-guard`, not the router
+ * package: same function, but a chunk import that fails because the page is
+ * being navigated away from does not trigger TanStack's reload (which would
+ * replace that navigation). See that module's header.
  */
-import {
-  createRootRoute,
-  createRoute,
-  createRouter,
-  lazyRouteComponent,
-  type AnyRouter,
-} from '@tanstack/react-router';
+import { createRootRoute, createRoute, createRouter, type AnyRouter } from '@tanstack/react-router';
 
 import { t } from '@/shared/i18n';
+import { lazyRouteComponent } from '@/shared/lib/chunk-load-guard';
 
 import { AdminLayout } from './AdminLayout';
 

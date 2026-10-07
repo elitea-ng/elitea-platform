@@ -118,6 +118,13 @@ async function seedBucketWithFiles(request: APIRequestContext, projectId: string
  *
  * No assertion is weakened. The wait ends BEFORE the navigation begins, so
  * everything after it still judges a fresh document.
+ *
+ * WHY IT WAS CANCELLED (traced later): not the boot calls. WebKit cancels a
+ * lazy route chunk still loading when the next navigation begins, and TanStack
+ * Router answered that chunk error with `window.location.reload()`, which
+ * replaced the `goto`. `src/shared/lib/chunk-load-guard.ts` removes that
+ * reload, so this wait should no longer be load-bearing; it stays until a run
+ * of webkit repeats without it shows as much.
  */
 async function reenterArtifacts(page: Page, url: string): Promise<void> {
   await page.waitForLoadState('networkidle');
@@ -308,6 +315,12 @@ test.describe('J20 artifacts lifecycle', () => {
      * the notification SSE stream stays open across it and does not hold it.
      *
      * No assertion is weakened: the three below still judge a FRESH document.
+     *
+     * The cancellation itself was TanStack Router's chunk-error reload, not the
+     * boot calls: WebKit cancels a lazy route chunk still in flight, and the
+     * router reloaded on that error, replacing this reload/goto. Fixed in
+     * `src/shared/lib/chunk-load-guard.ts`; see `reenterArtifacts` above for
+     * why the wait is kept for now.
      */
     await page.waitForLoadState('networkidle');
 
