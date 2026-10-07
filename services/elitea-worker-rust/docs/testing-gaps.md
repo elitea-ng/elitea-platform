@@ -97,7 +97,10 @@ All six listener failures in the retained Main packet pass their complete owning
 Database and live-service skips remain explicit. Native live conformance remains unexecuted.
 The [current deployed acceptance](source-mapping/code-nats-deployed-acceptance-20261007.md) records current native images and normal browser sign-in.
 Four-language execution, typed refusal, failed preparation, active Stop, and debug off/on now have separate current evidence.
-Cache, authority refusal, remaining editor and preparation cases, recovery, and Kubernetes acceptance stay open.
+Later c53 cold, warm, and editor cache cases pass with one exact compiled descriptor.
+Supported application-list denial and outer artifact RBAC refusal pass their finite cases.
+The [failed-journal owner-loss case](source-mapping/code-failed-stop-owner-recovery-20261007.md) passes current NATS technical recovery, live/reloaded UI, isolation, and runtime removal.
+Remaining preparation, authority, service-loss, and Kubernetes acceptance stay open.
 Require complete Code acceptance before graph consolidation progresses.
 
 The [2026-10-06 consolidation](source-mapping/point5-consolidation-20261006.md) records the latest Point 5 evidence.
@@ -112,7 +115,8 @@ The fresh four-language positive run passes in chat 825, including exact answer 
 These proofs use deployed Worker `d6568bae8`; they do not prove the later NATS replacement.
 Keep NATS complete-cohort acceptance and preparation-message display open until their proofs pass.
 The [typed failure source correction](source-mapping/code-terminal-failure-20261006.md) passes 50 Rust tests and 109 Main cases.
-Strict Clippy and vet pass. Main preparation-message deployment and actual failed-journal replay remain separate proofs.
+Strict Clippy and vet pass. Main preparation-message deployment remains a separate proof.
+The later chat 843 case closes actual failed-journal replay on its accepted current NATS image boundary.
 State rename reference rewriting remains a separate editor gap.
 Workspaces remain outside this register in the post-worker backlog.
 

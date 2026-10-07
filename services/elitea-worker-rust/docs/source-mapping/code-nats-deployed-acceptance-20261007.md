@@ -19,7 +19,10 @@ The builder returns to its 8 GiB limit after this trial.
 The earlier 8 GiB failure remains preserved.
 Source resolver policies do not prove destination enforcement on resolver networks.
 
-| Deployed role | Exact image SHA-256 |
+The following table records the earlier efa deployment.
+The later c53 native image and Worker successor boundaries appear in the [recovery record](code-failed-stop-owner-recovery-20261007.md).
+
+| Earlier deployed role | Exact image SHA-256 |
 | --- | --- |
 | Main | `2ad1810c426b8cb8846a2988e2dfb063e7a71046d002bdb097b524a345a55074` |
 | Web | `1c343b749892ac042f5389e4018432e21776d97a902e9b0eb7e8fc18adb91714` |
@@ -85,16 +88,26 @@ Retained writer metadata does not grant new publication authority.
 ## Open completion requirements
 
 Keep Code and Point 5 open.
-The exact current-claim failed-journal restoration test has not run.
-Automatic approval review rejects its copied-row locks and candidate Worker pause before any mutation.
-Human approval remains pending for that reviewed fault action.
+The later [failed-journal recovery record](code-failed-stop-owner-recovery-20261007.md) closes the exact current-claim failed-journal restoration case.
+Explicit human approval authorizes its exact copied-row locks and candidate Worker pause, kill, and fresh-spool replacement.
+The accepted case includes live and reloaded UI, normal checkpoint authority, one terminal settlement, and actual runtime removal.
+Earlier refusals remain preserved and receive no recovery credit.
 
 Later-request Cargo bundle reuse exposes an existing preparation gap.
-The [lookup correction](code-frozen-cargo-lookup-20261007.md) passes owning-source checks but has no deployed cache acceptance at this checkpoint.
-Cold, warm, matching compiled, and editor runs remain required after coordinated Worker and Supervisor delivery.
+The [lookup correction](code-frozen-cargo-lookup-20261007.md) later passes deployed cold, warm, and editor acceptance on the coordinated c53 Worker and Supervisor.
+The frozen root receipt is `b8d5aab58fdb00534bf5b2ae09051bd2e04bffe41fbb5ed15dc81dadd5fb6467`.
+The exact typed oracle survives persistent reload and editor history restoration.
+The same compiled descriptor serves one cold compilation and two later executions.
 
 Preparation Stop, pending Stop across Worker replacement, and the remaining preparation messages stay open.
-Supported-operation denial, debug permission refusal, registered-child export, and debug reconciliation stay open.
+The later chat 839 fixture completes normally in 14 seconds after its controller refuses before Stop or Worker loss.
+The controller records an original-preparation identity mismatch; this run receives no cancellation or recovery credit.
+Its earlier helper readback refusal is limited to inherited immutable-image labels. All requested host fields match.
+The label correction passes actual fresh-spool initialization and helper removal. The prior refused helper and unused spool remain preserved.
+Supported application-list denial and outer artifact RBAC refusal later pass their finite cases.
+Their frozen root receipt is `6b20be7632be1bffca3de94806b16c586de0daba5968f88acf13c0ea812140b9`.
+The artifact HTTP 403 occurs at the outer RBAC gate; it does not prove a separate bucket ACL refusal.
+Registered-child export, remaining quota or authority refusals, and debug reconciliation stay open.
 Worker, Main, Supervisor, acquisition, and assembled NATS recovery require their recorded phase proofs.
 Current Kubernetes positive, cache, refusal, Stop, and owner-recovery boundaries remain separate.
 Earlier unchanged component proofs retain their original scope.
@@ -112,7 +125,9 @@ The correction separates persisted answer authors from the composer selection.
 It also preserves the fresh-chat participant before navigation and accepts both ID spellings.
 Six focused suites pass 76 unique tests with zero failures or skips.
 TypeScript, lint, and whitespace checks return direct status zero.
-The Web correction has no image, deployment, real browser, or CI acceptance at this checkpoint.
+The Web correction is published as commit `42a0c390bc19bd46f0a3eae2f244714024595d71` on PR #1084.
+Its frozen build context is ready. It has no image, deployment, or real browser acceptance at this checkpoint.
+CI at this exact head remains separate from the earlier c53 result.
 Main and Web remain at efa. The separately accepted native pair remains at c53.
 The chat838 selection-loss branch and notification Offline cause remain unproved.
 These checks do not close recovery, capacity, or the complete Code gate.

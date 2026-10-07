@@ -1010,3 +1010,21 @@ These are local Web checks. Deployed Web remains at efa and the native pair rema
 The actual chat838 selection-loss branch and notification Offline cause remain unproved.
 The existing terminal failure and journal evidence remains separate.
 Root retains image delivery, browser acceptance, CI, and Code gate closure.
+
+## Code failed-journal Worker recovery, 2026-10-07
+
+The [recovery mapping](source-mapping/code-failed-stop-owner-recovery-20261007.md) closes the finite R19 failed-journal owner-loss case.
+Chat 843 restores the original failure after loss of the exact original Worker.
+The replacement uses the accepted c53 image and a fresh private spool; the old Worker and spool remain preserved and unopened.
+Main grants checkpoint recovery authority at claim attempt 2 and epoch 2.
+One typed failure output and one FAILED settlement commit without a new Code dispatch or execution.
+The original failure journal and completed predecessor identities remain unchanged.
+Live and ordinary reloaded UI retain the same failure code and support reference.
+Both original sandbox runtimes pass 16 isolation checks and later return HTTP 404 on independent removal readback.
+The frozen root acceptance receipt is `cbbdffb369169b57d1c6456928bc0b233d9b4cdc8b69886d5bd17a049bf6d262`.
+
+The operator fixes affect capture matching and private spool initialization; this case requires no product source change.
+The record preserves earlier refusals and the separate permission-probe boundary.
+Preparation Stop, preparation owner loss, the remaining service-loss cases, and current-cohort Kubernetes acceptance stay open.
+The published Web reload correction still requires image delivery and browser acceptance.
+Complete Code, graph gates 5a–5e, later worker gates, and release remain open. Workspaces remain deferred.

@@ -448,3 +448,15 @@ The [integration mapping](docs/source-mapping/main-integration-20261007.md) reco
 The merge preserves existing runtime work and mandatory NATS replacement.
 These source checks do not prove current images, integrated CI, or candidate Code recovery.
 All worker gates retain their requirement-specific acceptance boundaries.
+
+## Code failed-journal recovery, 2026-10-07
+
+The [owner-loss mapping](docs/source-mapping/code-failed-stop-owner-recovery-20261007.md) records current NATS recovery in chat 843.
+The current application's safe terminal failure behavior remains the reference.
+Main grants checkpoint authority to a fresh claim; the c53 Worker restores the original recorded failure from a fresh private spool.
+The original failure and completed Code journals remain unchanged, with no Code re-execution or new dispatch.
+One typed output and one FAILED settlement commit. Live and reloaded UI retain the same support reference.
+All 16 isolation checks pass for each original runtime; independent HTTP 404 and absence checks prove their removal.
+The old Worker and spool remain preserved and unopened.
+This closes the finite failed-journal Worker-loss case, not the remaining preparation, service-loss, Kubernetes, graph, or release gates.
+The source record preserves capture-matcher fixes, the restricted descriptor-based initializer repair, and earlier refused attempts.
