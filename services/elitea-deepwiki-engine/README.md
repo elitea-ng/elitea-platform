@@ -23,6 +23,16 @@ Phase 7 packages it: the released image
 [runbook](#runbook-deploy-migrate-operate)). The Python `-engine` image stays
 available behind `runner: legacy` until the parity sign-off.
 
+## Benchmark
+
+[`docs/benchmark-2026-10.md`](docs/benchmark-2026-10.md) compares this
+engine with the Python one on spring-petclinic and on elitea-platform's
+analysis phases. Rust uses about 5× less memory, its graph and phase 2 run
+8 to 57× faster, and its retrieval recall@10 is 0.92, where Python's vectors
+are absent or meaningless. Generation is model-bound on both. The harness is
+`parity/bench/`, `parity/model_router.py`, `parity/questions/` and
+`src/bin/deepwiki-bench.rs` (a developer tool, not in the image).
+
 ## The socket protocol
 
 ```

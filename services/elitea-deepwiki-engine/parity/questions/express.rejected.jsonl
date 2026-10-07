@@ -1,0 +1,1 @@
+{"node_id": "javascript::index::users__examples__route-map__index_js", "question": "In the route-map example, which object groups together the three handler functions that respond to requests for viewing all users, viewing a specific user by their unique identifier, and removing a user?", "reason": "names the identifier"}
