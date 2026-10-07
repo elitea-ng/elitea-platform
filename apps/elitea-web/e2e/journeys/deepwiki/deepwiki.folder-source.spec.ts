@@ -142,7 +142,9 @@ test.describe('DeepWiki folder source', () => {
 
   test('DWIKI-018: a wiki is generated from an artifact folder', async ({ request }, info) => {
     const bucket = sourceBucket(info);
-    const wikiId = `${bucket}--${FOLDER}--main`;
+    // One rule for a folder's wiki id, the generation's:
+    // `artifact--{bucket}--{prefix}--{branch}`.
+    const wikiId = `artifact--${bucket}--${FOLDER}--main`;
     await clean(request, bucket, wikiId);
     await seedFolder(request, bucket);
 
@@ -180,9 +182,9 @@ test.describe('DeepWiki folder source', () => {
       await request.get(`${BASE_URL}/api/v2/artifacts/objects/${SEEDED.projectId}/${SEEDED.bucket}/${manifestKey}`)
     ).json()) as Record<string, unknown>;
 
-    // The identity is the FOLDER's, with the `artifact://` scheme dropped.
-    // Left in, `//` becomes four dashes and the wiki id — which is also this
-    // object-key prefix — stops being a name.
+    // The id is the one the real engine's generation files the folder under,
+    // so the browser finds a fixture wiki and a real one in the same place.
+    // The display repository (and the title) keep the folder's own name.
     expect(manifest['wiki_id']).toBe(wikiId);
     expect(manifest['repository']).toBe(`${bucket}/${FOLDER}`);
     expect(manifest['provider_type']).toBe('artifact');
