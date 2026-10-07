@@ -12,6 +12,8 @@ description = "The Rust-native Inventory engine behind the sub-application host'
 # container probe and process tracing.
 elitea-engine-core = { path = "../../libs/rust/engine-core" }
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
+# The tree-sitter parsers (and the Kotlin/Swift ports) of the parser stage.
+elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
 elitea-pg-migrate = { path = "../../libs/rust/pg-migrate" }
 elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
 # The graph's node and edge order is insertion order (graph.json, search ties).

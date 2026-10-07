@@ -20,10 +20,13 @@ pub mod csharp;
 pub mod go;
 pub mod java;
 pub mod javascript;
+pub mod kotlin;
 mod limits;
 pub mod model;
 pub mod python;
+mod regex_support;
 pub mod rust_lang;
+pub mod swift;
 pub mod typescript;
 
 pub use limits::{LARGEST_PARSER_STACK, with_pool_failures};
@@ -56,8 +59,10 @@ pub fn parser_for(language: &str) -> Option<Box<dyn LanguageParser>> {
         "go" => Some(Box::new(go::GoParser)),
         "java" => Some(Box::new(java::JavaParser)),
         "javascript" => Some(Box::new(javascript::JavaScriptParser)),
+        "kotlin" => Some(Box::new(kotlin::KotlinParser)),
         "python" => Some(Box::new(python::PythonParser)),
         "rust" => Some(Box::new(rust_lang::RustParser)),
+        "swift" => Some(Box::new(swift::SwiftParser)),
         "typescript" => Some(Box::new(typescript::TypeScriptParser)),
         _ => None,
     }

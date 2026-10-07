@@ -14,12 +14,13 @@
 //!    transaction (`store::sources::complete`). A run that fails or is
 //!    stopped before that commits nothing but its `error` status.
 //!
-//! What a read file contributes is, in this phase, its file node. The
-//! parser entities (P3c), the LLM extraction (P3d), communities and
-//! embeddings (P3e) add to the same step.
+//! What a read file contributes: its file node and, for a code file, the
+//! symbols and relations its parser found ([`parse`]). The LLM extraction
+//! (P3d), communities and embeddings (P3e) add to the same step.
 
 pub mod files;
 pub mod ids;
+pub mod parse;
 pub mod source;
 
 use crate::graph::Graph;
@@ -28,7 +29,7 @@ use crate::store::{self, GraphKey, StoreError};
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::stream::Context;
 use elitea_repo_ingest::IngestSettings;
-use files::{EntityCounts, Selection, Skipped};
+use files::{Selection, Skipped};
 use source::Source;
 use sqlx::postgres::PgPool;
 use std::collections::BTreeMap;
@@ -56,6 +57,9 @@ pub struct Outcome {
     pub skipped_unreadable: usize,
     /// Every file the source has now, with its hash.
     pub hashes: BTreeMap<String, String>,
+    /// Files a parser failed on (`path: error`); they still have their
+    /// file node.
+    pub parse_errors: Vec<String>,
 }
 
 /// Every regular file under `root`, as `/`-separated relative paths in
@@ -88,20 +92,28 @@ fn list_files(root: &Path) -> std::io::Result<Vec<String>> {
     Ok(found)
 }
 
-/// Steps 4 of the run, over a checked-out tree: update `graph` with the
-/// files of `root` that `source` selects, given the hashes of the last
-/// completed run.
+/// A selected file whose content changed (or is new): it is read this run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileToRead {
+    pub path: String,
+    pub text: String,
+    pub hash: String,
+}
+
+/// Step 4a: select and read the files of `root`, compare each with the
+/// last completed run's hash, and remove what changed or deleted files
+/// said. Returns the counts so far and the files to read.
 ///
 /// # Errors
 ///
 /// The tree cannot be listed, or a stop was requested.
-pub fn ingest_tree(
+pub fn prepare(
     graph: &mut Graph,
     source: &Source,
     root: &Path,
     previous: &BTreeMap<String, String>,
     context: &Context,
-) -> Result<Outcome, EngineError> {
+) -> Result<(Outcome, Vec<FileToRead>), EngineError> {
     let selection = Selection {
         whitelist: source.whitelist.clone(),
         blacklist: source.blacklist.clone(),
@@ -113,6 +125,7 @@ pub fn ingest_tree(
         )
     })?;
     let mut outcome = Outcome::default();
+    let mut to_read = Vec::new();
     for path in &listed {
         context.checkpoint()?;
         match selection.admit(path) {
@@ -133,30 +146,15 @@ pub fn ingest_tree(
                     continue;
                 };
                 let hash = files::content_hash(&text);
+                outcome.hashes.insert(path.clone(), hash.clone());
                 if previous.get(path) == Some(&hash) {
                     outcome.unchanged += 1;
-                    outcome.hashes.insert(path.clone(), hash);
-                    continue;
-                }
-                if previous.contains_key(path) {
-                    graph.remove_file(&source.name, path);
-                }
-                let node = files::file_node(path, &text, &source.name, EntityCounts::default());
-                graph.add_entity(
-                    &node.id,
-                    &node.name,
-                    node.entity_type,
-                    Some(&node.citation),
-                    Some(&node.properties),
-                );
-                outcome.entities_added += 1;
-                outcome.documents_processed += 1;
-                outcome.hashes.insert(path.clone(), hash);
-                if outcome.documents_processed % 10 == 0 {
-                    context.thinking(format!(
-                        "[progress] 📄 Processed {} files | 📊 {} entities",
-                        outcome.documents_processed, outcome.entities_added
-                    ));
+                } else {
+                    to_read.push(FileToRead {
+                        path: path.clone(),
+                        text,
+                        hash,
+                    });
                 }
             }
         }
@@ -168,6 +166,115 @@ pub fn ingest_tree(
         graph.remove_file(&source.name, gone);
         outcome.removed_files += 1;
     }
+    for file in &to_read {
+        if previous.contains_key(&file.path) {
+            graph.remove_file(&source.name, &file.path);
+        }
+    }
+    Ok((outcome, to_read))
+}
+
+/// Step 4b: parse the files to read (one batch per language) and add each
+/// one's file node and entities, in path order. Returns the relations the
+/// files contributed, to be added once every file is in the graph.
+///
+/// # Errors
+///
+/// A stop was requested.
+pub fn assemble(
+    graph: &mut Graph,
+    source: &Source,
+    root: &Path,
+    to_read: &[FileToRead],
+    outcome: &mut Outcome,
+    context: &Context,
+) -> Result<Vec<parse::PendingRelation>, EngineError> {
+    context.checkpoint()?;
+    if !to_read.is_empty() {
+        context.thinking(format!("[extract] Parsing {} files", to_read.len()));
+    }
+    let paths: Vec<&str> = to_read.iter().map(|file| file.path.as_str()).collect();
+    let parsed = parse::parse_tree(root, &paths);
+    let mut relations = Vec::new();
+    for file in to_read {
+        context.checkpoint()?;
+        let extraction = parsed
+            .get(&file.path)
+            .map(|result| parse::extract(&file.path, result, &source.name, &file.hash))
+            .unwrap_or_default();
+        if let Some(error) = &extraction.error {
+            outcome.parse_errors.push(format!("{}: {error}", file.path));
+        }
+        let node = files::file_node(
+            &file.path,
+            &file.text,
+            &source.name,
+            parse::counts(&extraction.entities),
+        );
+        graph.add_entity(
+            &node.id,
+            &node.name,
+            node.entity_type,
+            Some(&node.citation),
+            Some(&node.properties),
+        );
+        outcome.entities_added += 1;
+        for entity in &extraction.entities {
+            graph.add_entity(
+                &entity.id,
+                &entity.name,
+                &entity.entity_type,
+                Some(&entity.citation),
+                Some(&entity.properties),
+            );
+            outcome.entities_added += 1;
+        }
+        relations.extend(extraction.relations);
+        relations.extend(parse::file_edges(
+            &node.id,
+            &file.path,
+            &extraction.entities,
+        ));
+        outcome.documents_processed += 1;
+        if outcome.documents_processed.is_multiple_of(10) {
+            context.thinking(format!(
+                "[progress] 📄 Processed {} files | 📊 {} entities",
+                outcome.documents_processed, outcome.entities_added
+            ));
+        }
+    }
+    Ok(relations)
+}
+
+/// Step 4 of the run, over a checked-out tree: update `graph` with the
+/// files of `root` that `source` selects, given the hashes of the last
+/// completed run.
+///
+/// In the Python pipeline's order: every selected file is read and
+/// compared first ([`prepare`]); the files to read are parsed and each
+/// adds its file node and its entities ([`assemble`]); and only when every
+/// file is in the graph are the relations added — a relation names its
+/// ends, which may be declared in a later file or an earlier run.
+///
+/// # Errors
+///
+/// The tree cannot be listed, or a stop was requested.
+pub fn ingest_tree(
+    graph: &mut Graph,
+    source: &Source,
+    root: &Path,
+    previous: &BTreeMap<String, String>,
+    context: &Context,
+) -> Result<Outcome, EngineError> {
+    let (mut outcome, to_read) = prepare(graph, source, root, previous, context)?;
+    let relations = assemble(graph, source, root, &to_read, &mut outcome, context)?;
+    if !relations.is_empty() {
+        context.thinking(format!(
+            "[relations] 🔗 Adding {} parser-extracted relationships...",
+            relations.len()
+        ));
+    }
+    outcome.relations_added += parse::add_relations(graph, &relations, &source.name);
     Ok(outcome)
 }
 

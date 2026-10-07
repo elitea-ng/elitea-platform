@@ -1,0 +1,2674 @@
+{
+ "language": "kotlin",
+ "files": {
+  "Encoding.kt": {
+   "file_path": "Encoding.kt",
+   "language": "kotlin",
+   "symbols": [
+    {
+     "name": "Grüße",
+     "symbol_type": "class",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 4,
+       "column": 0
+      },
+      "end": {
+       "line": 7,
+       "column": 0
+      }
+     },
+     "file_path": "Encoding.kt",
+     "parent_symbol": null,
+     "full_name": "enc.Grüße",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": "Ünïcödé dök.",
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public"
+     }
+    },
+    {
+     "name": "größe",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 6,
+       "column": 0
+      },
+      "end": {
+       "line": 6,
+       "column": 0
+      }
+     },
+     "file_path": "Encoding.kt",
+     "parent_symbol": null,
+     "full_name": "enc.größe",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "Int",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {}
+    },
+    {
+     "name": "café",
+     "symbol_type": "variable",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 8,
+       "column": 0
+      },
+      "end": {
+       "line": 8,
+       "column": 0
+      }
+     },
+     "file_path": "Encoding.kt",
+     "parent_symbol": null,
+     "full_name": "enc.café",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "mutable": false
+     }
+    }
+   ],
+   "relationships": [
+    {
+     "source_symbol": "Grüße",
+     "target_symbol": "Basis",
+     "relationship_type": "inheritance",
+     "source_file": "Encoding.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 4,
+       "column": 0
+      },
+      "end": {
+       "line": 4,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Encoding",
+     "target_symbol": "Basis",
+     "relationship_type": "calls",
+     "source_file": "Encoding.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 4,
+       "column": 28
+      },
+      "end": {
+       "line": 4,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Encoding",
+     "target_symbol": "Basis",
+     "relationship_type": "uses",
+     "source_file": "Encoding.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 4,
+       "column": 28
+      },
+      "end": {
+       "line": 4,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    }
+   ],
+   "imports": [],
+   "exports": [],
+   "dependencies": [],
+   "module_docstring": null,
+   "errors": [],
+   "warnings": []
+  },
+  "Models.kt": {
+   "file_path": "Models.kt",
+   "language": "kotlin",
+   "symbols": [
+    {
+     "name": "Product",
+     "symbol_type": "class",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 12,
+       "column": 0
+      },
+      "end": {
+       "line": 14,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.Product",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public",
+      "modifiers": "data",
+      "is_data_class": true
+     }
+    },
+    {
+     "name": "Price",
+     "symbol_type": "class",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 17,
+       "column": 0
+      },
+      "end": {
+       "line": 19,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.Price",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public",
+      "modifiers": "value"
+     }
+    },
+    {
+     "name": "CheckoutResult",
+     "symbol_type": "class",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 22,
+       "column": 0
+      },
+      "end": {
+       "line": 26,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.CheckoutResult",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": "A product in the catalogue.\n@property id the stable identifier\n/\n@Serializable\ndata class Product(val id: Long, val name: String, val price: Price) : Comparable<Product> {\noverride fun compareTo(other: Product): Int = price.compareTo(other.price)\n}\n\n@JvmInline\nvalue class Price(val cents: Long) : Comparable<Price> {\noverride fun compareTo(other: Price): Int = cents.compareTo(other.cents)\n}\n\n/** The result of a checkout.",
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public",
+      "modifiers": "sealed",
+      "is_sealed": true
+     }
+    },
+    {
+     "name": "Success",
+     "symbol_type": "class",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 23,
+       "column": 0
+      },
+      "end": {
+       "line": 33,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.Success",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public",
+      "modifiers": "data",
+      "is_data_class": true
+     }
+    },
+    {
+     "name": "Repository",
+     "symbol_type": "class",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 37,
+       "column": 0
+      },
+      "end": {
+       "line": 41,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.Repository",
+     "visibility": "internal",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "internal",
+      "modifiers": "abstract"
+     }
+    },
+    {
+     "name": "Cancelled",
+     "symbol_type": "class",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 25,
+       "column": 0
+      },
+      "end": {
+       "line": 33,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.Cancelled",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public"
+     }
+    },
+    {
+     "name": "compareTo",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 13,
+       "column": 0
+      },
+      "end": {
+       "line": 13,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.compareTo",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "Int",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "modifiers": [
+       "override"
+      ]
+     }
+    },
+    {
+     "name": "compareTo",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 18,
+       "column": 0
+      },
+      "end": {
+       "line": 18,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.compareTo",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "Int",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "modifiers": [
+       "override"
+      ]
+     }
+    },
+    {
+     "name": "format",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 31,
+       "column": 0
+      },
+      "end": {
+       "line": 32,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.format",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "String",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {}
+    },
+    {
+     "name": "find",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 39,
+       "column": 0
+      },
+      "end": {
+       "line": 39,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.find",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "T?",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "modifiers": [
+       "abstract"
+      ]
+     }
+    },
+    {
+     "name": "all",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 40,
+       "column": 0
+      },
+      "end": {
+       "line": 40,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.all",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "List<T>",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "modifiers": [
+       "open"
+      ]
+     }
+    },
+    {
+     "name": "ProductIndex",
+     "symbol_type": "type_alias",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 34,
+       "column": 0
+      },
+      "end": {
+       "line": 34,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.ProductIndex",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "aliased_type": "Map<Long, Product>"
+     }
+    },
+    {
+     "name": "Handler",
+     "symbol_type": "type_alias",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 36,
+       "column": 0
+      },
+      "end": {
+       "line": 36,
+       "column": 0
+      }
+     },
+     "file_path": "Models.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.model.Handler",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "aliased_type": "(T) -> Unit"
+     }
+    }
+   ],
+   "relationships": [
+    {
+     "source_symbol": "Models",
+     "target_symbol": "kotlinx.serialization.Serializable",
+     "relationship_type": "imports",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 2,
+       "column": 0
+      },
+      "end": {
+       "line": 2,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "java.time.Instant",
+     "relationship_type": "imports",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 4,
+       "column": 0
+      },
+      "end": {
+       "line": 4,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {
+      "alias": "Timestamp"
+     }
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "com.example.shop.util.",
+     "relationship_type": "imports",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 5,
+       "column": 0
+      },
+      "end": {
+       "line": 5,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "com.example.shop.util",
+     "relationship_type": "imports",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 5,
+       "column": 0
+      },
+      "end": {
+       "line": 5,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {
+      "wildcard": true
+     }
+    },
+    {
+     "source_symbol": "Product",
+     "target_symbol": "Comparable",
+     "relationship_type": "implementation",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 12,
+       "column": 0
+      },
+      "end": {
+       "line": 12,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Price",
+     "target_symbol": "Comparable",
+     "relationship_type": "implementation",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 17,
+       "column": 0
+      },
+      "end": {
+       "line": 17,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Success",
+     "target_symbol": "CheckoutResult",
+     "relationship_type": "inheritance",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 23,
+       "column": 0
+      },
+      "end": {
+       "line": 23,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Success",
+     "target_symbol": "val",
+     "relationship_type": "implementation",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 23,
+       "column": 0
+      },
+      "end": {
+       "line": 23,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Repository",
+     "target_symbol": "Closeable",
+     "relationship_type": "implementation",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 37,
+       "column": 0
+      },
+      "end": {
+       "line": 37,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Repository",
+     "target_symbol": "Iterable",
+     "relationship_type": "implementation",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 37,
+       "column": 0
+      },
+      "end": {
+       "line": 37,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Cancelled",
+     "target_symbol": "CheckoutResult",
+     "relationship_type": "implementation",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 25,
+       "column": 0
+      },
+      "end": {
+       "line": 25,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "property",
+     "relationship_type": "decorates",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 9,
+       "column": 3
+      },
+      "end": {
+       "line": 9,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "Serializable",
+     "relationship_type": "decorates",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 11,
+       "column": 0
+      },
+      "end": {
+       "line": 11,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "JvmInline",
+     "relationship_type": "decorates",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 16,
+       "column": 0
+      },
+      "end": {
+       "line": 16,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "Failure",
+     "relationship_type": "calls",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 24,
+       "column": 14
+      },
+      "end": {
+       "line": 24,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "Currency",
+     "relationship_type": "calls",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 28,
+       "column": 10
+      },
+      "end": {
+       "line": 28,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "EUR",
+     "relationship_type": "calls",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 29,
+       "column": 3
+      },
+      "end": {
+       "line": 29,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "USD",
+     "relationship_type": "calls",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 30,
+       "column": 3
+      },
+      "end": {
+       "line": 30,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "Failure",
+     "relationship_type": "uses",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 24,
+       "column": 14
+      },
+      "end": {
+       "line": 24,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "Currency",
+     "relationship_type": "uses",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 28,
+       "column": 10
+      },
+      "end": {
+       "line": 28,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "EUR",
+     "relationship_type": "uses",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 29,
+       "column": 3
+      },
+      "end": {
+       "line": 29,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Models",
+     "target_symbol": "USD",
+     "relationship_type": "uses",
+     "source_file": "Models.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 30,
+       "column": 3
+      },
+      "end": {
+       "line": 30,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    }
+   ],
+   "imports": [],
+   "exports": [],
+   "dependencies": [],
+   "module_docstring": null,
+   "errors": [],
+   "warnings": []
+  },
+  "Script.kts": {
+   "file_path": "Script.kts",
+   "language": "kotlin",
+   "symbols": [
+    {
+     "name": "report",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 4,
+       "column": 0
+      },
+      "end": {
+       "line": 4,
+       "column": 0
+      }
+     },
+     "file_path": "Script.kts",
+     "parent_symbol": null,
+     "full_name": "report",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {}
+    },
+    {
+     "name": "files",
+     "symbol_type": "variable",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 2,
+       "column": 0
+      },
+      "end": {
+       "line": 2,
+       "column": 0
+      }
+     },
+     "file_path": "Script.kts",
+     "parent_symbol": null,
+     "full_name": "files",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "mutable": false
+     }
+    }
+   ],
+   "relationships": [
+    {
+     "source_symbol": "Script",
+     "target_symbol": "java.io.File",
+     "relationship_type": "imports",
+     "source_file": "Script.kts",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 1,
+       "column": 0
+      },
+      "end": {
+       "line": 1,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Script",
+     "target_symbol": "File",
+     "relationship_type": "calls",
+     "source_file": "Script.kts",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 3,
+       "column": 11
+      },
+      "end": {
+       "line": 3,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Script",
+     "target_symbol": "File",
+     "relationship_type": "uses",
+     "source_file": "Script.kts",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 3,
+       "column": 11
+      },
+      "end": {
+       "line": 3,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    }
+   ],
+   "imports": [],
+   "exports": [],
+   "dependencies": [],
+   "module_docstring": null,
+   "errors": [],
+   "warnings": []
+  },
+  "Services.kt": {
+   "file_path": "Services.kt",
+   "language": "kotlin",
+   "symbols": [
+    {
+     "name": "CachingCatalogue",
+     "symbol_type": "class",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 18,
+       "column": 0
+      },
+      "end": {
+       "line": 43,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.CachingCatalogue",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public"
+     }
+    },
+    {
+     "name": "Stats",
+     "symbol_type": "class",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 39,
+       "column": 0
+      },
+      "end": {
+       "line": 42,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.Stats",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public",
+      "modifiers": "inner"
+     }
+    },
+    {
+     "name": "Catalogue",
+     "symbol_type": "interface",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 7,
+       "column": 0
+      },
+      "end": {
+       "line": 11,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.Catalogue",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public"
+     }
+    },
+    {
+     "name": "PriceRule",
+     "symbol_type": "interface",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 12,
+       "column": 0
+      },
+      "end": {
+       "line": 15,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.PriceRule",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public",
+      "is_fun_interface": true
+     }
+    },
+    {
+     "name": "AuditedCatalogue",
+     "symbol_type": "interface",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 16,
+       "column": 0
+      },
+      "end": {
+       "line": 43,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.AuditedCatalogue",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public"
+     }
+    },
+    {
+     "name": "Companion",
+     "symbol_type": "class",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 34,
+       "column": 0
+      },
+      "end": {
+       "line": 38,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.Companion",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public",
+      "is_companion": true
+     }
+    },
+    {
+     "name": "CheckoutService",
+     "symbol_type": "class",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 44,
+       "column": 0
+      },
+      "end": {
+       "line": 59,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.CheckoutService",
+     "visibility": "public",
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "visibility": "public"
+     }
+    },
+    {
+     "name": "products",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 9,
+       "column": 0
+      },
+      "end": {
+       "line": 28,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.products",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "List<Product>",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {}
+    },
+    {
+     "name": "refresh",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 10,
+       "column": 0
+      },
+      "end": {
+       "line": 28,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.refresh",
+     "visibility": null,
+     "is_static": false,
+     "is_async": true,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "modifiers": [
+       "suspend"
+      ],
+      "is_suspend": true
+     }
+    },
+    {
+     "name": "apply",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 14,
+       "column": 0
+      },
+      "end": {
+       "line": 28,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.apply",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "Long",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {}
+    },
+    {
+     "name": "products",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 24,
+       "column": 0
+      },
+      "end": {
+       "line": 28,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.products",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "List<Product>",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "modifiers": [
+       "override"
+      ]
+     }
+    },
+    {
+     "name": "refresh",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 29,
+       "column": 0
+      },
+      "end": {
+       "line": 33,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.refresh",
+     "visibility": null,
+     "is_static": false,
+     "is_async": true,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "modifiers": [
+       "suspend"
+      ],
+      "is_suspend": true
+     }
+    },
+    {
+     "name": "create",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 37,
+       "column": 0
+      },
+      "end": {
+       "line": 37,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.create",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "CachingCatalogue",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {}
+    },
+    {
+     "name": "ratio",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 41,
+       "column": 0
+      },
+      "end": {
+       "line": 41,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.ratio",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "Double",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {}
+    },
+    {
+     "name": "checkout",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 49,
+       "column": 0
+      },
+      "end": {
+       "line": 54,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.checkout",
+     "visibility": null,
+     "is_static": false,
+     "is_async": true,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "CheckoutResult",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "modifiers": [
+       "suspend"
+      ],
+      "is_suspend": true
+     }
+    },
+    {
+     "name": "close",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 55,
+       "column": 0
+      },
+      "end": {
+       "line": 58,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.close",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "modifiers": [
+       "override"
+      ]
+     }
+    },
+    {
+     "name": "castOrNull",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 60,
+       "column": 0
+      },
+      "end": {
+       "line": 61,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.castOrNull",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "T?",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "modifiers": [
+       "inline"
+      ],
+      "is_inline": true,
+      "extension_receiver": "Any"
+     }
+    },
+    {
+     "name": "toSlug",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 62,
+       "column": 0
+      },
+      "end": {
+       "line": 63,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.toSlug",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "String",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "extension_receiver": "String"
+     }
+    },
+    {
+     "name": "gcd",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 67,
+       "column": 0
+      },
+      "end": {
+       "line": 68,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.gcd",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": "Int",
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "modifiers": [
+       "tailrec"
+      ]
+     }
+    },
+    {
+     "name": "main",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 69,
+       "column": 0
+      },
+      "end": {
+       "line": 80,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.main",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {}
+    },
+    {
+     "name": "run",
+     "symbol_type": "function",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 77,
+       "column": 0
+      },
+      "end": {
+       "line": 77,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.run",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "modifiers": [
+       "override"
+      ]
+     }
+    },
+    {
+     "name": "cache",
+     "symbol_type": "variable",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 20,
+       "column": 0
+      },
+      "end": {
+       "line": 20,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.cache",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "mutable": false,
+      "modifiers": [
+       "private"
+      ]
+     }
+    },
+    {
+     "name": "lastRefresh",
+     "symbol_type": "variable",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 21,
+       "column": 0
+      },
+      "end": {
+       "line": 21,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.lastRefresh",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "mutable": true,
+      "modifiers": [
+       "lateinit"
+      ],
+      "type": "String"
+     }
+    },
+    {
+     "name": "hits",
+     "symbol_type": "variable",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 22,
+       "column": 0
+      },
+      "end": {
+       "line": 22,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.hits",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "mutable": true,
+      "type": "Int"
+     }
+    },
+    {
+     "name": "MAX_SIZE",
+     "symbol_type": "variable",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 36,
+       "column": 0
+      },
+      "end": {
+       "line": 36,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.MAX_SIZE",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "mutable": false,
+      "modifiers": [
+       "const"
+      ]
+     }
+    },
+    {
+     "name": "logger",
+     "symbol_type": "variable",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 46,
+       "column": 0
+      },
+      "end": {
+       "line": 46,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.logger",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "mutable": false,
+      "modifiers": [
+       "private"
+      ]
+     }
+    },
+    {
+     "name": "total",
+     "symbol_type": "variable",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 51,
+       "column": 0
+      },
+      "end": {
+       "line": 51,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.total",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "mutable": false
+     }
+    },
+    {
+     "name": "label",
+     "symbol_type": "variable",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 64,
+       "column": 0
+      },
+      "end": {
+       "line": 64,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.label",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "mutable": false,
+      "extension_receiver": "Product",
+      "type": "String"
+     }
+    },
+    {
+     "name": "catalogue",
+     "symbol_type": "variable",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 72,
+       "column": 0
+      },
+      "end": {
+       "line": 72,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.catalogue",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "mutable": false
+     }
+    },
+    {
+     "name": "anon",
+     "symbol_type": "variable",
+     "scope": "global",
+     "range": {
+      "start": {
+       "line": 76,
+       "column": 0
+      },
+      "end": {
+       "line": 76,
+       "column": 0
+      }
+     },
+     "file_path": "Services.kt",
+     "parent_symbol": null,
+     "full_name": "com.example.shop.service.anon",
+     "visibility": null,
+     "is_static": false,
+     "is_async": false,
+     "is_exported": false,
+     "docstring": null,
+     "return_type": null,
+     "parameter_types": [],
+     "source_text": null,
+     "signature": null,
+     "metadata": {
+      "mutable": false
+     }
+    }
+   ],
+   "relationships": [
+    {
+     "source_symbol": "Services",
+     "target_symbol": "com.example.shop.model.Product",
+     "relationship_type": "imports",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 2,
+       "column": 0
+      },
+      "end": {
+       "line": 2,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "com.example.shop.model.CheckoutResult",
+     "relationship_type": "imports",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 4,
+       "column": 0
+      },
+      "end": {
+       "line": 4,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "kotlinx.coroutines.flow.Flow",
+     "relationship_type": "imports",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 5,
+       "column": 0
+      },
+      "end": {
+       "line": 5,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "kotlinx.coroutines.withContext",
+     "relationship_type": "imports",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 6,
+       "column": 0
+      },
+      "end": {
+       "line": 6,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "CachingCatalogue",
+     "target_symbol": "Catalogue",
+     "relationship_type": "implementation",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 18,
+       "column": 0
+      },
+      "end": {
+       "line": 18,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "AuditedCatalogue",
+     "target_symbol": "Catalogue",
+     "relationship_type": "inheritance",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 16,
+       "column": 0
+      },
+      "end": {
+       "line": 16,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "AuditedCatalogue",
+     "target_symbol": "AutoCloseable",
+     "relationship_type": "inheritance",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 16,
+       "column": 0
+      },
+      "end": {
+       "line": 16,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "CheckoutService",
+     "target_symbol": "AutoCloseable",
+     "relationship_type": "implementation",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 44,
+       "column": 0
+      },
+      "end": {
+       "line": 44,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "delegate",
+     "relationship_type": "composition",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 17,
+       "column": 0
+      },
+      "end": {
+       "line": 17,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {
+      "delegation": true
+     }
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "withContext",
+     "relationship_type": "calls",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 30,
+       "column": 36
+      },
+      "end": {
+       "line": 30,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "Logger",
+     "relationship_type": "calls",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 46,
+       "column": 24
+      },
+      "end": {
+       "line": 46,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "Throws",
+     "relationship_type": "calls",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 48,
+       "column": 4
+      },
+      "end": {
+       "line": 48,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "generateId",
+     "relationship_type": "calls",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 53,
+       "column": 52
+      },
+      "end": {
+       "line": 53,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "lowercase",
+     "relationship_type": "calls",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 63,
+       "column": 29
+      },
+      "end": {
+       "line": 63,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "get",
+     "relationship_type": "calls",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 66,
+       "column": 3
+      },
+      "end": {
+       "line": 66,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "name",
+     "relationship_type": "calls",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 66,
+       "column": 13
+      },
+      "end": {
+       "line": 66,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "val",
+     "relationship_type": "calls",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 71,
+       "column": 3
+      },
+      "end": {
+       "line": 71,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "Pair",
+     "relationship_type": "calls",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 71,
+       "column": 25
+      },
+      "end": {
+       "line": 71,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "RemoteCatalogue",
+     "relationship_type": "calls",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 72,
+       "column": 43
+      },
+      "end": {
+       "line": 72,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "Logger",
+     "relationship_type": "uses",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 46,
+       "column": 24
+      },
+      "end": {
+       "line": 46,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "Throws",
+     "relationship_type": "uses",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 48,
+       "column": 4
+      },
+      "end": {
+       "line": 48,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "Success",
+     "relationship_type": "uses",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 53,
+       "column": 44
+      },
+      "end": {
+       "line": 53,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "Failure",
+     "relationship_type": "uses",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 53,
+       "column": 86
+      },
+      "end": {
+       "line": 53,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "Pair",
+     "relationship_type": "uses",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 71,
+       "column": 25
+      },
+      "end": {
+       "line": 71,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    },
+    {
+     "source_symbol": "Services",
+     "target_symbol": "RemoteCatalogue",
+     "relationship_type": "uses",
+     "source_file": "Services.kt",
+     "target_file": null,
+     "source_range": {
+      "start": {
+       "line": 72,
+       "column": 43
+      },
+      "end": {
+       "line": 72,
+       "column": 0
+      }
+     },
+     "confidence": 1.0,
+     "is_cross_file": false,
+     "context": null,
+     "metadata": {}
+    }
+   ],
+   "imports": [],
+   "exports": [],
+   "dependencies": [],
+   "module_docstring": null,
+   "errors": [],
+   "warnings": []
+  },
+  "Missing.kt": {
+   "file_path": "Missing.kt",
+   "language": "kotlin",
+   "symbols": [],
+   "relationships": [],
+   "imports": [],
+   "exports": [],
+   "dependencies": [],
+   "module_docstring": null,
+   "errors": [
+    "[Errno 2] No such file or directory: 'Missing.kt'"
+   ],
+   "warnings": []
+  }
+ }
+}

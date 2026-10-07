@@ -86,6 +86,17 @@ fn source(extra: &Value) -> Source {
     Source::parse(Some(&raw), &["github".to_owned()]).expect("a source")
 }
 
+/// The file nodes of a graph (`source_file`, `document_file`, …), by name.
+fn file_names(graph: &Graph) -> Vec<String> {
+    let mut names: Vec<String> = graph
+        .nodes()
+        .filter(|(_, n)| n["layer"] == json!("structure"))
+        .filter_map(|(_, n)| n["name"].as_str().map(str::to_owned))
+        .collect();
+    names.sort_unstable();
+    names
+}
+
 #[test]
 fn a_tree_is_selected_as_the_loader_did_and_diffed_by_hash() {
     let root = scratch("tree");
@@ -126,7 +137,7 @@ fn a_tree_is_selected_as_the_loader_did_and_diffed_by_hash() {
     let second = ingest_tree(&mut graph, &source, &root, &first.hashes, &context).expect("ingests");
     assert_eq!(second.unchanged, 1);
     assert_eq!(second.documents_processed, 2);
-    assert_eq!(graph.node_count(), 3);
+    assert_eq!(file_names(&graph), ["README.md", "app.py", "new.go"]);
     let app = graph
         .node(&entity_id("file", "src/app.py", Some("src/app.py")))
         .expect("re-read");
@@ -140,7 +151,7 @@ fn a_tree_is_selected_as_the_loader_did_and_diffed_by_hash() {
     std::fs::remove_file(root.join("README.md")).expect("rm");
     let third = ingest_tree(&mut graph, &source, &root, &second.hashes, &context).expect("ingests");
     assert_eq!(third.removed_files, 1);
-    assert_eq!(graph.node_count(), 2);
+    assert_eq!(file_names(&graph), ["app.py", "new.go"]);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -398,7 +409,8 @@ async fn a_source_is_cloned_ingested_and_re_ingested_incrementally() {
         .await
         .expect("load")
         .expect("a graph");
-    assert_eq!((graph.node_count(), revision), (2, 1));
+    assert_eq!(file_names(&graph), ["README.md", "app.py"]);
+    assert_eq!(revision, 1);
     let status = sources::status_document(&pool, key).await.expect("status");
     assert_eq!(status["sources"]["5"]["status"], json!("completed"));
     assert_eq!(status["sources"]["5"]["documents_processed"], json!(2));
@@ -438,12 +450,13 @@ async fn a_source_is_cloned_ingested_and_re_ingested_incrementally() {
         .expect("load")
         .expect("a graph");
     assert_eq!(revision, 2);
-    let mut names: Vec<&str> = graph
-        .nodes()
-        .filter_map(|(_, n)| n["name"].as_str())
-        .collect();
-    names.sort_unstable();
-    assert_eq!(names, ["app.py", "guide.md"]);
+    assert_eq!(file_names(&graph), ["app.py", "guide.md"]);
+    assert!(
+        graph
+            .nodes()
+            .any(|(_, n)| n["name"] == json!("hello") && n["type"] == json!("function")),
+        "the re-read file's function"
+    );
     let hashes = sources::file_hashes(&pool, key, "repo")
         .await
         .expect("hashes");
@@ -531,4 +544,131 @@ async fn one_ingestion_per_graph_at_a_time() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     assert!(retaken.is_some(), "released when dropped");
+}
+
+fn by_name(graph: &Graph, name: &str, kind: &str) -> String {
+    let found = graph
+        .nodes()
+        .find(|(_, n)| n["name"] == json!(name) && n["type"] == json!(kind));
+    match found {
+        Some((id, _)) => id.to_owned(),
+        None => panic!(
+            "no {kind} {name}: {:?}",
+            graph
+                .nodes()
+                .map(|(_, n)| (n["name"].clone(), n["type"].clone()))
+                .collect::<Vec<_>>()
+        ),
+    }
+}
+
+fn edge(graph: &Graph, source: &str, target: &str) -> Option<serde_json::Map<String, Value>> {
+    graph
+        .edges()
+        .find(|(s, t, _)| *s == source && *t == target)
+        .map(|(_, _, e)| e.clone())
+}
+
+#[test]
+fn code_files_add_their_symbols_and_relations() {
+    let root = scratch("parse");
+    write(
+        &root,
+        "src/users.py",
+        b"from src.util import helper\n\nclass Users:\n    \"\"\"The user registry.\"\"\"\n    def create(self, name):\n        local = name\n        return helper(local)\n",
+    );
+    write(&root, "src/util.py", b"def helper(x):\n    return x\n");
+    write(
+        &root,
+        "cmd/main.go",
+        b"package main\n\nfunc Run() int {\n\treturn 1\n}\n",
+    );
+    write(
+        &root,
+        "app/Order.kt",
+        b"package app\n\ndata class Order(val id: String)\n",
+    );
+    write(
+        &root,
+        "ios/Cart.swift",
+        b"import Foundation\n\nstruct Cart {\n    var items: [String]\n}\n",
+    );
+    write(&root, "README.md", b"# demo\n");
+    let (context, _lines, _) = context();
+    let mut graph = Graph::new();
+    let outcome = ingest_tree(
+        &mut graph,
+        &source(&json!({})),
+        &root,
+        &BTreeMap::new(),
+        &context,
+    )
+    .expect("ingests");
+    assert_eq!(outcome.documents_processed, 6);
+    // The Kotlin and Swift ports of the Python regex parsers.
+    for (name, file) in [("Order", "app/Order.kt"), ("Cart", "ios/Cart.swift")] {
+        assert!(
+            graph
+                .nodes()
+                .any(|(_, n)| n["name"] == json!(name)
+                    && n["citations"][0]["file_path"] == json!(file)),
+            "{name} from {file}"
+        );
+    }
+    assert!(
+        outcome.parse_errors.is_empty(),
+        "{:?}",
+        outcome.parse_errors
+    );
+
+    let users = by_name(&graph, "Users", "class");
+    let create = by_name(&graph, "create", "method");
+    let helper = by_name(&graph, "helper", "function");
+    let run = by_name(&graph, "Run", "function");
+    let users_file = by_name(&graph, "users.py", "source_file");
+    assert!(
+        graph
+            .nodes()
+            .all(|(_, n)| n["name"] != json!("name") && n["name"] != json!("local")),
+        "no parameter or local entities"
+    );
+    let users_node = graph.node(&users).expect("Users");
+    assert_eq!(users_node["layer"], json!("code"));
+    assert_eq!(users_node["description"], json!("The user registry."));
+    assert_eq!(users_node["citations"][0]["line_start"], json!(3));
+    assert!(graph.node(&run).is_some());
+
+    let contains = edge(&graph, &users, &create).expect("class contains its method");
+    assert_eq!(contains["relation_type"], json!("contains"));
+    let calls = edge(&graph, &create, &helper).expect("the cross-file call resolved by name");
+    assert_eq!(
+        calls["relation_type"],
+        json!("calls"),
+        "not replaced by `references`"
+    );
+    assert_eq!(calls["discovered_in_file"], json!("src/users.py"));
+    assert_eq!(calls["source"], json!("parser"));
+    let file_edge = edge(&graph, &users_file, &users).expect("the file contains its class");
+    assert_eq!(file_edge["relation_type"], json!("contains"));
+    let file_node = graph.node(&users_file).expect("the file node");
+    assert!(file_node["entity_count"].as_u64().is_some_and(|n| n >= 2));
+    assert!(
+        file_node["code_entity_count"]
+            .as_u64()
+            .is_some_and(|n| n >= 2)
+    );
+
+    // The file changes: its symbols and edges go and come back; the helper
+    // another file declares stays.
+    write(&root, "src/users.py", b"class Accounts:\n    pass\n");
+    let hashes = outcome.hashes.clone();
+    ingest_tree(&mut graph, &source(&json!({})), &root, &hashes, &context).expect("re-ingests");
+    assert!(
+        graph.nodes().all(|(_, n)| n["name"] != json!("Users")),
+        "the old class went"
+    );
+    by_name(&graph, "Accounts", "class");
+    by_name(&graph, "helper", "function");
+    assert!(edge(&graph, &create, &helper).is_none());
+    let _ = std::fs::remove_dir_all(&root);
 }
