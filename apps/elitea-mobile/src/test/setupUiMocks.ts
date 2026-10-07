@@ -37,3 +37,10 @@ jest.mock('expo-haptics', () => ({
   NotificationFeedbackType: { Success: 'success', Warning: 'warning', Error: 'error' },
   AndroidHaptics: { Confirm: 'confirm', Reject: 'reject' },
 }));
+// expo-alternate-app-icons: a device that cannot change its icon (tests pass their own module).
+jest.mock('expo-alternate-app-icons', () => ({
+  supportsAlternateIcons: false,
+  setAlternateAppIcon: jest.fn(async () => null),
+  getAppIconName: jest.fn(() => null),
+  resetAppIcon: jest.fn(async () => {}),
+}));

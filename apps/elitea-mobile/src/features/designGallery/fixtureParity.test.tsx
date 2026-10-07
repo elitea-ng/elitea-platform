@@ -19,8 +19,9 @@ const read = (relative: string) => fs.readFileSync(path.join(__dirname, '../../a
  */
 describe('design-tab previews draw the real screens’ components (D2)', () => {
   it.each([
-    ['(app)/(tabs)/(chats)/index.tsx', 'design-tabs/chats/index.tsx', /<ConversationRow\b/],
-    ['(app)/(tabs)/(chats)/index.tsx', 'design-tabs/chats/index.tsx', /ItemSeparatorComponent=\{ConversationSeparator\}/],
+    ['(app)/(tabs)/chats/index.tsx', 'design-tabs/chats/index.tsx', /<ConversationList\b/],
+    ['(app)/(tabs)/(home)/index.tsx', 'design-tabs/home/index.tsx', /<HomeView\b/],
+    ['(app)/(tabs)/(home)/index.tsx', 'design-tabs/home/index.tsx', /homeHeaderOptions\(/],
     ['(app)/(tabs)/settings/index.tsx', 'design-tabs/settings/index.tsx', /<SettingsList\b/],
   ])('%s and %s both use %p', (real, preview, pattern) => {
     expect(read(real)).toMatch(pattern);
@@ -36,12 +37,14 @@ describe('design-tab previews draw the real screens’ components (D2)', () => {
     expect(screen.getByRole('button', { name: 'Untitled conversation, Yesterday' })).toBeTruthy();
   });
 
-  it('the Settings list shows the project the way the tab does, with no Face ID row', async () => {
+  it('the Settings list shows the project by name, the way the tab does, with no Face ID row', async () => {
     await render(
       <SettingsList
         serverOrigin="https://acme.elitea.ai"
         logoMark={null}
         projectId={42}
+        projectName="Zefir Team"
+        onProject={() => {}}
         workspaceCount={1}
         developerSignIn={false}
         scheme="system"
@@ -55,7 +58,9 @@ describe('design-tab previews draw the real screens’ components (D2)', () => {
         onLogOut={() => {}}
       />,
     );
-    expect(screen.getByText('Project #42')).toBeTruthy();
+    // The project by its NAME, never its internal id ("Project #90504").
+    expect(screen.getByText('Zefir Team')).toBeTruthy();
+    expect(screen.queryByText(/#42/)).toBeNull();
     expect(screen.getByText('acme.elitea.ai')).toBeTruthy();
     expect(screen.queryByText('Face ID')).toBeNull();
     expect(screen.queryByText('Memory')).toBeNull();

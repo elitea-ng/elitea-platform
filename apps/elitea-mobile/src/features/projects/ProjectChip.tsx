@@ -2,18 +2,26 @@ import type { NativeStackNavigationOptions } from 'expo-router';
 import { router } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
 
+import { PERSONAL_PROJECT_LABEL } from '@/features/projects/ProjectsSheet';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
 import { usePersonalProjectId } from '@/state/selfIdentity';
 import { hitTarget, Icon, ripple, Text, uiPlatform, type UiPlatform } from '@/ui';
 import { useDesign } from '@/design/DesignProvider';
 
-/** The active project as the user sees it: "My project" for the personal one, else its name. */
+/**
+ * The active project as the user sees it: "My project" for the personal one, else its NAME;
+ * never the internal id (the switcher once read "Project #90504"). "Project" until the list
+ * has loaded.
+ */
 export function useProjectLabel(): string {
   const { project, projectId } = useProjectSelection();
   const personal = usePersonalProjectId();
-  return projectId !== null && projectId === personal
-    ? 'My project'
-    : (project?.name ?? (projectId !== null ? `Project ${projectId}` : 'Project'));
+  return projectLabel(projectId, project?.name ?? null, personal);
+}
+
+export function projectLabel(projectId: number | null, name: string | null, personalProjectId: number | null): string {
+  if (projectId !== null && projectId === personalProjectId) return PERSONAL_PROJECT_LABEL;
+  return name?.trim() || 'Project';
 }
 
 export function projectSwitcherLabel(label: string): string {

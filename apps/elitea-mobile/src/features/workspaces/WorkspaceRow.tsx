@@ -1,25 +1,34 @@
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
 import { displayHost } from '@/features/connect/connectFlow';
 import { WorkspaceMark } from '@/features/workspaces/WorkspaceMark';
 import type { WorkspaceSummary } from '@/state/workspaceList';
 import type { BrandImage } from '@/theme/brandPack';
-import { Icon, ramp } from '@/ui';
+import { Button, hitTarget, Icon, pressedOverlay, ripple, Text, uiPlatform } from '@/ui';
 
 /**
  * The mark a row may show. A workspace that is not active is never contacted
  * just to draw its row (WS-SEC-4: that would tell a put-aside workspace's
  * server when, and from where, this device lists it): only a mark already on
- * the device (a data: URI) is shown, otherwise the host's initial.
+ * the device (a data: URI) is shown, otherwise the host's initial on a tile in
+ * that workspace's own accent.
  */
 export function rowMark(image: BrandImage | null, active: boolean): BrandImage | null {
   if (image === null || active) return image;
   return image.uri.startsWith('data:') ? image : null;
 }
 
-/** One connected workspace: mark, name (when branded), host (always), state. */
+/** The row's state line: never colour alone (the word says it). */
+export function workspaceState(workspace: Pick<WorkspaceSummary, 'signedIn'>, active: boolean): string {
+  return active ? 'Active' : workspace.signedIn ? 'Signed in' : 'Signed out';
+}
+
+/**
+ * One connected workspace (an inset-grouped row, §4.10 sheet content): its mark in its own
+ * accent, the brand name when it has one, the host (always, system font) and its state, a check
+ * on the active one. "Remove" is a separate trailing button with its own 44/48 target.
+ */
 export function WorkspaceRow({
   workspace,
   active,
@@ -33,9 +42,9 @@ export function WorkspaceRow({
   onRemove?: () => void;
   disabled?: boolean;
 }) {
-  const palette = usePalette();
+  const design = useDesign();
   const host = displayHost(workspace.origin);
-  const state = active ? 'Active' : workspace.signedIn ? 'Signed in' : 'Signed out';
+  const state = workspaceState(workspace, active);
   return (
     <View style={styles.row}>
       <Pressable
@@ -45,44 +54,49 @@ export function WorkspaceRow({
         testID={`workspace-${workspace.id}`}
         disabled={disabled}
         onPress={onPress}
-        style={styles.main}>
-        <WorkspaceMark origin={workspace.origin} image={rowMark(workspace.logoMark, active)} size={36} />
+        android_ripple={ripple(design)}
+        style={({ pressed }) => [
+          styles.main,
+          { minHeight: Math.max(hitTarget(), 60) },
+          pressed && uiPlatform === 'ios' ? { backgroundColor: pressedOverlay(design) } : null,
+          disabled ? styles.disabled : null,
+        ]}>
+        <WorkspaceMark origin={workspace.origin} image={rowMark(workspace.logoMark, active)} brand={workspace.brand} size={36} />
         <View style={styles.text}>
           {workspace.name ? (
-            <Text numberOfLines={1} style={[styles.name, { color: palette.text }]}>
+            <Text variant="headline" numberOfLines={design.accessibilityLayout ? undefined : 1}>
               {workspace.name}
             </Text>
           ) : null}
-          <Text
-            numberOfLines={1}
-            style={[workspace.name ? styles.host : styles.name, { color: workspace.name ? palette.textSecondary : palette.text }]}>
+          {/* The host in the system font (a brand font must not be able to disguise it). */}
+          <Text variant={workspace.name ? 'subheadline' : 'headline'} tone={workspace.name ? 'secondary' : 'primary'} numberOfLines={design.accessibilityLayout ? undefined : 1}>
             {host}
           </Text>
-          <Text style={[styles.state, { color: active ? palette.accent : palette.textSecondary }]}>{state}</Text>
+          <Text variant="footnote" tone={active ? 'accent' : 'secondary'}>
+            {state}
+          </Text>
         </View>
-        {active ? <Icon name="check" size={20} color={palette.accent} weight="semibold" label="Active" /> : null}
+        {active ? <Icon name="check" size={20} tone="accent" weight="semibold" /> : null}
       </Pressable>
       {onRemove ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`Remove ${host}`}
+        <Button
+          title="Remove"
+          variant="destructivePlain"
+          size="small"
           testID={`remove-${workspace.id}`}
-          hitSlop={8}
+          accessibilityLabel={`Remove ${host}`}
           onPress={onRemove}
-          style={styles.remove}>
-          <Text style={{ ...ramp.subheadline, color: palette.danger }}>Remove</Text>
-        </Pressable>
+          style={styles.remove}
+        />
       ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: Spacing.three },
-  main: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.three, paddingVertical: Spacing.three },
+  row: { flexDirection: 'row', alignItems: 'center' },
+  main: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
   text: { flex: 1, gap: 2 },
-  name: { ...ramp.headline, fontWeight: '600' },
-  host: { ...ramp.subheadline },
-  state: { ...ramp.caption, fontWeight: '600' },
-  remove: { paddingLeft: Spacing.three, paddingVertical: Spacing.two },
+  remove: { marginEnd: 8 },
+  disabled: { opacity: 0.38 },
 });

@@ -35,14 +35,39 @@ they are sharp on a @3x screen only up to a maximum width: **avatar 128 pt, bust
 | `assets/images/android-icon-monochrome.png` | 1024, alpha only | `android.adaptiveIcon.monochromeImage` (Android 13+ themed icons). A flat glyph: swirl-head outline, eyes, brows, smile and two swirl grooves cut out; reach 0.25. |
 | `assets/images/favicon.png` | 48, opaque | `web.favicon` |
 
-### App icon: workspace / self-hosted set ("Zefir Night", not shipped)
+### App icon: workspace / self-hosted set ("Zefir Night")
 
-The second icon of the alternate-icon plan (`docs/design-system.md` §3.6) is not in the
-repository: an icon set nothing can switch to only adds weight. It lands together with the
-alternate-icon config plugin (follow-up F1), which must emit `CFBundleAlternateIcons` on iOS
-and one `<activity-alias>` with its own adaptive icon on Android. Its artwork is the same head
-mark from `build.py` on a neutral slate gradient (light `#F4F6F9` → `#E6EAF0` → `#D3DAE3`,
-dark `#3A4049` → `#262A31` → `#16191E`), held to the same reaches as the default set.
+The second, user-confirmed icon of the alternate-icon plan (`docs/design-system.md` §3.6). The
+same head mark from `build.py` on a neutral slate gradient (light `#F4F6F9` → `#E6EAF0` →
+`#D3DAE3`, dark `#3A4049` → `#262A31` → `#16191E`), held to the same reaches as the default set.
+Wired by `expo-alternate-app-icons` in `app.config.ts` under the name `ZefirNight`.
+
+| File | Pixels / alpha | Key |
+|---|---|---|
+| `assets/images/workspace-icon/ios-icon-light.png` | 1024, opaque | iOS `ZefirNight.appiconset`, default appearance |
+| `assets/images/workspace-icon/ios-icon-dark.png` | 1024, opaque | dark appearance (the pipeline's `ios-icon-dark-opaque.png`: the dark slate gradient, not the transparent variant) |
+| `assets/images/workspace-icon/ios-icon-tinted.png` | 1024, alpha | tinted (mono) appearance |
+| `assets/images/workspace-icon/android-icon-foreground.png` | 1024 (= 108 dp), alpha | the alias's adaptive foreground (reach 0.29) |
+| `assets/images/workspace-icon/android-icon-background.png` | 1024, opaque | the alias's adaptive background (slate gradient); `backgroundColor: '#E6EAF0'` |
+| `assets/images/workspace-icon/android-icon-monochrome.png` | 1024, alpha only | the alias's monochrome layer (Android 13+ themed icons) |
+| `assets/zefirca-workspace.icon/` | Icon Composer document | NOT wired: kept as the source for when alternate icons take `.icon` documents (below) |
+
+**Icon Composer and alternate icons.** The primary icon is an Icon Composer `.icon` document
+(`ios.icon`). The alternate is an asset-catalog `appiconset` with light, dark and tinted
+appearances, named in `ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES` (Xcode then writes
+`CFBundleAlternateIcons`), because `expo-alternate-app-icons` writes asset catalogs and the
+audit's caution stands: an alternate given as a `.icon` document needs Xcode 26's own alternate
+handling, which this toolchain does not drive. The visible difference is the Clear appearance:
+iOS 26 derives it for the `.icon` primary, the alternate shows its tinted art there. Switch the
+alternate to `zefirca-workspace.icon` once the plugin (or our own) can add a `.icon` alternate.
+
+**How it is offered.** Once per device, when a self-hosted workspace (`deployment_kind:
+self_hosted`) is connected (src/features/appIcon/appIcon.ts); iOS then shows its own "You have
+changed the icon" alert. Settings → Appearance → "Workspace app icon" switches either way.
+Android: the icon is an `<activity-alias>` (`.MainActivityZefirNight`) enabled instead of
+`.MainActivity`; `plugins/withAlternateIconLinks.js` copies MainActivity's link filters onto it so
+connect links and the sign-in redirect keep working with that icon on, and some launchers close
+the app during the switch (the offer says so).
 
 ### Splash
 

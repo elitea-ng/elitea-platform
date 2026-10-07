@@ -1,6 +1,6 @@
 import { Stack, router, useLocalSearchParams } from 'expo-router';
 import * as Linking from 'expo-linking';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -68,7 +68,7 @@ import {
   type ToolkitOption,
 } from '@/features/chat/slashPicker';
 import { pauseFromGroup } from '@/features/chat/pauses/continueBodies';
-import { readHandoff } from '@/features/intents/intentHandoff';
+import { markThenDone, readHandoff } from '@/features/intents/intentHandoff';
 import { MAX_PREFILL } from '@/features/intents/intentRouter';
 import { appActivity } from '@/lib/appActivity';
 import { network, useOnline } from '@/lib/network';
@@ -103,6 +103,12 @@ export default function ThreadScreen() {
   // The question an intent handed over in memory (intentHandoff.ts); never text from a URL.
   const { id, intent } = useLocalSearchParams<{ id: string; intent?: string }>();
   const prefill = readHandoff(intent)?.prefill ?? null;
+  // Home's "Dictate a message" / "Ask about a photo/file": what to do once, now that it is open.
+  const [then] = useState(() => {
+    const action = readHandoff(intent)?.then ?? null;
+    if (action !== null) markThenDone(intent);
+    return action;
+  });
   const ref = typeof id === 'string' ? id : '';
   const projectId = useSession((s) => s.projectId);
   const conversation = useConversation(projectId, ref);
@@ -305,6 +311,12 @@ export default function ThreadScreen() {
       Alert.alert('Attach files', "Those files couldn't be opened.");
     }
   };
+  const pickedOnOpen = useRef(false);
+  useEffect(() => {
+    if (pickedOnOpen.current || (then !== 'photos' && then !== 'files') || gateReason) return;
+    pickedOnOpen.current = true;
+    void pickInto(then);
+  });
   const sendWithFiles = async (text: string, mentions: SendExtras['mentions']): Promise<string | null> => {
     if (trayItems.length === 0) return turn.send(text, { mentions });
     if (gateReason) return gateReason;
@@ -692,6 +704,7 @@ export default function ThreadScreen() {
         onSend={({ text, mentions }) => sendWithFiles(text, mentions)}
         onStop={contract13 && online && turn.canStop ? stopWithFiles : null}
         dictation={dictation}
+        autoDictate={then === 'dictate' && dictation}
       />
     </KeyboardAvoidingView>
   );

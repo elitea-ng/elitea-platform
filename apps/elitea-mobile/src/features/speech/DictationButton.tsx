@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Pressable, StyleSheet, Text } from 'react-native';
 
 import { FONT_SCALE } from '@/constants/typeScale';
@@ -15,15 +16,25 @@ export function DictationButton({
   onText,
   onProblem,
   disabled = false,
+  autoStart = false,
 }: {
   /** Dictation begins: the composer remembers the text typed so far. */
   onStart: () => void;
   onText: (heard: string, final: boolean) => void;
   onProblem: (problem: DictationProblem) => void;
   disabled?: boolean;
+  /** Start listening once on mount (Home's "Dictate a message", a tap the user made). */
+  autoStart?: boolean;
 }) {
   const palette = usePalette();
   const dictation = useDictation({ onText, onProblem });
+  const started = useRef(false);
+  useEffect(() => {
+    if (!autoStart || disabled || started.current) return;
+    started.current = true;
+    onStart();
+    void dictation.start();
+  });
   return (
     <Pressable
       accessibilityRole="button"

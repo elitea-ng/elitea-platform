@@ -1,25 +1,28 @@
 import { router } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 
-import { usePalette } from '@/constants/use-palette';
 import { displayHost } from '@/features/connect/connectFlow';
+import { useActiveWorkspace } from '@/features/workspaces/activeWorkspace';
 import { WorkspaceMark } from '@/features/workspaces/WorkspaceMark';
-import { useSession } from '@/state/session';
-import { useBrandTheme } from '@/theme/brandStore';
-import { Icon, ramp } from '@/ui';
+import { Icon, Text } from '@/ui';
 
 /**
  * Header title of every signed-in screen: the screen title over the ACTIVE
- * workspace's host, with its mark. The host is always on screen, so the user
- * always knows which workspace they are typing into (two workspaces may share
- * a brand). Tapping it opens the workspace switcher.
+ * workspace's host, with its mark (in the workspace's accent when it has no
+ * logo). The host is always on screen, so the user always knows which
+ * workspace they are typing into (two workspaces may share a brand). Tapping
+ * it opens the workspace switcher.
  */
 export function WorkspaceTitle({ title }: { title: string }) {
-  const palette = usePalette();
-  const origin = useSession((s) => s.serverOrigin);
-  const brand = useBrandTheme();
-  if (origin === null) return <Text style={[styles.title, { color: palette.text }]}>{title}</Text>;
-  const host = displayHost(origin);
+  const workspace = useActiveWorkspace();
+  if (workspace === null) {
+    return (
+      <Text variant="headline" emphasized>
+        {title}
+      </Text>
+    );
+  }
+  const host = displayHost(workspace.origin);
   return (
     <Pressable
       accessibilityRole="button"
@@ -27,15 +30,15 @@ export function WorkspaceTitle({ title }: { title: string }) {
       testID="workspace-title"
       onPress={() => router.push('/workspaces')}
       style={styles.box}>
-      <Text numberOfLines={1} style={[styles.title, { color: palette.text }]}>
+      <Text variant="headline" emphasized numberOfLines={1}>
         {title}
       </Text>
       <View style={styles.hostRow}>
-        <WorkspaceMark origin={origin} image={brand?.origin === origin ? (brand.logoMark ?? null) : null} size={14} />
-        <Text numberOfLines={1} style={[styles.host, { color: palette.textSecondary }]}>
+        <WorkspaceMark origin={workspace.origin} image={workspace.logoMark} brand={workspace.brand} size={14} />
+        <Text variant="caption" tone="secondary" numberOfLines={1}>
           {host}
         </Text>
-        <Icon name="chevronDown" size={10} color={palette.textSecondary} weight="semibold" />
+        <Icon name="chevronDown" size={10} tone="secondary" weight="semibold" />
       </View>
     </Pressable>
   );
@@ -43,7 +46,5 @@ export function WorkspaceTitle({ title }: { title: string }) {
 
 const styles = StyleSheet.create({
   box: { alignItems: 'center', maxWidth: 220 },
-  title: { ...ramp.headline, fontWeight: '600' },
   hostRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  host: { ...ramp.caption },
 });

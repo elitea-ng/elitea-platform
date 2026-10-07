@@ -11,9 +11,14 @@ export type DeviceSecurity = 'none' | 'passcode' | 'biometric' | 'unsupported';
 
 export type AuthOutcome = { ok: true } | { ok: false; reason: 'cancelled' | 'lockout' | 'not_available' | 'failed' };
 
+/** The biometric the device unlocks with, for the unlock button's words and glyph. */
+export type Biometry = 'face' | 'fingerprint' | 'iris' | null;
+
 export interface DeviceAuth {
   security(): Promise<DeviceSecurity>;
   authenticate(promptMessage: string): Promise<AuthOutcome>;
+  /** Which biometric is enrolled-capable (Face ID, Touch ID / fingerprint, iris); null: none. */
+  biometry?(): Promise<Biometry>;
 }
 
 export const deviceAuth: DeviceAuth = {
@@ -27,6 +32,20 @@ export const deviceAuth: DeviceAuth = {
         return 'passcode';
       default:
         return 'biometric';
+    }
+  },
+
+  async biometry() {
+    if (Platform.OS === 'web') return null;
+    try {
+      const types = await LocalAuthentication.supportedAuthenticationTypesAsync();
+      const T = LocalAuthentication.AuthenticationType;
+      if (types.includes(T.FACIAL_RECOGNITION)) return 'face';
+      if (types.includes(T.FINGERPRINT)) return 'fingerprint';
+      if (types.includes(T.IRIS)) return 'iris';
+      return null;
+    } catch {
+      return null;
     }
   },
 

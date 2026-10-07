@@ -68,10 +68,11 @@ describe('the tab bar', () => {
     ['1.3', discoveryDocument13()],
     ['1.1', discoveryDocument11()],
     ['1.0', discoveryDocument()],
-  ])('on a %s workspace shows Chats, Discover and Settings (the Discover screen refuses below 1.3)', async (_label, doc) => {
+  ])('on a %s workspace shows Home, Chats, Discover and Settings (the Discover screen refuses below 1.3)', async (_label, doc) => {
     workspace(doc);
     await render(<TabsLayout />);
-    expect(screen.getByTestId('tab-(chats)')).toBeTruthy();
+    expect(screen.getByTestId('tab-(home)')).toBeTruthy();
+    expect(screen.getByTestId('tab-chats')).toBeTruthy();
     expect(screen.getByTestId('tab-discover')).toBeTruthy();
     expect(screen.getByTestId('tab-settings')).toBeTruthy();
     expect(screen.getByText('Discover')).toBeTruthy();
@@ -82,7 +83,7 @@ describe('the tab bar', () => {
     await act(async () => workspace(discoveryDocument13()));
     await act(async () => workspace(discoveryDocument11()));
     await act(async () => workspace(discoveryDocument13()));
-    expect(mounts).toEqual(['(chats);discover;settings']);
+    expect(mounts).toEqual(['(home);chats;discover;settings']);
   });
 
   it("matches the installed expo-router: hidden triggers leave the set and the set keys the tab view", () => {

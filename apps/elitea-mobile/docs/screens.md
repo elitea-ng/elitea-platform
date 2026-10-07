@@ -24,15 +24,15 @@ surface.
 /connect                 stack root when no workspace (existing route)
 /connect/confirm         ConnectConfirm (existing component, own screen)
 /sign-in                 (existing)
-/(tabs)/home             NEW: replaces the (app)/index "Conversations" landing
-/(tabs)/chats            the conversation list (moved from (app)/index)
+/(tabs)/(home)           Home, the `/` route and the first tab (shipped)
+/(tabs)/chats            the conversation list, `/chats` (shipped)
 /(tabs)/discover         NEW: agents catalogue (fetchAgents)
 /(tabs)/settings         (existing settings, regrouped)
 /c/[id]                  chat thread: stack above the tabs, tab bar hidden
 /voice                   full-screen modal
 /new                     agent picker: sheet
 /notifications           pushed from the bell
-/workspace               workspaces & projects: sheet (replaces /projects modal)
+/projects, /workspaces   project and workspace switchers: sheets with detents (shipped)
 ```
 
 The lock gate (`LockGate`) and the privacy cover sit above everything, unchanged in

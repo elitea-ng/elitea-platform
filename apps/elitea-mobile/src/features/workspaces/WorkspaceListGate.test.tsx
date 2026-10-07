@@ -10,6 +10,7 @@ const ws = (requiresLock: boolean): WorkspaceSummary => ({
   origin: 'https://a.example.com',
   name: 'Acme AI',
   logoMark: null,
+  brand: null,
   signedIn: true,
   requiresLock,
 });

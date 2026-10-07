@@ -242,26 +242,86 @@ export function accentSourceOf(schemes: { light?: Record<string, string>; dark?:
 
 /** Re-validates a persisted accent source: anything that is not a plain colour becomes null. */
 export function cleanAccentSource(value: Partial<Record<keyof BrandAccentSource, string | null>>): BrandAccentSource {
-  return {
+  return hueOnlyAccentSource({
     hue: plain(value.hue),
     lightAccent: plain(value.lightAccent),
     darkAccent: plain(value.darkAccent),
     lightOn: plain(value.lightOn),
     darkOn: plain(value.darkOn),
-  };
+  });
+}
+
+/**
+ * The Elitea product default pack's accent inputs (elitea-main
+ * `internal/api/v2/branding/product_default.pack.json`): its `brand.hue` and the
+ * `primary.main` it states per scheme.
+ */
+export const PRODUCT_DEFAULT_ACCENTS = {
+  hue: '#6ae8fa',
+  light: 'rgba(196, 40, 221, 1)',
+  dark: '#6ae8fa',
+} as const;
+
+function sameColor(a: string | null | undefined, b: string): boolean {
+  const x = parseColor(a ?? undefined);
+  const y = parseColor(b);
+  return x !== null && y !== null && formatColor(x) === formatColor(y);
+}
+
+/**
+ * A pack's accent inputs, read the way the web app's brand editor writes them
+ * (elitea-web `entries/brand-preview/lib/editPack.ts`): a pack whose `brand.hue`
+ * left the product default's while its scheme records are still the product
+ * default's stated values is a HUE-ONLY brand laid over the default. The stated
+ * `primary.main` (and its label colour) is then the default's leftover, so it
+ * is dropped and the accent derives from the hue. Without this a second
+ * workspace that changes only its hue kept the first's magenta (the stated
+ * value always wins over `brand.hue`, §3.4).
+ */
+export function packAccentSource(pack: Pick<BrandPack, 'schemes' | 'brand'>): BrandAccentSource {
+  return hueOnlyAccentSource(accentSourceOf(pack.schemes, pack.brand.hue));
+}
+
+/**
+ * `packAccentSource`'s rule on an accent source already read (a theme persisted by an earlier
+ * build still carries the product default's leftover primary next to its own hue).
+ */
+export function hueOnlyAccentSource(source: BrandAccentSource): BrandAccentSource {
+  if (sameColor(source.hue, PRODUCT_DEFAULT_ACCENTS.hue) || source.hue === null) return source;
+  const out = { ...source };
+  if (sameColor(source.lightAccent, PRODUCT_DEFAULT_ACCENTS.light)) {
+    out.lightAccent = null;
+    out.lightOn = null;
+  }
+  if (sameColor(source.darkAccent, PRODUCT_DEFAULT_ACCENTS.dark)) {
+    out.darkAccent = null;
+    out.darkOn = null;
+  }
+  return out;
+}
+
+/**
+ * Whether the served pack is the deployment's product default (no brand of its
+ * own): the `X-Elitea-Brand-Layers` header names only `default`, and its hue is
+ * the product default's. A pack that says `default` but carries another hue (a
+ * gateway or proxy that rewrites the pack) is that workspace's brand.
+ */
+export function isProductDefault(layers: string | null, hue: string | null | undefined): boolean {
+  const onlyDefault = (layers ?? '').split(',').map((l) => l.trim()).join(',') === 'default';
+  return onlyDefault && (hue === null || hue === undefined || sameColor(hue, PRODUCT_DEFAULT_ACCENTS.hue));
 }
 
 export function mapBrandPack(pack: BrandPack, origin: string, layers: string | null): BrandTheme {
   return {
     origin,
     productName: pack.product.name.trim().slice(0, 80),
-    productDefault: (layers ?? '').split(',').map((l) => l.trim()).join(',') === 'default',
+    productDefault: isProductDefault(layers, pack.brand.hue),
     logoMark: acceptImage(pack.assets.logoMark, origin),
     logoFull: acceptImage(pack.assets.logoFull, origin),
     light: mapScheme(pack.schemes.light, pack.brand.hue),
     dark: mapScheme(pack.schemes.dark, pack.brand.hue),
     ...mapFonts(pack, origin),
-    accentSource: accentSourceOf(pack.schemes, pack.brand.hue),
+    accentSource: packAccentSource(pack),
   };
 }
 

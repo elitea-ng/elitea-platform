@@ -37,7 +37,7 @@ export function HostText({
   testID,
 }: {
   host: string;
-  role: 'title1' | 'title2';
+  role: 'title1' | 'title2' | 'title3' | 'headline';
   color: string;
   heading?: boolean;
   testID?: string;

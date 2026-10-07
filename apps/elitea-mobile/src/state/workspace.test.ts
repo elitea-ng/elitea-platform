@@ -458,6 +458,7 @@ describe('workspace list', () => {
         dark: {},
         fontFaces: [],
         fontFamily: null,
+        accentSource: { hue: '#e8a33a', lightAccent: '#14B8A6', darkAccent: 'url(evil)', lightOn: null, darkOn: null },
       }),
     );
     fake.values.set(
@@ -467,8 +468,17 @@ describe('workspace list', () => {
     fake.values.delete(wsKey(SECURE_KEYS.credentialKind, A));
     await refreshWorkspaceList();
     expect(getWorkspaceList()).toEqual([
-      { id: A, origin: ORIGIN_A, name: null, logoMark: null, signedIn: false, requiresLock: false },
-      { id: B, origin: ORIGIN_B, name: 'Acme AI', logoMark: { uri: `${ORIGIN_B}/brand/mark.svg`, kind: 'svg' }, signedIn: true, requiresLock: true },
+      { id: A, origin: ORIGIN_A, name: null, logoMark: null, brand: null, signedIn: false, requiresLock: false },
+      {
+        id: B,
+        origin: ORIGIN_B,
+        name: 'Acme AI',
+        logoMark: { uri: `${ORIGIN_B}/brand/mark.svg`, kind: 'svg' },
+        // Each workspace's own accent, re-validated (a non-colour is dropped), for its row's tile.
+        brand: { productDefault: false, hue: '#e8a33a', lightAccent: '#14b8a6', darkAccent: null, lightOn: null, darkOn: null },
+        signedIn: true,
+        requiresLock: true,
+      },
     ]);
   });
 

@@ -7,6 +7,7 @@
     "@expo/ui": "~58.0.14",
     "@tanstack/react-query": "^5.104.1",
     "expo": "~58.0.6",
+    "expo-alternate-app-icons": "^8.0.0",
     "expo-app-intents": "~0.5.3",
     "expo-application": "~58.0.4",
     "expo-clipboard": "~58.0.3",

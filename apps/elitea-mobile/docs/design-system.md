@@ -881,10 +881,10 @@ The foundation landed on `feat/design-foundation` (additive only; no screen was 
 
 Follow-ups (not in the foundation):
 
-- **F1 Alternate app icon.** The workspace set is not shipped yet (`docs/assets.md`): the app
-  has no alternate-icon mechanism. Generate the set from the same head mark, and add a
-  config plugin (`expo-alternate-app-icons` or a local one in `plugins/`) emitting
-  `CFBundleAlternateIcons` and an Android `<activity-alias>`, plus the user-confirmed switch.
+- **F1 Alternate app icon.** Done with the entry/home redesign (§9): "Zefir Night" ships through
+  `expo-alternate-app-icons` (iOS asset-catalog alternate, Android `<activity-alias>` with
+  `plugins/withAlternateIconLinks.js`), offered once on connecting a self-hosted workspace and
+  switched in Settings (`docs/assets.md`).
 - **F2 Brand mapping in `src/theme/brandPack.ts`.** The pack mapper still applies the web
   neutrals to the old `Palette` and drops weak accents for the legacy theme. `useDesign()`
   ignores the neutrals and reads `BrandTheme.accentSource` (the pack's unfiltered accents,
@@ -943,4 +943,47 @@ Landed on `feat/redesign-shell`:
   `SettingsList` with sample values, so its screenshots show the shipped screens) and
   `/design-composer` (the real `Composer` on the keyboard, same keyboard handling as
   `/c/[id]`); both take `?brand=zefir|magenta|green|lemon`. `/design-sheet` shows `sheetOptions`.
+
+## 9. Entry and Home (as built)
+
+Landed on `feat/redesign-entry-home`:
+
+- **Signed-out screens** share `EntryScreen` (`src/features/entry/`): the gradient ground, every
+  safe area, keyboard-controller insets, one centred column.
+  - Connect (`ConnectWelcome`): the mascot hero (bust at accessibility sizes and while typing),
+    "Meet Agent Zefir", ONE primary action. The address field opens in place, already open when
+    the address is known. The QR button is gone until a scanner exists (App Review 2.1).
+  - Confirm (`ConnectConfirm`): no mascot; the workspace logo (or a monogram tile), its name, the
+    host as the largest text, an inset list (connection, workspace, operated as, version). The
+    pack's accent is not applied yet.
+  - Sign-in (`SignInView`): the bust and the workspace logo in SEPARATE tiles, "Sign in to
+    {name}", the host in a chip, one filled button in the workspace accent. Developer sign-in sits
+    behind "Other sign-in options".
+  - Lock (`LockView`): the bust, "Agent Zefir is locked", the workspace host and mark, "Unlock with
+    Face ID / Touch ID / fingerprint" (`deviceAuth.biometry`), the wipe as a small plain button
+    that confirms first. Update (`UpgradeView`) and the privacy cover use the same ground.
+- **Home** is the first tab (`(app)/(tabs)/(home)`, the `/` route; Chats moved to `/chats`):
+  `HomeView` + `homeHeaderOptions`. A transparent bar with the user's initials avatar (opens
+  Settings) and the bell with its badge; the inline "Home" appears once the greeting scrolls
+  away. The workspace pill reads "Name · Project" over the host and opens the project sheet. The
+  greeting names the user ("who am I" `name`, kept in memory only). The chip row and four cards
+  (New chat, Discover agents, Dictate a message, Ask about a file) start a chat; Dictate and
+  Attach hand the new conversation a one-time action in memory (`IntentHandoff.then`), so a URL
+  can never start the microphone or a picker. Up to five recent chats; the mascot empty state
+  when there are none.
+- **Chats** (`ConversationList`): inset-grouped sections by local day (Today, Yesterday, Previous
+  7 days, Earlier; the contract has no pinned chats), swipe left to Delete (`deleteConversation`,
+  confirmed first; also an accessibility action), none on the offline copy.
+- **Switchers** are native sheets with detents (`sheetOptions`, Done for VoiceOver): projects by
+  NAME under the active workspace (never "Project #id"), workspaces each with its mark in its
+  OWN corrected accent (`WorkspaceSummary.brand`, `markTint`).
+- **Hue-only brands.** A pack whose `brand.hue` left the product default's while its scheme
+  records still state the default's `primary.main` is read the way the web brand editor writes
+  it: the leftover primary is dropped and the hue drives the accent (`packAccentSource`); a pack
+  that says `default` but carries another hue is that workspace's brand (`isProductDefault`).
+  This was the "second workspace hue not applied".
+- **Previews** (`__DEV__`): `/design-tabs/home` (also `?empty=1`, `?offline=1`),
+  `/design-entry?screen=connect|address|add|confirm|sign-in|lock|lock-failed|upgrade`,
+  `/design-workspaces`, `/design-projects`; all take `&brand=magenta|green|lemon` and render
+  the real views (D2).
 

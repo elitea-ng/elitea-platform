@@ -41,8 +41,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   slug: identity.slug,
   version: '0.1.0',
   orientation: 'portrait',
-  // App icons and splash: Agent Zefirca head mark (docs/assets.md). The alternate workspace
-  // icon set ships with its config plugin (follow-up F1 in docs/design-system.md).
+  // App icons and splash: Agent Zefirca head mark (docs/assets.md). The second, user-confirmed
+  // icon ("Zefir Night", self-hosted workspaces) is the expo-alternate-app-icons entry below.
   icon: './assets/images/icon.png',
   scheme: [...identity.connectSchemes, identity.oauthRedirectScheme],
   userInterfaceStyle: 'automatic',
@@ -151,6 +151,36 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
           },
         ],
       },
+    ],
+    // Android: the icon's activity-alias answers the same links as MainActivity (connect links,
+    // the sign-in redirect), which is disabled while the alias is on. Listed BEFORE the icon
+    // plugin: manifest mods run last-registered first, so this one sees the alias it adds.
+    './plugins/withAlternateIconLinks',
+    // The alternate app icon "Zefir Night" (docs/design-system.md §3.6, docs/assets.md): offered
+    // once when a self-hosted workspace connects, switched back in Settings → Appearance
+    // (src/features/appIcon/appIcon.ts). iOS: an asset-catalog icon set with light, dark and
+    // tinted appearances, named in ASSETCATALOG_COMPILER_ALTERNATE_APPICON_NAMES (an Icon Composer
+    // `.icon` is the PRIMARY icon only: assets/zefirca-workspace.icon is kept as the source for
+    // when alternates take `.icon` documents). Android: an <activity-alias> with its own adaptive
+    // icon, monochrome layer included (Android 13+ themed icons).
+    [
+      'expo-alternate-app-icons',
+      [
+        {
+          name: 'ZefirNight',
+          ios: {
+            light: './assets/images/workspace-icon/ios-icon-light.png',
+            dark: './assets/images/workspace-icon/ios-icon-dark.png',
+            tinted: './assets/images/workspace-icon/ios-icon-tinted.png',
+          },
+          android: {
+            foregroundImage: './assets/images/workspace-icon/android-icon-foreground.png',
+            backgroundImage: './assets/images/workspace-icon/android-icon-background.png',
+            monochromeImage: './assets/images/workspace-icon/android-icon-monochrome.png',
+            backgroundColor: '#E6EAF0',
+          },
+        },
+      ],
     ],
     // Siri, Shortcuts and Spotlight: OPEN-APP intents only (app-intents/*.swift). They hand an
     // invocation to JS, which opens a screen behind the device lock; nothing is answered to Siri.

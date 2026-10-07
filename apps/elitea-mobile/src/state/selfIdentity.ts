@@ -122,8 +122,28 @@ export async function restoreSelfIdentity(origin: string): Promise<void> {
  * answer has none; a failed read rejects (the cached id, if any, stays).
  */
 export async function fetchSelfIdentity(client: ApiClient = sessionApiClient(), signal?: AbortSignal): Promise<number | null> {
+  return (await fetchSelfProfile(client, signal)).userId;
+}
+
+/** The signed-in user as Home greets them: the id, and the display name (memory only). */
+export interface SelfProfile {
+  userId: number | null;
+  /** The profile's display name, trimmed; null when it has none. Never persisted. */
+  name: string | null;
+}
+
+/**
+ * Reads "who am I" once: records the ids (as `fetchSelfIdentity`) and returns the display name
+ * for the greeting. The name lives only in the query cache, which is cleared with the session.
+ */
+export async function fetchSelfProfile(client: ApiClient = sessionApiClient(), signal?: AbortSignal): Promise<SelfProfile> {
   const origin = getSession().serverOrigin;
   const profile = await unwrap(client.GET('/social/author', { signal }));
+  const name = typeof profile?.name === 'string' && profile.name.trim() !== '' ? profile.name.trim().slice(0, 120) : null;
+  return { userId: await recordSelf(origin, profile), name };
+}
+
+async function recordSelf(origin: string | null, profile: { id?: unknown; personal_project_id?: unknown } | undefined): Promise<number | null> {
   const userId = parseUserId(profile?.id);
   // "" while the personal project is still being provisioned.
   const personalProjectId = parseUserId(profile?.personal_project_id);
@@ -137,16 +157,22 @@ export async function fetchSelfIdentity(client: ApiClient = sessionApiClient(), 
 
 /** Reads "who am I" once per signed-in session (the app shell mounts it). */
 export function useSelfIdentityRefresh(): void {
+  useSelfProfile();
+}
+
+/** The signed-in user's profile (one read per session, shared by the shell and Home). */
+export function useSelfProfile(): SelfProfile | null {
   const origin = useSession((s) => s.serverOrigin);
   const signedIn = useSession((s) => s.credential !== null && !s.ending);
-  useQuery({
+  const query = useQuery({
     queryKey: ['self', origin],
     enabled: signedIn && origin !== null,
     staleTime: Infinity,
     gcTime: Infinity,
     retry: 2,
-    queryFn: ({ signal }) => fetchSelfIdentity(sessionApiClient(), signal),
+    queryFn: ({ signal }) => fetchSelfProfile(sessionApiClient(), signal),
   });
+  return query.data ?? null;
 }
 
 export function resetSelfIdentity(): void {

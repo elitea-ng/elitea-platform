@@ -65,6 +65,8 @@ export interface ComposerProps {
   onStop?: (() => Promise<{ problem: string | null; restoreText: string | null; lostAttachments?: string[]; restoredAttachments?: string[] }>) | null;
   /** Offer on-device dictation (the screen checks the device can). */
   dictation?: boolean;
+  /** Start dictating once, on open (Home's "Dictate a message"). */
+  autoDictate?: boolean;
   /** Text the input starts with (Siri "Ask <agent>"); never sent until the user taps Send. */
   initialText?: string | null;
 }
@@ -121,6 +123,7 @@ export function Composer({
   allowEmptyText = false,
   onStop = null,
   dictation = false,
+  autoDictate = false,
   initialText = null,
 }: ComposerProps) {
   const palette = usePalette();
@@ -275,6 +278,7 @@ export function Composer({
         {dictation ? (
           <DictationButton
             disabled={submitting}
+            autoStart={autoDictate}
             onStart={() => {
               dictationBase.current = text;
               setError(null);

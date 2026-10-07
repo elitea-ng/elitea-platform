@@ -6,9 +6,13 @@ import {
   acceptImage,
   fetchBrandTheme,
   firstFamily,
+  isProductDefault,
   mapBrandPack,
   mapScheme,
+  packAccentSource,
 } from '@/theme/brandPack';
+import { resolveBrand } from '@/design/brand';
+import { brandInputFrom } from '@/design/resolve';
 import { contrastRatio, parseColor } from '@/theme/color';
 
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
@@ -227,5 +231,43 @@ describe('fetchBrandTheme', () => {
   it('returns null for a bad body or status', async () => {
     expect(await fetchBrandTheme(FIXTURE_ORIGIN, PACK_URL, packFetch({ nope: 1 }))).toBeNull();
     expect(await fetchBrandTheme(FIXTURE_ORIGIN, PACK_URL, packFetch(brandPack(), {}, 503))).toBeNull();
+  });
+});
+
+describe('a hue-only brand laid over the product default (second workspace hue)', () => {
+  const ORANGE = '#e8a33a';
+  const hueOnly = () => BrandPackSchema.parse(brandPack({ brand: { hue: ORANGE } }));
+
+  it('drops the product default\'s stated primary so the hue drives the accent', () => {
+    expect(packAccentSource(hueOnly())).toEqual({ hue: '#e8a33a', lightAccent: null, darkAccent: null, lightOn: null, darkOn: null });
+  });
+
+  it('keeps a stated primary that is the brand\'s own', () => {
+    const own = BrandPackSchema.parse(
+      brandPack({ brand: { hue: ORANGE }, schemes: { light: { 'primary.main': '#14B8A6' }, dark: { 'primary.main': '#14B8A6' } } }),
+    );
+    expect(packAccentSource(own)).toMatchObject({ lightAccent: '#14b8a6', darkAccent: '#14b8a6' });
+  });
+
+  it('keeps the stated values of the product default itself', () => {
+    expect(packAccentSource(BrandPackSchema.parse(brandPack()))).toMatchObject({ lightAccent: '#c428dd', darkAccent: '#6ae8fa' });
+  });
+
+  it('a pack that says "default" but carries another hue is that workspace\'s brand', () => {
+    expect(isProductDefault('default', '#6ae8fa')).toBe(true);
+    expect(isProductDefault('default', ORANGE)).toBe(false);
+    expect(isProductDefault('file', '#6ae8fa')).toBe(false);
+  });
+
+  it('the orange workspace gets an orange accent in both schemes, not the first workspace\'s magenta', () => {
+    const theme = mapBrandPack(hueOnly(), FIXTURE_ORIGIN, 'default');
+    expect(theme.productDefault).toBe(false);
+    const overrides = resolveBrand(brandInputFrom(theme));
+    for (const scheme of ['light', 'dark'] as const) {
+      const accent = parseColor(overrides[scheme].accent)!;
+      // Orange: red channel well above blue (magenta #C428DD has blue above green).
+      expect(accent.r).toBeGreaterThan(accent.b);
+      expect(accent.g).toBeGreaterThan(accent.b);
+    }
   });
 });

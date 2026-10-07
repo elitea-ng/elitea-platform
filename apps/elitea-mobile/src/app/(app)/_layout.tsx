@@ -1,4 +1,7 @@
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
+
+import { useDesign } from '@/design/DesignProvider';
+import { Button, sheetOptions } from '@/ui';
 
 import { useQuickActions } from '@/features/quickActions/useQuickActions';
 import { useWidgetSnapshot } from '@/features/surfaces/useWidgetSnapshot';
@@ -19,6 +22,13 @@ export default function AppLayout() {
   useWidgetSnapshot();
   // Siri and Shortcuts: open-app intents only (agent names only when the policy allows titles).
   useAppIntentHandler();
+  const design = useDesign();
+  // The switchers are native sheets with detents (§4.10): grabber, swipe-down and Android back
+  // close them, and Done is there for VoiceOver and Switch Control users (audit 2.9).
+  const switcher = {
+    ...sheetOptions(design, 'half'),
+    headerRight: () => <Button title="Done" variant="plain" size="small" onPress={() => router.back()} />,
+  };
   return (
     // Every signed-in screen names the active workspace's host in its header. The tabs carry
     // their own stacks (and headers); a thread, an agent page and the sheets sit above them.
@@ -26,8 +36,8 @@ export default function AppLayout() {
       {/* Its title is the back label of every screen above the tabs. */}
       <Stack.Screen name="(tabs)" options={{ headerShown: false, title: 'Back' }} />
       <Stack.Screen name="c/[id]" options={{ title: 'Conversation' }} />
-      <Stack.Screen name="projects" options={{ title: 'Projects', presentation: 'modal' }} />
-      <Stack.Screen name="workspaces" options={{ title: 'Workspaces', presentation: 'modal' }} />
+      <Stack.Screen name="projects" options={{ title: 'Projects', ...switcher }} />
+      <Stack.Screen name="workspaces" options={{ title: 'Workspaces', ...switcher }} />
       <Stack.Screen name="new" options={{ title: 'New conversation', presentation: 'modal' }} />
       <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
       <Stack.Screen name="memory" options={{ title: 'Memory' }} />

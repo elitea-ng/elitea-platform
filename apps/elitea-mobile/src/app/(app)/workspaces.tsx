@@ -1,27 +1,22 @@
 import { router } from 'expo-router';
 import { useEffect } from 'react';
-import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert } from 'react-native';
 
 import { identity } from '@/config/identity';
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
 import { displayHost } from '@/features/connect/connectFlow';
-import { WorkspaceRow } from '@/features/workspaces/WorkspaceRow';
+import { WorkspacesSheet } from '@/features/workspaces/WorkspacesSheet';
 import { log } from '@/lib/log';
-import { MAX_WORKSPACES } from '@/security/workspaceRegistry';
 import { useSession } from '@/state/session';
 import { beginAddWorkspace, removeWorkspace, switchToWorkspace } from '@/state/workspace';
 import { refreshWorkspaceList, useWorkspaceList, type WorkspaceSummary } from '@/state/workspaceList';
-import { ramp } from '@/ui';
 
 /**
- * The workspace switcher (modal): every workspace connected on this device,
- * each with its host. Switching never deletes anything; "Remove" logs out of
- * that one workspace and deletes only its data; "Add workspace" opens the
+ * The workspace switcher (a sheet with detents, `sheetOptions`): every workspace connected on
+ * this device, each with its host and in its own accent. Switching never deletes anything;
+ * "Remove" logs out of that one workspace and deletes only its data; "Add workspace" opens the
  * connect flow with the current workspace kept.
  */
 export default function WorkspacesScreen() {
-  const palette = usePalette();
   const activeId = useSession((s) => s.workspaceId);
   const workspaces = useWorkspaceList();
 
@@ -59,50 +54,16 @@ export default function WorkspacesScreen() {
     );
   };
 
-  const full = workspaces.length >= MAX_WORKSPACES;
   return (
-    <FlatList
-      style={{ backgroundColor: palette.background }}
-      data={workspaces}
-      keyExtractor={(w) => w.id}
-      ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: palette.border }]} />}
-      renderItem={({ item }) => (
-        <WorkspaceRow
-          workspace={item}
-          active={item.id === activeId}
-          onPress={() => onOpen(item)}
-          onRemove={() => onRemove(item)}
-        />
-      )}
-      ListFooterComponent={
-        <View style={styles.footer}>
-          <Pressable
-            accessibilityRole="button"
-            testID="add-workspace"
-            disabled={full}
-            accessibilityState={{ disabled: full }}
-            onPress={() => {
-              if (router.canGoBack()) router.back();
-              void beginAddWorkspace();
-            }}
-            style={[styles.button, { borderColor: palette.accent, opacity: full ? 0.5 : 1 }]}>
-            <Text style={[styles.buttonText, { color: palette.accent }]}>Add workspace</Text>
-          </Pressable>
-          <Text style={[styles.hint, { color: palette.textSecondary }]}>
-            {full
-              ? `At most ${MAX_WORKSPACES} workspaces can be connected. Remove one to add another.`
-              : 'Each workspace keeps its own sign-in, data and settings on this device. Switching never deletes anything.'}
-          </Text>
-        </View>
-      }
+    <WorkspacesSheet
+      workspaces={workspaces}
+      activeId={activeId}
+      onOpen={onOpen}
+      onRemove={onRemove}
+      onAdd={() => {
+        if (router.canGoBack()) router.back();
+        void beginAddWorkspace();
+      }}
     />
   );
 }
-
-const styles = StyleSheet.create({
-  separator: { height: StyleSheet.hairlineWidth, marginLeft: Spacing.three },
-  footer: { padding: Spacing.three, gap: Spacing.two },
-  button: { borderWidth: 1.5, borderRadius: 10, paddingVertical: Spacing.three - 2, alignItems: 'center' },
-  buttonText: { ...ramp.headline, fontWeight: '600' },
-  hint: { ...ramp.footnote, textAlign: 'center' },
-});

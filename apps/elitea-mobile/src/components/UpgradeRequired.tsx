@@ -1,16 +1,16 @@
+import * as WebBrowser from 'expo-web-browser';
 import { useState } from 'react';
-import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 
 import { StatusScreen } from '@/components/StatusScreen';
 import { identity } from '@/config/identity';
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
 import { endSession } from '@/security/endSession';
 import { getSession, useSession } from '@/state/session';
 import { beginAddWorkspace } from '@/state/workspace';
 import { useWorkspaceList } from '@/state/workspaceList';
 import { refreshWorkspaceInfo } from '@/state/workspaceInfo';
-import { ramp } from '@/ui';
+import { Button, Text } from '@/ui';
 
 /**
  * Asks the workspace again whether this app version is accepted: re-reads the
@@ -33,7 +33,7 @@ export async function checkVersionAgain(refresh: () => Promise<unknown> = refres
  * wipe) are the other ways out.
  */
 export function UpgradeRequired({ minVersion, overlay = false }: { minVersion?: string; overlay?: boolean }) {
-  const palette = usePalette();
+  const { colors } = useDesign();
   const workspaceId = useSession((s) => s.workspaceId);
   const others = useWorkspaceList().filter((w) => w.id !== workspaceId).length;
   const [checking, setChecking] = useState(false);
@@ -58,50 +58,21 @@ export function UpgradeRequired({ minVersion, overlay = false }: { minVersion?: 
     );
   };
   const screen = (
-    <StatusScreen title={`Update ${identity.displayName}`} body={body}>
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => void Linking.openURL(identity.webUrl)}
-        style={[styles.button, { backgroundColor: palette.accent }]}>
-        <Text style={[styles.buttonText, { color: palette.onAccent }]}>Get the update</Text>
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ busy: checking, disabled: checking }}
-        disabled={checking}
-        onPress={onCheckAgain}
-        style={[styles.button, styles.outline, { borderColor: palette.accent }]}>
-        {checking ? (
-          <ActivityIndicator color={palette.accent} />
-        ) : (
-          <Text style={[styles.buttonText, { color: palette.accent }]}>Check again</Text>
-        )}
-      </Pressable>
-      {stillRequired ? (
-        <Text accessibilityRole="alert" style={[styles.hint, { color: palette.textSecondary }]}>
-          The workspace still needs a newer version.
-        </Text>
-      ) : null}
-      {others > 0 ? (
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => void beginAddWorkspace()}
-          style={[styles.button, styles.outline, { borderColor: palette.accent }]}>
-          <Text style={[styles.buttonText, { color: palette.accent }]}>Use another workspace</Text>
-        </Pressable>
-      ) : null}
-      <Pressable
-        accessibilityRole="button"
-        onPress={() => void endSession({ reason: 'user_logout' })}
-        style={[styles.button, styles.outline, { borderColor: palette.danger }]}>
-        <Text style={[styles.buttonText, { color: palette.danger }]}>Log out & wipe</Text>
-      </Pressable>
-    </StatusScreen>
+    <UpgradeView
+      body={body}
+      checking={checking}
+      stillRequired={stillRequired}
+      others={others > 0}
+      onGetUpdate={() => void WebBrowser.openBrowserAsync(identity.webUrl)}
+      onCheckAgain={onCheckAgain}
+      onOtherWorkspace={() => void beginAddWorkspace()}
+      onLogOut={() => void endSession({ reason: 'user_logout' })}
+    />
   );
   if (!overlay) return screen;
   return (
     <View
-      style={[StyleSheet.absoluteFill, { backgroundColor: palette.background }]}
+      style={[StyleSheet.absoluteFill, { backgroundColor: colors.background }]}
       accessibilityViewIsModal
       importantForAccessibility="yes">
       {screen}
@@ -109,14 +80,48 @@ export function UpgradeRequired({ minVersion, overlay = false }: { minVersion?: 
   );
 }
 
+/**
+ * The update screen's content (audit 2.6): Agent Zefirca on the gradient, what is needed, ONE
+ * filled "Get the update", "Check again" tonal, and the ways out as plain buttons (the wipe in
+ * danger red, last).
+ */
+export function UpgradeView({
+  body,
+  checking,
+  stillRequired,
+  others,
+  onGetUpdate,
+  onCheckAgain,
+  onOtherWorkspace,
+  onLogOut,
+}: {
+  body: string;
+  checking: boolean;
+  stillRequired: boolean;
+  others: boolean;
+  onGetUpdate: () => void;
+  onCheckAgain: () => void;
+  onOtherWorkspace: () => void;
+  onLogOut: () => void;
+}) {
+  return (
+    <StatusScreen mascot="full" title={`Update ${identity.displayName}`} body={body}>
+      <View style={styles.actions}>
+        <Button title="Get the update" icon="openExternal" onPress={onGetUpdate} />
+        <Button title="Check again" variant="tonal" loading={checking} onPress={onCheckAgain} />
+        {stillRequired ? (
+          <Text accessibilityRole="alert" variant="subheadline" tone="secondary" style={styles.center}>
+            The workspace still needs a newer version.
+          </Text>
+        ) : null}
+        {others ? <Button title="Use another workspace" variant="plain" onPress={onOtherWorkspace} /> : null}
+        <Button title="Log out & wipe" variant="destructivePlain" onPress={onLogOut} />
+      </View>
+    </StatusScreen>
+  );
+}
+
 const styles = StyleSheet.create({
-  button: {
-    alignSelf: 'stretch',
-    borderRadius: 10,
-    paddingVertical: Spacing.three - 2,
-    alignItems: 'center',
-  },
-  outline: { borderWidth: 1.5 },
-  buttonText: { ...ramp.headline, fontWeight: '600' },
-  hint: { ...ramp.subheadline, textAlign: 'center' },
+  actions: { alignSelf: 'stretch', gap: 10, marginTop: 8 },
+  center: { textAlign: 'center' },
 });

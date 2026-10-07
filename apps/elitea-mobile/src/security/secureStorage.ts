@@ -62,6 +62,11 @@ export const REGISTERED_KEYS: readonly SecureKey[] = Object.freeze(Object.values
 export const DEVICE_KEYS = {
   /** Settings → Appearance: `system`, `light` or `dark` (a device convenience, not workspace data). */
   appearance: 'az.appearance',
+  /**
+   * The workspace app icon was offered once (connecting a self-hosted workspace): `1`. A device
+   * convenience; the choice itself is the OS's (the alternate icon), changed back in Settings.
+   */
+  appIconOffered: 'az.appicon.offered',
   /** The workspace registry: `{v, active, ids}` (src/security/workspaceRegistry.ts). Purged last. */
   workspaces: 'az.workspaces',
 } as const;

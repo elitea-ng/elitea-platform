@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { log } from '@/lib/log';
 import { SECURE_KEYS, getSecureItemIn } from '@/security/secureStorage';
 import { getRegistrySnapshot, readRegistry, subscribeRegistry, type Registry } from '@/security/workspaceRegistry';
-import { acceptImage, type BrandImage } from '@/theme/brandPack';
+import type { BrandInput } from '@/design/brand';
+import { acceptImage, cleanAccentSource, type BrandImage } from '@/theme/brandPack';
 
 /**
  * What the workspace switcher shows for each connected workspace: the host
@@ -19,6 +20,11 @@ export interface WorkspaceSummary {
   /** The brand's product name, or null for an unbranded workspace (show the host). */
   name: string | null;
   logoMark: BrandImage | null;
+  /**
+   * The workspace's brand accent inputs (its persisted pack's `accentSource`), so the switcher
+   * draws every workspace in its own hue, not only the active one. Null: unbranded.
+   */
+  brand: BrandInput | null;
   signedIn: boolean;
   /**
    * The workspace's last server policy requires the device lock: listing it
@@ -34,6 +40,7 @@ const PersistedBrand = z.looseObject({
   productName: z.string().max(80),
   productDefault: z.boolean(),
   logoMark: z.object({ uri: z.string(), kind: z.enum(['svg', 'raster']) }).nullable(),
+  accentSource: z.record(z.string(), z.string().max(64).nullable()).optional(),
 });
 
 let list: readonly WorkspaceSummary[] = Object.freeze([]);
@@ -86,6 +93,7 @@ export async function readWorkspaceSummary(id: string): Promise<WorkspaceSummary
   if (origin === null) return null;
   let name: string | null = null;
   let logoMark: BrandImage | null = null;
+  let accent: BrandInput | null = null;
   try {
     const raw = await getSecureItemIn(id, SECURE_KEYS.brandTheme);
     const brand = raw === null ? null : PersistedBrand.safeParse(JSON.parse(raw));
@@ -93,6 +101,9 @@ export async function readWorkspaceSummary(id: string): Promise<WorkspaceSummary
       name = brand.data.productDefault ? null : brand.data.productName.trim() || null;
       // Re-validated like a server value: same-origin images only.
       logoMark = brand.data.logoMark ? acceptImage(brand.data.logoMark.uri, origin) : null;
+      // Colours re-validated too (plain colours only); the switcher corrects them like the app does.
+      const source = brand.data.accentSource ? cleanAccentSource(brand.data.accentSource) : null;
+      accent = source ? { productDefault: brand.data.productDefault, ...source } : null;
     }
   } catch {
     // An unreadable brand only costs the decoration.
@@ -106,7 +117,7 @@ export async function readWorkspaceSummary(id: string): Promise<WorkspaceSummary
   } catch {
     // unreadable: treated as no lock requirement (opening it still applies its policy)
   }
-  return { id, origin, name, logoMark, signedIn: kind === 'oauth' || kind === 'pat', requiresLock };
+  return { id, origin, name, logoMark, brand: accent, signedIn: kind === 'oauth' || kind === 'pat', requiresLock };
 }
 
 let refreshing: Promise<void> | null = null;

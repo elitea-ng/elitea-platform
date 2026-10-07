@@ -1,44 +1,58 @@
 import type { ReactNode } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
-import { MaxContentWidth, Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
-import { useBrandFontFamily } from '@/theme/brandFonts';
-import { ramp } from '@/ui';
+import { Mascot } from '@/components/Mascot';
+import { MaxContentWidth } from '@/constants/theme';
+import { useDesign } from '@/design/DesignProvider';
+import { GradientBackground, Text } from '@/ui';
 
-/** Full-screen neutral state: launch, "Signing out…", blocking notices. */
+/**
+ * Full-screen neutral state: launch, "Signing out…", blocking notices. `mascot` adds Agent
+ * Zefirca above the title on the gradient ground (an update, a friendly blocking state); never
+ * for errors that lose data, security or approval states (design-system §5).
+ */
 export function StatusScreen({
   title,
   body,
   busy = false,
+  mascot,
   children,
 }: {
   title?: string;
   body?: string;
   busy?: boolean;
+  mascot?: 'bust' | 'full';
   children?: ReactNode;
 }) {
-  const palette = usePalette();
-  const fontFamily = useBrandFontFamily();
-  return (
-    <View style={[styles.container, { backgroundColor: palette.background }]}>
+  const design = useDesign();
+  const content = (
+    <View style={[styles.container, { padding: design.space.screenGutter }]}>
       <View style={styles.content}>
-        {busy ? <ActivityIndicator color={palette.accent} /> : null}
+        {mascot ? (
+          <Mascot variant={design.accessibilityLayout ? 'bust' : mascot} size={mascot === 'full' && !design.accessibilityLayout ? 140 : 96} decorative />
+        ) : null}
+        {busy ? <ActivityIndicator size="large" color={design.colors.accent} /> : null}
         {title ? (
-          <Text accessibilityRole="header" style={[styles.title, { color: palette.text, fontFamily }]}>
+          <Text variant="title2" heading style={styles.center}>
             {title}
           </Text>
         ) : null}
-        {body ? <Text style={[styles.body, { color: palette.textSecondary }]}>{body}</Text> : null}
+        {body ? (
+          <Text variant="body" tone="secondary" style={styles.center}>
+            {body}
+          </Text>
+        ) : null}
         {children}
       </View>
     </View>
   );
+  if (mascot) return <GradientBackground>{content}</GradientBackground>;
+  return <View style={[styles.flex, { backgroundColor: design.colors.background }]}>{content}</View>;
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.four },
-  content: { width: '100%', maxWidth: MaxContentWidth, gap: Spacing.three, alignItems: 'center' },
-  title: { ...ramp.title2, fontWeight: '700', textAlign: 'center' },
-  body: { ...ramp.body, textAlign: 'center' },
+  flex: { flex: 1 },
+  container: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  content: { width: '100%', maxWidth: MaxContentWidth, gap: 14, alignItems: 'center' },
+  center: { textAlign: 'center' },
 });

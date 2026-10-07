@@ -5,7 +5,9 @@ import { Alert, ScrollView, StyleSheet } from 'react-native';
 import { speaksContract } from '@/api/discovery';
 import { identity } from '@/config/identity';
 import { useDesign } from '@/design/DesignProvider';
+import { appIconSupported, setAppIcon, useAppIcon } from '@/features/appIcon/appIcon';
 import { displayHost } from '@/features/connect/connectFlow';
+import { useProjectLabel } from '@/features/projects/ProjectChip';
 import { SettingsList } from '@/features/settings/SettingsList';
 import { UsageCard } from '@/features/usage/UsageCard';
 import { usePolicy } from '@/security/policy';
@@ -22,6 +24,8 @@ export default function SettingsScreen() {
   const { serverOrigin, clear } = useWorkspace();
   const credentialKind = useSession((s) => s.credential?.kind ?? null);
   const projectId = useSession((s) => s.projectId);
+  const projectName = useProjectLabel();
+  const appIcon = useAppIcon();
   const { policy, source, managed } = usePolicy();
   const brand = useBrandTheme();
   const workspaceCount = useWorkspaceList().length;
@@ -70,6 +74,9 @@ export default function SettingsScreen() {
         serverOrigin={serverOrigin}
         logoMark={serverOrigin !== null && brand?.origin === serverOrigin ? brand.logoMark : null}
         projectId={projectId}
+        projectName={projectName}
+        onProject={() => router.push('/projects')}
+        appIcon={appIconSupported() ? { workspace: appIcon === 'workspace', onChange: (next) => void setAppIcon(next ? 'workspace' : 'default') } : null}
         workspaceCount={workspaceCount}
         developerSignIn={credentialKind === 'pat'}
         scheme={scheme}

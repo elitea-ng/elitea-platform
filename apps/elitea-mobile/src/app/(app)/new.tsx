@@ -66,7 +66,8 @@ export default function NewConversationScreen() {
       void queryClient.invalidateQueries({ queryKey: queryKeys.conversations(projectId) });
       router.replace({
         pathname: '/c/[id]',
-        params: prefill !== null && typeof intent === 'string' ? { id: String(created.id), intent } : { id: String(created.id) },
+        // The hand-over travels on when it still has something for the conversation to do.
+        params: (prefill !== null || handoff?.then) && typeof intent === 'string' ? { id: String(created.id), intent } : { id: String(created.id) },
       });
     } catch (e) {
       setError(

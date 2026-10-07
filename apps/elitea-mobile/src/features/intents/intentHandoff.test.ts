@@ -1,4 +1,4 @@
-import { HANDOFF_MAX_AGE_MS, clearHandoffs, handOff, markAgentStarted, readHandoff } from '@/features/intents/intentHandoff';
+import { HANDOFF_MAX_AGE_MS, clearHandoffs, handOff, markAgentStarted, markThenDone, readHandoff } from '@/features/intents/intentHandoff';
 
 let mockUuid = 0;
 jest.mock('expo-crypto', () => ({ randomUUID: () => `00000000-0000-4000-8000-${String(++mockUuid).padStart(12, '0')}` }));
@@ -21,4 +21,12 @@ it('expires, starts its agent once, and is gone after a wipe', () => {
   const other = handOff(HANDOFF, 2000);
   clearHandoffs();
   expect(readHandoff(other, 2000)).toBeNull();
+});
+
+it('carries a Home action ("then") once, and a URL cannot ask for one', () => {
+  const id = handOff({ agent: null, prefill: null, then: 'dictate' }, 1000);
+  expect(readHandoff(id, 1000)).toEqual({ agent: null, prefill: null, then: 'dictate' });
+  markThenDone(id);
+  expect(readHandoff(id, 1000)).toEqual({ agent: null, prefill: null });
+  expect(readHandoff('dictate', 1000)).toBeNull();
 });

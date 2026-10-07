@@ -4,7 +4,8 @@ import { useDesign } from '@/design/DesignProvider';
 import { nativeTabsProps } from '@/ui';
 
 /**
- * The signed-in tab bar: Chats, Discover and Settings (docs/screens.md §0).
+ * The signed-in tab bar: Home, Chats, Discover and Settings (docs/screens.md §2, design-system
+ * §4.12). Home is first, so it is where a signed-in launch lands.
  * The set of tabs never changes: expo-router keys the native tab view by the
  * visible trigger names, so hiding Discover until the workspace's discovery
  * document arrives (after launch) would remount the bar and every tab's
@@ -18,7 +19,11 @@ export default function TabsLayout() {
   const { colors } = useDesign();
   return (
     <NativeTabs {...nativeTabsProps(colors)}>
-      <NativeTabs.Trigger name="(chats)">
+      <NativeTabs.Trigger name="(home)">
+        <NativeTabs.Trigger.Label>Home</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf={{ default: 'house', selected: 'house.fill' }} md="home" />
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="chats">
         <NativeTabs.Trigger.Label>Chats</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf={{ default: 'bubble.left.and.bubble.right', selected: 'bubble.left.and.bubble.right.fill' }} md="forum" />
       </NativeTabs.Trigger>

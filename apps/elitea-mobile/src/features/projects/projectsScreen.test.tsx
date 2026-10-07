@@ -35,8 +35,10 @@ beforeEach(() => {
 
 it('lists the personal project first, then the team projects, without suspended ones', async () => {
   await render(<ProjectsScreen />);
+  // Section headers are the iOS inset-grouped style (uppercase footnote); the workspace comes first.
   const headers = screen.getAllByRole('header').map((h) => h.props.children);
-  expect(headers).toEqual(['Personal', 'Team projects']);
+  expect(headers).toEqual(['WORKSPACE', 'PERSONAL', 'TEAM PROJECTS']);
+  expect(screen.getByText('ai.example.com')).toBeTruthy();
   expect(screen.getByText('My project')).toBeTruthy();
   expect(screen.getByText('Platform team')).toBeTruthy();
   expect(screen.getByText('Support')).toBeTruthy();

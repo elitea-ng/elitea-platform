@@ -1,21 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
-import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TextInput, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { StyleSheet, View } from 'react-native';
 
 import { assessDiscovery } from '@/api/discovery';
 import { devSignInEnabled, signInWithPat, type DevSignInResult } from '@/auth/devSignIn';
 import { signInWithWorkspace, type NativeSignInError } from '@/auth/nativeAuth';
 import { identity } from '@/config/identity';
-import { MaxContentWidth, Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
 import { displayHost } from '@/features/connect/connectFlow';
-import { HostText } from '@/features/connect/HostText';
+import { SignInView, type NativeSignInState } from '@/features/entry/SignInView';
+import { useActiveWorkspace } from '@/features/workspaces/activeWorkspace';
 import { useSession } from '@/state/session';
 import { leaveSignIn } from '@/state/workspace';
 import { refreshWorkspaceInfo, useWorkspaceInfo } from '@/state/workspaceInfo';
-import { BrandLogo } from '@/theme/BrandLogo';
 import { useBrandTheme } from '@/theme/brandStore';
-import { Button, ramp, Text } from '@/ui';
+import { Button, Text, TextField } from '@/ui';
 
 type SignInError = Extract<DevSignInResult, { ok: false }>['error'];
 
@@ -50,43 +48,39 @@ const NATIVE_ERROR_TEXT: Record<NativeSignInError, string | null> = {
 /**
  * "Sign in": the workspace's native sign-in (ADR-0025 WP2: authorization
  * code + PKCE S256 in the system browser). Development builds (`__DEV__`) can
- * also paste a personal access token.
+ * also paste a personal access token, behind "Other sign-in options".
  */
 export default function SignInScreen() {
-  const palette = usePalette();
   const serverOrigin = useSession((s) => s.serverOrigin);
   const enabled = devSignInEnabled();
-  const brand = useBrandTheme();
-
+  const workspace = useActiveWorkspace();
+  const info = useWorkspaceInfo();
+  const native = useNativeSignIn();
+  const brandLogo = useBrandLogo(serverOrigin);
+  if (serverOrigin === null) return null;
+  const host = displayHost(serverOrigin);
+  const current = info !== null && info.origin === serverOrigin ? info : null;
   return (
-    <SafeAreaView style={[styles.flex, { backgroundColor: palette.background }]}>
-      <KeyboardAvoidingView
-        style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <BrandLogo image={brand?.logoMark ?? brand?.logoFull ?? null} size={56} />
-          <Text variant="title1" heading style={styles.title}>
-            Sign in
-          </Text>
-          <View style={[styles.card, { backgroundColor: palette.backgroundElement }]}>
-            <Text variant="footnote" tone="secondary" emphasized>
-              Workspace
-            </Text>
-            {serverOrigin ? <HostText host={displayHost(serverOrigin)} role="title2" color={palette.text} /> : null}
-          </View>
-
-          <NativeSignIn />
-
-          {enabled ? <DevPatForm /> : null}
-
-          <Button title="Use a different workspace" variant="plain" onPress={() => void leaveSignIn()} />
-        </ScrollView>
-      </KeyboardAvoidingView>
-    </SafeAreaView>
+    <SignInView
+      host={host}
+      origin={serverOrigin}
+      name={current?.discovery.display_name || workspace?.name || host}
+      logo={brandLogo}
+      brand={workspace?.brand ?? null}
+      native={native}
+      developer={enabled ? <DevPatForm /> : null}
+      onUseDifferentWorkspace={() => void leaveSignIn()}
+    />
   );
 }
 
-function NativeSignIn() {
+/** The workspace's logo for the sign-in tile: its mark, else its full logo. */
+function useBrandLogo(origin: string | null) {
+  const brand = useBrandTheme();
+  return brand !== null && brand.origin === origin ? (brand.logoMark ?? brand.logoFull) : null;
+}
+
+function useNativeSignIn(): NativeSignInState {
   const serverOrigin = useSession((s) => s.serverOrigin);
   const info = useWorkspaceInfo();
   const [busy, setBusy] = useState(false);
@@ -119,47 +113,22 @@ function NativeSignIn() {
     if (!result.ok) setError(NATIVE_ERROR_TEXT[result.error]);
   };
 
-  if (current === null) {
-    return (
-      <View style={styles.form}>
-        <Text tone="secondary">
-          {loading ? 'Checking the workspace…' : "The workspace's sign-in details are not loaded."}
-        </Text>
-        <Button title="Try again" variant="tonal" loading={loading} onPress={() => void load()} />
-      </View>
-    );
-  }
-
+  if (current === null) return loading ? { kind: 'loading' } : { kind: 'unloaded', onRetry: () => void load() };
   const assessment = assessDiscovery(current.discovery);
   if (assessment.kind === 'native_auth_unavailable' || assessment.kind === 'contract_unsupported') {
-    return (
-      <Text accessibilityRole="alert" tone="secondary">
-        {assessment.kind === 'native_auth_unavailable'
+    return {
+      kind: 'unavailable',
+      text:
+        assessment.kind === 'native_auth_unavailable'
           ? `This workspace hasn't enabled ${identity.displayName} sign-in. Ask your administrator to register the app.`
-          : `This workspace needs a different version of ${identity.displayName}.`}
-      </Text>
-    );
+          : `This workspace needs a different version of ${identity.displayName}.`,
+    };
   }
-
-  const name = current.discovery.display_name || displayHost(current.origin);
-  return (
-    <View style={styles.form}>
-      <Button testID="native-sign-in" title={`Sign in with ${name}`} loading={busy} onPress={() => void onSignIn()} />
-      <Text variant="footnote" tone="secondary">
-        Opens your organization&apos;s sign-in page in the system browser. {identity.displayName} never
-        sees your password.
-      </Text>
-      {error ? (
-        <Text accessibilityRole="alert" variant="subheadline" tone="danger">
-          {error}
-        </Text>
-      ) : null}
-    </View>
-  );
+  return { kind: 'ready', busy, error, onSignIn: () => void onSignIn() };
 }
 
 function DevPatForm() {
-  const palette = usePalette();
+  const { colors } = useDesign();
   const [token, setToken] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -188,7 +157,7 @@ function DevPatForm() {
 
   return (
     <View style={styles.form}>
-      <View style={[styles.banner, { borderColor: palette.danger }]}>
+      <View style={[styles.banner, { backgroundColor: colors.dangerSoft }]}>
         <Text variant="subheadline" tone="danger" emphasized>
           Developer sign-in
         </Text>
@@ -197,10 +166,8 @@ function DevPatForm() {
           device and grants full access to your account.
         </Text>
       </View>
-      <Text variant="footnote" tone="secondary" emphasized>
-        Personal access token
-      </Text>
-      <TextInput
+      <TextField
+        label="Personal access token"
         value={token}
         onChangeText={(text) => {
           setToken(text);
@@ -219,44 +186,14 @@ function DevPatForm() {
         importantForAutofill="no"
         spellCheck={false}
         returnKeyType="go"
-        accessibilityLabel="Personal access token"
-        style={[
-          styles.input,
-          {
-            color: palette.text,
-            backgroundColor: palette.field,
-            borderColor: error ? palette.danger : palette.inputBorder,
-          },
-        ]}
+        error={error}
       />
-      {error ? (
-        <Text accessibilityRole="alert" variant="subheadline" tone="danger">
-          {error}
-        </Text>
-      ) : null}
-      <Button title="Sign in" loading={busy} onPress={() => void onSubmit()} />
+      <Button title="Sign in with token" variant="tonal" loading={busy} onPress={() => void onSubmit()} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  content: {
-    padding: Spacing.four,
-    gap: Spacing.three,
-    width: '100%',
-    maxWidth: MaxContentWidth,
-    alignSelf: 'center',
-  },
-  title: { marginTop: Spacing.five },
-  card: { borderRadius: 16, borderCurve: 'continuous', padding: Spacing.three, gap: Spacing.one },
-  form: { gap: Spacing.three },
-  banner: { borderWidth: 1, borderRadius: 16, borderCurve: 'continuous', padding: Spacing.three, gap: Spacing.one },
-  input: {
-    ...ramp.body,
-    borderWidth: 1,
-    borderRadius: 10,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.three - 4,
-  },
+  form: { gap: 12 },
+  banner: { borderRadius: 16, borderCurve: 'continuous', padding: 14, gap: 4 },
 });

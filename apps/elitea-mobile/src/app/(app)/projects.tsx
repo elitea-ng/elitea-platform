@@ -1,102 +1,37 @@
 import { router } from 'expo-router';
-import { ActivityIndicator, Pressable, SectionList, StyleSheet, Text, View } from 'react-native';
 
-import { groupProjects, useProjects, type Project } from '@/api/queries/projects';
-import { StatusScreen } from '@/components/StatusScreen';
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
+import { groupProjects, useProjects } from '@/api/queries/projects';
+import { ProjectsSheet } from '@/features/projects/ProjectsSheet';
+import { useActiveWorkspace } from '@/features/workspaces/activeWorkspace';
 import { selectProject } from '@/state/projectSelection';
 import { usePersonalProjectId } from '@/state/selfIdentity';
 import { useSession } from '@/state/session';
-import { Icon, ramp } from '@/ui';
 
 /**
- * Project switcher (modal) for the ACTIVE workspace: the personal project
- * first, then the team projects (the client-tagged project list; suspended
- * ones are hidden). The choice is remembered per workspace.
+ * Project switcher (a sheet with detents) for the ACTIVE workspace: the workspace it belongs to
+ * on top, then the personal project, then the team projects by NAME (the client-tagged project
+ * list; suspended ones are hidden). The choice is remembered per workspace.
  */
 export default function ProjectsScreen() {
-  const palette = usePalette();
   const projects = useProjects();
   const selected = useSession((s) => s.projectId);
   const personalId = usePersonalProjectId();
-
-  if (projects.isLoading) {
-    return (
-      <View style={[styles.center, { backgroundColor: palette.background }]}>
-        <ActivityIndicator color={palette.accent} />
-      </View>
-    );
-  }
-  if (projects.error) {
-    return (
-      <StatusScreen title="Couldn't load projects" body="Check your connection and try again.">
-        <Pressable accessibilityRole="button" onPress={() => void projects.refetch()}>
-          <Text style={[styles.action, { color: palette.accent }]}>Retry</Text>
-        </Pressable>
-      </StatusScreen>
-    );
-  }
-
-  const { personal, team } = groupProjects(projects.data ?? [], personalId);
-  const sections = [
-    ...(personal ? [{ key: 'personal', title: 'Personal', data: [personal] }] : []),
-    ...(team.length > 0 ? [{ key: 'team', title: personal ? 'Team projects' : 'Projects', data: team }] : []),
-  ];
+  const workspace = useActiveWorkspace();
+  const groups = groupProjects(projects.data ?? [], personalId);
   return (
-    <SectionList
-      style={{ backgroundColor: palette.background }}
-      sections={sections}
-      keyExtractor={(p: Project) => String(p.id)}
-      stickySectionHeadersEnabled={false}
-      ListEmptyComponent={
-        <Text style={[styles.empty, { color: palette.textSecondary }]}>No active projects.</Text>
-      }
-      renderSectionHeader={({ section }) => (
-        <Text accessibilityRole="header" style={[styles.section, { color: palette.textSecondary }]}>
-          {section.title}
-        </Text>
-      )}
-      ItemSeparatorComponent={() => <View style={[styles.separator, { backgroundColor: palette.border }]} />}
-      renderItem={({ item }) => (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ selected: item.id === selected }}
-          testID={`project-${item.id}`}
-          onPress={() => {
-            void selectProject(item.id);
-            if (router.canGoBack()) router.back();
-          }}
-          style={styles.row}>
-          <Text numberOfLines={1} style={[styles.name, { color: palette.text }]}>
-            {item === personal ? 'My project' : item.name}
-          </Text>
-          {item.id === selected ? <Icon name="check" size={20} color={palette.accent} weight="semibold" /> : null}
-        </Pressable>
-      )}
+    <ProjectsSheet
+      workspace={workspace}
+      loading={projects.isLoading}
+      failed={projects.error != null}
+      onRetry={() => void projects.refetch()}
+      personal={groups.personal}
+      team={groups.team}
+      selectedId={selected}
+      onSelect={(id) => {
+        void selectProject(id);
+        if (router.canGoBack()) router.back();
+      }}
+      onSwitchWorkspace={() => router.replace('/workspaces')}
     />
   );
 }
-
-const styles = StyleSheet.create({
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.three,
-    gap: Spacing.two,
-  },
-  name: { ...ramp.body, flexShrink: 1 },
-  separator: { height: StyleSheet.hairlineWidth, marginLeft: Spacing.three },
-  empty: { ...ramp.subheadline, padding: Spacing.four, textAlign: 'center' },
-  section: {
-    ...ramp.footnote,
-    fontWeight: '600',
-    paddingHorizontal: Spacing.three,
-    paddingTop: Spacing.four,
-    paddingBottom: Spacing.one,
-  },
-  action: { ...ramp.headline, fontWeight: '600' },
-});

@@ -26,12 +26,14 @@ const roots = fs
 
 describe('tab roots with a large title keep the workspace host on screen (F1)', () => {
   it('finds the large-title tab roots', () => {
-    expect(roots).toEqual(expect.arrayContaining(['(chats)', 'discover', 'settings']));
+    expect(roots).toEqual(expect.arrayContaining(['chats', 'discover', 'settings']));
   });
 
   it.each(roots)('%s is rooted in an inset-adjusting scroll view and shows the host', (dir) => {
     const source = fs.readFileSync(path.join(TABS, dir, 'index.tsx'), 'utf8');
-    expect(source).toMatch(/contentInsetAdjustmentBehavior="automatic"/);
+    // The Chats list's scroll view is the shared ConversationList (the tab and its preview, D2).
+    const scroller = source.includes('<ConversationList') ? fs.readFileSync(path.join(__dirname, '../chats/ConversationList.tsx'), 'utf8') : source;
+    expect(scroller).toMatch(/contentInsetAdjustmentBehavior="automatic"/);
     const content = HOST_IN_CONTENT[dir];
     if (content) {
       expect(source).toMatch(content.mounted);

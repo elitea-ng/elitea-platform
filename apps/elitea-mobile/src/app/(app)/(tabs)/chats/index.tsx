@@ -1,17 +1,19 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { router, Stack } from 'expo-router';
 import { useMemo, useState } from 'react';
-import { ActivityIndicator, FlatList, RefreshControl, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Alert, RefreshControl, StyleSheet, View } from 'react-native';
 
-import { flattenConversationPages, useConversations } from '@/api/queries/conversations';
+import { deleteConversation, flattenConversationPages, useConversations } from '@/api/queries/conversations';
+import { queryKeys } from '@/api/queries/keys';
 import { OfflineNotice } from '@/components/OfflineNotice';
 import { StatusScreen } from '@/components/StatusScreen';
 import { useDesign } from '@/design/DesignProvider';
-import { ConversationRow, ConversationSeparator } from '@/features/chats/ConversationRow';
+import { ConversationList, type ChatListItem } from '@/features/chats/ConversationList';
 import { filterConversations } from '@/features/chats/filterConversations';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
 import { WorkspacePill } from '@/features/workspaces/WorkspacePill';
 import { formatAge } from '@/lib/time';
-import { Button, EmptyState, searchBarOptions } from '@/ui';
+import { Button, EmptyState, haptic, searchBarOptions } from '@/ui';
 
 /** The signed-in user's conversations in the selected project. */
 export default function ConversationsScreen() {
@@ -24,6 +26,7 @@ export default function ConversationsScreen() {
   const [query, setQuery] = useState('');
   const rows = useMemo(() => filterConversations(all, query), [all, query]);
   const searching = query.trim() !== '';
+  const queryClient = useQueryClient();
 
   // The native search field lives in the navigation bar (iOS UISearchController, Android
   // header search view). It searches the loaded (or offline-cached) titles on the device.
@@ -47,16 +50,41 @@ export default function ConversationsScreen() {
     );
   }
 
+  const confirmDelete = (row: ChatListItem): Promise<boolean> =>
+    new Promise((resolve) => {
+      const projectId = selection.projectId;
+      if (projectId === null) {
+        resolve(false);
+        return;
+      }
+      Alert.alert(`Delete “${row.name || 'Untitled conversation'}”?`, 'The chat and its messages are deleted for you in this workspace. This cannot be undone.', [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            void deleteConversation(projectId, row.id).then((ok) => {
+              if (ok) {
+                haptic('swipeActionThreshold');
+                void queryClient.invalidateQueries({ queryKey: queryKeys.conversations(projectId) });
+              } else {
+                Alert.alert("Couldn't delete the chat", 'Check your connection and try again.');
+              }
+              resolve(ok);
+            });
+          },
+        },
+      ], { cancelable: true, onDismiss: () => resolve(false) });
+    });
+
   return (
     <>
       {header}
-      <FlatList
-        contentInsetAdjustmentBehavior="automatic"
-        keyboardDismissMode="on-drag"
-        style={{ backgroundColor: colors.background }}
-        contentContainerStyle={rows.length === 0 ? styles.emptyContainer : styles.list}
-        data={rows}
-        keyExtractor={(c) => String(c.id)}
+      <ConversationList
+        rows={rows.map((c) => ({ id: c.id, name: c.name, updated_at: c.updated_at, age: formatAge(c.updated_at) }))}
+        onOpen={(row) => router.push({ pathname: '/c/[id]', params: { id: String(row.id) } })}
+        // The offline copy cannot be changed: no swipe there.
+        onDelete={offline ? null : confirmDelete}
         refreshControl={
           <RefreshControl
             refreshing={conversations.isRefetching && !conversations.isFetchingNextPage}
@@ -64,19 +92,18 @@ export default function ConversationsScreen() {
             tintColor={colors.accent}
           />
         }
-        ListHeaderComponent={
+        header={
           <>
             <WorkspacePill />
             <OfflineNotice visible={offline} />
           </>
         }
-        onEndReachedThreshold={0.5}
         onEndReached={() => {
           if (conversations.hasNextPage && !conversations.isFetchingNextPage) {
             void conversations.fetchNextPage();
           }
         }}
-        ListEmptyComponent={
+        empty={
           searching ? (
             <EmptyState mascot="bust" title={`Nothing found for “${query.trim()}”`} body="Try another word from the chat's title." />
           ) : (
@@ -87,15 +114,7 @@ export default function ConversationsScreen() {
             />
           )
         }
-        ListFooterComponent={conversations.isFetchingNextPage ? <ActivityIndicator style={styles.footer} color={colors.accent} /> : undefined}
-        ItemSeparatorComponent={ConversationSeparator}
-        renderItem={({ item }) => (
-          <ConversationRow
-            title={item.name}
-            age={formatAge(item.updated_at)}
-            onPress={() => router.push({ pathname: '/c/[id]', params: { id: String(item.id) } })}
-          />
-        )}
+        footer={conversations.isFetchingNextPage ? <ActivityIndicator style={styles.footer} color={colors.accent} /> : undefined}
       />
     </>
   );
@@ -103,7 +122,5 @@ export default function ConversationsScreen() {
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  emptyContainer: { flexGrow: 1 },
-  list: { paddingBottom: 24 },
   footer: { padding: 16 },
 });

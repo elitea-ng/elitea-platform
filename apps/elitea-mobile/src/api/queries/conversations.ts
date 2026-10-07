@@ -109,3 +109,18 @@ export function useConversations(projectId: number | null) {
     getNextPageParam: nextConversationOffset,
   });
 }
+
+/**
+ * Deletes one of the caller's conversations (`deleteConversation`, 204). Resolves true when the
+ * server removed it (or it was already gone: 404); false when it refused or could not be reached.
+ */
+export async function deleteConversation(projectId: number, conversationId: number, client: ApiClient = sessionApiClient()): Promise<boolean> {
+  try {
+    const { response } = await client.DELETE('/elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}', {
+      params: { path: { project_id: String(projectId), conversation_id: String(conversationId) } },
+    });
+    return response.ok || response.status === 404;
+  } catch {
+    return false;
+  }
+}

@@ -1,17 +1,21 @@
-import { Linking, StyleSheet, View } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
+import { StyleSheet, View } from 'react-native';
 
 import { identity } from '@/config/identity';
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
 import { canConnect, displayHost, type ConnectCheck } from '@/features/connect/connectFlow';
 import { HostText } from '@/features/connect/HostText';
+import { EntryScreen } from '@/features/entry/EntryScreen';
+import { WorkspaceMark } from '@/features/workspaces/WorkspaceMark';
 import { BrandLogo } from '@/theme/BrandLogo';
-import { Button, Text } from '@/ui';
+import { Button, Icon, ListRow, ListSection, Text } from '@/ui';
 
 /**
- * The connect confirmation (ADR-0025 WP1). The host is the largest text on
- * the screen: it is the one thing a phishing link cannot fake, so the user
- * checks it before anything is stored or any sign-in page opens.
+ * The connect confirmation (ADR-0025 WP1, docs/screens.md §1b). The workspace's identity is the
+ * hero (its logo, else a monogram tile; its product name), and the host is the largest text on
+ * the screen: it is the one thing a phishing link cannot fake, so the user checks it before
+ * anything is stored or any sign-in page opens. The workspace's accent is NOT applied yet (the
+ * buttons are Zefir's), so a workspace cannot style its own trust decision.
  */
 export function ConnectConfirm({
   check,
@@ -28,84 +32,76 @@ export function ConnectConfirm({
   onBack: () => void;
   onUseCanonical: (origin: string) => void;
 }) {
-  const palette = usePalette();
+  const { colors } = useDesign();
   const allowed = canConnect(check, devSignIn);
   const notice = noticeFor(check, devSignIn);
+  const host = displayHost(check.origin);
+  const secure = check.origin.startsWith('https://');
+  const logo = check.kind === 'confirm' && check.brand ? (check.brand.logoMark ?? check.brand.logoFull) : null;
+  const productName = check.kind === 'confirm' && check.brand && !check.brand.productDefault ? check.brand.productName : null;
 
   return (
-    <View style={styles.container}>
-      {check.kind === 'confirm' && check.brand ? (
-        <View style={styles.brand}>
-          <BrandLogo image={check.brand.logoMark ?? check.brand.logoFull} size={64} />
-          {check.brand.productName ? (
-            <Text variant="title3" emphasized>
-              {check.brand.productName}
-            </Text>
+    <EntryScreen
+      testID="connect-confirm-screen"
+      footer={
+        <>
+          {check.kind === 'failed' && check.canonicalOrigin ? (
+            <Button
+              variant={allowed ? 'tonal' : 'filled'}
+              title={`Use ${displayHost(check.canonicalOrigin)}`}
+              onPress={() => onUseCanonical(check.canonicalOrigin!)}
+            />
           ) : null}
+          {check.kind === 'confirm' && check.assessment.kind === 'upgrade_required' ? (
+            <Button title="Get the update" onPress={() => void WebBrowser.openBrowserAsync(identity.webUrl)} />
+          ) : null}
+          {allowed ? <Button testID="connect-confirm" title="Connect" loading={busy} onPress={onConfirm} /> : null}
+          <Button title="Use a different address" variant="plain" onPress={onBack} />
+        </>
+      }>
+      {/* No mascot here: the workspace's identity is the hero of the trust decision (§3.5, §5). */}
+      <View style={styles.identity}>
+        <View style={[styles.logoTile, { backgroundColor: colors.surface, borderColor: colors.separator }]}>
+          {logo ? <BrandLogo image={logo} size={56} /> : <WorkspaceMark origin={check.origin} image={null} size={56} />}
         </View>
-      ) : null}
-      {/* The host is always in the system font: a brand font must not be able to disguise it. */}
-      <Text variant="subheadline" tone="secondary" style={styles.caption}>
-        You are connecting to
-      </Text>
-      <HostText testID="connect-host" heading host={displayHost(check.origin)} role="title1" color={palette.text} />
-      {/* The full origin stays selectable (copy for support). */}
-      <Text variant="footnote" tone="secondary" selectable>
-        {check.origin}
-      </Text>
+        {productName ? (
+          <Text variant="title3" emphasized style={styles.center}>
+            {productName}
+          </Text>
+        ) : null}
+        <Text variant="subheadline" tone="secondary" style={styles.center}>
+          You are connecting to
+        </Text>
+        {/* The host is always in the system font: a brand font must not be able to disguise it. */}
+        <HostText testID="connect-host" heading host={host} role="title2" color={colors.textPrimary} />
+        {/* The full origin stays selectable (copy for support). */}
+        <Text variant="footnote" tone="secondary" selectable style={styles.center}>
+          {check.origin}
+        </Text>
+      </View>
 
       {check.kind === 'confirm' ? (
-        <View style={[styles.card, { backgroundColor: palette.backgroundElement }]}>
-          <Row label="Workspace" value={check.document.display_name || '—'} />
-          <Row
-            label="Operated as"
-            value={check.document.deployment_kind === 'saas' ? 'Hosted service' : 'Self-hosted'}
+        <ListSection footer="Only connect to workspaces you trust. You can remove a workspace and its data at any time.">
+          <ListRow
+            icon={secure ? 'lock' : 'warning'}
+            title={secure ? 'Secure connection' : 'Not encrypted'}
+            value={secure ? 'HTTPS' : 'HTTP'}
           />
-          <Row label="Server version" value={check.document.server_version} />
-        </View>
+          <ListRow icon="workspace" title="Workspace" value={check.document.display_name || '—'} />
+          <ListRow icon="info" title="Operated as" value={check.document.deployment_kind === 'saas' ? 'Hosted service' : 'Self-hosted'} />
+          <ListRow icon="sync" title="Server version" value={check.document.server_version} />
+        </ListSection>
       ) : null}
 
       {notice ? (
-        <Text
-          accessibilityRole="alert"
-          testID="connect-notice"
-          variant="subheadline"
-          tone={notice.tone === 'error' ? 'danger' : 'secondary'}>
-          {notice.text}
-        </Text>
+        <View style={[styles.notice, { backgroundColor: notice.tone === 'error' ? colors.dangerSoft : colors.surface }]}>
+          <Icon name={notice.tone === 'error' ? 'error' : 'info'} size={20} tone={notice.tone === 'error' ? 'danger' : 'secondary'} />
+          <Text accessibilityRole="alert" testID="connect-notice" variant="subheadline" style={styles.flex}>
+            {notice.text}
+          </Text>
+        </View>
       ) : null}
-
-      {check.kind === 'failed' && check.canonicalOrigin ? (
-        <Button
-          variant="tonal"
-          title={`Use ${displayHost(check.canonicalOrigin)}`}
-          onPress={() => onUseCanonical(check.canonicalOrigin!)}
-        />
-      ) : null}
-
-      {check.kind === 'confirm' && check.assessment.kind === 'upgrade_required' ? (
-        <Button title="Get the update" onPress={() => void Linking.openURL(identity.webUrl)} />
-      ) : null}
-
-      {allowed ? (
-        <Button testID="connect-confirm" title="Connect" loading={busy} onPress={onConfirm} />
-      ) : null}
-
-      <Button title="Use a different address" variant="plain" onPress={onBack} />
-    </View>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <View style={styles.row}>
-      <Text variant="subheadline" tone="secondary" emphasized>
-        {label}
-      </Text>
-      <Text variant="subheadline" style={styles.value}>
-        {value}
-      </Text>
-    </View>
+    </EntryScreen>
   );
 }
 
@@ -162,10 +158,18 @@ export function noticeFor(
 }
 
 const styles = StyleSheet.create({
-  container: { gap: Spacing.three },
-  brand: { alignItems: 'center', gap: Spacing.two, marginTop: Spacing.four },
-  caption: { marginTop: Spacing.four },
-  card: { borderRadius: 16, borderCurve: 'continuous', padding: Spacing.three, gap: Spacing.two },
-  row: { flexDirection: 'row', justifyContent: 'space-between', gap: Spacing.three },
-  value: { flexShrink: 1, textAlign: 'right' },
+  identity: { alignItems: 'center', gap: 6, marginTop: 16 },
+  logoTile: {
+    width: 80,
+    height: 80,
+    borderRadius: 22,
+    borderCurve: 'continuous',
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  center: { textAlign: 'center' },
+  notice: { flexDirection: 'row', gap: 10, padding: 14, borderRadius: 16, borderCurve: 'continuous', alignItems: 'flex-start' },
+  flex: { flex: 1 },
 });

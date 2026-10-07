@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 
-import { projectChipFrame, projectSwitcherOptions } from '@/features/projects/ProjectChip';
+import { projectChipFrame, projectLabel, projectSwitcherOptions } from '@/features/projects/ProjectChip';
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
 jest.mock('@/theme/brandStore', () => ({ useBrandTheme: () => null }));
@@ -31,5 +31,14 @@ describe('project switcher touch target (F5)', () => {
   it('is 44 pt on iOS and 48 dp on Android', () => {
     expect(projectChipFrame('ios').minHeight).toBe(44);
     expect(projectChipFrame('android').minHeight).toBe(48);
+  });
+});
+
+describe('project label', () => {
+  it('names the project, never its internal id ("Project #90504")', () => {
+    expect(projectLabel(90504, 'Zefir Team', 90501)).toBe('Zefir Team');
+    expect(projectLabel(90501, 'project_user_8', 90501)).toBe('My project');
+    expect(projectLabel(90504, null, 90501)).toBe('Project');
+    expect(projectLabel(90504, '  ', null)).toBe('Project');
   });
 });
