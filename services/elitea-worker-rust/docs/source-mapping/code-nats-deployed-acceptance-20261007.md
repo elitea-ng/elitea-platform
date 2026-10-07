@@ -103,3 +103,16 @@ These requirements do not create new load or HA gates for Code.
 Graph gates 5a–5e follow complete Code acceptance.
 Gates 6, 7, 7a, 7b, and 8 remain part of full worker completion.
 Workspaces remain deferred until completion and release of the full worker.
+
+## Local Web reload correction, 2026-10-07
+
+The [reload mapping](code-chat-reload-ui-20261007.md) records the later source correction.
+Chat838 retains the safe failure message, code, and reference after reload, but its displayed author changes.
+The correction separates persisted answer authors from the composer selection.
+It also preserves the fresh-chat participant before navigation and accepts both ID spellings.
+Six focused suites pass 76 unique tests with zero failures or skips.
+TypeScript, lint, and whitespace checks return direct status zero.
+The Web correction has no image, deployment, real browser, or CI acceptance at this checkpoint.
+Main and Web remain at efa. The separately accepted native pair remains at c53.
+The chat838 selection-loss branch and notification Offline cause remain unproved.
+These checks do not close recovery, capacity, or the complete Code gate.

@@ -399,3 +399,35 @@ describe('ChatMessageList speaking mode', () => {
     expect(onAutoSpeak).not.toHaveBeenCalled();
   });
 });
+
+
+describe('ChatMessageList persisted assistant attribution', () => {
+  it('keeps two reloaded pipeline authors when the composer selection changes', () => {
+    Element.prototype.scrollIntoView = vi.fn();
+    const participants = [
+      { id: 135, entity_name: 'application', entity_meta: { name: 'Pipeline Alpha' } },
+      { id: '136', entity_name: 'pipeline', entity_meta: { name: 'Pipeline Beta' } },
+    ] as unknown as readonly MessageParticipantWire[];
+    const messages = [
+      { id: 1, uuid: 'alpha', role: 'assistant', author_participant_id: '135', content: 'Synthetic alpha answer', created_at: '2026-01-01T12:00:00Z' },
+      { id: 2, uuid: 'beta', role: 'assistant', author_participant_id: 136, content: 'Synthetic beta answer', created_at: '2026-01-01T12:00:01Z' },
+    ] as unknown as readonly MessageGroupWire[];
+    const history = convertMessagesToChatHistory(messages, participants);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const buildList = (assistantName: string) => (
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <ChatMessageList chatHistory={history} assistantName={assistantName} />
+        </ThemeProvider>
+      </QueryClientProvider>
+    );
+    const view = render(buildList('Default model'));
+    expect(screen.getByText('Pipeline Alpha')).toBeVisible();
+    expect(screen.getByText('Pipeline Beta')).toBeVisible();
+    expect(screen.queryByText('Default model')).toBeNull();
+    view.rerender(buildList('Other active pipeline'));
+    expect(screen.getByText('Pipeline Alpha')).toBeVisible();
+    expect(screen.getByText('Pipeline Beta')).toBeVisible();
+    expect(screen.queryByText('Other active pipeline')).toBeNull();
+  });
+});

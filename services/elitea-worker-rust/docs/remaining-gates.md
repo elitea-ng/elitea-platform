@@ -995,3 +995,18 @@ The Cargo regression passes in about five seconds and retains its result after p
 Its compiled execution descriptor remains present.
 The replacement CI result remains required before merge.
 The new Main migration transition and complete-cohort restart acceptance remain separate open gates.
+
+## Code chat reload UI correction, 2026-10-07
+
+The [reload mapping](source-mapping/code-chat-reload-ui-20261007.md) records the author and participant-selection corrections.
+Historical answers use their persisted author. Fresh-chat creation stores the selected participant before route navigation.
+Numeric and string IDs match through the existing supported-participant guard.
+The complete creation, route, unmount, and remount regression passes.
+Six focused suites pass 76 unique tests with zero failures or skips.
+TypeScript, lint, and whitespace checks return direct status zero.
+The final implementation patch SHA-256 is `8179380e07279ac1d783d9ed4fcce092ae9ddba3c98ef4aba58ff3c1cef60588`.
+
+These are local Web checks. Deployed Web remains at efa and the native pair remains at c53.
+The actual chat838 selection-loss branch and notification Offline cause remain unproved.
+The existing terminal failure and journal evidence remains separate.
+Root retains image delivery, browser acceptance, CI, and Code gate closure.

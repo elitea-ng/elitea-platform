@@ -115,10 +115,8 @@ export interface ChatMessageListProps {
    */
   readonly emptyState?: ReactNode;
   /**
-   * The answering participant's display name, captioned on every assistant
-   * row (`<mark> Elitea to Message`). Supplied by `ChatBox`, which resolves
-   * it from the conversation's active participant — `entities/message`'s
-   * assistant normaliser keeps no participant, so the row cannot find it.
+   * The fallback name for assistant rows that state no persisted author.
+   * A persisted authorName takes precedence over the composer selection.
    */
   readonly assistantName?: string | undefined;
 }

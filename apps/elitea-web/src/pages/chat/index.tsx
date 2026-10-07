@@ -127,11 +127,11 @@ function conversationIdOf(activeConversation: unknown): string | undefined {
   return (activeConversation as { readonly id?: string } | undefined)?.id;
 }
 
-export function findActiveParticipantById(participants: readonly unknown[] | undefined, id: string | undefined): unknown {
+export function findActiveParticipantById(participants: readonly unknown[] | undefined, id: string | number | undefined): unknown {
   if (!id) return undefined;
   return participants?.find((raw) => {
-    const participant = raw as { readonly id?: string; readonly entity_name?: string } | null;
-    return participant?.id === id && canParticipantBeActiveInChat(participant);
+    const participant = raw as { readonly id?: string | number; readonly entity_name?: string } | null;
+    return participant?.id !== undefined && String(participant.id) === String(id) && canParticipantBeActiveInChat(participant);
   });
 }
 
@@ -212,12 +212,13 @@ const ChatPage = memo(({ editorCallbacks, entitySubmenus }: ChatPageProps) => {
    * showing while it revalidates instead of collapsing to skeletons.
    */
   const handleConversationCreated = useCallback(
-    (created: { readonly id?: string | number }) => {
+    (created: { readonly id?: string | number; readonly activeParticipantId?: string }) => {
       if (created.id === undefined) return;
+      if (created.activeParticipantId) setLocalActiveParticipant(String(created.id), created.activeParticipantId);
       void queryClient.invalidateQueries({ queryKey: ['folder', 'list'] });
       void navigate({ to: '/chat/$conversationId', params: { conversationId: String(created.id) } });
     },
-    [navigate, queryClient],
+    [navigate, queryClient, setLocalActiveParticipant],
   );
 
   // Restore the conversation's last-active participant once its real

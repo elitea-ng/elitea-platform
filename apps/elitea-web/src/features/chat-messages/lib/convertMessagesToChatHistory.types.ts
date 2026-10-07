@@ -21,6 +21,8 @@ export interface ChatMessage {
   readonly persistedTrace?: unknown;
   readonly id: string;
   readonly role: string;
+  /** The persisted assistant author name, independent of the composer selection. */
+  readonly authorName?: string | undefined;
   readonly name: string;
   readonly avatar?: string | undefined;
   readonly content: string;

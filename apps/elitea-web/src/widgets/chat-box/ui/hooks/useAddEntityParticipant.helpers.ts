@@ -105,6 +105,8 @@ type FetchParticipantDetails = (
 export interface CreatedConversation {
   readonly id?: string | number;
   readonly uuid?: string;
+  /** The attached participant selected while the conversation is created. */
+  readonly activeParticipantId?: string;
 }
 
 /**
@@ -181,6 +183,10 @@ async function conversationForSelection(
   return { id: String(created.id), created };
 }
 
+function withActiveParticipant(conversation: CreatedConversation, active: Participant | undefined): CreatedConversation {
+  return active ? { ...conversation, activeParticipantId: active.id } : conversation;
+}
+
 /**
  * Attaches (or, for a toolkit already attached, detaches) one "+"-menu
  * selection.
@@ -228,7 +234,8 @@ export async function applyParticipantSelection(
   // it: that notification navigates to the conversation, and the route change
   // refetches its details. Announcing first would race the add and show a
   // conversation with no agent in it.
-  if (conversation.created) runtime.onConversationCreated?.(conversation.created);
   const added = findSelectedConversationParticipant(selection, updated);
-  if (added && canBecomeActive(added)) runtime.onChangeParticipant?.(added);
+  const active = added && canBecomeActive(added) ? added : undefined;
+  if (conversation.created) runtime.onConversationCreated?.(withActiveParticipant(conversation.created, active));
+  if (active) runtime.onChangeParticipant?.(active);
 }
