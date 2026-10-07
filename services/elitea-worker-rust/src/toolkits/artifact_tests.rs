@@ -512,3 +512,118 @@ async fn every_tool_keeps_the_sdk_contract() {
     let (tools, _rpc) = tools_of("{}", &[]).await;
     super::sdk_conformance::assert_sdk_conformance("artifact", &tools);
 }
+
+fn text_body(content: &str, lines: u64) -> String {
+    json!({
+        "schema_version": "elitea.runtime.artifact-read.v1",
+        "project_id": 17,
+        "bucket": "agent-artifacts",
+        "name": "notes.txt",
+        "media_type": "text/plain",
+        "byte_length": content.len(),
+        "char_length": content.len(),
+        "total_lines": lines,
+        "max_chars": 200_000,
+        "over_limit": false,
+        "content": content,
+    })
+    .to_string()
+}
+
+/// The SDK's partial read: `start_line`/`end_line`, 1-indexed and inclusive.
+#[tokio::test]
+async fn a_line_range_returns_those_lines() {
+    let (tools, _) = tools_of(&text_body("one\ntwo\nthree\nfour\n", 4), &["read_file"]).await;
+    let slice = tools[0]
+        .execute(
+            context(),
+            json!({"filename": "notes.txt", "start_line": 2, "end_line": 3}),
+        )
+        .await
+        .expect("artifact read");
+    assert_eq!(slice, json!("two\nthree\n"));
+    let tail = tools[0]
+        .execute(context(), json!({"filename": "notes.txt", "start_line": 4}))
+        .await
+        .expect("artifact read");
+    assert_eq!(tail, json!("four\n"));
+    let empty = tools[0]
+        .execute(context(), json!({"filename": "notes.txt", "start_line": 9}))
+        .await
+        .expect("artifact read");
+    assert!(
+        empty
+            .as_str()
+            .is_some_and(|text| text.contains("has 4 lines")),
+        "{empty}"
+    );
+}
+
+/// The SDK's document options are accepted, and the answer says they were
+/// not applied rather than passing the whole file off as the slice asked for.
+/// A false `is_capture_image` (what models send by default) is no option at all.
+#[tokio::test]
+async fn document_options_are_accepted_and_named_when_not_applied() {
+    let (tools, _) = tools_of(&text_body("all of it", 1), &["read_file"]).await;
+    let plain = tools[0]
+        .execute(
+            context(),
+            json!({"filename": "notes.txt", "is_capture_image": false, "page_number": null}),
+        )
+        .await
+        .expect("artifact read");
+    assert_eq!(plain, json!("all of it"));
+    let noted = tools[0]
+        .execute(
+            context(),
+            json!({"filename": "notes.txt", "page_number": 2, "sheet_name": "S"}),
+        )
+        .await
+        .expect("artifact read");
+    assert_eq!(
+        noted,
+        json!(
+            "[page_number, sheet_name not applied: this runtime returns the file's text as a whole]\nall of it"
+        )
+    );
+}
+
+/// Copy mode (filepath, no filedata) copies a file the platform returns whole:
+/// one over the read limit comes back without content and is refused with a
+/// sentence, never written empty.
+#[tokio::test]
+async fn copying_a_file_over_the_read_limit_is_refused_not_written_empty() {
+    let over = json!({
+        "schema_version": "elitea.runtime.artifact-read.v1",
+        "project_id": 17,
+        "bucket": "reports",
+        "name": "big.csv",
+        "media_type": "text/csv",
+        "byte_length": 900_000,
+        "char_length": 900_000,
+        "total_lines": 9_000,
+        "max_chars": 200_000,
+        "over_limit": true,
+        "content": "",
+    })
+    .to_string();
+    let (tools, rpc) = tools_of(&over, &["create_file"]).await;
+    let answer = tools[0]
+        .execute(
+            context(),
+            json!({"filename": "copy.csv", "filepath": "/reports/big.csv"}),
+        )
+        .await
+        .expect("artifact copy");
+    assert!(
+        answer
+            .as_str()
+            .is_some_and(|text| text.contains("larger than this runtime copies")),
+        "{answer}"
+    );
+    assert_eq!(
+        rpc.paths.lock().expect("fixture paths").len(),
+        1,
+        "read, and no write"
+    );
+}

@@ -276,6 +276,114 @@ fn parse_filepath(filepath: &str) -> Option<(String, String)> {
     (!bucket.is_empty() && !key.is_empty()).then(|| (bucket.to_owned(), key.to_owned()))
 }
 
+/// The SDK's glob test (`fnmatch`, case-insensitive): `*` is any run of
+/// characters including `/`, `?` one character, `[...]` a class (`[!...]`
+/// negated). Used for `list_files`' include and skip patterns.
+fn glob_matches(pattern: &str, name: &str) -> bool {
+    let mut expression = String::from("(?is)^");
+    let mut characters = pattern.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '*' => expression.push_str(".*"),
+            '?' => expression.push('.'),
+            '[' => {
+                let mut class = String::new();
+                let mut closed = false;
+                for next in characters.by_ref() {
+                    if next == ']' && !class.is_empty() {
+                        closed = true;
+                        break;
+                    }
+                    class.push(next);
+                }
+                if closed {
+                    let class = class
+                        .strip_prefix('!')
+                        .map_or_else(|| class.clone(), |rest| format!("^{rest}"));
+                    expression.push('[');
+                    expression.push_str(&class.replace('\\', "\\\\"));
+                    expression.push(']');
+                } else {
+                    expression.push_str(&regex::escape(&format!("[{class}")));
+                }
+            }
+            other => expression.push_str(&regex::escape(&other.to_string())),
+        }
+    }
+    expression.push('$');
+    regex::Regex::new(&expression).is_ok_and(|compiled| compiled.is_match(name))
+}
+
+/// A list of glob patterns argument (`include`, `skip`); absent, null or
+/// empty is no patterns.
+fn pattern_list(arguments: &Value, key: &str) -> Vec<String> {
+    arguments
+        .as_object()
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_array)
+        .map(|patterns| {
+            patterns
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|pattern| !pattern.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The SDK's include/skip rule: kept when it matches some include pattern
+/// (or there are none) and no skip pattern.
+fn listed(name: &str, include: &[String], skip: &[String]) -> bool {
+    (include.is_empty() || include.iter().any(|pattern| glob_matches(pattern, name)))
+        && !skip.iter().any(|pattern| glob_matches(pattern, name))
+}
+
+fn optional_line(arguments: &Value, key: &str) -> Option<i64> {
+    arguments
+        .as_object()
+        .and_then(|object| object.get(key))
+        .and_then(Value::as_i64)
+}
+
+/// Lines `start..=end` (1-indexed, inclusive; `end` absent reads to the end)
+/// of `content`, as the SDK's partial read returns them. `None` when the range
+/// is empty or inverted, so the caller answers with a sentence.
+fn line_range(content: &str, start: Option<i64>, end: Option<i64>) -> Option<String> {
+    let start = usize::try_from(start.unwrap_or(1).max(1)).ok()?;
+    let lines: Vec<&str> = content.split_inclusive('\n').collect();
+    let end = match end {
+        Some(end) => usize::try_from(end).ok()?.min(lines.len()),
+        None => lines.len(),
+    };
+    (start <= end).then(|| lines[start - 1..end].concat())
+}
+
+/// The options of the SDK's `read_file` this runtime reads past rather than
+/// applies (page and sheet selection, per-type options, image capture): the
+/// platform's artifact read returns a file's text, not a parsed document. A
+/// call that sets one still succeeds, and the answer says so in one line
+/// before the content, so neither the model nor a pipeline mistakes the
+/// whole file for the slice it asked for.
+fn unapplied_read_options(arguments: &Value) -> Vec<&'static str> {
+    let object = arguments.as_object();
+    let set = |key: &str| {
+        object
+            .and_then(|object| object.get(key))
+            .is_some_and(|value| !value.is_null() && value != &Value::Bool(false))
+    };
+    [
+        "page_number",
+        "sheet_name",
+        "extra_params",
+        "is_capture_image",
+    ]
+    .into_iter()
+    .filter(|key| set(key))
+    .collect()
+}
+
 struct ListFilesTool {
     authority: ArtifactToolAuthority,
     bucket: Arc<str>,
@@ -306,7 +414,9 @@ impl Tool for ListFilesTool {
             "properties": {
                 "bucket_name": {"type": "string", "maxLength": 63, "description": "Bucket to list. Defaults to the toolkit's own bucket."},
                 "folder": {"type": "string", "maxLength": MAX_PREFIX_BYTES, "description": "Folder or key prefix to scope the listing to."},
-                "recursive": {"type": "boolean", "description": "List everything beneath the folder rather than its immediate children."}
+                "recursive": {"type": "boolean", "description": "List everything beneath the folder rather than its immediate children."},
+                "include": {"type": "array", "items": {"type": "string"}, "maxItems": 64, "description": "Glob patterns to include (case-insensitive): ['*.md'], ['docs/*'], ['docs/*.md']. Empty includes every file."},
+                "skip": {"type": "array", "items": {"type": "string"}, "maxItems": 64, "description": "Glob patterns to exclude (case-insensitive), same syntax as include: ['temp/*', '*.tmp']."}
             },
             "additionalProperties": false
         }))
@@ -329,6 +439,8 @@ impl Tool for ListFilesTool {
             recursive: optional_bool(&arguments, "recursive").unwrap_or(false),
             limit: DEFAULT_LIST_LIMIT,
         };
+        let include = pattern_list(&arguments, "include");
+        let skip = pattern_list(&arguments, "skip");
         match self
             .authority
             .platform()
@@ -339,6 +451,7 @@ impl Tool for ListFilesTool {
                 let rows = outcome
                     .files
                     .iter()
+                    .filter(|file| listed(&file.name, &include, &skip))
                     .map(|file| {
                         json!({
                             "name": file.name,
@@ -403,7 +516,13 @@ impl Tool for ReadFileTool {
             "properties": {
                 "filename": {"type": "string", "minLength": 1, "maxLength": MAX_FILENAME_BYTES, "description": "Name of the file to read, as list_files reports it. Not needed when filepath is given."},
                 "bucket_name": {"type": "string", "maxLength": 63, "description": "Bucket to read from. Defaults to the toolkit's own bucket. Ignored when filepath is given."},
-                "filepath": {"type": "string", "minLength": 1, "maxLength": MAX_FILENAME_BYTES, "description": "Full path in /{bucket}/{filename} format, as an attached file's header reports it. An alternative to filename plus bucket_name."}
+                "filepath": {"type": "string", "minLength": 1, "maxLength": MAX_FILENAME_BYTES, "description": "Full path in /{bucket}/{filename} format, as an attached file's header reports it. An alternative to filename plus bucket_name."},
+                "start_line": {"type": "integer", "minimum": 1, "description": "First line to return (1-indexed, inclusive) for a partial read of a text file."},
+                "end_line": {"type": "integer", "minimum": 1, "description": "Last line to return (1-indexed, inclusive). Omit to read to the end."},
+                "page_number": {"type": "integer", "description": "Accepted for compatibility; this runtime returns the whole file and says so."},
+                "sheet_name": {"type": "string", "description": "Accepted for compatibility; this runtime returns the whole file and says so."},
+                "is_capture_image": {"type": "boolean", "description": "Accepted for compatibility; images are not described by this runtime."},
+                "extra_params": {"type": "string", "description": "Accepted for compatibility; per-file-type options are not applied by this runtime."}
             },
             "additionalProperties": false
         }))
@@ -476,7 +595,32 @@ impl Tool for ReadFileTool {
                 "total_lines": outcome.total_lines,
                 "file": outcome.name,
             })),
-            Ok(outcome) => Ok(Value::String(outcome.content)),
+            Ok(outcome) => {
+                let start = optional_line(&arguments, "start_line");
+                let end = optional_line(&arguments, "end_line");
+                let content = if start.is_some() || end.is_some() {
+                    match line_range(&outcome.content, start, end) {
+                        Some(slice) => slice,
+                        None => {
+                            return Ok(Value::String(format!(
+                                "Could not read the file: the line range is empty; it has {} lines.",
+                                outcome.total_lines
+                            )));
+                        }
+                    }
+                } else {
+                    outcome.content
+                };
+                let unapplied = unapplied_read_options(&arguments);
+                if unapplied.is_empty() {
+                    Ok(Value::String(content))
+                } else {
+                    Ok(Value::String(format!(
+                        "[{} not applied: this runtime returns the file's text as a whole]\n{content}",
+                        unapplied.join(", ")
+                    )))
+                }
+            }
             Err(error) => {
                 tracing::warn!(
                     event = "agent_artifact_tool_failed",
@@ -522,10 +666,11 @@ impl Tool for CreateFileTool {
             "type": "object",
             "properties": {
                 "filename": {"type": "string", "minLength": 1, "maxLength": MAX_FILENAME_BYTES, "description": "Name of the file to create or replace."},
-                "filedata": {"type": "string", "minLength": 1, "maxLength": MAX_CONTENT_CHARS, "description": "The file's complete new content. This REPLACES the file; include everything that should remain."},
+                "filedata": {"type": "string", "maxLength": MAX_CONTENT_CHARS, "description": "The file's complete new content. This REPLACES the file; include everything that should remain. Leave empty when copying with filepath."},
+                "filepath": {"type": "string", "minLength": 1, "maxLength": MAX_FILENAME_BYTES, "description": "Existing file to copy, in /{bucket}/{filename} format, instead of filedata. Text files only in this runtime."},
                 "bucket_name": {"type": "string", "maxLength": 63, "description": "Bucket to write to. Defaults to the toolkit's own bucket."}
             },
-            "required": ["filename", "filedata"],
+            "required": ["filename"],
             "additionalProperties": false
         }))
     }
@@ -540,16 +685,25 @@ impl Tool for CreateFileTool {
                 "Could not create the file: a non-empty filename is required.".to_owned(),
             ));
         };
-        let Some(filedata) = arguments
+        let given = arguments
             .as_object()
             .and_then(|object| object.get("filedata"))
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
-        else {
-            return Ok(Value::String(
-                "Could not create the file: non-empty filedata is required.".to_owned(),
-            ));
+            .map(str::to_owned);
+        let filedata = match (given, optional_string(&arguments, "filepath")) {
+            (Some(filedata), _) => filedata,
+            (None, Some(filepath)) => match self.copied_text(&filepath).await {
+                Ok(text) => text,
+                Err(sentence) => return Ok(Value::String(sentence)),
+            },
+            (None, None) => {
+                return Ok(Value::String(
+                    "Could not create the file: give filedata, or a filepath to copy.".to_owned(),
+                ));
+            }
         };
+        let filedata = filedata.as_str();
         if filedata.chars().count() > MAX_CONTENT_CHARS {
             return Ok(Value::String(format!(
                 "Could not create the file: the content is longer than the {MAX_CONTENT_CHARS} \
@@ -583,6 +737,35 @@ impl Tool for CreateFileTool {
                     &error,
                 )))
             }
+        }
+    }
+}
+
+impl CreateFileTool {
+    /// The text of the file `filepath` names, for the SDK's copy mode
+    /// (`create_file` with `filepath` and no `filedata`). The platform's read
+    /// returns a file's text and refuses one it cannot (a binary file), and a
+    /// file over the read limit comes back without content — so neither is
+    /// copied: the model gets a sentence instead of a corrupted copy.
+    async fn copied_text(&self, filepath: &str) -> Result<String, String> {
+        let Some((bucket, name)) = parse_filepath(filepath) else {
+            return Err(
+                "Could not copy the file: filepath must be in /{bucket}/{filename} form."
+                    .to_owned(),
+            );
+        };
+        match self
+            .authority
+            .platform()
+            .read_artifact(self.authority.authority(), &ArtifactReadRequest { bucket, name })
+            .await
+        {
+            Ok(outcome) if outcome.over_limit => Err(
+                "Could not copy the file: it is larger than this runtime copies; copy it in the product instead."
+                    .to_owned(),
+            ),
+            Ok(outcome) => Ok(outcome.content),
+            Err(error) => Err(artifact_failure_text("copy the file", &error)),
         }
     }
 }
@@ -660,5 +843,37 @@ impl Tool for DeleteFileTool {
                 )))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn globs_follow_fnmatch_case_insensitively() {
+        assert!(glob_matches("*.md", "docs/Readme.MD"));
+        assert!(glob_matches("docs/*", "docs/a/b.txt"));
+        assert!(glob_matches("file[123].txt", "file2.txt"));
+        assert!(!glob_matches("file[!123].txt", "file2.txt"));
+        assert!(glob_matches("?.txt", "a.txt"));
+        assert!(!glob_matches("*.pdf", "a.pdf.txt"));
+        assert!(glob_matches("a+b(1).txt", "a+b(1).txt"));
+        let include = vec!["*.md".to_owned()];
+        let skip = vec!["draft/*".to_owned()];
+        assert!(listed("notes.md", &include, &skip));
+        assert!(!listed("draft/notes.md", &include, &skip));
+        assert!(!listed("notes.txt", &include, &skip));
+        assert!(listed("notes.txt", &[], &[]));
+    }
+
+    #[test]
+    fn line_ranges_are_one_indexed_and_inclusive() {
+        let text = "a\nb\nc";
+        assert_eq!(line_range(text, Some(2), None).as_deref(), Some("b\nc"));
+        assert_eq!(line_range(text, None, Some(1)).as_deref(), Some("a\n"));
+        assert_eq!(line_range(text, Some(3), Some(9)).as_deref(), Some("c"));
+        assert_eq!(line_range(text, Some(3), Some(2)), None);
+        assert_eq!(line_range(text, Some(4), None), None);
     }
 }
