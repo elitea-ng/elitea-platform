@@ -137,6 +137,24 @@ describe('chatTarget', () => {
     expect(target.ok && target.kind === 'agent' && target.choices.map((c) => c.participantId)).toEqual([2, 3, 6]);
   });
 
+  it('an agent participant whose ids come as digit strings (the server stores what the create sent) still names its agent', () => {
+    // GET conversation on the zefir-wave stack (main 22403f640): a chat the app started with Zefir Helper.
+    const helper = {
+      id: 3,
+      entity_name: 'application',
+      entity_meta: { id: '2', name: 'Zefir Helper', project_id: '90504' },
+      entity_settings: { version_id: '2' },
+      meta: { name: 'Zefir Helper' },
+    };
+    // The contract types these ids as numbers; the wire carries strings.
+    const detail = { participants: [user, helper] } as unknown as Parameters<typeof chatTarget>[0];
+    expect(chatTarget(detail)).toMatchObject({
+      ok: true,
+      kind: 'agent',
+      agent: { agentId: 2, agentProjectId: 90504, versionId: 2 },
+    });
+  });
+
   it('toolkits next to an agent stay read-only, with the reason', () => {
     expect(chatTarget({ participants: [user, agent(2, 'Research'), toolkit] })).toEqual({ ok: false, reason: 'toolkit_agent' });
   });

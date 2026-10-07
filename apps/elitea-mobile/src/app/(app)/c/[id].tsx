@@ -326,7 +326,15 @@ export default function ThreadScreen() {
   const stopWithFiles = async (): Promise<StopResult> => {
     const result = await turn.stop();
     if (result.restoreText !== null && result.lostAttachments.length > 0) {
-      const { restored, lost } = tray.restoreSent();
+      // Only what the tray actually put back is off the list: a file it no
+      // longer held (the thread was left and reopened while the answer ran,
+      // or a retried send) is still named, never dropped silently.
+      const { restored } = tray.restoreSent();
+      const lost = [...result.lostAttachments];
+      for (const name of restored) {
+        const at = lost.indexOf(name);
+        if (at !== -1) lost.splice(at, 1);
+      }
       return { ...result, lostAttachments: lost, restoredAttachments: restored };
     }
     if (result.problem === null) tray.releaseSent();

@@ -112,6 +112,12 @@ const asRecord = (v: unknown): Record<string, unknown> | null =>
   v !== null && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
 const asString = (v: unknown): string | null => (typeof v === 'string' ? v : null);
 const asInt = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) ? v : null);
+/**
+ * An id inside a participant's free-form `entity_meta` / `entity_settings`:
+ * the server keeps what the create sent, and an agent's id from the agents
+ * list arrives as a digit string ("2"), so both forms are read.
+ */
+const asId = (v: unknown): number | null => (typeof v === 'string' && /^\d{1,15}$/.test(v) ? asInt(Number(v)) : asInt(v));
 
 export function participantName(participant: Participant | undefined): string | null {
   if (!participant) return null;
@@ -286,9 +292,9 @@ export function agentOptions(detail: Pick<ConversationDetail, 'participants'> | 
     .filter((p) => p && AGENT_KINDS.has(p.entity_name) && asInt(p.id) !== null && p.id > 0)
     .map((p) => {
       const meta = asRecord(p.entity_meta);
-      const agentId = asInt(meta?.id);
-      const agentProjectId = asInt(meta?.project_id);
-      const versionId = asInt(asRecord(p.entity_settings)?.version_id);
+      const agentId = asId(meta?.id);
+      const agentProjectId = asId(meta?.project_id);
+      const versionId = asId(asRecord(p.entity_settings)?.version_id);
       return {
         participantId: p.id,
         name: participantName(p),

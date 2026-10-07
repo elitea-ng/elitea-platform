@@ -176,6 +176,35 @@ describe('Stop before any output with files (#29)', () => {
     expect(mockDeleted).not.toContain(PICKED);
   });
 
+  it('the screen was left and reopened while it streamed (the tray let go of the file): the note names it to attach again', async () => {
+    const server = installServer([]);
+    const first = await renderWithQueries(<ThreadScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach files' }));
+    await waitFor(() => expect(screen.getByLabelText(/notes\.md, ready/)).toBeTruthy());
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'summarise this');
+    await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(mockStream.connections).toHaveLength(1));
+    mockStream.connections[0].push(
+      `id: 90\nevent: execution.node_event\ndata: ${JSON.stringify({ type: 'agent_start', stream_id: UUID, message_id: ANSWER, question_id: null, content: null })}\n\n`,
+    );
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Stop answer' })).toBeTruthy());
+    // Back to the list: the thread's tray is cleared (its copies deleted); the turn keeps running.
+    first.unmount();
+    await waitFor(() => expect(mockDeleted).toContain(PICKED));
+    render(<QueryClientProvider client={queries as QueryClient}><ThreadScreen /></QueryClientProvider>);
+    await waitFor(() => expect(mockStream.connections.length).toBeGreaterThanOrEqual(2));
+    mockStream.connections[mockStream.connections.length - 1].push(
+      `id: 90\nevent: execution.node_event\ndata: ${JSON.stringify({ type: 'agent_start', stream_id: UUID, message_id: ANSWER, question_id: null, content: null })}\n\n`,
+    );
+    await fireEvent.press(await screen.findByRole('button', { name: 'Stop answer' }));
+    await waitFor(() => expect(server.requests.some((r) => r.method === 'DELETE' && r.url.pathname.endsWith(STOP))).toBe(true));
+    // Nothing came back to the tray, so the file must be named, not silently dropped.
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Stopped before an answer. Your message is back here; attach notes.md again to send it.'),
+    );
+    expect(screen.queryByLabelText(/notes\.md, /)).toBeNull();
+  });
+
   it('a question the server kept (output was written): the file copy is deleted, nothing comes back', async () => {
     const server = installServer([{ ...questionGroup, uuid: Q, content: 'summarise this' }]);
     await sendWithNotesThenStop(server);
