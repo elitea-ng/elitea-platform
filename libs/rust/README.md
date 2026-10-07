@@ -1,8 +1,8 @@
 # libs/rust — shared Rust crates
 
 Crates the platform's Rust services share (ADR-0027). The first consumers are
-the engine sidecars behind `elitea-subapp-host`: the DeepWiki engine today, the
-native Inventory engine next.
+the engine sidecars behind `elitea-subapp-host`: the DeepWiki engine and the
+native Inventory engine (`services/elitea-inventory-engine`).
 
 | Crate | What it holds |
 |---|---|

@@ -1,0 +1,36 @@
+[package]
+name = "elitea-inventory-engine"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+description = "The Rust-native Inventory engine behind the sub-application host's engine sidecar socket (ADR-0027)."
+
+[dependencies]
+# The engine sidecars' shared crates (ADR-0027): the error contract, the
+# NDJSON stream and stop flag, Python-compatible text; the socket server, the
+# container probe and process tracing.
+elitea-engine-core = { path = "../../libs/rust/engine-core" }
+elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
+serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
+tokio = { version = "=1.53.1", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "=0.1.44"
+
+[dev-dependencies]
+tokio = { version = "=1.53.1", features = ["test-util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "deny"
+
+[profile.release]
+opt-level = 3
+debug = "line-tables-only"
+strip = "none"
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+incremental = false
