@@ -1219,13 +1219,66 @@ LEFT JOIN LATERAL (
         -- conversation. Newest = the read path's own order (readCanvas:
         -- created_at DESC, id DESC).
         LEFT JOIN LATERAL (
-            SELECT canvas_version.canvas_content, canvas_version.code_language
+            SELECT canvas_version.canvas_content, canvas_version.code_language,
+                   octet_length(canvas_version.canvas_content) AS content_bytes
             FROM chat_canvas_versions AS canvas_version
             WHERE message_item.item_type = 'canvas_message'
               AND canvas_version.canvas_item_id = message_item.id
             ORDER BY canvas_version.created_at DESC, canvas_version.id DESC
             LIMIT 1
         ) AS message_canvas ON TRUE
+        LEFT JOIN chat_messages_canvas AS message_canvas_meta
+          ON message_item.item_type = 'canvas_message'
+         AND message_canvas_meta.id = message_item.id
+        -- CANVAS TEXT IS BOUNDED, and the bound is EXPLICIT to the model.
+        --
+        -- The worker fetches this history under a 256 KiB ceiling (see the
+        -- attachment bound below), and a canvas is user-editable text with no
+        -- natural size: unbounded, one large document made every later turn
+        -- of its conversation fail — unrecoverably, because history only
+        -- grows. Writes are capped at 64 KiB per canvas
+        -- (conversations.MaxCanvasContentBytes), and here the NEWEST canvases
+        -- are carried in full while their combined size stays within a 64 KiB
+        -- budget (65536 below; the same constant). Worst case, 128 KiB of
+        -- attachment text plus 64 KiB of canvas text, which leaves a quarter
+        -- of the worker's ceiling to the conversation's own words and the
+        -- JSON framing.
+        --
+        -- A canvas past the budget is NOT silently dropped (the owner rejected
+        -- silent truncation): it is replaced by a marker naming the canvas and
+        -- its size, so the model knows the document exists and was withheld,
+        -- and can say so rather than answer as if it had never been written.
+        --
+        -- ` + "`" + `canvas_budget.bytes` + "`" + ` is the size of this canvas plus every canvas
+        -- positioned after it in the conversation (newest-first prefix sum,
+        -- the attachment bound's own ordering). Counting a canvas after the
+        -- current question too only ever withholds more, never less.
+        LEFT JOIN LATERAL (
+            SELECT COALESCE(sum(octet_length(newer_version.canvas_content)), 0) AS bytes
+            FROM chat_message_items AS newer_item
+            JOIN chat_message_group AS newer_group
+              ON newer_group.id = newer_item.message_group_id
+            CROSS JOIN LATERAL (
+                SELECT newest.canvas_content
+                FROM chat_canvas_versions AS newest
+                WHERE newest.canvas_item_id = newer_item.id
+                ORDER BY newest.created_at DESC, newest.id DESC
+                LIMIT 1
+            ) AS newer_version
+            WHERE message_item.item_type = 'canvas_message'
+              AND newer_group.conversation_id = conversation.id
+              AND newer_item.item_type = 'canvas_message'
+              AND (newer_group.created_at, newer_group.id, newer_item.order_index, newer_item.id)
+                >= (message_group.created_at, message_group.id, message_item.order_index, message_item.id)
+        ) AS canvas_budget ON TRUE
+        -- THE FENCE IS ONE BACKTICK LONGER than the longest backtick run in
+        -- the content (and never shorter than pylon's three), so a canvas
+        -- that itself holds a fenced block cannot close the fence early and
+        -- spill the rest of the document out of it.
+        LEFT JOIN LATERAL (
+            SELECT repeat(chr(96), GREATEST(3, COALESCE(max(length(backtick_run.run[1])), 0) + 1)) AS marks
+            FROM regexp_matches(message_canvas.canvas_content, chr(96) || '+', 'g') AS backtick_run(run)
+        ) AS canvas_fence ON TRUE
         CROSS JOIN LATERAL (
             SELECT jsonb_build_object(
                        'type', 'text', 'text', message_text.content
@@ -1234,9 +1287,11 @@ LEFT JOIN LATERAL (
             WHERE message_item.item_type = 'text_message'
               AND COALESCE(message_text.content, '') <> ''
             UNION ALL
-            -- Pylon's rendering, byte for byte: a canvas with a language is
-            -- fenced as ` + "`" + `` + "`" + `` + "`" + `<lang>\n\n<content>\n\n` + "`" + `` + "`" + `` + "`" + ` and one without is its
-            -- content. The one deviation is ` + "`" + `document` + "`" + ` (#879, a type pylon
+            -- Pylon's rendering: a canvas with a language is fenced as
+            -- ` + "`" + `` + "`" + `` + "`" + `<lang>\n\n<content>\n\n` + "`" + `` + "`" + `` + "`" + ` (a longer fence when the content
+            -- holds backticks, see canvas_fence) and one without is its
+            -- content. A canvas past the history budget is a marker instead
+            -- (see canvas_budget). The one deviation is ` + "`" + `document` + "`" + ` (#879, a type pylon
             -- never had): its content IS the prose of the answer in Markdown,
             -- so it goes in as that prose rather than as a code block of a
             -- language no model knows. chr(96) is the backtick, spelled that
@@ -1244,10 +1299,16 @@ LEFT JOIN LATERAL (
             SELECT jsonb_build_object(
                        'type', 'text',
                        'text', CASE
+                           WHEN canvas_budget.bytes > 65536
+                           THEN '[Canvas "' || COALESCE(NULLIF(message_canvas_meta.name, ''), 'Untitled')
+                                || '" (' || message_canvas.content_bytes::text
+                                || ' bytes) is not included in this history: the conversation''s canvases exceed the '
+                                || '65536-byte budget for canvas text, and only the newest canvases that fit are shown. '
+                                || 'The user can still see and edit it in the conversation.]'
                            WHEN COALESCE(message_canvas.code_language, '') IN ('', 'document')
                            THEN message_canvas.canvas_content
-                           ELSE repeat(chr(96), 3) || message_canvas.code_language || chr(10) || chr(10)
-                                || message_canvas.canvas_content || chr(10) || chr(10) || repeat(chr(96), 3)
+                           ELSE canvas_fence.marks || message_canvas.code_language || chr(10) || chr(10)
+                                || message_canvas.canvas_content || chr(10) || chr(10) || canvas_fence.marks
                        END
                    ) AS chunk,
                    0 AS chunk_index
@@ -2050,13 +2111,66 @@ LEFT JOIN LATERAL (
         -- conversation. Newest = the read path's own order (readCanvas:
         -- created_at DESC, id DESC).
         LEFT JOIN LATERAL (
-            SELECT canvas_version.canvas_content, canvas_version.code_language
+            SELECT canvas_version.canvas_content, canvas_version.code_language,
+                   octet_length(canvas_version.canvas_content) AS content_bytes
             FROM chat_canvas_versions AS canvas_version
             WHERE message_item.item_type = 'canvas_message'
               AND canvas_version.canvas_item_id = message_item.id
             ORDER BY canvas_version.created_at DESC, canvas_version.id DESC
             LIMIT 1
         ) AS message_canvas ON TRUE
+        LEFT JOIN chat_messages_canvas AS message_canvas_meta
+          ON message_item.item_type = 'canvas_message'
+         AND message_canvas_meta.id = message_item.id
+        -- CANVAS TEXT IS BOUNDED, and the bound is EXPLICIT to the model.
+        --
+        -- The worker fetches this history under a 256 KiB ceiling (see the
+        -- attachment bound below), and a canvas is user-editable text with no
+        -- natural size: unbounded, one large document made every later turn
+        -- of its conversation fail — unrecoverably, because history only
+        -- grows. Writes are capped at 64 KiB per canvas
+        -- (conversations.MaxCanvasContentBytes), and here the NEWEST canvases
+        -- are carried in full while their combined size stays within a 64 KiB
+        -- budget (65536 below; the same constant). Worst case, 128 KiB of
+        -- attachment text plus 64 KiB of canvas text, which leaves a quarter
+        -- of the worker's ceiling to the conversation's own words and the
+        -- JSON framing.
+        --
+        -- A canvas past the budget is NOT silently dropped (the owner rejected
+        -- silent truncation): it is replaced by a marker naming the canvas and
+        -- its size, so the model knows the document exists and was withheld,
+        -- and can say so rather than answer as if it had never been written.
+        --
+        -- ` + "`" + `canvas_budget.bytes` + "`" + ` is the size of this canvas plus every canvas
+        -- positioned after it in the conversation (newest-first prefix sum,
+        -- the attachment bound's own ordering). Counting a canvas after the
+        -- current question too only ever withholds more, never less.
+        LEFT JOIN LATERAL (
+            SELECT COALESCE(sum(octet_length(newer_version.canvas_content)), 0) AS bytes
+            FROM chat_message_items AS newer_item
+            JOIN chat_message_group AS newer_group
+              ON newer_group.id = newer_item.message_group_id
+            CROSS JOIN LATERAL (
+                SELECT newest.canvas_content
+                FROM chat_canvas_versions AS newest
+                WHERE newest.canvas_item_id = newer_item.id
+                ORDER BY newest.created_at DESC, newest.id DESC
+                LIMIT 1
+            ) AS newer_version
+            WHERE message_item.item_type = 'canvas_message'
+              AND newer_group.conversation_id = conversation.id
+              AND newer_item.item_type = 'canvas_message'
+              AND (newer_group.created_at, newer_group.id, newer_item.order_index, newer_item.id)
+                >= (message_group.created_at, message_group.id, message_item.order_index, message_item.id)
+        ) AS canvas_budget ON TRUE
+        -- THE FENCE IS ONE BACKTICK LONGER than the longest backtick run in
+        -- the content (and never shorter than pylon's three), so a canvas
+        -- that itself holds a fenced block cannot close the fence early and
+        -- spill the rest of the document out of it.
+        LEFT JOIN LATERAL (
+            SELECT repeat(chr(96), GREATEST(3, COALESCE(max(length(backtick_run.run[1])), 0) + 1)) AS marks
+            FROM regexp_matches(message_canvas.canvas_content, chr(96) || '+', 'g') AS backtick_run(run)
+        ) AS canvas_fence ON TRUE
         CROSS JOIN LATERAL (
             SELECT jsonb_build_object(
                        'type', 'text', 'text', message_text.content
@@ -2065,9 +2179,11 @@ LEFT JOIN LATERAL (
             WHERE message_item.item_type = 'text_message'
               AND COALESCE(message_text.content, '') <> ''
             UNION ALL
-            -- Pylon's rendering, byte for byte: a canvas with a language is
-            -- fenced as ` + "`" + `` + "`" + `` + "`" + `<lang>\n\n<content>\n\n` + "`" + `` + "`" + `` + "`" + ` and one without is its
-            -- content. The one deviation is ` + "`" + `document` + "`" + ` (#879, a type pylon
+            -- Pylon's rendering: a canvas with a language is fenced as
+            -- ` + "`" + `` + "`" + `` + "`" + `<lang>\n\n<content>\n\n` + "`" + `` + "`" + `` + "`" + ` (a longer fence when the content
+            -- holds backticks, see canvas_fence) and one without is its
+            -- content. A canvas past the history budget is a marker instead
+            -- (see canvas_budget). The one deviation is ` + "`" + `document` + "`" + ` (#879, a type pylon
             -- never had): its content IS the prose of the answer in Markdown,
             -- so it goes in as that prose rather than as a code block of a
             -- language no model knows. chr(96) is the backtick, spelled that
@@ -2075,10 +2191,16 @@ LEFT JOIN LATERAL (
             SELECT jsonb_build_object(
                        'type', 'text',
                        'text', CASE
+                           WHEN canvas_budget.bytes > 65536
+                           THEN '[Canvas "' || COALESCE(NULLIF(message_canvas_meta.name, ''), 'Untitled')
+                                || '" (' || message_canvas.content_bytes::text
+                                || ' bytes) is not included in this history: the conversation''s canvases exceed the '
+                                || '65536-byte budget for canvas text, and only the newest canvases that fit are shown. '
+                                || 'The user can still see and edit it in the conversation.]'
                            WHEN COALESCE(message_canvas.code_language, '') IN ('', 'document')
                            THEN message_canvas.canvas_content
-                           ELSE repeat(chr(96), 3) || message_canvas.code_language || chr(10) || chr(10)
-                                || message_canvas.canvas_content || chr(10) || chr(10) || repeat(chr(96), 3)
+                           ELSE canvas_fence.marks || message_canvas.code_language || chr(10) || chr(10)
+                                || message_canvas.canvas_content || chr(10) || chr(10) || canvas_fence.marks
                        END
                    ) AS chunk,
                    0 AS chunk_index

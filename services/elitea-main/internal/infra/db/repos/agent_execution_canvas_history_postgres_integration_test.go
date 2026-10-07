@@ -18,7 +18,9 @@ package repos
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
@@ -212,5 +214,115 @@ func assertCanvasHistory(t *testing.T, raw string, want []canvasHistoryEntry) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("chat history:\n got %s\nwant %+v", raw, want)
+	}
+}
+
+// A canvas whose content holds a fenced block of its own must not close the
+// fence it is wrapped in: the fence is one backtick longer than the longest
+// backtick run in the content (and never shorter than three).
+func TestPostgresACanvasHoldingFencesIsWrappedInALongerFence(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+	tx := beginCurrentAgentAttachmentTx(t, pool)
+	queries := sqlcgen.New(tx)
+
+	first := agentexecutionapp.CurrentAdhocTurn{
+		ProjectID: 1, ActorUserID: 11, TargetParticipantID: 23,
+		ConversationUUID:  "10000000-0000-4000-8000-000000000032",
+		QuestionID:        "20000000-0000-4000-8000-000000000075",
+		QuestionItemID:    "30000000-0000-4000-8000-000000000075",
+		ResponseMessageID: "40000000-0000-4000-8000-000000000075",
+		QuestionMeta:      json.RawMessage(`{}`), UserInput: "write a readme",
+	}
+	if err := insertCurrentAdhocTurn(t.Context(), queries, "execution-canvas-fence-1", first); err != nil {
+		t.Fatal(err)
+	}
+	responseID := mustCurrentPGUUID(t, first.ResponseMessageID)
+	content := "# Readme\n\n```sh\nmake\n```\n\n````md\n```nested```\n````\n"
+	completePostgresCurrentApplicationTurn(t, tx, responseID, content)
+	carvePostgresResponseIntoCanvas(t, tx, responseID, "markdown", content)
+
+	row, err := queries.ResolveCurrentAdhocTurn(
+		t.Context(),
+		sqlcgen.ResolveCurrentAdhocTurnParams{
+			ActorUserID: 11, TargetParticipantID: 23, ProjectID: 1,
+			QuestionID:       mustCurrentPGUUID(t, "20000000-0000-4000-8000-000000000076"),
+			ConversationUuid: mustCurrentPGUUID(t, first.ConversationUUID),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertCanvasHistory(t, row.ChatHistoryJson, []canvasHistoryEntry{
+		historyEntry("user", "write a readme"),
+		historyEntry("assistant", "`````markdown\n\n"+content+"\n\n`````"),
+	})
+}
+
+// Canvas text in the history is BOUNDED and the bound is EXPLICIT. The newest
+// canvases are carried in full while their combined size fits the 64 KiB
+// budget; an older one past it is replaced by a marker naming it and its size
+// — never silently dropped — so the input bundle stays under the worker's
+// 256 KiB ceiling however many documents a conversation accumulates.
+func TestPostgresCanvasHistoryKeepsTheNewestWithinBudgetAndMarksTheRest(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+	tx := beginCurrentAgentAttachmentTx(t, pool)
+	queries := sqlcgen.New(tx)
+
+	older := strings.Repeat("o", 40<<10)
+	newer := strings.Repeat("n", 40<<10)
+	conversation := "10000000-0000-4000-8000-000000000031"
+	for index, document := range []string{older, newer} {
+		suffix := fmt.Sprintf("%012d", 77+index)
+		turn := agentexecutionapp.CurrentApplicationTurn{
+			ProjectID: 1, ActorUserID: 11, TargetParticipantID: 21,
+			ApplicationID: 31, ApplicationVersionID: 41,
+			ConversationUUID:  conversation,
+			QuestionID:        "20000000-0000-4000-8000-" + suffix,
+			QuestionItemID:    "30000000-0000-4000-8000-" + suffix,
+			ResponseMessageID: "40000000-0000-4000-8000-" + suffix,
+			QuestionMeta:      json.RawMessage(`{}`), UserInput: fmt.Sprintf("document %d", index+1),
+		}
+		if err := insertCurrentApplicationTurn(t.Context(), queries, "execution-canvas-budget-"+suffix, turn, 1); err != nil {
+			t.Fatal(err)
+		}
+		responseID := mustCurrentPGUUID(t, turn.ResponseMessageID)
+		completePostgresCurrentApplicationTurn(t, tx, responseID, document)
+		carvePostgresResponseIntoCanvas(t, tx, responseID, "document", document)
+	}
+
+	row, err := queries.ResolveCurrentApplicationTurn(
+		t.Context(),
+		sqlcgen.ResolveCurrentApplicationTurnParams{
+			ActorUserID: 11, TargetParticipantID: 21,
+			QuestionID:       mustCurrentPGUUID(t, "20000000-0000-4000-8000-000000000099"),
+			ConversationUuid: mustCurrentPGUUID(t, conversation),
+			ProjectID:        1,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := `[Canvas "Document" (40960 bytes) is not included in this history: the conversation's canvases exceed the 65536-byte budget for canvas text, and only the newest canvases that fit are shown. The user can still see and edit it in the conversation.]`
+	assertCanvasHistory(t, row.ChatHistoryJson, []canvasHistoryEntry{
+		historyEntry("user", "document 1"),
+		historyEntry("assistant", marker),
+		historyEntry("user", "document 2"),
+		historyEntry("assistant", newer),
+	})
+	if len(row.ChatHistoryJson) > 96<<10 {
+		t.Fatalf("history is %d bytes with two 40 KiB canvases; the budget did not hold", len(row.ChatHistoryJson))
+	}
+
+	// The migrated tenant carries 0147's newest-version index, which every one
+	// of those per-canvas lookups is served by.
+	var indexed bool
+	if err := tx.QueryRow(t.Context(),
+		`SELECT to_regclass('p_1.chat_canvas_versions_item_newest_idx') IS NOT NULL`).Scan(&indexed); err != nil {
+		t.Fatal(err)
+	}
+	if !indexed {
+		t.Fatal("tenant migration 0147's newest-version index is missing")
 	}
 }

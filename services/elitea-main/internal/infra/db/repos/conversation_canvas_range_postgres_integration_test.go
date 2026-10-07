@@ -28,9 +28,11 @@ package repos
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -108,4 +110,66 @@ func TestCreateCanvasRefusesASelectionOutsideTheMessage(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateCanvas refused a selection inside the message: %v", err)
 	}
+}
+
+// Canvas text is capped at conversations.MaxCanvasContentBytes on BOTH writes,
+// and the refusal leaves everything as it was: the create's carve deletes the
+// answer's text item, so a refusal after it would destroy the answer; the
+// edit appends a version, so a refusal after it would store the oversized
+// text the history then has to withhold.
+func TestCanvasWritesRefuseTextAboveTheCapWithoutChangingAnything(t *testing.T) {
+	pool := newFreshInstallPool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	seeded := strings.Repeat("x", conversations.MaxCanvasContentBytes+1)
+	groupID, itemID, _ := seedFreshInstallTextItem(t, pool, seeded)
+	repo := NewConversationsRepo(pool)
+
+	_, err := repo.CreateCanvas(ctx, "1", map[string]any{
+		"message_group_id": groupID, "message_item_id": itemID,
+		"name": "too big", "canvas_type": "document", "code_language": "document",
+		"canvas_content_starts_at": 0, "canvas_content_ends_at": len(seeded),
+	})
+	var tooLarge *conversations.CanvasTooLargeError
+	if !errors.As(err, &tooLarge) || tooLarge.Size != len(seeded) {
+		t.Fatalf("oversized create: err=%v, want a CanvasTooLargeError of %d bytes", err, len(seeded))
+	}
+	var content string
+	if err := pool.QueryRow(ctx, `SELECT content FROM p_1.chat_messages_text WHERE id = $1`, itemID).Scan(&content); err != nil {
+		t.Fatalf("the refused create destroyed the answer: %v", err)
+	}
+	if content != seeded {
+		t.Fatal("the refused create changed the answer")
+	}
+
+	// A selection at the cap is accepted, and an oversized EDIT of it is
+	// refused without a new version.
+	created, err := repo.CreateCanvas(ctx, "1", map[string]any{
+		"message_group_id": groupID, "message_item_id": itemID,
+		"name": "at the cap", "canvas_type": "code",
+		"canvas_content_starts_at": 1, "canvas_content_ends_at": len(seeded),
+	})
+	if err != nil {
+		t.Fatalf("a canvas at the cap was refused: %v", err)
+	}
+	canvasUUID, _ := created["uuid"].(string)
+	err = repo.UpdateCanvas(ctx, "1", canvasUUID, map[string]any{
+		"name": "renamed", "canvas_content": seeded,
+	})
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("oversized edit: err=%v, want a CanvasTooLargeError", err)
+	}
+	var versions int
+	var name string
+	if err := pool.QueryRow(ctx, `
+SELECT (SELECT count(*) FROM p_1.chat_canvas_versions WHERE canvas_item_id = canvas.id), canvas.name
+FROM p_1.chat_messages_canvas AS canvas
+JOIN p_1.chat_message_items AS item ON item.id = canvas.id
+WHERE item.uuid::text = $1`, canvasUUID).Scan(&versions, &name); err != nil {
+		t.Fatal(err)
+	}
+	if versions != 1 || name != "at the cap" {
+		t.Fatalf("the refused edit wrote: versions=%d name=%q", versions, name)
+	}
+
 }

@@ -247,6 +247,14 @@ type Participant struct {
 
 type Repository interface {
 	AuthorizeChatResource(ctx context.Context, projectID, resourceKind, resourceID string) error
+	// AuthorizeChatWrite is the WRITE rule for content the model will later
+	// read as part of the conversation (a canvas): the actor must be a user
+	// participant of the owning conversation — the rule sending a message
+	// applies (agent_chat.sql's author_mapping join). AuthorizeChatResource
+	// is the READ rule, which a public conversation grants to every project
+	// member; using it for a canvas write let a non-participant rewrite text
+	// the history then hands the model as its own earlier answer.
+	AuthorizeChatWrite(ctx context.Context, projectID, resourceKind, resourceID string) error
 	List(ctx context.Context, projectID string, page, pageSize int) (ListResponse, error)
 	Get(ctx context.Context, projectID, conversationID string) (Conversation, error)
 	Create(ctx context.Context, projectID string, conv Conversation) (Conversation, error)
@@ -1620,20 +1628,31 @@ func (h *Handler) DeselectConversation(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apierr.Write(w, apierr.BadRequest("invalid request body"))
+	if !decodeCanvasBody(w, r, &body) {
 		return
 	}
-	if err := h.repo.AuthorizeChatResource(r.Context(), projectID, "message", fmt.Sprint(body["message_group_id"])); err != nil {
+	// The participant rule, not the read rule: see AuthorizeChatWrite.
+	if err := h.repo.AuthorizeChatWrite(r.Context(), projectID, "message", fmt.Sprint(body["message_group_id"])); err != nil {
 		apierr.Write(w, err)
 		return
 	}
 	canvas, err := h.repo.CreateCanvas(r.Context(), projectID, body)
 	if err != nil {
-		apierr.Write(w, err)
+		writeCanvasError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, canvas)
+}
+
+// writeCanvasError answers a canvas write's failure: the size refusal as its
+// own 413 shape, everything else as apierr does.
+func writeCanvasError(w http.ResponseWriter, err error) {
+	var tooLarge *CanvasTooLargeError
+	if errors.As(err, &tooLarge) {
+		writeCanvasTooLarge(w, tooLarge)
+		return
+	}
+	apierr.Write(w, err)
 }
 
 func (h *Handler) GetCanvas(w http.ResponseWriter, r *http.Request) {
@@ -1651,18 +1670,28 @@ func (h *Handler) GetCanvas(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) UpdateCanvas(w http.ResponseWriter, r *http.Request) {
-	if !h.authorizeConversation(w, r) {
-		return
-	}
 	projectID := chi.URLParam(r, "projectID")
 	canvasID := chi.URLParam(r, "canvasID")
-	var body map[string]any
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		apierr.Write(w, apierr.BadRequest("invalid request body"))
+	// The participant rule, not the read rule GetCanvas keeps: see
+	// AuthorizeChatWrite.
+	if err := h.repo.AuthorizeChatWrite(r.Context(), projectID, "canvas", canvasID); err != nil {
+		apierr.Write(w, err)
 		return
 	}
+	var body map[string]any
+	if !decodeCanvasBody(w, r, &body) {
+		return
+	}
+	// Refused here as well as in the repository, so an oversized edit is
+	// answered before the canvas is read.
+	if content, ok := body["canvas_content"].(string); ok {
+		if err := CheckCanvasContent(content); err != nil {
+			writeCanvasError(w, err)
+			return
+		}
+	}
 	if err := h.repo.UpdateCanvas(r.Context(), projectID, canvasID, body); err != nil {
-		apierr.Write(w, err)
+		writeCanvasError(w, err)
 		return
 	}
 	// Answer the SAVED canvas, not `{"ok": true}`. The client normalises this
