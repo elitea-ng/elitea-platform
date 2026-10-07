@@ -66,7 +66,7 @@ impl SandboxClient {
             code: submission_code(&status),
         })?
         .into_inner();
-        decode_lookup(response, job, root)
+        decode_lookup(&response, job, root)
     }
 
     /// Request fresh authority and reconcile the same immutable preparation.
@@ -255,7 +255,7 @@ fn decode_preparation(
 }
 
 fn decode_lookup(
-    response: LookupSandboxDependenciesResponseV1,
+    response: &LookupSandboxDependenciesResponseV1,
     job: &PreparationJob,
     root: &str,
 ) -> Result<Option<DependencyBundle>, SandboxCallError> {
@@ -445,7 +445,7 @@ mod frozen_lookup_tests {
         let (request, bundle) = fixture();
         assert!(
             decode_lookup(
-                LookupSandboxDependenciesResponseV1 {
+                &LookupSandboxDependenciesResponseV1 {
                     bundle_json: Vec::new()
                 },
                 &request,
@@ -455,7 +455,7 @@ mod frozen_lookup_tests {
             .is_none()
         );
         let found = decode_lookup(
-            LookupSandboxDependenciesResponseV1 {
+            &LookupSandboxDependenciesResponseV1 {
                 bundle_json: bundle.record_json().to_vec(),
             },
             &request,
@@ -467,7 +467,7 @@ mod frozen_lookup_tests {
         for bytes in [b"{}".to_vec(), vec![b' '; 128 * 1024 + 1]] {
             assert!(matches!(
                 decode_lookup(
-                    LookupSandboxDependenciesResponseV1 { bundle_json: bytes },
+                    &LookupSandboxDependenciesResponseV1 { bundle_json: bytes },
                     &request,
                     bundle.root()
                 ),
@@ -476,7 +476,7 @@ mod frozen_lookup_tests {
         }
         assert!(matches!(
             decode_lookup(
-                LookupSandboxDependenciesResponseV1 {
+                &LookupSandboxDependenciesResponseV1 {
                     bundle_json: bundle.record_json().to_vec(),
                 },
                 &request,
@@ -491,7 +491,7 @@ mod frozen_lookup_tests {
             PreparationJob::from_transport(&serde_json::to_vec(&changed).unwrap()).unwrap();
         assert!(matches!(
             decode_lookup(
-                LookupSandboxDependenciesResponseV1 {
+                &LookupSandboxDependenciesResponseV1 {
                     bundle_json: bundle.record_json().to_vec(),
                 },
                 &changed,

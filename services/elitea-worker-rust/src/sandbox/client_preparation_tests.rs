@@ -80,9 +80,11 @@ impl ControlRpc for RecordingControl {
     }
 }
 
+type LookupReply = Option<Result<Vec<u8>, Status>>;
+
 #[derive(Clone, Default)]
 struct RecordingSupervisor {
-    lookup_reply: Arc<Mutex<Option<Result<Vec<u8>, Status>>>>,
+    lookup_reply: Arc<Mutex<LookupReply>>,
     lookup_requests:
         Arc<Mutex<Vec<crate::protocol::elitea::runtime::v1::LookupSandboxDependenciesRequestV1>>>,
     indices: Arc<Mutex<Vec<u32>>>,
@@ -548,10 +550,6 @@ async fn broker_hydration_rejects_missing_or_excess_intent_before_requesting_aut
 }
 
 #[tokio::test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "Keep bounded transport teardown and fail-closed assertions together"
-)]
 async fn frozen_lookup_uses_current_root_grant_and_never_starts_preparation_on_rpc_error() {
     let (job, bundle) = crate::sandbox::preparation::frozen_lookup_tests::fixture();
     let service = RecordingSupervisor::default();

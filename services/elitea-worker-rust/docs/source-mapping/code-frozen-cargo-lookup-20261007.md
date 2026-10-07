@@ -88,7 +88,7 @@ Repository locks, module sums, toolchain pins, and production recipes remain unc
 The wrapper's changed-path inventory uses incorrect documentation paths and exits one after the completed checks.
 The separate read-only reconciliation verifies all source, generated, and documentation paths.
 Its frozen completion receipt has SHA-256 `84af6de15620ca6666cb597c7a711490dbb248259ab5c4b987e50becfc019b93`.
-The original wrapper failure remains preserved. No passing test reruns.
+The original wrapper failure remains preserved. No tests rerun during that reconciliation.
 
 Run the library test target. The binary target contains no tests.
 
@@ -104,3 +104,25 @@ The initial private binary selector exits successfully with zero tests and recei
 Normal Rust generation runs through `build.rs` in the private build target.
 The macOS linker reports a large compact-unwind section warning. Release flags remain unchanged.
 These results prove component behavior. They do not prove Main authorization, image delivery, or UI acceptance.
+
+## CI lint correction
+
+CI at `b6b921542` rejects three lint issues before documentation and release checks.
+The lookup decoder takes an owned response without consuming it.
+The transport fixture stores a complex reply type.
+Its line-count lint expectation has no matching warning.
+
+The correction borrows the lookup response and names the private fixture reply type.
+It removes the obsolete lint expectation without suppressing warnings.
+The correction changes no contract, dependency, authority check, or acquisition behavior.
+The failed CI log remains preserved with SHA-256 `fcad5e12e417cad05ca29145eb630e808d41bdabe0d33f4931575cfdf58b867c`.
+Image builds remain held until the corrected source passes verification.
+
+Strict Clippy passes all targets and features with warnings denied on macOS arm64, using the existing Rust 1.97.1 toolchain.
+The crate's Clippy `all` and `pedantic` deny settings remain active.
+The exact Clippy log has SHA-256 `b09c358c608a6beec29889e6d67db44427811a5e9799a32b5add27da4ad5288a`.
+This local check does not prove Ubuntu CI, documentation build, or release image acceptance.
+The affected preparation-client selector passes eight tests with zero failures or ignored tests.
+It includes the changed frozen response decoder case. These cases overlap the earlier focused tests.
+Formatting and read-only source, dependency, builder, and candidate checks also pass.
+The correction receipt has SHA-256 `34f3f2a869c8ba15a9e3bbc4e182b0f8211b633ec587e8999e1c6172f49a2a79`.
