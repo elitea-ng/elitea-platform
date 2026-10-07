@@ -71,7 +71,7 @@ fn the_checksums_are_the_ledger_values() {
         ),
         (
             "0005_project_scope",
-            "e2deb1ba3f1eb886c152eeed6be3104e1226ce3e4ed15cb1c30439753f9a18ae",
+            "fe71faa1fc925a050ad73b5d3b7313e1cc8ca926d1218fe476ae950bd3a7cac7",
         ),
     ]
     .into_iter()

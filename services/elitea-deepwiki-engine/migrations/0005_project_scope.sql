@@ -196,7 +196,10 @@ CREATE INDEX idx_wiki_bm25_postings_term
 --
 -- Every build in progress is deleted (the cascade removes its staged rows):
 -- it was opened without a project, so it cannot be published into one. Its
--- generation fails at the publish and is run again.
+-- generation fails at the publish and is run again. The lock keeps an engine
+-- pod from before this migration from inserting a build between the DELETE
+-- and the NOT NULL column below (it would make the ALTER fail).
+LOCK TABLE deepwiki_build.builds IN ACCESS EXCLUSIVE MODE;
 DELETE FROM deepwiki_build.builds;
 
 ALTER TABLE deepwiki_build.builds ADD COLUMN project_id INTEGER NOT NULL;
