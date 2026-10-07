@@ -158,3 +158,47 @@ func DisplayRepositoryFor(repoConfig map[string]any) string {
 	}
 	return strings.Trim(trimSpace(repository), "/")
 }
+
+// ArtifactWikiID is the wiki id a generation of the folder on branch is
+// filed under: the engine's normalize_wiki_id of
+// `artifact://bucket/prefix:{branch}:{sha8}`. The repository part is split on
+// `/` (the scheme's `artifact:` becomes `artifact`), every part and the branch
+// are lower-cased with each other character folded to `-`, runs collapsed and
+// the ends trimmed, and the parts are joined with `--`. So
+// `artifact://docs/handbook` on `main` is `artifact--docs--handbook--main`.
+func ArtifactWikiID(source ArtifactSource, branch string) string {
+	branch = strings.TrimSpace(branch)
+	if branch == "" {
+		branch = "main"
+	}
+	// The engine splits `{repository}:{branch}:{sha8}` from the right, so a
+	// `:` inside the branch moves its head into the repository half.
+	repository := source.Repository()
+	if index := strings.LastIndex(branch, ":"); index >= 0 {
+		repository += ":" + branch[:index]
+		branch = branch[index+1:]
+	}
+	parts := make([]string, 0, 4)
+	for _, segment := range strings.Split(strings.Trim(lower(repository), "/"), "/") {
+		if part := wikiIDPart(segment); part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, "--") + "--" + wikiIDPart(branch)
+}
+
+// wikiIDPart is normalize_wiki_id's rule for one part: lower case, every
+// character outside [a-z0-9-] a `-`, runs of `-` collapsed, the ends trimmed.
+func wikiIDPart(text string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(text) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		} else {
+			b.WriteRune('-')
+		}
+	}
+	return strings.Trim(dashRuns.ReplaceAllString(b.String(), "-"), "-")
+}
+
+var dashRuns = regexp.MustCompile(`-+`)
