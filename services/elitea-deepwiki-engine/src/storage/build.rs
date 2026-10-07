@@ -1,20 +1,24 @@
 //! The build space: stage, publish, reconcile (ADR-0026 decision 5).
 //!
-//! A generation opens a [`Build`] for its `wiki_id`, stages the code graph
+//! A generation opens a [`Build`] for one project's wiki (a [`WikiKey`]:
+//! `(project_id, wiki_id)`, migration 0005), stages the code graph
 //! (and later its embeddings) into the `deepwiki_build` tables with `COPY`,
 //! and publishes. [`Build::publish`] is ONE transaction:
 //!
 //! 1. lock the build row (a build the sweep removed cannot publish; the
 //!    sweep skips a locked build);
-//! 2. queue, without a timeout: first behind a publish of the same wiki
-//!    (a transaction-scoped advisory lock on the wiki id), then for one of
+//! 2. queue, without a timeout: first behind a publish of the same wiki of
+//!    the same project (a transaction-scoped advisory lock on the project
+//!    and the wiki id; two projects publish the same wiki id at once), then
+//!    for one of
 //!    [`PublishSettings::slots`] publish slots per database (advisory locks
 //!    too), which bounds the `work_mem` the publishes take together;
 //! 3. set `statement_timeout`, `lock_timeout` and `work_mem` for the rest
 //!    of the transaction ([`PublishSettings`]);
 //! 4. upsert the `wikis` row;
 //! 5. refuse an empty build, before anything is deleted;
-//! 6. delete the wiki's live rows: `wiki_bm25_*`, embeddings, edges, nodes;
+//! 6. delete the wiki's live rows of THIS project: `wiki_bm25_*`,
+//!    embeddings, edges, nodes (rows of other projects are not touched);
 //! 7. `INSERT ... SELECT` the staged nodes, edges and embeddings;
 //! 8. write the `wiki_bm25_*` statistics of both branches;
 //! 9. delete the build row, which cascades to every staged row.
@@ -59,7 +63,7 @@ use crate::graph::{CodeGraph, edge_row, node_row};
 use crate::storage::copy::CopyWriter;
 use crate::storage::rows::{IndexEdge, IndexNode, collapse_edges};
 use crate::storage::text::{self, BM25_B, BM25_K1, BRANCH_BM25, BRANCH_FTS, FTS_B, FTS_K1};
-use crate::storage::{Result, StorageError};
+use crate::storage::{Result, StorageError, WikiKey};
 use indexmap::IndexMap;
 use serde_json::Value;
 use sqlx::Connection;
@@ -79,9 +83,19 @@ pub const MIN_STALE_AFTER: Duration = Duration::from_mins(5);
 /// (`hashtext(PUBLISH_SLOT_LOCK)`, with the slot number as the object).
 pub const PUBLISH_SLOT_LOCK: &str = "elitea_deepwiki.publish_slot";
 
-/// The advisory lock class that orders publishes of one wiki
-/// (`hashtext(PUBLISH_WIKI_LOCK)`, with `hashtext(wiki_id)` as the object).
+/// The advisory lock class that orders publishes of one wiki of one project
+/// (`hashtext(PUBLISH_WIKI_LOCK)`, with `hashtext(`[`publish_wiki_lock_object`]`)`
+/// as the object). The project is part of the key, so two projects
+/// publishing the same wiki id do not wait for each other (a hash collision
+/// only orders two publishes; it never mixes their rows).
 pub const PUBLISH_WIKI_LOCK: &str = "elitea_deepwiki.publish_wiki";
+
+/// The text whose `hashtext` is the object of a publish's
+/// [`PUBLISH_WIKI_LOCK`]: `{project_id}/{wiki_id}`.
+#[must_use]
+pub fn publish_wiki_lock_object(key: &WikiKey) -> String {
+    format!("{}/{}", key.project_id(), key.wiki_id())
+}
 
 /// How a publish uses the database. Every field has an
 /// `ELITEA_DEEPWIKI_PUBLISH_*` setting (`config.rs`).
@@ -326,18 +340,24 @@ impl BuildSpace {
         &self.boot_id
     }
 
-    /// Open a build of `wiki_id`, recorded under this owner and boot id,
-    /// and start its heartbeat task.
+    /// Open a build of one project's wiki, recorded under this owner and
+    /// boot id, and start its heartbeat task. The build publishes into that
+    /// project only: the pair is recorded on the build row and the publish
+    /// reads it from there.
+    ///
+    /// The build space itself is not scoped: the owner reconciliation and
+    /// the sweep delete abandoned BUILDS of any project, never a live index.
     ///
     /// # Errors
     ///
     /// [`StorageError::Database`].
-    pub async fn begin(&self, wiki_id: &str) -> Result<Build> {
+    pub async fn begin(&self, key: &WikiKey) -> Result<Build> {
         let build_id: String = sqlx::query_scalar(
-            "INSERT INTO deepwiki_build.builds (build_id, wiki_id, owner, boot_id) \
-             VALUES (gen_random_uuid()::text, $1, $2, $3) RETURNING build_id",
+            "INSERT INTO deepwiki_build.builds (build_id, project_id, wiki_id, owner, boot_id) \
+             VALUES (gen_random_uuid()::text, $1, $2, $3, $4) RETURNING build_id",
         )
-        .bind(wiki_id)
+        .bind(key.project_id())
+        .bind(key.wiki_id())
         .bind(&self.owner)
         .bind(&self.boot_id)
         .fetch_one(&self.pool)
@@ -347,7 +367,7 @@ impl BuildSpace {
         Ok(Build {
             pool: self.pool.clone(),
             id: build_id,
-            wiki_id: wiki_id.to_owned(),
+            key: key.clone(),
             next_ord: 0,
             publish: self.publish,
             beat_every,
@@ -475,7 +495,8 @@ pub async fn run_reconciler(space: BuildSpace, stale_after: Duration) {
 pub struct Build {
     pool: PgPool,
     id: String,
-    wiki_id: String,
+    /// The project and wiki the build publishes into.
+    key: WikiKey,
     /// The graph position of the next staged node (`bm25_docs.ord`).
     next_ord: i64,
     publish: PublishSettings,
@@ -581,7 +602,13 @@ impl Build {
     /// The wiki the build publishes.
     #[must_use]
     pub fn wiki_id(&self) -> &str {
-        &self.wiki_id
+        self.key.wiki_id()
+    }
+
+    /// The project and wiki the build publishes into.
+    #[must_use]
+    pub fn key(&self) -> &WikiKey {
+        &self.key
     }
 
     /// Record that the build is alive. The background task does this every
@@ -900,11 +927,13 @@ impl Build {
         )
         .await;
         let build = self.id.as_str();
-        let wiki = self.wiki_id.as_str();
+        let key = &self.key;
+        let wiki = key.wiki_id();
+        let project = key.project_id();
         let mut tx = connection.begin().await?;
-        enter_publish(&mut tx, &self.publish, build, wiki).await?;
+        enter_publish(&mut tx, &self.publish, build, key).await?;
 
-        upsert_wiki(&mut tx, wiki, record).await?;
+        upsert_wiki(&mut tx, key, record).await?;
 
         let staged: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM deepwiki_build.wiki_nodes WHERE build_id = $1",
@@ -918,51 +947,44 @@ impl Build {
             )));
         }
 
-        for statement in [
-            "DELETE FROM wiki_bm25_postings WHERE wiki_id = $1",
-            "DELETE FROM wiki_bm25_terms WHERE wiki_id = $1",
-            "DELETE FROM wiki_bm25_docs WHERE wiki_id = $1",
-            "DELETE FROM wiki_bm25_meta WHERE wiki_id = $1",
-            "DELETE FROM wiki_node_embeddings WHERE wiki_id = $1",
-            "DELETE FROM wiki_edges WHERE wiki_id = $1",
-            "DELETE FROM wiki_nodes WHERE wiki_id = $1",
-        ] {
-            sqlx::query(statement).bind(wiki).execute(&mut *tx).await?;
-        }
+        delete_live(&mut tx, key).await?;
 
         let nodes = sqlx::query(
-            "INSERT INTO wiki_nodes (wiki_id, node_id, rel_path, file_name, language, \
+            "INSERT INTO wiki_nodes (project_id, wiki_id, node_id, rel_path, file_name, language, \
                  start_line, end_line, symbol_name, symbol_type, parent_symbol, source_text, \
                  docstring, signature, chunk_type, macro_cluster, micro_cluster, \
                  is_architectural, is_doc, is_test) \
-             SELECT $1, node_id, rel_path, file_name, language, start_line, end_line, \
+             SELECT $3, $1, node_id, rel_path, file_name, language, start_line, end_line, \
                  symbol_name, symbol_type, parent_symbol, source_text, docstring, signature, \
                  chunk_type, macro_cluster, micro_cluster, is_architectural, is_doc, is_test \
              FROM deepwiki_build.wiki_nodes WHERE build_id = $2",
         )
         .bind(wiki)
         .bind(build)
+        .bind(project)
         .execute(&mut *tx)
         .await?
         .rows_affected();
         let edges = sqlx::query(
-            "INSERT INTO wiki_edges (wiki_id, source_id, target_id, rel_type, edge_class, \
-                 weight, metadata) \
-             SELECT $1, source_id, target_id, rel_type, edge_class, weight, metadata \
+            "INSERT INTO wiki_edges (project_id, wiki_id, source_id, target_id, rel_type, \
+                 edge_class, weight, metadata) \
+             SELECT $3, $1, source_id, target_id, rel_type, edge_class, weight, metadata \
              FROM deepwiki_build.wiki_edges WHERE build_id = $2",
         )
         .bind(wiki)
         .bind(build)
+        .bind(project)
         .execute(&mut *tx)
         .await?
         .rows_affected();
         let embeddings = sqlx::query(
-            "INSERT INTO wiki_node_embeddings (wiki_id, node_id, embedding) \
-             SELECT $1, node_id, embedding \
+            "INSERT INTO wiki_node_embeddings (project_id, wiki_id, node_id, embedding) \
+             SELECT $3, $1, node_id, embedding \
              FROM deepwiki_build.wiki_node_embeddings WHERE build_id = $2",
         )
         .bind(wiki)
         .bind(build)
+        .bind(project)
         .execute(&mut *tx)
         .await?
         .rows_affected();
@@ -971,8 +993,8 @@ impl Build {
         // inserted in key order, so the B-trees fill in order instead of at
         // random (measured on elitea-platform: 5.1M postings, 137 s
         // unsorted); the sorts get `work_mem` for that.
-        let bm25_documents = write_bm25_branch(&mut tx, wiki, build).await?;
-        let fts_documents = write_fts_branch(&mut tx, wiki).await?;
+        let bm25_documents = write_bm25_branch(&mut tx, key, build).await?;
+        let fts_documents = write_fts_branch(&mut tx, key).await?;
 
         sqlx::query("DELETE FROM deepwiki_build.builds WHERE build_id = $1")
             .bind(build)
@@ -1001,25 +1023,54 @@ impl Build {
     }
 }
 
+/// Delete the live index rows of one project's wiki, and only those:
+/// each project keeps its own index of the same wiki id.
+async fn delete_live(tx: &mut PgConnection, key: &WikiKey) -> Result<()> {
+    for statement in [
+        "DELETE FROM wiki_bm25_postings WHERE project_id = $1 AND wiki_id = $2",
+        "DELETE FROM wiki_bm25_terms WHERE project_id = $1 AND wiki_id = $2",
+        "DELETE FROM wiki_bm25_docs WHERE project_id = $1 AND wiki_id = $2",
+        "DELETE FROM wiki_bm25_meta WHERE project_id = $1 AND wiki_id = $2",
+        "DELETE FROM wiki_node_embeddings WHERE project_id = $1 AND wiki_id = $2",
+        "DELETE FROM wiki_edges WHERE project_id = $1 AND wiki_id = $2",
+        "DELETE FROM wiki_nodes WHERE project_id = $1 AND wiki_id = $2",
+    ] {
+        sqlx::query(statement)
+            .bind(key.project_id())
+            .bind(key.wiki_id())
+            .execute(&mut *tx)
+            .await?;
+    }
+    Ok(())
+}
+
 /// The publish transaction's first steps: set the publish settings, lock
 /// the build row, queue (without a timeout) behind a publish of the same
-/// wiki and for a publish slot, then set the settings again.
+/// wiki of the same project and for a publish slot, then set the settings
+/// again.
 async fn enter_publish(
     tx: &mut PgConnection,
     settings: &PublishSettings,
     build: &str,
-    wiki: &str,
+    key: &WikiKey,
 ) -> Result<()> {
     apply_settings(&mut *tx, &settings.session_settings()).await?;
 
-    let locked: Option<String> = sqlx::query_scalar(
-        "SELECT wiki_id FROM deepwiki_build.builds WHERE build_id = $1 FOR UPDATE",
+    let locked: Option<(i32, String)> = sqlx::query_as(
+        "SELECT project_id, wiki_id FROM deepwiki_build.builds WHERE build_id = $1 FOR UPDATE",
     )
     .bind(build)
     .fetch_optional(&mut *tx)
     .await?;
-    if locked.is_none() {
+    let Some((project, wiki)) = locked else {
         return Err(gone(build));
+    };
+    // The build row records the pair it was opened for; a build is never
+    // published into another project's (or another wiki's) index.
+    if project != key.project_id() || wiki != key.wiki_id() {
+        return Err(StorageError::Publish(format!(
+            "build {build} was opened for another project or wiki; refusing to publish it"
+        )));
     }
 
     // The queue: no timeout while waiting for a publish of this wiki,
@@ -1034,7 +1085,7 @@ async fn enter_publish(
     .await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))")
         .bind(PUBLISH_WIKI_LOCK)
-        .bind(wiki)
+        .bind(publish_wiki_lock_object(key))
         .execute(&mut *tx)
         .await?;
     take_publish_slot(&mut *tx, settings.slots, build).await?;
@@ -1249,15 +1300,15 @@ async fn copy_bm25(
 /// `_update_registry`, in one static statement. A supplied field replaces
 /// the stored one; an absent one keeps it (or takes the column default on a
 /// new row). `updated_at` is set on every publish.
-async fn upsert_wiki(tx: &mut PgConnection, wiki: &str, record: &WikiRecord) -> Result<()> {
+async fn upsert_wiki(tx: &mut PgConnection, key: &WikiKey, record: &WikiRecord) -> Result<()> {
     sqlx::query(
-        "INSERT INTO wikis (wiki_id, repo, branch, provider, host, display_name, description, \
-             folder_path, commit_hash, canonical_repo_identifier, analysis_key, wiki_version_id, \
-             updated_at) \
-         VALUES ($1, COALESCE($2, $1), COALESCE($3, 'main'), COALESCE($4, 'github'), \
+        "INSERT INTO wikis (project_id, wiki_id, repo, branch, provider, host, display_name, \
+             description, folder_path, commit_hash, canonical_repo_identifier, analysis_key, \
+             wiki_version_id, updated_at) \
+         VALUES ($13, $1, COALESCE($2, $1), COALESCE($3, 'main'), COALESCE($4, 'github'), \
              COALESCE($5, 'github.com'), COALESCE($6, ''), COALESCE($7, ''), COALESCE($8, ''), \
              $9, $10, $11, $12, now()) \
-         ON CONFLICT (wiki_id) DO UPDATE SET \
+         ON CONFLICT (project_id, wiki_id) DO UPDATE SET \
              repo = COALESCE($2, wikis.repo), \
              branch = COALESCE($3, wikis.branch), \
              provider = COALESCE($4, wikis.provider), \
@@ -1271,7 +1322,7 @@ async fn upsert_wiki(tx: &mut PgConnection, wiki: &str, record: &WikiRecord) -> 
              wiki_version_id = COALESCE($12, wikis.wiki_version_id), \
              updated_at = now()",
     )
-    .bind(wiki)
+    .bind(key.wiki_id())
     .bind(record.repo.as_deref())
     .bind(record.branch.as_deref())
     .bind(record.provider.as_deref())
@@ -1283,6 +1334,7 @@ async fn upsert_wiki(tx: &mut PgConnection, wiki: &str, record: &WikiRecord) -> 
     .bind(record.canonical_repo_identifier.as_deref())
     .bind(record.analysis_key.as_deref())
     .bind(record.wiki_version_id.as_deref())
+    .bind(key.project_id())
     .execute(&mut *tx)
     .await?;
     Ok(())
@@ -1292,107 +1344,118 @@ async fn upsert_wiki(tx: &mut PgConnection, wiki: &str, record: &WikiRecord) -> 
 /// postings are in place (`_store_statistics_from_counters`'s tail).
 async fn write_terms_and_meta(
     tx: &mut PgConnection,
-    wiki: &str,
+    key: &WikiKey,
     branch: &str,
     k1: f64,
     b: f64,
 ) -> Result<u64> {
     sqlx::query(
-        "INSERT INTO wiki_bm25_terms (wiki_id, branch, term, df) \
-         SELECT wiki_id, branch, term, count(*) FROM wiki_bm25_postings \
-         WHERE wiki_id = $1 AND branch = $2 GROUP BY wiki_id, branch, term",
+        "INSERT INTO wiki_bm25_terms (project_id, wiki_id, branch, term, df) \
+         SELECT project_id, wiki_id, branch, term, count(*) FROM wiki_bm25_postings \
+         WHERE wiki_id = $1 AND branch = $2 AND project_id = $3 \
+         GROUP BY project_id, wiki_id, branch, term",
     )
-    .bind(wiki)
+    .bind(key.wiki_id())
     .bind(branch)
+    .bind(key.project_id())
     .execute(&mut *tx)
     .await?;
     // `avgdl = total_length / doc_count if doc_count else 1.0`: one float8
     // division of two exact integers, as Python's.
     let documents: i64 = sqlx::query_scalar(
-        "INSERT INTO wiki_bm25_meta (wiki_id, branch, doc_count, avgdl, k1, b) \
-         SELECT $1, $2, count(*)::integer, \
+        "INSERT INTO wiki_bm25_meta (project_id, wiki_id, branch, doc_count, avgdl, k1, b) \
+         SELECT $5, $1, $2, count(*)::integer, \
              CASE WHEN count(*) = 0 THEN 1.0::float8 \
                   ELSE sum(length)::float8 / count(*)::float8 END, \
              $3, $4 \
-         FROM wiki_bm25_docs WHERE wiki_id = $1 AND branch = $2 \
+         FROM wiki_bm25_docs WHERE wiki_id = $1 AND branch = $2 AND project_id = $5 \
          RETURNING doc_count::bigint",
     )
-    .bind(wiki)
+    .bind(key.wiki_id())
     .bind(branch)
     .bind(k1)
     .bind(b)
+    .bind(key.project_id())
     .fetch_one(&mut *tx)
     .await?;
     Ok(u64::try_from(documents).unwrap_or_default())
 }
 
 /// The `'bm25'` branch, from the staged tokens.
-async fn write_bm25_branch(tx: &mut PgConnection, wiki: &str, build: &str) -> Result<u64> {
+async fn write_bm25_branch(tx: &mut PgConnection, key: &WikiKey, build: &str) -> Result<u64> {
+    let wiki = key.wiki_id();
     sqlx::query(
-        "INSERT INTO wiki_bm25_docs (wiki_id, branch, doc_idx, node_id, length) \
-         SELECT $1, $2, (row_number() OVER (ORDER BY ord) - 1)::integer, node_id, length \
+        "INSERT INTO wiki_bm25_docs (project_id, wiki_id, branch, doc_idx, node_id, length) \
+         SELECT $4, $1, $2, (row_number() OVER (ORDER BY ord) - 1)::integer, node_id, length \
          FROM deepwiki_build.bm25_docs WHERE build_id = $3",
     )
     .bind(wiki)
     .bind(BRANCH_BM25)
     .bind(build)
+    .bind(key.project_id())
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "INSERT INTO wiki_bm25_postings (wiki_id, branch, term, doc_idx, tf) \
-         SELECT $1, $2, p.term, d.doc_idx, p.tf \
+        "INSERT INTO wiki_bm25_postings (project_id, wiki_id, branch, term, doc_idx, tf) \
+         SELECT $4, $1, $2, p.term, d.doc_idx, p.tf \
          FROM deepwiki_build.bm25_postings p \
          JOIN wiki_bm25_docs d \
-           ON d.wiki_id = $1 AND d.branch = $2 AND d.node_id = p.node_id \
+           ON d.project_id = $4 AND d.wiki_id = $1 AND d.branch = $2 \
+          AND d.node_id = p.node_id \
          WHERE p.build_id = $3 \
          ORDER BY p.term, d.doc_idx",
     )
     .bind(wiki)
     .bind(BRANCH_BM25)
     .bind(build)
+    .bind(key.project_id())
     .execute(&mut *tx)
     .await?;
-    write_terms_and_meta(tx, wiki, BRANCH_BM25, BM25_K1, BM25_B).await
+    write_terms_and_meta(tx, key, BRANCH_BM25, BM25_K1, BM25_B).await
 }
 
 /// The `'fts'` branch, from the published tsvectors
 /// (`_rebuild_fts_statistics`): a document's length is the sum of its
 /// lexemes' position counts (1 for a lexeme without positions), its
 /// `doc_idx` follows `ORDER BY node_id`.
-async fn write_fts_branch(tx: &mut PgConnection, wiki: &str) -> Result<u64> {
+async fn write_fts_branch(tx: &mut PgConnection, key: &WikiKey) -> Result<u64> {
+    let wiki = key.wiki_id();
     sqlx::query(
-        "INSERT INTO wiki_bm25_docs (wiki_id, branch, doc_idx, node_id, length) \
-         SELECT $1, $2, (row_number() OVER (ORDER BY node_id) - 1)::integer, node_id, \
+        "INSERT INTO wiki_bm25_docs (project_id, wiki_id, branch, doc_idx, node_id, length) \
+         SELECT $3, $1, $2, (row_number() OVER (ORDER BY node_id) - 1)::integer, node_id, \
              length::integer \
          FROM ( \
              SELECT n.node_id, \
                  coalesce(sum(coalesce(array_length(l.positions, 1), 1)), 0) AS length \
              FROM wiki_nodes n \
              CROSS JOIN LATERAL unnest(n.fts) AS l(lexeme, positions, weights) \
-             WHERE n.wiki_id = $1 \
+             WHERE n.wiki_id = $1 AND n.project_id = $3 \
              GROUP BY n.node_id \
          ) AS documents \
          WHERE length > 0",
     )
     .bind(wiki)
     .bind(BRANCH_FTS)
+    .bind(key.project_id())
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "INSERT INTO wiki_bm25_postings (wiki_id, branch, term, doc_idx, tf) \
-         SELECT $1, $2, l.lexeme, d.doc_idx, coalesce(array_length(l.positions, 1), 1) \
+        "INSERT INTO wiki_bm25_postings (project_id, wiki_id, branch, term, doc_idx, tf) \
+         SELECT $3, $1, $2, l.lexeme, d.doc_idx, coalesce(array_length(l.positions, 1), 1) \
          FROM wiki_nodes n \
          CROSS JOIN LATERAL unnest(n.fts) AS l(lexeme, positions, weights) \
          JOIN wiki_bm25_docs d \
-           ON d.wiki_id = $1 AND d.branch = $2 AND d.node_id = n.node_id \
-         WHERE n.wiki_id = $1 \
+           ON d.project_id = $3 AND d.wiki_id = $1 AND d.branch = $2 \
+          AND d.node_id = n.node_id \
+         WHERE n.wiki_id = $1 AND n.project_id = $3 \
          ORDER BY l.lexeme, d.doc_idx",
     )
     .bind(wiki)
     .bind(BRANCH_FTS)
+    .bind(key.project_id())
     .execute(&mut *tx)
     .await?;
-    write_terms_and_meta(tx, wiki, BRANCH_FTS, FTS_K1, FTS_B).await
+    write_terms_and_meta(tx, key, BRANCH_FTS, FTS_K1, FTS_B).await
 }
 
 #[cfg(test)]

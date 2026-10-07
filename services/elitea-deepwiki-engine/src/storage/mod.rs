@@ -21,6 +21,9 @@
 //!   `resolve_wiki` use: a port of `storage/unified_db_adapter.py`.
 //! * [`text`] holds the tokenizer and the BM25 arithmetic both sides share.
 //! * [`topology`] is Phase 2's index over a build's staged rows.
+//! * [`scope`] is the tenancy key: every index row belongs to one
+//!   platform project, and every reader and build is made with one
+//!   ([`ProjectScope`], [`WikiKey`]; migration 0005).
 //!
 //! A DSN carries a password. Nothing in this module logs or formats one,
 //! and a DSN that does not parse is reported without its text.
@@ -35,10 +38,12 @@ pub mod build;
 mod copy;
 pub mod migrate;
 pub mod rows;
+pub mod scope;
 pub mod search;
 pub mod text;
 pub mod topology;
 
+pub use scope::{PROJECT_ARG, ProjectScope, WikiKey};
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use std::str::FromStr;
 use std::time::Duration;

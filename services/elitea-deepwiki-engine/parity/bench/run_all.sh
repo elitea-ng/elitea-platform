@@ -39,11 +39,11 @@ for corpus in $CORPORA; do
     curl -s "$ROUTER/_label" -d "{\"label\": \"$engine/$corpus/search\"}" >/dev/null
     if [ "$engine" = rust ]; then
       wiki=$(podman exec dwb-pg psql -U deepwiki -d deepwiki -Atc \
-        "SELECT wiki_id FROM wikis WHERE repo = '$(repo_of "$corpus")' ORDER BY updated_at DESC NULLS LAST LIMIT 1" 2>/dev/null)
+        "SELECT wiki_id FROM wikis WHERE project_id = 1 AND repo = '$(repo_of "$corpus")' ORDER BY updated_at DESC NULLS LAST LIMIT 1" 2>/dev/null)
       [ -z "$wiki" ] && wiki=$(podman exec dwb-pg psql -U deepwiki -d deepwiki -Atc \
-        "SELECT DISTINCT wiki_id FROM wiki_nodes WHERE wiki_id ILIKE '%$(basename "$(repo_of "$corpus")")%' LIMIT 1")
+        "SELECT DISTINCT wiki_id FROM wiki_nodes WHERE project_id = 1 AND wiki_id ILIKE '%$(basename "$(repo_of "$corpus")")%' LIMIT 1")
       echo "rust index: $wiki"
-      ELITEA_DEEPWIKI_DATABASE_URL=$DSN "$BIN/deepwiki-bench" search "$wiki" \
+      ELITEA_DEEPWIKI_DATABASE_URL=$DSN "$BIN/deepwiki-bench" search 1 "$wiki" \
         "$ENGINE_DIR/parity/questions/$corpus.jsonl" "$BENCH/search/$engine/$corpus.jsonl" \
         --api-base "$ROUTER/v1" --embedding-model Qwen/Qwen3-Embedding-4B
     else

@@ -69,6 +69,10 @@ fn the_checksums_are_the_ledger_values() {
             "0004_build_boot_id",
             "2572543733819202a9dd358c9aaad28ae598bd71691e705a2d4a553b881864ea",
         ),
+        (
+            "0005_project_scope",
+            "e2deb1ba3f1eb886c152eeed6be3104e1226ce3e4ed15cb1c30439753f9a18ae",
+        ),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v.to_owned()))
@@ -129,6 +133,38 @@ async fn the_ledger_is_written_once_and_guarded() {
     .expect("catalog");
     assert_eq!(boot_id, Some(("text".to_owned(), "YES".to_owned())));
 
+    // 0005: the project leads the key of every index table, and a build
+    // names its project.
+    for table in [
+        "wikis",
+        "wiki_nodes",
+        "wiki_edges",
+        "wiki_node_embeddings",
+        "wiki_bm25_meta",
+        "wiki_bm25_docs",
+        "wiki_bm25_terms",
+        "wiki_bm25_postings",
+    ] {
+        let first: Option<String> = sqlx::query_scalar(
+            "SELECT a.attname::text FROM pg_index i \
+             JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0] \
+             WHERE i.indrelid = ('public.' || $1)::regclass AND i.indisprimary",
+        )
+        .bind(table)
+        .fetch_optional(&pool)
+        .await
+        .expect("catalog");
+        assert_eq!(first.as_deref(), Some("project_id"), "{table}");
+    }
+    let project: Option<(String, String)> = sqlx::query_as(
+        "SELECT data_type::text, is_nullable::text FROM information_schema.columns \
+         WHERE table_schema = 'deepwiki_build' AND table_name = 'builds' AND column_name = 'project_id'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .expect("catalog");
+    assert_eq!(project, Some(("integer".to_owned(), "NO".to_owned())));
+
     // An applied migration whose text changed is refused, before anything
     // new is applied.
     sqlx::query("UPDATE schema_migrations SET checksum = 'tampered' WHERE version = '0002'")
@@ -158,4 +194,54 @@ async fn the_ledger_is_written_once_and_guarded() {
         .await
         .expect("catalog");
     assert_eq!((recorded, created), (0, None));
+}
+
+/// 0005 on a database that holds an index from before it: the rows cannot
+/// be attributed to a project, so they are deleted (with every build in
+/// progress), and the next generation rebuilds the index.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_project_scope_migration_deletes_the_unattributable_index() {
+    let Some(pool) = common::empty_database("migrate_scope").await else {
+        return;
+    };
+    let all = migrate::embedded().expect("valid");
+    let (before, scope) = all.split_at(4);
+    assert_eq!(scope[0].name, "project_scope");
+    migrate::apply(&pool, before).await.expect("0001-0004");
+    sqlx::raw_sql(
+        "INSERT INTO wikis (wiki_id, repo, branch) VALUES ('acme--repo--main', 'acme/repo', 'main');
+         INSERT INTO wiki_nodes (wiki_id, node_id, source_text) VALUES ('acme--repo--main', 'n0', 'x');
+         INSERT INTO wiki_bm25_meta (wiki_id, branch, doc_count, avgdl, k1, b)
+             VALUES ('acme--repo--main', 'bm25', 1, 1.0, 1.5, 0.75);
+         INSERT INTO deepwiki_build.builds (build_id, wiki_id, owner) VALUES ('b1', 'acme--repo--main', 'r');
+         INSERT INTO deepwiki_build.wiki_nodes (build_id, node_id) VALUES ('b1', 'n0');",
+    )
+    .execute(&pool)
+    .await
+    .expect("a pre-0005 index");
+
+    assert_eq!(
+        migrate::apply_all(&pool).await.expect("0005"),
+        ["0005".to_owned()]
+    );
+    for table in [
+        "wikis",
+        "wiki_nodes",
+        "wiki_bm25_meta",
+        "deepwiki_build.builds",
+        "deepwiki_build.wiki_nodes",
+    ] {
+        let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(count, 0, "{table}");
+    }
+    // A row without a project is refused from now on.
+    let unscoped = sqlx::query(
+        "INSERT INTO wikis (wiki_id, repo, branch) VALUES ('acme--repo--main', 'acme/repo', 'main')",
+    )
+    .execute(&pool)
+    .await;
+    assert!(unscoped.is_err());
 }

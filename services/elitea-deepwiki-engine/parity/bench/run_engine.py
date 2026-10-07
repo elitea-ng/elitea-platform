@@ -192,7 +192,10 @@ def arguments_for(tool: str, args, question: str | None = None) -> dict:
         "provider_config": {"base_url": "https://api.github.com"},
         "repository": args.repo, "branch": args.branch, "project": None, "is_cloud": None,
     }
-    common = {"llm_settings": llm_settings, "embedding_model": EMBED_MODEL}
+    # The project the Go host stamps from the authenticated identity
+    # (migration 0005): the Rust engine refuses an index tool without it.
+    common = {"llm_settings": llm_settings, "embedding_model": EMBED_MODEL,
+              "_elitea_project_id": "1"}
     if tool == "generate_wiki":
         return {**common, "query": f"Document the {args.repo} repository", "repo_config": repo_config,
                 "active_branch": args.branch, "force_rebuild_index": True,
