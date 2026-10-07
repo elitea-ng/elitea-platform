@@ -1,0 +1,18 @@
+[package]
+name = "elitea-pg-migrate"
+description = "Embedded, checksummed SQL migrations with an advisory-locked ledger, for the engines' PostgreSQL schemas."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+sha2 = "0.10.9"
+# No TLS feature here: the consuming service picks its TLS stack, and Cargo
+# unifies the features.
+sqlx = { version = "0.8.6", default-features = false, features = ["postgres", "runtime-tokio"] }
+thiserror = "2.0.20"
+tracing = "0.1.44"
+
+[lints]
+workspace = true

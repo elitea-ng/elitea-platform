@@ -1,4 +1,4 @@
-//! `elitea-inventory-engine [serve | healthcheck | --version]`.
+//! `elitea-inventory-engine [serve | healthcheck | migrate | --version]`.
 
 #![cfg_attr(
     not(test),
@@ -14,10 +14,11 @@
 use elitea_engine_sidecar::{healthcheck, server, telemetry};
 use elitea_inventory_engine::build_runner;
 use elitea_inventory_engine::config::Settings;
+use elitea_inventory_engine::store;
 use std::process::ExitCode;
 use std::time::Duration;
 
-const USAGE: &str = "usage: elitea-inventory-engine [serve | healthcheck | --version]";
+const USAGE: &str = "usage: elitea-inventory-engine [serve | healthcheck | migrate | --version]";
 
 /// The OTLP `service.name` of this engine's spans.
 const SERVICE_NAME: &str = "elitea-inventory-engine";
@@ -26,6 +27,7 @@ fn main() -> ExitCode {
     match std::env::args().nth(1).as_deref() {
         None | Some("serve") => on_runtime(serve()),
         Some("healthcheck") => on_runtime(probe()),
+        Some("migrate") => on_runtime(migrate()),
         Some("--version") => {
             println!("elitea-inventory-engine {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -72,6 +74,56 @@ async fn probe() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("{error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Apply the graph-store migrations to `ELITEA_INVENTORY_DATABASE_URL`
+/// (the `DeepWiki` engine's `migrate`, for this engine's schema). Exit 0 when
+/// the database is at the newest migration, whether or not this run applied
+/// one. It reads only that variable, so a migration Job needs no runner
+/// settings.
+async fn migrate() -> ExitCode {
+    let telemetry = telemetry::init(SERVICE_NAME);
+    let code = migrate_database().await;
+    telemetry.shutdown().await;
+    code
+}
+
+async fn migrate_database() -> ExitCode {
+    let dsn = std::env::var(store::DSN_ENV).unwrap_or_default();
+    if dsn.trim().is_empty() {
+        tracing::error!(
+            "{} is not set, so there is no database to migrate",
+            store::DSN_ENV
+        );
+        return ExitCode::FAILURE;
+    }
+    let pool = match store::lazy_pool(&dsn, 1) {
+        Ok(pool) => pool,
+        Err(error) => {
+            tracing::error!(%error, "cannot migrate");
+            return ExitCode::FAILURE;
+        }
+    };
+    let outcome = store::migrate(&pool).await;
+    pool.close().await;
+    match outcome {
+        Ok(applied) if applied.is_empty() => {
+            tracing::info!("the database is already at the newest migration");
+            ExitCode::SUCCESS
+        }
+        Ok(applied) => {
+            tracing::info!(
+                "applied {} migration(s): {}",
+                applied.len(),
+                applied.join(", ")
+            );
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            tracing::error!(%error, "migration failed");
             ExitCode::FAILURE
         }
     }

@@ -553,6 +553,7 @@ dependencies = [
  "elitea-engine-sidecar",
  "elitea-graph-algos",
  "elitea-model-client",
+ "elitea-pg-migrate",
  "elitea-repo-ingest",
  "fancy-regex",
  "globset",
@@ -623,6 +624,16 @@ dependencies = [
  "serde_json",
  "tiktoken-rs",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "elitea-pg-migrate"
+version = "0.1.0"
+dependencies = [
+ "sha2",
+ "sqlx",
+ "thiserror",
  "tracing",
 ]
 

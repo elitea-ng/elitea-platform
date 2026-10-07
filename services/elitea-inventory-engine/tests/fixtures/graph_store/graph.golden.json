@@ -1,0 +1,268 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "id": "a1",
+      "name": "UserService",
+      "type": "class",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/users.py",
+          "line_start": 10,
+          "line_end": 80,
+          "source_toolkit": "repo",
+          "doc_id": "repo://src/users.py",
+          "content_hash": "c0ffee"
+        },
+        {
+          "file_path": "src/api.py",
+          "line_start": 3,
+          "line_end": null,
+          "source_toolkit": "repo",
+          "doc_id": "repo://src/api.py",
+          "content_hash": "beef"
+        }
+      ],
+      "description": "Manages users",
+      "is_async": false,
+      "visibility": "public",
+      "decorators": [
+        "dataclass"
+      ],
+      "meta": {
+        "lines": 70
+      },
+      "embedding": [
+        0.1,
+        -0.25,
+        1e-07,
+        0.3333333333333333
+      ],
+      "community_id": "community_0"
+    },
+    {
+      "id": "b2",
+      "name": "create_user",
+      "type": "function",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/users.py",
+          "line_start": 20,
+          "line_end": 30,
+          "source_toolkit": "repo",
+          "doc_id": "repo://src/users.py",
+          "content_hash": "c0ffee"
+        }
+      ],
+      "signature": "def create_user(name: str) -> User",
+      "count": 3,
+      "ratio": 0.25,
+      "embedding": [
+        0.0,
+        1.0,
+        -1.5,
+        2.0
+      ],
+      "community_id": "community_0"
+    },
+    {
+      "id": "c3",
+      "name": "\u03a9\u03bc\u03ad\u03b3\u03b1 \u03a3\u039f\u03a6\u039f\u03a3",
+      "type": "concept",
+      "layer": "domain",
+      "citations": [
+        {
+          "file_path": "docs/intro.md",
+          "line_start": null,
+          "line_end": null,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki://docs/intro.md",
+          "content_hash": null
+        }
+      ],
+      "properties": {
+        "description": "an LLM entity keeps a nested dict"
+      }
+    },
+    {
+      "id": "d4",
+      "name": "Orphan",
+      "type": "widget_thing"
+    },
+    {
+      "id": "e5",
+      "name": "overridden by a property",
+      "type": "fact",
+      "layer": "custom",
+      "citations": [
+        {
+          "file_path": "src/users.py",
+          "line_start": 22,
+          "line_end": 22,
+          "source_toolkit": "repo",
+          "doc_id": "repo://src/users.py",
+          "content_hash": null
+        }
+      ],
+      "fact_type": "validation",
+      "subject": "create_user",
+      "predicate": "rejects",
+      "object": "empty names",
+      "confidence": 0.8
+    },
+    {
+      "id": "f6",
+      "name": "test_create",
+      "type": "test_function",
+      "layer": "testing",
+      "community_id": "community_0"
+    }
+  ],
+  "links": [
+    {
+      "relation_type": "uses",
+      "source": "a1",
+      "confidence": 0.7,
+      "discovered_in_file": "src/users.py",
+      "target": "b2"
+    },
+    {
+      "relation_type": "belongs_to",
+      "source": "b2",
+      "target": "a1"
+    },
+    {
+      "relation_type": "related_to",
+      "source": "c3",
+      "target": "c3"
+    },
+    {
+      "relation_type": "describes",
+      "source": "e5",
+      "confidence": 0.9,
+      "target": "b2"
+    },
+    {
+      "relation_type": "tests",
+      "source": "f6",
+      "target": "b2"
+    }
+  ],
+  "_indices": {
+    "entity_index": {
+      "userservice": [
+        "a1"
+      ],
+      "create_user": [
+        "b2"
+      ],
+      "\u03c9\u03bc\u03ad\u03b3\u03b1 \u03c3\u03bf\u03c6\u03bf\u03c2": [
+        "c3"
+      ],
+      "orphan": [
+        "d4"
+      ],
+      "overridden by a property": [
+        "e5"
+      ],
+      "test_create": [
+        "f6"
+      ]
+    },
+    "type_index": {
+      "class": [
+        "a1"
+      ],
+      "function": [
+        "b2"
+      ],
+      "concept": [
+        "c3"
+      ],
+      "widget_thing": [
+        "d4"
+      ],
+      "fact": [
+        "e5"
+      ],
+      "test_function": [
+        "f6"
+      ]
+    },
+    "file_index": {
+      "src/users.py": [
+        "a1",
+        "b2",
+        "e5"
+      ],
+      "src/api.py": [
+        "a1"
+      ],
+      "docs/intro.md": [
+        "c3"
+      ]
+    },
+    "source_doc_index": {
+      "repo://src/users.py": [
+        "a1",
+        "b2",
+        "e5"
+      ],
+      "repo://src/api.py": [
+        "a1"
+      ],
+      "wiki://docs/intro.md": [
+        "c3"
+      ]
+    }
+  },
+  "_metadata": {
+    "embeddings_model": "text-embedding-3-small",
+    "embeddings_count": 2,
+    "community_data": {
+      "algorithm": "leiden",
+      "resolution": 1.0,
+      "modularity": 0.42,
+      "num_communities": 1,
+      "communities": {
+        "community_0": {
+          "members": [
+            "a1",
+            "b2",
+            "f6",
+            "gone"
+          ],
+          "centroids": [
+            {
+              "id": "a1",
+              "score": 1.0,
+              "name": "UserService",
+              "type": "class"
+            }
+          ],
+          "stats": {
+            "size": 3,
+            "density": 0.5,
+            "cohesion": 0.66,
+            "internal_edges": 3
+          },
+          "label": "Users",
+          "summary": "",
+          "dominant_types": [
+            "class"
+          ],
+          "dominant_layers": [
+            "code"
+          ],
+          "micro_clusters": null
+        }
+      }
+    },
+    "last_saved": "2026-10-07T15:55:26.378170",
+    "version": "2.1"
+  }
+}

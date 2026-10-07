@@ -6,7 +6,12 @@ name: CI — Inventory native engine
 # and every check here needs the same compiled dependency graph.
 #
 #   * fmt, Clippy (all + pedantic, deny), rustdoc with warnings denied;
-#   * the crate's tests: the fixture runner against every Inventory golden
+#   * the crate's tests: the graph against the Python engine's own
+#     (tests/fixtures/graph_store, written by the Python KnowledgeGraph) and
+#     through a REAL PostgreSQL (the `postgres` service; the store's
+#     migrations, save/load, tenancy). INVENTORY_REQUIRE_POSTGRES=1 turns
+#     their "no database → skip" into a failure;
+#   * the fixture runner against every Inventory golden
 #     (conformance/provider/fixtures/inventory — the files the Go and Python
 #     fixture runners are held to), the tool table against the descriptor
 #     the host serves, and the engine over a REAL Unix socket;
@@ -59,6 +64,20 @@ jobs:
     defaults:
       run:
         working-directory: services/elitea-inventory-engine
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: inventory
+          POSTGRES_PASSWORD: inventory
+          POSTGRES_DB: inventory
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U inventory"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
 
@@ -87,6 +106,9 @@ jobs:
         run: cargo doc --locked --no-deps --all-features
 
       - name: Run the crate's tests
+        env:
+          INVENTORY_TEST_DSN: postgresql://inventory:inventory@127.0.0.1:5432/inventory
+          INVENTORY_REQUIRE_POSTGRES: "1"
         run: cargo test --locked --all-targets --all-features
 
       - name: Build the release binary

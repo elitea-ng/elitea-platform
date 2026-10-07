@@ -12,6 +12,7 @@ native Inventory engine (`services/elitea-inventory-engine`).
 | `code-parsers` | tree-sitter parsers for Python, Go, TypeScript, JavaScript, Java, C#, C++ and Rust → symbols and relationships |
 | `graph-algos` | Seeded two-pass Leiden (RB-configuration) over the vendored `leiden-rs`, communities numbered by size |
 | `repo-ingest` | Admitted shallow git clones (gix, egress allowlist, limits), artifact-folder downloads, file discovery; refusals name the consumer's settings (`names::SettingNames`) |
+| `pg-migrate` | The forward-only, checksummed Postgres migration runner: each consumer passes its own ledger table and advisory-lock name, so two engines on one database never share a ledger |
 
 ## Layout rules
 
