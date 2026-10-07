@@ -992,3 +992,5 @@ fn recursive_server_variable_defaults_stop_at_the_materialization_bound() {
         .expect("bounded substitution");
     assert_eq!(error.code(), OpenApiSpecErrorCode::ResourceExhausted);
 }
+
+// No SDK schema gate (sdk_conformance.rs): OpenAPI tools are generated from the configured spec and the SDK snapshot lists no static args_schemas for "openapi".

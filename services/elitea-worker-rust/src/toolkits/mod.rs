@@ -17,6 +17,7 @@ mod mcp;
 mod mcp_error;
 mod mcp_tool_cache;
 mod policy;
+mod sdk_conformance;
 mod snapshot;
 mod tool_binding;
 

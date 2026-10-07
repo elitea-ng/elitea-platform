@@ -772,3 +772,12 @@ async fn subset_order_block_policy_and_unknown_selection_are_fail_closed() {
         ZephyrSquadToolsetErrorCode::UnsupportedSelection
     );
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let toolset = build_zephyr_squad_toolset("gate", config(&[]), &policy(&[]))
+        .expect("complete zephyr_squad toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("zephyr_squad tools");
+    super::sdk_conformance::assert_sdk_conformance("zephyr_squad", &tools);
+}

@@ -1179,3 +1179,13 @@ async fn commits_filters_and_pagination_are_exact_and_exhaustion_is_explicit() {
     );
     assert_eq!(transport.requests().len(), 10);
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn GitLabOrgApi> = Arc::new(FixtureApi::default());
+    let toolset =
+        test_build_with_api("gate", &[], &policy(&[]), &api).expect("complete gitlab_org toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("gitlab_org tools");
+    super::sdk_conformance::assert_sdk_conformance("gitlab_org", &tools);
+}

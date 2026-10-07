@@ -710,3 +710,13 @@ fn fixture_error(code: ServiceNowClientErrorCode, retryable: bool) -> ServiceNow
     // parsing an error response through the public stable fields below.
     ServiceNowClientError::fixture(code, retryable)
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn ServiceNowApi> = Arc::new(FixtureApi::new());
+    let toolset =
+        test_build_with_api("gate", &[], &policy(), &api).expect("complete service_now toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("service_now tools");
+    super::sdk_conformance::assert_sdk_conformance("service_now", &tools);
+}

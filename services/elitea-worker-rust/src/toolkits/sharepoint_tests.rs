@@ -603,3 +603,29 @@ async fn configured_materializer_merges_sharepoint_with_the_common_auth_catalog(
         ["get_lists"]
     );
 }
+
+/// The family serves a subset of the SDK names and omits the rest, so the
+/// gate selects every SDK name and checks what the family keeps.
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let requirement = DelegatedAuthorizationRequirement::new(
+        "Project SharePoint".to_owned(),
+        "sharepoint".to_owned(),
+        SITE_URL.to_owned(),
+        None,
+        None,
+    )
+    .expect("SharePoint requirement");
+    let client: Arc<dyn SharePointApi> = Arc::new(AuthenticationApi { requirement });
+    let toolset = test_build_with_api(
+        "Project SharePoint",
+        SITE_URL,
+        &super::sdk_conformance::sdk_tool_names("sharepoint"),
+        &policy(&[]),
+        &client,
+    )
+    .expect("complete sharepoint toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("sharepoint tools");
+    super::sdk_conformance::assert_sdk_conformance("sharepoint", &tools);
+}

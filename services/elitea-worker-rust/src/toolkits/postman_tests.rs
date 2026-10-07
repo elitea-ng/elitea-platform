@@ -1448,3 +1448,13 @@ fn production_slice_has_no_forbidden_control_flow_macros() {
         }
     }
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn PostmanApi> = Arc::new(FixtureApi::new([]));
+    let toolset =
+        test_build_with_api("gate", &[], &policy(&[]), &api).expect("complete postman toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("postman tools");
+    super::sdk_conformance::assert_sdk_conformance("postman", &tools);
+}

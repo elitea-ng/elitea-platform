@@ -697,3 +697,13 @@ async fn post_accept_invalid_and_oversized_results_are_effect_aware() {
         assert!(!error.retryable());
     }
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn GcpApi> = Arc::new(FixtureApi::new());
+    let toolset =
+        test_build_with_api("gate", &[], &policy(&[]), &api).expect("complete gcp toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("gcp tools");
+    super::sdk_conformance::assert_sdk_conformance("gcp", &tools);
+}

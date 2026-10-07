@@ -619,3 +619,13 @@ fn relative_url_validation_covers_encoded_authority_escape_and_controls() {
         );
     }
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn KeycloakApi> = Arc::new(FixtureApi::new());
+    let toolset =
+        test_build_with_api("gate", &[], &policy(&[]), &api).expect("complete keycloak toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("keycloak tools");
+    super::sdk_conformance::assert_sdk_conformance("keycloak", &tools);
+}

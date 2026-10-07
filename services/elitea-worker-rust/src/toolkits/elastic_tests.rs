@@ -554,3 +554,13 @@ fn two_clients_never_cross_cluster_or_api_key_authority() {
         Some("ApiKey c2Vjb25k")
     );
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn ElasticApi> = Arc::new(FixtureApi::new());
+    let toolset =
+        test_build_with_api("gate", &[], &policy(&[]), &api).expect("complete elastic toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("elastic tools");
+    super::sdk_conformance::assert_sdk_conformance("elastic", &tools);
+}

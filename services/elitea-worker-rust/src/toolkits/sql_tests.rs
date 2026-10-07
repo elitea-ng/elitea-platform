@@ -677,3 +677,13 @@ fn production_slice_has_no_debug_output_or_unbounded_collection_helpers() {
     assert!(client.contains("no_engine_substitution(false)"));
     assert!(!client.contains("SET SESSION sql_mode"));
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn SqlApi> = Arc::new(FixtureApi::new([]));
+    let toolset = test_build_with_api("gate", &[], SqlDialect::Postgres, &policy(&[]), &api)
+        .expect("complete sql toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("sql tools");
+    super::sdk_conformance::assert_sdk_conformance("sql", &tools);
+}

@@ -1297,3 +1297,13 @@ async fn description_attachment_route_and_post_accept_bound_are_effect_aware() {
     assert_eq!(error.code(), AhaClientErrorCode::UnknownOutcome);
     assert_eq!(huge_transport.snapshots().len(), 1);
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn AhaApi> = Arc::new(FixtureApi::default());
+    let toolset =
+        test_build_with_api("gate", &[], &policy(&[]), &api).expect("complete aha toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("aha tools");
+    super::sdk_conformance::assert_sdk_conformance("aha", &tools);
+}

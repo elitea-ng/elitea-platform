@@ -2342,3 +2342,21 @@ impl GitHubApi for FixtureGitHubApi {
         }))
     }
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let client = Arc::new(FixtureGitHubApi::default());
+    let toolset = test_build_with_api(
+        "team-github",
+        "EliteaAI/elitea-platform",
+        &super::families::github::tools::test_supported_names(
+            &super::sdk_conformance::sdk_tool_names("github"),
+        ),
+        &policy(&[]),
+        &(client as Arc<dyn GitHubApi>),
+    )
+    .expect("native GitHub toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("native GitHub tools");
+    super::sdk_conformance::assert_sdk_conformance("github", &tools);
+}

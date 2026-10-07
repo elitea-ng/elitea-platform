@@ -883,3 +883,13 @@ fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .windows(needle.len())
         .position(|window| window == needle)
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn YagmailApi> = Arc::new(FixtureApi::new());
+    let toolset =
+        test_build_with_api("gate", &[], &policy(&[]), &api).expect("complete yagmail toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("yagmail tools");
+    super::sdk_conformance::assert_sdk_conformance("yagmail", &tools);
+}

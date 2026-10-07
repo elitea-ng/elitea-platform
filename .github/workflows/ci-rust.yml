@@ -9,6 +9,9 @@ on:
       - "libs/proto/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
+      # The SDK schema gate reads both (src/toolkits/sdk_conformance.rs).
+      - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
+      - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
       # The live command-bus test runs the worker against the NATS chart's
       # own permission table and the real bootstrap (docs/runtime-command-bus.md).
       - "deploy/helm/nats/**"
@@ -27,6 +30,9 @@ on:
       - "libs/proto/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
+      # The SDK schema gate reads both (src/toolkits/sdk_conformance.rs).
+      - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
+      - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
       # The live command-bus test runs the worker against the NATS chart's
       # own permission table and the real bootstrap (docs/runtime-command-bus.md).
       - "deploy/helm/nats/**"

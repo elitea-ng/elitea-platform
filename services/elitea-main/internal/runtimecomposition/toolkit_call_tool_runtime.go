@@ -64,7 +64,19 @@ func (a toolkitTypeVerdictAdapter) SupportsToolkitType(toolkitType string) (bool
 	return a.capability.SupportsToolkitType(toolkitType, importKey)
 }
 
-var _ toolkitcalltoolapp.ToolkitTypeVerdict = toolkitTypeVerdictAdapter{}
+// SupportsTool is the per-tool half (ADR-0027): a partial Rust family serves
+// fewer tools than its SDK type declares. The same reading of absence.
+func (a toolkitTypeVerdictAdapter) SupportsTool(toolkitType, toolName string) (bool, string) {
+	if a.capability == nil {
+		return true, ""
+	}
+	return a.capability.SupportsTool(toolkitType, toolName)
+}
+
+var (
+	_ toolkitcalltoolapp.ToolkitTypeVerdict = toolkitTypeVerdictAdapter{}
+	_ toolkitcalltoolapp.ToolVerdict        = toolkitTypeVerdictAdapter{}
+)
 
 // newCurrentToolkitCallToolRuntime composes the tool-run producer using the
 // configured worker's shared toolkit reader and settings resolver.

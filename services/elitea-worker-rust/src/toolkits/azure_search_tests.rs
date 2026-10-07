@@ -692,3 +692,13 @@ fn unsupported_selection_fails_before_provider_use() {
         AzureSearchToolsetErrorCode::UnsupportedSelection
     );
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn AzureSearchApi> = Arc::new(FixtureAzureSearchApi::default());
+    let toolset = test_build_with_api("gate", &[], &policy(&[]), &api)
+        .expect("complete azure_search toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("azure_search tools");
+    super::sdk_conformance::assert_sdk_conformance("azure_search", &tools);
+}

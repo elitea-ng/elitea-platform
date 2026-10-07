@@ -156,6 +156,12 @@ func TestWorkerToolkitCapabilityRefusesBadDocuments(t *testing.T) {
 			`"implementation":"rust","source":"s","supported_tool_types":["b","a"]}`,
 		"empty allow list": `{"schema_version":"elitea.worker-toolkit-capability.v1",` +
 			`"implementation":"rust","source":"s","supported_tool_types":[]}`,
+		"tools of a type it does not serve": `{"schema_version":"elitea.worker-toolkit-capability.v1",` +
+			`"implementation":"rust","source":"s","supported_tool_types":["a"],"supported_tools":{"b":["x"]}}`,
+		"an empty tool list": `{"schema_version":"elitea.worker-toolkit-capability.v1",` +
+			`"implementation":"rust","source":"s","supported_tool_types":["a"],"supported_tools":{"a":[]}}`,
+		"unsorted tools": `{"schema_version":"elitea.worker-toolkit-capability.v1",` +
+			`"implementation":"rust","source":"s","supported_tool_types":["a"],"supported_tools":{"a":["y","x"]}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := runtimecomposition.LoadWorkerToolkitCapability("rust", []byte(document))
@@ -163,6 +169,39 @@ func TestWorkerToolkitCapabilityRefusesBadDocuments(t *testing.T) {
 				t.Errorf("err=%v, want ErrWorkerToolkitCapabilityInvalid", err)
 			}
 		})
+	}
+}
+
+// A partial Rust family serves a subset of its SDK type's tools (ADR-0027);
+// a full one, and every Python answer, serves them all.
+func TestWorkerToolkitCapabilitySupportsTool(t *testing.T) {
+	t.Parallel()
+	rust, err := runtimecomposition.LoadWorkerToolkitCapability("rust", []byte(
+		`{"schema_version":"elitea.worker-toolkit-capability.v1","implementation":"rust","source":"s",`+
+			`"supported_tool_types":["github","slack"],"supported_tools":{"github":["get_issue","read_file"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		toolkitType, tool string
+		want              bool
+	}{
+		{"github", "read_file", true},
+		{"github", "create_pull_request", false},
+		{"slack", "send_message", true},
+	} {
+		got, reason := rust.SupportsTool(tc.toolkitType, tc.tool)
+		if got != tc.want || (got == (reason != "")) {
+			t.Errorf("%s/%s = %v %q, want %v", tc.toolkitType, tc.tool, got, reason, tc.want)
+		}
+	}
+	if _, reason := rust.SupportsTool("github", "create_pull_request"); reason !=
+		"This deployment's agent worker does not support the create_pull_request tool of the github toolkit." {
+		t.Errorf("reason = %q", reason)
+	}
+	var none *runtimecomposition.WorkerToolkitCapability
+	if ok, _ := none.SupportsTool("github", "anything"); !ok {
+		t.Error("a nil projection must serve everything")
 	}
 }
 
