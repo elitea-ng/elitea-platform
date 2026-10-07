@@ -580,6 +580,21 @@
             }
           }
         },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
         "426": {
           "content": {
             "application/json": {
@@ -4445,6 +4460,21 @@
           }
         },
         "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
           "content": {
             "application/json": {
               "type": "object",
