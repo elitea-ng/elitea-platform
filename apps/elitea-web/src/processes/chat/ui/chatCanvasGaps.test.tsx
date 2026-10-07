@@ -348,6 +348,8 @@ describe('the chat route: a canvas can be MADE from a selection', () => {
       // …and the transcript shows what the server wrote, without a reload.
       const block = await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });
       expect(within(block).getByTestId('canvas-block-content')).toHaveTextContent(SELECTED);
+      // A create that succeeded reports nothing.
+      expect(screen.queryByTestId('chat-canvas-create-error')).not.toBeInTheDocument();
     } finally {
       eventSources.restore();
     }
@@ -748,6 +750,71 @@ describe('the chat route: the canvas drawer and the keys and saves inside it', (
       await user.click(screen.getByTestId('chat-canvas-discard'));
       await waitFor(() => expect(screen.queryByTestId('chat-canvas-editor')).not.toBeInTheDocument());
       expect(saveBodies).toHaveLength(1);
+    } finally {
+      eventSources.restore();
+    }
+  });
+});
+
+/*
+ * A REFUSED create. It was swallowed (`.catch(() => undefined)`), so a
+ * selection over the server's 64 KiB canvas cap — answered 413
+ * `canvas_too_large` — was a click that did nothing at all.
+ */
+describe('the chat route: a canvas create the server refuses says why', () => {
+  function refuseCreate(status: number, body: Record<string, unknown>): void {
+    server.use(
+      http.post(`${BASE}/elitea_core/canvases/prompt_lib/${PROJECT}`, async ({ request }) => {
+        createBodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json(body, { status });
+      }),
+    );
+  }
+
+  async function openAsDocument(): Promise<ReturnType<typeof userEvent.setup>> {
+    renderChatRoute();
+    await screen.findByTestId('answer-text-item', {}, { timeout: 15_000 });
+    const user = userEvent.setup();
+    await user.click(await screen.findByTestId('answer-open-as-document', {}, { timeout: 10_000 }));
+    await waitFor(() => expect(createBodies).toHaveLength(1));
+    return user;
+  }
+
+  it("a 413 canvas_too_large shows the server's own safe_message, and opens no editor", async () => {
+    const safe = 'This document is too large to save (70.0 KiB; the limit is 64.0 KiB). Shorten it, or save it to artifacts instead.';
+    refuseCreate(413, { error: safe, code: 'canvas_too_large', safe_message: safe });
+    const eventSources = installTestEventSource();
+    try {
+      await openAsDocument();
+      const alert = await screen.findByTestId('chat-canvas-create-error', {}, { timeout: 10_000 });
+      expect(alert).toHaveTextContent(safe);
+      expect(screen.queryByTestId('chat-canvas-editor')).not.toBeInTheDocument();
+    } finally {
+      eventSources.restore();
+    }
+  });
+
+  it('a failure without a safe_message shows the generic sentence, not a transport string', async () => {
+    refuseCreate(500, { error: 'pq: something internal' });
+    const eventSources = installTestEventSource();
+    try {
+      await openAsDocument();
+      const alert = await screen.findByTestId('chat-canvas-create-error', {}, { timeout: 10_000 });
+      expect(alert).toHaveTextContent('The canvas could not be created. Try again.');
+      expect(alert).not.toHaveTextContent('pq:');
+    } finally {
+      eventSources.restore();
+    }
+  });
+
+  it('closing the alert clears it', async () => {
+    refuseCreate(413, { code: 'canvas_too_large', safe_message: 'Too large.' });
+    const eventSources = installTestEventSource();
+    try {
+      const user = await openAsDocument();
+      const alert = await screen.findByTestId('chat-canvas-create-error', {}, { timeout: 10_000 });
+      await user.click(within(alert).getByRole('button', { name: /close/i }));
+      await waitFor(() => expect(screen.queryByTestId('chat-canvas-create-error')).not.toBeInTheDocument());
     } finally {
       eventSources.restore();
     }

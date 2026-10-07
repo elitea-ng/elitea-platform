@@ -38,7 +38,7 @@
  * and `useChatBoxData`'s re-seed adopts a NON-EMPTY server answer for the same
  * conversation, so the block appears without a reload.
  */
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 
 import { useQueryClient } from '@tanstack/react-query';
 import { useParams } from '@tanstack/react-router';
@@ -47,7 +47,10 @@ import { conversationApi } from '@/entities/conversation';
 import { useCreateCanvasMutation } from '@/entities/canvas';
 import type { AnswerCanvasSelection, CanvasEditPayload } from '@/features/chat-messages';
 import { canvasByteRange, canvasKindForSelection } from '@/features/chat-messages';
+import { t } from '@/shared/i18n';
 import { useSelectedProject } from '@/widgets/app-shell';
+
+import { canvasRefusalMessage } from './useCanvasEditing';
 
 /** One stored item, read defensively off the details payload. */
 interface StoredItem {
@@ -96,6 +99,14 @@ export function findGroup(groups: readonly StoredGroup[], messageGroupUuid: stri
 export interface UseCanvasCreationResult {
   /** Carves the highlighted range of an answer into a canvas, then re-reads the transcript. */
   readonly onCreateCanvasFromSelection: (selection: AnswerCanvasSelection) => void;
+  /**
+   * Why the last create failed, or `undefined`. The server's own
+   * `safe_message` when it sent one (a 413 `canvas_too_large` names the size
+   * and the limit), else a generic sentence. The composition root shows it.
+   */
+  readonly createError: string | undefined;
+  /** Clears `createError` — the alert's close control and its auto-hide. */
+  readonly dismissCreateError: () => void;
 }
 
 /**
@@ -152,6 +163,8 @@ export function useCanvasCreation(options: UseCanvasCreationOptions = {}): UseCa
   const conversationId = params.conversationId;
   const queryClient = useQueryClient();
   const { mutateAsync: createCanvas } = useCreateCanvasMutation();
+  const [createError, setCreateError] = useState<string | undefined>(undefined);
+  const dismissCreateError = useCallback(() => setCreateError(undefined), []);
 
   const create = useCallback(
     async (selection: AnswerCanvasSelection): Promise<void> => {
@@ -211,15 +224,22 @@ export function useCanvasCreation(options: UseCanvasCreationOptions = {}): UseCa
 
   const onCreateCanvasFromSelection = useCallback(
     (selection: AnswerCanvasSelection) => {
-      // Fire-and-forget, and the failure is swallowed HERE only because this
-      // app has no toast hook at this layer yet — the same statement
-      // `useCanvasEditing`'s own save carries. A refused create leaves the
-      // answer exactly as it was, which is the server's own guarantee: it
-      // refuses an out-of-range selection rather than clamping it.
-      void create(selection).catch(() => undefined);
+      // Fire-and-forget for the caller, but a failure is NOT swallowed: it
+      // was, and a refused create (a selection over the server's canvas size
+      // cap answers 413 `canvas_too_large`) left the user clicking a control
+      // that did nothing. This app has no global toast host, so the reason is
+      // held as `createError` and the composition root renders it in a local
+      // Snackbar. A refused create leaves the answer exactly as it was — the
+      // server refuses rather than clamping — so there is nothing to undo.
+      setCreateError(undefined);
+      void create(selection).catch((error: unknown) => {
+        setCreateError(
+          canvasRefusalMessage(error) ?? t('processes.chat.canvas.createFailed', 'The canvas could not be created. Try again.'),
+        );
+      });
     },
     [create],
   );
 
-  return { onCreateCanvasFromSelection };
+  return { onCreateCanvasFromSelection, createError, dismissCreateError };
 }

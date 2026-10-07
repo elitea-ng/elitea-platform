@@ -94,20 +94,27 @@ export interface UseCanvasEditingResult {
 }
 
 /**
- * The words to show for a failed save. The server's `safe_message` (a 413
- * "too large to save" names the size and the limit) is meant for a user and
- * is shown as is; anything else gets a generic sentence rather than a
- * transport string.
+ * The server's own words for a refused canvas write, or `undefined`. A
+ * canvas route's `safe_message` (a 413 `canvas_too_large` names the size and
+ * the limit) is meant for a user and is shown as is; anything else — a
+ * transport failure, a body without one — is left to the caller's generic
+ * sentence rather than surfacing a transport string. Shared by the save here
+ * and the create in `./useCanvasCreation.ts`, which hit the same cap.
  */
+export function canvasRefusalMessage(error: unknown): string | undefined {
+  if (!(error instanceof EliteaApiError) || error.failure.kind !== 'http') return undefined;
+  const body = error.failure.body;
+  if (typeof body !== 'object' || body === null) return undefined;
+  const safe = (body as { readonly safe_message?: unknown }).safe_message;
+  return typeof safe === 'string' && safe.trim() !== '' ? safe : undefined;
+}
+
+/** The words to show for a failed save: the server's, else a generic sentence. */
 function canvasSaveErrorMessage(error: unknown): string {
-  if (error instanceof EliteaApiError && error.failure.kind === 'http') {
-    const body = error.failure.body;
-    if (typeof body === 'object' && body !== null) {
-      const safe = (body as { readonly safe_message?: unknown }).safe_message;
-      if (typeof safe === 'string' && safe.trim() !== '') return safe;
-    }
-  }
-  return t('processes.chat.canvas.saveFailed', 'The document could not be saved. Your changes are still here — try again.');
+  return (
+    canvasRefusalMessage(error) ??
+    t('processes.chat.canvas.saveFailed', 'The document could not be saved. Your changes are still here — try again.')
+  );
 }
 
 /**

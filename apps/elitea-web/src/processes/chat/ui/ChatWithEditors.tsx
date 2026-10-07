@@ -3,7 +3,9 @@ import { useCallback } from 'react';
 
 import { useParams, useRouteContext } from '@tanstack/react-router';
 
+import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
+import Snackbar from '@mui/material/Snackbar';
 import Typography from '@mui/material/Typography';
 
 import ChatPage from '@/pages/chat';
@@ -147,7 +149,8 @@ export function ChatWithEditors(): ReactNode {
    * new block with the control every stored canvas already has. The one
    * exception is "Open as document", whose name promises the editor: that
    * create then opens it through `handleShowCanvasEditor` — the mutex path
-   * the block's own pencil takes.
+   * the block's own pencil takes. A refused create (a 413 `canvas_too_large`
+   * among others) comes back as `createError` and is shown below.
    */
   const canvasCreation = useCanvasCreation({ onOpenCreated: handleShowCanvasEditor });
 
@@ -328,6 +331,18 @@ export function ChatWithEditors(): ReactNode {
 
       {/* The FILE canvas (issue #878) — a message attachment opened for editing. See `FileCanvasDrawer`'s own doc for why it is a second, independent drawer. */}
       <FileCanvasDrawer fileCanvas={fileCanvas} projectId={projectId} viewerId={viewerId} />
+
+      {/* A refused canvas create, in the server's words — the local-Snackbar pattern `ChatConversationSidebar` uses, as this app has no global toast host. */}
+      <Snackbar
+        open={canvasCreation.createError !== undefined}
+        autoHideDuration={8000}
+        onClose={canvasCreation.dismissCreateError}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity="error" variant="filled" onClose={canvasCreation.dismissCreateError} data-testid="chat-canvas-create-error">
+          {canvasCreation.createError}
+        </Alert>
+      </Snackbar>
 
       {/* `useEditorMutex`'s own "another editor is open" queue-and-confirm flow (its own doc comment) — distinct from `EditorShell`'s own discard-confirm, which guards a single editor's own close/discard action. */}
       <DeleteEntityModal

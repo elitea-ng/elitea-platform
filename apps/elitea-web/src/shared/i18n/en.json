@@ -4830,5 +4830,6 @@
   "features.chatMessages.canvas.editor.documentTitle": "Document",
   "processes.chat.canvas.discardAndClose": "Discard changes and close",
   "processes.chat.canvas.saveFailed": "The document could not be saved. Your changes are still here — try again.",
-  "processes.chat.canvas.saving": "Saving the document…"
+  "processes.chat.canvas.saving": "Saving the document…",
+  "processes.chat.canvas.createFailed": "The canvas could not be created. Try again."
 }
