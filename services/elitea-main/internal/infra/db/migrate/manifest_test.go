@@ -633,7 +633,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// Redis: elitea_auth.form_sessions, form_login_transactions and
 	// browser_attempt_windows (bytea records, expiry read on every access,
 	// swept by elitea-scheduler's authstateretention). No permission.
-	require.EqualValues(t, 153, Head(shared))
+	//
+	// 154: shared/0154_agent_stop_question_author.sql, the question author a
+	// chat stop removed, so a repeated stop by that author still replays
+	// (client contract 1.3). Nullable, no backfill, no permission.
+	require.EqualValues(t, 154, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
