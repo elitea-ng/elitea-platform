@@ -4390,7 +4390,7 @@
   "skills.edit.restoreVersionTitle": "Restore this version?",
   "artifacts.canvas.unsupportedFormat": "{{name}} is not a supported canvas format — download it instead.",
   "features.chatMessages.canvas.block.editingDocument": "Document editing...",
-  "features.chatMessages.canvas.block.openDocument": "Edit document",
+  "features.chatMessages.canvas.block.openDocument": "Open document",
   "features.chatMessages.canvas.document.blockquote": "Quote",
   "features.chatMessages.canvas.document.bold": "Bold",
   "features.chatMessages.canvas.document.bulletList": "Bullet list",
@@ -4826,5 +4826,9 @@
   "pipelines.parallel.removeTransition": "Remove transition from {{node}}",
   "pipelines.parallel.resultShape": "Each result contains branch_id, node, and outputs from that Agent. No reducer is configured.",
   "pipelines.parallel.transition": "Join transition",
-  "pipelines.parallel.wait": "Wait policy"
+  "pipelines.parallel.wait": "Wait policy",
+  "features.chatMessages.canvas.editor.documentTitle": "Document",
+  "processes.chat.canvas.discardAndClose": "Discard changes and close",
+  "processes.chat.canvas.saveFailed": "The document could not be saved. Your changes are still here — try again.",
+  "processes.chat.canvas.saving": "Saving the document…"
 }

@@ -607,6 +607,13 @@ describe('the chat route: "Open as document" opens an editor with a way out, and
       await waitFor(() => expect(screen.queryByTestId('chat-canvas-editor')).not.toBeInTheDocument());
       const block = await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });
       expect(within(block).getByTestId('canvas-block-title')).toHaveTextContent('Document');
+      // Focus lands on the block's own open control — the answer's "Open as
+      // document" button the drawer would restore focus to is gone (the carve
+      // removed it), and focus fell to <body>. The control is named neutrally:
+      // it opens the document, it is not a mode.
+      const open = within(block).getByTestId('canvas-block-open');
+      await waitFor(() => expect(open).toHaveFocus());
+      expect(open).toHaveAccessibleName('Open document');
     } finally {
       eventSources.restore();
     }
@@ -659,6 +666,88 @@ describe('the chat route: "Open as document" opens an editor with a way out, and
       for (const key of ['updated_items', 'message_id', 'stream_id', 'canvas_id', 'canvas_uuid', 'attachments_info']) {
         expect(body, `the send must not carry ${key}`).not.toHaveProperty(key);
       }
+    } finally {
+      eventSources.restore();
+    }
+  });
+});
+
+/*
+ * Escape belongs to the innermost thing that uses it, and a refused save keeps
+ * the user's edit (#1097 review: L4, M1).
+ */
+describe('the chat route: the canvas drawer and the keys and saves inside it', () => {
+  it('an Escape CodeMirror uses to close its search panel closes the PANEL, not the editor; the next Escape closes the editor', async () => {
+    answerItems = [CODE_CANVAS];
+    const eventSources = installTestEventSource();
+    try {
+      renderChatRoute();
+      const block = await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });
+      const user = userEvent.setup();
+      await user.click(within(block).getByTestId('canvas-block-open'));
+      const root = await screen.findByTestId('canvas-editor-root', {}, { timeout: 15_000 });
+      const content = root.querySelector('.cm-content');
+      if (!(content instanceof HTMLElement)) throw new Error('the canvas editor mounted no code pane');
+      await user.click(content);
+      await user.keyboard('{Control>}f{/Control}');
+      const panel = await waitFor(() => {
+        const found = root.querySelector('.cm-search');
+        if (!(found instanceof HTMLElement)) throw new Error('the search panel did not open');
+        return found;
+      });
+      expect(panel).toBeInTheDocument();
+      // The reader went back to the text with the panel still open — the
+      // search keymap's Escape is bound in the EDITOR scope too, and from
+      // there the press used to reach the drawer as well (the editor content
+      // stays in the page, unlike a search field the panel removes).
+      await user.click(content);
+      expect(content).toHaveFocus();
+
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(root.querySelector('.cm-search')).toBeNull());
+      // The press was the panel's: the editor is still open.
+      expect(screen.getByTestId('chat-canvas-editor')).toBeInTheDocument();
+
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByTestId('chat-canvas-editor')).not.toBeInTheDocument());
+    } finally {
+      eventSources.restore();
+    }
+  });
+
+  it('a save the server refuses as too large keeps the editor OPEN with the text and the reason; discarding is explicit', async () => {
+    const safe = 'This document is too large to save (70.0 KiB; the limit is 64.0 KiB). Shorten it, or save it to artifacts instead.';
+    server.use(
+      http.put(`${BASE}/elitea_core/canvas/prompt_lib/:projectId/:canvasId`, async ({ request }) => {
+        saveBodies.push((await request.json()) as Record<string, unknown>);
+        return HttpResponse.json({ error: safe, code: 'canvas_too_large', safe_message: safe }, { status: 413 });
+      }),
+    );
+    answerItems = [CODE_CANVAS];
+    const eventSources = installTestEventSource();
+    try {
+      renderChatRoute();
+      const block = await screen.findByTestId('canvas-block', {}, { timeout: 15_000 });
+      const user = userEvent.setup();
+      await user.click(within(block).getByTestId('canvas-block-open'));
+      const root = await screen.findByTestId('canvas-editor-root', {}, { timeout: 15_000 });
+      const content = root.querySelector('.cm-content');
+      if (!(content instanceof HTMLElement)) throw new Error('the canvas editor mounted no code pane');
+      await user.click(content);
+      await user.keyboard('XYZ');
+      await waitFor(() => expect(content.textContent ?? '').toContain(`XYZ${CODE_DOCUMENT}`));
+
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(saveBodies).toHaveLength(1));
+      const alert = await screen.findByTestId('chat-canvas-save-error', {}, { timeout: 10_000 });
+      expect(alert).toHaveTextContent(safe);
+      // Nothing lost: the drawer is open and still holds the edit.
+      expect(screen.getByTestId('chat-canvas-editor')).toBeInTheDocument();
+      expect(screen.getByTestId('canvas-editor-root').querySelector('.cm-content')?.textContent ?? '').toContain(`XYZ${CODE_DOCUMENT}`);
+
+      await user.click(screen.getByTestId('chat-canvas-discard'));
+      await waitFor(() => expect(screen.queryByTestId('chat-canvas-editor')).not.toBeInTheDocument());
+      expect(saveBodies).toHaveLength(1);
     } finally {
       eventSources.restore();
     }

@@ -13,6 +13,7 @@ type UploadAttachments = ReturnType<typeof useUploadAttachments>["uploadAttachme
 type UploadAttachmentsParams = Parameters<UploadAttachments>[0];
 type UploadAttachmentsOutcome = Awaited<ReturnType<UploadAttachments>>;
 import { getConfig } from "@/shared/config";
+import { settleCanvasSaves } from "@/shared/lib/canvasSaveGate";
 import type { ExecutionEventData } from "@/shared/api/sse";
 import { t } from "@/shared/i18n";
 
@@ -186,6 +187,9 @@ export function useChatBoxSend(
       readonly payload: Record<string, unknown>;
     }): Promise<StreamStartOutcome> => {
       if (projectId === undefined) return requireTestTransport(NO_STREAM_TRANSPORT);
+      // A canvas save still in flight lands first: the turn reads the
+      // canvas's newest version into its history (shared/lib/canvasSaveGate).
+      await settleCanvasSaves();
       const toolsFailure = await internalToolsSaveFailure(getInternalToolsForSend);
       if (toolsFailure) return toolsFailure;
       // The contract comes from the PARTICIPANT this turn addresses, never
@@ -272,6 +276,7 @@ export function useChatBoxSend(
     }): Promise<StreamStartOutcome> => {
       if (projectId === undefined || params.conversationUuid === undefined)
         return requireTestTransport(NO_STREAM_TRANSPORT);
+      await settleCanvasSaves();
       const toolsFailure = await internalToolsSaveFailure(getInternalToolsForSend);
       if (toolsFailure) return toolsFailure;
       const isApplicationTurn =

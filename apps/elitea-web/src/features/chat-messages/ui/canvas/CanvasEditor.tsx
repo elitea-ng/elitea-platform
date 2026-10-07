@@ -526,7 +526,9 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(
         if (!selectedCodeBlockInfo?.isBlock) return 'Edit response';
         if (codeLanguage === 'markdownTable') return 'Edit table';
         if (codeLanguage === 'mermaid') return 'Edit diagram';
-        if (codeLanguage === 'document') return 'Edit document';
+        // A noun, not "Edit document": the drawer is the document, and a verb
+        // in its header read as a mode with no way out (#1097).
+        if (codeLanguage === 'document') return t('features.chatMessages.canvas.editor.documentTitle', 'Document');
         return 'Edit code';
       },
       [selectedCodeBlockInfo?.isBlock, codeLanguage],
