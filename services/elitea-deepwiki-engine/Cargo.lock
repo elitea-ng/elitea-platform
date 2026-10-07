@@ -537,12 +537,11 @@ name = "elitea-deepwiki-engine"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
  "elitea-code-parsers",
  "elitea-engine-core",
  "elitea-model-client",
+ "elitea-repo-ingest",
  "fancy-regex",
- "gix",
  "globset",
  "http-body-util",
  "hyper",
@@ -565,7 +564,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
- "zeroize",
 ]
 
 [[package]]
@@ -587,6 +585,22 @@ dependencies = [
  "tiktoken-rs",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "elitea-repo-ingest"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "elitea-engine-core",
+ "gix",
+ "regex",
+ "reqwest",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+ "zeroize",
 ]
 
 [[package]]

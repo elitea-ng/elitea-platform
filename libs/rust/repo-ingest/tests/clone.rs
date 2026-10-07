@@ -6,7 +6,7 @@
 //! ONLY to build and serve the test repositories; the engine under test
 //! never runs it.
 //!
-//! Set `ELITEA_DEEPWIKI_LIVE_CLONE=1` to also clone
+//! Set `ELITEA_REPO_INGEST_LIVE_CLONE=1` to also clone
 //! `https://github.com/elitea-ng/elitea-platform` (about 45 MB).
 
 use axum::body::{Body, to_bytes};
@@ -14,14 +14,14 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::Response;
 use base64::Engine as _;
-use elitea_deepwiki_engine::errors::{ErrorType, classify};
-use elitea_deepwiki_engine::ingest::artifact::ArtifactCaps;
-use elitea_deepwiki_engine::ingest::clone::{clone_repository, ls_remote};
-use elitea_deepwiki_engine::ingest::egress::{AdmittedTarget, EgressPolicy};
-use elitea_deepwiki_engine::ingest::limits::IngestLimits;
-use elitea_deepwiki_engine::ingest::providers::{CloneTarget, ProviderType};
-use elitea_deepwiki_engine::ingest::secret::Secret;
-use elitea_deepwiki_engine::ingest::{IngestSettings, ingest, ingest_admitted};
+use elitea_engine_core::errors::{ErrorType, classify};
+use elitea_repo_ingest::artifact::ArtifactCaps;
+use elitea_repo_ingest::clone::{clone_repository, ls_remote};
+use elitea_repo_ingest::egress::{AdmittedTarget, EgressPolicy};
+use elitea_repo_ingest::limits::IngestLimits;
+use elitea_repo_ingest::providers::{CloneTarget, ProviderType};
+use elitea_repo_ingest::secret::Secret;
+use elitea_repo_ingest::{IngestSettings, ingest, ingest_admitted};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -968,10 +968,10 @@ async fn the_settings_path_refuses_a_host_off_the_allowlist() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn live_clone_of_the_platform_repository() {
-    if std::env::var("ELITEA_DEEPWIKI_LIVE_CLONE").as_deref() != Ok("1") {
+    if std::env::var("ELITEA_REPO_INGEST_LIVE_CLONE").as_deref() != Ok("1") {
         return;
     }
-    let job = std::env::var("ELITEA_DEEPWIKI_LIVE_CLONE_DIR")
+    let job = std::env::var("ELITEA_REPO_INGEST_LIVE_CLONE_DIR")
         .map_or_else(|_| scratch("live"), PathBuf::from);
     let settings = IngestSettings {
         git_allowlist: EgressPolicy::parse(Some("github.com,*.github.com")),

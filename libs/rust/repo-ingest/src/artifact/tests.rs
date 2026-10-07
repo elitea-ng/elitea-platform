@@ -1,25 +1,39 @@
 //! The port against the Python engine's own answers
-//! (`tests/fixtures/ingest/artifact_source.json`, written by
+//! (`tests/fixtures/artifact_source.json`, written by
 //! `parity/python_artifact_source.py`), the path and limit checks, and the
 //! transfer against a mock object API.
 
 use super::*;
-use crate::errors::classify;
-use crate::source::wiki_id_for;
-use crate::wiki::compose::{build_repo_identifier, normalize_wiki_id};
+use crate::names::SettingNames;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode as HttpStatus};
 use axum::response::{IntoResponse, Response as HttpResponse};
+use elitea_engine_core::errors::classify;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 
-const FIXTURE: &str = include_str!("../../../tests/fixtures/ingest/artifact_source.json");
+const FIXTURE: &str = include_str!("../../tests/fixtures/artifact_source.json");
 
 fn fixture() -> Value {
     serde_json::from_str(FIXTURE).unwrap_or_else(|e| panic!("fixture: {e}"))
 }
+
+/// The names the Python engine's messages carry: the fixture is its own
+/// output, so the parity cases run under the `DeepWiki` engine's names. A
+/// consumer of this crate sets its own (see `crate::names`).
+const PYTHON_NAMES: SettingNames = SettingNames {
+    max_clone_bytes: "ELITEA_DEEPWIKI_MAX_CLONE_BYTES",
+    max_file_count: "ELITEA_DEEPWIKI_MAX_FILE_COUNT",
+    max_file_bytes: "ELITEA_DEEPWIKI_MAX_FILE_BYTES",
+    max_parsed_bytes: "ELITEA_DEEPWIKI_MAX_PARSED_BYTES",
+    clone_timeout_seconds: "ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS",
+    artifact_max_files: "ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES",
+    artifact_max_bytes: "ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES",
+    git_allowlist: "ELITEA_DEEPWIKI_GIT_ALLOWLIST",
+    user_agent: "elitea-deepwiki-engine/test",
+};
 
 fn text(value: &Value) -> &str {
     value.as_str().unwrap_or_default()
@@ -86,8 +100,9 @@ fn the_listing_identity_and_names_match_python() {
         let repository = text(&case["repository"]);
         let branch = text(&case["branch"]);
         let folder = source(repository);
-        let collected = collect_objects(&folder, &page_items(case))
-            .and_then(|objects| check_caps(&objects, &folder, caps).map(|()| objects));
+        let collected = collect_objects(&folder, &page_items(case)).and_then(|objects| {
+            check_caps(&objects, &folder, caps, &PYTHON_NAMES).map(|()| objects)
+        });
         let objects = match collected {
             Err(error) => {
                 assert_eq!(error.message, text(&case["error"]["message"]), "{name}");
@@ -113,8 +128,8 @@ fn the_listing_identity_and_names_match_python() {
             "{name}"
         );
 
-        // The ONE id: the generation's, which ask and the context paths
-        // (and the fixture runner) derive too.
+        // The listing's identity. What a consumer NAMES the folder (DeepWiki's
+        // wiki id) is checked by that consumer against the same fixture.
         let config = json!({
             "provider_type": "artifact",
             "provider_config": {"bucket": folder.bucket, "prefix": folder.prefix},
@@ -130,25 +145,9 @@ fn the_listing_identity_and_names_match_python() {
         assert_eq!(target.repository(), text(&case["canonical_repository"]));
         assert_eq!(target.branch(), text(&case["marker"]["branch"]));
         let identity = RepoIdentity::new(target.repository(), target.branch(), digest.as_str());
-        let identifier =
-            build_repo_identifier(identity.repo(), identity.branch(), Some(identity.commit()));
-        assert_eq!(identifier, text(&case["repo_identifier"]), "{name}");
-        assert_eq!(identity.to_string(), identifier, "{name}");
         assert_eq!(
-            normalize_wiki_id(&identifier),
-            text(&case["wiki_id"]),
-            "{name}"
-        );
-        let ask = crate::ask::parse_request(
-            json!({"question": "q", "repo_config": config})
-                .as_object()
-                .unwrap_or_else(|| unreachable!()),
-        )
-        .map(|request| request.wiki_id);
-        assert_eq!(ask.ok().as_deref(), Some(text(&case["wiki_id"])), "{name}");
-        assert_eq!(
-            wiki_id_for(Some(&config), Some(branch)).ok().as_deref(),
-            Some(text(&case["wiki_id"])),
+            identity.to_string(),
+            text(&case["repo_identifier"]),
             "{name}"
         );
     }
@@ -286,6 +285,7 @@ fn small_limits() -> IngestLimits {
         max_file_bytes: 400,
         max_parsed_bytes: 500,
         clone_timeout: Duration::from_secs(5),
+        names: &PYTHON_NAMES,
     }
 }
 
@@ -344,14 +344,14 @@ fn pythons_caps_apply_too() {
         max_bytes: 10,
     };
     let three = [object("a", 1), object("b", 1), object("c", 1)];
-    let error = check_caps(&three, &folder, caps).err();
+    let error = check_caps(&three, &folder, caps, &PYTHON_NAMES).err();
     assert_eq!(
         error.map(|e| e.message),
         Some("the artifact folder artifact://docs holds 3 objects, over the limit of 2 (ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES)".to_owned())
     );
-    let error = check_caps(&[object("a", 11)], &folder, caps).err();
+    let error = check_caps(&[object("a", 11)], &folder, caps, &PYTHON_NAMES).err();
     assert!(error.is_some_and(|e| e.message.contains("holds 11 bytes")));
-    assert!(check_caps(&[object("a", 10)], &folder, caps).is_ok());
+    assert!(check_caps(&[object("a", 10)], &folder, caps, &PYTHON_NAMES).is_ok());
 }
 
 #[test]
@@ -547,8 +547,9 @@ impl Run {
             &json!({"api_base": format!("{base}/llm/v1"), "api_key": BEARER, "organization": "42"}),
         )
         .unwrap_or_else(|e| panic!("{e}"));
-        let transport = crate::llm::Transport::new(&crate::llm::TransportSettings::default())
-            .unwrap_or_else(|e| panic!("{e}"));
+        let transport =
+            elitea_model_client::Transport::new(&elitea_model_client::TransportSettings::default())
+                .unwrap_or_else(|e| panic!("{e}"));
         Self {
             target,
             platform,

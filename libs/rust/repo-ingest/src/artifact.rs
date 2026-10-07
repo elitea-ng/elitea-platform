@@ -40,16 +40,16 @@
 //! * each file is created with `O_CREAT|O_EXCL` in a directory this module
 //!   created, after the parent's canonical path is checked to be inside the
 //!   job directory. No symbolic link is ever created;
-//! * the git ingest's limits apply (`ELITEA_DEEPWIKI_MAX_FILE_COUNT`,
+//! * the git ingest's limits apply (`MAX_FILE_COUNT`,
 //!   `MAX_FILE_BYTES`, `MAX_CLONE_BYTES` over the total, `MAX_PARSED_BYTES`,
 //!   `CLONE_TIMEOUT_SECONDS`), once over the listed sizes before any
 //!   download and again over the bytes actually received, plus Python's own
-//!   caps (`ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES` 5000,
-//!   `ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES` 512 MiB);
+//!   caps (`ARTIFACT_MAX_FILES` 5000,
+//!   `ARTIFACT_MAX_BYTES` 512 MiB);
 //! * the only host is the invocation's `api_base`. Nothing in
 //!   `repo_config` or in a listing reaches the URL except as an encoded path
 //!   segment or query value; redirects are not followed (the model
-//!   transport's client: rustls, `ELITEA_DEEPWIKI_TLS_CA_FILE`). The git
+//!   transport's client: rustls, the engine's CA bundle). The git
 //!   allowlist does not apply, as in Go's `CheckEgress`: the platform is not
 //!   an external git host;
 //! * the bearer is sent as a sensitive header and never appears in a log
@@ -81,12 +81,13 @@ use super::ClonedRepository;
 use super::identity::RepoIdentity;
 use super::limits::{IngestLimits, TreeBudget, TreeStats};
 use super::secret::Secret;
-use crate::errors::{EngineError, ErrorType};
-use crate::graph::pystr;
+use crate::names::SettingNames;
 use crate::source::{
-    ArtifactSource, fold_unsafe_runs, is_artifact_source, parse_artifact_source, py_repr, py_str,
-    py_truthy, refuse_unsafe_key,
+    ArtifactSource, fold_unsafe_runs, is_artifact_source, parse_artifact_source, refuse_unsafe_key,
 };
+use elitea_engine_core::errors::{EngineError, ErrorType};
+use elitea_engine_core::pystr;
+use elitea_engine_core::pyvalue::{py_repr, py_str, py_truthy};
 use regex::Regex;
 use reqwest::{Client, Response, StatusCode, Url};
 use serde_json::{Map, Value};
@@ -103,10 +104,10 @@ use tokio::io::AsyncWriteExt;
 /// The `provider_type` the Go host and Python's extractors emit.
 pub const ARTIFACT_PROVIDER_TYPE: &str = "artifact";
 
-/// Python's `ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES` default.
+/// Python's `ARTIFACT_MAX_FILES` default.
 pub const DEFAULT_MAX_FILES: u64 = 5000;
 
-/// Python's `ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES` default.
+/// Python's `ARTIFACT_MAX_BYTES` default.
 pub const DEFAULT_MAX_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Python's `MAX_LIST_PAGES`.
@@ -135,9 +136,9 @@ static LLM_SUFFIX: LazyLock<Regex> =
 /// Python's two artifact caps, on top of the ingest limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ArtifactCaps {
-    /// `ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES`.
+    /// `ARTIFACT_MAX_FILES`.
     pub max_files: u64,
-    /// `ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES`.
+    /// `ARTIFACT_MAX_BYTES`.
     pub max_bytes: u64,
 }
 
@@ -534,6 +535,7 @@ pub fn check_caps(
     objects: &[ArtifactObject],
     source: &ArtifactSource,
     caps: ArtifactCaps,
+    names: &SettingNames,
 ) -> Result<(), EngineError> {
     let url = source.url();
     if objects.is_empty() {
@@ -544,15 +546,15 @@ pub fn check_caps(
     let count = objects.len() as u64;
     if count > caps.max_files {
         return Err(value_error(format!(
-            "the artifact folder {url} holds {count} objects, over the limit of {} (ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES)",
-            caps.max_files
+            "the artifact folder {url} holds {count} objects, over the limit of {} ({})",
+            caps.max_files, names.artifact_max_files
         )));
     }
     let total: i128 = objects.iter().map(|o| o.size).sum();
     if total > i128::from(caps.max_bytes) {
         return Err(value_error(format!(
-            "the artifact folder {url} holds {total} bytes, over the limit of {} (ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES)",
-            caps.max_bytes
+            "the artifact folder {url} holds {total} bytes, over the limit of {} ({})",
+            caps.max_bytes, names.artifact_max_bytes
         )));
     }
     Ok(())
@@ -602,7 +604,7 @@ fn transfer_error(action: &str, error: &reqwest::Error) -> EngineError {
     } else if error.is_connect() {
         "could not connect".to_owned()
     } else {
-        crate::llm::transport::error_chain(error)
+        elitea_engine_core::errors::error_chain(error)
     };
     runtime_error(format!("Failed to {action}: {cause}"))
 }
@@ -616,6 +618,7 @@ async fn list_folder(
     client: &Client,
     source: &ArtifactSource,
     most_objects: u64,
+    names: &SettingNames,
     cancel: &AtomicBool,
 ) -> Result<Vec<Value>, EngineError> {
     let prefix = source.list_prefix();
@@ -691,8 +694,10 @@ async fn list_folder(
         }
         if objects > most_objects {
             return Err(value_error(format!(
-                "the artifact folder {} holds more than {most_objects} objects, over the limit of ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES / ELITEA_DEEPWIKI_MAX_FILE_COUNT",
-                source.url()
+                "the artifact folder {} holds more than {most_objects} objects, over the limit of {} / {}",
+                source.url(),
+                names.artifact_max_files,
+                names.max_file_count
             )));
         }
         // Omitted when the listing is exhausted.
@@ -805,9 +810,10 @@ impl Received<'_> {
     fn admit(&mut self, relative: &str, file_bytes: u64, more: u64) -> Result<(), EngineError> {
         if file_bytes > self.limits.max_file_bytes {
             return Err(value_error(format!(
-                "The file {} in {} is at least {file_bytes} bytes, over ELITEA_DEEPWIKI_MAX_FILE_BYTES={}",
+                "The file {} in {} is at least {file_bytes} bytes, over {}={}",
                 py_repr(relative),
                 py_repr(self.repo),
+                self.limits.names.max_file_bytes,
                 self.limits.max_file_bytes
             )));
         }
@@ -817,8 +823,8 @@ impl Received<'_> {
         }
         if self.total > self.caps.max_bytes {
             return Err(value_error(format!(
-                "the artifact folder {} holds at least {} bytes, over the limit of {} (ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES)",
-                self.url, self.total, self.caps.max_bytes
+                "the artifact folder {} holds at least {} bytes, over the limit of {} ({})",
+                self.url, self.total, self.caps.max_bytes, self.limits.names.artifact_max_bytes
             )));
         }
         Ok(())
@@ -921,10 +927,18 @@ impl Materialise<'_> {
         let source = self.target.source();
         let url = source.url();
         let most = self.caps.max_files.min(self.limits.max_file_count);
-        let items = list_folder(self.platform, self.client, source, most, self.cancel).await?;
+        let items = list_folder(
+            self.platform,
+            self.client,
+            source,
+            most,
+            self.limits.names,
+            self.cancel,
+        )
+        .await?;
         let objects = collect_objects(source, &items)?;
         drop(items);
-        check_caps(&objects, source, self.caps)?;
+        check_caps(&objects, source, self.caps, self.limits.names)?;
         let listed = admit_listing(&objects, self.limits, &url)?;
         let digest = listing_digest(&objects);
 
@@ -1004,12 +1018,17 @@ fn admit_listing(
 
 /// The error for a folder that did not download within the ingest deadline.
 #[must_use]
-pub fn timeout_error(target: &ArtifactTarget, limit: Duration) -> EngineError {
+pub fn timeout_error(
+    target: &ArtifactTarget,
+    limit: Duration,
+    names: &SettingNames,
+) -> EngineError {
     runtime_error(format!(
-        "Artifact folder timeout: {} (branch {}) did not download within {} seconds (ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS)",
+        "Artifact folder timeout: {} (branch {}) did not download within {} seconds ({})",
         py_repr(&target.source().url()),
         py_repr(target.branch()),
-        limit.as_secs_f64()
+        limit.as_secs_f64(),
+        names.clone_timeout_seconds
     ))
 }
 

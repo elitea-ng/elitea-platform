@@ -12,7 +12,7 @@
 //! 2. [`providers::clone_target`] derives a credential-free URL, the
 //!    branch, the identity and the `Authorization` value;
 //! 3. [`egress::EgressPolicy::admit`] checks the URL's own host against
-//!    `ELITEA_DEEPWIKI_GIT_ALLOWLIST` — BEFORE the credential is used;
+//!    the engine's git allowlist ([`names::SettingNames::git_allowlist`]) — BEFORE the credential is used;
 //! 4. [`clone::clone_repository`] resolves the branch, clones depth 1 into
 //!    the scratch directory under the limits, and verifies containment.
 //!
@@ -23,12 +23,15 @@ pub mod clone;
 pub mod egress;
 pub mod identity;
 pub mod limits;
+pub mod names;
 pub mod providers;
 pub use elitea_engine_core::secret;
+pub mod discover;
+pub mod source;
 
-use crate::errors::{EngineError, ErrorType};
 use artifact::{ArtifactCaps, ArtifactTarget, PlatformObjects};
 use egress::EgressPolicy;
+use elitea_engine_core::errors::{EngineError, ErrorType};
 use limits::IngestLimits;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -43,7 +46,7 @@ pub struct IngestSettings {
     pub git_allowlist: EgressPolicy,
     pub limits: IngestLimits,
     /// The root under which each job gets its scratch directory
-    /// (`ELITEA_DEEPWIKI_SCRATCH_PATH`, Python's `scratch_path`).
+    /// (the engine's scratch-path setting, Python's `scratch_path`).
     pub scratch_path: PathBuf,
     /// Python's own caps on an artifact folder, on top of `limits`.
     pub artifact: ArtifactCaps,
@@ -169,7 +172,12 @@ pub async fn ingest_admitted(
         )),
         Err(_) => {
             cancel.store(true, Ordering::Release);
-            Err(clone::timeout_error(&repo, &branch, limits.clone_timeout))
+            Err(clone::timeout_error(
+                &repo,
+                &branch,
+                limits.clone_timeout,
+                limits.names,
+            ))
         }
     }
 }
@@ -209,6 +217,7 @@ pub async fn ingest_artifact(
         Err(artifact::timeout_error(
             target,
             settings.limits.clone_timeout,
+            settings.limits.names,
         ))
     }
 }
@@ -216,7 +225,7 @@ pub async fn ingest_artifact(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::classify;
+    use elitea_engine_core::errors::classify;
     use serde_json::json;
 
     #[test]

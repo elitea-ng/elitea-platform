@@ -17,7 +17,7 @@
 //! The lists are sorted, which is what the parity reference does to the
 //! Python engine's (otherwise filesystem-ordered) result.
 
-use super::pystr;
+use elitea_engine_core::pystr;
 use std::collections::BTreeMap;
 use std::path::Path;
 

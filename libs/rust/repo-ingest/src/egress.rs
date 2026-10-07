@@ -33,16 +33,24 @@
 //! would take an anonymous clone to a host this check never saw.
 
 use super::providers::CloneTarget;
-use crate::errors::{EngineError, ErrorType};
-use crate::source::py_repr;
-
-/// The setting the allowlist is read from.
-pub const ALLOWLIST_ENV: &str = "ELITEA_DEEPWIKI_GIT_ALLOWLIST";
+use crate::names::SettingNames;
+use elitea_engine_core::errors::{EngineError, ErrorType};
+use elitea_engine_core::pyvalue::py_repr;
 
 /// An allowlist of git hosts.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EgressPolicy {
     entries: Vec<String>,
+    names: &'static SettingNames,
+}
+
+impl Default for EgressPolicy {
+    fn default() -> Self {
+        Self {
+            entries: Vec::new(),
+            names: &SettingNames::NEUTRAL,
+        }
+    }
 }
 
 impl EgressPolicy {
@@ -57,7 +65,19 @@ impl EgressPolicy {
             .map(|part| part.trim().to_lowercase())
             .filter(|part| !part.is_empty())
             .collect();
-        Self { entries }
+        Self {
+            entries,
+            names: &SettingNames::NEUTRAL,
+        }
+    }
+
+    /// Name the consuming engine's settings: the refusal of an empty list
+    /// names its allowlist variable, and an admitted target carries the
+    /// names on to the clone (its `User-Agent`).
+    #[must_use]
+    pub fn named(mut self, names: &'static SettingNames) -> Self {
+        self.names = names;
+        self
     }
 
     /// The entries, lower-cased, in order.
@@ -118,8 +138,9 @@ impl EgressPolicy {
             return Err(EngineError::new(
                 ErrorType::Value,
                 format!(
-                    "No git-host allowlist is configured, so the {what} {} is refused. Set {ALLOWLIST_ENV} to the hosts this deployment may clone from (or '*' to disable the control explicitly).",
-                    py_repr(host)
+                    "No git-host allowlist is configured, so the {what} {} is refused. Set {} to the hosts this deployment may clone from (or '*' to disable the control explicitly).",
+                    py_repr(host),
+                    self.names.git_allowlist
                 ),
             ));
         }
@@ -152,13 +173,13 @@ impl EgressPolicy {
             target.host()
         };
         self.check(host, "clone destination")?;
-        Ok(AdmittedTarget(target))
+        Ok(AdmittedTarget(target, self.names))
     }
 }
 
 /// A clone target whose host passed the allowlist.
 #[derive(Debug)]
-pub struct AdmittedTarget(CloneTarget);
+pub struct AdmittedTarget(CloneTarget, &'static SettingNames);
 
 impl AdmittedTarget {
     /// The target.
@@ -166,12 +187,18 @@ impl AdmittedTarget {
     pub fn target(&self) -> &CloneTarget {
         &self.0
     }
+
+    /// The names of the policy that admitted it.
+    #[must_use]
+    pub fn names(&self) -> &'static SettingNames {
+        self.1
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::classify;
+    use elitea_engine_core::errors::classify;
 
     #[test]
     fn an_unset_allowlist_refuses_everything() {

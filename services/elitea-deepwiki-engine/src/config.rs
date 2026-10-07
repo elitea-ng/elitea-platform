@@ -445,18 +445,34 @@ fn check_worker_fits(worker: &WorkerSettings) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// The ingest settings under this engine's names: every limit, timeout and
+/// allowlist refusal names the `ELITEA_DEEPWIKI_*` variable to change, and
+/// the clone identifies itself as this engine.
+pub static INGEST_NAMES: crate::ingest::names::SettingNames = crate::ingest::names::SettingNames {
+    max_clone_bytes: "ELITEA_DEEPWIKI_MAX_CLONE_BYTES",
+    max_file_count: "ELITEA_DEEPWIKI_MAX_FILE_COUNT",
+    max_file_bytes: "ELITEA_DEEPWIKI_MAX_FILE_BYTES",
+    max_parsed_bytes: "ELITEA_DEEPWIKI_MAX_PARSED_BYTES",
+    clone_timeout_seconds: "ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS",
+    artifact_max_files: "ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES",
+    artifact_max_bytes: "ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES",
+    git_allowlist: "ELITEA_DEEPWIKI_GIT_ALLOWLIST",
+    user_agent: concat!("elitea-deepwiki-engine/", env!("CARGO_PKG_VERSION")),
+};
+
 fn ingest_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<IngestSettings, ConfigError> {
     let defaults = IngestLimits::default();
     Ok(IngestSettings {
         // Fail-closed when unset: the policy is empty and refuses every
         // clone (security/egress.py, spi.ParseEgressPolicy).
-        git_allowlist: EgressPolicy::parse(raw("GIT_ALLOWLIST").as_deref()),
+        git_allowlist: EgressPolicy::parse(raw("GIT_ALLOWLIST").as_deref()).named(&INGEST_NAMES),
         limits: IngestLimits {
             max_clone_bytes: positive_count(raw, "MAX_CLONE_BYTES", defaults.max_clone_bytes)?,
             max_file_count: positive_count(raw, "MAX_FILE_COUNT", defaults.max_file_count)?,
             max_file_bytes: positive_count(raw, "MAX_FILE_BYTES", defaults.max_file_bytes)?,
             max_parsed_bytes: positive_count(raw, "MAX_PARSED_BYTES", defaults.max_parsed_bytes)?,
             clone_timeout: positive_seconds(raw, "CLONE_TIMEOUT_SECONDS", defaults.clone_timeout)?,
+            names: &INGEST_NAMES,
         },
         scratch_path: PathBuf::from(
             raw("SCRATCH_PATH").unwrap_or_else(|| DEFAULT_SCRATCH_PATH.to_owned()),
@@ -649,8 +665,11 @@ mod tests {
         assert_eq!(
             parsed,
             Ok(IngestSettings {
-                git_allowlist: EgressPolicy::parse(None),
-                limits: IngestLimits::default(),
+                git_allowlist: EgressPolicy::parse(None).named(&INGEST_NAMES),
+                limits: IngestLimits {
+                    names: &INGEST_NAMES,
+                    ..IngestLimits::default()
+                },
                 scratch_path: PathBuf::from(DEFAULT_SCRATCH_PATH),
                 artifact: ArtifactCaps {
                     max_files: 5000,
@@ -673,13 +692,15 @@ mod tests {
         assert_eq!(
             parsed,
             Ok(IngestSettings {
-                git_allowlist: EgressPolicy::parse(Some("github.com *.github.com")),
+                git_allowlist: EgressPolicy::parse(Some("github.com *.github.com"))
+                    .named(&INGEST_NAMES),
                 limits: IngestLimits {
                     max_clone_bytes: 1_048_576,
                     max_file_count: 10,
                     max_file_bytes: 2048,
                     max_parsed_bytes: 4096,
                     clone_timeout: Duration::from_millis(2500),
+                    names: &INGEST_NAMES,
                 },
                 scratch_path: PathBuf::from("/scratch"),
                 artifact: ArtifactCaps {
@@ -687,6 +708,37 @@ mod tests {
                     max_bytes: 4096,
                 },
             })
+        );
+    }
+
+    /// The shared ingest crate names whatever setting it is handed; this
+    /// engine's refusals must name ITS variables, as the Python engine's did.
+    #[test]
+    fn ingest_refusals_name_this_engines_settings() {
+        let Ok(parsed) = settings(&[]) else {
+            panic!("the defaults load");
+        };
+        let ingest = parsed.ingest;
+        let refused = ingest
+            .git_allowlist
+            .check("github.com", "clone destination");
+        assert!(
+            refused.is_err_and(|e| e.message.contains("Set ELITEA_DEEPWIKI_GIT_ALLOWLIST to")),
+            "the allowlist refusal names the variable"
+        );
+        let too_big = ingest.limits.clone_bytes_error("o/r", u64::MAX);
+        assert!(
+            too_big
+                .message
+                .contains("over ELITEA_DEEPWIKI_MAX_CLONE_BYTES="),
+            "{too_big}"
+        );
+        assert!(
+            ingest
+                .limits
+                .names
+                .user_agent
+                .starts_with("elitea-deepwiki-engine/")
         );
     }
 

@@ -9,6 +9,7 @@ native Inventory engine next.
 | `engine-core` | The sidecar error contract, the NDJSON stream and stop flag, zeroizing secrets, Python-compatible JSON/string/value semantics |
 | `model-client` | The OpenAI-compatible gateway client: chat (blocking, streamed, tool calls), batched embeddings, SSE, token counting |
 | `code-parsers` | tree-sitter parsers for Python, Go, TypeScript, JavaScript, Java, C#, C++ and Rust → symbols and relationships |
+| `repo-ingest` | Admitted shallow git clones (gix, egress allowlist, limits), artifact-folder downloads, file discovery; refusals name the consumer's settings (`names::SettingNames`) |
 
 ## Layout rules
 

@@ -5,7 +5,7 @@
 //! large enough for real repositories, and exceeding one is a clear
 //! `ValueError` naming the setting, before the stage that would pay for it:
 //!
-//! | Setting (`ELITEA_DEEPWIKI_…`) | Default | Enforced |
+//! | Setting ([`crate::names::SettingNames`]) | Default | Enforced |
 //! | --- | --- | --- |
 //! | `MAX_CLONE_BYTES` | 2 GiB | while fetching (the pack on disk is polled and the fetch interrupted) and again before checkout (pack + every blob the checkout would write) |
 //! | `MAX_FILE_COUNT` | 100 000 | before checkout, over the tree |
@@ -21,9 +21,10 @@
 //! `memory`, `not found`, `timeout`), so a limit is `invalid_input`: the
 //! request named a repository this deployment will not take.
 
-use crate::errors::{EngineError, ErrorType};
-use crate::graph::discover;
-use crate::source::py_repr;
+use crate::discover;
+use crate::names::SettingNames;
+use elitea_engine_core::errors::{EngineError, ErrorType};
+use elitea_engine_core::pyvalue::py_repr;
 use std::time::Duration;
 
 /// The limits one ingest runs under.
@@ -34,6 +35,9 @@ pub struct IngestLimits {
     pub max_file_bytes: u64,
     pub max_parsed_bytes: u64,
     pub clone_timeout: Duration,
+    /// What the consuming engine calls these settings, for the messages
+    /// that ask an operator to raise one.
+    pub names: &'static SettingNames,
 }
 
 impl Default for IngestLimits {
@@ -44,6 +48,7 @@ impl Default for IngestLimits {
             max_file_bytes: 100 * 1024 * 1024,
             max_parsed_bytes: 512 * 1024 * 1024,
             clone_timeout: Duration::from_mins(10),
+            names: &SettingNames::NEUTRAL,
         }
     }
 }
@@ -57,8 +62,9 @@ impl IngestLimits {
     #[must_use]
     pub fn clone_bytes_error(&self, repo: &str, seen: u64) -> EngineError {
         limit_error(format!(
-            "The repository {} is larger than this deployment accepts: the clone reached {seen} bytes, over ELITEA_DEEPWIKI_MAX_CLONE_BYTES={}",
+            "The repository {} is larger than this deployment accepts: the clone reached {seen} bytes, over {}={}",
             py_repr(repo),
+            self.names.max_clone_bytes,
             self.max_clone_bytes
         ))
     }
@@ -117,16 +123,18 @@ impl<'a> TreeBudget<'a> {
         self.stats.files += 1;
         if self.stats.files > limits.max_file_count {
             return Err(limit_error(format!(
-                "The repository {} has more than ELITEA_DEEPWIKI_MAX_FILE_COUNT={} files",
+                "The repository {} has more than {}={} files",
                 py_repr(self.repo),
+                limits.names.max_file_count,
                 limits.max_file_count
             )));
         }
         if size > limits.max_file_bytes {
             return Err(limit_error(format!(
-                "The file {} in {} is {size} bytes, over ELITEA_DEEPWIKI_MAX_FILE_BYTES={}",
+                "The file {} in {} is {size} bytes, over {}={}",
                 py_repr(path),
                 py_repr(self.repo),
+                limits.names.max_file_bytes,
                 limits.max_file_bytes
             )));
         }
@@ -141,8 +149,9 @@ impl<'a> TreeBudget<'a> {
             self.stats.parsed_bytes = self.stats.parsed_bytes.saturating_add(size);
             if self.stats.parsed_bytes > limits.max_parsed_bytes {
                 return Err(limit_error(format!(
-                    "The files to analyse in {} total more than ELITEA_DEEPWIKI_MAX_PARSED_BYTES={} bytes",
+                    "The files to analyse in {} total more than {}={} bytes",
                     py_repr(self.repo),
+                    limits.names.max_parsed_bytes,
                     limits.max_parsed_bytes
                 )));
             }
@@ -168,7 +177,7 @@ pub fn is_parsed(rel_path: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::classify;
+    use elitea_engine_core::errors::classify;
 
     fn small() -> IngestLimits {
         IngestLimits {
@@ -177,6 +186,7 @@ mod tests {
             max_file_bytes: 400,
             max_parsed_bytes: 500,
             clone_timeout: Duration::from_secs(1),
+            ..IngestLimits::default()
         }
     }
 

@@ -12,18 +12,8 @@ description = "The Rust-native DeepWiki engine behind the sub-application host's
 elitea-engine-core = { path = "../../libs/rust/engine-core" }
 elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
 elitea-model-client = { path = "../../libs/rust/model-client" }
+elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
-# The Authorization header value. Already in the tree (gix-transport,
-# reqwest use the same version); a direct pin so the header is built here.
-base64 = "=0.22.1"
-# Repository ingest (ADR-0026 decision 7): HTTPS shallow clone in process,
-# no git binary. The minimal feature set: the blocking reqwest transport
-# with rustls (pulls reqwest 0.13 + rustls/aws-lc-rs, whose roots come
-# from the platform store), checkout, SHA-1, and the parallel pack
-# resolution. No default features (no status, blame, dirwalk, revparse,
-# mailmap, archive). The ssh and file transports compile in with the
-# blocking client but are unreachable: a CloneTarget holds only http(s).
-gix = { version = "=0.88.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "worktree-mutation", "sha1", "max-performance-safe"] }
 # The Mermaid sanitizer is ~150 transcribed Python regular expressions,
 # several with look-around, which `regex` lacks. A backtracking engine
 # with `sre`'s match preference. Already in the tree (tiktoken-rs uses it);
@@ -80,9 +70,6 @@ tracing = "=0.1.44"
 # in the tree through sqlx; pinned to the locked version.
 unicode-normalization = "=0.1.25"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
-# Credentials built here (the git Basic pair) are zeroed on drop, like
-# elitea-engine-core's Secret. Already in the tree through rustls.
-zeroize = "=1.9.0"
 
 [dev-dependencies]
 tokio = { version = "=1.53.1", features = ["test-util"] }
@@ -94,7 +81,7 @@ tokio = { version = "=1.53.1", features = ["test-util"] }
 # `git http-backend` to the worker CHILD process (which cannot be handed a
 # pre-admitted target). A release build ignores the feature: the clone URL
 # is always `https://` there. CI enables it through `--all-features`.
-loopback-git-http = []
+loopback-git-http = ["elitea-repo-ingest/loopback-git-http"]
 
 [lints.rust]
 unsafe_code = "forbid"

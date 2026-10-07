@@ -224,17 +224,7 @@ pub(crate) struct Call<'a> {
 
 /// `source()` chain of a transport error, for a message. reqwest's own
 /// text names the URL, which holds no credential (see `settings`).
-#[must_use]
-pub fn error_chain(error: &dyn std::error::Error) -> String {
-    let mut text = error.to_string();
-    let mut source = error.source();
-    while let Some(cause) = source {
-        text.push_str(": ");
-        text.push_str(&cause.to_string());
-        source = cause.source();
-    }
-    text
-}
+pub use elitea_engine_core::errors::error_chain;
 
 /// Replace the key wherever it appears, then cut to length.
 pub(crate) fn sanitize(text: &str, key: &Secret) -> String {

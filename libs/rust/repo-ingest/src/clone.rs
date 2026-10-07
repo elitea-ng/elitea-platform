@@ -77,9 +77,10 @@
 use super::egress::AdmittedTarget;
 use super::identity::RepoIdentity;
 use super::limits::{IngestLimits, TreeBudget, TreeStats};
+use super::names::SettingNames;
 use super::providers::CloneTarget;
-use crate::errors::{EngineError, ErrorType};
-use crate::source::py_repr;
+use elitea_engine_core::errors::{EngineError, ErrorType};
+use elitea_engine_core::pyvalue::py_repr;
 use gix::bstr::ByteSlice;
 use gix::protocol::transport::client::blocking_io::http;
 use std::num::NonZeroU32;
@@ -134,12 +135,18 @@ fn runtime_error(message: String) -> EngineError {
 /// The timeout error. The text carries `timeout`, which is what the
 /// legacy classifier keys `timeout_error` on.
 #[must_use]
-pub fn timeout_error(repo: &str, branch: &str, limit: Duration) -> EngineError {
+pub fn timeout_error(
+    repo: &str,
+    branch: &str,
+    limit: Duration,
+    names: &SettingNames,
+) -> EngineError {
     runtime_error(format!(
-        "Clone timeout: {} (branch {}) did not finish within {} seconds (ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS)",
+        "Clone timeout: {} (branch {}) did not finish within {} seconds ({})",
         py_repr(repo),
         py_repr(branch),
-        limit.as_secs_f64()
+        limit.as_secs_f64(),
+        names.clone_timeout_seconds
     ))
 }
 
@@ -205,7 +212,7 @@ fn is_loopback(host: &str) -> bool {
 
 /// The HTTP options for one connection: the credential as a header, and
 /// nothing read from any git configuration.
-fn transport_options(target: &CloneTarget) -> Result<http::Options, EngineError> {
+fn transport_options(target: &CloneTarget, user_agent: &str) -> Result<http::Options, EngineError> {
     let mut options = http::Options::default();
     if let Some(authorization) = target.authorization() {
         if target.url().starts_with("http://") && !is_loopback(target.host()) {
@@ -221,8 +228,7 @@ fn transport_options(target: &CloneTarget) -> Result<http::Options, EngineError>
             .extra_headers
             .push(format!("Authorization: {}", authorization.expose()));
     }
-    options.user_agent =
-        Some(concat!("elitea-deepwiki-engine/", env!("CARGO_PKG_VERSION")).to_owned());
+    options.user_agent = Some(user_agent.to_owned());
     // Never to another host than the admitted one (see the module docs).
     options.follow_redirects = http::options::FollowRedirects::None;
     Ok(options)
@@ -250,7 +256,7 @@ pub fn ls_remote(
     scratch: &Path,
 ) -> Result<Option<RemoteHead>, EngineError> {
     let target = admitted.target();
-    let options = transport_options(target)?;
+    let options = transport_options(target, admitted.names().user_agent)?;
     std::fs::create_dir_all(scratch)
         .map_err(|e| runtime_error(format!("Cannot create {}: {e}", scratch.display())))?;
     let probe = scratch.join(".ls-remote");
@@ -483,6 +489,7 @@ fn stop_error(
             target.repo_identifier(),
             target.branch(),
             limits.clone_timeout,
+            limits.names,
         )),
         STOP_BYTES => {
             let mut error = limits.clone_bytes_error(target.repo_identifier(), seen);
@@ -521,6 +528,7 @@ pub fn clone_repository(
             target.repo_identifier(),
             target.branch(),
             limits.clone_timeout,
+            limits.names,
         ));
     }
     if cancel.load(Ordering::Acquire) {
@@ -590,7 +598,7 @@ fn fetch_and_checkout(
     cancel: &AtomicBool,
     deadline: Instant,
 ) -> Result<(gix::Repository, TreeStats), EngineError> {
-    let options = transport_options(target)?;
+    let options = transport_options(target, limits.names.user_agent)?;
     let interrupt = AtomicBool::new(false);
     let alloc_limit = limits.max_file_bytes.max(MIN_ALLOC_LIMIT);
     let open = gix::open::Options::isolated().config_overrides([
@@ -633,7 +641,7 @@ fn fetch_and_checkout(
         // gitoxide's error tree (`{:#}`) names the allocation limit; its
         // `source()` chain stops above it.
         if format!("{e:#}").contains("too large to fit in memory") {
-            object_too_large(target, alloc_limit)
+            object_too_large(target, alloc_limit, limits.names)
         } else {
             classify_failure(target, &e)
         }
@@ -676,12 +684,13 @@ fn fetch_and_checkout(
 
 /// The error for a pack the resolution refused to decode: an object (or
 /// the pack's delta tree) larger than the allocation limit.
-fn object_too_large(target: &CloneTarget, alloc_limit: u64) -> EngineError {
+fn object_too_large(target: &CloneTarget, alloc_limit: u64, names: &SettingNames) -> EngineError {
     EngineError::new(
         ErrorType::Value,
         format!(
-            "The repository {} holds an object larger than this deployment accepts: over {alloc_limit} bytes once decompressed (ELITEA_DEEPWIKI_MAX_FILE_BYTES) (while fetching)",
-            py_repr(target.repo_identifier())
+            "The repository {} holds an object larger than this deployment accepts: over {alloc_limit} bytes once decompressed ({}) (while fetching)",
+            py_repr(target.repo_identifier()),
+            names.max_file_bytes
         ),
     )
 }
@@ -820,8 +829,9 @@ impl gix::traverse::tree::Visit for Admission<'_> {
             return self.stop(EngineError::new(
                 ErrorType::Value,
                 format!(
-                    "The repository {} has more than ELITEA_DEEPWIKI_MAX_FILE_COUNT={} directories",
+                    "The repository {} has more than {}={} directories",
                     py_repr(self.target.repo_identifier()),
+                    self.limits.names.max_file_count,
                     self.limits.max_file_count
                 ),
             ));
@@ -919,7 +929,7 @@ pub fn verify_containment(repo: &gix::Repository, root: &Path) -> Result<(), Eng
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ingest::providers::ProviderType;
+    use crate::providers::ProviderType;
 
     fn target(url: &str, authorization: Option<&str>) -> CloneTarget {
         CloneTarget::new(
@@ -927,7 +937,7 @@ mod tests {
             url.to_owned(),
             "o/r".to_owned(),
             "main".to_owned(),
-            authorization.and_then(|a| crate::ingest::secret::Secret::new(a.to_owned())),
+            authorization.and_then(|a| elitea_engine_core::secret::Secret::new(a.to_owned())),
             "token",
         )
         .unwrap_or_else(|e| panic!("{e}"))
@@ -936,19 +946,25 @@ mod tests {
     #[test]
     fn a_credential_is_refused_over_plain_http_off_loopback() {
         let remote = target("http://git.example.com/o/r.git", Some("Basic eA=="));
-        assert!(transport_options(&remote).is_err());
+        assert!(transport_options(&remote, SettingNames::NEUTRAL.user_agent).is_err());
         for local in [
             "http://127.0.0.1:9/o/r.git",
             "http://localhost:9/o/r.git",
             "http://[::1]:9/o/r.git",
         ] {
-            let options = transport_options(&target(local, Some("Basic eA==")));
+            let options = transport_options(
+                &target(local, Some("Basic eA==")),
+                SettingNames::NEUTRAL.user_agent,
+            );
             assert!(
                 options.is_ok_and(|o| o.extra_headers == ["Authorization: Basic eA=="]),
                 "{local}"
             );
         }
-        let anonymous = transport_options(&target("http://git.example.com/o/r.git", None));
+        let anonymous = transport_options(
+            &target("http://git.example.com/o/r.git", None),
+            SettingNames::NEUTRAL.user_agent,
+        );
         assert!(anonymous.is_ok_and(|o| o.extra_headers.is_empty()));
     }
 
@@ -958,7 +974,7 @@ mod tests {
         let classify = |text: &str| {
             let error = classify_failure(&remote, &std::io::Error::other(text.to_owned()));
             (
-                crate::errors::classify(error.error_type, &error.message),
+                elitea_engine_core::errors::classify(error.error_type, &error.message),
                 error.message,
             )
         };
@@ -968,13 +984,22 @@ mod tests {
         assert!(message.starts_with("Authentication failed"), "{message}");
         assert_eq!(classify("connection reset").0, "runtime_error");
         assert_eq!(
-            crate::errors::classify(ErrorType::Runtime, &branch_missing(&remote).message),
+            elitea_engine_core::errors::classify(
+                ErrorType::Runtime,
+                &branch_missing(&remote).message
+            ),
             "resource_not_found"
         );
         assert_eq!(
-            crate::errors::classify(
+            elitea_engine_core::errors::classify(
                 ErrorType::Runtime,
-                &timeout_error("o/r", "main", Duration::from_secs(5)).message
+                &timeout_error(
+                    "o/r",
+                    "main",
+                    Duration::from_secs(5),
+                    &SettingNames::NEUTRAL
+                )
+                .message
             ),
             "timeout_error"
         );

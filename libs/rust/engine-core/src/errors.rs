@@ -158,6 +158,21 @@ pub fn classify(error_type: ErrorType, message: &str) -> &'static str {
     "unknown_error"
 }
 
+/// An error and its `source()` chain on one line, `outer: cause: root`, for
+/// a message. The caller is responsible for what the chain may contain: a
+/// URL-carrying HTTP error must not hold a credential in its URL.
+#[must_use]
+pub fn error_chain(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(": ");
+        text.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

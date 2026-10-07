@@ -49,9 +49,9 @@
 //! * Usernames are trimmed, as Python already trimmed secrets.
 
 use super::secret::Secret;
-use crate::errors::{EngineError, ErrorType};
-use crate::source::{py_repr, py_str, py_truthy};
 use base64::Engine as _;
+use elitea_engine_core::errors::{EngineError, ErrorType};
+use elitea_engine_core::pyvalue::{py_repr, py_str, py_truthy};
 use regex::Regex;
 use serde_json::{Map, Value};
 use std::sync::LazyLock;

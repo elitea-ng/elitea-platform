@@ -35,7 +35,7 @@ pub mod clustering;
 pub mod constants;
 pub mod contraction;
 pub mod cross_language;
-pub mod discover;
+pub use elitea_repo_ingest::discover;
 pub mod documents;
 pub mod flags;
 pub mod helpers;

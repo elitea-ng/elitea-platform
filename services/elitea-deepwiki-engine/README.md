@@ -264,7 +264,13 @@ native runner through its own client up to the engine's allowlist re-check;
 a whole native run is not part of the Go job (it needs a gateway, a git host
 and PostgreSQL), the crate test covers it.
 
-## Repository ingest (`src/ingest/`)
+## Repository ingest (`libs/rust/repo-ingest`)
+
+The ingest is the shared crate `libs/rust/repo-ingest` (ADR-0027), reached
+here as `crate::ingest`; its file discovery is `crate::graph::discover`.
+The crate names whatever settings it is handed: this engine hands it
+`config::INGEST_NAMES`, so every refusal still names the `ELITEA_DEEPWIKI_*`
+variable and the clone's `User-Agent` is still this engine's.
 
 ADR-0026 decision 7: gitoxide (`gix` 0.88) in process, no `git` binary
 (the runtime image is distroless). The native runner calls `ingest::ingest(repo_config, settings, job_scratch, cancel)`.
@@ -278,7 +284,7 @@ ADR-0026 decision 7: gitoxide (`gix` 0.88) in process, no `git` binary
    `Authorization` value git sends for the userinfo Python put in the URL
    (`Basic base64("user:password")`, an absent password empty: GitHub
    `token:`, GitLab `oauth2:token`, Bitbucket `user:password`, ADO `pat:`).
-   `tests/fixtures/ingest/providers.json` is the Python factory's output
+   `libs/rust/repo-ingest/tests/fixtures/providers.json` is the Python factory's output
    for 44 configurations (written by `gen_providers.py`, deleted with the
    Python engine; see [Parity](#parity-with-the-python-engine)).
 3. `egress` re-checks the URL's own host against
@@ -326,9 +332,9 @@ gitoxide offers a per-allocation limit and a thread count, not a total; the
 deployment control is the job's memory limit (container or pod), which
 should stay above that figure. `tests/ingest_clone.rs` runs every path against
 `git http-backend` on loopback (git is a TEST dependency only);
-`ELITEA_DEEPWIKI_LIVE_CLONE=1` adds a clone of this repository from GitHub.
+`ELITEA_REPO_INGEST_LIVE_CLONE=1` (in `libs/rust/repo-ingest`) adds a clone of this repository from GitHub.
 
-### Artifact-folder sources (`src/ingest/artifact.rs`)
+### Artifact-folder sources (`libs/rust/repo-ingest/src/artifact.rs`)
 
 A port of `elitea_deepwiki.artifact_source` and the listing/download half of
 `engine.artifacts_platform_client`. A wiki source can be a folder of the
@@ -398,7 +404,7 @@ go, and everything after that is unchanged.
 
 Parity: `parity/python_artifact_source.py` (deleted with the Python engine;
 see [Parity](#parity-with-the-python-engine)) wrote
-`tests/fixtures/ingest/artifact_source.json` from the Python functions
+`libs/rust/repo-ingest/tests/fixtures/artifact_source.json` from the Python functions
 (parsing, the client's listing over recorded pages, `collect_objects`,
 `check_caps`, `listing_digest`, the directory and marker of
 `materialise_artifact_source`, the generation wiki id, `extract_artifact_settings`);
