@@ -255,7 +255,7 @@ describe('AttachmentTray: the sent files of a stopped question (#29)', () => {
     await flush();
     const result = await made.tray.uploadAll();
     if (!result.ok) throw new Error(result.error);
-    made.tray.holdSent(result.ids);
+    made.tray.holdSent(result.ids, 'q1');
     return { ...made, picks };
   }
 
@@ -306,13 +306,32 @@ describe('AttachmentTray: the sent files of a stopped question (#29)', () => {
     expect(picks).toEqual(['file:///p/chart.png']);
   });
 
+  it('restores only what fits the total size limit next to files picked meanwhile (F2)', async () => {
+    const limits = { ...attachmentLimits(null), maxTotalBytes: 1000 };
+    const picks: string[] = [];
+    const made = makeTray({ limits, discardPicked: (uri) => picks.push(uri) });
+    const { tray } = made;
+    tray.add([picked('big.pdf', 600), picked('small.pdf', 100)]);
+    await flush();
+    const result = await tray.uploadAll();
+    if (!result.ok) throw new Error(result.error);
+    tray.holdSent(result.ids, 'q1');
+    // Picked while the answer streamed: checked against an empty tray, so accepted.
+    expect(tray.add([picked('new.pdf', 500)]).refused).toEqual([]);
+    await flush();
+    expect(tray.restoreSent()).toEqual({ restored: ['small.pdf'], lost: ['big.pdf'] });
+    expect(tray.getSnapshot().map((i) => i.name)).toEqual(['new.pdf', 'small.pdf']);
+    expect(tray.getSnapshot().reduce((n, i) => n + (i.size ?? 0), 0)).toBeLessThanOrEqual(1000);
+    expect(picks).toEqual(['file:///p/big.pdf']);
+  });
+
   it('lets go of held files when the next message is sent or the thread goes', async () => {
     const { tray, picks } = await sent();
     tray.add([picked('next.pdf')]);
     await flush();
     const next = await tray.uploadAll();
     if (!next.ok) throw new Error(next.error);
-    tray.holdSent(next.ids);
+    tray.holdSent(next.ids, 'q2');
     expect(picks).toEqual(['file:///p/report.pdf', 'file:///p/chart.png']);
     tray.clear();
     expect(picks).toEqual(['file:///p/report.pdf', 'file:///p/chart.png', 'file:///p/next.pdf']);

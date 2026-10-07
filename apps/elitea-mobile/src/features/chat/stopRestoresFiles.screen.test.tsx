@@ -14,6 +14,7 @@ import { questionGroup } from '@/api/__fixtures__/chat13';
 import { discoveryDocument13 } from '@/api/__fixtures__/nativeClient';
 import { DiscoveryDocumentSchema } from '@/api/discovery';
 import ThreadScreen from '@/app/(app)/c/[id]';
+import { loadFixtureText } from '@/features/chat/__fixtures__/loadFixture';
 import { clearLiveTurns } from '@/features/chat/turnController';
 import { resetPolicy } from '@/security/policy';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
@@ -66,6 +67,21 @@ jest.mock('expo-file-system', () => {
   }
   return { File, Directory, Paths: { cache: 'file:///cache', document: 'file:///docs' } };
 });
+// The outbox: a send queued (offline, or behind an unsent message) or handed
+// off (workspace unreachable) is only recorded here.
+let mockQueueSends = false;
+const mockQueued: unknown[] = [];
+jest.mock('@/sync/appOutbox', () => ({
+  ...jest.requireActual('@/sync/appOutbox'),
+  shouldQueue: () => mockQueueSends,
+  queueSend: async (prepared: unknown) => {
+    mockQueued.push(prepared);
+  },
+  handOffToOutbox: async (prepared: unknown) => {
+    mockQueued.push(prepared);
+    return true;
+  },
+}));
 const mockPickFiles = jest.fn();
 jest.mock('@/features/chat/attachments/pickers', () => ({
   PickerPermissionError: class extends Error {},
@@ -131,6 +147,8 @@ beforeEach(() => {
   clearLiveTurns();
   resetPolicy();
   mockDeleted.length = 0;
+  mockQueueSends = false;
+  mockQueued.length = 0;
   mockStream = fakeStreamTransport();
   mockParams = { id: '3' };
   setSession({ hydrated: true, serverOrigin: FAKE_ORIGIN, projectId: P });
@@ -205,11 +223,84 @@ describe('Stop before any output with files (#29)', () => {
     expect(screen.queryByLabelText(/notes\.md, /)).toBeNull();
   });
 
+  it('a retried send (the failure let go of the file): Stop before output names it to attach again', async () => {
+    // The first events stream is refused (the turn fails, retryable); Retry re-sends the same body.
+    mockStream = fakeStreamTransport((index) => (index === 0 ? { status: 404 } : {}));
+    const server = installServer([]);
+    await renderWithQueries(<ThreadScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach files' }));
+    await waitFor(() => expect(screen.getByLabelText(/notes\.md, ready/)).toBeTruthy());
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'summarise this');
+    await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
+    // Failed: the question is kept on the server, so the held copy is deleted.
+    await fireEvent.press(await screen.findByRole('button', { name: 'Retry' }));
+    expect(mockDeleted).toContain(PICKED);
+    await waitFor(() => expect(mockStream.connections).toHaveLength(2));
+    mockStream.connections[1].push(
+      `id: 90\nevent: execution.node_event\ndata: ${JSON.stringify({ type: 'agent_start', stream_id: UUID, message_id: ANSWER, question_id: null, content: null })}\n\n`,
+    );
+    await fireEvent.press(await screen.findByRole('button', { name: 'Stop answer' }));
+    await waitFor(() => expect(server.requests.some((r) => r.method === 'DELETE' && r.url.pathname.endsWith(STOP))).toBe(true));
+    await waitFor(() =>
+      expect(screen.getByRole('alert')).toHaveTextContent('Stopped before an answer. Your message is back here; attach notes.md again to send it.'),
+    );
+    expect(screen.queryByLabelText(/notes\.md, /)).toBeNull();
+  });
+
+  it('stopped elsewhere (another device): the turn ends stopped with no Stop of ours, and the held copy is deleted (SEC-1)', async () => {
+    installServer([{ ...questionGroup, uuid: Q, content: 'summarise this' }]);
+    await renderWithQueries(<ThreadScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach files' }));
+    await waitFor(() => expect(screen.getByLabelText(/notes\.md, ready/)).toBeTruthy());
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'summarise this');
+    await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(mockStream.connections).toHaveLength(1));
+    expect(mockDeleted).not.toContain(PICKED);
+    // The transcript read after the end hangs (a slow network): the turn stays
+    // done and stopped, not yet settled or dismissed.
+    const answer = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo, init?: RequestInit) =>
+      new Request(input, init).url.includes('/elitea_core/conversation/') ? new Promise<Response>(() => {}) : answer(input, init)) as typeof fetch;
+    // The captured stream of an answer stopped with DELETE: it ends with execution.failed CANCELLED.
+    mockStream.connections[0].push(loadFixtureText('cancelled'));
+    await waitFor(() => expect(screen.getByText('Stopped.')).toBeTruthy());
+    await waitFor(() => expect(mockDeleted).toContain(PICKED));
+    expect(screen.queryByLabelText(/notes\.md, /)).toBeNull();
+  });
+
   it('a question the server kept (output was written): the file copy is deleted, nothing comes back', async () => {
     const server = installServer([{ ...questionGroup, uuid: Q, content: 'summarise this' }]);
     await sendWithNotesThenStop(server);
     await waitFor(() => expect(mockDeleted).toContain(PICKED));
     expect(screen.queryByLabelText(/notes\.md, /)).toBeNull();
     expect(screen.queryByText(/Stopped before an answer/)).toBeNull();
+  });
+});
+
+describe('Files of a send that went to the outbox (F3)', () => {
+  async function sendWithNotes() {
+    await renderWithQueries(<ThreadScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach files' }));
+    await waitFor(() => expect(screen.getByLabelText(/notes\.md, ready/)).toBeTruthy());
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'summarise this');
+    await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
+  }
+
+  it('a queued send: the uploaded file\'s local copy is deleted at once (nothing can be stopped)', async () => {
+    installServer([]);
+    mockQueueSends = true;
+    await sendWithNotes();
+    await waitFor(() => expect(mockQueued).toHaveLength(1));
+    await waitFor(() => expect(mockDeleted).toContain(PICKED));
+    expect(screen.queryByLabelText(/notes\.md, /)).toBeNull();
+  });
+
+  it('a send handed off to the outbox (workspace unreachable): the held copy is deleted', async () => {
+    const server = installServer([]);
+    server.on('POST', SEND, 'network_error');
+    await sendWithNotes();
+    await waitFor(() => expect(mockQueued).toHaveLength(1));
+    await waitFor(() => expect(mockDeleted).toContain(PICKED));
+    expect(screen.queryByLabelText(/notes\.md, /)).toBeNull();
   });
 });

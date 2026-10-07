@@ -91,6 +91,12 @@ export interface UseTurn {
   /** The answer streams and is admitted, so it can be stopped now. */
   canStop: boolean;
   /**
+   * Whether the live turn is question `questionId` and still sending or
+   * streaming (read now, not from the last render): false for a send that
+   * was queued for the outbox or handed off to it.
+   */
+  isRunning: (questionId: string) => boolean;
+  /**
    * Regenerates the newest answer in place and streams the new one. Online
    * only, never queued; resolves to an error text when it cannot start.
    */
@@ -370,5 +376,13 @@ export function useTurn({ projectId, conversationRef, conversationUuid, particip
     live.turn.phase === 'streaming' &&
     (live.execution?.responseMessageId ?? null) !== null &&
     !regenerationUnstoppable;
-  return { live, send, continueWith, retry, reconnect, dismiss, busy, stop, canStop, regenerate };
+  const isRunning = useCallback(
+    (questionId: string) => {
+      const current = key ? getLiveTurn(key) : undefined;
+      if (!current?.isActive) return false;
+      return current.getSnapshot().questionId === questionId;
+    },
+    [key],
+  );
+  return { live, send, continueWith, retry, reconnect, dismiss, busy, stop, canStop, isRunning, regenerate };
 }

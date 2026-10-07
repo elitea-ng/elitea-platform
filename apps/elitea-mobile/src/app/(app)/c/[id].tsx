@@ -81,7 +81,7 @@ import { canDictateOnDevice } from '@/features/speech/dictation';
 import { canReadAloud, readAloud, stopReading, useReading } from '@/features/speech/readAloud';
 import { exportErrorText } from '@/api/queries/exportConversation';
 import { shareTranscript } from '@/features/chat/export/shareTranscript';
-import { answerHiddenByRegeneration, type LiveTurn } from '@/features/chat/turnController';
+import { answerHiddenByRegeneration, newQuestionId, type LiveTurn } from '@/features/chat/turnController';
 import { ATTACHMENT_ONLY_TEXT, useTurn } from '@/features/chat/useTurn';
 import { Markdown } from '@/features/markdown/Markdown';
 import { useSelfUserId } from '@/state/selfIdentity';
@@ -310,20 +310,46 @@ export default function ThreadScreen() {
     // Every file first: a message with files is sent (or queued) only once all are stored.
     const uploaded = await tray.uploadAll();
     if (!uploaded.ok) return uploaded.error;
-    const problem = await turn.send(text.trim() === '' ? ATTACHMENT_ONLY_TEXT : text, { mentions, attachments: uploaded.attachments });
-    // Held, not deleted: a Stop before any output removes the question, and
-    // its files then come back (stopWithFiles).
-    if (problem === null) tray.holdSent(uploaded.ids);
-    return problem;
+    // Minted here so the held files can be tied to this question.
+    const questionId = newQuestionId();
+    const problem = await turn.send(text.trim() === '' ? ATTACHMENT_ONLY_TEXT : text, {
+      mentions,
+      attachments: uploaded.attachments,
+      questionId,
+    });
+    if (problem !== null) return problem;
+    // Held, not deleted, while its answer runs: a Stop before any output
+    // removes the question, and its files then come back (stopWithFiles).
+    // A send queued for the outbox (or already handed to it) cannot be
+    // stopped here: the outbox keeps the uploaded filepaths, not these copies.
+    if (turn.isRunning(questionId)) tray.holdSent(uploaded.ids, questionId);
+    else tray.clear(uploaded.ids);
+    return null;
   };
-  // The held files' answer settled with the question kept (an answer, a
-  // failure the retry re-sends with the stored files, a pause): let go of them.
+  // Let go of the held files once their question can no longer be stopped
+  // here: its answer ended (an answer, a failure the retry re-sends with the
+  // stored files, a pause, or a stop made elsewhere), or the live turn is no
+  // longer that question (handed off to the outbox, dismissed, another turn).
   const livePhase = turn.live?.turn.phase ?? null;
-  const liveStopped = turn.live?.turn.stopped ?? false;
+  const liveQuestion = turn.live?.questionId ?? null;
+  // A Stop of ours is running: stopWithFiles decides (the turn ends stopped,
+  // and may be dismissed, before it knows whether the question was removed).
+  const [stopping, setStopping] = useState(false);
   useEffect(() => {
-    if (livePhase === 'failed' || livePhase === 'paused' || (livePhase === 'done' && !liveStopped)) tray.releaseSent();
-  }, [tray, livePhase, liveStopped]);
+    const heldFor = tray.heldFor;
+    if (heldFor === null || stopping) return;
+    const ended = livePhase === 'failed' || livePhase === 'paused' || livePhase === 'done';
+    if (ended || liveQuestion !== heldFor) tray.releaseSent();
+  }, [tray, livePhase, liveQuestion, stopping]);
   const stopWithFiles = async (): Promise<StopResult> => {
+    setStopping(true);
+    try {
+      return await stopAndRestore();
+    } finally {
+      setStopping(false);
+    }
+  };
+  const stopAndRestore = async (): Promise<StopResult> => {
     const result = await turn.stop();
     if (result.restoreText !== null && result.lostAttachments.length > 0) {
       // Only what the tray actually put back is off the list: a file it no

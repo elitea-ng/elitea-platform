@@ -86,6 +86,8 @@ export class AttachmentTray {
    * then puts them back for a one-tap resend.
    */
   private held: TrayItem[] = [];
+  /** The question_id the held files went with (null when nothing is held). */
+  private heldQuestion: string | null = null;
   private readonly listeners = new Set<() => void>();
   private generation = 0;
   private target: { projectId: number; conversationUuid: string } | null = null;
@@ -239,40 +241,56 @@ export class AttachmentTray {
   }
 
   /**
-   * Takes the sent files (`ids`) out of the tray but keeps their local copies
-   * until `releaseSent` or `restoreSent`; the files of an earlier message
-   * still held are let go (only the newest question can be stopped).
+   * Takes the sent files (`ids`) of question `questionId` out of the tray but
+   * keeps their local copies until `releaseSent` or `restoreSent`; the files
+   * of an earlier message still held are let go (only the newest question
+   * can be stopped).
    */
-  holdSent(ids: readonly string[]): void {
+  holdSent(ids: readonly string[], questionId: string): void {
     this.releaseSent();
     const sent = new Set(ids);
     this.held = this.items.filter((i) => sent.has(i.id));
+    this.heldQuestion = this.held.length > 0 ? questionId : null;
     this.set(this.items.filter((i) => !sent.has(i.id)));
+  }
+
+  /** The question the held files went with, or null when none are held. */
+  get heldFor(): string | null {
+    return this.heldQuestion;
   }
 
   /** The held files' answer settled with the question kept: delete their copies. */
   releaseSent(): void {
     const held = this.held;
     this.held = [];
+    this.heldQuestion = null;
     for (const item of held) this.forget(item);
   }
 
   /**
    * The question the held files went with was removed: put them back, ready
    * to upload again (the removed message's upload is not reused), after any
-   * file picked meanwhile. A file whose local copy is gone, or one more than
-   * the tray takes, is reported as lost and deleted.
+   * file picked meanwhile. A file whose local copy is gone, or one the tray
+   * has no room for (its file count or its total size, as `add` checks), is
+   * reported as lost and deleted.
    */
   restoreSent(): RestoreResult {
     const held = this.held;
     this.held = [];
+    this.heldQuestion = null;
     const room = Math.max(0, this.limits.maxFiles - this.sendable);
+    const sizeOf = (item: TrayItem) => item.ready?.size ?? item.size ?? 0;
+    // Files picked while the answer ran were checked against a tray without
+    // the held ones: the restore must not take it past the total.
+    let totalBytes = this.items.filter((i) => i.state !== 'failed').reduce((n, i) => n + sizeOf(i), 0);
     const exists = this.deps.exists ?? (() => true);
     const back: TrayItem[] = [];
     const lost: string[] = [];
     for (const item of held) {
-      if (back.length < room && item.ready !== null && exists(item.ready.uri)) {
+      const fits = totalBytes + sizeOf(item) <= this.limits.maxTotalBytes;
+      if (back.length < room && fits && item.ready !== null && exists(item.ready.uri)) {
         back.push({ ...item, state: 'ready', progress: null, error: null, filepath: null });
+        totalBytes += sizeOf(item);
       } else {
         lost.push(item.name);
         this.forget(item);
