@@ -283,17 +283,63 @@ it('a finished activity still lingering on the lock screen ends at once on endAl
   expect(env.started[0]!.ended?.policy).toBe('immediate');
 });
 
-it('a lingering activity ends at once when its turn leaves memory', () => {
+it('a finished answer keeps lingering when its settled turn leaves memory (the open thread drops it at once)', () => {
+  // On the device the open thread drops a turn from the registry as soon as the persisted copy is
+  // back (`live.settled` → dismiss), ~100 ms after it finished: ending the activity then means
+  // "Answer ready" / "Your agent needs you" never stays on the lock screen.
   const env = setup();
   env.controller.start();
   const done = new FakeTurn({ phase: 'streaming' });
   env.add(done);
   env.advance(START_AFTER_MS);
+  done.set({ phase: 'done', content: 'answer' }, { settled: true });
+  env.remove();
+  expect((env.started[0]!.ended!.policy as { after: Date }).after.getTime()).toBe(env.now + DONE_LINGER_MS);
+  expect(env.controller.activeCount).toBe(1);
+  // App state and preview changes leave it alone.
+  env.setApp('background');
+  env.setApp('active');
+  env.setPreview('title');
+  expect((env.started[0]!.ended!.policy as { after: Date }).after.getTime()).toBeGreaterThan(env.now);
+
+  // Still one per conversation: a new turn there ends it at once; a wipe or switch too.
+  env.add(new FakeTurn({ phase: 'sending' }));
+  expect(env.started[0]!.ended?.policy).toBe('immediate');
+});
+
+it('a lingering activity of a turn that left memory still ends at once on endAll, and is forgotten after its dismissal date', () => {
+  const env = setup();
+  env.controller.start();
+  const paused = new FakeTurn({ phase: 'streaming' });
+  env.add(paused);
+  env.advance(START_AFTER_MS);
+  paused.set(PAUSE_STATE);
+  env.remove();
+  expect(env.controller.activeCount).toBe(1);
+  env.controller.endAll();
+  expect(env.started[0]!.ended?.policy).toBe('immediate');
+
+  const done = new FakeTurn({ phase: 'streaming' });
+  env.add(done, '7:aaaaaaaa-0000-4000-8000-000000000009');
+  env.advance(START_AFTER_MS);
   done.set({ phase: 'done', content: 'answer' });
+  env.remove('7:aaaaaaaa-0000-4000-8000-000000000009');
+  env.advance(DONE_LINGER_MS);
+  env.add(new FakeTurn({ phase: 'sending' }), '7:aaaaaaaa-0000-4000-8000-000000000010');
+  expect(env.controller.activeCount).toBe(0);
+});
+
+it('a turn that leaves memory while still running ends its activity at once', () => {
+  const env = setup();
+  env.controller.start();
+  const turn = new FakeTurn({ phase: 'streaming' });
+  env.add(turn);
+  env.advance(START_AFTER_MS);
   env.remove();
   expect(env.started[0]!.ended?.policy).toBe('immediate');
 });
 
+const PAUSE_STATE = { phase: 'paused', pause: { kind: 'hitl', shape: 'single', interrupts: [], threadId: null, messageId: 'm' } } as never;
 const PAUSE = { phase: 'paused', pause: { kind: 'hitl', shape: 'single', interrupts: [], threadId: null, messageId: 'm' } } as never;
 
 it('answering a pause (a continuation) ends the stale "needs you" activity before a new one starts', () => {

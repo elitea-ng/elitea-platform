@@ -87,7 +87,21 @@ export function clearSurfaceSnapshot(now: number = Date.now()): void {
   publishSurfaceSnapshot(null, signedOutSnapshot(now));
 }
 
-registerWipeHook('surface_snapshot', () => clearSurfaceSnapshot());
+/**
+ * Launch-time clear when no workspace was restored signed in: the App Group
+ * keeps the previous process's snapshot, a wipe resumed at launch runs no
+ * in-memory hook, and only the signed-in layout writes a new one. Always
+ * written: what this process wrote says nothing about what is stored.
+ */
+export function clearSurfaceSnapshotAtLaunch(now: number = Date.now()): void {
+  last = null;
+  writtenFor = null;
+  clearSurfaceSnapshot(now);
+}
+
+// Early: before the server revoke of a log out, so a kill during it cannot
+// leave counts or titles on the home screen (the same rule as quick actions).
+registerWipeHook('surface_snapshot', () => clearSurfaceSnapshot(), { early: true });
 // A workspace removed while another is active: clear only when the stored
 // snapshot is that workspace's (it never is after a switch; defensive).
 registerStoredWipeHook('surface_snapshot', (workspaceId) => {

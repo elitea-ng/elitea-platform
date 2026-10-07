@@ -1,7 +1,7 @@
 import * as intentsMock from 'expo-app-intents';
 
-import { AGENT_KIND, MAX_CATALOG_AGENTS, __resetAgentCatalogForTests, buildAgentCatalog, publishAgentCatalog } from '@/features/intents/agentCatalog';
-import { endSession, registerWipeHook, suspendActiveWorkspace } from '@/security/endSession';
+import { AGENT_KIND, MAX_CATALOG_AGENTS, __resetAgentCatalogForTests, buildAgentCatalog, clearAgentCatalogAtLaunch, publishAgentCatalog } from '@/features/intents/agentCatalog';
+import { endSession, registerRevokeHook, registerWipeHook, suspendActiveWorkspace } from '@/security/endSession';
 import { bindWorkspace } from '@/security/secureStorage';
 import { __resetSessionForTests } from '@/state/session';
 
@@ -79,4 +79,24 @@ it('publishes no names for a workspace that is not the bound one', async () => {
   bindWorkspace('bbbbbbbbbbbb');
   await publishAgentCatalog([{ id: 'aaaaaaaaaaaa:7:5', title: 'x' }], 'aaaaaaaaaaaa');
   expect(mock.catalogs.has(AGENT_KIND)).toBe(false);
+});
+
+it('empties the agent catalog BEFORE the server revoke of a log out (a kill during it leaves no agent names in Siri)', async () => {
+  await publishAgentCatalog(buildAgentCatalog({ workspaceId: 'aaaaaaaaaaaa', projectId: 7, allowTitles: true, agents }), 'aaaaaaaaaaaa');
+  let atRevoke: unknown[] | undefined;
+  const off = registerRevokeHook(async () => {
+    atRevoke = mock.catalogs.get(AGENT_KIND);
+  });
+  try {
+    await endSession({ reason: 'user_logout' });
+  } finally {
+    off();
+  }
+  expect(atRevoke).toEqual([]);
+});
+
+it('clearAgentCatalogAtLaunch empties the catalog even when this process published none', async () => {
+  mock.catalogs.set(AGENT_KIND, [{ id: 'aaaaaaaaaaaa:7:5', title: 'Left by a killed process' }]);
+  await clearAgentCatalogAtLaunch();
+  expect(mock.catalogs.get(AGENT_KIND)).toEqual([]);
 });

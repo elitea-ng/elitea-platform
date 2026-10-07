@@ -55,6 +55,8 @@ export interface PendingConversation {
 
 export interface SnapshotInput {
   workspaceId: string;
+  /** The selected project the counts are for; a conversation link names it (`&p=`). */
+  projectId: number;
   /** The workspace origin (`https://host[:port]`); shown only with titles allowed. */
   origin: string | null;
   allowTitles: boolean;
@@ -124,7 +126,7 @@ export function buildSnapshot(input: SnapshotInput): SurfaceSnapshot {
     // One conversation waiting: straight to it. Several: the conversation list.
     approvalsUrl:
       input.approvals.length === 1 && firstPending
-        ? surfaceUrl({ kind: 'conversation', ref: firstPending.ref }, ws)
+        ? surfaceUrl({ kind: 'conversation', ref: firstPending.ref, projectId: input.projectId }, ws)
         : surfaceUrl({ kind: 'home' }, ws),
     notificationsUrl: surfaceUrl({ kind: 'notifications' }, ws),
     at: input.now,

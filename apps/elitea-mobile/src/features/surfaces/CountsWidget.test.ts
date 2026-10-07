@@ -17,6 +17,7 @@ const NOW = Date.UTC(2026, 9, 6, 12);
 const snap = (allowTitles: boolean, approvals = 2, unread = 3, running = 1): SurfaceSnapshot =>
   buildSnapshot({
     workspaceId: 'aaaaaaaaaaaa',
+    projectId: 7,
     origin: 'https://acme-legal.elitea.example',
     allowTitles,
     approvals: Array.from({ length: approvals }, (_, i) => ({ ref: String(40 + i), name: `Contract ${i + 1}` })),

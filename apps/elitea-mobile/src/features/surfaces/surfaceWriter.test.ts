@@ -1,10 +1,11 @@
-import { endSession, registerWipeHook, suspendActiveWorkspace } from '@/security/endSession';
+import { endSession, registerRevokeHook, registerWipeHook, suspendActiveWorkspace } from '@/security/endSession';
 import { bindWorkspace } from '@/security/secureStorage';
 import { buildSnapshot } from '@/features/surfaces/surfaceSnapshot';
 import {
   RUNNING_STALE_MS,
   __setWidgetSinkForTests,
   clearSurfaceSnapshot,
+  clearSurfaceSnapshotAtLaunch,
   publishSurfaceSnapshot,
   type WidgetSink,
 } from '@/features/surfaces/surfaceWriter';
@@ -14,7 +15,7 @@ jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecur
 
 const NOW = Date.UTC(2026, 9, 6, 12);
 const snapshot = (over: { unread?: number; running?: number } = {}) =>
-  buildSnapshot({ workspaceId: 'aaaaaaaaaaaa', origin: 'https://ai.example.com', allowTitles: false, approvals: [], unread: over.unread ?? 2, running: over.running ?? 0, now: NOW });
+  buildSnapshot({ workspaceId: 'aaaaaaaaaaaa', projectId: 7, origin: 'https://ai.example.com', allowTitles: false, approvals: [], unread: over.unread ?? 2, running: over.running ?? 0, now: NOW });
 
 let sink: { updateTimeline: jest.Mock };
 
@@ -88,4 +89,27 @@ it('never throws when the App Group write fails', () => {
 it('does nothing off iOS (no sink)', () => {
   __setWidgetSinkForTests(null);
   expect(() => publishSurfaceSnapshot('aaaaaaaaaaaa', snapshot())).not.toThrow();
+});
+
+it('clears the widget snapshot BEFORE the server revoke of a log out (a kill during it leaves no counts behind)', async () => {
+  // The App Group outlives the process, and a wipe resumed at launch runs no in-memory hook.
+  publishSurfaceSnapshot('aaaaaaaaaaaa', snapshot({ unread: 4 }));
+  let atRevoke: unknown = null;
+  const off = registerRevokeHook(async () => {
+    atRevoke = sink.updateTimeline.mock.lastCall[0][0].props.signedIn;
+  });
+  try {
+    await endSession({ reason: 'user_logout' });
+  } finally {
+    off();
+  }
+  expect(atRevoke).toBe(false);
+});
+
+it('clearSurfaceSnapshotAtLaunch rewrites the signed-out snapshot even when this process wrote nothing', () => {
+  // What a previous process left in the App Group is unknown to this one.
+  clearSurfaceSnapshotAtLaunch();
+  clearSurfaceSnapshotAtLaunch();
+  expect(sink.updateTimeline).toHaveBeenCalledTimes(2);
+  expect(sink.updateTimeline.mock.lastCall[0][0].props).toMatchObject({ signedIn: false, unread: 0, titles: [], host: '' });
 });

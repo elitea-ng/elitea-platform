@@ -7,6 +7,10 @@ import { resetPolicySources } from '@/security/policyStore';
 import { DEVICE_KEYS, SECURE_KEYS, bindWorkspace, boundWorkspace } from '@/security/secureStorage';
 import { MIGRATED_WORKSPACE_ID, __resetRegistryForTests } from '@/security/workspaceRegistry';
 import * as QuickActions from 'expo-quick-actions';
+import * as AppIntentsMock from 'expo-app-intents';
+
+import { __resetAgentCatalogForTests } from '@/features/intents/agentCatalog';
+import { __setWidgetSinkForTests } from '@/features/surfaces/surfaceWriter';
 
 import { __resetHydrateForTests, hydrateSession } from '@/state/hydrate';
 import { __resetSessionForTests, getBearerToken, getSession } from '@/state/session';
@@ -21,6 +25,7 @@ const fake = jest.requireMock<FakeSecureStore>('expo-secure-store');
 const { checkFreshInstall } = jest.requireMock<{ checkFreshInstall: jest.Mock }>('@/security/freshInstall');
 
 const ORIGIN = 'https://ai.example.com';
+const intents = AppIntentsMock as unknown as { catalogs: Map<string, unknown[]> };
 
 function fakeAppState() {
   const listeners = new Set<(s: AppStateStatus) => void>();
@@ -68,6 +73,9 @@ beforeEach(() => {
   __resetNativeSessionForTests();
   resetPolicy();
   resetPolicySources();
+  __setWidgetSinkForTests(null);
+  __resetAgentCatalogForTests();
+  intents.catalogs.clear();
   fake.values.clear();
   jest.clearAllMocks();
   // clearAllMocks keeps implementations: put back the default after a test overrode it.
@@ -138,6 +146,25 @@ describe('hydrateSession', () => {
     });
     await hydrateSession({ devSignIn: true });
     expect(QuickActions.setItems).toHaveBeenCalledWith([]);
+  });
+
+  // Same class as QA-SEC-1: the widget snapshot (App Group) and the Siri agent catalog
+  // also outlive the process, and only the signed-in layout rewrites them.
+  it('clears the widget snapshot and the Siri agent catalog when a resumed wipe leaves no workspace signed in', async () => {
+    const sink = { updateTimeline: jest.fn() };
+    __setWidgetSinkForTests(sink);
+    intents.catalogs.set('agent', [{ id: 'x:1:2', title: 'Left behind' }]);
+    stored({
+      wipePending: JSON.stringify({ reason: 'user_logout' }),
+      serverOrigin: ORIGIN,
+      credentialKind: 'pat',
+      pat: 'tok',
+    });
+    await hydrateSession({ devSignIn: true });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sink.updateTimeline).toHaveBeenCalled();
+    expect(sink.updateTimeline.mock.lastCall[0][0].props.signedIn).toBe(false);
+    expect(intents.catalogs.get('agent')).toEqual([]);
   });
 
   it('leaves the quick actions to the signed-in layout when a workspace is restored signed in', async () => {

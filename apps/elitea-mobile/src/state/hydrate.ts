@@ -5,7 +5,9 @@ import { restoreNativeSession } from '@/auth/nativeSession';
 import { restorePolicy } from '@/security/policyStore';
 import { log } from '@/lib/log';
 import { parseConnectLink } from '@/linking/parseConnectLink';
+import { clearAgentCatalogAtLaunch } from '@/features/intents/agentCatalog';
 import { clearQuickActionsAtLaunch } from '@/features/quickActions/quickActions';
+import { clearSurfaceSnapshotAtLaunch } from '@/features/surfaces/surfaceWriter';
 import { resumePendingWipes, wipeStoredWorkspace } from '@/security/endSession';
 import { checkFreshInstall } from '@/security/freshInstall';
 import { SECURE_KEYS, bindWorkspace, deleteSecureItem, getSecureItem } from '@/security/secureStorage';
@@ -67,7 +69,13 @@ export function hydrateSession(options: HydrateOptions = {}): Promise<void> {
     // The OS kept the previous run's quick actions; only the signed-in layout
     // rebuilds them, so a launch that restores no signed-in workspace (a
     // resumed wipe, a workspace waiting for sign-in) clears them (QA-SEC-1).
-    if (getSession().credential === null) void clearQuickActionsAtLaunch();
+    // The widget snapshot (App Group) and the Siri agent catalog outlive the
+    // process the same way.
+    if (getSession().credential === null) {
+      void clearQuickActionsAtLaunch();
+      clearSurfaceSnapshotAtLaunch();
+      void clearAgentCatalogAtLaunch();
+    }
     // The switcher's list (hosts, brand marks); never blocks the launch.
     void refreshWorkspaceList();
   })();

@@ -129,7 +129,7 @@ export function useWidgetSnapshot(): void {
     const pending = mergePending(fromStore, counts.paused);
     publishSurfaceSnapshot(
       workspaceId,
-      buildSnapshot({ workspaceId, origin, allowTitles, approvals: pending, unread, running: counts.running, now: Date.now() }),
+      buildSnapshot({ workspaceId, projectId, origin, allowTitles, approvals: pending, unread, running: counts.running, now: Date.now() }),
     );
   }, [workspaceId, projectId, origin, allowTitles, unread, live, stored]);
 }

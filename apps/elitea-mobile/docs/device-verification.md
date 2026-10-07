@@ -318,8 +318,9 @@ See [native-surfaces.md](native-surfaces.md) for what each surface may show.
       A short answer shows none.
 - [ ] **Live Activity on suspend.** Background or lock the app mid-answer: the activity
       says "Open the app for the latest" and is de-emphasised; return: it is live again.
-- [ ] **Live Activity preview policy.** With `notification_preview: title` the headline is
-      the conversation's title; with `none` (default) it is generic. Never message text.
+- [ ] **Live Activity preview policy.** With `notification_preview: title` AND
+      `allow_system_surfaces` the headline is the conversation's title; with either off
+      (both are by default) it is generic. Never message text.
 - [ ] **Live Activity cleanup.** Force-quit mid-answer and relaunch: the old activity is
       gone. Log out mid-answer: it is gone at once.
 - [ ] **Siri: New chat.** "New chat in Agent Zefir" opens the agent picker. With

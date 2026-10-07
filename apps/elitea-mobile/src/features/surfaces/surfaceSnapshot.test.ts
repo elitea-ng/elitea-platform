@@ -1,8 +1,10 @@
+import { parseSurfaceLink, routeForSurfaceLink } from '@/features/surfaces/surfaceLinks';
 import { buildSnapshot, sameContent, signedOutSnapshot, type SnapshotInput } from '@/features/surfaces/surfaceSnapshot';
 
 const NOW = Date.UTC(2026, 9, 6, 12);
 const input = (over: Partial<SnapshotInput> = {}): SnapshotInput => ({
   workspaceId: 'aaaaaaaaaaaa',
+  projectId: 90501,
   origin: 'https://acme-legal.elitea.example',
   allowTitles: false,
   approvals: [
@@ -29,9 +31,18 @@ describe('buildSnapshot', () => {
   });
 
   it('a single waiting conversation is opened directly; several open the list', () => {
-    expect(buildSnapshot(input({ approvals: [{ ref: '42', name: 'x' }] })).approvalsUrl).toBe('agentzefir://surface/c/42?ws=aaaaaaaaaaaa');
+    expect(buildSnapshot(input({ approvals: [{ ref: '42', name: 'x' }] })).approvalsUrl).toBe('agentzefir://surface/c/42?ws=aaaaaaaaaaaa&p=90501');
     expect(buildSnapshot(input()).approvalsUrl).toBe('agentzefir://surface/home?ws=aaaaaaaaaaaa');
     expect(buildSnapshot(input()).notificationsUrl).toBe('agentzefir://surface/notifications?ws=aaaaaaaaaaaa');
+  });
+
+  it("the waiting conversation's link names its project: after a project change it opens the start, never another project's thread", () => {
+    // The widget keeps showing the last snapshot until the next project's store is read (and
+    // WidgetKit redraws later still); a numeric conversation id means another conversation there.
+    const url = buildSnapshot(input({ approvals: [{ ref: '7', name: 'x' }] })).approvalsUrl;
+    const link = parseSurfaceLink(url)!;
+    expect(routeForSurfaceLink(link, 'aaaaaaaaaaaa', true, 90501)).toBe('/c/7');
+    expect(routeForSurfaceLink(link, 'aaaaaaaaaaaa', true, 90504)).toBe('/');
   });
 
   it('clamps counts and trims titles to one bounded line', () => {

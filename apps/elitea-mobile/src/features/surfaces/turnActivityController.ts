@@ -21,8 +21,10 @@ import type { NotificationPreview } from '@/security/policy';
  *  - Updated when what it shows changes (phase, title, approximate), not on
  *    every streamed frame.
  *  - Ended when the turn finishes, fails, stops or pauses for the user (it
- *    lingers on the lock screen for a while), and at once when the turn
- *    leaves memory (thread closed, wipe, switch), lingering ones included.
+ *    lingers on the lock screen for a while). A finished turn leaving memory
+ *    (the open thread drops it as soon as the persisted copy is back) keeps
+ *    that lingering activity until its dismissal date; a turn leaving memory
+ *    while still running ends at once, and a wipe or a switch ends all.
  *  - When the app goes to the background the stream pauses (no background
  *    execution in this release): the activity is marked APPROXIMATE and
  *    stale, and comes back to the live state when the app is active again.
@@ -70,7 +72,12 @@ export interface TurnActivityDeps {
 }
 
 interface Tracked {
-  controller: TurnHandle;
+  /**
+   * Null once the finished turn left memory (the open thread drops a settled
+   * turn at once) while its activity still lingers: kept so a new turn in the
+   * same conversation, a wipe or a switch can still end it.
+   */
+  controller: TurnHandle | null;
   firstSeen: number;
   /** False after the turn finished: a restart of the same turn counts from then. */
   wasActive: boolean;
@@ -153,8 +160,18 @@ export class TurnActivityController {
 
   private syncRegistry(): void {
     const live = new Map(this.deps.turns.list());
-    for (const key of [...this.tracked.keys()]) {
-      if (!live.has(key)) this.forget(key, 'immediate');
+    const now = this.now();
+    for (const [key, t] of [...this.tracked.entries()]) {
+      if (live.has(key)) continue;
+      if (t.controller === null) {
+        // Retired earlier: the system takes it off at its dismissal date.
+        if (now >= t.lingerUntil) this.tracked.delete(key);
+      } else if (t.activity === null && t.lingering !== null && now < t.lingerUntil) {
+        // Finished and settled: "Answer ready" / "needs you" stays on the lock screen.
+        this.retire(t);
+      } else {
+        this.forget(key, 'immediate');
+      }
     }
     for (const [key, controller] of live) {
       const known = this.tracked.get(key);
@@ -168,7 +185,18 @@ export class TurnActivityController {
   }
 
   private snapshotOf(key: string): LiveTurn | null {
-    return this.tracked.get(key)?.controller.getSnapshot() ?? null;
+    return this.tracked.get(key)?.controller?.getSnapshot() ?? null;
+  }
+
+  /** Stops following a finished turn that left memory; its lingering activity stays tracked. */
+  private retire(t: Tracked): void {
+    t.unsubscribe();
+    t.unsubscribe = () => undefined;
+    if (t.timer !== null) {
+      this.clearTimer(t.timer);
+      t.timer = null;
+    }
+    t.controller = null;
   }
 
   private propsFor(key: string, phase: TurnActivityPhase, t: Tracked): TurnActivityProps {
@@ -183,7 +211,7 @@ export class TurnActivityController {
 
   private refresh(key: string): void {
     const t = this.tracked.get(key);
-    if (!t) return;
+    if (!t || t.controller === null) return;
     const live = this.snapshotOf(key);
     const phase = live ? activityPhase(live) : null;
     if (phase === null) {

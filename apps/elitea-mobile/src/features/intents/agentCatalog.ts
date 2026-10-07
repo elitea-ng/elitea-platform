@@ -90,4 +90,17 @@ export async function clearIntentState(): Promise<void> {
   }
 }
 
-registerWipeHook('app_intents', clearIntentState);
+/**
+ * Launch-time clear when no workspace was restored signed in: iOS keeps the
+ * catalog between launches, a wipe resumed at launch runs no in-memory hook,
+ * and only the signed-in layout publishes a new one. Always sent: what this
+ * process published says nothing about what the previous one left.
+ */
+export function clearAgentCatalogAtLaunch(): Promise<void> {
+  lastKey = null;
+  return publishAgentCatalog([], null);
+}
+
+// Early: before the server revoke of a log out, so a kill during it cannot
+// leave agent names in Siri and Shortcuts (the same rule as quick actions).
+registerWipeHook('app_intents', clearIntentState, { early: true });
