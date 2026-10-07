@@ -37,9 +37,21 @@ export function workspacePillLabel(host: string, name: string | null, project: s
 }
 
 /**
+ * The pill's bold line and caption. The first segment of the bold line is always the workspace:
+ * its name when branded (with the host as the caption), else the host itself (no caption).
+ */
+export function workspacePillLines(host: string, name: string | null, project: string | null): { title: string | null; caption: string | null } {
+  if (name) return { title: project ? `${name} · ${project}` : name, caption: host };
+  if (project) return { title: `${host} · ${project}`, caption: null };
+  return { title: null, caption: host };
+}
+
+/**
  * The pill itself, for a given workspace; the `__DEV__` previews draw it with a sample host.
  * With a `project` it reads "Name · Project" (Home, where it replaces the header's project chip)
- * and the host stays on its own line under it: the host is never dropped for the name.
+ * and the host stays on its own line under it: the host is never dropped for the name. An
+ * unbranded workspace has no name, so the host takes the name's place ("acme.elitea.ai · Project",
+ * one line): the first segment always means the workspace, never the project (EH-3).
  */
 export function WorkspacePillView({
   origin,
@@ -60,7 +72,7 @@ export function WorkspacePillView({
   // The same leading edge as the large title and the search field above it (D7).
   const margin = useLayoutMargin();
   const host = displayHost(origin);
-  const title = [name, project].filter(Boolean).join(' · ');
+  const { title, caption } = workspacePillLines(host, name, project);
   return (
     <View style={[styles.wrap, { paddingHorizontal: margin }]}>
       <Pressable
@@ -75,16 +87,18 @@ export function WorkspacePillView({
           { backgroundColor: design.colors.surface, borderColor: design.colors.separator },
           pressed && uiPlatform === 'ios' ? styles.pressed : null,
         ]}>
-        <WorkspaceMark origin={origin} image={image} brand={brand} size={title ? 28 : 20} />
+        <WorkspaceMark origin={origin} image={image} brand={brand} size={title ? 28 : 20} scaleWith="footnote" />
         <View style={styles.text}>
           {title ? (
             <Text variant="footnote" emphasized numberOfLines={design.accessibilityLayout ? undefined : 1}>
               {title}
             </Text>
           ) : null}
-          <Text variant={title ? 'caption' : 'footnote'} tone="secondary" numberOfLines={design.accessibilityLayout ? undefined : 1}>
-            {host}
-          </Text>
+          {caption ? (
+            <Text variant={title ? 'caption' : 'footnote'} tone="secondary" numberOfLines={design.accessibilityLayout ? undefined : 1}>
+              {caption}
+            </Text>
+          ) : null}
         </View>
         <Icon name="chevronDown" size={12} tone="secondary" weight="semibold" />
       </Pressable>

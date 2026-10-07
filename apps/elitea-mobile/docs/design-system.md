@@ -714,7 +714,8 @@ scheme, brand }`. Touch targets are at least 44 pt on iOS and 48 dp on Android, 
   `textSecondary`), and one primary action (a filled pill button).
 - **Copy, with the mascot's pose and prop:**
   - **no chats:** "Ask me anything" / "Start a chat or try your voice." / [New chat]
-    (the mascot holds the gear hologram)
+    (the mascot holds the gear hologram). On Home the action is left out: the New chat
+    card is already on screen (screens.md §2).
   - **no results:** "Nothing found for '{q}'"
   - **no notifications:** "You're all caught up"
   - **offline with no cache:** "You're offline" (no mascot glow)
@@ -965,7 +966,8 @@ Landed on `feat/redesign-entry-home`:
 - **Home** is the first tab (`(app)/(tabs)/(home)`, the `/` route; Chats moved to `/chats`):
   `HomeView` + `homeHeaderOptions`. A transparent bar with the user's initials avatar (opens
   Settings) and the bell with its badge; the inline "Home" appears once the greeting scrolls
-  away. The workspace pill reads "Name · Project" over the host and opens the project sheet. The
+  away. The workspace pill reads "Name · Project" over the host (unbranded: "host · Project" on one
+  line, so the first segment is always the workspace) and opens the project sheet. The
   greeting names the user ("who am I" `name`, kept in memory only). The chip row and four cards
   (New chat, Discover agents, Dictate a message, Ask about a file) start a chat; Dictate and
   Attach hand the new conversation a one-time action in memory (`IntentHandoff.then`), so a URL

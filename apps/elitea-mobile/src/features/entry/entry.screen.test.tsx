@@ -1,11 +1,23 @@
 import { fireEvent, render, screen } from '@testing-library/react-native';
 import { Text } from 'react-native';
 
+import { ConnectConfirm } from '@/features/connect/ConnectConfirm';
+import { ConnectWelcome } from '@/features/entry/ConnectWelcome';
+import { EntryScreen } from '@/features/entry/EntryScreen';
 import { SignInView, type NativeSignInState } from '@/features/entry/SignInView';
 import { LockView, unlockAction } from '@/security/lock/LockGate';
 import type { LockState } from '@/security/lock/lockController';
 
 jest.mock('expo-router', () => ({ router: { push: jest.fn() } }));
+jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
+let mockFontScale = 1;
+jest.mock('react-native/Libraries/Utilities/useWindowDimensions', () => ({
+  __esModule: true,
+  default: () => ({ width: 375, height: 667, scale: 2, fontScale: mockFontScale }),
+}));
+afterEach(() => {
+  mockFontScale = 1;
+});
 jest.mock('@/theme/brandStore', () => ({ useBrandTheme: () => null }));
 jest.mock('@/theme/brandFonts', () => ({ useBrandFontFamily: () => undefined }));
 jest.mock('@/security/lock/useLockController', () => ({ lockController: { unlock: jest.fn(), bypassForDevelopment: jest.fn() } }));
@@ -85,8 +97,68 @@ describe('lock screen (docs/screens.md §9; audit 2.5)', () => {
     expect(screen.getByRole('alert')).toHaveTextContent(/Too many attempts/);
   });
 
+  it('scrolls when its content outgrows the screen, with the unlock and wipe inside the scroll view (EH-2)', async () => {
+    await render(<LockView state={{ ...LOCKED, status: 'no_device_security' } as LockState} workspace={null} biometry={null} onUnlock={jest.fn()} onReset={jest.fn()} />);
+    const scroll = screen.getByTestId('lock-scroll');
+    expect(scroll.props.contentContainerStyle).toEqual(expect.arrayContaining([expect.objectContaining({ flexGrow: 1, justifyContent: 'space-between' })]));
+    expect(screen.getByRole('button', { name: 'Log out & wipe' })).toBeTruthy();
+    expect(screen.getByTestId('lock-scroll')).toContainElement(screen.getByRole('button', { name: 'Log out & wipe' }));
+  });
+
   it('draws nothing but the ground while the lock is still deciding', async () => {
     await render(<LockView state={{ ...LOCKED, status: 'deciding' }} workspace={null} biometry={null} onUnlock={jest.fn()} onReset={jest.fn()} />);
     expect(screen.queryByRole('button')).toBeNull();
+  });
+});
+
+describe('entry frame (docs/screens.md §1)', () => {
+  it('keeps the footer in the scroll view by default and pins it under the content with pinFooter', async () => {
+    await render(
+      <EntryScreen footer={<Text>Footer</Text>}>
+        <Text>Body</Text>
+      </EntryScreen>,
+    );
+    expect(screen.queryByTestId('entry-pinned-footer')).toBeNull();
+    expect(screen.getByTestId('entry-scroll')).toContainElement(screen.getByText('Footer'));
+    await render(
+      <EntryScreen pinFooter footer={<Text>Footer</Text>}>
+        <Text>Body</Text>
+      </EntryScreen>,
+    );
+    expect(screen.getByTestId('entry-pinned-footer')).toContainElement(screen.getByText('Footer'));
+    expect(screen.getByTestId('entry-scroll')).not.toContainElement(screen.getByText('Footer'));
+  });
+
+  it('pins Connect on screen on the confirm screen at accessibility sizes (EH-5)', async () => {
+    const check = { kind: 'failed', origin: 'https://acme.elitea.ai', error: 'not_supported' } as const;
+    const ui = <ConnectConfirm check={check} devSignIn busy={false} onConfirm={jest.fn()} onBack={jest.fn()} onUseCanonical={jest.fn()} />;
+    await render(ui);
+    expect(screen.queryByTestId('entry-pinned-footer')).toBeNull();
+    mockFontScale = 3;
+    await render(ui);
+    expect(screen.getByTestId('entry-pinned-footer')).toContainElement(screen.getByRole('button', { name: 'Use a different address' }));
+  });
+
+  it('puts "Back to {host}" at the top leading edge, outside the centred column (EH-6)', async () => {
+    const onBack = jest.fn();
+    await render(
+      <ConnectWelcome
+        adding
+        backTo={{ host: 'zefir.elitea.ai', onPress: onBack }}
+        address=""
+        onAddressChange={jest.fn()}
+        error={null}
+        managedHint={false}
+        busy={false}
+        onContinue={jest.fn()}
+        onPrivacy={jest.fn()}
+        onHelp={jest.fn()}
+      />,
+    );
+    const back = screen.getByTestId('connect-back');
+    expect(screen.getByTestId('entry-back-bar')).toContainElement(back);
+    expect(screen.getByTestId('entry-scroll')).not.toContainElement(back);
+    await fireEvent.press(back);
+    expect(onBack).toHaveBeenCalled();
   });
 });

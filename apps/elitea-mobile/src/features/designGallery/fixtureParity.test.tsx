@@ -28,6 +28,18 @@ describe('design-tab previews draw the real screens’ components (D2)', () => {
     expect(read(preview)).toMatch(pattern);
   });
 
+  it('the preview tab bar has the same tabs, labels and symbols as the real one (EH-9)', () => {
+    const triggers = (source: string) =>
+      [...source.matchAll(/<NativeTabs\.Trigger name="([^"]+)">[\s\S]*?<NativeTabs\.Trigger\.Label>([^<]+)<[\s\S]*?sf=\{([^}]+\})/g)].map(([, name, label, sf]) => [
+        name.replace(/^\((.*)\)$/, '$1'),
+        label,
+        sf,
+      ]);
+    const real = triggers(read('(app)/(tabs)/_layout.tsx'));
+    expect(real.map(([name]) => name)).toEqual(['home', 'chats', 'discover', 'settings']);
+    expect(triggers(read('design-tabs/_layout.tsx'))).toEqual(real);
+  });
+
   it('the Chats preview draws no avatar, preview line or unread dot of its own', () => {
     expect(read('design-tabs/chats/index.tsx')).not.toMatch(/<Avatar\b|unread|preview:|subtitle=/);
   });

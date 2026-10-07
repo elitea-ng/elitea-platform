@@ -32,7 +32,7 @@ export function ConnectConfirm({
   onBack: () => void;
   onUseCanonical: (origin: string) => void;
 }) {
-  const { colors } = useDesign();
+  const { colors, accessibilityLayout } = useDesign();
   const allowed = canConnect(check, devSignIn);
   const notice = noticeFor(check, devSignIn);
   const host = displayHost(check.origin);
@@ -43,6 +43,8 @@ export function ConnectConfirm({
   return (
     <EntryScreen
       testID="connect-confirm-screen"
+      // At accessibility sizes the rows stack and fill the screen: Connect stays on screen (EH-5).
+      pinFooter={accessibilityLayout}
       footer={
         <>
           {check.kind === 'failed' && check.canonicalOrigin ? (

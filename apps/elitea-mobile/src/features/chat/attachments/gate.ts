@@ -26,3 +26,33 @@ export function attachmentGate(input: GateInput): string | null {
       return input.target.internalTools.includes('attachments') ? null : "This agent doesn't take files.";
   }
 }
+
+/**
+ * Whether a refusal is final for this screen: the device is online, the conversation is known and
+ * the agent's version has been read (it takes no files, or it could not be read). Offline and
+ * "checking" refusals clear by themselves, so a hand-over waits for them instead.
+ */
+export function gateRefusalSettled(input: GateInput): boolean {
+  if (!input.online || !input.conversationUuid) return false;
+  return input.target.kind === 'agent' && input.target.versionStatus !== 'loading' && attachmentGate(input) !== null;
+}
+
+/**
+ * What Home's "Ask about a photo/file" hand-over does once the thread is open (F2): open the
+ * picker when files may be attached, wait while the gate is still settling, or say why not when it
+ * refused for good, so the one-time action is never spent silently.
+ */
+export function handoffPick(
+  then: 'dictate' | 'photos' | 'files' | null,
+  input: GateInput,
+): { kind: 'none' } | { kind: 'wait' } | { kind: 'pick'; source: 'photos' | 'files' } | { kind: 'explain'; title: string; message: string } {
+  if (then !== 'photos' && then !== 'files') return { kind: 'none' };
+  const reason = attachmentGate(input);
+  if (reason === null) return { kind: 'pick', source: then };
+  if (!gateRefusalSettled(input)) return { kind: 'wait' };
+  return {
+    kind: 'explain',
+    title: then === 'photos' ? "Can't attach a photo here" : "Can't attach a file here",
+    message: `${reason} Start a new chat with an agent or a model that takes files.`,
+  };
+}

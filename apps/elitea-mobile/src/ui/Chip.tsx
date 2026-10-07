@@ -13,7 +13,13 @@ export interface ChipProps extends Omit<PressableProps, 'children' | 'style'> {
   label: string;
   icon?: IconName;
   iconOnly?: boolean;
+  /** M3 filter-chip state: the filled look AND `accessibilityState.selected`. */
   selected?: boolean;
+  /**
+   * The filled look without a selection state, for an action chip that leads its row (e.g. Home's
+   * "Choose an agent"): screen readers must not announce "selected" for something that is a button.
+   */
+  filled?: boolean;
   /** Trailing chevron: the chip opens a picker (e.g. the agent target). */
   menu?: boolean;
   /** A Pressable's static style (Expo's widened web style type fits Pressable, not View, #30). */
@@ -25,10 +31,11 @@ export interface ChipProps extends Omit<PressableProps, 'children' | 'style'> {
  * `chipSelected`/`chipSelectedText` when selected (with a check on Android, M3 filter chip).
  * Selection changes fire the selection haptic. Icon-only chips are 40 × 40 circles.
  */
-export function Chip({ label, icon, iconOnly = false, selected = false, menu = false, onPress, style, disabled, ...rest }: ChipProps) {
+export function Chip({ label, icon, iconOnly = false, selected = false, filled = false, menu = false, onPress, style, disabled, ...rest }: ChipProps) {
   const design = useDesign();
   const { colors } = design;
-  const fg = selected ? colors.chipSelectedText : colors.chipText;
+  const on = selected || filled;
+  const fg = on ? colors.chipSelectedText : colors.chipText;
   return (
     <Pressable
       accessibilityRole="button"
@@ -45,8 +52,8 @@ export function Chip({ label, icon, iconOnly = false, selected = false, menu = f
         styles.chip,
         iconOnly ? styles.iconOnly : null,
         {
-          backgroundColor: selected ? colors.chipSelected : colors.chip,
-          borderColor: selected ? colors.chipSelected : colors.separator,
+          backgroundColor: on ? colors.chipSelected : colors.chip,
+          borderColor: on ? colors.chipSelected : colors.separator,
         },
         pressed ? styles.pressed : null,
         disabled ? styles.disabled : null,
@@ -55,7 +62,7 @@ export function Chip({ label, icon, iconOnly = false, selected = false, menu = f
       {...rest}>
       <View style={styles.row}>
         {selected && !icon ? <Icon name="check" size={16} color={fg} weight="semibold" /> : null}
-        {icon ? <Icon name={icon} size={18} color={fg} selected={selected} /> : null}
+        {icon ? <Icon name={icon} size={18} color={fg} selected={on} /> : null}
         {iconOnly ? null : (
           <Text variant="subheadline" color={fg} numberOfLines={1} style={styles.label}>
             {label}

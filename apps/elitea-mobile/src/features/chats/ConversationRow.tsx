@@ -1,4 +1,4 @@
-import { StyleSheet, View } from 'react-native';
+import { View } from 'react-native';
 
 import type { SwipeRowA11y } from '@/components/SwipeToDelete';
 import { useDesign } from '@/design/DesignProvider';
@@ -10,7 +10,7 @@ import { ListRow } from '@/ui';
  * review screenshots show the list the user gets (D2). When the list gains an avatar, a preview
  * line or an unread state, it is added here, with "unread" in the spoken label and an
  * emphasized title, never by colour alone. `a11y` carries the swipe's Delete action so
- * VoiceOver/TalkBack can reach it (§4.11).
+ * VoiceOver/TalkBack can reach it (§4.11), and its busy state while the delete runs.
  */
 export function ConversationRow({
   title,
@@ -32,17 +32,8 @@ export function ConversationRow({
         onPress={onPress}
         accessibilityActions={a11y?.accessibilityActions}
         onAccessibilityAction={a11y?.onAccessibilityAction}
+        busy={a11y?.accessibilityState?.busy === true}
       />
     </View>
   );
 }
-
-/** The hairline between Chats rows, inset to the row's text. */
-export function ConversationSeparator() {
-  const { colors } = useDesign();
-  return <View style={[styles.separator, { backgroundColor: colors.separator }]} />;
-}
-
-const styles = StyleSheet.create({
-  separator: { height: StyleSheet.hairlineWidth, marginStart: 16 },
-});

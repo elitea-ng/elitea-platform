@@ -62,6 +62,19 @@ export function ConnectWelcome({
   return (
     <EntryScreen
       testID="connect-screen"
+      // Back sits at the top leading edge (HIG / M3), not in the centred column (EH-6).
+      back={
+        backTo ? (
+          <Button
+            testID="connect-back"
+            variant="plain"
+            size="small"
+            icon="back"
+            title={`Back to ${backTo.host}`}
+            onPress={backTo.onPress}
+          />
+        ) : null
+      }
       footer={
         <>
           <Text variant="footnote" tone="secondary" style={styles.center}>
@@ -77,16 +90,6 @@ export function ConnectWelcome({
           </View>
         </>
       }>
-      {backTo ? (
-        <Button
-          testID="connect-back"
-          variant="plain"
-          size="small"
-          icon="back"
-          title={`Back to ${backTo.host}`}
-          onPress={backTo.onPress}
-        />
-      ) : null}
       <View style={styles.hero}>
         {adding ? null : compact ? (
           <Mascot variant="bust" size={96} decorative />

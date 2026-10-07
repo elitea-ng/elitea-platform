@@ -45,7 +45,7 @@ import { PauseCard } from '@/features/chat/pauses/PauseCard';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAgents, useAgentVersion } from '@/api/queries/agents';
 import { AttachButton, AttachmentTrayView, type PickSource } from '@/features/chat/attachments/AttachmentTrayView';
-import { attachmentGate } from '@/features/chat/attachments/gate';
+import { attachmentGate, handoffPick, type GateInput } from '@/features/chat/attachments/gate';
 import { PickerPermissionError, pickFiles, pickPhotos, takePhoto } from '@/features/chat/attachments/pickers';
 import { attachmentLimits } from '@/features/chat/attachments/prepare';
 import { useAttachmentTray } from '@/features/chat/attachments/useAttachmentTray';
@@ -276,7 +276,7 @@ export default function ThreadScreen() {
   const { tray, items: trayItems } = useAttachmentTray(projectId, conversationUuid, limits);
   const targetAgent = target.ok && target.kind === 'agent' ? target.agent : null;
   const agentVersion = useAgentVersion(targetAgent ? (targetAgent.agentProjectId ?? projectId) : null, targetAgent?.agentId ?? null);
-  const gateReason = attachmentGate({
+  const gateInput: GateInput = {
     online,
     conversationUuid: isOfflineCopy(detail) ? null : conversationUuid,
     target: !target.ok
@@ -290,7 +290,8 @@ export default function ThreadScreen() {
               versionStatus: agentVersion.isLoading ? 'loading' : agentVersion.data ? 'ready' : 'error',
               internalTools: agentVersion.data?.internalTools ?? [],
             },
-  });
+  };
+  const gateReason = attachmentGate(gateInput);
   // Files of sent messages: downloaded on demand (1.1 route), never kept.
   const opener = useAttachmentOpener(projectId, conversationUuid);
   const canOpenFiles = contract11 && online && !isOfflineCopy(detail);
@@ -313,9 +314,12 @@ export default function ThreadScreen() {
   };
   const pickedOnOpen = useRef(false);
   useEffect(() => {
-    if (pickedOnOpen.current || (then !== 'photos' && then !== 'files') || gateReason) return;
+    if (pickedOnOpen.current) return;
+    const plan = handoffPick(then, gateInput);
+    if (plan.kind === 'none' || plan.kind === 'wait') return;
     pickedOnOpen.current = true;
-    void pickInto(then);
+    if (plan.kind === 'pick') void pickInto(plan.source);
+    else Alert.alert(plan.title, plan.message);
   });
   const sendWithFiles = async (text: string, mentions: SendExtras['mentions']): Promise<string | null> => {
     if (trayItems.length === 0) return turn.send(text, { mentions });

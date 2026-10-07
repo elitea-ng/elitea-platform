@@ -22,7 +22,7 @@ export default function DesignWorkspacesRoute() {
       workspaces={SAMPLE_WORKSPACES}
       activeId="aaaaaaaaaaaa"
       onOpen={() => router.back()}
-      onRemove={() => {}}
+      onRemove={async () => false}
       onAdd={() => router.back()}
     />
   );

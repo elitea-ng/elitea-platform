@@ -17,7 +17,6 @@ import {
   GlassSurface,
   headerActionOptions,
   hitTarget,
-  pressedOverlay,
   ripple,
   Text,
   uiPlatform,
@@ -41,25 +40,53 @@ export function firstNameOf(name: string | null | undefined): string | null {
 /** How many recent chats Home lists (docs/screens.md §2: "max 5"). */
 export const HOME_RECENTS = 5;
 
-/** The scroll offset past which the greeting has gone and the bar shows the inline "Home". */
+/** The scroll distance (from rest) past which the greeting has gone and the bar shows the inline "Home". */
 export const HOME_TITLE_AFTER = 96;
+
+/** How far the content has to move before the bar gets its material (so nothing slides under a bare bar). */
+export const HOME_MATERIAL_AFTER = 1;
+
+/**
+ * Where Home's header is: `rest` (transparent, no title), `scrolled` (the bar's material behind
+ * the avatar and bell, still no title) and `collapsed` (material and the inline "Home").
+ */
+export type HomeScroll = 'rest' | 'scrolled' | 'collapsed';
+
+/**
+ * Home's header state for a scroll event, measured from the resting offset. On iOS the scroll
+ * view adjusts its insets automatically under the transparent bar, so at rest `contentOffset.y`
+ * is minus the adjusted inset (status bar + bar, about -106 pt), while the event's `contentInset`
+ * is the manual inset (0). `restInset` is that adjusted inset (the header height on iOS, 0 on
+ * Android, where the content is padded instead); the larger of it and the reported inset wins.
+ */
+export function homeScrollState(
+  { contentOffset, contentInset }: Pick<NativeScrollEvent, 'contentOffset'> & { contentInset?: Partial<NativeScrollEvent['contentInset']> },
+  restInset = 0,
+): HomeScroll {
+  const moved = contentOffset.y + Math.max(restInset, contentInset?.top ?? 0);
+  if (moved > HOME_TITLE_AFTER) return 'collapsed';
+  if (moved > HOME_MATERIAL_AFTER) return 'scrolled';
+  return 'rest';
+}
 
 /**
  * Home's navigation bar (§4.1): transparent over the gradient, the user's avatar leading (opens
  * Settings) and the bell with its badge trailing (a native SF Symbol bar button with the system
  * badge on iOS 26, a 48 dp action with an in-frame badge on Android). The inline title "Home"
- * appears only once the greeting has scrolled away, like a collapsing large title.
+ * appears only once the greeting has scrolled away, like a collapsing large title; the bar's
+ * material comes as soon as the content moves, so the pill never slides under a bare status bar.
  */
 export function homeHeaderOptions(
   design: Pick<Design, 'colors'>,
   {
     collapsed,
+    scrolled = collapsed,
     userName,
     avatarUri,
     unseen,
     onBell,
     onAvatar,
-  }: { collapsed: boolean; userName: string | null; avatarUri: string | null; unseen: number; onBell: () => void; onAvatar: () => void },
+  }: { collapsed: boolean; /** The content has moved off rest: the bar gets its material. Defaults to `collapsed`. */ scrolled?: boolean; userName: string | null; avatarUri: string | null; unseen: number; onBell: () => void; onAvatar: () => void },
   on: UiPlatform = uiPlatform,
 ): NativeStackNavigationOptions {
   return {
@@ -68,8 +95,8 @@ export function homeHeaderOptions(
     headerTransparent: true,
     headerShadowVisible: false,
     headerLargeTitle: false,
-    headerBlurEffect: collapsed && on === 'ios' ? 'systemChromeMaterial' : undefined,
-    headerStyle: on === 'android' ? { backgroundColor: collapsed ? design.colors.background : 'transparent' } : undefined,
+    headerBlurEffect: (scrolled || collapsed) && on === 'ios' ? 'systemChromeMaterial' : undefined,
+    headerStyle: on === 'android' ? { backgroundColor: scrolled || collapsed ? design.colors.background : 'transparent' } : undefined,
     headerTitleStyle: { color: design.colors.textPrimary },
     headerLeft: () => <HeaderAvatar name={userName} uri={avatarUri} onPress={onAvatar} />,
     ...headerActionOptions([{ ...notificationBellAction(unseen), onPress: onBell }], design, on),
@@ -99,6 +126,11 @@ export interface HomeViewProps {
   project: string | null;
   onWorkspace: () => void;
   offline: boolean;
+  /**
+   * The account has no usable project in this workspace (none, or all suspended): Home explains
+   * that instead of offering cards that would all end at "No project selected" (F1).
+   */
+  noProject?: boolean;
   /** Null while loading. */
   recents: readonly RecentChat[] | null;
   recentsFailed: boolean;
@@ -115,7 +147,9 @@ export interface HomeViewProps {
   onRefresh: () => void;
   /** Android: the transparent top app bar's height (iOS adjusts the scroll insets itself). */
   topInset?: number;
-  onScrolledPast?: (past: boolean) => void;
+  /** iOS: the inset the system adds under the transparent bar (the header height); 0 on Android. */
+  scrollRestInset?: number;
+  onScrollState?: (state: HomeScroll) => void;
 }
 
 /**
@@ -131,6 +165,7 @@ export function HomeView({
   project,
   onWorkspace,
   offline,
+  noProject = false,
   recents,
   recentsFailed,
   onRetry,
@@ -144,16 +179,14 @@ export function HomeView({
   refreshing,
   onRefresh,
   topInset = 0,
-  onScrolledPast,
+  scrollRestInset = 0,
+  onScrollState,
 }: HomeViewProps) {
   const design = useDesign();
   const { colors, accessibilityLayout } = design;
   const margin = useLayoutMargin();
-  const onScroll = onScrolledPast
-    ? (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-        const { contentOffset, contentInset } = event.nativeEvent;
-        onScrolledPast(contentOffset.y + (contentInset?.top ?? 0) > HOME_TITLE_AFTER);
-      }
+  const onScroll = onScrollState
+    ? (event: NativeSyntheticEvent<NativeScrollEvent>) => onScrollState(homeScrollState(event.nativeEvent, scrollRestInset))
     : undefined;
   const cards = [
     { key: 'new', title: 'New chat', icon: 'newChat' as const, hint: 'Pick an agent and start a chat', onPress: onNewChat },
@@ -202,58 +235,72 @@ export function HomeView({
           <Text variant="display">What can I help with?</Text>
         </Text>
 
-        <ChipRow>
-          <Chip label="Choose an agent" icon="agent" selected menu onPress={onNewChat} />
-          {onVoice ? <Chip label="Dictate" icon="mic" iconOnly onPress={onVoice} /> : null}
-          <Chip label="Ask about a photo" icon="image" iconOnly onPress={onAttachPhoto} />
-          <Chip label="Ask about a file" icon="attach" iconOnly onPress={onAttachFile} />
-        </ChipRow>
+        {noProject ? null : (
+          <>
+            <ChipRow>
+              <Chip label="Choose an agent" icon="agent" filled menu onPress={onNewChat} />
+              {onVoice ? <Chip label="Dictate" icon="mic" iconOnly onPress={onVoice} /> : null}
+              <Chip label="Ask about a photo" icon="image" iconOnly onPress={onAttachPhoto} />
+              <Chip label="Ask about a file" icon="attach" iconOnly onPress={onAttachFile} />
+            </ChipRow>
 
-        <View style={styles.grid}>
-          {rows.map((row) => (
-            <View key={row.map((c) => c.key).join('-')} style={styles.gridRow}>
-              {row.map((card) => (
-                <ActionCard key={card.key} testID={`home-card-${card.key}`} title={card.title} icon={card.icon} accessibilityHint={card.hint} onPress={card.onPress} />
+            <View style={styles.grid}>
+              {rows.map((row) => (
+                <View key={row.map((c) => c.key).join('-')} style={styles.gridRow}>
+                  {row.map((card) => (
+                    <ActionCard key={card.key} testID={`home-card-${card.key}`} title={card.title} icon={card.icon} accessibilityHint={card.hint} onPress={card.onPress} />
+                  ))}
+                  {row.length < perRow ? <View style={styles.flex} /> : null}
+                </View>
               ))}
-              {row.length < perRow ? <View style={styles.flex} /> : null}
             </View>
-          ))}
-        </View>
-      </View>
-
-      <View style={[styles.section, { paddingHorizontal: margin }]}>
-        <View style={styles.recentsHeader}>
-          <Text variant="title3" heading>
-            Recent chats
-          </Text>
-          {recents && recents.length > 0 ? (
-            <Pressable
-              testID="home-see-all"
-              accessibilityRole="button"
-              accessibilityLabel="See all chats"
-              onPress={onSeeAll}
-              hitSlop={8}
-              style={({ pressed }) => [{ minHeight: hitTarget(), justifyContent: 'center' }, pressed ? styles.pressed : null]}>
-              <Text variant="subheadline" tone="accent" emphasized>
-                See all
-              </Text>
-            </Pressable>
-          ) : null}
-        </View>
-        {recents === null ? (
-          <ActivityIndicator color={colors.accent} style={styles.loading} />
-        ) : recentsFailed && recents.length === 0 ? (
-          <EmptyState mascot="none" title="Couldn't load your chats" body="Check your connection and try again." action={{ title: 'Try again', onPress: onRetry }} />
-        ) : recents.length === 0 ? (
-          <EmptyState mascot="bust" title="Ask me anything" body="Start a chat or try your voice." action={{ title: 'New chat', onPress: onNewChat }} />
-        ) : (
-          <View style={styles.recents}>
-            {recents.slice(0, HOME_RECENTS).map((chat) => (
-              <RecentRow key={chat.id} chat={chat} onPress={() => onOpenChat(chat.id)} />
-            ))}
-          </View>
+          </>
         )}
       </View>
+
+      {noProject ? (
+        <EmptyState
+          mascot="bust"
+          title="No active project"
+          body="Your account has no active project in this workspace. Ask your workspace admin to add you to one, or switch workspace."
+        />
+      ) : (
+        <View style={[styles.section, { paddingHorizontal: margin }]}>
+          <View style={styles.recentsHeader}>
+            <Text variant="title3" heading>
+              Recent chats
+            </Text>
+            {recents && recents.length > 0 ? (
+              <Pressable
+                testID="home-see-all"
+                accessibilityRole="button"
+                accessibilityLabel="See all chats"
+                onPress={onSeeAll}
+                hitSlop={8}
+                style={({ pressed }) => [{ minHeight: hitTarget(), justifyContent: 'center' }, pressed ? styles.pressed : null]}>
+                <Text variant="subheadline" tone="accent" emphasized>
+                  See all
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+          {recents === null ? (
+            <ActivityIndicator color={colors.accent} style={styles.loading} />
+          ) : recentsFailed && recents.length === 0 ? (
+            <EmptyState mascot="none" title="Couldn't load your chats" body="Check your connection and try again." action={{ title: 'Try again', onPress: onRetry }} />
+          ) : recents.length === 0 ? (
+            // No action of its own (EH-4): the New chat card and the chips above already start one, and a
+            // button this low sat under the floating tab bar at rest.
+            <EmptyState mascot="bust" title="Ask me anything" body="Your chats show up here. Start one with New chat or your voice." />
+          ) : (
+            <View style={styles.recents}>
+              {recents.slice(0, HOME_RECENTS).map((chat) => (
+                <RecentRow key={chat.id} chat={chat} onPress={() => onOpenChat(chat.id)} />
+              ))}
+            </View>
+          )}
+        </View>
+      )}
     </ScrollView>
   );
 }
@@ -293,9 +340,6 @@ function RecentRow({ chat, onPress }: { chat: RecentChat; onPress: () => void })
     </Pressable>
   );
 }
-
-/** The pressed overlay of a row (exported for the kit's target tests). */
-export const homePressedOverlay = pressedOverlay;
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },

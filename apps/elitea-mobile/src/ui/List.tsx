@@ -91,6 +91,8 @@ export interface ListRowProps {
   /** Swipe and long-press actions are mirrored here so VoiceOver/TalkBack can reach them (§4.11). */
   accessibilityActions?: AccessibilityActionInfo[];
   onAccessibilityAction?: (event: AccessibilityActionEvent) => void;
+  /** Read as busy while an action on the row runs (a swipe's Delete waiting on the server). */
+  busy?: boolean;
   onLongPress?: () => void;
   numberOfLines?: number;
   testID?: string;
@@ -117,6 +119,7 @@ export function ListRow({
   accessibilityHint,
   accessibilityActions,
   onAccessibilityAction,
+  busy,
   onLongPress,
   numberOfLines = 1,
   testID,
@@ -165,7 +168,7 @@ export function ListRow({
   };
   if (!tappable) {
     return (
-      <View accessible {...a11y} accessibilityState={selected !== undefined ? { selected } : undefined}>
+      <View accessible {...a11y} accessibilityState={selected !== undefined || busy ? { selected, busy } : undefined}>
         {body}
       </View>
     );
@@ -174,7 +177,7 @@ export function ListRow({
     <Pressable
       accessibilityRole="button"
       {...a11y}
-      accessibilityState={{ disabled, selected }}
+      accessibilityState={busy ? { disabled, selected, busy } : { disabled, selected }}
       disabled={disabled}
       onPress={onPress}
       onLongPress={onLongPress}

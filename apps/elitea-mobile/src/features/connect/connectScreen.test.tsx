@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import { Alert } from 'react-native';
 
 import ConnectScreen from '@/app/connect';
@@ -116,13 +116,31 @@ describe('workspace switcher', () => {
     setSession({ workspaceId: A.id, serverOrigin: A.origin });
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
     await render(<WorkspacesScreen />);
-    fireEvent.press(screen.getByTestId('remove-bbbbbbbbbbbb'));
+    // No always-visible destructive button on the rows (EH-7): Remove is the swipe and the row's action.
+    expect(screen.queryByRole('button', { name: /^Remove/ })).toBeNull();
+    const row = screen.getByTestId('workspace-bbbbbbbbbbbb');
+    expect(row.props.accessibilityActions).toEqual([{ name: 'delete', label: 'Remove' }]);
+    await fireEvent(row, 'accessibilityAction', { nativeEvent: { actionName: 'delete' } });
     expect(workspace.removeWorkspace).not.toHaveBeenCalled();
     const [title, body, buttons] = alert.mock.calls[0];
     expect(title).toBe('Remove b.example.com?');
     expect(body).toMatch(/other workspaces are not affected/);
     buttons!.find((b) => b.style === 'destructive')!.onPress!();
     expect(workspace.removeWorkspace).toHaveBeenCalledWith('bbbbbbbbbbbb');
+  });
+
+  it('keeps the row when the removal is cancelled', async () => {
+    listModule.__setList([A, B]);
+    setSession({ workspaceId: A.id, serverOrigin: A.origin });
+    const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+    await render(<WorkspacesScreen />);
+    await fireEvent(screen.getByTestId('workspace-bbbbbbbbbbbb'), 'accessibilityAction', { nativeEvent: { actionName: 'delete' } });
+    const buttons = alert.mock.calls[0][2]!;
+    await act(async () => {
+      buttons.find((b) => b.style === 'cancel')!.onPress!();
+    });
+    expect(workspace.removeWorkspace).not.toHaveBeenCalled();
+    expect(screen.getByTestId('workspace-bbbbbbbbbbbb').props.accessibilityState.busy).toBeFalsy();
   });
 
   it('adds a workspace through the connect flow', async () => {

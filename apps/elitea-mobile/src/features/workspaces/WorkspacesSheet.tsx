@@ -1,5 +1,6 @@
 import { ScrollView, StyleSheet } from 'react-native';
 
+import { SwipeToDelete } from '@/components/SwipeToDelete';
 import { useDesign } from '@/design/DesignProvider';
 import { WorkspaceRow } from '@/features/workspaces/WorkspaceRow';
 import { MAX_WORKSPACES } from '@/security/workspaceRegistry';
@@ -9,6 +10,7 @@ import { Button, ListSection, Text } from '@/ui';
 /**
  * The switcher's content (the `/workspaces` sheet and its `__DEV__` preview draw this): the
  * connected workspaces as one inset-grouped list, the active one first, then "Add workspace".
+ * A row switches; a swipe left (or the row's "Remove" accessibility action) removes it.
  */
 export function WorkspacesSheet({
   workspaces,
@@ -20,7 +22,8 @@ export function WorkspacesSheet({
   workspaces: readonly WorkspaceSummary[];
   activeId: string | null;
   onOpen: (workspace: WorkspaceSummary) => void;
-  onRemove: (workspace: WorkspaceSummary) => void;
+  /** Asks, then removes; resolves true once the workspace is gone (false keeps the row). */
+  onRemove: (workspace: WorkspaceSummary) => Promise<boolean>;
   onAdd: () => void;
 }) {
   const { colors, space } = useDesign();
@@ -31,15 +34,13 @@ export function WorkspacesSheet({
       style={{ backgroundColor: colors.elevated }}
       contentInsetAdjustmentBehavior="automatic"
       contentContainerStyle={[styles.content, { paddingHorizontal: space.screenGutterCompact }]}>
-      <ListSection title="On this device" footer="Each workspace keeps its own sign-in, data and settings. Switching never deletes anything.">
+      <ListSection
+        title="On this device"
+        footer="Each workspace keeps its own sign-in, data and settings. Switching never deletes anything. Swipe left on a workspace to remove it.">
         {ordered.map((workspace) => (
-          <WorkspaceRow
-            key={workspace.id}
-            workspace={workspace}
-            active={workspace.id === activeId}
-            onPress={() => onOpen(workspace)}
-            onRemove={() => onRemove(workspace)}
-          />
+          <SwipeToDelete key={workspace.id} actionLabel="Remove" onDelete={() => onRemove(workspace)} testID={`swipe-${workspace.id}`}>
+            {(a11y) => <WorkspaceRow workspace={workspace} active={workspace.id === activeId} onPress={() => onOpen(workspace)} a11y={a11y} />}
+          </SwipeToDelete>
         ))}
       </ListSection>
       <Button title="Add workspace" variant="tonal" icon="plus" testID="add-workspace" disabled={full} onPress={onAdd} />

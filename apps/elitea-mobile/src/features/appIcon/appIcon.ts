@@ -26,9 +26,6 @@ export const WORKSPACE_ICON_NAME = 'ZefirNight';
 
 export type AppIconChoice = 'default' | 'workspace';
 
-/** User-facing names of the two icons. */
-export const APP_ICON_LABEL: Record<AppIconChoice, string> = { default: 'Zefir', workspace: 'Zefir Night' };
-
 interface NativeIcons {
   supportsAlternateIcons: boolean;
   setAlternateAppIcon(name: string | null): Promise<string | null>;

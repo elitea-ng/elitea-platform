@@ -39,9 +39,6 @@ const KIT_ICONS = {
   faceId: ['faceid', 'face'],
   touchId: ['touchid', 'fingerprint'],
   passcode: ['lock.shield', 'password'],
-  sparkles: ['sparkles', 'auto_awesome'],
-  waveform: ['waveform', 'graphic_eq'],
-  doc: ['doc', 'description'],
   grid: ['square.grid.2x2', 'apps'],
 } as const satisfies Record<string, readonly [SFSymbol, AndroidSymbol]>;
 

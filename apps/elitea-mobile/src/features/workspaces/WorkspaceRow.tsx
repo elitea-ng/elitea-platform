@@ -3,9 +3,10 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { useDesign } from '@/design/DesignProvider';
 import { displayHost } from '@/features/connect/connectFlow';
 import { WorkspaceMark } from '@/features/workspaces/WorkspaceMark';
+import type { SwipeRowA11y } from '@/components/SwipeToDelete';
 import type { WorkspaceSummary } from '@/state/workspaceList';
 import type { BrandImage } from '@/theme/brandPack';
-import { Button, hitTarget, Icon, pressedOverlay, ripple, Text, uiPlatform } from '@/ui';
+import { hitTarget, Icon, pressedOverlay, ripple, Text, uiPlatform } from '@/ui';
 
 /**
  * The mark a row may show. A workspace that is not active is never contacted
@@ -27,30 +28,35 @@ export function workspaceState(workspace: Pick<WorkspaceSummary, 'signedIn'>, ac
 /**
  * One connected workspace (an inset-grouped row, §4.10 sheet content): its mark in its own
  * accent, the brand name when it has one, the host (always, system font) and its state, a check
- * on the active one. "Remove" is a separate trailing button with its own 44/48 target.
+ * on the active one. The whole row is the switch target; removing is a trailing swipe (the
+ * sheet wraps the row in `SwipeToDelete`) and the same named accessibility action, carried in
+ * `a11y` (EH-7: a red "Remove" on every row made the picker read as a management screen).
  */
 export function WorkspaceRow({
   workspace,
   active,
   onPress,
-  onRemove,
+  a11y,
   disabled = false,
 }: {
   workspace: WorkspaceSummary;
   active: boolean;
   onPress: () => void;
-  onRemove?: () => void;
+  /** The swipe row's accessibility action ("Remove") and busy state. */
+  a11y?: SwipeRowA11y;
   disabled?: boolean;
 }) {
   const design = useDesign();
   const host = displayHost(workspace.origin);
   const state = workspaceState(workspace, active);
   return (
-    <View style={styles.row}>
+    <View style={[styles.row, { backgroundColor: design.colors.surface }]}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${workspace.name ? `${workspace.name}, ` : ''}${host}. ${state}`}
-        accessibilityState={{ selected: active, disabled }}
+        accessibilityState={{ selected: active, disabled, busy: a11y?.accessibilityState?.busy }}
+        accessibilityActions={a11y?.accessibilityActions}
+        onAccessibilityAction={a11y?.onAccessibilityAction}
         testID={`workspace-${workspace.id}`}
         disabled={disabled}
         onPress={onPress}
@@ -78,17 +84,6 @@ export function WorkspaceRow({
         </View>
         {active ? <Icon name="check" size={20} tone="accent" weight="semibold" /> : null}
       </Pressable>
-      {onRemove ? (
-        <Button
-          title="Remove"
-          variant="destructivePlain"
-          size="small"
-          testID={`remove-${workspace.id}`}
-          accessibilityLabel={`Remove ${host}`}
-          onPress={onRemove}
-          style={styles.remove}
-        />
-      ) : null}
     </View>
   );
 }
@@ -97,6 +92,5 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center' },
   main: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 },
   text: { flex: 1, gap: 2 },
-  remove: { marginEnd: 8 },
   disabled: { opacity: 0.38 },
 });

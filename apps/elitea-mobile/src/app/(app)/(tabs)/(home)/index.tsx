@@ -4,7 +4,7 @@ import { useState } from 'react';
 
 import { flattenConversationPages, useConversations } from '@/api/queries/conversations';
 import { useDesign } from '@/design/DesignProvider';
-import { firstNameOf, HOME_RECENTS, HomeView, homeHeaderOptions } from '@/features/home/HomeView';
+import { firstNameOf, HOME_RECENTS, HomeView, homeHeaderOptions, type HomeScroll } from '@/features/home/HomeView';
 import { handOff, type ThenAction } from '@/features/intents/intentHandoff';
 import { useNotificationCount } from '@/features/notifications/NotificationBell';
 import { useProjectLabel } from '@/features/projects/ProjectChip';
@@ -29,7 +29,7 @@ export default function HomeScreen() {
   const selection = useProjectSelection();
   const conversations = useConversations(selection.projectId);
   const unseen = useNotificationCount();
-  const [collapsed, setCollapsed] = useState(false);
+  const [scroll, setScroll] = useState<HomeScroll>('rest');
   const [dictation] = useState(canDictateOnDevice);
   const headerHeight = useHeaderHeight();
   const all = flattenConversationPages(conversations.data?.pages);
@@ -39,7 +39,8 @@ export default function HomeScreen() {
     <GradientBackground>
       <Stack.Screen
         options={homeHeaderOptions(design, {
-          collapsed,
+          collapsed: scroll === 'collapsed',
+          scrolled: scroll !== 'rest',
           userName: profile?.name ?? null,
           avatarUri: null,
           unseen,
@@ -53,6 +54,7 @@ export default function HomeScreen() {
         project={project}
         onWorkspace={() => router.push('/projects')}
         offline={offline}
+        noProject={selection.noProject}
         recents={loading && !selection.noProject ? null : all.slice(0, HOME_RECENTS).map((c) => ({ id: c.id, title: c.name, age: formatAge(c.updated_at) }))}
         recentsFailed={conversations.error != null}
         onRetry={() => void conversations.refetch()}
@@ -66,8 +68,9 @@ export default function HomeScreen() {
         refreshing={conversations.isRefetching && !conversations.isFetchingNextPage}
         onRefresh={() => void conversations.refetch()}
         topInset={uiPlatform === 'android' ? headerHeight : 0}
-        onScrolledPast={(past) => {
-          if (past !== collapsed) setCollapsed(past);
+        scrollRestInset={uiPlatform === 'ios' ? headerHeight : 0}
+        onScrollState={(next) => {
+          if (next !== scroll) setScroll(next);
         }}
       />
     </GradientBackground>

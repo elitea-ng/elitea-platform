@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, StyleSheet, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Mascot } from '@/components/Mascot';
@@ -107,13 +107,19 @@ export function LockView({
   const noSecurity = state.status === 'no_device_security';
   return (
     <View style={[StyleSheet.absoluteFill, styles.cover]} accessibilityViewIsModal importantForAccessibility="yes" testID="lock-screen">
-      <GradientBackground
-        style={[
-          styles.ground,
-          { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 16, paddingHorizontal: space.screenGutter },
-        ]}>
+      <GradientBackground>
         {state.status === 'deciding' ? null : (
-          <>
+          // Scrolls when the content outgrows the screen (accessibility text sizes on a small
+          // phone, the passcode copy, a failure line): centred while it fits, never clipped (EH-2).
+          <ScrollView
+            testID="lock-scroll"
+            style={styles.scroll}
+            contentInsetAdjustmentBehavior="never"
+            alwaysBounceVertical={false}
+            contentContainerStyle={[
+              styles.ground,
+              { paddingTop: insets.top + 24, paddingBottom: insets.bottom + 16, paddingHorizontal: space.screenGutter },
+            ]}>
             <View style={styles.content}>
               <Mascot variant="bust" size={96} decorative />
               <Text variant="title2" heading style={styles.center}>
@@ -121,7 +127,7 @@ export function LockView({
               </Text>
               {workspace ? (
                 <View style={styles.workspace} accessible accessibilityLabel={`Workspace ${workspace.name ? `${workspace.name}, ` : ''}${displayHost(workspace.origin)}`}>
-                  <WorkspaceMark origin={workspace.origin} image={workspace.logoMark} brand={workspace.brand} size={20} />
+                  <WorkspaceMark origin={workspace.origin} image={workspace.logoMark} brand={workspace.brand} size={20} scaleWith="footnote" />
                   <Text variant="footnote" tone="secondary" numberOfLines={2} style={styles.shrink}>
                     {displayHost(workspace.origin)}
                   </Text>
@@ -156,7 +162,7 @@ export function LockView({
                 <Button title="Development build: continue without unlocking" variant="plain" size="small" onPress={onDevBypass} />
               ) : null}
             </View>
-          </>
+          </ScrollView>
         )}
       </GradientBackground>
     </View>
@@ -165,8 +171,9 @@ export function LockView({
 
 const styles = StyleSheet.create({
   cover: { zIndex: 1000, elevation: 1000 },
-  ground: { alignItems: 'center', justifyContent: 'space-between' },
-  content: { flex: 1, width: '100%', maxWidth: MaxContentWidth, gap: 14, alignItems: 'center', justifyContent: 'center' },
+  scroll: { flex: 1 },
+  ground: { flexGrow: 1, alignItems: 'center', justifyContent: 'space-between', gap: 24 },
+  content: { flexGrow: 1, width: '100%', maxWidth: MaxContentWidth, gap: 14, alignItems: 'center', justifyContent: 'center' },
   center: { textAlign: 'center' },
   workspace: { flexDirection: 'row', alignItems: 'center', gap: 6, maxWidth: '100%' },
   failure: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },

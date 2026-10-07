@@ -170,7 +170,12 @@ G ──────────────────────────
 - There is **no composer on Home**. The reference's home has none, and the cards and
   chips cover the entry points. This keeps Home clear of the keyboard.
 - **Empty (no chats yet):** "Recent chats" is replaced by the empty state (mascot bust
-  96, "Ask me anything", "Start a chat or try your voice.").
+  96, "Ask me anything", "Your chats show up here. Start one with New chat or your voice.").
+  It has **no button of its own**: the New chat card and the chips above already start a
+  chat, and a button that low sat under the floating tab bar at rest.
+- **No active project** (none, or all suspended): the greeting and the workspace pill stay;
+  the chips, cards and "Recent chats" are replaced by the mascot empty state "No active
+  project", because every card would end at "No project selected".
 - **Offline:** the `warningSoft` offline strip sits under the workspace pill. Cards still
   work (the outbox), Talk is disabled with the reason "Voice needs a connection", and the
   recent rows come from the encrypted cache.

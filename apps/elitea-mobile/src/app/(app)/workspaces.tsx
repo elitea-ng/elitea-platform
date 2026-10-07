@@ -32,27 +32,29 @@ export default function WorkspacesScreen() {
     });
   };
 
-  const onRemove = (workspace: WorkspaceSummary) => {
-    const host = displayHost(workspace.origin);
-    const active = workspace.id === activeId;
-    Alert.alert(
-      `Remove ${host}?`,
-      `This signs you out of ${host} and deletes everything ${identity.displayName} stored for it on this device.${
-        workspaces.length > 1 ? ' Your other workspaces are not affected.' : ''
-      }`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Log out & remove',
-          style: 'destructive',
-          onPress: () => {
-            if (active && router.canGoBack()) router.back();
-            void removeWorkspace(workspace.id);
+  const onRemove = (workspace: WorkspaceSummary): Promise<boolean> =>
+    new Promise((resolve) => {
+      const host = displayHost(workspace.origin);
+      const active = workspace.id === activeId;
+      Alert.alert(
+        `Remove ${host}?`,
+        `This signs you out of ${host} and deletes everything ${identity.displayName} stored for it on this device.${
+          workspaces.length > 1 ? ' Your other workspaces are not affected.' : ''
+        }`,
+        [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          {
+            text: 'Log out & remove',
+            style: 'destructive',
+            onPress: () => {
+              if (active && router.canGoBack()) router.back();
+              void removeWorkspace(workspace.id).then(resolve, () => resolve(false));
+            },
           },
-        },
-      ],
-    );
-  };
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) },
+      );
+    });
 
   return (
     <WorkspacesSheet

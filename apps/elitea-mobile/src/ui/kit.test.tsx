@@ -132,6 +132,18 @@ describe('Button', () => {
   });
 });
 
+describe('Chip', () => {
+  it('announces "selected" only for a filter chip, not for a filled action chip', async () => {
+    const { colors } = light;
+    await inScheme(<Chip label="Research" selected onPress={() => {}} />);
+    expect(screen.getByRole('button', { name: 'Research' }).props.accessibilityState).toEqual({ selected: true, disabled: false });
+    await inScheme(<Chip label="Choose an agent" filled menu onPress={() => {}} />);
+    const action = screen.getByRole('button', { name: 'Choose an agent' });
+    expect(action.props.accessibilityState).toEqual({ selected: false, disabled: false });
+    expect(StyleSheet.flatten(typeof action.props.style === 'function' ? action.props.style({ pressed: false }) : action.props.style)).toMatchObject({ backgroundColor: colors.chipSelected });
+  });
+});
+
 describe('Icon', () => {
   it('pairs every semantic name with an SF Symbol and a Material Symbol that exists in the font', () => {
     const symbols = JSON.parse(fs.readFileSync(`${__dirname}/../../node_modules/expo-symbols/src/android/symbols.json`, 'utf8')) as Record<string, unknown>;
