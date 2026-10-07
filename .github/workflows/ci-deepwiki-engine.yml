@@ -33,6 +33,8 @@ on:
     paths:
       - "services/elitea-deepwiki-engine/**"
       - "libs/rust/**"
+      # The /llm caller contract both Rust callers assert (worker, engine model client).
+      - "conformance/llm-caller/**"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"
@@ -44,6 +46,8 @@ on:
     paths:
       - "services/elitea-deepwiki-engine/**"
       - "libs/rust/**"
+      # The /llm caller contract both Rust callers assert (worker, engine model client).
+      - "conformance/llm-caller/**"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"

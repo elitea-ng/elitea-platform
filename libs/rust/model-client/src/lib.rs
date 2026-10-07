@@ -32,6 +32,11 @@ pub use chat::{
     ToolChoice, ToolDefinition, Usage,
 };
 pub use embeddings::{EmbeddingClient, EmbeddingOptions};
-pub use settings::{ModelSettings, Provider, embedding_model_name};
+pub use settings::{
+    ModelSettings, Provider, ReasoningEffort, embedding_model_name, valid_execution_id,
+};
 pub use tokens::count_tokens;
-pub use transport::{Timeouts, Transport, TransportSettings};
+pub use transport::{
+    BudgetScope, EXECUTION_HEADER, PROJECT_HEADER, Timeouts, Transport, TransportSettings,
+    budget_scope, refusal_code, retryable,
+};

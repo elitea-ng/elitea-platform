@@ -270,7 +270,30 @@ async fn drain(
     Ok(responses)
 }
 
+/// The `/llm` caller contract both Rust callers of the edge assert
+/// (libs/rust/model-client/docs/llm-caller-contract.md).
+const LLM_CALLER_CONTRACT: &str = include_str!("../../../../conformance/llm-caller/contract.json");
+
+fn llm_caller_contract() -> serde_json::Value {
+    serde_json::from_str(LLM_CALLER_CONTRACT).expect("conformance/llm-caller/contract.json")
+}
+
 fn assert_exact_captured_request(request: &CapturedModelRequest) {
+    let contract = llm_caller_contract();
+    for name in contract["request"]["headers_absent"]
+        .as_array()
+        .expect("headers_absent")
+    {
+        let name = name.as_str().expect("header name");
+        assert!(
+            request.headers.get(name).is_none(),
+            "{name} must not be sent"
+        );
+    }
+    assert_eq!(
+        request.uri.path(),
+        contract["request"]["route"].as_str().expect("route")
+    );
     assert_eq!(request.method, http::Method::POST);
     assert_eq!(request.uri.path(), "/llm/v1/chat/completions");
     assert_eq!(request.version, Version::HTTP_2);
@@ -2144,6 +2167,45 @@ async fn an_image_part_this_runtime_will_not_send_refuses_the_request() {
         captured.lock().expect("captured requests").is_empty(),
         "nothing may reach the provider"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn every_contract_refusal_has_the_contract_code_and_retry_hint() {
+    // The same cases the engine model client reads
+    // (libs/rust/model-client/tests/caller_contract.rs).
+    let contract = llm_caller_contract();
+    for case in contract["refusals"].as_array().expect("refusals") {
+        let name = case["name"].as_str().expect("name");
+        let status = u16::try_from(case["status"].as_u64().expect("status")).expect("u16");
+        let body = Bytes::from(case["body"].to_string());
+        let response = Response::builder()
+            .status(StatusCode::from_u16(status).expect("status"))
+            .version(Version::HTTP_2)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::new(Full::new(body)))
+            .expect("refusal response");
+        let (client, _) = test_model_gateway_client(
+            vec![TestModelGatewayOutcome::Response(response)],
+            test_model_gateway_config(),
+        )
+        .expect("model gateway client");
+        let bound = client
+            .bind_ordinary(
+                &ClaimScopedEliteaContext::fixture(17, TOKEN),
+                17,
+                test_model_facade_invocation(),
+            )
+            .expect("bound model");
+        let Err(error) = bound.generate_for_test(test_model_request("request")).await else {
+            panic!("{name}: a refusal must fail")
+        };
+        assert_eq!(error.code, case["code"].as_str().expect("code"), "{name}");
+        assert_eq!(
+            error.retry.should_retry,
+            case["retryable"].as_bool().expect("retryable"),
+            "{name}"
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

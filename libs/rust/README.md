@@ -7,8 +7,8 @@ native Inventory engine next.
 | Crate | What it holds |
 |---|---|
 | `engine-core` | The sidecar error contract, the NDJSON stream and stop flag, zeroizing secrets, Python-compatible JSON/string/value semantics |
-| `engine-sidecar` | The Unix-socket NDJSON server the host's engine client speaks, over any `Engine` (tools + run); the distroless container probe; the cgroup reader |
-| `model-client` | The OpenAI-compatible gateway client: chat (blocking, streamed, tool calls), batched embeddings, SSE, token counting |
+| `engine-sidecar` | The Unix-socket NDJSON server the host's engine client speaks, over any `Engine` (tools + run); the distroless container probe; the cgroup reader; process tracing with OTLP span export under the worker's switches |
+| `model-client` | The OpenAI-compatible gateway client: chat (blocking, streamed, tool calls, reasoning), batched embeddings, SSE, token counting; follows the `/llm` caller contract the worker follows (`model-client/docs/llm-caller-contract.md`) |
 | `code-parsers` | tree-sitter parsers for Python, Go, TypeScript, JavaScript, Java, C#, C++ and Rust → symbols and relationships |
 | `graph-algos` | Seeded two-pass Leiden (RB-configuration) over the vendored `leiden-rs`, communities numbered by size |
 | `repo-ingest` | Admitted shallow git clones (gix, egress allowlist, limits), artifact-folder downloads, file discovery; refusals name the consumer's settings (`names::SettingNames`) |

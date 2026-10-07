@@ -2,9 +2,13 @@
 //!
 //! The facade in elitea-main writes that block (`material.CallbackSettings`):
 //! `api_base` (`{platform}/llm/v1`), `api_key` (a short-lived callback
-//! bearer), `organization` (the project id, sent as `OpenAI-Organization`)
-//! and the caller's `model_name`; `LiftToolLLMSettings` may add
-//! `max_tokens` and `temperature`. The Python workers also read the legacy
+//! bearer), `organization` (the project id, sent as `X-Project-Id` — the
+//! header the worker sends, ADR-0018's primary selector), `execution_id`
+//! (the run the gateway attributes spend to, `X-Elitea-Execution-Id`) and
+//! the caller's `model_name`; `LiftToolLLMSettings` may add `max_tokens`,
+//! `temperature` and `reasoning_effort`. The headers and their rules are the
+//! `/llm` caller contract the worker follows too
+//! (`docs/llm-caller-contract.md` in this crate). The Python workers also read the legacy
 //! `openai_api_base` / `openai_api_key` spellings, `provider`,
 //! `max_retries` and `streaming`, so those are accepted here too.
 //!
@@ -38,6 +42,45 @@ pub const DEFAULT_MAX_RETRIES: u32 = 2;
 /// The `max_tokens` default (ADR-0026 decision 8; `wiki_subprocess_worker`).
 pub const DEFAULT_MAX_TOKENS: u32 = 64_000;
 
+/// The longest execution id the `/llm` edge keeps (`maxExecutionIDLen` in
+/// elitea-main `internal/llmproxy`); a longer one is dropped there, so it is
+/// refused here, where the mistake is.
+pub const MAX_EXECUTION_ID_BYTES: usize = 128;
+
+/// Whether `id` passes the edge's shape rule: 1–128 bytes of ASCII letters,
+/// digits, `-`, `_` and `.`.
+#[must_use]
+pub fn valid_execution_id(id: &str) -> bool {
+    (1..=MAX_EXECUTION_ID_BYTES).contains(&id.len())
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+/// A reasoning model's effort, sent as `reasoning_effort` when set. The
+/// worker's values (`ModelReasoningEffort`): `none` turns reasoning off on a
+/// model that reasons by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningEffort {
+    None,
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    /// The wire value.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
 /// A retry count above this is a configuration mistake, not a policy: with
 /// the backoff cap of 8 s it would keep a dead gateway busy for minutes.
 const MAX_RETRIES_CEILING: u32 = 10;
@@ -61,8 +104,15 @@ pub struct ModelSettings {
     /// go to `{api_base}/chat/completions` and `{api_base}/embeddings`.
     pub api_base: String,
     pub api_key: Secret,
-    /// Sent as `OpenAI-Organization`; the gateway bills this project.
+    /// The project the call bills, sent as `X-Project-Id`. The callback
+    /// bearer is bound to it, so the edge refuses any other.
     pub organization: Option<String>,
+    /// The execution the gateway attributes the call's spend to, sent as
+    /// `X-Elitea-Execution-Id`. Absent, the call is billed but belongs to no
+    /// run.
+    pub execution_id: Option<String>,
+    /// Sent as `reasoning_effort` when set; unset, the body is unchanged.
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub model_name: String,
     pub max_retries: u32,
     pub max_tokens: u32,
@@ -78,6 +128,8 @@ impl fmt::Debug for ModelSettings {
             .field("api_base", &self.api_base)
             .field("api_key", &self.api_key)
             .field("organization", &self.organization)
+            .field("execution_id", &self.execution_id)
+            .field("reasoning_effort", &self.reasoning_effort)
             .field("model_name", &self.model_name)
             .field("max_retries", &self.max_retries)
             .field("max_tokens", &self.max_tokens)
@@ -204,6 +256,27 @@ impl ModelSettings {
                 ));
             }
         };
+        let execution_id = match settings.get("execution_id") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(id)) if valid_execution_id(id) => Some(id.clone()),
+            Some(_) => {
+                return Err(invalid(format!(
+                    "llm_settings.execution_id must be 1-{MAX_EXECUTION_ID_BYTES} letters, digits, '-', '_' or '.'"
+                )));
+            }
+        };
+        let reasoning_effort = match first_string(settings, &["reasoning_effort"])?.as_deref() {
+            None => None,
+            Some("none") => Some(ReasoningEffort::None),
+            Some("low") => Some(ReasoningEffort::Low),
+            Some("medium") => Some(ReasoningEffort::Medium),
+            Some("high") => Some(ReasoningEffort::High),
+            Some(other) => {
+                return Err(invalid(format!(
+                    "llm_settings.reasoning_effort must be none, low, medium or high, got '{other}'"
+                )));
+            }
+        };
         let streaming = match settings.get("streaming") {
             None | Some(Value::Null) => true,
             Some(Value::Bool(flag)) => *flag,
@@ -224,6 +297,8 @@ impl ModelSettings {
             api_base: base_url(&api_base, provider)?,
             api_key,
             organization,
+            execution_id,
+            reasoning_effort,
             model_name,
             max_retries,
             max_tokens,
@@ -291,6 +366,36 @@ mod tests {
         assert_eq!(settings.max_retries, DEFAULT_MAX_RETRIES);
         assert!(settings.streaming);
         assert_eq!(settings.provider, Provider::OpenAi);
+        assert_eq!(settings.execution_id, None);
+        assert_eq!(settings.reasoning_effort, None);
+    }
+
+    #[test]
+    fn the_execution_id_and_the_effort_are_read_and_checked() {
+        let base = json!({"api_base": "http://gw/llm/v1", "api_key": "k", "model_name": "m"});
+        let with = |key: &str, value: Value| {
+            let mut block = base.clone();
+            block[key] = value;
+            parse(block)
+        };
+        let ok = with("execution_id", json!("callback-7f3a.b_c"));
+        assert_eq!(
+            ok.ok().and_then(|s| s.execution_id).as_deref(),
+            Some("callback-7f3a.b_c")
+        );
+        for bad in [json!(""), json!("a:b"), json!(7), json!("x".repeat(129))] {
+            assert!(
+                with("execution_id", bad.clone()).is_err_and(|e| e.contains("execution_id")),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            with("reasoning_effort", json!("low"))
+                .ok()
+                .and_then(|s| s.reasoning_effort),
+            Some(ReasoningEffort::Low)
+        );
+        assert!(with("reasoning_effort", json!("max")).is_err());
     }
 
     #[test]
