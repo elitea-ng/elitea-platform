@@ -10,6 +10,7 @@
 use crate::errors::{EngineError, ErrorType};
 use regex::Regex;
 use serde_json::Value;
+use std::fmt::Write as _;
 use std::sync::LazyLock;
 
 /// The scheme that marks an artifact folder rather than a git repository.
@@ -28,6 +29,58 @@ pub const MAX_KEY_BYTES: usize = 1024;
 pub struct ArtifactSource {
     pub bucket: String,
     pub prefix: String,
+}
+
+impl ArtifactSource {
+    /// `artifact://{bucket}[/{prefix}]`, the canonical spelling.
+    #[must_use]
+    pub fn url(&self) -> String {
+        if self.prefix.is_empty() {
+            format!("{ARTIFACT_SCHEME}{}", self.bucket)
+        } else {
+            format!("{ARTIFACT_SCHEME}{}/{}", self.bucket, self.prefix)
+        }
+    }
+
+    /// The prefix sent to the listing route: with a trailing slash, so
+    /// `docs` does not also list `docs-archive/…` ("" for the whole bucket).
+    #[must_use]
+    pub fn list_prefix(&self) -> String {
+        if self.prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", self.prefix)
+        }
+    }
+
+    /// Python's `slug`: `bucket[_prefix]` with every run of characters
+    /// outside `A-Za-z0-9._-` folded to one `_`.
+    #[must_use]
+    pub fn slug(&self) -> String {
+        let raw = if self.prefix.is_empty() {
+            self.bucket.clone()
+        } else {
+            format!("{}_{}", self.bucket, self.prefix)
+        };
+        fold_unsafe_runs(&raw)
+    }
+}
+
+/// `re.sub(r"[^A-Za-z0-9._-]+", "_", text)`.
+#[must_use]
+pub fn fold_unsafe_runs(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_run = false;
+    for c in text.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+            out.push(c);
+            in_run = false;
+        } else if !in_run {
+            out.push('_');
+            in_run = true;
+        }
+    }
+    out
 }
 
 /// Python's `str(value)` for the JSON values a repository field can hold.
@@ -120,7 +173,14 @@ fn normalise_prefix(prefix: &str) -> Result<String, EngineError> {
     Ok(prefix.to_owned())
 }
 
-fn refuse_unsafe_key(key: &str, what: &str) -> Result<(), EngineError> {
+/// elitea-main's object-key rules (`internal/infra/storage/ref.go`): at
+/// most [`MAX_KEY_BYTES`], no NUL or backslash, no empty, `.` or `..`
+/// segment (so no leading or trailing slash either).
+///
+/// # Errors
+///
+/// A `ValueError` naming `what` and the rule the key breaks.
+pub fn refuse_unsafe_key(key: &str, what: &str) -> Result<(), EngineError> {
     if key.len() > MAX_KEY_BYTES {
         return Err(source_error(format!(
             "{what} is longer than {MAX_KEY_BYTES} bytes"
@@ -163,6 +223,10 @@ pub fn py_repr(text: &str) -> String {
             c if c == quote => {
                 out.push('\\');
                 out.push(c);
+            }
+            // Python escapes the other C0/C1 control characters as `\xNN`.
+            c if matches!(u32::from(c), 0..=0x1f | 0x7f..=0x9f) => {
+                let _ = write!(out, "\\x{:02x}", u32::from(c));
             }
             c => out.push(c),
         }

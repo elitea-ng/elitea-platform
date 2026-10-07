@@ -1,0 +1,491 @@
+{
+ "parse": [
+  {
+   "repository": "artifact://docs",
+   "bucket": "docs",
+   "prefix": "",
+   "url": "artifact://docs",
+   "list_prefix": "",
+   "slug": "docs"
+  },
+  {
+   "repository": "artifact://docs/handbook",
+   "bucket": "docs",
+   "prefix": "handbook",
+   "url": "artifact://docs/handbook",
+   "list_prefix": "handbook/",
+   "slug": "docs_handbook"
+  },
+  {
+   "repository": "  ARTIFACT://Docs/handbook/v2/  ",
+   "bucket": "docs",
+   "prefix": "handbook/v2",
+   "url": "artifact://docs/handbook/v2",
+   "list_prefix": "handbook/v2/",
+   "slug": "docs_handbook_v2"
+  },
+  {
+   "repository": "artifact://docs//",
+   "bucket": "docs",
+   "prefix": "",
+   "url": "artifact://docs",
+   "list_prefix": "",
+   "slug": "docs"
+  },
+  {
+   "repository": "artifact://my-bucket-1/a b/c.d_e",
+   "bucket": "my-bucket-1",
+   "prefix": "a b/c.d_e",
+   "url": "artifact://my-bucket-1/a b/c.d_e",
+   "list_prefix": "a b/c.d_e/",
+   "slug": "my-bucket-1_a_b_c.d_e"
+  },
+  {
+   "repository": "artifact://x",
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "'x' is not a usable bucket name: a bucket starts with a letter and holds 2 to 63 lowercase letters, digits or hyphens"
+   }
+  },
+  {
+   "repository": "artifact://1docs",
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "'1docs' is not a usable bucket name: a bucket starts with a letter and holds 2 to 63 lowercase letters, digits or hyphens"
+   }
+  },
+  {
+   "repository": "artifact://docs/a/../b",
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "folder prefix 'a/../b' holds an empty or relative segment"
+   }
+  },
+  {
+   "repository": "artifact://docs/a\\b",
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "folder prefix 'a\\\\b' holds a character a key may not hold"
+   }
+  },
+  {
+   "repository": "artifact://docs/a//b",
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "folder prefix 'a//b' holds an empty or relative segment"
+   }
+  },
+  {
+   "repository": "artifact://docs/./b",
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "folder prefix './b' holds an empty or relative segment"
+   }
+  },
+  {
+   "repository": "github.com/acme/notes",
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "'github.com/acme/notes' is not an artifact source; expected artifact://bucket[/prefix]"
+   }
+  },
+  {
+   "repository": "artifact://Doc_s",
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "'doc_s' is not a usable bucket name: a bucket starts with a letter and holds 2 to 63 lowercase letters, digits or hyphens"
+   }
+  }
+ ],
+ "listings": [
+  {
+   "name": "a folder with a placeholder, whitespace and mixed field types",
+   "repository": "artifact://docs/handbook",
+   "branch": "main",
+   "pages": [
+    {
+     "objects": [
+      {
+       "key": "handbook/",
+       "size_bytes": 0,
+       "modified_at": "2026-10-01T10:00:00Z"
+      },
+      {
+       "key": "handbook/z.md",
+       "size_bytes": 12,
+       "modified_at": "2026-10-01T10:00:00.123456Z"
+      },
+      {
+       "key": " handbook/a.py ",
+       "size_bytes": "40",
+       "modified_at": "2026-10-02T09:00:00Z"
+      }
+     ],
+     "common_prefixes": [],
+     "next_cursor": "page-2"
+    },
+    {
+     "objects": [
+      {
+       "key": "handbook/sub/dir/b.txt",
+       "size_bytes": 7.9,
+       "modified_at": null
+      },
+      {
+       "key": "handbook/sub/c.json",
+       "size_bytes": null
+      },
+      {
+       "key": "handbook/sub/ü.md",
+       "size_bytes": 3,
+       "modified_at": "2026-10-03T00:00:00Z"
+      },
+      "not an object",
+      {
+       "key": null,
+       "size_bytes": 5
+      }
+     ]
+    }
+   ],
+   "list_params": [
+    {
+     "prefix": "handbook/"
+    },
+    {
+     "prefix": "handbook/",
+     "cursor": "page-2"
+    }
+   ],
+   "objects": [
+    {
+     "key": "handbook/z.md",
+     "size": 12,
+     "modified": "2026-10-01T10:00:00.123456Z",
+     "relative_path": "z.md"
+    },
+    {
+     "key": "handbook/a.py",
+     "size": 40,
+     "modified": "2026-10-02T09:00:00Z",
+     "relative_path": "a.py"
+    },
+    {
+     "key": "handbook/sub/dir/b.txt",
+     "size": 7,
+     "modified": "",
+     "relative_path": "sub/dir/b.txt"
+    },
+    {
+     "key": "handbook/sub/c.json",
+     "size": 0,
+     "modified": "",
+     "relative_path": "sub/c.json"
+    },
+    {
+     "key": "handbook/sub/ü.md",
+     "size": 3,
+     "modified": "2026-10-03T00:00:00Z",
+     "relative_path": "sub/ü.md"
+    }
+   ],
+   "digest": "1cea09ba4c40fb7c5e5e56dd36ab7117b7734f92bb64877ac2a21e91c9958703",
+   "directory": "docs_handbook_main_1cea09ba",
+   "files": [
+    "a.py",
+    "sub/c.json",
+    "sub/dir/b.txt",
+    "sub/ü.md",
+    "z.md"
+   ],
+   "marker": {
+    "commit_hash": "1cea09ba4c40fb7c5e5e56dd36ab7117b7734f92bb64877ac2a21e91c9958703",
+    "branch": "main",
+    "remote_url": "artifact://docs/handbook",
+    "bucket": "docs",
+    "prefix": "handbook",
+    "object_count": 5,
+    "total_bytes": 145,
+    "exists": true
+   },
+   "canonical_repository": "artifact://docs/handbook",
+   "repo_identifier": "artifact://docs/handbook:main:1cea09ba",
+   "wiki_id": "artifact--docs--handbook--main",
+   "ask_wiki_id": "artifact--docs-handbook",
+   "context_wiki_id": "docs--handbook--main"
+  },
+  {
+   "name": "the whole bucket on a branch label with odd characters",
+   "repository": "artifact://docs",
+   "branch": "release/v1 (rc)",
+   "pages": [
+    {
+     "objects": [
+      {
+       "key": "README.md",
+       "size_bytes": 100,
+       "modified_at": "2026-09-30T08:00:00Z"
+      },
+      {
+       "key": "B.md",
+       "size_bytes": 1,
+       "modified_at": "2026-09-30T08:00:00Z"
+      },
+      {
+       "key": "a.md",
+       "size_bytes": 1,
+       "modified_at": "2026-09-30T08:00:00Z"
+      }
+     ]
+    }
+   ],
+   "list_params": [
+    {}
+   ],
+   "objects": [
+    {
+     "key": "README.md",
+     "size": 100,
+     "modified": "2026-09-30T08:00:00Z",
+     "relative_path": "README.md"
+    },
+    {
+     "key": "B.md",
+     "size": 1,
+     "modified": "2026-09-30T08:00:00Z",
+     "relative_path": "B.md"
+    },
+    {
+     "key": "a.md",
+     "size": 1,
+     "modified": "2026-09-30T08:00:00Z",
+     "relative_path": "a.md"
+    }
+   ],
+   "digest": "6dbb3fafb454bc1a24bf82c5d008813cb882baf59c086307c7468b94e9a24793",
+   "directory": "docs_release_v1_rc__6dbb3faf",
+   "files": [
+    "B.md",
+    "README.md",
+    "a.md"
+   ],
+   "marker": {
+    "commit_hash": "6dbb3fafb454bc1a24bf82c5d008813cb882baf59c086307c7468b94e9a24793",
+    "branch": "release/v1 (rc)",
+    "remote_url": "artifact://docs",
+    "bucket": "docs",
+    "prefix": "",
+    "object_count": 3,
+    "total_bytes": 53,
+    "exists": true
+   },
+   "canonical_repository": "artifact://docs",
+   "repo_identifier": "artifact://docs:release/v1 (rc):6dbb3faf",
+   "wiki_id": "artifact--docs--release-v1-rc",
+   "ask_wiki_id": "artifact--docs",
+   "context_wiki_id": "docs--release/v1 (rc)"
+  },
+  {
+   "name": "an empty folder",
+   "repository": "artifact://docs/empty",
+   "branch": "main",
+   "pages": [
+    {
+     "objects": [
+      {
+       "key": "empty/",
+       "size_bytes": 0
+      }
+     ]
+    }
+   ],
+   "list_params": [
+    {
+     "prefix": "empty/"
+    }
+   ],
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "the artifact folder artifact://docs/empty holds no objects to index"
+   }
+  },
+  {
+   "name": "a key outside the folder",
+   "repository": "artifact://docs/handbook",
+   "branch": "main",
+   "pages": [
+    {
+     "objects": [
+      {
+       "key": "handbook-archive/x.md",
+       "size_bytes": 1
+      }
+     ]
+    }
+   ],
+   "list_params": [
+    {
+     "prefix": "handbook/"
+    }
+   ],
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "object key 'handbook-archive/x.md' is not inside the folder 'handbook/'"
+   }
+  },
+  {
+   "name": "a traversal key",
+   "repository": "artifact://docs/handbook",
+   "branch": "main",
+   "pages": [
+    {
+     "objects": [
+      {
+       "key": "handbook/../etc/passwd",
+       "size_bytes": 1
+      }
+     ]
+    }
+   ],
+   "list_params": [
+    {
+     "prefix": "handbook/"
+    }
+   ],
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "object key 'handbook/../etc/passwd' holds an empty or relative segment"
+   }
+  },
+  {
+   "name": "a backslash key",
+   "repository": "artifact://docs/handbook",
+   "branch": "main",
+   "pages": [
+    {
+     "objects": [
+      {
+       "key": "handbook/a\\b.md",
+       "size_bytes": 1
+      }
+     ]
+    }
+   ],
+   "list_params": [
+    {
+     "prefix": "handbook/"
+    }
+   ],
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "object key 'handbook/a\\\\b.md' holds a character a key may not hold"
+   }
+  },
+  {
+   "name": "an absolute key",
+   "repository": "artifact://docs",
+   "branch": "main",
+   "pages": [
+    {
+     "objects": [
+      {
+       "key": "/etc/passwd",
+       "size_bytes": 1
+      }
+     ]
+    }
+   ],
+   "list_params": [
+    {}
+   ],
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "object key '/etc/passwd' holds an empty or relative segment"
+   }
+  },
+  {
+   "name": "a NUL key",
+   "repository": "artifact://docs",
+   "branch": "main",
+   "pages": [
+    {
+     "objects": [
+      {
+       "key": "a\u0000b",
+       "size_bytes": 1
+      }
+     ]
+    }
+   ],
+   "list_params": [
+    {}
+   ],
+   "error": {
+    "error_type": "ArtifactSourceError",
+    "message": "object key 'a\\x00b' holds a character a key may not hold"
+   }
+  }
+ ],
+ "settings": [
+  {
+   "llm_settings": {
+    "api_base": "https://platform.example/llm/v1",
+    "api_key": "k",
+    "organization": "42"
+   },
+   "base_url": "https://platform.example",
+   "project_id": "42"
+  },
+  {
+   "llm_settings": {
+    "api_base": "https://platform.example/llm/api/v2/",
+    "api_key": "k",
+    "organization": 7
+   },
+   "base_url": "https://platform.example",
+   "project_id": "7"
+  },
+  {
+   "llm_settings": {
+    "api_base": "https://platform.example/llm",
+    "api_key": "k",
+    "project_id": "9"
+   },
+   "base_url": "https://platform.example",
+   "project_id": "9"
+  },
+  {
+   "llm_settings": {
+    "openai_api_base": "https://p.example/base/llm/v1",
+    "openai_api_key": "k",
+    "openai_organization": "3"
+   },
+   "base_url": "https://p.example/base",
+   "project_id": "3"
+  },
+  {
+   "llm_settings": {
+    "api_base": "https://platform.example/v1",
+    "api_key": "k",
+    "organization": "42"
+   },
+   "base_url": "https://platform.example/v1",
+   "project_id": "42"
+  },
+  {
+   "llm_settings": {
+    "api_base": "http://127.0.0.1:8080/llm/v1",
+    "api_key": "k",
+    "organization": ""
+   },
+   "base_url": "http://127.0.0.1:8080",
+   "project_id": ""
+  }
+ ],
+ "caps": {
+  "max_files_env": "ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES",
+  "max_bytes_env": "ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES",
+  "default_max_files": 5000,
+  "default_max_bytes": 536870912
+ }
+}

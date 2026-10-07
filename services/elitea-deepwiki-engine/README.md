@@ -240,7 +240,8 @@ explains nothing.
 
 All are strict-parsed. Not ported: the deepagents planner (5d; a request
 for it falls back to the classic planner, as Python does when deepagents
-fails) and artifact-folder sources.
+fails). Artifact-folder sources are ported (see
+[Artifact-folder sources](#artifact-folder-sources-srcingestartifactrs)).
 
 `tests/native_generate.rs` runs the whole runner: the sidecar on a Unix
 socket, the real worker child, a repository served by `git http-backend`,
@@ -262,7 +263,8 @@ ADR-0026 decision 7: gitoxide (`gix` 0.88) in process, no `git` binary
 (the runtime image is distroless). The native runner calls `ingest::ingest(repo_config, settings, job_scratch, cancel)`.
 
 1. An artifact-folder source (`provider_type: artifact`, `artifact://…`)
-   is refused for now (`RuntimeError`); a later phase ports it.
+   takes its own road (`ingest::admit_source` → `ingest::ingest_artifact`,
+   below); steps 2–4 do not apply to it.
 2. `providers::clone_target` ports `engine/repo_providers` (GitHub incl.
    Enterprise, GitLab, Bitbucket Cloud/Server, Azure DevOps) over the
    host's `repo_config`. It builds a credential-free `https://` URL and the
@@ -317,6 +319,80 @@ deployment control is the job's memory limit (container or pod), which
 should stay above that figure. `tests/ingest_clone.rs` runs every path against
 `git http-backend` on loopback (git is a TEST dependency only);
 `ELITEA_DEEPWIKI_LIVE_CLONE=1` adds a clone of this repository from GitHub.
+
+### Artifact-folder sources (`src/ingest/artifact.rs`)
+
+A port of `elitea_deepwiki.artifact_source` and the listing/download half of
+`engine.artifacts_platform_client`. A wiki source can be a folder of the
+invoking project's artifact store: `repo_config.repository` is
+`artifact://{bucket}[/{prefix}]` (the Go host derives it from
+`artifact_configuration` and sets `provider_type: artifact`). The generation
+worker child downloads the folder into the job directory where a clone would
+go, and everything after that is unchanged.
+
+* **Contract.** The credential is the invocation's callback bearer, read as
+  Python read it (`extract_artifact_settings`): the platform is
+  `llm_settings.api_base` (or `openai_api_base`) without its
+  `/llm[/api][/vN][/]` suffix, the bearer `api_key` (or `openai_api_key`),
+  the project `organization` (or `openai_organization`, `project_id`). The
+  routes are elitea-main's: `GET {platform}/api/v2/artifacts/objects/{project}/{bucket}?prefix={prefix}/&cursor=…`
+  (paged by `next_cursor`; `objects[].key`, `size_bytes`, `modified_at`) and
+  `GET …/{bucket}/{key}`, each with `Authorization: Bearer`. The project in
+  the URL is the grant's, so only the caller's own buckets are reachable.
+* **Identity.** sha256 over the listing sorted by key, one
+  `{key}\0{size}\0{modified}\n` line per object (Python's `listing_digest`,
+  byte for byte), in place of the commit sha: `commit_hash` is the 64-hex
+  digest, the repo identifier `artifact://bucket/prefix:{branch}:{digest[:8]}`,
+  the wiki id `artifact--bucket--prefix--{branch}` (`normalize_wiki_id`), the
+  provider `artifact`, the branch `repo_config.branch` or `main` (a label),
+  the manifest's `repository` the repository string. The directory is
+  Python's `{bucket_prefix}_{branch}_{digest8}`.
+* **Other tools.** `ask` / `deep_research` derive `normalize_wiki_id(repo:branch)`
+  exactly as Python does, so a direct call names an artifact repository
+  `artifact--bucket-prefix` (Python's `rsplit(":", 2)` reads the scheme's
+  colon as a separator: the same id as Python, and not the generated wiki's).
+  Through `resolve_and_ask` the host passes the manifest's
+  `repo_identifier_override` and the id is the generated one. The context
+  paths (`source::wiki_id_for`) keep `{bucket}--{prefix}--{branch}`, as Python's
+  `wiki_context` and Go's `WikiIDFor` do. These three disagreements are
+  Python's, preserved.
+* **Security.** Keys are untrusted: each is held to elitea-main's key rules
+  (no NUL, backslash, empty, `.` or `..` segment, so no absolute path) and to
+  the listed folder before anything is written, and one bad key refuses the
+  source. Files are created `O_EXCL` in directories this module made, under a
+  parent whose canonical path is checked against the job directory; no link
+  is created and none is followed. The ingest limits apply twice, to the
+  listed sizes before any download and to the bytes received
+  (`MAX_FILE_COUNT`, `MAX_FILE_BYTES`, `MAX_CLONE_BYTES` over the total,
+  `MAX_PARSED_BYTES`, `CLONE_TIMEOUT_SECONDS`), and Python's caps too
+  (`ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES`, default 5000;
+  `ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES`, default 512 MiB). The listing stops
+  as soon as it holds more objects than a limit admits. The only host is the
+  invocation's `api_base`; nothing from `repo_config` or a listing reaches
+  the URL except as an encoded path segment or query value. The client is
+  the model client's (rustls, `ELITEA_DEEPWIKI_TLS_CA_FILE`, no redirects);
+  the git allowlist does not apply (as in Go's `CheckEgress`). The bearer is
+  a sensitive header and in no message. A listing page has 60 s, a download
+  300 s (Python's), the whole ingest `CLONE_TIMEOUT_SECONDS`; a stop ends a
+  transfer within 100 ms; a partial directory is removed.
+* **Deliberate differences.** A failed listing (a status other than 200 or
+  404, a body that is not JSON, the 1000-page ceiling) is an error; Python
+  indexed the partial listing. A 404 is still an empty folder ("holds no
+  objects to index"). No cache or marker file: the folder lives in the job
+  directory and every run builds. An `artifact://` repository is a folder
+  whatever `provider_type` says (Python failed it under `github`); a
+  `provider_type: artifact` with any other repository is refused. An empty
+  project is refused (Python sent it and read a 404). An unparsable cap
+  fails the start (Python used the default).
+
+Parity: `parity/python_artifact_source.py` writes
+`tests/fixtures/ingest/artifact_source.json` from the Python functions
+(parsing, the client's listing over recorded pages, `collect_objects`,
+`check_caps`, `listing_digest`, the directory and marker of
+`materialise_artifact_source`, the three wiki ids, `extract_artifact_settings`);
+`ingest::artifact::tests` replays it and runs the transfer against a mock
+object API. `tests/native_generate.rs` runs a whole generation over a folder,
+and the Go host's `native_engine_test.go` reads one through the worker child.
 
 ## Parsers and the code graph (`src/parsers/`, `src/graph/`)
 

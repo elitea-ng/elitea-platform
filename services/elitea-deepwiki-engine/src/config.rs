@@ -6,6 +6,7 @@
 //! its environment.
 
 use crate::ingest::IngestSettings;
+use crate::ingest::artifact::ArtifactCaps;
 use crate::ingest::egress::EgressPolicy;
 use crate::ingest::limits::IngestLimits;
 use crate::llm::embeddings::{DEFAULT_BATCH_SIZE, DEFAULT_CONCURRENCY, MIN_SPLIT_TOKENS};
@@ -460,6 +461,19 @@ fn ingest_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<IngestSettin
         scratch_path: PathBuf::from(
             raw("SCRATCH_PATH").unwrap_or_else(|| DEFAULT_SCRATCH_PATH.to_owned()),
         ),
+        // Python's artifact_source caps, under Python's names.
+        artifact: ArtifactCaps {
+            max_files: positive_count(
+                raw,
+                "ARTIFACT_MAX_FILES",
+                ArtifactCaps::default().max_files,
+            )?,
+            max_bytes: positive_count(
+                raw,
+                "ARTIFACT_MAX_BYTES",
+                ArtifactCaps::default().max_bytes,
+            )?,
+        },
     })
 }
 
@@ -638,6 +652,10 @@ mod tests {
                 git_allowlist: EgressPolicy::parse(None),
                 limits: IngestLimits::default(),
                 scratch_path: PathBuf::from(DEFAULT_SCRATCH_PATH),
+                artifact: ArtifactCaps {
+                    max_files: 5000,
+                    max_bytes: 512 * 1024 * 1024,
+                },
             })
         );
         let parsed = settings(&[
@@ -648,6 +666,8 @@ mod tests {
             ("ELITEA_DEEPWIKI_MAX_PARSED_BYTES", "4096"),
             ("ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS", "2.5"),
             ("ELITEA_DEEPWIKI_SCRATCH_PATH", "/scratch"),
+            ("ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES", "12"),
+            ("ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES", "4096"),
         ])
         .map(|s| s.ingest);
         assert_eq!(
@@ -662,6 +682,10 @@ mod tests {
                     clone_timeout: Duration::from_millis(2500),
                 },
                 scratch_path: PathBuf::from("/scratch"),
+                artifact: ArtifactCaps {
+                    max_files: 12,
+                    max_bytes: 4096,
+                },
             })
         );
     }
@@ -674,6 +698,8 @@ mod tests {
             "MAX_FILE_BYTES",
             "MAX_PARSED_BYTES",
             "CLONE_TIMEOUT_SECONDS",
+            "ARTIFACT_MAX_FILES",
+            "ARTIFACT_MAX_BYTES",
         ] {
             for bad in ["0", "-1", "x", "1e400"] {
                 let key = format!("ELITEA_DEEPWIKI_{name}");

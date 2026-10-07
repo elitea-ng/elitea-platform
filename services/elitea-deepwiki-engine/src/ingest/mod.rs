@@ -4,8 +4,11 @@
 //!
 //! The order is the security argument:
 //!
-//! 1. an artifact-folder source is refused (a later phase ports
-//!    `artifact_source.py`);
+//! 1. an artifact-folder source (`provider_type: artifact`,
+//!    `artifact://bucket[/prefix]`) takes the other road: [`artifact`]
+//!    lists and downloads it from the platform's object API with the
+//!    invocation's callback bearer, under the same limits, and steps 2–4
+//!    do not apply (there is no git host);
 //! 2. [`providers::clone_target`] derives a credential-free URL, the
 //!    branch, the identity and the `Authorization` value;
 //! 3. [`egress::EgressPolicy::admit`] checks the URL's own host against
@@ -15,6 +18,7 @@
 //!
 //! See each module for what differs from the Python engine, and why.
 
+pub mod artifact;
 pub mod clone;
 pub mod egress;
 pub mod identity;
@@ -23,7 +27,7 @@ pub mod providers;
 pub mod secret;
 
 use crate::errors::{EngineError, ErrorType};
-use crate::source::{is_artifact_source, py_str, py_truthy};
+use artifact::{ArtifactCaps, ArtifactTarget, PlatformObjects};
 use egress::EgressPolicy;
 use limits::IngestLimits;
 use serde_json::Value;
@@ -41,25 +45,62 @@ pub struct IngestSettings {
     /// The root under which each job gets its scratch directory
     /// (`ELITEA_DEEPWIKI_SCRATCH_PATH`, Python's `scratch_path`).
     pub scratch_path: PathBuf,
+    /// Python's own caps on an artifact folder, on top of `limits`.
+    pub artifact: ArtifactCaps,
 }
 
-/// Whether a `repo_config` names an artifact folder (`provider_type:
-/// artifact` from the Go host, or an `artifact://` repository).
-fn names_artifact_folder(repo_config: &Value) -> bool {
-    let field = |key: &str| {
-        repo_config
-            .get(key)
-            .filter(|v| py_truthy(v))
-            .map(py_str)
-            .unwrap_or_default()
-    };
-    field("provider_type")
-        .trim()
-        .eq_ignore_ascii_case("artifact")
-        || is_artifact_source(&field("repository"))
+/// What a `repo_config` names, admitted.
+#[derive(Debug)]
+pub enum Admitted {
+    /// A git repository whose host passed the allowlist.
+    Git(egress::AdmittedTarget),
+    /// A folder of the invoking project's artifact store.
+    Artifact(ArtifactTarget),
 }
 
-/// Derive and admit a clone target without cloning: steps 1–3.
+impl Admitted {
+    /// The `provider_type` the result reports.
+    #[must_use]
+    pub fn provider(&self) -> &str {
+        match self {
+            Self::Git(admitted) => admitted.target().provider().value(),
+            Self::Artifact(_) => artifact::ARTIFACT_PROVIDER_TYPE,
+        }
+    }
+
+    /// The repository the identifier is built from.
+    #[must_use]
+    pub fn repository(&self) -> &str {
+        match self {
+            Self::Git(admitted) => admitted.target().repo_identifier(),
+            Self::Artifact(target) => target.repository(),
+        }
+    }
+
+    /// The branch to check out (git) or the label (a folder).
+    #[must_use]
+    pub fn branch(&self) -> &str {
+        match self {
+            Self::Git(admitted) => admitted.target().branch(),
+            Self::Artifact(target) => target.branch(),
+        }
+    }
+}
+
+/// Admit what a `repo_config` names: an artifact folder as it is (step 1),
+/// a git repository through steps 2–3.
+///
+/// # Errors
+///
+/// An unusable artifact source, or the refusal of [`admit`].
+pub fn admit_source(repo_config: &Value, policy: &EgressPolicy) -> Result<Admitted, EngineError> {
+    if let Some(target) = ArtifactTarget::from_repo_config(repo_config)? {
+        return Ok(Admitted::Artifact(target));
+    }
+    admit(repo_config, policy).map(Admitted::Git)
+}
+
+/// Derive and admit a GIT clone target without cloning: steps 2–3.
 ///
 /// # Errors
 ///
@@ -68,13 +109,11 @@ pub fn admit(
     repo_config: &Value,
     policy: &EgressPolicy,
 ) -> Result<egress::AdmittedTarget, EngineError> {
-    if names_artifact_folder(repo_config) {
-        // Worded without "artifact" or "download": the legacy classifier
-        // would file those under artifact_error, and this is a runtime
-        // limitation of this engine, not a failed transfer.
+    if artifact::names_artifact_folder(repo_config) {
+        // A folder has no clone target; `admit_source` takes it.
         return Err(EngineError::new(
-            ErrorType::Runtime,
-            "This engine cannot read a bucket-folder source yet (ADR-0026: a later phase ports it); run the Python engine for folder sources",
+            ErrorType::Value,
+            "This repo_config names a bucket folder, which is not a git repository to clone",
         ));
     }
     let target = providers::clone_target(repo_config)?;
@@ -135,6 +174,45 @@ pub async fn ingest_admitted(
     }
 }
 
+/// Download an artifact folder into `job_scratch` (step 1's road), under
+/// the ingest limits and deadline.
+///
+/// `client` is the model transport's (rustls, no redirects); `platform` the
+/// invocation's own object API and bearer. At the deadline the transfer is
+/// dropped, which removes its partial directory.
+///
+/// # Errors
+///
+/// A refused key, a limit, a transfer failure, the timeout or the stop.
+pub async fn ingest_artifact(
+    target: &ArtifactTarget,
+    platform: &PlatformObjects,
+    client: &reqwest::Client,
+    settings: &IngestSettings,
+    job_scratch: &Path,
+    cancel: Arc<AtomicBool>,
+) -> Result<ClonedRepository, EngineError> {
+    let run = artifact::Materialise {
+        target,
+        platform,
+        client,
+        limits: &settings.limits,
+        caps: settings.artifact,
+        job_scratch,
+        cancel: &cancel,
+    }
+    .run();
+    if let Ok(outcome) = tokio::time::timeout(settings.limits.clone_timeout, run).await {
+        outcome
+    } else {
+        cancel.store(true, Ordering::Release);
+        Err(artifact::timeout_error(
+            target,
+            settings.limits.clone_timeout,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,22 +220,35 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn artifact_folders_are_not_supported_yet() {
-        let policy = EgressPolicy::parse(Some("*"));
+    fn artifact_folders_take_their_own_road() {
+        let policy = EgressPolicy::parse(None);
         for config in [
-            json!({"provider_type": "artifact", "provider_config": {"bucket": "docs"}, "repository": "docs/handbook"}),
-            json!({"provider_type": "github", "repository": "artifact://docs/handbook"}),
+            json!({"provider_type": "artifact", "provider_config": {"bucket": "docs"}, "repository": "artifact://docs/handbook"}),
+            json!({"provider_type": "github", "repository": "ARTIFACT://Docs/handbook/", "branch": "v2"}),
         ] {
+            // Never a git target, whatever the allowlist says.
             let error = admit(&config, &policy).err();
-            let error = error.unwrap_or_else(|| panic!("{config}: admitted"));
-            assert!(
-                error
-                    .message
-                    .contains("not read a bucket-folder source yet"),
-                "{error}"
-            );
-            assert_eq!(classify(error.error_type, &error.message), "runtime_error");
+            assert!(error.is_some(), "{config}: admitted as git");
+            let admitted = admit_source(&config, &policy);
+            let Ok(Admitted::Artifact(target)) = admitted else {
+                panic!("{config}: {admitted:?}");
+            };
+            assert_eq!(target.source().url(), "artifact://docs/handbook");
+            assert_eq!(Admitted::Artifact(target.clone()).provider(), "artifact");
         }
+        // provider_type artifact without an artifact:// repository.
+        let error = admit_source(
+            &json!({"provider_type": "artifact", "repository": "docs/handbook"}),
+            &policy,
+        )
+        .err();
+        assert!(error.is_some_and(|e| e.message.contains("not artifact://")));
+        // An unusable source is refused before anything else.
+        let error = admit_source(&json!({"repository": "artifact://docs/a/../b"}), &policy).err();
+        assert_eq!(
+            error.map(|e| classify(e.error_type, &e.message)),
+            Some("invalid_input")
+        );
     }
 
     #[test]
@@ -192,6 +283,7 @@ mod tests {
             git_allowlist: EgressPolicy::parse(Some("github.com")),
             limits: IngestLimits::default(),
             scratch_path: PathBuf::from("/nonexistent"),
+            artifact: ArtifactCaps::default(),
         };
         let config = json!({"provider_type": "gitlab", "provider_config": {"url": "https://gitlab.example.com"}, "repository": "g/p"});
         let error = ingest(

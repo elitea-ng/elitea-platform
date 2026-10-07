@@ -15,6 +15,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::Response;
 use base64::Engine as _;
 use elitea_deepwiki_engine::errors::{ErrorType, classify};
+use elitea_deepwiki_engine::ingest::artifact::ArtifactCaps;
 use elitea_deepwiki_engine::ingest::clone::{clone_repository, ls_remote};
 use elitea_deepwiki_engine::ingest::egress::{AdmittedTarget, EgressPolicy};
 use elitea_deepwiki_engine::ingest::limits::IngestLimits;
@@ -945,6 +946,7 @@ async fn the_settings_path_refuses_a_host_off_the_allowlist() {
         git_allowlist: EgressPolicy::parse(Some("gitlab.com")),
         limits: limits(),
         scratch_path: PathBuf::from("/nonexistent"),
+        artifact: ArtifactCaps::default(),
     };
     let config = serde_json::json!({"provider_type": "github", "provider_config": {"access_token": TOKEN}, "repository": "o/r"});
     let error = ingest(
@@ -978,6 +980,7 @@ async fn live_clone_of_the_platform_repository() {
             ..IngestLimits::default()
         },
         scratch_path: job.clone(),
+        artifact: ArtifactCaps::default(),
     };
     let config = serde_json::json!({"provider_type": "github", "provider_config": {"base_url": "https://api.github.com"}, "repository": "elitea-ng/elitea-platform", "branch": "main"});
     let started = Instant::now();
