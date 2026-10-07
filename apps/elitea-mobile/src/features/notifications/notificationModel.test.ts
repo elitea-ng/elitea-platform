@@ -1,4 +1,11 @@
-import { describeNotification, mentionConversationRef } from '@/features/notifications/notificationModel';
+import { notificationsPage } from '@/api/__fixtures__/settings13';
+import {
+  MAX_FILTER_TYPES,
+  applyFilter,
+  describeNotification,
+  filterOptions,
+  mentionConversationRef,
+} from '@/features/notifications/notificationModel';
 
 // meta exactly as the server writes it for client contract 1.1
 // (repos/chat_mention_notification.go, documented on the Notification schema).
@@ -45,5 +52,35 @@ describe('describeNotification', () => {
 
   it('leaves other notifications as they were, without a link', () => {
     expect(describeNotification({ event_type: 'agent_finished', meta: {} })).toEqual({ title: 'Agent finished', conversationRef: null });
+  });
+});
+
+describe('the type filter (client contract 1.3 inbox)', () => {
+  const rows = notificationsPage.rows;
+
+  it('offers All plus one chip per type, labelled for people', () => {
+    expect(filterOptions(rows)).toEqual([
+      { value: 'all', label: 'All', count: 3 },
+      { value: 'agent_finished', label: 'Agent finished', count: 1 },
+      { value: 'chat_user_mentioned', label: 'Mentions', count: 1 },
+      { value: 'moderation_approved', label: 'Moderation approved', count: 1 },
+    ]);
+  });
+
+  it('offers no chips when every row has the same type', () => {
+    expect(filterOptions([rows[0], rows[0]])).toEqual([]);
+    expect(filterOptions([])).toEqual([]);
+  });
+
+  it('ranks the most frequent types first and keeps at most MAX_FILTER_TYPES', () => {
+    const many = ['a', 'b', 'b', 'c', 'd', 'e', 'f', 'g', 'g', 'g'].map((event_type) => ({ event_type }));
+    const options = filterOptions(many);
+    expect(options).toHaveLength(MAX_FILTER_TYPES + 1);
+    expect(options.slice(1, 3).map((o) => o.value)).toEqual(['g', 'b']);
+  });
+
+  it('filters by type; All keeps everything', () => {
+    expect(applyFilter(rows, 'chat_user_mentioned').map((r) => r.id)).toEqual([9]);
+    expect(applyFilter(rows, 'all')).toHaveLength(3);
   });
 });

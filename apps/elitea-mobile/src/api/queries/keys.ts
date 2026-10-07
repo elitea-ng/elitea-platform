@@ -18,4 +18,8 @@ export const queryKeys = {
   feedback: (projectId: number) => ['p', projectId, 'feedback'] as const,
   /** Recommended agents for the empty new-chat screen (client contract 1.3). */
   recommendations: (projectId: number) => ['p', projectId, 'recommendations'] as const,
+  /** The caller's own memories (client contract 1.3); online only, never in the offline store. */
+  memories: (projectId: number) => ['p', projectId, 'memories'] as const,
+  /** Current-period usage against the budget (client contract 1.3), keyed below by scope. */
+  usage: (projectId: number) => ['p', projectId, 'usage'] as const,
 };

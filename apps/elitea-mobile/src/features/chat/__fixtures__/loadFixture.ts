@@ -22,6 +22,8 @@ export const FIXTURE_NAMES = [
   // Captured from a real stack (2026-10-06, see README.md).
   'regenerate-answer',
   'cancelled',
+  // The server's budget refusal frame (v4.7.0 source shape, see the file header).
+  'budget-refusal',
 ] as const;
 
 export type FixtureName = (typeof FIXTURE_NAMES)[number];

@@ -58,6 +58,22 @@ describe('turnReducer over fixtures', () => {
     });
   });
 
+  it('maps a budget refusal to a plain message, not retryable, and names the budget', () => {
+    const { state } = play('budget-refusal');
+    expect(state).toMatchObject({
+      phase: 'failed',
+      error: { message: expect.stringMatching(/^Your budget in this project is used up/), retryable: false, budget: 'member' },
+    });
+  });
+
+  it.each([
+    ['PROJECT_BUDGET_EXHAUSTED', 'project', /^This project's shared budget is used up/],
+    ['MODEL_BUDGET_EXHAUSTED', 'unknown', /^The model budget is used up/],
+  ])('maps %s to the %s budget', (code, budget, text) => {
+    const state = reduceTurn(INITIAL_TURN, { kind: 'failed', failure: { code, safe_message: 'raw', retryable: true } });
+    expect(state.error).toEqual({ message: expect.stringMatching(text), retryable: false, budget });
+  });
+
   it('ends on llm_error', () => {
     const { state, consumed, total } = play('llm-error');
     expect(state.phase).toBe('failed');

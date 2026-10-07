@@ -5,22 +5,11 @@
 # (contract/elitea-v2.yaml) does not define yet, each with where its shape was
 # observed (`x-zefir-source`) and what will replace it (`x-zefir-until`).
 #
-# It was empty from the pin to elitea-platform 06a490427 (v4.2.0, client
-# contract 1.1) to v4.3.2 (1.2). It now carries the client contract 1.3 gap:
-# the server's 1.3 work (elitea-platform PR #1090, branch
-# feat/client-contract-1-3, commit 507a13b0c1fc2cf2cebe7a42ba2516c101c49221,
-# 2026-10-06) is not released yet. When a release carries it, bump the pin to
-# that release and delete every entry below (the build names each one).
-#
-# What 1.3 adds that the 1.2 pin lacks:
-#   - cancelChatExecution, the server-side stop of a running answer (served
-#     before 1.3 but missing from the spec);
-#   - six data-control keys of the native client policy, on both the full
-#     policy (token response) and its public subset (discovery).
-# The other 1.3 operations the app uses (message feedback get/set/delete,
-# exportConversation, getRecommendations) are already DEFINED in the 1.2 pin,
-# untagged; contract/client-operations.json keeps them, and the app calls
-# them only when discovery says `client_contract` >= 1.3.
+# It is EMPTY since the pin moved to elitea-platform v4.7.0 (d6f572dbd, client
+# contract 1.3): the 1.3 gap it carried (cancelChatExecution and the six
+# data-control keys of NativeClientPolicy / ClientPublicPolicy) is now defined
+# upstream and tagged `client`. Earlier it was empty from v4.2.0 (1.1) to
+# v4.3.2 (1.2). The file and its rules stay for the next gap.
 #
 # Rules enforced by scripts/contract.mjs build:
 #   - an operation (path + method) that upstream already defines is a hard
@@ -33,136 +22,8 @@
 #
 # Server-sent-event endpoints are NOT described here (OpenAPI 3.0 cannot model
 # text/event-stream usefully); they are typed by hand in src/api/sse/.
-# The overlay may $ref upstream components (ProjectId, XClientVersion,
-# ErrorResponse, the shared 401/403/426 responses); references resolve after
-# the merge.
 openapi: 3.0.3
 info:
   title: Agent Zefir native-gap overlay
-  version: 0.3.0
-
-x-zefir-extend:
-  schemas:
-    NativeClientPolicy:
-      x-zefir-source: 'observed: elitea-main platformconfig NativeClientPolicy data controls (nativeclientpolicy.go), server commit 507a13b0c (PR #1090), 2026-10-06'
-      x-zefir-until: client contract 1.3 release
-      properties:
-        allow_share_out:
-          type: boolean
-          description: >-
-            Copy, share and export of messages and transcripts are allowed.
-            Absent (a server before 1.3) means allowed.
-        allow_share_in:
-          type: boolean
-          description: >-
-            The system share sheet may hand text, links, files and photos to
-            the app. Absent means allowed.
-        allow_cloud_stt:
-          type: boolean
-          description: >-
-            Dictation may use a recogniser that sends audio off the device.
-            Absent or false means on-device recognition only.
-        notification_preview:
-          type: string
-          description: >-
-            What a notification shows on the lock screen: `none` (generic
-            text) or `title`. Absent or any other value reads as `none`.
-        allow_notification_actions:
-          type: boolean
-          description: >-
-            A notification may offer actions; a decision still needs the app
-            unlocked. Absent means allowed.
-        allow_system_surfaces:
-          type: boolean
-          description: >-
-            Widgets, quick actions and other surfaces outside the app may
-            show titles. Absent or false means counts only.
-    ClientPublicPolicy:
-      x-zefir-source: 'observed: elitea-main discovery PublicPolicy data controls (discovery/document.go), server commit 507a13b0c (PR #1090), 2026-10-06'
-      x-zefir-until: client contract 1.3 release
-      properties:
-        allow_share_out:
-          type: boolean
-          description: >-
-            Copy, share and export of messages and transcripts are allowed.
-            Absent (a server before 1.3) means allowed.
-        allow_share_in:
-          type: boolean
-          description: >-
-            The system share sheet may hand text, links, files and photos to
-            the app. Absent means allowed.
-        allow_cloud_stt:
-          type: boolean
-          description: >-
-            Dictation may use a recogniser that sends audio off the device.
-            Absent or false means on-device recognition only.
-        notification_preview:
-          type: string
-          description: >-
-            What a notification shows on the lock screen: `none` (generic
-            text) or `title`. Absent or any other value reads as `none`.
-        allow_notification_actions:
-          type: boolean
-          description: >-
-            A notification may offer actions; a decision still needs the app
-            unlocked. Absent means allowed.
-        allow_system_surfaces:
-          type: boolean
-          description: >-
-            Widgets, quick actions and other surfaces outside the app may
-            show titles. Absent or false means counts only.
-
-paths:
-  /elitea_core/task/prompt_lib/{project_id}/{response_message_id}:
-    parameters:
-      - $ref: '#/components/parameters/ProjectId'
-      - name: response_message_id
-        in: path
-        required: true
-        description: The answer to stop (the send's or the regeneration's `response_message_id`).
-        schema: { type: string, format: uuid }
-    delete:
-      operationId: cancelChatExecution
-      summary: Stop a running answer on the server
-      description: >-
-        Client contract 1.3. Asks the server to stop the run writing this
-        answer (closing the event stream alone does not stop it). 204 also
-        when this caller already stopped it; 409 when the answer is no longer
-        running (it completed or failed) or is not this caller's to stop.
-        After a 204, close the stream and read the transcript again: a run
-        stopped before any output is removed with its question, partial
-        output is kept.
-      tags: [chat, client]
-      x-zefir-source: 'observed: elitea-main agentexecution cancel route (DELETE /api/v2/elitea_core/task/prompt_lib/{projectID}/{responseMessageID}, cancel.go), server commit 507a13b0c (PR #1090), 2026-10-06'
-      x-zefir-until: client contract 1.3 release
-      parameters:
-        - $ref: '#/components/parameters/XClientVersion'
-      responses:
-        '204': { description: Stopped, or already stopped by this caller. }
-        '400':
-          description: An invalid answer id or client version.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '401': { $ref: '#/components/responses/401' }
-        '403': { $ref: '#/components/responses/403' }
-        '409':
-          description: The answer is not running, or this caller may not stop it.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
-        '502':
-          description: The stop could not be recorded; retry.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '504':
-          description: The stop timed out; retry.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
+  version: 0.4.0
+paths: {}

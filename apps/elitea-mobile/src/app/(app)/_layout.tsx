@@ -4,6 +4,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { usePalette } from '@/constants/use-palette';
 import { NotificationBell } from '@/features/notifications/NotificationBell';
 import { ProjectChip } from '@/features/projects/ProjectChip';
+import { useQuickActions } from '@/features/quickActions/useQuickActions';
 import { WorkspaceTitle } from '@/features/workspaces/WorkspaceTitle';
 import { useSelfIdentityRefresh } from '@/state/selfIdentity';
 
@@ -11,6 +12,8 @@ export default function AppLayout() {
   const palette = usePalette();
   // "Who am I", once per session: tells my messages from other people's.
   useSelfIdentityRefresh();
+  // Home-screen quick actions for the active workspace (titles only when the policy allows).
+  useQuickActions();
   return (
     // Every signed-in screen names the active workspace's host in its header.
     <Stack screenOptions={{ headerTitle: (props) => <WorkspaceTitle title={props.children} /> }}>
@@ -38,6 +41,7 @@ export default function AppLayout() {
       <Stack.Screen name="workspaces" options={{ title: 'Workspaces', presentation: 'modal' }} />
       <Stack.Screen name="new" options={{ title: 'New conversation', presentation: 'modal' }} />
       <Stack.Screen name="notifications" options={{ title: 'Notifications' }} />
+      <Stack.Screen name="memory" options={{ title: 'Memory' }} />
     </Stack>
   );
 }

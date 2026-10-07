@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 
 import { registerWipeHook } from '@/security/endSession';
+import { getManagedConfig, subscribeManagedConfig, type ManagedConfig } from '@/security/managedConfig';
 
 /**
  * Client policy: how strictly this device must protect workspace data.
@@ -116,8 +117,38 @@ export const STRICT_DEFAULTS: Readonly<ClientPolicy> = Object.freeze({
 export interface PolicyState {
   policy: Readonly<ClientPolicy>;
   source: PolicySource;
+  /** Present (true) when the device's managed configuration (MDM) tightened the lock policy. */
+  managed?: boolean;
 }
 
+/**
+ * The managed (MDM) lock floor: it only tightens. A required lock wins, the
+ * shorter (non-zero) idle time wins, and screenshots off wins (src/security/managedConfig.ts).
+ */
+export function applyManagedFloor(policy: ClientPolicy, managed: ManagedConfig): { policy: ClientPolicy; tightened: boolean } {
+  const next = { ...policy };
+  if (managed.requireDeviceLock === true) next.require_device_lock = true;
+  // `idle_lock_seconds` 0 means "never relock on resume", the loosest value: a
+  // managed 0 changes nothing, and any managed positive time beats a 0.
+  const idle = managed.idleLockSeconds;
+  if (idle !== null && idle > 0 && next.require_device_lock && (next.idle_lock_seconds === 0 || idle < next.idle_lock_seconds)) {
+    next.idle_lock_seconds = idle;
+  }
+  if (managed.allowScreenshots === false) next.allow_screenshots = false;
+  const tightened =
+    next.require_device_lock !== policy.require_device_lock ||
+    next.idle_lock_seconds !== policy.idle_lock_seconds ||
+    next.allow_screenshots !== policy.allow_screenshots;
+  return { policy: next, tightened };
+}
+
+function withFloor(policy: ClientPolicy, source: PolicySource): PolicyState {
+  const floored = applyManagedFloor(policy, getManagedConfig());
+  return { policy: Object.freeze(floored.policy), source, ...(floored.tightened ? { managed: true } : {}) };
+}
+
+/** The policy as the workspace set it, before the managed floor (re-floored when MDM changes). */
+let unfloored: { policy: ClientPolicy; source: PolicySource } = { policy: STRICT_DEFAULTS, source: 'default' };
 let state: PolicyState = { policy: STRICT_DEFAULTS, source: 'default' };
 const listeners = new Set<() => void>();
 
@@ -145,15 +176,23 @@ export function setPolicy(policy: Partial<ClientPolicy>, source: PolicySource): 
   }
   if (typeof policy.offline_attachments === 'boolean') next.offline_attachments = policy.offline_attachments;
   Object.assign(next, dataControlsFrom(policy as Record<string, unknown>));
-  state = { policy: Object.freeze(next), source };
+  unfloored = { policy: next, source };
+  state = withFloor(next, source);
   for (const listener of [...listeners]) listener();
 }
 
 /** Back to the strict defaults (end of session). */
 export function resetPolicy(): void {
-  state = { policy: STRICT_DEFAULTS, source: 'default' };
+  unfloored = { policy: STRICT_DEFAULTS, source: 'default' };
+  state = withFloor(STRICT_DEFAULTS, 'default');
   for (const listener of [...listeners]) listener();
 }
+
+// An MDM push while the app runs re-applies the floor at once (the lock controller follows).
+subscribeManagedConfig(() => {
+  state = withFloor(unfloored.policy, unfloored.source);
+  for (const listener of [...listeners]) listener();
+});
 
 // A policy belongs to the workspace session that delivered it.
 registerWipeHook('policy', resetPolicy);

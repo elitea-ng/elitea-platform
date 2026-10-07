@@ -14,6 +14,7 @@ import { wireNetwork } from '@/lib/network';
 import { startOutbox } from '@/sync/appOutbox';
 import { startSync } from '@/sync/appSync';
 import { LockGate } from '@/security/lock/LockGate';
+import { startManagedConfig } from '@/security/managedConfig';
 import { PrivacyCover } from '@/security/privacy/PrivacyCover';
 import { usePrivacyProtection } from '@/security/privacy/usePrivacyProtection';
 import { useLockController } from '@/security/lock/useLockController';
@@ -27,6 +28,8 @@ import { sweepUploadTemp } from '@/api/attachments/upload';
 import { sweepDownloadTemp } from '@/features/chat/attachments/opener';
 import { sweepPickerCopies } from '@/features/chat/attachments/pickers';
 
+// MDM AppConfig first: its lock floor must be in place before the launch lock decision.
+startManagedConfig();
 wireFocusManager();
 wireUpgradeRecovery();
 // The encrypted offline store follows the session, the policy and the device lock.

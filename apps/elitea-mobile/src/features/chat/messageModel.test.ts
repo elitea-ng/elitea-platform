@@ -247,6 +247,19 @@ describe('failed answers', () => {
     const [fine] = toChatMessages({ participants, message_groups: [{ ...failed, meta: {}, message_items: [text(0, 'ok')] }] });
     expect(fine.error).toBeNull();
   });
+
+  it('show a stored budget refusal (meta.error_code) as the plain budget message', () => {
+    const [member] = toChatMessages({
+      participants,
+      message_groups: [{ ...failed, meta: { is_error: true, error_code: 'MEMBER_BUDGET_EXHAUSTED', error: 'Your budget in this project is exhausted.' } }],
+    });
+    expect(member.error).toMatch(/^Your budget in this project is used up/);
+    const [project] = toChatMessages({
+      participants,
+      message_groups: [{ ...failed, meta: undefined, metadata: { is_error: true, error_code: 'PROJECT_BUDGET_EXHAUSTED' } }],
+    });
+    expect(project.error).toMatch(/^This project's shared budget is used up/);
+  });
 });
 
 describe('agentsCanJoin', () => {

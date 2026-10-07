@@ -1,0 +1,62 @@
+diff --git a/node_modules/expo-quick-actions/ios/AppDelegate.swift b/node_modules/expo-quick-actions/ios/AppDelegate.swift
+index 37558e0..d07d8ad 100644
+--- a/node_modules/expo-quick-actions/ios/AppDelegate.swift
++++ b/node_modules/expo-quick-actions/ios/AppDelegate.swift
+@@ -17,6 +17,12 @@ public class ExpoQuickActionsAppDelegate: ExpoAppDelegateSubscriber {
+   }
+ 
+   public func application(_ application: UIApplication, performActionFor shortcutItem: UIApplicationShortcutItem, completionHandler: @escaping (Bool) -> Void) {
++    // Patched (agent-zefir): under the scene life cycle a cold-start quick action
++    // comes here (ExpoAppSceneDelegate forwards connectionOptions.shortcutItem)
++    // before JS listens, and launch options carry none. Keep it for takeInitial().
++    if !quickActionObserved {
++      pendingAction = shortcutItem
++    }
+     NotificationCenter.default.post(name: Notification.Name(onQuickAction), object: shortcutItem)
+     completionHandler(true)
+   }
+diff --git a/node_modules/expo-quick-actions/ios/ExpoQuickActionsModule.swift b/node_modules/expo-quick-actions/ios/ExpoQuickActionsModule.swift
+index 252da49..7806585 100644
+--- a/node_modules/expo-quick-actions/ios/ExpoQuickActionsModule.swift
++++ b/node_modules/expo-quick-actions/ios/ExpoQuickActionsModule.swift
+@@ -72,6 +72,9 @@ func toActionObject(item: UIApplicationShortcutItem?) -> ActionObject? {
+ }
+ 
+ var initialAction: UIApplicationShortcutItem?
++// Patched (agent-zefir): a quick action performed before JS listened (scene cold start).
++var pendingAction: UIApplicationShortcutItem?
++var quickActionObserved = false
+ 
+ public class ExpoQuickActionsModule: Module {
+     
+@@ -96,6 +99,14 @@ public class ExpoQuickActionsModule: Module {
+             }
+         }.runOnQueue(.main)
+         
++        // Patched (agent-zefir): the action that launched the app, once (then nil).
++        Function("takeInitial") { () -> [String: Any]? in
++            let item = pendingAction ?? initialAction
++            pendingAction = nil
++            initialAction = nil
++            return toActionObject(item: item)?.toDictionary()
++        }
++
+         AsyncFunction("isSupported") { () -> Bool in
+             return true
+         }
+@@ -103,6 +114,7 @@ public class ExpoQuickActionsModule: Module {
+         Events(onQuickAction)
+         
+         OnStartObserving {
++            quickActionObserved = true
+             NotificationCenter.default.addObserver(
+                 self,
+                 selector: #selector(self.quickActionListener),
+@@ -112,6 +124,7 @@ public class ExpoQuickActionsModule: Module {
+         }
+         
+         OnStopObserving {
++            quickActionObserved = false
+             NotificationCenter.default.removeObserver(
+                 self,
+                 name: Notification.Name(onQuickAction),

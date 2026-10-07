@@ -133,3 +133,24 @@ describe('workspace switcher', () => {
     expect(workspace.beginAddWorkspace).toHaveBeenCalled();
   });
 });
+
+describe('MDM AppConfig', () => {
+  const { refreshManagedConfig } = jest.requireActual<typeof import('@/security/managedConfig')>('@/security/managedConfig');
+  afterEach(() => refreshManagedConfig(() => null));
+
+  it('pre-fills the address with the managed server_url and says where it came from', async () => {
+    refreshManagedConfig(() => ({ server_url: 'https://ai.corp.example.com' }));
+    await render(<ConnectScreen />);
+    expect(screen.getByLabelText('Workspace address').props.value).toBe('https://ai.corp.example.com');
+    expect(screen.getByTestId('connect-managed-hint')).toBeTruthy();
+    await fireEvent.changeText(screen.getByLabelText('Workspace address'), 'https://other.example.com');
+    expect(screen.queryByTestId('connect-managed-hint')).toBeNull();
+  });
+
+  it('the address of a workspace that just signed out wins over the managed one', async () => {
+    refreshManagedConfig(() => ({ server_url: 'https://ai.corp.example.com' }));
+    setSession({ lastOriginHint: 'https://last.example.com' });
+    await render(<ConnectScreen />);
+    expect(screen.getByLabelText('Workspace address').props.value).toBe('https://last.example.com');
+  });
+});

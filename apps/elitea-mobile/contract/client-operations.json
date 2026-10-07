@@ -36,6 +36,12 @@
     "setMessageFeedback",
     "deleteMessageFeedback",
     "exportConversation",
-    "getRecommendations"
+    "getRecommendations",
+    "deleteNotification",
+    "deleteNotifications",
+    "listMemories",
+    "deleteMemory",
+    "clearMemories",
+    "getProjectUsage"
   ]
 }

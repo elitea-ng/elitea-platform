@@ -5,9 +5,9 @@
  * Apache-2.0, see contract/LICENSE.elitea) merged with the Agent Zefir
  * native-gap overlay and pruned to contract/client-operations.json.
  *
- * upstream sha256:    a0c2a7009c5350f1d84b67a914add32dcd65ad683256088a981ab33701fa1f08
- * overlay sha256:     3017febbed2220117b862458b3b9e724c438a1852d569432173b8cf02cef2752
- * operations sha256:  524e54724928d5818b5f3c9294fff880c25dad900fe7635b8cc2ae34afed6a70
+ * upstream sha256:    27c4b5278cbc1415565e9b74214900b8dbe0cc7680cedfc23de341ba21d0f9c6
+ * overlay sha256:     a841b06906dceacba2d34407cd109837cb418a101cfa6c4aea80d9b1ef01bf01
+ * operations sha256:  ff6e5f7c7eb16a1675091bbc02f0476c073839b3db86c0153416289127dbe0d4
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -390,6 +390,8 @@ export interface paths {
          *     `agent_hitl_already_resolved`, `agent_authorization_already_resolved`
          *     or `agent_output_limit_already_resolved` and `retryable: false`:
          *     refresh the transcript instead of retrying.
+         *
+         *     The existing static continuation contract uses agent.continue.static.v1 with the exact original pause identity.
          */
         post: operations["continueChatExecution"];
         delete?: never;
@@ -511,6 +513,67 @@ export interface paths {
          */
         post: operations["createConversation"];
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/memories/prompt_lib/{project_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List the caller's own persistent, cross-conversation memories
+         * @description internal/api/v2/memories/handler.go's List (#870). Answers only the
+         *     AUTHENTICATED caller's own entries in this project — never another
+         *     user's, and never gated by an "admin sees everyone's memories" mode.
+         *     Most recent first. `q`, when given, filters by a case-insensitive
+         *     substring match over content and tags.
+         */
+        get: operations["listMemories"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete every one of the caller's own memories in this project
+         * @description internal/api/v2/memories/handler.go's ClearAll (#870). Settings >
+         *     Memory's "Clear all" control, after its own confirmation dialog.
+         *     Never touches another user's memories.
+         */
+        delete: operations["clearMemories"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/memory/prompt_lib/{project_id}/{memory_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                memory_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Delete one of the caller's own memories
+         * @description internal/api/v2/memories/handler.go's Delete (#870). Idempotent: a
+         *     `memory_id` that never existed, or already belonged to someone else,
+         *     answers 204 the same as a successful delete — the same
+         *     DeleteMessageFeedback-style shape, matching MemoriesRepo.Delete's own
+         *     comment.
+         */
+        delete: operations["deleteMemory"];
         options?: never;
         head?: never;
         patch?: never;
@@ -855,7 +918,7 @@ export interface paths {
             path: {
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
-                /** @description The answer to stop (the send's or the regeneration's `response_message_id`). */
+                /** @description The running answer to stop (its `uid`, the send's or the regeneration's `response_message_id`). */
                 response_message_id: string;
             };
             cookie?: never;
@@ -865,7 +928,30 @@ export interface paths {
         post?: never;
         /**
          * Stop a running answer on the server
-         * @description Client contract 1.3. Asks the server to stop the run writing this answer (closing the event stream alone does not stop it). 204 also when this caller already stopped it; 409 when the answer is no longer running (it completed or failed) or is not this caller's to stop. After a 204, close the stream and read the transcript again: a run stopped before any output is removed with its question, partial output is kept.
+         * @description Client contract 1.3. Stops the turn that is writing this answer: the
+         *     execution's desired state becomes CANCELLED, which both workers
+         *     observe (the Python worker on its next lease poll or output
+         *     acknowledgement, after any synchronous SDK step already running; the
+         *     Rust worker through its lease monitor, which stops the model run) and
+         *     settle as cancelled. Dropping the stream alone does
+         *     NOT stop the run; it keeps spending the budget.
+         *
+         *     What happens to the answer: a turn stopped before any output is
+         *     removed together with its question; a turn with partial output keeps
+         *     what was written. After a 204, close the stream and reload the
+         *     transcript rather than waiting for a terminal frame.
+         *
+         *     Only the conversation's author, or the user who asked the question,
+         *     may stop it (internal/api/v2/agentexecution/cancel.go). The project
+         *     permission check runs before the route reads anything, so an
+         *     invalid project id answers 403, like a project the caller cannot
+         *     use.
+         *
+         *     Idempotent for the same caller: stopping an answer that this caller
+         *     already stopped answers 204 again, also after the run has settled.
+         *     An answer that completed (or failed) on its own, one that is not this
+         *     caller's, or one that does not exist answers 409 without saying
+         *     which; for a completed answer the transcript already holds it.
          */
         delete: operations["cancelChatExecution"];
         options?: never;
@@ -931,6 +1017,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/elitea_core/usage/prompt_lib/{project_id}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        /**
+         * Current-period usage against the applicable budget
+         * @description Backs Settings → Usage. The period is the current calendar month and is
+         *     reported back in `period_start`, `period_end` and `resets_at`, so no
+         *     date range is accepted.
+         *
+         *     `scope=project` reports the whole project; `scope=user` reports only the
+         *     calling member's own budget within it.
+         *
+         *     The dimensional views — `daily`, `models` and the token totals — come
+         *     from the per-request usage ledger added by issue #320. They are ABSENT,
+         *     not empty, when the ledger holds no row for the scope in this period:
+         *     an empty series reads as "no calls were made", which is a different and
+         *     wrong claim about a deployment upgraded part-way through a period.
+         *     `usage_events_available` says which case the payload is in, exactly as
+         *     `spend_available` distinguishes "no spend yet" from "no data".
+         *
+         *     A member who may not see platform cost figures receives the same payload
+         *     with `monthly_limit`, `effective_limit`, `spend`, `remaining` and
+         *     `currency` REMOVED and `can_see_amounts: false`; the `spend` inside each
+         *     `daily` and `models` row is removed too, because leaving the same money
+         *     in a per-day series would make the control decorative. Percentages, the
+         *     warning threshold, the period and the token counts are still present, so
+         *     the usage bar and the charts still render. Project admins, and the owner
+         *     of a personal project, see the amounts.
+         */
+        get: operations["getProjectUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/notifications/notification/prompt_lib/{project_id}/{notification_id}": {
         parameters: {
             query?: never;
@@ -950,7 +1081,11 @@ export interface paths {
          */
         put: operations["markNotificationSeen"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete one of the caller's notifications
+         * @description Deletes one notification of the CALLER. The deletion reaches the caller's other devices as a `deleted` tombstone in the `changes_since` delta of listNotifications (shared migration 0144).
+         */
+        delete: operations["deleteNotification"];
         options?: never;
         head?: never;
         patch?: never;
@@ -981,7 +1116,11 @@ export interface paths {
         /** Mark several (or all) of the caller's notifications seen or unseen */
         put: operations["markNotificationsSeen"];
         post?: never;
-        delete?: never;
+        /**
+         * Delete several of the caller's notifications
+         * @description Deletes the listed notifications of the CALLER; an id that is not the caller's is skipped, and `deleted` counts what was removed. Each deletion reaches the caller's other devices as a `deleted` tombstone in the `changes_since` delta of listNotifications (shared migration 0144's AFTER DELETE trigger), so a dismissed item does not come back on another device.
+         */
+        delete: operations["deleteNotifications"];
         options?: never;
         head?: never;
         patch?: never;
@@ -1270,6 +1409,111 @@ export interface components {
             };
             version: string;
         };
+        /**
+         * @description The calendar month a budget accrues over. Derived exactly as the LLM
+         *     gateway derives it (first instant of the current month, UTC) — the
+         *     accumulator's key includes the period start, so a period computed any
+         *     other way would look up a row that does not exist and report zero spend
+         *     against a real limit.
+         */
+        BudgetPeriodWindow: {
+            /**
+             * @description The period tag, YYYYMM.
+             * @example 202608
+             */
+            period: string;
+            /**
+             * @description Last day of the period, YYYY-MM-DD.
+             * @example 2026-08-31
+             */
+            period_end: string;
+            /**
+             * @description First day of the period, YYYY-MM-DD.
+             * @example 2026-08-01
+             */
+            period_start: string;
+            /**
+             * Format: date-time
+             * @description When the accumulator rolls over to a new period row.
+             */
+            resets_at: string;
+        };
+        /**
+         * @description The five COST fields — monthly_limit, effective_limit, spend, remaining
+         *     and currency — are deliberately NOT in `required`. Both project-scoped
+         *     reads (`getProjectBudget`, `getProjectUsage`) REMOVE them for a caller
+         *     whose `can_see_amounts` is false, so requiring them would make a
+         *     correct redacted response fail its own schema. Everything that is not a
+         *     cost figure — the percentage, the threshold, the period — is required,
+         *     because redaction never removes those.
+         */
+        BudgetState: components["schemas"]["BudgetPeriodWindow"] & {
+            /**
+             * @description Present on the project-scoped reads only. False means the five
+             *     cost fields were removed from this payload; percentages, the
+             *     warning threshold and the period remain.
+             */
+            can_see_amounts?: boolean;
+            /**
+             * @description Always USD. The gateway compares limits against a nano-USD
+             *     counter and nothing converts, so the write path rejects any
+             *     other value rather than storing a label enforcement ignores.
+             * @enum {string}
+             */
+            currency?: "USD";
+            /**
+             * @description The ENFORCED ceiling. Null when the scope is unlimited — which
+             *     includes a scope that has a monthly_limit but is disabled.
+             */
+            effective_limit?: number | null;
+            /**
+             * @description False marks the scope deliberately exempt: it stays unlimited
+             *     whatever monthly_limit says. Stored separately from the
+             *     enforcement flag so `enabled with no ceiling yet` and
+             *     `deliberately exempt` do not read back as the same thing.
+             */
+            enabled: boolean;
+            /**
+             * @description Where the enforced limit came from. The reference had a third
+             *     value, `default`, for a platform-wide fallback; this platform
+             *     has none.
+             * @enum {string}
+             */
+            limit_source: "explicit" | "unlimited";
+            /** @description The AUTHORED ceiling in USD. Null means none was set. */
+            monthly_limit?: number | null;
+            /** @description Null when the scope is unlimited or the limit is zero. */
+            percent_used: number | null;
+            /** @description Null when the scope is unlimited. Never negative. */
+            remaining?: number | null;
+            /** @description USD accrued this period. Zero when nothing is recorded. */
+            spend?: number;
+            /**
+             * @description Whether an accumulator row exists for this period at all, which
+             *     is what separates "nothing billed yet" from "no usage data".
+             */
+            spend_available: boolean;
+            /**
+             * @description True when `percent_used` has reached `warning_pct` — the
+             *     soft-alert threshold this scope resolves, which is the
+             *     project's own value, else the platform value an operator set
+             *     through `PUT /admin/gateway/budget-alerts`, else 80.
+             *
+             *     The server answers it rather than each client deriving it, so a
+             *     warning banner and the percentage beside it cannot disagree,
+             *     and so the comparison is made once against the same resolved
+             *     threshold the gateway alerts on. False whenever there is
+             *     nothing to warn about: an unlimited scope, a disabled one and a
+             *     zero ceiling all report a null `percent_used`.
+             *
+             *     It is not a cost figure and is never redacted: a member who may
+             *     not see the amounts still learns the project is close to its
+             *     limit.
+             */
+            warning_active: boolean;
+            /** @description Percent-of-limit at which this scope warns. */
+            warning_pct: number;
+        };
         /** @description Resume a paused turn. NOTE(W2): internal/api/v2/agentexecution/route.go:201 (`currentContinuationBody`); which fields are allowed depends on the `execution_contract` (route.go:484-540). */
         ChatContinueRequest: {
             /** @description `authorize` or `skip` (agent.continue.authorization.v1, single request). */
@@ -1455,20 +1699,20 @@ export interface components {
         };
         /** @description The public subset of the native client policy (ADR-0025 decision 5); the full policy travels with every token response. NOTE(W2): internal/api/v2/discovery/document.go:65 (`PublicPolicy`). */
         ClientPublicPolicy: {
-            /** @description Dictation may use a recogniser that sends audio off the device. Absent or false means on-device recognition only. */
-            allow_cloud_stt?: boolean;
-            /** @description A notification may offer actions; a decision still needs the app unlocked. Absent means allowed. */
-            allow_notification_actions?: boolean;
-            /** @description The system share sheet may hand text, links, files and photos to the app. Absent means allowed. */
-            allow_share_in?: boolean;
-            /** @description Copy, share and export of messages and transcripts are allowed. Absent (a server before 1.3) means allowed. */
-            allow_share_out?: boolean;
-            /** @description Widgets, quick actions and other surfaces outside the app may show titles. Absent or false means counts only. */
-            allow_system_surfaces?: boolean;
+            /** @description Client contract 1.3. Dictation may use a recogniser that sends audio off the device (the platform's server recogniser or the workspace's transcription model). False means on-device recognition only. Default false. */
+            allow_cloud_stt: boolean;
+            /** @description Client contract 1.3. A notification may offer actions (mark read, open an approval). A decision always needs the app unlocked. Default true. */
+            allow_notification_actions: boolean;
+            /** @description Client contract 1.3. The system share sheet may send text, links, files and photos into the app. Default true. */
+            allow_share_in: boolean;
+            /** @description Client contract 1.3. Copy, share and export of messages and transcripts out of the app are allowed. Default true. */
+            allow_share_out: boolean;
+            /** @description Client contract 1.3. Widgets, home-screen quick actions and other surfaces outside the app may show conversation and agent titles. False means counts only. Default false. */
+            allow_system_surfaces: boolean;
             /** @description Deployment-wide minimum client version; empty means none. The document's per-client `min_client_version` entry, when present, is never lower than this. */
             min_client_version: string;
-            /** @description What a notification shows on the lock screen: `none` (generic text) or `title`. Absent or any other value reads as `none`. */
-            notification_preview?: string;
+            /** @description Client contract 1.3. What a notification shows on the lock screen: `none` (a generic text only, the default) or `title` (the conversation or item title). Message content is never shown. Treat an unknown value as `none`. */
+            notification_preview: string;
             /** @description Offline storage is allowed. */
             offline_enabled: boolean;
             /** @description The client must refuse to run without a device passcode or biometric lock. */
@@ -1583,6 +1827,7 @@ export interface components {
             created_at: string;
             created_by: string;
             description?: string;
+            editor_test_runs?: components["schemas"]["EditorTestRunsPage"];
             /** @description Null when the conversation sits outside every folder. */
             folder_id?: string | null;
             id: string;
@@ -1595,6 +1840,9 @@ export interface components {
                 [key: string]: unknown;
             }[];
             meta: {
+                editor_test?: components["schemas"]["EditorTestContext"];
+                is_hidden?: boolean;
+            } & {
                 [key: string]: unknown;
             };
             name: string;
@@ -1829,6 +2077,54 @@ export interface components {
              */
             server_version: string;
         };
+        /** @description Immutable Test identity. Main derives actor and project from authenticated authority. */
+        EditorTestContext: {
+            actor_id: string;
+            application_id: string;
+            application_version_id: string;
+            project_id: string;
+            /** @enum {integer} */
+            revision: 1;
+        };
+        EditorTestInputReference: {
+            bundle_id: string;
+            content_digest: string;
+            entry_id: string;
+            immutable_version: string;
+        };
+        /** @description Existing admitted run. Reading or observing this row creates no work. */
+        EditorTestRun: {
+            /** Format: date-time */
+            admitted_at: string;
+            can_control: boolean;
+            desired_state: string;
+            events_url?: string;
+            execution_generation: string;
+            execution_id: string;
+            input_reference: components["schemas"]["EditorTestInputReference"];
+            /** @enum {string} */
+            phase: "RUNNING" | "PAUSED" | "TERMINAL";
+            /** Format: uuid */
+            question_id: string;
+            /**
+             * Format: int64
+             * @description Original response group for this execution and generation. Never substitute a newer response.
+             */
+            response_message_group_id?: number;
+            /** Format: uuid */
+            response_message_id: string;
+            /** Format: date-time */
+            settled_at?: string | null;
+            state: string;
+            /** @description Visible persisted trace exists and the original response still matches this execution and generation. Omission on older Main versions means unavailable. */
+            trace_available?: boolean;
+        };
+        EditorTestRunsPage: {
+            has_more: boolean;
+            limit: number;
+            offset: number;
+            rows: components["schemas"]["EditorTestRun"][];
+        };
         /** @description NOTE(W2): wire truth from pkg/apierr/apierr.go:47-59 (apierr.Write encodes `{"error": message}`) and the handlers' inline `map[string]any{"error": ...}` writes. No operation documented in this spec emits the pylon `ok` field via THIS schema; the five social/handler.go 500 sites (:268, 301, 321, 341, 419) use the named `SocialActionErrorResponse` schema instead (see there), and five more UNDOCUMENTED sites remain on toolkits/handler.go (:286, 312, 324, 350, 362). */
         ErrorResponse: {
             /** @description Human-readable error message */
@@ -1867,6 +2163,26 @@ export interface components {
              */
             max_context_tokens?: number;
             preserve_recent_messages?: number;
+        };
+        /** @description One persistent, cross-conversation personal memory (#870). internal/api/v2/memories/handler.go. Scoped to (project, the authenticated caller) — never readable or writable cross-user. `enabled=false` keeps the entry without letting it reach a chat turn's recall (internal/application/agentexecution's CurrentMemoryRecallResolver). NOT the same feature as the `memory` TOOLKIT type (integrations/toolkits/memory_toolkit) — that is an agent-scoped key/value store the LLM calls as a tool mid-turn; this is read passively, before a turn starts. */
+        MemoryEntry: {
+            /** @description The remembered fact's text. Refused past 4000 characters (memories.MaxContentBytes). */
+            content: string;
+            /** Format: date-time */
+            created_at: string;
+            enabled: boolean;
+            id: string;
+            project_id: string;
+            /** @description The conversation this memory was captured from, when it was saved via the "Remember this" message action (chat_conversations.uuid). Absent when typed directly into the settings panel. Informational only — the source conversation may since have been deleted (tenant/0137_personal_memory_entries.sql's own header explains why this deliberately holds no foreign key). */
+            source_conversation_id?: string | null;
+            /** @description Free-form labels for the settings panel's own search/filter. Never more than 16 (memories.MaxTags). */
+            tags: string[];
+            /** Format: date-time */
+            updated_at: string;
+        };
+        MemoryEntryList: {
+            items: components["schemas"]["MemoryEntry"][];
+            total: number;
         };
         /** @description The user's default summarization settings, stored in centry.social_users.default_summarization (jsonb) and edited by Settings > Memory. pylon's SummarizationModel, field for field. Three of these flatten into a conversation's `context_strategy.summary_llm_settings` when one is resolved: summary_model_name -> model_name, summary_model_project_id -> model_project_id, target_summary_tokens -> max_tokens. */
         MemorySummarization: {
@@ -1986,18 +2302,18 @@ export interface components {
         };
         /** @description The server-driven native client policy (ADR-0025 decision 5), the `native_client_policy` admin Configuration section. The device-side fields are enforced by the client; the server refuses versions below `min_client_version` with 426. Adding a field is additive; renaming or removing one bumps `client_contract`. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:43 (`NativeClientPolicy`). */
         NativeClientPolicy: {
-            /** @description Dictation may use a recogniser that sends audio off the device. Absent or false means on-device recognition only. */
-            allow_cloud_stt?: boolean;
-            /** @description A notification may offer actions; a decision still needs the app unlocked. Absent means allowed. */
-            allow_notification_actions?: boolean;
+            /** @description Client contract 1.3. Dictation may use a recogniser that sends audio off the device (the platform's server recogniser or the workspace's transcription model). False means on-device recognition only. Default false. */
+            allow_cloud_stt: boolean;
+            /** @description Client contract 1.3. A notification may offer actions (mark read, open an approval). A decision always needs the app unlocked. Default true. */
+            allow_notification_actions: boolean;
             /** @description When false, block screenshots and screen recording where the platform allows it. */
             allow_screenshots: boolean;
-            /** @description The system share sheet may hand text, links, files and photos to the app. Absent means allowed. */
-            allow_share_in?: boolean;
-            /** @description Copy, share and export of messages and transcripts are allowed. Absent (a server before 1.3) means allowed. */
-            allow_share_out?: boolean;
-            /** @description Widgets, quick actions and other surfaces outside the app may show titles. Absent or false means counts only. */
-            allow_system_surfaces?: boolean;
+            /** @description Client contract 1.3. The system share sheet may send text, links, files and photos into the app. Default true. */
+            allow_share_in: boolean;
+            /** @description Client contract 1.3. Copy, share and export of messages and transcripts out of the app are allowed. Default true. */
+            allow_share_out: boolean;
+            /** @description Client contract 1.3. Widgets, home-screen quick actions and other surfaces outside the app may show conversation and agent titles. False means counts only. Default false. */
+            allow_system_surfaces: boolean;
             /**
              * Format: int64
              * @description Lock the app after this many seconds in the background; 0 never locks. 0 to 86400.
@@ -2005,8 +2321,8 @@ export interface components {
             idle_lock_seconds: number;
             /** @description The lowest version this deployment serves this client; empty means none. MAJOR.MINOR.PATCH with an optional -prerelease. */
             min_client_version: string;
-            /** @description What a notification shows on the lock screen: `none` (generic text) or `title`. Absent or any other value reads as `none`. */
-            notification_preview?: string;
+            /** @description Client contract 1.3. What a notification shows on the lock screen: `none` (a generic text only, the default) or `title` (the conversation or item title). Message content is never shown. Treat an unknown value as `none`. */
+            notification_preview: string;
             /** @description Whether attachments may be stored offline, or only messages. */
             offline_attachments: boolean;
             /**
@@ -2095,6 +2411,10 @@ export interface components {
             updated_at: string | null;
             user_id: number;
             uuid: string;
+        };
+        /** @description NOTE(W2): internal/api/v2/notifications/api.go:405 (`decodeCurrentNotificationBulkDelete`). */
+        NotificationBulkDeleteRequest: {
+            ids: number[];
         };
         /** @description NOTE(W2): internal/api/v2/notifications/api.go:383 (`decodeCurrentNotificationBulkUpdate`). */
         NotificationBulkSeenRequest: {
@@ -2243,6 +2563,45 @@ export interface components {
             /** @description The caller's own federated identity references, exactly as public.auth_core__user_provider.provider_ref stores them (`oidc:<sub>`, `saml:<nameid>`, or a pylon-era bare subject). An operator copies one of these into the deployment's `identity.initial_global_admins` to make a global administrator, which previously needed a SELECT against the production database. Absent when the account holds none: a Form password login creates no provider row. Never another user's — the read is keyed on the authenticated principal's own user id. */
             provider_refs?: string[];
         };
+        StaticPipelineContinuationBody: components["schemas"]["StaticPipelineRootContinuation"] | components["schemas"]["StaticPipelineToolsContinuation"];
+        StaticPipelineContinuationReceipt: {
+            command_id: string;
+            created: boolean;
+            events_url: string;
+            execution_id: string;
+            /** Format: uuid */
+            response_message_id: string;
+            task_id: string;
+        };
+        StaticPipelineLeafDecision: {
+            /** @enum {string} */
+            action: "continue";
+            child_thread_id: string;
+            pause_id: string;
+            tool_call_id: string;
+            value: string;
+        };
+        /** @description Continue the original before/after occurrence. Main resolves its frozen checkpoint and version; the browser supplies neither. */
+        StaticPipelineRootContinuation: {
+            /** Format: uuid */
+            conversation_uuid: string;
+            /** Format: uuid */
+            message_id: string;
+            project_id: number;
+            static_pause_id: string;
+            thread_id?: string;
+            user_input: string;
+        };
+        /** @description Continue only selected original saved-pipeline leaves. Main atomically retains every unselected occurrence. */
+        StaticPipelineToolsContinuation: {
+            /** Format: uuid */
+            conversation_uuid: string;
+            /** Format: uuid */
+            message_id: string;
+            project_id: number;
+            static_decisions: components["schemas"]["StaticPipelineLeafDecision"][];
+            thread_id?: string;
+        };
         /** @description A refused `changes_since` request (ADR-0025 WP6). `error` is `invalid_sync_cursor` (400: the cursor does not decode, or was issued for another list, scope or filter), `invalid_limit` (400) or `sync_cursor_expired` (410: the cursor is older than the tombstone retention, 97 days; resync with `changes_since=0`). NOTE(W2): internal/application/changesync/changesync.go (`ErrorBody`). */
         SyncCursorError: {
             error: string;
@@ -2285,6 +2644,95 @@ export interface components {
         };
         /** @description Opaque tool/toolkit settings blob — see marker. */
         ToolSettings: unknown;
+        UsageDailyEntry: {
+            /** Format: int64 */
+            api_requests: number;
+            /** Format: int64 */
+            completion_tokens: number;
+            /**
+             * Format: date
+             * @description The UTC calendar day, the zone billing periods are computed in.
+             */
+            date: string;
+            /** Format: int64 */
+            prompt_tokens: number;
+            /**
+             * @description USD for the day. REMOVED for a caller who may not see amounts, like
+             *     every other money field.
+             */
+            spend?: number | null;
+            /** Format: int64 */
+            total_tokens: number;
+        };
+        /**
+         * @description The per-model, per-day and per-token views, from the per-request usage
+         *     ledger (issue #320). Before that ledger existed the platform kept one
+         *     accumulated figure per scope and period, and these views could not be
+         *     populated at all.
+         *
+         *     Every field except `usage_events_available` is ABSENT when the ledger
+         *     holds no row for the scope in this period. Read the flag first.
+         */
+        UsageDimensions: {
+            /**
+             * Format: int64
+             * @description Billed requests in the period.
+             */
+            api_requests?: number;
+            /** Format: int64 */
+            completion_tokens?: number;
+            /**
+             * @description One entry per day that had at least one call. Days with no calls are
+             *     omitted rather than zero-filled: the period runs to the end of the
+             *     calendar month, and a zero for a day nobody could have used yet is a
+             *     claim about the future.
+             */
+            daily?: components["schemas"]["UsageDailyEntry"][];
+            /** @description One entry per (provider, model) billed in the period, ordered by spend. */
+            models?: components["schemas"]["UsageModelEntry"][];
+            /**
+             * Format: int64
+             * @description Provider-reported prompt tokens for the period. Never estimated.
+             */
+            prompt_tokens?: number;
+            /** Format: int64 */
+            total_tokens?: number;
+            /**
+             * @description Whether the ledger holds any row for this scope in this period.
+             *     FALSE means no data, which is NOT the same claim as no calls — the
+             *     accumulated `spend` may still be non-zero for a period that began
+             *     before the ledger did.
+             */
+            usage_events_available: boolean;
+        };
+        UsageModelEntry: {
+            /** Format: int64 */
+            api_requests: number;
+            /** Format: int64 */
+            completion_tokens: number;
+            model: string;
+            /** Format: int64 */
+            prompt_tokens: number;
+            provider: string;
+            /** @description USD for the model. REMOVED for a caller who may not see amounts. */
+            spend?: number | null;
+            /** Format: int64 */
+            total_tokens: number;
+        };
+        UsageReport: {
+            /**
+             * @description Present for scope=project only.
+             * @enum {string}
+             */
+            budget_period?: "monthly";
+            /** @description Present for scope=user only. See MemberBudget.enforced. */
+            enforced?: boolean;
+            project_id: number;
+            /** @enum {string} */
+            scope: "project" | "user";
+            /** @description Null for scope=project. */
+            user_id: number | null;
+        } & components["schemas"]["UsageDimensions"] & components["schemas"]["BudgetState"];
         VersionMeta: {
             /** @description Written by UpdateAttachmentStorage as {"toolkit_id": "..."} (eliteacore/handler.go:1777-1781). */
             attachment_storage?: {
@@ -2927,7 +3375,7 @@ export interface operations {
     continueChatExecution: {
         parameters: {
             query: {
-                execution_contract: "agent.continue.hitl.v1" | "agent.continue.authorization.v1" | "agent.continue.output-limit.v1";
+                execution_contract: "agent.continue.hitl.v1" | "agent.continue.authorization.v1" | "agent.continue.output-limit.v1" | "agent.continue.static.v1";
             };
             header?: {
                 /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
@@ -2943,7 +3391,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ChatContinueRequest"];
+                "application/json": components["schemas"]["ChatContinueRequest"] & (components["schemas"]["StaticPipelineContinuationBody"] | components["schemas"]["ChatContinueRequest"]);
             };
         };
         responses: {
@@ -2953,7 +3401,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ChatExecutionStarted"];
+                    "application/json": components["schemas"]["ChatExecutionStarted"] & (components["schemas"]["StaticPipelineContinuationReceipt"] | components["schemas"]["ChatExecutionStarted"]);
                 };
             };
             /** @description A malformed request. */
@@ -3023,7 +3471,10 @@ export interface operations {
                 /** @description `md` (the default) is the readable document — a title, a short header block and one section per message. `json` is the faithful one, carrying every field the transcript read returns. Any other value is a 400 rather than a silent fallback, because a client that asked for a format it did not get would save the wrong extension. */
                 format?: "md" | "markdown" | "json";
             };
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 /** @description The conversation's numeric id or its UUID. Both resolve, the same way the conversation detail read resolves them. */
                 conversation_id: string;
@@ -3058,14 +3509,19 @@ export interface operations {
             401: components["responses"]["401"];
             403: components["responses"]["403"];
             404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
     };
     getConversation: {
         parameters: {
             query?: {
+                editor_test_runs?: boolean;
                 /** @description Embed this many message groups (0 or absent embeds none). */
                 messages_limit?: number;
+                messages_offset?: number;
+                runs_limit?: number;
+                runs_offset?: number;
                 /** @description Order of the embedded groups, `asc` or `desc`. */
                 sort_order?: string;
             };
@@ -3223,10 +3679,110 @@ export interface operations {
             500: components["responses"]["500"];
         };
     };
+    listMemories: {
+        parameters: {
+            query?: {
+                /** @description Case-insensitive substring filter over content and tags. */
+                q?: string;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's own memories in this project. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryEntryList"];
+                };
+            };
+            400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    clearMemories: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How many memories were removed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        removed: number;
+                    };
+                };
+            };
+            400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
+    deleteMemory: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                memory_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted (or already absent). */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["InvalidClientVersion"];
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
     getMessageFeedback: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 /** @description The message-GROUP uuid — the same `{messageID}` GetMessage and DeleteMessage share (internal/api/v2/conversations/handler.go). */
                 message_id: string;
@@ -3246,15 +3802,20 @@ export interface operations {
                     "application/json": components["schemas"]["MessageFeedbackSummary"];
                 };
             };
+            400: components["responses"]["InvalidClientVersion"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
     };
     setMessageFeedback: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 /** @description The message-GROUP uuid — the same `{messageID}` GetMessage and DeleteMessage share (internal/api/v2/conversations/handler.go). */
                 message_id: string;
@@ -3298,13 +3859,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
+            426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
     };
     deleteMessageFeedback: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 /** @description The message-GROUP uuid — the same `{messageID}` GetMessage and DeleteMessage share (internal/api/v2/conversations/handler.go). */
                 message_id: string;
@@ -3324,16 +3889,24 @@ export interface operations {
                     "application/json": components["schemas"]["MessageFeedbackSummary"];
                 };
             };
+            400: components["responses"]["InvalidClientVersion"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
     };
     getMessageTrace: {
         parameters: {
             query: {
+                /** @description Original client generation. All three identity fields are required together and are checked in the trace read snapshot. */
+                execution_generation?: string;
+                /** @description Original admitted execution. Supply with execution_generation, response_message_id and message_group_id. Mismatched or superseded identity returns no trace. */
+                execution_id?: string;
                 /** @description The owning message group, from the trace-list row. */
                 message_group_id: number;
+                /** @description Original response UUID. The execution binding must belong to the authenticated actor and exact project. Ordinary callers may omit all identity fields. */
+                response_message_id?: string;
             };
             header?: {
                 /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
@@ -3384,6 +3957,10 @@ export interface operations {
     listMessageTraces: {
         parameters: {
             query?: {
+                /** @description Original client generation. All three identity fields are required together and are checked in the trace read snapshot. */
+                execution_generation?: string;
+                /** @description Original admitted execution. Supply with execution_generation, response_message_id and message_group_id. Mismatched or superseded identity returns no trace. */
+                execution_id?: string;
                 include_total?: boolean;
                 /** @description Filter by step kind. Allowed values are `tool_call` and `thinking_step`; anything else is a 400 rather than an empty page. */
                 kind?: string;
@@ -3393,6 +3970,8 @@ export interface operations {
                 /** @description Comma-separated loaded message-group ids, at most 200. Duplicates are collapsed; a non-integer member is a 400. */
                 message_group_ids?: string;
                 offset?: number;
+                /** @description Original response UUID. The execution binding must belong to the authenticated actor and exact project. Ordinary callers may omit all identity fields. */
+                response_message_id?: string;
             };
             header?: {
                 /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
@@ -3737,7 +4316,10 @@ export interface operations {
                 /** @description Maximum number of items to return */
                 limit?: components["parameters"]["Limit"];
             };
-            header?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
             path: {
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
@@ -3755,8 +4337,10 @@ export interface operations {
                     "application/json": components["schemas"]["RecommendationsResponse"];
                 };
             };
+            400: components["responses"]["InvalidClientVersion"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
         };
     };
     regenerateChatMessage: {
@@ -3863,21 +4447,21 @@ export interface operations {
             path: {
                 /** @description Project identifier (extracted from URL path) */
                 project_id: components["parameters"]["ProjectId"];
-                /** @description The answer to stop (the send's or the regeneration's `response_message_id`). */
+                /** @description The running answer to stop (its `uid`, the send's or the regeneration's `response_message_id`). */
                 response_message_id: string;
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Stopped */
+            /** @description Stopped, or already stopped by this caller. */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description An invalid answer id or client version. */
+            /** @description An invalid response message id, or a native client version that does not parse (InvalidClientVersionError). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -3898,7 +4482,7 @@ export interface operations {
                 };
             };
             426: components["responses"]["ClientUpgradeRequired"];
-            /** @description The stop could not be recorded; retry. */
+            /** @description The stop could not be recorded. Retry. */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -3907,7 +4491,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description The stop timed out; retry. */
+            /** @description The stop timed out. Retry. */
             504: {
                 headers: {
                     [name: string]: unknown;
@@ -4012,6 +4596,47 @@ export interface operations {
             500: components["responses"]["500"];
         };
     };
+    getProjectUsage: {
+        parameters: {
+            query?: {
+                scope?: "project" | "user";
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Usage and budget state for the requested scope */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageReport"];
+                };
+            };
+            /** @description scope was neither 'project' nor 'user'. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
     markNotificationSeen: {
         parameters: {
             query?: never;
@@ -4038,6 +4663,52 @@ export interface operations {
                 };
             };
             /** @description An invalid id, or a notification that is not the caller's. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            /** @description The write failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteNotification: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                notification_id: number;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description An invalid id, a notification that is not the caller's, or a native client version that does not parse (invalid_client_version). */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -4161,6 +4832,60 @@ export interface operations {
                 };
             };
             /** @description An invalid body. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            /** @description The write failed. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NotificationErrorResponse"];
+                };
+            };
+        };
+    };
+    deleteNotifications: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NotificationBulkDeleteRequest"];
+            };
+        };
+        responses: {
+            /** @description How many rows were deleted. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: int64 */
+                        deleted: number;
+                    };
+                };
+            };
+            /** @description An invalid body, or a native client version that does not parse (invalid_client_version). */
             400: {
                 headers: {
                     [name: string]: unknown;

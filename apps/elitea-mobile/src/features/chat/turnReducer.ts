@@ -1,4 +1,5 @@
 import type { Frame, NodeEvent } from '@/features/chat/frames';
+import { budgetRefusalText, budgetScopeOf, type BudgetScope } from '@/features/usage/budgetRefusal';
 import {
   isToolFrame,
   mergeFanout,
@@ -34,6 +35,8 @@ export type TurnPhase =
 export interface TurnError {
   message: string;
   retryable: boolean;
+  /** Set when a model budget refused the turn (the thread offers the usage card). */
+  budget?: BudgetScope;
 }
 
 export interface TurnState {
@@ -134,6 +137,13 @@ export function reduceTurn(state: TurnState, frame: Frame): TurnState {
     case 'failed':
       if (frame.failure.code === CANCELLED_CODE) {
         return { ...state, phase: 'done', status: null, error: null, stopped: true };
+      }
+      {
+        const budget = budgetScopeOf(frame.failure.code);
+        if (budget !== null) {
+          // A policy outcome, not a fault: a plain message, and retrying cannot help.
+          return { ...state, phase: 'failed', status: null, error: { message: budgetRefusalText(budget), retryable: false, budget } };
+        }
       }
       return {
         ...state,

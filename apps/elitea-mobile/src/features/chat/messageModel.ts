@@ -1,4 +1,5 @@
 import type { components } from '@/api/generated/elitea.gen';
+import { budgetRefusalText, budgetScopeOf } from '@/features/usage/budgetRefusal';
 import { parseServerTime } from '@/lib/time';
 
 /**
@@ -192,6 +193,8 @@ function authorship(author: Participant | undefined, people: number, self: SelfC
 function groupError(group: Record<string, unknown>): string | null {
   const meta = asRecord(group.meta) ?? asRecord(group.metadata);
   if (meta?.is_error !== true) return null;
+  const budget = budgetScopeOf(meta.error_code);
+  if (budget !== null) return budgetRefusalText(budget);
   const reason = typeof meta.error === 'string' ? meta.error.trim() : '';
   return reason !== '' ? reason.slice(0, 500) : 'This answer failed.';
 }

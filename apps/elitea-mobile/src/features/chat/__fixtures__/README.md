@@ -19,6 +19,16 @@ Python worker, the offline mock LLM that echoes the prompt as `MOCK: …`):
   after a few chunks. The stream ends with `execution.failed`
   `{"code":"CANCELLED", "retryable": false}`.
 
+## Budget refusal (server source shape)
+
+`budget-refusal.sse` is composed from the elitea-platform v4.7.0 source, not
+captured: the zefir-wave mock model is not billed through the gateway budget,
+so a capped project still answers. The `execution.failed` body is what
+`application/output/runtime_failure.go` writes (`{code, safe_message,
+retryable}`); the code and safe message are the registered member pair of
+`transport/runtimegrpc/output/server.go` (`budgetScopePolicy`, #6732). The
+other two codes are `PROJECT_BUDGET_EXHAUSTED` and `MODEL_BUDGET_EXHAUSTED`.
+
 ## Provenance of the synthesised ones (read this before trusting them)
 
 They are **synthesised, not captured**. When they were written (2026-10-04)

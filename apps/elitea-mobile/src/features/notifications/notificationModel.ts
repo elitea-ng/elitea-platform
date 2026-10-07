@@ -47,3 +47,42 @@ export function describeNotification(notification: Pick<Notification, 'event_typ
     conversationRef: mentionConversationRef(meta),
   };
 }
+
+/** The inbox's type filter: everything, or one `event_type`. */
+export type NotificationFilter = 'all' | string;
+
+export interface FilterOption {
+  value: NotificationFilter;
+  label: string;
+  count: number;
+}
+
+/** At most this many type chips; rarer types are still shown under "All". */
+export const MAX_FILTER_TYPES = 6;
+
+/** A chip label for an `event_type` (plural for mentions: "Mentions"). */
+export function filterLabel(eventType: string): string {
+  return eventType === MENTION_EVENT ? 'Mentions' : notificationTitle(eventType);
+}
+
+/**
+ * The chips for the rows on screen: "All" first, then each event type that
+ * occurs, most frequent first (ties by first appearance). No chips when
+ * there is only one type (a filter would change nothing).
+ */
+export function filterOptions(rows: readonly Pick<Notification, 'event_type'>[]): FilterOption[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    if (typeof row.event_type === 'string' && row.event_type !== '') counts.set(row.event_type, (counts.get(row.event_type) ?? 0) + 1);
+  }
+  if (counts.size < 2) return [];
+  const types = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, MAX_FILTER_TYPES);
+  return [
+    { value: 'all', label: 'All', count: rows.length },
+    ...types.map(([type, count]) => ({ value: type, label: filterLabel(type), count })),
+  ];
+}
+
+export function applyFilter<T extends Pick<Notification, 'event_type'>>(rows: readonly T[], filter: NotificationFilter): T[] {
+  return filter === 'all' ? [...rows] : rows.filter((row) => row.event_type === filter);
+}

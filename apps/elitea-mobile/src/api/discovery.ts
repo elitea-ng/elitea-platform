@@ -91,13 +91,25 @@ export type DiscoveryDocument = z.infer<typeof DiscoveryDocumentSchema>;
 export type NativeAuthEndpoints = z.infer<typeof NativeAuthSchema>;
 
 // The runtime schema must stay assignable to the contract's type; a drift
-// fails typecheck here. `attachments` is required upstream (1.1) but optional
-// here, because the app also serves 1.0 servers.
+// fails typecheck here. `attachments` (1.1) and the data controls of
+// `client_policy` (1.3) are required upstream but optional here, because the
+// app also serves 1.0 to 1.2 servers.
 type Assignable<A, B> = A extends B ? true : false;
 type WireDiscovery = components['schemas']['DiscoveryDocument'];
+type WirePublicPolicy = WireDiscovery['client_policy'];
+type DataControlKey =
+  | 'allow_share_out'
+  | 'allow_share_in'
+  | 'allow_cloud_stt'
+  | 'notification_preview'
+  | 'allow_notification_actions'
+  | 'allow_system_surfaces';
 const contractCheck: Assignable<
   DiscoveryDocument,
-  Omit<WireDiscovery, 'attachments'> & { attachments?: WireDiscovery['attachments'] }
+  Omit<WireDiscovery, 'attachments' | 'client_policy'> & {
+    attachments?: WireDiscovery['attachments'];
+    client_policy: Omit<WirePublicPolicy, DataControlKey> & Partial<Pick<WirePublicPolicy, DataControlKey>>;
+  }
 > = true;
 void contractCheck;
 

@@ -21,6 +21,7 @@ import { ConnectConfirm } from '@/features/connect/ConnectConfirm';
 import { checkWorkspace, confirmConnection, displayHost, type ConnectCheck } from '@/features/connect/connectFlow';
 import { WorkspaceRow } from '@/features/workspaces/WorkspaceRow';
 import { parseConnectLink, type ConnectLinkErrorCode } from '@/linking/parseConnectLink';
+import { useManagedConfig } from '@/security/managedConfig';
 import { MAX_WORKSPACES } from '@/security/workspaceRegistry';
 import { setSession, useSession, type EndReason } from '@/state/session';
 import { returnToPreviousWorkspace, switchToWorkspace } from '@/state/workspace';
@@ -67,7 +68,9 @@ export default function ConnectScreen() {
   const workspaces = useWorkspaceList();
   const returnTo = useSession((s) => s.returnWorkspaceId);
   const returnHost = workspaces.find((w) => w.id === returnTo);
-  const [address, setAddress] = useState(incoming || lastOriginHint || '');
+  // MDM AppConfig `server_url` (src/security/managedConfig.ts) pre-fills an empty field.
+  const managedServer = useManagedConfig().serverUrl;
+  const [address, setAddress] = useState(incoming || lastOriginHint || managedServer || '');
   const [error, setError] = useState<string | null>(null);
   // Discovery result awaiting the user's confirmation; nothing is stored yet.
   const [check, setCheck] = useState<ConnectCheck | null>(null);
@@ -229,6 +232,11 @@ export default function ConnectScreen() {
               },
             ]}
           />
+          {managedServer !== null && address.trim() === managedServer && !error ? (
+            <Text testID="connect-managed-hint" style={[styles.error, { color: palette.textSecondary }]}>
+              Suggested by your organization.
+            </Text>
+          ) : null}
           {error ? (
             <Text accessibilityRole="alert" style={[styles.error, { color: palette.danger }]}>
               {error}

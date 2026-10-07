@@ -277,26 +277,20 @@ describe('buildContract (real inputs)', () => {
   });
 });
 
-describe('client contract 1.2 (pinned upstream)', () => {
-  it('pins a server that speaks client contract 1.2; the overlay carries only the unreleased 1.3 gap', () => {
+describe('client contract 1.3 (pinned upstream)', () => {
+  it('pins a server that speaks client contract 1.3 and needs no overlay', () => {
     const { doc } = buildContract();
-    assert.equal(doc.info['x-elitea-client-contract'], '1.2');
+    assert.equal(doc.info['x-elitea-client-contract'], '1.3');
     const overlay = YAML.parse(readFileSync(new URL('../contract/overlay/native-gap.yaml', import.meta.url), 'utf8'));
-    const ops = Object.values(overlay.paths).flatMap((item) => Object.values(item).filter((op) => op?.operationId));
-    assert.deepEqual(
-      ops.map((op) => op.operationId),
-      ['cancelChatExecution'],
-    );
-    for (const op of ops) assert.match(op['x-zefir-source'], /507a13b0c/);
-    assert.deepEqual(Object.keys(overlay['x-zefir-extend']), ['schemas']);
-    assert.deepEqual(Object.keys(overlay['x-zefir-extend'].schemas).sort(), ['ClientPublicPolicy', 'NativeClientPolicy']);
+    assert.deepEqual(overlay.paths, {});
+    assert.equal(overlay['x-zefir-extend'], undefined);
   });
 
-  it('keeps the 1.3 operations the app uses: cancel from the overlay, the rest defined (untagged) in the 1.2 pin', () => {
+  it('keeps the 1.3 operations the app uses, every one tagged client', () => {
     const { doc } = buildContract();
-    const ids = new Set();
+    const ops = {};
     for (const item of Object.values(doc.paths)) {
-      for (const op of Object.values(item)) if (op && op.operationId) ids.add(op.operationId);
+      for (const op of Object.values(item)) if (op && op.operationId) ops[op.operationId] = op;
     }
     for (const id of [
       'cancelChatExecution',
@@ -306,11 +300,21 @@ describe('client contract 1.2 (pinned upstream)', () => {
       'deleteMessageFeedback',
       'exportConversation',
       'getRecommendations',
+      'deleteNotification',
+      'deleteNotifications',
+      'listMemories',
+      'deleteMemory',
+      'clearMemories',
+      'getProjectUsage',
     ]) {
-      assert.ok(ids.has(id), id);
+      assert.ok(ops[id], id);
+      assert.equal(ops[id].tags.at(-1), 'client', id);
     }
     const cancel = doc.paths['/elitea_core/task/prompt_lib/{project_id}/{response_message_id}'].delete;
     assert.ok(cancel.responses['204'] && cancel.responses['409'] && cancel.responses['426']);
+    assert.ok(ops.deleteNotification.responses['204']);
+    assert.ok(ops.deleteMemory.responses['204']);
+    assert.ok(ops.clearMemories.responses['200']);
     for (const schema of ['NativeClientPolicy', 'ClientPublicPolicy']) {
       const props = doc.components.schemas[schema].properties;
       for (const key of ['allow_share_out', 'allow_share_in', 'allow_cloud_stt', 'notification_preview', 'allow_notification_actions', 'allow_system_surfaces']) {

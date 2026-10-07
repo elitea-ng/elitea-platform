@@ -1,14 +1,17 @@
 import { router } from 'expo-router';
 import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
+import { speaksContract } from '@/api/discovery';
 import { identity } from '@/config/identity';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { displayHost } from '@/features/connect/connectFlow';
+import { UsageCard } from '@/features/usage/UsageCard';
 import { WorkspaceMark } from '@/features/workspaces/WorkspaceMark';
 import { usePolicy } from '@/security/policy';
 import { useSession } from '@/state/session';
 import { useWorkspace } from '@/state/workspace';
+import { useWorkspaceInfo } from '@/state/workspaceInfo';
 import { useWorkspaceList } from '@/state/workspaceList';
 import { useBrandTheme } from '@/theme/brandStore';
 
@@ -17,10 +20,12 @@ export default function SettingsScreen() {
   const { serverOrigin, clear } = useWorkspace();
   const credentialKind = useSession((s) => s.credential?.kind ?? null);
   const projectId = useSession((s) => s.projectId);
-  const { policy, source } = usePolicy();
+  const { policy, source, managed } = usePolicy();
   const brand = useBrandTheme();
   const workspaceCount = useWorkspaceList().length;
   const host = serverOrigin ? displayHost(serverOrigin) : null;
+  // Client contract 1.3: memory and usage.
+  const contract13 = speaksContract(useWorkspaceInfo()?.discovery, 1, 3);
 
   const onLogOut = () => {
     Alert.alert(
@@ -95,7 +100,25 @@ export default function SettingsScreen() {
         <Text style={[styles.label, { color: palette.textSecondary }]}>
           {POLICY_SOURCE_TEXT[source]}
         </Text>
+        {managed ? (
+          <Text testID="policy-managed" style={[styles.label, { color: palette.textSecondary }]}>
+            Your organization&apos;s device management makes the lock stricter on this device.
+          </Text>
+        ) : null}
       </View>
+
+      {contract13 && projectId !== null ? <UsageCard projectId={projectId} /> : null}
+
+      {contract13 && projectId !== null ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityHint="What the workspace remembers about you in this project"
+          onPress={() => router.push('/memory')}
+          style={[styles.card, styles.navRow, { backgroundColor: palette.backgroundElement }]}>
+          <Text style={[styles.value, styles.flex, { color: palette.text }]}>Memory</Text>
+          <Text style={[styles.value, { color: palette.textSecondary }]}>›</Text>
+        </Pressable>
+      ) : null}
 
       <Pressable
         accessibilityRole="button"
@@ -148,6 +171,7 @@ function formatIdle(seconds: number): string {
 const styles = StyleSheet.create({
   content: { padding: Spacing.three, gap: Spacing.three },
   card: { borderRadius: 12, padding: Spacing.three, gap: Spacing.one },
+  navRow: { flexDirection: 'row', alignItems: 'center' },
   workspace: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   flex: { flex: 1 },
   banner: { borderWidth: 1, borderRadius: 12, padding: Spacing.three, gap: Spacing.one },

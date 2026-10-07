@@ -10,7 +10,7 @@ this repository.
 | `elitea-v2.yaml.sha256` | `shasum -a 256` of the copy; `npm run contract:verify` fails on any change. |
 | `LICENSE.elitea` | The upstream Apache-2.0 license text and NOTICE, required to redistribute the copy. |
 | `client-operations.json` | The app's declared API surface: the operationIds kept in the generated client. |
-| `overlay/native-gap.yaml` | **Our own** OpenAPI fragment for REST operations the pinned contract does not define yet, plus `x-zefir-extend` additions to upstream operations and schemas. Each entry records where its shape was observed (`x-zefir-source`) and what will replace it (`x-zefir-until`). Empty from v4.2.0 (1.1) to v4.3.2 (1.2); it now carries the unreleased client contract 1.3 gap (see below). |
+| `overlay/native-gap.yaml` | **Our own** OpenAPI fragment for REST operations the pinned contract does not define yet, plus `x-zefir-extend` additions to upstream operations and schemas. Each entry records where its shape was observed (`x-zefir-source`) and what will replace it (`x-zefir-until`). Empty since v4.7.0 (client contract 1.3); it was empty from v4.2.0 (1.1) to v4.3.2 (1.2) and carried the unreleased 1.3 gap in between. |
 
 ## Generated client
 
@@ -34,12 +34,12 @@ regenerate. Server-sent-event endpoints are typed by hand in `src/api/sse/`.
 | | |
 |---|---|
 | Repository | `elitea-ng/elitea-platform` |
-| Commit | `a9cada5eff87b5b56ff5fae91ca092534d2ad0ae` (`origin/main`, tag `v4.3.2`, 2026-10-05; the file is byte-identical to its introduction in `e6be27894`, #1067) |
+| Commit | `d6f572dbd5f170ee161f49be48092f6e85be893b` (tag `v4.7.0`, 2026-10-06; the file is byte-identical to its introduction in that commit, PR #1090) |
 | Path | `services/elitea-main/api/openapi/v2.yaml` |
-| Client contract | `1.2` (`info.x-elitea-client-contract`) |
-| SHA-256 | `a0c2a7009c5350f1d84b67a914add32dcd65ad683256088a981ab33701fa1f08` |
-| Size | 25,752 lines |
-| License | Apache-2.0 (see `LICENSE.elitea`; LICENSE and NOTICE unchanged since `e7585fee2`) |
+| Client contract | `1.3` (`info.x-elitea-client-contract`) |
+| SHA-256 | `27c4b5278cbc1415565e9b74214900b8dbe0cc7680cedfc23de341ba21d0f9c6` |
+| Size | 26,344 lines |
+| License | Apache-2.0 (see `LICENSE.elitea`; LICENSE and NOTICE unchanged between v4.3.2 and v4.7.0) |
 | Copied | 2026-10-06 |
 
 ## Bumping the pinned contract
@@ -83,30 +83,28 @@ The route and the trace fields exist on a 1.1 server too; a 1.1 server sends
 `agent_tool_error` with the interrupt's repr for a pause, which the app still
 recognises.
 
-## Client contract 1.3 (overlay, not released yet)
+## Client contract 1.3 (pinned, no overlay)
 
-The server's 1.3 work is elitea-platform PR #1090 (branch
-`feat/client-contract-1-3`, commit `507a13b0c1fc2cf2cebe7a42ba2516c101c49221`,
-2026-10-06). It is not in a release, so the pin stays at v4.3.2 (1.2) and the
-gap goes through the overlay:
+The server's 1.3 work (elitea-platform PR #1090) is released in v4.7.0 and
+pinned above; the overlay that carried its gap before the release is empty
+again. Every 1.3 operation the app uses is tagged `client`:
 
-| Overlay entry | What it is |
+| Area | operationIds |
 |---|---|
-| `DELETE /elitea_core/task/prompt_lib/{project_id}/{response_message_id}` (`cancelChatExecution`) | Server-side stop of a running answer. 204 (also when this caller already stopped it), 409 when the answer is no longer running or not the caller's. |
-| `x-zefir-extend` on `NativeClientPolicy` and `ClientPublicPolicy` | The six data controls: `allow_share_out`, `allow_share_in`, `allow_cloud_stt`, `notification_preview`, `allow_notification_actions`, `allow_system_surfaces`. |
+| Chat | `cancelChatExecution` (server-side Stop), `regenerateChatMessage`, `getMessageFeedback`, `setMessageFeedback`, `deleteMessageFeedback`, `exportConversation`, `getRecommendations` |
+| Notifications | `deleteNotification`, `deleteNotifications` (a deletion reaches the caller's other devices as a `deleted` tombstone in the `changes_since` delta) |
+| Memory | `listMemories`, `deleteMemory`, `clearMemories` (the caller's own memories in the project) |
+| Usage | `getProjectUsage` (current-period totals; money fields are removed for a member who may not see them) |
 
-The other 1.3 operations the app uses are already defined (untagged) in the
-1.2 pin and are listed in `client-operations.json`: `getMessageFeedback`,
-`setMessageFeedback`, `deleteMessageFeedback`, `exportConversation`,
-`getRecommendations`. `regenerateChatMessage` was already tagged `client`.
+`NativeClientPolicy` and `ClientPublicPolicy` carry the six data controls
+(`allow_share_out`, `allow_share_in`, `allow_cloud_stt`,
+`notification_preview`, `allow_notification_actions`,
+`allow_system_surfaces`).
 
 The app calls the 1.3 operations only when discovery says `client_contract`
 >= 1.3 (`speaksContract(document, 1, 3)`); on an older server the feature is
 hidden. The data controls default to the server's own defaults when a server
 sends none (src/security/policy.ts `DATA_CONTROL_DEFAULTS`).
-
-When a release carries 1.3: copy its `v2.yaml` verbatim (steps below), delete
-the overlay entries the build names, regenerate, and update this section.
 
 `GET /api/v2/auth/native/authorize` is a browser navigation, not an API call,
 so it is not typed; the app builds that URL itself (`src/auth/nativeAuth.ts`).

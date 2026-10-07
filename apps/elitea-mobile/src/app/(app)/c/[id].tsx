@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams } from 'expo-router';
+import { Stack, router, useLocalSearchParams } from 'expo-router';
 import * as Linking from 'expo-linking';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -578,6 +578,7 @@ export default function ThreadScreen() {
                   onReconnect={turn.reconnect}
                   onDismiss={turn.dismiss}
                   onOpenTool={setOpenStep}
+                  usageAvailable={contract13}
                 />
               );
           }
@@ -763,6 +764,7 @@ function LiveReply({
   onReconnect,
   onDismiss,
   onOpenTool,
+  usageAvailable,
 }: {
   live: LiveTurn;
   author: string | null;
@@ -770,6 +772,8 @@ function LiveReply({
   onReconnect: () => void;
   onDismiss: () => void;
   onOpenTool: (step: ToolStep) => void;
+  /** Settings has a usage card (client contract 1.3). Older servers refuse on budget too, but have no usage to show. */
+  usageAvailable: boolean;
 }) {
   const palette = usePalette();
   const { turn } = live;
@@ -792,6 +796,7 @@ function LiveReply({
   const actions = [
     live.canReconnect ? { label: 'Reconnect', onPress: onReconnect } : null,
     turn.phase === 'failed' && turn.error?.retryable ? { label: 'Retry', onPress: onRetry } : null,
+    turn.phase === 'failed' && turn.error?.budget && usageAvailable ? { label: 'View usage', onPress: () => router.push('/settings') } : null,
     turn.phase === 'failed' ? { label: 'Dismiss', onPress: onDismiss } : null,
   ].filter((a): a is { label: string; onPress: () => void } => a !== null);
   return (

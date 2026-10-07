@@ -259,3 +259,31 @@ suggestions; copy, share, read aloud, dictation and regenerate also work on 1.2.
       the end (not while it streams); a sensitive tool pause says "Approval needed to run …".
 - [ ] **Dynamic Type and Reduce Motion.** At the largest accessibility size the composer,
       chips and sheet rows stay usable; with Reduce Motion on, sheets fade in.
+
+## Settings and home quick wins (client contract 1.3)
+
+- [ ] **Dismiss a notification.** Swipe a row left: it slides out and stays gone after
+      pull-to-refresh, after a relaunch offline (the offline copy), and on a second device
+      signed in to the same workspace after its next sync (the server's tombstone). With
+      VoiceOver, the row offers a "Dismiss" action. On a 1.2 workspace nothing swipes.
+- [ ] **Type filter.** With several kinds of notifications, the chips filter the list;
+      dismissing the last row of a kind returns to All.
+- [ ] **Memory.** Settings → Memory lists the memories the web app shows for this project;
+      swipe one away (the web app no longer has it); Clear all asks first. In airplane mode
+      the screen says it needs a connection and shows nothing cached.
+- [ ] **Usage.** Settings shows "Usage this month" for You and Project; as a project editor
+      (not admin) only percentages, no amounts. With a member budget of $0 in the admin
+      app, sending a message ends with "Your budget in this project is used up…", no Retry,
+      and "View usage" opens Settings.
+- [ ] **Quick actions.** Long-press the app icon: New chat and Notifications (with the unread
+      count). No conversation names unless the admin turns on `allow_system_surfaces`; then
+      the two latest chats appear and open their thread (behind the lock when it is due).
+      iOS only: Android never lists chats by name, because a pinned shortcut would keep
+      its title after a wipe (#35).
+      Log out: the quick actions are gone; switch workspace: they follow the active one.
+- [ ] **MDM AppConfig.** Push `server_url`, `require_device_lock: true`, `idle_lock_seconds: 60`
+      and `allow_screenshots: false` (Apple Configurator or an MDM, see docs/mdm-appconfig.md):
+      the connect screen starts with the address ("Suggested by your organization"), the app
+      locks after a minute in the background even when the workspace does not require a lock,
+      and Settings says the device management made the lock stricter.
+
