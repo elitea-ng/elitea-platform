@@ -68,6 +68,8 @@ import {
   type ToolkitOption,
 } from '@/features/chat/slashPicker';
 import { pauseFromGroup } from '@/features/chat/pauses/continueBodies';
+import { readHandoff } from '@/features/intents/intentHandoff';
+import { MAX_PREFILL } from '@/features/intents/intentRouter';
 import { appActivity } from '@/lib/appActivity';
 import { network, useOnline } from '@/lib/network';
 import { useWorkspaceInfo } from '@/state/workspaceInfo';
@@ -97,7 +99,9 @@ type Row =
 /** One conversation: its latest messages, newest at the bottom, and the composer. */
 export default function ThreadScreen() {
   const palette = usePalette();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  // The question an intent handed over in memory (intentHandoff.ts); never text from a URL.
+  const { id, intent } = useLocalSearchParams<{ id: string; intent?: string }>();
+  const prefill = readHandoff(intent)?.prefill ?? null;
   const ref = typeof id === 'string' ? id : '';
   const projectId = useSession((s) => s.projectId);
   const conversation = useConversation(projectId, ref);
@@ -625,6 +629,8 @@ export default function ThreadScreen() {
         </Pressable>
       ) : null}
       <Composer
+        // Siri "Ask <agent>": the question waits in the input for the user to send it.
+        initialText={typeof prefill === 'string' ? prefill.slice(0, MAX_PREFILL) : null}
         disabledReason={disabledReason}
         busy={turn.busy}
         people={people}

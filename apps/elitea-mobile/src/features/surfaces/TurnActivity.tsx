@@ -1,0 +1,61 @@
+import { HStack, Image, Spacer, Text, VStack } from '@expo/ui/swift-ui';
+import { activityBackgroundTint, font, foregroundStyle, lineLimit, monospacedDigit, padding } from '@expo/ui/swift-ui/modifiers';
+import { createLiveActivity, type LiveActivityEnvironment } from 'expo-widgets';
+
+import type { TurnActivityProps } from '@/features/surfaces/turnActivityModel';
+
+/**
+ * The Live Activity (lock screen and Dynamic Island) of a running answer;
+ * see src/features/surfaces/turnActivityModel.ts for what it may show.
+ * Rendered in the widget extension's runtime: only `@expo/ui/swift-ui`
+ * views and the props (the 'widget' directive serialises the function).
+ */
+export const TURN_ACTIVITY = 'ZefirTurn';
+
+const TurnActivityLayout = (props: TurnActivityProps, environment: LiveActivityEnvironment) => {
+  'widget';
+  const accent = environment.isLuminanceReduced ? '#FFFFFF' : '#B4306A';
+  const symbols = {
+    working: 'sparkles',
+    tool: 'wrench.and.screwdriver.fill',
+    writing: 'text.bubble.fill',
+    waiting: 'hand.raised.fill',
+    done: 'checkmark.circle.fill',
+    failed: 'exclamationmark.triangle.fill',
+    stopped: 'stop.circle.fill',
+  } as const;
+  const symbol = symbols[props.phase] ?? 'sparkles';
+  const muted = foregroundStyle({ type: 'hierarchical', style: 'secondary' });
+  // The elapsed time is a SwiftUI timer counting up from the start: the system
+  // advances it, while the activity is only updated when what it shows
+  // changes. A finished or paused one shows none (it would keep counting).
+  const running = props.phase === 'working' || props.phase === 'tool' || props.phase === 'writing';
+  const elapsed = (style: ReturnType<typeof font>[]) =>
+    running ? <Text date={new Date(props.startedAt)} dateStyle="timer" modifiers={[...style, monospacedDigit()]} /> : null;
+  return {
+    banner: (
+      <HStack spacing={12} modifiers={[padding({ all: 14 }), activityBackgroundTint(environment.colorScheme === 'dark' ? '#1E1A24' : '#FBF7F9')]}>
+        <Image systemName={symbol} color={accent} size={24} />
+        <VStack alignment="leading" spacing={2}>
+          <Text modifiers={[font({ textStyle: 'headline' }), lineLimit(1)]}>{props.title}</Text>
+          <Text modifiers={[font({ textStyle: 'subheadline' }), muted, lineLimit(1)]}>{props.detail}</Text>
+        </VStack>
+        <Spacer />
+        {elapsed([font({ textStyle: 'caption' }), muted])}
+      </HStack>
+    ),
+    compactLeading: <Image systemName={symbol} color={accent} />,
+    compactTrailing: props.approximate ? (
+      <Text modifiers={[font({ textStyle: 'caption' })]}>…</Text>
+    ) : (
+      (elapsed([font({ textStyle: 'caption' })]) ?? <Text modifiers={[font({ textStyle: 'caption' })]}> </Text>)
+    ),
+    minimal: <Image systemName={symbol} color={accent} />,
+    expandedLeading: <Image systemName={symbol} color={accent} size={28} />,
+    expandedCenter: <Text modifiers={[font({ textStyle: 'headline' }), lineLimit(1)]}>{props.title}</Text>,
+    expandedBottom: <Text modifiers={[font({ textStyle: 'subheadline' }), muted, lineLimit(1)]}>{props.detail}</Text>,
+    expandedTrailing: elapsed([font({ textStyle: 'caption' }), muted]),
+  };
+};
+
+export const turnActivity = createLiveActivity<TurnActivityProps>(TURN_ACTIVITY, TurnActivityLayout);

@@ -7,8 +7,32 @@ import { log } from '@/lib/log';
 import { getSession, subscribeSession, type SessionState } from '@/state/session';
 import { SyncManager } from '@/sync/syncManager';
 
+const changeListeners = new Set<(projectId: number) => void>();
+
+/**
+ * Told after a sync run changed stored data of a project (the widget
+ * snapshot is rewritten after sync, src/features/surfaces/).
+ */
+export function subscribeSyncChanges(listener: (projectId: number) => void): () => void {
+  changeListeners.add(listener);
+  return () => {
+    changeListeners.delete(listener);
+  };
+}
+
 /** The app's sync manager, over the app's offline store. */
-export const syncManager = new SyncManager({ getDb: () => offlineStore.get() });
+export const syncManager = new SyncManager({
+  getDb: () => offlineStore.get(),
+  onChanged: (projectId) => {
+    for (const listener of [...changeListeners]) {
+      try {
+        listener(projectId);
+      } catch (error) {
+        log.warn('sync change listener failed', { error });
+      }
+    }
+  },
+});
 
 export interface SyncBindingDeps {
   store: Pick<OfflineStore, 'subscribe' | 'status'>;

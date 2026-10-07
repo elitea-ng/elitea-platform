@@ -287,3 +287,42 @@ suggestions; copy, share, read aloud, dictation and regenerate also work on 1.2.
       locks after a minute in the background even when the workspace does not require a lock,
       and Settings says the device management made the lock stricter.
 
+
+## 11. Native surfaces (iOS: `src/features/surfaces/*`, `src/features/intents/*`, `app-intents/`)
+
+See [native-surfaces.md](native-surfaces.md) for what each surface may show.
+
+- [ ] **Widgets, counts only.** Add the Agent Zefir widget (small and medium) and the
+      lock-screen widgets (inline, circular, rectangular). After a sync they show
+      "waiting for you", "unread" and "running" counts for the active workspace, and no
+      host or conversation name.
+- [ ] **Widgets with titles.** Turn on `allow_system_surfaces` for the workspace: after
+      the next foreground the medium widget shows the host and the waiting conversations'
+      names. Turn it off: they are gone after the next foreground.
+- [ ] **Widget tap.** With one conversation waiting, tapping opens it (behind the lock when
+      it is due); with unread only, the inbox; otherwise the conversation list.
+- [ ] **Widget wipe.** Log out & wipe: the widgets say "Open the app to sign in" at once.
+      Switch workspace: they show the new workspace's counts after its first sync, never
+      the old one's.
+- [ ] **Running count goes stale.** Start a long answer, background the app: the widget's
+      running count drops to 0 after ten minutes even though the app never ran again.
+- [ ] **Live Activity.** Ask something that takes more than 5 s: an activity appears on the
+      lock screen and in the Dynamic Island ("Your agent is answering", then "Using a
+      tool…" / "Writing the answer…"), and ends with "Answer ready" (gone after ~2 min).
+      A short answer shows none.
+- [ ] **Live Activity on suspend.** Background or lock the app mid-answer: the activity
+      says "Open the app for the latest" and is de-emphasised; return: it is live again.
+- [ ] **Live Activity preview policy.** With `notification_preview: title` the headline is
+      the conversation's title; with `none` (default) it is generic. Never message text.
+- [ ] **Live Activity cleanup.** Force-quit mid-answer and relaunch: the old activity is
+      gone. Log out mid-answer: it is gone at once.
+- [ ] **Siri: New chat.** "New chat in Agent Zefir" opens the agent picker. With
+      `allow_system_surfaces` on, "New chat with <agent> in Agent Zefir" offers the
+      selected project's agents and opens that agent's new conversation after unlock.
+- [ ] **Siri: Ask.** "Ask <agent> in Agent Zefir" → dictate a question: the app opens with
+      the question in the composer; nothing is sent until you tap Send. Siri reads nothing
+      back.
+- [ ] **Siri: Open notifications.** Opens the inbox, behind the app lock when it is due.
+- [ ] **Siri while locked.** With the device locked, Siri asks to unlock the device first.
+- [ ] **Siri after logout.** Log out: Shortcuts offers no agent names any more; a shortcut
+      saved with an agent opens the picker of whichever workspace is active.

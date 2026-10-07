@@ -35,6 +35,12 @@ Settings and home quick wins (1.3): swipe-to-dismiss notifications with a type
 filter, a memory viewer, a usage card with a readable budget refusal in chat,
 home-screen quick actions (titles only when the policy allows them), and MDM
 AppConfig pre-fill and lock floor ([docs/mdm-appconfig.md](docs/mdm-appconfig.md)).
+Native surfaces (iOS): home-screen and lock-screen widgets with the active
+workspace's counts (pending approvals, unread, running), a local Live Activity
+and Dynamic Island for a running answer, and open-app Siri / Shortcuts intents
+(New chat with an agent, Ask an agent, Open notifications); counts and generic
+text unless the workspace policy allows titles
+([docs/native-surfaces.md](docs/native-surfaces.md)).
 Native behaviour is verified by hand with
 [docs/device-verification.md](docs/device-verification.md).
 See [docs/design.md](docs/design.md) for the planned product and
@@ -57,6 +63,8 @@ hardcode them anywhere else.
 | Connect-link scheme | `agentzefir`, as in `agentzefir://connect?server=https://ai.example.com` |
 | OAuth redirect (RFC 8252) | `ca.zefir.agent:/oauth/callback` |
 | Website | https://agent.zefir.ca (privacy: `/privacy`, support: `/support`) |
+| App Group (widget extension) | `group.ca.zefir.agent` |
+| Widget extension bundle id | `ca.zefir.agent.widgets` |
 
 ## Running it
 
@@ -96,6 +104,7 @@ development build (`npx expo run:ios|android` or EAS Build), not Expo Go.
 
 ```
 app.config.ts              Expo config, the single source of the identifiers above (+ config plugins)
+app-intents/               Siri / Shortcuts App Intents (Swift, compiled into the app target; open-app only)
 src/
   app/                     expo-router routes
     _layout.tsx            root: splash gate, guards (connect → sign-in → app), lock gate,
@@ -124,7 +133,8 @@ src/
   constants/               fallback theme (brand tokens from the workspace override it)
   theme/                   workspace brand pack → palette, logo, same-origin font face
   features/                chat (frames, turn reducer/controller, message model), markdown,
-                           notifications, projects, connect (discovery check + confirmation)
+                           notifications, projects, connect (discovery check + confirmation),
+                           surfaces/ (widgets, Live Activity), intents/ (Siri / Shortcuts)
   db/                      encrypted offline store: SQLCipher open/key, migrations, retention,
                            lifecycle (open after unlock, close on lock, wipe with the session)
   sync/                    changes_since sync engine, offline reads, outbox (idempotent replay)

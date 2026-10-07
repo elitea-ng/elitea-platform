@@ -27,6 +27,11 @@ import { createSplashGate } from '@/state/splashGate';
 import { sweepUploadTemp } from '@/api/attachments/upload';
 import { sweepDownloadTemp } from '@/features/chat/attachments/opener';
 import { sweepPickerCopies } from '@/features/chat/attachments/pickers';
+// Registers the wipe hooks of the system surfaces (widget snapshot) before any session can end.
+import '@/features/surfaces/surfaceWriter';
+import '@/features/intents/agentCatalog';
+import { useDiscardIntentsWhileSignedOut } from '@/features/intents/discardIntentsWhileSignedOut';
+import { startTurnActivities } from '@/features/surfaces/turnActivities';
 
 // MDM AppConfig first: its lock floor must be in place before the launch lock decision.
 startManagedConfig();
@@ -44,6 +49,8 @@ sweepUploadTemp();
 sweepPickerCopies();
 // The public policy and minimum version are re-read on every foreground.
 startForegroundRefresh();
+// Live Activities of running answers (local only); ends any a previous process left behind.
+startTurnActivities();
 
 // The native splash stays up until the session is restored, so the first
 // screen is the right one (no flash of /connect).
@@ -139,6 +146,8 @@ function RootStack() {
     updateSplash(hydrated && lockDecided);
   }, [hydrated, lockDecided]);
   useIncomingConnectLink(hydrated && !ending && !switching && (!signedIn || lock.status === 'unlocked'));
+  // Siri runs while signed out too: nothing queued then reaches the next workspace.
+  useDiscardIntentsWhileSignedOut(hydrated && !signedIn);
 
   if (!hydrated) return <StatusScreen busy />;
   if (ending) return <StatusScreen busy title="Signing out…" />;

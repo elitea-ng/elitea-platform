@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { router } from 'expo-router';
-import { useState } from 'react';
+import { router, useLocalSearchParams } from 'expo-router';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, SectionList, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { StartConversationError, startConversationWithAgent, useAgents, type Agent } from '@/api/queries/agents';
@@ -15,17 +15,34 @@ import { useWorkspaceInfo } from '@/state/workspaceInfo';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { useSession } from '@/state/session';
+import { useLockCovers } from '@/security/lock/useLockController';
+import { markAgentStarted, readHandoff } from '@/features/intents/intentHandoff';
+import { MAX_PREFILL } from '@/features/intents/intentRouter';
 
 type Choice = { kind: 'agent'; key: string; agent: Agent } | { kind: 'model'; key: string; model: ChatModel };
 
 /**
  * New conversation: pick an agent, or a model for a plain model chat (no
  * agent; its turns use the adhoc contract), create the conversation, open it.
+ *
+ * Opened by Siri / Shortcuts (src/features/intents/) with `intent`, the id
+ * of an in-memory hand-over (src/features/intents/intentHandoff.ts), never
+ * with the agent or the text as route params: a URL any app can build starts
+ * nothing. Its agent's conversation starts once, when the agent is in the
+ * selected project's list and the app is unlocked; its question is carried
+ * into the new conversation's composer (never sent by itself).
  */
 export default function NewConversationScreen() {
   const palette = usePalette();
   const queryClient = useQueryClient();
   const projectId = useSession((s) => s.projectId);
+  const { intent } = useLocalSearchParams<{ intent?: string }>();
+  const handoff = readHandoff(intent);
+  const prefill = handoff?.prefill != null && handoff.prefill.trim() !== '' ? handoff.prefill.slice(0, MAX_PREFILL) : null;
+  const wantedAgent = handoff?.agent?.agentId ?? null;
+  const wantedProject = handoff?.agent?.projectId ?? null;
+  const lockCovers = useLockCovers();
+  const autoStarted = useRef(false);
   const [search, setSearch] = useState('');
   const agents = useAgents(projectId, search);
   const models = useModels(projectId);
@@ -46,7 +63,10 @@ export default function NewConversationScreen() {
           ? await startConversationWithAgent(projectId, choice.agent)
           : await startConversationWithModel(projectId, choice.model);
       void queryClient.invalidateQueries({ queryKey: queryKeys.conversations(projectId) });
-      router.replace({ pathname: '/c/[id]', params: { id: String(created.id) } });
+      router.replace({
+        pathname: '/c/[id]',
+        params: prefill !== null && typeof intent === 'string' ? { id: String(created.id), intent } : { id: String(created.id) },
+      });
     } catch (e) {
       setError(
         e instanceof StartConversationError && e.reason === 'no_version'
@@ -56,6 +76,16 @@ export default function NewConversationScreen() {
       setBusyKey(null);
     }
   };
+
+  // "New chat with <agent>": start it once the list has it (an agent of another project, or
+  // one no longer listed, leaves the picker open) and only while the app is unlocked.
+  const listed = wantedAgent !== null && wantedProject === projectId ? agents.data?.find((a) => a.id === wantedAgent) : undefined;
+  useEffect(() => {
+    if (autoStarted.current || listed === undefined || lockCovers || search !== '') return;
+    autoStarted.current = true;
+    markAgentStarted(intent);
+    void start({ kind: 'agent', key: `agent:${listed.id}`, agent: listed });
+  });
 
   if (projectId === null) return <StatusScreen title="No project selected" />;
 

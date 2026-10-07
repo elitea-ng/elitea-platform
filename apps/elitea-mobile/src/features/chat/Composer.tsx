@@ -62,6 +62,8 @@ export interface ComposerProps {
   onStop?: (() => Promise<{ problem: string | null; restoreText: string | null; lostAttachments?: string[] }>) | null;
   /** Offer on-device dictation (the screen checks the device can). */
   dictation?: boolean;
+  /** Text the input starts with (Siri "Ask <agent>"); never sent until the user taps Send. */
+  initialText?: string | null;
 }
 
 function listNames(names: string[]): string {
@@ -107,9 +109,10 @@ export function Composer({
   allowEmptyText = false,
   onStop = null,
   dictation = false,
+  initialText = null,
 }: ComposerProps) {
   const palette = usePalette();
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialText ?? '');
   const [selection, setSelection] = useState<Selection>({ start: 0, end: 0 });
   /** Set once after a pick to move the caret; released on the next selection event. */
   const [forcedSelection, setForcedSelection] = useState<Selection | undefined>(undefined);

@@ -20,6 +20,14 @@ const identity = {
   webUrl: 'https://agent.zefir.ca',
   privacyUrl: 'https://agent.zefir.ca/privacy',
   supportUrl: 'https://agent.zefir.ca/support',
+  /**
+   * App Group shared with the widget extension (widgets and Live Activities,
+   * src/features/surfaces/). It carries COUNTS only unless the workspace
+   * policy allows titles (`allow_system_surfaces`); never a credential.
+   */
+  appGroup: 'group.ca.zefir.agent',
+  /** The widget extension's bundle id (home-screen and lock-screen widgets, Live Activities). */
+  widgetBundleId: 'ca.zefir.agent.widgets',
 } as const;
 
 export type AppIdentity = typeof identity;
@@ -115,10 +123,38 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     // No plaintext URL cache: responses (tokens, transcripts) are never written to
     // Library/Caches/<bundle id>/Cache.db (DEF-R2). Our own plugin, see plugins/.
     './plugins/withNoHttpCache',
+    // Home-screen and lock-screen widgets (counts per active workspace) and the Live Activity
+    // of a running answer: one WidgetKit extension, fed from the App Group after sync
+    // (src/features/surfaces/). Local updates only: no push token is ever requested.
+    [
+      'expo-widgets',
+      {
+        bundleIdentifier: identity.widgetBundleId,
+        groupIdentifier: identity.appGroup,
+        enablePushNotifications: false,
+        frequentUpdates: false,
+        widgets: [
+          {
+            name: 'ZefirCounts',
+            displayName: identity.displayName,
+            description: 'Pending approvals, unread notifications and running answers in your workspace.',
+            ios: {
+              supportedFamilies: ['systemSmall', 'systemMedium', 'accessoryCircular', 'accessoryRectangular', 'accessoryInline'],
+            },
+          },
+        ],
+      },
+    ],
+    // Siri, Shortcuts and Spotlight: OPEN-APP intents only (app-intents/*.swift). They hand an
+    // invocation to JS, which opens a screen behind the device lock; nothing is answered to Siri.
+    'expo-app-intents',
   ],
   experiments: {
     typedRoutes: true,
     reactCompiler: true,
+    // The App Intents Swift (app-intents/) is compiled into the app target (Apple's metadata
+    // extraction does not see intents inside a static pod).
+    inlineModules: { watchedDirectories: ['app-intents'] },
   },
   extra: {
     ...config.extra,

@@ -577,6 +577,11 @@ export function subscribeLiveTurns(listener: () => void): () => void {
   };
 }
 
+/** Every live turn with its key (the widget counts and the Live Activity read these). */
+export function listLiveTurns(): [string, TurnController][] {
+  return [...liveTurns.entries()];
+}
+
 export function getLiveTurn(key: string): TurnController | undefined {
   return liveTurns.get(key);
 }

@@ -14,6 +14,9 @@ export interface AppIdentity {
   webUrl: string;
   privacyUrl: string;
   supportUrl: string;
+  /** App Group shared with the widget extension (src/features/surfaces/). */
+  appGroup: string;
+  widgetBundleId: string;
 }
 
 function loadIdentity(): AppIdentity {

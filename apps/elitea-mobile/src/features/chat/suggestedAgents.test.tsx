@@ -13,7 +13,7 @@ import { __resetWorkspaceInfoForTests, setWorkspaceInfo } from '@/state/workspac
 import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
 
 const mockReplace = jest.fn();
-jest.mock('expo-router', () => ({ router: { replace: (...args: unknown[]) => mockReplace(...args) } }));
+jest.mock('expo-router', () => ({ router: { replace: (...args: unknown[]) => mockReplace(...args) }, useLocalSearchParams: () => ({}) }));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 
