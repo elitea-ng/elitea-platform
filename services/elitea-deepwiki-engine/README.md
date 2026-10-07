@@ -35,6 +35,11 @@ are absent or meaningless. Generation is model-bound on both. The harness is
 
 ## The socket protocol
 
+The server is the shared crate `libs/rust/engine-sidecar` (ADR-0027): this
+engine's `runner::Runner` implements its `Engine` trait (the four tools in
+`ENGINE_TOOLS`, and the `generate_wiki` publish hook), and the crate owns
+the protocol below.
+
 ```
 POST /engine/invoke                  {invocation_id, tool, arguments}
   → application/x-ndjson: {"thinking": …} and {"token": …} interleaved,
@@ -264,7 +269,13 @@ native runner through its own client up to the engine's allowlist re-check;
 a whole native run is not part of the Go job (it needs a gateway, a git host
 and PostgreSQL), the crate test covers it.
 
-## Repository ingest (`src/ingest/`)
+## Repository ingest (`libs/rust/repo-ingest`)
+
+The ingest is the shared crate `libs/rust/repo-ingest` (ADR-0027), reached
+here as `crate::ingest`; its file discovery is `crate::graph::discover`.
+The crate names whatever settings it is handed: this engine hands it
+`config::INGEST_NAMES`, so every refusal still names the `ELITEA_DEEPWIKI_*`
+variable and the clone's `User-Agent` is still this engine's.
 
 ADR-0026 decision 7: gitoxide (`gix` 0.88) in process, no `git` binary
 (the runtime image is distroless). The native runner calls `ingest::ingest(repo_config, settings, job_scratch, cancel)`.
@@ -278,7 +289,7 @@ ADR-0026 decision 7: gitoxide (`gix` 0.88) in process, no `git` binary
    `Authorization` value git sends for the userinfo Python put in the URL
    (`Basic base64("user:password")`, an absent password empty: GitHub
    `token:`, GitLab `oauth2:token`, Bitbucket `user:password`, ADO `pat:`).
-   `tests/fixtures/ingest/providers.json` is the Python factory's output
+   `libs/rust/repo-ingest/tests/fixtures/providers.json` is the Python factory's output
    for 44 configurations (written by `gen_providers.py`, deleted with the
    Python engine; see [Parity](#parity-with-the-python-engine)).
 3. `egress` re-checks the URL's own host against
@@ -326,9 +337,9 @@ gitoxide offers a per-allocation limit and a thread count, not a total; the
 deployment control is the job's memory limit (container or pod), which
 should stay above that figure. `tests/ingest_clone.rs` runs every path against
 `git http-backend` on loopback (git is a TEST dependency only);
-`ELITEA_DEEPWIKI_LIVE_CLONE=1` adds a clone of this repository from GitHub.
+`ELITEA_REPO_INGEST_LIVE_CLONE=1` (in `libs/rust/repo-ingest`) adds a clone of this repository from GitHub.
 
-### Artifact-folder sources (`src/ingest/artifact.rs`)
+### Artifact-folder sources (`libs/rust/repo-ingest/src/artifact.rs`)
 
 A port of `elitea_deepwiki.artifact_source` and the listing/download half of
 `engine.artifacts_platform_client`. A wiki source can be a folder of the
@@ -398,7 +409,7 @@ go, and everything after that is unchanged.
 
 Parity: `parity/python_artifact_source.py` (deleted with the Python engine;
 see [Parity](#parity-with-the-python-engine)) wrote
-`tests/fixtures/ingest/artifact_source.json` from the Python functions
+`libs/rust/repo-ingest/tests/fixtures/artifact_source.json` from the Python functions
 (parsing, the client's listing over recorded pages, `collect_objects`,
 `check_caps`, `listing_digest`, the directory and marker of
 `materialise_artifact_source`, the generation wiki id, `extract_artifact_settings`);
@@ -406,9 +417,10 @@ see [Parity](#parity-with-the-python-engine)) wrote
 object API. `tests/native_generate.rs` runs a whole generation over a folder,
 and the Go host's `native_engine_test.go` reads one through the worker child.
 
-## Parsers and the code graph (`src/parsers/`, `src/graph/`)
+## Parsers and the code graph (`libs/rust/code-parsers`, `src/graph/`)
 
-Eight parsers, one per language the Python engine parses richly: Python, Go,
+The parsers are the shared crate `libs/rust/code-parsers` (ADR-0027), which
+this engine reaches as `crate::parsers`; the graph stays here. Eight parsers, one per language the Python engine parses richly: Python, Go,
 TypeScript/TSX, JavaScript/JSX, Java, C#, C++ and Rust. Each is a port of the
 Python visitor for that language, over `tree-sitter` 0.27. The Python parser
 used the standard-library `ast` module; its port builds the same tree from
@@ -517,7 +529,7 @@ component's representative among equal degrees is the first in id order
 (Python's `max()` over a `set` followed the hash seed); an unknown
 calibration profile is an error (Python fell back to `calibrated`).
 
-## Model client (`src/llm/`)
+## Model client (`libs/rust/model-client`)
 
 ADR-0026 decision 8: one small OpenAI-compatible client on `reqwest` 0.13
 (the copy `gix` pulls) over rustls. Indexing, generation (the native
@@ -591,10 +603,13 @@ runner), `ask` and deep research use it.
 - `count_tokens` is `token_counter.py` over the embedded `o200k_base`
   BPE, with no `chars/4` fallback.
 
-`tests/llm_client.rs` runs the client against a mock gateway on loopback
-(and over TLS with a throwaway CA). `ELITEA_DEEPWIKI_LIVE_LLM=1` adds a
-chat, stream and tool-call round trip against the LAN vLLM
-(`ELITEA_DEEPWIKI_LIVE_LLM_BASE`, `ELITEA_DEEPWIKI_LIVE_LLM_MODEL`).
+The client is the shared crate `libs/rust/model-client` (ADR-0027); this
+engine reaches it as `crate::llm` and maps its environment onto it in
+`config.rs`. Its `tests/llm_client.rs` runs the client against a mock
+gateway on loopback (and over TLS with a throwaway CA).
+`ELITEA_MODEL_CLIENT_LIVE_LLM=1` adds a chat, stream and tool-call round
+trip against the LAN vLLM (`ELITEA_MODEL_CLIENT_LIVE_LLM_BASE`,
+`ELITEA_MODEL_CLIENT_LIVE_LLM_MODEL`).
 
 ## Index storage (`src/storage/`)
 
@@ -1285,8 +1300,9 @@ sections by Leiden on the file-contracted graph (γ = `max(0.3, 1 −
 0.2·log10(files))`), pages by Leiden per section (γ = 1), consolidation to
 `clamp(5..20, ⌈1.2·log2 files⌉)` sections and `clamp(8..200, ⌈√(nodes/7)⌉)`
 pages, hub re-integration, the `macro_cluster` / `micro_cluster` / `is_hub` /
-`hub_assignment` columns. Leiden is vendored `leiden-rs` 0.8.1
-(`vendor/README.md`) behind the `Partitioner` trait, one thread, seed 42.
+`hub_assignment` columns. Leiden is the shared `libs/rust/graph-algos`
+(ADR-0027) over the vendored `leiden-rs` 0.8.1 (`libs/rust/vendor/README.md`),
+behind the `Partitioner` trait, one thread, seed 42.
 Note: the live caller hands Phase 3 only the first 20 sorted hub ids
 (`run_phase2` caps `node_ids`); the port keeps that contract.
 

@@ -1,0 +1,34 @@
+# Rust crates shared by the platform's Rust services (ADR-0027).
+#
+# This is a workspace of LIBRARIES only. Each service keeps its own crate,
+# Cargo.lock and image, and takes these as path dependencies, so an image
+# copies `libs/rust` plus its own tree and nothing else. That is deliberate:
+# one root workspace would put every Rust service in every image build and
+# every lock bump in every Rust CI job.
+#
+# Dependency requirements here are caret ranges at the version the services
+# lock, not exact pins: two services resolve them independently, and an
+# exact pin in a shared crate would force every consumer to move together.
+# The services' own manifests keep their exact pins.
+#
+# This lock file exists for this workspace's own tests; it is not what any
+# service builds against.
+[workspace]
+resolver = "3"
+members = ["code-parsers", "engine-core", "engine-sidecar", "graph-algos", "model-client", "repo-ingest"]
+# Vendored crates are path dependencies, never members: their own tests,
+# benches and dev-dependencies are not built or resolved (vendor/README.md).
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "deny"

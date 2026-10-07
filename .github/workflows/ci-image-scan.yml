@@ -110,6 +110,7 @@ on:
       # missing once (the retired Python DeepWiki image) was re-measured only
       # by the daily run.
       - "services/elitea-deepwiki-engine/**"
+      - "libs/rust/**"
       - "apps/elitea-web/**"
       # The elitea-ui image builds the apps/elitea-ui submodule, so a submodule
       # pointer bump changes the image without changing a file in this tree.
@@ -143,6 +144,7 @@ on:
       - "services/elitea-subapp-host/**"
       - "services/elitea-llm-gateway/**"
       - "services/elitea-deepwiki-engine/**"
+      - "libs/rust/**"
       - "apps/elitea-web/**"
       - "apps/elitea-ui"
       - "deploy/docker/**"

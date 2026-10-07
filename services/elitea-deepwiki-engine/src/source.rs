@@ -13,107 +13,13 @@
 //! reader (the fixture runner, the context paths, a direct `ask`) derives
 //! that id, never one of its own. A git repository is unchanged.
 
-use crate::errors::{EngineError, ErrorType};
-use regex::Regex;
+use crate::errors::EngineError;
+pub use elitea_engine_core::pyvalue::{py_repr, py_str, py_truthy};
+pub use elitea_repo_ingest::source::{
+    ARTIFACT_SCHEME, ArtifactSource, MAX_KEY_BYTES, fold_unsafe_runs, is_artifact_source,
+    parse_artifact_source, refuse_unsafe_key,
+};
 use serde_json::Value;
-use std::fmt::Write as _;
-use std::sync::LazyLock;
-
-/// The scheme that marks an artifact folder rather than a git repository.
-pub const ARTIFACT_SCHEME: &str = "artifact://";
-
-/// elitea-main's bucket-name rule.
-static BUCKET_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[a-z][a-z0-9-]{1,62}$").unwrap_or_else(|_| unreachable!()));
-
-/// The longest object key elitea-main accepts, in bytes.
-pub const MAX_KEY_BYTES: usize = 1024;
-
-/// One artifact folder: a bucket, and an optional folder prefix without a
-/// trailing slash ("" is the whole bucket).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArtifactSource {
-    pub bucket: String,
-    pub prefix: String,
-}
-
-impl ArtifactSource {
-    /// `artifact://{bucket}[/{prefix}]`, the canonical spelling.
-    #[must_use]
-    pub fn url(&self) -> String {
-        if self.prefix.is_empty() {
-            format!("{ARTIFACT_SCHEME}{}", self.bucket)
-        } else {
-            format!("{ARTIFACT_SCHEME}{}/{}", self.bucket, self.prefix)
-        }
-    }
-
-    /// The prefix sent to the listing route: with a trailing slash, so
-    /// `docs` does not also list `docs-archive/…` ("" for the whole bucket).
-    #[must_use]
-    pub fn list_prefix(&self) -> String {
-        if self.prefix.is_empty() {
-            String::new()
-        } else {
-            format!("{}/", self.prefix)
-        }
-    }
-
-    /// Python's `slug`: `bucket[_prefix]` with every run of characters
-    /// outside `A-Za-z0-9._-` folded to one `_`.
-    #[must_use]
-    pub fn slug(&self) -> String {
-        let raw = if self.prefix.is_empty() {
-            self.bucket.clone()
-        } else {
-            format!("{}_{}", self.bucket, self.prefix)
-        };
-        fold_unsafe_runs(&raw)
-    }
-}
-
-/// `re.sub(r"[^A-Za-z0-9._-]+", "_", text)`.
-#[must_use]
-pub fn fold_unsafe_runs(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut in_run = false;
-    for c in text.chars() {
-        if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
-            out.push(c);
-            in_run = false;
-        } else if !in_run {
-            out.push('_');
-            in_run = true;
-        }
-    }
-    out
-}
-
-/// Python's `str(value)` for the JSON values a repository field can hold.
-#[must_use]
-pub fn py_str(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        Value::Null => "None".to_owned(),
-        Value::Bool(true) => "True".to_owned(),
-        Value::Bool(false) => "False".to_owned(),
-        Value::Number(number) => number.to_string(),
-        other => other.to_string(),
-    }
-}
-
-/// Python truthiness of a JSON value.
-#[must_use]
-pub fn py_truthy(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(flag) => *flag,
-        Value::Number(number) => number.as_f64().is_some_and(|n| n != 0.0),
-        Value::String(text) => !text.is_empty(),
-        Value::Array(items) => !items.is_empty(),
-        Value::Object(map) => !map.is_empty(),
-    }
-}
 
 /// `str(mapping.get(key) or "")`.
 fn str_or_empty(mapping: &serde_json::Map<String, Value>, key: &str) -> String {
@@ -121,124 +27,6 @@ fn str_or_empty(mapping: &serde_json::Map<String, Value>, key: &str) -> String {
         Some(value) if py_truthy(value) => py_str(value),
         _ => String::new(),
     }
-}
-
-/// Report whether a repository string names an artifact folder.
-#[must_use]
-pub fn is_artifact_source(repository: &str) -> bool {
-    repository
-        .trim()
-        .to_lowercase()
-        .starts_with(ARTIFACT_SCHEME)
-}
-
-fn source_error(message: String) -> EngineError {
-    EngineError::new(ErrorType::Value, message)
-}
-
-/// Parse `artifact://bucket[/prefix]`, refusing anything else.
-///
-/// # Errors
-///
-/// A `ValueError` (Python's `ArtifactSourceError`) for a string that is not
-/// an artifact source, an unusable bucket name or an unsafe prefix.
-pub fn parse_artifact_source(repository: &str) -> Result<ArtifactSource, EngineError> {
-    if !is_artifact_source(repository) {
-        return Err(source_error(format!(
-            "{} is not an artifact source; expected {ARTIFACT_SCHEME}bucket[/prefix]",
-            py_repr(repository)
-        )));
-    }
-    let stripped = repository.trim();
-    let remainder: String = stripped
-        .chars()
-        .skip(ARTIFACT_SCHEME.chars().count())
-        .collect();
-    let (bucket, prefix) = remainder
-        .split_once('/')
-        .unwrap_or((remainder.as_str(), ""));
-    let bucket = bucket.trim().to_lowercase();
-    if !BUCKET_PATTERN.is_match(&bucket) {
-        return Err(source_error(format!(
-            "{} is not a usable bucket name: a bucket starts with a letter and holds 2 to 63 lowercase letters, digits or hyphens",
-            py_repr(&bucket)
-        )));
-    }
-    Ok(ArtifactSource {
-        bucket,
-        prefix: normalise_prefix(prefix)?,
-    })
-}
-
-fn normalise_prefix(prefix: &str) -> Result<String, EngineError> {
-    let prefix = prefix.trim().trim_matches('/');
-    if prefix.is_empty() {
-        return Ok(String::new());
-    }
-    refuse_unsafe_key(prefix, "folder prefix")?;
-    Ok(prefix.to_owned())
-}
-
-/// elitea-main's object-key rules (`internal/infra/storage/ref.go`): at
-/// most [`MAX_KEY_BYTES`], no NUL or backslash, no empty, `.` or `..`
-/// segment (so no leading or trailing slash either).
-///
-/// # Errors
-///
-/// A `ValueError` naming `what` and the rule the key breaks.
-pub fn refuse_unsafe_key(key: &str, what: &str) -> Result<(), EngineError> {
-    if key.len() > MAX_KEY_BYTES {
-        return Err(source_error(format!(
-            "{what} is longer than {MAX_KEY_BYTES} bytes"
-        )));
-    }
-    if key.contains('\0') || key.contains('\\') {
-        return Err(source_error(format!(
-            "{what} {} holds a character a key may not hold",
-            py_repr(key)
-        )));
-    }
-    if key
-        .split('/')
-        .any(|segment| matches!(segment, "" | "." | ".."))
-    {
-        return Err(source_error(format!(
-            "{what} {} holds an empty or relative segment",
-            py_repr(key)
-        )));
-    }
-    Ok(())
-}
-
-/// Python's `repr()` of a plain string, close enough for messages: single
-/// quotes unless the text holds one and no double quote.
-#[must_use]
-pub fn py_repr(text: &str) -> String {
-    let quote = if text.contains('\'') && !text.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut out = String::from(quote);
-    for character in text.chars() {
-        match character {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            // Python escapes the other C0/C1 control characters as `\xNN`.
-            c if matches!(u32::from(c), 0..=0x1f | 0x7f..=0x9f) => {
-                let _ = write!(out, "\\x{:02x}", u32::from(c));
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
 }
 
 /// The repository a wiki is NAMED after.
@@ -324,6 +112,7 @@ pub fn wiki_id_for(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::ErrorType;
     use serde_json::json;
 
     #[test]
@@ -440,5 +229,61 @@ mod tests {
             let error = display_repository_for(Some(&config)).err();
             assert_eq!(error.map(|e| e.error_type), Some(ErrorType::Value), "{bad}");
         }
+    }
+
+    /// The Python engine's own wiki ids for every artifact listing in the
+    /// ingest fixture (`libs/rust/repo-ingest/tests/fixtures`, written by
+    /// `parity/python_artifact_source.py`). The ingest crate checks the
+    /// listing and its identity; the NAME it is filed under is this engine's,
+    /// and every reader — the generation, `ask`, the context paths — must
+    /// derive the same one.
+    #[test]
+    fn every_reader_derives_the_python_wiki_id_of_a_folder() {
+        use crate::wiki::compose::{build_repo_identifier, normalize_wiki_id};
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../libs/rust/repo-ingest/tests/fixtures/artifact_source.json"
+        ))
+        .unwrap_or_else(|e| panic!("{e}"));
+        let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
+        let mut checked = 0;
+        for case in fixture["listings"].as_array().into_iter().flatten() {
+            if case.get("error").is_some() {
+                continue;
+            }
+            let name = text(&case["name"]);
+            let branch = text(&case["branch"]);
+            let folder = parse_artifact_source(&text(&case["repository"]))
+                .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let identifier = build_repo_identifier(
+                &text(&case["canonical_repository"]),
+                &text(&case["marker"]["branch"]),
+                Some(&text(&case["digest"])),
+            );
+            assert_eq!(identifier, text(&case["repo_identifier"]), "{name}");
+            let wiki_id = text(&case["wiki_id"]);
+            assert_eq!(normalize_wiki_id(&identifier), wiki_id, "{name}");
+            let config = json!({
+                "provider_type": "artifact",
+                "provider_config": {"bucket": folder.bucket, "prefix": folder.prefix},
+                "repository": case["repository"],
+                "branch": branch,
+                "project": null,
+                "is_cloud": null,
+            });
+            let ask = crate::ask::parse_request(
+                json!({"question": "q", "repo_config": config})
+                    .as_object()
+                    .unwrap_or_else(|| unreachable!()),
+            )
+            .map(|request| request.wiki_id);
+            assert_eq!(ask.ok().as_deref(), Some(wiki_id.as_str()), "{name}");
+            assert_eq!(
+                wiki_id_for(Some(&config), Some(&branch)).ok().as_deref(),
+                Some(wiki_id.as_str()),
+                "{name}"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "the fixture holds no accepted listing");
     }
 }

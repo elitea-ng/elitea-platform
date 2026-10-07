@@ -45,6 +45,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo install cargo-auditable --locked --version 0.7.5
 
 WORKDIR /src/services/elitea-deepwiki-engine
+# The shared engine crates are path dependencies at ../../libs/rust, so the
+# repository layout is kept under /src (ADR-0027).
+COPY libs/rust /src/libs/rust
 COPY services/elitea-deepwiki-engine ./
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

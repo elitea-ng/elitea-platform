@@ -6,14 +6,17 @@
 //! implementation reproduces leidenalg bit for bit (ADR-0026 decision 6), so
 //! the call is a [`Partitioner`]:
 //!
-//! * [`LeidenPartitioner`] — the production one, the vendored `leiden-rs`.
-//!   Its gate is partition QUALITY (modularity, agreement), not equality.
+//! * [`LeidenPartitioner`] — the production one: the shared
+//!   `elitea-graph-algos` Leiden (the vendored `leiden-rs`, two seeded
+//!   passes; its module docs list the gaps to leidenalg). Its gate is
+//!   partition QUALITY (modularity, agreement), not equality.
 //! * [`ReplayPartitioner`] — parity only: it answers with the memberships
 //!   leidenalg returned for the same input, recorded by
 //!   `parity/python_phase3_dump.py`. With it, every other step of Phase 3
 //!   must give Python's result exactly.
 
-use leiden_rs::{GraphDataBuilder, Leiden, LeidenConfig, QualityType};
+pub use elitea_graph_algos::leiden::number_by_size;
+use elitea_graph_algos::leiden::{self, LeidenRequest};
 use std::collections::HashMap;
 
 /// The Phase 3 pass a call belongs to.
@@ -68,79 +71,23 @@ pub trait Partitioner {
     fn partition(&mut self, request: &PartitionRequest<'_>) -> Result<Vec<usize>, PartitionError>;
 }
 
-/// The production partitioner: `leiden-rs`, RB-configuration objective
+/// The production partitioner: the shared Leiden
+/// ([`elitea_graph_algos::leiden::partition`]) — RB-configuration objective
 /// (modularity with resolution γ), edge weights, the request's seed,
-/// single-threaded (the crate is built without `rayon`).
-///
-/// Semantic gaps to leidenalg 0.12 `find_partition` (documented, not
-/// fixable through the `leiden-rs` API):
-///
-/// * leidenalg's `optimise_partition(n_iterations=2)` runs the whole
-///   multi-level Leiden pass twice, the second from the first's result.
-///   One `Leiden::run` is one such pass (it aggregates until local moving
-///   changes nothing), so this runs it, then
-///   `run_with_initial_partition` from its result: two passes.
-/// * Both move and refine greedily (best gain) in a random node order, but
-///   the orders come from different generators (igraph's RNG vs `StdRng`
-///   seeded with the same number) and different queue disciplines, so the
-///   same seed gives a different, equally valid partition.
-/// * leidenalg stops a pass when aggregation no longer shrinks the graph;
-///   `leiden-rs` when local moving changes nothing or the quality gain is
-///   below 1e-10. Both converge to a local optimum of the same objective.
-/// * leidenalg numbers communities by size, ties by its internal index;
-///   here ties go to the community holding the lowest vertex.
+/// single-threaded, two passes, communities numbered by size.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LeidenPartitioner;
 
 impl Partitioner for LeidenPartitioner {
     fn partition(&mut self, request: &PartitionRequest<'_>) -> Result<Vec<usize>, PartitionError> {
-        let leiden_error = |e: leiden_rs::LeidenError| PartitionError::Leiden(e.to_string());
-        let mut builder = GraphDataBuilder::new(request.names.len());
-        for &(u, v, weight) in request.edges {
-            builder.add_edge(u, v, weight).map_err(leiden_error)?;
-        }
-        let graph = builder.build().map_err(leiden_error)?;
-        let config = LeidenConfig {
+        leiden::partition(&LeidenRequest {
+            vertices: request.names.len(),
+            edges: request.edges,
             resolution: request.resolution,
-            seed: Some(request.seed),
-            quality: QualityType::RBConfiguration,
-            ..LeidenConfig::default()
-        };
-        let leiden = Leiden::new(config);
-        let first = leiden.run(&graph).map_err(leiden_error)?;
-        let second = leiden
-            .run_with_initial_partition(&graph, first.partition)
-            .map_err(leiden_error)?;
-        Ok(number_by_size(second.partition.as_slice()))
+            seed: request.seed,
+        })
+        .map_err(|e| PartitionError::Leiden(e.0))
     }
-}
-
-/// Renumber a membership: largest community 0, ties to the community
-/// holding the lowest vertex.
-#[must_use]
-pub fn number_by_size(membership: &[usize]) -> Vec<usize> {
-    // (size, first vertex) per label, in first-vertex order.
-    let mut seen: HashMap<usize, usize> = HashMap::new();
-    let mut groups: Vec<(usize, usize)> = Vec::new();
-    for (vertex, label) in membership.iter().enumerate() {
-        let slot = *seen.entry(*label).or_insert_with(|| {
-            groups.push((0, vertex));
-            groups.len() - 1
-        });
-        groups[slot].0 += 1;
-    }
-    let mut order: Vec<usize> = (0..groups.len()).collect();
-    order.sort_by(|a, b| {
-        groups[*b]
-            .0
-            .cmp(&groups[*a].0)
-            .then(groups[*a].1.cmp(&groups[*b].1))
-    });
-    let mut new_id = vec![0; groups.len()];
-    for (rank, slot) in order.into_iter().enumerate() {
-        new_id[slot] = rank;
-    }
-    membership.iter().map(|label| new_id[seen[label]]).collect()
 }
 
 /// One recorded leidenalg call.
@@ -278,15 +225,6 @@ mod tests {
             (3, 5, 1.0),
             (2, 3, 0.1),
         ]
-    }
-
-    #[test]
-    fn number_by_size_puts_the_largest_first_and_breaks_ties_by_first_vertex() {
-        assert_eq!(
-            number_by_size(&[7, 3, 3, 7, 9, 9, 9]),
-            vec![1, 2, 2, 1, 0, 0, 0]
-        );
-        assert_eq!(number_by_size(&[]), Vec::<usize>::new());
     }
 
     #[test]

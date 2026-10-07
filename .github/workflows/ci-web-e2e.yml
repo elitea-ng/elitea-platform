@@ -95,6 +95,7 @@ on:
       # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
       # its fixture runner).
       - "services/elitea-deepwiki-engine/**"
+      - "libs/rust/**"
       - "services/elitea-subapp-host/**"
       # The `chat-stream-rust` job runs the journeys against the native Rust
       # runtime, so a change to it can break a browser journey while touching
@@ -125,6 +126,7 @@ on:
       # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
       # its fixture runner).
       - "services/elitea-deepwiki-engine/**"
+      - "libs/rust/**"
       - "services/elitea-subapp-host/**"
       # The `chat-stream-rust` job runs the journeys against the native Rust
       # runtime, so a change to it can break a browser journey while touching

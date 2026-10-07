@@ -16,146 +16,11 @@ pub mod native;
 
 use crate::errors::{EngineError, ErrorType};
 use serde_json::{Map, Value};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
-use tokio::sync::{Notify, mpsc};
+
+pub use elitea_engine_core::stream::{Context, Line, StopSignal};
 
 /// The tools the sidecar serves. The Go host serves everything else itself.
 pub const ENGINE_TOOLS: [&str; 4] = ["generate_wiki", "ask", "deep_research", "resolve_wiki"];
-
-/// One NDJSON line of the engine's stream.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Line {
-    /// Progress text.
-    Thinking(String),
-    /// One fragment of the ANSWER (issue #701).
-    Token(String),
-    /// The tool's result dict — success or not; the host maps a failed one.
-    Result(Value),
-    /// A failure the host classifies by `error_type`.
-    Error(EngineError),
-}
-
-impl Line {
-    /// The JSON object this line is on the wire.
-    #[must_use]
-    pub fn to_json(&self) -> Value {
-        match self {
-            Self::Thinking(text) => serde_json::json!({ "thinking": text }),
-            Self::Token(text) => serde_json::json!({ "token": text }),
-            Self::Result(result) => serde_json::json!({ "result": result }),
-            Self::Error(error) => error.to_line(),
-        }
-    }
-}
-
-/// The stop flag of one invocation, shared by the socket and the tool.
-#[derive(Debug, Clone, Default)]
-pub struct StopSignal {
-    requested: Arc<AtomicBool>,
-    notify: Arc<Notify>,
-}
-
-impl StopSignal {
-    /// Ask the tool to stop at its next checkpoint, and wake any pause.
-    pub fn request(&self) {
-        self.requested.store(true, Ordering::SeqCst);
-        self.notify.notify_waiters();
-    }
-
-    #[must_use]
-    pub fn is_requested(&self) -> bool {
-        self.requested.load(Ordering::SeqCst)
-    }
-
-    /// Resolve once a stop is requested (at once if it already was).
-    ///
-    /// A model call awaits this beside its request, so a stop aborts a
-    /// call that may otherwise wait minutes for its first token.
-    pub async fn stopped(&self) {
-        loop {
-            let notified = self.notify.notified();
-            tokio::pin!(notified);
-            // Registered before the flag is read, so a request that lands
-            // between the two still wakes this waiter.
-            notified.as_mut().enable();
-            if self.is_requested() {
-                return;
-            }
-            notified.await;
-        }
-    }
-}
-
-/// The hooks one tool run reports through.
-#[derive(Debug, Clone)]
-pub struct Context {
-    lines: mpsc::UnboundedSender<Line>,
-    stop: StopSignal,
-}
-
-impl Context {
-    #[must_use]
-    pub fn new(lines: mpsc::UnboundedSender<Line>, stop: StopSignal) -> Self {
-        Self { lines, stop }
-    }
-
-    /// The invocation's stop signal (a clone sharing the flag), for the
-    /// calls that wait on it: model requests, the clone watchdog, the
-    /// worker child's supervisor.
-    #[must_use]
-    pub fn stop_signal(&self) -> StopSignal {
-        self.stop.clone()
-    }
-
-    /// Report progress.
-    pub fn thinking(&self, message: impl Into<String>) {
-        // A closed channel means the reader went away; the stop flag is
-        // already set by then and the next checkpoint ends the run.
-        let _ = self.lines.send(Line::Thinking(message.into()));
-    }
-
-    /// Report one fragment of the answer. An empty fragment is DROPPED here:
-    /// the poll drain discards an event with an empty message, so letting
-    /// one through would spend a read-once event slot on nothing.
-    pub fn token(&self, text: impl Into<String>) {
-        let text = text.into();
-        if !text.is_empty() {
-            let _ = self.lines.send(Line::Token(text));
-        }
-    }
-
-    /// Fail with the stop line once a stop was requested.
-    ///
-    /// # Errors
-    ///
-    /// [`EngineError::cancelled`] after a stop request.
-    pub fn checkpoint(&self) -> Result<(), EngineError> {
-        if self.stop.is_requested() {
-            Err(EngineError::cancelled())
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Wait `duration`, or less if a stop arrives first.
-    pub async fn pause(&self, duration: Duration) {
-        if duration.is_zero() || self.stop.is_requested() {
-            return;
-        }
-        let notified = self.stop.notify.notified();
-        tokio::pin!(notified);
-        notified.as_mut().enable();
-        if self.stop.is_requested() {
-            return;
-        }
-        tokio::select! {
-            () = tokio::time::sleep(duration) => {}
-            () = notified => {}
-        }
-    }
-}
 
 /// Reader-selected wiki pages (`context_paths`) and their pinned version.
 pub const PATHS_PARAM: &str = "context_paths";
@@ -258,30 +123,29 @@ impl Runner {
     pub async fn publish(&self, _result: &Value, _context: &Context) {}
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn a_pause_ends_when_a_stop_arrives() {
-        let (sender, _receiver) = mpsc::unbounded_channel();
-        let stop = StopSignal::default();
-        let context = Context::new(sender, stop.clone());
-        let started = std::time::Instant::now();
-        let pause = tokio::spawn(async move { context.pause(Duration::from_secs(30)).await });
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        stop.request();
-        assert!(pause.await.is_ok());
-        assert!(started.elapsed() < Duration::from_secs(5));
+/// The socket serves [`ENGINE_TOOLS`] through this runner; the shared
+/// sidecar crate owns the protocol (ADR-0027).
+impl elitea_engine_sidecar::Engine for Runner {
+    fn runner_name(&self) -> &'static str {
+        self.name()
     }
 
-    #[test]
-    fn an_empty_token_never_reaches_the_channel() {
-        let (sender, mut receiver) = mpsc::unbounded_channel();
-        let context = Context::new(sender, StopSignal::default());
-        context.token("");
-        context.token("x");
-        assert_eq!(receiver.try_recv().ok(), Some(Line::Token("x".to_owned())));
-        assert!(receiver.try_recv().is_err());
+    fn serves(&self, tool: &str) -> bool {
+        ENGINE_TOOLS.contains(&tool)
+    }
+
+    async fn run(
+        &self,
+        tool: &str,
+        arguments: Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        Runner::run(self, tool, arguments, context).await
+    }
+
+    async fn after_success(&self, tool: &str, result: &Value, context: &Context) {
+        if tool == "generate_wiki" {
+            self.publish(result, context).await;
+        }
     }
 }
