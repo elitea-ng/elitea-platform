@@ -74,6 +74,13 @@ func (s *suite) contract13(t *testing.T) {
 	if response := need(t)(api.Do(ctx, http.MethodDelete, stop, nil, nil)); response.Status != http.StatusConflict {
 		t.Errorf("stopping a settled answer: %s, want 409", response)
 	}
+	// The id is `format: uuid`, which admits either case: a client that
+	// re-serialises it upper-case names the same answer (409), not a
+	// malformed id (400).
+	upper := fmt.Sprintf("/api/v2/elitea_core/task/prompt_lib/%d/%s", project, strings.ToUpper(s.admission.ResponseMessageID))
+	if response := need(t)(api.Do(ctx, http.MethodDelete, upper, nil, nil)); response.Status != http.StatusConflict {
+		t.Errorf("stopping a settled answer by its upper-case id: %s, want 409", response)
+	}
 	malformed := fmt.Sprintf("/api/v2/elitea_core/task/prompt_lib/%d/not-a-uuid", project)
 	if response := need(t)(api.Do(ctx, http.MethodDelete, malformed, nil, nil)); response.Status != http.StatusBadRequest {
 		t.Errorf("stopping a malformed id: %s, want 400", response)
@@ -86,6 +93,39 @@ func (s *suite) contract13(t *testing.T) {
 		map[string]any{"ids": []int64{2147483000}}, nil)), http.StatusOK)
 	if deleted, ok := asInt64(bulk["deleted"]); !ok || deleted != 0 {
 		t.Errorf("bulk delete of a foreign id = %v, want deleted 0", bulk)
+	}
+
+	// Notifications: the single delete of one of the caller's own (the one
+	// seed-native inserts) answers 204, and the caller's other devices learn
+	// of it as a `deleted` tombstone in the delta from a cursor taken before.
+	notifications := client.NotificationsPath(project)
+	before, err := api.Sync(ctx, notifications, "0", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own := ""
+	for _, row := range before.Rows {
+		if own = client.RowID(row); own != "" {
+			break
+		}
+	}
+	if own == "" {
+		t.Fatalf("no notification in project %d to delete; native-conformance.sh seed-native "+
+			"inserts one per run (%d rows)", project, len(before.Rows))
+	}
+	if response := need(t)(api.Do(ctx, http.MethodDelete, client.NotificationPath(project, own), nil, nil)); response.Status != http.StatusNoContent {
+		t.Errorf("deleting own notification %s: %s, want 204", own, response)
+	} else {
+		delta, err := api.Sync(ctx, notifications, before.Cursor, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tombstone, ok := client.TombstoneFor(delta.Tombstones, own); !ok || tombstone.Reason != "deleted" {
+			t.Errorf("the delta after deleting %s carries no `deleted` tombstone for it: %+v", own, delta.Tombstones)
+		}
+		if _, still := client.RowsByID(delta.Rows)[own]; still {
+			t.Errorf("the delta after deleting %s still carries it as a row", own)
+		}
 	}
 
 	// Suggestions, memories, usage and budget: read over the native bearer.
