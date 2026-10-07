@@ -137,7 +137,7 @@ pub fn try_build_index_graph_parsed(
     discovery: &Discovery,
     flags: &super::flags::Phase1cFlags,
 ) -> Result<(CodeGraph, BuildReport, super::phase1c::Phase1cReport), String> {
-    let (built, failure) = crate::parsers::limits::with_pool_failures(|| {
+    let (built, failure) = crate::parsers::with_pool_failures(|| {
         build_index_graph_parsed(repo_root, discovery, flags)
     });
     match failure {

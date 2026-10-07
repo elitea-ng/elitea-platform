@@ -7,6 +7,8 @@ native Inventory engine next.
 | Crate | What it holds |
 |---|---|
 | `engine-core` | The sidecar error contract, the NDJSON stream and stop flag, zeroizing secrets, Python-compatible JSON/string/value semantics |
+| `model-client` | The OpenAI-compatible gateway client: chat (blocking, streamed, tool calls), batched embeddings, SSE, token counting |
+| `code-parsers` | tree-sitter parsers for Python, Go, TypeScript, JavaScript, Java, C#, C++ and Rust → symbols and relationships |
 
 ## Layout rules
 
@@ -15,7 +17,9 @@ native Inventory engine next.
   (`../../libs/rust/<crate>`). An image build copies `libs/rust` and its own
   tree, nothing else.
 - **Caret ranges here, exact pins in services.** A shared crate states the
-  lowest version it needs; each service's lock decides the exact one.
+  lowest version it needs; each service's lock decides the exact one. The
+  one exception is the tree-sitter grammars in `code-parsers`: parser output
+  is a function of the grammar revision, so they stay exactly pinned.
 - **Lints match the services:** `unsafe_code = "forbid"`, Clippy `all` and
   `pedantic` denied.
 - **No engine-specific code.** A crate here must not know which engine it

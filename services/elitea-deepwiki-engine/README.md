@@ -406,9 +406,10 @@ see [Parity](#parity-with-the-python-engine)) wrote
 object API. `tests/native_generate.rs` runs a whole generation over a folder,
 and the Go host's `native_engine_test.go` reads one through the worker child.
 
-## Parsers and the code graph (`src/parsers/`, `src/graph/`)
+## Parsers and the code graph (`libs/rust/code-parsers`, `src/graph/`)
 
-Eight parsers, one per language the Python engine parses richly: Python, Go,
+The parsers are the shared crate `libs/rust/code-parsers` (ADR-0027), which
+this engine reaches as `crate::parsers`; the graph stays here. Eight parsers, one per language the Python engine parses richly: Python, Go,
 TypeScript/TSX, JavaScript/JSX, Java, C#, C++ and Rust. Each is a port of the
 Python visitor for that language, over `tree-sitter` 0.27. The Python parser
 used the standard-library `ast` module; its port builds the same tree from

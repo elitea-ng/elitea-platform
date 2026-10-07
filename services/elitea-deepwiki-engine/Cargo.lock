@@ -512,11 +512,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-code-parsers"
+version = "0.1.0"
+dependencies = [
+ "elitea-engine-core",
+ "indexmap",
+ "rayon",
+ "regex",
+ "serde",
+ "serde_json",
+ "tree-sitter",
+ "tree-sitter-c-sharp",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+]
+
+[[package]]
 name = "elitea-deepwiki-engine"
 version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "elitea-code-parsers",
  "elitea-engine-core",
  "elitea-model-client",
  "fancy-regex",
@@ -542,15 +564,6 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
- "tree-sitter",
- "tree-sitter-c-sharp",
- "tree-sitter-cpp",
- "tree-sitter-go",
- "tree-sitter-java",
- "tree-sitter-javascript",
- "tree-sitter-python",
- "tree-sitter-rust",
- "tree-sitter-typescript",
  "unicode-normalization",
  "zeroize",
 ]

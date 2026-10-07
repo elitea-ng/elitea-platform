@@ -112,7 +112,7 @@ pub const MAX_WORKER_THREADS: u64 = 256;
 /// The address space each worker thread is sized at: the largest parser
 /// stack (the Python parser's 256 MiB), which every thread of a parser
 /// pool reserves.
-pub const WORKER_THREAD_RESERVE_BYTES: u64 = crate::parsers::limits::LARGEST_PARSER_STACK as u64;
+pub const WORKER_THREAD_RESERVE_BYTES: u64 = crate::parsers::LARGEST_PARSER_STACK as u64;
 
 /// The address space a worker needs besides its parser stacks (1 GiB):
 /// the heap, the malloc arenas, the runtime's own threads.

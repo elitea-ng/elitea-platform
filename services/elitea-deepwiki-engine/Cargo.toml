@@ -10,6 +10,7 @@ description = "The Rust-native DeepWiki engine behind the sub-application host's
 # The engine sidecars' shared foundation (ADR-0027): errors, the NDJSON
 # stream and stop flag, secrets, Python-compatible text.
 elitea-engine-core = { path = "../../libs/rust/engine-core" }
+elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
 elitea-model-client = { path = "../../libs/rust/model-client" }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 # The Authorization header value. Already in the tree (gix-transport,
@@ -79,23 +80,6 @@ tracing = "=0.1.44"
 # in the tree through sqlx; pinned to the locked version.
 unicode-normalization = "=0.1.25"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
-tree-sitter = "=0.27.0"
-# The C# grammar `tree_sitter_language_pack` 1.16.1 builds (its
-# language_definitions.json: master at this rev, 4 commits after v0.23.5 with
-# C# 14 support; ABI 15, 8495 parse states, 26 fields, 545 node kinds). The
-# 0.23.5 crate has 8053 states and 533 kinds, and no later crate exists.
-tree-sitter-c-sharp = { git = "https://github.com/tree-sitter/tree-sitter-c-sharp", rev = "9150f7d56bb47f1a809fa23623f1ba1413e93fa9" }
-# The C++ grammar `tree_sitter_language_pack` 1.16.1 builds (its
-# language_definitions.json: master at this rev, 40 commits after v0.23.4;
-# ABI 15, 11734 parse states, 53 fields, 575 node kinds). The 0.23.4 crate
-# has ABI 14, 8637 states, 50 fields and 543 kinds, and no later crate exists.
-tree-sitter-cpp = { git = "https://github.com/tree-sitter/tree-sitter-cpp", rev = "8b5b49eb196bec7040441bee33b2c9a4838d6967" }
-tree-sitter-go = "=0.25.0"
-tree-sitter-java = "=0.23.5"
-tree-sitter-javascript = "=0.25.0"
-tree-sitter-python = "=0.25.0"
-tree-sitter-rust = "=0.24.2"
-tree-sitter-typescript = "=0.23.2"
 # Credentials built here (the git Basic pair) are zeroed on drop, like
 # elitea-engine-core's Secret. Already in the tree through rustls.
 zeroize = "=1.9.0"
