@@ -758,6 +758,7 @@ fn transport() -> Transport {
             max: Duration::from_millis(2),
             max_retry_after: Duration::from_millis(5),
         },
+        ..TransportSettings::default()
     })
     .expect("transport")
 }

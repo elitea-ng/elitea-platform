@@ -17,8 +17,8 @@
 use super::settings::ModelSettings;
 use super::sse::{SseDecoder, SseEvent, SseLimits};
 use super::transport::{BodyError, Call, Transport, read_limited};
-use crate::errors::{EngineError, ErrorType};
-use crate::runner::StopSignal;
+use elitea_engine_core::errors::{EngineError, ErrorType};
+use elitea_engine_core::stream::StopSignal;
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
@@ -72,12 +72,14 @@ pub struct SystemPrompt {
 
 impl SystemPrompt {
     /// One text.
-    pub(crate) fn text(text: String) -> Self {
+    #[must_use]
+    pub fn text(text: String) -> Self {
         Self { parts: vec![text] }
     }
 
     /// Text content blocks, in order.
-    pub(crate) fn blocks(parts: Vec<String>) -> Self {
+    #[must_use]
+    pub fn blocks(parts: Vec<String>) -> Self {
         Self { parts }
     }
 

@@ -2,10 +2,10 @@
 //!
 //! Each test scripts the gateway's replies, runs the client, and checks
 //! both what the client returned and what it sent. One test runs over TLS
-//! with a throwaway CA, to prove `ELITEA_DEEPWIKI_TLS_CA_FILE`.
+//! with a throwaway CA, to prove a private CA bundle (`TransportSettings::ca_file`).
 //!
-//! `ELITEA_DEEPWIKI_LIVE_LLM=1` adds a chat round trip against the LAN
-//! vLLM (`ELITEA_DEEPWIKI_LIVE_LLM_BASE`, default
+//! `ELITEA_MODEL_CLIENT_LIVE_LLM=1` adds a chat round trip against the LAN
+//! vLLM (`ELITEA_MODEL_CLIENT_LIVE_LLM_BASE`, default
 //! `http://192.168.29.60:8000/v1`).
 
 // The mock vectors hold small whole numbers, exact in f32.
@@ -16,16 +16,16 @@ use axum::body::{Body, Bytes};
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use elitea_deepwiki_engine::errors::EngineError;
-use elitea_deepwiki_engine::llm::embeddings::MIN_SPLIT_TOKENS;
-use elitea_deepwiki_engine::llm::sse::SseLimits;
-use elitea_deepwiki_engine::llm::tokens::embedding_split;
-use elitea_deepwiki_engine::llm::transport::Backoff;
-use elitea_deepwiki_engine::llm::{
+use elitea_engine_core::errors::EngineError;
+use elitea_engine_core::stream::StopSignal;
+use elitea_model_client::embeddings::MIN_SPLIT_TOKENS;
+use elitea_model_client::sse::SseLimits;
+use elitea_model_client::tokens::embedding_split;
+use elitea_model_client::transport::Backoff;
+use elitea_model_client::{
     ChatClient, ChatMessage, ChatRequest, EmbeddingClient, EmbeddingOptions, ModelSettings,
     Sampling, Timeouts, ToolChoice, ToolDefinition, Transport, TransportSettings,
 };
-use elitea_deepwiki_engine::runner::StopSignal;
 use serde_json::{Value, json};
 use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
@@ -179,6 +179,7 @@ fn fast() -> TransportSettings {
             max: Duration::from_millis(20),
             max_retry_after: Duration::from_secs(1),
         },
+        ..TransportSettings::default()
     }
 }
 
@@ -522,14 +523,18 @@ async fn another_bad_request_still_fails_the_call() {
 async fn a_context_refusal_below_the_floor_fails_naming_the_setting() {
     // Refuses every request as over its context.
     let (gw, base) = gateway(|_, _| vllm_context_refusal()).await;
-    let client = embedder(&base, EmbeddingOptions::default());
+    // The consumer names its own setting; the client repeats that name.
+    let client = embedder(
+        &base,
+        EmbeddingOptions {
+            ctx_setting: "TEST_EMBED_CTX_TOKENS",
+            ..EmbeddingOptions::default()
+        },
+    );
     let error = err(client
         .embed_documents(&[prose(400)], &StopSignal::default())
         .await);
-    assert!(
-        error.message.contains("ELITEA_DEEPWIKI_EMBED_CTX_TOKENS"),
-        "{error}"
-    );
+    assert!(error.message.contains("TEST_EMBED_CTX_TOKENS"), "{error}");
     assert!(
         error.message.contains(&MIN_SPLIT_TOKENS.to_string()),
         "{error}"
@@ -805,7 +810,7 @@ async fn a_tool_round_trip_is_sent_in_openai_shape() {
         transport(&fast()),
         settings(&base, json!({"model_name": "o3-mini", "max_tokens": 4096})),
     );
-    let call = elitea_deepwiki_engine::llm::ToolCall {
+    let call = elitea_model_client::ToolCall {
         id: "call_1".to_owned(),
         name: "think".to_owned(),
         arguments: "{}".to_owned(),
@@ -1035,7 +1040,7 @@ fn test_pki() -> (String, String, Vec<u8>) {
     ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
     ca_params
         .distinguished_name
-        .push(rcgen::DnType::CommonName, "elitea deepwiki test CA");
+        .push(rcgen::DnType::CommonName, "elitea model-client test CA");
     validity(&mut ca_params);
     let Ok(ca) = CertifiedIssuer::self_signed(ca_params, ca_key) else {
         panic!("ca cert")
@@ -1128,7 +1133,8 @@ async fn the_ca_file_is_trusted_and_its_absence_is_not() {
     });
     let base = format!("https://localhost:{}/llm/v1", address.port());
 
-    let scratch = std::env::temp_dir().join(format!("deepwiki-llm-ca-{}", std::process::id()));
+    let scratch =
+        std::env::temp_dir().join(format!("elitea-model-client-ca-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&scratch);
     let ca_file = scratch.join("ca.pem");
     assert!(
@@ -1172,13 +1178,11 @@ async fn the_ca_file_is_trusted_and_its_absence_is_not() {
 
     let missing = TransportSettings {
         ca_file: Some(scratch.join("absent.pem")),
+        ca_file_setting: "TEST_TLS_CA_FILE",
         ..fast()
     };
     let error = err(Transport::new(&missing));
-    assert!(
-        error.message.contains("ELITEA_DEEPWIKI_TLS_CA_FILE"),
-        "{error}"
-    );
+    assert!(error.message.contains("TEST_TLS_CA_FILE"), "{error}");
     assert_eq!(error.category(), "runtime_error");
     let _ = std::fs::remove_dir_all(&scratch);
 }
@@ -1186,12 +1190,16 @@ async fn the_ca_file_is_trusted_and_its_absence_is_not() {
 /// A real round trip against the LAN vLLM, when asked for.
 #[tokio::test]
 async fn live_lan_model_chat() {
-    if std::env::var("ELITEA_DEEPWIKI_LIVE_LLM").ok().as_deref() != Some("1") {
+    if std::env::var("ELITEA_MODEL_CLIENT_LIVE_LLM")
+        .ok()
+        .as_deref()
+        != Some("1")
+    {
         return;
     }
-    let base = std::env::var("ELITEA_DEEPWIKI_LIVE_LLM_BASE")
+    let base = std::env::var("ELITEA_MODEL_CLIENT_LIVE_LLM_BASE")
         .unwrap_or_else(|_| "http://192.168.29.60:8000/v1".to_owned());
-    let model = std::env::var("ELITEA_DEEPWIKI_LIVE_LLM_MODEL")
+    let model = std::env::var("ELITEA_MODEL_CLIENT_LIVE_LLM_MODEL")
         .unwrap_or_else(|_| "RadixArk/Qwen3.8-27B-NVFP4".to_owned());
     let settings = settings(&base, json!({"model_name": model, "max_tokens": 2048}));
     let live = TransportSettings::default();

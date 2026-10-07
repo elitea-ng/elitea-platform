@@ -44,7 +44,7 @@
 //!    windows of a long text are. The window's place and weight do not
 //!    change.
 //! 3. A window of [`MIN_SPLIT_TOKENS`] or fewer is not cut: the run fails
-//!    and names `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS`. The extra requests of
+//!    and names the window setting ([`EmbeddingOptions::ctx_setting`]). The extra requests of
 //!    one client are capped at [`FALLBACK_REQUESTS_PER_WINDOW`] per window
 //!    plus [`FALLBACK_REQUESTS_BASE`]; past the cap the run fails too.
 //!
@@ -55,8 +55,8 @@
 use super::settings::ModelSettings;
 use super::tokens::{EMBEDDING_CTX_LENGTH, Window, embedding_split};
 use super::transport::{BodyError, Call, PostError, Transport, read_limited};
-use crate::errors::{EngineError, ErrorType};
-use crate::runner::StopSignal;
+use elitea_engine_core::errors::{EngineError, ErrorType};
+use elitea_engine_core::stream::StopSignal;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -75,7 +75,7 @@ pub const DEFAULT_BATCH_SIZE: usize = 64;
 pub const DEFAULT_CONCURRENCY: usize = 4;
 
 /// The smallest window the context-length fallback cuts in two, in
-/// `cl100k_base` tokens; also the smallest `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS`.
+/// `cl100k_base` tokens; also the smallest window a consumer should allow.
 pub const MIN_SPLIT_TOKENS: usize = 256;
 
 /// The fallback's extra requests allowed per window this client embedded.
@@ -88,8 +88,6 @@ pub const FALLBACK_REQUESTS_PER_WINDOW: u64 = 4;
 pub const FALLBACK_REQUESTS_BASE: u64 = 64;
 
 /// The name an operator sets to shrink the windows.
-const CTX_SETTING: &str = "ELITEA_DEEPWIKI_EMBED_CTX_TOKENS";
-
 /// Phrases that mark a refusal as a context-length refusal, lower case.
 ///
 /// * `maximum context length`: `OpenAI` ("This model's maximum context
@@ -134,6 +132,10 @@ pub struct EmbeddingOptions {
     pub concurrency: usize,
     /// The window length, in `cl100k_base` tokens.
     pub ctx_length: usize,
+    /// What the operator calls [`EmbeddingOptions::ctx_length`] — the
+    /// consuming engine's environment variable — named in the advice a
+    /// context-length refusal carries.
+    pub ctx_setting: &'static str,
 }
 
 impl Default for EmbeddingOptions {
@@ -142,6 +144,7 @@ impl Default for EmbeddingOptions {
             batch_size: DEFAULT_BATCH_SIZE,
             concurrency: DEFAULT_CONCURRENCY,
             ctx_length: EMBEDDING_CTX_LENGTH,
+            ctx_setting: "the embedding window",
         }
     }
 }
@@ -172,7 +175,8 @@ impl Drop for Inner {
                 split_windows = split,
                 extra_requests = *self.fallback_requests.get_mut(),
                 ctx_tokens = self.options.ctx_length,
-                "the embedding model refused windows as over its context; they were cut and their halves averaged. Set {CTX_SETTING} below the model's context to avoid the extra requests"
+                "the embedding model refused windows as over its context; they were cut and their halves averaged. Set {} below the model's context to avoid the extra requests",
+                self.options.ctx_setting
             );
         }
     }
@@ -205,6 +209,7 @@ impl EmbeddingClient {
                     batch_size: options.batch_size.max(1),
                     concurrency: options.concurrency.max(1),
                     ctx_length: options.ctx_length.max(1),
+                    ctx_setting: options.ctx_setting,
                 },
                 dimension: OnceLock::new(),
                 prompt_tokens: AtomicU64::new(0),
@@ -414,8 +419,11 @@ impl EmbeddingClient {
     ) -> Result<Vec<f32>, EngineError> {
         if window.tokens <= MIN_SPLIT_TOKENS {
             return Err(runtime(format!(
-                "Embedding inference failed for model '{}': the model refused a window of {} cl100k_base tokens as over its context, and a window of {MIN_SPLIT_TOKENS} tokens or fewer is not cut further; check the model's maximum context and set {CTX_SETTING} (now {}) below it",
-                self.inner.model, window.tokens, self.inner.options.ctx_length
+                "Embedding inference failed for model '{}': the model refused a window of {} cl100k_base tokens as over its context, and a window of {MIN_SPLIT_TOKENS} tokens or fewer is not cut further; check the model's maximum context and set {} (now {}) below it",
+                self.inner.model,
+                window.tokens,
+                self.inner.options.ctx_setting,
+                self.inner.options.ctx_length
             )));
         }
         if stop.is_requested() {
@@ -447,8 +455,8 @@ impl EmbeddingClient {
         let used = inner.fallback_requests.fetch_add(count, Ordering::Relaxed) + count;
         if used > cap {
             return Err(runtime(format!(
-                "Embedding inference failed for model '{}': the model refused so many windows as over its context that the fallback reached its cap of {cap} extra requests; set {CTX_SETTING} (now {}) below the model's maximum context",
-                inner.model, inner.options.ctx_length
+                "Embedding inference failed for model '{}': the model refused so many windows as over its context that the fallback reached its cap of {cap} extra requests; set {} (now {}) below the model's maximum context",
+                inner.model, inner.options.ctx_setting, inner.options.ctx_length
             )));
         }
         Ok(())
@@ -796,7 +804,7 @@ mod tests {
         assert!(
             refused
                 .as_ref()
-                .is_err_and(|e| e.message.contains(CTX_SETTING)),
+                .is_err_and(|e| e.message.contains(EmbeddingOptions::default().ctx_setting)),
             "{refused:?}"
         );
         // The allowance grows with the windows embedded.

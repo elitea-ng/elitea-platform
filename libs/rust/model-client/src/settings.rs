@@ -26,9 +26,9 @@
 //! (each call site fixed its own value), and ADR-0026 decision 8 keeps their
 //! values (see [`super::chat::Sampling`]).
 
-use crate::errors::{EngineError, ErrorType};
-use crate::ingest::secret::Secret;
-use crate::source::py_truthy;
+use elitea_engine_core::errors::{EngineError, ErrorType};
+use elitea_engine_core::pyvalue::py_truthy;
+use elitea_engine_core::secret::Secret;
 use serde_json::Value;
 use std::fmt;
 

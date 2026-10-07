@@ -17,7 +17,7 @@
 //! gives for every embedding model name, known or not), windows of 8191
 //! tokens.
 
-use crate::errors::{EngineError, ErrorType};
+use elitea_engine_core::errors::{EngineError, ErrorType};
 use std::sync::LazyLock;
 use tiktoken_rs::{CoreBPE, Rank};
 

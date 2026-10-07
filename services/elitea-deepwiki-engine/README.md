@@ -517,7 +517,7 @@ component's representative among equal degrees is the first in id order
 (Python's `max()` over a `set` followed the hash seed); an unknown
 calibration profile is an error (Python fell back to `calibrated`).
 
-## Model client (`src/llm/`)
+## Model client (`libs/rust/model-client`)
 
 ADR-0026 decision 8: one small OpenAI-compatible client on `reqwest` 0.13
 (the copy `gix` pulls) over rustls. Indexing, generation (the native
@@ -591,10 +591,13 @@ runner), `ask` and deep research use it.
 - `count_tokens` is `token_counter.py` over the embedded `o200k_base`
   BPE, with no `chars/4` fallback.
 
-`tests/llm_client.rs` runs the client against a mock gateway on loopback
-(and over TLS with a throwaway CA). `ELITEA_DEEPWIKI_LIVE_LLM=1` adds a
-chat, stream and tool-call round trip against the LAN vLLM
-(`ELITEA_DEEPWIKI_LIVE_LLM_BASE`, `ELITEA_DEEPWIKI_LIVE_LLM_MODEL`).
+The client is the shared crate `libs/rust/model-client` (ADR-0027); this
+engine reaches it as `crate::llm` and maps its environment onto it in
+`config.rs`. Its `tests/llm_client.rs` runs the client against a mock
+gateway on loopback (and over TLS with a throwaway CA).
+`ELITEA_MODEL_CLIENT_LIVE_LLM=1` adds a chat, stream and tool-call round
+trip against the LAN vLLM (`ELITEA_MODEL_CLIENT_LIVE_LLM_BASE`,
+`ELITEA_MODEL_CLIENT_LIVE_LLM_MODEL`).
 
 ## Index storage (`src/storage/`)
 

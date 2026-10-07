@@ -13,7 +13,7 @@ pub mod generate;
 pub mod graph;
 pub mod healthcheck;
 pub mod ingest;
-pub mod llm;
+pub use elitea_model_client as llm;
 pub mod parsers;
 pub use elitea_engine_core::pyjson;
 pub mod runner;

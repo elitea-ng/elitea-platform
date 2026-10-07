@@ -1039,3 +1039,57 @@ mod tests {
         assert!(settings(&[("ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS", "0")]).is_err());
     }
 }
+
+// The model client is a shared crate (libs/rust/model-client, ADR-0027) and
+// knows nothing of this engine's environment; these map it onto the client.
+impl From<&ModelEnvSettings> for crate::llm::TransportSettings {
+    fn from(settings: &ModelEnvSettings) -> Self {
+        Self {
+            ca_file: settings.tls_ca_file.clone(),
+            ca_file_setting: "ELITEA_DEEPWIKI_TLS_CA_FILE",
+            user_agent: concat!("elitea-deepwiki-engine/", env!("CARGO_PKG_VERSION")),
+            timeouts: crate::llm::Timeouts {
+                stream_total: settings.stream_total,
+                ..crate::llm::Timeouts::default()
+            },
+            ..Self::default()
+        }
+    }
+}
+
+impl From<&ModelEnvSettings> for crate::llm::EmbeddingOptions {
+    fn from(settings: &ModelEnvSettings) -> Self {
+        Self {
+            batch_size: settings.embed_batch_size,
+            concurrency: settings.embed_concurrency,
+            ctx_length: settings.embed_ctx_tokens,
+            ctx_setting: "ELITEA_DEEPWIKI_EMBED_CTX_TOKENS",
+        }
+    }
+}
+
+#[cfg(test)]
+mod model_env_tests {
+    use super::*;
+    use crate::llm::EmbeddingOptions;
+
+    #[test]
+    fn the_embedding_window_comes_from_the_environment() {
+        let settings = ModelEnvSettings {
+            tls_ca_file: None,
+            embed_batch_size: 16,
+            embed_concurrency: 3,
+            embed_ctx_tokens: 4096,
+            stream_total: std::time::Duration::from_mins(1),
+        };
+        assert_eq!(
+            EmbeddingOptions::from(&settings),
+            EmbeddingOptions {
+                batch_size: 16,
+                concurrency: 3,
+                ctx_length: 4096,
+                ctx_setting: "ELITEA_DEEPWIKI_EMBED_CTX_TOKENS",
+            }
+        );
+    }
+}

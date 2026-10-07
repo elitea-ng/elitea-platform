@@ -29,9 +29,9 @@
 //! few hundred characters and has the key replaced before it is used,
 //! because a misconfigured upstream can echo request headers.
 
-use crate::errors::{EngineError, ErrorType};
-use crate::ingest::secret::Secret;
-use crate::runner::StopSignal;
+use elitea_engine_core::errors::{EngineError, ErrorType};
+use elitea_engine_core::secret::Secret;
+use elitea_engine_core::stream::StopSignal;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, Response, StatusCode};
 use std::path::{Path, PathBuf};
@@ -94,14 +94,31 @@ impl Default for Backoff {
 
 /// Process-wide transport settings: what the environment decides, not the
 /// invocation.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportSettings {
-    /// A PEM bundle trusted IN ADDITION to the platform roots
-    /// (`ELITEA_DEEPWIKI_TLS_CA_FILE`): the gateway of an install with a
-    /// private CA, while public endpoints keep working.
+    /// A PEM bundle trusted IN ADDITION to the platform roots: the gateway
+    /// of an install with a private CA, while public endpoints keep working.
     pub ca_file: Option<PathBuf>,
+    /// What the operator calls [`TransportSettings::ca_file`] — the
+    /// consuming engine's environment variable — so a CA-file error names
+    /// the setting to fix.
+    pub ca_file_setting: &'static str,
+    /// The `User-Agent` of every request: the consuming engine's name.
+    pub user_agent: &'static str,
     pub timeouts: Timeouts,
     pub backoff: Backoff,
+}
+
+impl Default for TransportSettings {
+    fn default() -> Self {
+        Self {
+            ca_file: None,
+            ca_file_setting: "The TLS CA file",
+            user_agent: concat!("elitea-model-client/", env!("CARGO_PKG_VERSION")),
+            timeouts: Timeouts::default(),
+            backoff: Backoff::default(),
+        }
+    }
 }
 
 /// A configured HTTP client. Cheap to clone; share one per process.
@@ -116,7 +133,7 @@ fn runtime(message: impl Into<String>) -> EngineError {
     EngineError::new(ErrorType::Runtime, message)
 }
 
-fn read_ca_file(path: &Path) -> Result<Vec<reqwest::Certificate>, EngineError> {
+fn read_ca_file(path: &Path, setting: &str) -> Result<Vec<reqwest::Certificate>, EngineError> {
     // Worded without "not found": a missing CA file is a deployment error,
     // not a missing wiki.
     let pem = std::fs::read(path).map_err(|error| {
@@ -127,19 +144,19 @@ fn read_ca_file(path: &Path) -> Result<Vec<reqwest::Certificate>, EngineError> {
             other => other.to_string(),
         };
         runtime(format!(
-            "ELITEA_DEEPWIKI_TLS_CA_FILE {} cannot be read: {reason}",
+            "{setting} {} cannot be read: {reason}",
             path.display(),
         ))
     })?;
     let certificates = reqwest::Certificate::from_pem_bundle(&pem).map_err(|_| {
         runtime(format!(
-            "ELITEA_DEEPWIKI_TLS_CA_FILE {} is not a PEM certificate bundle",
+            "{setting} {} is not a PEM certificate bundle",
             path.display()
         ))
     })?;
     if certificates.is_empty() {
         return Err(runtime(format!(
-            "ELITEA_DEEPWIKI_TLS_CA_FILE {} holds no certificate",
+            "{setting} {} holds no certificate",
             path.display()
         )));
     }
@@ -161,12 +178,9 @@ impl Transport {
         let mut builder = Client::builder()
             .connect_timeout(settings.timeouts.connect)
             .redirect(reqwest::redirect::Policy::none())
-            .user_agent(concat!(
-                "elitea-deepwiki-engine/",
-                env!("CARGO_PKG_VERSION")
-            ));
+            .user_agent(settings.user_agent);
         if let Some(path) = &settings.ca_file {
-            builder = builder.tls_certs_merge(read_ca_file(path)?);
+            builder = builder.tls_certs_merge(read_ca_file(path, settings.ca_file_setting)?);
         }
         let client = builder.build().map_err(|error| {
             runtime(format!(
@@ -210,7 +224,8 @@ pub(crate) struct Call<'a> {
 
 /// `source()` chain of a transport error, for a message. reqwest's own
 /// text names the URL, which holds no credential (see `settings`).
-pub(crate) fn error_chain(error: &dyn std::error::Error) -> String {
+#[must_use]
+pub fn error_chain(error: &dyn std::error::Error) -> String {
     let mut text = error.to_string();
     let mut source = error.source();
     while let Some(cause) = source {

@@ -16,7 +16,7 @@
 //! * [`sse`] — the bounded event-stream decoder;
 //! * [`tokens`] — token counting with the embedded `o200k_base` BPE.
 //!
-//! The API key lives in a [`crate::ingest::secret::Secret`]: it is sent in
+//! The API key lives in a [`elitea_engine_core::secret::Secret`]: it is sent in
 //! the `Authorization` header, marked sensitive, and never formatted into
 //! an error or a log line.
 
@@ -35,52 +35,3 @@ pub use embeddings::{EmbeddingClient, EmbeddingOptions};
 pub use settings::{ModelSettings, Provider, embedding_model_name};
 pub use tokens::count_tokens;
 pub use transport::{Timeouts, Transport, TransportSettings};
-
-use crate::config::ModelEnvSettings;
-
-impl From<&ModelEnvSettings> for TransportSettings {
-    fn from(settings: &ModelEnvSettings) -> Self {
-        Self {
-            ca_file: settings.tls_ca_file.clone(),
-            timeouts: Timeouts {
-                stream_total: settings.stream_total,
-                ..Timeouts::default()
-            },
-            ..Self::default()
-        }
-    }
-}
-
-impl From<&ModelEnvSettings> for EmbeddingOptions {
-    fn from(settings: &ModelEnvSettings) -> Self {
-        Self {
-            batch_size: settings.embed_batch_size,
-            concurrency: settings.embed_concurrency,
-            ctx_length: settings.embed_ctx_tokens,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_embedding_window_comes_from_the_environment() {
-        let settings = ModelEnvSettings {
-            tls_ca_file: None,
-            embed_batch_size: 16,
-            embed_concurrency: 3,
-            embed_ctx_tokens: 4096,
-            stream_total: std::time::Duration::from_mins(1),
-        };
-        assert_eq!(
-            EmbeddingOptions::from(&settings),
-            EmbeddingOptions {
-                batch_size: 16,
-                concurrency: 3,
-                ctx_length: 4096,
-            }
-        );
-    }
-}
