@@ -7,11 +7,15 @@
 //! * [`tools`] — the families and tools the socket admits;
 //! * [`fixture`] — the canned graph every Inventory fixture runner replays;
 //! * [`runner`] — what answers a tool;
+//! * [`graph`] — the knowledge graph, with the Python graph's semantics;
+//! * [`store`] — the graph's PostgreSQL storage;
 //! * [`config`] — the `ELITEA_INVENTORY_*` settings.
 
 pub mod config;
 pub mod fixture;
+pub mod graph;
 pub mod runner;
+pub mod store;
 pub mod tools;
 
 use config::{ConfigError, RunnerKind, Settings};

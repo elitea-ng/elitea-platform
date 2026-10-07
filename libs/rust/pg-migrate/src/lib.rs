@@ -194,6 +194,13 @@ async fn apply_locked(
     table: &str,
     migrations: &[Migration],
 ) -> Result<Vec<String>> {
+    // A schema-qualified ledger lives in the engine's own schema, which the
+    // first migration cannot have created yet.
+    if let Some((schema, _)) = table.split_once('.') {
+        sqlx::raw_sql(&format!("CREATE SCHEMA IF NOT EXISTS {schema};"))
+            .execute(&mut *connection)
+            .await?;
+    }
     // `migrate._BOOTSTRAP`, with the engine's ledger table.
     sqlx::raw_sql(&format!(
         "CREATE TABLE IF NOT EXISTS {table} (

@@ -12,7 +12,13 @@ description = "The Rust-native Inventory engine behind the sub-application host'
 # container probe and process tracing.
 elitea-engine-core = { path = "../../libs/rust/engine-core" }
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
+elitea-pg-migrate = { path = "../../libs/rust/pg-migrate" }
+# The graph's node and edge order is insertion order (graph.json, search ties).
+indexmap = "=2.14.2"
 serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
+# The graph store (src/store.rs); the same stack the DeepWiki engine uses.
+sqlx = { version = "=0.8.6", default-features = false, features = ["json", "postgres", "runtime-tokio", "tls-rustls-aws-lc-rs"] }
+thiserror = "=2.0.20"
 tokio = { version = "=1.53.1", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "=0.1.44"
 
