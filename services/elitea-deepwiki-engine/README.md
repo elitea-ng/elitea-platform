@@ -729,8 +729,7 @@ and `BuildSpace::begin` take a `WikiKey`, so no reader or build exists
 without a project, and every statement filters, inserts and deletes by
 `(project_id, wiki_id)`. The owner reconciliation and the sweep work over
 all projects: they delete abandoned BUILDS, never a live index.
-`wiki_exists` and `repo_identifier_override` resolve in the caller's
-project only.
+Every lookup of a wiki id is made within the caller's project.
 
 **Where the project comes from.** `generate_wiki`, `ask` and
 `deep_research` refuse to run (`ValueError`) without the reserved argument

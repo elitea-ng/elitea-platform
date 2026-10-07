@@ -37,8 +37,6 @@ projects.
   when `ELITEA_DEEPWIKI_IDENTITY_SECRET` is set on the host, else from the
   `llm_settings.organization` the platform facade writes. The engine
   refuses `generate_wiki`, `ask` and `deep_research` without it.
-- `repo_identifier_override` is still accepted; it can now only name a
-  wiki of the caller's own project.
 
 **What to do.**
 

@@ -10,8 +10,7 @@ package run
 // The engine now keys every index row by (project_id, wiki_id) and refuses
 // an index tool without the reserved argument ProjectArgument. THIS HOST is
 // the only party that sets it, from authenticated context, and it overwrites
-// whatever a caller put there. repo_identifier_override stays allowed: it can
-// now only name a wiki of the caller's own project.
+// whatever a caller put there.
 //
 // WHERE THE PROJECT COMES FROM, in order:
 //
