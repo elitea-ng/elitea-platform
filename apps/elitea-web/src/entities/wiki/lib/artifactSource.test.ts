@@ -144,6 +144,43 @@ describe('the identity a folder source resolves to', () => {
     expect(normalizeRepoToWikiIdPrefix({ repository: 'acme/notes', branch: 'main' })).toBe('acme--notes--main');
   });
 
+  it('splits a branch with a colon as the engine does: the head joins the repository', () => {
+    // The engine and the Go host split `artifact://docs/handbook:v1:rc:{sha8}`
+    // on `:` from the right, so the wiki is `artifact--docs--handbook-v1--rc`.
+    // Folding the colon into the branch would look for
+    // `artifact--docs--handbook--v1-rc`, an id nothing writes.
+    const identity = getConfiguredRepoIdentity(
+      null,
+      { artifact_configuration: { bucket: 'docs', prefix: 'handbook' }, branch: 'v1:rc' },
+      null,
+    );
+    expect(identity).toEqual({ repository: 'artifact/docs/handbook-v1', branch: 'rc' });
+    expect(normalizeRepoToWikiIdPrefix(identity)).toBe('artifact--docs--handbook-v1--rc');
+    // Two colons: only the last one splits.
+    expect(
+      normalizeRepoToWikiIdPrefix(
+        getConfiguredRepoIdentity(null, { artifact_configuration: { bucket: 'docs' }, branch: 'a:b:c' }, null),
+      ),
+    ).toBe('artifact--docs-a-b--c');
+    // A slash in the head makes a new repository part, as in the engine.
+    expect(
+      normalizeRepoToWikiIdPrefix(
+        getConfiguredRepoIdentity(
+          null,
+          { artifact_configuration: { bucket: 'docs', prefix: 'handbook' }, branch: 'feat/x:rc' },
+          null,
+        ),
+      ),
+    ).toBe('artifact--docs--handbook-feat--x--rc');
+    const manifests = [
+      { wiki_id: 'artifact--docs--handbook-v1--rc', repository: 'artifact://docs/handbook', branch: 'v1:rc' },
+      { wiki_id: 'artifact--docs--handbook--v1-rc', repository: 'artifact://docs/handbook', branch: 'v1-rc' },
+    ];
+    expect(filterManifestsByRepo(manifests, identity).map((m) => m.wiki_id)).toEqual([
+      'artifact--docs--handbook-v1--rc',
+    ]);
+  });
+
   it('carries the branch the settings name, under every alias', () => {
     expect(
       getConfiguredRepoIdentity(

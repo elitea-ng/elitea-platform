@@ -396,6 +396,8 @@ struct Platform {
     hang: bool,
     /// List every object as 1 byte, whatever it holds.
     lie_size: bool,
+    /// Answer 404 to every listing page after the first (a cursor is set).
+    vanish_after_first_page: bool,
     /// Every request: method, path, query, `Authorization`.
     seen: Arc<Mutex<Vec<(String, String, String)>>>,
 }
@@ -430,6 +432,9 @@ async fn platform(
             .get("cursor")
             .and_then(|c| c.parse().ok())
             .unwrap_or(0);
+        if state.vanish_after_first_page && params.contains_key("cursor") {
+            return (HttpStatus::NOT_FOUND, "").into_response();
+        }
         let mut all: Vec<Value> = state
             .objects
             .iter()
@@ -515,6 +520,7 @@ fn state(objects: &[(&str, &[u8])]) -> Platform {
         download_status: None,
         hang: false,
         lie_size: false,
+        vanish_after_first_page: false,
         seen: Arc::new(Mutex::new(Vec::new())),
     }
 }
@@ -767,6 +773,35 @@ async fn refusals_by_the_platform_are_reported_without_the_bearer() {
     let run = Run::new(&base, "artifact://nothing", "empty");
     let error = run.run().await.err();
     assert!(error.is_some_and(|e| e.message.contains("holds no objects to index")));
+}
+
+#[tokio::test]
+async fn a_404_after_the_first_listing_page_is_an_error() {
+    // Page 1 answers 200 with a cursor, page 2 answers 404: the listing is
+    // partial, so the run fails and indexes nothing.
+    let mut mock = state(&[("a.md", b"a"), ("b.md", b"b"), ("c.md", b"c")]);
+    mock.vanish_after_first_page = true;
+    let seen = Arc::clone(&mock.seen);
+    let base = serve(mock).await;
+    let run = Run::new(&base, "artifact://docs", "vanish");
+    let error = run
+        .run()
+        .await
+        .err()
+        .unwrap_or_else(|| panic!("a partial listing was indexed"));
+    assert!(
+        error.message.contains("HTTP 404") && error.message.contains("incomplete"),
+        "{error}"
+    );
+    assert_eq!(classify(error.error_type, &error.message), "artifact_error");
+    // Two listing pages, no download.
+    let seen = seen.lock().map(|s| s.clone()).unwrap_or_default();
+    assert_eq!(seen.len(), 2);
+    assert!(
+        seen.iter()
+            .all(|(path, _, _)| path == "/api/v2/artifacts/objects/42/docs")
+    );
+    assert_eq!(run.left(), 0);
 }
 
 #[tokio::test]

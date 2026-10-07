@@ -63,8 +63,9 @@
 //! * A listing that fails (an HTTP status other than 200 or 404, a body
 //!   that is not JSON, the 1000-page ceiling) is an error. Python logged a
 //!   warning and indexed what it had read so far, under an identity of that
-//!   partial listing. A 404 is still an empty listing, so an unknown bucket
-//!   is still "holds no objects to index".
+//!   partial listing. A 404 on the first page is still an empty listing,
+//!   so an unknown bucket is still "holds no objects to index"; a 404 on a
+//!   later page (after a cursor) is an error, as the listing is partial.
 //! * The folder is downloaded into the job's own scratch directory and
 //!   removed with it; there is no cache to reuse across runs and no marker
 //!   file (every native run builds).
@@ -638,8 +639,16 @@ async fn list_folder(
             .await?
             .map_err(|e| transfer_error(&target, &e))?;
         match response.status() {
-            // Python: an unknown bucket lists as empty.
-            StatusCode::NOT_FOUND => return Ok(items),
+            // Python: an unknown bucket lists as empty. Only the first
+            // page can say so: a 404 after a cursor (the bucket removed
+            // mid-listing, a stale cursor) leaves the listing partial, and
+            // a partial listing must not be indexed as the whole folder.
+            StatusCode::NOT_FOUND if cursor.is_empty() => return Ok(items),
+            StatusCode::NOT_FOUND => {
+                return Err(runtime_error(format!(
+                    "Failed to {target}: HTTP 404 on a later listing page; the listing is incomplete"
+                )));
+            }
             StatusCode::OK => {}
             status => {
                 return Err(runtime_error(format!(
