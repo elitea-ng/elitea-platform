@@ -854,7 +854,7 @@ function LiveReply({
   const actions = [
     live.canReconnect ? { label: 'Reconnect', onPress: onReconnect } : null,
     turn.phase === 'failed' && turn.error?.retryable ? { label: 'Retry', onPress: onRetry } : null,
-    turn.phase === 'failed' && turn.error?.budget && usageAvailable ? { label: 'View usage', onPress: () => router.push('/settings') } : null,
+    turn.phase === 'failed' && turn.error?.budget && usageAvailable ? { label: 'View usage', onPress: () => router.dismissTo('/settings') } : null,
     turn.phase === 'failed' ? { label: 'Dismiss', onPress: onDismiss } : null,
   ].filter((a): a is { label: string; onPress: () => void } => a !== null);
   return (

@@ -295,9 +295,11 @@ G ──────────────────────────
  └──────────────┘ └──────────────┘
 ```
 
-- **Shipped (client contract 1.3) as a pushed screen**, `/discover` and `/discover/[id]`,
-  reached from a "Discover" row at the top of the conversation list until the tab shell
-  lands. It lists the workspace's PUBLIC agents (`listPublicApplications`, 20 per page),
+- **Shipped (client contract 1.3) as a tab**: the native tab bar (`(app)/(tabs)`) has
+  Chats, Discover and Settings (Home comes with the home screen). `/discover` is the tab's
+  root; `/discover/[id]` is pushed above the tabs, like a thread. The tab is there on every
+  workspace (a changing tab set would remount the bar and every tab's content); below 1.3
+  its screen says "Discover isn't available", and it waits while the workspace is not yet known. It lists the workspace's PUBLIC agents (`listPublicApplications`, 20 per page),
   not the project's own (those stay in `/new`); see `docs/design.md` "Discover".
 - Target: data from `fetchAgents(projectId, search)`, 50 per page, loaded as you scroll.
 - Tapping a card opens an agent detail sheet: icon (48), name, description, [Start chat],

@@ -10,6 +10,7 @@ import { AgentIcon } from '@/features/discover/AgentIcon';
 import { TagList } from '@/features/discover/TagList';
 import { useDiscoverAvailable } from '@/features/discover/useDiscoverAvailable';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
+import { useWorkspaceInfo } from '@/state/workspaceInfo';
 
 /** The search reaches the server once typing pauses. */
 export const SEARCH_DEBOUNCE_MS = 300;
@@ -17,10 +18,13 @@ export const SEARCH_DEBOUNCE_MS = 300;
 /**
  * Discover: the workspace's public agents (client contract 1.3). Search runs
  * on the server (name and description); a row opens the agent's details,
- * where a chat starts in the active project. Hidden on an older workspace.
+ * where a chat starts in the active project. The tab is always there (a
+ * changing tab set remounts the bar), so the screen gates: it waits while the
+ * workspace's discovery document is not yet known and refuses below 1.3.
  */
 export default function DiscoverScreen() {
   const palette = usePalette();
+  const known = useWorkspaceInfo() !== null;
   const available = useDiscoverAvailable();
   const { projectId } = useProjectSelection();
   const [search, setSearch] = useState('');
@@ -32,6 +36,7 @@ export default function DiscoverScreen() {
   const agents = usePublicAgents(projectId, query, available);
   const rows = flattenPublicAgentPages(agents.data?.pages);
 
+  if (!known) return <StatusScreen busy title="Checking this workspace" />;
   if (!available) {
     return <StatusScreen title="Discover isn't available" body="This workspace does not offer public agents to mobile yet." />;
   }

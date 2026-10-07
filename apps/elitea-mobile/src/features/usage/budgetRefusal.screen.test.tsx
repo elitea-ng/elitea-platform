@@ -13,7 +13,12 @@ import { __resetWorkspaceInfoForTests, setWorkspaceInfo } from '@/state/workspac
 import { FAKE_ORIGIN, fakeServer } from '@/test/fakeServer';
 import { fakeStreamTransport } from '@/test/fakeStreamTransport';
 
-jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: () => null }, router: { push: jest.fn(), replace: jest.fn() } }));
+const mockDismissTo = jest.fn();
+jest.mock('expo-router', () => ({
+  useLocalSearchParams: () => ({ id: '3' }),
+  Stack: { Screen: () => null },
+  router: { push: jest.fn(), replace: jest.fn(), dismissTo: (...args: unknown[]) => mockDismissTo(...args) },
+}));
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 jest.mock('expo-crypto', () => ({ randomUUID: () => '3f1c2a9e-7b4d-4c8e-9a10-5d6e7f809a1b' }));
@@ -108,6 +113,9 @@ it('a budget refusal on a 1.3 server links to the usage card', async () => {
   await refusedTurn();
   expect(screen.getByRole('button', { name: 'View usage' })).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  // Settings is a tab beneath the thread: the link goes back down to it, never pushes a second tab bar.
+  await fireEvent.press(screen.getByRole('button', { name: 'View usage' }));
+  expect(mockDismissTo).toHaveBeenCalledWith('/settings');
 });
 
 it('a budget refusal on a pre-1.3 server keeps the message but offers no usage link (Settings has no usage card there)', async () => {

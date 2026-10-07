@@ -6,7 +6,6 @@ import { OfflineNotice } from '@/components/OfflineNotice';
 import { StatusScreen } from '@/components/StatusScreen';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
-import { DiscoverEntry } from '@/features/discover/DiscoverEntry';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
 import { formatAge } from '@/lib/time';
 
@@ -56,12 +55,7 @@ export default function ConversationsScreen() {
           tintColor={palette.accent}
         />
       }
-      ListHeaderComponent={
-        <>
-          <OfflineNotice visible={offline} />
-          <DiscoverEntry />
-        </>
-      }
+      ListHeaderComponent={<OfflineNotice visible={offline} />}
       onEndReachedThreshold={0.5}
       onEndReached={() => {
         if (conversations.hasNextPage && !conversations.isFetchingNextPage) {

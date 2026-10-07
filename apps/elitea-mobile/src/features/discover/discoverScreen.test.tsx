@@ -7,8 +7,7 @@ import { discoveryDocument11, discoveryDocument13 } from '@/api/__fixtures__/nat
 import { DiscoveryDocumentSchema } from '@/api/discovery';
 import { publicAgentPageOf, type PublicAgentPage } from '@/api/queries/discover';
 import PublicAgentScreen from '@/app/(app)/discover/[id]';
-import DiscoverScreen, { SEARCH_DEBOUNCE_MS } from '@/app/(app)/discover/index';
-import { DiscoverEntry } from '@/features/discover/DiscoverEntry';
+import DiscoverScreen, { SEARCH_DEBOUNCE_MS } from '@/app/(app)/(tabs)/discover/index';
 import { monogramOf } from '@/features/discover/AgentIcon';
 import { readHandoff } from '@/features/intents/intentHandoff';
 import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
@@ -98,20 +97,23 @@ async function openCatalogue() {
 }
 
 describe('Discover is client contract 1.3', () => {
-  it('on a 1.1 workspace there is no entry, and the screen says it is not available without asking the server', async () => {
+  // The tab is always there (discoverTab.test.tsx), so the screen does the gating.
+  it('before the workspace is known the screen waits for it, without asking the server or saying "not available"', async () => {
+    const server = install('1.3');
+    __resetWorkspaceInfoForTests();
+    await render(withQueries(<DiscoverScreen />));
+    expect(screen.getByText('Checking this workspace')).toBeTruthy();
+    expect(screen.queryByText("Discover isn't available")).toBeNull();
+    expect(server.requests).toHaveLength(0);
+    await act(async () => setWorkspaceInfo({ origin: FAKE_ORIGIN, discovery: DiscoveryDocumentSchema.parse(discoveryDocument13()) }));
+    expect(await screen.findByText('Zefir Travel Planner')).toBeTruthy();
+  });
+
+  it('on a 1.1 workspace the screen says it is not available without asking the server', async () => {
     const server = install('1.1');
-    await render(withQueries(<DiscoverEntry />));
-    expect(screen.queryByTestId('discover-entry')).toBeNull();
     await render(withQueries(<DiscoverScreen />));
     expect(screen.getByText("Discover isn't available")).toBeTruthy();
     expect(server.requests).toHaveLength(0);
-  });
-
-  it('on a 1.3 workspace the entry opens Discover', async () => {
-    install('1.3');
-    await render(withQueries(<DiscoverEntry />));
-    await fireEvent.press(screen.getByTestId('discover-entry'));
-    expect(mockPush).toHaveBeenCalledWith('/discover');
   });
 });
 

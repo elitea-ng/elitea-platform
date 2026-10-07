@@ -307,8 +307,11 @@ server it is hidden, not broken.
   published version (`addConversationParticipants`); an agent that cannot be added
   deletes the empty conversation again. A starter opens the chat with its text in the
   composer (in-memory hand-over, never sent by itself). Icons load only from the
-  workspace origin, without credentials; anything else shows the monogram. Hidden below
-  client contract 1.3. The catalogue is keyed under the active project, so a project or
+  workspace origin, without credentials; anything else shows the monogram. Discover is a
+  tab (Chats, Discover, Settings) on every workspace: the tab set never changes, because
+  expo-router keys the native tab view by its visible tabs and a change remounts the bar and
+  every tab's content. The Discover screen gates instead: "Checking this workspace" until
+  the discovery document is known, "Discover isn't available" below client contract 1.3. The catalogue is keyed under the active project, so a project or
   workspace switch reads it afresh.
 - **Accessibility.** VoiceOver hears phase changes of the live answer (done, stopped,
   failed, waiting for approval, a question or a sign-in), debounced and never per token.

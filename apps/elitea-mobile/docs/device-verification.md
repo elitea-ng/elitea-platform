@@ -255,8 +255,10 @@ suggestions; copy, share, read aloud, dictation and regenerate also work on 1.2.
       FILE (not empty text). The file stays in `cache/export-tmp` until the next export.
 - [ ] **Suggested agents.** New chat with no search shows "Suggested"; tapping one starts the
       chat with that agent.
-- [ ] **Discover.** On a 1.3 workspace the conversation list starts with "Discover"; on a 1.2
-      workspace it does not. Discover lists the public agents (icon from the workspace,
+- [ ] **Discover.** On a 1.3 workspace the tab bar shows Chats, Discover and Settings; on a
+      1.2 workspace the tab is still there and says "Discover isn't available". On a cold
+      launch the tab bar does not flash or reset (Chats scroll position kept) when the discovery
+      document arrives. Discover lists the public agents (icon from the workspace,
       category, tags); a search narrows them; an agent page shows its welcome message and
       starters. Start chat opens a new conversation in the project shown in the header chip,
       and the agent answers; a starter opens it with that text in the composer, unsent.
