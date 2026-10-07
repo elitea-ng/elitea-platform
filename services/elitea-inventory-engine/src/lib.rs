@@ -8,6 +8,7 @@
 //! * [`fixture`] — the canned graph every Inventory fixture runner replays;
 //! * [`runner`] — what answers a tool;
 //! * [`native`] — the native runner, over the graph store;
+//! * [`retrieval`] — the read tools over a loaded graph;
 //! * [`graph`] — the knowledge graph, with the Python graph's semantics;
 //! * [`store`] — the graph's PostgreSQL storage;
 //! * [`ingest`] — a source's files into the graph;
@@ -24,6 +25,7 @@ pub mod fixture;
 pub mod graph;
 pub mod ingest;
 pub mod native;
+pub mod retrieval;
 pub mod runner;
 pub mod store;
 pub mod tools;

@@ -38,6 +38,7 @@ pub struct NativeRunner {
     pool: PgPool,
     settings: Arc<Settings>,
     transport: Transport,
+    views: Arc<crate::retrieval::ViewCache>,
 }
 
 fn invalid(message: impl Into<String>) -> EngineError {
@@ -90,6 +91,7 @@ impl NativeRunner {
             pool,
             settings: Arc::new(settings),
             transport,
+            views: Arc::new(crate::retrieval::ViewCache::default()),
         })
     }
 
@@ -134,13 +136,39 @@ impl NativeRunner {
             "run_ingestion" => self.run_ingestion(key, params, context).await,
             "get_sources_status" => self.sources_status(key, params).await,
             "get_ingestion_status" => self.ingestion_status(key, params).await,
-            other => Err(EngineError::new(
+            other => self.read(other, family, key, params).await,
+        }
+    }
+
+    /// A read tool over the graph's current view (an empty graph when the
+    /// toolkit has none yet, as the Python wrapper started one).
+    async fn read(
+        &self,
+        tool: &str,
+        family: &str,
+        key: GraphKey,
+        params: &Map<String, Value>,
+    ) -> Result<Value, EngineError> {
+        let view = self
+            .views
+            .view(&self.pool, key)
+            .await
+            .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?
+            .unwrap_or_default();
+        let call = crate::retrieval::Call {
+            tool,
+            family,
+            params,
+            view: &view,
+        };
+        crate::retrieval::dispatch(&call).unwrap_or_else(|| {
+            Err(EngineError::new(
                 ErrorType::FileNotFound,
                 format!(
-                    "'{other}' is not served by the native Inventory engine yet (ADR-0027 P4); run the deployment with ELITEA_INVENTORY_RUNNER=legacy for it"
+                    "'{tool}' is not served by the native Inventory engine yet (ADR-0027 P4); run the deployment with ELITEA_INVENTORY_RUNNER=legacy for it"
                 ),
-            )),
-        }
+            ))
+        })
     }
 
     fn model_settings(
