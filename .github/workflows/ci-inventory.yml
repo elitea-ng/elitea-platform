@@ -2,7 +2,7 @@ name: CI — Inventory
 
 # `services/elitea-inventory`'s tests had no CI job at all. Every other Python
 # package in the tree has one — pylon-indexer and elitea-worker-python in
-# ci-python.yml, elitea-deepwiki in ci-deepwiki-conformance.yml — and the only
+# ci-python.yml (and the since-deleted elitea-deepwiki had its own) — and the only
 # workflows that named this package resolved its dependency closure without
 # running a line of it. So 305 tests, including the copy-is-verbatim digest
 # check that makes "the engine is a byte-for-byte copy" mean something, ran on

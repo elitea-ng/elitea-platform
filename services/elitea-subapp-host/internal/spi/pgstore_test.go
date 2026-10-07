@@ -1,8 +1,8 @@
 package spi_test
 
 // The durable store against a real PostgreSQL, in a schema of its own that
-// the Python package's migration creates — the SAME migration production
-// applies (services/elitea-deepwiki/…/migrations/0002_invocations.sql).
+// the DeepWiki engine's migration creates — the SAME migration production
+// applies (services/elitea-deepwiki-engine/migrations/0002_invocations.sql).
 // Gated on ELITEA_SUBAPP_HOST_TEST_DSN: without it the suite reports the
 // skip loudly rather than passing a store it never touched.
 
@@ -21,7 +21,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
-const migration = "../../../elitea-deepwiki/src/elitea_deepwiki/migrations/0002_invocations.sql"
+const migration = "../../../elitea-deepwiki-engine/migrations/0002_invocations.sql"
 
 // testStore creates a throwaway schema, applies the migration into it, and
 // returns a store bound to that schema plus a second connection for

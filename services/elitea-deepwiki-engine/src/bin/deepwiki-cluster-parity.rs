@@ -1,6 +1,12 @@
 //! Developer tool for the ADR-0026 Phase 3 clustering gate. Not shipped in
 //! the image.
 //!
+//! The `parity/*.py` scripts named below wrote the Python dumps and scored
+//! the results. They were deleted with the Python engine and exist up to
+//! origin/main 1233e1582; the README's "Parity with the Python engine"
+//! section says how to use them. The committed golden fixtures are dumps in
+//! the same formats.
+//!
 //! ```text
 //! deepwiki-cluster-parity replay <dump-dir>
 //! deepwiki-cluster-parity leiden <dump-dir> <out-dir> [--runs N]

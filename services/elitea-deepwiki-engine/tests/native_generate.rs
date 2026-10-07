@@ -82,6 +82,34 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
+/// The notes service the e2e stub describes.
+const NOTES_FILES: [(&str, &str); 6] = [
+    (
+        "README.md",
+        "# notes-service\n\nA small notes service with SQLite persistence, ranked search and bearer-token auth.\n\nSee [the design](docs/design.md).\n",
+    ),
+    (
+        "docs/design.md",
+        "# Design\n\nRequests reach `api.py`, which checks the token with `verify_token` and calls `NoteStore`.\n",
+    ),
+    (
+        "api.py",
+        "from notes.store import NoteStore\nfrom notes.search import rank_notes\nfrom auth.tokens import verify_token\n\n\ndef handle_create_note(store: NoteStore, token: str, body: str) -> int:\n    \"\"\"Create a note for the token's owner.\"\"\"\n    owner = verify_token(token)\n    return store.save_note(owner, body)\n\n\ndef handle_search(store: NoteStore, token: str, query: str) -> list:\n    \"\"\"Rank the owner's notes against the query.\"\"\"\n    owner = verify_token(token)\n    return rank_notes(store.load_notes(owner), query)\n",
+    ),
+    (
+        "notes/store.py",
+        "import sqlite3\n\n\nclass NoteStore:\n    \"\"\"Notes in one SQLite file.\"\"\"\n\n    def __init__(self, path: str) -> None:\n        self.connection = sqlite3.connect(path)\n\n    def save_note(self, owner: str, body: str) -> int:\n        cursor = self.connection.execute(\"INSERT INTO notes (owner, body) VALUES (?, ?)\", (owner, body))\n        return cursor.lastrowid\n\n    def load_notes(self, owner: str) -> list:\n        return self.connection.execute(\"SELECT body FROM notes WHERE owner = ?\", (owner,)).fetchall()\n\n    def delete_note(self, note_id: int) -> None:\n        self.connection.execute(\"DELETE FROM notes WHERE id = ?\", (note_id,))\n",
+    ),
+    (
+        "notes/search.py",
+        "def rank_notes(notes: list, query: str) -> list:\n    \"\"\"Order notes by how many query terms they share.\"\"\"\n    terms = set(query.lower().split())\n    return sorted(notes, key=lambda note: -len(terms & set(note[0].lower().split())))\n",
+    ),
+    (
+        "auth/tokens.py",
+        "import hashlib\nimport hmac\n\nSECRET = b\"change-me\"\n\n\ndef issue_token(owner: str) -> str:\n    signature = hmac.new(SECRET, owner.encode(), hashlib.sha256).hexdigest()\n    return f\"{owner}.{signature}\"\n\n\ndef verify_token(token: str) -> str:\n    owner, _, signature = token.partition(\".\")\n    if issue_token(owner) != token:\n        raise PermissionError(\"bad token\")\n    return owner\n",
+    ),
+];
+
 /// The notes service the e2e stub describes, as `acme/notes-service`.
 /// Returns the served root and the commit of `main`.
 fn served_repository(root: &Path) -> (PathBuf, String) {
@@ -89,34 +117,8 @@ fn served_repository(root: &Path) -> (PathBuf, String) {
     for dir in ["notes", "auth", "docs"] {
         std::fs::create_dir_all(work.join(dir)).unwrap();
     }
-    let files: [(&str, &str); 6] = [
-        (
-            "README.md",
-            "# notes-service\n\nA small notes service with SQLite persistence, ranked search and bearer-token auth.\n\nSee [the design](docs/design.md).\n",
-        ),
-        (
-            "docs/design.md",
-            "# Design\n\nRequests reach `api.py`, which checks the token with `verify_token` and calls `NoteStore`.\n",
-        ),
-        (
-            "api.py",
-            "from notes.store import NoteStore\nfrom notes.search import rank_notes\nfrom auth.tokens import verify_token\n\n\ndef handle_create_note(store: NoteStore, token: str, body: str) -> int:\n    \"\"\"Create a note for the token's owner.\"\"\"\n    owner = verify_token(token)\n    return store.save_note(owner, body)\n\n\ndef handle_search(store: NoteStore, token: str, query: str) -> list:\n    \"\"\"Rank the owner's notes against the query.\"\"\"\n    owner = verify_token(token)\n    return rank_notes(store.load_notes(owner), query)\n",
-        ),
-        (
-            "notes/store.py",
-            "import sqlite3\n\n\nclass NoteStore:\n    \"\"\"Notes in one SQLite file.\"\"\"\n\n    def __init__(self, path: str) -> None:\n        self.connection = sqlite3.connect(path)\n\n    def save_note(self, owner: str, body: str) -> int:\n        cursor = self.connection.execute(\"INSERT INTO notes (owner, body) VALUES (?, ?)\", (owner, body))\n        return cursor.lastrowid\n\n    def load_notes(self, owner: str) -> list:\n        return self.connection.execute(\"SELECT body FROM notes WHERE owner = ?\", (owner,)).fetchall()\n\n    def delete_note(self, note_id: int) -> None:\n        self.connection.execute(\"DELETE FROM notes WHERE id = ?\", (note_id,))\n",
-        ),
-        (
-            "notes/search.py",
-            "def rank_notes(notes: list, query: str) -> list:\n    \"\"\"Order notes by how many query terms they share.\"\"\"\n    terms = set(query.lower().split())\n    return sorted(notes, key=lambda note: -len(terms & set(note[0].lower().split())))\n",
-        ),
-        (
-            "auth/tokens.py",
-            "import hashlib\nimport hmac\n\nSECRET = b\"change-me\"\n\n\ndef issue_token(owner: str) -> str:\n    signature = hmac.new(SECRET, owner.encode(), hashlib.sha256).hexdigest()\n    return f\"{owner}.{signature}\"\n\n\ndef verify_token(token: str) -> str:\n    owner, _, signature = token.partition(\".\")\n    if issue_token(owner) != token:\n        raise PermissionError(\"bad token\")\n    return owner\n",
-        ),
-    ];
     git(&work, &["init", "-q", "-b", "main"]);
-    for (path, text) in files {
+    for (path, text) in NOTES_FILES {
         std::fs::write(work.join(path), text).unwrap();
     }
     git(&work, &["add", "."]);
@@ -232,10 +234,68 @@ struct Gateway {
     chats: Arc<AtomicUsize>,
     embedded: Arc<AtomicUsize>,
     embedding_requested: Arc<AtomicBool>,
+    /// Every request to the object API (`path?query`).
+    objects_seen: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+/// The platform's object API for the bucket `docs` of project 42: the
+/// notes service under `handbook/`, a folder placeholder, and one object
+/// outside the folder that must not be read.
+const OBJECTS_ROUTE: &str = "/api/v2/artifacts/objects/42/docs";
+
+fn artifact_objects() -> Vec<(String, &'static str)> {
+    let mut objects: Vec<(String, &'static str)> = NOTES_FILES
+        .iter()
+        .map(|(path, text)| (format!("handbook/{path}"), *text))
+        .collect();
+    objects.push(("handbook-archive/old.md".to_owned(), "# Old\n"));
+    objects
+}
+
+fn objects_api(state: &Gateway, request: &Request) -> Response {
+    let authorized = request
+        .headers()
+        .get("authorization")
+        .is_some_and(|v| v.as_bytes() == b"Bearer mock-callback-bearer");
+    let path = request.uri().path().to_owned();
+    state.objects_seen.lock().unwrap().push(format!(
+        "{path}?{}",
+        request.uri().query().unwrap_or_default()
+    ));
+    if !authorized {
+        return (StatusCode::UNAUTHORIZED, "").into_response();
+    }
+    if path == OBJECTS_ROUTE {
+        let query = request.uri().query().unwrap_or_default();
+        let prefix = if query.contains("prefix=handbook%2F") {
+            "handbook/"
+        } else {
+            ""
+        };
+        let mut listed: Vec<Value> = artifact_objects()
+            .iter()
+            .filter(|(key, _)| key.starts_with(prefix))
+            .map(|(key, text)| json!({"key": key, "size_bytes": text.len(), "modified_at": "2026-10-01T10:00:00Z"}))
+            .collect();
+        listed.push(
+            json!({"key": "handbook/", "size_bytes": 0, "modified_at": "2026-10-01T10:00:00Z"}),
+        );
+        return axum::Json(json!({"objects": listed, "common_prefixes": []})).into_response();
+    }
+    let key = path
+        .strip_prefix(&format!("{OBJECTS_ROUTE}/"))
+        .unwrap_or_default();
+    match artifact_objects().into_iter().find(|(k, _)| k == key) {
+        Some((_, text)) => text.into_response(),
+        None => (StatusCode::NOT_FOUND, "").into_response(),
+    }
 }
 
 async fn gateway(State(state): State<Gateway>, request: Request) -> Response {
     let path = request.uri().path().to_owned();
+    if path.starts_with("/api/v2/artifacts/") {
+        return objects_api(&state, &request);
+    }
     let bytes = to_bytes(request.into_body(), 64 * 1024 * 1024)
         .await
         .unwrap();
@@ -306,6 +366,7 @@ async fn serve_gateway(hang: bool) -> (u16, Gateway) {
         chats: Arc::new(AtomicUsize::new(0)),
         embedded: Arc::new(AtomicUsize::new(0)),
         embedding_requested: Arc::new(AtomicBool::new(false)),
+        objects_seen: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
     let app = axum::Router::new()
         .fallback(gateway)
@@ -748,6 +809,134 @@ async fn a_native_generation_publishes_the_wiki_it_returns() {
         .unwrap();
     assert_eq!(dense.len(), 3);
     assert!(gateway.chats.load(Ordering::SeqCst) >= 3);
+    assert_eq!(
+        jobs_left(&engine.scratch),
+        0,
+        "the job's scratch is removed"
+    );
+    drop(engine);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// An ARTIFACT-FOLDER source end to end: the worker child lists and
+/// downloads `artifact://docs/handbook` from the platform's object API with
+/// the invocation's callback bearer (the git allowlist does not apply; this
+/// engine's names only 127.0.0.1 for git), and the wiki is named and keyed
+/// as the Python engine names it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
+async fn a_native_generation_reads_an_artifact_folder() {
+    use sha2::{Digest, Sha256};
+
+    let Some(pool) = storage_common::fresh_database("native_artifact").await else {
+        return;
+    };
+    let root = scratch("art");
+    let (gateway_port, gateway) = serve_gateway(false).await;
+    let engine = Engine::start_with(
+        &root,
+        "native_artifact",
+        &[("ELITEA_DEEPWIKI_GIT_ALLOWLIST", "git.example.com")],
+    );
+    let mut arguments = arguments(1, gateway_port);
+    arguments["repo_config"] = json!({
+        "provider_type": "artifact",
+        "provider_config": {"bucket": "docs", "prefix": "handbook"},
+        "repository": "artifact://docs/handbook",
+        "branch": "main",
+        "project": null,
+        "is_cloud": null,
+    });
+    let mut lines = engine.invoke("inv-native-artifact", &arguments).await;
+    let mut all = Vec::new();
+    let deadline = Instant::now() + Duration::from_mins(5);
+    while let Some(line) = tokio::time::timeout_at(deadline.into(), lines.recv())
+        .await
+        .expect("the run finished within 5 minutes")
+    {
+        all.push(line);
+    }
+    let thinking: Vec<&str> = all.iter().filter_map(|l| l["thinking"].as_str()).collect();
+    let last = all.last().expect("a last line");
+    let Some(result) = last.get("result").and_then(Value::as_object) else {
+        panic!("the run failed: {last}\nprogress: {thinking:#?}");
+    };
+
+    // The identity Python's listing_digest gives this listing.
+    let mut listed: Vec<(String, usize)> = artifact_objects()
+        .iter()
+        .filter(|(key, _)| key.starts_with("handbook/"))
+        .map(|(key, text)| (key.clone(), text.len()))
+        .collect();
+    listed.sort();
+    let mut digest = Sha256::new();
+    for (key, size) in &listed {
+        digest.update(format!("{key}\0{size}\02026-10-01T10:00:00Z\n").as_bytes());
+    }
+    let digest: String = digest
+        .finalize()
+        .iter()
+        .fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
+    let wiki_id = "artifact--docs--handbook--main";
+    let identifier = format!("artifact://docs/handbook:main:{}", &digest[..8]);
+    assert_eq!(result["success"], true);
+    assert_eq!(result["errors"], json!([]), "{:?}", result["errors"]);
+    assert_eq!(result["wiki_id"], wiki_id);
+    assert_eq!(result["provider_type"], "artifact");
+    assert_eq!(result["branch"], "main");
+    assert_eq!(result["commit_hash"], digest.as_str());
+    assert_eq!(result["canonical_repo_identifier"], identifier.as_str());
+    for expected in [
+        "[worker] Clone config built: artifact - artifact://docs/handbook @ main",
+        "Materialised artifact://docs/handbook: 6 objects, ",
+        "Repository cloned (branch: main, commit: ",
+        "[worker] Done",
+    ] {
+        assert!(
+            thinking.iter().any(|t| t.contains(expected)),
+            "no progress line with {expected:?}: {thinking:#?}"
+        );
+    }
+    let artifacts = result["artifacts"].as_array().unwrap();
+    assert!(artifacts.iter().all(|a| {
+        a["name"]
+            .as_str()
+            .unwrap()
+            .starts_with(&format!("{wiki_id}/"))
+    }));
+    let manifest = artifacts
+        .iter()
+        .find(|a| a["object_type"] == "wiki_manifest")
+        .expect("a manifest");
+    let manifest: Map<String, Value> =
+        serde_json::from_str(manifest["data"].as_str().unwrap()).unwrap();
+    assert_eq!(manifest["wiki_id"], wiki_id);
+    assert_eq!(manifest["repository"], "artifact://docs/handbook");
+
+    // The object API: one listing of the folder, one download per object,
+    // nothing outside the folder, the bearer on every request.
+    let seen = gateway.objects_seen.lock().unwrap().clone();
+    assert_eq!(seen[0], format!("{OBJECTS_ROUTE}?prefix=handbook%2F"));
+    assert_eq!(seen.len(), 1 + 6, "{seen:#?}");
+    assert!(seen.iter().all(|s| !s.contains("archive")), "{seen:#?}");
+
+    // The published index, under the wiki id Python would file it under.
+    let row: (String, Option<String>) =
+        sqlx::query_as("SELECT provider, canonical_repo_identifier FROM wikis WHERE wiki_id = $1")
+            .bind(wiki_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(row, ("artifact".to_owned(), Some(identifier.clone())));
+    let reader = IndexReader::new(pool.clone(), wiki_id);
+    let hits = reader.search_fts("NoteStore", 5).await.unwrap();
+    assert!(
+        hits.iter().any(|h| h.rel_path == "notes/store.py"),
+        "{hits:?}"
+    );
     assert_eq!(
         jobs_left(&engine.scratch),
         0,

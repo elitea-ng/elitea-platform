@@ -137,17 +137,19 @@ export function getArtifactSource(settings: unknown): ArtifactFolderSource | nul
 }
 
 /**
- * A folder source as the wiki id and the manifest spell it: `bucket`, or
- * `bucket/prefix`.
+ * A folder source as the repository its wiki id is derived from:
+ * `artifact/bucket[/prefix]`.
  *
- * NOT the `artifact://` form. That form is what the facade derives for the
- * provider; the wiki is NAMED after this one. The Go and Python twins
- * (`run.DisplayRepositoryFor`, `wiki_context.display_repository_for`) strip
- * the scheme for the same reason: so that the id reads as a folder and not as
- * `artifact:----docs--handbook--main`. All three must agree, or this browser
- * looks for a wiki under an id nothing wrote.
+ * ONE RULE, the engine's: a folder's wiki id is the one its generation files
+ * it under, `normalize_wiki_id("artifact://bucket/prefix:{branch}:{sha8}")` —
+ * the scheme's `artifact:` becomes the first part, so `artifact://docs/handbook`
+ * on `main` is `artifact--docs--handbook--main`. Joined with `/`, these parts
+ * normalise (repoMatch's `normalizeWikiIdPart`, the same rule) to exactly that
+ * id. The Rust engine (`source::artifact_wiki_id`) and the Go host
+ * (`run.ArtifactWikiID`) derive the same one; all three must agree, or this
+ * browser looks for a wiki under an id nothing wrote.
  */
-export function artifactDisplayRepository(source: ArtifactFolderSource): string {
-  return source.prefix === '' ? source.bucket : `${source.bucket}/${source.prefix}`;
+export function artifactIdentityRepository(source: ArtifactFolderSource): string {
+  return source.prefix === '' ? `artifact/${source.bucket}` : `artifact/${source.bucket}/${source.prefix}`;
 }
 

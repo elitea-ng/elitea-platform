@@ -179,10 +179,10 @@ jobs:
       # half the claim, and the half that rots silently is the refusal. Delete
       # either guard and every other gate in this file stays green.
       #
-      # It also asserts the migration Job overrides the image ENTRYPOINT. The
-      # image starts the SERVER by default, so a Job that forgets the override
-      # runs a second copy of the service instead of migrating, and Helm waits
-      # for it forever.
+      # It also asserts the migration Job overrides the image's default CMD.
+      # The native image starts the engine SIDECAR by default, so a Job that
+      # forgets the override runs a second engine instead of migrating, and
+      # Helm waits for it forever.
       # The PostgreSQL connection ceiling (O1a). Both directions: the guard
       # refuses an over-budget topology AND permits one inside the budget — a
       # one-directional check cannot tell a working guard from a template that

@@ -39,8 +39,13 @@ target "elitea-llm-gateway" {
 target "elitea-deepwiki" {
   cache-from = ["type=gha,scope=elitea-subapp-host-linux-amd64"]
 }
+// Its engine sidecar and its migration both run the Rust-native engine image
+// (elitea-deepwiki-engine-native, ADR-0026); one image, one scope.
 target "elitea-deepwiki-engine" {
-  cache-from = ["type=gha,scope=elitea-deepwiki-linux-amd64"]
+  cache-from = ["type=gha,scope=elitea-deepwiki-engine-native-linux-amd64"]
+}
+target "elitea-deepwiki-migrate" {
+  cache-from = ["type=gha,scope=elitea-deepwiki-engine-native-linux-amd64"]
 }
 // The Inventory provider service runs the Go sub-application host image; its
 // engine sidecar is the elitea-inventory image (a Python service, Debian base).
@@ -88,6 +93,7 @@ group "standalone" {
   targets = [
     "elitea-migrate", "elitea-agentstate-migrate", "elitea-main", "elitea-scheduler",
     "elitea-llm-gateway", "llm-mock", "elitea-deepwiki", "elitea-deepwiki-engine",
+    "elitea-deepwiki-migrate",
     "elitea-inventory", "elitea-inventory-engine",
     "elitea-web", "elitea-worker", "mcp-mock", "mcp-mock-trust", "worker-trust", "qtest-mock",
     "ado-mock",

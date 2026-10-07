@@ -112,13 +112,15 @@ up with `--no-deps` — but a normal `up` no longer needs it.
 
 ### DeepWiki and Inventory — canned data with no engine closure
 
-Both sub-applications run their Go host (`elitea-subapp-host`) with
-`RUNNER=legacy`, reaching an engine SIDECAR (`elitea-deepwiki`,
-`elitea-inventory`) over a shared Unix socket — the socket hop this stack
-exists to exercise, not just the Go half. Neither sidecar carries the real
-analysis engine's dependency closure here; both serve their `fixture`
-runner instead, so `up` shows a populated wiki and a populated Inventory
-graph with no repository, no model and no ~1 GB+ engine image.
+Both sub-applications run their Go host (`elitea-subapp-host`) reaching an
+engine SIDECAR over a shared Unix socket — the socket hop this stack exists
+to exercise, not just the Go half. DeepWiki's host runs `RUNNER=native`
+and its sidecar is the Rust-native engine (`elitea-deepwiki-engine-native`,
+with its migration service); Inventory's host runs `RUNNER=legacy` and its
+sidecar is `elitea-inventory` without the engine closure. Both sidecars
+serve their `fixture` runner, so `up` shows a populated wiki and a
+populated Inventory graph with no repository and no model.
+`DEEPWIKI_NATIVE_RUNNER=native` runs the real DeepWiki engine instead.
 
 Inventory's fixture graph (six entities, two source toolkits, five
 relations) is the SAME one the Go sub-application host's own fixture runner
@@ -246,12 +248,12 @@ nothing. Both halves refuse to render while half configured
 (`elitea-deepwiki.validateGuards`, `elitea-main.validateDeepWiki`), because the
 container's own refusal is a CrashLoopBackOff somebody has to go read logs for.
 
-Two things about it are worth knowing before turning it on. The published
-image carries the engine SOURCE but not its ~92-package closure, so it serves
-the whole SPI and REFUSES every tool; the `-engine` image tag is the one that
-can run a generation, and the chart refuses the combination of
-`ELITEA_DEEPWIKI_RUNNER=legacy` with a non-engine tag. And
-`ELITEA_DEEPWIKI_GIT_ALLOWLIST` is read by BOTH halves and is fail-closed on
+Two things about it are worth knowing before turning it on. The engine
+sidecar is the Rust-native engine (`elitea-deepwiki-engine-native`), and its
+default `native` runner keeps every index in PostgreSQL, so the chart
+refuses to render without an `ELITEA_DEEPWIKI_DATABASE_URL` secret
+(`deepwiki.secrets` or `postgresql.existingSecret`); the same image runs the
+migrate Job. And `ELITEA_DEEPWIKI_GIT_ALLOWLIST` is read by BOTH halves and is fail-closed on
 both: the facade checks it before opening the vault, the provider before
 building a clone URL, and two values that disagree mean an invocation that
 starts and then fails.

@@ -91,14 +91,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 FROM python:3.12.14-slim-trixie AS runtime
 
-# The base's remaining fixable packages, upgraded — the same three
-# services/elitea-deepwiki upgrades, for the same measured reason (the base's
+# The base's remaining fixable packages, upgraded — the same three the retired
+# Python DeepWiki image upgraded, for the same measured reason (the base's
 # openssl is the only one of the base image's HIGH/CRITICAL findings that
 # Debian trixie has a fixed version for). --only-upgrade, so this installs
 # nothing new.
 #
 # THE `ADD` BELOW IS NOT A FILE THE IMAGE NEEDS. It is a cache stamp, and it is
-# the same one services/elitea-deepwiki/Containerfile carries. The upgrade is a
+# the same one the retired Python DeepWiki Containerfile carried. The upgrade is a
 # layer whose command string never changes, so a layer cache serves it on every
 # build and freezes the package versions of the day it was first built. That
 # defect was measured on the nginx image (apps/elitea-web/Containerfile).

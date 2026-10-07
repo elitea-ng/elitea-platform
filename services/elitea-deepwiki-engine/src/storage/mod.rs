@@ -8,9 +8,9 @@
 //! `deepwiki_build`) and publishes it into the ADR-0022 tables in one
 //! transaction.
 //!
-//! * [`migrate`] applies the service migrations, which stay in the Python
-//!   package (`services/elitea-deepwiki/src/elitea_deepwiki/migrations/`)
-//!   and are embedded here. Both runners write one checksum ledger.
+//! * [`migrate`] applies the service migrations (`migrations/` in this
+//!   crate), which are embedded here. Their bytes are frozen: databases
+//!   hold each file's SHA-256 in the `schema_migrations` ledger.
 //! * [`rows`] maps graph rows onto the ADR-0022 columns as `publish.py`
 //!   maps the `.wiki.db` rows.
 //! * [`build`] stages a graph (`COPY`), publishes it, and reconciles

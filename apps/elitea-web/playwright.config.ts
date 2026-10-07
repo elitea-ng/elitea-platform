@@ -173,9 +173,9 @@ const ADMISSION_JOURNEY = /journeys\/deepwiki\/deepwiki\.admission\.spec\.ts/;
 const WIKI_QUERY_JOURNEY = /journeys\/deepwiki\/deepwiki\.wiki-query\.spec\.ts/;
 
 /*
- * The real-engine journey (DWIKI-014) drives the copied analysis engine —
+ * The real-engine journey (DWIKI-014) drives the native analysis engine —
  * clone, index, plan, write — behind the Go host, on the standalone stack
- * with deploy/docker-compose.deepwiki-real-engine.yml applied
+ * with deploy/docker-compose.deepwiki-native-real-engine.yml applied
  * (scripts/deepwiki-real-engine.sh). Minutes long and image-heavy, so it has
  * its own project and no other project picks it up.
  */

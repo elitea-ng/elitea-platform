@@ -1,8 +1,8 @@
 # elitea-deepwiki-engine
 
 The Rust-native DeepWiki engine ([ADR-0026](https://github.com/elitea-ng/elitea-docs/blob/main/docs/internal/03-architecture/adrs/adr-0026-native-deepwiki-engine.mdx)).
-It replaces the Python engine sidecar (`services/elitea-deepwiki`) behind the
-same Unix socket. The Go sub-application host (`services/elitea-subapp-host`)
+It replaced the Python engine sidecar (`services/elitea-deepwiki`, deleted
+after origin/main `1233e1582`) behind the same Unix socket. The Go sub-application host (`services/elitea-subapp-host`)
 keeps the provider SPI, admission, the parameter merge, the egress check,
 composition and upload. This crate runs the tools.
 
@@ -20,8 +20,8 @@ child process per generation. Phase 6 adds `ask`, `deep_research` and
 Phase 7 packages it: the released image
 `ghcr.io/elitea-ng/elitea-deepwiki-engine-native`, the Helm switch
 `deepwiki.engine.runner: native` and the compose overlay (see the
-[runbook](#runbook-deploy-migrate-operate)). The Python `-engine` image stays
-available behind `runner: legacy` until the parity sign-off.
+[runbook](#runbook-deploy-migrate-operate)). It is now the only engine: the
+Python engine and its `runner: legacy` are removed (see `docs/UPGRADING.md`).
 
 ## Benchmark
 
@@ -45,7 +45,7 @@ GET  /engine/health                  {"status": "UP", "runner": …, "active": n
 
 Tools: `generate_wiki`, `ask`, `deep_research`, `resolve_wiki`.
 
-The wire is the Python sidecar's wherever the host can see it:
+The wire is the retired Python sidecar's wherever the host can see it:
 
 - the routes and status codes: 400 for a missing id, an unknown tool or
   non-object arguments; 409 for an id that is already running; 422 for a
@@ -75,7 +75,7 @@ keeps that refusal: the host resolves the attachments for every engine.
 | `unavailable` (default) | Refuses every tool with `FileNotFoundError` / `resource_not_found`. |
 | `fixture` | Canned results with paced progress (`ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS`, default 1). A port of the Python `fixture_runner.py`; the Go host's own fixture is a third copy. |
 | `native` | The engine: `generate_wiki` in a worker child process (see [below](#the-native-runner-generate_wiki)); `ask`, `deep_research` and `resolve_wiki` in process (see [below](#ask-deep-research-and-resolve_wiki-srcask)). Needs `ELITEA_DEEPWIKI_DATABASE_URL`, or the start is refused. |
-| `legacy` | Refused: that is the Python engine image. |
+| `legacy` | Refused: it named the retired Python engine (see `docs/UPGRADING.md`). |
 
 The fixture's JSON artifacts are written as Python's `json.dumps(…,
 indent=2)` writes them (insertion order, `ensure_ascii`), because the real
@@ -149,7 +149,8 @@ a caller cannot redirect the model calls or the bearer.
 ### Phase 2 on PostgreSQL
 
 `PgTopologyStore` answers every `TopologyStore` call from the build's staged
-rows, with the semantics `parity/python_reference.py --search-dsn` measured:
+rows, with the semantics `parity/python_reference.py --search-dsn` (now
+deleted) measured:
 the folded `plainto_tsquery` over the staged `fts` column, optionally under
 `<prefix>/` (a C-collated range), ranked by BM25 (k1 1.2, b 0.75) over the
 build's own statistics (document length = the sum of position counts, the
@@ -240,7 +241,8 @@ explains nothing.
 
 All are strict-parsed. Not ported: the deepagents planner (5d; a request
 for it falls back to the classic planner, as Python does when deepagents
-fails) and artifact-folder sources.
+fails). Artifact-folder sources are ported (see
+[Artifact-folder sources](#artifact-folder-sources-srcingestartifactrs)).
 
 `tests/native_generate.rs` runs the whole runner: the sidecar on a Unix
 socket, the real worker child, a repository served by `git http-backend`,
@@ -262,7 +264,8 @@ ADR-0026 decision 7: gitoxide (`gix` 0.88) in process, no `git` binary
 (the runtime image is distroless). The native runner calls `ingest::ingest(repo_config, settings, job_scratch, cancel)`.
 
 1. An artifact-folder source (`provider_type: artifact`, `artifact://…`)
-   is refused for now (`RuntimeError`); a later phase ports it.
+   takes its own road (`ingest::admit_source` → `ingest::ingest_artifact`,
+   below); steps 2–4 do not apply to it.
 2. `providers::clone_target` ports `engine/repo_providers` (GitHub incl.
    Enterprise, GitLab, Bitbucket Cloud/Server, Azure DevOps) over the
    host's `repo_config`. It builds a credential-free `https://` URL and the
@@ -270,7 +273,8 @@ ADR-0026 decision 7: gitoxide (`gix` 0.88) in process, no `git` binary
    (`Basic base64("user:password")`, an absent password empty: GitHub
    `token:`, GitLab `oauth2:token`, Bitbucket `user:password`, ADO `pat:`).
    `tests/fixtures/ingest/providers.json` is the Python factory's output
-   for 44 configurations (`gen_providers.py` regenerates it).
+   for 44 configurations (written by `gen_providers.py`, deleted with the
+   Python engine; see [Parity](#parity-with-the-python-engine)).
 3. `egress` re-checks the URL's own host against
    `ELITEA_DEEPWIKI_GIT_ALLOWLIST` (Python/Go rules: fail-closed, `*`,
    `*.x` = direct subdomains, ports ignored) before the credential is
@@ -317,6 +321,84 @@ deployment control is the job's memory limit (container or pod), which
 should stay above that figure. `tests/ingest_clone.rs` runs every path against
 `git http-backend` on loopback (git is a TEST dependency only);
 `ELITEA_DEEPWIKI_LIVE_CLONE=1` adds a clone of this repository from GitHub.
+
+### Artifact-folder sources (`src/ingest/artifact.rs`)
+
+A port of `elitea_deepwiki.artifact_source` and the listing/download half of
+`engine.artifacts_platform_client`. A wiki source can be a folder of the
+invoking project's artifact store: `repo_config.repository` is
+`artifact://{bucket}[/{prefix}]` (the Go host derives it from
+`artifact_configuration` and sets `provider_type: artifact`). The generation
+worker child downloads the folder into the job directory where a clone would
+go, and everything after that is unchanged.
+
+* **Contract.** The credential is the invocation's callback bearer, read as
+  Python read it (`extract_artifact_settings`): the platform is
+  `llm_settings.api_base` (or `openai_api_base`) without its
+  `/llm[/api][/vN][/]` suffix, the bearer `api_key` (or `openai_api_key`),
+  the project `organization` (or `openai_organization`, `project_id`). The
+  routes are elitea-main's: `GET {platform}/api/v2/artifacts/objects/{project}/{bucket}?prefix={prefix}/&cursor=…`
+  (paged by `next_cursor`; `objects[].key`, `size_bytes`, `modified_at`) and
+  `GET …/{bucket}/{key}`, each with `Authorization: Bearer`. The project in
+  the URL is the grant's, so only the caller's own buckets are reachable.
+* **Identity.** sha256 over the listing sorted by key, one
+  `{key}\0{size}\0{modified}\n` line per object (Python's `listing_digest`,
+  byte for byte), in place of the commit sha: `commit_hash` is the 64-hex
+  digest, the repo identifier `artifact://bucket/prefix:{branch}:{digest[:8]}`,
+  the wiki id `artifact--bucket--prefix--{branch}` (`normalize_wiki_id`), the
+  provider `artifact`, the branch `repo_config.branch` or `main` (a label),
+  the manifest's `repository` the repository string. The directory is
+  Python's `{bucket_prefix}_{branch}_{digest8}`.
+* **One wiki id.** An artifact folder has exactly one wiki id, the one its
+  generation files it under: `artifact--{bucket}--{prefix segments}--{branch}`,
+  each part lower-cased with every other character folded to `-`
+  (`source::artifact_wiki_id`, `normalize_wiki_id` of
+  `artifact://bucket/prefix:{branch}:{sha8}`). `artifact://docs/handbook` on
+  `main` is `artifact--docs--handbook--main`. Every reader derives it: a direct
+  `ask` / `deep_research`, the context paths and the fixture runner
+  (`source::wiki_id_for`), the Go host's `run.WikiIDFor`, and the browser's
+  repository identity (`entities/wiki/lib/artifactSource.ts`). Through
+  `resolve_and_ask` the manifest's `repo_identifier_override` gives the same
+  id. A git repository's id is unchanged. (Python derived two other ids for
+  a folder in `ask` and `wiki_context`; they were dropped.)
+* **Security.** Keys are untrusted: each is held to elitea-main's key rules
+  (no NUL, backslash, empty, `.` or `..` segment, so no absolute path) and to
+  the listed folder before anything is written, and one bad key refuses the
+  source. Files are created `O_EXCL` in directories this module made, under a
+  parent whose canonical path is checked against the job directory; no link
+  is created and none is followed. The ingest limits apply twice, to the
+  listed sizes before any download and to the bytes received
+  (`MAX_FILE_COUNT`, `MAX_FILE_BYTES`, `MAX_CLONE_BYTES` over the total,
+  `MAX_PARSED_BYTES`, `CLONE_TIMEOUT_SECONDS`), and Python's caps too
+  (`ELITEA_DEEPWIKI_ARTIFACT_MAX_FILES`, default 5000;
+  `ELITEA_DEEPWIKI_ARTIFACT_MAX_BYTES`, default 512 MiB). The listing stops
+  as soon as it holds more objects than a limit admits. The only host is the
+  invocation's `api_base`; nothing from `repo_config` or a listing reaches
+  the URL except as an encoded path segment or query value. The client is
+  the model client's (rustls, `ELITEA_DEEPWIKI_TLS_CA_FILE`, no redirects);
+  the git allowlist does not apply (as in Go's `CheckEgress`). The bearer is
+  a sensitive header and in no message. A listing page has 60 s, a download
+  300 s (Python's), the whole ingest `CLONE_TIMEOUT_SECONDS`; a stop ends a
+  transfer within 100 ms; a partial directory is removed.
+* **Deliberate differences.** A failed listing (a status other than 200 or
+  404, a body that is not JSON, the 1000-page ceiling) is an error; Python
+  indexed the partial listing. A 404 is still an empty folder ("holds no
+  objects to index"). No cache or marker file: the folder lives in the job
+  directory and every run builds. An `artifact://` repository is a folder
+  whatever `provider_type` says (Python failed it under `github`); a
+  `provider_type: artifact` with any other repository is refused. An empty
+  project is refused (Python sent it and read a 404). An unparsable cap
+  fails the start (Python used the default).
+
+Parity: `parity/python_artifact_source.py` (deleted with the Python engine;
+see [Parity](#parity-with-the-python-engine)) wrote
+`tests/fixtures/ingest/artifact_source.json` from the Python functions
+(parsing, the client's listing over recorded pages, `collect_objects`,
+`check_caps`, `listing_digest`, the directory and marker of
+`materialise_artifact_source`, the generation wiki id, `extract_artifact_settings`);
+`ingest::artifact::tests` replays it and runs the transfer against a mock
+object API. `tests/native_generate.rs` runs a whole generation over a folder,
+and the Go host's `native_engine_test.go` reads one through the worker child.
 
 ## Parsers and the code graph (`src/parsers/`, `src/graph/`)
 
@@ -514,16 +596,15 @@ ADR-0026 decision 5, with the owner's rule: **no SQLite anywhere**. There is
 no `.wiki.db`, no sqlite-vec, no FAISS and no docstore. The index is the
 ADR-0022 schema in the `deepwiki` database, unchanged.
 
-**Migrations.** The SQL files stay in
-`services/elitea-deepwiki/src/elitea_deepwiki/migrations/`; the binary
-embeds them (`include_str!`). `elitea-deepwiki-engine migrate` reads
-`ELITEA_DEEPWIKI_DATABASE_URL` and writes the `schema_migrations` ledger as
-`python -m elitea_deepwiki.storage` does: the same versions, names and
-SHA-256 of the text Python reads (`\r\n` translated), the same refusal of
-an applied migration whose file changed. Either runner continues where the
-other stopped. `tests/storage_migrate.rs` runs `migrate.discover()` with
-python3 and compares every checksum; a file in the directory that is not
-embedded fails it. The URL form only (`postgresql://…`): sqlx does not read
+**Migrations.** The SQL files are in `migrations/` (moved unchanged from
+the retired Python package); the binary embeds them (`include_str!`).
+`elitea-deepwiki-engine migrate` reads `ELITEA_DEEPWIKI_DATABASE_URL` and
+writes the `schema_migrations` ledger the retired `python -m
+elitea_deepwiki.storage` wrote: the same versions, names and SHA-256 of the
+text (`\r\n` translated), the same refusal of an applied migration whose
+file changed, so a database the Python runner migrated continues here.
+`tests/storage_migrate.rs` pins every checksum (a changed byte fails it) and
+fails on a file in the directory that is not embedded. The URL form only (`postgresql://…`): sqlx does not read
 psycopg's `key=value` form.
 
 Migration 0003 (additive, applied by both runners) adds schema
@@ -748,10 +829,10 @@ Dead in that path and not ported: the hierarchical and agentic modes
 - **The manifest has no `faiss_cache_key`, `graph_cache_key`,
   `docstore_cache_key`/`docstore_files`, `bm25_cache_key`/`bm25_files`,
   `unified_db_key`/`unified_db_files`.** No live consumer reads them: the
-  Go host and `apps/elitea-web` never mention them; in the Python sidecar
-  only `publishing.py` reads `unified_db_key` (with a newest-file
-  fallback) on the legacy-runner path, and the legacy engine's
-  `artifact_manager` / dead `wiki_loader` read the rest.
+  Go host and `apps/elitea-web` never mention them; in the retired Python
+  sidecar only `publishing.py` read `unified_db_key` (with a newest-file
+  fallback), and the Python engine's `artifact_manager` / dead
+  `wiki_loader` read the rest.
   `analysis_cache_key` stays.
 - **Full-text search.** FTS5 is gone (no SQLite); production uses
   `SubstringSearch`: Python's own non-FTS fallback of
@@ -783,6 +864,10 @@ two characters `\n`; the sanitizer's literal `'\1'` template, its
 line it drops after a fence; failed pages are exported as empty files.
 
 ### Parity
+
+> Historical: the Python commands below need the Python engine and the
+> `parity/` scripts, which exist only up to origin/main `1233e1582`. See
+> [Parity with the Python engine](#parity-with-the-python-engine).
 
 ```bash
 # Python: index (Phase 1–3, stand-in embedding), then the page path against
@@ -875,8 +960,8 @@ user messages only.
 **Prompts.** Every prompt text is the Python value, byte for byte, in
 `src/structure/prompts/*.txt` (compiled in). `PROMPTS_MANIFEST.json` names
 the source file, the symbol and the SHA-256 of each Python value;
-`tests/structure_prompts.rs` derives the hashes again from the Python
-source with python3 (`ast`, no engine import) and from the embedded texts.
+`tests/structure_prompts.rs` holds the embedded texts to those hashes (the
+source paths are historical: the Python engine is deleted).
 
 **`PageRank`.** Pages are full of exact rank ties, and a tie keeps the
 subgraph's node order, so `centrality.rs` reproduces networkx 3.6 / scipy
@@ -1028,6 +1113,10 @@ the parity gate drives.
 
 ### Parity
 
+> Historical: the Python commands below need the Python engine and the
+> `parity/` scripts, which exist only up to origin/main `1233e1582`. See
+> [Parity with the Python engine](#parity-with-the-python-engine).
+
 ```bash
 # Python: index the golden repository, run the scripted conversation of
 # tests/fixtures/ask/script.json against the e2e stub (LLM_STUB_SCRIPT
@@ -1055,10 +1144,26 @@ channel, todos, the limits, a stop, steered arguments, summarisation, and
 
 ## Parity with the Python engine
 
-The parity tools are in `parity/`. They run the Python engine itself (the
-`engine` extra of `services/elitea-deepwiki`), made reproducible for the
-reference only: inline thread pools, submission-order `as_completed`, sorted
-discovery. Two Python runs on the same commit are byte-identical.
+The Python engine (`services/elitea-deepwiki`) and the Python half of the
+parity tools (`parity/python_*.py`, `parity/compare_*.py` and
+`tests/fixtures/ingest/gen_providers.py`) are deleted. They ran against the
+Python engine at the last commit before the deletion, origin/main
+`1233e1582e8ec633d1f308f53025fcda550d012a`; check out that commit to re-run any Python
+command in this README. The tools ran the Python engine itself (its
+`engine` extra), made reproducible for the reference only: inline thread
+pools, submission-order `as_completed`, sorted discovery. Two Python runs on
+the same commit were byte-identical.
+
+The golden fixtures they wrote stay under `tests/fixtures/`, and `cargo test`
+replays them without Python. The `deepwiki-parity` and
+`deepwiki-cluster-parity` binaries stay too: they write the Rust side from a
+repository or from a dump (a committed fixture, or a dump made at that
+commit), and `index-dump` / `graph-dump` / `parse-dump` are useful on their
+own.
+
+> Historical: the Python commands below need the Python engine and the
+> `parity/` scripts, which exist only up to origin/main `1233e1582`. See above.
+
 
 ```bash
 # Python reference: the graph as the index stores it (repo_nodes / repo_edges rows)
@@ -1119,6 +1224,10 @@ pages, hub re-integration, the `macro_cluster` / `micro_cluster` / `is_hub` /
 Note: the live caller hands Phase 3 only the first 20 sorted hub ids
 (`run_phase2` caps `node_ids`); the port keeps that contract.
 
+> Historical: the Python commands below need the Python engine and the
+> `parity/` scripts, which exist only up to origin/main `1233e1582`. See
+> [Parity with the Python engine](#parity-with-the-python-engine).
+
 ```bash
 # Python: Phase 1 + 1c + Phase 2 (stand-in SHA-256 embeddings) + Phase 3, every leidenalg call recorded
 PYTHONHASHSEED=0 PYTHONPATH=services/elitea-deepwiki/src python services/elitea-deepwiki-engine/parity/python_phase3_dump.py <repo> <dump>
@@ -1148,6 +1257,10 @@ end on elitea-platform, Rust vs Python section ARI is 0.97 against a
 Python seed-to-seed 0.95–0.97, page ARI 0.47 against 0.47–0.49.
 
 ### Phase 2
+
+> Historical: the Python commands below need the Python engine and the
+> `parity/` scripts, which exist only up to origin/main `1233e1582`. See
+> [Parity with the Python engine](#parity-with-the-python-engine).
 
 ```bash
 # Python: Phase 2 over its own .wiki.db, stand-in embedding, every index read recorded
@@ -1192,6 +1305,10 @@ Structural edges and every weight of an edge both sides have are equal.
 
 ### Structure planning
 
+> Historical: the Python commands below need the Python engine and the
+> `parity/` scripts, which exist only up to origin/main `1233e1582`. See
+> [Parity with the Python engine](#parity-with-the-python-engine).
+
 ```bash
 # Python: Phase 1–3 (recorded), then analyze_repository + generate_wiki_structure
 # against the LLM stub (started in process; it records every request body)
@@ -1202,7 +1319,7 @@ cargo run --release --bin deepwiki-parity -- structure-dump <repo> <py-dump> <rs
 python3 parity/compare_structure.py <py-dump> <rs-out>
 ```
 
-The stub (`services/elitea-deepwiki/e2e/llm_stub.py`) answers the naming
+The stub (`services/elitea-deepwiki-engine/testdata/llm_stub.py`) answers the naming
 prompts with names made from the listed symbols, and drops the last page of
 one batched answer in five so the multi-call path runs too. The gate:
 the same requests in the same order (messages byte for byte, model,
@@ -1274,13 +1391,14 @@ The image (50 MB, distroless):
 podman build -f services/elitea-deepwiki-engine/Containerfile -t elitea-deepwiki-engine-native .
 ```
 
-On the standalone stack, in place of the Python sidecar:
+The standalone stack runs it as the sidecar (its `fixture` runner by
+default; `DEEPWIKI_NATIVE_RUNNER=native` for the engine):
 
 ```bash
-STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native.yml deploy/scripts/standalone-stack.sh up
+DEEPWIKI_NATIVE_RUNNER=native deploy/scripts/standalone-stack.sh up
 ```
 
-The Go host then runs `ELITEA_DEEPWIKI_RUNNER=native` and `GET /health`
+The Go host runs `ELITEA_DEEPWIKI_RUNNER=native` and `GET /health`
 reports `runner: native`.
 
 ## Runbook: deploy, migrate, operate
@@ -1299,10 +1417,8 @@ uid 10001; `/run/deepwiki` is in the image, owned by 10001, mode 0777.
 Subcommands: `serve` (the default CMD), `healthcheck`, `migrate`, `worker`
 (started by `serve`, never by hand), `--version`.
 
-The binary embeds the service migrations from
-`services/elitea-deepwiki/src/elitea_deepwiki/migrations/` (`include_str!`,
-a path outside the crate), so the Containerfile copies that directory too.
-A build context without it fails to compile.
+The binary embeds the service migrations from the crate's own
+`migrations/` (`include_str!`), so the crate COPY covers them.
 
 Release wiring, held together by `scripts/ci/image-matrix.sh --verify`:
 the bake target, `publish.yml` (`build`, `scan`, `publish-image` matrices and
@@ -1316,7 +1432,7 @@ group; the repository has no `docker` ecosystem entry for any image.
 deepwiki:
   enabled: true
   engine:
-    runner: native            # the one switch; legacy = Python, fixture = Python canned
+    runner: native            # the one switch: native, or fixture (canned results)
     native:
       image:
         repository: ghcr.io/elitea-ng/elitea-deepwiki-engine-native
@@ -1349,24 +1465,23 @@ What `runner: native` renders:
 - the `scratch` emptyDir at `ELITEA_DEEPWIKI_SCRATCH_PATH`, the socket
   emptyDir at `/run/deepwiki`, `/tmp` as an emptyDir (read-only root).
 
-The chart refuses to render `runner: native` without a database URL, a host
-runner of `native` with a Python sidecar, an unknown `engine.runner`, and a
-memory limit that is not Gi/Mi or is below 1Gi. The `-engine` tag guard
-still applies to `legacy`. `deploy/helm/tests/render-deepwiki.sh` asserts
-all of it.
+The chart refuses to render `runner: native` without a database URL, an
+unknown `engine.runner`, `legacy` on either switch or the Python sidecar's
+old `engine.image` / `engine.resources` keys (each with a pointer to
+`docs/UPGRADING.md`), and a memory limit that is not Gi/Mi or is below 1Gi.
+`deploy/helm/tests/render-deepwiki.sh` asserts all of it.
 
 ### Migrations
 
-**Decision: with `runner: native` the migrate Job runs the native image
-(`args: ["migrate"]`); a native install pulls no Python image.** It is the
-same schema, not a fork: the binary embeds the same SQL files and writes the
-same `schema_migrations` ledger with the same SHA-256 checksums
-(`tests/storage_migrate.rs` compares them with `migrate.py`), so either runner
-can migrate a database the other one migrated and a switch back to `legacy`
-needs no migration step. The Rust runner also holds a session advisory lock,
-so two Jobs cannot apply one file twice. The role needs `CREATE` on the
-database (migration 0003 creates the `deepwiki_build` schema; see
-`services/elitea-deepwiki/README.md`). By hand:
+**The migrate Job runs the native image (`args: ["migrate"]`).** It is the
+schema the retired Python runner applied, not a fork: the binary embeds the
+same SQL files (now in `migrations/`) and writes the same
+`schema_migrations` ledger with the same SHA-256 checksums
+(`tests/storage_migrate.rs` pins them), so a database the Python runner
+migrated needs no extra step. The Rust runner also holds a session advisory
+lock, so two Jobs cannot apply one file twice. The role needs `CREATE` on
+the database (`migrations/0003_build_space.sql` creates the
+`deepwiki_build` schema). By hand:
 
 ```bash
 ELITEA_DEEPWIKI_DATABASE_URL=postgresql://… elitea-deepwiki-engine migrate
@@ -1385,41 +1500,39 @@ pool through `deepwiki.env` to change it.
 
 ### Compose
 
-`deploy/docker-compose.deepwiki-native.yml` on the standalone stack: the
-native sidecar (`runner native`), a one-shot `elitea-deepwiki-migrate`
-service from the same image, the stack's PostgreSQL (`elitea` database,
-direct, not pgbouncer) and a fixed build owner. `DEEPWIKI_NATIVE_RUNNER=fixture`
-keeps the canned results for the fixture journeys
-(`apps/elitea-web/scripts/deepwiki-e2e.sh`).
+`deploy/docker-compose.standalone-full.yml` runs the native sidecar, a
+one-shot `elitea-deepwiki-migrate` service from the same image, the stack's
+PostgreSQL (`elitea` database, direct, not pgbouncer) and a fixed build
+owner. Its runner is `fixture` by default, the canned results the fixture
+journeys expect (`apps/elitea-web/scripts/deepwiki-e2e.sh`);
+`DEEPWIKI_NATIVE_RUNNER=native` runs the engine.
 
 ```bash
-STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native.yml deploy/scripts/standalone-stack.sh up
+DEEPWIKI_NATIVE_RUNNER=native deploy/scripts/standalone-stack.sh up
 ```
 
 ### Real-engine journey (DWIKI-014)
 
 `apps/elitea-web/scripts/deepwiki-real-engine.sh` and
-`.github/workflows/deepwiki-real-engine.yml` run the journey on either
-engine. `DEEPWIKI_REAL_ENGINE=legacy` (the default) is the Python engine
-over a `git daemon` fixture. `DEEPWIKI_REAL_ENGINE=native` is this engine.
+`.github/workflows/deepwiki-real-engine.yml` run the journey on this
+engine.
 
-The native clone cannot reach the git daemon: it opens the repository
-isolated (no `insteadOf`), speaks HTTPS only in a release build and follows
-no redirect. So the native run analyses a real public repository,
+The native clone opens the repository isolated (no `insteadOf`), speaks
+HTTPS only in a release build and follows no redirect, so a local git
+daemon cannot serve it. So the run analyses a real public repository,
 `https://github.com/kharkevich-engineering-lab/floe` (its owner agreed to
 this use), through the allowlist entry `github.com`. The runner needs
 internet access.
 
-What the native run uses:
+What the run uses:
 
-- `deploy/docker-compose.deepwiki-native.yml` and then
-  `deploy/docker-compose.deepwiki-native-real-engine.yml` on the
-  standalone stack. The second overlay runs the prebuilt image
+- `deploy/docker-compose.deepwiki-native-real-engine.yml` on the
+  standalone stack. The overlay runs the prebuilt image
   (`DEEPWIKI_ENGINE_IMAGE`, default
   `ghcr.io/eliteaai/elitea-deepwiki-engine-native:local`, the bake target
   `elitea-deepwiki-engine-native` with `TAG=local`) for the migration and
   the engine, forces `runner native`, and puts the deterministic LLM stub
-  (`services/elitea-deepwiki/e2e/llm_stub.py`) at `llm-mock:8090`.
+  (`services/elitea-deepwiki-engine/testdata/llm_stub.py`) at `llm-mock:8090`.
 - `standalone-stack.sh seed-deepwiki-public`: an anonymous GitHub
   repository toolkit (configuration 9011, no token). The seed's toolkit
   9010 has a literal token, and GitHub refuses a bad credential with 401
@@ -1429,11 +1542,11 @@ What the native run uses:
   `main`) with `git ls-remote` before it builds anything, and stops when the
   head is not `DEEPWIKI_NATIVE_COMMIT` (default
   `89c2197fa88a910c9b8344ae3c4dd06618ed28ae`). `none` (or empty) analyses
-  the head as it is. When floe's `main` moves, the native leg fails at
+  the head as it is. When floe's `main` moves, a pinned run fails at
   this check. Move the pin (the workflow input default, the `schedule`
   fallback in the job env, the script default), or use a tag at the pin.
 
-What the native run asserts, through the product: the generation completes
+What the run asserts, through the product: the generation completes
 and the host uploads the objects; one manifest and its pages land under
 `kharkevich-engineering-lab--floe--<ref>`; the manifest names the
 repository, the ref and the resolved commit; the wiki title is
@@ -1444,19 +1557,19 @@ from the symbols the engine put in the prompt) and none is a page of the
 stub's canned structure; the README index renders in the browser with that
 title; the wiki chat answers over the published index.
 
-Run it on GitHub (weekly, the schedule runs both engines; or by hand):
+Run it on GitHub (weekly, at floe's head; or by hand, at the pin):
 
 ```bash
-gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native
+gh workflow run deepwiki-real-engine.yml --ref <branch>
 # a tag at the pin, or no pin:
-gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native -f native_ref=<tag>
-gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native -f native_commit=none
+gh workflow run deepwiki-real-engine.yml --ref <branch> -f native_ref=<tag>
+gh workflow run deepwiki-real-engine.yml --ref <branch> -f native_commit=none
 ```
 
 Locally (podman; builds the native image once when the tag is absent):
 
 ```bash
-DEEPWIKI_REAL_ENGINE=native apps/elitea-web/scripts/deepwiki-real-engine.sh
+apps/elitea-web/scripts/deepwiki-real-engine.sh
 ```
 
 The crate-level proof stays `tests/native_generate.rs` (worker child, `git
@@ -1470,7 +1583,7 @@ not parse refuses the start (and the probe) with a message naming it.
 
 | Variable | Default | Limits / notes |
 | --- | --- | --- |
-| `ELITEA_DEEPWIKI_RUNNER` | `unavailable` | `unavailable`, `fixture`, `native`; `legacy` is refused (Python image) |
+| `ELITEA_DEEPWIKI_RUNNER` | `unavailable` | `unavailable`, `fixture`, `native`; `legacy` is refused (the retired Python engine) |
 | `ELITEA_DEEPWIKI_ENGINE_SOCKET` | `/run/deepwiki/engine.sock` | the host dials the same path |
 | `ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS` | `1` | `fixture` only; not negative |
 | `ELITEA_DEEPWIKI_DATABASE_URL` | unset | required by `native` and `migrate`; never logged |
@@ -1508,7 +1621,7 @@ normally stay unset: `DEEPWIKI_EXCLUDE_TESTS`, `DEEPWIKI_MAX_SYMBOLS_PER_PAGE`,
 `DEEPWIKI_DEEPAGENTS_REPOCTX_TOKENS`, `DEEPWIKI_TEST_LINKER`,
 `DEEPWIKI_WEIGHT_CALIBRATION_PROFILE`, `DEEPWIKI_NAMING_ORDER` /
 `WIKI_NAMING_ORDER`, `DEEPWIKI_NAMING_BATCHED` / `WIKI_NAMING_BATCHED`.
-The Python sidecar's `ELITEA_DEEPWIKI_MODEL_ALLOWLIST` is not read: the
+The retired Python sidecar's `ELITEA_DEEPWIKI_MODEL_ALLOWLIST` is not read: the
 native engine downloads no model, every model call goes to the invocation's
 `llm_settings.api_base`.
 

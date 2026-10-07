@@ -1,16 +1,16 @@
 name: Engine closure refresh
 
 # The route back IN for a security fix, now that dependabot is deliberately
-# silent on both frozen-engine packages.
+# silent on the frozen-engine package.
 #
 # ── WHY DEPENDABOT IS SILENT, AND WHY THAT NEEDED A REPLACEMENT ─────────────
 #
-# services/elitea-deepwiki and services/elitea-inventory each pin the resolved
-# dependency closure of a byte-frozen analysis engine in an `engine` extra. Ten
-# grouped Dependabot bumps moved single pins inside those closures and made
-# them unsatisfiable (#677-#679, #757-#761 for DeepWiki; #740, #741 for
-# Inventory), so .github/dependabot.yml now gives both packages a pip entry
-# with `ignore: "*"` and `open-pull-requests-limit: 0`.
+# services/elitea-inventory pins the resolved dependency closure of a
+# byte-frozen analysis engine in an `engine` extra. Ten grouped Dependabot bumps
+# moved single pins inside such closures and made them unsatisfiable
+# (#677-#679, #757-#761 for the Python DeepWiki engine, since deleted; #740,
+# #741 for Inventory), so .github/dependabot.yml now gives the package a pip
+# entry with `ignore: "*"` and `open-pull-requests-limit: 0`.
 #
 # That is correct and it is not free: the closures carry open advisories
 # (aiohttp among them) with no scanner able to propose a fix. Turning the
@@ -26,10 +26,9 @@ name: Engine closure refresh
 # pull request body carries the acceptance gates, and they are the two things
 # CI does not do:
 #
-#   * the `-engine` image builds (~2 GB, >35 GB of disk, tens of minutes — no
-#     CI job builds it, which is the whole reason this failure class exists);
-#   * `deepwiki-real-engine.yml` is green on the branch
-#     (`gh workflow run deepwiki-real-engine.yml --ref <branch>`).
+#   * the `-engine` image builds (tens of minutes — no CI job builds it,
+#     which is the whole reason this failure class exists);
+#   * the engine runs against the new versions on that image.
 #
 # ── WHAT IS LEFT MANUAL, ON PURPOSE ─────────────────────────────────────────
 #
@@ -38,7 +37,9 @@ name: Engine closure refresh
 # mechanical rewrite would delete along with the version — langsmith's h11
 # bound, and the I8 ledger recording what each exact pin unlocked. Its drift is
 # REPORTED in the pull request body and in the job summary; the edit is a
-# person's.
+# person's. It is the only package left, so today a drift run writes no change
+# and the pull request step exits early; the step stays for the next frozen
+# closure that is fully pinned.
 #
 # ── NO PUSH ARM ─────────────────────────────────────────────────────────────
 #
@@ -90,7 +91,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # 3.12: both packages declare requires-python ">=3.12,<3.13", and a
+      # 3.12: the package declares requires-python ">=3.12,<3.13", and a
       # resolution performed for another interpreter is a different answer.
       - uses: actions/setup-python@v7
         with:
@@ -168,8 +169,7 @@ jobs:
           # Named paths, not `git add -A`: the refresher writes pyproject.toml
           # and nothing else, and the run's own scratch directory
           # (refresh-artifacts/) is in the working tree.
-          git add services/elitea-deepwiki/pyproject.toml \
-                  services/elitea-inventory/pyproject.toml
+          git add services/elitea-inventory/pyproject.toml
           # printf rather than a heredoc: this is a YAML block scalar, so every
           # line is indented, and an indented heredoc terminator does not
           # terminate anything.

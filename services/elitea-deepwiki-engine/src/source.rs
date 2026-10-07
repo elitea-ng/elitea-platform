@@ -3,13 +3,20 @@
 //!
 //! Ports of `elitea_deepwiki.wiki_context.display_repository_for` /
 //! `wiki_id_for` and `elitea_deepwiki.artifact_source.parse_artifact_source`.
-//! The Go host carries a third copy (`run.DisplayRepositoryFor`); all of
-//! them must agree, because a wiki id is an object-key prefix and the key
-//! the browser matches a manifest on.
+//! The Go host (`run.WikiIDFor`) and the browser (`toolkitSettings`) carry
+//! their own copies; all of them must agree, because a wiki id is an
+//! object-key prefix and the key the browser matches a manifest on.
+//!
+//! ONE RULE FOR AN ARTIFACT FOLDER: its wiki id is the one its generation
+//! files it under, [`artifact_wiki_id`] — `artifact--{bucket}--{prefix
+//! segments}--{branch}`, `normalize_wiki_id` of the repo identifier. Every
+//! reader (the fixture runner, the context paths, a direct `ask`) derives
+//! that id, never one of its own. A git repository is unchanged.
 
 use crate::errors::{EngineError, ErrorType};
 use regex::Regex;
 use serde_json::Value;
+use std::fmt::Write as _;
 use std::sync::LazyLock;
 
 /// The scheme that marks an artifact folder rather than a git repository.
@@ -28,6 +35,58 @@ pub const MAX_KEY_BYTES: usize = 1024;
 pub struct ArtifactSource {
     pub bucket: String,
     pub prefix: String,
+}
+
+impl ArtifactSource {
+    /// `artifact://{bucket}[/{prefix}]`, the canonical spelling.
+    #[must_use]
+    pub fn url(&self) -> String {
+        if self.prefix.is_empty() {
+            format!("{ARTIFACT_SCHEME}{}", self.bucket)
+        } else {
+            format!("{ARTIFACT_SCHEME}{}/{}", self.bucket, self.prefix)
+        }
+    }
+
+    /// The prefix sent to the listing route: with a trailing slash, so
+    /// `docs` does not also list `docs-archive/…` ("" for the whole bucket).
+    #[must_use]
+    pub fn list_prefix(&self) -> String {
+        if self.prefix.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", self.prefix)
+        }
+    }
+
+    /// Python's `slug`: `bucket[_prefix]` with every run of characters
+    /// outside `A-Za-z0-9._-` folded to one `_`.
+    #[must_use]
+    pub fn slug(&self) -> String {
+        let raw = if self.prefix.is_empty() {
+            self.bucket.clone()
+        } else {
+            format!("{}_{}", self.bucket, self.prefix)
+        };
+        fold_unsafe_runs(&raw)
+    }
+}
+
+/// `re.sub(r"[^A-Za-z0-9._-]+", "_", text)`.
+#[must_use]
+pub fn fold_unsafe_runs(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_run = false;
+    for c in text.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+            out.push(c);
+            in_run = false;
+        } else if !in_run {
+            out.push('_');
+            in_run = true;
+        }
+    }
+    out
 }
 
 /// Python's `str(value)` for the JSON values a repository field can hold.
@@ -120,7 +179,14 @@ fn normalise_prefix(prefix: &str) -> Result<String, EngineError> {
     Ok(prefix.to_owned())
 }
 
-fn refuse_unsafe_key(key: &str, what: &str) -> Result<(), EngineError> {
+/// elitea-main's object-key rules (`internal/infra/storage/ref.go`): at
+/// most [`MAX_KEY_BYTES`], no NUL or backslash, no empty, `.` or `..`
+/// segment (so no leading or trailing slash either).
+///
+/// # Errors
+///
+/// A `ValueError` naming `what` and the rule the key breaks.
+pub fn refuse_unsafe_key(key: &str, what: &str) -> Result<(), EngineError> {
     if key.len() > MAX_KEY_BYTES {
         return Err(source_error(format!(
             "{what} is longer than {MAX_KEY_BYTES} bytes"
@@ -164,6 +230,10 @@ pub fn py_repr(text: &str) -> String {
                 out.push('\\');
                 out.push(c);
             }
+            // Python escapes the other C0/C1 control characters as `\xNN`.
+            c if matches!(u32::from(c), 0..=0x1f | 0x7f..=0x9f) => {
+                let _ = write!(out, "\\x{:02x}", u32::from(c));
+            }
             c => out.push(c),
         }
     }
@@ -201,7 +271,23 @@ pub fn display_repository_for(repo_config: Option<&Value>) -> Result<String, Eng
     Ok(repository.trim().trim_matches('/').to_owned())
 }
 
-/// The canonical `{owner}--{repo}--{branch}`.
+/// The wiki id a generation of `source` on `branch` is filed under:
+/// `normalize_wiki_id("artifact://bucket/prefix:{branch}:{sha8}")`, the
+/// listing digest left out because it never reaches the id. So
+/// `artifact://docs/handbook` on `main` is `artifact--docs--handbook--main`.
+#[must_use]
+pub fn artifact_wiki_id(source: &ArtifactSource, branch: Option<&str>) -> String {
+    use crate::wiki::compose::{build_repo_identifier, normalize_wiki_id};
+    let branch = branch.unwrap_or_default();
+    normalize_wiki_id(&build_repo_identifier(
+        &source.url(),
+        branch,
+        Some("00000000"),
+    ))
+}
+
+/// The canonical `{owner}--{repo}--{branch}`; for an artifact folder,
+/// [`artifact_wiki_id`].
 ///
 /// # Errors
 ///
@@ -210,6 +296,20 @@ pub fn wiki_id_for(
     repo_config: Option<&Value>,
     branch: Option<&str>,
 ) -> Result<String, EngineError> {
+    if let Some(Value::Object(config)) = repo_config {
+        let mut repository = str_or_empty(config, "repository");
+        if repository.is_empty()
+            && let Some(Value::Object(provider)) = config.get("provider_config")
+        {
+            repository = str_or_empty(provider, "repository");
+        }
+        if is_artifact_source(&repository) {
+            return Ok(artifact_wiki_id(
+                &parse_artifact_source(&repository)?,
+                branch,
+            ));
+        }
+    }
     let mut repository = display_repository_for(repo_config)?;
     if repository.is_empty() {
         "fixture/repository".clone_into(&mut repository);
@@ -271,6 +371,53 @@ mod tests {
         assert_eq!(
             display_repository_for(Some(&whole)).ok().as_deref(),
             Some("docs")
+        );
+    }
+
+    #[test]
+    fn an_artifact_folder_has_its_generation_id() {
+        for (repository, branch, expected) in [
+            (
+                "artifact://docs/handbook",
+                Some("main"),
+                "artifact--docs--handbook--main",
+            ),
+            (
+                "ARTIFACT://Docs/handbook/",
+                None,
+                "artifact--docs--handbook--main",
+            ),
+            (
+                "artifact://docs",
+                Some(" Release/V1 "),
+                "artifact--docs--release-v1",
+            ),
+            (
+                "artifact://my-b/a b/c.d_e",
+                Some("dev"),
+                "artifact--my-b--a-b--c-d-e--dev",
+            ),
+        ] {
+            let config = json!({"repository": repository});
+            assert_eq!(
+                wiki_id_for(Some(&config), branch).ok().as_deref(),
+                Some(expected),
+                "{repository}"
+            );
+        }
+        // The same id the generation derives from its repo identifier.
+        let source = parse_artifact_source("artifact://docs/handbook").ok();
+        let generated =
+            crate::wiki::compose::normalize_wiki_id("artifact://docs/handbook:main:1cea09ba");
+        assert_eq!(
+            source.map(|s| artifact_wiki_id(&s, Some("main"))),
+            Some(generated)
+        );
+        // A git repository is unchanged (no lower-casing, no folding).
+        let git = json!({"repository": "Acme/My_Repo"});
+        assert_eq!(
+            wiki_id_for(Some(&git), Some("Feature/X")).ok().as_deref(),
+            Some("Acme--My_Repo--Feature/X")
         );
     }
 

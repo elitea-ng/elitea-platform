@@ -1,14 +1,15 @@
 //! ADR-0026 decision 8: the `ask`, deep research and `resolve_wiki`
 //! prompts are the Python values, byte for byte.
 //!
-//! * The engine's own prompts: re-derived from the Python SOURCE with
-//!   `python3`'s `ast` (no engine import), as `tests/structure_prompts.rs`.
+//! * The engine's own prompts: held to the manifest's SHA-256 of each
+//!   Python value. The manifest's `source` paths are historical (the Python
+//!   engine was deleted after origin/main 1233e1582).
 //! * The third-party texts (`LangChain`'s todo and summary prompts,
 //!   `deepagents`' summary prompt), pinned by package version in the
 //!   manifest: the todo prompt is held to the recorded deep research
-//!   request; with `ELITEA_DEEPWIKI_PARITY_VENV` set (the venv
-//!   `parity/python_ask_dump.py` runs in) every one is re-read from the
-//!   installed package.
+//!   request; with `ELITEA_DEEPWIKI_PARITY_VENV` set (a venv with the
+//!   pinned `langchain` and `deepagents` versions) every one is re-read
+//!   from the installed package.
 
 use elitea_deepwiki_engine::ask::prompts;
 use serde_json::Value;
@@ -16,29 +17,6 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::process::Command;
-
-const DERIVE: &str = r#"
-import ast, hashlib, json, sys
-root = sys.argv[1]
-manifest = json.load(sys.stdin)
-def module_constant(path, name):
-    tree = ast.parse(open(path, encoding="utf-8").read())
-    value = None
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
-            value = ast.literal_eval(node.value)
-    return value
-out = {}
-for entry in manifest["prompts"]:
-    if "source" not in entry:
-        continue
-    value = module_constant(root + "/" + entry["source"], entry["symbol"])
-    selector = entry.get("selector")
-    if selector:
-        value = value[ast.literal_eval(selector[1:-1])]
-    out[entry["file"]] = hashlib.sha256(value.encode("utf-8")).hexdigest()
-print(json.dumps(out))
-"#;
 
 const PACKAGES: &str = r#"
 import hashlib, importlib, json, sys
@@ -118,14 +96,6 @@ fn embedded_prompts_match_the_manifest() {
         })
         .collect();
     assert_eq!(on_disk, embedded.keys().cloned().collect());
-}
-
-#[test]
-fn python_source_values_match_the_manifest() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../elitea-deepwiki");
-    let derived = run_python("python3", DERIVE, &root.to_string_lossy());
-    assert_eq!(derived, hashes(|e| e.get("source").is_some()));
-    assert_eq!(derived.len(), 15);
 }
 
 #[test]

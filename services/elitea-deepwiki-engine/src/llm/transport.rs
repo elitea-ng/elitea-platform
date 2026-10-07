@@ -185,6 +185,14 @@ impl Transport {
     pub fn timeouts(&self) -> Timeouts {
         self.timeouts
     }
+
+    /// The configured client, for the platform's object API (an
+    /// artifact-folder source): the same TLS stack, CA bundle and refusal
+    /// of redirects as the model calls.
+    #[must_use]
+    pub fn http_client(&self) -> &Client {
+        &self.client
+    }
 }
 
 /// What one request is, for its error messages and its retries.

@@ -5,9 +5,10 @@ chart** (`deploy/helm/elitea`) with the DeepWiki provider enabled in the shape
 it ships to production (ADR-0023):
 
 * the provider pod is **two containers** — the Go sub-application host
-  (`ghcr.io/elitea-ng/elitea-subapp-host`) with `ELITEA_DEEPWIKI_RUNNER=legacy`,
-  and the Python **engine sidecar** (`ghcr.io/elitea-ng/elitea-deepwiki`) it
-  reaches over a Unix socket they share (`/run/deepwiki/engine.sock`);
+  (`ghcr.io/elitea-ng/elitea-subapp-host`) with `ELITEA_DEEPWIKI_RUNNER=native`,
+  and the Rust-native **engine sidecar**
+  (`ghcr.io/elitea-ng/elitea-deepwiki-engine-native`) it reaches over a Unix
+  socket they share (`/run/deepwiki/engine.sock`);
 * the `elitea-main → provider` hop is **mutually authenticated**, both
   certificates issued by cert-manager from one internal CA `ClusterIssuer`
   named `elitea-internal-ca`, exactly as
@@ -48,7 +49,7 @@ installed cert-manager are reused, and the chart install is a
 
 1. creates the kind cluster `elitea-kind`;
 2. builds `elitea-subapp-host:kind`, `elitea-main:kind` (target `e2e`) and
-   `elitea-deepwiki:kind-engine` with podman, skipping any that already exist,
+   `elitea-deepwiki-engine-native:kind` with podman, skipping any that already exist,
    and side-loads them plus the five third-party images into the node — so a
    repeat run touches no registry;
 3. installs cert-manager and applies `manifests/ca-issuer.yaml`: a self-signed
@@ -69,7 +70,7 @@ installed cert-manager are reused, and the chart install is a
    and it is the Deployment that crash-loops, after the install looked green;
 7. `helm upgrade --install` with `values-kind.yaml`. The chart's own
    pre-install hooks run both migrations: elitea-main's `-all-tenants` run and
-   the provider's `python -m elitea_deepwiki.storage`;
+   the provider's `elitea-deepwiki-engine migrate` (the native image);
 8. applies `seed.sql` — the wiki toolkit, the repository credential the facade
    resolves through the project vault, the artifact bucket row, and the
    personal access token `verify` authenticates with.
@@ -82,7 +83,7 @@ Every check exits non-zero on failure.
    completed migration Job is never `Ready` and reading it as a failure would
    make a correct stack fail forever.
 2. **The provider pod has containers `elitea-deepwiki` and `engine`**, and
-   their runners are `legacy` (the host, which reaches the sidecar over the
+   their runners are `native` (the host, which reaches the sidecar over the
    socket) and `fixture` (the engine).
 3. **The facade registered the provider.** `kubectl exec` into PostgreSQL:
    ```sql
@@ -151,15 +152,10 @@ LLM gateway stay off throughout.
 
 ## Known limits
 
-* **The engine sidecar's `-engine` tag does not carry the engine closure.**
-  `elitea-deepwiki.validateGuards` refuses a `runner: legacy` install whose
-  engine image tag does not end in `-engine`, because on a real deployment that
-  suffix means the ~92-package closure (torch, transformers, faiss-cpu,
-  tree-sitter). This stack builds the tag with `EXTRAS=[storage-postgres]`
-  only — the sidecar runs the **fixture** runner, which is what both compose
-  stacks pair with the plain image, and the closure would add multiple GB for
-  nothing. Set `DEEPWIKI_ENGINE_EXTRAS='[engine,storage-postgres]'` to build
-  the real one.
+* **The native image is compiled from source.** A cold `up` builds
+  `elitea-deepwiki-engine-native` (~420 crates), which is most of its time.
+  The sidecar runs the **fixture** runner, which needs no LLM, no git host
+  and no index database; the same image runs `migrate` for the Job.
 * **No browser login.** The Form provider's user list exists so the graph
   parses (`gen-runtime-certs.sh` writes one throwaway account); `verify`
   authenticates with a PAT. There is no OIDC provider and no edge.
@@ -188,11 +184,11 @@ the chart, the two-container pod, the mTLS hop, admission and the artifact
 path, offline. The real analysis engine is proven on compose instead —
 `apps/elitea-web/scripts/deepwiki-real-engine.sh` runs the Playwright
 project `deepwiki-real-engine` (DWIKI-014/014b) against
-`deploy/docker-compose.deepwiki-real-engine.yml`: the `-engine` image with
-`ELITEA_DEEPWIKI_RUNNER=legacy`, a git daemon serving the seeded repository,
-and the deterministic LLM stub behind the gateway. In CI that recipe runs from
+`deploy/docker-compose.deepwiki-native-real-engine.yml`: the native engine
+with its `native` runner, a git daemon serving the seeded repository, and the
+deterministic LLM stub behind the gateway. In CI that recipe runs from
 `.github/workflows/deepwiki-real-engine.yml` — manual dispatch plus a weekly
 cron, never on a pull request. The same three things
 are what a real-engine kind run would need in-cluster (a git host the engine
-may clone from, a model the gateway resolves for the toolkit's project, the
-engine image built with `DEEPWIKI_ENGINE_EXTRAS='[engine,storage-postgres]'`).
+may clone from, a model the gateway resolves for the toolkit's project, and
+`deepwiki.engine.runner: native`).

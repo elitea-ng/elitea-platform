@@ -7,7 +7,7 @@
  * logic looks arbitrary it is preserved and the reason is written down.
  */
 import type { RepositoryIdentity, Toolkit, ToolkitSettings } from '../model/types';
-import { artifactDisplayRepository, getArtifactSource } from './artifactSource';
+import { artifactIdentityRepository, getArtifactSource } from './artifactSource';
 import { parseRepositoryIdentity, extractAdoOrganization } from './repoUrl';
 import { mergePlainObjects } from './wikiId';
 
@@ -202,7 +202,7 @@ export function getConfiguredRepoIdentity(
   const folder = getArtifactSource(merged);
   if (folder) {
     return {
-      repository: artifactDisplayRepository(folder),
+      repository: artifactIdentityRepository(folder),
       branch: firstFrom(sources, getBranchFromSettings),
     };
   }

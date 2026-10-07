@@ -345,7 +345,8 @@ jobs:
           GCS_ENDPOINT: "http://127.0.0.1:4443/storage/v1/"
           ELITEA_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
           # The sub-application host's durable invocation store (ADR-0023
-          # H2b): its tests apply the Python package's migration into a
+          # H2b): its tests apply the DeepWiki engine's migration
+          # (services/elitea-deepwiki-engine/migrations/0002) into a
           # throwaway schema of this database and skip loudly without it.
           ELITEA_SUBAPP_HOST_TEST_DSN: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
           ELITEA_AGENTSTATE_TEST_DATABASE_URL: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"

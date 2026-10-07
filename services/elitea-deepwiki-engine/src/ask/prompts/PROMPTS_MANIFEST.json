@@ -1,4 +1,5 @@
 {
+  "_provenance": "Historical provenance: each `source` names the Python file the value was copied from, in the Python engine (services/elitea-deepwiki) as it stood at origin/main 1233e1582e8ec633d1f308f53025fcda550d012a. That tree is deleted; the sha256 values are the record.",
   "prompts": [
     {
       "file": "ask_workflow.txt",
