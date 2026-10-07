@@ -477,6 +477,7 @@ impl EmbeddingClient {
             model: &inner.model,
             key: &inner.settings.api_key,
             organization: inner.settings.organization.as_deref(),
+            execution_id: inner.settings.execution_id.as_deref(),
             max_retries: inner.settings.max_retries,
             streaming: false,
         }

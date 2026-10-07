@@ -177,6 +177,12 @@ pub struct Usage {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
+    /// `completion_tokens_details.reasoning_tokens`: the part of
+    /// `completion_tokens` a reasoning model spent thinking (the worker's
+    /// `thinking_token_count`). 0 when the gateway reports none.
+    pub reasoning_tokens: u64,
+    /// `prompt_tokens_details.cached_tokens`.
+    pub cached_tokens: u64,
 }
 
 /// One call.
@@ -208,7 +214,13 @@ impl ChatRequest {
 /// The model's answer.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChatResponse {
+    /// The answer, without the model's reasoning.
     pub content: String,
+    /// A reasoning model's thinking: `reasoning_content` (or `reasoning`)
+    /// as the gateway sent it, or the text before a bare `</think>` that a
+    /// server without a reasoning parser left in `content`. Never part of
+    /// `content`, never streamed as answer text.
+    pub reasoning: String,
     pub tool_calls: Vec<ToolCall>,
     pub finish_reason: Option<String>,
     pub usage: Option<Usage>,
@@ -279,6 +291,7 @@ impl ChatClient {
             model: &self.settings.model_name,
             key: &self.settings.api_key,
             organization: self.settings.organization.as_deref(),
+            execution_id: self.settings.execution_id.as_deref(),
             max_retries: self.settings.max_retries,
             streaming,
         }
@@ -330,6 +343,17 @@ impl ChatClient {
         });
         if stream {
             body["stream_options"] = json!({"include_usage": true});
+        }
+        // Only when configured, so a body without it is the parity body. A
+        // reasoning model refuses a sampling temperature (the worker refuses
+        // the pair at configuration), so an effort other than `none` drops it.
+        if let Some(effort) = self.settings.reasoning_effort {
+            body["reasoning_effort"] = json!(effort.as_str());
+            if effort != crate::settings::ReasoningEffort::None
+                && let Some(fields) = body.as_object_mut()
+            {
+                fields.remove("temperature");
+            }
         }
         if !request.tools.is_empty() {
             let mut tools = Vec::with_capacity(request.tools.len());
@@ -509,11 +533,54 @@ fn encode(body: &Value) -> Result<Vec<u8>, EngineError> {
 fn usage_of(value: &Value) -> Option<Usage> {
     let usage = value.get("usage").filter(|u| u.is_object())?;
     let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
+    let detail = |group: &str, name: &str| {
+        usage
+            .get(group)
+            .and_then(|details| details.get(name))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
     Some(Usage {
         prompt_tokens: field("prompt_tokens"),
         completion_tokens: field("completion_tokens"),
         total_tokens: field("total_tokens"),
+        reasoning_tokens: detail("completion_tokens_details", "reasoning_tokens"),
+        cached_tokens: detail("prompt_tokens_details", "cached_tokens"),
     })
+}
+
+/// The reasoning text of a message or a delta: `reasoning_content` (vLLM,
+/// `DeepSeek`, the gateway) or `reasoning` (newer vLLM). Both present and
+/// different is refused, as the worker refuses it.
+fn reasoning_of(part: &Value) -> Result<Option<&str>, String> {
+    let text = |key: &str| part.get(key).and_then(Value::as_str);
+    match (text("reasoning_content"), text("reasoning")) {
+        (Some(a), Some(b)) if a != b => {
+            Err("the answer carries two different reasoning texts".to_owned())
+        }
+        (Some(a), _) => Ok(Some(a)),
+        (None, b) => Ok(b),
+    }
+}
+
+/// A Qwen3-style model served without a reasoning parser puts its whole
+/// monologue in `content` and leaves a BARE `</think>` (the chat template
+/// consumed the opening tag). Everything up to the last `</think>` is the
+/// reasoning, the rest the answer. A content with a matching `<think>` is
+/// treated the same way. Content without the tag is unchanged.
+fn split_leaked_reasoning(content: String) -> (String, String) {
+    const CLOSE: &str = "</think>";
+    match content.rfind(CLOSE) {
+        None => (content, String::new()),
+        Some(at) => {
+            let thought = content[..at]
+                .trim_start_matches("<think>")
+                .trim()
+                .to_owned();
+            let answer = content[at + CLOSE.len()..].trim_start().to_owned();
+            (answer, thought)
+        }
+    }
 }
 
 /// An `{"error": …}` object in a body or an event.
@@ -544,6 +611,8 @@ fn parse_completion(value: &Value) -> Result<ChatResponse, String> {
         Some(Value::String(text)) => text.clone(),
         Some(_) => return Err("the message content is not text".to_owned()),
     };
+    let (content, leaked) = split_leaked_reasoning(content);
+    let reasoning = reasoning_of(message)?.map_or(leaked, str::to_owned);
     let mut tool_calls = Vec::new();
     if let Some(calls) = message.get("tool_calls").filter(|c| !c.is_null()) {
         let calls = calls.as_array().ok_or("tool_calls is not a list")?;
@@ -582,6 +651,7 @@ fn parse_completion(value: &Value) -> Result<ChatResponse, String> {
     }
     Ok(ChatResponse {
         content,
+        reasoning,
         tool_calls,
         finish_reason: choice
             .get("finish_reason")
@@ -610,6 +680,7 @@ type CallKey = (u64, u32);
 #[derive(Debug, Default)]
 struct Assembler {
     content: String,
+    reasoning: String,
     /// The calls, ordered by index, then by generation. An index the server
     /// skipped leaves no slot.
     calls: BTreeMap<CallKey, PartialCall>,
@@ -663,6 +734,9 @@ impl Assembler {
         let Some(delta) = choice.get("delta") else {
             return Ok(());
         };
+        if let Some(thought) = reasoning_of(delta)? {
+            self.reasoning.push_str(thought);
+        }
         if let Some(text) = delta.get("content").and_then(Value::as_str)
             && !text.is_empty()
         {
@@ -803,8 +877,15 @@ impl Assembler {
                 arguments: call.arguments,
             });
         }
+        let (content, leaked) = split_leaked_reasoning(self.content);
+        let reasoning = if self.reasoning.is_empty() {
+            leaked
+        } else {
+            self.reasoning
+        };
         Ok(ChatResponse {
-            content: self.content,
+            content,
+            reasoning,
             tool_calls,
             finish_reason: self.finish_reason,
             usage: self.usage,
@@ -827,6 +908,72 @@ fn same_id_renamed(call: &PartialCall, id: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bare_think_close_splits_the_monologue_off_the_answer() {
+        assert_eq!(
+            split_leaked_reasoning("plan the page\n</think>\n\n# Title".to_owned()),
+            ("# Title".to_owned(), "plan the page".to_owned())
+        );
+        assert_eq!(
+            split_leaked_reasoning("<think>a</think>b".to_owned()),
+            ("b".to_owned(), "a".to_owned())
+        );
+        assert_eq!(
+            split_leaked_reasoning("no tags here".to_owned()),
+            ("no tags here".to_owned(), String::new())
+        );
+        let parsed = parse_completion(&json!({"choices": [{"message": {
+            "content": "x</think>answer", "reasoning_content": "from the parser"}}]}));
+        assert_eq!(
+            parsed.map(|r| (r.content, r.reasoning)),
+            Ok(("answer".to_owned(), "from the parser".to_owned()))
+        );
+        assert!(
+            parse_completion(&json!({"choices": [{"message": {
+            "content": "a", "reasoning_content": "one", "reasoning": "two"}}]}))
+            .is_err()
+        );
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn client_with(extra: Value) -> ChatClient {
+        let mut block =
+            json!({"api_base": "http://gw/llm/v1", "api_key": "k", "model_name": "qwen3"});
+        if let (Some(block), Some(extra)) = (block.as_object_mut(), extra.as_object()) {
+            block.extend(extra.clone());
+        }
+        let settings = ModelSettings::from_llm_settings(&block).unwrap_or_else(|e| panic!("{e}"));
+        let transport =
+            Transport::new(&crate::TransportSettings::default()).unwrap_or_else(|e| panic!("{e}"));
+        ChatClient::new(transport, settings)
+    }
+
+    #[test]
+    fn reasoning_effort_is_sent_only_when_configured() {
+        let request = ChatRequest::new(vec![ChatMessage::User("q".to_owned())]);
+        let plain = client_with(json!({}))
+            .body(&request, false)
+            .unwrap_or_default();
+        assert!(
+            plain.get("reasoning_effort").is_none(),
+            "the parity body is unchanged"
+        );
+        assert!(plain.get("temperature").is_some());
+        let high = client_with(json!({"reasoning_effort": "high"}))
+            .body(&request, false)
+            .unwrap_or_default();
+        assert_eq!(high["reasoning_effort"], "high");
+        assert!(
+            high.get("temperature").is_none(),
+            "a reasoning model refuses one"
+        );
+        let off = client_with(json!({"reasoning_effort": "none"}))
+            .body(&request, false)
+            .unwrap_or_default();
+        assert_eq!(off["reasoning_effort"], "none");
+        assert!(off.get("temperature").is_some());
+    }
 
     #[test]
     fn sampling_follows_the_python_rules() {

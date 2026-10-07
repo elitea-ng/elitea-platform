@@ -8,6 +8,7 @@
       "llm_settings": {
         "api_base": "https://elitea.example/llm/v1",
         "api_key": "bearer-for-token-a",
+        "execution_id": "callback-token-a",
         "max_tokens": 32000,
         "model_name": "gpt-4o",
         "organization": "42"

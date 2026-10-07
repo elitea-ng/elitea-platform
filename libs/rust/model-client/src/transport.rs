@@ -21,9 +21,22 @@
 //! | stop requested | `RuntimeError` | `runtime_error` (the stop line) |
 //! | timeout, HTTP 504 | `RuntimeError` | `timeout_error` |
 //! | HTTP 429 / 503 after the retries | `RuntimeError` | `service_busy` |
-//! | HTTP 402 (budget) | `ValueError` | `invalid_input` |
+//! | HTTP 402 (budget: member, project or unscoped) | `ValueError` | `invalid_input` |
 //! | HTTP 404 (unknown model) | `RuntimeError` | `resource_not_found` |
 //! | any other refusal, a malformed reply | `RuntimeError` | `inference_failed` |
+//!
+//! Every refusal also has the worker's code ([`refusal_code`]:
+//! `model_gateway.member_budget_exhausted`, `model_gateway.rate_limited`, …),
+//! recorded on the request's span, so the two callers of `/llm` report a
+//! refusal the same way (the `/llm` caller contract, `docs/llm-caller-contract.md`).
+//!
+//! # Tracing
+//!
+//! Each request is one `engine.model.request` span (the worker's is
+//! `agent.model.request`) with the worker's attribute names where they
+//! apply: `model_adapter`, `model_name`, `billing_project_id`,
+//! `streaming`, `outcome`, `error_code`, `retryable`, plus `engine`,
+//! `operation`, `execution_id`, `attempts` and `http_status`.
 //!
 //! No message carries the API key. Text the gateway sent back is cut to a
 //! few hundred characters and has the key replaced before it is used,
@@ -36,9 +49,17 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValu
 use reqwest::{Client, Response, StatusCode};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tracing::Instrument as _;
 
 /// How much of a refusal body is read to find its message.
 const MAX_ERROR_BODY_BYTES: usize = 16 * 1024;
+
+/// The project selector the worker sends (ADR-0018's primary choice).
+pub const PROJECT_HEADER: &str = "x-project-id";
+
+/// The run the gateway attributes the call's spend to; the `/llm` edge keeps
+/// it only for a live execution of the same project and user.
+pub const EXECUTION_HEADER: &str = "x-elitea-execution-id";
 
 /// How much of an upstream message an error repeats.
 const MAX_UPSTREAM_MESSAGE_CHARS: usize = 300;
@@ -127,6 +148,8 @@ pub struct Transport {
     client: Client,
     timeouts: Timeouts,
     backoff: Backoff,
+    /// The consuming engine, for the request span (its `User-Agent`).
+    engine: &'static str,
 }
 
 fn runtime(message: impl Into<String>) -> EngineError {
@@ -192,6 +215,7 @@ impl Transport {
             client,
             timeouts: settings.timeouts,
             backoff: settings.backoff,
+            engine: settings.user_agent,
         })
     }
 
@@ -218,6 +242,7 @@ pub(crate) struct Call<'a> {
     pub model: &'a str,
     pub key: &'a Secret,
     pub organization: Option<&'a str>,
+    pub execution_id: Option<&'a str>,
     pub max_retries: u32,
     pub streaming: bool,
 }
@@ -273,6 +298,13 @@ fn retry_after(headers: &HeaderMap) -> Option<Duration> {
         .and_then(|s| Duration::try_from_secs_f64(s).ok())
 }
 
+/// Whether a refusal with this status is worth another attempt: 408, 409,
+/// 429 and 5xx, as the worker's categories decide.
+#[must_use]
+pub fn retryable(status: u16) -> bool {
+    StatusCode::from_u16(status).is_ok_and(retryable_status)
+}
+
 fn retryable_status(status: StatusCode) -> bool {
     matches!(status.as_u16(), 408 | 409 | 429) || status.is_server_error()
 }
@@ -317,6 +349,61 @@ pub(crate) enum BodyError {
 
 /// The message inside an OpenAI-style refusal: `{"error": {"message"}}`,
 /// `{"error": "…"}`, `{"message": "…"}` or `{"detail": "…"}`.
+/// Which ceiling a 402 names, read as the worker reads it
+/// (`budget_refusal_scope`): only a `budget_exceeded` error is a budget
+/// refusal of this platform; its `scope` decides, and an older gateway that
+/// sends no scope is known by `code: member_budget_exceeded`. A provider's
+/// own quota refusal (no scope) is [`BudgetScope::Unscoped`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetScope {
+    Member,
+    Project,
+    Unscoped,
+}
+
+/// The scope of a 402 body (see [`BudgetScope`]).
+#[must_use]
+pub fn budget_scope(body: &[u8]) -> BudgetScope {
+    let scope = || -> Option<BudgetScope> {
+        let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+        let error = value.get("error")?;
+        if error.get("type")?.as_str()? != "budget_exceeded" {
+            return None;
+        }
+        match (
+            error.get("scope").and_then(serde_json::Value::as_str),
+            error.get("code").and_then(serde_json::Value::as_str),
+        ) {
+            (Some("member"), _) | (None, Some("member_budget_exceeded")) => {
+                Some(BudgetScope::Member)
+            }
+            (Some("project"), _) => Some(BudgetScope::Project),
+            _ => None,
+        }
+    };
+    scope().unwrap_or(BudgetScope::Unscoped)
+}
+
+/// The worker's code for a gateway refusal (`validate_response_head`,
+/// `budget_refusal_error`), so both callers name a refusal alike.
+#[must_use]
+pub fn refusal_code(status: u16, body: &[u8]) -> &'static str {
+    match status {
+        402 => match budget_scope(body) {
+            BudgetScope::Member => "model_gateway.member_budget_exhausted",
+            BudgetScope::Project => "model_gateway.project_budget_exhausted",
+            BudgetScope::Unscoped => "model_gateway.budget_exhausted",
+        },
+        401 => "model_gateway.unauthorized",
+        403 => "model_gateway.forbidden",
+        408 | 504 => "model_gateway.upstream_timeout",
+        429 => "model_gateway.rate_limited",
+        409 => "model_gateway.conflict",
+        300..=399 | 500..=599 => "model_gateway.unavailable",
+        _ => "model_gateway.rejected",
+    }
+}
+
 fn upstream_message(body: &[u8]) -> Option<String> {
     let value: serde_json::Value = serde_json::from_slice(body).ok()?;
     let error = value.get("error");
@@ -352,6 +439,8 @@ impl Call<'_> {
                 "application/json"
             }),
         );
+        // The worker's selector (ADR-0018's primary one). The callback bearer
+        // is bound to this project, so the edge refuses any other.
         if let Some(organization) = self.organization {
             let value = HeaderValue::from_str(organization).map_err(|_| {
                 EngineError::new(
@@ -359,7 +448,16 @@ impl Call<'_> {
                     "llm_settings.organization holds characters an HTTP header cannot carry",
                 )
             })?;
-            headers.insert("openai-organization", value);
+            headers.insert(PROJECT_HEADER, value);
+        }
+        if let Some(execution) = self.execution_id {
+            let value = HeaderValue::from_str(execution).map_err(|_| {
+                EngineError::new(
+                    ErrorType::Value,
+                    "llm_settings.execution_id holds characters an HTTP header cannot carry",
+                )
+            })?;
+            headers.insert(EXECUTION_HEADER, value);
         }
         Ok(headers)
     }
@@ -402,13 +500,20 @@ impl Call<'_> {
                 "{} request for model '{}' hit a gateway timeout (HTTP {code}){tried}",
                 self.what, self.model
             )),
-            402 => EngineError::new(
-                ErrorType::Value,
-                format!(
-                    "The model budget is exhausted: HTTP 402 for model '{}'{upstream}",
-                    self.model
-                ),
-            ),
+            402 => {
+                let which = match budget_scope(body) {
+                    BudgetScope::Member => "member model budget",
+                    BudgetScope::Project => "project model budget",
+                    BudgetScope::Unscoped => "model budget",
+                };
+                EngineError::new(
+                    ErrorType::Value,
+                    format!(
+                        "The {which} is exhausted: HTTP 402 for model '{}'{upstream}",
+                        self.model
+                    ),
+                )
+            }
             404 => runtime(format!(
                 "{} model '{}' not found at the gateway (HTTP 404){upstream}",
                 self.what, self.model
@@ -440,6 +545,26 @@ impl Call<'_> {
             self.what,
             sanitize(&error_chain(error), self.key)
         ))
+    }
+}
+
+/// The worker's code for a failed request, and whether the worker would
+/// call it retryable: a refusal by its status ([`refusal_code`]); a stop,
+/// a timeout or a transport failure by the error.
+fn failure_code(failure: &PostError) -> (&'static str, bool) {
+    if let Some(refusal) = &failure.refusal {
+        let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::BAD_GATEWAY);
+        return (
+            refusal_code(refusal.status, refusal.body.as_bytes()),
+            retryable_status(status),
+        );
+    }
+    if failure.error.message == EngineError::cancelled().message {
+        ("cancelled", false)
+    } else if failure.error.message.contains("timeout") {
+        ("model_gateway.response_header_timeout", true)
+    } else {
+        ("model_gateway.transport", true)
     }
 }
 
@@ -498,6 +623,57 @@ impl Transport {
         body: Vec<u8>,
         stop: &StopSignal,
     ) -> Result<Response, PostError> {
+        let span = tracing::info_span!(
+            "engine.model.request",
+            engine = self.engine,
+            operation = call.what,
+            model_adapter = "openai_compatible",
+            model_name = call.model,
+            billing_project_id = call.organization.unwrap_or_default(),
+            execution_id = call.execution_id.unwrap_or_default(),
+            streaming = call.streaming,
+            attempts = tracing::field::Empty,
+            http_status = tracing::field::Empty,
+            outcome = tracing::field::Empty,
+            error_code = tracing::field::Empty,
+            retryable = tracing::field::Empty,
+        );
+        let result = self
+            .post_attempts(call, body, stop)
+            .instrument(span.clone())
+            .await;
+        match &result {
+            Ok(response) => {
+                span.record("http_status", response.status().as_u16());
+                span.record(
+                    "outcome",
+                    if call.streaming {
+                        "stream_opened"
+                    } else {
+                        "responded"
+                    },
+                );
+            }
+            Err(failure) => {
+                let (code, retryable) = failure_code(failure);
+                if let Some(refusal) = &failure.refusal {
+                    span.record("http_status", refusal.status);
+                }
+                span.record("outcome", "failed");
+                span.record("error_code", code);
+                span.record("retryable", retryable);
+            }
+        }
+        result
+    }
+
+    /// The attempts of one request: the retry loop under the span.
+    async fn post_attempts(
+        &self,
+        call: &Call<'_>,
+        body: Vec<u8>,
+        stop: &StopSignal,
+    ) -> Result<Response, PostError> {
         if stop.is_requested() {
             return Err(EngineError::cancelled().into());
         }
@@ -524,6 +700,7 @@ impl Transport {
                 () = stop.stopped() => return Err(EngineError::cancelled().into()),
             };
             let attempts = retry + 1;
+            tracing::Span::current().record("attempts", attempts);
             let can_retry = retry < call.max_retries;
             match sent {
                 Err(_) => {
@@ -598,6 +775,7 @@ mod tests {
             model: "gpt-4o",
             key,
             organization: None,
+            execution_id: None,
             max_retries: 2,
             streaming: false,
         }

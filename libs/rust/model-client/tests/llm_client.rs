@@ -152,6 +152,7 @@ fn settings(base: &str, extra: Value) -> ModelSettings {
         "api_base": base,
         "api_key": KEY,
         "organization": "42",
+        "execution_id": "callback-test-run",
         "model_name": "gpt-4o",
     });
     if let (Some(block), Some(extra)) = (block.as_object_mut(), extra.as_object()) {
@@ -285,13 +286,23 @@ async fn embeddings_batch_in_order_with_the_right_headers() {
                 .and_then(|v| v.to_str().ok()),
             Some(format!("Bearer {KEY}").as_str())
         );
+        // The worker's selector and attribution headers; no
+        // OpenAI-Organization (the edge's fallback selector) beside them.
         assert_eq!(
             request
                 .headers
-                .get("openai-organization")
+                .get("x-project-id")
                 .and_then(|v| v.to_str().ok()),
             Some("42")
         );
+        assert_eq!(
+            request
+                .headers
+                .get("x-elitea-execution-id")
+                .and_then(|v| v.to_str().ok()),
+            Some("callback-test-run")
+        );
+        assert!(request.headers.get("openai-organization").is_none());
         assert_eq!(request.body["model"], "emb-model");
         assert_eq!(request.body["encoding_format"], "float");
     }

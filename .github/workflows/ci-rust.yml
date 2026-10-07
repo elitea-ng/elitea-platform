@@ -7,6 +7,8 @@ on:
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"
+      # The /llm caller contract both Rust callers assert (worker, engine model client).
+      - "conformance/llm-caller/**"
       # The live command-bus test runs the worker against the NATS chart's
       # own permission table and the real bootstrap (docs/runtime-command-bus.md).
       - "deploy/helm/nats/**"
@@ -23,6 +25,8 @@ on:
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"
+      # The /llm caller contract both Rust callers assert (worker, engine model client).
+      - "conformance/llm-caller/**"
       # The live command-bus test runs the worker against the NATS chart's
       # own permission table and the real bootstrap (docs/runtime-command-bus.md).
       - "deploy/helm/nats/**"

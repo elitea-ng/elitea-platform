@@ -11,6 +11,7 @@
 
 use elitea_deepwiki_engine::config::Settings;
 use elitea_deepwiki_engine::{build_runner, healthcheck, server, storage, worker};
+use elitea_engine_sidecar::telemetry;
 use std::future::Future;
 use std::process::ExitCode;
 use std::time::Duration;
@@ -29,8 +30,10 @@ fn main() -> ExitCode {
             Some(settings) => {
                 let threads = settings.worker.threads;
                 on_runtime(Some(threads), async move {
-                    init_tracing();
-                    worker::run(&settings).await
+                    let telemetry = telemetry::init(SERVICE_NAME);
+                    let code = worker::run(&settings).await;
+                    telemetry.shutdown().await;
+                    code
                 })
             }
             None => ExitCode::FAILURE,
@@ -92,15 +95,9 @@ async fn healthcheck() -> ExitCode {
     }
 }
 
-fn init_tracing() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
-}
+/// The OTLP `service.name` of this engine's spans (the server and the
+/// worker child alike).
+const SERVICE_NAME: &str = "elitea-deepwiki-engine";
 
 /// `python -m elitea_deepwiki.storage`: apply the service migrations to
 /// `ELITEA_DEEPWIKI_DATABASE_URL`. Exit 0 when the database is at the
@@ -108,7 +105,13 @@ fn init_tracing() {
 /// It reads only that variable, as the Python entry point does, so a
 /// migration Job needs no runner settings.
 async fn migrate() -> ExitCode {
-    init_tracing();
+    let telemetry = telemetry::init(SERVICE_NAME);
+    let code = migrate_database().await;
+    telemetry.shutdown().await;
+    code
+}
+
+async fn migrate_database() -> ExitCode {
     let dsn = std::env::var(storage::DSN_ENV).unwrap_or_default();
     if dsn.trim().is_empty() {
         tracing::error!(
@@ -173,7 +176,13 @@ fn start_reconciler(settings: &Settings) {
 }
 
 async fn serve() -> ExitCode {
-    init_tracing();
+    let telemetry = telemetry::init(SERVICE_NAME);
+    let code = serve_engine().await;
+    telemetry.shutdown().await;
+    code
+}
+
+async fn serve_engine() -> ExitCode {
     let Some(settings) = settings() else {
         return ExitCode::FAILURE;
     };

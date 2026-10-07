@@ -65,3 +65,42 @@ SELECT EXISTS (
 	}
 	return ok, nil
 }
+
+// VerifyCallbackExecution implements llmproxy.CallbackExecutionVerifier: a
+// provider invocation's execution id `callback-<uuid>` is kept only when
+// tokenUUID names the token that authenticated the request (tokenID), owned
+// by userID, bound to projectID (every callback token is bound), and not
+// expired more than attributionSlackSQL ago. A callback token is minted per
+// invocation and revoked or expired after it, so liveness is the token's.
+func (v *ExecutionAttributionVerifier) VerifyCallbackExecution(ctx context.Context, projectID, userID, tokenID, tokenUUID string) (bool, error) {
+	if v == nil || v.pool == nil {
+		return false, nil
+	}
+	project, err := strconv.ParseInt(projectID, 10, 32)
+	if err != nil || project < 1 {
+		return false, nil
+	}
+	user, err := strconv.ParseInt(userID, 10, 32)
+	if err != nil || user < 1 {
+		return false, nil
+	}
+	token, err := strconv.ParseInt(tokenID, 10, 32)
+	if err != nil || token < 1 || tokenUUID == "" || len(tokenUUID) > 36 {
+		return false, nil
+	}
+	var ok bool
+	if err := v.pool.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1
+    FROM public.auth_core__token AS t
+    JOIN elitea_identity.token_project_binding AS b ON b.token_id = t.id
+    WHERE t.uuid = $1
+      AND t.id = $2
+      AND t.user_id = $3
+      AND b.project_id = $4
+      AND (t.expires IS NULL OR t.expires > (clock_timestamp() AT TIME ZONE 'UTC') - `+attributionSlackSQL+`)
+)`, tokenUUID, token, user, project).Scan(&ok); err != nil {
+		return false, fmt.Errorf("verify callback execution attribution: %w", err)
+	}
+	return ok, nil
+}
