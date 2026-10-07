@@ -675,3 +675,13 @@ async fn invalid_selection_and_effect_arguments_fail_before_provider_use() {
     };
     assert_eq!(error.code(), RallyToolsetErrorCode::UnsupportedSelection);
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn RallyApi> = Arc::new(FixtureRallyApi::default());
+    let toolset =
+        test_build_with_api("gate", &[], &policy(&[]), &api).expect("complete rally toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("rally tools");
+    super::sdk_conformance::assert_sdk_conformance("rally", &tools);
+}

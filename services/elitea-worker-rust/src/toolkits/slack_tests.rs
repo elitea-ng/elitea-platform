@@ -815,3 +815,13 @@ async fn invalid_selection_and_arguments_fail_before_provider_use() {
     };
     assert_eq!(error.code(), SlackToolsetErrorCode::UnsupportedSelection);
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn SlackApi> = Arc::new(FixtureSlackApi::default());
+    let toolset =
+        test_build_with_api("gate", &[], &policy(&[]), &api).expect("complete slack toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("slack tools");
+    super::sdk_conformance::assert_sdk_conformance("slack", &tools);
+}

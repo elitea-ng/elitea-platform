@@ -714,3 +714,13 @@ fn two_clients_never_cross_cluster_credentials_or_authority() {
         Some("Bearer second-token")
     );
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn KubernetesApi> = Arc::new(FixtureApi::new());
+    let toolset = test_build_with_api("gate", CLUSTER_URL, &[], &policy(&[]), &api)
+        .expect("complete kubernetes toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("kubernetes tools");
+    super::sdk_conformance::assert_sdk_conformance("kubernetes", &tools);
+}

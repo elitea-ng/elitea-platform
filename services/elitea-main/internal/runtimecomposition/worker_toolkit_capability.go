@@ -69,6 +69,13 @@ type rustWorkerToolkitCapabilityDocument struct {
 	// platform type "kubernetes". Translating here would report a capability
 	// the worker does not have.
 	SupportedToolTypes []string `json:"supported_tool_types"`
+	// SupportedTools lists, per type, the TOOLS the Rust family serves when
+	// it serves fewer than the SDK declares (ADR-0027: github, sharepoint
+	// and artifact are partial). A type without an entry serves every tool
+	// the SDK declares. Its gate is the worker's SDK conformance test
+	// (services/elitea-worker-rust/src/toolkits/sdk_conformance.rs), which
+	// builds each family and compares the names it actually serves.
+	SupportedTools map[string][]string `json:"supported_tools,omitempty"`
 }
 
 // WorkerToolkitCapability answers whether the configured worker can run a
@@ -95,6 +102,9 @@ type WorkerToolkitCapability struct {
 	// whole registry and loses parts of it, so its answer is the loss. The Rust
 	// worker implements families one at a time, so its answer is the list.
 	supportedToolTypes map[string]struct{}
+	// supportedTools is the per-tool allow list of a partial Rust family,
+	// keyed by type; a type absent from it serves every tool.
+	supportedTools map[string]map[string]struct{}
 }
 
 // WorkerImplementationFromEnv reads which worker image this deployment runs.
@@ -202,9 +212,25 @@ func loadRustWorkerToolkitCapability(data []byte) (*WorkerToolkitCapability, err
 	if err != nil {
 		return nil, err
 	}
+	if len(document.SupportedTools) > len(types) {
+		return nil, ErrWorkerToolkitCapabilityInvalid
+	}
+	tools := make(map[string]map[string]struct{}, len(document.SupportedTools))
+	for toolkitType, names := range document.SupportedTools {
+		if _, known := types[toolkitType]; !known ||
+			len(names) == 0 || len(names) > maxWorkerToolkitCapabilityNames {
+			return nil, ErrWorkerToolkitCapabilityInvalid
+		}
+		set, err := workerToolkitCapabilityNameSet(names)
+		if err != nil {
+			return nil, err
+		}
+		tools[toolkitType] = set
+	}
 	return &WorkerToolkitCapability{
 		implementation:     RustWorkerImplementation,
 		supportedToolTypes: types,
+		supportedTools:     tools,
 	}, nil
 }
 
@@ -289,6 +315,26 @@ func (c *WorkerToolkitCapability) SupportsToolkitType(
 	default:
 		return true, ""
 	}
+}
+
+// SupportsTool reports whether the configured worker serves one TOOL of a
+// type it supports (SupportsToolkitType answers for the type). Only a Rust
+// family that serves a subset of the SDK's tools refuses one; every other
+// answer is yes, including a nil projection, for the reason
+// SupportsToolkitType gives.
+func (c *WorkerToolkitCapability) SupportsTool(toolkitType, toolName string) (bool, string) {
+	if c == nil || c.implementation != RustWorkerImplementation {
+		return true, ""
+	}
+	tools, partial := c.supportedTools[toolkitType]
+	if !partial {
+		return true, ""
+	}
+	if _, served := tools[toolName]; served {
+		return true, ""
+	}
+	return false, "This deployment's agent worker does not support the " +
+		toolName + " tool of the " + toolkitType + " toolkit."
 }
 
 // UnsupportedNames returns the names this projection refuses, sorted. The

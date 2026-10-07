@@ -634,3 +634,13 @@ fn unsupported_selection_fails_before_provider_use() {
         GooglePlacesToolsetErrorCode::UnsupportedSelection
     );
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn GooglePlacesApi> = Arc::new(FixtureGooglePlacesApi::default());
+    let toolset = test_build_with_api("gate", &[], &policy(&[]), &api)
+        .expect("complete google_places toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("google_places tools");
+    super::sdk_conformance::assert_sdk_conformance("google_places", &tools);
+}

@@ -571,3 +571,41 @@ func indexOf(haystack, needle string) int {
 	}
 	return -1
 }
+
+// A partial native family (ADR-0027) keeps every SDK tool in the schema — a
+// saved selection holding one must still validate — and names the ones the
+// worker does not serve in metadata.unavailable_tools.
+func TestAPartialRustFamilyNamesItsUnservedTools(t *testing.T) {
+	t.Parallel()
+
+	types, err := json.Marshal(pinnedWorkerCapability(t, "rust").SupportedNames())
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability, err := runtimecomposition.LoadWorkerToolkitCapability("rust", []byte(
+		`{"schema_version":"elitea.worker-toolkit-capability.v1","implementation":"rust","source":"s",`+
+			`"supported_tool_types":`+string(types)+`,"supported_tools":{"github":["get_issue","read_file"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := getToolkitTypeCatalogue(t,
+		toolkits.WithArgumentSchemas(pinnedSnapshot(t)),
+		toolkits.WithSettingsDefinitions(pinnedSettingsDefinitions(t)),
+		toolkits.WithCatalogue(pinnedCatalogue(t)),
+		toolkits.WithWorkerCapability(capability),
+	)
+	unavailable, _ := metadataOf(t, body, "github")["unavailable_tools"].([]any)
+	listed := map[string]bool{}
+	for _, name := range unavailable {
+		listed[name.(string)] = true
+	}
+	if !listed["create_pull_request"] || listed["get_issue"] || listed["read_file"] {
+		t.Fatalf("github unavailable_tools = %v", unavailable)
+	}
+	if hidden, _ := metadataOf(t, body, "github")["hidden"].(bool); hidden {
+		t.Fatal("a partial family is still a runnable type")
+	}
+	if _, present := metadataOf(t, body, "slack")["unavailable_tools"]; present {
+		t.Fatal("a family without a tool list serves every tool")
+	}
+}

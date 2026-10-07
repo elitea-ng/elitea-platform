@@ -887,3 +887,13 @@ fn two_clients_keep_subscription_tenant_and_secret_authority_isolated() {
             .any(|window| window == b"other-secret")
     );
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn AzureApi> = Arc::new(FixtureApi::new());
+    let toolset = test_build_with_api("gate", SUBSCRIPTION_ID, &[], &policy(&[]), &api)
+        .expect("complete azure toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("azure tools");
+    super::sdk_conformance::assert_sdk_conformance("azure", &tools);
+}

@@ -1712,6 +1712,16 @@ fn invalid_arguments() -> AdkError {
     )
 }
 
+/// The names of `names` this family serves (the SDK gate selects them).
+#[cfg(test)]
+pub(in crate::toolkits) fn test_supported_names(names: &[String]) -> Vec<String> {
+    names
+        .iter()
+        .filter(|name| is_supported_read(name))
+        .cloned()
+        .collect()
+}
+
 #[cfg(test)]
 pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,

@@ -846,3 +846,13 @@ async fn invalid_selection_and_arguments_fail_before_provider_use() {
         SalesforceToolsetErrorCode::UnsupportedSelection
     );
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn SalesforceApi> = Arc::new(FixtureSalesforceApi::default());
+    let toolset =
+        test_build_with_api("gate", &[], &policy(&[]), &api).expect("complete salesforce toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("salesforce tools");
+    super::sdk_conformance::assert_sdk_conformance("salesforce", &tools);
+}

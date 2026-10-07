@@ -506,3 +506,9 @@ async fn read_file_advertises_the_sdks_filepath_argument() {
     assert!(properties.contains_key("filepath"));
     assert!(properties.contains_key("filename"));
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let (tools, _rpc) = tools_of("{}", &[]).await;
+    super::sdk_conformance::assert_sdk_conformance("artifact", &tools);
+}

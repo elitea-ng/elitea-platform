@@ -670,3 +670,9 @@ fn two_clients_never_cross_origin_or_basic_credentials() {
     assert!(!rendered.contains(PASSWORD));
     assert!(!rendered.contains("second-secret"));
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn ZephyrApi> = Arc::new(FixtureApi::success());
+    super::sdk_conformance::assert_sdk_conformance("zephyr", &tools_for(api, &[]).await);
+}

@@ -160,6 +160,14 @@ type ToolkitTypeVerdict interface {
 	SupportsToolkitType(toolkitType string) (bool, string)
 }
 
+// ToolVerdict is the optional per-tool half of a ToolkitTypeVerdict: a type
+// the worker runs may still lack one of its tools (a partial native family,
+// ADR-0027). A verdict that implements it is asked after the type passes,
+// with the same before-any-write rule.
+type ToolVerdict interface {
+	SupportsTool(toolkitType, toolName string) (bool, string)
+}
+
 // Settlement is one terminal row of the durable output inbox.
 type Settlement struct {
 	Outcome     executionapp.SettlementOutcome
@@ -354,6 +362,14 @@ func (s *RunService) runTool(ctx context.Context, request RunRequest, exactRevis
 			reason = "This deployment cannot run the " + inputs.ToolkitType + " toolkit."
 		}
 		return RunOutcome{}, &UnsupportedToolkitTypeError{ToolkitType: inputs.ToolkitType, Reason: reason}
+	}
+	if tools, ok := s.verdict.(ToolVerdict); ok {
+		if supported, reason := tools.SupportsTool(inputs.ToolkitType, request.ToolName); !supported {
+			if reason == "" {
+				reason = "This deployment cannot run the " + request.ToolName + " tool of the " + inputs.ToolkitType + " toolkit."
+			}
+			return RunOutcome{}, &UnsupportedToolkitTypeError{ToolkitType: inputs.ToolkitType, Reason: reason}
+		}
 	}
 	inputs.ToolName = request.ToolName
 	inputs.Arguments = append(json.RawMessage(nil), request.Arguments...)

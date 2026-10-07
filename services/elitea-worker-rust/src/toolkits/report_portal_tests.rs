@@ -933,3 +933,13 @@ fn fixture_error_constructor_remains_data_free() {
     assert_eq!(error.code(), ReportPortalClientErrorCode::InvalidResponse);
     assert!(!format!("{error:?} {error}").contains("secret"));
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn ReportPortalApi> = Arc::new(FixtureApi::default());
+    let toolset = test_build_with_api("gate", &[], &policy(&[]), &api)
+        .expect("complete report_portal toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("report_portal tools");
+    super::sdk_conformance::assert_sdk_conformance("report_portal", &tools);
+}

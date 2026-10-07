@@ -515,3 +515,13 @@ fn unsupported_selection_fails_before_provider_use() {
     };
     assert_eq!(error.code(), SonarToolsetErrorCode::UnsupportedSelection);
 }
+
+#[tokio::test]
+async fn every_tool_keeps_the_sdk_contract() {
+    let api: Arc<dyn SonarApi> = Arc::new(FixtureSonarApi::default());
+    let toolset =
+        test_build_with_api("gate", &[], &policy(&[]), &api).expect("complete sonar toolset");
+    let readonly: Arc<dyn ReadonlyContext> = context();
+    let tools = toolset.tools(readonly).await.expect("sonar tools");
+    super::sdk_conformance::assert_sdk_conformance("sonar", &tools);
+}
