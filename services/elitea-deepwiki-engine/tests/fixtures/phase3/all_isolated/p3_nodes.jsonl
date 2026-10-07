@@ -1,0 +1,12 @@
+{"id": "py::pkg0/m0.py::X0", "rel_path": "pkg0/m0.py", "file_name": "m0.py", "is_doc": false, "pred": []}
+{"id": "py::pkg1/m1.py::X0", "rel_path": "pkg1/m1.py", "file_name": "m1.py", "is_doc": false, "pred": []}
+{"id": "py::pkg1/m1.py::X1", "rel_path": "pkg1/m1.py", "file_name": "m1.py", "is_doc": false, "pred": []}
+{"id": "py::pkg0/m2.py::X0", "rel_path": "pkg0/m2.py", "file_name": "m2.py", "is_doc": false, "pred": []}
+{"id": "py::pkg0/m2.py::X1", "rel_path": "pkg0/m2.py", "file_name": "m2.py", "is_doc": false, "pred": ["py::pkg0/m2.py::X0"]}
+{"id": "py::pkg0/m2.py::X2", "rel_path": "pkg0/m2.py", "file_name": "m2.py", "is_doc": false, "pred": ["py::pkg0/m2.py::X1"]}
+{"id": "py::pkg1/m3.py::X0", "rel_path": "pkg1/m3.py", "file_name": "m3.py", "is_doc": false, "pred": []}
+{"id": "py::pkg0/m4.py::X0", "rel_path": "pkg0/m4.py", "file_name": "m4.py", "is_doc": false, "pred": []}
+{"id": "py::pkg0/m4.py::X1", "rel_path": "pkg0/m4.py", "file_name": "m4.py", "is_doc": false, "pred": ["py::pkg0/m4.py::X0"]}
+{"id": "py::pkg9/two.py::P", "rel_path": "pkg9/two.py", "file_name": "two.py", "is_doc": false, "pred": []}
+{"id": "py::pkg9/two.py::Q", "rel_path": "pkg9/two.py", "file_name": "two.py", "is_doc": false, "pred": []}
+{"id": "py::hub.py::H", "rel_path": "hub.py", "file_name": "hub.py", "is_doc": false, "pred": ["py::pkg0/m0.py::X0"]}

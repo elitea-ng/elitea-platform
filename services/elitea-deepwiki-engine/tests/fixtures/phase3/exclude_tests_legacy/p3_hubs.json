@@ -1,0 +1,8 @@
+{
+  "phase3_hubs": [
+    "py::core/cfg.py::Config",
+    "py::core/ghost.py::Ghost",
+    "py::core/log.py::Logger"
+  ],
+  "phase2_hub_count": 3
+}

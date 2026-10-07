@@ -1,0 +1,6 @@
+{
+  "phase3_hubs": [
+    "py::hub.py::H"
+  ],
+  "phase2_hub_count": 1
+}

@@ -1,0 +1,51 @@
+{
+  "repo": "synthetic:default",
+  "nodes": 265,
+  "edges": 878,
+  "leiden_calls": 13,
+  "phase3_stats": {
+    "graph": {
+      "total_nodes": 265,
+      "total_edges": 878,
+      "hubs": 3,
+      "test_nodes_excluded": 0
+    },
+    "macro": {
+      "cluster_count": 8,
+      "cluster_count_raw": 12,
+      "nodes_assigned": 262
+    },
+    "micro": {
+      "total_pages": 8,
+      "total_pages_raw": 55
+    },
+    "algorithm_metadata": {
+      "algorithm": "hierarchical_leiden_file_contracted",
+      "section_resolution": 0.6429340329978466,
+      "page_resolution": 1.0,
+      "sections": 12,
+      "pages": 55,
+      "seed": 42,
+      "file_nodes": 60,
+      "connected_files": 55,
+      "isolated_files": 5
+    },
+    "hubs": {
+      "total": 3,
+      "assigned_to_cluster": 3,
+      "global_core": 0
+    },
+    "persistence": {
+      "nodes_clustered": 268,
+      "macro_clusters": 8,
+      "micro_clusters": 8,
+      "hubs_assigned": 3,
+      "hubs_in_clusters": 3,
+      "hubs_global_core": 0
+    }
+  },
+  "flags": {
+    "exclude_tests": false,
+    "weight_calibration_profile": "calibrated"
+  }
+}

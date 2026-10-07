@@ -28,9 +28,9 @@ const SECTION_TYPE: &str = "markdown_section";
 const DOCUMENT_TYPE: &str = "markdown_document";
 const SYNTHETIC_DOC_PREFIX: &str = "markdown_document::";
 
-static MD_LINK: LazyLock<Regex> =
+pub(super) static MD_LINK: LazyLock<Regex> =
     LazyLock::new(|| super::pyre::compile(r"\[(?:[^\]]*)\]\(([^)]+)\)", ""));
-static BACKTICK_REF: LazyLock<Regex> =
+pub(super) static BACKTICK_REF: LazyLock<Regex> =
     LazyLock::new(|| super::pyre::compile(r"`([A-Za-z_]\w+(?:\.\w+)*)`", ""));
 
 /// What [`wire_markdown_structure`] did.
@@ -42,8 +42,9 @@ pub struct MarkdownStats {
     pub references_edges: usize,
 }
 
-/// `graph_orphan_cascade_v2._is_doc_node`.
-fn is_doc_node(data: &NodeData) -> bool {
+/// `graph_orphan_cascade_v2._is_doc_node`. Phase 2's explicit-reference
+/// pass reuses it, as Python does.
+pub(super) fn is_doc_node(data: &NodeData) -> bool {
     if matches!(
         data.symbol_type.to_lowercase().as_str(),
         "file_doc" | "module_doc" | "doc"
@@ -57,7 +58,7 @@ fn is_doc_node(data: &NodeData) -> bool {
 }
 
 /// `_build_path_index`: `rel_path` → the last node with it.
-fn build_path_index(graph: &CodeGraph) -> HashMap<String, String> {
+pub(super) fn build_path_index(graph: &CodeGraph) -> HashMap<String, String> {
     let mut index = HashMap::new();
     for (id, data) in graph.nodes() {
         if !data.rel_path.is_empty() {
@@ -68,7 +69,7 @@ fn build_path_index(graph: &CodeGraph) -> HashMap<String, String> {
 }
 
 /// `_build_simple_name_index`: `symbol_name` → non-document nodes.
-fn build_simple_name_index(graph: &CodeGraph) -> HashMap<String, Vec<String>> {
+pub(super) fn build_simple_name_index(graph: &CodeGraph) -> HashMap<String, Vec<String>> {
     let mut index: HashMap<String, Vec<String>> = HashMap::new();
     for (id, data) in graph.nodes() {
         if is_doc_node(data) || data.symbol_name.is_empty() {
@@ -100,13 +101,13 @@ fn normalize_link(reference: &str, source_dir: &str) -> String {
 }
 
 /// A resolved reference: target node and matcher.
-struct Hit {
-    node_id: String,
-    matcher: &'static str,
+pub(super) struct Hit {
+    pub(super) node_id: String,
+    pub(super) matcher: &'static str,
 }
 
 /// `_resolve_doc_orphan_links`: markdown links first, then backtick names.
-fn resolve_doc_links(
+pub(super) fn resolve_doc_links(
     node_id: &str,
     source_text: &str,
     source_dir: &str,
