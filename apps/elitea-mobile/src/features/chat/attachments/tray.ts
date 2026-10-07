@@ -53,6 +53,12 @@ export interface TrayDeps {
    * while the session lasts.
    */
   discardPicked?: (uri: string) => void;
+  /**
+   * Whether a local file is still there (the upload temp dir is swept when
+   * the workspace is put aside or ended): a held file whose copy went is not
+   * put back. Absent: assumed there.
+   */
+  exists?: (uri: string) => boolean;
   /** A user-facing message for an upload or preparation error. */
   describe: (error: unknown, name: string) => string;
   newId?: () => string;
@@ -63,10 +69,23 @@ export type UploadAllResult =
   | { ok: true; attachments: TurnAttachment[]; ids: string[] }
   | { ok: false; error: string };
 
+/** What `restoreSent` put back in the tray, and the names of the files it could not. */
+export interface RestoreResult {
+  restored: string[];
+  lost: string[];
+}
+
 let counter = 0;
 
 export class AttachmentTray {
   private items: TrayItem[] = [];
+  /**
+   * The files of the last message sent, out of the tray but with their local
+   * copies kept until its answer settles: a Stop before any output makes the
+   * server delete that question (cancelChatExecution), and `restoreSent`
+   * then puts them back for a one-tap resend.
+   */
+  private held: TrayItem[] = [];
   private readonly listeners = new Set<() => void>();
   private generation = 0;
   private target: { projectId: number; conversationUuid: string } | null = null;
@@ -220,13 +239,58 @@ export class AttachmentTray {
   }
 
   /**
+   * Takes the sent files (`ids`) out of the tray but keeps their local copies
+   * until `releaseSent` or `restoreSent`; the files of an earlier message
+   * still held are let go (only the newest question can be stopped).
+   */
+  holdSent(ids: readonly string[]): void {
+    this.releaseSent();
+    const sent = new Set(ids);
+    this.held = this.items.filter((i) => sent.has(i.id));
+    this.set(this.items.filter((i) => !sent.has(i.id)));
+  }
+
+  /** The held files' answer settled with the question kept: delete their copies. */
+  releaseSent(): void {
+    const held = this.held;
+    this.held = [];
+    for (const item of held) this.forget(item);
+  }
+
+  /**
+   * The question the held files went with was removed: put them back, ready
+   * to upload again (the removed message's upload is not reused), after any
+   * file picked meanwhile. A file whose local copy is gone, or one more than
+   * the tray takes, is reported as lost and deleted.
+   */
+  restoreSent(): RestoreResult {
+    const held = this.held;
+    this.held = [];
+    const room = Math.max(0, this.limits.maxFiles - this.sendable);
+    const exists = this.deps.exists ?? (() => true);
+    const back: TrayItem[] = [];
+    const lost: string[] = [];
+    for (const item of held) {
+      if (back.length < room && item.ready !== null && exists(item.ready.uri)) {
+        back.push({ ...item, state: 'ready', progress: null, error: null, filepath: null });
+      } else {
+        lost.push(item.name);
+        this.forget(item);
+      }
+    }
+    if (back.length > 0) this.set([...this.items, ...back]);
+    return { restored: back.map((i) => i.name), lost };
+  }
+
+  /**
    * Forgets files and deletes their temporary copies: after the message is
    * accepted only the sent ones (`ids`), so a file picked meanwhile stays;
-   * with no ids (the thread went) everything.
+   * with no ids (the thread went) everything, held files included.
    */
   clear(ids?: readonly string[]): void {
     if (ids === undefined) {
       this.generation++;
+      this.releaseSent();
       for (const item of this.items) this.forget(item);
       this.set([]);
       return;

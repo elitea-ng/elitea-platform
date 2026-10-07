@@ -16,6 +16,14 @@ function discard(uri: string) {
   }
 }
 
+function exists(uri: string): boolean {
+  try {
+    return new File(uri).exists;
+  } catch {
+    return false;
+  }
+}
+
 /** The composer's attachment tray for one conversation (cleared when the thread goes). */
 export function useAttachmentTray(projectId: number | null, conversationUuid: string | null, limits: AttachmentLimits) {
   const [tray] = useState(
@@ -33,6 +41,7 @@ export function useAttachmentTray(projectId: number | null, conversationUuid: st
           ),
         discard,
         discardPicked: discardPickerCopy,
+        exists,
         describe: (error, name) => (error instanceof PrepareError ? error.userMessage : uploadErrorText(error, name)),
       }),
   );

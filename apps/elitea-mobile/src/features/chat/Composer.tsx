@@ -59,7 +59,7 @@ export interface ComposerProps {
    * put back when the server removed it with the stopped answer. Absent:
    * Send stays, disabled, until the answer ends.
    */
-  onStop?: (() => Promise<{ problem: string | null; restoreText: string | null; lostAttachments?: string[] }>) | null;
+  onStop?: (() => Promise<{ problem: string | null; restoreText: string | null; lostAttachments?: string[]; restoredAttachments?: string[] }>) | null;
   /** Offer on-device dictation (the screen checks the device can). */
   dictation?: boolean;
   /** Text the input starts with (Siri "Ask <agent>"); never sent until the user taps Send. */
@@ -72,12 +72,21 @@ function listNames(names: string[]): string {
 }
 
 /** What the composer says after a Stop removed the user's question on the server. */
-export function stoppedNote(restoreText: string, lostAttachments: string[]): string {
-  if (lostAttachments.length === 0) return 'Stopped before an answer. Your message is back here to edit or send again.';
+export function stoppedNote(restoreText: string, lostAttachments: string[], restoredAttachments: string[] = []): string {
+  const hasText = restoreText.trim() !== '';
+  const noneBack = restoredAttachments.length === 0;
+  const subject = hasText
+    ? noneBack
+      ? 'Your message is'
+      : 'Your message and its files are'
+    : restoredAttachments.length === 1
+      ? 'Its file is'
+      : 'Its files are';
+  if (lostAttachments.length === 0) return `Stopped before an answer. ${subject} back here to edit or send again.`;
   const files = listNames(lostAttachments);
   const them = lostAttachments.length === 1 ? 'it' : 'them';
-  if (restoreText.trim() === '') return `Stopped before an answer. The message was removed; attach ${files} again to send ${them}.`;
-  return `Stopped before an answer. Your message is back here; attach ${files} again to send ${them}.`;
+  if (!hasText && noneBack) return `Stopped before an answer. The message was removed; attach ${files} again to send ${them}.`;
+  return `Stopped before an answer. ${subject} back here; attach ${files} again to send ${them}.`;
 }
 
 /** The "@" rows for a query: Everyone first, then names starting with it, then names containing it. */
@@ -156,13 +165,13 @@ export function Composer({
     setStopping(true);
     setError(null);
     onStop()
-      .then(({ problem, restoreText, lostAttachments = [] }) => {
+      .then(({ problem, restoreText, lostAttachments = [], restoredAttachments = [] }) => {
         if (restoreText !== null) {
           // The server removed the question with the stopped answer: hand it
           // back, unless the user has typed something new meanwhile. Its files
-          // cannot come back (the tray let go of them): name them.
+          // are back in the tray when the screen still held them; the rest are named.
           setText((current) => (current.trim() === '' ? restoreText : current));
-          setError(stoppedNote(restoreText, lostAttachments));
+          setError(stoppedNote(restoreText, lostAttachments, restoredAttachments));
           return;
         }
         setError(problem);

@@ -37,6 +37,13 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # Locally Expo writes expo-env.d.ts (git-ignored), which pulls in the
+      # web-widened style types: check that variant too so both agree (#30).
+      - name: Typecheck with Expo's env types
+        run: |
+          echo '/// <reference types="expo/types" />' > expo-env.d.ts
+          npm run typecheck
+
       - name: Lint
         run: npm run lint
 

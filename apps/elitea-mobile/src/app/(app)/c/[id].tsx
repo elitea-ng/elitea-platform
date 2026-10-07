@@ -36,7 +36,7 @@ import {
   type ChatAttachment,
   type ChatMessage,
 } from '@/features/chat/messageModel';
-import type { SendExtras } from '@/features/chat/useTurn';
+import type { SendExtras, StopResult } from '@/features/chat/useTurn';
 import { useMessageTraces } from '@/api/queries/messageTraces';
 import { ToolActivity } from '@/features/chat/ToolCalls';
 import { ToolDetailSheet } from '@/features/chat/ToolDetailSheet';
@@ -311,8 +311,26 @@ export default function ThreadScreen() {
     const uploaded = await tray.uploadAll();
     if (!uploaded.ok) return uploaded.error;
     const problem = await turn.send(text.trim() === '' ? ATTACHMENT_ONLY_TEXT : text, { mentions, attachments: uploaded.attachments });
-    if (problem === null) tray.clear(uploaded.ids);
+    // Held, not deleted: a Stop before any output removes the question, and
+    // its files then come back (stopWithFiles).
+    if (problem === null) tray.holdSent(uploaded.ids);
     return problem;
+  };
+  // The held files' answer settled with the question kept (an answer, a
+  // failure the retry re-sends with the stored files, a pause): let go of them.
+  const livePhase = turn.live?.turn.phase ?? null;
+  const liveStopped = turn.live?.turn.stopped ?? false;
+  useEffect(() => {
+    if (livePhase === 'failed' || livePhase === 'paused' || (livePhase === 'done' && !liveStopped)) tray.releaseSent();
+  }, [tray, livePhase, liveStopped]);
+  const stopWithFiles = async (): Promise<StopResult> => {
+    const result = await turn.stop();
+    if (result.restoreText !== null && result.lostAttachments.length > 0) {
+      const { restored, lost } = tray.restoreSent();
+      return { ...result, lostAttachments: lost, restoredAttachments: restored };
+    }
+    if (result.problem === null) tray.releaseSent();
+    return result;
   };
 
   // "#": find an agent, add it (pinned to its version) and address it (1.1, online).
@@ -650,7 +668,7 @@ export default function ThreadScreen() {
         allowEmptyText={trayItems.length > 0}
         leading={<AttachButton disabledReason={gateReason} onPick={(source) => void pickInto(source)} />}
         onSend={({ text, mentions }) => sendWithFiles(text, mentions)}
-        onStop={contract13 && online && turn.canStop ? turn.stop : null}
+        onStop={contract13 && online && turn.canStop ? stopWithFiles : null}
         dictation={dictation}
       />
     </KeyboardAvoidingView>

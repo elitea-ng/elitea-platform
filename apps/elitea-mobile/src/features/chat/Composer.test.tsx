@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 
-import { Composer, peopleSuggestions } from '@/features/chat/Composer';
+import { Composer, peopleSuggestions, stoppedNote } from '@/features/chat/Composer';
 
 // F5: a send that resolves to an error keeps the text; an accepted one clears it.
 describe('Composer with an async onSend', () => {
@@ -120,6 +120,27 @@ describe('Composer Stop', () => {
     await fireEvent.press(screen.getByRole('button', { name: 'Stop answer' }));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Stopped before an answer. The message was removed; attach scan.jpg again to send it.'));
     expect(screen.getByLabelText('Message').props.value).toBe('');
+  });
+
+  it('files the screen put back in the tray are not asked for again (#29)', async () => {
+    const onStop = jest.fn(async () => ({
+      problem: null,
+      restoreText: 'see attached',
+      lostAttachments: [],
+      restoredAttachments: ['report.pdf', 'chart.png'],
+    }));
+    await render(<Composer busy onSend={() => null} onStop={onStop} />);
+    await fireEvent.press(screen.getByRole('button', { name: 'Stop answer' }));
+    await waitFor(() => expect(screen.getByLabelText('Message').props.value).toBe('see attached'));
+    expect(screen.getByRole('alert')).toHaveTextContent('Stopped before an answer. Your message and its files are back here to edit or send again.');
+  });
+
+  it.each([
+    ['an attachment-only message, all back', '', [], ['scan.jpg'], 'Stopped before an answer. Its file is back here to edit or send again.'],
+    ['an attachment-only message, one swept', '', ['b.png'], ['a.pdf'], 'Stopped before an answer. Its file is back here; attach b.png again to send it.'],
+    ['text and files, one over the limit', 'q', ['c.txt'], ['a.pdf', 'b.png'], 'Stopped before an answer. Your message and its files are back here; attach c.txt again to send it.'],
+  ])('%s', (_label, text, lost, restored, expected) => {
+    expect(stoppedNote(text, lost, restored)).toBe(expected);
   });
 
   it('never overwrites what the user typed meanwhile', async () => {

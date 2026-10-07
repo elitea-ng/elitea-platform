@@ -1,4 +1,4 @@
-import { Image, StyleSheet, View, type ImageSourcePropType, type StyleProp, type ViewStyle } from 'react-native';
+import { Image, StyleSheet, View, type ImageSourcePropType, type ViewProps } from 'react-native';
 
 import { useDesign } from '@/design/DesignProvider';
 import { colors as zefirColors } from '@/design/tokens';
@@ -66,7 +66,8 @@ export function Mascot({
   size?: number;
   label?: string;
   decorative?: boolean;
-  style?: StyleProp<ViewStyle>;
+  /** `View`'s own style type: the web-widened `ViewStyle` (expo/types) does not fit it (#30). */
+  style?: ViewProps['style'];
   testID?: string;
 }) {
   const { colors, scheme } = useDesign();

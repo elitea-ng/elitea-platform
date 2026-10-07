@@ -246,3 +246,76 @@ describe('attachmentGate', () => {
     expect(attachmentGate(input)).toBe(expected);
   });
 });
+
+describe('AttachmentTray: the sent files of a stopped question (#29)', () => {
+  async function sent(over: Partial<TrayDeps> = {}) {
+    const picks: string[] = [];
+    const made = makeTray({ discardPicked: (uri) => picks.push(uri), ...over });
+    made.tray.add([picked('report.pdf'), picked('chart.png')]);
+    await flush();
+    const result = await made.tray.uploadAll();
+    if (!result.ok) throw new Error(result.error);
+    made.tray.holdSent(result.ids);
+    return { ...made, picks };
+  }
+
+  it('holds the sent files out of the tray without deleting their copies', async () => {
+    const { tray, discarded, picks } = await sent();
+    expect(tray.getSnapshot()).toEqual([]);
+    expect(discarded).toEqual([]);
+    expect(picks).toEqual([]);
+  });
+
+  it('puts them back ready to upload again when the question was removed', async () => {
+    const { tray, uploads, discarded } = await sent();
+    expect(tray.restoreSent()).toEqual({ restored: ['report.pdf', 'chart.png'], lost: [] });
+    expect(tray.getSnapshot().map((i) => [i.name, i.state, i.filepath])).toEqual([
+      ['report.pdf', 'ready', null],
+      ['chart.png', 'ready', null],
+    ]);
+    expect(discarded).toEqual([]);
+    // The resend uploads them again (the removed message's upload is not reused).
+    const again = await tray.uploadAll();
+    expect(again.ok).toBe(true);
+    expect(uploads).toEqual(['report.pdf-0000', 'chart.png-0000', 'report.pdf-0000', 'chart.png-0000']);
+    // Nothing is held any more: a second restore puts nothing back.
+    tray.clear((again as { ids: string[] }).ids);
+    expect(tray.restoreSent()).toEqual({ restored: [], lost: [] });
+  });
+
+  it('deletes the copies once the answer settled with the question kept', async () => {
+    const { tray, discarded, picks } = await sent();
+    tray.releaseSent();
+    expect(discarded).toEqual(['file:///cache/chart.png.jpg']);
+    expect(picks).toEqual(['file:///p/report.pdf', 'file:///p/chart.png']);
+    expect(tray.restoreSent()).toEqual({ restored: [], lost: [] });
+  });
+
+  it('reports a file whose local copy was swept as lost', async () => {
+    const { tray } = await sent({ exists: (uri) => !uri.includes('chart') });
+    expect(tray.restoreSent()).toEqual({ restored: ['report.pdf'], lost: ['chart.png'] });
+    expect(tray.getSnapshot().map((i) => i.name)).toEqual(['report.pdf']);
+  });
+
+  it('keeps files picked meanwhile first and restores only what fits the limit', async () => {
+    const { tray, picks } = await sent({ limits: { ...attachmentLimits(null), maxFiles: 2 } });
+    tray.add([picked('new.txt')]);
+    await flush();
+    expect(tray.restoreSent()).toEqual({ restored: ['report.pdf'], lost: ['chart.png'] });
+    expect(tray.getSnapshot().map((i) => i.name)).toEqual(['new.txt', 'report.pdf']);
+    expect(picks).toEqual(['file:///p/chart.png']);
+  });
+
+  it('lets go of held files when the next message is sent or the thread goes', async () => {
+    const { tray, picks } = await sent();
+    tray.add([picked('next.pdf')]);
+    await flush();
+    const next = await tray.uploadAll();
+    if (!next.ok) throw new Error(next.error);
+    tray.holdSent(next.ids);
+    expect(picks).toEqual(['file:///p/report.pdf', 'file:///p/chart.png']);
+    tray.clear();
+    expect(picks).toEqual(['file:///p/report.pdf', 'file:///p/chart.png', 'file:///p/next.pdf']);
+    expect(tray.restoreSent()).toEqual({ restored: [], lost: [] });
+  });
+});

@@ -108,11 +108,18 @@ export interface StopResult {
   problem: string | null;
   restoreText: string | null;
   /**
-   * The names of the files that went with a removed question: they were
-   * uploaded for it and the tray let go of them, so the composer asks for
-   * them to be attached again. Empty otherwise.
+   * The names of the files that went with a removed question. The screen
+   * puts back the ones the tray still holds (`restoredAttachments`) and
+   * leaves here only those the composer must ask to attach again. Empty
+   * otherwise.
    */
   lostAttachments: string[];
+  /**
+   * The names of the files the screen put back in the tray with the removed
+   * question (it kept their local copies until the answer settled, #29);
+   * `lostAttachments` then names only the ones it could not.
+   */
+  restoredAttachments?: string[];
 }
 
 /** The text a message with files and no words is sent with (the server needs some). */
