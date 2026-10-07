@@ -75,7 +75,9 @@ test.describe('Inventory ask', () => {
     await expect(answer).toBeVisible({ timeout: 90_000 });
     // The provider echoed the question back INSIDE the answer, so this rules
     // out a bubble rendered from the composer's own text.
-    await expect(answer).toContainText(`Answer to "${QUESTION}"`);
+    // Python's repr of the question (single quotes), as every Inventory
+    // fixture runner writes it; the Go runner wrote Go's %q until #1108.
+    await expect(answer).toContainText(`Answer to '${QUESTION}'`);
     // …and named what it matched, by entity name and file path — values that
     // exist only in the graph the provider read.
     await expect(answer).toContainText('CheckoutService');
