@@ -1,0 +1,458 @@
+{
+  "ask": [
+    {
+      "name": "search_symbols",
+      "description": "Search for code symbols by name or keywords. Returns compact summaries (no source code). This is the primary discovery tool. Use it to find relevant classes, functions,\nand constants, then use get_code to read the ones you need.",
+      "parameters": {
+        "properties": {
+          "file_prefix": {
+            "default": "",
+            "description": "Optional filter by file path prefix (e.g. 'src/auth')",
+            "type": "string"
+          },
+          "k": {
+            "default": 20,
+            "description": "Maximum number of results (default 20)",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Search query (symbol name, concept, or keywords)",
+            "type": "string"
+          },
+          "symbol_type": {
+            "default": "",
+            "description": "Optional filter by type: class, function, constant, interface, etc.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_relationships_tool",
+      "description": "Get relationships for a code symbol. Returns compact edge list (no source code). Use this after search_symbols to understand how a symbol connects to the codebase.",
+      "parameters": {
+        "properties": {
+          "direction": {
+            "default": "both",
+            "description": "'both', 'outgoing', or 'incoming'",
+            "type": "string"
+          },
+          "max_depth": {
+            "default": 2,
+            "description": "How many hops to traverse (default 2)",
+            "type": "integer"
+          },
+          "symbol_name": {
+            "description": "Name of the symbol to analyze (e.g. \"AuthService\", \"login\")",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol_name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_code",
+      "description": "Retrieve full source code for a specific symbol. Use sparingly — read only what you need. Call search_symbols first to discover symbols, then get_code for the 3-5 most\nrelevant ones.",
+      "parameters": {
+        "properties": {
+          "max_lines": {
+            "default": 200,
+            "description": "Maximum lines of source to return (default 200)",
+            "type": "integer"
+          },
+          "symbol_name": {
+            "description": "Exact symbol name from search_symbols results",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol_name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "search_docs",
+      "description": "Search documentation (README, guides, comments) — NOT code symbols. Use this when the question is about project documentation, configuration,\nor high-level architecture described in markdown/text files.",
+      "parameters": {
+        "properties": {
+          "k": {
+            "default": 5,
+            "description": "Maximum number of document chunks to return (default 5)",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Search query for documentation content",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "query_graph",
+      "description": "Execute a structured JQL query against the code graph. Use this for precise, multi-filter searches when you know what kind of\nsymbol you're looking for. Combines type, layer, path, name, relationship,\nand connection count filters in a single expression. Syntax: field:value clauses separated by spaces (implicit AND).\n- type:class          — filter by symbol type (class, function, method, interface, etc.)\n- layer:core_type     — filter by architectural layer (core_type, public_api, entry_point, internal, infrastructure, constant)\n- file:src/auth/*     — filter by file path (glob patterns supported)\n- name:AuthService    — filter by symbol name (glob patterns supported)\n- text:authentication — full-text search across names, docstrings, code\n- related:\"BaseClass\" — filter to symbols connected to a specific symbol\n- dir:outgoing        — direction for related filter (outgoing, incoming, both)\n- has_rel:inheritance — filter to symbols with a specific relationship type.\n  Common types: calls, inheritance, implementation, composition, aggregation,\n  imports, exports, defines, contains, references, creates, instantiates,\n  decorates, annotates, overrides, uses, uses_type, reads, writes,\n  defines_body, specializes, captures, alias_of, assigns, returns, parameter.\n  Aliases accepted: inherits→inheritance, extends→inheritance,\n  implements→implementation, invokes→calls, composes→composition\n- connections:>10     — filter by connection count (>, <, >=, <=)\n- limit:30            — maximum number of results (default 20) Examples:\n    type:class file:src/auth/*\n    related:\"AuthService\" dir:outgoing has_rel:calls\n    type:function connections:>5 limit:10\n    layer:core_type text:handler",
+      "parameters": {
+        "properties": {
+          "expression": {
+            "description": "JQL query expression with field:value clauses",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expression"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "think",
+      "description": "Strategic reflection tool for analyzing findings and planning next steps. Use this to:\n- Analyze what you've learned so far\n- Identify gaps in your understanding\n- Plan your next research steps\n- Synthesize information from multiple sources\n- Decide if you have enough information to answer the question This makes your reasoning visible and helps organize research.",
+      "parameters": {
+        "properties": {
+          "reflection": {
+            "description": "Your full analysis, observations, or reasoning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reflection"
+        ],
+        "type": "object"
+      }
+    }
+  ],
+  "deep_research": [
+    {
+      "name": "ls",
+      "description": "Lists all files in a directory.\n\nThis is useful for exploring the filesystem and finding the right file to read or edit.\nYou should almost ALWAYS use this tool before using the read_file or edit_file tools.",
+      "parameters": {
+        "properties": {
+          "path": {
+            "description": "Absolute path to the directory to list. Must be absolute, not relative.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "read_file",
+      "description": "Reads a file from the filesystem. Assume any path the user provides is valid; reading a missing file returns an error.\n\nUsage:\n- By default, it reads up to 100 lines starting from the beginning of the file. Use `offset`/`limit` to page through large files instead of reading them whole.\n- Results are returned with line numbers starting at `offset` + 1 (1 by default), then two spaces, then the source line. Never include these line-number prefixes when editing.\n- Lines over 5,000 characters are split with continuation markers (e.g. 5.1, 5.2); `limit` counts source lines, so continuation rows do not consume the budget.\n- Speculatively batch multiple `read_file` calls in one response when several files may be useful.\n- An empty file returns a system-reminder warning in place of contents.\n- Large tool results may be offloaded to a file; the tool message gives the path. Read that path here, paging with `offset`/`limit`.\n- Images (`.png`, `.jpg`, etc.), audio, video, and PDFs return multimodal content blocks (https://docs.langchain.com/oss/python/langchain/messages#multimodal).\n- For images and PDFs, pagination via `offset`/`limit` is text-only - supply `file_path` only\n- Always read a file before editing it.",
+      "parameters": {
+        "properties": {
+          "file_path": {
+            "description": "Absolute path to the file to read. Must be absolute, not relative.",
+            "type": "string"
+          },
+          "limit": {
+            "default": 100,
+            "description": "Maximum number of lines to read. Use for pagination of large files.",
+            "type": "integer"
+          },
+          "offset": {
+            "default": 0,
+            "description": "Line number to start reading from (0-indexed). Use for pagination of large files.",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "write_file",
+      "description": "Writes content to a file. Creates the file if it does not exist; replaces it entirely if it does.\n\nUsage:\n- Use this tool when you intend to create a new file or replace the whole file. You do not need to read the file first.\n- Prefer to edit existing files (with the edit_file tool) over creating new ones when possible.",
+      "parameters": {
+        "properties": {
+          "content": {
+            "description": "The text content to write to the file. This parameter is required.",
+            "type": "string"
+          },
+          "file_path": {
+            "description": "Absolute path where the file should be written. Must be absolute, not relative.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_path",
+          "content"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "edit_file",
+      "description": "Performs exact string replacements in files.\n\nUsage:\n- You must read the file before editing; this tool errors otherwise.\n- Preserve the exact indentation from the read output, and never include line-number prefixes in old_string or new_string.\n- Prefer editing an existing file over creating a new one.\n- Only use emojis if the user explicitly requests it.",
+      "parameters": {
+        "properties": {
+          "file_path": {
+            "description": "Absolute path to the file to edit. Must be absolute, not relative.",
+            "type": "string"
+          },
+          "new_string": {
+            "description": "The text to replace old_string with. Must be different from old_string.",
+            "type": "string"
+          },
+          "old_string": {
+            "description": "The exact text to find and replace. Must be unique in the file unless replace_all is True.",
+            "type": "string"
+          },
+          "replace_all": {
+            "default": false,
+            "description": "If True, replace all occurrences of old_string. If False (default), old_string must be unique.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "file_path",
+          "old_string",
+          "new_string"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "delete",
+      "description": "Deletes a file or directory from the filesystem.\n\nUsage:\n- Permanently removes the file or directory at the given absolute path.\n- Deleting a directory removes it and everything inside it, recursively. Prefer\n  deleting a directory in one call over deleting each file individually.\n- This cannot be undone, so only delete paths you are sure are no longer needed.",
+      "parameters": {
+        "properties": {
+          "file_path": {
+            "description": "Absolute path to the file to delete. Must be absolute, not relative.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "file_path"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "glob",
+      "description": "Find files matching a glob pattern, returning absolute paths.\n\nSupports `*` (any characters within a path segment), `**` (any directories), `?` (single character), `[abc]` (one character from a set), and `{a,b}` (alternatives), e.g. `*.py`, `src/**/*.py`, `*.{yml,yaml}`.\n\nA pattern without `/` matches the file name at any depth under the search root (`*.py` matches `src/app/main.py`). A pattern containing `/` matches the search-root-relative path (`src/**/*.py`). A leading `/` anchors to the search root (`/*.py` matches only top-level Python files).\n\nLeading-dot names are only matched when the pattern segment itself starts with `.` (use `.env`, or `.github/**/*.yml`). Because `**` will not descend into dot-directories, the bare form `*.yml` is *broader* than `**/*.yml` and is usually what you want.",
+      "parameters": {
+        "properties": {
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Base directory to search from. Defaults to the backend's default root."
+          },
+          "pattern": {
+            "description": "Glob pattern to match files (e.g., '*.py', '**/*.py', '/subdir/**/*.md'). A pattern without '/' matches the file name at any depth; a pattern containing '/' matches the search-root-relative path; a leading '/' anchors to the search root ('/*.py' matches only top-level files). Leading-dot names are excluded unless the pattern segment starts with '.', so prefer the bare form '*.py' over '**/*.py' -- '**' will not descend into dot-directories like '.github'.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "grep",
+      "description": "Search for a LITERAL text pattern across files (NOT regex).\n\nThe pattern is matched verbatim: regex metacharacters are ordinary characters, not operators. To match any of several strings, run a separate grep for each; `grep(pattern=\"foo|bar\")` searches for the literal text \"foo|bar\", and `.*` or `\\.` match those characters literally.\n\nReturns matching files or content per `output_mode`. Offloaded large tool results live under the artifacts root (`/large_tool_results/` by default); grep that directory to search them when you do not know the exact path.",
+      "parameters": {
+        "properties": {
+          "glob": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Glob pattern (NOT regex) limiting which files are searched (e.g. '*.py', '*.ts'). A pattern without '/' matches the file name at any depth; a pattern containing '/' matches the search-root-relative path (e.g. 'src/**/*.py'). This is an in-tool file filter, not a call to the separate glob tool. Brace expansion (e.g. '*.{ts,tsx}') is not supported on all backends; run a separate search per extension for reliable results."
+          },
+          "max_count": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional cap on the total number of matches returned across all files. Leave unset to use the configured default. When the cap is hit, results are truncated and a note says so; narrow the pattern or path to see the rest."
+          },
+          "output_mode": {
+            "default": "files_with_matches",
+            "description": "Shape of the returned text. 'files_with_matches' (default): newline-separated matching file paths. 'content': matching lines grouped by file under a '<path>:' header, each line indented and formatted '<line_number>: <line text>' (only the matched line, no surrounding context). 'count': one '<path>: <match_count>' line per file.",
+            "enum": [
+              "files_with_matches",
+              "content",
+              "count"
+            ],
+            "type": "string"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Directory to search in. Defaults to current working directory."
+          },
+          "pattern": {
+            "description": "Text pattern to search for (literal string, not regex).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pattern"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "write_todos",
+      "description": "Use this tool to create and manage a structured task list for your current work session. This helps you track progress and organize complex tasks.\n\nOnly use this tool if you think it will be helpful in staying organized. If the user's request is trivial and takes less than 3 steps, it is better to NOT use this tool and just do the task directly.\n\n## When to Use This Tool\n\nUse this tool in these scenarios:\n\n1. Complex multi-step tasks - When a task requires 3 or more distinct steps or actions\n2. Non-trivial and complex tasks - Tasks that require careful planning or multiple operations\n3. User explicitly requests todo list - When the user directly asks you to use the todo list\n4. User provides multiple tasks - When users provide a list of things to be done (numbered or comma-separated)\n5. The plan may need future revisions or updates based on results from the first few steps\n\n## How to Use This Tool\n\n1. When you start working on a task - Mark it as in_progress BEFORE beginning work.\n2. After completing a task - Mark it as completed and add any new follow-up tasks discovered during implementation.\n3. You can also update future tasks, such as deleting them if they are no longer necessary, or adding new tasks that are necessary. Don't change previously completed tasks.\n4. You can make several updates to the todo list at once. For example, when you complete a task, you can mark the next task you need to start as in_progress.\n\n## When NOT to Use This Tool\n\nIt is important to skip using this tool when:\n1. There is only a single, straightforward task\n2. The task is trivial and tracking it provides no benefit\n3. The task can be completed in less than 3 trivial steps\n4. The task is purely conversational or informational\n\n## Task States and Management\n\n1. **Task States**: Use these states to track progress:\n    - pending: Task not yet started\n    - in_progress: Currently working on (you can have multiple tasks in_progress at a time if they are not related to each other and can be run in parallel)\n    - completed: Task finished successfully\n\n2. **Task Management**:\n    - Update task status in real-time as you work\n    - Mark tasks complete IMMEDIATELY after finishing (don't batch completions)\n    - Complete current tasks before starting new ones\n    - Remove tasks that are no longer relevant from the list entirely\n    - IMPORTANT: When you write this todo list, you should mark your first task (or tasks) as in_progress immediately!.\n    - IMPORTANT: Unless all tasks are completed, you should always have at least one task in_progress.\n\n3. **Task Completion Requirements**:\n    - ONLY mark a task as completed when you have FULLY accomplished it\n    - If you encounter errors, blockers, or cannot finish, keep the task as in_progress\n    - When blocked, create a new task describing what needs to be resolved\n    - Never mark a task as completed if:\n        - There are unresolved issues or errors\n        - Work is partial or incomplete\n        - You encountered blockers that prevent completion\n        - You couldn't find necessary resources or dependencies\n        - Quality standards haven't been met\n\n4. **Task Breakdown**:\n    - Create specific, actionable items\n    - Break complex tasks into smaller, manageable steps\n    - Use clear, descriptive task names\n\nBeing proactive with task management ensures you complete all requirements successfully\nRemember: If you only need to make a few tool calls to complete a task, and it is clear what you need to do, it is better to just do the task directly and NOT call this tool at all.\n\n## When You Finish\n\n`write_todos` tracks your work; it does not deliver the answer. Whatever the user asked for — computations, summaries, comparisons, data — must appear as text content in a message after your final `write_todos` call. Marking the last todo complete is not itself an answer to the user.",
+      "parameters": {
+        "properties": {
+          "todos": {
+            "items": {
+              "description": "A single todo item with content and status.",
+              "properties": {
+                "content": {
+                  "type": "string"
+                },
+                "status": {
+                  "enum": [
+                    "pending",
+                    "in_progress",
+                    "completed"
+                  ],
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content",
+                "status"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "todos"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "search_codebase",
+      "description": "Search the repository codebase for relevant code, classes, functions, and documentation. Uses hybrid search: vector store (semantic, capped at 3 doc results)\n+ code graph FTS5 (full-text, up to k results).\nReturns actual code symbols even when docs are separated from code.",
+      "parameters": {
+        "properties": {
+          "k": {
+            "default": 10,
+            "description": "Maximum number of results after reranking (default 10)",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Search query describing what you're looking for",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "get_symbol_relationships",
+      "description": "Get relationships for a code symbol (class, function, module). Use this to understand how a symbol connects to other parts of the codebase:\n- What classes it inherits from or implements\n- What functions it calls or is called by\n- What modules depend on it",
+      "parameters": {
+        "properties": {
+          "max_depth": {
+            "default": 2,
+            "description": "How many relationship levels to traverse (default 2)",
+            "type": "integer"
+          },
+          "symbol_name": {
+            "description": "Name of the symbol to analyze (e.g., \"AuthService\", \"login\")",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol_name"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "search_graph",
+      "description": "Search for code symbols and return them with their graph relationships. Combines FTS5 full-text search with graph traversal to return rich context:\neach matched symbol comes with its immediate neighbors (callers, callees,\nparent classes, implementations, etc.). Use this when you need to understand HOW a symbol fits into the codebase,\nnot just WHAT it contains.  For pure content search, use search_codebase.",
+      "parameters": {
+        "properties": {
+          "include_neighbors": {
+            "default": true,
+            "description": "Whether to include 1-hop graph neighbors (default True)",
+            "type": "boolean"
+          },
+          "k": {
+            "default": 5,
+            "description": "Maximum number of primary symbols to return (default 5)",
+            "type": "integer"
+          },
+          "query": {
+            "description": "Search query (symbol name, concept, or keywords)",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "think",
+      "description": "Strategic reflection tool for analyzing findings and planning next steps. Use this to:\n- Analyze what you've learned so far\n- Identify gaps in your understanding\n- Plan your next research steps\n- Synthesize information from multiple sources\n- Decide if you have enough information to answer the question This makes your reasoning visible and helps organize research.",
+      "parameters": {
+        "properties": {
+          "reflection": {
+            "description": "Your full analysis, observations, or reasoning",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reflection"
+        ],
+        "type": "object"
+      }
+    }
+  ]
+}

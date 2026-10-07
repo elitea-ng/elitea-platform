@@ -1,0 +1,30 @@
+# Custom Tool Guidelines
+
+## `search_codebase` - Semantic Code Search
+
+**Your primary research tool.** Returns semantically relevant code snippets.
+
+**Search patterns:**
+- Start broad: "authentication system" 
+- Then narrow: "token validation AuthService"
+- Use specific symbols found: "validateToken function"
+
+**Parallel search example:**
+If investigating auth, call these in parallel:
+- search_codebase("authentication login")
+- search_codebase("session management")
+- search_codebase("token validation")
+
+## `get_symbol_relationships` - Code Graph Analysis
+
+Use AFTER finding symbols via search to understand connections:
+- What calls this function?
+- What does this class inherit from?
+- What depends on this module?
+
+## `think` - Strategic Reflection
+
+**Use after tool calls** to briefly reflect (2-3 sentences max):
+- What did I find?
+- What's still missing?
+- Should I search more or synthesize?

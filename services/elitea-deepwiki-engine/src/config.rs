@@ -27,6 +27,12 @@ pub const DEFAULT_SCRATCH_PATH: &str = "/tmp/deepwiki";
 /// when a database is configured (the reconciliation is keyed by owner).
 pub const DEFAULT_BUILD_OWNER: &str = "elitea-deepwiki-engine";
 
+/// `ELITEA_DEEPWIKI_QUERY_POOL_SIZE`'s default: the database connections
+/// the in-process query tools share.
+pub const DEFAULT_QUERY_POOL_SIZE: u32 = 8;
+/// The largest `ELITEA_DEEPWIKI_QUERY_POOL_SIZE`.
+pub const MAX_QUERY_POOL_SIZE: u32 = 256;
+
 /// A database URL. It can carry a password, so its `Debug` form is
 /// redacted and nothing formats it.
 #[derive(Clone, PartialEq, Eq)]
@@ -182,6 +188,12 @@ pub struct Settings {
     pub model: ModelEnvSettings,
     /// The `generate_wiki` worker child's limits.
     pub worker: WorkerSettings,
+    /// `ELITEA_DEEPWIKI_QUERY_POOL_SIZE` (default 8, at most 256): the
+    /// connections of the pool that `ask`, `deep_research` and
+    /// `resolve_wiki` share in the native runner. A query waits for a free
+    /// connection (30 s), so this also caps their concurrent reads. The
+    /// clean-up of a killed worker's build has its own pool.
+    pub query_pool_size: u32,
 }
 
 /// What the environment decides about model calls; the invocation's
@@ -510,6 +522,12 @@ impl Settings {
         }
         let publish = publish_settings(&raw)?;
         let worker = worker_settings(&raw, cgroup_memory_max)?;
+        let query_pool_size = bounded_count(
+            &raw,
+            "QUERY_POOL_SIZE",
+            DEFAULT_QUERY_POOL_SIZE,
+            MAX_QUERY_POOL_SIZE,
+        )?;
         if runner == RunnerKind::Native {
             check_worker_fits(&worker)?;
         }
@@ -529,6 +547,7 @@ impl Settings {
             publish,
             model,
             worker,
+            query_pool_size,
         })
     }
 
@@ -664,6 +683,7 @@ mod tests {
         };
         assert_eq!(parsed.build_owner, "deepwiki-7f9c");
         assert_eq!(parsed.build_stale_after, Duration::from_mins(10));
+        assert_eq!(parsed.query_pool_size, DEFAULT_QUERY_POOL_SIZE);
         // The password never reaches a Debug form.
         assert!(!format!("{parsed:?}").contains("secret"));
         assert_eq!(
@@ -676,6 +696,21 @@ mod tests {
         ]);
         assert_eq!(owner.map(|s| s.build_owner), Ok("replica-a".to_owned()));
         assert!(settings(&[("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "0")]).is_err());
+    }
+
+    #[test]
+    fn the_query_pool_size_parses_strictly() {
+        let size = |value: &str| {
+            settings(&[("ELITEA_DEEPWIKI_QUERY_POOL_SIZE", value)]).map(|s| s.query_pool_size)
+        };
+        assert_eq!(size("16"), Ok(16));
+        assert_eq!(size(" 256 "), Ok(MAX_QUERY_POOL_SIZE));
+        for refused in ["0", "257", "-1", "eight"] {
+            assert!(
+                matches!(size(refused), Err(ConfigError(m)) if m.contains("QUERY_POOL_SIZE")),
+                "{refused}"
+            );
+        }
     }
 
     #[test]

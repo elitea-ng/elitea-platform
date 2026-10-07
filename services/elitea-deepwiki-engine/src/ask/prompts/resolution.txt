@@ -1,0 +1,9 @@
+Given the following question and list of available code repositories, determine which repository the question is most likely about.
+
+Question: {question}
+
+Available repositories:
+{wiki_list_text}
+
+Respond with ONLY the wiki_id (e.g., "owner--repo--branch") of the most relevant repository, or "NONE" if none are relevant.
+Do not include any explanation or other text.

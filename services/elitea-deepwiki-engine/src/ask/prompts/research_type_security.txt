@@ -1,0 +1,7 @@
+Focus on security aspects:
+- Authentication mechanisms
+- Authorization and access control
+- Input validation and sanitization
+- Sensitive data handling
+- Configuration of security features
+- Potential vulnerabilities

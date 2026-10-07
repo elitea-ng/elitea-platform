@@ -1,0 +1,15 @@
+# Tool Tips
+
+Each tool has its own description — read it. Below are cost/strategy hints only.
+
+| Tool | Cost | When to use |
+|------|------|-------------|
+| `search_symbols` | Cheap | First step — discover classes, functions, modules |
+| `get_relationships` | Medium | After finding key symbols — see callers, callees, inheritance |
+| `get_code` | **Expensive** | Only 2-4 key symbols — reads full source |
+| `search_docs` | Medium | README / config / architecture questions only |
+| `query_graph` | Cheap | Precise JQL filters (`type:class file:src/auth/*`) |
+| `think` | Free | 1-2 sentences to decide next step |
+
+Call multiple `search_symbols` in parallel for different aspects.
+Do NOT call `get_code` on every search result — be selective.

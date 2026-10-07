@@ -1,0 +1,18 @@
+{
+ "request": {
+  "max_completion_tokens": 4000,
+  "messages": [
+   {
+    "content": "Given the following question and list of available code repositories, determine which repository the question is most likely about.\n\nQuestion: Where are notes {stored}?\n\nAvailable repositories:\n- acme--notes--main: Notes - A notes service xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n- acme--other--main: None - \n- bare--id--main:  - \n\nRespond with ONLY the wiki_id (e.g., \"owner--repo--branch\") of the most relevant repository, or \"NONE\" if none are relevant.\nDo not include any explanation or other text.",
+    "role": "user"
+   }
+  ],
+  "model": "gpt-4o",
+  "stream": false,
+  "temperature": 0.0
+ },
+ "result": {
+  "success": true,
+  "wiki_id": "## Overview\n\nThe notes service stores notes in SQLite, ranks search results by term overlap, and authenticates writes with signed bearer tokens.\n\n```mermaid\nflowchart LR\n  api --> store\n  api --> auth\n```\n\nSee `notes/store.py` for persistence and `auth/tokens.py` for signing."
+ }
+}

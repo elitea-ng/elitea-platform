@@ -1,0 +1,4 @@
+Focus on understanding the system holistically:
+- How components interact
+- Key design decisions
+- Implementation patterns used

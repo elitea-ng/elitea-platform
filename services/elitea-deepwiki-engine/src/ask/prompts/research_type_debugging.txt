@@ -1,0 +1,6 @@
+Focus on problem investigation:
+- Error handling and logging
+- State management and data flow
+- Edge cases and race conditions
+- Dependencies and their behavior
+- Configuration and environment

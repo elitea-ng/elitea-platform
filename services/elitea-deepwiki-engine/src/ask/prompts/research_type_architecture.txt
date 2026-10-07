@@ -1,0 +1,6 @@
+Focus on system design:
+- Component boundaries and responsibilities
+- Communication patterns between modules
+- Data flow through the system
+- Scalability and performance considerations
+- Configuration and deployment aspects

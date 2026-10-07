@@ -9,7 +9,7 @@
 //!
 //! * [`Runner::Native`] — the Rust engine (ADR-0026): `generate_wiki` in a
 //!   worker child process ([`native`]); `ask`, `deep_research` and
-//!   `resolve_wiki` are refused until phase 6.
+//!   `resolve_wiki` in this process, over PostgreSQL.
 
 pub mod fixture;
 pub mod native;
@@ -170,9 +170,9 @@ pub const EXTRA_CONTEXT_PARAM: &str = "extra_context";
 /// both keys, so a request that came through the host arrives here with
 /// nothing left to do; the version key is dropped as the Python sidecar's
 /// `consume` drops it. A sidecar called directly with attachments still in
-/// place is REFUSED rather than silently answering without them: resolving
-/// them here needs the artifact client, which lands with the native `ask`
-/// (ADR-0026 phase 6).
+/// place is REFUSED rather than silently answering without them: the
+/// engine has no artifact client, and the host is the one place that
+/// resolves them.
 ///
 /// # Errors
 ///

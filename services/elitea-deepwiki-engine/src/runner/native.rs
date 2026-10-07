@@ -26,8 +26,10 @@
 //!    deleted, so a killed child leaves no staging rows (a published or
 //!    abandoned build is already gone and the delete is a no-op).
 //!
-//! `ask`, `deep_research` and `resolve_wiki` are refused until their ports
-//! land (ADR-0026 phase 6).
+//! `ask`, `deep_research` and `resolve_wiki` run IN this process, not in a
+//! worker: they are I/O-bound (model and database calls), read only
+//! PostgreSQL (ADR-0026 decision 5) and stop at every model and tool step
+//! ([`crate::ask`]).
 
 use super::{Context, prepare_arguments};
 use crate::cgroup::Cgroup;
@@ -89,8 +91,15 @@ pub struct WorkerCommand {
 pub struct NativeRunner {
     settings: Arc<Settings>,
     worker: Arc<WorkerCommand>,
-    /// For deleting the build of a child that was killed.
+    /// For deleting the build of a child that was killed. Its own pool, so
+    /// busy query tools never hold up a clean-up.
     pool: PgPool,
+    /// The query tools' reads ([`Settings::query_pool_size`] connections).
+    query_pool: PgPool,
+    /// The query tools' limits, read once at start. A value that is not a
+    /// whole number fails `ask` and `deep_research` (as Python's `int()`
+    /// did), never the start: `generate_wiki` does not read it.
+    query_limits: Result<crate::ask::Limits, EngineError>,
     /// This process's cgroup (v2), whose OOM-kill count explains a SIGKILL
     /// this runner did not send.
     cgroup: Option<Arc<Cgroup>>,
@@ -260,10 +269,18 @@ impl NativeRunner {
         })?;
         let pool =
             crate::storage::lazy_pool(url.expose(), 2).map_err(|e| ConfigError(e.to_string()))?;
+        let query_pool = crate::storage::lazy_pool(url.expose(), settings.query_pool_size)
+            .map_err(|e| ConfigError(e.to_string()))?;
+        let query_limits = crate::ask::Limits::from_env();
+        if let Err(error) = &query_limits {
+            tracing::warn!(error = %error.message, "ask and deep_research will fail until the setting is fixed");
+        }
         Ok(Self {
             settings: Arc::new(settings),
             worker: Arc::new(worker),
             pool,
+            query_pool,
+            query_limits,
             cgroup: Cgroup::discover().map(Arc::new),
         })
     }
@@ -273,6 +290,35 @@ impl NativeRunner {
     pub fn with_cgroup(mut self, cgroup: Option<Cgroup>) -> Self {
         self.cgroup = cgroup.map(Arc::new);
         self
+    }
+
+    /// `ask`, `deep_research` or `resolve_wiki`, in this process.
+    ///
+    /// No repository analysis is passed: the Python ask loaded it from the
+    /// analysis store on scratch, which a query replica does not have
+    /// (ADR-0026 decision 5); the README records it.
+    async fn query(
+        &self,
+        tool: &str,
+        arguments: &Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        let transport =
+            crate::llm::Transport::new(&crate::llm::TransportSettings::from(&self.settings.model))?;
+        // `resolve_wiki` reads no limit.
+        let limits = match &self.query_limits {
+            Ok(limits) => *limits,
+            Err(_) if tool == "resolve_wiki" => crate::ask::Limits::default(),
+            Err(error) => return Err(error.clone()),
+        };
+        let deps = crate::ask::QueryDeps {
+            pool: self.query_pool.clone(),
+            transport,
+            embedding_options: crate::llm::EmbeddingOptions::from(&self.settings.model),
+            limits,
+            clock: crate::ask::agent::Clock::System,
+        };
+        crate::ask::run_tool(tool, arguments, &deps, None, context).await
     }
 
     /// Run one tool.
@@ -287,10 +333,16 @@ impl NativeRunner {
         arguments: Map<String, Value>,
         context: &Context,
     ) -> Result<Value, EngineError> {
+        if crate::ask::QUERY_TOOLS.contains(&tool) {
+            let arguments = prepare_arguments(tool, arguments)?;
+            context.checkpoint()?;
+            return self.query(tool, &arguments, context).await;
+        }
         if tool != "generate_wiki" {
-            return Err(runtime(format!(
-                "{tool} is not supported by the native engine yet (ADR-0026 phase 6); run the fixture runner or the Python engine for it"
-            )));
+            return Err(EngineError::new(
+                ErrorType::Key,
+                format!("Unknown tool: {tool}"),
+            ));
         }
         let arguments = prepare_arguments(tool, arguments)?;
         context.checkpoint()?;
@@ -780,6 +832,41 @@ mod tests {
         (runner, root)
     }
 
+    #[tokio::test]
+    async fn the_query_tools_have_their_own_pool() {
+        let (runner, root) = scripted("#!/bin/sh\nexit 0\n");
+        assert_eq!(runner.pool.options().get_max_connections(), 2);
+        assert_eq!(
+            runner.query_pool.options().get_max_connections(),
+            crate::config::DEFAULT_QUERY_POOL_SIZE
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test]
+    async fn a_bad_query_limit_fails_only_the_agents() {
+        // The worker answers at once: generate_wiki does not read the
+        // query limits.
+        let (mut runner, root) = scripted("#!/bin/sh\necho '{\"result\": {\"ok\": true}}'\n");
+        let refused = EngineError::new(
+            ErrorType::Value,
+            "DEEPWIKI_ASK_MAX_ITERATIONS must be a whole number, got 'x'",
+        );
+        runner.query_limits = Err(refused.clone());
+        let (context, _receiver, _stop) = context();
+        for tool in ["ask", "deep_research"] {
+            let mut arguments = Map::new();
+            arguments.insert("question".to_owned(), Value::String("q".to_owned()));
+            let outcome = runner.run(tool, arguments, &context).await;
+            assert_eq!(outcome.err(), Some(refused.clone()), "{tool}");
+        }
+        let resolved = runner.run("resolve_wiki", Map::new(), &context).await;
+        assert_ne!(resolved.err(), Some(refused.clone()));
+        let generated = runner.run("generate_wiki", Map::new(), &context).await;
+        assert_ne!(generated.err(), Some(refused));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_worker_that_ignores_sigterm_is_killed_after_three_seconds() {
         // The worker ignores SIGTERM and never ends on its own.
@@ -967,16 +1054,81 @@ exit 0
     }
 
     #[tokio::test]
-    async fn the_query_tools_are_refused_until_their_port() {
-        let (runner, root) = scripted("#!/bin/sh\nexit 0\n");
+    async fn the_query_tools_run_in_process_and_never_spawn_a_worker() {
+        // A worker that would fail loudly if spawned. Each answer below is
+        // the query tool's own, reached in this process before any model
+        // or database call; a spawned worker would answer "ended without
+        // a result" instead.
+        let (runner, root) = scripted("#!/bin/sh\necho spawned >&2\nexit 7\n");
         let (context, _receiver, _stop) = context();
-        for tool in ["ask", "deep_research", "resolve_wiki"] {
-            let error = runner.run(tool, Map::new(), &context).await.err();
-            assert!(
-                error.is_some_and(|e| e.message.contains("not supported by the native engine yet")),
+        let run = |tool: &'static str, arguments: Value| {
+            let runner = runner.clone();
+            let context = context.clone();
+            async move {
+                let arguments = arguments.as_object().cloned().unwrap_or_default();
+                runner.run(tool, arguments, &context).await
+            }
+        };
+        let gateway = json!({"api_base": "http://127.0.0.1:1", "api_key": "k", "model_name": "m"});
+        for tool in ["ask", "deep_research"] {
+            // `parse_request`: an unsuccessful result.
+            let result = run(tool, json!({"question": "q"})).await;
+            assert_eq!(
+                result.ok(),
+                Some(json!({
+                    "success": false,
+                    "error": "No repository specified",
+                    "error_type": "ValueError",
+                    "error_category": "invalid_input",
+                })),
                 "{tool}"
             );
+            // The model settings: an engine error.
+            let refused = run(
+                tool,
+                json!({"question": "q", "repo_config": {"repository": "a/b"}}),
+            )
+            .await
+            .map_err(|e| (e.error_type, e.message));
+            assert_eq!(
+                refused,
+                Err((
+                    ErrorType::Value,
+                    "llm_settings.api_base is required".to_owned()
+                )),
+                "{tool}"
+            );
+            // The embedding model: an engine error.
+            let refused = run(
+                tool,
+                json!({"question": "q", "repo_config": {"repository": "a/b"},
+                       "llm_settings": gateway, "embedding_model": 5}),
+            )
+            .await
+            .map_err(|e| (e.error_type, e.message));
+            assert!(
+                matches!(&refused, Err((ErrorType::Value, m)) if m.starts_with("embedding_model must be")),
+                "{tool}: {refused:?}"
+            );
         }
+        // resolve_wiki: no wikis is NONE; wikis without a model a refusal.
+        let none = run("resolve_wiki", json!({"question": "q"})).await;
+        assert_eq!(none.ok(), Some(json!({"success": true, "wiki_id": "NONE"})));
+        let refused = run(
+            "resolve_wiki",
+            json!({"question": "q", "wikis": [{"wiki_id": "w"}]}),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        assert_eq!(refused["success"], json!(false));
+        assert!(
+            refused["error"]
+                .as_str()
+                .is_some_and(|m| m.starts_with("llm_settings carries no model_name")),
+            "{refused}"
+        );
+        let unknown = runner.run("list_wikis", Map::new(), &context).await.err();
+        assert_eq!(unknown.map(|e| e.error_type), Some(ErrorType::Key));
         let _ = std::fs::remove_dir_all(&root);
     }
 

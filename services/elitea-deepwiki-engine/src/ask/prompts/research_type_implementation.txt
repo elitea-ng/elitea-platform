@@ -1,0 +1,6 @@
+Focus on code details:
+- Specific functions and their logic
+- Data structures and algorithms
+- Error handling approaches
+- Edge cases and boundary conditions
+- Testing patterns
