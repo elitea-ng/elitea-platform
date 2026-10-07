@@ -314,6 +314,7 @@ export * from "./indexWriteRefusal.zod";
 export * from "./internalMcpPatStatus.zod";
 export * from "./invalidClientVersionError.zod";
 export * from "./invalidClientVersionResponse.zod";
+export * from "./invalidQueryParameterError.zod";
 export * from "./inventoryInvocationAccepted.zod";
 export * from "./inventoryInvocationStatus.zod";
 export * from "./inventoryInvokeRequest.zod";

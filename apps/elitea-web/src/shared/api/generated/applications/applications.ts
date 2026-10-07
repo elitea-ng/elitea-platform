@@ -106,6 +106,7 @@ import type {
   ImportWizardRequest,
   ImportWizardResponse,
   InvalidClientVersionResponse,
+  InvalidQueryParameterError,
   ListApplicationsParams,
   ListEvalDatasetsParams,
   ListEvalRunsParams,
@@ -4825,7 +4826,7 @@ export type listPublicApplicationsResponse200 = {
 };
 
 export type listPublicApplicationsResponse400 = {
-  data: InvalidClientVersionResponse;
+  data: InvalidQueryParameterError;
   status: 400;
 };
 
@@ -4873,10 +4874,10 @@ export const getListPublicApplicationsUrl = (
  * internal/api/v2/eliteacore/public_applications.go. A `sort_by`,
  * `sort_order`, `agents_type` or `statuses` value outside its allowlist,
  * or a `limit`/`offset` outside its range, is refused with 400 and a body
- * naming the parameter — it is never silently ignored. The 400 is NOT
- * declared as a response here: `eliteaFetch` throws on every non-2xx, so
- * this codebase keeps generated response types 200-only (see
- * apps/elitea-web/src/pages/agents/Latest.tsx).
+ * naming the parameter (InvalidQueryParameterError) — it is never
+ * silently ignored. A native client whose `X-Client-Version` does not
+ * parse gets the same status and the same `{error, error_description}`
+ * keys, with `error: invalid_client_version`.
  *
  * Trending (`trend_start_period`/`trend_end_period`) is the one pylon
  * parameter still missing here.
@@ -4906,7 +4907,7 @@ export const getListPublicApplicationsQueryKey = (
 
 export const getListPublicApplicationsQueryOptions = <
   TData = Awaited<ReturnType<typeof listPublicApplications>>,
-  TError = InvalidClientVersionResponse | ClientUpgradeRequiredResponse,
+  TError = InvalidQueryParameterError | ClientUpgradeRequiredResponse,
 >(
   params?: ListPublicApplicationsParams,
   options?: {
@@ -4941,11 +4942,11 @@ export type ListPublicApplicationsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listPublicApplications>>
 >;
 export type ListPublicApplicationsQueryError =
-  InvalidClientVersionResponse | ClientUpgradeRequiredResponse;
+  InvalidQueryParameterError | ClientUpgradeRequiredResponse;
 
 export function useListPublicApplications<
   TData = Awaited<ReturnType<typeof listPublicApplications>>,
-  TError = InvalidClientVersionResponse | ClientUpgradeRequiredResponse,
+  TError = InvalidQueryParameterError | ClientUpgradeRequiredResponse,
 >(
   params: undefined | ListPublicApplicationsParams,
   options: {
@@ -4972,7 +4973,7 @@ export function useListPublicApplications<
 };
 export function useListPublicApplications<
   TData = Awaited<ReturnType<typeof listPublicApplications>>,
-  TError = InvalidClientVersionResponse | ClientUpgradeRequiredResponse,
+  TError = InvalidQueryParameterError | ClientUpgradeRequiredResponse,
 >(
   params?: ListPublicApplicationsParams,
   options?: {
@@ -4999,7 +5000,7 @@ export function useListPublicApplications<
 };
 export function useListPublicApplications<
   TData = Awaited<ReturnType<typeof listPublicApplications>>,
-  TError = InvalidClientVersionResponse | ClientUpgradeRequiredResponse,
+  TError = InvalidQueryParameterError | ClientUpgradeRequiredResponse,
 >(
   params?: ListPublicApplicationsParams,
   options?: {
@@ -5022,7 +5023,7 @@ export function useListPublicApplications<
 
 export function useListPublicApplications<
   TData = Awaited<ReturnType<typeof listPublicApplications>>,
-  TError = InvalidClientVersionResponse | ClientUpgradeRequiredResponse,
+  TError = InvalidQueryParameterError | ClientUpgradeRequiredResponse,
 >(
   params?: ListPublicApplicationsParams,
   options?: {
