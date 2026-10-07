@@ -63,4 +63,8 @@ export function startTurnActivities(): void {
 }
 
 // Nothing of a workspace outlives its session or a switch on the lock screen.
-registerWipeHook('live_activities', () => controller?.endAll());
+// Early (before the capped server revoke): the lock screen and the Dynamic
+// Island are state the OS keeps outside the app, so a kill during "Signing
+// out..." must not leave a conversation title there (QA-SEC-1, like the widget
+// snapshot and the Siri catalog). endAll is synchronous and local.
+registerWipeHook('live_activities', () => controller?.endAll(), { early: true });

@@ -54,7 +54,9 @@ requested (push-updated activities are #12).
 - Suspended or locked app: marked **approximate** ("Open the app for the latest") and
   stale at once; back to the live state on return.
 - Ended at once when a turn leaves memory while still running, on a wipe or switch,
-  and at the next launch for anything a killed process left.
+  and at the next launch for anything a killed process left. A sign-out ends them
+  before the server revoke (an early wipe hook, like the widget snapshot and the Siri
+  catalog), so a kill during "Signing out..." leaves no title on the lock screen.
 
 ## Siri and Shortcuts
 
@@ -67,13 +69,24 @@ app's own lock still covers the screen the intent opens.
 | Intent | Phrase examples | Opens |
 |---|---|---|
 | New Chat (`NewChatIntent`, optional agent) | "New chat in Agent Zefir", "New chat with <agent> in Agent Zefir" | `/new`; with an agent of the selected project, that agent's conversation once the app is unlocked |
-| Ask Agent (`AskAgentIntent`, optional agent, question) | "Ask Agent Zefir", "Ask <agent> in Agent Zefir" | as New Chat, with the question in the composer; **never sent** without the user tapping Send |
+| Ask Agent (`AskAgentIntent`, optional agent, optional question) | "Ask Agent Zefir", "Ask <agent> in Agent Zefir" | as New Chat; a question typed into a Shortcut goes in the composer, **never sent** without the user tapping Send. By voice the composer opens empty: Siri never asks for the question (see below) |
 | Open Notifications | "Open Agent Zefir notifications" | `/notifications` |
 
 `AgentEntity` ids are `<workspace slot>:<project id>:<agent id>`: a shortcut saved for
 one workspace or project opens the picker of the active one instead of another
 workspace's agent. Invocations are removed from the queue **before** their screen
 opens (at most once: a replay must not start a second conversation).
+**Siri never collects the question.** A required text parameter, or a
+`requestValueDialog`, makes Siri ask "What do you want to ask?" and transcribe the
+answer with its own recogniser, which can run on Apple's servers depending on the
+device, the language and the Siri settings, with no workspace control. The app's
+speech is on the device only (docs/design.md), so the question is optional, has no
+dialog, and only a value the user put in a Shortcut fills it
+(`scripts/app-intents-no-siri-dictation.test.mjs` holds every intent to this).
+Residual: a user-built Shortcut that dictates its own text (a "Dictate Text" action,
+or "Ask Each Time" run through Siri) uses Apple's recogniser by the user's own
+choice, and typed Shortcut text passes through the Shortcuts app.
+
 The agent and the question reach `/new` (and the thread's composer) through an
 in-memory hand-over (`intentHandoff.ts`) under a random one-time id, never as route
 params: `agentzefir://new?agent=…&prefill=…` from a web page or another app opens the

@@ -275,7 +275,8 @@ server it is hidden, not broken.
 - **Speech, on the device only.** Dictation uses expo-speech-recognition with
   `requiresOnDeviceRecognition`: no audio leaves the device, and a device or language
   without an on-device model has no dictation rather than a server fallback. Apple's
-  server recogniser is never used; `allow_cloud_stt` is reserved for the workspace's own
+  server recogniser is never used, Siri included: no App Intent makes Siri ask for
+  text ("Ask Agent" opens an empty composer by voice; docs/native-surfaces.md); `allow_cloud_stt` is reserved for the workspace's own
   transcription model (later). Read aloud uses expo-speech (the device synthesiser):
   Markdown marks are dropped and code blocks announced, one reading at a time, stopped with
   the thread and the session. Each speech module has one facade (lint). The on-device

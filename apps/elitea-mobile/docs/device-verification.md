@@ -322,13 +322,15 @@ See [native-surfaces.md](native-surfaces.md) for what each surface may show.
       `allow_system_surfaces` the headline is the conversation's title; with either off
       (both are by default) it is generic. Never message text.
 - [ ] **Live Activity cleanup.** Force-quit mid-answer and relaunch: the old activity is
-      gone. Log out mid-answer: it is gone at once.
+      gone. Log out mid-answer, or with an
+      answer waiting for approval: it is gone at once, while "Signing out..." still shows.
 - [ ] **Siri: New chat.** "New chat in Agent Zefir" opens the agent picker. With
       `allow_system_surfaces` on, "New chat with <agent> in Agent Zefir" offers the
       selected project's agents and opens that agent's new conversation after unlock.
-- [ ] **Siri: Ask.** "Ask <agent> in Agent Zefir" → dictate a question: the app opens with
-      the question in the composer; nothing is sent until you tap Send. Siri reads nothing
-      back.
+- [ ] **Siri: Ask.** "Ask <agent> in Agent Zefir": Siri does NOT ask "What do you want to
+      ask?"; the app opens that agent's new chat with an empty composer. In Shortcuts, an
+      Ask Agent action with a typed question opens with that question in the composer;
+      nothing is sent until you tap Send. Siri reads nothing back.
 - [ ] **Siri: Open notifications.** Opens the inbox, behind the app lock when it is due.
 - [ ] **Siri while locked.** With the device locked, Siri asks to unlock the device first.
 - [ ] **Siri after logout.** Log out: Shortcuts offers no agent names any more; a shortcut

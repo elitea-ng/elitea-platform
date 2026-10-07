@@ -26,6 +26,10 @@ describe('routeIntent (open-app intents only)', () => {
     expect(routeIntent(inv('askAgent', { text: '   ' }), WS)).toEqual({ kind: 'newChat', agent: null, prefill: null });
   });
 
+  it('Ask <agent> by voice carries no question (Siri never collects one): an empty composer for that agent', () => {
+    expect(routeIntent(inv('askAgent', { agentId: `${WS}:7:3` }), WS)).toEqual({ kind: 'newChat', agent: { projectId: 7, agentId: 3 }, prefill: null });
+  });
+
   it('discards what this build does not know', () => {
     expect(routeIntent(inv('deleteEverything'), WS)).toEqual({ kind: 'discard' });
   });

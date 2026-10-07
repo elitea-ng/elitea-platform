@@ -28,10 +28,16 @@ struct NewChatIntent: AppIntent {
   }
 }
 
+// "Ask Agent" never makes Siri collect the question: a required String (or a
+// requestValueDialog) has Siri ask "What do you want to ask?" and transcribe the spoken
+// answer with its own recogniser, which may run on Apple's servers, and the app's speech
+// is on the device only (src/features/speech/dictation.ts). By voice it opens the composer
+// empty for the user to type or dictate (on the device); a question the user typed into a
+// Shortcut still reaches the composer (scripts/app-intents-no-siri-dictation.test.mjs).
 struct AskAgentIntent: AppIntent {
   static let title: LocalizedStringResource = "Ask Agent"
   static let description = IntentDescription(
-    "Opens Agent Zefir with your question in the composer. Nothing is sent until you tap Send."
+    "Opens Agent Zefir on a new chat, with the question from your shortcut in the composer. Nothing is sent until you tap Send."
   )
   static let openAppWhenRun: Bool = true
   static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
@@ -39,8 +45,8 @@ struct AskAgentIntent: AppIntent {
   @Parameter(title: "Agent")
   var agent: AgentEntity?
 
-  @Parameter(title: "Question", requestValueDialog: "What do you want to ask?")
-  var question: String
+  @Parameter(title: "Question", description: "Typed text for the composer. Siri never asks for it.")
+  var question: String?
 
   static var parameterSummary: some ParameterSummary {
     Summary("Ask \(\.$agent) \(\.$question)")
@@ -48,7 +54,8 @@ struct AskAgentIntent: AppIntent {
 
   @MainActor
   func perform() async throws -> some IntentResult {
-    var params: AppIntentParams = ["text": .string(question)]
+    var params: AppIntentParams = [:]
+    if let question { params["text"] = .string(question) }
     if let agent { params["agentId"] = .string(agent.id) }
     await AppIntentDispatcher.shared.dispatch(name: "askAgent", params: params)
     return .result()
