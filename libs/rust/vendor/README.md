@@ -2,9 +2,10 @@
 
 ## `leiden-rs/` — leiden-rs 0.8.1
 
-Leiden community detection for Phase 3 clustering (ADR-0026 decision 6).
-The engine calls it only through `graph::clustering::LeidenPartitioner`,
-behind the `Partitioner` trait.
+Leiden community detection (ADR-0026 decision 6), shared since ADR-0027.
+Nothing calls it directly: `elitea-graph-algos` (`leiden::partition`) is
+its one caller, and the engines reach it through that crate — DeepWiki's
+Phase 3 through `graph::clustering::LeidenPartitioner`.
 
 **Why vendored.** It is a single-author crate whose repository is on
 gitcode, not GitHub. A copy in this tree cannot change or disappear under
@@ -19,7 +20,7 @@ us, and every change to it is a reviewed diff.
 | Licence | `MIT OR Apache-2.0`; both texts are in the directory (`LICENSE-MIT`, `LICENSE-APACHE`) |
 | Changes | One: the archive's `Cargo.lock` is removed. Every other file is the archive's, byte for byte. The repository's root `.gitignore` ignores `bin/`, so `src/bin/leiden-cli.rs` is added with `git add -f`; keep it, or `diff -r` and the tree digest fail. |
 
-**Verify.**
+**Verify** (from `libs/rust`).
 
 ```bash
 curl -sL https://static.crates.io/crates/leiden-rs/leiden-rs-0.8.1.crate -o /tmp/l.crate
@@ -33,14 +34,14 @@ diff -r /tmp/leiden-rs-0.8.1 vendor/leiden-rs    # no output
 them dev-dependencies and optional features this build never compiles.
 GitHub's dependency graph reads every `Cargo.lock` in the repository, so it
 raised alerts for code that does not ship. Cargo ignores the lockfile of a
-path dependency (the engine's `Cargo.lock` resolves the crate's
-dependencies), so removing it changes nothing in the build.
+path dependency (each consuming service's `Cargo.lock` resolves the
+crate's dependencies), so removing it changes nothing in the build.
 
 **How it is built.** A path dependency with `default-features = false`:
 no `cli` (clap), no `rayon` (the algorithm runs on one thread, so a seed
 gives one result on every machine), no `gryf`. It pulls `rand` 0.9,
 `rustc-hash` 2 and `thiserror` 2; `Cargo.lock` pins them. The crate is not
-a workspace member, so its own tests, benches and dev-dependencies are not
+a workspace member (`libs/rust/Cargo.toml` excludes `vendor`), so its own tests, benches and dev-dependencies are not
 built or resolved. `vendor/rustfmt.toml` stops `cargo fmt --all` (which
 also formats path dependencies) from rewriting it.
 

@@ -1300,8 +1300,9 @@ sections by Leiden on the file-contracted graph (γ = `max(0.3, 1 −
 0.2·log10(files))`), pages by Leiden per section (γ = 1), consolidation to
 `clamp(5..20, ⌈1.2·log2 files⌉)` sections and `clamp(8..200, ⌈√(nodes/7)⌉)`
 pages, hub re-integration, the `macro_cluster` / `micro_cluster` / `is_hub` /
-`hub_assignment` columns. Leiden is vendored `leiden-rs` 0.8.1
-(`vendor/README.md`) behind the `Partitioner` trait, one thread, seed 42.
+`hub_assignment` columns. Leiden is the shared `libs/rust/graph-algos`
+(ADR-0027) over the vendored `leiden-rs` 0.8.1 (`libs/rust/vendor/README.md`),
+behind the `Partitioner` trait, one thread, seed 42.
 Note: the live caller hands Phase 3 only the first 20 sorted hub ids
 (`run_phase2` caps `node_ids`); the port keeps that contract.
 

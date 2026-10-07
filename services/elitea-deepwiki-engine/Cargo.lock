@@ -540,6 +540,7 @@ dependencies = [
  "elitea-code-parsers",
  "elitea-engine-core",
  "elitea-engine-sidecar",
+ "elitea-graph-algos",
  "elitea-model-client",
  "elitea-repo-ingest",
  "fancy-regex",
@@ -548,7 +549,6 @@ dependencies = [
  "hyper",
  "hyper-util",
  "indexmap",
- "leiden-rs",
  "memchr",
  "pgvector",
  "rayon",
@@ -589,6 +589,13 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+]
+
+[[package]]
+name = "elitea-graph-algos"
+version = "0.1.0"
+dependencies = [
+ "leiden-rs",
 ]
 
 [[package]]

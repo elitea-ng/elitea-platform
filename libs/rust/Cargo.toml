@@ -15,7 +15,10 @@
 # service builds against.
 [workspace]
 resolver = "3"
-members = ["code-parsers", "engine-core", "engine-sidecar", "model-client", "repo-ingest"]
+members = ["code-parsers", "engine-core", "engine-sidecar", "graph-algos", "model-client", "repo-ingest"]
+# Vendored crates are path dependencies, never members: their own tests,
+# benches and dev-dependencies are not built or resolved (vendor/README.md).
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.1.0"

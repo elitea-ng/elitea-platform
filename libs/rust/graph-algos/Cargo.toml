@@ -1,0 +1,16 @@
+[package]
+name = "elitea-graph-algos"
+description = "Graph algorithms the engines share: seeded Leiden community detection over the vendored leiden-rs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Vendored (see ../vendor/README.md): a single-author crate hosted on
+# gitcode. No default features: no CLI, no rayon (one thread, so a seed
+# gives one result on every machine), no gryf.
+leiden-rs = { path = "../vendor/leiden-rs", version = "=0.8.1", default-features = false }
+
+[lints]
+workspace = true

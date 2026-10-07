@@ -10,6 +10,7 @@ native Inventory engine next.
 | `engine-sidecar` | The Unix-socket NDJSON server the host's engine client speaks, over any `Engine` (tools + run); the distroless container probe; the cgroup reader |
 | `model-client` | The OpenAI-compatible gateway client: chat (blocking, streamed, tool calls), batched embeddings, SSE, token counting |
 | `code-parsers` | tree-sitter parsers for Python, Go, TypeScript, JavaScript, Java, C#, C++ and Rust → symbols and relationships |
+| `graph-algos` | Seeded two-pass Leiden (RB-configuration) over the vendored `leiden-rs`, communities numbered by size |
 | `repo-ingest` | Admitted shallow git clones (gix, egress allowlist, limits), artifact-folder downloads, file discovery; refusals name the consumer's settings (`names::SettingNames`) |
 
 ## Layout rules
@@ -28,6 +29,10 @@ native Inventory engine next.
   serves. DeepWiki keeps its old module paths by re-exporting
   (`pub use elitea_engine_core::errors;`), so moving code here is a move, not
   a rewrite of every caller.
+
+Vendored third-party crates live in `vendor/` (provenance and review in
+`vendor/README.md`). They are path dependencies, never workspace members,
+and `vendor/rustfmt.toml` keeps `cargo fmt` from rewriting them.
 
 ## Checks
 
