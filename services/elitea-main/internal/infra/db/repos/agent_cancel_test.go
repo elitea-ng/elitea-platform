@@ -174,3 +174,58 @@ func TestCurrentAgentCancelRepositoryRollsBackIncompleteProjection(t *testing.T)
 		t.Fatal("expected incomplete projection error")
 	}
 }
+
+// Two stops of an empty turn sent together: the second one's target CTE took
+// its snapshot before the first committed, so it still sees the answer, waits
+// on the job row and then matches `desired_state = 'CANCELLED'`; by the time
+// its projection runs the first stop has deleted both rows, so every flag is
+// false. That is the same caller's repeated stop the contract answers 204, not
+// a projection that "did not settle" (502). A projection that finds nothing
+// for a caller the replay check does not admit is still an error.
+func TestCurrentAgentCancelRepositoryTreatsAVanishedProjectionAsReplay(t *testing.T) {
+	questionID := int32(41)
+	request := agentexecutionapp.CurrentAgentCancelRequest{
+		ProjectID: 2, ActorUserID: 7,
+		ResponseMessageID: "10000000-0000-4000-8000-000000000034",
+	}
+	for _, test := range []struct {
+		name    string
+		replay  bool
+		wantErr bool
+	}{
+		{name: "concurrent repeated stop", replay: true},
+		{name: "not a replay", replay: false, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executor := &currentAgentCancelExecutorStub{
+				scriptedExecutor: &scriptedExecutor{},
+				cancelRow: sqlcgen.CancelCurrentAgentExecutionRow{
+					ResponseMessageGroupID: 51, QuestionMessageGroupID: &questionID,
+					ExecutionID: "execution-1", Generation: 1,
+					ClientExecutionGeneration: "20000000-0000-4000-8000-000000000034",
+				},
+				replay: test.replay,
+			}
+			repository, err := newCurrentAgentCancelRepository(
+				&currentAgentCancelProjectStoreStub{executor: executor},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			outcome, err := repository.CancelCurrentAgent(t.Context(), request)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("outcome=%+v, want an error", outcome)
+				}
+				return
+			}
+			if err != nil || !outcome.Replay || outcome.Deleted || outcome.Salvaged {
+				t.Fatalf("outcome=%+v err=%v, want a replay", outcome, err)
+			}
+			if executor.replayParams.ResponseMessageID != request.ResponseMessageID ||
+				executor.replayParams.ProjectID != 2 || executor.replayParams.ActorUserID != 7 {
+				t.Fatalf("replay params=%+v", executor.replayParams)
+			}
+		})
+	}
+}

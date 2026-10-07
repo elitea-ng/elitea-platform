@@ -86,10 +86,13 @@ func (handler *currentAgentCancelHandler) cancel(writer http.ResponseWriter, req
 		writeError(writer, http.StatusUnauthorized, "authentication required")
 		return
 	}
+	responseMessageID := agentexecutionapp.CanonicalCurrentAgentResponseMessageID(
+		chi.URLParam(request, "responseMessageID"),
+	)
 	requestModel := agentexecutionapp.CurrentAgentCancelRequest{
 		ProjectID:         projectID,
 		ActorUserID:       actorUserID,
-		ResponseMessageID: chi.URLParam(request, "responseMessageID"),
+		ResponseMessageID: responseMessageID,
 	}
 	if !validProject || requestModel.Validate() != nil {
 		writeError(writer, http.StatusBadRequest, "Invalid agent cancellation request")

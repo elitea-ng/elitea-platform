@@ -11,7 +11,11 @@ WITH target AS MATERIALIZED (
                OR response.meta ? 'authorization_requests'
            ) AS has_pause_projection,
            (response.meta ->> 'execution_generation')::text
-               AS client_execution_generation
+               AS client_execution_generation,
+           CASE
+               WHEN question_author.entity_meta ->> 'id' ~ '^[1-9][0-9]*$'
+               THEN (question_author.entity_meta ->> 'id')::bigint
+           END AS question_author_id
     FROM chat_message_group AS response
     JOIN chat_conversations AS conversation
       ON conversation.id = response.conversation_id
@@ -72,6 +76,19 @@ WITH target AS MATERIALIZED (
           OR job.desired_state = 'CANCELLED'
       )
     RETURNING job.execution_id, job.generation
+), recorded AS (
+    -- The question is deleted when the turn has no output, so the replay
+    -- check cannot resolve its author later: record it now, on the binding.
+    UPDATE elitea_runtime.agent_execution_jobs AS binding
+    SET stop_question_author_id = target.question_author_id
+    FROM target
+    JOIN cancelled
+      ON cancelled.execution_id = target.execution_id
+     AND cancelled.generation = target.generation
+    WHERE binding.execution_id = target.execution_id
+      AND binding.generation = target.generation
+      AND binding.stop_question_author_id IS DISTINCT FROM target.question_author_id
+    RETURNING binding.execution_id
 )
 SELECT target.response_message_group_id,
        target.question_message_group_id,
@@ -182,10 +199,14 @@ SELECT EXISTS (SELECT 1 FROM deleted_response) AS deleted,
 
 -- name: IsCurrentAgentCancellationReplay :one
 -- A replay admits the same principals CancelCurrentAgentExecution does: the
--- user who asked (the job's actor) and the conversation's author. A stop of a
--- turn with no output deletes the question and the answer, so the author is
--- resolved through the binding's client_stream_id, which admission pins to the
--- conversation uuid, not through the deleted message rows.
+-- conversation's author and the question's author. A stop of a turn with no
+-- output deletes the question and the answer, so neither is read from the
+-- message rows: the conversation author is resolved through the binding's
+-- client_stream_id, which admission pins to the conversation uuid, and the
+-- question author is the stop_question_author_id the stop recorded (shared
+-- 0154). The job's actor is NOT the question author for a regeneration (the
+-- conversation's owner may regenerate another member's question); it stands
+-- in only for a binding no stop through this route recorded.
 SELECT EXISTS (
     SELECT 1
     FROM elitea_runtime.execution_jobs AS job
@@ -200,8 +221,12 @@ SELECT EXISTS (
       AND job.resource_project_id = sqlc.arg(project_id)::integer
       AND job.projection_project_id = sqlc.arg(project_id)::integer
       AND (
-          job.actor_id = sqlc.arg(actor_user_id)::bigint::text
-          OR conversation.author_id = sqlc.arg(actor_user_id)::bigint
+          conversation.author_id = sqlc.arg(actor_user_id)::bigint
+          OR binding.stop_question_author_id = sqlc.arg(actor_user_id)::bigint
+          OR (
+              binding.stop_question_author_id IS NULL
+              AND job.actor_id = sqlc.arg(actor_user_id)::bigint::text
+          )
       )
       AND job.capability_id IN (
           'agent.execute.application.v1',

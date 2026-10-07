@@ -10908,6 +10908,21 @@ components:
             Client contract 1.3. Widgets, home-screen quick actions and other
             surfaces outside the app may show conversation and agent titles.
             False means counts only. Default false.
+    InvalidQueryParameterError:
+      type: object
+      description: >-
+        The 400 answer of listPublicApplications. A query parameter outside
+        its allowlist or range answers `error: invalid_query_parameter` with
+        `param` naming it and `msg` saying what it must be; the version gate
+        answers `error: invalid_client_version` with no `param`. NOTE(W2):
+        internal/api/v2/eliteacore/public_applications.go:280
+        (`writePublicApplicationsQueryError`).
+      required: [error, error_description]
+      properties:
+        error: { type: string }
+        error_description: { type: string }
+        param: { type: string }
+        msg: { type: string }
     InvalidClientVersionError:
       type: object
       description: >-
@@ -16202,6 +16217,8 @@ paths:
 
         Idempotent for the same caller: stopping an answer that this caller
         already stopped answers 204 again, also after the run has settled.
+        The response message id may be sent in either case; the server folds
+        it to the lowercase spelling it stored.
         An answer that completed (or failed) on its own, one that is not this
         caller's, or one that does not exist answers 409 without saying
         which; for a completed answer the transcript already holds it.
@@ -17417,6 +17434,7 @@ paths:
                 $ref: '#/components/schemas/MessageFeedbackSummary'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
     post:
       operationId: setMessageFeedback
@@ -17483,6 +17501,7 @@ paths:
                 $ref: '#/components/schemas/MessageFeedbackSummary'
         '401': { $ref: '#/components/responses/401' }
         '403': { $ref: '#/components/responses/403' }
+        '404': { $ref: '#/components/responses/404' }
         '500': { $ref: '#/components/responses/500' }
 
   # ==========================================================================
@@ -17905,10 +17924,10 @@ paths:
         internal/api/v2/eliteacore/public_applications.go. A `sort_by`,
         `sort_order`, `agents_type` or `statuses` value outside its allowlist,
         or a `limit`/`offset` outside its range, is refused with 400 and a body
-        naming the parameter — it is never silently ignored. The 400 is NOT
-        declared as a response here: `eliteaFetch` throws on every non-2xx, so
-        this codebase keeps generated response types 200-only (see
-        apps/elitea-web/src/pages/agents/Latest.tsx).
+        naming the parameter (InvalidQueryParameterError) — it is never
+        silently ignored. A native client whose `X-Client-Version` does not
+        parse gets the same status and the same `{error, error_description}`
+        keys, with `error: invalid_client_version`.
 
         Trending (`trend_start_period`/`trend_end_period`) is the one pylon
         parameter still missing here.
@@ -17980,7 +17999,14 @@ paths:
         "426":
           $ref: "#/components/responses/ClientUpgradeRequired"
         "400":
-          $ref: "#/components/responses/InvalidClientVersion"
+          description: >-
+            A refused query parameter (`error: invalid_query_parameter`, with
+            `param` and `msg`), or a native client version that does not
+            parse (`error: invalid_client_version`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvalidQueryParameterError'
         '200':
           description: Published applications
           content:

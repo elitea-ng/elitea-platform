@@ -398,6 +398,7 @@ type EliteaRuntimeAgentExecutionJob struct {
 	ClientMessageID           string `db:"client_message_id" json:"client_message_id"`
 	ClientExecutionGeneration string `db:"client_execution_generation" json:"client_execution_generation"`
 	SioEvent                  string `db:"sio_event" json:"sio_event"`
+	StopQuestionAuthorID      *int64 `db:"stop_question_author_id" json:"stop_question_author_id"`
 }
 
 type EliteaRuntimeCommandOutbox struct {

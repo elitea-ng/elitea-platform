@@ -4977,6 +4977,8 @@ export const getCancelChatExecutionUrl = (
  *
  * Idempotent for the same caller: stopping an answer that this caller
  * already stopped answers 204 again, also after the run has settled.
+ * The response message id may be sent in either case; the server folds
+ * it to the lowercase spelling it stored.
  * An answer that completed (or failed) on its own, one that is not this
  * caller's, or one that does not exist answers 409 without saying
  * which; for a completed answer the transcript already holds it.
@@ -8818,6 +8820,11 @@ export type getMessageFeedbackResponse403 = {
   status: 403;
 };
 
+export type getMessageFeedbackResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
 export type getMessageFeedbackResponse426 = {
   data: ClientUpgradeRequiredResponse;
   status: 426;
@@ -8836,6 +8843,7 @@ export type getMessageFeedbackResponseError = (
   | getMessageFeedbackResponse400
   | getMessageFeedbackResponse401
   | getMessageFeedbackResponse403
+  | getMessageFeedbackResponse404
   | getMessageFeedbackResponse426
   | getMessageFeedbackResponse500
 ) & {
@@ -8888,6 +8896,7 @@ export const getGetMessageFeedbackQueryOptions = <
     | InvalidClientVersionResponse
     | N401Response
     | N403Response
+    | N404Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -8938,6 +8947,7 @@ export type GetMessageFeedbackQueryError =
   | InvalidClientVersionResponse
   | N401Response
   | N403Response
+  | N404Response
   | ClientUpgradeRequiredResponse
   | N500Response;
 
@@ -8947,6 +8957,7 @@ export function useGetMessageFeedback<
     | InvalidClientVersionResponse
     | N401Response
     | N403Response
+    | N404Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -8980,6 +8991,7 @@ export function useGetMessageFeedback<
     | InvalidClientVersionResponse
     | N401Response
     | N403Response
+    | N404Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -9013,6 +9025,7 @@ export function useGetMessageFeedback<
     | InvalidClientVersionResponse
     | N401Response
     | N403Response
+    | N404Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -9042,6 +9055,7 @@ export function useGetMessageFeedback<
     | InvalidClientVersionResponse
     | N401Response
     | N403Response
+    | N404Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -9418,6 +9432,11 @@ export type deleteMessageFeedbackResponse403 = {
   status: 403;
 };
 
+export type deleteMessageFeedbackResponse404 = {
+  data: N404Response;
+  status: 404;
+};
+
 export type deleteMessageFeedbackResponse426 = {
   data: ClientUpgradeRequiredResponse;
   status: 426;
@@ -9436,6 +9455,7 @@ export type deleteMessageFeedbackResponseError = (
   | deleteMessageFeedbackResponse400
   | deleteMessageFeedbackResponse401
   | deleteMessageFeedbackResponse403
+  | deleteMessageFeedbackResponse404
   | deleteMessageFeedbackResponse426
   | deleteMessageFeedbackResponse500
 ) & {
@@ -9488,6 +9508,7 @@ export const getDeleteMessageFeedbackQueryOptions = <
     | InvalidClientVersionResponse
     | N401Response
     | N403Response
+    | N404Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -9538,6 +9559,7 @@ export type DeleteMessageFeedbackQueryError =
   | InvalidClientVersionResponse
   | N401Response
   | N403Response
+  | N404Response
   | ClientUpgradeRequiredResponse
   | N500Response;
 
@@ -9547,6 +9569,7 @@ export function useDeleteMessageFeedback<
     | InvalidClientVersionResponse
     | N401Response
     | N403Response
+    | N404Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -9580,6 +9603,7 @@ export function useDeleteMessageFeedback<
     | InvalidClientVersionResponse
     | N401Response
     | N403Response
+    | N404Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -9613,6 +9637,7 @@ export function useDeleteMessageFeedback<
     | InvalidClientVersionResponse
     | N401Response
     | N403Response
+    | N404Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(
@@ -9642,6 +9667,7 @@ export function useDeleteMessageFeedback<
     | InvalidClientVersionResponse
     | N401Response
     | N403Response
+    | N404Response
     | ClientUpgradeRequiredResponse
     | N500Response,
 >(

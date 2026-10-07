@@ -580,6 +580,21 @@
             }
           }
         },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
         "426": {
           "content": {
             "application/json": {
@@ -4459,6 +4474,21 @@
             }
           }
         },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
         "426": {
           "content": {
             "application/json": {
@@ -6160,6 +6190,12 @@
                   "type": "string"
                 },
                 "error_description": {
+                  "type": "string"
+                },
+                "msg": {
+                  "type": "string"
+                },
+                "param": {
                   "type": "string"
                 }
               }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 )
 
 var (
@@ -27,6 +28,21 @@ func (request CurrentAgentCancelRequest) Validate() error {
 		return ErrInvalidCurrentAgentCancel
 	}
 	return nil
+}
+
+// CanonicalCurrentAgentResponseMessageID lower-cases a canonical UUID of
+// either case and returns anything else unchanged, for Validate to refuse.
+// The stop's path parameter is declared `format: uuid`, which admits either
+// case, and a client that re-serialises the id the server gave it (Swift's
+// uuidString) sends it upper-case. Unlike a turn's question_id this id is not
+// a client-minted idempotency key: the server minted and stored it in
+// lowercase, so folding the case names the same stored answer and lets the
+// replay check match it as text.
+func CanonicalCurrentAgentResponseMessageID(value string) string {
+	if validStoredUUID(value) {
+		return strings.ToLower(value)
+	}
+	return value
 }
 
 type CurrentAgentCancelOutcome struct {
