@@ -32,7 +32,7 @@ if [[ -z "${ELITEA_CONFLUENCE_PARITY_PGVECTOR_URL:-}" ]]; then
     -e POSTGRES_PASSWORD=parity \
     -e POSTGRES_DB=parity \
     -p 127.0.0.1::5432 \
-    pgvector/pgvector:0.8.1-pg18 >/dev/null
+    pgvector/pgvector:0.8.1-pg18-trixie >/dev/null
   port="$(docker port "${container}" 5432/tcp | sed -E 's/.*:([0-9]+)$/\1/')"
   for _ in $(seq 1 30); do
     if docker exec "${container}" pg_isready -U parity -d parity >/dev/null 2>&1; then

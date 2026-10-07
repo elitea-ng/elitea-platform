@@ -3498,8 +3498,13 @@ worker:
   # writable. A Secret volume cannot satisfy that (root-owned, or a symlink
   # farm), so an init container copies each key into a memory-backed emptyDir at
   # 0600 owned by the worker's uid — the same answer issue #404 gave elitea-main.
+  #
+  # python:3.12.14-slim-trixie, not debian:trixie-slim: the init script
+  # concatenates /etc/ssl/certs/ca-certificates.crt into the trust bundle, and
+  # debian:trixie-slim ships no CA bundle. The python slim image is Debian 13
+  # with ca-certificates installed, and it is the worker image's own base.
   materialInit:
-    image: docker.io/library/alpine:3.20
+    image: docker.io/library/python:3.12.14-slim-trixie
     sizeLimit: 8Mi
 
   # uid/gid 10001 is the `elitea` user baked into the worker image.

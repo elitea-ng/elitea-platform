@@ -20,7 +20,7 @@
 #   2. Every `go-version:` in the workflows below equals that version, string
 #      for string. `1.26` and `1.26.4` are NOT the same request —
 #      actions/setup-go reads `1.26` as "the newest 1.26 patch", which is what
-#      a `golang:1.26-alpine` image does, and `1.26.4` as that one patch.
+#      a `golang:1.26-trixie` image does, and `1.26.4` as that one patch.
 #   3. The `go` directive in go.mod shares the image's major.minor series, and
 #      never asks for a patch newer than a pinned image can supply. That line
 #      is a FLOOR, not a maximum, so it may sit below the image version.
@@ -60,7 +60,7 @@ done
 # ── 1. What the image builds with ────────────────────────────────────────────
 #
 # Matches `FROM golang:<version>[-<variant>]`. The version is captured on its
-# own so `golang:1.26-alpine` and `golang:1.26.4-alpine` are told apart.
+# own so `golang:1.26-trixie` and `golang:1.26.4-trixie` are told apart.
 BUILDER_TAGS="$(sed -nE 's/^[[:space:]]*FROM[[:space:]]+golang:([0-9][0-9.]*)([-][^[:space:]]*)?.*/\1/p' "$CONTAINERFILE")"
 builder_count="$(printf '%s' "$BUILDER_TAGS" | grep -c . || true)"
 if [ "$builder_count" -eq 0 ]; then

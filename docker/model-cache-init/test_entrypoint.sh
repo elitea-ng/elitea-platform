@@ -1019,8 +1019,8 @@ test_metrics_standalone() {
     # ── Issue #484 ───────────────────────────────────────────────────────────
     # Every gauge must carry a number, and each measurement must say whether it
     # ran. `du -sb` is absent on BSD and on plain BusyBox, so the size gauge is
-    # unmeasured on such a host and measured inside the alpine image, which
-    # installs coreutils. The value that must NEVER appear is an empty one.
+    # unmeasured on such a host and measured inside the Debian image, which
+    # ships GNU coreutils. The value that must NEVER appear is an empty one.
     assert_metric_is_numeric "model_cache_size_bytes" "$metrics_content"
     assert_metric_is_numeric "model_cache_size_bytes_measured" "$metrics_content"
     assert_metric_is_numeric "model_cache_files_total_measured" "$metrics_content"

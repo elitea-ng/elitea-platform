@@ -8,9 +8,12 @@
 # hence `git daemon` and not a static HTTP tree.
 set -eu
 
-# The daemon lives in its own Alpine package; the base image is plain alpine.
+# The base image is plain debian:trixie-slim. Debian's `git` package carries
+# `git daemon`; no CA bundle is needed, because the daemon serves git:// only.
 if ! git daemon --version >/dev/null 2>&1; then
-  apk add --no-cache -q git git-daemon
+  apt-get update -qq
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends git >/dev/null
+  rm -rf /var/lib/apt/lists/*
 fi
 
 REPOSITORY="${DEEPWIKI_GIT_REPOSITORY:-acme/e2e-generated}"

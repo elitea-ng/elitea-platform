@@ -17,7 +17,7 @@
 # The runtime probes are what say the move is safe rather than only smaller:
 # `require_indexing_runtime_capabilities()` runs in the build below and drives
 # the real Tesseract, Poppler and Cairo of THIS base.
-FROM python:3.12.14-slim AS build
+FROM python:3.12.14-slim-trixie AS build
 
 ARG ELITEA_SDK_REVISION=b5113a129329b85d23c2d5c2bf55f18e307414ec
 ARG ELITEA_SDK_ARCHIVE_SHA256=df398b4a378e7b88ea3b72511e31de13a17a02159c69fbada6f0b948a0ecf2d7
@@ -108,7 +108,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
       /wheels \
       verified_wheels
 
-FROM python:3.12.14-slim
+FROM python:3.12.14-slim-trixie
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

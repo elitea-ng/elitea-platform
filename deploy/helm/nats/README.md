@@ -340,7 +340,13 @@ refuses the stream ("insufficient storage resources").
 ## NATS Server version
 
 **NATS Server 2.12.0+ is required** for `Nats-Incr` (ADR-49). Both profiles
-pin `nats:2.12.0-alpine`. The bootstrap needs natscli 0.3.0+ (`--allow-counter`;
+pin `nats:2.12.0`, the scratch image (no OS; it was `2.12.0-alpine` until
+2026-10, and NATS publishes no Debian variant). The upstream chart runs no
+shell in the server container: its probes are `httpGet` on the monitoring
+port, and its preStop hook execs `nats-server`, which is on the image's `PATH`.
+Compose, CI and the test scripts run the same tag (render-nats-security.sh
+asserts it); compose probes readiness from the `nats-health` sidecar. The
+bootstrap needs natscli 0.3.0+ (`--allow-counter`;
 nats-box 0.19.7 ships 0.4.0).
 
 ## Profiles (design §8.1.1)
@@ -395,12 +401,15 @@ $N stream ls          # GATEWAY_BUDGET, GATEWAY_RATELIMIT, GATEWAY_BUDGET_DELTAS
 (`elitea-nats-bootstrap-main-nats-client-tls` the same way shows MAIN's
 `KV_ELITEA_CANVAS_PRESENCE`, and nothing of GATEWAY's.)
 
-Who is connected, as whom (from inside the pod; 8222 is reachable only from
-the KEDA operator):
+Who is connected, as whom. The server image is `scratch` (no shell, no
+`wget`), and 8222 is reachable in the cluster only from the KEDA operator,
+so read it through a port-forward, which goes through the kubelet:
 
 ```bash
-kubectl -n elitea exec elitea-nats-0 -c nats -- wget -qO- 'http://127.0.0.1:8222/connz?auth=1' \
+kubectl -n elitea port-forward pod/elitea-nats-0 18222:8222 &
+curl -fsS 'http://127.0.0.1:18222/connz?auth=1' \
   | jq -r '.connections[] | "\(.name)\t\(.account)\t\(.authorized_user)"'
+kill %1
 ```
 
 Every connection must show one of the `spiffe://elitea.internal/nats/…` users,

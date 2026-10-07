@@ -248,7 +248,7 @@ jobs:
       # The version MUST match ci-gateway.yml: the gateway is a standalone
       # module on the Go 1.26 series, deliberately outside the root go.work.
       # Name the SERIES, not the patch. go.mod states a floor, and the image
-      # builds from `golang:1.26-alpine`, which moves with the series.
+      # builds from `golang:1.26-trixie`, which moves with the series.
       # scripts/ci/check-gateway-toolchain.sh holds this pin, the Containerfile
       # tag and ci-gateway.yml together.
       - uses: actions/setup-go@v7

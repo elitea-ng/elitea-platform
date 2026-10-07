@@ -125,7 +125,7 @@ jobs:
     # the legacy file backend, both live, over the P0 retrieval fixtures.
     services:
       postgres:
-        image: pgvector/pgvector:0.8.5-pg16
+        image: pgvector/pgvector:0.8.5-pg16-trixie
         env:
           POSTGRES_USER: deepwiki
           POSTGRES_PASSWORD: deepwiki

@@ -202,7 +202,7 @@ jobs:
         # sets ELITEA_REQUIRE_PGVECTOR_POSTGRES_TEST below, which turns that
         # guard into a t.Fatal. Losing the image here fails the job; it can
         # never turn it green with zero execution.
-        image: pgvector/pgvector:0.8.5-pg16
+        image: pgvector/pgvector:0.8.5-pg16-trixie
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -294,14 +294,16 @@ jobs:
       - name: Start NATS (JetStream)
         run: |
           set -euo pipefail
-          docker run -d --name ci-nats -p 4222:4222 -p 8222:8222 nats:2.12.0-alpine -js -m 8222
+          docker run -d --name ci-nats -p 4222:4222 -p 8222:8222 nats:2.12.0 -js -m 8222
           for _ in $(seq 1 30); do
             if curl -fsS "http://127.0.0.1:8222/healthz?js-enabled-only=true" >/dev/null; then
               # The same server binary, out of the container, for the
               # restart test (TestNATSStoreFollowsTheBucketAcrossAServerRestart
               # stops and starts its own server). Its path is read from the
-              # image, not assumed.
-              bin=$(docker exec ci-nats sh -c 'command -v nats-server')
+              # image's entrypoint, not assumed. The image is scratch, so
+              # nothing can run a shell inside the container.
+              bin=$(docker inspect --format '{{index .Config.Entrypoint 0}}' nats:2.12.0)
+              test -n "$bin"
               docker cp "ci-nats:${bin}" "${RUNNER_TEMP}/nats-server"
               chmod +x "${RUNNER_TEMP}/nats-server"
               "${RUNNER_TEMP}/nats-server" --version
@@ -535,7 +537,7 @@ jobs:
     timeout-minutes: 10
     services:
       postgres:
-        image: pgvector/pgvector:0.8.5-pg16
+        image: pgvector/pgvector:0.8.5-pg16-trixie
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres

@@ -378,6 +378,10 @@ jobs:
             target: final
             expect_type: gobinary
             blocking: true
+          # The two nginx images stay on nginx:stable-alpine, the one OS
+          # exception besides nats-box (owner decision 2026-10-06): every
+          # Debian userland carries HIGH findings with no fixed version, and
+          # these scans are blocking. See deploy/README.md, upgrade notes.
           - name: elitea-ui
             context: .
             dockerfile: ./deploy/docker/Containerfile.elitea-ui

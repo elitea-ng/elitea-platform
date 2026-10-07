@@ -102,7 +102,7 @@ updates:
     multi-ecosystem-group: weekly
     patterns: ["*"]
     ignore:
-      # bifrost core 1.8 requires Go 1.27; the gateway ships on golang:1.26-alpine
+      # bifrost core 1.8 requires Go 1.27; the gateway ships on golang:1.26-trixie
       # with GOTOOLCHAIN=local and is tested on the 1.26 series
       # (scripts/ci/check-gateway-toolchain.sh). Moving the toolchain is a
       # deliberate change of image, runner and gate, not a dependency bump (#653).
