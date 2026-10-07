@@ -14,7 +14,8 @@ sanitizer) → ``finalize_wiki`` → ``export_wiki`` → the hybrid wrapper's
 result → ``wiki_subprocess_worker.main`` (the real composition code, with
 the wrapper and the model factory stubbed).
 
-The model is ``services/elitea-deepwiki/e2e/llm_stub.py``, served in
+The model is ``services/elitea-deepwiki-engine/testdata/llm_stub.py``,
+served in
 process; every chat request body is recorded. LangGraph's map step is run
 sequentially in ``Send`` order (its reducer keeps that order), so the
 recording is deterministic.
@@ -66,7 +67,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent.parent / "elitea-deepwiki" / "e2e"))
+sys.path.insert(0, str(HERE.parent / "testdata"))
 
 import python_phase3_dump as p3  # noqa: E402
 

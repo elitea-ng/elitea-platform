@@ -62,12 +62,12 @@ EXEMPT_WORKFLOWS = {
         "release candidate."
     ),
     "deepwiki-real-engine.yml": (
-        "It has no push arm at all, and no pull_request arm either. It builds "
-        "the ~2 GB DeepWiki `-engine` image (torch, faiss, tree-sitter) and "
-        "runs a real analysis pass over the standalone stack; the per-change "
+        "It has no push arm at all, and no pull_request arm either. It runs "
+        "the native DeepWiki engine's real analysis pass over the standalone "
+        "stack, cloning a public repository from github.com; the per-change "
         "gate for the same product surface is the `deepwiki-stack` job in "
-        "ci-web-e2e.yml, which uses the provider's fixture engine. Weekly "
-        "cadence plus manual dispatch, like ci-web-mutation.yml."
+        "ci-web-e2e.yml, which runs the same engine image on its fixture "
+        "runner. Weekly cadence plus manual dispatch, like ci-web-mutation.yml."
     ),
     "nightly-real-llm.yml": (
         "No push arm and no pull_request arm: it is the real-model chat lane's "

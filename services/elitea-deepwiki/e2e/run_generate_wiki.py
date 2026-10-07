@@ -5,7 +5,8 @@ planning, page generation — over the protocol the Go sub-application host
 speaks to it (ADR-0023): one NDJSON stream of progress, then the engine's
 result. Composition into the frozen object set and the upload are the host's
 now, so what this prints is the ENGINE result (artifacts by name and size).
-It is not a content test: the LLM is a local stub (``llm_stub.py``) whose
+It is not a content test: the LLM is a local stub
+(``services/elitea-deepwiki-engine/testdata/llm_stub.py``) whose
 answers are canned and deterministic. What is under test is the pipeline,
 not the prose.
 

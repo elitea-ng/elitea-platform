@@ -1281,7 +1281,7 @@ cargo run --release --bin deepwiki-parity -- structure-dump <repo> <py-dump> <rs
 python3 parity/compare_structure.py <py-dump> <rs-out>
 ```
 
-The stub (`services/elitea-deepwiki/e2e/llm_stub.py`) answers the naming
+The stub (`services/elitea-deepwiki-engine/testdata/llm_stub.py`) answers the naming
 prompts with names made from the listed symbols, and drops the last page of
 one batched answer in five so the multi-call path runs too. The gate:
 the same requests in the same order (messages byte for byte, model,
@@ -1479,18 +1479,17 @@ DEEPWIKI_NATIVE_RUNNER=native deploy/scripts/standalone-stack.sh up
 ### Real-engine journey (DWIKI-014)
 
 `apps/elitea-web/scripts/deepwiki-real-engine.sh` and
-`.github/workflows/deepwiki-real-engine.yml` run the journey on either
-engine. `DEEPWIKI_REAL_ENGINE=legacy` (the default) is the Python engine
-over a `git daemon` fixture. `DEEPWIKI_REAL_ENGINE=native` is this engine.
+`.github/workflows/deepwiki-real-engine.yml` run the journey on this
+engine.
 
-The native clone cannot reach the git daemon: it opens the repository
-isolated (no `insteadOf`), speaks HTTPS only in a release build and follows
-no redirect. So the native run analyses a real public repository,
+The native clone opens the repository isolated (no `insteadOf`), speaks
+HTTPS only in a release build and follows no redirect, so a local git
+daemon cannot serve it. So the run analyses a real public repository,
 `https://github.com/kharkevich-engineering-lab/floe` (its owner agreed to
 this use), through the allowlist entry `github.com`. The runner needs
 internet access.
 
-What the native run uses:
+What the run uses:
 
 - `deploy/docker-compose.deepwiki-native-real-engine.yml` on the
   standalone stack. The overlay runs the prebuilt image
@@ -1498,7 +1497,7 @@ What the native run uses:
   `ghcr.io/eliteaai/elitea-deepwiki-engine-native:local`, the bake target
   `elitea-deepwiki-engine-native` with `TAG=local`) for the migration and
   the engine, forces `runner native`, and puts the deterministic LLM stub
-  (`services/elitea-deepwiki/e2e/llm_stub.py`) at `llm-mock:8090`.
+  (`services/elitea-deepwiki-engine/testdata/llm_stub.py`) at `llm-mock:8090`.
 - `standalone-stack.sh seed-deepwiki-public`: an anonymous GitHub
   repository toolkit (configuration 9011, no token). The seed's toolkit
   9010 has a literal token, and GitHub refuses a bad credential with 401
@@ -1508,11 +1507,11 @@ What the native run uses:
   `main`) with `git ls-remote` before it builds anything, and stops when the
   head is not `DEEPWIKI_NATIVE_COMMIT` (default
   `89c2197fa88a910c9b8344ae3c4dd06618ed28ae`). `none` (or empty) analyses
-  the head as it is. When floe's `main` moves, the native leg fails at
+  the head as it is. When floe's `main` moves, a pinned run fails at
   this check. Move the pin (the workflow input default, the `schedule`
   fallback in the job env, the script default), or use a tag at the pin.
 
-What the native run asserts, through the product: the generation completes
+What the run asserts, through the product: the generation completes
 and the host uploads the objects; one manifest and its pages land under
 `kharkevich-engineering-lab--floe--<ref>`; the manifest names the
 repository, the ref and the resolved commit; the wiki title is
@@ -1523,19 +1522,19 @@ from the symbols the engine put in the prompt) and none is a page of the
 stub's canned structure; the README index renders in the browser with that
 title; the wiki chat answers over the published index.
 
-Run it on GitHub (weekly, the schedule runs both engines; or by hand):
+Run it on GitHub (weekly, at floe's head; or by hand, at the pin):
 
 ```bash
-gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native
+gh workflow run deepwiki-real-engine.yml --ref <branch>
 # a tag at the pin, or no pin:
-gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native -f native_ref=<tag>
-gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native -f native_commit=none
+gh workflow run deepwiki-real-engine.yml --ref <branch> -f native_ref=<tag>
+gh workflow run deepwiki-real-engine.yml --ref <branch> -f native_commit=none
 ```
 
 Locally (podman; builds the native image once when the tag is absent):
 
 ```bash
-DEEPWIKI_REAL_ENGINE=native apps/elitea-web/scripts/deepwiki-real-engine.sh
+apps/elitea-web/scripts/deepwiki-real-engine.sh
 ```
 
 The crate-level proof stays `tests/native_generate.rs` (worker child, `git

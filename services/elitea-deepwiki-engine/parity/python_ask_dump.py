@@ -6,7 +6,7 @@ small repository as ``python_pages_dump.py`` does (Phase 1, 1c, 2 with the
 stand-in embedding, 3) into a ``.wiki.db``, then runs the LIVE worker
 coroutines — ``ask_subprocess_worker.run_ask_agentic_async`` and
 ``deep_research_subprocess_worker.run_deep_research_async`` — against
-``services/elitea-deepwiki/e2e/llm_stub.py`` with a SCRIPTED conversation
+``services/elitea-deepwiki-engine/testdata/llm_stub.py`` with a SCRIPTED conversation
 (``--script``: ``{"ask": [turns], "deep_research": [turns]}``, the stub's
 ``set_script`` format). Only the worker's environment is patched:
 
@@ -60,7 +60,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(0, str(HERE.parent.parent / "elitea-deepwiki" / "e2e"))
+sys.path.insert(0, str(HERE.parent / "testdata"))
 
 import python_pages_dump as pages  # noqa: E402
 import python_phase3_dump as p3  # noqa: E402

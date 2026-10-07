@@ -53,8 +53,7 @@
 #                (p_90200.configuration 9011, no token) beside the seed's
 #                9010, whose literal token GitHub refuses with 401 even for a
 #                public repository. Run after `seed`.
-#                apps/elitea-web/scripts/deepwiki-real-engine.sh calls it
-#                for DEEPWIKI_REAL_ENGINE=native
+#                apps/elitea-web/scripts/deepwiki-real-engine.sh calls it.
 #   check       verify the gateway mTLS hop, the runtime plane and the chat
 #                critical path (delegates the last to chat-smoke.py), plus the
 #                embedding path (embedding-path-check.sh) and a REAL elitea-sdk

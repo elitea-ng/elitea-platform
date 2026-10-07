@@ -12,7 +12,8 @@ It runs, in one process:
    ``OptimizedWikiGenerationAgent.analyze_repository`` (the repository
    analysis call) and ``generate_wiki_structure`` (the planner the
    ``planner_type`` names), against the deterministic LLM stub
-   ``services/elitea-deepwiki/e2e/llm_stub.py``, which this script starts
+   ``services/elitea-deepwiki-engine/testdata/llm_stub.py``, which this
+   script starts
    on a loopback port and which records every chat request body.
 
 The LLM is the one the subprocess worker builds
@@ -73,7 +74,7 @@ sys.path.insert(0, str(HERE))
 import python_phase3_dump as p3  # noqa: E402
 import python_reference as ref  # noqa: E402
 
-STUB = HERE.parent.parent / "elitea-deepwiki" / "e2e" / "llm_stub.py"
+STUB = HERE.parent / "testdata" / "llm_stub.py"
 
 
 class OrderedSet:

@@ -6,9 +6,8 @@
 #     DEEPWIKI_ENGINE_IMAGE=ghcr.io/eliteaai/elitea-deepwiki-engine-native:local \
 #     deploy/scripts/standalone-stack.sh up
 #
-# apps/elitea-web/scripts/deepwiki-real-engine.sh assembles that with
-# DEEPWIKI_REAL_ENGINE=native and runs the `deepwiki-real-engine` Playwright
-# project against it.
+# apps/elitea-web/scripts/deepwiki-real-engine.sh assembles that and runs
+# the `deepwiki-real-engine` Playwright project against it.
 #
 # What it changes on top of the base file:
 #
@@ -17,10 +16,10 @@
 #     build) and never a compose build: `build:` is reset on both;
 #   * the engine runs the `native` runner whatever DEEPWIKI_NATIVE_RUNNER
 #     says, so this overlay can never run the fixture by accident;
-#   * the platform's LLM mock is replaced by the same deterministic stub the
-#     legacy real-engine overlay uses (services/elitea-deepwiki/e2e/llm_stub.py),
-#     at the mock's hostname and port, so the gateway's egress allowlist and
-#     the seeded credential need no change.
+#   * the platform's LLM mock is replaced by a deterministic stub
+#     (services/elitea-deepwiki-engine/testdata/llm_stub.py), at the mock's
+#     hostname and port, so the gateway's egress allowlist and the seeded
+#     credential need no change.
 #
 # What it does NOT have, on purpose: no git daemon and no `insteadOf`
 # rewrite. The native clone opens the repository isolated (no environment
@@ -41,10 +40,7 @@ services:
 
   # The stub in the mock's place: same hostname, same port, so the gateway's
   # GATEWAY_EGRESS_ALLOWLIST (`llm-mock:8090`) and the seeded credential's
-  # api_base need no change. Any model name is accepted. A copy of the
-  # legacy overlay's service (docker-compose.deepwiki-real-engine.yml): that
-  # overlay also replaces the engine with the Python image and adds the git
-  # daemon, so it cannot be layered under this one.
+  # api_base need no change. Any model name is accepted.
   llm-mock:
     image: docker.io/library/python:3.12-slim
     build: !reset null
@@ -53,7 +49,7 @@ services:
       LLM_STUB_HOST: "0.0.0.0"
       LLM_STUB_PORT: "8090"
     volumes:
-      - ../services/elitea-deepwiki/e2e/llm_stub.py:/opt/llm_stub.py:ro
+      - ../services/elitea-deepwiki-engine/testdata/llm_stub.py:/opt/llm_stub.py:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/v1/models', timeout=2)"]
       interval: 3s

@@ -7,7 +7,8 @@ result — clone, index, repository analysis, structure planning, page
 generation. Composition into the frozen artifact set and the upload are the
 host's; run the host in front of this sidecar to see them.
 
-What it does **not** prove: content quality. `llm_stub.py` is a local,
+What it does **not** prove: content quality.
+`services/elitea-deepwiki-engine/testdata/llm_stub.py` is a local,
 deterministic, prompt-aware OpenAI-compatible stub. It returns a well-formed
 `WikiStructureSpec` when asked for structure, names made from the listed
 symbols for the cluster planner's naming prompts, and canned markdown for
@@ -36,7 +37,7 @@ mkdir -p /tmp/dwe2e/www/acme && git clone --bare <a-small-repo> /tmp/dwe2e/www/a
 ```
 
 ```bash
-python services/elitea-deepwiki/e2e/llm_stub.py &
+python services/elitea-deepwiki-engine/testdata/llm_stub.py &
 ```
 
 ```bash

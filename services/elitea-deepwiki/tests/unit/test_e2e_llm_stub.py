@@ -6,7 +6,12 @@ import importlib.util
 import json
 from pathlib import Path
 
-_STUB = Path(__file__).resolve().parents[2] / "e2e" / "llm_stub.py"
+_STUB = (
+    Path(__file__).resolve().parents[3]
+    / "elitea-deepwiki-engine"
+    / "testdata"
+    / "llm_stub.py"
+)
 
 
 def _stub():
