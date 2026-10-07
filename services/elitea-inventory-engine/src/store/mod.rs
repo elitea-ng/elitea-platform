@@ -486,6 +486,22 @@ pub async fn load(pool: &PgPool, key: GraphKey) -> Result<Option<(Graph, i64)>> 
     Ok(Some((graph, revision)))
 }
 
+/// The stored graph's revision, or `None` when there is no graph: a
+/// cheap check of whether a cached copy is still current.
+///
+/// # Errors
+///
+/// [`StoreError::Database`].
+pub async fn revision(pool: &PgPool, key: GraphKey) -> Result<Option<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT revision FROM inventory_graph.graphs WHERE project_id = $1 AND application_id = $2",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
 /// Delete the stored graph `key` and its sources' state; `true` when there
 /// was a graph.
 ///

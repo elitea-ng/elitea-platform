@@ -574,6 +574,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-graph-algos"
+version = "0.1.0"
+dependencies = [
+ "leiden-rs",
+]
+
+[[package]]
 name = "elitea-inventory-engine"
 version = "0.1.0"
 dependencies = [
@@ -581,6 +588,7 @@ dependencies = [
  "elitea-code-parsers",
  "elitea-engine-core",
  "elitea-engine-sidecar",
+ "elitea-graph-algos",
  "elitea-model-client",
  "elitea-pg-migrate",
  "elitea-repo-ingest",
@@ -2240,6 +2248,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 dependencies = [
  "spin",
+]
+
+[[package]]
+name = "leiden-rs"
+version = "0.8.1"
+dependencies = [
+ "rand 0.9.5",
+ "rustc-hash",
+ "thiserror",
 ]
 
 [[package]]

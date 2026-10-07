@@ -67,6 +67,10 @@ pub struct Outcome {
     pub failed_model_chunks: usize,
     /// Edges the quality pass removed.
     pub pruned_edges: usize,
+    /// Communities detected.
+    pub communities: usize,
+    /// Entities embedded.
+    pub embeddings_generated: usize,
 }
 
 /// Every regular file under `root`, as `/`-separated relative paths in
@@ -389,6 +393,18 @@ fn add_parser_relations(
     outcome.relations_added += parse::add_relations(graph, relations, &source.name, "parser");
 }
 
+/// What a run does beyond reading files.
+#[derive(Debug, Clone, Default)]
+pub struct RunOptions {
+    /// The model stage, community labels; `None` reads files and parses
+    /// code only.
+    pub model: Option<ModelOptions>,
+    /// Entity embeddings, when the toolkit configures a model for them.
+    pub embeddings: Option<elitea_model_client::embeddings::EmbeddingClient>,
+    /// `full_rebuild`: start from an empty graph (every source of it).
+    pub full_rebuild: bool,
+}
+
 /// How a run uses a model.
 #[derive(Debug, Clone)]
 pub struct ModelOptions {
@@ -581,9 +597,10 @@ async fn build(
     to_read: &[FileToRead],
     parsed: &BTreeMap<String, parse::FileExtraction>,
     outcome: &mut Outcome,
-    model: Option<&ModelOptions>,
+    options: &RunOptions,
     context: &Context,
 ) -> Result<(), EngineError> {
+    let model = options.model.as_ref();
     let modelled = match model {
         Some(options) => model_files(options, source, to_read, parsed, outcome, context).await?,
         None => HashMap::new(),
@@ -607,7 +624,62 @@ async fn build(
         ));
     }
     context.checkpoint()?;
+    communities(graph, model, outcome, context).await?;
+    if let Some(client) = &options.embeddings {
+        context.thinking("[embeddings] 🧮 Generating entity embeddings...".to_owned());
+        let count = crate::embed::embed_graph(
+            graph,
+            client,
+            &crate::clock::now_iso(),
+            &context.stop_signal(),
+        )
+        .await?;
+        outcome.embeddings_generated = count;
+        context.thinking(format!(
+            "[embeddings] ✅ Generated embeddings for {count} entities"
+        ));
+    }
+    Ok(())
+}
 
+/// `_run_community_detection`: Leiden over the whole graph (10 nodes or
+/// more), labelled and summarised by the model when there is one.
+async fn communities(
+    graph: &mut Graph,
+    model: Option<&ModelOptions>,
+    outcome: &mut Outcome,
+    context: &Context,
+) -> Result<(), EngineError> {
+    context.thinking("[communities] 🔍 Detecting communities...".to_owned());
+    let Some(mut data) = crate::communities::detect(graph, 1.0) else {
+        return Ok(());
+    };
+    let count = data
+        .get("num_communities")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    let modularity = data
+        .get("modularity")
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    context.thinking(format!(
+        "[communities] 🏘️ Detected {count} communities (modularity={modularity:.3})"
+    ));
+    if let Some(options) = model.filter(|_| count > 0) {
+        context.thinking(format!(
+            "[communities] 🏷️ Generating labels for {count} communities..."
+        ));
+        crate::communities::label_and_summarize(
+            &options.model,
+            &mut data,
+            graph,
+            options.tuning,
+            &context.stop_signal(),
+        )
+        .await?;
+    }
+    outcome.communities = usize::try_from(count).unwrap_or(usize::MAX);
+    graph.set_community_data(data);
     Ok(())
 }
 
@@ -623,7 +695,7 @@ pub async fn run(
     key: GraphKey,
     source: &Source,
     settings: &IngestSettings,
-    model: Option<&ModelOptions>,
+    options: &RunOptions,
     context: &Context,
 ) -> Result<Outcome, EngineError> {
     let Some(_lease) = source_store::lease(pool, key)
@@ -641,10 +713,15 @@ pub async fn run(
         toolkit_type: source.kind.name().to_owned(),
         branch: Some(source.active_branch()),
     };
+    if options.full_rebuild {
+        store::delete(pool, key)
+            .await
+            .map_err(|e| store_error(&e))?;
+    }
     source_store::start(pool, key, &status)
         .await
         .map_err(|e| store_error(&e))?;
-    let outcome = run_started(pool, key, source, settings, model, context).await;
+    let outcome = run_started(pool, key, source, settings, options, context).await;
     if let Err(error) = &outcome {
         // The run's own error is what the caller sees; a failure to record
         // it as well is only logged.
@@ -699,7 +776,7 @@ async fn run_started(
     key: GraphKey,
     source: &Source,
     settings: &IngestSettings,
-    model: Option<&ModelOptions>,
+    options: &RunOptions,
     context: &Context,
 ) -> Result<Outcome, EngineError> {
     let repo_config = source.repo_config()?;
@@ -754,7 +831,7 @@ async fn run_started(
         &to_read,
         &parsed,
         &mut outcome,
-        model,
+        options,
         context,
     )
     .await?;

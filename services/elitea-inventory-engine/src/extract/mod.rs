@@ -63,7 +63,7 @@ impl Model {
         Self(Arc::new(call))
     }
 
-    async fn ask(&self, prompt: String) -> Result<String, EngineError> {
+    pub(crate) async fn ask(&self, prompt: String) -> Result<String, EngineError> {
         (self.0)(prompt).await
     }
 }

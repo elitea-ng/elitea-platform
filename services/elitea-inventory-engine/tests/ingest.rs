@@ -406,7 +406,7 @@ async fn a_source_is_cloned_ingested_and_re_ingested_incrementally() {
         key,
         &loopback_source(port),
         &settings,
-        None,
+        &ingest::RunOptions::default(),
         &context,
     )
     .await
@@ -445,7 +445,7 @@ async fn a_source_is_cloned_ingested_and_re_ingested_incrementally() {
         key,
         &loopback_source(port),
         &settings,
-        None,
+        &ingest::RunOptions::default(),
         &context,
     )
     .await
@@ -506,7 +506,7 @@ async fn a_refused_clone_is_recorded_and_commits_nothing() {
         key,
         &loopback_source(port),
         &settings(&root.join("jobs"), "github.com"),
-        None,
+        &ingest::RunOptions::default(),
         &context,
     )
     .await;
@@ -773,7 +773,10 @@ async fn a_source_with_a_model_gets_entities_facts_and_relations() {
     let transport = Transport::new(&TransportSettings::default()).expect("transport");
     let (context, _lines, stop) = context();
     let model = gateway_model(ChatClient::new(transport, model_settings), stop);
-    let options = ModelOptions::new(model);
+    let options = ingest::RunOptions {
+        model: Some(ModelOptions::new(model)),
+        ..ingest::RunOptions::default()
+    };
 
     let key = GraphKey::new(1, 10).expect("key");
     let outcome = ingest::run(
@@ -781,7 +784,7 @@ async fn a_source_with_a_model_gets_entities_facts_and_relations() {
         key,
         &loopback_source(port),
         &settings(&root.join("jobs"), "127.0.0.1"),
-        Some(&options),
+        &options,
         &context,
     )
     .await

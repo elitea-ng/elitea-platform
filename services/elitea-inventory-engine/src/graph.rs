@@ -370,6 +370,24 @@ impl Graph {
         self.nodes.insert(id, attributes);
     }
 
+    /// The edge from `source` to `target`, if there is one.
+    #[must_use]
+    pub fn edge(&self, source: &str, target: &str) -> Option<&Map<String, Value>> {
+        self.edges.get(source)?.get(target)
+    }
+
+    /// The outgoing edges of `source`: `(target, attributes)`, in insertion
+    /// order.
+    pub fn successors<'a>(
+        &'a self,
+        source: &str,
+    ) -> impl Iterator<Item = (&'a str, &'a Map<String, Value>)> + 'a {
+        self.edges
+            .get(source)
+            .into_iter()
+            .flat_map(|targets| targets.iter().map(|(target, edge)| (target.as_str(), edge)))
+    }
+
     /// Keep only the edges `keep` accepts (`source`, `target`, attributes);
     /// returns how many were removed.
     pub fn retain_edges(
