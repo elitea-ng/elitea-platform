@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
@@ -200,6 +201,25 @@ type ExecutionVerifier interface {
 	VerifyExecution(ctx context.Context, projectID, userID, executionID string) (bool, error)
 }
 
+// CallbackExecutionPrefix marks an execution id that names a provider
+// invocation rather than a runtime execution: `callback-<token uuid>`, where
+// the uuid is the callback token minted for that one invocation
+// (providerhost/material.CallbackSettings). A runtime execution id is 32 hex
+// characters, so the two never collide.
+const CallbackExecutionPrefix = "callback-"
+
+// CallbackExecutionVerifier is the optional half of a verifier that also
+// admits provider invocations. A provider engine (DeepWiki, Inventory) calls
+// /llm with the callback token minted for its invocation; there is no
+// execution_jobs row for that work, so the token IS the execution. The rule:
+// the id names the very token that authenticated this request (tokenID, the
+// principal's auth_core__token id), owned by userID, bound to projectID, and
+// not expired. Only the holder of that bearer can claim the id, and only
+// while the bearer lives.
+type CallbackExecutionVerifier interface {
+	VerifyCallbackExecution(ctx context.Context, projectID, userID, tokenID, tokenUUID string) (bool, error)
+}
+
 // executionVerifyTimeout bounds the lookup on the request path.
 const executionVerifyTimeout = 2 * time.Second
 
@@ -215,6 +235,18 @@ func verifiedExecutionID(ctx context.Context, verifier ExecutionVerifier, id ide
 	}
 	ctx, cancel := context.WithTimeout(ctx, executionVerifyTimeout)
 	defer cancel()
+	if tokenUUID, ok := strings.CutPrefix(executionID, CallbackExecutionPrefix); ok {
+		callbacks, implemented := verifier.(CallbackExecutionVerifier)
+		user, authenticated := auth.UserFromContext(ctx)
+		if !implemented || !authenticated || user.TokenID == "" || tokenUUID == "" {
+			return ""
+		}
+		ok, err := callbacks.VerifyCallbackExecution(ctx, id.projectID, id.userID, user.TokenID, tokenUUID)
+		if err != nil || !ok {
+			return ""
+		}
+		return executionID
+	}
 	ok, err := verifier.VerifyExecution(ctx, id.projectID, id.userID, executionID)
 	if err != nil || !ok {
 		return ""

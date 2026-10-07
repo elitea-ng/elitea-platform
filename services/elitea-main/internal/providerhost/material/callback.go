@@ -46,11 +46,25 @@ func CallbackSettings(base string, grant Grant, projectID int64, model string) m
 		// and both must be the one in the path — not one the client names.
 		"organization": fmt.Sprintf("%d", projectID),
 	}
+	if grant.UUID != "" {
+		// The run the gateway attributes this invocation's model spend to,
+		// sent by the engine as X-Elitea-Execution-Id (the /llm caller
+		// contract, as the worker sends its execution id). The /llm edge
+		// keeps it only while it names the very token that authenticated the
+		// call (llmproxy.CallbackExecutionPrefix), so it cannot be borrowed.
+		settings["execution_id"] = CallbackExecutionPrefix + grant.UUID
+	}
 	if model != "" {
 		settings["model_name"] = model
 	}
 	return settings
 }
+
+// CallbackExecutionPrefix is llmproxy.CallbackExecutionPrefix; the edge
+// recognises a provider invocation's execution id by it. Kept as its own
+// constant so this package stays free of the edge (TestCallbackExecutionPrefix
+// pins the two together).
+const CallbackExecutionPrefix = "callback-"
 
 // ToolSettingsCarried are the keys of a TOOL-level llm_settings block a facade
 // carries into its own: tuning, never transport. Everything else in that block
