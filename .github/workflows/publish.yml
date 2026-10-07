@@ -266,25 +266,6 @@ jobs:
           - name: elitea-worker-rust
             context: .
             dockerfile: ./services/elitea-worker-rust/Containerfile
-          # The DeepWiki provider service (ADR-0022 P3). Repo ROOT context: the
-          # Containerfile COPYs services/elitea-deepwiki from there.
-          #
-          # build-args carries EXTRAS=[storage-postgres] and nothing more. The
-          # engine's closure is torch-sized, and a release must not wait tens of
-          # minutes on two arches for it. The published image therefore serves
-          # the whole SPI and REFUSES every tool — it cannot silently look like
-          # it has an engine, because ELITEA_DEEPWIKI_RUNNER defaults to the
-          # refusing runner and GET /health names the active one.
-          #
-          # The engine image is `docker buildx bake elitea-deepwiki-engine`,
-          # deliberately not released here. Releasing it needs a decision about
-          # scan thresholds against a multi-GB ML closure that this entry does
-          # not make.
-          - name: elitea-deepwiki
-            context: .
-            dockerfile: ./services/elitea-deepwiki/Containerfile
-            build_args: |
-              EXTRAS=[storage-postgres]
           # The Inventory provider engine (ADR-0023 H4c). Repo ROOT context:
           # the Containerfile COPYs services/elitea-inventory from there.
           #
@@ -303,13 +284,11 @@ jobs:
           - name: elitea-inventory
             context: .
             dockerfile: ./services/elitea-inventory/Containerfile
-          # The Rust-native DeepWiki engine (ADR-0026 phase 7): the sidecar
-          # the chart runs for `deepwiki.engine.runner: native`. Repo ROOT
-          # context: the binary embeds the service migrations from
-          # services/elitea-deepwiki, outside the crate. No `target:` — the
-          # shipping stage is the last one. Unlike the Python `-engine`
-          # variant it IS released: one distroless binary, no ML closure, so
-          # there is no scan-threshold decision to wait for.
+          # The Rust-native DeepWiki engine (ADR-0026 phase 7): the only
+          # engine sidecar the chart runs. It replaced the Python
+          # elitea-deepwiki image, which is no longer published. Repo ROOT
+          # context: the Containerfile COPYs services/elitea-deepwiki-engine
+          # from there. No `target:` — the shipping stage is the last one.
           - name: elitea-deepwiki-engine-native
             context: .
             dockerfile: ./services/elitea-deepwiki-engine/Containerfile
@@ -356,9 +335,11 @@ jobs:
           target: ${{ matrix.image.target }}
           push: true
           tags: ${{ env.REGISTRY }}/${{ matrix.image.name }}:${{ needs.release.outputs.new_release_version }}-${{ matrix.platform.suffix }}
+          # No matrix entry passes build-args since the Python DeepWiki image
+          # (EXTRAS) was removed. One that needs them adds a `build_args` key
+          # to its entry and a line here.
           build-args: |
             VERSION=${{ needs.release.outputs.new_release_version }}
-            ${{ matrix.image.build_args }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
@@ -491,25 +472,14 @@ jobs:
           - name: elitea-worker-rust
             expect_type: rustbinary
             blocking: true
-          # python-pkg and exempt, like the other two Python images, and for
-          # the same measured reason they are: 16 HIGH/CRITICAL findings, all
-          # from the Debian base and none with a published fix. The count came
-          # from running this image as blocking first — see #635 for the
-          # numbers, #636 for the path that ends the entry, and
-          # ci-image-scan.yml for the same value and the register that holds
-          # the two files in step.
-          - name: elitea-deepwiki
-            expect_type: python-pkg
-            blocking: false
           # The Inventory provider engine (ADR-0023 H4c), scanned as it is
           # RELEASED: no build-args, so the engine closure is not in the image
           # under test either.
           #
-          # python-pkg and EXEMPT, on the same Debian base as elitea-deepwiki
-          # and therefore with the same base findings and the same absence of
-          # published fixes for them. Findings #635, retirement #636 — the
-          # entry it shares in .github/image-scan-exempt.txt, which the
-          # coverage job holds against this field.
+          # python-pkg and EXEMPT: its Debian base carries HIGH/CRITICAL
+          # findings with no published fix. Findings #635, retirement #636 —
+          # the entry in .github/image-scan-exempt.txt, which the coverage
+          # job holds against this field.
           - name: elitea-inventory
             expect_type: python-pkg
             blocking: false
@@ -652,25 +622,14 @@ jobs:
           - name: elitea-worker-rust
             expect_type: rustbinary
             blocking: true
-          # python-pkg and exempt, like the other two Python images, and for
-          # the same measured reason they are: 16 HIGH/CRITICAL findings, all
-          # from the Debian base and none with a published fix. The count came
-          # from running this image as blocking first — see #635 for the
-          # numbers, #636 for the path that ends the entry, and
-          # ci-image-scan.yml for the same value and the register that holds
-          # the two files in step.
-          - name: elitea-deepwiki
-            expect_type: python-pkg
-            blocking: false
           # The Inventory provider engine (ADR-0023 H4c), scanned as it is
           # RELEASED: no build-args, so the engine closure is not in the image
           # under test either.
           #
-          # python-pkg and EXEMPT, on the same Debian base as elitea-deepwiki
-          # and therefore with the same base findings and the same absence of
-          # published fixes for them. Findings #635, retirement #636 — the
-          # entry it shares in .github/image-scan-exempt.txt, which the
-          # coverage job holds against this field.
+          # python-pkg and EXEMPT: its Debian base carries HIGH/CRITICAL
+          # findings with no published fix. Findings #635, retirement #636 —
+          # the entry in .github/image-scan-exempt.txt, which the coverage
+          # job holds against this field.
           - name: elitea-inventory
             expect_type: python-pkg
             blocking: false
@@ -1037,7 +996,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-deepwiki" "elitea-inventory" "elitea-deepwiki-engine-native")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-inventory" "elitea-deepwiki-engine-native")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 

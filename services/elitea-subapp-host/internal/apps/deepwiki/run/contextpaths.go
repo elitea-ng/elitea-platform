@@ -31,11 +31,11 @@ package run
 // in that manifest is REFUSED, not dropped. A dropped attachment is an
 // answer that looks grounded in pages it never saw.
 //
-// TWO IMPLEMENTATIONS, ONE FIXTURE. The Python wrapper
-// (services/elitea-deepwiki/src/elitea_deepwiki/wiki_context.py) carries the
-// same rules for the standalone stack. Both are pinned to
-// conformance/provider/fixtures/deepwiki/context/context_paths.json, so the
-// two cannot drift without a test saying so.
+// ONE FIXTURE. The rules are pinned to
+// conformance/provider/fixtures/deepwiki/context/context_paths.json. The
+// retired Python wrapper (wiki_context.py) carried a second copy pinned to
+// the same file; this host is now the only implementation, and the Rust
+// engine receives the resolved context.
 
 import (
 	"context"

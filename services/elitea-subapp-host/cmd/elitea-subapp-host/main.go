@@ -2,8 +2,9 @@
 //
 //	ELITEA_SUBAPP=deepwiki|echo|inventory  which application (default: deepwiki)
 //	ELITEA_<APP>_RUNNER=unavailable|echo|…  the application's runner; fixture
-//	                                and legacy are DeepWiki's own
-//	ELITEA_<APP>_ENGINE_SOCKET      the engine sidecar's Unix socket (legacy)
+//	                                and native are DeepWiki's own (legacy is
+//	                                retired and refused at start)
+//	ELITEA_<APP>_ENGINE_SOCKET      the engine sidecar's Unix socket (native)
 //	ELITEA_<APP>_DATABASE_URL       the durable invocation store (else in memory)
 //	ELITEA_<APP>_*                  the host settings under the app's prefix
 //

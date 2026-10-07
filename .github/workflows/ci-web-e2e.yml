@@ -92,7 +92,6 @@ on:
       - "apps/elitea-web/**"
       - "tools/uictl/**"
       - "services/elitea-main/**"
-      - "services/elitea-deepwiki/**"
       # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
       # its fixture runner).
       - "services/elitea-deepwiki-engine/**"
@@ -123,7 +122,6 @@ on:
       - "apps/elitea-web/**"
       - "tools/uictl/**"
       - "services/elitea-main/**"
-      - "services/elitea-deepwiki/**"
       # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
       # its fixture runner).
       - "services/elitea-deepwiki-engine/**"

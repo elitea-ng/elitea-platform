@@ -9,33 +9,29 @@ name: Dependency Scanning
 #
 # ── THE SECOND JOB, AND WHY IT LIVES HERE ───────────────────────────────────
 #
-# `engine-closures` resolves the two FROZEN analysis-engine closures
-# (services/elitea-deepwiki and services/elitea-inventory `engine` extras).
-# The full reasoning is in scripts/ci/check-engine-closures.sh; the placement
-# reasoning is this:
+# `engine-closures` resolves the FROZEN analysis-engine closure
+# (services/elitea-inventory's `engine` extra; the Python DeepWiki service had
+# the second one until it was deleted). The full reasoning is in
+# scripts/ci/check-engine-closures.sh; the placement reasoning is this:
 #
-#   * ci-deepwiki-conformance.yml was the obvious alternative and it does not
-#     fit. Its triggers cover services/elitea-deepwiki/** and the provider
-#     conformance tree, and NOTHING about services/elitea-inventory — so half
-#     of what this gate exists to protect would never start it. It also has no
-#     schedule arm, and half of this gate's value is the run that happens with
-#     no pull request at all.
+#   * ci-inventory.yml was the obvious alternative and it does not fit: it has
+#     no schedule arm, and half of this gate's value is the run that happens
+#     with no pull request at all.
 #   * this workflow is already "the dependabot configuration versus the tree it
 #     claims to cover". A closure dependabot is deliberately SILENT on
-#     (`ignore: "*"`, `open-pull-requests-limit: 0` for both packages) is the
-#     same subject: the manifest nobody is watching. Putting it here also means
-#     no new workflow file, and so no new decision to record in
+#     (`ignore: "*"`, `open-pull-requests-limit: 0`) is the same subject: the
+#     manifest nobody is watching. Putting it here also means no new workflow
+#     file, and so no new decision to record in
 #     scripts/ci/check_workflow_branch_coverage.py's exemption table.
 #   * it inherits this workflow's unfiltered `pull_request` arm, which is
-#     STRONGER than the path filter the two pyproject files would give it. The
-#     input that broke these closures without touching either pyproject is the
-#     outside world: a new `elitea-sdk` release, a yanked distribution, an
-#     advisory-driven re-pin somewhere upstream. A path filter cannot see any
-#     of those.
+#     STRONGER than the path filter the pyproject would give it. The input that
+#     broke these closures without touching a pyproject is the outside world: a
+#     new `elitea-sdk` release, a yanked distribution, an advisory-driven re-pin
+#     somewhere upstream. A path filter cannot see any of those.
 #
-# The schedule arm is new and it is for the same reason: with dependabot
-# silenced on both packages, a world change reaches these closures with no pull
-# request to attach a gate to. Daily, so "it broke on Tuesday" is answerable.
+# The schedule arm is for the same reason: with dependabot silenced on the
+# package, a world change reaches the closure with no pull request to attach a
+# gate to. Daily, so "it broke on Tuesday" is answerable.
 
 on:
   pull_request:
@@ -79,23 +75,23 @@ jobs:
     name: The frozen engine closures still resolve
     runs-on: ubuntu-latest
 
-    # It RESOLVES, it does not install and it does not build. The DeepWiki
-    # `-engine` image is ~2 GB and needs >35 GB of disk and tens of minutes,
-    # which is exactly why its build is not a per-change gate — and why ten
-    # bumps inside these closures reached main with nothing to report them.
-    # A resolver answers the same question in seconds without fetching torch.
+    # It RESOLVES, it does not install and it does not build. An `-engine`
+    # image needs tens of minutes, which is exactly why its build is not a
+    # per-change gate — and why ten bumps inside these closures reached main
+    # with nothing to report them. A resolver answers the same question in
+    # seconds.
     timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v7
 
-      # 3.12 because both packages declare requires-python ">=3.12,<3.13" and
-      # pip resolves for the interpreter it runs on. The script refuses any
+      # 3.12 because the package declares requires-python ">=3.12,<3.13" and
+      # the resolver targets this interpreter's version. The script refuses any
       # other version rather than resolving a different set and calling it a
       # pass.
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
-      - name: Resolve both engine extras
+      - name: Resolve the engine extra
         run: bash scripts/ci/check-engine-closures.sh

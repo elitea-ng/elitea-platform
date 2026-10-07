@@ -1,8 +1,8 @@
 package spi_test
 
 // The durable store against a real PostgreSQL, in a schema of its own that
-// the Python package's migration creates — the SAME migration production
-// applies (services/elitea-deepwiki/…/migrations/0002_invocations.sql).
+// the DeepWiki engine's migration creates — the SAME migration production
+// applies (services/elitea-deepwiki-engine/migrations/0002_invocations.sql).
 // Gated on ELITEA_SUBAPP_HOST_TEST_DSN: without it the suite reports the
 // skip loudly rather than passing a store it never touched.
 

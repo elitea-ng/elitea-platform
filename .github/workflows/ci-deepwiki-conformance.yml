@@ -1,54 +1,40 @@
-name: CI — DeepWiki
+name: CI — Provider conformance fixtures
 
-# ADR-0022 ports deepwiki_plugin into services/elitea-deepwiki. Two gates run
-# here:
+# The published provider contract (conformance/provider): the phase-P0 golden
+# fixtures DeepWiki was ported against, the legacy v0 bundle, and the DeepWiki
+# descriptor revision guard (tests/test_descriptor_revision.py, which keeps
+# the Go host's served descriptor equal to the generated legacy-v1 fixture).
+# It installs nothing but pytest — replaying the committed fixtures needs only
+# the standard library. Fixtures that nothing replays are dead weight that
+# reads as coverage.
 #
-#   * "Fixture invariants" replays the phase-P0 golden fixtures on their own.
-#     It installs nothing but pytest — replaying the committed fixtures needs
-#     only the standard library. Fixtures that nothing replays are dead weight
-#     that reads as coverage.
-#   * "Service conformance" drives the ported ASGI service and compares its
-#     answers with those same fixtures. This is what makes "the SPI is a frozen
-#     contract" (decision 2) mean something: moving the contract fails a build.
-#     It also checks the engine copy's digests and the dispatch/composition
-#     adapter, neither of which needs the engine's multi-GB closure.
-#   * "Storage parity" runs the legacy file backend and the PostgreSQL backend
-#     side by side over the P0 retrieval fixtures. This is the gate on decision
-#     3 — the SQLite/FAISS to pgvector/tsvector port — which ADR-0022 names as
-#     carrying the largest share of port risk.
-#
-# Re-recording the fixtures from the legacy deepwiki_plugin checkout
-# (conformance/provider/tools/record_*.py) is a local step — the legacy plugin is not
-# available to CI.
+# The Python DeepWiki service and its service, storage-parity and image jobs
+# were removed with services/elitea-deepwiki; the Rust engine's gates are in
+# ci-deepwiki-engine.yml, and the Go host replays the same fixtures in
+# ci-go.yml. Re-recording the fixtures from the legacy deepwiki_plugin
+# checkout (conformance/provider/tools/record_*.py) is a local step — the
+# legacy plugin is not available to CI.
 
 on:
   pull_request:
     paths:
-      - "services/elitea-deepwiki/**"
-      # P1.0 moved the conformance suite OUT of services/elitea-deepwiki,
-      # because it is the published provider contract and not one provider's
-      # test directory. Without these three lines the move would have silently
-      # switched this workflow off for every change to the contract, the
-      # fixtures and the legacy bundle — the gate would still be listed, still
-      # be green, and check nothing that moved.
       - "conformance/provider/**"
       - "libs/provider/**"
       - "scripts/provider/**"
+      # The descriptor guard compares the fixture with the copy the Go host
+      # serves.
+      - "services/elitea-subapp-host/internal/apps/deepwiki/descriptor.json"
       - ".github/workflows/ci-deepwiki-conformance.yml"
   push:
     branches:
       - main
     paths:
-      - "services/elitea-deepwiki/**"
-      # P1.0 moved the conformance suite OUT of services/elitea-deepwiki,
-      # because it is the published provider contract and not one provider's
-      # test directory. Without these three lines the move would have silently
-      # switched this workflow off for every change to the contract, the
-      # fixtures and the legacy bundle — the gate would still be listed, still
-      # be green, and check nothing that moved.
       - "conformance/provider/**"
       - "libs/provider/**"
       - "scripts/provider/**"
+      # The descriptor guard compares the fixture with the copy the Go host
+      # serves.
+      - "services/elitea-subapp-host/internal/apps/deepwiki/descriptor.json"
       - ".github/workflows/ci-deepwiki-conformance.yml"
 
 concurrency:
@@ -83,96 +69,3 @@ jobs:
       # disagree with nothing reporting it.
       - name: The legacy v0 bundle has not drifted
         run: bash scripts/provider/verify-legacy-bundle.sh
-
-  service:
-    name: Engine package
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - name: Install the service and its test extras
-        working-directory: services/elitea-deepwiki
-        # storage-postgres is the DRIVER, not a server. Having it here without
-        # a database is exactly the "database unreachable" case the readiness
-        # tests exercise — and without it, a service configured with a DSN
-        # cannot even be constructed, so those paths would go untested in the
-        # one job that runs driver-adjacent code without a database.
-        run: python -m pip install --disable-pip-version-check -e ".[test,storage-postgres]"
-
-      - name: Test the engine package and its sidecar
-        working-directory: services/elitea-deepwiki
-        # The SPI conformance suite is the Go host's now (ci-go.yml runs
-        # services/elitea-subapp-host against the same fixtures). Scoped
-        # deliberately: tests/storage needs a database and would SKIP here,
-        # which would let this job's green tick look like it covered storage
-        # parity. That gate is the storage-parity job below.
-        run: python -m pytest tests/unit tests/engine -q
-
-      - name: Verify the engine copy is verbatim
-        working-directory: services/elitea-deepwiki
-        # Needs no legacy checkout: it hashes what is committed here.
-        run: python tools/refresh_engine_copy.py --check
-
-  storage-parity:
-    name: Storage parity (PostgreSQL)
-    runs-on: ubuntu-latest
-
-    # The gate on ADR-0022 decision 3. It compares the PostgreSQL backend with
-    # the legacy file backend, both live, over the P0 retrieval fixtures.
-    services:
-      postgres:
-        image: pgvector/pgvector:0.8.5-pg16-trixie
-        env:
-          POSTGRES_USER: deepwiki
-          POSTGRES_PASSWORD: deepwiki
-          POSTGRES_DB: deepwiki
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U deepwiki"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-
-    env:
-      DEEPWIKI_TEST_DSN: postgresql://deepwiki:deepwiki@127.0.0.1:5432/deepwiki
-      # Without this the suite SKIPS when it cannot reach a database, and a
-      # broken service block would report a green parity run that never
-      # connected. This turns that into a failure.
-      DEEPWIKI_REQUIRE_POSTGRES: "1"
-
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12"
-
-      - name: Install the service with both storage backends
-        working-directory: services/elitea-deepwiki
-        run: |
-          python -m pip install --disable-pip-version-check \
-            -e ".[test,storage-postgres,storage-legacy]"
-
-      - name: Compare the backends against the P0 retrieval fixtures
-        working-directory: services/elitea-deepwiki
-        # -rs prints the skip reasons: a skipped parity case must be visible in
-        # the log, not inferred from a green tick.
-        run: python -m pytest tests/storage -q -rs
-
-  image:
-    name: Container builds
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      # The image is not published yet (no docker-bake.hcl target — the engine
-      # closure will make it torch-sized and it stays out of the default bake
-      # group). Building it here keeps the Containerfile honest in the
-      # meantime: a broken build is caught on the change that broke it.
-      - name: Build the engine sidecar image
-        run: docker build -f services/elitea-deepwiki/Containerfile -t elitea-deepwiki:ci .

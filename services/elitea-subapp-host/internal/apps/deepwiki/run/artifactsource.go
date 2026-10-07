@@ -5,9 +5,10 @@ package run
 // The four legacy providers all name a remote to clone. A fifth kind of
 // source names a folder in the INVOKING PROJECT's artifact store: a bucket,
 // and optionally a prefix inside it. The engine still indexes a directory —
-// the Python side downloads the folder into the one a clone would have
-// produced (elitea_deepwiki/artifact_source.py) — so everything downstream of
-// the repo_config is unchanged.
+// the engine downloads the folder into the one a clone would have produced
+// (src/ingest/artifact.rs in the Rust engine, a port of the retired Python
+// artifact_source.py) — so everything downstream of the repo_config is
+// unchanged.
 //
 // THE SOURCE IS SPELLED IN THE REPOSITORY STRING, `artifact://{bucket}` or
 // `artifact://{bucket}/{prefix}`. The repository is the one value that
@@ -125,7 +126,7 @@ func safeKeyPrefix(prefix string) bool {
 }
 
 // artifactRepoConfig is the normalised repo_config an artifact source
-// produces. The Python twin is elitea_deepwiki.artifact_source.repo_config_for.
+// produces. Its twin was the retired Python artifact_source.repo_config_for.
 func artifactRepoConfig(source ArtifactSource, branch any) RepoConfig {
 	name := trimSpace(str(branch))
 	if name == "" {

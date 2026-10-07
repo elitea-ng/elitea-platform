@@ -11,8 +11,8 @@ package run_test
 // events happened.
 //
 // The golden sequence is conformance/provider/fixtures/deepwiki/stream/
-// token_events.json. The Python engine's own tests replay its `engine_lines`
-// half (services/elitea-deepwiki/tests/unit/test_answer_tokens.py) and the
+// token_events.json. The Rust engine's own tests replay its `engine_lines`
+// half (services/elitea-deepwiki-engine/tests/conformance.rs) and the
 // browser's replay the `chat_frames` half
 // (apps/elitea-web/src/features/wiki-chat/lib/framesFromChatPoll.test.ts).
 
