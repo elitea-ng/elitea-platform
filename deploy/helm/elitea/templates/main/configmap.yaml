@@ -23,6 +23,12 @@
   refuses to start when this variable is PRESENT at all, so a chart that always
   wrote a value here would stop a default install. See elitea.aiProjectId.
 */ -}}
+{{- /*
+  The DeepWiki callback origin through platform-edge (ADR-0027), when
+  deepwiki.callbackViaPlatformEdge fills it in; an explicit value wins.
+*/ -}}
+{{- $deepwikiCallback := include "elitea-deepwiki.callbackBaseUrl" . }}
+{{- if and $deepwikiCallback (not (get $env "ELITEA_DEEPWIKI_CALLBACK_BASE_URL")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" $deepwikiCallback) }}{{- end }}
 {{- $aiProjectId := include "elitea.aiProjectId" . }}
 {{- if and $aiProjectId (not (get $env "ELITEA_AI_PROJECT_ID")) }}{{- $env = merge (deepCopy $env) (dict "ELITEA_AI_PROJECT_ID" $aiProjectId) }}{{- end }}
 {{- /*

@@ -67,7 +67,7 @@ func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 			return client.Invoke(ctx, tool, stamped, tc)
 		}
 	}
-	transport := ArtifactClientFrom(settings.TLSCAFile)
+	transport := ArtifactClientFrom(settings.CallbackCA())
 	tools := map[string]Tool{}
 	for name, tool := range sidecar {
 		if name == ResolveWikiTool {

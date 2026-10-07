@@ -43,8 +43,42 @@ Each is checked at `helm template` time and not only at container start,
 because the container's own refusal is a CrashLoopBackOff an operator has to
 go read logs for, and this is a message in the terminal that ran the command.
 */}}
+{{/*
+elitea-deepwiki.callbackBaseUrl — the origin the provider calls back to: an
+explicit main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL, else platform-edge when
+deepwiki.callbackViaPlatformEdge is on, else empty (which validateDeepWiki
+refuses for an enabled facade).
+*/}}
+{{- define "elitea-deepwiki.callbackBaseUrl" -}}
+{{- $explicit := get (.Values.main.env | default dict) "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" | default "" | toString -}}
+{{- if $explicit -}}
+{{- $explicit -}}
+{{- else if .Values.deepwiki.callbackViaPlatformEdge -}}
+{{- .Values.worker.runtime.platformOrigin -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Where both containers find the runtime CA for the callback hop. */}}
+{{- define "elitea-deepwiki.runtimeCaPath" -}}/run/elitea-runtime-ca{{- end -}}
+
 {{- define "elitea-deepwiki.validateGuards" -}}
 {{- $env := .Values.deepwiki.env | default dict -}}
+
+{{/*
+  Guard #0: the callback hop through platform-edge (ADR-0027). The edge is a
+  worker component, so without the worker there is nothing to dial; and an
+  explicit callback URL that is not the edge would leave the runtime CA
+  mounted for a hop that never uses it.
+*/}}
+{{- if .Values.deepwiki.callbackViaPlatformEdge -}}
+{{- if not (and .Values.worker.enabled .Values.worker.platformEdge.enabled) -}}
+{{- fail "deepwiki.callbackViaPlatformEdge is on, but platform-edge is not rendered: it needs worker.enabled and worker.platformEdge.enabled. Turn those on, or leave the callback hop on main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL (cleartext in-cluster)." -}}
+{{- end -}}
+{{- $explicit := get (.Values.main.env | default dict) "ELITEA_DEEPWIKI_CALLBACK_BASE_URL" | default "" | toString -}}
+{{- if and $explicit (ne $explicit (.Values.worker.runtime.platformOrigin | toString)) -}}
+{{- fail (printf "deepwiki.callbackViaPlatformEdge is on, so the callback hop is %s, but main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL says %q. Leave it unset (the chart fills it in) or turn the flag off." .Values.worker.runtime.platformOrigin $explicit) -}}
+{{- end -}}
+{{- end -}}
 
 {{/*
   Guard #1: the git-host allowlist.

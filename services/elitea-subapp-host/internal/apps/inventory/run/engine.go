@@ -77,6 +77,6 @@ func NewEngineRunner(settings spi.Settings) *Runner {
 	return &Runner{
 		RunnerName: "legacy",
 		Tools:      tools,
-		Artifacts:  ArtifactClientFrom(settings.TLSCAFile),
+		Artifacts:  ArtifactClientFrom(settings.CallbackCA()),
 	}
 }

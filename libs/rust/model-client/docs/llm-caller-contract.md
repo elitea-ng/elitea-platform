@@ -111,7 +111,7 @@ set, unless `OTEL_SDK_DISABLED=true`.
 
 | | Worker | Engine |
 | --- | --- | --- |
-| Transport | HTTP/2 only, through `platform-edge` over TLS | HTTP/1.1 or 2, to the callback base (`ELITEA_*_CALLBACK_BASE_URL`) |
+| Transport | HTTP/2 only, through `platform-edge` over TLS | HTTP/1.1 or 2, to the callback base (`ELITEA_*_CALLBACK_BASE_URL`): cleartext in-cluster, or `platform-edge` over TLS when the chart's `callbackViaPlatformEdge` is on |
 | Retries | none in the facade (the ADK decides from `retryable`) | up to `llm_settings.max_retries` (default 2), backoff 0.5 s · 2ⁿ ≤ 8 s, honours `retry-after` ≤ 60 s |
 | Response headers / non-stream request | 120 s | 10 min |
 | Stream idle | 120 s | 5 min |
@@ -130,8 +130,13 @@ set, unless `OTEL_SDK_DISABLED=true`.
   - a client certificate that is never rotated and that the edge does not
     check;
   - no embeddings client.
-- **Engine transport:** an engine reaches elitea-main directly over plain HTTP
-  inside the cluster. Routing it through `platform-edge` over TLS is a
-  deployment change (the engine pod must trust the runtime CA) and is
-  tracked separately. Note that the edge itself forwards to elitea-main over
-  plain HTTP and does not verify client certificates.
+- **Engine transport:** by default an engine reaches elitea-main directly
+  over plain HTTP inside the cluster.
+  - With `deepwiki.callbackViaPlatformEdge: true` (Helm; needs
+    `worker.platformEdge`), the callback origin becomes
+    `worker.runtime.platformOrigin`.
+  - The host and the engine then trust the runtime CA through
+    `ELITEA_DEEPWIKI_CALLBACK_CA_FILE`, which only the `runtime-ca.crt` key
+    of the worker's material Secret reaches. This is the worker's posture.
+  - The edge itself forwards to elitea-main over plain HTTP and does not
+    verify client certificates, so the gain is TLS on the pod-to-edge hop.

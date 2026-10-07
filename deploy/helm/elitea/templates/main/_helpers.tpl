@@ -593,7 +593,7 @@ reads, which looks configured and does nothing.
 {{- if not (hasPrefix "https://" $url) -}}
 {{- fail (printf "env.ELITEA_DEEPWIKI_BASE_URL must be an https URL, and it is %q. The provider refuses non-mTLS traffic, so a plain-http origin is a facade that fails on every call; NewProxy catches it at startup." $url) -}}
 {{- end -}}
-{{- if not (get $env "ELITEA_DEEPWIKI_CALLBACK_BASE_URL") -}}
+{{- if not (include "elitea-deepwiki.callbackBaseUrl" .) -}}
 {{- fail "env.ELITEA_DEEPWIKI_ENABLED is on, so env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL must name the origin the PROVIDER calls back to for artifacts and models. Without it a generation runs to completion and then cannot hand back what it produced — the failure arrives at the end of the most expensive operation the facade offers. Set it to this deployment's own in-cluster origin, e.g. http://elitea-main:8080." -}}
 {{- end -}}
 {{- if not (get $env "ELITEA_DEEPWIKI_GIT_ALLOWLIST") -}}
