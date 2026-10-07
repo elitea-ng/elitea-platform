@@ -5,12 +5,13 @@
 fixture runners replay — the two-runner-drift trap
 `support-inventory-wiki-survey.md` (INV-2) warns about, made mechanical.
 
-## The two runners
+## The runners
 
 | Runner | Where | Stack that runs it |
 |---|---|---|
 | Go | `services/elitea-subapp-host/internal/apps/inventory/run/fixture.go` | the E2E stack (`ELITEA_INVENTORY_RUNNER=fixture` on the Go host — no engine sidecar at all) |
 | Python | `services/elitea-inventory/src/elitea_inventory/fixture_graph.py` (used by `fixture_runner.py`) | the standalone-full stack's engine sidecar over the Unix socket |
+| Rust | `services/elitea-inventory-engine/src/fixture.rs` (ADR-0027; packaged copy `src/fixtures/graph.json`) | the native engine sidecar, `ELITEA_INVENTORY_RUNNER=fixture` — `tests/conformance.rs` holds it to these files, and the host's `native_engine_test.go` to the Go runner over the socket |
 
 Both answer from the SAME graph: six entities (two source toolkits — `code`,
 `docs` — three types, two layers) and five relations. `code:payment-client` is

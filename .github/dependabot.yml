@@ -116,6 +116,7 @@ updates:
       - /services/elitea-code-runner/adapters/rust
       - /services/elitea-deepwiki-engine
       - /libs/rust
+      - /services/elitea-inventory-engine
     multi-ecosystem-group: weekly
     patterns: ["*"]
     ignore:

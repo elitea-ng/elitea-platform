@@ -1,0 +1,90 @@
+{
+  "_comment": [
+    "The ONE canned knowledge graph both fixture runners replay:",
+    "services/elitea-subapp-host/internal/apps/inventory/run/fixture.go",
+    "(FixtureEntities/FixtureRelations/FixturePresets, Go constants — a Go",
+    "test in that package, fixture_parity_test.go, asserts the constants",
+    "equal this file) and services/elitea-inventory's Python engine",
+    "(elitea_inventory.fixture_graph, which loads this file at runtime, by",
+    "default from its own packaged copy at",
+    "src/elitea_inventory/fixtures/inventory/spi/graph.json — a test in that",
+    "package asserts the two copies are byte-identical). Editing the graph",
+    "means editing this file and re-running both tests; editing only one",
+    "language's copy is exactly the two-runner-drift trap this file exists",
+    "to make mechanical.",
+    "",
+    "Two source toolkits, three entity types and two layers, because every",
+    "read tool below groups by one of those three and a graph with one of",
+    "each cannot tell a correct grouping from a constant.",
+    "`code:payment-client` is deliberately the only entity with more than one",
+    "inbound edge — it is what impact_analysis and get_related_entities have",
+    "something to say about."
+  ],
+  "entities": [
+    {
+      "id": "code:checkout-service",
+      "name": "CheckoutService",
+      "type": "class",
+      "layer": "application",
+      "source_toolkit": "code",
+      "file_path": "src/checkout/service.py",
+      "content": "class CheckoutService:\n    \"\"\"Places an order.\"\"\"\n"
+    },
+    {
+      "id": "code:place-order",
+      "name": "place_order",
+      "type": "function",
+      "layer": "application",
+      "source_toolkit": "code",
+      "file_path": "src/checkout/service.py",
+      "content": "def place_order(cart):\n    return Order(cart)\n"
+    },
+    {
+      "id": "code:order-model",
+      "name": "Order",
+      "type": "class",
+      "layer": "domain",
+      "source_toolkit": "code",
+      "file_path": "src/checkout/models.py",
+      "content": "class Order:\n    items: list\n"
+    },
+    {
+      "id": "code:payment-client",
+      "name": "PaymentClient",
+      "type": "class",
+      "layer": "infrastructure",
+      "source_toolkit": "code",
+      "file_path": "src/payments/client.py",
+      "content": "class PaymentClient:\n    def charge(self, order): ...\n"
+    },
+    {
+      "id": "docs:checkout-guide",
+      "name": "Checkout guide",
+      "type": "document",
+      "layer": "documentation",
+      "source_toolkit": "docs",
+      "file_path": "docs/checkout.md",
+      "content": "# Checkout guide\n\nThe checkout service places an order.\n"
+    },
+    {
+      "id": "docs:payments-guide",
+      "name": "Payments guide",
+      "type": "document",
+      "layer": "documentation",
+      "source_toolkit": "docs",
+      "file_path": "docs/payments.md",
+      "content": "# Payments guide\n\nPayment is charged after the order lands.\n"
+    }
+  ],
+  "relations": [
+    { "source": "code:checkout-service", "target": "code:place-order", "relation_type": "defines" },
+    { "source": "code:place-order", "target": "code:order-model", "relation_type": "returns" },
+    { "source": "code:place-order", "target": "code:payment-client", "relation_type": "calls" },
+    { "source": "docs:checkout-guide", "target": "code:checkout-service", "relation_type": "documents" },
+    { "source": "docs:payments-guide", "target": "code:payment-client", "relation_type": "documents" }
+  ],
+  "presets": {
+    "code": "Parsers for source files, one entity per class and function.",
+    "documentation": "Markdown and text files, one entity per document."
+  }
+}
