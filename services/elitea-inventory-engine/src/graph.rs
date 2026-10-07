@@ -476,6 +476,46 @@ impl Graph {
         true
     }
 
+    /// Forget what one file of one source said: its citations, the edges
+    /// discovered in it, and every node left with no citation at all
+    /// (with that node's edges). A node another file or source still
+    /// cites stays, with its other citations. Returns the number of nodes
+    /// removed.
+    ///
+    /// This is what an incremental run does to a changed or deleted file
+    /// before reading it again. A node that never had citations (none
+    /// added by ingestion) is not touched.
+    pub fn remove_file(&mut self, source_toolkit: &str, file_path: &str) -> usize {
+        let cites = |citation: &Value| {
+            citation.get("file_path").and_then(Value::as_str) == Some(file_path)
+                && citation.get("source_toolkit").and_then(Value::as_str) == Some(source_toolkit)
+        };
+        let mut orphaned = Vec::new();
+        for (id, node) in &mut self.nodes {
+            let Some(Value::Array(citations)) = node.get_mut("citations") else {
+                continue;
+            };
+            let before = citations.len();
+            citations.retain(|citation| !cites(citation));
+            if citations.is_empty() && before > 0 {
+                orphaned.push(id.clone());
+            }
+        }
+        for id in &orphaned {
+            self.nodes.shift_remove(id);
+            self.edges.shift_remove(id);
+        }
+        let discovered_here = |edge: &Map<String, Value>| {
+            edge.get("discovered_in_file").and_then(Value::as_str) == Some(file_path)
+                && edge.get("source_toolkit").and_then(Value::as_str) == Some(source_toolkit)
+        };
+        for targets in self.edges.values_mut() {
+            targets.retain(|target, edge| !orphaned.contains(target) && !discovered_here(edge));
+        }
+        self.edges.retain(|_, targets| !targets.is_empty());
+        orphaned.len()
+    }
+
     /// Set a node's embedding vector; `false` for an unknown node.
     pub fn set_embedding(&mut self, entity_id: &str, vector: &[f64]) -> bool {
         let Some(node) = self.nodes.get_mut(entity_id) else {
@@ -750,5 +790,72 @@ mod tests {
         assert_eq!(edge.get("source"), Some(&json!("parser")));
         let document = graph.to_node_link("now");
         assert_eq!(document["links"][0]["source"], json!("a"));
+    }
+
+    #[test]
+    fn removing_a_file_keeps_what_others_still_cite() {
+        let cite = |file: &str, source: &str| Citation {
+            file_path: file.to_owned(),
+            source_toolkit: Some(source.to_owned()),
+            ..Citation::default()
+        };
+        let mut graph = Graph::new();
+        graph.add_entity(
+            "shared",
+            "Shared",
+            "concept",
+            Some(&cite("a.py", "repo")),
+            None,
+        );
+        graph.add_entity(
+            "shared",
+            "Shared",
+            "concept",
+            Some(&cite("b.py", "repo")),
+            None,
+        );
+        graph.add_entity(
+            "only_a",
+            "OnlyA",
+            "class",
+            Some(&cite("a.py", "repo")),
+            None,
+        );
+        graph.add_entity(
+            "other_source",
+            "X",
+            "class",
+            Some(&cite("a.py", "wiki")),
+            None,
+        );
+        graph.add_entity("uncited", "U", "class", None, None);
+        let found_in = |file: &str| json!({"discovered_in_file": file, "source_toolkit": "repo"});
+        graph.add_relation("shared", "only_a", "uses", None);
+        graph.add_relation(
+            "shared",
+            "other_source",
+            "uses",
+            found_in("a.py").as_object(),
+        );
+        graph.add_relation(
+            "other_source",
+            "shared",
+            "uses",
+            found_in("b.py").as_object(),
+        );
+
+        assert_eq!(graph.remove_file("repo", "a.py"), 1);
+        assert!(graph.node("only_a").is_none());
+        assert_eq!(
+            graph.node("shared").and_then(|n| n.get("citations")),
+            Some(&json!([cite("b.py", "repo").to_value()]))
+        );
+        assert!(
+            graph.node("other_source").is_some(),
+            "another source's citation"
+        );
+        assert!(graph.node("uncited").is_some());
+        let edges: Vec<(&str, &str)> = graph.edges().map(|(s, t, _)| (s, t)).collect();
+        assert_eq!(edges, [("other_source", "shared")]);
     }
 }

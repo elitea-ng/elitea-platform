@@ -1,0 +1,98 @@
+[
+  {
+    "type": "file",
+    "name": "src/users.py",
+    "file_path": "src/users.py",
+    "id": "8109fd978928"
+  },
+  {
+    "type": "file",
+    "name": "Docs/README.md",
+    "file_path": "Docs/README.md",
+    "id": "d37cae2adc9b"
+  },
+  {
+    "type": "class",
+    "name": "UserService",
+    "file_path": "src/users.py",
+    "id": "b50c334b042b"
+  },
+  {
+    "type": "class",
+    "name": "UserAuthenticationServiceImpl",
+    "file_path": "src/a.py",
+    "id": "7e03c1ba5c78"
+  },
+  {
+    "type": "class",
+    "name": "UserAuthenticationServiceImpl",
+    "file_path": "src/b.py",
+    "id": "7e03c1ba5c78"
+  },
+  {
+    "type": "function",
+    "name": "get",
+    "file_path": "src/a.py",
+    "id": "4d9ee37999d9"
+  },
+  {
+    "type": "function",
+    "name": "get_user_by_identifier",
+    "file_path": "src/a.py",
+    "id": "4f11b1b228ea"
+  },
+  {
+    "type": "function",
+    "name": "  Padded Name  ",
+    "file_path": "src/a.py",
+    "id": "190af8d634d2"
+  },
+  {
+    "type": "method",
+    "name": "a_long_descriptive_method_name",
+    "file_path": "src/a.py",
+    "id": "3ba7c0c83f4e"
+  },
+  {
+    "type": "concept",
+    "name": "Billing",
+    "file_path": "docs/x.md",
+    "id": "67e361e7b274"
+  },
+  {
+    "type": "concept",
+    "name": "Billing",
+    "file_path": null,
+    "id": "67e361e7b274"
+  },
+  {
+    "type": "Class",
+    "name": "HTTPServerFactoryBuilder",
+    "file_path": "x.py",
+    "id": "4a7f7b1fce6b"
+  },
+  {
+    "type": "fact",
+    "name": "validation_create_user",
+    "file_path": "src/users.py",
+    "id": "955738475742"
+  },
+  {
+    "type": "function",
+    "name": "parseHTTPResponseBody",
+    "file_path": "x.go",
+    "id": "577a2b11e0b7"
+  },
+  {
+    "type": "module",
+    "name": "Ωμέγα_ΣΟΦΟΣ_μεγάλο",
+    "file_path": "src/greek.py",
+    "id": "1eb5f2107950"
+  },
+  {
+    "type": "function",
+    "name": "short",
+    "file_path": "",
+    "id": "3dda6ea034f4"
+  }
+]
