@@ -1,7 +1,7 @@
 import { BLACK, WHITE, contrastRatio, formatColor, parseColor, type Rgba } from '@/theme/color';
 
 import { brandOverrides, correctAccent, resolveBrand } from './brand';
-import { accentGrounds, minContrast, rgb } from './contrast';
+import { accentGrounds, bubbleChipGround, minContrast, rgb } from './contrast';
 import { fromOklch, toOklch } from './oklch';
 import { colors, type Scheme } from './tokens';
 
@@ -76,12 +76,20 @@ describe('brandOverrides', () => {
       [merged.chipSelectedText, merged.chipSelected],
       [merged.bubbleUserText, merged.bubbleUser],
     ];
+    // A file chip on my own bubble (AttachmentStrip) veils the bubble.
+    pairs.push([merged.bubbleUserText, formatColor(bubbleChipGround(merged))]);
     for (const [fg, bg] of pairs) expect(contrastRatio(hex(fg), hex(bg))).toBeGreaterThanOrEqual(4.5);
     // The (possibly tinted) gradient still carries tertiary text and the accent.
     for (const stop of merged.backgroundGradient.stops) {
       expect(contrastRatio(hex(merged.textTertiary), hex(stop))).toBeGreaterThanOrEqual(4.5);
       expect(contrastRatio(hex(merged.accent), hex(stop))).toBeGreaterThanOrEqual(4.5);
     }
+  });
+
+  it.each(rows)('%s (%s, %s): the file chip veil never lowers the bubble text contrast', (_name, input, scheme) => {
+    const merged = { ...colors[scheme], ...brandOverrides(hex(input), scheme)! };
+    const text = hex(merged.bubbleUserText);
+    expect(contrastRatio(text, bubbleChipGround(merged))).toBeGreaterThanOrEqual(contrastRatio(text, hex(merged.bubbleUser)));
   });
 
   it('touches only brand-overridable tokens', () => {

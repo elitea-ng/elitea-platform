@@ -39,3 +39,22 @@ it('approximate after a suspend', () => {
   expect(texts(layout.banner).filter(Boolean)).toEqual(['Contract review', 'Open the app for the latest']);
   expect(texts(layout.compactTrailing)).toEqual(['…']);
 });
+
+it('the timer keeps to a fixed trailing frame, so the title gets the banner width (#41)', () => {
+  const layout = render(activityProps({ phase: 'tool', preview: 'none', conversationTitle: null, approximate: false, startedAt: Date.now() - 60_000 }));
+  const timerOf = (node: WidgetNode | null | undefined): WidgetNode | null => {
+    if (!node) return null;
+    if (node.type === 'Text' && node.props.dateStyle === 'timer') return node;
+    for (const child of node.children) {
+      if (typeof child !== 'string') {
+        const found = timerOf(child);
+        if (found) return found;
+      }
+    }
+    return null;
+  };
+  for (const slot of [layout.banner, layout.compactTrailing, layout.expandedTrailing]) {
+    const mods = (timerOf(slot)?.props.modifiers ?? []) as { modifier: string; args: unknown[] }[];
+    expect(mods.find((m) => m.modifier === 'frame')?.args[0]).toMatchObject({ alignment: 'trailing', width: expect.any(Number) });
+  }
+});

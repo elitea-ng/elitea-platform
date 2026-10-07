@@ -1,3 +1,4 @@
+import type { ComponentRef, Ref } from 'react';
 import { Pressable, StyleSheet, View, type PressableProps } from 'react-native';
 
 import { useDesign } from '@/design/DesignProvider';
@@ -11,13 +12,19 @@ import type { TextTone } from './Text';
 
 export type IconButtonVariant = 'glass' | 'tonal' | 'filled' | 'plain';
 
-export interface IconButtonProps extends Omit<PressableProps, 'children' | 'style'> {
+export interface IconButtonProps extends Omit<PressableProps, 'children' | 'style' | 'ref'> {
+  /** The button's host view (e.g. to move screen-reader focus to it). */
+  ref?: Ref<ComponentRef<typeof View>>;
   icon: IconName;
   /** Required: an icon-only control always speaks (§1.8). */
   accessibilityLabel: string;
   variant?: IconButtonVariant;
   /** Visual diameter; the touch target is grown to 44/48 with hitSlop. Default 40. */
   size?: number;
+  /** Glyph size; default the icon-button size (22). */
+  iconSize?: number;
+  /** An explicit glyph colour (a token), for the rare non-tone case. */
+  iconColor?: string;
   badge?: number;
   selected?: boolean;
   haptic?: HapticEvent;
@@ -34,6 +41,8 @@ export function IconButton({
   accessibilityLabel,
   variant = 'glass',
   size = 40,
+  iconSize,
+  iconColor,
   badge,
   selected,
   haptic: feedback,
@@ -41,6 +50,7 @@ export function IconButton({
   disabled,
   style,
   accessibilityState,
+  ref,
   ...rest
 }: IconButtonProps) {
   const design = useDesign();
@@ -52,6 +62,7 @@ export function IconButton({
   const frame = variant === 'plain' ? Math.max(size, hitTarget()) : size;
   return (
     <Pressable
+      ref={ref}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       accessibilityState={{ disabled: disabled === true, selected, ...accessibilityState }}
@@ -72,7 +83,7 @@ export function IconButton({
         style,
       ]}
       {...rest}>
-      <Icon name={icon} size={design.size.iconButton} tone={tone} selected={selected} />
+      <Icon name={icon} size={iconSize ?? design.size.iconButton} tone={tone} color={iconColor} selected={selected} />
       {badge !== undefined && badge > 0 ? (
         <View style={styles.badgeSlot} pointerEvents="none">
           <Badge count={badge} />

@@ -186,6 +186,50 @@ describe('AttachmentTray', () => {
     expect(uploads).toEqual(['a.pdf-0000']);
   });
 
+  it('removing a file while it uploads cancels that upload; the send goes on with the rest', async () => {
+    const signals: AbortSignal[] = [];
+    const picks: string[] = [];
+    const { tray, uploads } = makeTray({
+      discardPicked: (uri) => picks.push(uri),
+      upload: (file, _p, target, _l, signal) => {
+        uploads.push(file.uploadName);
+        signals.push(signal);
+        if (!file.uploadName.startsWith('a')) return Promise.resolve({ filepath: `/x/${target.conversationUuid}/${file.uploadName}`, size: 1 });
+        // a.pdf hangs until it is aborted, as a slow upload would.
+        return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted'))));
+      },
+    });
+    tray.add([picked('a.pdf'), picked('b.pdf')]);
+    await flush();
+    const sending = tray.uploadAll();
+    await flush();
+    expect(tray.getSnapshot().map((i) => i.state)).toEqual(['uploading', 'ready']);
+    tray.remove('t1');
+    expect(signals[0].aborted).toBe(true);
+    expect(tray.getSnapshot().map((i) => i.name)).toEqual(['b.pdf']);
+    expect(await sending).toMatchObject({ ok: true, attachments: [{ name: 'b.pdf' }], ids: ['t2'] });
+    expect(uploads).toEqual(['a.pdf-0000', 'b.pdf-0000']);
+    // The cancelled file's copies are deleted once its upload let go.
+    expect(picks).toContain('file:///p/a.pdf');
+  });
+
+  it('the thread going away aborts an upload in flight', async () => {
+    const signals: AbortSignal[] = [];
+    const { tray } = makeTray({
+      upload: (_file, _p, _t, _l, signal) => {
+        signals.push(signal);
+        return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new Error('aborted'))));
+      },
+    });
+    tray.add([picked('a.pdf')]);
+    await flush();
+    const sending = tray.uploadAll();
+    await flush();
+    tray.clear();
+    expect(signals[0].aborted).toBe(true);
+    await sending;
+  });
+
   it('clearing after a send forgets only the files that were sent', async () => {
     const picks: string[] = [];
     const { tray } = makeTray({ discardPicked: (uri) => picks.push(uri) });

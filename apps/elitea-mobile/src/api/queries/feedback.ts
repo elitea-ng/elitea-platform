@@ -115,7 +115,10 @@ export async function clearFeedback(projectId: number, messageUuid: string, clie
   return summaryOf(data);
 }
 
-/** The caller's rating of one answer, read when the actions sheet opens it. */
+/**
+ * The caller's rating of one answer: read when the actions sheet opens it and for the newest
+ * answer's action row. With `enabled` false it still returns what the cache holds.
+ */
 export function useFeedback(projectId: number | null, messageUuid: string | null, enabled: boolean) {
   return useQuery({
     queryKey: [...queryKeys.feedback(projectId ?? 0), messageUuid ?? ''],

@@ -255,6 +255,10 @@ G ──────────────────────────
   (`react-native-keyboard-controller`).
 - **Dark:** user bubbles are `#5B2541` with white text, and agent bubbles `#221F28` with
   no border.
+- **As built** (`feat/redesign-chat`, design-system.md §10): the approval card closes the
+  transcript inline; the header keeps Export and Participants as bar buttons (the "⋯" menu and
+  the avatar title are not built); dictation's listening state is the voice-orb card above the
+  composer rather than the full-screen `/voice` modal, which stays unbuilt.
 
 ## 5. Voice (`/voice`, full-screen modal)
 

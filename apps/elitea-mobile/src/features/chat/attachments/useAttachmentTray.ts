@@ -31,13 +31,13 @@ export function useAttachmentTray(projectId: number | null, conversationUuid: st
       new AttachmentTray({
         limits,
         prepare: (file, { fitInline, limits: current }) => readyFile(file, current, { fitInline }),
-        upload: (ready, onProgress, target, current) =>
+        upload: (ready, onProgress, target, current, signal) =>
           uploadAttachment(
             target.projectId,
             target.conversationUuid,
             { uri: ready.uri, uploadName: ready.uploadName, size: ready.size, mimeType: ready.mimeType },
             current.chunkBytes,
-            { onProgress },
+            { onProgress, signal },
           ),
         discard,
         discardPicked: discardPickerCopy,

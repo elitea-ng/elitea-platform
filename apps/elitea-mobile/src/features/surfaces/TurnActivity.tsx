@@ -1,5 +1,5 @@
 import { HStack, Image, Spacer, Text, VStack } from '@expo/ui/swift-ui';
-import { activityBackgroundTint, font, foregroundStyle, lineLimit, monospacedDigit, padding } from '@expo/ui/swift-ui/modifiers';
+import { activityBackgroundTint, font, foregroundStyle, frame, lineLimit, monospacedDigit, multilineTextAlignment, padding } from '@expo/ui/swift-ui/modifiers';
 import { createLiveActivity, type LiveActivityEnvironment } from 'expo-widgets';
 
 import type { TurnActivityProps } from '@/features/surfaces/turnActivityModel';
@@ -30,8 +30,17 @@ const TurnActivityLayout = (props: TurnActivityProps, environment: LiveActivityE
   // advances it, while the activity is only updated when what it shows
   // changes. A finished or paused one shows none (it would keep counting).
   const running = props.phase === 'working' || props.phase === 'tool' || props.phase === 'writing';
-  const elapsed = (style: ReturnType<typeof font>[]) =>
-    running ? <Text date={new Date(props.startedAt)} dateStyle="timer" modifiers={[...style, monospacedDigit()]} /> : null;
+  // A SwiftUI timer Text takes all the width it is offered (it sizes for the longest time it
+  // could show), so beside the title it split the banner in half and cut the title short (#41).
+  // A fixed trailing frame keeps it to the digits; the title gets the rest.
+  const elapsed = (style: ReturnType<typeof font>[], width?: number) =>
+    running ? (
+      <Text
+        date={new Date(props.startedAt)}
+        dateStyle="timer"
+        modifiers={[...style, monospacedDigit(), multilineTextAlignment('trailing'), ...(width ? [frame({ width, alignment: 'trailing' })] : [])]}
+      />
+    ) : null;
   return {
     banner: (
       <HStack spacing={12} modifiers={[padding({ all: 14 }), activityBackgroundTint(environment.colorScheme === 'dark' ? '#1E1A24' : '#FBF7F9')]}>
@@ -41,20 +50,20 @@ const TurnActivityLayout = (props: TurnActivityProps, environment: LiveActivityE
           <Text modifiers={[font({ textStyle: 'subheadline' }), muted, lineLimit(1)]}>{props.detail}</Text>
         </VStack>
         <Spacer />
-        {elapsed([font({ textStyle: 'caption' }), muted])}
+        {elapsed([font({ textStyle: 'caption' }), muted], 56)}
       </HStack>
     ),
     compactLeading: <Image systemName={symbol} color={accent} />,
     compactTrailing: props.approximate ? (
       <Text modifiers={[font({ textStyle: 'caption' })]}>…</Text>
     ) : (
-      (elapsed([font({ textStyle: 'caption' })]) ?? <Text modifiers={[font({ textStyle: 'caption' })]}> </Text>)
+      (elapsed([font({ textStyle: 'caption' })], 44) ?? <Text modifiers={[font({ textStyle: 'caption' })]}> </Text>)
     ),
     minimal: <Image systemName={symbol} color={accent} />,
     expandedLeading: <Image systemName={symbol} color={accent} size={28} />,
     expandedCenter: <Text modifiers={[font({ textStyle: 'headline' }), lineLimit(1)]}>{props.title}</Text>,
     expandedBottom: <Text modifiers={[font({ textStyle: 'subheadline' }), muted, lineLimit(1)]}>{props.detail}</Text>,
-    expandedTrailing: elapsed([font({ textStyle: 'caption' }), muted]),
+    expandedTrailing: elapsed([font({ textStyle: 'caption' }), muted], 56),
   };
 };
 

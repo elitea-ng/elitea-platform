@@ -119,6 +119,17 @@ async function attachNotes() {
 }
 
 describe('attachments in a model chat', () => {
+  it('a file attached with a caveat is an information note, not an error alert', async () => {
+    installServer();
+    mockPickFiles.mockResolvedValue([{ uri: 'file:///picked/big.md', name: 'big.md', size: 30 * 1024 * 1024, mimeType: 'text/markdown' }]);
+    await renderWithQueries(<ThreadScreen />);
+    await fireEvent.press(await screen.findByRole('button', { name: 'Attach files' }));
+    await waitFor(() => expect(screen.getByTestId('thread-note-info')).toBeTruthy());
+    expect(screen.getByText(/big\.md.*is large/)).toBeTruthy();
+    expect(screen.queryByTestId('thread-note-error')).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('uploads the picked file first, then sends with payload.attachments', async () => {
     const server = installServer();
     server.on('POST', UPLOAD, { status: 201, body: [{ filepath: `/chat-attachments/${UUID}/notes-8000.md`, file_size: 13 }] });

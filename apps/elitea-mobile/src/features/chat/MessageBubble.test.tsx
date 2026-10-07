@@ -70,3 +70,62 @@ describe('MessageBubble colours (docs/design-system.md §4.6)', () => {
     expect(tree()).toContain(`"backgroundColor":"${colors.light.bubbleAgent}"`);
   });
 });
+
+describe('MessageBubble avatar placement (§4.6)', () => {
+  const { StyleSheet } = require('react-native');
+  // The row is the outermost view; the avatar its first child.
+  const rowAlign = () => {
+    const row = screen.toJSON() as unknown as { props: { style: unknown }; children: { props: { testID?: string } }[] };
+    expect(row.children[0].props.testID).toBe('message-avatar');
+    return StyleSheet.flatten(row.props.style).alignItems;
+  };
+  const actions = <MessageBubble role="assistant">Row</MessageBubble>;
+
+  it('pins the agent avatar beside the name line, the same while streaming and once the action row appears', async () => {
+    const view = await render(
+      <MessageBubble role="assistant" meta="Research · 9:41" avatar={<></>}>
+        Answer
+      </MessageBubble>,
+    );
+    const streaming = rowAlign();
+    await view.rerender(
+      <MessageBubble role="assistant" meta="Research · 9:41" avatar={<></>} actions={actions}>
+        Answer
+      </MessageBubble>,
+    );
+    expect(streaming).toBe('flex-start');
+    expect(rowAlign()).toBe('flex-start');
+  });
+});
+
+describe('MessageBubble for screen readers', () => {
+  const { Pressable, Text: RNText } = require('react-native');
+
+  it('a plain message is one element whose label carries its status and error', async () => {
+    await render(
+      <MessageBubble role="user" status="Waiting to send" error="Couldn't send">
+        Hello
+      </MessageBubble>,
+    );
+    expect(screen.getByLabelText("You: Hello. Waiting to send. Couldn't send")).toBeTruthy();
+  });
+
+  it('a message with files keeps its file buttons reachable (not one element)', async () => {
+    await render(
+      <MessageBubble
+        role="user"
+        footer={
+          <Pressable accessibilityRole="button" accessibilityLabel="File a.pdf">
+            <RNText>a.pdf</RNText>
+          </Pressable>
+        }>
+        see attached
+      </MessageBubble>,
+    );
+    expect(screen.getByRole('button', { name: 'File a.pdf' })).toBeTruthy();
+    // The bubble itself is not an accessible element that would hide the button on iOS.
+    let n = screen.getByRole('button', { name: 'File a.pdf' }).parent;
+    for (; n; n = n.parent) expect(n.props.accessible === true && n.props.accessibilityLabel?.startsWith('You')).not.toBe(true);
+    expect(screen.getByText('see attached')).toBeTruthy();
+  });
+});

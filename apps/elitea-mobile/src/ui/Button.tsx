@@ -9,7 +9,7 @@ import type { IconName } from './icons';
 import { hitSlopFor, pressedOverlay, ripple, uiPlatform, type UiPlatform } from './platform';
 import { Text, type TextTone } from './Text';
 
-export type ButtonVariant = 'filled' | 'tonal' | 'plain' | 'destructive' | 'destructivePlain' | 'glass';
+export type ButtonVariant = 'filled' | 'tonal' | 'plain' | 'destructive' | 'destructiveTonal' | 'destructivePlain' | 'glass';
 export type ButtonSize = 'regular' | 'small';
 
 /** Height of a button (§4.13): 50 pt iOS / 48 dp Android; small buttons keep the hit target via hitSlop. */
@@ -35,6 +35,9 @@ export function buttonLook(variant: ButtonVariant, design: Pick<Design, 'colors'
       return { background: c.accentSoft, pressed: c.accentSoft, tone: 'accentSoftOn' };
     case 'destructive':
       return { background: c.danger, pressed: c.danger, tone: 'dangerOn' };
+    case 'destructiveTonal':
+      // Reject on an approval card (§4.7): danger text on dangerSoft (proven 4.5:1).
+      return { background: c.dangerSoft, pressed: c.dangerSoft, tone: 'danger' };
     case 'destructivePlain':
       return { background: 'transparent', pressed: pressedOverlay(design), tone: 'danger' };
     case 'glass':

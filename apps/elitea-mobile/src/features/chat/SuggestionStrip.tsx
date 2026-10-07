@@ -1,10 +1,9 @@
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
 
-import { Spacing } from '@/constants/theme';
 import { FONT_SCALE } from '@/constants/typeScale';
-import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
 import { initialOf } from '@/features/chat/MessageBubble';
-import { ramp } from '@/ui';
+import { AVATAR_TONES, pressedOverlay, ripple, Text, toneIndex, uiPlatform } from '@/ui';
 
 /** One row of the composer's suggestion strip (a person, an agent, a skill, a tool). */
 export interface Suggestion {
@@ -26,7 +25,8 @@ export interface SuggestionState {
 
 /** How many rows show before the strip scrolls. */
 export const VISIBLE_SUGGESTIONS = 5;
-const ROW_HEIGHT = 48;
+/** A row's height at the standard text size (it grows with the text: minHeight, not height). */
+const ROW_HEIGHT = 52;
 
 export function SuggestionStrip({
   state,
@@ -44,74 +44,69 @@ export function SuggestionStrip({
    */
   inline?: boolean;
 }) {
-  const palette = usePalette();
+  const design = useDesign();
+  const { colors, radius, scheme } = design;
   if (state.items.length === 0 && !state.loading && !state.message) return null;
-  const row = (item: Suggestion) => (
-    <Pressable
-      key={item.key}
-      accessibilityRole="button"
-      accessibilityLabel={item.subtitle ? `${item.title}, ${item.subtitle}` : item.title}
-      onPress={() => onPick(item)}
-      style={({ pressed }) => [styles.row, pressed ? { backgroundColor: palette.border } : null]}>
-      <View style={[styles.avatar, { backgroundColor: palette.border }]}>
-        <Text maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.avatarText, { color: palette.text }]}>
-          {item.initial ?? initialOf(item.title)}
-        </Text>
-      </View>
-      <View style={styles.texts}>
-        <Text numberOfLines={1} maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.title, { color: palette.text }]}>
-          {item.title}
-        </Text>
-        {item.subtitle ? (
-          <Text numberOfLines={1} maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.subtitle, { color: palette.textSecondary }]}>
-            {item.subtitle}
+  const row = (item: Suggestion) => {
+    const [fill, ink] = AVATAR_TONES[scheme][toneIndex(item.title)];
+    return (
+      <Pressable
+        key={item.key}
+        accessibilityRole="button"
+        accessibilityLabel={item.subtitle ? `${item.title}, ${item.subtitle}` : item.title}
+        onPress={() => onPick(item)}
+        android_ripple={ripple(design)}
+        style={({ pressed }) => [styles.row, pressed && uiPlatform === 'ios' ? { backgroundColor: pressedOverlay(design) } : null]}>
+        <View style={[styles.avatar, { backgroundColor: fill }]}>
+          <Text variant="footnote" color={ink} emphasized maxFontSizeMultiplier={1}>
+            {item.initial ?? initialOf(item.title)}
+          </Text>
+        </View>
+        <View style={styles.texts}>
+          <Text variant="subheadline" emphasized numberOfLines={1} maxFontSizeMultiplier={FONT_SCALE.chrome}>
+            {item.title}
+          </Text>
+          {item.subtitle ? (
+            <Text variant="caption" tone="secondary" numberOfLines={1} maxFontSizeMultiplier={FONT_SCALE.chrome}>
+              {item.subtitle}
+            </Text>
+          ) : null}
+        </View>
+        {item.badge ? (
+          <Text variant="caption" tone="accent" maxFontSizeMultiplier={FONT_SCALE.chrome}>
+            {item.badge}
           </Text>
         ) : null}
-      </View>
-      {item.badge ? (
-        <Text maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.badge, { color: palette.textSecondary }]}>
-          {item.badge}
-        </Text>
-      ) : null}
-    </Pressable>
-  );
+      </Pressable>
+    );
+  };
+  // A popover card above the composer (§4.5): the elevated surface, e2, radius 16.
+  const frame = [styles.strip, design.elevation.e2, { borderColor: colors.separator, backgroundColor: colors.elevated, borderRadius: radius.md }];
   if (inline) {
     return (
-      <View accessibilityLabel={label} style={[styles.strip, { borderColor: palette.border, backgroundColor: palette.backgroundElement }]}>
+      <View accessibilityLabel={label} style={frame}>
         {state.items.map(row)}
       </View>
     );
   }
   return (
-    <View
-      accessibilityLabel={label}
-      style={[
-        styles.strip,
-        { borderColor: palette.border, backgroundColor: palette.backgroundElement, maxHeight: ROW_HEIGHT * VISIBLE_SUGGESTIONS },
-      ]}>
-      {state.loading && state.items.length === 0 ? <ActivityIndicator style={styles.loading} color={palette.accent} /> : null}
+    <View accessibilityLabel={label} style={[frame, { maxHeight: ROW_HEIGHT * VISIBLE_SUGGESTIONS }]}>
+      {state.loading && state.items.length === 0 ? <ActivityIndicator style={styles.loading} color={colors.accent} /> : null}
       {state.message && state.items.length === 0 ? (
-        <Text style={[styles.message, { color: palette.textSecondary }]}>{state.message}</Text>
+        <Text variant="subheadline" tone="secondary" style={styles.message}>
+          {state.message}
+        </Text>
       ) : null}
-      <FlatList
-        data={state.items}
-        keyExtractor={(item) => item.key}
-        keyboardShouldPersistTaps="handled"
-        renderItem={({ item }) => row(item)}
-      />
+      <FlatList data={state.items} keyExtractor={(item) => item.key} keyboardShouldPersistTaps="handled" renderItem={({ item }) => row(item)} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  strip: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, overflow: 'hidden' },
-  loading: { padding: Spacing.two },
-  message: { ...ramp.subheadline, padding: Spacing.two },
-  row: { height: ROW_HEIGHT, flexDirection: 'row', alignItems: 'center', gap: Spacing.two, paddingHorizontal: Spacing.two },
-  avatar: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { ...ramp.footnote, fontWeight: '700' },
+  strip: { borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
+  loading: { padding: 12 },
+  message: { padding: 12 },
+  row: { minHeight: ROW_HEIGHT, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 12, paddingVertical: 6 },
+  avatar: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
   texts: { flex: 1 },
-  title: { ...ramp.subheadline, fontWeight: '500' },
-  subtitle: { ...ramp.caption },
-  badge: { ...ramp.caption },
 });

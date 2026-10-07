@@ -23,6 +23,13 @@ describe('design-tab previews draw the real screens’ components (D2)', () => {
     ['(app)/(tabs)/(home)/index.tsx', 'design-tabs/home/index.tsx', /<HomeView\b/],
     ['(app)/(tabs)/(home)/index.tsx', 'design-tabs/home/index.tsx', /homeHeaderOptions\(/],
     ['(app)/(tabs)/settings/index.tsx', 'design-tabs/settings/index.tsx', /<SettingsList\b/],
+    ['(app)/c/[id].tsx', 'design-chat.tsx', /<ThreadLayout\b/],
+    ['(app)/c/[id].tsx', 'design-chat.tsx', /<PersistedMessage\b/],
+    ['(app)/c/[id].tsx', 'design-chat.tsx', /<LiveReply\b/],
+    ['(app)/c/[id].tsx', 'design-chat.tsx', /<AnswerActions\b/],
+    ['(app)/c/[id].tsx', 'design-chat.tsx', /<PauseCard\b/],
+    ['(app)/c/[id].tsx', 'design-chat.tsx', /<ChatEmptyState\b/],
+    ['(app)/c/[id].tsx', 'design-chat.tsx', /<Composer\b/],
   ])('%s and %s both use %p', (real, preview, pattern) => {
     expect(read(real)).toMatch(pattern);
     expect(read(preview)).toMatch(pattern);

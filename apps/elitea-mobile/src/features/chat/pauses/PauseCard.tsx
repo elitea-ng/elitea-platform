@@ -26,7 +26,8 @@ import type { HitlInterrupt, TurnPause } from '@/features/chat/toolActivity';
 import { MONOSPACE_FONT } from '@/features/markdown/Markdown';
 import { useShareOut } from '@/security/policy';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
-import { Icon, ramp } from '@/ui';
+import { useDesign } from '@/design/DesignProvider';
+import { Button as KitButton, haptic, Icon, ramp, type IconName } from '@/ui';
 
 export interface PauseCardProps {
   pause: TurnPause;
@@ -37,6 +38,8 @@ export interface PauseCardProps {
   onContinue: (contract: ContinueContract, body: ChatContinueRequest) => Promise<string | null>;
   /** Opens the conversation in the web app (system browser). */
   onOpenWeb: (() => void) | null;
+  /** The workspace the tool runs on (its host), always said on an approval (§3.5). */
+  host?: string | null;
 }
 
 const ACTION_LABEL: Record<string, string> = {
@@ -99,40 +102,85 @@ export function continueBodyText(error: ContinueBodyError): string {
   }
 }
 
-function Frame({ title, children, note }: { title: string; children: React.ReactNode; note?: string | null }) {
-  const palette = usePalette();
+function Frame({
+  title,
+  children,
+  note,
+  icon = 'warning',
+  host,
+}: {
+  title: string;
+  children: React.ReactNode;
+  note?: string | null;
+  icon?: IconName;
+  host?: string | null;
+}) {
+  const { colors, radius, space, elevation } = useDesign();
+  // §4.7: a surface card with a warning leading edge, inline at the end of the transcript.
+  // Never the mascot, never branded chrome: only the buttons take the (corrected) accent.
   return (
     <View
       accessibilityRole="summary"
-      style={[styles.card, { borderColor: palette.accent, backgroundColor: palette.backgroundElement }]}>
-      <Text maxFontSizeMultiplier={FONT_SCALE.body} accessibilityRole="header" style={[styles.title, { color: palette.text }]}>
-        {title}
-      </Text>
+      style={[
+        styles.card,
+        elevation.e1,
+        {
+          backgroundColor: colors.surface,
+          borderColor: colors.separator,
+          borderStartColor: colors.warning,
+          borderRadius: radius.card,
+          padding: space.cardPadding,
+          marginHorizontal: space.screenGutterCompact,
+        },
+      ]}>
+      <View style={styles.titleRow}>
+        <View style={[styles.titleIcon, { backgroundColor: colors.warningSoft }]}>
+          <Icon name={icon} size={18} tone="warning" />
+        </View>
+        <Text maxFontSizeMultiplier={FONT_SCALE.body} accessibilityRole="header" style={[styles.title, { color: colors.textPrimary }]}>
+          {title}
+        </Text>
+      </View>
+      {host ? (
+        <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.subtitle, { color: colors.textSecondary }]}>
+          On {host}
+        </Text>
+      ) : null}
       {children}
       {note ? (
-        <Text maxFontSizeMultiplier={FONT_SCALE.body} accessibilityRole="alert" style={[styles.note, { color: palette.danger }]}>
-          {note}
-        </Text>
+        <View style={[styles.noteRow, { backgroundColor: colors.dangerSoft, borderRadius: radius.sm }]}>
+          <Icon name="error" size={16} tone="danger" />
+          <Text maxFontSizeMultiplier={FONT_SCALE.body} accessibilityRole="alert" style={[styles.note, styles.flex, { color: colors.danger }]}>
+            {note}
+          </Text>
+        </View>
       ) : null}
     </View>
   );
 }
 
-function Button({ label, onPress, disabled, primary }: { label: string; onPress: () => void; disabled?: boolean; primary?: boolean }) {
-  const palette = usePalette();
+function Button({
+  label,
+  onPress,
+  disabled,
+  primary,
+  danger,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+  primary?: boolean;
+  danger?: boolean;
+}) {
   return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityState={{ disabled: Boolean(disabled) }}
+    <KitButton
+      title={label}
+      size="small"
+      variant={primary ? 'filled' : danger ? 'destructiveTonal' : 'tonal'}
       disabled={disabled}
       onPress={onPress}
-      style={[
-        styles.button,
-        primary ? { backgroundColor: palette.accent, borderColor: palette.accent } : { borderColor: palette.border },
-        { opacity: disabled ? 0.45 : 1 },
-      ]}>
-      <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.buttonText, { color: primary ? palette.onAccent : palette.accent }]}>{label}</Text>
-    </Pressable>
+      style={styles.button}
+    />
   );
 }
 
@@ -161,7 +209,7 @@ function HitlCard(props: PauseCardProps & { pause: Extract<TurnPause, { kind: 'h
   const title = several ? `${pause.interrupts.length} approvals needed` : (pause.interrupts[0]?.actionLabel ?? 'Approval needed');
 
   return (
-    <Frame title={title} note={error ?? offlineNote(props)}>
+    <Frame title={title} note={error ?? offlineNote(props)} icon="tool" host={props.host}>
       {pause.interrupts.map((interrupt, index) => (
         <InterruptBody
           key={interrupt.interruptId ?? index}
@@ -228,8 +276,11 @@ function InterruptBody({
                 key={action}
                 label={ACTION_LABEL[action] ?? action}
                 primary={action === 'approve'}
+                danger={action === 'reject'}
                 disabled={disabled}
                 onPress={() => {
+                  if (action === 'approve') haptic('approvalApprove');
+                  if (action === 'reject') haptic('approvalReject');
                   if (action === 'edit' || action === 'block_with_comment') setEditor(action);
                   else onDecide({ interrupt, action });
                 }}
@@ -442,7 +493,7 @@ function AuthCard(props: PauseCardProps & { pause: Extract<TurnPause, { kind: 'a
   const names = [...new Set(pause.requests.map((r) => r.toolkitName ?? r.resourceName ?? 'A toolkit'))];
   const title = names.length === 1 ? `${names[0]} needs sign-in` : `${names.length} toolkits need sign-in`;
   return (
-    <Frame title={title} note={error ?? offlineNote(props)}>
+    <Frame title={title} note={error ?? offlineNote(props)} icon="lock" host={props.host}>
       <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.textSecondary }]}>
         The tool has not run. Skip it to let the agent continue without it, or sign in from the web app.
       </Text>
@@ -464,7 +515,7 @@ function OutputLimitCard(props: PauseCardProps) {
   const { busy, error, submit, disabled } = useSubmit(props);
   const label = props.pause.kind === 'output_limit' && props.pause.action ? props.pause.action : 'Continue';
   return (
-    <Frame title="The answer reached its length limit" note={error ?? offlineNote(props)}>
+    <Frame title="The answer reached its length limit" note={error ?? offlineNote(props)} icon="info">
       <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.body, { color: palette.textSecondary }]}>Continue to get the rest of it.</Text>
       <Button label={busy ? 'Continuing…' : label} primary disabled={disabled} onPress={() => submit(OUTPUT_LIMIT_CONTRACT, buildOutputLimitBody)} />
     </Frame>
@@ -473,15 +524,19 @@ function OutputLimitCard(props: PauseCardProps) {
 
 const styles = StyleSheet.create({
   disclosure: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44 },
-  card: { borderWidth: 1.5, borderRadius: 14, padding: Spacing.three - 4, gap: Spacing.two, marginHorizontal: Spacing.two, marginBottom: Spacing.two },
-  title: { ...ramp.headline, fontWeight: '700' },
+  card: { borderWidth: StyleSheet.hairlineWidth, borderStartWidth: 3, gap: Spacing.two, marginVertical: Spacing.two, borderCurve: 'continuous' },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  titleIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  title: { ...ramp.headline, fontWeight: '600', flex: 1 },
+  noteRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, paddingHorizontal: 8, paddingVertical: 6 },
+  flex: { flex: 1 },
   subtitle: { ...ramp.footnote },
   body: { ...ramp.subheadline },
   note: { ...ramp.footnote },
   interrupt: { gap: Spacing.one },
   question: { gap: Spacing.one },
   buttons: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two, marginTop: Spacing.one },
-  button: { borderWidth: 1, borderRadius: 18, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, alignItems: 'center' },
+  button: { flexGrow: 1 },
   buttonText: { ...ramp.subheadline, fontWeight: '600' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.one },
   chip: { borderWidth: 1, borderRadius: 16, paddingHorizontal: Spacing.two + 2, paddingVertical: Spacing.one + 2 },

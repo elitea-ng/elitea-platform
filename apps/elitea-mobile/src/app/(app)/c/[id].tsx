@@ -1,30 +1,25 @@
-import { Stack, router, useLocalSearchParams } from 'expo-router';
+import { Stack, useLocalSearchParams } from 'expo-router';
 import * as Linking from 'expo-linking';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  FlatList,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
+import { AccessibilityInfo, ActivityIndicator, Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
 
 import { isConversationRef, useConversation } from '@/api/queries/conversation';
 import { useModels } from '@/api/queries/models';
 import type { TurnModel } from '@/api/queries/sendMessage';
 import { OfflineNotice } from '@/components/OfflineNotice';
 import { StatusScreen } from '@/components/StatusScreen';
-import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { useDesign } from '@/design/DesignProvider';
-import { headerActionOptions, ramp } from '@/ui';
+import { GlassSurface, headerActionOptions, Icon, IconButton, Text } from '@/ui';
 import { Composer } from '@/features/chat/Composer';
 import { MessageBubble } from '@/features/chat/MessageBubble';
 import { speaksContract } from '@/api/discovery';
-import { restorePreparedTurn, TurnInputError } from '@/api/queries/sendMessage';
+import { AnswerActions } from '@/features/chat/actions/AnswerActions';
+import { AssistantAvatar, useAgentIconUri } from '@/features/chat/AssistantAvatar';
+import { ChatEmptyState, MODEL_CHAT_SUGGESTIONS } from '@/features/chat/ChatEmptyState';
+import { ThreadLayout, Toast, useToast } from '@/features/chat/ThreadLayout';
+import { LiveReply, PersistedMessage, QueuedMessage } from '@/features/chat/ThreadRows';
+import { displayHost } from '@/features/connect/connectFlow';
 import type { ActiveTrigger, MentionCandidate, TriggerChar } from '@/features/chat/mentions/mentions';
 import {
   chatTarget,
@@ -33,12 +28,10 @@ import {
   participantName,
   participantUserId,
   toChatMessages,
-  type ChatAttachment,
   type ChatMessage,
 } from '@/features/chat/messageModel';
 import type { SendExtras, StopResult } from '@/features/chat/useTurn';
 import { useMessageTraces } from '@/api/queries/messageTraces';
-import { ToolActivity } from '@/features/chat/ToolCalls';
 import { ToolDetailSheet } from '@/features/chat/ToolDetailSheet';
 import { markPausedSteps, type ToolStep, type TurnPause } from '@/features/chat/toolActivity';
 import { PauseCard } from '@/features/chat/pauses/PauseCard';
@@ -49,7 +42,7 @@ import { attachmentGate, handoffPick, type GateInput } from '@/features/chat/att
 import { PickerPermissionError, pickFiles, pickPhotos, takePhoto } from '@/features/chat/attachments/pickers';
 import { attachmentLimits } from '@/features/chat/attachments/prepare';
 import { useAttachmentTray } from '@/features/chat/attachments/useAttachmentTray';
-import { AttachmentStrip, ImageViewer } from '@/features/chat/attachments/AttachmentStrip';
+import { ImageViewer } from '@/features/chat/attachments/AttachmentStrip';
 import { useAttachmentOpener } from '@/features/chat/attachments/useAttachmentOpener';
 import { queryKeys } from '@/api/queries/keys';
 import { addAgentParticipant, participantErrorText } from '@/api/queries/participants';
@@ -83,12 +76,11 @@ import { exportErrorText } from '@/api/queries/exportConversation';
 import { shareTranscript } from '@/features/chat/export/shareTranscript';
 import { answerHiddenByRegeneration, newQuestionId, type LiveTurn } from '@/features/chat/turnController';
 import { ATTACHMENT_ONLY_TEXT, useTurn } from '@/features/chat/useTurn';
-import { Markdown } from '@/features/markdown/Markdown';
 import { useSelfUserId } from '@/state/selfIdentity';
 import { useSession } from '@/state/session';
-import { outboxDrainer, useOutboxItems } from '@/sync/appOutbox';
+import { useOutboxItems } from '@/sync/appOutbox';
 import { isOfflineCopy } from '@/sync/offlineReads';
-import { outboxStatus, type OutboxItem } from '@/sync/outbox';
+import type { OutboxItem } from '@/sync/outbox';
 
 type Row =
   | { kind: 'persisted'; key: string; message: ChatMessage }
@@ -121,7 +113,7 @@ export default function ThreadScreen() {
   // Client contract 1.3: feedback, server stop, export, suggested agents.
   const contract13 = speaksContract(workspace?.discovery, 1, 3);
   const { policy } = usePolicy();
-  const [actionsFor, setActionsFor] = useState<ChatMessage | null>(null);
+  const [actionsFor, setActionsFor] = useState<{ message: ChatMessage; dislike: boolean } | null>(null);
   // On-device speech: dictation into the composer, and reading an answer aloud.
   const [dictation] = useState(canDictateOnDevice);
   const reading = useReading();
@@ -222,7 +214,12 @@ export default function ThreadScreen() {
   const outbox = useOutboxItems(projectId, conversationUuid);
 
   // A note above the composer (a regeneration that could not start, or did not land).
-  const [threadNote, setThreadNote] = useState<string | null>(null);
+  /**
+   * The note above the composer: an error (a refusal, a failure: danger, read as an alert), or
+   * information (a file attached with a caveat: secondary, no alert).
+   */
+  const [threadNote, setNote] = useState<{ text: string; kind: 'error' | 'info' } | null>(null);
+  const setThreadNote = useCallback((text: string | null) => setNote(text === null ? null : { text, kind: 'error' }), []);
   // Once the persisted copy is back from the server, the live bubbles go.
   useEffect(() => {
     if (live?.settled) dismiss();
@@ -262,12 +259,12 @@ export default function ThreadScreen() {
     });
     if (problem !== null) setThreadNote(problem);
   };
-  const actionPlan = planActions(actionsFor ?? { role: 'user', text: '', uuid: null, isStreaming: false }, {
+  const actionPlan = planActions(actionsFor?.message ?? { role: 'user', text: '', uuid: null, isStreaming: false }, {
     shareOut: policy.allow_share_out,
     contract13,
     online: online && !isOfflineCopy(detail),
     canSpeak: canReadAloud(),
-    canRegenerate: canRegenerate(actionsFor),
+    canRegenerate: canRegenerate(actionsFor?.message ?? null),
   });
 
   // Attachments (contract 1.1 limits, else the server defaults): picked and
@@ -302,14 +299,21 @@ export default function ThreadScreen() {
         source === 'photos' ? await pickPhotos(limits.maxFiles - tray.sendable) : source === 'camera' ? await takePhoto() : await pickFiles();
       if (picked.length === 0) return;
       const { refused, warnings } = tray.add(picked);
-      const notes = [...refused.map((r) => r.message), ...warnings];
-      if (notes.length > 0) Alert.alert(refused.length > 0 ? 'Some files were not attached' : 'Attached', notes.join('\n'));
+      // Success is silent: the file is in the tray (audit X8). A refusal is an error note above
+      // the composer, not a modal alert; a warning alone (the file IS attached, with a caveat)
+      // is an information note, not an error.
+      if (refused.length > 0) setThreadNote([...refused.map((r) => r.message), ...warnings].join('\n'));
+      else if (warnings.length > 0) {
+        const text = warnings.join('\n');
+        setNote({ text, kind: 'info' });
+        AccessibilityInfo.announceForAccessibility(text);
+      }
     } catch (error) {
       if (error instanceof PickerPermissionError) {
-        Alert.alert('Camera access', 'Allow camera access in Settings to take a photo here.');
+        setThreadNote('Allow camera access in Settings to take a photo here.');
         return;
       }
-      Alert.alert('Attach files', "Those files couldn't be opened.");
+      setThreadNote("Those files couldn't be opened.");
     }
   };
   const pickedOnOpen = useRef(false);
@@ -318,7 +322,8 @@ export default function ThreadScreen() {
     const plan = handoffPick(then, gateInput);
     if (plan.kind === 'none' || plan.kind === 'wait') return;
     pickedOnOpen.current = true;
-    if (plan.kind === 'pick') void pickInto(plan.source);
+    // The picker opens after this render (its notes are state, never set from inside an effect).
+    if (plan.kind === 'pick') queueMicrotask(() => void pickInto(plan.source));
     else Alert.alert(plan.title, plan.message);
   });
   const sendWithFiles = async (text: string, mentions: SendExtras['mentions']): Promise<string | null> => {
@@ -501,6 +506,20 @@ export default function ThreadScreen() {
     }
   };
 
+  // Who answers, drawn left of every answer (§4.6, §5): the addressed agent's own icon; else, for
+  // it (or a model chat), Agent Zefirca; another agent of the conversation gets a monogram.
+  const agentIcon = useAgentIconUri(targetAgent ? (targetAgent.agentProjectId ?? projectId) : null, agentVersion.data?.iconPath ?? null);
+  const primaryParticipant = target.ok ? target.participantId : null;
+  const avatarFor = (participantId: number | null, name: string | null) => {
+    const primary = participantId === null || participantId === primaryParticipant;
+    const label = name ?? (target.ok ? target.name : null) ?? 'Assistant';
+    return <AssistantAvatar name={label} imageUri={primary ? agentIcon : null} mascot={primary} />;
+  };
+  const { toast, show: showToast, hide: hideToast } = useToast();
+  const [draft, setDraft] = useState<{ text: string; key: number } | null>(null);
+  const list = useRef<ComponentRef<typeof FlatList<Row>>>(null);
+  const [scrolledAway, setScrolledAway] = useState(false);
+
   if (!isConversationRef(ref)) return <StatusScreen title="Conversation not found" />;
   if (conversation.isLoading) {
     return (
@@ -513,7 +532,9 @@ export default function ThreadScreen() {
     return (
       <StatusScreen title="Couldn't open this conversation" body="Check your connection and try again.">
         <Pressable accessibilityRole="button" onPress={() => void conversation.refetch()}>
-          <Text style={[styles.action, { color: palette.accent }]}>Retry</Text>
+          <Text variant="headline" tone="accent">
+            Retry
+          </Text>
         </Pressable>
       </StatusScreen>
     );
@@ -555,14 +576,24 @@ export default function ThreadScreen() {
           ? 'Loading the workspace model…'
           : 'This project has no model to chat with.';
 
+  const targetName = target.ok ? target.name : null;
+  const pauseCard =
+    pause && !(live && (live.turn.phase === 'sending' || live.turn.phase === 'streaming')) ? (
+      <PauseCard
+        key={`${pause.kind}:${pause.messageId ?? ''}`}
+        pause={pause}
+        target={pauseTarget}
+        offline={!online}
+        host={workspace ? displayHost(workspace.origin) : null}
+        onContinue={turn.continueWith}
+        onOpenWeb={webUrl ? () => void Linking.openURL(webUrl) : null}
+      />
+    ) : null;
+  const empty = rows.length === 0 && pauseCard === null;
+  const suggestions = targetAgent ? (agentVersion.data?.starters ?? []) : target.ok ? MODEL_CHAT_SUGGESTIONS : [];
+
   return (
-    // The composer rides on the keyboard on both platforms (audit 2.11, S1): the view measures
-    // its own position under the navigation bar (no hard-coded header offset), and on Android
-    // the keyboard controller follows the IME insets under edge-to-edge.
-    <KeyboardAvoidingView
-      style={[styles.flex, { backgroundColor: palette.background }]}
-      behavior="padding"
-      automaticOffset>
+    <>
       <Stack.Screen
         options={{
           title: detail?.name || 'Conversation',
@@ -593,317 +624,188 @@ export default function ThreadScreen() {
           onAgentAdded={(participantId) => chosenKey !== null && setTarget(chosenKey, participantId)}
         />
       ) : null}
-      <OfflineNotice visible={isOfflineCopy(detail)} />
-      <FlatList
-        inverted
-        data={rows}
-        keyExtractor={(row) => row.key}
-        contentContainerStyle={styles.list}
-        keyboardShouldPersistTaps="handled"
-        renderItem={({ item }) => {
-          switch (item.kind) {
-            case 'persisted':
-              return (
-                <PersistedMessage
-                  message={item.message}
-                  highlight={highlight}
-                  opening={opener.opening}
-                  onOpenFile={canOpenFiles ? (a) => void opener.open(a) : null}
-                  tools={
-                    item.message.groupId !== null
-                      ? markPausedSteps(traces.data?.get(item.message.groupId) ?? [], item.message.key === newest?.key ? persistedPause : null)
-                      : []
+      <ThreadLayout
+        jumpToLatest={scrolledAway && !empty ? () => list.current?.scrollToOffset({ offset: 0, animated: !design.reduceMotion }) : null}
+        renderTranscript={(composerHeight) => (
+          <>
+            <OfflineNotice visible={isOfflineCopy(detail)} />
+            {empty ? (
+              <ChatEmptyState
+                agentName={targetName ?? 'your agent'}
+                iconUri={agentIcon}
+                welcome={agentVersion.data?.welcomeMessage ?? null}
+                suggestions={disabledReason ? [] : suggestions}
+                onSuggestion={(text) => setDraft((current) => ({ text, key: (current?.key ?? 0) + 1 }))}
+                bottomInset={composerHeight}
+              />
+            ) : (
+              <FlatList
+                ref={list}
+                inverted
+                data={rows}
+                keyExtractor={(row) => row.key}
+                // Inverted: the "top" padding is the bottom edge, under the floating composer.
+                contentContainerStyle={[styles.list, { paddingTop: composerHeight + design.space[2] }]}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="interactive"
+                onScroll={(event) => setScrolledAway(event.nativeEvent.contentOffset.y > 480)}
+                scrollEventThrottle={100}
+                // The pause card closes the transcript, inline after the newest answer (§4.7).
+                ListHeaderComponent={pauseCard ?? undefined}
+                renderItem={({ item }) => {
+                  switch (item.kind) {
+                    case 'persisted': {
+                      const message = item.message;
+                      const plan = planActions(message, {
+                        shareOut: policy.allow_share_out,
+                        contract13,
+                        online: online && !isOfflineCopy(detail),
+                        canSpeak: canReadAloud(),
+                        canRegenerate: canRegenerate(message),
+                      });
+                      return (
+                        <PersistedMessage
+                          message={message}
+                          highlight={highlight}
+                          opening={opener.opening}
+                          onOpenFile={canOpenFiles ? (a) => void opener.open(a) : null}
+                          tools={
+                            message.groupId !== null
+                              ? markPausedSteps(traces.data?.get(message.groupId) ?? [], message.key === newest?.key ? persistedPause : null)
+                              : []
+                          }
+                          onOpenTool={setOpenStep}
+                          onActions={() => setActionsFor({ message, dislike: false })}
+                          avatar={message.role === 'assistant' ? avatarFor(message.authorParticipantId, message.author) : undefined}
+                          actions={
+                            message.role === 'assistant' ? (
+                              <AnswerActions
+                                message={message}
+                                plan={plan}
+                                projectId={projectId}
+                                reading={reading === message.key}
+                                onReadAloud={() => readAloud(message.key, message.text)}
+                                onStopReading={stopReading}
+                                onRegenerate={() => void regenerate(message)}
+                                onMore={() => setActionsFor({ message, dislike: false })}
+                                onDislike={() => setActionsFor({ message, dislike: true })}
+                                onNote={showToast}
+                                loadRating={message.key === newestAnswer?.key}
+                              />
+                            ) : undefined
+                          }
+                        />
+                      );
+                    }
+                    case 'live_user':
+                      return (
+                        <MessageBubble role="user" highlight={highlight} status={item.files.length > 0 ? `Attached: ${item.files.join(', ')}` : null}>
+                          {item.text}
+                        </MessageBubble>
+                      );
+                    case 'outbox':
+                      return <QueuedMessage item={item.item} onSendAgain={turn.send} />;
+                    case 'live_reply':
+                      return (
+                        <LiveReply
+                          live={item.live}
+                          author={targetName}
+                          avatar={avatarFor(primaryParticipant, targetName)}
+                          onRetry={turn.retry}
+                          onReconnect={turn.reconnect}
+                          onDismiss={turn.dismiss}
+                          onOpenTool={setOpenStep}
+                          usageAvailable={contract13}
+                        />
+                      );
                   }
-                  onOpenTool={setOpenStep}
-                  onActions={() => setActionsFor(item.message)}
-                />
-              );
-            case 'live_user':
-              return (
-                <MessageBubble
-                  role="user"
-                  highlight={highlight}
-                  status={item.files.length > 0 ? `Attached: ${item.files.join(', ')}` : null}>
-                  {item.text}
-                </MessageBubble>
-              );
-            case 'outbox':
-              return <QueuedMessage item={item.item} onSendAgain={turn.send} />;
-            case 'live_reply':
-              return (
-                <LiveReply
-                  live={item.live}
-                  author={target.ok ? target.name : null}
-                  onRetry={turn.retry}
-                  onReconnect={turn.reconnect}
-                  onDismiss={turn.dismiss}
-                  onOpenTool={setOpenStep}
-                  usageAvailable={contract13}
-                />
-              );
-          }
-        }}
-        ListEmptyComponent={
-          <Text style={[styles.empty, { color: palette.textSecondary }]}>No messages yet.</Text>
+                }}
+              />
+            )}
+          </>
+        )}
+        floating={
+          <>
+            <Toast toast={toast} onHide={hideToast} />
+            {reading !== null ? (
+              <GlassSurface radius={design.radius.pill} floating style={styles.reading}>
+                <Icon name="readAloud" size={18} tone="accent" />
+                <Text variant="subheadline" accessibilityLiveRegion="polite">
+                  Reading aloud…
+                </Text>
+                <IconButton icon="stop" variant="tonal" size={32} iconSize={14} accessibilityLabel="Stop reading aloud" onPress={stopReading} />
+              </GlassSurface>
+            ) : null}
+            {threadNote ? (
+              <Pressable accessibilityRole="button" accessibilityHint="Dismisses the note" onPress={() => setThreadNote(null)} style={styles.noteWrap}>
+                <GlassSurface radius={design.radius.md} floating style={styles.note} testID={`thread-note-${threadNote.kind}`}>
+                  <Icon name={threadNote.kind === 'error' ? 'error' : 'info'} size={18} tone={threadNote.kind === 'error' ? 'danger' : 'secondary'} />
+                  <Text
+                    variant="footnote"
+                    tone={threadNote.kind === 'error' ? 'danger' : 'secondary'}
+                    accessibilityRole={threadNote.kind === 'error' ? 'alert' : undefined}
+                    style={styles.flex}>
+                    {threadNote.text}
+                  </Text>
+                  <Icon name="close" size={14} tone="secondary" />
+                </GlassSurface>
+              </Pressable>
+            ) : null}
+          </>
+        }
+        composer={
+          <Composer
+            // Siri "Ask <agent>": the question waits in the input for the user to send it.
+            initialText={typeof prefill === 'string' ? prefill.slice(0, MAX_PREFILL) : null}
+            placeholder={targetName ? `Message ${targetName}…` : 'Message'}
+            draft={draft}
+            disabledReason={disabledReason}
+            busy={turn.busy}
+            people={people}
+            hint={mentionHint}
+            externalTriggers={externalTriggers}
+            onTriggerChange={setTrigger}
+            externalSuggestions={suggestionState}
+            onPickExternal={pickExternal}
+            accessory={
+              (target.ok && target.kind === 'agent' && target.choices.length > 1 && chosenKey !== null) || trayItems.length > 0 ? (
+                <>
+                  {target.ok && target.kind === 'agent' && target.choices.length > 1 && chosenKey !== null ? (
+                    <TargetChip current={target.agent} choices={target.choices} onChoose={(id) => setTarget(chosenKey, id)} />
+                  ) : null}
+                  <AttachmentTrayView items={trayItems} onRemove={(id) => tray.remove(id)} onRetry={(id) => tray.retry(id)} />
+                </>
+              ) : null
+            }
+            allowEmptyText={trayItems.length > 0}
+            leading={<AttachButton disabledReason={gateReason} onPick={(source) => void pickInto(source)} onBlocked={showToast} />}
+            onSend={({ text, mentions }) => sendWithFiles(text, mentions)}
+            onStop={contract13 && online && turn.canStop ? stopWithFiles : null}
+            dictation={dictation}
+            autoDictate={then === 'dictate' && dictation}
+          />
         }
       />
-      {pause && !(live && (live.turn.phase === 'sending' || live.turn.phase === 'streaming')) ? (
-        <PauseCard
-          key={`${pause.kind}:${pause.messageId ?? ''}`}
-          pause={pause}
-          target={pauseTarget}
-          offline={!online}
-          onContinue={turn.continueWith}
-          onOpenWeb={webUrl ? () => void Linking.openURL(webUrl) : null}
-        />
-      ) : null}
       <ImageViewer uri={opener.viewer?.uri ?? null} name={opener.viewer?.name ?? ''} onClose={opener.closeViewer} />
       <ToolDetailSheet step={openStep} projectId={projectId} onClose={() => setOpenStep(null)} />
       <MessageActionsSheet
-        message={actionsFor}
+        message={actionsFor?.message ?? null}
+        startWithDislike={actionsFor?.dislike ?? false}
         plan={actionPlan}
         projectId={projectId}
         onClose={() => setActionsFor(null)}
         onRegenerate={(message) => void regenerate(message)}
         onReadAloud={(message) => readAloud(message.key, message.text)}
       />
-      {reading !== null ? (
-        <View style={[styles.reading, { borderTopColor: palette.border, backgroundColor: palette.backgroundElement }]}>
-          <Text accessibilityLiveRegion="polite" style={[styles.readingText, { color: palette.textSecondary }]}>
-            Reading aloud…
-          </Text>
-          <Pressable accessibilityRole="button" accessibilityLabel="Stop reading aloud" onPress={stopReading} hitSlop={10}>
-            <Text style={[styles.actionSmall, { color: palette.accent }]}>Stop</Text>
-          </Pressable>
-        </View>
-      ) : null}
-      {threadNote ? (
-        <Pressable accessibilityRole="button" accessibilityHint="Dismisses the note" onPress={() => setThreadNote(null)}>
-          <Text accessibilityRole="alert" style={[styles.note, { color: palette.danger }]}>
-            {threadNote}
-          </Text>
-        </Pressable>
-      ) : null}
-      <Composer
-        // Siri "Ask <agent>": the question waits in the input for the user to send it.
-        initialText={typeof prefill === 'string' ? prefill.slice(0, MAX_PREFILL) : null}
-        disabledReason={disabledReason}
-        busy={turn.busy}
-        people={people}
-        hint={mentionHint}
-        externalTriggers={externalTriggers}
-        onTriggerChange={setTrigger}
-        externalSuggestions={suggestionState}
-        onPickExternal={pickExternal}
-        accessory={
-          <>
-            {target.ok && target.kind === 'agent' && target.choices.length > 1 && chosenKey !== null ? (
-              <TargetChip current={target.agent} choices={target.choices} onChoose={(id) => setTarget(chosenKey, id)} />
-            ) : null}
-            <AttachmentTrayView items={trayItems} onRemove={(id) => tray.remove(id)} onRetry={(id) => tray.retry(id)} />
-          </>
-        }
-        allowEmptyText={trayItems.length > 0}
-        leading={<AttachButton disabledReason={gateReason} onPick={(source) => void pickInto(source)} />}
-        onSend={({ text, mentions }) => sendWithFiles(text, mentions)}
-        onStop={contract13 && online && turn.canStop ? stopWithFiles : null}
-        dictation={dictation}
-        autoDictate={then === 'dictate' && dictation}
-      />
-    </KeyboardAvoidingView>
-  );
-}
-
-function PersistedMessage({
-  message,
-  tools,
-  onOpenTool,
-  highlight,
-  opening,
-  onOpenFile,
-  onActions,
-}: {
-  message: ChatMessage;
-  onActions: () => void;
-  highlight: { people: string[]; agents: string[] };
-  opening: string | null;
-  onOpenFile: ((attachment: ChatAttachment) => void) | null;
-  tools: readonly ToolStep[];
-  onOpenTool: (step: ToolStep) => void;
-}) {
-  const status = message.isStreaming
-    ? 'Still generating…'
-    : message.hasUnsupportedItems
-      ? 'Part of this message can only be viewed in the web app.'
-      : null;
-  return (
-    <MessageBubble
-      role={message.role}
-      mine={message.mine}
-      author={message.author}
-      status={status}
-      error={message.error}
-      highlight={message.role === 'user' ? highlight : null}
-      onActions={message.text.trim() !== '' || message.role === 'assistant' ? onActions : null}
-      footer={
-        message.attachments.length > 0 || tools.length > 0 ? (
-          <>
-            <AttachmentStrip attachments={message.attachments} mine={message.mine} opening={opening} onOpen={onOpenFile} />
-            {tools.length > 0 ? <ToolActivity steps={tools} onOpen={onOpenTool} /> : null}
-          </>
-        ) : null
-      }>
-      {message.role === 'assistant' && message.text !== '' ? <Markdown value={message.text} /> : message.text}
-    </MessageBubble>
-  );
-}
-
-/** A message waiting in the offline outbox (queued, sending, or refused). */
-/** What a refused outbox item carried besides its text (kept on "Send again"). */
-function extrasOf(item: OutboxItem): SendExtras {
-  try {
-    const { mentions, attachments } = restorePreparedTurn(item.bodyJson).request;
-    return { mentions, attachments };
-  } catch (error) {
-    if (error instanceof TurnInputError) return {};
-    throw error;
-  }
-}
-
-function QueuedMessage({
-  item,
-  onSendAgain,
-}: {
-  item: OutboxItem;
-  onSendAgain: (text: string, extras?: SendExtras) => Promise<string | null>;
-}) {
-  const palette = usePalette();
-  const status = outboxStatus(item);
-  const actions =
-    item.state === 'failed'
-      ? [
-          // A new message with a new question_id; the refused one is dropped
-          // only once the new one is accepted, so a failed resend loses nothing.
-          {
-            label: 'Send again',
-            onPress: () =>
-              void onSendAgain(item.userText, extrasOf(item)).then((problem) => {
-                if (problem === null) return outboxDrainer.remove(item.questionId);
-              }),
-          },
-          { label: 'Delete', onPress: () => void outboxDrainer.remove(item.questionId) },
-        ]
-      : item.state === 'queued'
-        ? [
-            { label: 'Retry now', onPress: () => void outboxDrainer.retryNow(item.questionId) },
-            { label: 'Delete', onPress: () => void outboxDrainer.remove(item.questionId) },
-          ]
-        : [];
-  return (
-    <MessageBubble
-      role="user"
-      status={status.error ? null : status.text}
-      error={status.error ? status.text : null}
-      footer={
-        actions.length > 0 ? (
-          <View style={styles.actions}>
-            {actions.map((a) => (
-              <Pressable key={a.label} accessibilityRole="button" onPress={a.onPress}>
-                <Text style={[styles.actionSmall, { color: palette.accent }]}>{a.label}</Text>
-              </Pressable>
-            ))}
-          </View>
-        ) : null
-      }>
-      {item.userText}
-    </MessageBubble>
-  );
-}
-
-function LiveReply({
-  live,
-  author,
-  onRetry,
-  onReconnect,
-  onDismiss,
-  onOpenTool,
-  usageAvailable,
-}: {
-  live: LiveTurn;
-  author: string | null;
-  onRetry: () => void;
-  onReconnect: () => void;
-  onDismiss: () => void;
-  onOpenTool: (step: ToolStep) => void;
-  /** Settings has a usage card (client contract 1.3). Older servers refuse on budget too, but have no usage to show. */
-  usageAvailable: boolean;
-}) {
-  const palette = usePalette();
-  const { turn } = live;
-  const waiting = turn.phase === 'sending' || (turn.phase === 'streaming' && turn.content === '');
-  const status =
-    turn.status ??
-    (turn.stopped
-      ? 'Stopped.'
-      : turn.phase === 'paused'
-      ? turn.pause
-        ? 'Waiting for you.'
-        : 'Paused. Continue it in the web app.'
-      : turn.phase === 'sending'
-        ? 'Sending…'
-        : waiting
-          ? 'Thinking…'
-          : live.streamStatus === 'retrying'
-            ? 'Reconnecting…'
-            : null);
-  const actions = [
-    live.canReconnect ? { label: 'Reconnect', onPress: onReconnect } : null,
-    turn.phase === 'failed' && turn.error?.retryable ? { label: 'Retry', onPress: onRetry } : null,
-    turn.phase === 'failed' && turn.error?.budget && usageAvailable ? { label: 'View usage', onPress: () => router.dismissTo('/settings') } : null,
-    turn.phase === 'failed' ? { label: 'Dismiss', onPress: onDismiss } : null,
-  ].filter((a): a is { label: string; onPress: () => void } => a !== null);
-  return (
-    <MessageBubble
-      role="assistant"
-      author={author}
-      status={status}
-      error={turn.phase === 'failed' ? (turn.error?.message ?? null) : null}
-      footer={
-        <>
-          <ToolActivity steps={turn.tools} streaming={turn.phase === 'streaming'} onOpen={onOpenTool} />
-          {actions.length > 0 ? (
-            <View style={styles.actions}>
-              {actions.map((a) => (
-                <Pressable key={a.label} accessibilityRole="button" onPress={a.onPress}>
-                  <Text style={[styles.actionSmall, { color: palette.accent }]}>{a.label}</Text>
-                </Pressable>
-              ))}
-            </View>
-          ) : null}
-        </>
-      }>
-      {turn.content !== '' ? <Markdown value={turn.content} streaming={turn.phase === 'streaming'} /> : ''}
-    </MessageBubble>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  list: { paddingVertical: Spacing.two },
-  // The list is inverted, so flip the empty state back upright.
-  empty: { ...ramp.subheadline, textAlign: 'center', padding: Spacing.four, transform: [{ scaleY: -1 }] },
-  action: { ...ramp.headline, fontWeight: '600' },
-  actions: { flexDirection: 'row', gap: Spacing.three, marginTop: Spacing.one },
-  actionSmall: { ...ramp.subheadline, fontWeight: '600' },
-  note: { ...ramp.subheadline, paddingHorizontal: Spacing.three, paddingVertical: Spacing.one },
-  reading: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.one,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  readingText: { ...ramp.subheadline },
+  list: { paddingBottom: 8 },
+  reading: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingStart: 14, paddingEnd: 6, paddingVertical: 6 },
+  noteWrap: { alignSelf: 'stretch' },
+  note: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 10 },
 });

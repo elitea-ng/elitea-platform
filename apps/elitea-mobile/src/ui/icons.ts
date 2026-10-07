@@ -40,6 +40,13 @@ const KIT_ICONS = {
   touchId: ['touchid', 'fingerprint'],
   passcode: ['lock.shield', 'password'],
   grid: ['square.grid.2x2', 'apps'],
+  keyboard: ['keyboard', 'keyboard'],
+  arrowDown: ['arrow.down', 'arrow_downward'],
+  document: ['doc', 'description'],
+  code: ['chevron.left.forwardslash.chevron.right', 'code'],
+  speakerOff: ['speaker.slash', 'volume_off'],
+  retry: ['arrow.clockwise', 'refresh'],
+  photoLibrary: ['photo.on.rectangle', 'photo_library'],
 } as const satisfies Record<string, readonly [SFSymbol, AndroidSymbol]>;
 
 export const ICONS = { ...(tokenIcons as Record<keyof typeof tokenIcons, readonly [SFSymbol, AndroidSymbol]>), ...KIT_ICONS };

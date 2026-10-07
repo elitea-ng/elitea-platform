@@ -103,3 +103,71 @@ describe('Composer dictation (on-device only)', () => {
     expect(screen.queryByRole('button', { name: 'Dictate' })).toBeNull();
   });
 });
+
+// The composer around dictation (B3-B5: the redesign moved useDictation into Composer).
+const heard = async (transcript: string, isFinal = false) => {
+  await act(async () => recogniser.__emit('result', { results: [{ transcript }], isFinal }));
+};
+
+async function startDictating(ui: React.ReactElement) {
+  const view = await render(ui);
+  await fireEvent.press(screen.getByRole('button', { name: 'Dictate' }));
+  await waitFor(() => expect(screen.getByTestId('dictation-panel')).toBeTruthy());
+  return view;
+}
+
+describe('Composer dictation', () => {
+  it('stops listening when the composer turns into a notice (an approval pause), keeping what was heard', async () => {
+    const onSend = jest.fn(() => null);
+    const view = await startDictating(<Composer busy onSend={onSend} dictation />);
+    await heard('check the build');
+    await view.rerender(<Composer busy onSend={onSend} dictation disabledReason="Waiting for your approval above." />);
+    expect(recogniser.abort).toHaveBeenCalled();
+    // Words after the pause are not written into the hidden input.
+    await heard('check the build and more');
+    await view.rerender(<Composer busy={false} onSend={onSend} dictation />);
+    expect(screen.queryByTestId('dictation-panel')).toBeNull();
+    expect(screen.getByLabelText('Message').props.value).toBe('check the build');
+  });
+
+  it('Send while dictating sends what the input shows, and a late final result does not refill it (#56)', async () => {
+    const onSend = jest.fn(() => null);
+    await startDictating(<Composer busy={false} onSend={onSend} dictation />);
+    // A real stop() delivers a final result before 'end'; the mock would end at once.
+    recogniser.stop.mockImplementation(() => {});
+    await heard('send the report');
+    await fireEvent.press(screen.getByRole('button', { name: 'Send' }));
+    expect(onSend).toHaveBeenCalledWith({ text: 'send the report', mentions: null });
+    expect(recogniser.abort).toHaveBeenCalled();
+    await heard('Send the report.', true);
+    expect(screen.getByLabelText('Message').props.value).toBe('');
+    recogniser.stop.mockImplementation(() => recogniser.__emit('end', null));
+  });
+
+  it('VoiceOver focus follows the control: to Stop when listening starts ("Listening" is said), back to Dictate when it ends', async () => {
+    const { AccessibilityInfo } = require('react-native');
+    const announce = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
+    const focus = jest.spyOn(AccessibilityInfo, 'sendAccessibilityEvent').mockImplementation(() => {});
+    // The host instance the ref holds carries the props it was rendered with.
+    const labelOf = (instance: unknown) => (instance as { props?: { accessibilityLabel?: string } } | null)?.props?.accessibilityLabel;
+    await startDictating(<Composer busy={false} onSend={jest.fn(() => null)} dictation />);
+    expect(announce).toHaveBeenCalledWith('Listening');
+    await waitFor(() => expect(focus).toHaveBeenCalledTimes(1));
+    expect(focus.mock.calls[0][1]).toBe('focus');
+    expect(labelOf(focus.mock.calls[0][0])).toBe('Stop dictation');
+    await fireEvent.press(screen.getByRole('button', { name: 'Stop dictation' }));
+    await waitFor(() => expect(focus).toHaveBeenCalledTimes(2));
+    expect(labelOf(focus.mock.calls[1][0])).toBe('Dictate');
+    announce.mockRestore();
+    focus.mockRestore();
+  });
+
+  it('the design preview draws the composer\'s own listening state: panel in the bar, no mic, words in the input, Send live', async () => {
+    await render(<Composer busy={false} onSend={jest.fn(() => null)} dictation dictationPreview={{ heard: 'draft a follow-up', level: 0.4 }} />);
+    expect(screen.getByTestId('dictation-panel')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Dictate' })).toBeNull();
+    expect(screen.getByLabelText('Message').props.value).toBe('draft a follow-up');
+    expect(screen.getByRole('button', { name: 'Send' }).props.accessibilityState?.disabled).toBe(false);
+    expect(recogniser.start).not.toHaveBeenCalled();
+  });
+});

@@ -43,6 +43,8 @@ export interface TrayDeps {
     onProgress: (fraction: number | null) => void,
     target: { projectId: number; conversationUuid: string },
     limits: AttachmentLimits,
+    /** Aborted when the user cancels this file's upload (`remove`) or the thread goes. */
+    signal: AbortSignal,
   ) => Promise<Uploaded>;
   /** Deletes a temporary (re-encoded) file. */
   discard: (uri: string) => void;
@@ -90,6 +92,8 @@ export class AttachmentTray {
   private heldQuestion: string | null = null;
   private readonly listeners = new Set<() => void>();
   private generation = 0;
+  /** The upload in flight, by item id: `remove` aborts it. */
+  private readonly uploads = new Map<string, AbortController>();
   private target: { projectId: number; conversationUuid: string } | null = null;
   private limits: AttachmentLimits;
 
@@ -189,9 +193,19 @@ export class AttachmentTray {
     this.deps.discardPicked?.(item.pickedUri);
   }
 
+  /**
+   * Takes a file out of the tray. One uploading is cancelled: its request is aborted and the
+   * send goes on with the other files (its copies are deleted once the upload has let go).
+   */
   remove(id: string): void {
     const item = this.items.find((i) => i.id === id);
-    if (!item || item.state === 'uploading') return;
+    if (!item) return;
+    const upload = this.uploads.get(id);
+    if (upload) {
+      upload.abort();
+      this.set(this.items.filter((i) => i.id !== id));
+      return;
+    }
     this.forget(item);
     this.set(this.items.filter((i) => i.id !== id));
   }
@@ -219,13 +233,23 @@ export class AttachmentTray {
       const item = this.items.find((i) => i.id === id);
       if (!item || item.state !== 'ready' || !item.ready) continue;
       this.patch(item.id, { state: 'uploading', progress: null, error: null });
+      const controller = new AbortController();
+      this.uploads.set(item.id, controller);
       try {
-        const uploaded = await this.deps.upload(item.ready, (progress) => this.patch(item.id, { progress }), target, this.limits);
+        const uploaded = await this.deps.upload(item.ready, (progress) => this.patch(item.id, { progress }), target, this.limits, controller.signal);
+        if (controller.signal.aborted) throw new Error('cancelled');
         this.patch(item.id, { state: 'uploaded', progress: 1, filepath: uploaded.filepath });
       } catch (error) {
+        // Cancelled (`remove`): the file is gone from the tray; the message goes without it.
+        if (controller.signal.aborted) {
+          this.forget(item);
+          continue;
+        }
         const message = this.deps.describe(error, item.name);
         this.patch(item.id, { state: 'failed', progress: null, error: message });
         return { ok: false, error: message };
+      } finally {
+        this.uploads.delete(item.id);
       }
     }
     // A file picked while the others uploaded was not part of this pass: the
@@ -308,6 +332,7 @@ export class AttachmentTray {
   clear(ids?: readonly string[]): void {
     if (ids === undefined) {
       this.generation++;
+      for (const upload of this.uploads.values()) upload.abort();
       this.releaseSent();
       for (const item of this.items) this.forget(item);
       this.set([]);

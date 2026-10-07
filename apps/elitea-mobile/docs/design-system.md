@@ -286,6 +286,7 @@ gradient stop and the flat background. Gradient rows use the worst stop.
 | danger / gradient (worst) | 5.15 | 7.56 | 4.5 |
 | dangerOn / danger | 5.90 | 7.45 | 4.5 |
 | bubbleUserText / bubbleUser | 5.88 | 11.76 | 4.5 |
+| bubbleUserText / bubbleUserChip (a file chip's 12 % veil on my bubble: black under white text, white under black) | 7.14 | 12.98 | 4.5 |
 | bubbleAgentText / bubbleAgent | 17.69 | 14.66 | 4.5 |
 | chipText / chip | 17.69 | 14.08 | 4.5 |
 | chipText / surfaceGlass (worst) | 16.98 | 14.10 | 4.5 |
@@ -627,6 +628,8 @@ scheme, brand }`. Touch targets are at least 44 pt on iOS and 48 dp on Android, 
     agent gets the mascot. The others get a monogram on `secondarySoft`, so speakers stay
     distinguishable.
   - The accessibility label is always the agent's name, never "Zefirca".
+  - Pinned to the top of the message, level with the name line, in every state: it does
+    not move when the answer finishes and its action row appears.
 - The name line above the first bubble of a run shows the agent name (footnote,
   `textSecondary`) and the time.
 - **Streaming:**
@@ -989,3 +992,56 @@ Landed on `feat/redesign-entry-home`:
   `/design-workspaces`, `/design-projects`; all take `&brand=magenta|green|lemon` and render
   the real views (D2).
 
+
+## 10. Chat (as built)
+
+Landed on `feat/redesign-chat`:
+
+- **Frame** (`ThreadLayout`): the transcript on the flat `background`, the floating glass composer
+  over its bottom edge (the transcript scrolls under the glass; its newest row is padded by the
+  composer's measured height), toasts / the reading-aloud pill / notes and the "jump to latest"
+  glass button floating above the composer. Keyboard-controller `KeyboardAvoidingView` with
+  `automaticOffset`; the composer pads by the bottom safe area when the keyboard is down and rides
+  the IME insets on Android (edge-to-edge). Transient confirmations are toasts (`Toast`), not
+  alerts: attach success is silent, refusals are a dismissible note above the composer.
+- **Bubbles** (`MessageBubble`, rows in `ThreadRows.tsx`): mine right, `bubbleUser`, 84 % wide at
+  most, radius 22 with the 6 corner on my side; answers full width with the avatar column (28),
+  the "Agent · 9:41" line above and the 6 corner on the agent's side. A plain-text message is one
+  VoiceOver element with a "Message actions" accessibility action; an answer keeps its markdown
+  links reachable and carries the action row.
+- **Assistant avatar** (`AssistantAvatar`, `useAgentIconUri`): the addressed agent's own icon
+  (`version_details.meta.icon_meta.url`, downloaded like Discover's: redirects refused, raster bytes
+  only), else Agent Zefirca's head for the primary agent or a model chat, else a monogram. Labelled
+  by the agent; decorative next to the name line.
+- **Action row** (`AnswerActions`): copy, like, dislike, read aloud | regenerate, "…". Copy needs
+  `allow_share_out`; like/dislike client contract 1.3 and a persisted answer (toggles, filled
+  glyph in the accent; dislike opens the menu on the optional comment); regenerate only on the
+  newest answer when the screen can. At accessibility sizes only "…" remains. Long press (or "…")
+  opens the full menu (`MessageActionsSheet` on `ActionMenu`: symbol rows, rating, comment).
+- **Markdown**: the type ramp and tokens (body 17 pt on iOS, headings on title roles, links in the
+  accent); fenced code is `CodeBlock`: sunken card, language, sideways scroll, copy button only
+  with share-out.
+- **Tool steps** (`ToolActivity`): a sunken disclosure card, 44 pt summary row, one 44 pt row per
+  call with a symbol and a word for its status. **Approval** (`PauseCard`): inline at the end of
+  the transcript, `surface` card with a 3 pt `warning` leading edge, a symbol tile, "On {host}",
+  Approve filled / Reject `destructiveTonal` / others tonal, approve/reject haptics; no mascot.
+- **Composer** (`Composer`): paperclip (iOS action sheet anchored to the button, Android
+  `ActionMenu`), the input ("Message {agent}…"), mic, send (accent circle, sunken when disabled)
+  or stop (`textPrimary` circle). The target chip and the attachment tray (56 pt thumbnails,
+  `xmark.circle.fill` remove, which cancels a file still uploading, tap a failed file to retry) sit inside the glass above the input.
+- **Dictation** (`DictationPanel`, `VoiceOrb`): the listening state is a pastel glass card above the
+  composer with a red-dot "Listening" pill, the orb (SVG gradient + specular highlight; breathes
+  and scales with the microphone level from `volumechange`; a static ring that steps with the
+  level under Reduce Motion), the words heard, and keyboard / stop / cancel (cancel restores the
+  text typed before dictation). Recognition stays on the device.
+- **Thinking / streaming**: three bobbing dots in the answer bubble with "Thinking…" (static under
+  Reduce Motion), then a pulsing caret at the end of the streaming text (`InlineCaret`: an inline
+  text run after the last character, on its last line, as tall as the line at every text size;
+  its dim phase stays at 3:1 on the bubble; steady under Reduce Motion; skipped by screen readers).
+- **Empty conversation** (`ChatEmptyState`): on the gradient, the agent's icon or the mascot bust,
+  "Ask {agent} anything", its welcome message, and its conversation starters (model chats: four
+  generic ones) as glass suggestion cards that put the text in the composer (never sent alone).
+- **#56**: a pending iOS autocorrection committed after Send (`keyboardCommit.ts`) is the keyboard
+  finishing the sent message, so the input is still cleared.
+- **Preview** (`__DEV__`): `/design-chat?state=conversation|empty|thinking|streaming|approval|dictation|compose&brand=magenta|green|lemon`
+  renders the real components (D2, `fixtureParity.test.tsx`).

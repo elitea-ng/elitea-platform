@@ -158,3 +158,49 @@ describe('Composer Stop', () => {
     expect(screen.getByLabelText('Send')).toBeDisabled();
   });
 });
+
+// #56: iOS commits a pending autocorrection through onChangeText AFTER Send read the text and
+// BEFORE the send settles. That is the keyboard finishing the sent message, not a user edit:
+// the input is cleared, so a second tap cannot send the corrected copy again.
+describe('Composer and a keyboard autocorrection committed after Send (#56)', () => {
+  function deferredSend() {
+    let accept: (problem: string | null) => void = () => {};
+    const onSend = jest.fn(() => new Promise<string | null>((resolve) => (accept = resolve)));
+    return { onSend, accept: (problem: string | null = null) => accept(problem) };
+  }
+
+  it('clears the input when only the last word was corrected between submit and settle', async () => {
+    const send = deferredSend();
+    await render(<Composer busy={false} onSend={send.onSend} />);
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello zefir');
+    await fireEvent.press(screen.getByLabelText('Send'));
+    expect(send.onSend).toHaveBeenCalledWith({ text: 'hello zefir', mentions: null });
+    // The keyboard commits "zefir" → "Zefir" (and its trailing space) while the send is in flight.
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello Zefir ');
+    send.accept();
+    await waitFor(() => expect(screen.getByLabelText('Message').props.value).toBe(''));
+  });
+
+  it('keeps a real edit made while the send was in flight', async () => {
+    const send = deferredSend();
+    await render(<Composer busy={false} onSend={send.onSend} />);
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello zefir');
+    await fireEvent.press(screen.getByLabelText('Send'));
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello zefir and one more thing');
+    send.accept();
+    await waitFor(() => expect(send.onSend).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByLabelText('Send')).not.toBeDisabled());
+    expect(screen.getByLabelText('Message').props.value).toBe('hello zefir and one more thing');
+  });
+
+  it('keeps the corrected text when the send was refused (nothing was sent)', async () => {
+    const send = deferredSend();
+    await render(<Composer busy={false} onSend={send.onSend} />);
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello zefir');
+    await fireEvent.press(screen.getByLabelText('Send'));
+    await fireEvent.changeText(screen.getByLabelText('Message'), 'hello Zefir');
+    send.accept('This message could not be sent.');
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.getByLabelText('Message').props.value).toBe('hello Zefir');
+  });
+});

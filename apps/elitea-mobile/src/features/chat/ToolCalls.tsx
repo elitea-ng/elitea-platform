@@ -1,18 +1,16 @@
 import { useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, View } from 'react-native';
 
-import { Spacing } from '@/constants/theme';
 import { FONT_SCALE } from '@/constants/typeScale';
-import { usePalette } from '@/constants/use-palette';
 import type { ToolStep } from '@/features/chat/toolActivity';
 import { useDesign } from '@/design/DesignProvider';
-import { Icon, ramp, type IconName } from '@/ui';
+import { Icon, pressedOverlay, ripple, Text, uiPlatform, type IconName, type TextTone } from '@/ui';
 
 /**
- * The tool calls of one answer, under its bubble: a collapsed row
- * ("Used 3 tools · 4.2s"), expanded (always while the answer streams) into
- * one chip per call, grouped under the sub-agent that ran it. A chip opens
- * the call's inputs and output.
+ * The tool steps of one answer, inside its bubble (docs/design-system.md §4.7): a sunken card
+ * whose disclosure row ("Used 3 tools · 4.2s", 44 pt) opens one row per call, grouped under
+ * the sub-agent that ran it; expanded while the answer streams. A row shows the tool, its
+ * status as a symbol AND a word (never colour alone) and opens the call's input and output.
  */
 
 /**
@@ -34,6 +32,13 @@ const STATUS_WORD: Record<ToolStep['status'], string> = {
 };
 
 /** The status symbol of a finished or waiting step; a running one shows a spinner. Never colour alone: the label says it too. */
+const STATUS_TONE: Record<Exclude<ToolStep['status'], 'running'>, TextTone> = {
+  done: 'success',
+  error: 'danger',
+  needs_auth: 'warning',
+  waiting: 'accent',
+};
+
 const STATUS_ICON: Record<Exclude<ToolStep['status'], 'running'>, IconName> = {
   done: 'checkCircle',
   error: 'errorCircle',
@@ -88,14 +93,17 @@ export function ToolActivity({
   streaming?: boolean;
   onOpen: (step: ToolStep) => void;
 }) {
-  const palette = usePalette();
   const design = useDesign();
+  const { colors, radius } = design;
   const [expanded, setExpanded] = useState(false);
   if (steps.length === 0) return null;
   const open = expanded || streaming;
   const summary = toolsSummary(steps);
+  const running = steps.some((s) => s.status === 'running');
+  const failed = steps.some((s) => s.status === 'error');
+  const pressed = (on: boolean) => (on && uiPlatform === 'ios' ? { backgroundColor: pressedOverlay(design) } : null);
   return (
-    <View style={styles.box}>
+    <View style={[styles.card, { backgroundColor: colors.surfaceSunken, borderRadius: radius.md }]}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={summary}
@@ -103,51 +111,51 @@ export function ToolActivity({
         accessibilityHint={open ? 'Hides the tool calls' : 'Shows the tool calls'}
         disabled={streaming}
         onPress={() => setExpanded((v) => !v)}
-        hitSlop={8}
-        style={styles.summaryRow}>
-        <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.summary, { color: palette.textSecondary }]}>
+        android_ripple={ripple(design)}
+        style={({ pressed: on }) => [styles.summaryRow, pressed(on)]}>
+        {running ? (
+          <ActivityIndicator size="small" color={colors.accent} />
+        ) : (
+          <Icon name={failed ? 'errorCircle' : 'tool'} size={18} tone={failed ? 'danger' : 'secondary'} />
+        )}
+        <Text variant="callout" tone="secondary" maxFontSizeMultiplier={FONT_SCALE.control} style={styles.flex}>
           {summary}
         </Text>
-        {streaming ? null : <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} color={palette.textSecondary} weight="semibold" />}
+        {streaming ? null : <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14} tone="tertiary" weight="semibold" />}
       </Pressable>
       {open
         ? groupByAgent(steps).map((group) => (
-            <View key={group.agent ?? '-'} style={styles.group}>
+            <View key={group.agent ?? '-'} style={[styles.group, { borderTopColor: colors.separator }]}>
               {group.agent ? (
-                <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.agent, { color: palette.textSecondary }]} numberOfLines={1}>
+                <Text variant="caption" tone="secondary" maxFontSizeMultiplier={FONT_SCALE.control} numberOfLines={1} style={styles.agent}>
                   {group.agent}
                 </Text>
               ) : null}
-              <View style={styles.chips}>
-                {group.steps.map((step) => (
-                  <Pressable
-                    key={step.id}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${toolLabel(step)}, ${statusWord(step)}`}
-                    accessibilityHint="Shows the input and output"
-                    onPress={() => onOpen(step)}
-                    style={[
-                      styles.chip,
-                      {
-                        borderColor: step.status === 'error' ? palette.danger : palette.border,
-                        backgroundColor: palette.background,
-                      },
-                    ]}>
-                    <Text maxFontSizeMultiplier={FONT_SCALE.control} numberOfLines={1} style={[styles.chipText, { color: palette.text }]}>
+              {group.steps.map((step) => (
+                <Pressable
+                  key={step.id}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${toolLabel(step)}, ${statusWord(step)}`}
+                  accessibilityHint="Shows the input and output"
+                  onPress={() => onOpen(step)}
+                  android_ripple={ripple(design)}
+                  style={({ pressed: on }) => [styles.step, pressed(on)]}>
+                  {step.status === 'running' ? (
+                    <ActivityIndicator size="small" color={colors.accent} />
+                  ) : (
+                    <Icon name={STATUS_ICON[step.status]} size={18} tone={STATUS_TONE[step.status]} />
+                  )}
+                  <View style={styles.flex}>
+                    <Text variant="callout" maxFontSizeMultiplier={FONT_SCALE.control} numberOfLines={1}>
                       {toolLabel(step)}
                     </Text>
-                    {step.status === 'running' ? (
-                      <ActivityIndicator size="small" color={palette.accent} />
-                    ) : (
-                      <Icon
-                        name={STATUS_ICON[step.status]}
-                        size={14}
-                        color={step.status === 'error' || step.status === 'needs_auth' ? palette.danger : step.status === 'done' ? design.colors.success : palette.accent}
-                      />
-                    )}
-                  </Pressable>
-                ))}
-              </View>
+                    <Text variant="caption" tone={step.status === 'error' ? 'danger' : 'secondary'} maxFontSizeMultiplier={FONT_SCALE.control} numberOfLines={1}>
+                      {statusWord(step)}
+                    </Text>
+                  </View>
+                  <Icon name="chevronRight" size={14} tone="tertiary" weight="semibold" />
+                </Pressable>
+              ))}
             </View>
           ))
         : null}
@@ -156,22 +164,10 @@ export function ToolActivity({
 }
 
 const styles = StyleSheet.create({
-  box: { gap: Spacing.one, marginTop: Spacing.one },
-  summary: { ...ramp.footnote, fontWeight: '500' },
-  group: { gap: 2 },
-  agent: { ...ramp.caption, fontWeight: '600' },
-  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.one },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.one,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    paddingHorizontal: Spacing.two,
-    paddingVertical: 6,
-    minHeight: 32,
-    maxWidth: 260,
-  },
-  chipText: { ...ramp.caption, flexShrink: 1 },
-  summaryRow: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 28 },
+  card: { overflow: 'hidden', marginTop: 2, borderCurve: 'continuous' },
+  summaryRow: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44, paddingHorizontal: 12, paddingVertical: 8 },
+  group: { borderTopWidth: StyleSheet.hairlineWidth },
+  agent: { fontWeight: '600', paddingHorizontal: 12, paddingTop: 8 },
+  step: { flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 44, paddingHorizontal: 12, paddingVertical: 6 },
+  flex: { flex: 1 },
 });

@@ -107,6 +107,14 @@ export interface DictationHandlers {
   /** The words heard so far (`final` once the recogniser is done with them). */
   onText: (heard: string, final: boolean) => void;
   onProblem: (problem: DictationProblem) => void;
+  /** The microphone level while listening, 0 (silence) to 1 (loud); drives the voice orb. */
+  onLevel?: (level: number) => void;
+}
+
+/** The recogniser's input volume (-2..10, below 0 inaudible) as 0..1. */
+export function levelOf(volume: number): number {
+  if (!Number.isFinite(volume) || volume <= 0) return 0;
+  return Math.min(1, volume / 10);
 }
 
 /**
@@ -140,6 +148,10 @@ export function useDictation(handlers: DictationHandlers) {
         if (problem !== null) latest.current.onProblem(problem);
         end();
       }),
+      ExpoSpeechRecognitionModule.addListener('volumechange', (event) => {
+        if (!active.current) return;
+        latest.current.onLevel?.(levelOf(event.value));
+      }),
       ExpoSpeechRecognitionModule.addListener('end', end),
     ];
     return () => {
@@ -172,6 +184,8 @@ export function useDictation(handlers: DictationHandlers) {
         addsPunctuation: true,
         continuous: false,
         iosTaskHint: 'dictation',
+        // The orb follows the microphone level (a number, no audio leaves the recogniser).
+        volumeChangeEventOptions: { enabled: true, intervalMillis: 120 },
       });
     } catch (error) {
       log.info('dictation did not start', { error });
@@ -190,7 +204,14 @@ export function useDictation(handlers: DictationHandlers) {
     }
   };
 
-  return { listening, start, stop };
+  /** Stops listening and drops what the recogniser still holds (the composer restores its text). */
+  const cancel = () => {
+    active.current = false;
+    setListening(false);
+    abortDictation();
+  };
+
+  return { listening, start, stop, cancel };
 }
 
 /** Stops any dictation at once (screen gone, session wiped). */

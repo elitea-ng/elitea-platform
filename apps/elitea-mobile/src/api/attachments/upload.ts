@@ -41,7 +41,7 @@ export interface Uploaded {
   size: number;
 }
 
-export type UploadFailure = 'refused' | 'too_large' | 'not_allowed' | 'unreachable' | 'bad_response' | 'session' | 'upgrade_required';
+export type UploadFailure = 'refused' | 'too_large' | 'not_allowed' | 'unreachable' | 'bad_response' | 'session' | 'upgrade_required' | 'cancelled';
 
 export class UploadError extends Error {
   constructor(
@@ -68,6 +68,8 @@ export function uploadErrorText(error: unknown, name: string): string {
       return 'You were signed out.';
     case 'upgrade_required':
       return 'Update Agent Zefir to attach files.';
+    case 'cancelled':
+      return `The upload of ${name} was cancelled.`;
     default:
       return `${name} could not be uploaded. Try again.`;
   }
@@ -85,6 +87,8 @@ export interface UploadDeps {
   newFileId?: () => string;
   sleep?: (ms: number) => Promise<void>;
   onProgress?: (fraction: number | null) => void;
+  /** Cancels the upload: the request in flight is aborted and no further chunk is sent. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -158,16 +162,25 @@ function classify(status: number, body: unknown): UploadError {
   return new UploadError('refused', message);
 }
 
-async function post(client: ApiClient, projectId: number, conversationUuid: string, form: FormData): Promise<PostOutcome> {
+async function post(
+  client: ApiClient,
+  projectId: number,
+  conversationUuid: string,
+  form: FormData,
+  signal: AbortSignal | undefined,
+): Promise<PostOutcome> {
+  if (signal?.aborted) throw new UploadError('cancelled');
   let result;
   try {
     result = await client.POST('/elitea_core/attachments/prompt_lib/{project_id}/{conversation_id}', {
+      signal,
       params: { path: { project_id: String(projectId), conversation_id: conversationUuid } },
       // FormData as is: the platform sets the multipart boundary itself.
       body: form as never,
       bodySerializer: (body: unknown) => body as FormData,
     });
   } catch (error) {
+    if (signal?.aborted || (isApiError(error) && error.kind === 'aborted')) throw new UploadError('cancelled');
     if (isApiError(error) && (error.kind === 'network' || error.kind === 'timeout')) throw new UploadError('unreachable');
     if (isApiError(error) && error.kind === 'upgrade_required') throw new UploadError('upgrade_required');
     if (isApiError(error)) throw new UploadError('session');
@@ -204,7 +217,7 @@ export async function uploadAttachment(
     const form = new FormData();
     form.append('file', part(source.uri, source.uploadName, source.mimeType) as never);
     form.append('file_name', source.uploadName);
-    const outcome = await post(client, projectId, conversationUuid, form);
+    const outcome = await post(client, projectId, conversationUuid, form, deps.signal);
     if (outcome.kind !== 'stored') throw new UploadError('bad_response');
     deps.onProgress?.(1);
     return outcome.uploaded;
@@ -218,6 +231,7 @@ export async function uploadAttachment(
   deps.onProgress?.(0);
 
   for (let index = 0; index < total; index++) {
+    if (deps.signal?.aborted) throw new UploadError('cancelled');
     const offset = index * chunkBytes;
     const length = Math.min(chunkBytes, source.size - offset);
     const bytes = await readChunk(source.uri, offset, length);
@@ -233,10 +247,10 @@ export async function uploadAttachment(
         form.append('chunk_index', String(index));
         form.append('total_chunks', String(total));
         try {
-          outcome = await post(client, projectId, conversationUuid, form);
+          outcome = await post(client, projectId, conversationUuid, form, deps.signal);
           break;
         } catch (error) {
-          if (!(error instanceof UploadError) || error.reason !== 'unreachable' || attempt + 1 >= CHUNK_RETRIES) throw error;
+          if (!(error instanceof UploadError) || error.reason !== 'unreachable' || attempt + 1 >= CHUNK_RETRIES || deps.signal?.aborted) throw error;
           await sleep(500 * 2 ** attempt);
         }
       }

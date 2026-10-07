@@ -1,12 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode } from 'react';
+import { AccessibilityInfo, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { useKeyboardState } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { FONT_SCALE } from '@/constants/typeScale';
-import { usePalette } from '@/constants/use-palette';
 import { useDesign } from '@/design/DesignProvider';
-import { GlassSurface, haptic, hitSlopFor, Icon, ramp, uiPlatform } from '@/ui';
+import { GlassSurface, haptic, hitSlopFor, Icon, IconButton, ramp, Text, uiPlatform } from '@/ui';
 import {
   EVERYONE,
   deriveMentions,
@@ -19,8 +18,9 @@ import {
   type TriggerChar,
 } from '@/features/chat/mentions/mentions';
 import { SuggestionStrip, type Suggestion, type SuggestionState } from '@/features/chat/SuggestionStrip';
-import { DictationButton } from '@/features/speech/DictationButton';
-import { dictationProblemText, joinDictation } from '@/features/speech/dictation';
+import { holdsOnlySent } from '@/features/chat/keyboardCommit';
+import { DictationPanel } from '@/features/speech/DictationPanel';
+import { dictationProblemText, joinDictation, useDictation } from '@/features/speech/dictation';
 
 /** What the composer hands over on send. */
 export interface ComposerSend {
@@ -69,6 +69,15 @@ export interface ComposerProps {
   autoDictate?: boolean;
   /** Text the input starts with (Siri "Ask <agent>"); never sent until the user taps Send. */
   initialText?: string | null;
+  /** The input's placeholder ("Message Research…"). */
+  placeholder?: string;
+  /** Text put in the input from outside (an empty-state suggestion); a new `key` puts it again. */
+  draft?: { text: string; key: number } | null;
+  /**
+   * Development previews only (`/design-chat`): draw the composer's own listening state with
+   * these words, as if dictation had heard them, without starting the recogniser.
+   */
+  dictationPreview?: { heard: string; level: number } | null;
 }
 
 function listNames(names: string[]): string {
@@ -125,15 +134,19 @@ export function Composer({
   dictation = false,
   autoDictate = false,
   initialText = null,
+  placeholder = 'Message',
+  draft = null,
+  dictationPreview = null,
 }: ComposerProps) {
-  const palette = usePalette();
   const design = useDesign();
+  const { colors } = design;
   // Off the keyboard, the bar keeps clear of the home indicator / Android gesture bar
   // (edge-to-edge, audit 2.11 S1); on the keyboard it sits right on top of it.
   const insets = useSafeAreaInsets();
   const keyboardUp = useKeyboardState((state) => state.isVisible);
   const bottomInset = keyboardUp ? design.space[2] : Math.max(insets.bottom, design.space[2]);
-  const [text, setText] = useState(initialText ?? '');
+  const input = useRef<ComponentRef<typeof TextInput>>(null);
+  const [text, setText] = useState(dictationPreview ? joinDictation(initialText ?? '', dictationPreview.heard) : (initialText ?? ''));
   const [selection, setSelection] = useState<Selection>({ start: 0, end: 0 });
   /** Set once after a pick to move the caret; released on the next selection event. */
   const [forcedSelection, setForcedSelection] = useState<Selection | undefined>(undefined);
@@ -141,8 +154,53 @@ export function Composer({
   const [submitting, setSubmitting] = useState(false);
   const [picking, setPicking] = useState(false);
   const [stopping, setStopping] = useState(false);
+  /** When the last send read the text, and when the text last changed after it (#56). */
+  const sentAt = useRef(0);
+  const changedAt = useRef<number | null>(null);
   /** The text typed before the current dictation; the words heard go after it. */
   const dictationBase = useRef<string | null>(null);
+  /** What dictation has heard so far (the panel shows it) and the microphone level. */
+  const [heard, setHeard] = useState('');
+  const [level, setLevel] = useState(0);
+  const voice = useDictation({
+    onText: (words, final) => {
+      const base = dictationBase.current ?? '';
+      const next = joinDictation(base, words);
+      setHeard(words.trim());
+      setText(next);
+      setSelection({ start: next.length, end: next.length });
+      if (final) dictationBase.current = next;
+    },
+    onProblem: (problem) => setError(dictationProblemText(problem)),
+    onLevel: setLevel,
+  });
+  const startDictation = () => {
+    dictationBase.current = text;
+    setHeard('');
+    setLevel(0);
+    setError(null);
+    haptic('voiceStart');
+    void voice.start();
+  };
+  // Home's "Dictate a message": once, on open (a tap the user made there).
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!autoDictate || !dictation || autoStarted.current || disabledReason) return;
+    autoStarted.current = true;
+    startDictation();
+  });
+  // An empty-state suggestion goes into the input to edit or send; never sent on its own. Taken
+  // over while rendering (a new key), then the input is focused.
+  const [draftKey, setDraftKey] = useState<number | null>(null);
+  if (draft !== null && draft.key !== draftKey) {
+    setDraftKey(draft.key);
+    setText(draft.text);
+    setSelection({ start: draft.text.length, end: draft.text.length });
+    setError(null);
+  }
+  useEffect(() => {
+    if (draftKey !== null) input.current?.focus();
+  }, [draftKey]);
   /** A token whose pick failed; its strip stays hidden until the token changes. */
   const [dismissed, setDismissed] = useState<string | null>(null);
 
@@ -162,10 +220,47 @@ export function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [externalKey]);
 
+  // Starting dictation removes the Dictate button and ending it removes the panel, so the
+  // screen-reader focus would fall to an arbitrary element (and iOS ignores the panel's live
+  // region). Focus follows the control instead: to Stop when listening starts ("Listening" is
+  // announced), back to Dictate when it ends.
+  const micButton = useRef<ComponentRef<typeof View>>(null);
+  const stopButton = useRef<ComponentRef<typeof View>>(null);
+  const wasListening = useRef(false);
+  useEffect(() => {
+    if (voice.listening === wasListening.current) return;
+    wasListening.current = voice.listening;
+    if (voice.listening) AccessibilityInfo.announceForAccessibility('Listening');
+    const timer = setTimeout(() => {
+      const target = voice.listening ? stopButton.current : (micButton.current ?? input.current);
+      if (target) AccessibilityInfo.sendAccessibilityEvent(target, 'focus');
+    }, FOCUS_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [voice.listening]);
+
+  // The composer can turn into a notice mid-dictation (an approval pauses the answer): the
+  // panel with Stop and Cancel goes, so the recogniser must too, or the microphone stays live
+  // with no control and keeps writing into a hidden input. What was heard so far is kept.
+  const recognising = voice.listening;
+  useEffect(() => {
+    if (!disabledReason || !recognising) return;
+    voice.cancel();
+    dictationBase.current = null;
+    // `voice` is a new object every render; only these two decide.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [disabledReason, recognising]);
+  /** The listening state as drawn: the recogniser's, or a development preview's. */
+  const listening = voice.listening || dictationPreview !== null;
+
   if (disabledReason) {
     return (
-      <View style={[styles.bar, { backgroundColor: palette.background, paddingBottom: bottomInset }]}>
-        <Text style={[styles.notice, { color: palette.textSecondary }]}>{disabledReason}</Text>
+      <View style={[styles.bar, { paddingHorizontal: design.space.composerInset, paddingBottom: bottomInset }]}>
+        <GlassSurface radius={design.radius.composer} floating style={styles.notice}>
+          <Icon name="info" size={18} tone="secondary" />
+          <Text variant="footnote" tone="secondary" style={styles.noticeText}>
+            {disabledReason}
+          </Text>
+        </GlassSurface>
       </View>
     );
   }
@@ -194,13 +289,24 @@ export function Composer({
 
   const settle = (sent: string, problem: string | null) => {
     setError(problem);
-    // Only the accepted text is cleared; an edit made meanwhile is kept.
-    if (problem === null) setText((current) => (current === sent ? '' : current));
+    if (problem !== null) return;
+    // Only the accepted text is cleared; an edit made meanwhile is kept. A pending keyboard
+    // autocorrection that iOS committed right after Send is not an edit (#56).
+    const at = sentAt.current;
+    const last = changedAt.current;
+    setText((current) => (holdsOnlySent(sent, current, at, last) ? '' : current));
   };
   const submit = () => {
     if (!canSend) return;
     haptic('send');
+    // Abort, not stop: a stop makes the recogniser deliver a final result, which would write
+    // the sent words back into the cleared input (and a second tap sends them twice, #56).
+    // What is sent is what the input shows now.
+    if (voice.listening) voice.cancel();
+    dictationBase.current = null;
     const sent = text;
+    sentAt.current = Date.now();
+    changedAt.current = null;
     const mentions = people.length > 0 ? deriveMentions(sent, people, { everyone: true }) : null;
     const result = onSend({ text: sent, mentions });
     if (!(result instanceof Promise)) {
@@ -259,7 +365,25 @@ export function Composer({
       : (externalSuggestions ?? { items: [], loading: true });
 
   return (
-    <View style={[styles.bar, { backgroundColor: palette.background, paddingBottom: bottomInset }]}>
+    <View style={[styles.bar, { paddingHorizontal: design.space.composerInset, paddingBottom: bottomInset }]}>
+      {listening ? (
+        <DictationPanel
+          stopRef={stopButton}
+          heard={dictationPreview?.heard ?? heard}
+          level={dictationPreview?.level ?? level}
+          onStop={() => voice.stop()}
+          onKeyboard={() => {
+            voice.stop();
+            input.current?.focus();
+          }}
+          onCancel={() => {
+            const base = dictationBase.current ?? '';
+            voice.cancel();
+            setText(base);
+            setSelection({ start: base.length, end: base.length });
+          }}
+        />
+      ) : null}
       {stripState ? (
         <SuggestionStrip
           state={picking ? { ...stripState, loading: true } : stripState}
@@ -267,109 +391,124 @@ export function Composer({
           label={active?.trigger === '@' ? 'People' : 'Suggestions'}
         />
       ) : null}
-      {accessory}
       {error ? (
-        <Text accessibilityRole="alert" style={[styles.error, { color: palette.danger }]}>
-          {error}
-        </Text>
+        <GlassSurface radius={design.radius.md} style={styles.error}>
+          <Icon name="error" size={18} tone="danger" />
+          <Text variant="footnote" tone="danger" accessibilityRole="alert" style={styles.noticeText}>
+            {error}
+          </Text>
+        </GlassSurface>
       ) : null}
-      <GlassSurface radius={design.radius.composer} interactive floating style={styles.row}>
-        {leading}
-        {dictation ? (
-          <DictationButton
-            disabled={submitting}
-            autoStart={autoDictate}
-            onStart={() => {
-              dictationBase.current = text;
+      <GlassSurface radius={design.radius.composer} interactive floating style={styles.box}>
+        {accessory ? <View style={styles.accessory}>{accessory}</View> : null}
+        <View style={styles.row}>
+          {leading}
+          <TextInput
+            ref={input}
+            value={text}
+            selection={forcedSelection}
+            onChangeText={(value) => {
+              // Typing at the end keeps the caret at the end; the platform's
+              // selection event (when it comes) is the truth.
+              if (selection.start === selection.end && selection.end === text.length) {
+                setSelection({ start: value.length, end: value.length });
+              }
+              changedAt.current = Date.now();
+              setText(value);
               setError(null);
             }}
-            onText={(heard, final) => {
-              const base = dictationBase.current ?? '';
-              const next = joinDictation(base, heard);
-              setText(next);
-              setSelection({ start: next.length, end: next.length });
-              if (final) dictationBase.current = next;
+            onSelectionChange={(event) => {
+              setSelection(event.nativeEvent.selection);
+              setForcedSelection(undefined);
             }}
-            onProblem={(problem) => setError(dictationProblemText(problem))}
+            placeholder={placeholder}
+            placeholderTextColor={colors.textTertiary}
+            multiline
+            maxFontSizeMultiplier={FONT_SCALE.input}
+            accessibilityLabel="Message"
+            accessibilityHint={placeholder !== 'Message' ? placeholder : undefined}
+            style={[styles.input, { color: colors.textPrimary }]}
           />
-        ) : null}
-        <TextInput
-          value={text}
-          selection={forcedSelection}
-          onChangeText={(value) => {
-            // Typing at the end keeps the caret at the end; the platform's
-            // selection event (when it comes) is the truth.
-            if (selection.start === selection.end && selection.end === text.length) {
-              setSelection({ start: value.length, end: value.length });
-            }
-            setText(value);
-            setError(null);
-          }}
-          onSelectionChange={(event) => {
-            setSelection(event.nativeEvent.selection);
-            setForcedSelection(undefined);
-          }}
-          placeholder="Message"
-          placeholderTextColor={design.colors.textTertiary}
-          multiline
-          maxFontSizeMultiplier={FONT_SCALE.input}
-          accessibilityLabel="Message"
-          style={[styles.input, { color: palette.text }]}
-        />
-        {showStop ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Stop answer"
-            accessibilityState={{ disabled: stopping, busy: stopping }}
-            disabled={stopping}
-            onPress={stop}
-            hitSlop={hitSlopFor(SEND_SIZE)}
-            android_ripple={{ color: design.colors.surface, borderless: true }}
-            style={({ pressed }) => [
-              styles.send,
-              { backgroundColor: design.colors.textPrimary, opacity: stopping ? 0.38 : pressed && uiPlatform === 'ios' ? 0.7 : 1 },
-            ]}>
-            <Icon name="stop" size={16} color={design.colors.background} />
-          </Pressable>
-        ) : (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Send"
-            accessibilityState={{ disabled: !canSend, busy }}
-            disabled={!canSend}
-            onPress={submit}
-            hitSlop={hitSlopFor(SEND_SIZE)}
-            android_ripple={{ color: design.colors.accentPressed, borderless: true }}
-            style={({ pressed }) => [
-              styles.send,
-              { backgroundColor: pressed && uiPlatform === 'ios' ? design.colors.accentPressed : design.colors.accent, opacity: canSend ? 1 : 0.38 },
-            ]}>
-            <Icon name="send" size={18} color={design.colors.accentOn} weight="bold" />
-          </Pressable>
-        )}
+          {dictation && !listening ? (
+            <IconButton
+              ref={micButton}
+              icon="mic"
+              variant="plain"
+              size={SEND_SIZE}
+              accessibilityLabel="Dictate"
+              accessibilityHint="Speech is turned into text on this device"
+              disabled={submitting}
+              onPress={startDictation}
+            />
+          ) : null}
+          {showStop ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Stop answer"
+              accessibilityState={{ disabled: stopping, busy: stopping }}
+              disabled={stopping}
+              onPress={stop}
+              hitSlop={hitSlopFor(SEND_SIZE)}
+              android_ripple={{ color: colors.surface, borderless: true }}
+              style={({ pressed }) => [
+                styles.send,
+                { backgroundColor: colors.textPrimary, opacity: stopping ? 0.38 : pressed && uiPlatform === 'ios' ? 0.7 : 1 },
+              ]}>
+              <Icon name="stop" size={14} color={colors.background} scales={false} />
+            </Pressable>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Send"
+              accessibilityState={{ disabled: !canSend, busy }}
+              disabled={!canSend}
+              onPress={submit}
+              hitSlop={hitSlopFor(SEND_SIZE)}
+              android_ripple={{ color: colors.accentPressed, borderless: true }}
+              style={({ pressed }) => [
+                styles.send,
+                canSend
+                  ? { backgroundColor: pressed && uiPlatform === 'ios' ? colors.accentPressed : colors.accent }
+                  : { backgroundColor: colors.surfaceSunken, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.separator },
+              ]}>
+              <Icon name="send" size={18} color={canSend ? colors.accentOn : colors.textTertiary} weight="bold" scales={false} />
+            </Pressable>
+          )}
+        </View>
       </GlassSurface>
-      {hint ? <Text style={[styles.hint, { color: palette.textSecondary }]}>{hint}</Text> : null}
+      {hint ? (
+        <Text variant="caption" tone="secondary" style={styles.hint}>
+          {hint}
+        </Text>
+      ) : null}
     </View>
   );
 }
+
+/** After a dictation control appears, before screen-reader focus moves to it (lets it mount). */
+const FOCUS_DELAY_MS = 150;
 
 /** The send / stop circle (§4.5): 36 pt visual, grown to the 44/48 touch target. */
 const SEND_SIZE = 36;
 
 const styles = StyleSheet.create({
-  bar: { paddingHorizontal: 12, paddingTop: 8, gap: 4 },
-  row: { flexDirection: 'row', alignItems: 'flex-end', gap: 4, minHeight: 52, paddingHorizontal: 8, paddingVertical: 8 },
+  bar: { paddingTop: 8, gap: 8 },
+  box: { paddingHorizontal: 6, paddingVertical: 6, gap: 6 },
+  accessory: { gap: 6, paddingHorizontal: 4, paddingTop: 2 },
+  row: { flexDirection: 'row', alignItems: 'flex-end', gap: 2, minHeight: 40 },
   input: {
     ...ramp.body,
     flex: 1,
     minHeight: 36,
+    // About six lines of body text, then it scrolls (§4.5).
     maxHeight: 140,
     paddingHorizontal: 8,
-    paddingTop: 7,
-    paddingBottom: 7,
+    paddingTop: 8,
+    paddingBottom: 8,
   },
-  send: { width: SEND_SIZE, height: SEND_SIZE, borderRadius: SEND_SIZE / 2, alignItems: 'center', justifyContent: 'center' },
-  notice: { ...ramp.footnote, textAlign: 'center', padding: 8 },
-  error: { ...ramp.footnote },
-  hint: { ...ramp.caption },
+  send: { width: SEND_SIZE, height: SEND_SIZE, borderRadius: SEND_SIZE / 2, alignItems: 'center', justifyContent: 'center', marginStart: 2 },
+  notice: { flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 52, paddingHorizontal: 16, paddingVertical: 10 },
+  noticeText: { flexShrink: 1 },
+  error: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12, paddingVertical: 8 },
+  hint: { paddingHorizontal: 12 },
 });

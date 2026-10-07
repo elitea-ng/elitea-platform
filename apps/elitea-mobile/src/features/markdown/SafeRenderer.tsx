@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { Text, type ImageStyle, type TextStyle } from 'react-native';
 import { Renderer } from 'react-native-marked';
 
+import { CodeBlock } from '@/features/markdown/CodeBlock';
+import { CARET_MARK, InlineCaret } from '@/features/markdown/InlineCaret';
 import { confirmAndOpenLink, safeLinkHost, type LinkOpener } from '@/features/markdown/links';
 
 export interface SafeRendererOptions {
@@ -68,6 +70,37 @@ export class SafeRenderer extends Renderer {
         {children}
       </Text>
     );
+  }
+
+  /** A fenced block: the sunken code card with its language and (share-out allowing) a copy button. */
+  override code(text: string, language?: string): ReactNode {
+    const caret = text.includes(CARET_MARK);
+    return (
+      <CodeBlock
+        key={this.nextKey('code')}
+        code={caret ? text.split(CARET_MARK).join('') : text}
+        language={language?.trim() || null}
+        selectable={this.textSelectable}
+        caret={caret}
+      />
+    );
+  }
+
+  /** Plain text; the streaming caret mark becomes the inline caret (Markdown `caret`). */
+  override text(text: string | ReactNode[], styles?: TextStyle): ReactNode {
+    return super.text(typeof text === 'string' ? this.withCaret(text) : text, styles);
+  }
+
+  override codespan(text: string, styles?: TextStyle): ReactNode {
+    if (!text.includes(CARET_MARK)) return super.codespan(text, styles);
+    return super.text([super.codespan(text.split(CARET_MARK).join(''), styles), <InlineCaret key={this.nextKey('caret')} />]);
+  }
+
+  /** `text` split at the caret mark, with the inline caret in its place. */
+  private withCaret(text: string): string | ReactNode[] {
+    if (!text.includes(CARET_MARK)) return text;
+    const parts = text.split(CARET_MARK);
+    return parts.flatMap((part, index) => (index === 0 ? [part] : [<InlineCaret key={this.nextKey('caret')} />, part])).filter((p) => p !== '');
   }
 
   override image(uri: string, alt?: string, _style?: ImageStyle, title?: string): ReactNode {

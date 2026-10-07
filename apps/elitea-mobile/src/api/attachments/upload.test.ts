@@ -131,6 +131,26 @@ describe('chunked upload', () => {
     expect(disk.temps.size).toBe(0);
   });
 
+  it('a cancelled upload sends no further chunk, keeps nothing on disk, and says it was cancelled', async () => {
+    const server = fakeServer();
+    const disk = memoryDisk({ 'file:///big.pdf': big });
+    server.on('POST', ROUTE, { status: 202, body: { status: 'chunk_received' } }, { status: 202, body: { status: 'chunk_received' } });
+    const controller = new AbortController();
+    const error = await uploadAttachment(7, UUID, source('file:///big.pdf', 13), 5, {
+      client: server.client,
+      ...disk.deps,
+      newFileId: () => 'f1',
+      signal: controller.signal,
+      onProgress: (p) => {
+        if (p !== null && p > 0) controller.abort();
+      },
+    }).catch((e: unknown) => e);
+    expect(error).toMatchObject({ reason: 'cancelled' });
+    expect(server.requests).toHaveLength(1);
+    expect(disk.temps.size).toBe(0);
+    expect(uploadErrorText(error, 'big.pdf')).toBe('The upload of big.pdf was cancelled.');
+  });
+
   it('refuses a 201 before the last chunk as a bad answer', async () => {
     const server = fakeServer();
     const disk = memoryDisk({ 'file:///big.pdf': big });

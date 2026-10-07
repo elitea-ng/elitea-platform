@@ -110,7 +110,9 @@
     ["chipText", "chip"], ["chipText", "surfaceGlass"], ["chipSelectedText", "chipSelected"],
     ["badgeText", "badge"],
     ["separatorStrong", "surface"], ["separatorStrong", "background"], ["separatorStrong", "surfaceSunken"],
-    ["focus", "background"], ["focus", "backgroundGradient"], ["focus", "surface"]
+    ["focus", "background"], ["focus", "backgroundGradient"], ["focus", "surface"],
+    ["textSecondary", "surfaceSunken"], ["textTertiary", "surfaceSunken"], ["danger", "dangerSoft"], ["warning", "warningSoft"], ["accent", "surfaceSunken"],
+    ["bubbleUserText", "bubbleUserChip"]
   ],
   "space": { "0": 0, "0.5": 2, "1": 4, "2": 8, "3": 12, "4": 16, "5": 20, "6": 24, "8": 32, "10": 40, "12": 48, "16": 64,
     "aliases": { "screenGutter": 20, "screenGutterCompact": 16, "cardPadding": 16, "cardGap": 12, "sectionGap": 28, "listRowPaddingY": 12, "inlineGap": 8, "composerInset": 12 } },

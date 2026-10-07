@@ -195,7 +195,13 @@ export const colors: Record<Scheme, SemanticColors> = {
  * A `backgroundGradient` background means every stop; `surfaceGlass` means the
  * glass composited over every gradient stop and the flat background.
  */
-export const PROOFS: readonly (readonly [ColorKey, ColorKey | 'backgroundGradient' | 'surfaceGlass'])[] = [
+/**
+ * A proof's background: a token, or a composite ground (the gradient's stops, glass over every
+ * ground, or a file chip's veil over the user's own bubble, src/design/contrast.ts).
+ */
+export type ProofGround = ColorKey | 'backgroundGradient' | 'surfaceGlass' | 'bubbleUserChip';
+
+export const PROOFS: readonly (readonly [ColorKey, ProofGround])[] = [
   ['textPrimary', 'background'], ['textPrimary', 'backgroundGradient'], ['textPrimary', 'surface'],
   ['textPrimary', 'surfaceGlass'], ['textPrimary', 'elevated'], ['textPrimary', 'surfaceSunken'],
   ['textSecondary', 'background'], ['textSecondary', 'backgroundGradient'], ['textSecondary', 'surface'],
@@ -213,6 +219,11 @@ export const PROOFS: readonly (readonly [ColorKey, ColorKey | 'backgroundGradien
   ['badgeText', 'badge'],
   ['separatorStrong', 'surface'], ['separatorStrong', 'background'], ['separatorStrong', 'surfaceSunken'],
   ['focus', 'background'], ['focus', 'backgroundGradient'], ['focus', 'surface'],
+  // The chat redesign: tool-step cards and code blocks (sunken), error rows and approval chrome.
+  ['textSecondary', 'surfaceSunken'], ['textTertiary', 'surfaceSunken'], ['danger', 'dangerSoft'], ['warning', 'warningSoft'],
+  ['accent', 'surfaceSunken'],
+  // A file chip on my own bubble (AttachmentStrip): its name and type caption on the veiled bubble.
+  ['bubbleUserText', 'bubbleUserChip'],
 ];
 
 /** Non-text UI (borders, focus rings) needs 3:1; everything else is text at 4.5:1. */

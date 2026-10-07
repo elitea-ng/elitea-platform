@@ -73,7 +73,15 @@ const AgentDetail = z.looseObject({
   version_details: z
     .looseObject({
       id: PositiveId,
-      meta: z.looseObject({ internal_tools: z.array(z.string()).nullish() }).nullish().catch(null),
+      conversation_starters: z.array(z.unknown()).max(200).nullish().catch(null),
+      welcome_message: z.string().max(10_000).nullish().catch(null),
+      meta: z
+        .looseObject({
+          internal_tools: z.array(z.string()).nullish(),
+          icon_meta: z.looseObject({ url: z.string().max(2000).nullish() }).nullish().catch(null),
+        })
+        .nullish()
+        .catch(null),
     })
     .nullish(),
 });
@@ -84,7 +92,16 @@ export interface AgentVersion {
   versionId: number;
   /** The version's enabled internal tools (`attachments`, `ask_user`, …). */
   internalTools: string[];
+  /** The agent's icon (`meta.icon_meta.url`, a path on the workspace origin), or null. */
+  iconPath: string | null;
+  /** Its conversation starters (offered on an empty conversation), at most `MAX_STARTERS`. */
+  starters: string[];
+  /** Its welcome message, or null. */
+  welcomeMessage: string | null;
 }
+
+/** How many conversation starters an empty conversation offers. */
+export const MAX_STARTERS = 4;
 
 /** The agent's current (default) version, or null when it has none. */
 export async function fetchAgentVersion(
@@ -102,7 +119,18 @@ export async function fetchAgentVersion(
   const parsed = AgentDetail.safeParse(detail);
   const version = parsed.success ? parsed.data.version_details : null;
   if (!version) return null;
-  return { versionId: version.id, internalTools: (version.meta?.internal_tools ?? []).filter((t) => typeof t === 'string') };
+  const icon = version.meta?.icon_meta?.url?.trim();
+  return {
+    versionId: version.id,
+    internalTools: (version.meta?.internal_tools ?? []).filter((t) => typeof t === 'string'),
+    iconPath: icon ? icon : null,
+    starters: (version.conversation_starters ?? [])
+      .filter((t): t is string => typeof t === 'string')
+      .map((t) => t.trim().slice(0, 500))
+      .filter((t) => t !== '')
+      .slice(0, MAX_STARTERS),
+    welcomeMessage: version.welcome_message?.trim() || null,
+  };
 }
 
 /** The version a new conversation addresses: the agent's current (default) version. */

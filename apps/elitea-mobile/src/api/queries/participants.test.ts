@@ -30,7 +30,33 @@ describe('agent version (getApplication)', () => {
   it('reads the current version id and its internal tools', async () => {
     const server = fakeServer();
     server.on('GET', '/elitea_core/application/prompt_lib/7/31', { status: 200, body: applicationDetail() });
-    await expect(fetchAgentVersion(7, 31, server.client)).resolves.toEqual({ versionId: 310, internalTools: ['attachments', 'ask_user'] });
+    await expect(fetchAgentVersion(7, 31, server.client)).resolves.toEqual({
+      versionId: 310,
+      internalTools: ['attachments', 'ask_user'],
+      iconPath: null,
+      starters: [],
+      welcomeMessage: null,
+    });
+  });
+
+  it('reads the icon, the conversation starters (strings only, at most four) and the welcome message', async () => {
+    const server = fakeServer();
+    const detail = applicationDetail();
+    const body = {
+      ...detail,
+      version_details: {
+        ...detail.version_details,
+        meta: { ...detail.version_details.meta, icon_meta: { name: 'a.png', url: '/icons/7/a.png' } },
+        conversation_starters: ['  First  ', 2, '', 'Second', 'Third', 'Fourth', 'Fifth'],
+        welcome_message: '  Hi there.  ',
+      },
+    };
+    server.on('GET', '/elitea_core/application/prompt_lib/7/31', { status: 200, body });
+    await expect(fetchAgentVersion(7, 31, server.client)).resolves.toMatchObject({
+      iconPath: '/icons/7/a.png',
+      starters: ['First', 'Second', 'Third', 'Fourth'],
+      welcomeMessage: 'Hi there.',
+    });
   });
 });
 
