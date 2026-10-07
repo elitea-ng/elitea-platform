@@ -15,6 +15,7 @@ elitea-model-client = { path = "../../libs/rust/model-client" }
 elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
 elitea-graph-algos = { path = "../../libs/rust/graph-algos" }
+elitea-pg-migrate = { path = "../../libs/rust/pg-migrate" }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 # The Mermaid sanitizer is ~150 transcribed Python regular expressions,
 # several with look-around, which `regex` lacks. A backtracking engine
