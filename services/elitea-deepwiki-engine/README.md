@@ -6,7 +6,7 @@ same Unix socket. The Go sub-application host (`services/elitea-subapp-host`)
 keeps the provider SPI, admission, the parameter merge, the egress check,
 composition and upload. This crate runs the tools.
 
-**Status: ADR-0026 phase 3.** Phase 1 delivered the sidecar protocol, the
+**Status: ADR-0026 phase 7.** Phase 1 delivered the sidecar protocol, the
 `unavailable` and `fixture` runners, and the container probe. Phase 2 adds
 the front half of the engine: repository ingest, the eight language parsers,
 and the code graph (Phase 1 build plus the Phase 1c passes), each proven equal
@@ -17,6 +17,11 @@ structure planner, the pages and the export, and wires `generate_wiki` end to
 end as the [`native` runner](#the-native-runner-generate_wiki): a worker
 child process per generation. Phase 6 adds `ask`, `deep_research` and
 `resolve_wiki`, which the native runner serves in process over PostgreSQL.
+Phase 7 packages it: the released image
+`ghcr.io/elitea-ng/elitea-deepwiki-engine-native`, the Helm switch
+`deepwiki.engine.runner: native` and the compose overlay (see the
+[runbook](#runbook-deploy-migrate-operate)). The Python `-engine` image stays
+available behind `runner: legacy` until the parity sign-off.
 
 ## The socket protocol
 
@@ -432,9 +437,36 @@ runner), `ask` and deep research use it.
   defaulting to `gpt-4o-mini` / `text-embedding-3-large`.
 - `EmbeddingClient`: batches of `WIKI_EMBED_BATCH_SIZE` (64), at most
   300 000 tokens per request, `ELITEA_DEEPWIKI_EMBED_CONCURRENCY` (4) in
-  flight. Texts above 8191 `cl100k_base` tokens are embedded in windows
-  and averaged, as LangChain did. The dimension comes from the first
-  response and is enforced for the rest of the run.
+  flight. Texts above 8191 `cl100k_base` tokens
+  (`ELITEA_DEEPWIKI_EMBED_CTX_TOKENS`) are embedded in windows and
+  averaged by token count, as LangChain did. The dimension comes from the
+  first response and is enforced for the rest of the run.
+- The context-length fallback. The windows are counted in `cl100k_base`
+  tokens, but the model counts with its own tokenizer, which can count
+  more for the same text (Qwen3-Embedding-4B on vLLM, 8192 tokens of
+  context, refuses a full window: `max context 8192 tokens, the prompt
+  had at least 8193`). When a request comes back HTTP 400 and its body
+  names the context limit (`maximum context length`,
+  `context_length_exceeded`, `max context`, `maximum model length`), the
+  client sends that request's windows again one at a time. A window the
+  model refuses on its own is cut in two with the same tokenizer, the
+  halves are embedded (and cut again if needed), and their vectors are
+  averaged by token count into the window's vector; the window keeps its
+  place and weight. A window of 256 tokens or fewer is not cut: the run
+  fails with an error that names `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS`. The
+  extra requests of one client are capped at 4 per window it embedded
+  plus 64; past the cap the run fails the same way. Any other refusal
+  fails the run, as before. The fallback runs inside the refused request's
+  slot (so within `ELITEA_DEEPWIKI_EMBED_CONCURRENCY`), honours the stop,
+  and keeps the vectors in order. The client counts the cut windows
+  (`split_windows()`, `fallback_requests()`) and logs one warning with the
+  count when the run ends. Each cut costs requests: for such a model, set
+  `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS` below its context (7000 for
+  Qwen3-Embedding at 8192).
+  Deliberate difference from Python: LangChain sent the windows' cl100k
+  token IDS, which a non-OpenAI model reads as meaningless input, so it
+  never hit the limit and never got a useful vector. This client sends
+  text and recovers from the refusal instead.
 - `ChatClient`: blocking and SSE-streamed completions with tool calls
   (streamed deltas assembled by `index`; a new id, or a new name once a
   call's arguments began, on a used index starts another call; a skipped
@@ -447,7 +479,9 @@ runner), `ask` and deep research use it.
   failures, `retry-after`, 0.5 s doubling to 8 s with jitter). A stop
   aborts a request or a wait at once.
 - Timeouts: connect 10 s, blocking call 600 s, stream silence 300 s,
-  stream total 30 min. SSE caps: 1 MiB per line and per event, 64 MiB
+  stream total 2 h (`ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS`; Python
+  had no total limit, and a reasoning model writing a 48k-token page
+  streams for over an hour). SSE caps: 1 MiB per line and per event, 64 MiB
   per stream. Lines end in `\n`, `\r\n` or a lone `\r`; a leading UTF-8
   BOM is skipped.
 - `ELITEA_DEEPWIKI_TLS_CA_FILE` is trusted in addition to the platform
@@ -1238,3 +1272,271 @@ STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native.yml deploy/scripts/stan
 
 The Go host then runs `ELITEA_DEEPWIKI_RUNNER=native` and `GET /health`
 reports `runner: native`.
+
+## Runbook: deploy, migrate, operate
+
+### The image
+
+`ghcr.io/elitea-ng/elitea-deepwiki-engine-native:<release>`, built by
+`docker buildx bake elitea-deepwiki-engine-native` from
+`services/elitea-deepwiki-engine/Containerfile` with the repository root as
+the context. One binary (`/usr/local/bin/elitea-deepwiki-engine`) on
+`gcr.io/distroless/base-nossl-debian13:nonroot` plus `libgcc_s` from
+`cc-debian13` (Debian 13; no system OpenSSL, as the TLS is rustls; the build
+fails if the binary's library closure does not resolve in that runtime),
+built with `cargo auditable`, runs as
+uid 10001; `/run/deepwiki` is in the image, owned by 10001, mode 0777.
+Subcommands: `serve` (the default CMD), `healthcheck`, `migrate`, `worker`
+(started by `serve`, never by hand), `--version`.
+
+The binary embeds the service migrations from
+`services/elitea-deepwiki/src/elitea_deepwiki/migrations/` (`include_str!`,
+a path outside the crate), so the Containerfile copies that directory too.
+A build context without it fails to compile.
+
+Release wiring, held together by `scripts/ci/image-matrix.sh --verify`:
+the bake target, `publish.yml` (`build`, `scan`, `publish-image` matrices and
+the `IMAGES` rollback array) and `ci-image-scan.yml` (`expect_type:
+rustbinary`, blocking). The crate's `Cargo.lock` is in the Dependabot `cargo`
+group; the repository has no `docker` ecosystem entry for any image.
+
+### Kubernetes (Helm, `deploy/helm/elitea`)
+
+```yaml
+deepwiki:
+  enabled: true
+  engine:
+    runner: native            # the one switch; legacy = Python, fixture = Python canned
+    native:
+      image:
+        repository: ghcr.io/elitea-ng/elitea-deepwiki-engine-native
+        tag: ""               # empty = the chart-wide image.tag
+      resources:
+        requests: {cpu: 500m, memory: 2Gi}
+        limits: {memory: 16Gi} # the worker's RLIMIT_AS is 85 % of it (WORKER_MEMORY_BYTES)
+      workerCpuSeconds: 14400  # the worker's RLIMIT_CPU
+  env:
+    ELITEA_DEEPWIKI_GIT_ALLOWLIST: "github.com,*.github.com"
+postgresql:
+  existingSecret: elitea-main-db  # or deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL
+  key: database-url
+```
+
+What `runner: native` renders:
+
+- the `engine` sidecar from the native image, no `command` (the image's
+  `serve`), probes `exec: /usr/local/bin/elitea-deepwiki-engine healthcheck`;
+- the host's `ELITEA_DEEPWIKI_RUNNER` as `native` (`GET /health` reports
+  `runner: native`), whatever `deepwiki.env` says;
+- `ELITEA_DEEPWIKI_DATABASE_URL` from the secret the migrate Job uses (a
+  plain `deepwiki.env` value is refused: the Job would not get it);
+- `ELITEA_DEEPWIKI_BUILD_OWNER` from the pod name (downward API);
+- `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` as 85 % of `limits.memory` (Gi or
+  Mi, at least 1205Mi; the rest is for the serving parent and the page
+  cache), so a runaway generation ends as an engine `MemoryError` before the
+  kubelet OOM-kills the sidecar; `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS`
+  from `workerCpuSeconds`. No CPU limit, as elsewhere in the chart;
+- the `scratch` emptyDir at `ELITEA_DEEPWIKI_SCRATCH_PATH`, the socket
+  emptyDir at `/run/deepwiki`, `/tmp` as an emptyDir (read-only root).
+
+The chart refuses to render `runner: native` without a database URL, a host
+runner of `native` with a Python sidecar, an unknown `engine.runner`, and a
+memory limit that is not Gi/Mi or is below 1Gi. The `-engine` tag guard
+still applies to `legacy`. `deploy/helm/tests/render-deepwiki.sh` asserts
+all of it.
+
+### Migrations
+
+**Decision: with `runner: native` the migrate Job runs the native image
+(`args: ["migrate"]`); a native install pulls no Python image.** It is the
+same schema, not a fork: the binary embeds the same SQL files and writes the
+same `schema_migrations` ledger with the same SHA-256 checksums
+(`tests/storage_migrate.rs` compares them with `migrate.py`), so either runner
+can migrate a database the other one migrated and a switch back to `legacy`
+needs no migration step. The Rust runner also holds a session advisory lock,
+so two Jobs cannot apply one file twice. The role needs `CREATE` on the
+database (migration 0003 creates the `deepwiki_build` schema; see
+`services/elitea-deepwiki/README.md`). By hand:
+
+```bash
+ELITEA_DEEPWIKI_DATABASE_URL=postgresql://… elitea-deepwiki-engine migrate
+# exit 0: at the newest migration (applied now or before); 1: not
+```
+
+Connect directly to PostgreSQL, not through a transaction-mode pooler
+(pgbouncer): the migration and the publish use session advisory locks.
+
+Connections per engine pod, for `max_connections`: 2 for the build
+reconciler, 2 for the delete of a killed worker's build,
+`ELITEA_DEEPWIKI_QUERY_POOL_SIZE` (default 8) for `ask`, `deep_research`
+and `resolve_wiki`, and 4 for each `generate_wiki` worker that runs. So a
+pod with the default and two generations at a time needs 20; set the query
+pool through `deepwiki.env` to change it.
+
+### Compose
+
+`deploy/docker-compose.deepwiki-native.yml` on the standalone stack: the
+native sidecar (`runner native`), a one-shot `elitea-deepwiki-migrate`
+service from the same image, the stack's PostgreSQL (`elitea` database,
+direct, not pgbouncer) and a fixed build owner. `DEEPWIKI_NATIVE_RUNNER=fixture`
+keeps the canned results for the fixture journeys
+(`apps/elitea-web/scripts/deepwiki-e2e.sh`).
+
+```bash
+STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native.yml deploy/scripts/standalone-stack.sh up
+```
+
+### Real-engine journey (DWIKI-014)
+
+`apps/elitea-web/scripts/deepwiki-real-engine.sh` and
+`.github/workflows/deepwiki-real-engine.yml` run the journey on either
+engine. `DEEPWIKI_REAL_ENGINE=legacy` (the default) is the Python engine
+over a `git daemon` fixture. `DEEPWIKI_REAL_ENGINE=native` is this engine.
+
+The native clone cannot reach the git daemon: it opens the repository
+isolated (no `insteadOf`), speaks HTTPS only in a release build and follows
+no redirect. So the native run analyses a real public repository,
+`https://github.com/kharkevich-engineering-lab/floe` (its owner agreed to
+this use), through the allowlist entry `github.com`. The runner needs
+internet access.
+
+What the native run uses:
+
+- `deploy/docker-compose.deepwiki-native.yml` and then
+  `deploy/docker-compose.deepwiki-native-real-engine.yml` on the
+  standalone stack. The second overlay runs the prebuilt image
+  (`DEEPWIKI_ENGINE_IMAGE`, default
+  `ghcr.io/eliteaai/elitea-deepwiki-engine-native:local`, the bake target
+  `elitea-deepwiki-engine-native` with `TAG=local`) for the migration and
+  the engine, forces `runner native`, and puts the deterministic LLM stub
+  (`services/elitea-deepwiki/e2e/llm_stub.py`) at `llm-mock:8090`.
+- `standalone-stack.sh seed-deepwiki-public`: an anonymous GitHub
+  repository toolkit (configuration 9011, no token). The seed's toolkit
+  9010 has a literal token, and GitHub refuses a bad credential with 401
+  also for a public repository.
+- The commit pin. The product clones a branch or tag head (depth 1), never
+  a commit. So the runner script resolves `DEEPWIKI_NATIVE_REF` (default
+  `main`) with `git ls-remote` before it builds anything, and stops when the
+  head is not `DEEPWIKI_NATIVE_COMMIT` (default
+  `89c2197fa88a910c9b8344ae3c4dd06618ed28ae`). `none` (or empty) analyses
+  the head as it is. When floe's `main` moves, the native leg fails at
+  this check. Move the pin (the workflow input default, the `schedule`
+  fallback in the job env, the script default), or use a tag at the pin.
+
+What the native run asserts, through the product: the generation completes
+and the host uploads the objects; one manifest and its pages land under
+`kharkevich-engineering-lab--floe--<ref>`; the manifest names the
+repository, the ref and the resolved commit; the wiki title is
+`floe — Technical Documentation` (`derive_wiki_title`, the cluster
+planner); every page of the structure artifact landed, at least one is
+named from floe's own symbols (`working-with-…`, the stub's naming answer
+from the symbols the engine put in the prompt) and none is a page of the
+stub's canned structure; the README index renders in the browser with that
+title; the wiki chat answers over the published index.
+
+Run it on GitHub (weekly, the schedule runs both engines; or by hand):
+
+```bash
+gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native
+# a tag at the pin, or no pin:
+gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native -f native_ref=<tag>
+gh workflow run deepwiki-real-engine.yml --ref <branch> -f engine=native -f native_commit=none
+```
+
+Locally (podman; builds the native image once when the tag is absent):
+
+```bash
+DEEPWIKI_REAL_ENGINE=native apps/elitea-web/scripts/deepwiki-real-engine.sh
+```
+
+The crate-level proof stays `tests/native_generate.rs` (worker child, `git
+http-backend`, mock gateway, PostgreSQL) in `ci-deepwiki-engine.yml`, on
+every change.
+
+### Settings
+
+Every variable the binary reads. All are strict-parsed: a value that does
+not parse refuses the start (and the probe) with a message naming it.
+
+| Variable | Default | Limits / notes |
+| --- | --- | --- |
+| `ELITEA_DEEPWIKI_RUNNER` | `unavailable` | `unavailable`, `fixture`, `native`; `legacy` is refused (Python image) |
+| `ELITEA_DEEPWIKI_ENGINE_SOCKET` | `/run/deepwiki/engine.sock` | the host dials the same path |
+| `ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS` | `1` | `fixture` only; not negative |
+| `ELITEA_DEEPWIKI_DATABASE_URL` | unset | required by `native` and `migrate`; never logged |
+| `ELITEA_DEEPWIKI_BUILD_OWNER` | `HOSTNAME`, else `elitea-deepwiki-engine` | with a database the shared default is refused; unique per replica, stable across restarts |
+| `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS` | `7200` | at least 300; the sweep runs every quarter of it (10 s–10 min) |
+| `ELITEA_DEEPWIKI_PUBLISH_STATEMENT_TIMEOUT_SECONDS` | `1800` | above 0, at most a day |
+| `ELITEA_DEEPWIKI_PUBLISH_LOCK_TIMEOUT_SECONDS` | `30` | above 0, at most a day |
+| `ELITEA_DEEPWIKI_PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS` | `5` | the best-effort `ANALYZE` after a publish |
+| `ELITEA_DEEPWIKI_PUBLISH_WORK_MEM_MB` | `64` | 1–4096 |
+| `ELITEA_DEEPWIKI_PUBLISH_SLOTS` | `2` | 1–64 concurrent publishes per database |
+| `ELITEA_DEEPWIKI_GIT_ALLOWLIST` | empty = refuse every clone | comma-separated hosts, `*.` wildcards, `*` for any |
+| `ELITEA_DEEPWIKI_MAX_CLONE_BYTES` | 2 GiB | at least 1 |
+| `ELITEA_DEEPWIKI_MAX_FILE_COUNT` | 100 000 | at least 1 |
+| `ELITEA_DEEPWIKI_MAX_FILE_BYTES` | 100 MiB | also the clone's object allocation limit |
+| `ELITEA_DEEPWIKI_MAX_PARSED_BYTES` | 512 MiB | at least 1 |
+| `ELITEA_DEEPWIKI_CLONE_TIMEOUT_SECONDS` | `600` | above 0 |
+| `ELITEA_DEEPWIKI_SCRATCH_PATH` | `/tmp/deepwiki` | clones and worker job directories |
+| `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` | 16 GiB | at least 1 GiB; `RLIMIT_AS` of a generation worker (Helm: 85 % of `limits.memory`) |
+| `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS` | `14400` | at least 60; `RLIMIT_CPU` (hard limit 10 s above) |
+| `ELITEA_DEEPWIKI_WORKER_THREADS` | available parallelism, at most 8 | at most 256 |
+| `ELITEA_DEEPWIKI_EMBED_CONCURRENCY` | `4` | embedding requests in flight |
+| `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS` | `8191` | at least 256; the embedding window in `cl100k_base` tokens. Set it below the embedding model's context when its tokenizer counts more tokens (a refused window is cut and retried, at extra requests) |
+| `ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS` | `7200` | the longest one streamed model call may run (Python: no limit); a stalled stream ends after 300 s of silence |
+| `ELITEA_DEEPWIKI_TLS_CA_FILE` | unset | extra PEM roots for the model gateway |
+| `ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS` | `15` | 1–100, `deep_research` |
+| `WIKI_EMBED_BATCH_SIZE` | `64` | inputs per embedding request (the Python name) |
+| `DEEPWIKI_ASK_MAX_ITERATIONS` | `8` | 1–100, `ask` tool calls |
+| `HOSTNAME` | set by the runtime | the build owner when `ELITEA_DEEPWIKI_BUILD_OWNER` is unset |
+| `RUST_LOG` | `info` | `tracing` filter; logs go to stderr |
+
+The Python engine's tuning names are read with its defaults, for parity, and
+normally stay unset: `DEEPWIKI_EXCLUDE_TESTS`, `DEEPWIKI_MAX_SYMBOLS_PER_PAGE`,
+`DEEPWIKI_SKIP_REPO_CONTEXT_FOR_PAGES`, `DEEPWIKI_STRUCTURE_PLANNER`,
+`DEEPWIKI_USE_STRUCTURED_REPO_ANALYSIS`, `DEEPWIKI_DEEPAGENTS_FILE_THRESHOLD`,
+`DEEPWIKI_DEEPAGENTS_REPOCTX_TOKENS`, `DEEPWIKI_TEST_LINKER`,
+`DEEPWIKI_WEIGHT_CALIBRATION_PROFILE`, `DEEPWIKI_NAMING_ORDER` /
+`WIKI_NAMING_ORDER`, `DEEPWIKI_NAMING_BATCHED` / `WIKI_NAMING_BATCHED`.
+The Python sidecar's `ELITEA_DEEPWIKI_MODEL_ALLOWLIST` is not read: the
+native engine downloads no model, every model call goes to the invocation's
+`llm_settings.api_base`.
+
+### Troubleshooting
+
+- **The sidecar never becomes ready; the host waits.** Read the engine's
+  stderr. A refused setting is one line naming the variable. The probe
+  re-reads the settings, so a bad value fails the probe too.
+- **`cannot bind the engine socket`.** The socket directory is not writable
+  by uid 10001 (a volume that arrived `root:root 0755`), or a non-socket file
+  sits at the socket path (`… exists and is not a socket`; it is never
+  deleted, remove it). The image creates `/run/deepwiki` as 10001 0777 for
+  that reason; a compose named volume copies it on first mount, an emptyDir
+  is writable already.
+- **The host gets `permission denied` on connect.** The socket is created
+  0777; a umask or a mount option that strips it, or a host container that
+  does not mount the same directory, breaks the hop.
+- **`the build owner is the shared default`.** A database is set and neither
+  `ELITEA_DEEPWIKI_BUILD_OWNER` nor `HOSTNAME` is. Set an owner unique per
+  replica that survives restarts (the pod name; a fixed name in compose). Two
+  engines with ONE owner delete each other's builds at startup.
+- **`RUNNER=native needs ELITEA_DEEPWIKI_DATABASE_URL`.** Point it at the
+  database the migrate Job migrated.
+- **Staging rows grow (`deepwiki_build` schema).** Builds of a replaced pod
+  (a new owner) are removed by the stale sweep after
+  `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS` (2 h) without a heartbeat; the log
+  line is `swept builds with a stale heartbeat`. A failing sweep logs
+  `build sweep failed; retrying` and retries at the next tick. A restarted
+  engine deletes its own owner's earlier builds at once.
+- **A publish fails with `canceling statement due to statement timeout` or
+  `lock timeout`.** Raise `…_PUBLISH_STATEMENT_TIMEOUT_SECONDS` (large
+  repositories) or `…_PUBLISH_LOCK_TIMEOUT_SECONDS` (a long reader on the
+  live tables). Waiting for a publish slot or for a publish of the same wiki
+  has no timeout; fewer slots trade latency for `work_mem`.
+- **A generation ends `out_of_memory` / `timeout_error`.** The worker hit
+  `RLIMIT_AS` / `RLIMIT_CPU`. In Helm raise `limits.memory` (the cap moves
+  with it) or `workerCpuSeconds`. A sidecar restart with `OOMKilled` instead
+  means resident memory of the parent plus the child passed the limit before
+  the address-space cap did; lower `ELITEA_DEEPWIKI_WORKER_THREADS`.
+- **`migrate` exits 1 with `permission denied for database`.** The role
+  lacks `CREATE` on the database (migration 0003).

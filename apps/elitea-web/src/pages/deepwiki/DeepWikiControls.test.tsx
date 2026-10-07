@@ -155,4 +155,53 @@ describe('DeepWiki header controls', () => {
       expect(storage.load()).toBeNull();
     });
   });
+
+  it('keeps the settings panel and its saved notice while the listing reloads for new settings', async () => {
+    // A save that changes the repository changes the listing's identity, so
+    // the listing is pending again. The page used to return only "Loading
+    // wikis…" then, which unmounted the settings panel; it came back without
+    // the "Settings saved" notice (the native real-engine journey's failure).
+    const user = userEvent.setup();
+    server.use(
+      http.put(`${BASE}/elitea_core/tool/prompt_lib/:projectId/:toolkitId`, async ({ request }) =>
+        HttpResponse.json({ ...((await request.json()) as Record<string, unknown>), id: 42 }),
+      ),
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const page = (identity: RepositoryIdentity, settings: ToolkitSettings) => (
+      <QueryClientProvider client={client}>
+        <ThemeProvider theme={theme} defaultMode={DEFAULT_COLOR_SCHEME}>
+          <DeepWiki
+            projectId={PROJECT_ID}
+            identity={identity}
+            toolkitId={TOOLKIT_ID}
+            settings={settings}
+            toolkit={{ ...TOOLKIT, settings }}
+          />
+        </ThemeProvider>
+      </QueryClientProvider>
+    );
+    const { rerender } = render(page(IDENTITY, SETTINGS));
+
+    await user.click(await screen.findByTestId('wiki-settings-toggle'));
+    await user.click(await screen.findByTestId('wiki-settings-save'));
+    await screen.findByTestId('wiki-settings-saved');
+
+    // The saved settings name another repository; its listing never answers
+    // within this test, so it stays pending.
+    server.use(http.get(LIST_ROUTE, () => new Promise<never>(() => undefined)));
+    const moved: ToolkitSettings = { repository: 'acme/other-service', branch: 'main' };
+    rerender(page({ repository: 'acme/other-service', branch: null }, moved));
+
+    // The new listing is still pending; the panel and its notice are not
+    // replaced by a page-wide loading state.
+    await waitFor(() => {
+      expect(screen.queryByText('notes-service (main)')).toBeNull();
+    });
+    expect(screen.getByTestId('wiki-settings-panel')).toBeInTheDocument();
+    expect(screen.getByTestId('wiki-settings-saved')).toBeVisible();
+    // Whether a wiki exists is unknown until the list loads, so Generate
+    // waits: "no wiki" would skip the regenerate confirmation.
+    expect(screen.getByTestId('wiki-generate')).toBeDisabled();
+  });
 });

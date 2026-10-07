@@ -42,6 +42,10 @@ impl From<&ModelEnvSettings> for TransportSettings {
     fn from(settings: &ModelEnvSettings) -> Self {
         Self {
             ca_file: settings.tls_ca_file.clone(),
+            timeouts: Timeouts {
+                stream_total: settings.stream_total,
+                ..Timeouts::default()
+            },
             ..Self::default()
         }
     }
@@ -52,7 +56,31 @@ impl From<&ModelEnvSettings> for EmbeddingOptions {
         Self {
             batch_size: settings.embed_batch_size,
             concurrency: settings.embed_concurrency,
-            ..Self::default()
+            ctx_length: settings.embed_ctx_tokens,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_embedding_window_comes_from_the_environment() {
+        let settings = ModelEnvSettings {
+            tls_ca_file: None,
+            embed_batch_size: 16,
+            embed_concurrency: 3,
+            embed_ctx_tokens: 4096,
+            stream_total: std::time::Duration::from_mins(1),
+        };
+        assert_eq!(
+            EmbeddingOptions::from(&settings),
+            EmbeddingOptions {
+                batch_size: 16,
+                concurrency: 3,
+                ctx_length: 4096,
+            }
+        );
     }
 }

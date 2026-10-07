@@ -7,6 +7,7 @@
   nothing to report.
 */ -}}
 {{- $secrets := fromJson (include "elitea.provider.databaseSecret" (dict "ctx" . "provider" "deepwiki" "urlKey" "ELITEA_DEEPWIKI_DATABASE_URL")) }}
+{{- $native := eq (.Values.deepwiki.engine.runner | toString) "native" }}
 # The service's own migrations (ADR-0022 decision 3).
 #
 # A JOB, not a startup step, and not a second responsibility of the platform's
@@ -24,6 +25,16 @@
 # running code expects. They travel INSIDE the package (they used to be
 # resolved relative to the source tree, which is a path that does not exist in
 # an installed layout — the published image carried none at all).
+#
+# WHICH IMAGE (ADR-0026 phase 7). With deepwiki.engine.runner: native the Job
+# runs the NATIVE image's `migrate` subcommand, so a native install pulls no
+# Python image at all. It is not a second schema: the binary embeds the same
+# SQL files (from the Python package's directory, at build time) and writes
+# the same schema_migrations ledger with the same SHA-256 checksums
+# (tests/storage_migrate.rs compares them with migrate.py's), so either runner
+# can migrate a database the other one migrated, and switching runner back to
+# legacy needs no migration step. It also takes an advisory lock the Python
+# runner does not. Every other runner keeps the Python image's entry point.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -60,15 +71,28 @@ spec:
       {{- include "elitea.imagePullSecrets" (dict "local" .Values.deepwiki.imagePullSecrets "global" .Values.image.pullSecrets) | nindent 6 }}
       containers:
         - name: migrate
+          {{- if $native }}
+          # The native engine embeds the migrations; the host image has none.
+          image: "{{ .Values.deepwiki.engine.native.image.repository }}:{{ include "elitea-deepwiki.nativeTag" . }}"
+          imagePullPolicy: {{ .Values.deepwiki.engine.native.image.pullPolicy }}
+          {{- else }}
           # The migrations are the Python package's; the host image has none.
           image: "{{ .Values.deepwiki.engine.image.repository }}:{{ include "elitea-deepwiki.engineTag" . }}"
           imagePullPolicy: {{ .Values.deepwiki.image.pullPolicy }}
+          {{- end }}
           {{- with .Values.deepwiki.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- if $native }}
+          # The image's ENTRYPOINT is the binary; its default CMD (`serve`)
+          # starts the sidecar, so the argument replaces it. It reads only
+          # ELITEA_DEEPWIKI_DATABASE_URL and exits 0 at the newest migration.
+          args: ["migrate"]
+          {{- else }}
           # Overrides the image's ENTRYPOINT, which starts the server.
           command: ["python", "-m", "elitea_deepwiki.storage"]
+          {{- end }}
           env:
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
           resources:

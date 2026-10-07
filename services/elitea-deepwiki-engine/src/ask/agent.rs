@@ -20,9 +20,10 @@
 //!   [`MAX_CALLS_PER_STEP`] calls in one step.
 //!
 //! A model that still calls tools after `tool_choice: none` ends the loop:
-//! the text of that reply is the answer (its calls run nowhere), and a
-//! reply without text fails the run (`RuntimeError`), as a Python run that
-//! hit `LangGraph`'s recursion limit failed.
+//! the text of that reply is the answer (its calls run nowhere). A reply to
+//! `tool_choice: none` without text (blank, or only calls) fails the run
+//! (`RuntimeError`), as a Python run that hit `LangGraph`'s recursion limit
+//! failed; so does any run that ends with a blank answer.
 //!
 //! A tool call without an id gets `call_{step}`, the id its progress line
 //! names, once: the call in the conversation, its result line and its tool
@@ -501,11 +502,13 @@ pub async fn run<S: IndexStore, M: Model>(
             calls: calls.clone(),
             total_tokens,
         });
-        if calls.is_empty() {
-            break;
-        }
         if exhausted {
-            tracing::warn!(mode = ?spec.mode, "the model called tools after its step limit; ending the run");
+            if !calls.is_empty() {
+                tracing::warn!(mode = ?spec.mode, "the model called tools after its step limit; ending the run");
+            }
+            // Told to answer, the model gave no text: blank (a reasoning
+            // model that wanted one more tool can send only "\n\n") or
+            // more calls. Either way there is no answer.
             if crate::graph::pystr::strip(&response.content).is_empty() {
                 let setting = match spec.mode {
                     Mode::Ask => "DEEPWIKI_ASK_MAX_ITERATIONS",
@@ -514,11 +517,14 @@ pub async fn run<S: IndexStore, M: Model>(
                 return Err(EngineError::new(
                     ErrorType::Runtime,
                     format!(
-                        "The model gave no answer after its step limit ({setting}={}): it still called tools when told to answer.",
+                        "The model gave no answer after its step limit ({setting}={}): told to answer, it sent no text.",
                         spec.budget
                     ),
                 ));
             }
+            break;
+        }
+        if calls.is_empty() {
             break;
         }
         for call in &calls {
@@ -581,6 +587,14 @@ pub async fn run<S: IndexStore, M: Model>(
         Mode::Ask => fragments.concat(),
         Mode::Research => report,
     };
+    // A run that ends without text is a failure, never a success with a
+    // blank answer.
+    if crate::graph::pystr::strip(&answer).is_empty() {
+        return Err(EngineError::new(
+            ErrorType::Runtime,
+            "The model ended the run without an answer.",
+        ));
+    }
     Ok(Outcome {
         answer,
         todos,
