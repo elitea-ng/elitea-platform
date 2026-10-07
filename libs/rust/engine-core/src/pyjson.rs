@@ -3,9 +3,11 @@
 //! Artifact bodies the engine returns (the manifest, the structure JSON) are
 //! uploaded as the bytes they are. The Python engine wrote them with
 //! `json.dumps(..., indent=2)`, whose output differs from `serde_json`'s
-//! pretty printer in one way that matters: `ensure_ascii=True` escapes every
-//! non-ASCII character as `\uXXXX` (surrogate pairs above the BMP). Keys keep
-//! insertion order (`serde_json` is built with `preserve_order`).
+//! pretty printer in two ways that matter: `ensure_ascii=True` escapes every
+//! non-ASCII character as `\uXXXX` (surrogate pairs above the BMP), and a
+//! float is written as Python's `repr` writes it ([`float_repr`]: `1e-07`
+//! where `serde_json` writes `1e-7`). Keys keep insertion order (`serde_json`
+//! is built with `preserve_order`).
 
 use serde_json::Value;
 use std::fmt::Write as _;
@@ -45,13 +47,81 @@ struct Style {
     ensure_ascii: bool,
 }
 
+/// Python's `repr(float)` (what `json.dumps` writes for a finite float):
+/// the shortest digits that round-trip, positional when the decimal
+/// exponent is from -4 to 15 (`0.0001`, `123.0`), else scientific with a
+/// signed, at least two-digit exponent (`1e-05`, `1.5e+16`).
+#[must_use]
+pub fn float_repr(value: f64) -> String {
+    if !value.is_finite() {
+        // json.dumps writes these (allow_nan=True); a serde_json Value never
+        // holds one, but a caller of this function might.
+        return if value.is_nan() {
+            "NaN".to_owned()
+        } else if value > 0.0 {
+            "Infinity".to_owned()
+        } else {
+            "-Infinity".to_owned()
+        };
+    }
+    // Rust's `{:e}` is the shortest round-trip form too: `d[.ddd]e<exp>`.
+    let scientific = format!("{value:e}");
+    let (mantissa, exponent) = scientific
+        .split_once('e')
+        .unwrap_or((scientific.as_str(), "0"));
+    let exponent: i32 = exponent.parse().unwrap_or(0);
+    let (sign, mantissa) = mantissa
+        .strip_prefix('-')
+        .map_or(("", mantissa), |rest| ("-", rest));
+    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
+    let mut out = String::from(sign);
+    if (-4..16).contains(&exponent) {
+        if exponent < 0 {
+            out.push_str("0.");
+            for _ in 0..(-exponent - 1) {
+                out.push('0');
+            }
+            out.push_str(&digits);
+        } else {
+            let point = usize::try_from(exponent).unwrap_or(0) + 1;
+            if digits.len() <= point {
+                out.push_str(&digits);
+                for _ in digits.len()..point {
+                    out.push('0');
+                }
+                out.push_str(".0");
+            } else {
+                out.push_str(&digits[..point]);
+                out.push('.');
+                out.push_str(&digits[point..]);
+            }
+        }
+    } else {
+        out.push_str(&digits[..1]);
+        if digits.len() > 1 {
+            out.push('.');
+            out.push_str(&digits[1..]);
+        }
+        let _ = write!(
+            out,
+            "e{}{:02}",
+            if exponent < 0 { '-' } else { '+' },
+            exponent.unsigned_abs()
+        );
+    }
+    out
+}
+
 /// `depth` is `None` for the one-line form, else the indent level.
 fn write_value(out: &mut String, value: &Value, style: Style, depth: Option<usize>) {
     match value {
         Value::Null => out.push_str("null"),
         Value::Bool(true) => out.push_str("true"),
         Value::Bool(false) => out.push_str("false"),
-        Value::Number(number) => out.push_str(&number.to_string()),
+        Value::Number(number) => match number.as_f64().filter(|_| number.is_f64()) {
+            Some(float) => out.push_str(&float_repr(float)),
+            None => out.push_str(&number.to_string()),
+        },
         Value::String(text) => write_string(out, text, style.ensure_ascii),
         Value::Array(items) => {
             if items.is_empty() {
@@ -182,6 +252,37 @@ mod tests {
         assert_eq!(
             dumps_indent2(&json!("é😀\u{1}\"\\\n/")),
             "\"\\u00e9\\ud83d\\ude00\\u0001\\\"\\\\\\n/\""
+        );
+    }
+
+    #[test]
+    fn floats_are_written_as_python_repr_writes_them() {
+        for (value, expected) in [
+            (0.0, "0.0"),
+            (-0.0, "-0.0"),
+            (1.0, "1.0"),
+            (0.1, "0.1"),
+            (-0.25, "-0.25"),
+            (1e-7, "1e-07"),
+            (1e-5, "1e-05"),
+            (0.0001, "0.0001"),
+            (0.000_123_4, "0.0001234"),
+            (123.0, "123.0"),
+            (1.5e15, "1500000000000000.0"),
+            (1e16, "1e+16"),
+            (1.5e16, "1.5e+16"),
+            (-2.5e-300, "-2.5e-300"),
+            (1e100, "1e+100"),
+            (0.333_333_333_333_333_3, "0.3333333333333333"),
+            (123_456.789, "123456.789"),
+            (f64::MAX, "1.7976931348623157e+308"),
+            (5e-324, "5e-324"),
+        ] {
+            assert_eq!(float_repr(value), expected, "{value:e}");
+        }
+        assert_eq!(
+            dumps(&serde_json::json!({"f": 1e-7, "i": 7, "big": 18_446_744_073_709_551_615_u64})),
+            r#"{"f": 1e-07, "i": 7, "big": 18446744073709551615}"#
         );
     }
 }
