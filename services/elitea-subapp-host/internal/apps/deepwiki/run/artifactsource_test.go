@@ -116,6 +116,9 @@ func TestAFolderIsNamedAsItsGenerationNamesIt(t *testing.T) {
 		{"artifact://handbook", "", "artifact--handbook--main"},
 		{"artifact://docs", " Release/V1 ", "artifact--docs--release-v1"},
 		{"artifact://my-b/a b/c.d_e", "dev", "artifact--my-b--a-b--c-d-e--dev"},
+		// Split on `:` from the right, as the engine does: the head of the
+		// branch joins the repository (the browser makes the same split).
+		{"artifact://docs/handbook", "v1:rc", "artifact--docs--handbook-v1--rc"},
 	} {
 		if got := run.WikiIDFor(map[string]any{"repository": c.repository}, c.branch); got != c.want {
 			t.Fatalf("WikiIDFor(%q, %q) = %q, want %q", c.repository, c.branch, got, c.want)

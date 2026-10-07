@@ -397,6 +397,13 @@ mod tests {
                 Some("dev"),
                 "artifact--my-b--a-b--c-d-e--dev",
             ),
+            // Split on `:` from the right: the head of the branch joins
+            // the repository (the browser and the Go host make this split).
+            (
+                "artifact://docs/handbook",
+                Some("v1:rc"),
+                "artifact--docs--handbook-v1--rc",
+            ),
         ] {
             let config = json!({"repository": repository});
             assert_eq!(
