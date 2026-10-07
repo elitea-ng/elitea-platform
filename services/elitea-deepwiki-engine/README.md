@@ -12,11 +12,11 @@ the front half of the engine: repository ingest, the eight language parsers,
 and the code graph (Phase 1 build plus the Phase 1c passes), each proven equal
 to the Python engine (see [Parity](#parity-with-the-python-engine)). Phase 3
 adds the [index storage](#index-storage-srcstorage): PostgreSQL only, with a
-build space, a transactional publish and the read path. Nothing
-calls them from the socket yet: the `native` runner arrives with
-`generate_wiki` (phase 5). Until then `ELITEA_DEEPWIKI_RUNNER=native` refuses
-to start, so a deployment cannot ask for the engine and get a refusal at
-invocation time instead.
+build space, a transactional publish and the read path. Phase 5 adds the
+structure planner, the pages and the export, and wires `generate_wiki` end to
+end as the [`native` runner](#the-native-runner-generate_wiki): a worker
+child process per generation. `ask`, `deep_research` and `resolve_wiki` are
+still refused by it (phase 6).
 
 ## The socket protocol
 
@@ -59,18 +59,192 @@ resolves them itself in phase 6.
 | --- | --- |
 | `unavailable` (default) | Refuses every tool with `FileNotFoundError` / `resource_not_found`. |
 | `fixture` | Canned results with paced progress (`ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS`, default 1). A port of the Python `fixture_runner.py`; the Go host's own fixture is a third copy. |
-| `native` | Refused at start until the engine lands. |
+| `native` | The engine: `generate_wiki` in a worker child process (see [below](#the-native-runner-generate_wiki)); the other three tools are refused (`RuntimeError`, phase 6). Needs `ELITEA_DEEPWIKI_DATABASE_URL`, or the start is refused. |
 | `legacy` | Refused: that is the Python engine image. |
 
 The fixture's JSON artifacts are written as Python's `json.dumps(…,
 indent=2)` writes them (insertion order, `ensure_ascii`), because the real
 engine's artifacts are bytes a reader downloads.
 
+## The native runner (`generate_wiki`)
+
+`ELITEA_DEEPWIKI_RUNNER=native` (`src/runner/native.rs`, `src/worker.rs`,
+`src/generate/`). The start is refused without
+`ELITEA_DEEPWIKI_DATABASE_URL`: the engine has no index storage but
+PostgreSQL. Model settings are per invocation (`llm_settings`,
+`embedding_model`); a request without them is refused with the Python
+messages (`llm_settings.api_base is required`). `GET /engine/health` reports
+`runner: native`.
+
+### The pipeline
+
+One generation, in the worker child, in order (Python's
+`tool_operations.generate_wiki` → `wiki_subprocess_worker` →
+`HybridWikiToolkitWrapper` → `_write_unified_db` → the agent graph → the
+composition → `publish_generation`):
+
+1. the arguments (`generate::arguments`) and the environment flags
+   (`DEEPWIKI_TEST_LINKER`, `DEEPWIKI_WEIGHT_CALIBRATION_PROFILE`,
+   `DEEPWIKI_EXCLUDE_TESTS`, `DEEPWIKI_STRUCTURE_PLANNER`), refused up front
+   when invalid;
+2. ingest: the clone target from `repo_config`, the git allowlist again, the
+   shallow clone into the job's scratch directory;
+3. Phase 1 + 1c on a blocking thread;
+4. a build: the graph staged (`COPY`), every node whose `source_text` is not
+   blank (SQLite's `trim`) embedded through the gateway in rounds of
+   `WIKI_EMBED_BATCH_SIZE × ELITEA_DEEPWIKI_EMBED_CONCURRENCY` and its
+   vector staged;
+5. Phase 2 against the staged rows (`storage::topology::PgTopologyStore`),
+   the model as the orphan fallback embedder; the staged edges replaced;
+6. Phase 3 with the first 20 hubs in id order (what Python passed), the
+   cluster columns written to the staged nodes;
+7. repository analysis and the structure planner over the rows as the index
+   stores them (types before Phase 2's re-typing, the cluster columns);
+8. pages, export and the worker's composition;
+9. the publish, one transaction, before the result line. A failure is
+   reported in band in `errors` (as `publishing.py` did) and the build is
+   abandoned. The publish is last on purpose: a run that fails at the model
+   never replaces a wiki's live index.
+
+Progress is `thinking` lines worded like the Python worker's log lines
+(`[worker] Clone config built: …`, `Phase 2 complete: …`, `Phase 3
+complete: …`, `Publishing the index for query replicas`, `Published N nodes
+and M vectors`). Errors keep the frozen categories: ingest refusals and
+argument errors are `ValueError`, index failures `RuntimeError`
+("Repository indexing failed: …"), model failures the client's own
+(`timeout_error`, `service_busy`, …). Deliberate difference: a failed
+embedding request fails the run (Python skipped the batch and published a
+wiki with part of its vectors). That includes an orphan's fallback
+embedding in Phase 2: a credential, budget or model refusal there fails the
+run with the gateway's own error type and category ("Embedding an orphan
+node with <model> failed: …"), not as a generic index failure. A timeout or
+a busy service that remains after the client's retries leaves that orphan
+without a vector, as Python does.
+
+**What the engine trusts.** The wiki is named by the clone, never by the
+caller: `wiki_id` is `normalize_wiki_id(repo:branch:sha8)` of the repository
+`repo_config` names and the branch and commit actually checked out; a
+`wiki_id` or `path_prefix` argument is ignored. Phase 2's path prefixes are
+directories of the clone, bound as parameters. `llm_settings.api_base` is
+taken as given: elitea-main's facade replaces the whole block
+(`material.CallbackSettings`, the platform's `/llm/v1` and a short-lived
+bearer) and lifts only `max_tokens` / `temperature` from a client's block, so
+a caller cannot redirect the model calls or the bearer.
+
+### Phase 2 on PostgreSQL
+
+`PgTopologyStore` answers every `TopologyStore` call from the build's staged
+rows, with the semantics `parity/python_reference.py --search-dsn` measured:
+the folded `plainto_tsquery` over the staged `fts` column, optionally under
+`<prefix>/` (a C-collated range), ranked by BM25 (k1 1.2, b 0.75) over the
+build's own statistics (document length = the sum of position counts, the
+document frequency of each query lexeme counted once per build and cached),
+negated to FTS5's sign, ties by node id; `phraseto_tsquery` for the phrase
+counts; exact pgvector L2 for dense search, ranked over ALL vectors and
+filtered by the prefix AFTER the limit (sqlite-vec's order, the owner's
+decision), so fewer than `k` hits can come back. The hub flags and the meta
+entries have no column in the ADR-0022 schema; the store returns them to the
+caller. Each call checks the stop first.
+
+Before Phase 2 the staging tables are `ANALYZE`d (best effort), so the
+planner plans for the rows just staged. Dense search does not scan every
+vector in SQL per orphan: the build's vectors are read into memory once
+(on the first dense search; `nodes × dimensions × 4` bytes, about 600 MB
+for 100k nodes of 1536 dimensions) and each search ranks them in process,
+in parallel. The vectors within 0.1 % of the k-th nearest distance are the
+candidates, and one indexed query over them computes pgvector's own
+distances and order, so the hits are the full-scan query's, row for row and
+bit for bit (`tests/storage_topology.rs` compares both). Measured (release
+build, 5000 nodes × 1536 dimensions, 300 searches): 1.9 s in process,
+including the read, against 72 s for the full-scan query.
+
+### The worker child
+
+`elitea-deepwiki-engine worker` (ADR-0026 decision 10). The parent:
+
+- makes `{ELITEA_DEEPWIKI_SCRATCH_PATH}/jobs/job-…` (mode 0700) and removes
+  it after the child ends, also when the request's reader went away and
+  the supervising task was dropped (a drop guard removes the directory and
+  schedules the build's delete). At `serve` startup it removes every
+  `jobs/*` entry an earlier process left: on Linux their workers died with
+  it (`PR_SET_PDEATHSIG`); on macOS, which has no such signal, an orphaned
+  worker only stops at its next checkpoint (its stdin closed), so the
+  startup clean-up can remove a directory under a worker that is still
+  ending;
+- starts the child with `RAYON_NUM_THREADS` and `MALLOC_ARENA_MAX=2` and
+  sends the request on its STDIN (the arguments carry credentials, so never
+  `argv` or the environment); stdin stays open and its end stops the child;
+- relays the child's NDJSON `thinking` / `token` lines, keeps its
+  `{"build": id}` line, takes the last line as the result or the error, and
+  copies its stderr (the logs) to its own. A line is at most 64 MiB, the Go
+  host's own line limit (`MAX_RESULT_LINE`, tested against `engine.go`);
+  the child refuses a larger result BEFORE it publishes (`RuntimeError`
+  "The wiki result is too large: …; nothing was published"), so a wiki the
+  host could never receive does not replace the live index;
+- on a stop, or a reader that went away, sends SIGTERM, then SIGKILL after
+  3 s (the child stops at its next checkpoint, abandons its build and writes
+  the stop line);
+- treats the publish as a critical section: the child writes a
+  `{"publishing": true}` control line (kept, never relayed) before it
+  publishes and `{"publishing": false}` after. A stop meanwhile is deferred:
+  the child does not interrupt the publish, and the parent moves its SIGKILL
+  out to the publish `statement_timeout` plus 30 s. A publish that
+  committed reports its result even though a stop came (never "cancelled"
+  for a wiki that is live); one that did not commit reports the stop. A
+  child killed inside the publish after the commit is reported as a
+  `RuntimeError` saying the index is live but the result was lost. The
+  child's connections set `client_connection_check_interval` (5 s), so the
+  backend of a killed child aborts its statement and releases its locks;
+- after the child ended, deletes its build if it reported one, so a killed
+  child leaves no staging rows (a no-op after a publish or an abandon). The
+  delete has a 15 s `lock_timeout` and a 2 min `statement_timeout`; on a
+  timeout the sweep removes the build.
+
+The child limits itself before it reads the request (`rustix`'s safe
+`setrlimit`, so the crate stays `unsafe_code = "forbid"`), never above the
+hard limits it inherited, and on Linux asks for SIGKILL when its parent dies.
+A parser pool that cannot start its threads fails the run
+("Repository indexing failed: Parse error: the … parser could not start its
+worker threads"); it does not index the repository with every file of that
+language marked as failed. A child that dies without a last line is
+reported by its cause: an
+allocation failure (`MemoryError`, `out_of_memory`), SIGXCPU
+(`timeout_error`), a SIGKILL the parent did not send (`MemoryError`: on
+Linux that is the kernel's OOM killer; the message says so for certain when
+the cgroup v2 `memory.events` `oom_kill` count rose during the run), anything
+else `RuntimeError`. A last line cut off by the child's death does not hide
+the exit status: it is reported ("output is unreadable") only when the exit
+explains nothing.
+
+| Setting | Default | |
+| --- | --- | --- |
+| `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES` | 85 % of the container's cgroup v2 `memory.max` when it is set, else 16 GiB (at least 1 GiB) | `RLIMIT_AS`. It counts reserved address space (each parser thread reserves its stack, up to 256 MiB), not resident memory; it stops a runaway, the pod limit sizes the job. macOS does not enforce it (a warning is logged). |
+| `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS` | 14400 (at least 60) | `RLIMIT_CPU`, hard limit 10 s above |
+| `ELITEA_DEEPWIKI_WORKER_THREADS` | available parallelism, at most 8 (at most 256), lowered until it fits the memory cap | the child's runtime and parser threads. With the native runner, `threads × 256 MiB + 1 GiB` (each parser thread's stack reservation plus headroom) must fit `WORKER_MEMORY_BYTES`, or the start is refused. |
+| `ELITEA_DEEPWIKI_SCRATCH_PATH` | `/tmp/deepwiki` | root of the job directories |
+
+All are strict-parsed. Still refused or not ported: `ask`, `deep_research`,
+`resolve_wiki` (phase 6), the deepagents planner (5d), artifact-folder
+sources.
+
+`tests/native_generate.rs` runs the whole runner: the sidecar on a Unix
+socket, the real worker child, a repository served by `git http-backend`,
+a mock gateway (the e2e stub's answers, stand-in embeddings) and
+PostgreSQL. It checks the result against the frozen generation contract, the
+published rows and the artifacts, and that a stop during the embedding
+phase kills the child and leaves no staging rows. It needs
+`DEEPWIKI_TEST_DSN` and the test-only `loopback-git-http` feature
+(`--all-features`; a release build ignores it), because the child derives an
+`https://` clone URL from `repo_config` otherwise. `tests/storage_topology.rs`
+holds the store's contract. The Go host's `native_engine_test.go` runs the
+native runner through its own client up to the engine's allowlist re-check;
+a whole native run is not part of the Go job (it needs a gateway, a git host
+and PostgreSQL), the crate test covers it.
+
 ## Repository ingest (`src/ingest/`)
 
 ADR-0026 decision 7: gitoxide (`gix` 0.88) in process, no `git` binary
-(the runtime image is distroless). Not wired to a runner yet; the native
-runner calls `ingest::ingest(repo_config, settings, job_scratch, cancel)`.
+(the runtime image is distroless). The native runner calls `ingest::ingest(repo_config, settings, job_scratch, cancel)`.
 
 1. An artifact-folder source (`provider_type: artifact`, `artifact://…`)
    is refused for now (`RuntimeError`); a later phase ports it.
@@ -202,7 +376,7 @@ packages with the last file winning.
 
 A port of `graph_topology.run_phase2` and what it reaches
 (`graph_orphan_cascade_v2`, `graph_orphan_hybrid`, `graph_lexical_v2`).
-Not wired to a runner yet; the native runner calls
+The native runner calls
 `graph::topology::run_phase2(graph, store, embedder, config)` after Phase 1c.
 
 1. Orphan resolution (`cascade.rs`), Python's Mode A: explicit references
@@ -243,8 +417,7 @@ calibration profile is an error (Python fell back to `calibrated`).
 ## Model client (`src/llm/`)
 
 ADR-0026 decision 8: one small OpenAI-compatible client on `reqwest` 0.13
-(the copy `gix` pulls) over rustls. Not wired to a runner yet; indexing
-(phase 3), generation (5) and `ask` / deep research (6) build on it.
+(the copy `gix` pulls) over rustls. Indexing and generation (the native runner) and `ask` / deep research (phase 6) build on it.
 
 - `ModelSettings::from_llm_settings` reads the block the facade writes:
   `api_base` | `openai_api_base`, `api_key` | `openai_api_key`,
@@ -473,7 +646,7 @@ shared machine.
 ## Wiki pages and export (`src/wiki/`)
 
 Phase 5b of `generate_wiki`: the planner's structure in, the engine result
-out. Not wired to a runner yet; the native runner calls
+out. The native runner calls
 `wiki::run::generate_wiki_pages(generator, structure, repo_context,
 identity, clock, started)` after the structure planner, with a
 `wiki::index::PageIndex` built from the Phase 3 graph
@@ -609,8 +782,7 @@ frozen `conformance/provider/fixtures/deepwiki/generation` fixtures, and
 
 ADR-0026 phase 5a: the first two nodes of `generate_wiki`'s agent graph
 (`agents/wiki_graph_optimized.py`), `analyze_repository` →
-`generate_wiki_structure`. Not wired to a runner yet; the native runner
-calls `structure::analysis::analyze_repository` and then
+`generate_wiki_structure`. The native runner calls `structure::analysis::analyze_repository` and then
 `structure::plan_wiki_structure` with the index rows of Phase 3
 (`structure::index::PlannerIndex`: `repo_nodes` with the cluster columns,
 `repo_edges` as Phase 2 persisted them, both in row order).
@@ -886,7 +1058,7 @@ Build with the pinned toolchain (`rust-toolchain.toml`, 1.97.1):
 cd services/elitea-deepwiki-engine
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets --all-features -- -D warnings
-cargo test --locked --all-targets
+cargo test --locked --all-targets --all-features
 ```
 
 The tests run the sidecar on a real Unix socket. Two of them read the

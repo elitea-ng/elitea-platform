@@ -26,6 +26,23 @@ pub enum ErrorType {
 }
 
 impl ErrorType {
+    /// The type a wire name names: the inverse of [`ErrorType::wire_name`].
+    /// Any other name is [`ErrorType::Generic`] (`Exception`).
+    #[must_use]
+    pub fn from_wire_name(name: &str) -> Self {
+        [
+            Self::FileNotFound,
+            Self::Value,
+            Self::Memory,
+            Self::Key,
+            Self::Runtime,
+            Self::Type,
+        ]
+        .into_iter()
+        .find(|kind| kind.wire_name() == name)
+        .unwrap_or(Self::Generic)
+    }
+
     /// The class name on the wire.
     #[must_use]
     pub fn wire_name(self) -> &'static str {
@@ -185,6 +202,22 @@ mod tests {
             classify(ErrorType::Runtime, "[SERVICE_BUSY] try later"),
             "service_busy"
         );
+    }
+
+    #[test]
+    fn wire_names_read_back() {
+        for kind in [
+            ErrorType::FileNotFound,
+            ErrorType::Value,
+            ErrorType::Memory,
+            ErrorType::Key,
+            ErrorType::Runtime,
+            ErrorType::Type,
+            ErrorType::Generic,
+        ] {
+            assert_eq!(ErrorType::from_wire_name(kind.wire_name()), kind);
+        }
+        assert_eq!(ErrorType::from_wire_name("OSError"), ErrorType::Generic);
     }
 
     #[test]

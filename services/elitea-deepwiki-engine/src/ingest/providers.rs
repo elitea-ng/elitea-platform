@@ -363,9 +363,10 @@ fn github(config: Normalised) -> Result<CloneTarget, EngineError> {
         (None, "anonymous")
     };
     let path = safe_path(&repo)?;
+    let scheme = clone_scheme(&config.api_url, &host);
     CloneTarget::new(
         ProviderType::GitHub,
-        format!("https://{host}/{path}.git"),
+        format!("{scheme}://{host}/{path}.git"),
         repo,
         config.branch,
         authorization,
@@ -629,6 +630,28 @@ fn configured_host(
         Some((from, to)) if host == from => to.to_owned(),
         _ => host,
     })
+}
+
+/// The scheme of a GitHub clone URL: always `https`.
+///
+/// TEST ONLY: a debug build with the `loopback-git-http` feature keeps
+/// `http` for a configured `http://` base URL on a loopback host, so the
+/// end-to-end tests can serve a repository to the worker child process
+/// with `git http-backend`. A release build never does (`debug_assertions`
+/// is off there), whatever the features.
+#[cfg_attr(
+    not(all(feature = "loopback-git-http", debug_assertions)),
+    allow(unused_variables)
+)]
+fn clone_scheme(api_url: &str, host: &str) -> &'static str {
+    #[cfg(all(feature = "loopback-git-http", debug_assertions))]
+    {
+        let name = host.rsplit_once(':').map_or(host, |(name, _)| name);
+        if api_url.trim().starts_with("http://") && matches!(name, "127.0.0.1" | "localhost") {
+            return "http";
+        }
+    }
+    "https"
 }
 
 static GITHUB_SSH: LazyLock<Regex> = LazyLock::new(|| {

@@ -7,9 +7,12 @@
 //!   that proves the host → socket → composition → upload path without a
 //!   model or a git host. The browser journeys run against it.
 //!
-//! The analysis engine itself (`native`) arrives in later ADR-0026 phases.
+//! * [`Runner::Native`] — the Rust engine (ADR-0026): `generate_wiki` in a
+//!   worker child process ([`native`]); `ask`, `deep_research` and
+//!   `resolve_wiki` are refused until phase 6.
 
 pub mod fixture;
+pub mod native;
 
 use crate::errors::{EngineError, ErrorType};
 use serde_json::{Map, Value};
@@ -96,6 +99,14 @@ impl Context {
     #[must_use]
     pub fn new(lines: mpsc::UnboundedSender<Line>, stop: StopSignal) -> Self {
         Self { lines, stop }
+    }
+
+    /// The invocation's stop signal (a clone sharing the flag), for the
+    /// calls that wait on it: model requests, the clone watchdog, the
+    /// worker child's supervisor.
+    #[must_use]
+    pub fn stop_signal(&self) -> StopSignal {
+        self.stop.clone()
     }
 
     /// Report progress.
@@ -201,6 +212,7 @@ pub fn prepare_arguments(
 pub enum Runner {
     Unavailable,
     Fixture(fixture::FixtureRunner),
+    Native(native::NativeRunner),
 }
 
 impl Runner {
@@ -210,6 +222,7 @@ impl Runner {
         match self {
             Self::Unavailable => "unavailable",
             Self::Fixture(_) => "fixture",
+            Self::Native(_) => "native",
         }
     }
 
@@ -234,11 +247,14 @@ impl Runner {
                 ),
             )),
             Self::Fixture(runner) => runner.run(tool, arguments, context).await,
+            Self::Native(runner) => runner.run(tool, arguments, context).await,
         }
     }
 
-    /// Publish a completed generation's index. Neither runner here has one.
-    #[allow(clippy::unused_async)] // The native runner's publish is async.
+    /// Publish a completed generation's index. The fixture has none; the
+    /// native worker publishes before its result line (ADR-0026 decision 5),
+    /// so there is nothing left to do here.
+    #[allow(clippy::unused_async)] // The Python sidecar's publish was async.
     pub async fn publish(&self, _result: &Value, _context: &Context) {}
 }
 

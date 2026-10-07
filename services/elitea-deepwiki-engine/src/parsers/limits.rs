@@ -15,9 +15,12 @@
 //!   [`OUTPUT_ERROR`].
 //! * **Worker pool.** [`on_worker_pool`] runs the parse on threads with the
 //!   large stack the walks need. When that pool cannot start, the parse
-//!   fails; it never falls back to the caller's (small) stack.
+//!   fails; it never falls back to the caller's (small) stack. The failure
+//!   is also noted for the calling thread, so a caller inside
+//!   [`with_pool_failures`] (the native generation) fails the whole run
+//!   instead of indexing a repository whose files all failed to parse.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use tree_sitter::Node;
 
 /// The deepest tree a parser walks. Python's own parser refuses a file at
@@ -63,7 +66,15 @@ pub(crate) fn too_deep(root: Node<'_>) -> bool {
     tree_depth(root) > MAX_TREE_DEPTH
 }
 
+/// The largest stack a parser thread reserves (the Python parser's).
+/// Every thread of a pool reserves it in the address space `RLIMIT_AS`
+/// counts, so the worker settings size the thread count against it.
+pub(crate) const LARGEST_PARSER_STACK: usize = 256 << 20;
+
 thread_local! {
+    /// The first worker pool that could not start on this thread, inside
+    /// [`with_pool_failures`].
+    static POOL_FAILURE: RefCell<Option<String>> = const { RefCell::new(None) };
     /// The output bytes left for the file this thread parses; `None` outside
     /// [`with_output_budget`].
     static BUDGET: Cell<Option<usize>> = const { Cell::new(None) };
@@ -137,10 +148,25 @@ pub(crate) fn on_worker_pool<T: Send>(
         .build()
         .map(|pool| pool.install(job))
         .map_err(|error| {
-            format!(
+            let text = format!(
                 "Parse error: the {language} parser could not start its worker threads: {error}"
-            )
+            );
+            POOL_FAILURE.with_borrow_mut(|failure| {
+                if failure.is_none() {
+                    *failure = Some(text.clone());
+                }
+            });
+            text
         })
+}
+
+/// Run `work` on this thread and return the first worker pool failure
+/// [`on_worker_pool`] met during it, if any.
+pub(crate) fn with_pool_failures<T>(work: impl FnOnce() -> T) -> (T, Option<String>) {
+    let saved = POOL_FAILURE.take();
+    let result = work();
+    let failure = POOL_FAILURE.replace(saved);
+    (result, failure)
 }
 
 #[cfg(test)]
@@ -320,6 +346,23 @@ mod tests {
         let (symbols, errors) = parse_text("javascript", "a.js", &small);
         assert!(errors.is_empty(), "{errors:?}");
         assert!(symbols > levels);
+    }
+
+    #[test]
+    fn a_pool_that_cannot_start_is_noted_for_the_caller() {
+        let (result, failure) = with_pool_failures(|| {
+            let first = on_worker_pool("first", usize::MAX, || 1);
+            let _ = on_worker_pool("second", usize::MAX, || 1);
+            first
+        });
+        assert!(result.is_err());
+        assert!(
+            failure.is_some_and(|f| f.contains("the first parser could not start")),
+            "the first failure is kept"
+        );
+        // A pool that starts notes nothing.
+        let (_, failure) = with_pool_failures(|| on_worker_pool("ok", 1 << 20, || 1));
+        assert_eq!(failure, None);
     }
 
     #[test]

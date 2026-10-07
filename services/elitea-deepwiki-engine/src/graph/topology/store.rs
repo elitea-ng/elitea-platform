@@ -24,18 +24,66 @@
 //! rows match, which fields come back, the order); the ranking inside the
 //! contract is the store's.
 
+use crate::errors::EngineError;
 use serde_json::Value;
 
 /// A storage failure. Python logged most of them at debug level and went
 /// on with a poorer graph; this engine fails the phase instead, so a
 /// broken index is not published as if it were whole.
+///
+/// A failure of the run's model service ([`StoreError::from_engine`])
+/// keeps the [`EngineError`] it came from, so the run reports its type
+/// and category (a refused credential, an exhausted budget, a timeout)
+/// and not a generic index failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-#[error("{0}")]
-pub struct StoreError(pub String);
+#[error("{message}")]
+pub struct StoreError {
+    message: String,
+    cause: Option<EngineError>,
+}
 
 impl StoreError {
     pub fn new(message: impl Into<String>) -> Self {
-        Self(message.into())
+        Self {
+            message: message.into(),
+            cause: None,
+        }
+    }
+
+    /// A failure of the model service, with its type kept.
+    #[must_use]
+    pub fn from_engine(error: EngineError) -> Self {
+        Self {
+            message: error.wire_message().to_owned(),
+            cause: Some(error),
+        }
+    }
+
+    /// The message.
+    #[must_use]
+    pub fn message(&self) -> &str {
+        &self.message
+    }
+
+    /// The model service's error, when this failure is one.
+    #[must_use]
+    pub fn engine_error(&self) -> Option<&EngineError> {
+        self.cause.as_ref()
+    }
+
+    /// Whether a failed orphan embedding must fail Phase 2.
+    ///
+    /// A refusal that will recur for every later model call — a rejected
+    /// credential, an exhausted budget, an unknown model, a malformed
+    /// reply — fails the run with its own type (the pages would fail on it
+    /// minutes later anyway). A timeout or a busy service that outlasted the
+    /// client's retries does NOT: like Python's `embedding_fn` failing, the
+    /// orphan goes on without a vector to the lexical pass.
+    #[must_use]
+    pub fn fails_the_phase(&self) -> bool {
+        self.cause
+            .as_ref()
+            .is_some_and(|cause| !matches!(cause.category(), "timeout_error" | "service_busy"))
     }
 }
 
@@ -181,6 +229,9 @@ pub trait TextEmbedder {
     ///
     /// A [`StoreError`] when the model cannot answer. Phase 2 then treats
     /// the orphan as having no vector, logs a warning and goes on, as
-    /// Python did; only index failures fail the phase.
+    /// Python did, UNLESS the error carries the model service's
+    /// [`EngineError`] ([`StoreError::from_engine`]): that one fails the
+    /// phase with its type, as a failed request fails the embedding of
+    /// the nodes.
     fn embed(&mut self, text: &str) -> Result<Vec<f64>, StoreError>;
 }

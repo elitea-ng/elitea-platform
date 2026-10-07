@@ -30,6 +30,16 @@ import (
 // socket. step is ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS.
 func nativeEngine(t *testing.T, step string) string {
 	t.Helper()
+	return startNativeEngine(t,
+		"ELITEA_DEEPWIKI_RUNNER=fixture",
+		"ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS="+step,
+	)
+}
+
+// startNativeEngine starts the Rust engine with extra environment and
+// answers its socket.
+func startNativeEngine(t *testing.T, extra ...string) string {
+	t.Helper()
 	binary := os.Getenv("ELITEA_DEEPWIKI_NATIVE_ENGINE_BIN")
 	if binary == "" {
 		if os.Getenv("ELITEA_REQUIRE_NATIVE_ENGINE") == "1" {
@@ -44,9 +54,7 @@ func nativeEngine(t *testing.T, step string) string {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	socket := filepath.Join(dir, "e.sock")
-	env := append(os.Environ(),
-		"ELITEA_DEEPWIKI_RUNNER=fixture",
-		"ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS="+step,
+	env := append(append(os.Environ(), extra...),
 		"ELITEA_DEEPWIKI_ENGINE_SOCKET="+socket,
 	)
 	server := exec.Command(binary, "serve")
@@ -242,5 +250,68 @@ func TestAStopEndsTheNativeEnginesRun(t *testing.T) {
 	}
 	if elapsed := time.Since(started); elapsed > 10*time.Second {
 		t.Fatalf("the stop took %v; the engine waited out its step", elapsed)
+	}
+}
+
+// The native runner (ELITEA_DEEPWIKI_RUNNER=native): generate_wiki runs in
+// the engine's worker CHILD process, and the engine checks the clone host
+// against ITS OWN git allowlist again, after the host's check passed. Here
+// the host admits github.com and the engine admits only another host, so
+// the run ends at the engine's check: through the child, the NDJSON relay
+// and the host's error mapping, with nothing uploaded.
+//
+// A whole native generation is not run here: it needs a model gateway, a
+// git host and PostgreSQL, which this job does not stand up for the Go
+// tests. The crate's own tests/native_generate.rs runs it end to end (a
+// git http-backend, a mock gateway, the CI pgvector service). The database
+// URL below is never connected to: the run fails before it opens a build.
+func TestTheNativeRunnerRechecksTheCloneHostInItsWorker(t *testing.T) {
+	scratch, err := os.MkdirTemp("/tmp", "dwns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(scratch) })
+	socket := startNativeEngine(t,
+		"ELITEA_DEEPWIKI_RUNNER=native",
+		"ELITEA_DEEPWIKI_DATABASE_URL=postgresql://deepwiki:deepwiki@127.0.0.1:1/deepwiki",
+		"ELITEA_DEEPWIKI_BUILD_OWNER=native-go-test",
+		"ELITEA_DEEPWIKI_GIT_ALLOWLIST=git.example.com",
+		"ELITEA_DEEPWIKI_SCRATCH_PATH="+scratch,
+	)
+	client := &fakeArtifactClient{}
+	runner := nativeRunner(socket, client)
+	llm := map[string]any{}
+	for key, value := range transport {
+		llm[key] = value
+	}
+	llm["model_name"] = "gpt-4o"
+	request := map[string]any{
+		"configuration": map[string]any{"parameters": map[string]any{
+			"code_toolkit": map[string]any{
+				"github_configuration": map[string]any{"url": "https://github.com"},
+				"repository":           "acme/e2e-service",
+				"active_branch":        "main",
+			},
+			"llm_settings":    llm,
+			"embedding_model": "text-embedding-3-small",
+		}},
+		"parameters": map[string]any{"query": "Document it"},
+	}
+	_, events, err := invokeWithEvents(t, runner, spi.Family{Name: "main"}, "generate_wiki", request, "")
+	if err == nil {
+		t.Fatal("a clone host off the engine's allowlist was admitted")
+	}
+	if !strings.Contains(err.Error(), "not on the git-host allowlist") {
+		t.Fatalf("error %v", err)
+	}
+	if len(client.uploads) != 0 {
+		t.Fatalf("a refused run uploaded %v", uploadedNames(client))
+	}
+	if text := strings.Join(events, "\n"); !strings.Contains(text, "DeepWiki worker started") {
+		t.Fatalf("the run never reached the worker child: %q", text)
+	}
+	entries, _ := os.ReadDir(filepath.Join(scratch, "jobs"))
+	if len(entries) != 0 {
+		t.Fatalf("the worker's scratch directory was left: %v", entries)
 	}
 }

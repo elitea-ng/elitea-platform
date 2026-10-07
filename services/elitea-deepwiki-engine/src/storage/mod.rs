@@ -20,6 +20,7 @@
 //! * [`adapter`] is the read surface `ask`, `deep_research` and
 //!   `resolve_wiki` use: a port of `storage/unified_db_adapter.py`.
 //! * [`text`] holds the tokenizer and the BM25 arithmetic both sides share.
+//! * [`topology`] is Phase 2's index over a build's staged rows.
 //!
 //! A DSN carries a password. Nothing in this module logs or formats one,
 //! and a DSN that does not parse is reported without its text.
@@ -36,6 +37,7 @@ pub mod migrate;
 pub mod rows;
 pub mod search;
 pub mod text;
+pub mod topology;
 
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use std::str::FromStr;
@@ -105,6 +107,42 @@ pub fn lazy_pool(dsn: &str, max_connections: u32) -> Result<PgPool> {
     Ok(PgPoolOptions::new()
         .max_connections(max_connections.max(1))
         .acquire_timeout(Duration::from_secs(30))
+        .connect_lazy_with(options))
+}
+
+/// How often a generation worker's connections have the server check that
+/// the client is still there while a statement runs (5 s): a killed worker
+/// leaves no backend running its statement, holding its locks, until the
+/// statement ends.
+pub const CLIENT_CHECK_INTERVAL_MS: u32 = 5_000;
+
+/// [`lazy_pool`] for a generation worker: every connection sets
+/// `client_connection_check_interval` ([`CLIENT_CHECK_INTERVAL_MS`]), so a
+/// worker that was killed mid-statement (a stop during the publish) has
+/// its statement and transaction aborted within seconds and its locks
+/// released. A server that does not know the setting (before PostgreSQL
+/// 14) or cannot use it (not Linux) keeps the connection without it.
+///
+/// # Errors
+///
+/// [`StorageError::InvalidDsn`].
+pub fn worker_pool(dsn: &str, max_connections: u32) -> Result<PgPool> {
+    let options = connect_options(dsn)?;
+    Ok(PgPoolOptions::new()
+        .max_connections(max_connections.max(1))
+        .acquire_timeout(Duration::from_secs(30))
+        .after_connect(|connection, _meta| {
+            Box::pin(async move {
+                let set = sqlx::query("SELECT set_config('client_connection_check_interval', $1, false)")
+                    .bind(CLIENT_CHECK_INTERVAL_MS.to_string())
+                    .execute(&mut *connection)
+                    .await;
+                if let Err(error) = set {
+                    tracing::debug!(%error, "client_connection_check_interval is not available on this server");
+                }
+                Ok(())
+            })
+        })
         .connect_lazy_with(options))
 }
 
