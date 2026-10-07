@@ -1,4 +1,6 @@
 #!/bin/bash
+# The python-* arms need services/elitea-deepwiki, deleted after the 2026-10
+# benchmark: run them from a checkout of 781bf6ece (docs/benchmark-2026-10.md).
 # The benchmark's run sequence (docs/benchmark-2026-10.md): for each corpus,
 # each engine variant in turn (one engine at a time against the shared model
 # box): generate_wiki + the ask subset, then the retrieval question set

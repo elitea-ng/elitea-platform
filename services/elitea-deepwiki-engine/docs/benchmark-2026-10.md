@@ -33,7 +33,10 @@ stated in each section; nothing below is extrapolated.
   question names the symbols and files that answer it.
 
 Reproduce with `parity/bench/run_all.sh`, then run `analyze.py` and
-`report_tables.py`.
+`report_tables.py`. The Python service was deleted after this benchmark, so the two Python
+arms (`run_engine.py`'s `python-*` engines, `python_search.py` and
+`pypatch/`) run only from a checkout of `781bf6ece`, the last commit that
+has `services/elitea-deepwiki`. The Rust arm runs from any later commit.
 
 ## Results
 
