@@ -37,14 +37,24 @@ export function ChatCanvasDrawer({ canvas, viewerId }: ChatCanvasDrawerProps): R
           anchor="right"
           open
           /*
-           * `() => …`, not the handler itself. MUI calls `onClose(event,
-           * reason)`, and `onCloseCanvasEditor`'s own contract is
-           * `(hasChange, finalResult, language)` — handed the pair directly it
-           * would read the event as "there are changes" and the string
-           * `"backdropClick"` as the document to save, and write that over the
-           * user's canvas.
+           * Escape and a backdrop click close the editor the SAME way its ✕
+           * does — through the editor's own `save()`, which hands
+           * `onCloseCanvasEditor` the live document, its undo state and its
+           * language. This was `() => canvas.onCloseCanvasEditor()`: no
+           * arguments, so `hasChange` was undefined and Escape closed the
+           * drawer WITHOUT saving — silently dropping every edit, while
+           * `lib/canvasEditorKeys` documents Escape as the save-and-close.
+           *
+           * Never the handler itself: MUI calls `onClose(event, reason)`, and
+           * handed that pair directly the close contract would read the event
+           * as "there are changes" and `"backdropClick"` as the document. The
+           * bare close is only the fallback for an editor not mounted yet.
            */
-          onClose={() => canvas.onCloseCanvasEditor()}
+          onClose={() => {
+            const editor = canvas.canvasEditorRef.current;
+            if (editor !== null) editor.save();
+            else canvas.onCloseCanvasEditor();
+          }}
           slotProps={{ paper: { sx: { width: { xs: '100%', md: '48rem' }, maxWidth: '100%', p: 2, boxSizing: 'border-box' } } }}
           data-testid="chat-canvas-editor"
         >

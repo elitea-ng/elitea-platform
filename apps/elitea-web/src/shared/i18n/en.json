@@ -3191,6 +3191,8 @@
   "features.chatMessages.canvas.block.openTable": "Edit table",
   "features.chatMessages.canvas.block.watch": "Watch editing",
   "features.chatMessages.canvas.editor.exitFullScreen": "Exit full screen",
+  "features.chatMessages.canvas.editor.close": "Close editor",
+  "features.chatMessages.canvas.editor.closeHint": "Close (Esc)",
   "features.chatMessages.canvas.editor.fullScreen": "Full screen",
   "features.chatMessages.canvas.mermaid.quickFix": "Quick Fix",
   "features.chatMessages.canvas.selection.create": "Create canvas",

@@ -141,12 +141,15 @@ export function ChatWithEditors(): ReactNode {
    * mounted by a plain `renderHook` in its own tests, where `useParams` has no
    * router to read and throws.
    *
-   * It is deliberately NOT routed through the editor mutex either: making a
+   * The create itself is NOT routed through the editor mutex: making a
    * canvas opens no editor, so there is no second editor to queue behind. It
    * writes the canvas and re-reads the transcript; the reader then opens the
-   * new block with the control every stored canvas already has.
+   * new block with the control every stored canvas already has. The one
+   * exception is "Open as document", whose name promises the editor: that
+   * create then opens it through `handleShowCanvasEditor` — the mutex path
+   * the block's own pencil takes.
    */
-  const canvasCreation = useCanvasCreation();
+  const canvasCreation = useCanvasCreation({ onOpenCreated: handleShowCanvasEditor });
 
   /*
    * "Open in canvas" from a message ATTACHMENT (issue #878). Composed HERE

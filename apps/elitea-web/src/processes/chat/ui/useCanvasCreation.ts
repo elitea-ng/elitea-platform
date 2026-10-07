@@ -45,7 +45,7 @@ import { useParams } from '@tanstack/react-router';
 
 import { conversationApi } from '@/entities/conversation';
 import { useCreateCanvasMutation } from '@/entities/canvas';
-import type { AnswerCanvasSelection } from '@/features/chat-messages';
+import type { AnswerCanvasSelection, CanvasEditPayload } from '@/features/chat-messages';
 import { canvasByteRange, canvasKindForSelection } from '@/features/chat-messages';
 import { useSelectedProject } from '@/widgets/app-shell';
 
@@ -98,7 +98,54 @@ export interface UseCanvasCreationResult {
   readonly onCreateCanvasFromSelection: (selection: AnswerCanvasSelection) => void;
 }
 
-export function useCanvasCreation(): UseCanvasCreationResult {
+/**
+ * The editor payload for a canvas this hook just made — the same shape a
+ * stored block's pencil hands the opener. The create answers the canvas's
+ * uuid; its content is not echoed at the top level (the route nests it under
+ * `latest_version`), and it is by construction the range just carved, which
+ * is the selected text.
+ */
+export function createdCanvasEditPayload(
+  created: { readonly uuid: string; readonly content?: string | undefined },
+  selectedText: string,
+  isDocument: boolean,
+): CanvasEditPayload | undefined {
+  if (created.uuid === '') return undefined;
+  const content = created.content ?? selectedText;
+  return {
+    rawData: content,
+    codeBlock: content,
+    language: isDocument ? 'document' : 'markdown',
+    isBlock: true,
+    canvasId: created.uuid,
+    viewOnly: false,
+  };
+}
+
+/** Opens the editor on the created canvas — only for a selection that asked ("Open as document"). */
+function openCreatedIfAsked(
+  selection: AnswerCanvasSelection,
+  created: { readonly uuid: string; readonly content?: string | undefined },
+  isDocument: boolean,
+  onOpenCreated: ((payload: CanvasEditPayload) => void) | undefined,
+): void {
+  if (selection.openAfterCreate !== true || onOpenCreated === undefined) return;
+  const payload = createdCanvasEditPayload(created, selection.selectedText, isDocument);
+  if (payload !== undefined) onOpenCreated(payload);
+}
+
+export interface UseCanvasCreationOptions {
+  /**
+   * Opens the editor on a canvas this hook just created, for a selection that
+   * asked for it (`openAfterCreate` — "Open as document"). The composition
+   * root passes the same opener a stored block's pencil uses, so the editor,
+   * its close control and the mutex are the ones every canvas already has.
+   */
+  readonly onOpenCreated?: ((payload: CanvasEditPayload) => void) | undefined;
+}
+
+export function useCanvasCreation(options: UseCanvasCreationOptions = {}): UseCanvasCreationResult {
+  const { onOpenCreated } = options;
   const { project } = useSelectedProject();
   const projectId = project?.id === undefined ? undefined : String(project.id);
   const params = useParams({ strict: false }) as { conversationId?: string };
@@ -134,7 +181,7 @@ export function useCanvasCreation(): UseCanvasCreationResult {
       const kind = selection.kind ?? canvasKindForSelection(selection.selectedText);
       const isDocument = kind === 'document';
 
-      await createCanvas({
+      const created = await createCanvas({
         projectId,
         message_group_id: Number(group.id),
         message_item_id: Number(item.id),
@@ -142,7 +189,12 @@ export function useCanvasCreation(): UseCanvasCreationResult {
         // header derives from the language — the reference's own string for a
         // canvas whose document is prose or code rather than a table or a
         // diagram.
-        name: isDocument ? 'Edit document' : 'Edit code',
+        //
+        // A document canvas is named with a NOUN. "Edit document" rendered on
+        // the transcript block reads as a mode banner — the owner's report
+        // was "I entered the 'Edit document' mode and have no button to exit"
+        // — while the block is just a stored document with an open control.
+        name: isDocument ? 'Document' : 'Edit code',
         canvas_type: isDocument ? 'document' : 'code',
         code_language: isDocument ? 'document' : 'markdown',
         canvas_content_starts_at: range.startsAt,
@@ -151,8 +203,10 @@ export function useCanvasCreation(): UseCanvasCreationResult {
 
       await queryClient.invalidateQueries({ queryKey: ['conversation', 'messageList'] });
       await queryClient.invalidateQueries({ queryKey: ['conversation', 'details'] });
+
+      openCreatedIfAsked(selection, created, isDocument, onOpenCreated);
     },
-    [conversationId, createCanvas, projectId, queryClient],
+    [conversationId, createCanvas, onOpenCreated, projectId, queryClient],
   );
 
   const onCreateCanvasFromSelection = useCallback(

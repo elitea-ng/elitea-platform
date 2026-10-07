@@ -416,6 +416,8 @@ describe('ApplicationAnswer "Open as document" action (issue #879)', () => {
       selectedText: answer.content,
       messageItemId: undefined,
       kind: 'document',
+      // The action's name promises the EDITOR, not just a carved block.
+      openAfterCreate: true,
     });
   });
 

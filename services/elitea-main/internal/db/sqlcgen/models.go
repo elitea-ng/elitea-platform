@@ -231,6 +231,14 @@ type CentryStatistic struct {
 	TasksExecutions       *int32           `db:"tasks_executions" json:"tasks_executions"`
 }
 
+type ChatCanvasVersion struct {
+	ID            int32            `db:"id" json:"id"`
+	CodeLanguage  *string          `db:"code_language" json:"code_language"`
+	CanvasContent string           `db:"canvas_content" json:"canvas_content"`
+	CanvasItemID  int32            `db:"canvas_item_id" json:"canvas_item_id"`
+	CreatedAt     pgtype.Timestamp `db:"created_at" json:"created_at"`
+}
+
 type ChatConversation struct {
 	ID           int32            `db:"id" json:"id"`
 	Uuid         pgtype.UUID      `db:"uuid" json:"uuid"`
@@ -297,6 +305,12 @@ type ChatMessagesAttachment struct {
 	Bucket         string `db:"bucket" json:"bucket"`
 	AttachmentType string `db:"attachment_type" json:"attachment_type"`
 	Content        []byte `db:"content" json:"content"`
+}
+
+type ChatMessagesCanva struct {
+	Name       string `db:"name" json:"name"`
+	CanvasType string `db:"canvas_type" json:"canvas_type"`
+	ID         int32  `db:"id" json:"id"`
 }
 
 type ChatMessagesContext struct {
