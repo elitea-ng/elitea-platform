@@ -81,6 +81,12 @@ spec:
             - name: ELITEA_DEEPWIKI_TLS_CA_FILE
               value: {{ .Values.deepwiki.mtls.mountPath }}/ca.crt
             {{- end }}
+            {{- if .Values.deepwiki.callbackViaPlatformEdge }}
+            # The callback hop (artifact uploads) is TLS through platform-edge:
+            # trust the runtime CA there, apart from the listener's client CA.
+            - name: ELITEA_DEEPWIKI_CALLBACK_CA_FILE
+              value: {{ include "elitea-deepwiki.runtimeCaPath" . }}/runtime-ca.crt
+            {{- end }}
             # Sensitive vars from Kubernetes Secrets, never plaintext in the
             # env map above.
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
@@ -126,6 +132,11 @@ spec:
             - name: engine-socket
               mountPath: {{ .Values.deepwiki.engine.socketDir }}
             {{- with (include "elitea.provider.mtlsVolumeMount" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 12 }}{{- end }}
+            {{- if .Values.deepwiki.callbackViaPlatformEdge }}
+            - name: runtime-ca
+              mountPath: {{ include "elitea-deepwiki.runtimeCaPath" . }}
+              readOnly: true
+            {{- end }}
         {{- if eq $sidecar "native" }}
         # The engine sidecar (ADR-0023 H2, ADR-0026): the Rust-native engine,
         # reached by the host over the shared socket. No port, no TLS, no
@@ -163,6 +174,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.name
+            {{- if .Values.deepwiki.callbackViaPlatformEdge }}
+            # Model calls and artifact-folder reads go to the callback origin,
+            # platform-edge: the runtime CA signs its certificate.
+            - name: ELITEA_DEEPWIKI_CALLBACK_CA_FILE
+              value: {{ include "elitea-deepwiki.runtimeCaPath" . }}/runtime-ca.crt
+            {{- end }}
             # ELITEA_DEEPWIKI_DATABASE_URL, from the secret the migrate Job
             # reads (validateGuards refuses a native runner without one).
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
@@ -190,6 +207,11 @@ spec:
               mountPath: {{ .Values.deepwiki.scratch.mountPath }}
             - name: engine-socket
               mountPath: {{ .Values.deepwiki.engine.socketDir }}
+            {{- if .Values.deepwiki.callbackViaPlatformEdge }}
+            - name: runtime-ca
+              mountPath: {{ include "elitea-deepwiki.runtimeCaPath" . }}
+              readOnly: true
+            {{- end }}
         {{- end }}
       volumes:
         - name: tmp
@@ -201,6 +223,17 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
+        {{- if .Values.deepwiki.callbackViaPlatformEdge }}
+        # ONLY the runtime CA from the worker's material Secret: the Secret
+        # also holds the worker's client key and signing keys, none of which
+        # this pod may read.
+        - name: runtime-ca
+          secret:
+            secretName: {{ .Values.worker.materialSecretName }}
+            items:
+              - key: runtime-ca.crt
+                path: runtime-ca.crt
+        {{- end }}
         {{- with (include "elitea.provider.mtlsVolume" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 8 }}{{- end }}
       {{- with .Values.deepwiki.nodeSelector }}
       nodeSelector:

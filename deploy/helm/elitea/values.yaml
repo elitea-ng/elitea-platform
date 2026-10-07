@@ -2923,6 +2923,23 @@ deepwiki:
   enabled: false
   replicaCount: 1
 
+  # ADR-0027: the provider's CALLBACK hop — its model calls through the /llm
+  # edge and its artifact uploads, both to main.env
+  # ELITEA_DEEPWIKI_CALLBACK_BASE_URL — over TLS through worker.platformEdge,
+  # as the agent worker reaches elitea-main, instead of cleartext to
+  # elitea-main:8080. Needs worker.enabled and worker.platformEdge.enabled.
+  # When on:
+  #   * an unset main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL becomes
+  #     worker.runtime.platformOrigin (a different explicit value is refused);
+  #   * both containers trust the runtime CA, which signs the edge's
+  #     certificate, through ELITEA_DEEPWIKI_CALLBACK_CA_FILE — the
+  #     runtime-ca.crt key of worker.materialSecretName and NOTHING else from
+  #     that Secret.
+  # The edge terminates TLS and forwards to elitea-main over cleartext; it does
+  # not check client certificates. What this adds is TLS on the pod-to-edge
+  # hop, the same posture the worker has.
+  callbackViaPlatformEdge: false
+
   # The provider pod is TWO containers (ADR-0023 H2): the Go sub-application
   # host, which serves the SPI, composes and uploads, and the Rust-native
   # engine sidecar (ADR-0026), which runs the analysis engine for it over a

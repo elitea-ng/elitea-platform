@@ -151,6 +151,30 @@ func TestSettingsAreStrictAndPrefixed(t *testing.T) {
 	}
 }
 
+// The callback hop's trust is its own setting once the hop goes through
+// platform-edge (ADR-0027): the runtime CA there, the provider CA on the
+// listener. Unset, it stays the listener's CA, as before the split.
+func TestTheCallbackCAIsItsOwnSettingWithTheOldFallback(t *testing.T) {
+	mtls := map[string]string{
+		"ELITEA_DEEPWIKI_TLS_CERTFILE": "/c", "ELITEA_DEEPWIKI_TLS_KEYFILE": "/k", "ELITEA_DEEPWIKI_TLS_CA_FILE": "/provider-ca",
+	}
+	s, err := spi.SettingsFromEnv("ELITEA_DEEPWIKI_", env(mtls))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.CallbackCA(); got != "/provider-ca" {
+		t.Fatalf("callback CA without its own setting = %q, want the listener's", got)
+	}
+	mtls["ELITEA_DEEPWIKI_CALLBACK_CA_FILE"] = "/runtime-ca"
+	s, err = spi.SettingsFromEnv("ELITEA_DEEPWIKI_", env(mtls))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.CallbackCA(); got != "/runtime-ca" || s.TLSCAFile != "/provider-ca" {
+		t.Fatalf("callback CA = %q, listener CA = %q", got, s.TLSCAFile)
+	}
+}
+
 func TestToolkitAdmissionRaisesTheTwoLegacyRefusals(t *testing.T) {
 	table := spi.Toolkits{
 		Families: []spi.Family{

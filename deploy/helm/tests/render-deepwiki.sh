@@ -316,6 +316,36 @@ else
   fail "runner=fixture is refused for a missing database URL, which the fixture never reads"
 fi
 
+# ── The callback hop through platform-edge (ADR-0027) ────────────────────────
+#
+# On: elitea-main's callback origin becomes the edge, and BOTH containers trust
+# the runtime CA — that one key of the worker's material Secret and nothing
+# else. Refused: the flag without the edge, and the flag beside an explicit
+# origin that is not the edge. Off (every render above): neither appears.
+
+echo "== deepwiki.callbackViaPlatformEdge routes the callback hop through the edge =="
+EDGE="-f $CHART/values-standalone.yaml --set worker.enabled=true --set deepwiki.callbackViaPlatformEdge=true --set main.env.ELITEA_DEEPWIKI_CALLBACK_BASE_URL="
+edge="$(render $COMPLETE $EDGE)" || fail "the callback hop through the edge does not render: $edge"
+expect "callback origin in elitea-main" \
+  "$(printf '%s' "$edge" | yq eval-all 'select(.kind == "ConfigMap" and .metadata.name == "elitea-main-config") | .data.ELITEA_DEEPWIKI_CALLBACK_BASE_URL' -)" \
+  "https://elitea-platform-edge"
+ed() { printf '%s' "$edge" | yq eval-all "select(.kind == \"Deployment\" and .metadata.name == \"elitea-deepwiki\") | $1" -; }
+expect "host callback CA" "$(ed '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_DEEPWIKI_CALLBACK_CA_FILE") | .value')" "/run/elitea-runtime-ca/runtime-ca.crt"
+expect "engine callback CA" "$(ed '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_DEEPWIKI_CALLBACK_CA_FILE") | .value')" "/run/elitea-runtime-ca/runtime-ca.crt"
+expect "runtime CA mounted in both containers" "$(ed '.spec.template.spec.containers[].volumeMounts[] | select(.name == "runtime-ca") | .mountPath' | tr '\n' ' ')" "/run/elitea-runtime-ca /run/elitea-runtime-ca "
+expect "only runtime-ca.crt leaves the worker Secret" "$(ed '.spec.template.spec.volumes[] | select(.name == "runtime-ca") | .secret.items[].key' | tr '\n' ' ')" "runtime-ca.crt "
+expect "the flag off mounts nothing" "$(printf '%s' "$manifest" | grep -c 'runtime-ca\|CALLBACK_CA_FILE')" "0"
+if render $COMPLETE --set deepwiki.callbackViaPlatformEdge=true >/dev/null 2>&1; then
+  fail "callbackViaPlatformEdge renders with no platform-edge to dial"
+else
+  note "refused without worker.platformEdge"
+fi
+if render $COMPLETE -f $CHART/values-standalone.yaml --set worker.enabled=true --set deepwiki.callbackViaPlatformEdge=true >/dev/null 2>&1; then
+  fail "callbackViaPlatformEdge renders beside an explicit non-edge callback origin"
+else
+  note "refused beside http://elitea-main:8080"
+fi
+
 if [ "$failures" -ne 0 ]; then
   echo "render-deepwiki: $failures assertion(s) failed" >&2
   exit 1

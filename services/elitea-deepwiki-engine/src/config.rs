@@ -198,14 +198,26 @@ pub struct Settings {
     pub query_pool_size: u32,
 }
 
+/// The callback hop's own trust setting (see [`ModelEnvSettings::tls_ca_file`]).
+pub const CALLBACK_CA_SETTING: &str = "ELITEA_DEEPWIKI_CALLBACK_CA_FILE";
+/// The listener's CA, which the callback hop trusted before the split.
+pub const TLS_CA_SETTING: &str = "ELITEA_DEEPWIKI_TLS_CA_FILE";
+
 /// What the environment decides about model calls; the invocation's
 /// `llm_settings` decide the rest (`llm::settings`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelEnvSettings {
-    /// `ELITEA_DEEPWIKI_TLS_CA_FILE`: a PEM bundle trusted in addition to
-    /// the platform roots, for a gateway behind a private CA. The Go host
-    /// reads the same variable for its callback hop.
+    /// A PEM bundle trusted in addition to the platform roots on the
+    /// callback hop (the model gateway and the artifact API behind
+    /// `llm_settings.api_base`): `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` — the
+    /// runtime CA when that hop is TLS through platform-edge (ADR-0027) —
+    /// else `ELITEA_DEEPWIKI_TLS_CA_FILE`, what it read before the two were
+    /// separated. The Go host reads the same pair in the same order
+    /// (`spi.Settings.CallbackCA`).
     pub tls_ca_file: Option<PathBuf>,
+    /// Which of the two variables `tls_ca_file` came from, so an unreadable
+    /// bundle names the setting to fix.
+    pub tls_ca_setting: &'static str,
     /// `WIKI_EMBED_BATCH_SIZE` (unprefixed: the Python indexer's name):
     /// inputs per embedding request, default 64.
     pub embed_batch_size: usize,
@@ -249,7 +261,14 @@ fn model_settings(
             ))
         })?;
     Ok(ModelEnvSettings {
-        tls_ca_file: raw("TLS_CA_FILE").map(PathBuf::from),
+        tls_ca_file: raw("CALLBACK_CA_FILE")
+            .or_else(|| raw("TLS_CA_FILE"))
+            .map(PathBuf::from),
+        tls_ca_setting: if raw("CALLBACK_CA_FILE").is_some() {
+            CALLBACK_CA_SETTING
+        } else {
+            TLS_CA_SETTING
+        },
         embed_batch_size: batch,
         embed_concurrency: usize::try_from(concurrency)
             .map_err(|_| ConfigError(format!("{ENV_PREFIX}EMBED_CONCURRENCY is out of range")))?,
@@ -1049,6 +1068,7 @@ mod tests {
             defaults,
             Ok(ModelEnvSettings {
                 tls_ca_file: None,
+                tls_ca_setting: TLS_CA_SETTING,
                 embed_batch_size: DEFAULT_BATCH_SIZE,
                 embed_concurrency: DEFAULT_CONCURRENCY,
                 embed_ctx_tokens: EMBEDDING_CTX_LENGTH,
@@ -1067,11 +1087,23 @@ mod tests {
             set,
             Ok(ModelEnvSettings {
                 tls_ca_file: Some(PathBuf::from("/etc/ca.pem")),
+                tls_ca_setting: TLS_CA_SETTING,
                 embed_batch_size: 16,
                 embed_concurrency: 2,
                 embed_ctx_tokens: 4096,
                 stream_total: Duration::from_hours(3),
             })
+        );
+        // The callback hop's own CA wins over the listener's, and a CA-file
+        // error then names the variable that was actually set.
+        let split = settings(&[
+            ("ELITEA_DEEPWIKI_TLS_CA_FILE", "/provider-ca.pem"),
+            ("ELITEA_DEEPWIKI_CALLBACK_CA_FILE", "/runtime-ca.pem"),
+        ])
+        .map(|s| (s.model.tls_ca_file, s.model.tls_ca_setting));
+        assert_eq!(
+            split,
+            Ok((Some(PathBuf::from("/runtime-ca.pem")), CALLBACK_CA_SETTING))
         );
         assert!(settings(&[("WIKI_EMBED_BATCH_SIZE", "0")]).is_err());
         for bad in ["0", "255", "-1", "8k"] {
@@ -1098,7 +1130,7 @@ impl From<&ModelEnvSettings> for crate::llm::TransportSettings {
     fn from(settings: &ModelEnvSettings) -> Self {
         Self {
             ca_file: settings.tls_ca_file.clone(),
-            ca_file_setting: "ELITEA_DEEPWIKI_TLS_CA_FILE",
+            ca_file_setting: settings.tls_ca_setting,
             user_agent: concat!("elitea-deepwiki-engine/", env!("CARGO_PKG_VERSION")),
             timeouts: crate::llm::Timeouts {
                 stream_total: settings.stream_total,
@@ -1129,6 +1161,7 @@ mod model_env_tests {
     fn the_embedding_window_comes_from_the_environment() {
         let settings = ModelEnvSettings {
             tls_ca_file: None,
+            tls_ca_setting: TLS_CA_SETTING,
             embed_batch_size: 16,
             embed_concurrency: 3,
             embed_ctx_tokens: 4096,

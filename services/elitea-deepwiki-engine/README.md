@@ -604,7 +604,7 @@ runner), `ask` and deep research use it.
   streams for over an hour). SSE caps: 1 MiB per line and per event, 64 MiB
   per stream. Lines end in `\n`, `\r\n` or a lone `\r`; a leading UTF-8
   BOM is skipped.
-- `ELITEA_DEEPWIKI_TLS_CA_FILE` is trusted in addition to the platform
+- `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` (else `ELITEA_DEEPWIKI_TLS_CA_FILE`) is trusted in addition to the platform
   roots. Redirects are refused (the bearer key must not follow one).
 - Errors: timeouts → `timeout_error`; 429/503 after the retries →
   `service_busy`; 402 → `invalid_input`; 404 → `resource_not_found`;
@@ -1699,7 +1699,8 @@ not parse refuses the start (and the probe) with a message naming it.
 | `ELITEA_DEEPWIKI_EMBED_CONCURRENCY` | `4` | embedding requests in flight |
 | `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS` | `8191` | at least 256; the embedding window in `cl100k_base` tokens. Set it below the embedding model's context when its tokenizer counts more tokens (a refused window is cut and retried, at extra requests) |
 | `ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS` | `7200` | the longest one streamed model call may run (Python: no limit); a stalled stream ends after 300 s of silence |
-| `ELITEA_DEEPWIKI_TLS_CA_FILE` | unset | extra PEM roots for the model gateway |
+| `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` | unset | extra PEM roots for the callback hop (model gateway, artifact API): the runtime CA when the hop is TLS through platform-edge (Helm `deepwiki.callbackViaPlatformEdge`, ADR-0027). Wins over `ELITEA_DEEPWIKI_TLS_CA_FILE`; the Go host reads the same pair |
+| `ELITEA_DEEPWIKI_TLS_CA_FILE` | unset | extra PEM roots for the callback hop when `ELITEA_DEEPWIKI_CALLBACK_CA_FILE` is unset (its meaning before the split) |
 | `ELITEA_DEEPWIKI_RESEARCH_MAX_ITERATIONS` | `15` | 1–100, `deep_research` |
 | `WIKI_EMBED_BATCH_SIZE` | `64` | inputs per embedding request (the Python name) |
 | `DEEPWIKI_ASK_MAX_ITERATIONS` | `8` | 1–100, `ask` tool calls |

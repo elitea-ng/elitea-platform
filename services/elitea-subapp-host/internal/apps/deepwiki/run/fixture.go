@@ -313,7 +313,7 @@ func fixtureDeepResearch(arguments map[string]any) map[string]any {
 // its progress by step, with the egress policy and the callback CA from
 // the host's settings.
 func NewFixtureRunner(settings spi.Settings, step time.Duration) *Runner {
-	transport := ArtifactClientFrom(settings.TLSCAFile)
+	transport := ArtifactClientFrom(settings.CallbackCA())
 	canned := FixtureTools(step)
 	tools := map[string]Tool{}
 	for name, tool := range canned {
