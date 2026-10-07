@@ -21,7 +21,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
-const migration = "../../../elitea-deepwiki/src/elitea_deepwiki/migrations/0002_invocations.sql"
+const migration = "../../../elitea-deepwiki-engine/migrations/0002_invocations.sql"
 
 // testStore creates a throwaway schema, applies the migration into it, and
 // returns a store bound to that schema plus a second connection for

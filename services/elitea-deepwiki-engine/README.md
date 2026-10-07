@@ -149,7 +149,8 @@ a caller cannot redirect the model calls or the bearer.
 ### Phase 2 on PostgreSQL
 
 `PgTopologyStore` answers every `TopologyStore` call from the build's staged
-rows, with the semantics `parity/python_reference.py --search-dsn` measured:
+rows, with the semantics `parity/python_reference.py --search-dsn` (now
+deleted) measured:
 the folded `plainto_tsquery` over the staged `fts` column, optionally under
 `<prefix>/` (a C-collated range), ranked by BM25 (k1 1.2, b 0.75) over the
 build's own statistics (document length = the sum of position counts, the
@@ -272,7 +273,8 @@ ADR-0026 decision 7: gitoxide (`gix` 0.88) in process, no `git` binary
    (`Basic base64("user:password")`, an absent password empty: GitHub
    `token:`, GitLab `oauth2:token`, Bitbucket `user:password`, ADO `pat:`).
    `tests/fixtures/ingest/providers.json` is the Python factory's output
-   for 44 configurations (`gen_providers.py` regenerates it).
+   for 44 configurations (written by `gen_providers.py`, deleted with the
+   Python engine; see [Parity](#parity-with-the-python-engine)).
 3. `egress` re-checks the URL's own host against
    `ELITEA_DEEPWIKI_GIT_ALLOWLIST` (Python/Go rules: fail-closed, `*`,
    `*.x` = direct subdomains, ports ignored) before the credential is
@@ -388,7 +390,8 @@ go, and everything after that is unchanged.
   project is refused (Python sent it and read a 404). An unparsable cap
   fails the start (Python used the default).
 
-Parity: `parity/python_artifact_source.py` writes
+Parity: `parity/python_artifact_source.py` (deleted with the Python engine;
+see [Parity](#parity-with-the-python-engine)) wrote
 `tests/fixtures/ingest/artifact_source.json` from the Python functions
 (parsing, the client's listing over recorded pages, `collect_objects`,
 `check_caps`, `listing_digest`, the directory and marker of
@@ -593,16 +596,15 @@ ADR-0026 decision 5, with the owner's rule: **no SQLite anywhere**. There is
 no `.wiki.db`, no sqlite-vec, no FAISS and no docstore. The index is the
 ADR-0022 schema in the `deepwiki` database, unchanged.
 
-**Migrations.** The SQL files stay in
-`services/elitea-deepwiki/src/elitea_deepwiki/migrations/`; the binary
-embeds them (`include_str!`). `elitea-deepwiki-engine migrate` reads
-`ELITEA_DEEPWIKI_DATABASE_URL` and writes the `schema_migrations` ledger as
-`python -m elitea_deepwiki.storage` does: the same versions, names and
-SHA-256 of the text Python reads (`\r\n` translated), the same refusal of
-an applied migration whose file changed. Either runner continues where the
-other stopped. `tests/storage_migrate.rs` runs `migrate.discover()` with
-python3 and compares every checksum; a file in the directory that is not
-embedded fails it. The URL form only (`postgresql://…`): sqlx does not read
+**Migrations.** The SQL files are in `migrations/` (moved unchanged from
+the retired Python package); the binary embeds them (`include_str!`).
+`elitea-deepwiki-engine migrate` reads `ELITEA_DEEPWIKI_DATABASE_URL` and
+writes the `schema_migrations` ledger the retired `python -m
+elitea_deepwiki.storage` wrote: the same versions, names and SHA-256 of the
+text (`\r\n` translated), the same refusal of an applied migration whose
+file changed, so a database the Python runner migrated continues here.
+`tests/storage_migrate.rs` pins every checksum (a changed byte fails it) and
+fails on a file in the directory that is not embedded. The URL form only (`postgresql://…`): sqlx does not read
 psycopg's `key=value` form.
 
 Migration 0003 (additive, applied by both runners) adds schema
@@ -863,6 +865,10 @@ line it drops after a fence; failed pages are exported as empty files.
 
 ### Parity
 
+> Historical: the Python commands below need the Python engine and the
+> `parity/` scripts, which exist only up to origin/main `1233e1582`. See
+> [Parity with the Python engine](#parity-with-the-python-engine).
+
 ```bash
 # Python: index (Phase 1–3, stand-in embedding), then the page path against
 # the e2e stub over a FIXED structure; every chat request recorded
@@ -954,8 +960,8 @@ user messages only.
 **Prompts.** Every prompt text is the Python value, byte for byte, in
 `src/structure/prompts/*.txt` (compiled in). `PROMPTS_MANIFEST.json` names
 the source file, the symbol and the SHA-256 of each Python value;
-`tests/structure_prompts.rs` derives the hashes again from the Python
-source with python3 (`ast`, no engine import) and from the embedded texts.
+`tests/structure_prompts.rs` holds the embedded texts to those hashes (the
+source paths are historical: the Python engine is deleted).
 
 **`PageRank`.** Pages are full of exact rank ties, and a tie keeps the
 subgraph's node order, so `centrality.rs` reproduces networkx 3.6 / scipy
@@ -1107,6 +1113,10 @@ the parity gate drives.
 
 ### Parity
 
+> Historical: the Python commands below need the Python engine and the
+> `parity/` scripts, which exist only up to origin/main `1233e1582`. See
+> [Parity with the Python engine](#parity-with-the-python-engine).
+
 ```bash
 # Python: index the golden repository, run the scripted conversation of
 # tests/fixtures/ask/script.json against the e2e stub (LLM_STUB_SCRIPT
@@ -1134,10 +1144,26 @@ channel, todos, the limits, a stop, steered arguments, summarisation, and
 
 ## Parity with the Python engine
 
-The parity tools are in `parity/`. They run the Python engine itself (the
-`engine` extra of `services/elitea-deepwiki`), made reproducible for the
-reference only: inline thread pools, submission-order `as_completed`, sorted
-discovery. Two Python runs on the same commit are byte-identical.
+The Python engine (`services/elitea-deepwiki`) and the Python half of the
+parity tools (`parity/python_*.py`, `parity/compare_*.py` and
+`tests/fixtures/ingest/gen_providers.py`) are deleted. They ran against the
+Python engine at the last commit before the deletion, origin/main
+`1233e1582e8ec633d1f308f53025fcda550d012a`; check out that commit to re-run any Python
+command in this README. The tools ran the Python engine itself (its
+`engine` extra), made reproducible for the reference only: inline thread
+pools, submission-order `as_completed`, sorted discovery. Two Python runs on
+the same commit were byte-identical.
+
+The golden fixtures they wrote stay under `tests/fixtures/`, and `cargo test`
+replays them without Python. The `deepwiki-parity` and
+`deepwiki-cluster-parity` binaries stay too: they write the Rust side from a
+repository or from a dump (a committed fixture, or a dump made at that
+commit), and `index-dump` / `graph-dump` / `parse-dump` are useful on their
+own.
+
+> Historical: the Python commands below need the Python engine and the
+> `parity/` scripts, which exist only up to origin/main `1233e1582`. See above.
+
 
 ```bash
 # Python reference: the graph as the index stores it (repo_nodes / repo_edges rows)
@@ -1198,6 +1224,10 @@ pages, hub re-integration, the `macro_cluster` / `micro_cluster` / `is_hub` /
 Note: the live caller hands Phase 3 only the first 20 sorted hub ids
 (`run_phase2` caps `node_ids`); the port keeps that contract.
 
+> Historical: the Python commands below need the Python engine and the
+> `parity/` scripts, which exist only up to origin/main `1233e1582`. See
+> [Parity with the Python engine](#parity-with-the-python-engine).
+
 ```bash
 # Python: Phase 1 + 1c + Phase 2 (stand-in SHA-256 embeddings) + Phase 3, every leidenalg call recorded
 PYTHONHASHSEED=0 PYTHONPATH=services/elitea-deepwiki/src python services/elitea-deepwiki-engine/parity/python_phase3_dump.py <repo> <dump>
@@ -1227,6 +1257,10 @@ end on elitea-platform, Rust vs Python section ARI is 0.97 against a
 Python seed-to-seed 0.95–0.97, page ARI 0.47 against 0.47–0.49.
 
 ### Phase 2
+
+> Historical: the Python commands below need the Python engine and the
+> `parity/` scripts, which exist only up to origin/main `1233e1582`. See
+> [Parity with the Python engine](#parity-with-the-python-engine).
 
 ```bash
 # Python: Phase 2 over its own .wiki.db, stand-in embedding, every index read recorded
@@ -1270,6 +1304,10 @@ hub changes follow from those edges: anchors and components move.
 Structural edges and every weight of an edge both sides have are equal.
 
 ### Structure planning
+
+> Historical: the Python commands below need the Python engine and the
+> `parity/` scripts, which exist only up to origin/main `1233e1582`. See
+> [Parity with the Python engine](#parity-with-the-python-engine).
 
 ```bash
 # Python: Phase 1–3 (recorded), then analyze_repository + generate_wiki_structure
@@ -1379,10 +1417,8 @@ uid 10001; `/run/deepwiki` is in the image, owned by 10001, mode 0777.
 Subcommands: `serve` (the default CMD), `healthcheck`, `migrate`, `worker`
 (started by `serve`, never by hand), `--version`.
 
-The binary embeds the service migrations from
-`services/elitea-deepwiki/src/elitea_deepwiki/migrations/` (`include_str!`,
-a path outside the crate), so the Containerfile copies that directory too.
-A build context without it fails to compile.
+The binary embeds the service migrations from the crate's own
+`migrations/` (`include_str!`), so the crate COPY covers them.
 
 Release wiring, held together by `scripts/ci/image-matrix.sh --verify`:
 the bake target, `publish.yml` (`build`, `scan`, `publish-image` matrices and
@@ -1441,7 +1477,7 @@ all of it.
 (`args: ["migrate"]`); a native install pulls no Python image.** It is the
 same schema, not a fork: the binary embeds the same SQL files and writes the
 same `schema_migrations` ledger with the same SHA-256 checksums
-(`tests/storage_migrate.rs` compares them with `migrate.py`), so either runner
+(`tests/storage_migrate.rs` pins them), so either runner
 can migrate a database the other one migrated and a switch back to `legacy`
 needs no migration step. The Rust runner also holds a session advisory lock,
 so two Jobs cannot apply one file twice. The role needs `CREATE` on the

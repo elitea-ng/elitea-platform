@@ -1,5 +1,4 @@
-//! The embedded migrations against `migrate.py`: one directory, one ledger,
-//! one checksum.
+//! The embedded migrations: one directory, one ledger, pinned checksums.
 
 mod storage_common;
 
@@ -7,7 +6,6 @@ use elitea_deepwiki_engine::storage::StorageError;
 use elitea_deepwiki_engine::storage::migrate::{self, MIGRATIONS_DIR};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::process::Command;
 use storage_common as common;
 
 fn migrations_dir() -> PathBuf {
@@ -44,44 +42,38 @@ fn the_embedded_set_is_the_directory() {
     }
 }
 
-/// The checksums `migrate.py` itself computes (its `discover()`, run by
-/// python3 from this checkout) equal the Rust ones, file for file.
+/// The ledger checksums, pinned. Databases migrated by this binary or by
+/// the retired Python runner hold these values in `schema_migrations`; a
+/// change to a file's bytes makes every such database refuse to start.
 #[test]
-fn rust_and_python_compute_the_same_checksums() {
-    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../elitea-deepwiki/src");
-    let script = "import json, sys\n\
-                  sys.path.insert(0, sys.argv[1])\n\
-                  from elitea_deepwiki.storage.migrate import discover\n\
-                  print(json.dumps({m.version + '_' + m.name: m.checksum for m in discover()}))\n";
-    let output = Command::new("python3")
-        .arg("-c")
-        .arg(script)
-        .arg(&src)
-        .output()
-        .expect("python3 runs (it is a test dependency, as git is for the ingest tests)");
-    assert!(
-        output.status.success(),
-        "migrate.discover failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let python: BTreeMap<String, String> =
-        serde_json::from_slice(&output.stdout).expect("python printed JSON");
+fn the_checksums_are_the_ledger_values() {
     let rust: BTreeMap<String, String> = migrate::embedded()
         .expect("valid")
         .into_iter()
         .map(|m| (format!("{}_{}", m.version, m.name), m.checksum()))
         .collect();
-    // 0001-0004, 0004 being the additive `builds.boot_id`.
-    assert_eq!(
-        rust.keys().map(String::as_str).collect::<Vec<_>>(),
-        [
+    let pinned: BTreeMap<String, String> = [
+        (
             "0001_wiki_index_storage",
+            "ea5af872e89869cdf824e92f71586ed58143efa30572c74c73a3e7bfa1bb40c3",
+        ),
+        (
             "0002_invocations",
+            "639bb4e76683606c9c5a02b56e868af901be7f4a2bbab53269b2ff508ab909a2",
+        ),
+        (
             "0003_build_space",
-            "0004_build_boot_id"
-        ]
-    );
-    assert_eq!(rust, python);
+            "e36c440fb1c6d43c2900931f94f4f1c1ea023359c9e9ffbddd93e191efaf2b7e",
+        ),
+        (
+            "0004_build_boot_id",
+            "2572543733819202a9dd358c9aaad28ae598bd71691e705a2d4a553b881864ea",
+        ),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+    .collect();
+    assert_eq!(rust, pinned);
 }
 
 #[tokio::test(flavor = "multi_thread")]

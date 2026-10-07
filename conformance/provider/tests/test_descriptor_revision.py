@@ -13,13 +13,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-SERVICE_ROOT = Path(__file__).resolve().parents[2]
-REPO_ROOT = SERVICE_ROOT.parents[1]
-TOOL = SERVICE_ROOT / "tools" / "build_descriptor_v1.py"
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+TOOL = PACKAGE_ROOT / "tools" / "build_descriptor_v1.py"
 V1 = (
-    REPO_ROOT
-    / "conformance"
-    / "provider"
+    PACKAGE_ROOT
     / "fixtures"
     / "deepwiki"
     / "descriptor"

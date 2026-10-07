@@ -31,9 +31,6 @@ on:
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"
-      # The engine embeds the service migrations (include_str!).
-      - "services/elitea-deepwiki/src/elitea_deepwiki/migrations/**"
-      - "services/elitea-deepwiki/src/elitea_deepwiki/storage/migrate.py"
       - ".github/workflows/ci-deepwiki-engine.yml"
       - "scripts/go/declared-skips.txt"
   push:
@@ -44,9 +41,6 @@ on:
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"
-      # The engine embeds the service migrations (include_str!).
-      - "services/elitea-deepwiki/src/elitea_deepwiki/migrations/**"
-      - "services/elitea-deepwiki/src/elitea_deepwiki/storage/migrate.py"
       - ".github/workflows/ci-deepwiki-engine.yml"
       - "scripts/go/declared-skips.txt"
   workflow_dispatch:

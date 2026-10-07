@@ -46,13 +46,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 WORKDIR /src/services/elitea-deepwiki-engine
 COPY services/elitea-deepwiki-engine ./
-# The service migrations, which the binary embeds (include_str!) from the
-# Python package's directory: one set of files for both runners. Load-bearing:
-# src/storage/migrate.rs reads them by a path OUTSIDE the crate
-# (../elitea-deepwiki/...), and without this line the build fails with
-# "couldn't read …/0001_wiki_index_storage.sql". `migrate` writes the same
-# schema_migrations ledger (same SHA-256 checksums) as the Python entry point.
-COPY services/elitea-deepwiki/src/elitea_deepwiki/migrations ../elitea-deepwiki/src/elitea_deepwiki/migrations
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \

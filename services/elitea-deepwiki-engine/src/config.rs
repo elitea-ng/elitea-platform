@@ -509,7 +509,7 @@ impl Settings {
             Some("native") => RunnerKind::Native,
             Some("legacy") => {
                 return Err(ConfigError(format!(
-                    "{ENV_PREFIX}RUNNER=legacy names the Python engine, which this binary is not; run the elitea-deepwiki -engine image for it"
+                    "{ENV_PREFIX}RUNNER=legacy named the Python engine, which is retired; use native (see docs/UPGRADING.md)"
                 )));
             }
             Some(other) => {

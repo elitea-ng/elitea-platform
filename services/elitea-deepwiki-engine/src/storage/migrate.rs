@@ -1,10 +1,10 @@
-//! The service migrations, embedded, and `migrate.py`'s ledger.
+//! The service migrations, embedded, and the `schema_migrations` ledger.
 //!
-//! ADR-0026 decision 5: the SQL files stay in the Python package until it is
-//! retired, the Rust binary embeds the same files, and both runners write
-//! ONE ledger (`schema_migrations`). Neither the schema nor the migration
-//! numbers fork, so either runner can migrate a database the other one
-//! migrated.
+//! ADR-0026 decision 5: the Rust binary writes the ledger the retired Python
+//! runner (`migrate.py`) wrote, so a database that runner migrated stays
+//! valid. The SQL files moved from the Python package into this crate's
+//! `migrations/` unchanged; their bytes are frozen because the ledger holds
+//! each file's SHA-256 (`tests/storage_migrate.rs` pins them).
 //!
 //! The rules are `migrate.py`'s:
 //!
@@ -20,7 +20,7 @@
 //!
 //! One addition: the run holds a session advisory lock, so two engine
 //! replicas started together cannot both apply the same file. The Python
-//! runner takes no lock; the lock changes nothing in the ledger.
+//! runner took no lock; the lock changes nothing in the ledger.
 
 use crate::storage::text::universal_newlines;
 use crate::storage::{Result, StorageError};
@@ -31,7 +31,7 @@ use std::fmt::Write as _;
 
 /// The migration directory, relative to the crate root. Tests read it to
 /// prove the embedded list is the directory's list.
-pub const MIGRATIONS_DIR: &str = "../elitea-deepwiki/src/elitea_deepwiki/migrations";
+pub const MIGRATIONS_DIR: &str = "migrations";
 
 /// `(file name, file text)` of every migration, in version order.
 ///
@@ -40,27 +40,19 @@ pub const MIGRATIONS_DIR: &str = "../elitea-deepwiki/src/elitea_deepwiki/migrati
 const EMBEDDED: &[(&str, &str)] = &[
     (
         "0001_wiki_index_storage.sql",
-        include_str!(
-            "../../../elitea-deepwiki/src/elitea_deepwiki/migrations/0001_wiki_index_storage.sql"
-        ),
+        include_str!("../../migrations/0001_wiki_index_storage.sql"),
     ),
     (
         "0002_invocations.sql",
-        include_str!(
-            "../../../elitea-deepwiki/src/elitea_deepwiki/migrations/0002_invocations.sql"
-        ),
+        include_str!("../../migrations/0002_invocations.sql"),
     ),
     (
         "0003_build_space.sql",
-        include_str!(
-            "../../../elitea-deepwiki/src/elitea_deepwiki/migrations/0003_build_space.sql"
-        ),
+        include_str!("../../migrations/0003_build_space.sql"),
     ),
     (
         "0004_build_boot_id.sql",
-        include_str!(
-            "../../../elitea-deepwiki/src/elitea_deepwiki/migrations/0004_build_boot_id.sql"
-        ),
+        include_str!("../../migrations/0004_build_boot_id.sql"),
     ),
 ];
 

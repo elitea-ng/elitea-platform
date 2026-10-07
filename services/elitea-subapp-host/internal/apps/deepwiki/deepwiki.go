@@ -13,9 +13,10 @@
 //	chat_history              sent on every wiki-chat turn since the port,
 //	                          and never declared by the legacy plugin
 //
-// It is generated, not hand-edited: services/elitea-deepwiki/tools/
+// It is generated, not hand-edited: conformance/provider/tools/
 // build_descriptor_v1.py derives it from legacy-v0 and writes both this
-// copy and the fixture, so the two cannot disagree. legacy-v0 stays in the
+// copy and the fixture, so the two cannot disagree (its --check runs in
+// conformance/provider/tests/test_descriptor_revision.py). legacy-v0 stays in the
 // fixtures as the record of what the legacy plugin actually declared.
 //
 // The engine stays where it is (services/elitea-deepwiki, Python); reaching

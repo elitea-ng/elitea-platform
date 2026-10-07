@@ -1,5 +1,6 @@
 {
-  "_comment": "ADR-0026 decision 8: every prompt the page path sends, embedded verbatim. sha256 is of the Python VALUE (UTF-8); tests/wiki_prompts.rs re-derives it from the Python source.",
+  "_comment": "ADR-0026 decision 8: every prompt the page path sends, embedded verbatim. sha256 is of the Python VALUE (UTF-8); tests/wiki_prompts.rs holds each embedded file to it.",
+  "_provenance": "Historical provenance: each `source` names the Python file the value was copied from, in the Python engine (services/elitea-deepwiki) as it stood at origin/main 1233e1582e8ec633d1f308f53025fcda550d012a. That tree is deleted; the sha256 values are the record.",
   "prompts": [
     {
       "file": "page_content_v3_tone_adjusted.txt",

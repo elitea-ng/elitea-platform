@@ -5,9 +5,10 @@
 //! this module (`prompts/*.txt`), compiled in with `include_str!`.
 //! `prompts/PROMPTS_MANIFEST.json` names, per file, the Python source file,
 //! the symbol (and, for a literal inside a function, which `("system", …)`
-//! tuple), and the SHA-256 of the Python value. `tests/structure_prompts.rs`
-//! re-derives every hash from the Python source with `python3`, so a prompt
-//! edited on one side only fails the build.
+//! tuple), and the SHA-256 of the Python value. The source paths are
+//! historical (the Python engine is deleted); `tests/structure_prompts.rs`
+//! holds every file to its recorded hash, so an edited prompt fails the
+//! build.
 //!
 //! The `*_USER` templates are formatted the way Python formatted them:
 //! `ChatPromptTemplate` (f-string templates) and `str.format` are the same
