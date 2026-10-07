@@ -2,11 +2,12 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, useState } from 'react';
-import { useColorScheme } from 'react-native';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 
 import { StatusScreen } from '@/components/StatusScreen';
-import { usePalette } from '@/constants/use-palette';
+import { DesignProvider, useDesign } from '@/design/DesignProvider';
+import { sheetOptions } from '@/ui';
 import { UpgradeRequired } from '@/components/UpgradeRequired';
 import { queryClient, wireFocusManager, wireUpgradeRecovery } from '@/api/queryClient';
 import { startOfflineStore } from '@/db/startOfflineStore';
@@ -62,33 +63,50 @@ void SplashScreen.preventAutoHideAsync().catch(() => {});
 const updateSplash = createSplashGate(() => SplashScreen.hideAsync());
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
-  const palette = usePalette();
   usePrivacyProtection();
-  // Navigation chrome (headers, cards) follows the workspace brand too.
+  return (
+    <QueryClientProvider client={queryClient}>
+      {/* One design for the whole app: scheme, Zefir tokens, the corrected workspace accent,
+          accessibility modifiers (docs/design-system.md §6.1). */}
+      <DesignProvider>
+        <KeyboardProvider>
+          <NavigationTheme>
+            <RootStack />
+            <PrivacyCover />
+          </NavigationTheme>
+        </KeyboardProvider>
+      </DesignProvider>
+    </QueryClientProvider>
+  );
+}
+
+/**
+ * Navigation chrome (headers, cards, the tab bar's tint) from the same tokens as the screens:
+ * the Zefir neutrals of the scheme and the corrected workspace accent. The status bar follows
+ * the scheme (dark content on the light grounds, light on the night ones).
+ */
+function NavigationTheme({ children }: { children: ReactNode }) {
+  const { scheme, colors } = useDesign();
   const navigationTheme = useMemo(() => {
-    const base = colorScheme === 'dark' ? DarkTheme : DefaultTheme;
+    const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
     return {
       ...base,
       colors: {
         ...base.colors,
-        primary: palette.accent,
-        background: palette.background,
-        card: palette.background,
-        text: palette.text,
-        border: palette.border,
-        notification: palette.danger,
+        primary: colors.accent,
+        background: colors.background,
+        card: colors.background,
+        text: colors.textPrimary,
+        border: colors.separator,
+        notification: colors.badge,
       },
     };
-  }, [colorScheme, palette]);
+  }, [scheme, colors]);
   return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider value={navigationTheme}>
-        <RootStack />
-        <PrivacyCover />
-        <StatusBar style="auto" />
-      </ThemeProvider>
-    </QueryClientProvider>
+    <ThemeProvider value={navigationTheme}>
+      {children}
+      <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+    </ThemeProvider>
   );
 }
 
@@ -180,16 +198,24 @@ function RootStack() {
 }
 
 function RoutedStack({ connected, signedIn }: { connected: boolean; signedIn: boolean }) {
+  const design = useDesign();
   return (
     <Stack screenOptions={{ headerShown: false }}>
+      {/* Development builds only: every kit component in light/dark/branded (screenshots). */}
+      <Stack.Protected guard={__DEV__}>
+        <Stack.Screen name="design-gallery" options={{ headerShown: true, title: 'Design gallery' }} />
+        <Stack.Screen name="design-tabs" options={{ headerShown: false }} />
+        <Stack.Screen name="design-composer" options={{ headerShown: true, title: 'Conversation' }} />
+        <Stack.Screen name="design-sheet" options={{ headerShown: true, title: 'Workspace', ...sheetOptions(design) }} />
+      </Stack.Protected>
       <Stack.Protected guard={signedIn}>
         <Stack.Screen name="(app)" />
       </Stack.Protected>
       <Stack.Protected guard={connected && !signedIn}>
-        <Stack.Screen name="sign-in" />
+        <Stack.Screen name="sign-in" options={{ title: 'Sign in' }} />
       </Stack.Protected>
       <Stack.Protected guard={!connected}>
-        <Stack.Screen name="connect" />
+        <Stack.Screen name="connect" options={{ title: 'Connect' }} />
       </Stack.Protected>
     </Stack>
   );

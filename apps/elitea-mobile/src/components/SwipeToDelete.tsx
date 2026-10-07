@@ -12,6 +12,7 @@ import {
 
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
+import { ramp } from '@/ui';
 
 /**
  * A list row that is removed with a swipe to the left (core PanResponder and
@@ -153,5 +154,5 @@ export function SwipeToDelete({ actionLabel, onDelete, testID, children }: Swipe
 
 const styles = StyleSheet.create({
   behind: { alignItems: 'flex-end', justifyContent: 'center', paddingHorizontal: Spacing.three },
-  behindText: { color: '#ffffff', fontWeight: '700', fontSize: 15 },
+  behindText: { ...ramp.subheadline, color: '#ffffff', fontWeight: '700' },
 });

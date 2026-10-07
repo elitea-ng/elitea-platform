@@ -21,6 +21,7 @@ import { handOff } from '@/features/intents/intentHandoff';
 import { MAX_PREFILL } from '@/features/intents/intentRouter';
 import { useProjectLabel } from '@/features/projects/ProjectChip';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
+import { ramp } from '@/ui';
 
 /**
  * One public agent: what it is, and a chat with it in the ACTIVE project
@@ -152,16 +153,16 @@ const styles = StyleSheet.create({
   content: { padding: Spacing.three, gap: Spacing.three },
   header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three },
   headerText: { flex: 1, gap: 2 },
-  title: { fontSize: 22, fontWeight: '600' },
-  meta: { fontSize: 13 },
-  body: { fontSize: 15, lineHeight: 21 },
+  title: { ...ramp.title2, fontWeight: '600' },
+  meta: { ...ramp.footnote },
+  body: { ...ramp.subheadline },
   welcome: { borderRadius: 12, padding: Spacing.three },
   primary: { borderRadius: 12, paddingVertical: Spacing.three, alignItems: 'center' },
-  primaryText: { fontSize: 16, fontWeight: '600' },
-  note: { fontSize: 13, textAlign: 'center', marginTop: -Spacing.two },
+  primaryText: { ...ramp.headline, fontWeight: '600' },
+  note: { ...ramp.footnote, textAlign: 'center', marginTop: -Spacing.two },
   starters: { gap: Spacing.two },
-  section: { fontSize: 13, fontWeight: '600' },
+  section: { ...ramp.footnote, fontWeight: '600' },
   starter: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, borderWidth: 1, borderRadius: 12, padding: Spacing.three },
-  starterText: { flex: 1, fontSize: 15 },
-  link: { fontSize: 16, fontWeight: '600' },
+  starterText: { ...ramp.subheadline, flex: 1 },
+  link: { ...ramp.headline, fontWeight: '600' },
 });

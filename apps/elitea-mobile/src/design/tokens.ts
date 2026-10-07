@@ -181,8 +181,8 @@ export const colors: Record<Scheme, SemanticColors> = {
     chipText: '#F7F2F5',
     chipSelected: '#3D1E2D',
     chipSelectedText: '#FFC2DA',
-    badge: '#FF8780',
-    badgeText: '#3A0705',
+    badge: '#D2333A',
+    badgeText: '#FFFFFF',
     focus: '#8DC3EA',
     scrim: 'rgba(0, 0, 0, 0.55)',
     orb: { stops: ['#C2477E', '#6F5BB8', '#2F8C7E'], highlight: 'rgba(255, 255, 255, 0.55)', decorative: true },
@@ -211,7 +211,7 @@ export const PROOFS: readonly (readonly [ColorKey, ColorKey | 'backgroundGradien
   ['bubbleUserText', 'bubbleUser'], ['bubbleAgentText', 'bubbleAgent'],
   ['chipText', 'chip'], ['chipText', 'surfaceGlass'], ['chipSelectedText', 'chipSelected'],
   ['badgeText', 'badge'],
-  ['separatorStrong', 'surface'], ['separatorStrong', 'background'],
+  ['separatorStrong', 'surface'], ['separatorStrong', 'background'], ['separatorStrong', 'surfaceSunken'],
   ['focus', 'background'], ['focus', 'backgroundGradient'], ['focus', 'surface'],
 ];
 

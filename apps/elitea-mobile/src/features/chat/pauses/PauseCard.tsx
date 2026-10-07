@@ -26,6 +26,7 @@ import type { HitlInterrupt, TurnPause } from '@/features/chat/toolActivity';
 import { MONOSPACE_FONT } from '@/features/markdown/Markdown';
 import { useShareOut } from '@/security/policy';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
+import { Icon, ramp } from '@/ui';
 
 export interface PauseCardProps {
   pause: TurnPause;
@@ -261,10 +262,11 @@ export function MaskedArgs({ args }: { args: Record<string, unknown> }) {
   if (keys.length === 0) return null;
   return (
     <View>
-      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => setOpen((v) => !v)}>
+      <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} onPress={() => setOpen((v) => !v)} style={styles.disclosure}>
         <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.subtitle, { color: palette.accent }]}>
-          Arguments ({keys.length}) {open ? '▾' : '›'}
+          Arguments ({keys.length})
         </Text>
+        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} color={palette.accent} weight="semibold" />
       </Pressable>
       {open
         ? keys.map((key) => {
@@ -320,7 +322,7 @@ function AskUser({ interrupt, disabled, onAnswer }: { interrupt: HitlInterrupt; 
                     disabled={disabled}
                     onPress={() => toggle(q.key, o.label, q.multiSelect)}
                     style={[styles.chip, { borderColor: on ? palette.accent : palette.border, backgroundColor: on ? palette.accent : 'transparent' }]}>
-                    <Text maxFontSizeMultiplier={FONT_SCALE.body} style={{ color: on ? palette.onAccent : palette.text, fontSize: 14 }}>{o.label}</Text>
+                    <Text maxFontSizeMultiplier={FONT_SCALE.body} style={{ ...ramp.subheadline, color: on ? palette.onAccent : palette.text }}>{o.label}</Text>
                   </Pressable>
                 );
               })}
@@ -334,7 +336,7 @@ function AskUser({ interrupt, disabled, onAnswer }: { interrupt: HitlInterrupt; 
               editable={!disabled}
               value={typed[q.key] ?? ''}
               onChangeText={(text) => setTyped((t) => ({ ...t, [q.key]: text }))}
-              style={[styles.input, { color: palette.text, borderColor: palette.border }]}
+              style={[styles.input, { color: palette.text, borderColor: palette.inputBorder }]}
             />
           ) : null}
         </View>
@@ -423,7 +425,7 @@ function EditorBody({
           contextMenuHidden={!shareOut}
           value={text}
           onChangeText={setText}
-          style={[styles.editorInput, { color: palette.text, borderColor: palette.border }, jsonObject ? { fontFamily: MONOSPACE_FONT } : null]}
+          style={[styles.editorInput, { color: palette.text, borderColor: palette.inputBorder }, jsonObject ? { fontFamily: MONOSPACE_FONT } : null]}
         />
         {problem && text !== '' ? <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.note, { color: palette.danger }]}>{problem}</Text> : null}
       </ScrollView>
@@ -470,22 +472,23 @@ function OutputLimitCard(props: PauseCardProps) {
 }
 
 const styles = StyleSheet.create({
+  disclosure: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44 },
   card: { borderWidth: 1.5, borderRadius: 14, padding: Spacing.three - 4, gap: Spacing.two, marginHorizontal: Spacing.two, marginBottom: Spacing.two },
-  title: { fontSize: 16, fontWeight: '700' },
-  subtitle: { fontSize: 13 },
-  body: { fontSize: 14, lineHeight: 20 },
-  note: { fontSize: 13 },
+  title: { ...ramp.headline, fontWeight: '700' },
+  subtitle: { ...ramp.footnote },
+  body: { ...ramp.subheadline },
+  note: { ...ramp.footnote },
   interrupt: { gap: Spacing.one },
   question: { gap: Spacing.one },
   buttons: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.two, marginTop: Spacing.one },
   button: { borderWidth: 1, borderRadius: 18, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, alignItems: 'center' },
-  buttonText: { fontSize: 15, fontWeight: '600' },
+  buttonText: { ...ramp.subheadline, fontWeight: '600' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.one },
   chip: { borderWidth: 1, borderRadius: 16, paddingHorizontal: Spacing.two + 2, paddingVertical: Spacing.one + 2 },
-  input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: Spacing.two, paddingVertical: Spacing.two, fontSize: 15 },
-  arg: { fontFamily: MONOSPACE_FONT, fontSize: 13, paddingVertical: 2 },
+  input: { ...ramp.subheadline, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: Spacing.two, paddingVertical: Spacing.two },
+  arg: { ...ramp.footnote, fontFamily: MONOSPACE_FONT, paddingVertical: 2 },
   editor: { flex: 1, padding: Spacing.three, gap: Spacing.two },
   editorHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   editorBody: { gap: Spacing.two },
-  editorInput: { minHeight: 240, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: Spacing.two, fontSize: 14, textAlignVertical: 'top' },
+  editorInput: { ...ramp.subheadline, minHeight: 240, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: Spacing.two, textAlignVertical: 'top' },
 });

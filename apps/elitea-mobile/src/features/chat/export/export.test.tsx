@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import type { ReactElement } from 'react';
 import * as Sharing from 'expo-sharing';
-import { Share } from 'react-native';
+import { Platform, Share } from 'react-native';
 
 import { CAPTURE, conversationDetail13, exportBadFormat, exportHeaders, exportMarkdown } from '@/api/__fixtures__/chat13';
 import { discoveryDocument11, discoveryDocument13 } from '@/api/__fixtures__/nativeClient';
@@ -16,7 +16,31 @@ import { __resetSessionForTests, setCredential, setSession } from '@/state/sessi
 import { __resetWorkspaceInfoForTests, setWorkspaceInfo } from '@/state/workspaceInfo';
 import { FAKE_ORIGIN, fakeServer, type FakeServer } from '@/test/fakeServer';
 
-jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen: (p: { options?: { headerRight?: () => unknown } }) => p.options?.headerRight?.() ?? null }, router: { replace: jest.fn() } }));
+// The header renders either branch of headerActionOptions: the kit icon buttons (Android, iOS <
+// 26: options.headerRight) or the iOS 26 native bar button items (options.unstable_headerRightItems),
+// drawn here as the buttons UIKit would make of them (label, disabled, onPress).
+jest.mock('expo-router', () => {
+  const { createElement } = require('react');
+  const { Pressable } = require('react-native');
+  type MockItem = { type: string; accessibilityLabel?: string; label: string; disabled?: boolean; onPress?: () => void; identifier?: string };
+  const Screen = (p: { options?: { headerRight?: () => unknown; unstable_headerRightItems?: () => MockItem[] } }) => {
+    const items = p.options?.unstable_headerRightItems?.();
+    if (items) {
+      return items.map((item) =>
+        createElement(Pressable, {
+          key: item.identifier ?? item.label,
+          accessibilityRole: 'button',
+          accessibilityLabel: item.accessibilityLabel ?? item.label,
+          accessibilityState: { disabled: item.disabled === true },
+          disabled: item.disabled,
+          onPress: item.onPress,
+        }),
+      );
+    }
+    return p.options?.headerRight?.() ?? null;
+  };
+  return { useLocalSearchParams: () => ({ id: '3' }), Stack: { Screen }, router: { replace: jest.fn() } };
+});
 jest.mock('react-native-safe-area-context', () => require('react-native-safe-area-context/jest/mock').default);
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 jest.mock('expo-crypto', () => ({ randomUUID: () => '0f0e0d0c-0b0a-4908-8706-050403020100' }));
@@ -224,19 +248,50 @@ describe('Export in the thread header', () => {
     return server;
   }
 
-  it('shares the transcript file and deletes it when the sheet closes', async () => {
-    install('1.3');
-    let sharedUri = '';
-    let presentWhileSharing = false;
-    jest.mocked(Sharing.shareAsync).mockImplementation(async (url: string) => {
-      sharedUri = url;
-      presentWhileSharing = mockFs.written.get(sharedUri) === exportMarkdown;
+  // F3: both header branches. iOS 26+ (the default on current devices) goes through the native
+  // bar button items, which no screen test exercised before.
+  describe.each([
+    ['iOS 18 (kit icon buttons)', '18.0'],
+    ['iOS 26 (native bar button items)', '26.0'],
+  ])('%s', (_name, version) => {
+    beforeEach(() => {
+      jest.spyOn(Platform, 'Version', 'get').mockReturnValue(version as never);
     });
-    await renderThread(<ThreadScreen />);
-    await fireEvent.press(await screen.findByRole('button', { name: 'Export conversation' }));
-    await waitFor(() => expect(sharedUri).toMatch(/^file:\/\/\/cache\/export-tmp\/.+\/Quick_wins_capture\.md$/));
-    expect(presentWhileSharing).toBe(true);
-    await waitFor(() => expect(mockFs.written.size).toBe(0));
+
+    it('shares the transcript file and deletes it when the sheet closes', async () => {
+      install('1.3');
+      let sharedUri = '';
+      let presentWhileSharing = false;
+      jest.mocked(Sharing.shareAsync).mockImplementation(async (url: string) => {
+        sharedUri = url;
+        presentWhileSharing = mockFs.written.get(sharedUri) === exportMarkdown;
+      });
+      await renderThread(<ThreadScreen />);
+      await fireEvent.press(await screen.findByRole('button', { name: 'Export conversation' }));
+      await waitFor(() => expect(sharedUri).toMatch(/^file:\/\/\/cache\/export-tmp\/.+\/Quick_wins_capture\.md$/));
+      expect(presentWhileSharing).toBe(true);
+      await waitFor(() => expect(mockFs.written.size).toBe(0));
+    });
+
+    it('reads as busy and takes no second tap while the export runs, then is offered again', async () => {
+      install('1.3');
+      let finish: () => void = () => {};
+      jest.mocked(Sharing.shareAsync).mockClear();
+      jest.mocked(Sharing.shareAsync).mockImplementation(() => new Promise<void>((resolve) => (finish = resolve)));
+      await renderThread(<ThreadScreen />);
+      await fireEvent.press(await screen.findByRole('button', { name: 'Export conversation' }));
+      const busy =
+        version === '26.0'
+          ? await screen.findByRole('button', { name: 'Export conversation, in progress' })
+          : await screen.findByRole('button', { name: 'Export conversation', busy: true });
+      expect(busy.props.accessibilityState).toMatchObject({ disabled: true });
+      await waitFor(() => expect(Sharing.shareAsync).toHaveBeenCalledTimes(1));
+      await fireEvent.press(busy);
+      finish();
+      const again = await screen.findByRole('button', { name: 'Export conversation' });
+      await waitFor(() => expect(again.props.accessibilityState).toMatchObject({ disabled: false }));
+      expect(Sharing.shareAsync).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('not offered when allow_share_out is off, or before client contract 1.3', async () => {

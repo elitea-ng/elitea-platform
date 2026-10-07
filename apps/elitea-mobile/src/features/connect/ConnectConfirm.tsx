@@ -1,10 +1,12 @@
-import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, StyleSheet, View } from 'react-native';
 
 import { identity } from '@/config/identity';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { canConnect, displayHost, type ConnectCheck } from '@/features/connect/connectFlow';
+import { HostText } from '@/features/connect/HostText';
 import { BrandLogo } from '@/theme/BrandLogo';
+import { Button, Text } from '@/ui';
 
 /**
  * The connect confirmation (ADR-0025 WP1). The host is the largest text on
@@ -36,20 +38,19 @@ export function ConnectConfirm({
         <View style={styles.brand}>
           <BrandLogo image={check.brand.logoMark ?? check.brand.logoFull} size={64} />
           {check.brand.productName ? (
-            <Text style={[styles.brandName, { color: palette.text }]}>{check.brand.productName}</Text>
+            <Text variant="title3" emphasized>
+              {check.brand.productName}
+            </Text>
           ) : null}
         </View>
       ) : null}
       {/* The host is always in the system font: a brand font must not be able to disguise it. */}
-      <Text style={[styles.caption, { color: palette.textSecondary }]}>You are connecting to</Text>
-      <Text
-        accessibilityRole="header"
-        testID="connect-host"
-        selectable
-        style={[styles.host, { color: palette.text }]}>
-        {displayHost(check.origin)}
+      <Text variant="subheadline" tone="secondary" style={styles.caption}>
+        You are connecting to
       </Text>
-      <Text selectable style={[styles.origin, { color: palette.textSecondary }]}>
+      <HostText testID="connect-host" heading host={displayHost(check.origin)} role="title1" color={palette.text} />
+      {/* The full origin stays selectable (copy for support). */}
+      <Text variant="footnote" tone="secondary" selectable>
         {check.origin}
       </Text>
 
@@ -68,56 +69,42 @@ export function ConnectConfirm({
         <Text
           accessibilityRole="alert"
           testID="connect-notice"
-          style={[styles.notice, { color: notice.tone === 'error' ? palette.danger : palette.textSecondary }]}>
+          variant="subheadline"
+          tone={notice.tone === 'error' ? 'danger' : 'secondary'}>
           {notice.text}
         </Text>
       ) : null}
 
       {check.kind === 'failed' && check.canonicalOrigin ? (
-        <Pressable
-          accessibilityRole="button"
+        <Button
+          variant="tonal"
+          title={`Use ${displayHost(check.canonicalOrigin)}`}
           onPress={() => onUseCanonical(check.canonicalOrigin!)}
-          style={[styles.button, styles.outline, { borderColor: palette.accent }]}>
-          <Text style={[styles.buttonText, { color: palette.accent }]}>
-            Use {displayHost(check.canonicalOrigin)}
-          </Text>
-        </Pressable>
+        />
       ) : null}
 
       {check.kind === 'confirm' && check.assessment.kind === 'upgrade_required' ? (
-        <Pressable
-          accessibilityRole="button"
-          onPress={() => void Linking.openURL(identity.webUrl)}
-          style={[styles.button, { backgroundColor: palette.accent }]}>
-          <Text style={[styles.buttonText, { color: palette.onAccent }]}>Get the update</Text>
-        </Pressable>
+        <Button title="Get the update" onPress={() => void Linking.openURL(identity.webUrl)} />
       ) : null}
 
       {allowed ? (
-        <Pressable
-          accessibilityRole="button"
-          testID="connect-confirm"
-          disabled={busy}
-          accessibilityState={{ disabled: busy, busy }}
-          onPress={onConfirm}
-          style={[styles.button, { backgroundColor: palette.accent, opacity: busy ? 0.6 : 1 }]}>
-          <Text style={[styles.buttonText, { color: palette.onAccent }]}>Connect</Text>
-        </Pressable>
+        <Button testID="connect-confirm" title="Connect" loading={busy} onPress={onConfirm} />
       ) : null}
 
-      <Pressable accessibilityRole="button" onPress={onBack} style={styles.linkButton}>
-        <Text style={[styles.link, { color: palette.accent }]}>Use a different address</Text>
-      </Pressable>
+      <Button title="Use a different address" variant="plain" onPress={onBack} />
     </View>
   );
 }
 
 function Row({ label, value }: { label: string; value: string }) {
-  const palette = usePalette();
   return (
     <View style={styles.row}>
-      <Text style={[styles.label, { color: palette.textSecondary }]}>{label}</Text>
-      <Text style={[styles.value, { color: palette.text }]}>{value}</Text>
+      <Text variant="subheadline" tone="secondary" emphasized>
+        {label}
+      </Text>
+      <Text variant="subheadline" style={styles.value}>
+        {value}
+      </Text>
     </View>
   );
 }
@@ -177,18 +164,8 @@ export function noticeFor(
 const styles = StyleSheet.create({
   container: { gap: Spacing.three },
   brand: { alignItems: 'center', gap: Spacing.two, marginTop: Spacing.four },
-  brandName: { fontSize: 18, fontWeight: '700' },
-  caption: { fontSize: 15, marginTop: Spacing.four },
-  host: { fontSize: 30, fontWeight: '800' },
-  origin: { fontSize: 13 },
-  card: { borderRadius: 12, padding: Spacing.three, gap: Spacing.two },
+  caption: { marginTop: Spacing.four },
+  card: { borderRadius: 16, borderCurve: 'continuous', padding: Spacing.three, gap: Spacing.two },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: Spacing.three },
-  label: { fontSize: 14, fontWeight: '600' },
-  value: { fontSize: 14, flexShrink: 1, textAlign: 'right' },
-  notice: { fontSize: 15, lineHeight: 21 },
-  button: { borderRadius: 10, paddingVertical: Spacing.three - 2, alignItems: 'center' },
-  outline: { borderWidth: 1.5 },
-  buttonText: { fontSize: 16, fontWeight: '600' },
-  linkButton: { alignItems: 'center', paddingVertical: Spacing.two },
-  link: { fontSize: 15 },
+  value: { flexShrink: 1, textAlign: 'right' },
 });

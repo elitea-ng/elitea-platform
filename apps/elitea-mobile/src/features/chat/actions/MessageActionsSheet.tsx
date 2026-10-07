@@ -21,6 +21,7 @@ import { codeBlockLabel, type ActionPlan, type MessageActionKey } from '@/featur
 import type { ChatMessage } from '@/features/chat/messageModel';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
 import { useShareOut } from '@/security/policy';
+import { ramp } from '@/ui';
 
 export interface MessageActionsSheetProps {
   /** The message the sheet acts on; null hides it. */
@@ -213,7 +214,7 @@ function SheetBody({ message, plan, projectId, onClose, onReadAloud, onRegenerat
               multiline
               autoFocus
               maxFontSizeMultiplier={FONT_SCALE.input}
-              style={[styles.input, { color: palette.text, borderColor: palette.border, backgroundColor: palette.backgroundElement }]}
+              style={[styles.input, { color: palette.text, borderColor: palette.inputBorder, backgroundColor: palette.field }]}
             />
             <View style={styles.commentActions}>
               <Pressable accessibilityRole="button" onPress={() => setCommentFor(null)} hitSlop={8}>
@@ -272,16 +273,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: Spacing.three,
     gap: Spacing.two,
   },
-  title: { fontSize: 13, fontWeight: '600', textTransform: 'uppercase' },
-  note: { fontSize: 14 },
+  title: { ...ramp.footnote, fontWeight: '600', textTransform: 'uppercase' },
+  note: { ...ramp.subheadline },
   ratingRow: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
   rating: { borderWidth: 1, borderRadius: 18, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, minHeight: 44, justifyContent: 'center' },
-  ratingText: { fontSize: 15, fontWeight: '600' },
+  ratingText: { ...ramp.subheadline, fontWeight: '600' },
   comment: { gap: Spacing.one },
-  input: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, minHeight: 64, maxHeight: 140, padding: Spacing.two, fontSize: 15 },
+  input: { ...ramp.subheadline, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, minHeight: 64, maxHeight: 140, padding: Spacing.two },
   commentActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: Spacing.four },
-  link: { fontSize: 15, fontWeight: '600' },
+  link: { ...ramp.subheadline, fontWeight: '600' },
   row: { minHeight: 48, justifyContent: 'center', borderTopWidth: StyleSheet.hairlineWidth },
-  rowText: { fontSize: 16 },
+  rowText: { ...ramp.body },
   done: { fontWeight: '600', textAlign: 'center' },
 });

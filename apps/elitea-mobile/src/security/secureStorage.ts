@@ -60,7 +60,9 @@ export const REGISTERED_KEYS: readonly SecureKey[] = Object.freeze(Object.values
 
 /** Device-wide items (not part of any workspace). */
 export const DEVICE_KEYS = {
-  /** The workspace registry: `{v, active, ids}` (src/security/workspaceRegistry.ts). */
+  /** Settings → Appearance: `system`, `light` or `dark` (a device convenience, not workspace data). */
+  appearance: 'az.appearance',
+  /** The workspace registry: `{v, active, ids}` (src/security/workspaceRegistry.ts). Purged last. */
   workspaces: 'az.workspaces',
 } as const;
 

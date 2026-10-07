@@ -11,6 +11,7 @@ import { prettyJson, type ToolStep } from '@/features/chat/toolActivity';
 import { MONOSPACE_FONT } from '@/features/markdown/Markdown';
 import { useShareOut } from '@/security/policy';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
+import { ramp } from '@/ui';
 
 type Tab = 'input' | 'output';
 
@@ -135,16 +136,16 @@ function SheetBody({ step, projectId, onClose }: { step: ToolStep; projectId: nu
 const styles = StyleSheet.create({
   sheet: { flex: 1, padding: Spacing.three, gap: Spacing.two },
   header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  title: { flex: 1, fontSize: 17, fontWeight: '700' },
-  sub: { fontSize: 13 },
-  action: { fontSize: 16, fontWeight: '600' },
+  title: { ...ramp.headline, flex: 1, fontWeight: '700' },
+  sub: { ...ramp.footnote },
+  action: { ...ramp.headline, fontWeight: '600' },
   tabs: { flexDirection: 'row', borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, overflow: 'hidden' },
   tab: { flex: 1, alignItems: 'center', paddingVertical: Spacing.two },
-  tabText: { fontSize: 14 },
-  banner: { fontSize: 13, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, padding: Spacing.two },
+  tabText: { ...ramp.subheadline },
+  banner: { ...ramp.footnote, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, padding: Spacing.two },
   loading: { padding: Spacing.two },
   body: { flex: 1, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8 },
   bodyContent: { padding: Spacing.two },
-  code: { fontFamily: MONOSPACE_FONT, fontSize: 13, lineHeight: 18 },
+  code: { ...ramp.footnote, fontFamily: MONOSPACE_FONT },
   copy: { alignItems: 'center', paddingVertical: Spacing.two, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10 },
 });

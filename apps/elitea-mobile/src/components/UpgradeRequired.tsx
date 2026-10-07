@@ -10,6 +10,7 @@ import { getSession, useSession } from '@/state/session';
 import { beginAddWorkspace } from '@/state/workspace';
 import { useWorkspaceList } from '@/state/workspaceList';
 import { refreshWorkspaceInfo } from '@/state/workspaceInfo';
+import { ramp } from '@/ui';
 
 /**
  * Asks the workspace again whether this app version is accepted: re-reads the
@@ -116,6 +117,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   outline: { borderWidth: 1.5 },
-  buttonText: { fontSize: 16, fontWeight: '600' },
-  hint: { fontSize: 14, textAlign: 'center' },
+  buttonText: { ...ramp.headline, fontWeight: '600' },
+  hint: { ...ramp.subheadline, textAlign: 'center' },
 });

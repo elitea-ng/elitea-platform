@@ -6,6 +6,7 @@ import { usePalette } from '@/constants/use-palette';
 import { SafeRenderer } from '@/features/markdown/SafeRenderer';
 import { useShareOut } from '@/security/policy';
 import type { LinkOpener } from '@/features/markdown/links';
+import { ramp } from '@/ui';
 
 export interface MarkdownProps {
   value: string;
@@ -45,7 +46,7 @@ export function Markdown({ value, streaming = false, throttleMs = 50, openLink }
   const shown = useThrottled(value, throttleMs, streaming);
   const selectable = useShareOut();
   const renderer = useMemo(
-    () => new SafeRenderer({ openLink, chipStyle: { color: palette.accent, fontSize: 14 }, selectable }),
+    () => new SafeRenderer({ openLink, chipStyle: { ...ramp.subheadline, color: palette.accent }, selectable }),
     [openLink, palette.accent, selectable],
   );
   const nodes = useMarkdown(shown, {

@@ -1,20 +1,17 @@
-import { Link } from 'expo-router';
+import { router } from 'expo-router';
 import { useEffect } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import { FONT_SCALE } from '@/constants/typeScale';
 
 import { useInvalidateNotifications, useUnseenCount } from '@/api/queries/notifications';
-import { usePalette } from '@/constants/use-palette';
 import { openNotificationsStream } from '@/features/notifications/notificationStream';
 import { useSession } from '@/state/session';
+import type { HeaderAction } from '@/ui';
 
 /**
- * Header bell with the unseen count. While mounted it holds the project's
- * notifications stream (paused in the background by the stream itself) and
- * refreshes the count when a notification arrives.
+ * The unseen-notification count of the active project. While mounted it holds the project's
+ * notifications stream (paused in the background by the stream itself) and refreshes the
+ * count when a notification arrives. Mount it once, where the bell is shown.
  */
-export function NotificationBell() {
-  const palette = usePalette();
+export function useNotificationCount(): number {
   const projectId = useSession((s) => s.projectId);
   const origin = useSession((s) => s.serverOrigin);
   const unseen = useUnseenCount(projectId);
@@ -28,37 +25,25 @@ export function NotificationBell() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, origin]);
 
-  const count = unseen.data ?? 0;
-  const label = count > 99 ? '99+' : String(count);
-  return (
-    <Link
-      href="/notifications"
-      accessibilityLabel={count > 0 ? `Notifications, ${count} unread` : 'Notifications'}>
-      <View style={styles.wrap}>
-        <Text maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.bell, { color: palette.accent }]}>🔔</Text>
-        {count > 0 ? (
-          <View style={[styles.badge, { backgroundColor: palette.danger }]}>
-            <Text maxFontSizeMultiplier={FONT_SCALE.chrome} style={styles.badgeText}>{label}</Text>
-          </View>
-        ) : null}
-      </View>
-    </Link>
-  );
+  return unseen.data ?? 0;
 }
 
-const styles = StyleSheet.create({
-  wrap: { paddingHorizontal: 2 },
-  bell: { fontSize: 18 },
-  badge: {
-    position: 'absolute',
-    top: -6,
-    right: -10,
-    minWidth: 18,
-    height: 18,
-    borderRadius: 9,
-    paddingHorizontal: 4,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  badgeText: { color: '#ffffff', fontSize: 11, fontWeight: '700' },
-});
+export function notificationsLabel(count: number): string {
+  return count > 0 ? `Notifications, ${count} unread` : 'Notifications';
+}
+
+/**
+ * The bell as a navigation-bar action (`headerActionOptions`): an SF Symbol bar button with the
+ * system badge on iOS 26 (inside the Liquid Glass group, never clipped), a 48 dp top-app-bar
+ * icon with an in-frame badge on Android.
+ */
+export function notificationBellAction(count: number): HeaderAction {
+  return {
+    id: 'notifications',
+    icon: 'bell',
+    label: 'Notifications',
+    accessibilityLabel: notificationsLabel(count),
+    badge: count,
+    onPress: () => router.push('/notifications'),
+  };
+}

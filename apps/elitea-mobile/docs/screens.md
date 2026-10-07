@@ -244,9 +244,10 @@ G ──────────────────────────
 - **States:** the thinking indicator (mascot bust and dots), streaming (caret), error
   (inline `dangerSoft` row "Couldn't get a reply · Retry"), offline outbox messages
   (clock glyph and "Waiting to send"), and paused tool calls (approval card).
-- **Android:** predictive back stays disabled for now (`predictiveBackGestureEnabled:
-  false`, existing). Revisit once the navigation library's predictive-back support is
-  verified. The system back closes sheets first, then pops.
+- **Android:** predictive back is on (`predictiveBackGestureEnabled: true`, app shell
+  redesign): Android 16 shows the system back preview. The system back closes sheets first,
+  then pops. The composer rides the IME insets under edge-to-edge
+  (`react-native-keyboard-controller`).
 - **Dark:** user bubbles are `#5B2541` with white text, and agent bubbles `#221F28` with
   no border.
 

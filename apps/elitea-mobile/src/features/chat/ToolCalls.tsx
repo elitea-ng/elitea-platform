@@ -5,6 +5,8 @@ import { Spacing } from '@/constants/theme';
 import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
 import type { ToolStep } from '@/features/chat/toolActivity';
+import { useDesign } from '@/design/DesignProvider';
+import { Icon, ramp, type IconName } from '@/ui';
 
 /**
  * The tool calls of one answer, under its bubble: a collapsed row
@@ -31,7 +33,13 @@ const STATUS_WORD: Record<ToolStep['status'], string> = {
   waiting: 'waiting for approval',
 };
 
-const STATUS_MARK: Record<ToolStep['status'], string> = { running: '', done: '✓', error: '✗', needs_auth: '!', waiting: '⏸' };
+/** The status symbol of a finished or waiting step; a running one shows a spinner. Never colour alone: the label says it too. */
+const STATUS_ICON: Record<Exclude<ToolStep['status'], 'running'>, IconName> = {
+  done: 'checkCircle',
+  error: 'errorCircle',
+  needs_auth: 'warning',
+  waiting: 'pauseCircle',
+};
 
 /** A step's status in words: a paused call says what it waits for. */
 export function statusWord(step: Pick<ToolStep, 'status' | 'waitingFor'>): string {
@@ -81,6 +89,7 @@ export function ToolActivity({
   onOpen: (step: ToolStep) => void;
 }) {
   const palette = usePalette();
+  const design = useDesign();
   const [expanded, setExpanded] = useState(false);
   if (steps.length === 0) return null;
   const open = expanded || streaming;
@@ -93,10 +102,13 @@ export function ToolActivity({
         accessibilityState={{ expanded: open }}
         accessibilityHint={open ? 'Hides the tool calls' : 'Shows the tool calls'}
         disabled={streaming}
-        onPress={() => setExpanded((v) => !v)}>
+        onPress={() => setExpanded((v) => !v)}
+        hitSlop={8}
+        style={styles.summaryRow}>
         <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.summary, { color: palette.textSecondary }]}>
-          {summary} {streaming ? '' : open ? '▾' : '›'}
+          {summary}
         </Text>
+        {streaming ? null : <Icon name={open ? 'chevronDown' : 'chevronRight'} size={12} color={palette.textSecondary} weight="semibold" />}
       </Pressable>
       {open
         ? groupByAgent(steps).map((group) => (
@@ -127,13 +139,11 @@ export function ToolActivity({
                     {step.status === 'running' ? (
                       <ActivityIndicator size="small" color={palette.accent} />
                     ) : (
-                      <Text maxFontSizeMultiplier={FONT_SCALE.control}
-                        style={[
-                          styles.mark,
-                          { color: step.status === 'error' || step.status === 'needs_auth' ? palette.danger : palette.accent },
-                        ]}>
-                        {STATUS_MARK[step.status]}
-                      </Text>
+                      <Icon
+                        name={STATUS_ICON[step.status]}
+                        size={14}
+                        color={step.status === 'error' || step.status === 'needs_auth' ? palette.danger : step.status === 'done' ? design.colors.success : palette.accent}
+                      />
                     )}
                   </Pressable>
                 ))}
@@ -147,9 +157,9 @@ export function ToolActivity({
 
 const styles = StyleSheet.create({
   box: { gap: Spacing.one, marginTop: Spacing.one },
-  summary: { fontSize: 13, fontWeight: '500' },
+  summary: { ...ramp.footnote, fontWeight: '500' },
   group: { gap: 2 },
-  agent: { fontSize: 12, fontWeight: '600' },
+  agent: { ...ramp.caption, fontWeight: '600' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.one },
   chip: {
     flexDirection: 'row',
@@ -158,9 +168,10 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 12,
     paddingHorizontal: Spacing.two,
-    paddingVertical: 3,
+    paddingVertical: 6,
+    minHeight: 32,
     maxWidth: 260,
   },
-  chipText: { fontSize: 12, flexShrink: 1 },
-  mark: { fontSize: 12, fontWeight: '700' },
+  chipText: { ...ramp.caption, flexShrink: 1 },
+  summaryRow: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 28 },
 });

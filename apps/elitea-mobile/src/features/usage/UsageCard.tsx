@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { totalsLine, usageLine, useUsage, type UsageSummary } from '@/api/queries/usage';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
+import { ramp } from '@/ui';
 
 /**
  * Settings > Usage: this month's spend against the budget, for the caller
@@ -56,12 +57,12 @@ export function UsageCard({ projectId }: { projectId: number }) {
 
 const styles = StyleSheet.create({
   card: { borderRadius: 12, padding: Spacing.three, gap: Spacing.two },
-  label: { fontSize: 13, fontWeight: '600' },
+  label: { ...ramp.footnote, fontWeight: '600' },
   row: { gap: Spacing.one },
   line: { flexDirection: 'row', gap: Spacing.two },
   right: { flex: 1, textAlign: 'right' },
-  value: { fontSize: 16 },
-  small: { fontSize: 13 },
+  value: { ...ramp.body },
+  small: { ...ramp.footnote },
   track: { height: 6, borderRadius: 3, overflow: 'hidden' },
   fill: { height: 6, borderRadius: 3 },
 });

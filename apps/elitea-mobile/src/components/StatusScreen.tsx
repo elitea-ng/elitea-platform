@@ -4,6 +4,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { useBrandFontFamily } from '@/theme/brandFonts';
+import { ramp } from '@/ui';
 
 /** Full-screen neutral state: launch, "Signing out…", blocking notices. */
 export function StatusScreen({
@@ -38,6 +39,6 @@ export function StatusScreen({
 const styles = StyleSheet.create({
   container: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.four },
   content: { width: '100%', maxWidth: MaxContentWidth, gap: Spacing.three, alignItems: 'center' },
-  title: { fontSize: 22, fontWeight: '700', textAlign: 'center' },
-  body: { fontSize: 16, lineHeight: 22, textAlign: 'center' },
+  title: { ...ramp.title2, fontWeight: '700', textAlign: 'center' },
+  body: { ...ramp.body, textAlign: 'center' },
 });

@@ -4,6 +4,7 @@ import { AppState, Platform, StyleSheet, Text, View } from 'react-native';
 import { identity } from '@/config/identity';
 import { usePalette } from '@/constants/use-palette';
 import { coverVisible } from '@/security/privacy/privacyProtection';
+import { ramp } from '@/ui';
 
 /**
  * Opaque branded cover shown whenever the app is not active ('inactive' on
@@ -33,5 +34,5 @@ export function PrivacyCover() {
 
 const styles = StyleSheet.create({
   cover: { alignItems: 'center', justifyContent: 'center', zIndex: 2000, elevation: 2000 },
-  name: { fontSize: 20, fontWeight: '600' },
+  name: { ...ramp.title3, fontWeight: '600' },
 });

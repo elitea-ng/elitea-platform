@@ -4,6 +4,7 @@ import { AccessibilityInfo, Platform, useColorScheme, useWindowDimensions } from
 import { useBrandFontFamily } from '@/theme/brandFonts';
 import { useBrandTheme } from '@/theme/brandStore';
 
+import type { BrandInput } from './brand';
 import {
   brandInputFrom,
   DEFAULT_A11Y,
@@ -101,27 +102,42 @@ export function useAccessibilityModifiers(): AccessibilityModifiers {
   return useMemo(() => ({ ...current, fontScale: fontScale || 1 }), [current, fontScale]);
 }
 
-function useResolvedDesign(preference: SchemePreference, a11y: AccessibilityModifiers): Design {
+function useResolvedDesign(preference: SchemePreference, a11y: AccessibilityModifiers, brandOverride?: BrandInput | null): Design {
   const system = useColorScheme();
   const brand = useBrandTheme();
   const brandFont = useBrandFontFamily() ?? null;
   const scheme = schemeFor(preference, system);
+  const brandInput = useMemo(() => (brandOverride !== undefined ? brandOverride : brandInputFrom(brand)), [brandOverride, brand]);
   return useMemo(
     () =>
       resolveDesign({
         scheme,
         platform: Platform.OS === 'ios' ? 'ios' : 'android',
-        brand: brandInputFrom(brand),
-        brandFont,
+        brand: brandInput,
+        brandFont: brandOverride !== undefined ? null : brandFont,
         a11y,
       }),
-    [scheme, brand, brandFont, a11y],
+    [scheme, brandInput, brandFont, brandOverride, a11y],
   );
 }
 
-export function DesignProvider({ scheme = 'system', children }: { scheme?: SchemePreference; children: ReactNode }) {
+/**
+ * Provides the design to a subtree. The app root mounts one with the system scheme (Settings →
+ * Appearance applies its choice through `Appearance.setColorScheme`, src/state/appearance.ts).
+ * `scheme` forces a scheme for a subtree; `brand` replaces the workspace brand for a subtree
+ * (`null`: unbranded Zefir), which the design gallery uses to show a branded preview.
+ */
+export function DesignProvider({
+  scheme = 'system',
+  brand,
+  children,
+}: {
+  scheme?: SchemePreference;
+  brand?: BrandInput | null;
+  children: ReactNode;
+}) {
   const a11y = useAccessibilityModifiers();
-  const design = useResolvedDesign(scheme, a11y);
+  const design = useResolvedDesign(scheme, a11y, brand);
   return <DesignContext.Provider value={design}>{children}</DesignContext.Provider>;
 }
 

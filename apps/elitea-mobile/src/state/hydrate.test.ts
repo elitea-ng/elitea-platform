@@ -12,8 +12,9 @@ import * as AppIntentsMock from 'expo-app-intents';
 import { __resetAgentCatalogForTests } from '@/features/intents/agentCatalog';
 import { __setWidgetSinkForTests } from '@/features/surfaces/surfaceWriter';
 
+import { getSchemePreference, resetSchemePreferenceForTests } from '@/state/appearance';
 import { __resetHydrateForTests, hydrateSession } from '@/state/hydrate';
-import { __resetSessionForTests, getBearerToken, getSession } from '@/state/session';
+import { __resetSessionForTests, getBearerToken, getSession, subscribeSession } from '@/state/session';
 import { TEST_WORKSPACE, registryValue, wsKey, type FakeSecureStore } from '@/test/fakeSecureStore';
 
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
@@ -67,6 +68,7 @@ const left = (id = TEST_WORKSPACE) => [...fake.values.keys()].filter((k) => k.st
 
 beforeEach(() => {
   __resetSessionForTests();
+  resetSchemePreferenceForTests();
   __resetRegistryForTests();
   bindWorkspace(null);
   __resetHydrateForTests();
@@ -211,6 +213,36 @@ describe('hydrateSession', () => {
     // No workspace item is read (the switcher may read the empty registry).
     expect(fake.getItemAsync.mock.calls.filter((c) => c[0].startsWith('az.ws.'))).toEqual([]);
     expect(getSession()).toMatchObject({ hydrated: true, serverOrigin: null });
+  });
+
+  // F7: the stored appearance used to be read at module load, racing the fresh-install purge.
+  describe('Settings → Appearance at launch', () => {
+    it('is applied before the session reads as hydrated (the splash waits for it)', async () => {
+      fake.values.set(DEVICE_KEYS.appearance, 'dark');
+      let atHydrated: string | null = null;
+      const stop = subscribeSession(() => {
+        if (getSession().hydrated && atHydrated === null) atHydrated = getSchemePreference();
+      });
+      await hydrateSession({ devSignIn: true });
+      stop();
+      expect(atHydrated).toBe('dark');
+    });
+
+    it("a reinstall never applies the previous install's choice (read after the purge)", async () => {
+      // The Keychain outlived the uninstall: the purge deletes the old choice.
+      fake.values.set(DEVICE_KEYS.appearance, 'dark');
+      checkFreshInstall.mockImplementation(async () => {
+        fake.values.delete(DEVICE_KEYS.appearance);
+        return { fresh: true, purgeIncomplete: false };
+      });
+      await hydrateSession({ devSignIn: true });
+      expect(getSchemePreference()).toBe('system');
+      const appearanceReads = fake.getItemAsync.mock.invocationCallOrder.filter(
+        (_order, i) => fake.getItemAsync.mock.calls[i][0] === DEVICE_KEYS.appearance,
+      );
+      expect(appearanceReads.length).toBeGreaterThan(0);
+      expect(Math.min(...appearanceReads)).toBeGreaterThan(checkFreshInstall.mock.invocationCallOrder[0]);
+    });
   });
 
   it('restores a native sign-in and the workspace policy before the lock decision', async () => {

@@ -15,6 +15,7 @@ import { usePalette } from '@/constants/use-palette';
 import { useModalAnimation } from '@/features/a11y/motion';
 import { participantName, participantUserId } from '@/features/chat/messageModel';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
+import { ramp } from '@/ui';
 
 const KIND_LABEL: Record<string, string> = {
   user: 'Person',
@@ -173,7 +174,7 @@ function SheetBody({ onClose, projectId, conversationId, participants, selfUserI
             autoFocus
             value={query}
             onChangeText={setQuery}
-            style={[styles.search, { color: palette.text, borderColor: palette.border }]}
+            style={[styles.search, { color: palette.text, borderColor: palette.inputBorder }]}
           />
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.list}>
             {mode === 'people'
@@ -227,14 +228,14 @@ function SheetBody({ onClose, projectId, conversationId, participants, selfUserI
 const styles = StyleSheet.create({
   sheet: { flex: 1, padding: Spacing.three, gap: Spacing.two },
   header: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
-  title: { flex: 1, fontSize: 17, fontWeight: '700' },
-  action: { fontSize: 16, fontWeight: '600' },
-  note: { fontSize: 14 },
+  title: { ...ramp.headline, flex: 1, fontWeight: '700' },
+  action: { ...ramp.headline, fontWeight: '600' },
+  note: { ...ramp.subheadline },
   list: { gap: 0, paddingBottom: Spacing.four },
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: Spacing.two + 2, borderBottomWidth: StyleSheet.hairlineWidth, gap: Spacing.two },
   texts: { flex: 1 },
-  name: { fontSize: 16 },
-  kind: { fontSize: 13 },
+  name: { ...ramp.body },
+  kind: { ...ramp.footnote },
   adds: { flexDirection: 'row', gap: Spacing.four, paddingTop: Spacing.three },
-  search: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: Spacing.two, paddingVertical: Spacing.two, fontSize: 16 },
+  search: { ...ramp.body, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, paddingHorizontal: Spacing.two, paddingVertical: Spacing.two },
 });

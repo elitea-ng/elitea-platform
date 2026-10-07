@@ -6,6 +6,7 @@ import { displayHost } from '@/features/connect/connectFlow';
 import { WorkspaceMark } from '@/features/workspaces/WorkspaceMark';
 import { useSession } from '@/state/session';
 import { useBrandTheme } from '@/theme/brandStore';
+import { Icon, ramp } from '@/ui';
 
 /**
  * Header title of every signed-in screen: the screen title over the ACTIVE
@@ -32,8 +33,9 @@ export function WorkspaceTitle({ title }: { title: string }) {
       <View style={styles.hostRow}>
         <WorkspaceMark origin={origin} image={brand?.origin === origin ? (brand.logoMark ?? null) : null} size={14} />
         <Text numberOfLines={1} style={[styles.host, { color: palette.textSecondary }]}>
-          {host} ▾
+          {host}
         </Text>
+        <Icon name="chevronDown" size={10} color={palette.textSecondary} weight="semibold" />
       </View>
     </Pressable>
   );
@@ -41,7 +43,7 @@ export function WorkspaceTitle({ title }: { title: string }) {
 
 const styles = StyleSheet.create({
   box: { alignItems: 'center', maxWidth: 220 },
-  title: { fontSize: 17, fontWeight: '600' },
+  title: { ...ramp.headline, fontWeight: '600' },
   hostRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  host: { fontSize: 12 },
+  host: { ...ramp.caption },
 });

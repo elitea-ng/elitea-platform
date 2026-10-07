@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useKeyboardState } from 'react-native-keyboard-controller';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Spacing } from '@/constants/theme';
 import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
+import { GlassSurface, haptic, hitSlopFor, Icon, ramp, uiPlatform } from '@/ui';
 import {
   EVERYONE,
   deriveMentions,
@@ -121,6 +124,12 @@ export function Composer({
   initialText = null,
 }: ComposerProps) {
   const palette = usePalette();
+  const design = useDesign();
+  // Off the keyboard, the bar keeps clear of the home indicator / Android gesture bar
+  // (edge-to-edge, audit 2.11 S1); on the keyboard it sits right on top of it.
+  const insets = useSafeAreaInsets();
+  const keyboardUp = useKeyboardState((state) => state.isVisible);
+  const bottomInset = keyboardUp ? design.space[2] : Math.max(insets.bottom, design.space[2]);
   const [text, setText] = useState(initialText ?? '');
   const [selection, setSelection] = useState<Selection>({ start: 0, end: 0 });
   /** Set once after a pick to move the caret; released on the next selection event. */
@@ -152,7 +161,7 @@ export function Composer({
 
   if (disabledReason) {
     return (
-      <View style={[styles.bar, { borderTopColor: palette.border, backgroundColor: palette.background }]}>
+      <View style={[styles.bar, { backgroundColor: palette.background, paddingBottom: bottomInset }]}>
         <Text style={[styles.notice, { color: palette.textSecondary }]}>{disabledReason}</Text>
       </View>
     );
@@ -187,6 +196,7 @@ export function Composer({
   };
   const submit = () => {
     if (!canSend) return;
+    haptic('send');
     const sent = text;
     const mentions = people.length > 0 ? deriveMentions(sent, people, { everyone: true }) : null;
     const result = onSend({ text: sent, mentions });
@@ -246,7 +256,7 @@ export function Composer({
       : (externalSuggestions ?? { items: [], loading: true });
 
   return (
-    <View style={[styles.bar, { borderTopColor: palette.border, backgroundColor: palette.background }]}>
+    <View style={[styles.bar, { backgroundColor: palette.background, paddingBottom: bottomInset }]}>
       {stripState ? (
         <SuggestionStrip
           state={picking ? { ...stripState, loading: true } : stripState}
@@ -260,7 +270,7 @@ export function Composer({
           {error}
         </Text>
       ) : null}
-      <View style={styles.row}>
+      <GlassSurface radius={design.radius.composer} interactive floating style={styles.row}>
         {leading}
         {dictation ? (
           <DictationButton
@@ -296,14 +306,11 @@ export function Composer({
             setForcedSelection(undefined);
           }}
           placeholder="Message"
-          placeholderTextColor={palette.textSecondary}
+          placeholderTextColor={design.colors.textTertiary}
           multiline
           maxFontSizeMultiplier={FONT_SCALE.input}
           accessibilityLabel="Message"
-          style={[
-            styles.input,
-            { color: palette.text, backgroundColor: palette.backgroundElement, borderColor: palette.border },
-          ]}
+          style={[styles.input, { color: palette.text }]}
         />
         {showStop ? (
           <Pressable
@@ -312,10 +319,13 @@ export function Composer({
             accessibilityState={{ disabled: stopping, busy: stopping }}
             disabled={stopping}
             onPress={stop}
-            style={[styles.send, { backgroundColor: palette.danger, opacity: stopping ? 0.5 : 1 }]}>
-            <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.sendText, { color: palette.onAccent }]}>
-              {stopping ? 'Stopping…' : 'Stop'}
-            </Text>
+            hitSlop={hitSlopFor(SEND_SIZE)}
+            android_ripple={{ color: design.colors.surface, borderless: true }}
+            style={({ pressed }) => [
+              styles.send,
+              { backgroundColor: design.colors.textPrimary, opacity: stopping ? 0.38 : pressed && uiPlatform === 'ios' ? 0.7 : 1 },
+            ]}>
+            <Icon name="stop" size={16} color={design.colors.background} />
           </Pressable>
         ) : (
           <Pressable
@@ -324,35 +334,38 @@ export function Composer({
             accessibilityState={{ disabled: !canSend, busy }}
             disabled={!canSend}
             onPress={submit}
-            style={[styles.send, { backgroundColor: palette.accent, opacity: canSend ? 1 : 0.4 }]}>
-            <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.sendText, { color: palette.onAccent }]}>
-              Send
-            </Text>
+            hitSlop={hitSlopFor(SEND_SIZE)}
+            android_ripple={{ color: design.colors.accentPressed, borderless: true }}
+            style={({ pressed }) => [
+              styles.send,
+              { backgroundColor: pressed && uiPlatform === 'ios' ? design.colors.accentPressed : design.colors.accent, opacity: canSend ? 1 : 0.38 },
+            ]}>
+            <Icon name="send" size={18} color={design.colors.accentOn} weight="bold" />
           </Pressable>
         )}
-      </View>
+      </GlassSurface>
       {hint ? <Text style={[styles.hint, { color: palette.textSecondary }]}>{hint}</Text> : null}
     </View>
   );
 }
 
+/** The send / stop circle (§4.5): 36 pt visual, grown to the 44/48 touch target. */
+const SEND_SIZE = 36;
+
 const styles = StyleSheet.create({
-  bar: { borderTopWidth: StyleSheet.hairlineWidth, padding: Spacing.two, gap: Spacing.one },
-  row: { flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.two },
+  bar: { paddingHorizontal: 12, paddingTop: 8, gap: 4 },
+  row: { flexDirection: 'row', alignItems: 'flex-end', gap: 4, minHeight: 52, paddingHorizontal: 8, paddingVertical: 8 },
   input: {
+    ...ramp.body,
     flex: 1,
-    minHeight: 40,
+    minHeight: 36,
     maxHeight: 140,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 18,
-    paddingHorizontal: Spacing.three - 4,
-    paddingTop: Spacing.two,
-    paddingBottom: Spacing.two,
-    fontSize: 16,
+    paddingHorizontal: 8,
+    paddingTop: 7,
+    paddingBottom: 7,
   },
-  send: { borderRadius: 18, paddingHorizontal: Spacing.three, height: 40, justifyContent: 'center' },
-  sendText: { fontSize: 15, fontWeight: '600' },
-  notice: { fontSize: 14, textAlign: 'center', padding: Spacing.two },
-  error: { fontSize: 13 },
-  hint: { fontSize: 12 },
+  send: { width: SEND_SIZE, height: SEND_SIZE, borderRadius: SEND_SIZE / 2, alignItems: 'center', justifyContent: 'center' },
+  notice: { ...ramp.footnote, textAlign: 'center', padding: 8 },
+  error: { ...ramp.footnote },
+  hint: { ...ramp.caption },
 });

@@ -12,6 +12,7 @@ import { resumePendingWipes, wipeStoredWorkspace } from '@/security/endSession';
 import { checkFreshInstall } from '@/security/freshInstall';
 import { SECURE_KEYS, bindWorkspace, deleteSecureItem, getSecureItem } from '@/security/secureStorage';
 import { migrateLegacyLayout, readRegistry } from '@/security/workspaceRegistry';
+import { hydrateSchemePreference } from '@/state/appearance';
 import { restoreSelfIdentity } from '@/state/selfIdentity';
 import { getSession, setCredential, setSession } from '@/state/session';
 import { refreshWorkspaceList } from '@/state/workspaceList';
@@ -35,7 +36,9 @@ import { restoreBrandTheme } from '@/theme/brandStore';
  *   4. bind the registry's active workspace and read its origin, credential
  *      and selected project (`restoreWorkspace`, also used by a switch);
  *   5. no workspace signed in: clear the home-screen quick actions the OS
- *      kept from the previous run (a wipe resumed after a kill).
+ *      kept from the previous run (a wipe resumed after a kill);
+ *   6. the device's Settings → Appearance choice (after the purge of step 1,
+ *      before `hydrated`).
  *
  * Secure items are `WHEN_UNLOCKED_THIS_DEVICE_ONLY`: reading them fails while
  * the device is locked. A read ERROR is therefore "try again when the app is
@@ -65,6 +68,10 @@ export function hydrateSession(options: HydrateOptions = {}): Promise<void> {
         await nextActive(options.appState ?? AppState);
       }
     }
+    // Settings → Appearance, read AFTER the fresh-install purge (a reinstall must not apply the
+    // previous install's choice and then delete it) and before `hydrated`, so the splash screen
+    // stays up until the scheme is applied and the first screen does not flip (F7).
+    await hydrateSchemePreference();
     if (!getSession().hydrated) setSession({ hydrated: true });
     // The OS kept the previous run's quick actions; only the signed-in layout
     // rebuilds them, so a launch that restores no signed-in workspace (a

@@ -71,7 +71,14 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       backgroundImage: './assets/images/android-icon-background.png',
       monochromeImage: './assets/images/android-icon-monochrome.png',
     },
-    predictiveBackGestureEnabled: false,
+    // Android 16 (API 36) turns the predictive-back system animations on for apps that target
+    // it; the app opts in (audit §3 S1). Back is handled through OnBackPressedDispatcher only:
+    // react-native-screens pops stacks and dismisses sheets, RN Modal's onRequestClose closes
+    // the LockAwareModal sheets. Edge-to-edge is always on (SDK 58 / API 36 cannot opt out):
+    // every screen pads by the safe-area insets, the composer rides the IME insets
+    // (react-native-keyboard-controller) and the navigation bar is transparent.
+    predictiveBackGestureEnabled: true,
+    softwareKeyboardLayoutMode: 'resize',
   },
   web: {
     output: 'static',

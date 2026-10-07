@@ -1,6 +1,7 @@
 import { StyleSheet, Text, View } from 'react-native';
 
 import { usePalette } from '@/constants/use-palette';
+import { monogramStyle } from '@/ui';
 import { displayHost } from '@/features/connect/connectFlow';
 import { BrandLogo } from '@/theme/BrandLogo';
 import type { BrandImage } from '@/theme/brandPack';
@@ -31,7 +32,7 @@ function Initial({ origin, size }: { origin: string; size: number }) {
         styles.center,
         { width: size, height: size, borderRadius: size / 4, backgroundColor: palette.backgroundElement },
       ]}>
-      <Text style={{ color: palette.textSecondary, fontSize: size * 0.5, fontWeight: '700' }}>{letter}</Text>
+      <Text maxFontSizeMultiplier={1} style={[monogramStyle(size, 0.5), { color: palette.textSecondary, fontWeight: '700' }]}>{letter}</Text>
     </View>
   );
 }

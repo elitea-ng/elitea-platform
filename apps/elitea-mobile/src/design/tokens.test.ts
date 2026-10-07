@@ -58,6 +58,13 @@ describe('WCAG proofs (docs/design-system.md §2.1)', () => {
     expect(proofRatio(colors[scheme], fg, bg)).toBeGreaterThanOrEqual(bar);
   });
 
+  // The iOS 26 native tab bar and bar-button badges ignore the requested text colour and draw a
+  // white numeral (src/ui/tabs.ts, src/ui/header.tsx), so the badge fill must pass with white.
+  it.each(SCHEMES)('%s: the badge passes 4.5:1 with the white numeral the native badges draw', (scheme) => {
+    expect(colors[scheme].badgeText).toBe('#FFFFFF');
+    expect(proofRatio({ ...colors[scheme], badgeText: '#FFFFFF' }, 'badgeText', 'badge')).toBeGreaterThanOrEqual(4.5);
+  });
+
   // Spot checks against the published table, so the proof code itself is checked too.
   it.each([
     ['light', 'textPrimary', 'background', 16.66],

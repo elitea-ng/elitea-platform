@@ -1,6 +1,7 @@
 import { NativeTabs } from 'expo-router/native-tabs';
 
-import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
+import { nativeTabsProps } from '@/ui';
 
 /**
  * The signed-in tab bar: Chats, Discover and Settings (docs/screens.md §0).
@@ -11,11 +12,12 @@ import { usePalette } from '@/constants/use-palette';
  * the workspace (below client contract 1.3) does not offer it.
  * A thread, an agent page and the sheets are pushed on the stack above the
  * tabs, so the tab bar is not shown there.
+ * The bar's look (Liquid Glass on iOS 26, M3 navigation bar on Android) is `nativeTabsProps`.
  */
 export default function TabsLayout() {
-  const palette = usePalette();
+  const { colors } = useDesign();
   return (
-    <NativeTabs tintColor={palette.accent}>
+    <NativeTabs {...nativeTabsProps(colors)}>
       <NativeTabs.Trigger name="(chats)">
         <NativeTabs.Trigger.Label>Chats</NativeTabs.Trigger.Label>
         <NativeTabs.Trigger.Icon sf={{ default: 'bubble.left.and.bubble.right', selected: 'bubble.left.and.bubble.right.fill' }} md="forum" />

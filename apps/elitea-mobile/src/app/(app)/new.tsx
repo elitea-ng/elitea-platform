@@ -18,6 +18,7 @@ import { useSession } from '@/state/session';
 import { useLockCovers } from '@/security/lock/useLockController';
 import { markAgentStarted, readHandoff } from '@/features/intents/intentHandoff';
 import { MAX_PREFILL } from '@/features/intents/intentRouter';
+import { ramp } from '@/ui';
 
 type Choice = { kind: 'agent'; key: string; agent: Agent } | { kind: 'model'; key: string; model: ChatModel };
 
@@ -111,7 +112,7 @@ export default function NewConversationScreen() {
         placeholderTextColor={palette.textSecondary}
         autoCorrect={false}
         accessibilityLabel="Search agents and models"
-        style={[styles.search, { color: palette.text, backgroundColor: palette.backgroundElement }]}
+        style={[styles.search, { color: palette.text, backgroundColor: palette.field }]}
       />
       {error ? (
         <Text accessibilityRole="alert" style={[styles.error, { color: palette.danger }]}>
@@ -211,15 +212,15 @@ export default function NewConversationScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
-  search: { margin: Spacing.three, borderRadius: 10, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two, fontSize: 16 },
+  search: { ...ramp.body, margin: Spacing.three, borderRadius: 10, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two },
   loading: { padding: Spacing.four, alignItems: 'center' },
-  error: { paddingHorizontal: Spacing.three, fontSize: 14 },
-  empty: { textAlign: 'center', padding: Spacing.four, fontSize: 15 },
-  header: { fontSize: 13, fontWeight: '600', paddingHorizontal: Spacing.three, paddingTop: Spacing.three, paddingBottom: Spacing.one },
+  error: { ...ramp.subheadline, paddingHorizontal: Spacing.three },
+  empty: { ...ramp.subheadline, textAlign: 'center', padding: Spacing.four },
+  header: { ...ramp.footnote, fontWeight: '600', paddingHorizontal: Spacing.three, paddingTop: Spacing.three, paddingBottom: Spacing.one },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: Spacing.three },
   row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, padding: Spacing.three },
   suggested: { paddingBottom: Spacing.two },
   suggestedStrip: { paddingHorizontal: Spacing.three },
-  name: { fontSize: 16, fontWeight: '500' },
-  description: { fontSize: 13, marginTop: 2 },
+  name: { ...ramp.body, fontWeight: '500' },
+  description: { ...ramp.footnote, marginTop: 2 },
 });

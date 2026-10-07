@@ -5,13 +5,12 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 
 import { isConversationRef, useConversation } from '@/api/queries/conversation';
 import { useModels } from '@/api/queries/models';
@@ -19,8 +18,9 @@ import type { TurnModel } from '@/api/queries/sendMessage';
 import { OfflineNotice } from '@/components/OfflineNotice';
 import { StatusScreen } from '@/components/StatusScreen';
 import { Spacing } from '@/constants/theme';
-import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
+import { headerActionOptions, ramp } from '@/ui';
 import { Composer } from '@/features/chat/Composer';
 import { MessageBubble } from '@/features/chat/MessageBubble';
 import { speaksContract } from '@/api/discovery';
@@ -99,6 +99,7 @@ type Row =
 /** One conversation: its latest messages, newest at the bottom, and the composer. */
 export default function ThreadScreen() {
   const palette = usePalette();
+  const design = useDesign();
   // The question an intent handed over in memory (intentHandoff.ts); never text from a URL.
   const { id, intent } = useLocalSearchParams<{ id: string; intent?: string }>();
   const prefill = readHandoff(intent)?.prefill ?? null;
@@ -539,40 +540,27 @@ export default function ThreadScreen() {
           : 'This project has no model to chat with.';
 
   return (
+    // The composer rides on the keyboard on both platforms (audit 2.11, S1): the view measures
+    // its own position under the navigation bar (no hard-coded header offset), and on Android
+    // the keyboard controller follows the IME insets under edge-to-edge.
     <KeyboardAvoidingView
       style={[styles.flex, { backgroundColor: palette.background }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 0}>
+      behavior="padding"
+      automaticOffset>
       <Stack.Screen
         options={{
           title: detail?.name || 'Conversation',
-          headerRight:
-            (contract11 && conversationNumericId !== null) || canExport
-              ? () => (
-                  <View style={styles.headerActions}>
-                    {canExport ? (
-                      <Pressable
-                        accessibilityRole="button"
-                        accessibilityLabel="Export conversation"
-                        accessibilityState={{ busy: exporting, disabled: exporting }}
-                        disabled={exporting}
-                        onPress={() => void exportTranscript()}
-                        hitSlop={10}>
-                        <Text maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.action, { color: palette.accent, opacity: exporting ? 0.5 : 1 }]}>
-                          Export
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                    {contract11 && conversationNumericId !== null ? (
-                      <Pressable accessibilityRole="button" accessibilityLabel="Participants" onPress={() => setPeopleOpen(true)} hitSlop={10}>
-                        <Text maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.action, { color: palette.accent }]}>
-                          People
-                        </Text>
-                      </Pressable>
-                    ) : null}
-                  </View>
-                )
-              : undefined,
+          ...headerActionOptions(
+            [
+              ...(canExport
+                ? [{ id: 'export', icon: 'share' as const, label: 'Export conversation', disabled: exporting, busy: exporting, onPress: () => void exportTranscript() }]
+                : []),
+              ...(contract11 && conversationNumericId !== null
+                ? [{ id: 'people', icon: 'people' as const, label: 'Participants', onPress: () => setPeopleOpen(true) }]
+                : []),
+            ],
+            design,
+          ),
         }}
       />
       {projectId !== null && conversationNumericId !== null ? (
@@ -887,11 +875,11 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   list: { paddingVertical: Spacing.two },
   // The list is inverted, so flip the empty state back upright.
-  empty: { textAlign: 'center', padding: Spacing.four, fontSize: 15, transform: [{ scaleY: -1 }] },
-  action: { fontSize: 16, fontWeight: '600' },
+  empty: { ...ramp.subheadline, textAlign: 'center', padding: Spacing.four, transform: [{ scaleY: -1 }] },
+  action: { ...ramp.headline, fontWeight: '600' },
   actions: { flexDirection: 'row', gap: Spacing.three, marginTop: Spacing.one },
-  actionSmall: { fontSize: 14, fontWeight: '600' },
-  note: { fontSize: 14, paddingHorizontal: Spacing.three, paddingVertical: Spacing.one },
+  actionSmall: { ...ramp.subheadline, fontWeight: '600' },
+  note: { ...ramp.subheadline, paddingHorizontal: Spacing.three, paddingVertical: Spacing.one },
   reading: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -900,6 +888,5 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.one,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  readingText: { fontSize: 14 },
-  headerActions: { flexDirection: 'row', gap: Spacing.three, alignItems: 'center' },
+  readingText: { ...ramp.subheadline },
 });

@@ -1,7 +1,6 @@
 import { useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -27,6 +26,7 @@ import { MAX_WORKSPACES } from '@/security/workspaceRegistry';
 import { setSession, useSession, type EndReason } from '@/state/session';
 import { returnToPreviousWorkspace, switchToWorkspace } from '@/state/workspace';
 import { useWorkspaceList } from '@/state/workspaceList';
+import { Button, Text as KitText, ramp } from '@/ui';
 
 const ERROR_TEXT: Record<ConnectLinkErrorCode, string> = {
   empty: 'Enter your workspace address.',
@@ -183,9 +183,9 @@ export default function ConnectScreen() {
               <Text style={[styles.link, { color: palette.accent }]}>‹ Back to {displayHost(returnHost.origin)}</Text>
             </Pressable>
           ) : null}
-          <Text style={[styles.title, { color: palette.text }]}>
+          <KitText variant="title1" heading style={styles.title}>
             {workspaces.length > 0 ? 'Add a workspace' : 'Connect to your workspace'}
-          </Text>
+          </KitText>
           {endNotice ? (
             <Text
               accessibilityRole="alert"
@@ -200,12 +200,7 @@ export default function ConnectScreen() {
             address you use in your browser.
           </Text>
 
-          <Pressable
-            accessibilityRole="button"
-            onPress={onScanQr}
-            style={[styles.button, { backgroundColor: palette.accent }]}>
-            <Text style={[styles.buttonText, { color: palette.onAccent }]}>Scan QR code</Text>
-          </Pressable>
+          <Button title="Scan QR code" onPress={onScanQr} />
 
           <Text style={[styles.label, { color: palette.textSecondary }]}>Workspace address</Text>
           <TextInput
@@ -228,8 +223,8 @@ export default function ConnectScreen() {
               styles.input,
               {
                 color: palette.text,
-                backgroundColor: palette.backgroundElement,
-                borderColor: error ? palette.danger : palette.border,
+                backgroundColor: palette.field,
+                borderColor: error ? palette.danger : palette.inputBorder,
               },
             ]}
           />
@@ -244,18 +239,7 @@ export default function ConnectScreen() {
             </Text>
           ) : null}
 
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => void onContinue()}
-            disabled={busy}
-            accessibilityState={{ disabled: busy, busy }}
-            style={[styles.button, styles.secondary, { borderColor: palette.accent }]}>
-            {busy ? (
-              <ActivityIndicator color={palette.accent} />
-            ) : (
-              <Text style={[styles.buttonText, { color: palette.accent }]}>Continue</Text>
-            )}
-          </Pressable>
+          <Button title="Continue" variant="tonal" loading={busy} onPress={() => void onContinue()} />
 
           <View style={styles.footer}>
             <Text style={[styles.small, { color: palette.textSecondary }]}>
@@ -304,35 +288,27 @@ const styles = StyleSheet.create({
     maxWidth: MaxContentWidth,
     alignSelf: 'center',
   },
-  title: { fontSize: 28, fontWeight: '700', marginTop: Spacing.four },
-  body: { fontSize: 16, lineHeight: 22 },
-  label: { fontSize: 13, fontWeight: '600', marginTop: Spacing.three },
+  title: { marginTop: Spacing.four },
+  body: { ...ramp.body },
+  label: { ...ramp.footnote, fontWeight: '600', marginTop: Spacing.three },
   input: {
+    ...ramp.body,
     borderWidth: 1,
     borderRadius: 10,
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.three - 4,
-    fontSize: 16,
   },
-  error: { fontSize: 14 },
+  error: { ...ramp.subheadline },
   notice: {
-    fontSize: 15,
-    lineHeight: 21,
+    ...ramp.subheadline,
     borderWidth: 1,
     borderRadius: 10,
     padding: Spacing.three,
   },
-  button: {
-    borderRadius: 10,
-    paddingVertical: Spacing.three - 2,
-    alignItems: 'center',
-  },
-  secondary: { borderWidth: 1.5 },
-  buttonText: { fontSize: 16, fontWeight: '600' },
   footer: { marginTop: Spacing.four },
   back: { marginTop: Spacing.three, alignSelf: 'flex-start' },
-  link: { fontSize: 16 },
+  link: { ...ramp.body },
   saved: { marginTop: Spacing.four, gap: Spacing.two },
   savedList: { borderRadius: 12 },
-  small: { fontSize: 13, lineHeight: 18 },
+  small: { ...ramp.footnote },
 });

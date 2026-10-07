@@ -3,6 +3,7 @@ import { Pressable, StyleSheet, Text } from 'react-native';
 import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
 import { useDictation, type DictationProblem } from '@/features/speech/dictation';
+import { ramp } from '@/ui';
 
 /**
  * The composer's microphone: tap to dictate (on the device), tap again to
@@ -56,5 +57,5 @@ export function DictationButton({
 
 const styles = StyleSheet.create({
   button: { width: 40, height: 40, borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
-  label: { fontSize: 17 },
+  label: { ...ramp.body },
 });

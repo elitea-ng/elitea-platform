@@ -4,9 +4,11 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Spacing } from '@/constants/theme';
 import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
+import { useDesign } from '@/design/DesignProvider';
 import { HighlightedText } from '@/features/chat/HighlightedText';
 import type { ChatRole } from '@/features/chat/messageModel';
 import { useShareOut } from '@/security/policy';
+import { ramp } from '@/ui';
 
 export interface MessageBubbleProps {
   role: ChatRole;
@@ -41,9 +43,15 @@ export function initialOf(name: string | null | undefined): string {
 
 export function MessageBubble({ role, mine: mineProp, author, children, status, error, footer, highlight, onActions }: MessageBubbleProps) {
   const palette = usePalette();
+  const { colors, scheme } = useDesign();
   const selectable = useShareOut();
   const mine = mineProp ?? role === 'user';
   const otherPerson = role === 'user' && !mine;
+  // §4.6: the bubble tokens, not the accent, so a dark (and branded dark) user bubble is the
+  // deep bubbleUser tone instead of a bright accent slab; agent bubbles have a hairline only
+  // in light mode (a surface step in dark).
+  const onBubble = mine ? colors.bubbleUserText : colors.bubbleAgentText;
+  const quiet = mine ? colors.bubbleUserText : colors.textSecondary;
   return (
     <View style={[styles.row, mine ? styles.mine : styles.theirs]}>
       {otherPerson ? (
@@ -62,28 +70,31 @@ export function MessageBubble({ role, mine: mineProp, author, children, status, 
         style={[
           styles.bubble,
           mine
-            ? { backgroundColor: palette.accent }
-            : { backgroundColor: palette.backgroundElement, borderColor: palette.border },
+            ? { backgroundColor: colors.bubbleUser }
+            : {
+                backgroundColor: colors.bubbleAgent,
+                borderColor: scheme === 'light' ? colors.bubbleAgentBorder : 'transparent',
+              },
         ]}>
         {author ? (
-          <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.author, { color: mine ? palette.onAccent : palette.textSecondary }]}>{author}</Text>
+          <Text maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.author, { color: quiet }]}>{author}</Text>
         ) : null}
         {typeof children === 'string' && highlight ? (
           <HighlightedText
             text={children}
             people={highlight.people}
             agents={highlight.agents}
-            style={[styles.text, { color: mine ? palette.onAccent : palette.text }]}
+            style={[styles.text, { color: onBubble }]}
           />
         ) : typeof children === 'string' ? (
-          <Text selectable={selectable} maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.text, { color: mine ? palette.onAccent : palette.text }]}>
+          <Text selectable={selectable} maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.text, { color: onBubble }]}>
             {children}
           </Text>
         ) : (
           children
         )}
         {status ? (
-          <Text accessibilityLiveRegion="polite" maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.status, { color: mine ? palette.onAccent : palette.textSecondary }]}>
+          <Text accessibilityLiveRegion="polite" maxFontSizeMultiplier={FONT_SCALE.body} style={[styles.status, { color: quiet }]}>
             {status}
           </Text>
         ) : null}
@@ -100,7 +111,7 @@ export function MessageBubble({ role, mine: mineProp, author, children, status, 
             onPress={onActions}
             hitSlop={10}
             style={styles.more}>
-            <Text maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.moreText, { color: mine ? palette.onAccent : palette.textSecondary }]}>
+            <Text maxFontSizeMultiplier={FONT_SCALE.chrome} style={[styles.moreText, { color: quiet }]}>
               •••
             </Text>
           </Pressable>
@@ -113,7 +124,7 @@ export function MessageBubble({ role, mine: mineProp, author, children, status, 
 const styles = StyleSheet.create({
   row: { paddingHorizontal: Spacing.three, paddingVertical: Spacing.one, flexDirection: 'row', alignItems: 'flex-end', gap: Spacing.one },
   avatar: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontSize: 13, fontWeight: '700' },
+  avatarText: { ...ramp.footnote, fontWeight: '700' },
   mine: { justifyContent: 'flex-end' },
   theirs: { justifyContent: 'flex-start' },
   bubble: {
@@ -125,9 +136,9 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: 'transparent',
   },
-  author: { fontSize: 12, fontWeight: '600' },
-  text: { fontSize: 16, lineHeight: 22 },
-  status: { fontSize: 13, fontStyle: 'italic' },
+  author: { ...ramp.caption, fontWeight: '600' },
+  text: { ...ramp.body },
+  status: { ...ramp.footnote, fontStyle: 'italic' },
   more: { alignSelf: 'flex-end', paddingHorizontal: Spacing.one, minHeight: 24, justifyContent: 'center' },
-  moreText: { fontSize: 13, fontWeight: '700', letterSpacing: 1 },
+  moreText: { ...ramp.footnote, fontWeight: '700', letterSpacing: 1 },
 });

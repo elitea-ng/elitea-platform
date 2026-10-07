@@ -290,9 +290,10 @@ gradient stop and the flat background. Gradient rows use the worst stop.
 | chipText / chip | 17.69 | 14.08 | 4.5 |
 | chipText / surfaceGlass (worst) | 16.98 | 14.10 | 4.5 |
 | chipSelectedText / chipSelected | 6.70 | 9.83 | 4.5 |
-| badgeText / badge | 5.90 | 7.45 | 4.5 |
+| badgeText / badge | 5.90 | 4.91 | 4.5 |
 | separatorStrong / surface (input border) | 3.55 | 3.60 | 3.0 |
 | separatorStrong / background | 3.34 | 3.92 | 3.0 |
+| separatorStrong / surfaceSunken (selected segment edge) | 3.13 | 4.02 | 3.0 |
 | focus / background (focus ring) | 5.62 | 9.91 | 3.0 |
 | focus / gradient (worst) | 5.20 | 9.31 | 3.0 |
 | focus / surface | 5.97 | 9.10 | 3.0 |
@@ -517,6 +518,9 @@ scheme, brand }`. Touch targets are at least 44 pt on iOS and 48 dp on Android, 
   - Both lines go in one accessible text node.
 - **Badge:** the `badge` colour with a `badgeText` numeral. It shows a count up to 99 and
   "99+" above that. The label is "Notifications, 3 unread".
+  - `badgeText` is white in both schemes. The iOS 26 native tab bar and bar-button badges
+    draw a white numeral whatever text colour is requested, so `badge` must pass 4.5:1 with
+    white (dark `#D2333A`, 4.91:1), not only with the requested `badgeText`.
 - **iOS:** use a large-title-style custom header that collapses into an inline nav title
   ("Home") on scroll, with the same metrics as a UINavigationBar large title.
 - **Android:** use a M3 top app bar (medium) with the greeting in the collapsing area,
@@ -887,8 +891,56 @@ Follow-ups (not in the foundation):
   label colours and `brand.hue`, persisted and re-validated with the theme), so a weak accent
   is corrected and a missing scheme is derived per §3.4. Shrinking `TOKEN_MAP` to the accent
   family (§3.1) remains, with the screen adoption (F3).
-- **F3 Screen adoption.** Screens move from `usePalette()` to `useDesign()` one by one; the
-  root `_layout.tsx` gains `<DesignProvider>` once Settings → Appearance exists.
-- **F4 New dependencies** (§6.3): `expo-linear-gradient`, `expo-blur`/`expo-glass-effect`,
-  `expo-symbols`, `expo-haptics`, `expo-image`, added with the components that need them.
+- **F3 Screen adoption.** Screens move from `usePalette()` to `useDesign()` and the kit one by
+  one. Done in the app shell (§8): the root mounts `<DesignProvider>`, and `usePalette()` is now
+  a view of the design tokens, so no screen renders the pack's web neutrals any more.
+- **F4 New dependencies** (§6.3): `expo-linear-gradient`, `expo-glass-effect`, `expo-symbols`
+  (+ `@expo-google-fonts/material-symbols-rounded` for Android), `expo-haptics` and
+  `react-native-keyboard-controller` landed with the shell; `expo-blur` and `expo-image` come
+  with the screens that need them.
+
+## 8. App shell and component kit (as built)
+
+Landed on `feat/redesign-shell`:
+
+- **One design app-wide.** `src/app/_layout.tsx` mounts `<DesignProvider>` (scheme, Zefir
+  tokens, the corrected workspace accent, accessibility modifiers) above the navigation theme,
+  so headers, the tab bar tint and the status bar follow the same tokens as the screens.
+  `usePalette()` (`src/constants/use-palette.ts`) maps the eight legacy names onto the
+  semantic tokens (plus `inputBorder` = `separatorStrong` and `field` = `surfaceSunken`).
+- **Settings → Appearance** (System / Light / Dark, `src/state/appearance.ts`): a device item
+  (`az.appearance`) applied with `Appearance.setColorScheme`, so the native chrome follows it.
+- **Navigation.** Native tabs (Liquid Glass on iOS 26, minimise on scroll, sidebar on iPad; M3
+  navigation bar with the `accentSoft` indicator on Android). Tab roots use large titles
+  (`largeTitleOptions`), the Chats list a native header search (`searchBarOptions`). Header
+  actions are `headerActionOptions`: native SF Symbol bar buttons with system badges on iOS 26,
+  48 dp icon buttons with in-frame badges on Android and older iOS. The project switcher
+  (`projectSwitcherOptions`) is the same chip on every platform: the project name and a
+  chevron, truncated by the system, in the leading slot (iOS 26 wraps it in the glass capsule;
+  a native bar button cannot show a title and a chevron together). The workspace host stays
+  visible: the inline title (`WorkspaceTitle`) and, under a large title, `WorkspacePill`.
+- **Keyboard and insets.** The chat uses `react-native-keyboard-controller`'s
+  `KeyboardAvoidingView` with `automaticOffset` (no hard-coded header offset); the composer
+  pads by the bottom safe area when the keyboard is down. Android: `predictiveBackGestureEnabled`
+  is on, `softwareKeyboardLayoutMode: 'resize'`, edge-to-edge.
+- **Type ramp everywhere.** No `fontSize`/`lineHeight` outside `src/design` and `src/ui`
+  (`src/ui/noHardcodedFontSize.test.ts`); styles spread `ramp.<role>` or use `<Text variant>`.
+  A spread role carries size, line height and face but no weight (a style sets its own), so
+  Android's medium label roles never turn paragraph copy medium; `<Text variant>` keeps the
+  role's weight.
+- **Kit (`src/ui/`).** `Text`, `Icon` (SF Symbols / Material Symbols Rounded, one semantic map
+  in `src/ui/icons.ts`), `haptic()`, `Button`, `IconButton`, `Badge`, `Chip`/`ChipRow`,
+  `SegmentedControl`, `ListSection`/`ListRow`, `Card`, `ActionCard`, `ArrowButton`, `IconTile`,
+  `GlassSurface`, `GradientBackground`, `EmptyState` (mascot), `Avatar` (initials tones proven
+  4.5:1, agent mascot fallback), `sheetOptions` (native form sheet / M3 bottom sheet). Touch
+  targets are tested (`src/ui/kit.test.tsx`).
+- **Design gallery** (`/design-gallery`, `__DEV__` only, Settings → About → Design gallery):
+  every component, with a preview scheme and sample brands (magenta, green, lemon) run through
+  the real correction. `agentzefir://design-gallery?scheme=dark&brand=green` opens it directly.
+  Two more `__DEV__` fixture routes: `/design-tabs/chats` (the native tab shell with sample
+  chats: large title, header search, bar buttons with a badge, project switcher, workspace
+  pill; the rows are the real `ConversationRow`, and `/design-tabs/settings` is the real
+  `SettingsList` with sample values, so its screenshots show the shipped screens) and
+  `/design-composer` (the real `Composer` on the keyboard, same keyboard handling as
+  `/c/[id]`); both take `?brand=zefir|magenta|green|lemon`. `/design-sheet` shows `sheetOptions`.
 

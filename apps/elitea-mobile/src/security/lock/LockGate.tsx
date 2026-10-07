@@ -6,6 +6,7 @@ import { usePalette } from '@/constants/use-palette';
 import type { LockState } from '@/security/lock/lockController';
 import { lockController } from '@/security/lock/useLockController';
 import { removeAllWorkspaces } from '@/state/workspace';
+import { ramp } from '@/ui';
 
 const FAILURE_TEXT: Record<NonNullable<LockState['lastFailure']>, string> = {
   cancelled: 'Unlock was cancelled.',
@@ -91,11 +92,11 @@ export function LockGate({ state }: { state: LockState }) {
 const styles = StyleSheet.create({
   cover: { alignItems: 'center', justifyContent: 'center', padding: Spacing.four, zIndex: 1000, elevation: 1000 },
   content: { width: '100%', maxWidth: MaxContentWidth, gap: Spacing.three, alignItems: 'center' },
-  title: { fontSize: 22, fontWeight: '700', textAlign: 'center' },
-  body: { fontSize: 16, lineHeight: 22, textAlign: 'center' },
+  title: { ...ramp.title2, fontWeight: '700', textAlign: 'center' },
+  body: { ...ramp.body, textAlign: 'center' },
   button: { alignSelf: 'stretch', borderRadius: 10, paddingVertical: Spacing.three - 2, alignItems: 'center' },
   outline: { borderWidth: 1.5 },
-  buttonText: { fontSize: 16, fontWeight: '600' },
+  buttonText: { ...ramp.headline, fontWeight: '600' },
   linkButton: { paddingVertical: Spacing.two },
-  link: { fontSize: 13 },
+  link: { ...ramp.footnote },
 });

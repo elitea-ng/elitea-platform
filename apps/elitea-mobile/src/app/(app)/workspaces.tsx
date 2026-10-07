@@ -12,6 +12,7 @@ import { MAX_WORKSPACES } from '@/security/workspaceRegistry';
 import { useSession } from '@/state/session';
 import { beginAddWorkspace, removeWorkspace, switchToWorkspace } from '@/state/workspace';
 import { refreshWorkspaceList, useWorkspaceList, type WorkspaceSummary } from '@/state/workspaceList';
+import { ramp } from '@/ui';
 
 /**
  * The workspace switcher (modal): every workspace connected on this device,
@@ -102,6 +103,6 @@ const styles = StyleSheet.create({
   separator: { height: StyleSheet.hairlineWidth, marginLeft: Spacing.three },
   footer: { padding: Spacing.three, gap: Spacing.two },
   button: { borderWidth: 1.5, borderRadius: 10, paddingVertical: Spacing.three - 2, alignItems: 'center' },
-  buttonText: { fontSize: 16, fontWeight: '600' },
-  hint: { fontSize: 13, lineHeight: 18, textAlign: 'center' },
+  buttonText: { ...ramp.headline, fontWeight: '600' },
+  hint: { ...ramp.footnote, textAlign: 'center' },
 });

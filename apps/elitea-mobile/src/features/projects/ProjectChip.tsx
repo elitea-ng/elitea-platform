@@ -1,10 +1,11 @@
-import { Link } from 'expo-router';
-import { StyleSheet, Text } from 'react-native';
+import type { NativeStackNavigationOptions } from 'expo-router';
+import { router } from 'expo-router';
+import { Pressable, StyleSheet, View } from 'react-native';
 
-import { Spacing } from '@/constants/theme';
-import { usePalette } from '@/constants/use-palette';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
 import { usePersonalProjectId } from '@/state/selfIdentity';
+import { hitTarget, Icon, ripple, Text, uiPlatform, type UiPlatform } from '@/ui';
+import { useDesign } from '@/design/DesignProvider';
 
 /** The active project as the user sees it: "My project" for the personal one, else its name. */
 export function useProjectLabel(): string {
@@ -15,30 +16,51 @@ export function useProjectLabel(): string {
     : (project?.name ?? (projectId !== null ? `Project ${projectId}` : 'Project'));
 }
 
-/** Header chip showing the current project; opens the project switcher. */
-export function ProjectChip() {
-  const palette = usePalette();
-  const label = useProjectLabel();
+export function projectSwitcherLabel(label: string): string {
+  return `Project: ${label}. Switch project`;
+}
+
+const openProjects = () => router.push('/projects');
+
+/**
+ * The project switcher in the navigation bar's leading slot (audit X6): the project name and a
+ * chevron, so it reads as a control that opens a picker on every platform (D6). On iOS 26 the
+ * system wraps this custom bar item in its Liquid Glass capsule (no border of ours inside it).
+ * The name truncates by the space it has and the text size, not by a character count.
+ *
+ * A native text bar button is not used: UIKit draws a bar button's image INSTEAD of its title,
+ * so it cannot show both the name and the disclosure chevron.
+ */
+export function projectSwitcherOptions(label: string): Pick<NativeStackNavigationOptions, 'headerLeft'> {
+  return { headerLeft: () => <ProjectChip label={label} /> };
+}
+
+/** The chip's frame: the platform touch target (44 pt iOS, 48 dp Android; F5) and a width cap. */
+export function projectChipFrame(on: UiPlatform = uiPlatform) {
+  return { minHeight: hitTarget(on), justifyContent: 'center', paddingHorizontal: 8, maxWidth: 180 } as const;
+}
+
+export function ProjectChip({ label }: { label: string }) {
+  const design = useDesign();
   return (
-    <Link
-      href="/projects"
+    <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`Project: ${label}. Switch project`}
-      style={[styles.chip, { borderColor: palette.border }]}>
-      <Text numberOfLines={1} style={[styles.text, { color: palette.text }]}>
-        {label} ▾
-      </Text>
-    </Link>
+      accessibilityLabel={projectSwitcherLabel(label)}
+      onPress={openProjects}
+      android_ripple={ripple(design, true)}
+      style={({ pressed }) => [projectChipFrame(), pressed && uiPlatform === 'ios' ? styles.pressed : null]}>
+      <View style={styles.row}>
+        <Text variant="subheadline" emphasized numberOfLines={1} style={styles.text}>
+          {label}
+        </Text>
+        <Icon name="chevronDown" size={12} tone="secondary" weight="semibold" />
+      </View>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  chip: {
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingHorizontal: Spacing.two + 2,
-    paddingVertical: Spacing.one,
-    maxWidth: 180,
-  },
-  text: { fontSize: 14, fontWeight: '600' },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  text: { flexShrink: 1 },
+  pressed: { opacity: 0.6 },
 });

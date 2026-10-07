@@ -16,6 +16,7 @@ import { usePalette } from '@/constants/use-palette';
 import { useShareOut } from '@/security/policy';
 import { getSession, useSession } from '@/state/session';
 import { useWorkspaceInfo } from '@/state/workspaceInfo';
+import { ramp } from '@/ui';
 
 /**
  * Settings > Memory: what the workspace remembers about the caller in the
@@ -145,12 +146,12 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   center: { alignItems: 'center', justifyContent: 'center' },
   loading: { padding: Spacing.four },
-  hint: { fontSize: 13, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two },
+  hint: { ...ramp.footnote, paddingHorizontal: Spacing.three, paddingVertical: Spacing.two },
   clear: { paddingHorizontal: Spacing.three, paddingTop: Spacing.two, alignItems: 'flex-end' },
-  note: { paddingHorizontal: Spacing.three, paddingTop: Spacing.two, fontSize: 14 },
-  empty: { textAlign: 'center', padding: Spacing.four, fontSize: 15 },
+  note: { ...ramp.subheadline, paddingHorizontal: Spacing.three, paddingTop: Spacing.two },
+  empty: { ...ramp.subheadline, textAlign: 'center', padding: Spacing.four },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: Spacing.three },
   row: { padding: Spacing.three, gap: Spacing.one },
-  content: { fontSize: 15, lineHeight: 21 },
-  meta: { fontSize: 13 },
+  content: { ...ramp.subheadline },
+  meta: { ...ramp.footnote },
 });

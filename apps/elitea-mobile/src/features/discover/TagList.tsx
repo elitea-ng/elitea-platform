@@ -3,6 +3,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import type { PublicAgentTag } from '@/api/queries/discover';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
+import { ramp } from '@/ui';
 
 /** An agent's category and tags as small chips (display only). */
 export function TagList({ category, tags, limit }: { category: string | null; tags: PublicAgentTag[]; limit?: number }) {
@@ -32,6 +33,6 @@ export function TagList({ category, tags, limit }: { category: string | null; ta
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.one },
-  chip: { fontSize: 12, paddingHorizontal: Spacing.two, paddingVertical: 2, borderRadius: 10, overflow: 'hidden' },
+  chip: { ...ramp.caption, paddingHorizontal: Spacing.two, paddingVertical: 2, borderRadius: 10, overflow: 'hidden' },
   category: { borderWidth: StyleSheet.hairlineWidth },
 });

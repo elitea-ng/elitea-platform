@@ -5,6 +5,7 @@ import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
 import { extensionOf, formatBytes } from '@/features/chat/attachments/prepare';
 import type { TrayItem } from '@/features/chat/attachments/tray';
+import { hitSlopFor, Icon, ramp } from '@/ui';
 
 /** The chips of the files a message will carry: thumbnail or type, name, size, state, remove. */
 export function AttachmentTrayView({
@@ -57,13 +58,13 @@ export function AttachmentTrayView({
             </View>
             {item.state === 'preparing' || item.state === 'uploading' ? <ActivityIndicator size="small" color={palette.accent} /> : null}
             {failed && item.ready ? (
-              <Pressable accessibilityRole="button" accessibilityLabel={`Retry ${item.name}`} hitSlop={8} onPress={() => onRetry(item.id)}>
-                <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.action, { color: palette.accent }]}>↻</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Retry ${item.name}`} hitSlop={hitSlopFor(20)} onPress={() => onRetry(item.id)}>
+                <Icon name="regenerate" size={20} color={palette.accent} />
               </Pressable>
             ) : null}
             {item.state !== 'uploading' ? (
-              <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name}`} hitSlop={8} onPress={() => onRemove(item.id)}>
-                <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.action, { color: palette.textSecondary }]}>✕</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${item.name}`} hitSlop={hitSlopFor(20)} onPress={() => onRemove(item.id)}>
+                <Icon name="closeCircle" size={20} color={palette.textSecondary} />
               </Pressable>
             ) : null}
           </View>
@@ -111,8 +112,9 @@ export function AttachButton({
       accessibilityHint={disabledReason ?? undefined}
       accessibilityState={{ disabled: disabledReason !== null }}
       onPress={open}
-      style={[styles.clip, { borderColor: palette.border, opacity: disabledReason ? 0.4 : 1 }]}>
-      <Text maxFontSizeMultiplier={FONT_SCALE.control} style={[styles.clipText, { color: palette.accent }]}>+</Text>
+      hitSlop={hitSlopFor(36)}
+      style={[styles.clip, { opacity: disabledReason ? 0.38 : 1 }]}>
+      <Icon name="plus" size={22} color={palette.text} weight="medium" />
     </Pressable>
   );
 }
@@ -122,11 +124,9 @@ const styles = StyleSheet.create({
   chip: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, padding: 4, maxWidth: 240 },
   thumb: { width: 36, height: 36, borderRadius: 6 },
   icon: { alignItems: 'center', justifyContent: 'center' },
-  iconText: { fontSize: 10, fontWeight: '700' },
+  iconText: { ...ramp.caption, fontWeight: '700' },
   texts: { flexShrink: 1, maxWidth: 140 },
-  name: { fontSize: 13 },
-  meta: { fontSize: 11 },
-  action: { fontSize: 16, paddingHorizontal: 2 },
-  clip: { width: 40, height: 40, borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, alignItems: 'center', justifyContent: 'center' },
-  clipText: { fontSize: 24, lineHeight: 26, fontWeight: '400' },
+  name: { ...ramp.footnote },
+  meta: { ...ramp.caption },
+  clip: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
 });

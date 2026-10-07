@@ -6,6 +6,7 @@ import { displayHost } from '@/features/connect/connectFlow';
 import { WorkspaceMark } from '@/features/workspaces/WorkspaceMark';
 import type { WorkspaceSummary } from '@/state/workspaceList';
 import type { BrandImage } from '@/theme/brandPack';
+import { Icon, ramp } from '@/ui';
 
 /**
  * The mark a row may show. A workspace that is not active is never contacted
@@ -59,7 +60,7 @@ export function WorkspaceRow({
           </Text>
           <Text style={[styles.state, { color: active ? palette.accent : palette.textSecondary }]}>{state}</Text>
         </View>
-        {active ? <Text style={{ color: palette.accent, fontSize: 18 }}>✓</Text> : null}
+        {active ? <Icon name="check" size={20} color={palette.accent} weight="semibold" label="Active" /> : null}
       </Pressable>
       {onRemove ? (
         <Pressable
@@ -69,7 +70,7 @@ export function WorkspaceRow({
           hitSlop={8}
           onPress={onRemove}
           style={styles.remove}>
-          <Text style={{ color: palette.danger, fontSize: 15 }}>Remove</Text>
+          <Text style={{ ...ramp.subheadline, color: palette.danger }}>Remove</Text>
         </Pressable>
       ) : null}
     </View>
@@ -80,8 +81,8 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: Spacing.three },
   main: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: Spacing.three, paddingVertical: Spacing.three },
   text: { flex: 1, gap: 2 },
-  name: { fontSize: 16, fontWeight: '600' },
-  host: { fontSize: 14 },
-  state: { fontSize: 12, fontWeight: '600' },
+  name: { ...ramp.headline, fontWeight: '600' },
+  host: { ...ramp.subheadline },
+  state: { ...ramp.caption, fontWeight: '600' },
   remove: { paddingLeft: Spacing.three, paddingVertical: Spacing.two },
 });

@@ -5,6 +5,7 @@ import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { deviceAuth, type DeviceAuth } from '@/security/lock/deviceAuth';
 import type { WorkspaceSummary } from '@/state/workspaceList';
+import { ramp } from '@/ui';
 
 /** True when the list names a workspace whose policy requires the device lock. */
 export function listNeedsUnlock(workspaces: readonly Pick<WorkspaceSummary, 'requiresLock'>[]): boolean {
@@ -66,6 +67,6 @@ export function WorkspaceListGate({
 
 const styles = StyleSheet.create({
   button: { borderWidth: 1, borderRadius: 10, padding: Spacing.three, gap: 4, marginTop: Spacing.three },
-  text: { fontSize: 16, fontWeight: '600' },
-  small: { fontSize: 13 },
+  text: { ...ramp.headline, fontWeight: '600' },
+  small: { ...ramp.footnote },
 });

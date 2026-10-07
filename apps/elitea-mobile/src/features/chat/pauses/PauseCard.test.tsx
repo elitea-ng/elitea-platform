@@ -31,7 +31,7 @@ describe('HITL card', () => {
 
   it('masks the tool arguments until a value is tapped', async () => {
     await renderCard(golden('python', 'hitl_interrupt'));
-    await fireEvent.press(await screen.findByText('Arguments (1) ›'));
+    await fireEvent.press(await screen.findByText('Arguments (1)'));
     expect(screen.getByLabelText('branch, hidden. Tap to show.')).toBeTruthy();
     await fireEvent.press(screen.getByLabelText('branch, hidden. Tap to show.'));
     expect(screen.getByLabelText('branch: old')).toBeTruthy();

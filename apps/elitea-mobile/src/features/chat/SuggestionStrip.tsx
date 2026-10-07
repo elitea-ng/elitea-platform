@@ -4,6 +4,7 @@ import { Spacing } from '@/constants/theme';
 import { FONT_SCALE } from '@/constants/typeScale';
 import { usePalette } from '@/constants/use-palette';
 import { initialOf } from '@/features/chat/MessageBubble';
+import { ramp } from '@/ui';
 
 /** One row of the composer's suggestion strip (a person, an agent, a skill, a tool). */
 export interface Suggestion {
@@ -105,12 +106,12 @@ export function SuggestionStrip({
 const styles = StyleSheet.create({
   strip: { borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, overflow: 'hidden' },
   loading: { padding: Spacing.two },
-  message: { padding: Spacing.two, fontSize: 14 },
+  message: { ...ramp.subheadline, padding: Spacing.two },
   row: { height: ROW_HEIGHT, flexDirection: 'row', alignItems: 'center', gap: Spacing.two, paddingHorizontal: Spacing.two },
   avatar: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
-  avatarText: { fontSize: 13, fontWeight: '700' },
+  avatarText: { ...ramp.footnote, fontWeight: '700' },
   texts: { flex: 1 },
-  title: { fontSize: 15, fontWeight: '500' },
-  subtitle: { fontSize: 12 },
-  badge: { fontSize: 12 },
+  title: { ...ramp.subheadline, fontWeight: '500' },
+  subtitle: { ...ramp.caption },
+  badge: { ...ramp.caption },
 });

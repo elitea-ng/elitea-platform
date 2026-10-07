@@ -5,6 +5,7 @@ import { usePalette } from '@/constants/use-palette';
 import { extensionOf } from '@/features/chat/attachments/prepare';
 import type { ChatAttachment } from '@/features/chat/messageModel';
 import { LockAwareModal } from '@/security/lock/LockAwareModal';
+import { ramp } from '@/ui';
 
 /** How many thumbnails show before "+n". */
 export const VISIBLE_THUMBNAILS = 4;
@@ -94,12 +95,12 @@ const styles = StyleSheet.create({
   grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
   thumb: { width: 72, height: 72, borderRadius: 8 },
   more: { position: 'absolute', top: 0, left: 0, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center' },
-  moreText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  moreText: { ...ramp.title3, color: '#fff', fontWeight: '700' },
   chip: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one, borderWidth: StyleSheet.hairlineWidth, borderRadius: 8, paddingHorizontal: Spacing.two, paddingVertical: 4, maxWidth: 260 },
-  ext: { fontSize: 10, fontWeight: '700' },
-  name: { fontSize: 13, flexShrink: 1 },
+  ext: { ...ramp.caption, fontWeight: '700' },
+  name: { ...ramp.footnote, flexShrink: 1 },
   viewer: { flex: 1, backgroundColor: '#000', justifyContent: 'center' },
   full: { flex: 1 },
   close: { position: 'absolute', top: 56, right: 20 },
-  closeText: { color: '#fff', fontSize: 17, fontWeight: '600' },
+  closeText: { ...ramp.headline, color: '#fff', fontWeight: '600' },
 });

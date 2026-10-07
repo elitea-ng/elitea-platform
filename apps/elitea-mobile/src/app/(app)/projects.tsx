@@ -8,6 +8,7 @@ import { usePalette } from '@/constants/use-palette';
 import { selectProject } from '@/state/projectSelection';
 import { usePersonalProjectId } from '@/state/selfIdentity';
 import { useSession } from '@/state/session';
+import { Icon, ramp } from '@/ui';
 
 /**
  * Project switcher (modal) for the ACTIVE workspace: the personal project
@@ -70,7 +71,7 @@ export default function ProjectsScreen() {
           <Text numberOfLines={1} style={[styles.name, { color: palette.text }]}>
             {item === personal ? 'My project' : item.name}
           </Text>
-          {item.id === selected ? <Text style={{ color: palette.accent }}>✓</Text> : null}
+          {item.id === selected ? <Icon name="check" size={20} color={palette.accent} weight="semibold" /> : null}
         </Pressable>
       )}
     />
@@ -87,15 +88,15 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.three,
     gap: Spacing.two,
   },
-  name: { fontSize: 16, flexShrink: 1 },
+  name: { ...ramp.body, flexShrink: 1 },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: Spacing.three },
-  empty: { padding: Spacing.four, textAlign: 'center', fontSize: 15 },
+  empty: { ...ramp.subheadline, padding: Spacing.four, textAlign: 'center' },
   section: {
-    fontSize: 13,
+    ...ramp.footnote,
     fontWeight: '600',
     paddingHorizontal: Spacing.three,
     paddingTop: Spacing.four,
     paddingBottom: Spacing.one,
   },
-  action: { fontSize: 16, fontWeight: '600' },
+  action: { ...ramp.headline, fontWeight: '600' },
 });

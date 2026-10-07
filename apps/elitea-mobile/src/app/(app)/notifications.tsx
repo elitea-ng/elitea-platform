@@ -24,6 +24,7 @@ import { formatAge } from '@/lib/time';
 import { isOfflineCopy } from '@/sync/offlineReads';
 import { useSession } from '@/state/session';
 import { useWorkspaceInfo } from '@/state/workspaceInfo';
+import { ramp } from '@/ui';
 
 /**
  * Recent notifications for the selected project. Client contract 1.3 adds
@@ -167,10 +168,10 @@ const styles = StyleSheet.create({
   chip: { borderWidth: 1, borderRadius: 16, paddingHorizontal: Spacing.three, paddingVertical: 6 },
   markAll: { padding: Spacing.three, alignItems: 'flex-end' },
   loading: { padding: Spacing.four },
-  empty: { textAlign: 'center', padding: Spacing.four, fontSize: 15 },
+  empty: { ...ramp.subheadline, textAlign: 'center', padding: Spacing.four },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: Spacing.three },
   row: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, padding: Spacing.three },
   dot: { width: 8, height: 8, borderRadius: 4 },
-  title: { flex: 1, fontSize: 15 },
-  age: { fontSize: 13 },
+  title: { ...ramp.subheadline, flex: 1 },
+  age: { ...ramp.footnote },
 });

@@ -5,6 +5,7 @@ import { Image, StyleSheet, Text, View } from 'react-native';
 import { publicAgentIconUrl } from '@/api/queries/discover';
 import { queryKeys } from '@/api/queries/keys';
 import { usePalette } from '@/constants/use-palette';
+import { monogramStyle } from '@/ui';
 import { fetchPublicAgentIcon } from '@/features/discover/agentIconData';
 import { useSession } from '@/state/session';
 
@@ -67,7 +68,7 @@ export function AgentIcon({
   }
   return (
     <View testID="agent-icon-monogram" accessible={false} style={[frame, styles.center, { backgroundColor: palette.backgroundElement }]}>
-      <Text style={{ color: palette.textSecondary, fontSize: size * 0.38, fontWeight: '600' }}>{monogramOf(name)}</Text>
+      <Text maxFontSizeMultiplier={1} style={[monogramStyle(size, 0.38), { color: palette.textSecondary, fontWeight: '600' }]}>{monogramOf(name)}</Text>
     </View>
   );
 }
