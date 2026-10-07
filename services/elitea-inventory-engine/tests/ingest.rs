@@ -401,9 +401,16 @@ async fn a_source_is_cloned_ingested_and_re_ingested_incrementally() {
     let settings = settings(&root.join("jobs"), "127.0.0.1");
     let (context, mut lines, _) = context();
 
-    let first = ingest::run(&pool, key, &loopback_source(port), &settings, &context)
-        .await
-        .expect("the first run");
+    let first = ingest::run(
+        &pool,
+        key,
+        &loopback_source(port),
+        &settings,
+        None,
+        &context,
+    )
+    .await
+    .expect("the first run");
     assert_eq!(first.documents_processed, 2);
     let (graph, revision) = store::load(&pool, key)
         .await
@@ -433,9 +440,16 @@ async fn a_source_is_cloned_ingested_and_re_ingested_incrementally() {
             ("docs/guide.md", Some("# guide\n")),
         ],
     );
-    let second = ingest::run(&pool, key, &loopback_source(port), &settings, &context)
-        .await
-        .expect("the second run");
+    let second = ingest::run(
+        &pool,
+        key,
+        &loopback_source(port),
+        &settings,
+        None,
+        &context,
+    )
+    .await
+    .expect("the second run");
     assert_eq!(
         (
             second.documents_processed,
@@ -492,6 +506,7 @@ async fn a_refused_clone_is_recorded_and_commits_nothing() {
         key,
         &loopback_source(port),
         &settings(&root.join("jobs"), "github.com"),
+        None,
         &context,
     )
     .await;
@@ -670,5 +685,149 @@ fn code_files_add_their_symbols_and_relations() {
     by_name(&graph, "Accounts", "class");
     by_name(&graph, "helper", "function");
     assert!(edge(&graph, &create, &helper).is_none());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// ---------------------------------------------------------------------------
+// With a model: a mock OpenAI-compatible gateway behind the real client
+// ---------------------------------------------------------------------------
+
+/// `/chat/completions` answering by prompt kind, as a model would.
+async fn gateway(
+    axum::extract::State(calls): axum::extract::State<
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    >,
+    axum::Json(body): axum::Json<Value>,
+) -> axum::Json<Value> {
+    calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let prompt = body["messages"][0]["content"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    assert_eq!(
+        body["temperature"],
+        json!(0.0),
+        "the extractors sample deterministically"
+    );
+    let answer = if prompt.starts_with("Extract semantic entities") {
+        if prompt.contains("Refund policy") {
+            r#"[{"id": "r", "type": "Business Rules", "name": "Refund window", "line_start": 3, "line_end": 9,
+                 "properties": {"description": "Refunds within 30 days"}},
+                {"id": "s", "type": "service", "name": "Billing Service", "line_start": 10, "line_end": 14,
+                 "properties": {"description": "Issues refunds"}}]"#
+        } else {
+            "[]"
+        }
+    } else if prompt.starts_with("Extract SEMANTIC relationships") {
+        r#"[{"source_id": "Billing Service", "relation_type": "implements", "target_id": "Refund window", "confidence": 0.9},
+            {"source_id": "Billing Service", "relation_type": "related_to", "target_id": "Billing Service", "confidence": 0.9}]"#
+    } else if prompt.starts_with("Extract factual information") {
+        r#"[{"fact_type": "decision", "title": "Refunds go through Billing", "line_start": 2, "line_end": 4, "confidence": 0.8}]"#
+    } else {
+        "[]"
+    };
+    axum::Json(json!({
+        "id": "x", "object": "chat.completion", "model": "m",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": answer}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    }))
+}
+
+#[cfg(feature = "loopback-git-http")]
+#[tokio::test]
+async fn a_source_with_a_model_gets_entities_facts_and_relations() {
+    use elitea_inventory_engine::extract::gateway_model;
+    use elitea_inventory_engine::ingest::ModelOptions;
+    use elitea_model_client::chat::ChatClient;
+    use elitea_model_client::settings::ModelSettings;
+    use elitea_model_client::transport::{Transport, TransportSettings};
+
+    let Some(pool) = database("model").await else {
+        return;
+    };
+    let root = scratch("model");
+    repository(&root);
+    let policy = format!(
+        "# Refund policy\n\nRefunds are accepted within 30 days.\n{}\n## Billing Service\n\nThe Billing Service issues every refund.\n",
+        "Customers ask support for a refund and support files it.\n".repeat(20)
+    );
+    publish(&root, &[("docs/refunds.md", Some(policy.as_str()))]);
+    let port = serve(&root).await;
+
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let app = axum::Router::new()
+        .route("/v1/chat/completions", axum::routing::post(gateway))
+        .with_state(std::sync::Arc::clone(&calls));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let model_port = listener.local_addr().expect("addr").port();
+    tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+    let settings_value = json!({
+        "api_base": format!("http://127.0.0.1:{model_port}/v1"),
+        "api_key": "k",
+        "model_name": "m",
+        "streaming": false,
+    });
+    let model_settings = ModelSettings::from_llm_settings(&settings_value).expect("llm settings");
+    let transport = Transport::new(&TransportSettings::default()).expect("transport");
+    let (context, _lines, stop) = context();
+    let model = gateway_model(ChatClient::new(transport, model_settings), stop);
+    let options = ModelOptions::new(model);
+
+    let key = GraphKey::new(1, 10).expect("key");
+    let outcome = ingest::run(
+        &pool,
+        key,
+        &loopback_source(port),
+        &settings(&root.join("jobs"), "127.0.0.1"),
+        Some(&options),
+        &context,
+    )
+    .await
+    .expect("the run");
+    assert!(calls.load(std::sync::atomic::Ordering::SeqCst) >= 3);
+    assert_eq!(
+        outcome.model_skipped, 2,
+        "README and app.py are small: {outcome:?}"
+    );
+    let (graph, _) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("a graph");
+    let rule = by_name(&graph, "Refund window", "rule");
+    let service = by_name(&graph, "Billing Service", "service");
+    let fact = by_name(&graph, "Refunds go through Billing", "fact");
+    let rule_node = graph.node(&rule).expect("rule");
+    assert!(
+        rule_node.get("layer").is_none(),
+        "`rule` is in no layer of LAYER_TYPE_MAPPING"
+    );
+    assert_eq!(
+        rule_node["citations"][0]["file_path"],
+        json!("docs/refunds.md")
+    );
+    assert_eq!(
+        rule_node["properties"]["description"],
+        json!("Refunds within 30 days")
+    );
+    assert_eq!(
+        graph.node(&fact).expect("fact")["fact_type"],
+        json!("decision")
+    );
+    let implements = edge(&graph, &service, &rule).expect("the model's relation");
+    assert_eq!(implements["relation_type"], json!("implements"));
+    assert_eq!(implements["source"], json!("llm"));
+    assert_eq!(implements["discovered_in_file"], json!("docs/refunds.md"));
+    assert!(
+        edge(&graph, &service, &service).is_none(),
+        "the quality pass removes self-loops"
+    );
+    let file = by_name(&graph, "refunds.md", "document_file");
+    assert!(
+        edge(&graph, &file, &rule).is_some(),
+        "the file contains what the model found"
+    );
+    assert_eq!(graph.node(&file).expect("file")["fact_count"], json!(1));
     let _ = std::fs::remove_dir_all(&root);
 }

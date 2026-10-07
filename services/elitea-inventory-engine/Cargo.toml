@@ -14,13 +14,15 @@ elitea-engine-core = { path = "../../libs/rust/engine-core" }
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
 # The tree-sitter parsers (and the Kotlin/Swift ports) of the parser stage.
 elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
+elitea-model-client = { path = "../../libs/rust/model-client" }
 elitea-pg-migrate = { path = "../../libs/rust/pg-migrate" }
 elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
 # The graph's node and edge order is insertion order (graph.json, search ties).
-indexmap = "=2.14.2"
+indexmap = { version = "=2.14.2", features = ["serde"] }
 # Entity ids are Python's md5 prefix; file hashes its sha256.
 md-5 = "=0.10.6"
 sha2 = "=0.10.9"
+serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
 # The graph store (src/store.rs); the same stack the DeepWiki engine uses.
 sqlx = { version = "=0.8.6", default-features = false, features = ["json", "postgres", "runtime-tokio", "tls-rustls-aws-lc-rs"] }
@@ -35,7 +37,7 @@ loopback-git-http = ["elitea-repo-ingest/loopback-git-http"]
 
 [dev-dependencies]
 # The ingestion tests' local smart-HTTP git server (`git http-backend`).
-axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 tokio = { version = "=1.53.1", features = ["test-util"] }
 
 [lints.rust]

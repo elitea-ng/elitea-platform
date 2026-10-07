@@ -370,6 +370,22 @@ impl Graph {
         self.nodes.insert(id, attributes);
     }
 
+    /// Keep only the edges `keep` accepts (`source`, `target`, attributes);
+    /// returns how many were removed.
+    pub fn retain_edges(
+        &mut self,
+        mut keep: impl FnMut(&str, &str, &Map<String, Value>) -> bool,
+    ) -> usize {
+        let mut removed = 0;
+        for (source, targets) in &mut self.edges {
+            let before = targets.len();
+            targets.retain(|target, edge| keep(source, target, edge));
+            removed += before - targets.len();
+        }
+        self.edges.retain(|_, targets| !targets.is_empty());
+        removed
+    }
+
     /// Insert an edge as loaded, creating a missing endpoint as an empty
     /// node the way networkx's `add_edge` does; attributes merge into an
     /// existing edge.

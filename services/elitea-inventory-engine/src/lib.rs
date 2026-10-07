@@ -10,9 +10,11 @@
 //! * [`graph`] — the knowledge graph, with the Python graph's semantics;
 //! * [`store`] — the graph's PostgreSQL storage;
 //! * [`ingest`] — a source's files into the graph;
+//! * [`extract`] — what a model reads out of a file;
 //! * [`config`] — the `ELITEA_INVENTORY_*` settings.
 
 pub mod config;
+pub mod extract;
 pub mod fixture;
 pub mod graph;
 pub mod ingest;

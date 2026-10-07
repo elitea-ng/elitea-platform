@@ -404,12 +404,14 @@ pub fn name_index(graph: &Graph) -> HashMap<String, String> {
     index
 }
 
-/// The relations phase for parser relations: resolve each and add it.
+/// The relations phase: resolve each relation and add it, marked as
+/// found by `origin` (`parser`, `llm`).
 /// Returns how many were added.
 pub fn add_relations(
     graph: &mut Graph,
     relations: &[PendingRelation],
     source_toolkit: &str,
+    origin: &str,
 ) -> usize {
     let index = name_index(graph);
     let mut added = 0;
@@ -441,7 +443,7 @@ pub fn add_relations(
         let mut properties = Map::new();
         properties.insert("source_toolkit".to_owned(), json!(source_toolkit));
         properties.insert("confidence".to_owned(), json!(relation.confidence));
-        properties.insert("source".to_owned(), json!("parser"));
+        properties.insert("source".to_owned(), json!(origin));
         properties.insert(
             "discovered_in_file".to_owned(),
             json!(relation.discovered_in_file),
@@ -599,7 +601,7 @@ mod tests {
             confidence: 1.0,
             is_cross_file: true,
         }];
-        assert_eq!(add_relations(&mut graph, &pending, "repo"), 1);
+        assert_eq!(add_relations(&mut graph, &pending, "repo", "parser"), 1);
         let (source, target, edge) = graph.edges().next().unwrap_or_else(|| panic!("an edge"));
         assert_eq!((source, target), ("cls", "base"));
         assert_eq!(edge["is_cross_file"], json!(true));

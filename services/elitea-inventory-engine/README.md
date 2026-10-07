@@ -3,7 +3,7 @@
 The Rust-native Inventory engine (ADR-0027) behind the sub-application host's
 engine sidecar socket, built on the shared engine crates in `libs/rust`.
 
-**State: P3b, ingestion of a source's files.** It serves the Inventory tool table on the same
+**State: P3d, ingestion with parsers and a model.** It serves the Inventory tool table on the same
 socket protocol the Python sidecar spoke, with two runners:
 
 | `ELITEA_INVENTORY_RUNNER` | What answers |
@@ -11,9 +11,15 @@ socket protocol the Python sidecar spoke, with two runners:
 | `unavailable` (default) | every tool is refused (`FileNotFoundError`): an engine that is not wired must look broken |
 | `fixture` | the canned graph every Inventory fixture runner replays |
 
-The knowledge graph and its PostgreSQL store (P3a) and file ingestion (P3b) are
-in, as a library: no socket tool runs them yet. Parser and LLM extraction,
-communities, embeddings, retrieval and `investigate` land in P3c–P4.
+The knowledge graph and its PostgreSQL store (P3a), file ingestion (P3b), the
+parser stage (P3c) and the model stage (P3d) are in, as a library: no socket
+tool runs them yet. Communities, embeddings, the `run_ingestion` wiring,
+retrieval and `investigate` land in P3e–P4.
+
+The model stage (`src/extract`) uses the Python engine's prompts and type tables
+as data: `assets/python_inventory.json`, generated from its source by
+`assets/generate.py`. The module docs list where it deliberately differs:
+absolute citations, kept text facts, and relations that are actually extracted.
 
 ## The graph and its store
 

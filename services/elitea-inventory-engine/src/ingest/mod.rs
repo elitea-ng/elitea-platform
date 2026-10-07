@@ -23,6 +23,7 @@ pub mod ids;
 pub mod parse;
 pub mod source;
 
+use crate::extract;
 use crate::graph::Graph;
 use crate::store::sources::{self as source_store, Completion, RunCounts, SourceStatus};
 use crate::store::{self, GraphKey, StoreError};
@@ -32,7 +33,7 @@ use elitea_repo_ingest::IngestSettings;
 use files::{Selection, Skipped};
 use source::Source;
 use sqlx::postgres::PgPool;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,6 +61,12 @@ pub struct Outcome {
     /// Files a parser failed on (`path: error`); they still have their
     /// file node.
     pub parse_errors: Vec<String>,
+    /// Files the model was not asked about (small, license, barrel).
+    pub model_skipped: usize,
+    /// Chunks whose model extraction failed after every retry.
+    pub failed_model_chunks: usize,
+    /// Edges the quality pass removed.
+    pub pruned_edges: usize,
 }
 
 /// Every regular file under `root`, as `/`-separated relative paths in
@@ -174,67 +181,92 @@ pub fn prepare(
     Ok((outcome, to_read))
 }
 
-/// Step 4b: parse the files to read (one batch per language) and add each
-/// one's file node and entities, in path order. Returns the relations the
-/// files contributed, to be added once every file is in the graph.
-///
-/// # Errors
-///
-/// A stop was requested.
-pub fn assemble(
-    graph: &mut Graph,
+/// Step 4b: parse the files to read, one batch per language.
+#[must_use]
+pub fn parse_files(
     source: &Source,
     root: &Path,
     to_read: &[FileToRead],
-    outcome: &mut Outcome,
     context: &Context,
-) -> Result<Vec<parse::PendingRelation>, EngineError> {
-    context.checkpoint()?;
+) -> BTreeMap<String, parse::FileExtraction> {
     if !to_read.is_empty() {
         context.thinking(format!("[extract] Parsing {} files", to_read.len()));
     }
     let paths: Vec<&str> = to_read.iter().map(|file| file.path.as_str()).collect();
-    let parsed = parse::parse_tree(root, &paths);
+    parse::parse_tree(root, &paths)
+        .into_iter()
+        .filter_map(|(path, result)| {
+            let hash = &to_read.iter().find(|file| file.path == path)?.hash;
+            let extraction = parse::extract(&path, &result, &source.name, hash);
+            Some((path, extraction))
+        })
+        .collect()
+}
+
+/// What step 4c added for one file: the entities a model relation step
+/// is offered, as `(id, name, type)`.
+pub type FileEntities = BTreeMap<String, Vec<(String, String, String)>>;
+
+/// Step 4c: add each file's file node, parser entities and model entities
+/// (in that order, path order), every type through the graph's
+/// normaliser (`KnowledgeGraph.add_entity`). Returns the parser relations
+/// to add once every file is in the graph, and each file's entities.
+///
+/// # Errors
+///
+/// A stop was requested.
+#[allow(clippy::implicit_hasher)]
+pub fn assemble(
+    graph: &mut Graph,
+    source: &Source,
+    to_read: &[FileToRead],
+    parsed: &BTreeMap<String, parse::FileExtraction>,
+    modelled: &HashMap<String, extract::ModelExtraction>,
+    outcome: &mut Outcome,
+    context: &Context,
+) -> Result<(Vec<parse::PendingRelation>, FileEntities), EngineError> {
     let mut relations = Vec::new();
+    let mut per_file = FileEntities::new();
+    let unparsed = parse::FileExtraction::default();
     for file in to_read {
         context.checkpoint()?;
-        let extraction = parsed
-            .get(&file.path)
-            .map(|result| parse::extract(&file.path, result, &source.name, &file.hash))
-            .unwrap_or_default();
+        let extraction = parsed.get(&file.path).unwrap_or(&unparsed);
         if let Some(error) = &extraction.error {
             outcome.parse_errors.push(format!("{}: {error}", file.path));
         }
-        let node = files::file_node(
-            &file.path,
-            &file.text,
-            &source.name,
-            parse::counts(&extraction.entities),
-        );
+        let mut entities: Vec<&parse::ParsedEntity> = extraction.entities.iter().collect();
+        if let Some(model) = modelled.get(&file.path) {
+            entities.extend(model.entities.iter());
+            outcome.failed_model_chunks += model.failed_chunks;
+        }
+        let owned: Vec<parse::ParsedEntity> = entities.iter().map(|e| (*e).clone()).collect();
+        let node = files::file_node(&file.path, &file.text, &source.name, parse::counts(&owned));
+        let mut offered = Vec::with_capacity(entities.len() + 1);
+        let node_type = extract::types::normalize_graph(node.entity_type);
         graph.add_entity(
             &node.id,
             &node.name,
-            node.entity_type,
+            &node_type,
             Some(&node.citation),
             Some(&node.properties),
         );
+        offered.push((node.id.clone(), node.name.clone(), node_type));
         outcome.entities_added += 1;
-        for entity in &extraction.entities {
+        for entity in &entities {
+            let kind = extract::types::normalize_graph(&entity.entity_type);
             graph.add_entity(
                 &entity.id,
                 &entity.name,
-                &entity.entity_type,
+                &kind,
                 Some(&entity.citation),
                 Some(&entity.properties),
             );
+            offered.push((entity.id.clone(), entity.name.clone(), kind));
             outcome.entities_added += 1;
         }
-        relations.extend(extraction.relations);
-        relations.extend(parse::file_edges(
-            &node.id,
-            &file.path,
-            &extraction.entities,
-        ));
+        relations.extend(extraction.relations.iter().cloned());
+        relations.extend(parse::file_edges(&node.id, &file.path, &owned));
+        per_file.insert(file.path.clone(), offered);
         outcome.documents_processed += 1;
         if outcome.documents_processed.is_multiple_of(10) {
             context.thinking(format!(
@@ -243,7 +275,66 @@ pub fn assemble(
             ));
         }
     }
-    Ok(relations)
+    Ok((relations, per_file))
+}
+
+/// `_run_graph_quality_pass`: remove self-loops, `related_to` edges into a
+/// node with more than 50 of them, and `related_to` edges into a short or
+/// generic code-named entity. Returns how many edges went.
+pub fn quality_pass(graph: &mut Graph) -> usize {
+    const HUB_THRESHOLD: usize = 50;
+    const GENERIC: [&str; 31] = [
+        "get", "set", "context", "page", "api", "data", "test", "name", "url", "login", "user",
+        "response", "request", "result", "value", "config", "error", "status", "type", "id", "key",
+        "list", "item", "index", "base", "default", "main", "run", "init", "setup", "start",
+    ];
+    let relation = |edge: &serde_json::Map<String, serde_json::Value>| {
+        edge.get("relation_type")
+            .or_else(|| edge.get("type"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_lowercase()
+    };
+    let mut pruned = graph.retain_edges(|source, target, _| source != target);
+    let mut related_in: HashMap<String, usize> = HashMap::new();
+    for (_, target, edge) in graph.edges() {
+        if relation(edge) == "related_to" {
+            *related_in.entry(target.to_owned()).or_default() += 1;
+        }
+    }
+    let hubs: std::collections::HashSet<String> = related_in
+        .into_iter()
+        .filter(|(_, count)| *count > HUB_THRESHOLD)
+        .map(|(id, _)| id)
+        .collect();
+    pruned += graph
+        .retain_edges(|_, target, edge| !(hubs.contains(target) && relation(edge) == "related_to"));
+    let generic_targets: std::collections::HashSet<String> = graph
+        .nodes()
+        .filter(|(_, node)| {
+            let kind = node
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_lowercase();
+            let name = node
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let name = elitea_engine_core::pystr::strip(&name.to_lowercase()).to_owned();
+            matches!(
+                kind.as_str(),
+                "function" | "variable" | "constant" | "import" | "class" | "method"
+            ) && (GENERIC.contains(&name.as_str())
+                || (elitea_engine_core::pystr::split_whitespace(&name).count() <= 1
+                    && name.chars().count() <= 10))
+        })
+        .map(|(id, _)| id.to_owned())
+        .collect();
+    pruned += graph.retain_edges(|_, target, edge| {
+        !(relation(edge) == "related_to" && generic_targets.contains(target))
+    });
+    pruned
 }
 
 /// Step 4 of the run, over a checked-out tree: update `graph` with the
@@ -267,15 +358,203 @@ pub fn ingest_tree(
     context: &Context,
 ) -> Result<Outcome, EngineError> {
     let (mut outcome, to_read) = prepare(graph, source, root, previous, context)?;
-    let relations = assemble(graph, source, root, &to_read, &mut outcome, context)?;
+    let parsed = parse_files(source, root, &to_read, context);
+    let (relations, _) = assemble(
+        graph,
+        source,
+        &to_read,
+        &parsed,
+        &HashMap::new(),
+        &mut outcome,
+        context,
+    )?;
+    add_parser_relations(graph, &relations, source, &mut outcome, context);
+    outcome.pruned_edges += quality_pass(graph);
+    Ok(outcome)
+}
+
+fn add_parser_relations(
+    graph: &mut Graph,
+    relations: &[parse::PendingRelation],
+    source: &Source,
+    outcome: &mut Outcome,
+    context: &Context,
+) {
     if !relations.is_empty() {
         context.thinking(format!(
             "[relations] 🔗 Adding {} parser-extracted relationships...",
             relations.len()
         ));
     }
-    outcome.relations_added += parse::add_relations(graph, &relations, &source.name);
-    Ok(outcome)
+    outcome.relations_added += parse::add_relations(graph, relations, &source.name, "parser");
+}
+
+/// How a run uses a model.
+#[derive(Debug, Clone)]
+pub struct ModelOptions {
+    pub model: extract::Model,
+    pub tuning: extract::Tuning,
+    /// A file shorter than this many lines (or characters) is not sent to
+    /// the model (`min_file_lines` 20, `min_file_chars` 300).
+    pub min_file_lines: usize,
+    pub min_file_chars: usize,
+}
+
+impl ModelOptions {
+    /// The Python pipeline's defaults around `model`.
+    #[must_use]
+    pub fn new(model: extract::Model) -> Self {
+        Self {
+            model,
+            tuning: extract::Tuning::default(),
+            min_file_lines: 20,
+            min_file_chars: 300,
+        }
+    }
+}
+
+/// The model stage over the files to read: each file not skipped
+/// (`extract::skip`) is extracted, up to `parallel_files` at once.
+///
+/// # Errors
+///
+/// A stop was requested.
+pub async fn model_files(
+    options: &ModelOptions,
+    source: &Source,
+    to_read: &[FileToRead],
+    parsed: &BTreeMap<String, parse::FileExtraction>,
+    outcome: &mut Outcome,
+    context: &Context,
+) -> Result<HashMap<String, extract::ModelExtraction>, EngineError> {
+    let stop = context.stop_signal();
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(
+        options.tuning.parallel_files.max(1),
+    ));
+    let mut tasks = tokio::task::JoinSet::new();
+    for file in to_read {
+        if let Some(reason) =
+            extract::skip::reason(&file.text, options.min_file_lines, options.min_file_chars)
+        {
+            tracing::debug!(path = %file.path, %reason, "the model is not asked about this file");
+            outcome.model_skipped += 1;
+            continue;
+        }
+        let parser_names: std::collections::HashSet<String> = parsed
+            .get(&file.path)
+            .map(|p| p.entities.iter().map(|e| e.name.to_lowercase()).collect())
+            .unwrap_or_default();
+        let (model, tuning, stop, semaphore) = (
+            options.model.clone(),
+            options.tuning,
+            stop.clone(),
+            std::sync::Arc::clone(&semaphore),
+        );
+        let (path, text, hash, toolkit) = (
+            file.path.clone(),
+            file.text.clone(),
+            file.hash.clone(),
+            source.name.clone(),
+        );
+        tasks.spawn(async move {
+            let _permit = semaphore.acquire().await;
+            let input = extract::FileInput {
+                path: &path,
+                text: &text,
+                content_hash: &hash,
+                source_toolkit: &toolkit,
+                parser_names: &parser_names,
+            };
+            let extraction = extract::extract_file(&model, &input, tuning, &stop).await;
+            (path, extraction)
+        });
+    }
+    let total = tasks.len();
+    let mut done = 0usize;
+    let mut results = HashMap::new();
+    while let Some(joined) = tasks.join_next().await {
+        let (path, extraction) = joined.map_err(|join| {
+            EngineError::new(
+                ErrorType::Runtime,
+                format!("a model task ended abnormally ({join})"),
+            )
+        })?;
+        results.insert(path, extraction?);
+        done += 1;
+        if done.is_multiple_of(10) || done == total {
+            context.thinking(format!(
+                "[extract] 🤖 Model extraction: {done}/{total} files"
+            ));
+        }
+    }
+    Ok(results)
+}
+
+/// The model relation step: each file with two or more entities this run
+/// is read once more for the relations between them, resolved against the
+/// whole graph.
+///
+/// # Errors
+///
+/// A stop was requested.
+pub async fn model_relations(
+    options: &ModelOptions,
+    graph: &Graph,
+    to_read: &[FileToRead],
+    per_file: &FileEntities,
+    context: &Context,
+) -> Result<Vec<parse::PendingRelation>, EngineError> {
+    let resolver =
+        std::sync::Arc::new(extract::IdResolver::new(graph.nodes().map(|(id, node)| {
+            (
+                id,
+                node.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+                node.get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default(),
+            )
+        })));
+    let stop = context.stop_signal();
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(
+        options.tuning.parallel_files.max(1),
+    ));
+    let mut tasks = tokio::task::JoinSet::new();
+    for file in to_read {
+        let Some(entities) = per_file.get(&file.path).filter(|e| e.len() >= 2) else {
+            continue;
+        };
+        let (model, tuning, stop, semaphore, resolver) = (
+            options.model.clone(),
+            options.tuning,
+            stop.clone(),
+            std::sync::Arc::clone(&semaphore),
+            std::sync::Arc::clone(&resolver),
+        );
+        let (path, text, entities) = (file.path.clone(), file.text.clone(), entities.clone());
+        tasks.spawn(async move {
+            let _permit = semaphore.acquire().await;
+            (
+                path.clone(),
+                extract::extract_relations(
+                    &model, &path, &text, &entities, &resolver, tuning, &stop,
+                )
+                .await,
+            )
+        });
+    }
+    let mut by_file: BTreeMap<String, Vec<parse::PendingRelation>> = BTreeMap::new();
+    while let Some(joined) = tasks.join_next().await {
+        let (path, relations) = joined.map_err(|join| {
+            EngineError::new(
+                ErrorType::Runtime,
+                format!("a model task ended abnormally ({join})"),
+            )
+        })?;
+        by_file.insert(path, relations?);
+    }
+    Ok(by_file.into_values().flatten().collect())
 }
 
 /// Where one run clones, removed when the run ends.
@@ -294,6 +573,44 @@ fn store_error(error: &StoreError) -> EngineError {
     )
 }
 
+/// Steps 4c onwards over the read files: the model stage, the graph's
+/// nodes, the parser and model relations, the quality pass.
+async fn build(
+    graph: &mut Graph,
+    source: &Source,
+    to_read: &[FileToRead],
+    parsed: &BTreeMap<String, parse::FileExtraction>,
+    outcome: &mut Outcome,
+    model: Option<&ModelOptions>,
+    context: &Context,
+) -> Result<(), EngineError> {
+    let modelled = match model {
+        Some(options) => model_files(options, source, to_read, parsed, outcome, context).await?,
+        None => HashMap::new(),
+    };
+    let (relations, per_file) =
+        assemble(graph, source, to_read, parsed, &modelled, outcome, context)?;
+    add_parser_relations(graph, &relations, source, outcome, context);
+    if let Some(options) = model {
+        context.thinking(format!(
+            "[relations] 🔗 Extracting semantic relations from {} files...",
+            per_file.values().filter(|e| e.len() >= 2).count()
+        ));
+        let found = model_relations(options, graph, to_read, &per_file, context).await?;
+        outcome.relations_added += parse::add_relations(graph, &found, &source.name, "llm");
+    }
+    let pruned = quality_pass(graph);
+    outcome.pruned_edges += pruned;
+    if pruned > 0 {
+        context.thinking(format!(
+            "[quality] 🧹 Quality pass: pruned {pruned} low-quality edges"
+        ));
+    }
+    context.checkpoint()?;
+
+    Ok(())
+}
+
 /// One whole run (steps 1–5) of `source` into the graph `key`.
 ///
 /// # Errors
@@ -306,6 +623,7 @@ pub async fn run(
     key: GraphKey,
     source: &Source,
     settings: &IngestSettings,
+    model: Option<&ModelOptions>,
     context: &Context,
 ) -> Result<Outcome, EngineError> {
     let Some(_lease) = source_store::lease(pool, key)
@@ -326,7 +644,7 @@ pub async fn run(
     source_store::start(pool, key, &status)
         .await
         .map_err(|e| store_error(&e))?;
-    let outcome = run_started(pool, key, source, settings, context).await;
+    let outcome = run_started(pool, key, source, settings, model, context).await;
     if let Err(error) = &outcome {
         // The run's own error is what the caller sees; a failure to record
         // it as well is only logged.
@@ -338,28 +656,15 @@ pub async fn run(
     outcome
 }
 
-async fn run_started(
-    pool: &PgPool,
+/// Step 3: the shallow clone, into a scratch directory removed when the
+/// returned guard drops; a stop interrupts it.
+async fn clone(
+    settings: &IngestSettings,
+    repo_config: &serde_json::Value,
     key: GraphKey,
     source: &Source,
-    settings: &IngestSettings,
     context: &Context,
-) -> Result<Outcome, EngineError> {
-    let repo_config = source.repo_config()?;
-    context.thinking(format!(
-        "Ingesting from {} source {}",
-        source.kind.name(),
-        source.name
-    ));
-    let graph = store::load(pool, key)
-        .await
-        .map_err(|e| store_error(&e))?
-        .map(|(graph, _)| graph)
-        .unwrap_or_default();
-    let previous = source_store::file_hashes(pool, key, &source.name)
-        .await
-        .map_err(|e| store_error(&e))?;
-
+) -> Result<(JobScratch, elitea_repo_ingest::ClonedRepository), EngineError> {
     let scratch = JobScratch(settings.scratch_path.join(format!(
         "inventory-{}-{}-{}",
         key.project_id,
@@ -382,24 +687,55 @@ async fn run_started(
         })
     };
     context.thinking(format!("[fetch] Cloning {}", source.active_branch()));
-    let cloned = elitea_repo_ingest::ingest(&repo_config, settings, &scratch.0, cancel).await;
+    let cloned = elitea_repo_ingest::ingest(repo_config, settings, &scratch.0, cancel).await;
     watcher.abort();
     let cloned = cloned?;
     context.checkpoint()?;
+    Ok((scratch, cloned))
+}
+
+async fn run_started(
+    pool: &PgPool,
+    key: GraphKey,
+    source: &Source,
+    settings: &IngestSettings,
+    model: Option<&ModelOptions>,
+    context: &Context,
+) -> Result<Outcome, EngineError> {
+    let repo_config = source.repo_config()?;
+    context.thinking(format!(
+        "Ingesting from {} source {}",
+        source.kind.name(),
+        source.name
+    ));
+    let graph = store::load(pool, key)
+        .await
+        .map_err(|e| store_error(&e))?
+        .map(|(graph, _)| graph)
+        .unwrap_or_default();
+    let previous = source_store::file_hashes(pool, key, &source.name)
+        .await
+        .map_err(|e| store_error(&e))?;
+
+    let (_scratch, cloned) = clone(settings, &repo_config, key, source, context).await?;
 
     let tree = cloned.path.clone();
     let source_for_tree = source.clone();
     let context_for_tree = context.clone();
-    let (graph, outcome) = tokio::task::spawn_blocking(move || {
+    let prepared = tokio::task::spawn_blocking(move || {
         let mut graph = graph;
-        let outcome = ingest_tree(
+        let prepared = prepare(
             &mut graph,
             &source_for_tree,
             &tree,
             &previous,
             &context_for_tree,
-        );
-        (graph, outcome)
+        )
+        .map(|(outcome, to_read)| {
+            let parsed = parse_files(&source_for_tree, &tree, &to_read, &context_for_tree);
+            (outcome, to_read, parsed)
+        });
+        (graph, prepared)
     })
     .await
     .map_err(|join| {
@@ -408,8 +744,20 @@ async fn run_started(
             format!("the ingestion task ended abnormally ({join})"),
         )
     })?;
-    let outcome = outcome?;
+    let (mut graph, prepared) = prepared;
+    let (mut outcome, to_read, parsed) = prepared?;
     context.checkpoint()?;
+
+    build(
+        &mut graph,
+        source,
+        &to_read,
+        &parsed,
+        &mut outcome,
+        model,
+        context,
+    )
+    .await?;
 
     // What sources_status.json recorded: this run's additions.
     let counts = RunCounts {
