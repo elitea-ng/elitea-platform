@@ -93,6 +93,9 @@ on:
       - "tools/uictl/**"
       - "services/elitea-main/**"
       - "services/elitea-deepwiki/**"
+      # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
+      # its fixture runner).
+      - "services/elitea-deepwiki-engine/**"
       - "services/elitea-subapp-host/**"
       # The `chat-stream-rust` job runs the journeys against the native Rust
       # runtime, so a change to it can break a browser journey while touching
@@ -121,6 +124,9 @@ on:
       - "tools/uictl/**"
       - "services/elitea-main/**"
       - "services/elitea-deepwiki/**"
+      # The DeepWiki engine sidecar the `deepwiki-stack` job runs (native,
+      # its fixture runner).
+      - "services/elitea-deepwiki-engine/**"
       - "services/elitea-subapp-host/**"
       # The `chat-stream-rust` job runs the journeys against the native Rust
       # runtime, so a change to it can break a browser journey while touching
@@ -1123,7 +1129,9 @@ jobs:
   deepwiki-stack:
     name: DeepWiki journeys through the facade and the provider
     # The provider-backed DeepWiki journeys (DWIKI-005/006/010/011/012):
-    # generate → the provider's fixture engine → pages uploaded through the
+    # generate → the provider's native engine sidecar on its fixture runner
+    # (built from services/elitea-deepwiki-engine, cache scope
+    # elitea-deepwiki-engine-native-linux-amd64) → pages uploaded through the
     # callback bearer → read back by the browser; stop, resume, settings,
     # delete and chat. The FULL standalone stack, because the facade needs
     # production Form authentication and the E2E stack is OIDC-only — see

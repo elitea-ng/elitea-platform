@@ -36,8 +36,10 @@ on:
       - "services/elitea-main/internal/runtimecomposition/**"
       # The two images this job builds and whose containers `verify` asserts.
       - "services/elitea-subapp-host/**"
-      - "services/elitea-deepwiki/**"
-      # The bake step reads its targets, contexts and EXTRAS from here.
+      - "services/elitea-deepwiki-engine/**"
+      # The migrations the native image embeds (include_str!, outside its crate).
+      - "services/elitea-deepwiki/src/elitea_deepwiki/migrations/**"
+      # The bake step reads its targets and contexts from here.
       - "docker-bake.hcl"
       - ".github/workflows/helm-install-smoke.yml"
   push:
@@ -52,7 +54,8 @@ on:
       - "services/elitea-main/internal/runtimecomposition/**"
       # The two images this job builds and whose containers `verify` asserts.
       - "services/elitea-subapp-host/**"
-      - "services/elitea-deepwiki/**"
+      - "services/elitea-deepwiki-engine/**"
+      - "services/elitea-deepwiki/src/elitea_deepwiki/migrations/**"
       - "docker-bake.hcl"
       - ".github/workflows/helm-install-smoke.yml"
   schedule:
@@ -86,8 +89,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # No disk-clearing step: the three images (the engine sidecar without
-      # its torch-sized `engine` extra), four pinned third-party images and a
+      # No disk-clearing step: the three images (the engine sidecar is one
+      # distroless Rust binary), four pinned third-party images and a
       # kind node are ~3 GB against the runner's ~21 GB free. The first version
       # purged $AGENT_TOOLSDIRECTORY — the whole /opt/hostedtoolcache on
       # GitHub's runners — and helm/kind-action, which installs INTO it, died.
@@ -101,11 +104,12 @@ jobs:
 
       - name: Build the three images the chart installs (shared layer cache)
         # Under the tags kind-stack.sh looks for (KIND_IMAGE_TAG default
-        # `kind`, engine `kind-engine`), so its own build step finds them
-        # present and skips; the tags, the `e2e` target and the storage
-        # EXTRAS restate deploy/kind/kind-stack.sh's defaults and must move
-        # with them. The same scopes the E2E stacks, the image scan and the
-        # release share; the write mode is LAYER_MODE above.
+        # `kind`), so its own build step finds them present and skips; the
+        # tags and the `e2e` target restate deploy/kind/kind-stack.sh's
+        # defaults and must move with them. The same scopes the E2E stacks,
+        # the image scan and the release share; the write mode is LAYER_MODE
+        # above. The native engine compiles ~420 crates cold, so its own
+        # scope is what keeps a pull request's run warm.
         uses: docker/bake-action@v7
         with:
           source: .
@@ -114,7 +118,7 @@ jobs:
           targets: |
             elitea-main
             elitea-subapp-host
-            elitea-deepwiki
+            elitea-deepwiki-engine-native
           load: true
           provenance: false
           set: |
@@ -126,9 +130,9 @@ jobs:
             elitea-subapp-host.tags=ghcr.io/elitea-ng/elitea-subapp-host:kind
             elitea-subapp-host.cache-from=type=gha,scope=elitea-subapp-host-linux-amd64
             elitea-subapp-host.cache-to=type=gha,mode=${{ env.LAYER_MODE }},scope=elitea-subapp-host-linux-amd64
-            elitea-deepwiki.tags=ghcr.io/elitea-ng/elitea-deepwiki:kind-engine
-            elitea-deepwiki.cache-from=type=gha,scope=elitea-deepwiki-linux-amd64
-            elitea-deepwiki.cache-to=type=gha,mode=${{ env.LAYER_MODE }},scope=elitea-deepwiki-linux-amd64
+            elitea-deepwiki-engine-native.tags=ghcr.io/elitea-ng/elitea-deepwiki-engine-native:kind
+            elitea-deepwiki-engine-native.cache-from=type=gha,scope=elitea-deepwiki-engine-native-linux-amd64
+            elitea-deepwiki-engine-native.cache-to=type=gha,mode=${{ env.LAYER_MODE }},scope=elitea-deepwiki-engine-native-linux-amd64
 
       - name: Pin Helm to the version helm-lint renders with
         # Same pin as helm-lint.yml, so the chart is INSTALLED by the Helm

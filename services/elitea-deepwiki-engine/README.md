@@ -1353,13 +1353,14 @@ The image (50 MB, distroless):
 podman build -f services/elitea-deepwiki-engine/Containerfile -t elitea-deepwiki-engine-native .
 ```
 
-On the standalone stack, in place of the Python sidecar:
+The standalone stack runs it as the sidecar (its `fixture` runner by
+default; `DEEPWIKI_NATIVE_RUNNER=native` for the engine):
 
 ```bash
-STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native.yml deploy/scripts/standalone-stack.sh up
+DEEPWIKI_NATIVE_RUNNER=native deploy/scripts/standalone-stack.sh up
 ```
 
-The Go host then runs `ELITEA_DEEPWIKI_RUNNER=native` and `GET /health`
+The Go host runs `ELITEA_DEEPWIKI_RUNNER=native` and `GET /health`
 reports `runner: native`.
 
 ## Runbook: deploy, migrate, operate
@@ -1464,15 +1465,15 @@ pool through `deepwiki.env` to change it.
 
 ### Compose
 
-`deploy/docker-compose.deepwiki-native.yml` on the standalone stack: the
-native sidecar (`runner native`), a one-shot `elitea-deepwiki-migrate`
-service from the same image, the stack's PostgreSQL (`elitea` database,
-direct, not pgbouncer) and a fixed build owner. `DEEPWIKI_NATIVE_RUNNER=fixture`
-keeps the canned results for the fixture journeys
-(`apps/elitea-web/scripts/deepwiki-e2e.sh`).
+`deploy/docker-compose.standalone-full.yml` runs the native sidecar, a
+one-shot `elitea-deepwiki-migrate` service from the same image, the stack's
+PostgreSQL (`elitea` database, direct, not pgbouncer) and a fixed build
+owner. Its runner is `fixture` by default, the canned results the fixture
+journeys expect (`apps/elitea-web/scripts/deepwiki-e2e.sh`);
+`DEEPWIKI_NATIVE_RUNNER=native` runs the engine.
 
 ```bash
-STANDALONE_OVERLAY=deploy/docker-compose.deepwiki-native.yml deploy/scripts/standalone-stack.sh up
+DEEPWIKI_NATIVE_RUNNER=native deploy/scripts/standalone-stack.sh up
 ```
 
 ### Real-engine journey (DWIKI-014)
@@ -1491,9 +1492,8 @@ internet access.
 
 What the native run uses:
 
-- `deploy/docker-compose.deepwiki-native.yml` and then
-  `deploy/docker-compose.deepwiki-native-real-engine.yml` on the
-  standalone stack. The second overlay runs the prebuilt image
+- `deploy/docker-compose.deepwiki-native-real-engine.yml` on the
+  standalone stack. The overlay runs the prebuilt image
   (`DEEPWIKI_ENGINE_IMAGE`, default
   `ghcr.io/eliteaai/elitea-deepwiki-engine-native:local`, the bake target
   `elitea-deepwiki-engine-native` with `TAG=local`) for the migration and

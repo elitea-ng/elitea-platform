@@ -2924,10 +2924,10 @@ deepwiki:
   replicaCount: 1
 
   # The provider pod is TWO containers (ADR-0023 H2): the Go sub-application
-  # host, which serves the SPI, composes and uploads, and the Python engine
-  # sidecar, which runs the analysis engine for it over a Unix socket the two
-  # share. `image` is the host; `engine.image` is the Python image, which
-  # must be the `-engine` variant for the legacy runner to run anything.
+  # host, which serves the SPI, composes and uploads, and the Rust-native
+  # engine sidecar (ADR-0026), which runs the analysis engine for it over a
+  # Unix socket the two share. `image` is the host; `engine.native.image` is
+  # the engine.
   image:
     repository: ghcr.io/elitea-ng/elitea-subapp-host
     # Empty means the chart-wide image.tag.
@@ -2935,37 +2935,19 @@ deepwiki:
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   engine:
-    image:
-      repository: ghcr.io/elitea-ng/elitea-deepwiki
-      # Empty means the chart-wide image.tag with `-engine` appended — the
-      # image that carries the engine's dependency closure. The guard in
-      # _helpers.tpl refuses a runner=legacy install whose engine tag lacks
-      # that suffix: the plain image carries the engine SOURCE only and every
-      # tool would fail at invocation time.
-      tag: ""
-      pullPolicy: IfNotPresent
-    # What the SIDECAR runs:
-    #   legacy  the Python engine (`image` above, the -engine variant);
-    #   fixture the Python image's canned results, for a stack that proves
-    #           the hop without the engine;
-    #   native  the Rust-native engine (ADR-0026, `native.image` below). This
-    #           one switch also renders the host's ELITEA_DEEPWIKI_RUNNER as
-    #           native, and needs ELITEA_DEEPWIKI_DATABASE_URL (the secret the
+    # What the SIDECAR runs, on the native image either way:
+    #   native  the engine. Needs ELITEA_DEEPWIKI_DATABASE_URL (the secret the
     #           migrate Job uses); the chart refuses to render without it.
-    # The Python engine stays available behind `legacy` until the native
-    # engine's parity sign-off.
-    runner: legacy
+    #   fixture canned results, for a stack that proves the hop without the
+    #           engine. It reads no database.
+    # The sidecar is rendered only while env.ELITEA_DEEPWIKI_RUNNER is native.
+    # `legacy` (the retired Python engine) is refused; see docs/UPGRADING.md.
+    runner: native
     socketDir: /run/deepwiki
-    resources:
-      requests:
-        cpu: 250m
-        memory: 512Mi
-      limits:
-        memory: 4Gi
-    # The Rust-native engine (services/elitea-deepwiki-engine), used when
-    # runner is native. One distroless binary: its probe is the binary itself
+    # The Rust-native engine (services/elitea-deepwiki-engine). One
+    # distroless binary: its probe is the binary itself
     # (`elitea-deepwiki-engine healthcheck`), and the migrate Job runs its
-    # `migrate` subcommand, so a native install pulls no Python image at all.
+    # `migrate` subcommand.
     native:
       image:
         repository: ghcr.io/elitea-ng/elitea-deepwiki-engine-native
@@ -3018,11 +3000,11 @@ deepwiki:
     # from the git allowlist — a deployment may well allow an internal model
     # mirror and no public git host — and fail-closed in the same way.
     ELITEA_DEEPWIKI_MODEL_ALLOWLIST: ""
-    # The host's runner: legacy reaches the engine sidecar over the socket
-    # below; unavailable refuses every tool (no sidecar is rendered then).
-    # engine.runner: native renders this as "native" (the Rust sidecar on the
-    # same socket); writing "native" here without it is refused.
-    ELITEA_DEEPWIKI_RUNNER: "legacy"
+    # The host's runner: native reaches the engine sidecar over the socket
+    # below (engine.runner picks what the sidecar runs); unavailable refuses
+    # every tool and fixture is the host's own canned results (no sidecar is
+    # rendered for either). `legacy` is refused.
+    ELITEA_DEEPWIKI_RUNNER: "native"
     ELITEA_DEEPWIKI_ENGINE_SOCKET: /run/deepwiki/engine.sock
     ELITEA_SUBAPP: deepwiki
     # "subprocess" for compose and small installs, Kubernetes Jobs for scale.
@@ -3062,7 +3044,7 @@ deepwiki:
   # or
   #   CREATE SCHEMA deepwiki_build AUTHORIZATION <role>;
   # Without it the Job fails with "permission denied for database" and the
-  # release stops at the hook. See services/elitea-deepwiki/README.md.
+  # release stops at the hook. See services/elitea-deepwiki-engine/README.md.
   migrate:
     enabled: true
     backoffLimit: 3

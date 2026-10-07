@@ -15,8 +15,6 @@
 {{- $secrets := fromJson (include "elitea.provider.databaseSecret" (dict "ctx" . "provider" "deepwiki" "urlKey" "ELITEA_DEEPWIKI_DATABASE_URL")) }}
 {{- include "elitea-deepwiki.validateGuards" . -}}
 {{- $sidecar := include "elitea-deepwiki.sidecar" . }}
-{{- /* The host's runner follows the sidecar: native when the Rust engine runs. */ -}}
-{{- $hostEnv := merge (dict "ELITEA_DEEPWIKI_RUNNER" (include "elitea-deepwiki.hostRunner" .)) $env }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -63,7 +61,7 @@ spec:
               containerPort: 8080
               protocol: TCP
           env:
-            {{- range $key, $value := $hostEnv }}
+            {{- range $key, $value := $env }}
             {{- if not (hasKey $secrets $key) }}
             # Skipped when the same name is secret-backed below: emitting both
             # puts one name twice in this list, and only ordering decides which
@@ -128,57 +126,14 @@ spec:
             - name: engine-socket
               mountPath: {{ .Values.deepwiki.engine.socketDir }}
             {{- with (include "elitea.provider.mtlsVolumeMount" (dict "ctx" . "provider" "deepwiki") | trim) }}{{- . | nindent 12 }}{{- end }}
-        {{- if eq $sidecar "python" }}
-        # The engine sidecar (ADR-0023 H2): the Python tool layer and its
-        # dependency closure, reached by the host over the shared socket. No
-        # port, no TLS, no identity — the socket directory is the only way in.
-        - name: engine
-          image: "{{ .Values.deepwiki.engine.image.repository }}:{{ include "elitea-deepwiki.engineTag" . }}"
-          imagePullPolicy: {{ .Values.deepwiki.engine.image.pullPolicy }}
-          {{- with .Values.deepwiki.securityContext }}
-          securityContext:
-            {{- toYaml . | nindent 12 }}
-          {{- end }}
-          # The image's ENTRYPOINT is the SPI shell; the sidecar is another
-          # module, so the command replaces it.
-          command: ["python", "-m", "elitea_deepwiki.sidecar"]
-          env:
-            {{- $engineEnv := merge (dict "ELITEA_DEEPWIKI_RUNNER" .Values.deepwiki.engine.runner) $env }}
-            {{- range $key, $value := $engineEnv }}
-            {{- if not (hasKey $secrets $key) }}
-            - name: {{ $key }}
-              value: {{ $value | quote }}
-            {{- end }}
-            {{- end }}
-            {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
-          livenessProbe:
-            exec:
-              command: ["python3", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('{{ .Values.deepwiki.engine.socketDir }}/engine.sock'); s.close()"]
-            periodSeconds: {{ .Values.deepwiki.probes.liveness.periodSeconds }}
-            failureThreshold: {{ .Values.deepwiki.probes.liveness.failureThreshold }}
-          readinessProbe:
-            exec:
-              command: ["python3", "-c", "import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect('{{ .Values.deepwiki.engine.socketDir }}/engine.sock'); s.close()"]
-            periodSeconds: {{ .Values.deepwiki.probes.readiness.periodSeconds }}
-            failureThreshold: {{ .Values.deepwiki.probes.readiness.failureThreshold }}
-          resources:
-            {{- toYaml .Values.deepwiki.engine.resources | nindent 12 }}
-          volumeMounts:
-            - name: tmp
-              mountPath: /tmp
-            # The engine clones repositories and writes an index before
-            # publishing it. That is ephemeral pod storage by design (ADR-0022
-            # decision 4): nothing durable lives here, and a replica that dies
-            # mid-generation loses only work that is being redone anyway.
-            - name: scratch
-              mountPath: {{ .Values.deepwiki.scratch.mountPath }}
-            - name: engine-socket
-              mountPath: {{ .Values.deepwiki.engine.socketDir }}
-        {{- else if eq $sidecar "native" }}
-        # The Rust-native engine sidecar (ADR-0026): the same socket protocol
-        # on the same socket, one distroless binary. The image's own
-        # ENTRYPOINT/CMD (`elitea-deepwiki-engine serve`) is the sidecar, so no
-        # command is set.
+        {{- if eq $sidecar "native" }}
+        # The engine sidecar (ADR-0023 H2, ADR-0026): the Rust-native engine,
+        # reached by the host over the shared socket. No port, no TLS, no
+        # identity — the socket directory is the only way in. One distroless
+        # binary: the image's own ENTRYPOINT/CMD (`elitea-deepwiki-engine
+        # serve`) is the sidecar, so no command is set. Its runner is
+        # deepwiki.engine.runner: native, or fixture (canned results, no
+        # database read).
         - name: engine
           image: "{{ .Values.deepwiki.engine.native.image.repository }}:{{ include "elitea-deepwiki.nativeTag" . }}"
           imagePullPolicy: {{ .Values.deepwiki.engine.native.image.pullPolicy }}
@@ -188,7 +143,7 @@ spec:
           {{- end }}
           env:
             {{- $nativeEnv := merge (dict
-                  "ELITEA_DEEPWIKI_RUNNER" "native"
+                  "ELITEA_DEEPWIKI_RUNNER" (.Values.deepwiki.engine.runner | toString)
                   "ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES" (include "elitea-deepwiki.nativeWorkerMemoryBytes" .)
                   "ELITEA_DEEPWIKI_WORKER_CPU_SECONDS" (.Values.deepwiki.engine.native.workerCpuSeconds | int64 | toString)
                 ) (omit $env "ELITEA_DEEPWIKI_BUILD_OWNER") }}
@@ -209,7 +164,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.name
             # ELITEA_DEEPWIKI_DATABASE_URL, from the secret the migrate Job
-            # reads (validateGuards refuses a native install without one).
+            # reads (validateGuards refuses a native runner without one).
             {{- with (include "elitea.provider.secretEnv" (dict "secrets" $secrets) | trim) }}{{- . | nindent 12 }}{{- end }}
           # Distroless: no shell, no python. The binary connects to its own
           # socket and asks GET /engine/health.

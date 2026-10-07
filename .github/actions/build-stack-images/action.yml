@@ -190,7 +190,7 @@ runs:
         # become permanent again. `-v2-` is only what abandons the poisoned
         # `buildkit-mounts-Linux-rust-…` entry that is already out there; it
         # will be evicted by LRU on its own.
-        MOUNT_BASE: buildkit-mounts-v2-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-${{ hashFiles('services/elitea-worker-rust/Cargo.lock', 'services/elitea-main/go.sum', 'services/elitea-llm-gateway/go.sum', 'services/elitea-subapp-host/go.sum', 'services/elitea-worker-python/pyproject.toml', 'services/elitea-deepwiki/pyproject.toml') }}
+        MOUNT_BASE: buildkit-mounts-v2-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-${{ hashFiles('services/elitea-worker-rust/Cargo.lock', 'services/elitea-main/go.sum', 'services/elitea-llm-gateway/go.sum', 'services/elitea-subapp-host/go.sum', 'services/elitea-worker-python/pyproject.toml', 'services/elitea-deepwiki-engine/Cargo.lock') }}
         MOUNT_PREFIX: buildkit-mounts-v2-${{ runner.os }}-${{ inputs.mount-cache-suffix }}-
         RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
       run: |

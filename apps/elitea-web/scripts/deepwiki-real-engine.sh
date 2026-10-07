@@ -7,8 +7,8 @@
 #     Go host's sidecar (deploy/docker-compose.deepwiki-real-engine.yml), a
 #     git daemon serving the seeded repository `acme/e2e-generated`.
 #   DEEPWIKI_REAL_ENGINE=native — the Rust-native engine (ADR-0026;
-#     deploy/docker-compose.deepwiki-native.yml plus
-#     deploy/docker-compose.deepwiki-native-real-engine.yml). The native
+#     deploy/docker-compose.deepwiki-native-real-engine.yml over the
+#     standalone stack, which runs the native sidecar already). The native
 #     clone speaks HTTPS only, so the repository under analysis is a real
 #     public one on github.com: kharkevich-engineering-lab/floe (its owner
 #     agreed to this use). Needs internet access.
@@ -78,7 +78,7 @@ case "$ENGINE" in
     export DEEPWIKI_ENGINE_IMAGE="${DEEPWIKI_ENGINE_IMAGE:-ghcr.io/eliteaai/elitea-deepwiki-engine-native:local}"
     ENGINE_CONTAINERFILE="${REPO_ROOT}/services/elitea-deepwiki-engine/Containerfile"
     ENGINE_BUILD_ARGS=()
-    ENGINE_OVERLAY="${REPO_ROOT}/deploy/docker-compose.deepwiki-native.yml ${REPO_ROOT}/deploy/docker-compose.deepwiki-native-real-engine.yml"
+    ENGINE_OVERLAY="${REPO_ROOT}/deploy/docker-compose.deepwiki-native-real-engine.yml"
     NATIVE_OWNER_REPO="${DEEPWIKI_NATIVE_REPOSITORY:-kharkevich-engineering-lab/floe}"
     NATIVE_URL="https://github.com/${NATIVE_OWNER_REPO}"
     NATIVE_REF="${DEEPWIKI_NATIVE_REF:-main}"

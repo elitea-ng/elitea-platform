@@ -9,7 +9,6 @@ name: CI — DeepWiki real engine
 #     the repository under analysis from a git daemon, and answers the
 #     engine's model calls with a deterministic stub;
 #   native — the Rust-native engine (ADR-0026): the standalone stack plus
-#     deploy/docker-compose.deepwiki-native.yml and
 #     deploy/docker-compose.deepwiki-native-real-engine.yml (the bake target
 #     `elitea-deepwiki-engine-native`, the same stub). The native clone speaks
 #     HTTPS only and reads no git configuration, so the git daemon cannot
@@ -248,7 +247,7 @@ jobs:
         run: |
           case "$DEEPWIKI_REAL_ENGINE" in
             native)
-              overlays="deploy/docker-compose.deepwiki-native.yml deploy/docker-compose.deepwiki-native-real-engine.yml" ;;
+              overlays="deploy/docker-compose.deepwiki-native-real-engine.yml" ;;
             *)
               overlays="deploy/docker-compose.deepwiki-real-engine.yml" ;;
           esac
