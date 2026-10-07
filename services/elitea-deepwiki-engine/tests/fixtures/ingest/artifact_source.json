@@ -210,9 +210,7 @@
    },
    "canonical_repository": "artifact://docs/handbook",
    "repo_identifier": "artifact://docs/handbook:main:1cea09ba",
-   "wiki_id": "artifact--docs--handbook--main",
-   "ask_wiki_id": "artifact--docs-handbook",
-   "context_wiki_id": "docs--handbook--main"
+   "wiki_id": "artifact--docs--handbook--main"
   },
   {
    "name": "the whole bucket on a branch label with odd characters",
@@ -281,9 +279,7 @@
    },
    "canonical_repository": "artifact://docs",
    "repo_identifier": "artifact://docs:release/v1 (rc):6dbb3faf",
-   "wiki_id": "artifact--docs--release-v1-rc",
-   "ask_wiki_id": "artifact--docs",
-   "context_wiki_id": "docs--release/v1 (rc)"
+   "wiki_id": "artifact--docs--release-v1-rc"
   },
   {
    "name": "an empty folder",

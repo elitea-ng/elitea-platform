@@ -3,9 +3,15 @@
 //!
 //! Ports of `elitea_deepwiki.wiki_context.display_repository_for` /
 //! `wiki_id_for` and `elitea_deepwiki.artifact_source.parse_artifact_source`.
-//! The Go host carries a third copy (`run.DisplayRepositoryFor`); all of
-//! them must agree, because a wiki id is an object-key prefix and the key
-//! the browser matches a manifest on.
+//! The Go host (`run.WikiIDFor`) and the browser (`toolkitSettings`) carry
+//! their own copies; all of them must agree, because a wiki id is an
+//! object-key prefix and the key the browser matches a manifest on.
+//!
+//! ONE RULE FOR AN ARTIFACT FOLDER: its wiki id is the one its generation
+//! files it under, [`artifact_wiki_id`] — `artifact--{bucket}--{prefix
+//! segments}--{branch}`, `normalize_wiki_id` of the repo identifier. Every
+//! reader (the fixture runner, the context paths, a direct `ask`) derives
+//! that id, never one of its own. A git repository is unchanged.
 
 use crate::errors::{EngineError, ErrorType};
 use regex::Regex;
@@ -265,7 +271,23 @@ pub fn display_repository_for(repo_config: Option<&Value>) -> Result<String, Eng
     Ok(repository.trim().trim_matches('/').to_owned())
 }
 
-/// The canonical `{owner}--{repo}--{branch}`.
+/// The wiki id a generation of `source` on `branch` is filed under:
+/// `normalize_wiki_id("artifact://bucket/prefix:{branch}:{sha8}")`, the
+/// listing digest left out because it never reaches the id. So
+/// `artifact://docs/handbook` on `main` is `artifact--docs--handbook--main`.
+#[must_use]
+pub fn artifact_wiki_id(source: &ArtifactSource, branch: Option<&str>) -> String {
+    use crate::wiki::compose::{build_repo_identifier, normalize_wiki_id};
+    let branch = branch.unwrap_or_default();
+    normalize_wiki_id(&build_repo_identifier(
+        &source.url(),
+        branch,
+        Some("00000000"),
+    ))
+}
+
+/// The canonical `{owner}--{repo}--{branch}`; for an artifact folder,
+/// [`artifact_wiki_id`].
 ///
 /// # Errors
 ///
@@ -274,6 +296,20 @@ pub fn wiki_id_for(
     repo_config: Option<&Value>,
     branch: Option<&str>,
 ) -> Result<String, EngineError> {
+    if let Some(Value::Object(config)) = repo_config {
+        let mut repository = str_or_empty(config, "repository");
+        if repository.is_empty()
+            && let Some(Value::Object(provider)) = config.get("provider_config")
+        {
+            repository = str_or_empty(provider, "repository");
+        }
+        if is_artifact_source(&repository) {
+            return Ok(artifact_wiki_id(
+                &parse_artifact_source(&repository)?,
+                branch,
+            ));
+        }
+    }
     let mut repository = display_repository_for(repo_config)?;
     if repository.is_empty() {
         "fixture/repository".clone_into(&mut repository);
@@ -335,6 +371,53 @@ mod tests {
         assert_eq!(
             display_repository_for(Some(&whole)).ok().as_deref(),
             Some("docs")
+        );
+    }
+
+    #[test]
+    fn an_artifact_folder_has_its_generation_id() {
+        for (repository, branch, expected) in [
+            (
+                "artifact://docs/handbook",
+                Some("main"),
+                "artifact--docs--handbook--main",
+            ),
+            (
+                "ARTIFACT://Docs/handbook/",
+                None,
+                "artifact--docs--handbook--main",
+            ),
+            (
+                "artifact://docs",
+                Some(" Release/V1 "),
+                "artifact--docs--release-v1",
+            ),
+            (
+                "artifact://my-b/a b/c.d_e",
+                Some("dev"),
+                "artifact--my-b--a-b--c-d-e--dev",
+            ),
+        ] {
+            let config = json!({"repository": repository});
+            assert_eq!(
+                wiki_id_for(Some(&config), branch).ok().as_deref(),
+                Some(expected),
+                "{repository}"
+            );
+        }
+        // The same id the generation derives from its repo identifier.
+        let source = parse_artifact_source("artifact://docs/handbook").ok();
+        let generated =
+            crate::wiki::compose::normalize_wiki_id("artifact://docs/handbook:main:1cea09ba");
+        assert_eq!(
+            source.map(|s| artifact_wiki_id(&s, Some("main"))),
+            Some(generated)
+        );
+        // A git repository is unchanged (no lower-casing, no folding).
+        let git = json!({"repository": "Acme/My_Repo"});
+        assert_eq!(
+            wiki_id_for(Some(&git), Some("Feature/X")).ok().as_deref(),
+            Some("Acme--My_Repo--Feature/X")
         );
     }
 

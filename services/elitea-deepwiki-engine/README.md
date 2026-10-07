@@ -347,15 +347,18 @@ go, and everything after that is unchanged.
   provider `artifact`, the branch `repo_config.branch` or `main` (a label),
   the manifest's `repository` the repository string. The directory is
   Python's `{bucket_prefix}_{branch}_{digest8}`.
-* **Other tools.** `ask` / `deep_research` derive `normalize_wiki_id(repo:branch)`
-  exactly as Python does, so a direct call names an artifact repository
-  `artifact--bucket-prefix` (Python's `rsplit(":", 2)` reads the scheme's
-  colon as a separator: the same id as Python, and not the generated wiki's).
-  Through `resolve_and_ask` the host passes the manifest's
-  `repo_identifier_override` and the id is the generated one. The context
-  paths (`source::wiki_id_for`) keep `{bucket}--{prefix}--{branch}`, as Python's
-  `wiki_context` and Go's `WikiIDFor` do. These three disagreements are
-  Python's, preserved.
+* **One wiki id.** An artifact folder has exactly one wiki id, the one its
+  generation files it under: `artifact--{bucket}--{prefix segments}--{branch}`,
+  each part lower-cased with every other character folded to `-`
+  (`source::artifact_wiki_id`, `normalize_wiki_id` of
+  `artifact://bucket/prefix:{branch}:{sha8}`). `artifact://docs/handbook` on
+  `main` is `artifact--docs--handbook--main`. Every reader derives it: a direct
+  `ask` / `deep_research`, the context paths and the fixture runner
+  (`source::wiki_id_for`), the Go host's `run.WikiIDFor`, and the browser's
+  repository identity (`entities/wiki/lib/artifactSource.ts`). Through
+  `resolve_and_ask` the manifest's `repo_identifier_override` gives the same
+  id. A git repository's id is unchanged. (Python derived two other ids for
+  a folder in `ask` and `wiki_context`; they were dropped.)
 * **Security.** Keys are untrusted: each is held to elitea-main's key rules
   (no NUL, backslash, empty, `.` or `..` segment, so no absolute path) and to
   the listed folder before anything is written, and one bad key refuses the
@@ -389,7 +392,7 @@ Parity: `parity/python_artifact_source.py` writes
 `tests/fixtures/ingest/artifact_source.json` from the Python functions
 (parsing, the client's listing over recorded pages, `collect_objects`,
 `check_caps`, `listing_digest`, the directory and marker of
-`materialise_artifact_source`, the three wiki ids, `extract_artifact_settings`);
+`materialise_artifact_source`, the generation wiki id, `extract_artifact_settings`);
 `ingest::artifact::tests` replays it and runs the transfer against a mock
 object API. `tests/native_generate.rs` runs a whole generation over a folder,
 and the Go host's `native_engine_test.go` reads one through the worker child.

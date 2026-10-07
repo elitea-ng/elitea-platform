@@ -13,11 +13,13 @@ Everything comes from the Python code itself, not from a transcription:
   ``requests.get`` answered from the pages), then ``collect_objects``,
   ``check_caps``, ``listing_digest`` and ``materialise_artifact_source``
   with a fake client (the directory name it chooses and the marker it
-  writes beside it); and the three wiki ids an artifact source gets:
-  the generation's (``normalize_wiki_id(build_repo_identifier(...))``,
-  as ``wiki_subprocess_worker`` derives it), the direct ``ask``'s
-  (``build_query_repo_identifier``) and the context-path one
-  (``wiki_context.wiki_id_for``);
+  writes beside it); and the generation's wiki id
+  (``normalize_wiki_id(build_repo_identifier(...))``, as
+  ``wiki_subprocess_worker`` derives it). That is the ONE id of an artifact
+  folder: the Rust engine's direct ``ask`` and context paths derive it too.
+  Python's own ``ask`` and ``wiki_context`` derived two others
+  (``artifact--docs-handbook``, ``docs--handbook--main``); they were dropped
+  on purpose and are not recorded;
 * ``settings``: ``extract_artifact_settings`` over ``llm_settings`` blocks.
 
 The Rust unit tests ``ingest::artifact::tests`` replay every case.
@@ -36,11 +38,9 @@ from elitea_deepwiki import artifact_source as source_mod
 from elitea_deepwiki.engine import artifacts_platform_client as client_mod
 from elitea_deepwiki.engine.registry_manager import normalize_wiki_id
 from elitea_deepwiki.engine.repository_identity import (
-    build_query_repo_identifier,
     build_repo_identifier,
     canonical_repository_path,
 )
-from elitea_deepwiki.wiki_context import wiki_id_for
 
 PARSE = [
     "artifact://docs",
@@ -247,19 +247,6 @@ def listing_case(case: dict) -> dict:
     out["canonical_repository"] = canonical
     out["repo_identifier"] = identifier
     out["wiki_id"] = normalize_wiki_id(identifier)
-    repo_config = {
-        "provider_type": "artifact",
-        "provider_config": {"bucket": source.bucket, "prefix": source.prefix},
-        "repository": repository,
-        "branch": branch,
-        "project": None,
-        "is_cloud": None,
-    }
-    ask_identifier = build_query_repo_identifier(
-        repository=repository, branch=branch, repo_config=repo_config
-    )
-    out["ask_wiki_id"] = normalize_wiki_id(ask_identifier)
-    out["context_wiki_id"] = wiki_id_for(repo_config, branch)
     return out
 
 

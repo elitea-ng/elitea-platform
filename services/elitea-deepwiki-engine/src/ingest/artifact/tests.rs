@@ -113,7 +113,8 @@ fn the_listing_identity_and_names_match_python() {
             "{name}"
         );
 
-        // The names the generation, ask and the context paths derive.
+        // The ONE id: the generation's, which ask and the context paths
+        // (and the fixture runner) derive too.
         let config = json!({
             "provider_type": "artifact",
             "provider_config": {"bucket": folder.bucket, "prefix": folder.prefix},
@@ -144,14 +145,10 @@ fn the_listing_identity_and_names_match_python() {
                 .unwrap_or_else(|| unreachable!()),
         )
         .map(|request| request.wiki_id);
-        assert_eq!(
-            ask.ok().as_deref(),
-            Some(text(&case["ask_wiki_id"])),
-            "{name}"
-        );
+        assert_eq!(ask.ok().as_deref(), Some(text(&case["wiki_id"])), "{name}");
         assert_eq!(
             wiki_id_for(Some(&config), Some(branch)).ok().as_deref(),
-            Some(text(&case["context_wiki_id"])),
+            Some(text(&case["wiki_id"])),
             "{name}"
         );
     }
