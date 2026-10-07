@@ -122,3 +122,30 @@ impl Runner {
     #[allow(clippy::unused_async)] // The Python sidecar's publish was async.
     pub async fn publish(&self, _result: &Value, _context: &Context) {}
 }
+
+/// The socket serves [`ENGINE_TOOLS`] through this runner; the shared
+/// sidecar crate owns the protocol (ADR-0027).
+impl elitea_engine_sidecar::Engine for Runner {
+    fn runner_name(&self) -> &'static str {
+        self.name()
+    }
+
+    fn serves(&self, tool: &str) -> bool {
+        ENGINE_TOOLS.contains(&tool)
+    }
+
+    async fn run(
+        &self,
+        tool: &str,
+        arguments: Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        Runner::run(self, tool, arguments, context).await
+    }
+
+    async fn after_success(&self, tool: &str, result: &Value, context: &Context) {
+        if tool == "generate_wiki" {
+            self.publish(result, context).await;
+        }
+    }
+}

@@ -8,20 +8,27 @@
 //! GET  /engine/health                  {"status": "UP", "runner": …, "active": n}
 //! ```
 //!
-//! The wire is the Python sidecar's (`elitea_deepwiki/sidecar.py`) byte for
-//! byte where the host can see it: routes, status codes, keys, the empty
-//! token rule and the stop line. No SPI, no descriptor and no identity
-//! headers live here — the socket is reachable only from the host's pod.
+//! The wire is the Python sidecars' (`elitea_deepwiki/sidecar.py`, the
+//! Inventory `sidecar.py`) byte for byte where the host can see it: routes,
+//! status codes, keys, the empty token rule and the stop line. One client in
+//! the host (`internal/engine`) talks to every engine through it. No SPI, no
+//! descriptor and no identity headers live here — the socket is reachable
+//! only from the host's pod.
+//!
+//! What an engine adds is an [`Engine`]: the tools it serves and how it runs
+//! one. Everything about the socket is here.
 
-use crate::pyjson::dumps;
-use crate::runner::{Context, ENGINE_TOOLS, Line, Runner, StopSignal};
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path as UrlPath, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use serde_json::{Value, json};
+use elitea_engine_core::errors::EngineError;
+use elitea_engine_core::pyjson::dumps;
+use elitea_engine_core::pyvalue::py_str;
+use elitea_engine_core::stream::{Context, Line, StopSignal};
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::io;
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -33,30 +40,71 @@ use tokio::sync::mpsc;
 use tokio_stream::StreamExt;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 
+/// One engine behind the socket: the tools it serves and how it runs one.
+///
+/// The server owns the protocol — admission of the request, the invocation
+/// registry, the stop route, the NDJSON stream and its stop-on-disconnect —
+/// so an engine implements only what is its own.
+pub trait Engine: Send + Sync + 'static {
+    /// The name `GET /engine/health` reports as `runner` (`native`,
+    /// `fixture`, `unavailable`, …).
+    fn runner_name(&self) -> &'static str;
+
+    /// Whether `tool` is one this socket serves. Anything else is refused
+    /// with `400 Unknown tool` before a run starts; the host serves every
+    /// other tool of the application itself.
+    fn serves(&self, tool: &str) -> bool;
+
+    /// Run one tool with the arguments the host derived, reporting progress
+    /// and answer fragments through `context`.
+    ///
+    /// # Errors
+    ///
+    /// The tool's failure (the error line), or the stop line after a stop.
+    fn run(
+        &self,
+        tool: &str,
+        arguments: Map<String, Value>,
+        context: &Context,
+    ) -> impl Future<Output = Result<Value, EngineError>> + Send;
+
+    /// Called with a successful result (`"success": true`) before its line
+    /// is sent, for work that must be done by then — publishing what the
+    /// result points at. Nothing by default.
+    fn after_success(
+        &self,
+        tool: &str,
+        result: &Value,
+        context: &Context,
+    ) -> impl Future<Output = ()> + Send {
+        let _ = (tool, result, context);
+        async {}
+    }
+}
+
 /// What every request handler shares.
-#[derive(Debug)]
-struct Shared {
-    runner: Runner,
+struct Shared<E> {
+    engine: E,
     running: Mutex<HashMap<String, StopSignal>>,
 }
 
-impl Shared {
+impl<E> Shared<E> {
     fn running(&self) -> std::sync::MutexGuard<'_, HashMap<String, StopSignal>> {
         // A poisoned map still holds valid stop signals; keep serving.
         self.running.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
-/// The sidecar's routes over `runner`.
-pub fn router(runner: Runner) -> Router {
+/// The sidecar's routes over `engine`.
+pub fn router<E: Engine>(engine: E) -> Router {
     let shared = Arc::new(Shared {
-        runner,
+        engine,
         running: Mutex::new(HashMap::new()),
     });
     Router::new()
-        .route("/engine/health", get(health))
-        .route("/engine/invoke", post(invoke))
-        .route("/engine/invocations/{invocation_id}/stop", post(stop))
+        .route("/engine/health", get(health::<E>))
+        .route("/engine/invoke", post(invoke::<E>))
+        .route("/engine/invocations/{invocation_id}/stop", post(stop::<E>))
         .fallback(|| async { detail(StatusCode::NOT_FOUND, "Not Found") })
         .with_state(shared)
 }
@@ -75,16 +123,16 @@ fn detail(status: StatusCode, message: &str) -> Response {
     json_response(status, &json!({ "detail": message }))
 }
 
-async fn health(State(shared): State<Arc<Shared>>) -> Response {
+async fn health<E: Engine>(State(shared): State<Arc<Shared<E>>>) -> Response {
     let active = shared.running().len();
     json_response(
         StatusCode::OK,
-        &json!({"status": "UP", "runner": shared.runner.name(), "active": active}),
+        &json!({"status": "UP", "runner": shared.engine.runner_name(), "active": active}),
     )
 }
 
-async fn stop(
-    State(shared): State<Arc<Shared>>,
+async fn stop<E: Engine>(
+    State(shared): State<Arc<Shared<E>>>,
     UrlPath(invocation_id): UrlPath<String>,
 ) -> Response {
     let signal = shared.running().get(&invocation_id).cloned();
@@ -98,14 +146,14 @@ async fn stop(
 /// Ends an invocation's registration when its stream is dropped — finished
 /// or abandoned. A reader that went away mid-run is a stop: nothing will
 /// read the result.
-struct StreamGuard {
-    shared: Arc<Shared>,
+struct StreamGuard<E> {
+    shared: Arc<Shared<E>>,
     invocation_id: String,
     stop: StopSignal,
     finished: Arc<AtomicBool>,
 }
 
-impl Drop for StreamGuard {
+impl<E> Drop for StreamGuard<E> {
     fn drop(&mut self) {
         if !self.finished.load(Ordering::SeqCst) {
             self.stop.request();
@@ -116,10 +164,10 @@ impl Drop for StreamGuard {
 
 /// Python's `f"{value}"` for the refusal message.
 fn shown(value: Option<&Value>) -> String {
-    value.map_or_else(|| "None".to_owned(), crate::source::py_str)
+    value.map_or_else(|| "None".to_owned(), py_str)
 }
 
-async fn invoke(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {
+async fn invoke<E: Engine>(State(shared): State<Arc<Shared<E>>>, body: Bytes) -> Response {
     let Ok(Value::Object(request)) = serde_json::from_slice::<Value>(&body) else {
         return detail(
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -131,7 +179,7 @@ async fn invoke(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {
         _ => return detail(StatusCode::BAD_REQUEST, "invocation_id is required"),
     };
     let tool = match request.get("tool") {
-        Some(Value::String(tool)) if ENGINE_TOOLS.contains(&tool.as_str()) => tool.clone(),
+        Some(Value::String(tool)) if shared.engine.serves(tool) => tool.clone(),
         other => {
             return detail(
                 StatusCode::BAD_REQUEST,
@@ -161,11 +209,14 @@ async fn invoke(State(shared): State<Arc<Shared>>, body: Bytes) -> Response {
     let task_shared = Arc::clone(&shared);
     let task_finished = Arc::clone(&finished);
     tokio::spawn(async move {
-        let outcome = task_shared.runner.run(&tool, arguments, &context).await;
+        let outcome = task_shared.engine.run(&tool, arguments, &context).await;
         let line = match outcome {
             Ok(result) => {
-                if tool == "generate_wiki" && result.get("success") == Some(&Value::Bool(true)) {
-                    task_shared.runner.publish(&result, &context).await;
+                if result.get("success") == Some(&Value::Bool(true)) {
+                    task_shared
+                        .engine
+                        .after_success(&tool, &result, &context)
+                        .await;
                 }
                 Line::Result(result)
             }
@@ -226,17 +277,17 @@ pub fn bind(path: &Path) -> io::Result<UnixListener> {
     Ok(listener)
 }
 
-/// Serve `runner` on `listener` until `shutdown` resolves.
+/// Serve `engine` on `listener` until `shutdown` resolves.
 ///
 /// # Errors
 ///
 /// The server's I/O failure.
-pub async fn serve(
+pub async fn serve<E: Engine>(
     listener: UnixListener,
-    runner: Runner,
+    engine: E,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    axum::serve(listener, router(runner))
+    axum::serve(listener, router(engine))
         .with_graceful_shutdown(shutdown)
         .await
 }

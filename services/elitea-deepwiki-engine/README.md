@@ -35,6 +35,11 @@ are absent or meaningless. Generation is model-bound on both. The harness is
 
 ## The socket protocol
 
+The server is the shared crate `libs/rust/engine-sidecar` (ADR-0027): this
+engine's `runner::Runner` implements its `Engine` trait (the four tools in
+`ENGINE_TOOLS`, and the `generate_wiki` publish hook), and the crate owns
+the protocol below.
+
 ```
 POST /engine/invoke                  {invocation_id, tool, arguments}
   → application/x-ndjson: {"thinking": …} and {"token": …} interleaved,

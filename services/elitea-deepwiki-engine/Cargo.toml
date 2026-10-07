@@ -13,6 +13,7 @@ elitea-engine-core = { path = "../../libs/rust/engine-core" }
 elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
 elitea-model-client = { path = "../../libs/rust/model-client" }
 elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
+elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 # The Mermaid sanitizer is ~150 transcribed Python regular expressions,
 # several with look-around, which `regex` lacks. A backtracking engine
@@ -20,9 +21,6 @@ axum = { version = "=0.8.9", default-features = false, features = ["http1", "jso
 # this pins the same version as a direct dependency.
 fancy-regex = "=0.19.2"
 globset = "=0.4.20"
-http-body-util = "=0.1.5"
-hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1"] }
-hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio"] }
 indexmap = "=2.14.2"
 # Dense vectors on the PostgreSQL index (ADR-0026 decision 5). Its `sqlx`
 # feature accepts sqlx 0.8 and 0.9 and resolves 0.9 by default; the exact
@@ -72,6 +70,10 @@ unicode-normalization = "=0.1.25"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
 
 [dev-dependencies]
+# The sidecar tests' HTTP/1 client over the Unix socket.
+http-body-util = "=0.1.5"
+hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio"] }
 tokio = { version = "=1.53.1", features = ["test-util"] }
 
 [features]

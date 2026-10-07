@@ -15,7 +15,7 @@
 # service builds against.
 [workspace]
 resolver = "3"
-members = ["code-parsers", "engine-core", "model-client", "repo-ingest"]
+members = ["code-parsers", "engine-core", "engine-sidecar", "model-client", "repo-ingest"]
 
 [workspace.package]
 version = "0.1.0"

@@ -6,18 +6,18 @@
 //! a worker child process (`worker`, `generate`).
 
 pub mod ask;
-pub mod cgroup;
+pub use elitea_engine_sidecar::cgroup;
 pub mod config;
 pub use elitea_engine_core::errors;
 pub mod generate;
 pub mod graph;
-pub mod healthcheck;
 pub use elitea_code_parsers as parsers;
 pub use elitea_engine_core::pyjson;
+pub use elitea_engine_sidecar::healthcheck;
 pub use elitea_model_client as llm;
 pub use elitea_repo_ingest as ingest;
 pub mod runner;
-pub mod server;
+pub use elitea_engine_sidecar::server;
 pub mod source;
 pub mod storage;
 pub mod structure;

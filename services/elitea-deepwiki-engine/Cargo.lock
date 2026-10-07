@@ -539,6 +539,7 @@ dependencies = [
  "axum",
  "elitea-code-parsers",
  "elitea-engine-core",
+ "elitea-engine-sidecar",
  "elitea-model-client",
  "elitea-repo-ingest",
  "fancy-regex",
@@ -573,6 +574,21 @@ dependencies = [
  "serde_json",
  "tokio",
  "zeroize",
+]
+
+[[package]]
+name = "elitea-engine-sidecar"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "elitea-engine-core",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tracing",
 ]
 
 [[package]]

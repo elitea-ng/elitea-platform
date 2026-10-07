@@ -547,6 +547,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-engine-sidecar"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "elitea-engine-core",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+]
+
+[[package]]
 name = "elitea-model-client"
 version = "0.1.0"
 dependencies = [

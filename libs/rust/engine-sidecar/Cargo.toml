@@ -1,0 +1,24 @@
+[package]
+name = "elitea-engine-sidecar"
+description = "The engine sidecar's Unix-socket NDJSON server, container probe and cgroup reader."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum = { version = "0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
+elitea-engine-core = { path = "../engine-core" }
+http-body-util = "0.1.5"
+hyper = { version = "1.11.1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1.20", default-features = false, features = ["tokio"] }
+serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
+tokio = { version = "1.53.1", features = ["macros", "net", "rt", "sync", "time"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
+
+[lints]
+workspace = true
