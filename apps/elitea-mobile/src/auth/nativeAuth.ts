@@ -3,12 +3,12 @@ import * as WebBrowser from 'expo-web-browser';
 import { assessDiscovery, type NativeAuthEndpoints } from '@/api/discovery';
 import { getClientVersion } from '@/api/clientVersion';
 import { deviceName, devicePlatform } from '@/auth/deviceInfo';
-import { nativeClientId, startNativeSession } from '@/auth/nativeSession';
+import { WorkspaceChangedError, nativeClientId, startNativeSession } from '@/auth/nativeSession';
 import { constantTimeEqual, createPkce, createState, type PkceDeps } from '@/auth/pkce';
 import { exchangeAuthorizationCode, revokeToken, type TokenOutcome } from '@/auth/tokenEndpoint';
 import { oauthRedirectUri } from '@/config/identity';
 import { log } from '@/lib/log';
-import { SECURE_KEYS, deleteSecureItem } from '@/security/secureStorage';
+import { SECURE_KEYS, boundWorkspace, deleteSecureItemIn } from '@/security/secureStorage';
 import { getSession, setSession } from '@/state/session';
 import { getWorkspaceInfo, refreshWorkspaceInfo } from '@/state/workspaceInfo';
 
@@ -165,7 +165,10 @@ export function signInWithWorkspace(deps: NativeSignInDeps = {}): Promise<Native
 
 async function run(deps: NativeSignInDeps): Promise<NativeSignInResult> {
   const origin = getSession().serverOrigin;
-  if (origin === null) return { ok: false, error: 'workspace_changed' };
+  // The slot this sign-in is for: every write and any cleanup targets it,
+  // whatever is bound by the time the browser returns.
+  const workspaceId = boundWorkspace();
+  if (origin === null || workspaceId === null) return { ok: false, error: 'workspace_changed' };
 
   let info = getWorkspaceInfo();
   if (info?.origin !== origin) {
@@ -221,12 +224,13 @@ async function run(deps: NativeSignInDeps): Promise<NativeSignInResult> {
     redirectUri: oauthRedirectUri,
     clientId,
   });
-  return finish(outcome, origin, endpoints, clientId);
+  return finish(outcome, origin, workspaceId, endpoints, clientId);
 }
 
 async function finish(
   outcome: TokenOutcome,
   origin: string,
+  workspaceId: string,
   endpoints: NativeAuthEndpoints,
   clientId: string,
 ): Promise<NativeSignInResult> {
@@ -247,7 +251,9 @@ async function finish(
     default:
       return { ok: false, error: 'server_error' };
   }
-  if (getSession().serverOrigin !== origin) return { ok: false, error: 'workspace_changed' };
+  if (getSession().serverOrigin !== origin || boundWorkspace() !== workspaceId) {
+    return { ok: false, error: 'workspace_changed' };
+  }
   try {
     await startNativeSession(outcome.response, outcome.receivedAt, {
       origin,
@@ -256,12 +262,14 @@ async function finish(
       revocationEndpoint: endpoints.revocation_endpoint,
     });
   } catch (error) {
+    // Stored in its own slot, which now opens signed in; nothing to undo.
+    if (error instanceof WorkspaceChangedError) return { ok: false, error: 'workspace_changed' };
     log.warn('native sign-in could not store its tokens', { error });
     // Do not leave a half-written credential or an orphaned device session.
     await Promise.allSettled([
-      deleteSecureItem(SECURE_KEYS.refreshToken),
-      deleteSecureItem(SECURE_KEYS.accessToken),
-      deleteSecureItem(SECURE_KEYS.credentialKind),
+      deleteSecureItemIn(workspaceId, SECURE_KEYS.refreshToken),
+      deleteSecureItemIn(workspaceId, SECURE_KEYS.accessToken),
+      deleteSecureItemIn(workspaceId, SECURE_KEYS.credentialKind),
       revokeToken(origin, endpoints.revocation_endpoint, { token: outcome.response.refresh_token, clientId }),
     ]);
     return { ok: false, error: 'storage' };

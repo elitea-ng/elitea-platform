@@ -7,7 +7,7 @@ import { displayHost } from '@/features/connect/connectFlow';
 import { log } from '@/lib/log';
 import { useSession } from '@/state/session';
 import { beginAddWorkspace, classifyIncomingLink, switchToWorkspace } from '@/state/workspace';
-import { useWorkspaceList } from '@/state/workspaceList';
+import { useWorkspaceList, useWorkspaceListLoaded } from '@/state/workspaceList';
 
 /** URLs already acted on; `useLinkingURL` keeps returning the launch URL. */
 const handled = new Set<string>();
@@ -27,9 +27,13 @@ export function useIncomingConnectLink(enabled: boolean): void {
   const url = Linking.useLinkingURL();
   const serverOrigin = useSession((s) => s.serverOrigin);
   const known = useWorkspaceList();
+  // At launch the list is read after hydration, without blocking it: until
+  // it has loaded, a link for a connected workspace would read as a new one.
+  const listLoaded = useWorkspaceListLoaded();
 
   useEffect(() => {
     if (!enabled || !url || handled.has(url)) return;
+    if (!listLoaded && serverOrigin !== null) return;
     const action = classifyIncomingLink(
       url,
       serverOrigin,
@@ -65,5 +69,5 @@ export function useIncomingConnectLink(enabled: boolean): void {
         { text: 'Add workspace', onPress: () => void beginAddWorkspace(action.origin) },
       ],
     );
-  }, [enabled, url, serverOrigin, known]);
+  }, [enabled, url, serverOrigin, known, listLoaded]);
 }

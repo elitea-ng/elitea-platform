@@ -1,7 +1,7 @@
 import { opaqueToken } from '@/api/__fixtures__/nativeClient';
-import { __resetNativeSessionForTests, __setNativeSessionDepsForTests } from '@/auth/nativeSession';
+import { __resetNativeSessionForTests, __setNativeSessionDepsForTests, getNativeTokenSet } from '@/auth/nativeSession';
 import { abortAll, registerAbortable } from '@/lib/abortRegistry';
-import { registerStoredWipeHook, registerWipeHook } from '@/security/endSession';
+import { endSession, registerStoredWipeHook, registerWipeHook } from '@/security/endSession';
 import { DEVICE_KEYS, SECURE_KEYS, bindWorkspace, boundWorkspace } from '@/security/secureStorage';
 import { MAX_WORKSPACES, __resetRegistryForTests } from '@/security/workspaceRegistry';
 import { __resetSessionForTests, getBearerToken, getSession, setCredential, setSession } from '@/state/session';
@@ -11,6 +11,7 @@ import {
   classifyIncomingLink,
   connectWorkspace,
   isSwitchingWorkspace,
+  leaveSignIn,
   onWorkspaceSwitch,
   removeAllWorkspaces,
   removeWorkspace,
@@ -60,6 +61,29 @@ function slot(id: string, origin: string, token: string, project: string) {
   fake.values.set(wsKey(SECURE_KEYS.pat, id), token);
   fake.values.set(wsKey(SECURE_KEYS.projectSelected, id), project);
   fake.values.set(wsKey(SECURE_KEYS.dbKey, id), id.slice(0, 1).repeat(64));
+}
+
+/** Makes slot `id` a native (OAuth) slot with a stored device session. */
+function nativeSlot(id: string, origin: string) {
+  fake.values.delete(wsKey(SECURE_KEYS.pat, id));
+  fake.values.set(wsKey(SECURE_KEYS.credentialKind, id), 'oauth');
+  fake.values.set(
+    wsKey(SECURE_KEYS.refreshToken, id),
+    JSON.stringify({
+      v: 1,
+      origin,
+      clientId: 'ca.zefir.agent',
+      tokenEndpoint: `${origin}/api/v2/auth/native/token`,
+      revocationEndpoint: `${origin}/api/v2/auth/native/revoke`,
+      refreshToken: opaqueToken('elnrt_', 2),
+      refreshExpiresAt: 0,
+      deviceId: 'd',
+    }),
+  );
+  fake.values.set(
+    wsKey(SECURE_KEYS.accessToken, id),
+    JSON.stringify({ v: 1, accessToken: opaqueToken('elnat_', 2), accessExpiresAt: 0 }),
+  );
 }
 
 /** Workspaces A (active, signed in) and B (connected, put aside). */
@@ -135,6 +159,18 @@ describe('connectWorkspace', () => {
     expect(connected).toBe(false);
     expect(registry().ids).toEqual([B, A]);
     expect([...fake.values.keys()].filter((k) => k.endsWith('.server.origin'))).toHaveLength(2);
+  });
+
+  // F3: a slot with an unfinished wipe keeps its origin for the retry.
+  it('finishes the unfinished wipe of a slot for the same origin, then connects a fresh one', async () => {
+    slot(B, ORIGIN_B, 'token-b', '9');
+    fake.values.set(wsKey(SECURE_KEYS.wipePending, B), JSON.stringify({ reason: 'user_logout' }));
+    fake.values.set(DEVICE_KEYS.workspaces, registryValue([B], null));
+    await expect(connectWorkspace(ORIGIN_B)).resolves.toBe(true);
+    const id = boundWorkspace()!;
+    expect(id).not.toBe(B);
+    expect(itemsOf(B)).toEqual({});
+    expect(registry()).toEqual({ v: 1, active: id, ids: [id] });
   });
 
   it('adds one slot for an origin connected twice at the same time', async () => {
@@ -223,6 +259,48 @@ describe('switchToWorkspace', () => {
     expect(getSession()).toMatchObject({ workspaceId: A, credential: { kind: 'pat' } });
   });
 
+  // F1: a switch that fails after the target's credential was already loaded
+  // must not leave that half-restored workspace live in memory.
+  it('forgets the half-restored workspace when opening it fails (no token, revoke or refresher left)', async () => {
+    twoWorkspaces();
+    nativeSlot(B, ORIGIN_B);
+    const revoke = jest.fn(async () => true);
+    __setNativeSessionDepsForTests({ revoke });
+    const write = fake.setItemAsync.getMockImplementation()!;
+    fake.setItemAsync.mockImplementation(async (key: string, value: string) => {
+      if (key === DEVICE_KEYS.workspaces) throw new Error('device locked');
+      return write(key, value);
+    });
+    const reset = jest.fn();
+    const off = registerWipeHook('probe', reset);
+
+    await expect(switchToWorkspace(B)).resolves.toBe(false);
+    fake.setItemAsync.mockImplementation(write);
+
+    expect(reset).toHaveBeenCalledTimes(2); // A put aside, then B's half-restore forgotten
+    expect(getNativeTokenSet()).toBeNull();
+    expect(getBearerToken()).toBeNull();
+    expect(boundWorkspace()).toBeNull();
+    expect(getSession()).toMatchObject({ serverOrigin: null, workspaceId: null, credential: null, switching: false });
+    // A later end of whatever is active next must not revoke B's device session.
+    await endSession({ reason: 'user_logout' });
+    expect(revoke).not.toHaveBeenCalled();
+    expect(itemsOf(B)[wsKey(SECURE_KEYS.refreshToken, B)]).toBeDefined();
+    off();
+  });
+
+  it('puts leftover in-memory state aside even when nothing is bound', async () => {
+    const reset = jest.fn();
+    const off = registerWipeHook('probe', reset);
+    setCredential({ kind: 'pat', token: 'stale' });
+    slot(B, ORIGIN_B, 'token-b', '9');
+    fake.values.set(DEVICE_KEYS.workspaces, registryValue([B], null));
+    await expect(switchToWorkspace(B)).resolves.toBe(true);
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(getBearerToken()).toBe('token-b');
+    off();
+  });
+
   it('finishes an interrupted wipe of the target instead of opening it', async () => {
     twoWorkspaces();
     fake.values.set(wsKey(SECURE_KEYS.wipePending, B), JSON.stringify({ reason: 'device_revoked' }));
@@ -253,6 +331,36 @@ describe('add workspace', () => {
     await expect(returnToPreviousWorkspace()).resolves.toBe(true);
     expect(getSession()).toMatchObject({ workspaceId: A, returnWorkspaceId: null });
     expect(getBearerToken()).toBe('token-a');
+  });
+});
+
+// F2: a new slot is not the launch default until it has signed in.
+describe('add workspace, then back out of its sign-in', () => {
+  const ORIGIN_C = 'https://c.example.com';
+
+  it('keeps the previous workspace active and the Back link when the new slot is left unsigned', async () => {
+    twoWorkspaces();
+    await beginAddWorkspace();
+    await expect(connectWorkspace(ORIGIN_C)).resolves.toBe(true);
+    const c = boundWorkspace()!;
+    // A relaunch on C's sign-in screen still opens A.
+    expect(registry()).toEqual({ v: 1, active: A, ids: [c, A, B] });
+    expect(getSession().returnWorkspaceId).toBe(A);
+
+    await leaveSignIn(); // "Use a different workspace"
+
+    expect(registry()).toEqual({ v: 1, active: A, ids: [A, B] });
+    expect(getSession()).toMatchObject({ serverOrigin: null, returnWorkspaceId: A });
+    await expect(returnToPreviousWorkspace()).resolves.toBe(true);
+    expect(getBearerToken()).toBe('token-a');
+  });
+
+  it('does not make a signed-out workspace the launch default by switching to it', async () => {
+    twoWorkspaces();
+    fake.values.delete(wsKey(SECURE_KEYS.credentialKind, B));
+    fake.values.delete(wsKey(SECURE_KEYS.pat, B));
+    await switchToWorkspace(B);
+    expect(registry().active).toBe(A);
   });
 });
 
@@ -352,11 +460,15 @@ describe('workspace list', () => {
         fontFamily: null,
       }),
     );
+    fake.values.set(
+      wsKey(SECURE_KEYS.policy, B),
+      JSON.stringify({ v: 1, origin: ORIGIN_B, policy: { require_device_lock: true } }),
+    );
     fake.values.delete(wsKey(SECURE_KEYS.credentialKind, A));
     await refreshWorkspaceList();
     expect(getWorkspaceList()).toEqual([
-      { id: A, origin: ORIGIN_A, name: null, logoMark: null, signedIn: false },
-      { id: B, origin: ORIGIN_B, name: 'Acme AI', logoMark: { uri: `${ORIGIN_B}/brand/mark.svg`, kind: 'svg' }, signedIn: true },
+      { id: A, origin: ORIGIN_A, name: null, logoMark: null, signedIn: false, requiresLock: false },
+      { id: B, origin: ORIGIN_B, name: 'Acme AI', logoMark: { uri: `${ORIGIN_B}/brand/mark.svg`, kind: 'svg' }, signedIn: true, requiresLock: true },
     ]);
   });
 

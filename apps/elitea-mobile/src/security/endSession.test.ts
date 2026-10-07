@@ -429,4 +429,25 @@ describe('a database file that could not be deleted', () => {
     expect(fake.values.get(wsKey(SECURE_KEYS.workspaceMeta, OTHER))).toBe('other workspace');
     expect(fake.values.has(wsKey(SECURE_KEYS.refreshToken, OTHER))).toBe(false);
   });
+
+  // F3 / WS-SEC-5: the brand-font hook finds its folder by the slot's origin.
+  it('keeps the origin too, so a retried stored hook can still find what it deletes', async () => {
+    signedIn();
+    const seen: (string | null)[] = [];
+    let fail = true;
+    const { getSecureItemIn } = jest.requireActual<typeof import('@/security/secureStorage')>('@/security/secureStorage');
+    const unregister = registerStoredWipeHook('probe', async (id) => {
+      seen.push(await getSecureItemIn(id, SECURE_KEYS.serverOrigin));
+      if (fail) throw new Error('directory busy');
+    });
+    const first = await wipeStoredWorkspace(OTHER, { reason: 'user_logout' });
+    expect(first.wiped).toBe(false);
+    expect(fake.values.get(wsKey(SECURE_KEYS.serverOrigin, OTHER))).toBe('other workspace');
+    fail = false;
+    const [resumed] = await resumePendingWipes();
+    unregister();
+    expect(resumed).toMatchObject({ workspaceId: OTHER, wiped: true });
+    expect(seen).toEqual(['other workspace', 'other workspace']);
+    expect(fake.values.has(wsKey(SECURE_KEYS.serverOrigin, OTHER))).toBe(false);
+  });
 });

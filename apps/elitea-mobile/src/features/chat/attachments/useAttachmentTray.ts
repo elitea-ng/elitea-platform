@@ -12,7 +12,7 @@ function discard(uri: string) {
     const file = new File(uri);
     if (file.exists) file.delete();
   } catch {
-    // the caches are wiped with the session anyway
+    // swept when the workspace is put aside or ended (tempWipe.ts), and at the next start
   }
 }
 

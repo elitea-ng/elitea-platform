@@ -78,7 +78,12 @@ beforeEach(() => {
   jest.spyOn(console, 'warn').mockImplementation(() => {});
   jest.spyOn(console, 'info').mockImplementation(() => {});
 });
-afterEach(() => jest.restoreAllMocks());
+let afterThis: (() => void) | null = null;
+afterEach(() => {
+  afterThis?.();
+  afterThis = null;
+  jest.restoreAllMocks();
+});
 
 describe('buildAuthorizeUrl', () => {
   it('carries every parameter the server requires', () => {
@@ -281,5 +286,47 @@ describe('signInWithWorkspace', () => {
       endpoints.revocation_endpoint,
       { token: tokenResponse().refresh_token, clientId: 'ca.zefir.agent' },
     );
+  });
+
+  // WS-SEC-3: the failure cleanup must target the slot the sign-in was for.
+  it('cleans up the workspace it signed in to, not one switched to meanwhile', async () => {
+    const { openAuthSession } = browser(success);
+    const B = 'bbbbbbbbbbbb';
+    store.values.set(wsKey(SECURE_KEYS.refreshToken, B), 'b-refresh');
+    store.values.set(wsKey(SECURE_KEYS.credentialKind, B), 'oauth');
+    store.setItemAsync.mockImplementationOnce(async () => {
+      bindWorkspace(B); // the user switched while the keychain write failed
+      throw new Error('keychain error');
+    });
+    jest.spyOn(require('@/auth/tokenEndpoint'), 'revokeToken').mockImplementation(async () => true);
+    expect(await signInWithWorkspace({ openAuthSession, exchange: exchangeOk(), pkce })).toEqual({
+      ok: false,
+      error: 'storage',
+    });
+    expect(store.values.get(wsKey(SECURE_KEYS.refreshToken, B))).toBe('b-refresh');
+    expect(store.values.get(wsKey(SECURE_KEYS.credentialKind, B))).toBe('oauth');
+  });
+
+  it('reports a switch during the sign-in as workspace_changed and keeps the stored session', async () => {
+    const { openAuthSession } = browser(success);
+    setSession({ workspaceId: TEST_WORKSPACE });
+    const write = store.setItemAsync.getMockImplementation()!;
+    afterThis = () => store.setItemAsync.mockImplementation(write);
+    store.setItemAsync.mockImplementation(async (key: string, value: string) => {
+      await write(key, value);
+      if (key === wsKey(SECURE_KEYS.credentialKind)) {
+        bindWorkspace('bbbbbbbbbbbb');
+        setSession({ workspaceId: 'bbbbbbbbbbbb' });
+      }
+    });
+    const revoke = jest.fn(async () => true);
+    jest.spyOn(require('@/auth/tokenEndpoint'), 'revokeToken').mockImplementation(revoke);
+    expect(await signInWithWorkspace({ openAuthSession, exchange: exchangeOk(), pkce })).toEqual({
+      ok: false,
+      error: 'workspace_changed',
+    });
+    expect(getBearerToken()).toBeNull();
+    expect(store.values.get(wsKey(SECURE_KEYS.credentialKind))).toBe('oauth');
+    expect(revoke).not.toHaveBeenCalled();
   });
 });

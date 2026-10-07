@@ -21,7 +21,8 @@ import {
   getSecureItemIn,
   setSecureItemIn,
 } from '@/security/secureStorage';
-import { getBearerToken, getSession, setCredential } from '@/state/session';
+import { activateSignedInWorkspace } from '@/security/workspaceRegistry';
+import { getBearerToken, getSession, setCredential, setSession } from '@/state/session';
 
 /**
  * The native sign-in credential (ADR-0025 WP2/WP3): an opaque access token
@@ -295,6 +296,14 @@ function activate(set: NativeTokenSet): void {
   setCredentialRefresher(refresher);
 }
 
+/** The workspace a sign-in was for is no longer the active one; its tokens are stored in its slot. */
+export class WorkspaceChangedError extends Error {
+  constructor() {
+    super('workspace changed during sign-in');
+    this.name = 'WorkspaceChangedError';
+  }
+}
+
 /**
  * Sign-in finished with a token response: store it (refresh record, access
  * record, then the credential kind as the commit marker) and make it the
@@ -308,13 +317,23 @@ export async function startNativeSession(
 ): Promise<void> {
   const workspaceId = boundWorkspace();
   if (workspaceId === null) throw new NoWorkspaceError();
+  const sessionWorkspace = getSession().workspaceId;
   const set = tokenSetFrom(response, receivedAt, { ...base, workspaceId });
   await persistTokens(set);
   await tracked(setSecureItemIn(workspaceId, SECURE_KEYS.credentialKind, 'oauth'));
+  // A switch can land while the tokens are being stored (sign-in completion is
+  // not one of the serialised transitions). They stay in their own slot, which
+  // then opens signed in; activating them now would make this workspace's
+  // token the credential of the one switched to, sent to its server.
+  if (boundWorkspace() !== workspaceId || getSession().workspaceId !== sessionWorkspace) {
+    throw new WorkspaceChangedError();
+  }
   parked.delete(workspaceId);
   unpersisted = false;
   activate(set);
   notifyGrant(response);
+  setSession({ returnWorkspaceId: null });
+  await activateSignedInWorkspace(workspaceId);
 }
 
 /**
@@ -405,6 +424,112 @@ export async function revokeStoredSession(workspaceId: string, signal: AbortSign
     { token: record.refreshToken, clientId: record.clientId },
     { signal },
   );
+}
+
+/** What a check-in of a workspace that is not active found out. */
+export type StoredCheckIn =
+  /** The device session is alive; its rotated pair is stored in the slot (or parked). */
+  | { kind: 'ok'; origin: string; policy: Record<string, unknown> | undefined }
+  /** The server revoked, expired or deactivated the device session: wipe the workspace. */
+  | { kind: 'device_revoked' }
+  /** The refresh token or the client was refused: the workspace's sign-in is dead. */
+  | { kind: 'rejected' }
+  /** Nothing usable to check (no native credential, active, already under way). */
+  | { kind: 'skipped' }
+  /** No answer (offline, 5xx, 426): nothing changes. */
+  | { kind: 'unavailable' };
+
+/**
+ * Check-in of a workspace that is NOT active (WS-SEC-1): its stored device
+ * session is refreshed once, as a refresh of the active one would be, so a
+ * revocation, a deactivated client or a new client policy reaches a workspace
+ * that is only put aside. The rotated pair is stored into the slot (refresh
+ * record first) unless its wipe has begun, or parked for its next restore when
+ * the keychain refuses it; opening the workspace meanwhile waits for the
+ * check-in, like for a refresh put aside by a switch. Lost answers are
+ * re-presented inside the server's re-delivery window. Never throws.
+ */
+export function checkInStoredSession(workspaceId: string): Promise<StoredCheckIn> {
+  if (boundWorkspace() === workspaceId || detachedRefreshes.has(workspaceId) || parked.has(workspaceId)) {
+    return Promise.resolve({ kind: 'skipped' });
+  }
+  const run = runStoredCheckIn(workspaceId).catch((error: unknown): StoredCheckIn => {
+    log.info('workspace check-in failed', { error });
+    return { kind: 'unavailable' };
+  });
+  detachedRefreshes.set(workspaceId, run);
+  void run.finally(() => {
+    if (detachedRefreshes.get(workspaceId) === run) detachedRefreshes.delete(workspaceId);
+  });
+  return run;
+}
+
+async function runStoredCheckIn(workspaceId: string): Promise<StoredCheckIn> {
+  if ((await getSecureItemIn(workspaceId, SECURE_KEYS.credentialKind)) !== 'oauth') return { kind: 'skipped' };
+  const raw = await getSecureItemIn(workspaceId, SECURE_KEYS.refreshToken);
+  if (raw === null) return { kind: 'skipped' };
+  let record: z.infer<typeof RefreshRecord>;
+  try {
+    record = RefreshRecord.parse(JSON.parse(raw));
+  } catch {
+    return { kind: 'skipped' };
+  }
+  const slotOrigin = await getSecureItemIn(workspaceId, SECURE_KEYS.serverOrigin);
+  if (
+    record.origin !== slotOrigin ||
+    !isSameOrigin(record.tokenEndpoint, record.origin) ||
+    !isSameOrigin(record.revocationEndpoint, record.origin)
+  ) {
+    return { kind: 'skipped' };
+  }
+  const request = { refreshToken: record.refreshToken, clientId: record.clientId, clientVersion: deps.clientVersion() };
+  const startedAt = deps.now();
+  let outcome: TokenOutcome = await deps.refresh(record.origin, record.tokenEndpoint, request);
+  for (
+    let attempt = 1;
+    (outcome.kind === 'network' || outcome.kind === 'unavailable') && attempt < REDELIVERY_MAX_ATTEMPTS;
+    attempt++
+  ) {
+    const remaining = REDELIVERY_BUDGET_MS - (deps.now() - startedAt);
+    const wanted = (outcome.kind === 'unavailable' ? outcome.retryAfterMs : undefined) ?? REDELIVERY_BASE_DELAY_MS * attempt;
+    if (remaining <= wanted) break;
+    await deps.sleep(wanted);
+    outcome = await deps.refresh(record.origin, record.tokenEndpoint, request);
+  }
+  switch (outcome.kind) {
+    case 'ok': {
+      const set = tokenSetFrom(outcome.response, outcome.receivedAt, {
+        workspaceId,
+        origin: record.origin,
+        clientId: record.clientId,
+        tokenEndpoint: record.tokenEndpoint,
+        revocationEndpoint: record.revocationEndpoint,
+      });
+      let stored = false;
+      for (let attempt = 0; attempt < 2 && !stored; attempt++) {
+        try {
+          stored = await tracked(
+            (async () => {
+              if ((await getSecureItemIn(workspaceId, SECURE_KEYS.wipePending)) !== null) return true; // dropped on purpose
+              await writeTokens(set);
+              return true;
+            })(),
+          );
+        } catch (error) {
+          log.warn('checked-in tokens could not be stored', { error, attempt });
+        }
+      }
+      if (!stored) parked.set(workspaceId, set);
+      return { kind: 'ok', origin: record.origin, policy: outcome.response.client_policy };
+    }
+    case 'device_revoked':
+      return { kind: 'device_revoked' };
+    case 'invalid_grant':
+    case 'invalid_client':
+      return { kind: 'rejected' };
+    default:
+      return { kind: 'unavailable' };
+  }
 }
 
 export function getNativeTokenSet(): Readonly<NativeTokenSet> | null {

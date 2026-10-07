@@ -42,7 +42,12 @@ comes from the server at runtime.
   (every other connected workspace is untouched):
   - on logout of that workspace ("Log out & wipe", or Remove in the switcher)
   - on remote revocation of that workspace (the server rejects the refresh token, or
-    policy signals a wipe)
+    policy signals a wipe). A workspace that is put aside learns this from a check-in:
+    at launch and on every return to the foreground (at most every 6 hours per
+    workspace) its device session is refreshed once; a revoked or refused session
+    wipes it, and a new policy without offline storage deletes its database. A
+    developer sign-in (PAT) has no device session and is only checked when opened;
+    an `offline_retention_days` above 0 is applied when the workspace is opened.
   Switching between workspaces never wipes. "Can't unlock → reset" wipes every
   workspace on the device.
 - **Several workspaces** (see "Multi-workspace" below): up to 8 connected at once, one

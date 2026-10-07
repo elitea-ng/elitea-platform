@@ -320,6 +320,7 @@ export class ResumableStream {
     if (getSession().ending) {
       return { kind: 'final', error: new ApiError('session_invalid', 'not signed in', { reason: 'no_credential' }) };
     }
+    const workspaceId = getSession().workspaceId;
     let token: string;
     try {
       // A native access token is refreshed first when it is about to expire.
@@ -368,7 +369,7 @@ export class ResumableStream {
         return { kind: 'final', error: new ApiError('origin_mismatch', 'stream was redirected to another origin') };
       }
       if (response.status !== 200) {
-        return await this.classifyStatus(response, token);
+        return await this.classifyStatus(response, token, workspaceId);
       }
 
       this.setStatus({ status: 'open' });
@@ -414,12 +415,12 @@ export class ResumableStream {
     }
   }
 
-  private async classifyStatus(response: StreamResponse, token: string): Promise<Outcome> {
+  private async classifyStatus(response: StreamResponse, token: string, workspaceId: string | null): Promise<Outcome> {
     const { status } = response;
     if (status === 401 || status === 426) {
       const classify = this.opts.classifyFailure ?? classifySessionFailure;
       const error =
-        (await classify({ status, json: () => readSmallJson(response.body) }, { token, sessionAuth: true })) ??
+        (await classify({ status, json: () => readSmallJson(response.body) }, { token, sessionAuth: true, workspaceId })) ??
         new ApiError('http', `HTTP ${status}`, { status });
       // The native access token was renewed for this 401: reconnect with it
       // straight away (once per open, so a server that keeps refusing cannot

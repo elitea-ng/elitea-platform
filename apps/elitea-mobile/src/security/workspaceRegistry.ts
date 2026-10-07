@@ -159,6 +159,25 @@ export function activateInRegistry(id: string): Promise<Registry> {
   return updateRegistry((r) => ({ v: 1, active: id, ids: [id, ...r.ids.filter((x) => x !== id)] }));
 }
 
+/**
+ * The first sign-in into slot `id` finished: it becomes the active (launch)
+ * workspace. Until then a new slot is not active, so backing out of its
+ * sign-in, or a relaunch on its sign-in screen, still opens the workspace that
+ * was active before. A slot no longer registered (removed meanwhile) is not
+ * added back. Best effort: never throws.
+ */
+export async function activateSignedInWorkspace(id: string): Promise<void> {
+  try {
+    const r = await readRegistry();
+    if (!r.ids.includes(id) || r.active === id) return;
+    await updateRegistry((cur) =>
+      cur.ids.includes(id) ? { v: 1, active: id, ids: [id, ...cur.ids.filter((x) => x !== id)] } : cur,
+    );
+  } catch (error) {
+    log.warn('signed-in workspace could not be made the active one', { error });
+  }
+}
+
 /** No active workspace (the connect screen opens at launch); the slots stay. */
 export function clearActiveInRegistry(): Promise<Registry> {
   return updateRegistry((r) => ({ ...r, active: null }));
@@ -219,7 +238,8 @@ export interface CreateSlotOptions {
 
 /**
  * A new slot for `origin`: its origin and meta items first, then the registry
- * (the new id first and active). The limit and the one-slot-per-origin rule
+ * (the new id first; active only when no other workspace is, see
+ * `activateSignedInWorkspace`). The limit and the one-slot-per-origin rule
  * are checked inside the registry's read-modify-write, so two overlapping
  * calls cannot both pass them (`TooManyWorkspacesError`,
  * `WorkspaceExistsError`; a stored origin that cannot be read rejects too).
@@ -241,7 +261,9 @@ export async function createWorkspaceSlot(origin: string, options: CreateSlotOpt
       if (r.ids.length >= MAX_WORKSPACES) throw new TooManyWorkspacesError();
       const existing = await findWorkspaceByOrigin(origin, r);
       if (existing !== null) throw new WorkspaceExistsError(existing);
-      return { v: 1, active: id, ids: [id, ...r.ids] };
+      // Not active yet unless nothing else is: the previous workspace stays
+      // the launch default until this one has signed in.
+      return { v: 1, active: r.active ?? id, ids: [id, ...r.ids] };
     });
   } catch (error) {
     await deleteAllSecureItemsIn(id);

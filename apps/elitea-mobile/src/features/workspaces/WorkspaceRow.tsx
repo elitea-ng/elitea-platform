@@ -5,6 +5,18 @@ import { usePalette } from '@/constants/use-palette';
 import { displayHost } from '@/features/connect/connectFlow';
 import { WorkspaceMark } from '@/features/workspaces/WorkspaceMark';
 import type { WorkspaceSummary } from '@/state/workspaceList';
+import type { BrandImage } from '@/theme/brandPack';
+
+/**
+ * The mark a row may show. A workspace that is not active is never contacted
+ * just to draw its row (WS-SEC-4: that would tell a put-aside workspace's
+ * server when, and from where, this device lists it): only a mark already on
+ * the device (a data: URI) is shown, otherwise the host's initial.
+ */
+export function rowMark(image: BrandImage | null, active: boolean): BrandImage | null {
+  if (image === null || active) return image;
+  return image.uri.startsWith('data:') ? image : null;
+}
 
 /** One connected workspace: mark, name (when branded), host (always), state. */
 export function WorkspaceRow({
@@ -33,7 +45,7 @@ export function WorkspaceRow({
         disabled={disabled}
         onPress={onPress}
         style={styles.main}>
-        <WorkspaceMark origin={workspace.origin} image={workspace.logoMark} size={36} />
+        <WorkspaceMark origin={workspace.origin} image={rowMark(workspace.logoMark, active)} size={36} />
         <View style={styles.text}>
           {workspace.name ? (
             <Text numberOfLines={1} style={[styles.name, { color: palette.text }]}>

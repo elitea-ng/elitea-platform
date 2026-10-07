@@ -66,13 +66,17 @@ export interface EndSessionResult {
 }
 
 /**
- * Items a wipe keeps for its retry: the marker, and the workspace meta when a
- * stored-wipe hook failed (the meta names the database file: the migrated
- * slot's is `az-offline.db`, which the retry could not guess).
+ * Items a wipe keeps for its retry: the marker, and, when a stored-wipe hook
+ * failed, what those hooks need to find their files again: the workspace meta
+ * (it names the database file: the migrated slot's is `az-offline.db`, which
+ * the retry could not guess) and the origin (the brand-font folder is named
+ * after it). Neither is a secret; the marker keeps the slot from being opened.
  */
 function keptForRetry(errors: readonly { step: string }[]): SecureKey[] {
   const fileLeft = errors.some((e) => e.step.startsWith('stored:'));
-  return fileLeft ? [SECURE_KEYS.wipePending, SECURE_KEYS.workspaceMeta] : [SECURE_KEYS.wipePending];
+  return fileLeft
+    ? [SECURE_KEYS.wipePending, SECURE_KEYS.workspaceMeta, SECURE_KEYS.serverOrigin]
+    : [SECURE_KEYS.wipePending];
 }
 
 /** True when the step failure belongs to the secure-storage wipe (step 5). */
@@ -202,6 +206,28 @@ export async function suspendActiveWorkspace(): Promise<void> {
     resetSession({ endReason: null, lastOriginHint: null, switching, returnWorkspaceId });
   } finally {
     suspending = false;
+  }
+}
+
+/**
+ * The server revoked a workspace that is no longer the active one (an answer
+ * that landed while it was being put aside, or for a workspace put aside
+ * already). Nothing of it is in memory any more and the session in use is
+ * another one, so `endSession` would end the wrong workspace: only its
+ * crash-resume marker is written. Opening it again (`switchToWorkspace`) or
+ * the next launch (`resumePendingWipes`) then wipes it instead of restoring
+ * it, and a token rotation still under way for it is dropped. Never throws.
+ */
+export async function markWorkspaceRevoked(workspaceId: string): Promise<void> {
+  try {
+    if ((await getSecureItemIn(workspaceId, SECURE_KEYS.wipePending)) !== null) return;
+    await setSecureItemIn(
+      workspaceId,
+      SECURE_KEYS.wipePending,
+      JSON.stringify({ reason: 'device_revoked', startedAt: Date.now() }),
+    );
+  } catch (error) {
+    log.warn('revoked workspace could not be marked for its wipe', { error });
   }
 }
 

@@ -3,7 +3,7 @@ import { ApiError } from '@/api/errors';
 import type { SseEvent } from '@/api/sse/parser';
 import { ResumableStream, backoffDelay, type ResumableStreamOptions, type StreamStatusInfo } from '@/api/sse/stream';
 import { abortAll, inFlightCount } from '@/lib/abortRegistry';
-import { __resetSessionForTests, setCredential, setSession } from '@/state/session';
+import { __resetSessionForTests, getSession, setCredential, setSession } from '@/state/session';
 import { fakeStreamTransport, type ScriptedAnswer } from '@/test/fakeStreamTransport';
 
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
@@ -149,6 +149,7 @@ describe('ResumableStream', () => {
     expect(classifyFailure).toHaveBeenCalledWith(expect.objectContaining({ status: 401 }), {
       token: 'tok',
       sessionAuth: true,
+      workspaceId: getSession().workspaceId,
     });
     expect(t.transport).toHaveBeenCalledTimes(1);
     expect(t.last().error).toMatchObject({ reason: 'device_revoked' });

@@ -3,11 +3,12 @@ import type { ConfigContext } from 'expo/config';
 import appConfig from '../../app.config';
 import { devSignInEnabled, pickDefaultProject, signInWithPat } from './devSignIn';
 import type { BaseFetch } from '@/api/middleware';
-import { SECURE_KEYS, bindWorkspace } from '@/security/secureStorage';
+import { DEVICE_KEYS, SECURE_KEYS, bindWorkspace } from '@/security/secureStorage';
+import { __resetRegistryForTests } from '@/security/workspaceRegistry';
 import { __resetSessionForTests, getBearerToken, getSession, setSession } from '@/state/session';
 import type { FakeSecureStore } from '@/test/fakeSecureStore';
 
-import { TEST_WORKSPACE, wsKey } from '@/test/fakeSecureStore';
+import { TEST_WORKSPACE, registryValue, wsKey } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 
 const store = jest.requireMock<FakeSecureStore>('expo-secure-store');
@@ -63,7 +64,12 @@ describe('signInWithPat', () => {
     jest.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
-  afterEach(() => jest.restoreAllMocks());
+  let afterThis: (() => void) | null = null;
+  afterEach(() => {
+    afterThis?.();
+    afterThis = null;
+    jest.restoreAllMocks();
+  });
 
   it('validates the token with listProjects, stores it device-only and signs in', async () => {
     const { fetch, calls } = serverReturning(200, [project(2, true), project(4)]);
@@ -82,6 +88,38 @@ describe('signInWithPat', () => {
     expect(getSession().credential).toEqual({ kind: 'pat' });
     expect(getSession().projectId).toBe(4);
     expect(getBearerToken()).toBe('candidate-token');
+  });
+
+  // F2: the slot becomes the launch default only once it has signed in.
+  it('makes the signed-in slot the active workspace', async () => {
+    __resetRegistryForTests();
+    store.values.set(DEVICE_KEYS.workspaces, registryValue([TEST_WORKSPACE, 'bbbbbbbbbbbb'], 'bbbbbbbbbbbb'));
+    setSession({ returnWorkspaceId: 'bbbbbbbbbbbb' });
+    const { fetch } = serverReturning(200, [project(4)]);
+    await expect(signInWithPat('tok', { fetch, enabled: true })).resolves.toEqual({ ok: true, projectId: 4 });
+    expect(JSON.parse(store.values.get(DEVICE_KEYS.workspaces)!).active).toBe(TEST_WORKSPACE);
+    expect(getSession().returnWorkspaceId).toBeNull();
+  });
+
+  // WS-SEC-3: a switch between the writes must not move them, or the PAT, to the other workspace.
+  it('keeps every write in the workspace it signed in to and does not activate after a switch', async () => {
+    setSession({ workspaceId: TEST_WORKSPACE });
+    const B = 'bbbbbbbbbbbb';
+    const write = store.setItemAsync.getMockImplementation()!;
+    afterThis = () => store.setItemAsync.mockImplementation(write);
+    store.setItemAsync.mockImplementation(async (key: string, value: string) => {
+      store.values.set(key, value);
+      if (key === wsKey(SECURE_KEYS.pat)) {
+        bindWorkspace(B);
+        setSession({ serverOrigin: 'https://b.example.com', workspaceId: B });
+      }
+    });
+    const { fetch } = serverReturning(200, [project(4)]);
+    await expect(signInWithPat('tok', { fetch, enabled: true })).resolves.toEqual({ ok: false, error: 'not_connected' });
+    expect([...store.values.keys()].filter((k) => k.startsWith(`az.ws.${B}.`))).toEqual([]);
+    expect(store.values.get(wsKey(SECURE_KEYS.credentialKind))).toBe('pat');
+    expect(getBearerToken()).toBeNull();
+    expect(getSession().credential).toBeNull();
   });
 
   it('reports a rejected token without storing it or ending the session', async () => {

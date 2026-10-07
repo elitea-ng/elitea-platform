@@ -3,7 +3,8 @@ import { isApiError } from '@/api/errors';
 import type { BaseFetch } from '@/api/middleware';
 import { fetchProjects, resolveProjectSelection } from '@/api/queries/projects';
 import { log } from '@/lib/log';
-import { SECURE_KEYS, deleteSecureItem, setSecureItem } from '@/security/secureStorage';
+import { SECURE_KEYS, boundWorkspace, deleteSecureItemIn, setSecureItemIn } from '@/security/secureStorage';
+import { activateSignedInWorkspace } from '@/security/workspaceRegistry';
 import { getSession, setCredential, setSession } from '@/state/session';
 
 /**
@@ -50,7 +51,12 @@ export async function signInWithPat(rawToken: string, options: DevSignInOptions 
   const token = rawToken.trim();
   if (token === '') return { ok: false, error: 'empty' };
   const origin = getSession().serverOrigin;
-  if (origin === null) return { ok: false, error: 'not_connected' };
+  // The slot this sign-in is for: every write and any cleanup targets it.
+  const workspaceId = boundWorkspace();
+  const sessionWorkspace = getSession().workspaceId;
+  if (origin === null || workspaceId === null) return { ok: false, error: 'not_connected' };
+  const stillHere = () =>
+    getSession().serverOrigin === origin && boundWorkspace() === workspaceId && getSession().workspaceId === sessionWorkspace;
 
   const client = createApiClient({ origin, auth: { kind: 'token', token }, fetch: options.fetch });
   let projectId: number | null;
@@ -69,23 +75,27 @@ export async function signInWithPat(rawToken: string, options: DevSignInOptions 
   if (projectId === null) return { ok: false, error: 'no_project' };
 
   // The workspace may have been switched while the request was in flight.
-  if (getSession().serverOrigin !== origin) return { ok: false, error: 'not_connected' };
+  if (!stillHere()) return { ok: false, error: 'not_connected' };
 
   try {
-    await setSecureItem(SECURE_KEYS.pat, token);
-    await setSecureItem(SECURE_KEYS.credentialKind, 'pat');
-    await setSecureItem(SECURE_KEYS.projectSelected, String(projectId));
+    await setSecureItemIn(workspaceId, SECURE_KEYS.pat, token);
+    await setSecureItemIn(workspaceId, SECURE_KEYS.credentialKind, 'pat');
+    await setSecureItemIn(workspaceId, SECURE_KEYS.projectSelected, String(projectId));
   } catch (error) {
     log.warn('developer sign-in could not store the token', { error });
     await Promise.allSettled([
-      deleteSecureItem(SECURE_KEYS.pat),
-      deleteSecureItem(SECURE_KEYS.credentialKind),
-      deleteSecureItem(SECURE_KEYS.projectSelected),
+      deleteSecureItemIn(workspaceId, SECURE_KEYS.pat),
+      deleteSecureItemIn(workspaceId, SECURE_KEYS.credentialKind),
+      deleteSecureItemIn(workspaceId, SECURE_KEYS.projectSelected),
     ]);
     return { ok: false, error: 'storage' };
   }
+  // Switched while storing: the token stays in its own slot (which opens
+  // signed in) and never becomes the credential of the workspace now in use.
+  if (!stillHere()) return { ok: false, error: 'not_connected' };
 
   setCredential({ kind: 'pat', token });
-  setSession({ projectId, endReason: null, lastOriginHint: null });
+  setSession({ projectId, endReason: null, lastOriginHint: null, returnWorkspaceId: null });
+  await activateSignedInWorkspace(workspaceId);
   return { ok: true, projectId };
 }

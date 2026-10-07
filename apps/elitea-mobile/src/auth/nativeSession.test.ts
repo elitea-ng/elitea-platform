@@ -12,11 +12,12 @@ import {
 } from '@/auth/nativeSession';
 import { TokenResponseSchema, type TokenOutcome } from '@/auth/tokenEndpoint';
 import { endSession, suspendActiveWorkspace, wipeStoredWorkspace } from '@/security/endSession';
-import { SECURE_KEYS, bindWorkspace } from '@/security/secureStorage';
+import { DEVICE_KEYS, SECURE_KEYS, bindWorkspace } from '@/security/secureStorage';
+import { __resetRegistryForTests } from '@/security/workspaceRegistry';
 import { __resetSessionForTests, getBearerToken, getSession, setSession } from '@/state/session';
 import type { FakeSecureStore } from '@/test/fakeSecureStore';
 
-import { TEST_WORKSPACE, wsKey } from '@/test/fakeSecureStore';
+import { TEST_WORKSPACE, registryValue, wsKey } from '@/test/fakeSecureStore';
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
 const store = jest.requireMock<FakeSecureStore>('expo-secure-store');
 
@@ -62,6 +63,7 @@ beforeEach(() => {
   });
   __resetSessionForTests();
   __resetNativeSessionForTests();
+  __resetRegistryForTests();
   jest.spyOn(console, 'warn').mockImplementation(() => {});
   jest.spyOn(console, 'info').mockImplementation(() => {});
 });
@@ -86,6 +88,43 @@ describe('startNativeSession', () => {
     expect(getSession().credential).toEqual({ kind: 'oauth' });
     expect(getBearerToken()).toBe(opaqueToken('elnat_', 1));
     expect(getCredentialRefresher()).not.toBeNull();
+  });
+
+  // WS-SEC-3: a switch can land while the tokens are being stored.
+  it('stores, but never activates, a sign-in that completes after a switch to another workspace', async () => {
+    useDeps(jest.fn());
+    setSession({ hydrated: true, serverOrigin: FIXTURE_ORIGIN, workspaceId: TEST_WORKSPACE });
+    store.setItemAsync.mockImplementation(async (key: string, value: string) => {
+      store.values.set(key, value);
+      if (key === wsKey(SECURE_KEYS.credentialKind)) {
+        bindWorkspace('bbbbbbbbbbbb');
+        setSession({ serverOrigin: 'https://b.example.com', workspaceId: 'bbbbbbbbbbbb' });
+      }
+    });
+    await expect(startNativeSession(TokenResponseSchema.parse(tokenResponse(1)), clock, BASE)).rejects.toThrow(
+      'workspace changed',
+    );
+    expect(getBearerToken()).toBeNull();
+    expect(getNativeTokenSet()).toBeNull();
+    expect(getSession().credential).toBeNull();
+    expect(getCredentialRefresher()).toBeNull();
+    // Kept in its own slot: opening that workspace again finds it signed in.
+    expect(store.values.get(wsKey(SECURE_KEYS.credentialKind))).toBe('oauth');
+    expect(store.values.has(wsKey(SECURE_KEYS.credentialKind, 'bbbbbbbbbbbb'))).toBe(false);
+  });
+
+  // F2: a slot added next to an active one becomes the launch default only now.
+  it('makes the signed-in slot the active workspace, and forgets the Back link', async () => {
+    useDeps(jest.fn());
+    store.values.set(DEVICE_KEYS.workspaces, registryValue([TEST_WORKSPACE, 'bbbbbbbbbbbb'], 'bbbbbbbbbbbb'));
+    setSession({ returnWorkspaceId: 'bbbbbbbbbbbb' });
+    await signedIn();
+    expect(JSON.parse(store.values.get(DEVICE_KEYS.workspaces)!)).toEqual({
+      v: 1,
+      active: TEST_WORKSPACE,
+      ids: [TEST_WORKSPACE, 'bbbbbbbbbbbb'],
+    });
+    expect(getSession().returnWorkspaceId).toBeNull();
   });
 
   it('tells grant listeners (the policy arrives with every token response)', async () => {

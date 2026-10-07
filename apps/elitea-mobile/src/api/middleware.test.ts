@@ -1,7 +1,7 @@
 import { createApiClient } from '@/api/client';
 import { CLIENT_VERSION_HEADER, getClientVersion } from '@/api/clientVersion';
 import { ApiError, unwrap } from '@/api/errors';
-import { createGuardedFetch, setUpgradeRecheck, type BaseFetch } from '@/api/middleware';
+import { classifySessionFailure, createGuardedFetch, setUpgradeRecheck, type BaseFetch } from '@/api/middleware';
 import { abortAll } from '@/lib/abortRegistry';
 import { registerWipeHook } from '@/security/endSession';
 import {
@@ -13,6 +13,7 @@ import {
 } from '@/state/session';
 
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
+const fakeStore = jest.requireMock<import('@/test/fakeSecureStore').FakeSecureStore>('expo-secure-store');
 
 const ORIGIN = 'https://ai.example.com';
 
@@ -221,6 +222,42 @@ describe('guarded fetch: 401 and 426', () => {
     expect(getSession().upgradeRequired).toEqual({ minVersion: '1.2.0' });
     expect(endSession).not.toHaveBeenCalled();
     expect(getBearerToken()).toBe('pat-secret');
+  });
+
+  // WS-SEC-1: a device_revoked that answers a workspace being put aside must
+  // mark THAT workspace for its wipe, not end whatever session is current.
+  it('a device_revoked for a workspace that is no longer active marks its slot for a wipe and ends nothing', async () => {
+    signIn('token-a');
+    setSession({ workspaceId: 'bbbbbbbbbbbb' });
+    const endSession = jest.fn();
+    const error = await classifySessionFailure(
+      { status: 401, json: async () => ({ error: 'device_revoked' }) },
+      { token: 'token-a', sessionAuth: true, endSession, workspaceId: 'aaaaaaaaaaaa' },
+    );
+    expect(error).toMatchObject({ kind: 'session_invalid', reason: 'stale_credential' });
+    expect(endSession).not.toHaveBeenCalled();
+    expect(JSON.parse(fakeStore.values.get('az.ws.aaaaaaaaaaaa.wipe.pending')!)).toMatchObject({ reason: 'device_revoked' });
+    expect(fakeStore.values.has('az.ws.bbbbbbbbbbbb.wipe.pending')).toBe(false);
+  });
+
+  // F4: a 426 answering the previous workspace's request is not the new one's.
+  it("a 426 for a workspace that is no longer active does not put the new one into 'upgrade required'", async () => {
+    signIn();
+    setSession({ workspaceId: 'aaaaaaaaaaaa' });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { fetch } = recordingFetch(async () => {
+      await gate;
+      return jsonResponse(426, { error: 'upgrade_required', min_client_version: '9.0.0' });
+    });
+    const guarded = createGuardedFetch({ origin: ORIGIN, auth: { kind: 'session' }, fetch });
+    const pending = guarded(new Request(`${ORIGIN}/api/v2/x`));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The user switched to workspace B (same host in this fixture) meanwhile.
+    setSession({ workspaceId: 'bbbbbbbbbbbb' });
+    release();
+    await expect(pending).rejects.toMatchObject({ kind: 'upgrade_required' });
+    expect(getSession().upgradeRequired).toBeNull();
   });
 
   // DEF-R4 (Agent Zefir E2E run 2): after the workspace lowered its minimum

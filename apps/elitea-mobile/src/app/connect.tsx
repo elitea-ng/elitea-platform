@@ -19,6 +19,7 @@ import { MaxContentWidth, Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
 import { ConnectConfirm } from '@/features/connect/ConnectConfirm';
 import { checkWorkspace, confirmConnection, displayHost, type ConnectCheck } from '@/features/connect/connectFlow';
+import { WorkspaceListGate } from '@/features/workspaces/WorkspaceListGate';
 import { WorkspaceRow } from '@/features/workspaces/WorkspaceRow';
 import { parseConnectLink, type ConnectLinkErrorCode } from '@/linking/parseConnectLink';
 import { useManagedConfig } from '@/security/managedConfig';
@@ -268,16 +269,18 @@ export default function ConnectScreen() {
               <Text accessibilityRole="header" style={[styles.label, { color: palette.textSecondary }]}>
                 Your workspaces on this device
               </Text>
-              <View style={[styles.savedList, { backgroundColor: palette.backgroundElement }]}>
-                {workspaces.map((workspace) => (
-                  <WorkspaceRow
-                    key={workspace.id}
-                    workspace={workspace}
-                    active={false}
-                    onPress={() => void switchToWorkspace(workspace.id)}
-                  />
-                ))}
-              </View>
+              <WorkspaceListGate workspaces={workspaces}>
+                <View style={[styles.savedList, { backgroundColor: palette.backgroundElement }]}>
+                  {workspaces.map((workspace) => (
+                    <WorkspaceRow
+                      key={workspace.id}
+                      workspace={workspace}
+                      active={false}
+                      onPress={() => void switchToWorkspace(workspace.id)}
+                    />
+                  ))}
+                </View>
+              </WorkspaceListGate>
               {workspaces.length >= MAX_WORKSPACES ? (
                 <Text style={[styles.small, { color: palette.textSecondary }]}>
                   At most {MAX_WORKSPACES} workspaces can be connected. Open one and remove it from its

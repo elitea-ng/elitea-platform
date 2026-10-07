@@ -77,7 +77,7 @@ export function discardPickerCopy(uri: string): void {
     const file = new File(uri);
     if (file.exists) file.delete();
   } catch {
-    // swept at the next start, and with the session's caches
+    // swept at the next start, and when the workspace is put aside or ended (tempWipe.ts)
   }
 }
 

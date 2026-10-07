@@ -94,9 +94,14 @@ function tell(event: SwitchEvent): void {
   }
 }
 
-/** Puts the active workspace aside (nothing wiped). */
+/**
+ * Puts the active workspace aside (nothing wiped). Runs even when nothing is
+ * bound: module state (a native token set, its revoke hook and refresher, the
+ * bearer token, policy, brand) is not visible from here, and anything a failed
+ * transition left in memory must not survive into the next workspace. With
+ * nothing loaded the reset hooks only forget what is already empty.
+ */
 async function suspend(): Promise<void> {
-  if (boundWorkspace() === null && getSession().serverOrigin === null) return;
   await suspendActiveWorkspace();
 }
 
@@ -112,7 +117,9 @@ async function activate(id: string): Promise<boolean> {
   }
   const restored = await restoreWorkspace(id);
   if (!restored) return false;
-  await activateInRegistry(id);
+  // Only a signed-in workspace becomes the launch default; a signed-out one
+  // does once its sign-in succeeds (`activateSignedInWorkspace`).
+  if (getSession().credential !== null) await activateInRegistry(id);
   return true;
 }
 
@@ -140,9 +147,12 @@ async function switchNow(id: string): Promise<boolean> {
       return ok;
     } catch (error) {
       // Secure storage unreadable (device locked mid-switch): nothing active.
+      // The restore may already have loaded the target's policy, brand, "me"
+      // and native credential (token set, bearer, revoke hook, refresher):
+      // forget all of it through the same reset as a switch, not only the
+      // session fields, so no later transition runs this workspace's revoke.
       log.warn('workspace could not be opened', { error });
-      bindWorkspace(null);
-      setSession({ serverOrigin: null, workspaceId: null, credential: null, projectId: null });
+      await suspendActiveWorkspace();
       return false;
     }
   } finally {
@@ -188,8 +198,15 @@ export function connectWorkspace(origin: string): Promise<boolean> {
       log.warn('connected workspaces could not be read', { error });
       return false;
     }
-    if (existing !== null) return switchNow(existing);
-    if (boundWorkspace() !== null) await suspend();
+    if (existing !== null) {
+      if (await switchNow(existing)) return true;
+      // A slot whose earlier wipe was unfinished (it keeps its origin for the
+      // retry) is wiped by that switch instead of opened: connect anew once
+      // it is gone.
+      const still = await findWorkspaceByOrigin(origin).catch(() => existing);
+      if (still !== null) return false;
+    }
+    await suspend();
     let id: string;
     try {
       id = await createWorkspaceSlot(origin);
@@ -199,6 +216,8 @@ export function connectWorkspace(origin: string): Promise<boolean> {
       return false;
     }
     bindWorkspace(id);
+    // returnWorkspaceId is kept: until the new slot signs in, its sign-in
+    // screen can still go back to the workspace that was active.
     setSession({
       serverOrigin: origin,
       workspaceId: id,
@@ -206,7 +225,6 @@ export function connectWorkspace(origin: string): Promise<boolean> {
       endedOrigin: null,
       lastOriginHint: null,
       pendingConnectOrigin: null,
-      returnWorkspaceId: null,
     });
     void refreshWorkspaceList();
     return true;
@@ -232,6 +250,21 @@ export function removeWorkspace(id: string, reason: EndReason = 'user_logout'): 
       reason,
       revoke: (signal) => revokeStoredSession(id, signal),
     });
+    void refreshWorkspaceList();
+    return wiped;
+  }, { replacesActive: false });
+}
+
+/**
+ * The server revoked (or refused) the device session of workspace `id`, found
+ * out while it was put aside (a check-in): it is wiped like a revocation of
+ * the active one. No server revoke: the credential is already dead. When it
+ * became the active one meanwhile, its session ends instead.
+ */
+export function wipeRevokedWorkspace(id: string, reason: 'device_revoked' | 'credential_rejected'): Promise<boolean> {
+  return serial(async () => {
+    if (boundWorkspace() === id) return (await endSession({ reason })).storageWiped;
+    const { wiped } = await wipeStoredWorkspace(id, { reason });
     void refreshWorkspaceList();
     return wiped;
   }, { replacesActive: false });
@@ -271,8 +304,15 @@ export async function leaveSignIn(): Promise<void> {
   const everSignedIn =
     (await getSecureItemIn(id, SECURE_KEYS.dbKey).catch(() => null)) !== null ||
     (await getSecureItemIn(id, SECURE_KEYS.selfUser).catch(() => null)) !== null;
-  if (everSignedIn) await beginAddWorkspace();
-  else await removeWorkspace(id, 'server_switch');
+  if (everSignedIn) {
+    await beginAddWorkspace();
+    return;
+  }
+  // endSession's reset clears the session; the connect screen's "Back" to
+  // the workspace active before "Add workspace" must survive it.
+  const back = getSession().returnWorkspaceId;
+  await removeWorkspace(id, 'server_switch');
+  if (back !== null && back !== id) setSession({ returnWorkspaceId: back });
 }
 
 const clear = async () => {

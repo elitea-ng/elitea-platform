@@ -23,12 +23,14 @@ import { hydrateSession } from '@/state/hydrate';
 import { useSession } from '@/state/session';
 import { refreshWorkspaceInfo } from '@/state/workspaceInfo';
 import { startForegroundRefresh } from '@/state/foregroundRefresh';
+import { startWorkspaceCheckIns } from '@/state/workspaceCheckIn';
 import { createSplashGate } from '@/state/splashGate';
 import { sweepUploadTemp } from '@/api/attachments/upload';
 import { sweepDownloadTemp } from '@/features/chat/attachments/opener';
 import { sweepPickerCopies } from '@/features/chat/attachments/pickers';
 // Registers the wipe hooks of the system surfaces (widget snapshot) before any session can end.
 import '@/features/surfaces/surfaceWriter';
+import '@/features/chat/attachments/tempWipe';
 import '@/features/intents/agentCatalog';
 import { useDiscardIntentsWhileSignedOut } from '@/features/intents/discardIntentsWhileSignedOut';
 import { startTurnActivities } from '@/features/surfaces/turnActivities';
@@ -49,6 +51,8 @@ sweepUploadTemp();
 sweepPickerCopies();
 // The public policy and minimum version are re-read on every foreground.
 startForegroundRefresh();
+// Workspaces put aside are checked in with their servers (revocation, policy).
+startWorkspaceCheckIns();
 // Live Activities of running answers (local only); ends any a previous process left behind.
 startTurnActivities();
 

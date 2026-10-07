@@ -7,7 +7,12 @@ import { isSameOrigin } from '@/api/paths';
 import { registerAbortable } from '@/lib/abortRegistry';
 import { log } from '@/lib/log';
 import { getCredentialRefresher, type RefreshVerdict } from '@/auth/credentialRefresh';
-import { endSession as defaultEndSession, isEndingSession } from '@/security/endSession';
+import {
+  endSession as defaultEndSession,
+  isEndingSession,
+  isSuspendingWorkspace,
+  markWorkspaceRevoked,
+} from '@/security/endSession';
 import { getBearerToken, getSession, setSession } from '@/state/session';
 
 /**
@@ -103,6 +108,9 @@ export function createGuardedFetch(options: GuardedFetchOptions): (input: Reques
       throw new ApiError('origin_mismatch', 'request targets an origin other than the workspace');
     }
 
+    // The workspace this request is for: an answer that lands after a switch
+    // must not change the session of the workspace switched to.
+    const workspaceId = getSession().workspaceId;
     let token: string | null = null;
     if (auth.kind === 'session') {
       if (getSession().ending || isEndingSession()) {
@@ -119,14 +127,14 @@ export function createGuardedFetch(options: GuardedFetchOptions): (input: Reques
     // A session request may be replayed once after a token refresh.
     const replay = auth.kind === 'session' ? request.clone() : null;
     let response = await send(request, token);
-    let failure = await classify(response, token);
+    let failure = await classify(response, token, workspaceId);
     if (failure && replay && shouldReplay(failure)) {
       const renewed = getBearerToken();
       // Only the same workspace's renewed token (never one of another workspace switched to meanwhile).
       const sameWorkspace = getSession().serverOrigin !== null && isSameOrigin(request.url, getSession().serverOrigin!);
       if (renewed !== null && renewed !== token && sameWorkspace) {
         response = await send(replay, renewed);
-        failure = await classify(response, renewed);
+        failure = await classify(response, renewed, workspaceId);
       }
     }
     if (failure) throw failure;
@@ -176,8 +184,8 @@ export function createGuardedFetch(options: GuardedFetchOptions): (input: Reques
     return response;
   }
 
-  function classify(response: Response, token: string | null): Promise<ApiError | null> {
-    return classifySessionFailure(response, { token, sessionAuth: auth.kind === 'session', endSession });
+  function classify(response: Response, token: string | null, workspaceId: string | null): Promise<ApiError | null> {
+    return classifySessionFailure(response, { token, sessionAuth: auth.kind === 'session', endSession, workspaceId });
   }
 }
 
@@ -229,6 +237,17 @@ export function sessionBearerToken(): string | Promise<string> {
 }
 
 /**
+ * True when a response for `workspaceId` (undefined: not known, treated as
+ * current) arrives while that workspace is no longer the active one, or while
+ * the active one is being put aside or replaced.
+ */
+function answersAnotherWorkspace(workspaceId: string | null | undefined): boolean {
+  if (workspaceId === undefined) return false;
+  const session = getSession();
+  return session.switching || isSuspendingWorkspace() || session.workspaceId !== workspaceId;
+}
+
+/**
  * The session-level meaning of a response, shared by the REST guarded fetch
  * and the event-stream client:
  *  - 401 for the session credential: `device_revoked` or `credential_rejected`,
@@ -238,7 +257,16 @@ export function sessionBearerToken(): string | Promise<string> {
  */
 export async function classifySessionFailure(
   response: Pick<Response, 'status'> & { clone?: () => Pick<Response, 'json'>; json?: () => Promise<unknown> },
-  context: { token: string | null; sessionAuth: boolean; endSession?: typeof defaultEndSession },
+  context: {
+    token: string | null;
+    sessionAuth: boolean;
+    endSession?: typeof defaultEndSession;
+    /**
+     * The workspace the request was sent for (captured before the send). When
+     * given and no longer the active one, the answer changes no session state.
+     */
+    workspaceId?: string | null;
+  },
 ): Promise<ApiError | null> {
   const endSession = context.endSession ?? defaultEndSession;
   const readBody = async (): Promise<unknown> => {
@@ -257,6 +285,17 @@ export async function classifySessionFailure(
     if (getBearerToken() !== context.token) {
       // Answer to a credential that has since been replaced or removed.
       return new ApiError('session_invalid', 'credential changed', {
+        status: 401,
+        code,
+        reason: 'stale_credential',
+      });
+    }
+    if (answersAnotherWorkspace(context.workspaceId)) {
+      // The workspace this answers is being put aside, or already is: ending
+      // "the session" would end (or half-reset) the wrong one. A revocation
+      // marks that workspace's slot for its wipe; anything else is stale.
+      if (code === 'device_revoked' && context.workspaceId) await markWorkspaceRevoked(context.workspaceId);
+      return new ApiError('session_invalid', 'answer for a workspace no longer in use', {
         status: 401,
         code,
         reason: 'stale_credential',
@@ -297,7 +336,11 @@ export async function classifySessionFailure(
     const minVersion = parsed.success
       ? (parsed.data.min_client_version ?? parsed.data.min_version)
       : undefined;
-    setSession({ upgradeRequired: minVersion === undefined ? {} : { minVersion } });
+    // Only for the workspace still in use: a 426 that answers the previous
+    // workspace's request after a switch is that workspace's version floor.
+    if (!answersAnotherWorkspace(context.workspaceId)) {
+      setSession({ upgradeRequired: minVersion === undefined ? {} : { minVersion } });
+    }
     return new ApiError('upgrade_required', 'this app version is no longer supported', {
       status: 426,
     });
