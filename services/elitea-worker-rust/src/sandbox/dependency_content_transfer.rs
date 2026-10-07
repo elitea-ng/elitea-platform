@@ -2,6 +2,34 @@
 use super::*;
 
 impl DependencyContentClient {
+    /// Read canonical native metadata at one signed immutable Cargo root.
+    /// # Errors
+    /// Returns authority, integrity, or storage errors. Only HTTP 404 is absent.
+    pub(crate) async fn lookup_native(
+        &self,
+        root: &str,
+        grant: &SignedSandboxJobGrantV1,
+    ) -> Result<Option<DependencyBundle>, DependencyContentError> {
+        let authority = grant_header(grant, root)?;
+        let _slot = self
+            .slots
+            .try_acquire()
+            .map_err(|_| DependencyContentError::Busy)?;
+        let operation = async {
+            let response = self
+                .client
+                .get(format!("{}/sandbox-native-bundles/{root}", self.origin))
+                .header(GRANT_HEADER, authority)
+                .send()
+                .await
+                .map_err(transport)?;
+            decode_native_lookup(response, root).await
+        };
+        tokio::time::timeout(self.deadline, operation)
+            .await
+            .map_err(|_| DependencyContentError::Timeout)?
+    }
+
     /// Confirm exact published metadata before accessing a retained preparation runtime.
     /// # Errors
     /// Rejects changed metadata, invalid authority, and storage failures.
@@ -191,5 +219,99 @@ impl DependencyContentClient {
             self.discard_export(bundle, index);
         }
         result
+    }
+}
+
+async fn decode_native_lookup(
+    mut response: Response,
+    root: &str,
+) -> Result<Option<DependencyBundle>, DependencyContentError> {
+    if response.status() == StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    check_response(&response, StatusCode::OK, "application/json", None)?;
+    let metadata = bounded_metadata(&mut response).await?;
+    let bundle = DependencyBundle::parse(&metadata, root)?;
+    if !bundle.native().is_some_and(|native| {
+        native.record.kind == super::super::native_bundle::NativeKind::Cargo
+            && native.record.language == super::super::request::Language::Rust
+    }) {
+        return Err(DependencyContentError::Integrity);
+    }
+    Ok(Some(bundle))
+}
+
+#[cfg(test)]
+mod frozen_lookup_tests {
+    use super::*;
+
+    fn response(status: StatusCode, body: &[u8]) -> Response {
+        http::Response::builder()
+            .status(status)
+            .header(CONTENT_TYPE, "application/json")
+            .header(CONTENT_LENGTH, body.len())
+            .body(body.to_vec())
+            .unwrap()
+            .into()
+    }
+
+    #[tokio::test]
+    async fn frozen_lookup_accepts_exact_cargo_and_only_not_found_is_absent() {
+        let bytes = include_bytes!("native-cargo-v2.json");
+        let record: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        let root = record["digest"].as_str().unwrap();
+        let found = decode_native_lookup(response(StatusCode::OK, bytes), root)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.record_json(), bytes);
+        assert!(
+            decode_native_lookup(response(StatusCode::NOT_FOUND, b""), root)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert!(
+                decode_native_lookup(response(status, b""), root)
+                    .await
+                    .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn frozen_lookup_refuses_changed_root_wrong_kind_and_unbounded_metadata() {
+        let cargo = include_bytes!("native-cargo-v2.json");
+        assert!(matches!(
+            decode_native_lookup(response(StatusCode::OK, cargo), &"a".repeat(64)).await,
+            Err(DependencyContentError::Integrity)
+        ));
+        let deno = include_bytes!("native-deno-v2.json");
+        let record: serde_json::Value = serde_json::from_slice(deno).unwrap();
+        assert!(matches!(
+            decode_native_lookup(
+                response(StatusCode::OK, deno),
+                record["digest"].as_str().unwrap()
+            )
+            .await,
+            Err(DependencyContentError::Integrity)
+        ));
+        assert!(matches!(
+            decode_native_lookup(
+                response(StatusCode::OK, &vec![b' '; METADATA_LIMIT + 1]),
+                &"a".repeat(64)
+            )
+            .await,
+            Err(DependencyContentError::Integrity)
+        ));
+        assert!(matches!(
+            decode_native_lookup(response(StatusCode::OK, b"{}"), &"a".repeat(64)).await,
+            Err(DependencyContentError::Integrity)
+        ));
     }
 }

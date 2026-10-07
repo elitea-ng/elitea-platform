@@ -2,7 +2,8 @@
 use super::{SandboxCallError, SandboxClient, submission_code};
 use crate::{
     protocol::elitea::runtime::v1::{
-        AuthorizeSandboxJobRequestV1, PrepareSandboxDependenciesRequestV1,
+        AuthorizeSandboxJobRequestV1, LookupSandboxDependenciesRequestV1,
+        LookupSandboxDependenciesResponseV1, PrepareSandboxDependenciesRequestV1,
         PrepareSandboxDependenciesResponseV1, PublishSandboxDependenciesRequestV1,
         PublishSandboxDependenciesResponseV1, SandboxJobStatusV1, SignedSandboxJobGrantV1,
     },
@@ -31,6 +32,43 @@ pub enum PublicationOutcome {
 }
 
 impl SandboxClient {
+    /// Read one frozen Cargo root without starting or reconciling a preparer.
+    /// # Errors
+    /// Returns authority, transport, or metadata errors. Errors are never cache misses.
+    pub(crate) async fn lookup_dependencies<R: ControlRpc>(
+        &self,
+        control: &ControlGrpcClient<R>,
+        authorization: AuthorizeSandboxJobRequestV1,
+        job: &PreparationJob,
+        root: &str,
+    ) -> Result<Option<DependencyBundle>, SandboxCallError> {
+        if job.language() != crate::sandbox::request::Language::Rust || !job.native() {
+            return Err(SandboxCallError::Invalid);
+        }
+        let digest = job.fingerprint().map_err(|_| SandboxCallError::Invalid)?;
+        let grant = self
+            .authorize_content(control, authorization, &digest, root)
+            .await?;
+        let mut request = Request::new(LookupSandboxDependenciesRequestV1 {
+            content_grant: Some(grant),
+            preparation_job_json: job.to_transport().map_err(|_| SandboxCallError::Invalid)?,
+        });
+        request.set_timeout(self.deadline);
+        let response = tokio::time::timeout(
+            self.deadline,
+            self.rpc.clone().lookup_sandbox_dependencies(request),
+        )
+        .await
+        .map_err(|_| SandboxCallError::Submission {
+            code: Code::DeadlineExceeded,
+        })?
+        .map_err(|status| SandboxCallError::Submission {
+            code: submission_code(&status),
+        })?
+        .into_inner();
+        decode_lookup(response, job, root)
+    }
+
     /// Request fresh authority and reconcile the same immutable preparation.
     /// # Errors
     /// Returns safe authorization, transport, or bounded metadata failures.
@@ -216,6 +254,25 @@ fn decode_preparation(
     }
 }
 
+fn decode_lookup(
+    response: LookupSandboxDependenciesResponseV1,
+    job: &PreparationJob,
+    root: &str,
+) -> Result<Option<DependencyBundle>, SandboxCallError> {
+    if response.bundle_json.is_empty() {
+        return Ok(None);
+    }
+    if response.bundle_json.len() > 128 * 1024 {
+        return Err(SandboxCallError::InvalidReceipt);
+    }
+    let bundle = DependencyBundle::parse(&response.bundle_json, root)
+        .map_err(|_| SandboxCallError::InvalidReceipt)?;
+    if !job.matches_bundle(&bundle) {
+        return Err(SandboxCallError::InvalidReceipt);
+    }
+    Ok(Some(bundle))
+}
+
 pub(super) fn decode_publication(
     response: PublishSandboxDependenciesResponseV1,
 ) -> Result<PublicationOutcome, SandboxCallError> {
@@ -375,5 +432,72 @@ mod tests {
         ] {
             assert!(root_bytes(&invalid).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod frozen_lookup_tests {
+    use super::*;
+    use crate::sandbox::preparation::frozen_lookup_tests::fixture;
+
+    #[test]
+    fn frozen_lookup_response_miss_and_exact_hit_cannot_hide_changed_metadata() {
+        let (request, bundle) = fixture();
+        assert!(
+            decode_lookup(
+                LookupSandboxDependenciesResponseV1 {
+                    bundle_json: Vec::new()
+                },
+                &request,
+                bundle.root()
+            )
+            .unwrap()
+            .is_none()
+        );
+        let found = decode_lookup(
+            LookupSandboxDependenciesResponseV1 {
+                bundle_json: bundle.record_json().to_vec(),
+            },
+            &request,
+            bundle.root(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(found.record_json(), bundle.record_json());
+        for bytes in [b"{}".to_vec(), vec![b' '; 128 * 1024 + 1]] {
+            assert!(matches!(
+                decode_lookup(
+                    LookupSandboxDependenciesResponseV1 { bundle_json: bytes },
+                    &request,
+                    bundle.root()
+                ),
+                Err(SandboxCallError::InvalidReceipt)
+            ));
+        }
+        assert!(matches!(
+            decode_lookup(
+                LookupSandboxDependenciesResponseV1 {
+                    bundle_json: bundle.record_json().to_vec(),
+                },
+                &request,
+                &"c".repeat(64)
+            ),
+            Err(SandboxCallError::InvalidReceipt)
+        ));
+        let mut changed: serde_json::Value =
+            serde_json::from_slice(&request.to_transport().unwrap()).unwrap();
+        changed["timeout_seconds"] = 61.into();
+        let changed =
+            PreparationJob::from_transport(&serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert!(matches!(
+            decode_lookup(
+                LookupSandboxDependenciesResponseV1 {
+                    bundle_json: bundle.record_json().to_vec(),
+                },
+                &changed,
+                bundle.root()
+            ),
+            Err(SandboxCallError::InvalidReceipt)
+        ));
     }
 }

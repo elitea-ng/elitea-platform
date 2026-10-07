@@ -20,7 +20,8 @@ use crate::protocol::{
     command::Ed25519PublicKeyResolver,
     elitea::runtime::v1::{
         CancelSandboxJobRequestV1, CancelSandboxJobResponseV1, HydrateSandboxDependenciesRequestV1,
-        HydrateSandboxDependenciesResponseV1, PrepareSandboxDependenciesRequestV1,
+        HydrateSandboxDependenciesResponseV1, LookupSandboxDependenciesRequestV1,
+        LookupSandboxDependenciesResponseV1, PrepareSandboxDependenciesRequestV1,
         PrepareSandboxDependenciesResponseV1, PublishSandboxDependenciesRequestV1,
         PublishSandboxDependenciesResponseV1, SandboxJobStatusV1, SubmitSandboxJobRequestV1,
         SubmitSandboxJobResponseV1,
@@ -199,6 +200,41 @@ impl<R: Ed25519PublicKeyResolver + 'static> SandboxSupervisorService for Supervi
         Status,
     > {
         self.publish_snapshot(request).await
+    }
+
+    async fn lookup_sandbox_dependencies(
+        &self,
+        request: Request<LookupSandboxDependenciesRequestV1>,
+    ) -> Result<Response<LookupSandboxDependenciesResponseV1>, Status> {
+        let peer = authenticated_peer(&request)?;
+        let input = request.into_inner();
+        let grant = input.content_grant.ok_or_else(|| {
+            Status::unauthenticated("A current dependency content grant is required.")
+        })?;
+        let prepared =
+            super::preparation::PreparationJob::from_transport(&input.preparation_job_json)
+                .map_err(|_| {
+                    Status::invalid_argument("Frozen lookup requires a valid preparation profile.")
+                })?;
+        let authorization = self
+            .verifier
+            .verify_content(&grant, &peer, chrono::Utc::now().timestamp_millis())
+            .map_err(|_| {
+                Status::permission_denied("The content grant does not authorize frozen lookup.")
+            })?;
+        let content = self.content.as_deref().ok_or_else(|| {
+            Status::failed_precondition(
+                "Shared dependency storage is not configured on this supervisor.",
+            )
+        })?;
+        let bundle = self
+            .supervisor
+            .lookup_dependencies_authorized(&authorization, &grant, &prepared, content)
+            .await
+            .map_err(|error| service_error(&error))?;
+        Ok(Response::new(LookupSandboxDependenciesResponseV1 {
+            bundle_json: bundle.map_or_else(Vec::new, |bundle| bundle.record_json().to_vec()),
+        }))
     }
 
     async fn prepare_sandbox_dependencies(

@@ -9,7 +9,7 @@ use crate::{
     },
     sandbox::{
         dependency_content::{DependencyBundle, DependencyContentClient, DependencyContentError},
-        ledger::{JobLease, JobRecord, JobScope, Phase},
+        ledger::{JobLease, JobRecord, JobScope, LedgerError, Phase},
         preparation::PreparationJob,
     },
 };
@@ -70,6 +70,52 @@ impl DockerSupervisor {
         }
         self.preparation_policy = Some(revision);
         Ok(self)
+    }
+
+    /// Read an exact frozen Cargo profile without reserving a job or runtime.
+    /// # Errors
+    /// Rejects expired authority, recorded work, invalid profiles, and uncertain storage.
+    pub(crate) async fn lookup_dependencies_authorized(
+        &self,
+        authorization: &AuthorizedContent,
+        grant: &SignedSandboxJobGrantV1,
+        request: &PreparationJob,
+        client: &DependencyContentClient,
+    ) -> Result<Option<DependencyBundle>, SupervisorError> {
+        if request.language() != crate::sandbox::request::Language::Rust
+            || !request.native()
+            || !self.preparation_languages.contains(&request.language())
+            || request.platform() != self.native_platform.as_ref()
+            || !authorization.valid_at(chrono::Utc::now().timestamp_millis())
+            || request
+                .fingerprint()
+                .map_err(|_| SupervisorError::Invalid)?
+                != authorization.scope().digest
+            || !request.within_timeout(self.runtime.code_job_timeout())
+            || !self
+                .preparation_policy
+                .as_ref()
+                .is_some_and(|policy| request.matches_runtime(self.runtime.image_digest(), policy))
+        {
+            return Err(SupervisorError::Invalid);
+        }
+        let _permit = self
+            .capacity
+            .try_acquire()
+            .map_err(|_| SupervisorError::Busy)?;
+        // Existing work must reconcile its original preparer and immutable root.
+        match self.ledger.read(authorization.scope()).await {
+            Err(LedgerError::Missing) => {}
+            Ok(_) => return Err(SupervisorError::Invalid),
+            Err(error) => return Err(error.into()),
+        }
+        let root = content_root(authorization.root());
+        let selected = client.lookup_native(&root, grant).await?;
+        if !authorization.valid_at(chrono::Utc::now().timestamp_millis()) {
+            return Err(SupervisorError::Invalid);
+        }
+        // Valid different declarations/profiles remain fresh ordinary acquisitions.
+        Ok(selected.filter(|bundle| request.matches_bundle(bundle)))
     }
 
     /// Admit or reconcile the exact preparation request without resolving it again.

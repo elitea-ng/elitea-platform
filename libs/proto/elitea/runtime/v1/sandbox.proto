@@ -122,6 +122,8 @@ service SandboxSupervisorService {
   rpc PublishRustCompiledSnapshot(PublishRustCompiledSnapshotRequestV1) returns (PublishRustCompiledSnapshotResponseV1);
   rpc SubmitSandboxJob(SubmitSandboxJobRequestV1) returns (SubmitSandboxJobResponseV1);
   rpc CancelSandboxJob(CancelSandboxJobRequestV1) returns (CancelSandboxJobResponseV1);
+  // Content-only lookup cannot reserve a job or start a preparer.
+  rpc LookupSandboxDependencies(LookupSandboxDependenciesRequestV1) returns (LookupSandboxDependenciesResponseV1);
   rpc PrepareSandboxDependencies(PrepareSandboxDependenciesRequestV1) returns (PrepareSandboxDependenciesResponseV1);
   rpc PublishSandboxDependencies(PublishSandboxDependenciesRequestV1) returns (PublishSandboxDependenciesResponseV1);
   rpc HydrateSandboxDependencies(HydrateSandboxDependenciesRequestV1) returns (HydrateSandboxDependenciesResponseV1);
@@ -194,6 +196,26 @@ message CancelSandboxJobResponseV1 {
   SandboxJobStatusV1 status = 1;
   bool cleanup_pending = 2;
   reserved 3 to 15;
+}
+
+// Lookup only the operator-selected frozen Cargo root before fresh acquisition.
+// Revision 3 authority binds the current claim, preparation fingerprint, and root.
+// The supervisor matches its native preparation profile before reading metadata.
+// This operation cannot reserve a job, provision a runtime, or claim cleanup.
+message LookupSandboxDependenciesRequestV1 {
+  SignedSandboxJobGrantV1 content_grant = 1;
+  // Strict native Cargo PreparationJob JSON, at most 1 MiB.
+  // The source is the saved TOML declaration. It contains no execution state.
+  bytes preparation_job_json = 2;
+  reserved 3 to 15;
+}
+
+message LookupSandboxDependenciesResponseV1 {
+  // Bounded canonical metadata at the signed root. No package bytes.
+  // Empty means genuine absent storage or a valid unmatched fresh profile.
+  // Authority, integrity, and uncertain storage failures return RPC errors.
+  bytes bundle_json = 1;
+  reserved 2 to 15;
 }
 
 // Each retry uses fresh revision 1 authority and the same preparation request.

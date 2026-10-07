@@ -147,6 +147,18 @@ struct ColdFixture {
 }
 #[tonic::async_trait]
 impl SandboxSupervisorService for SupervisorFixture {
+    async fn lookup_sandbox_dependencies(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::LookupSandboxDependenciesRequestV1>,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::LookupSandboxDependenciesResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "frozen lookup is outside this fixture",
+        ))
+    }
+
     async fn hydrate_sandbox_workspace(
         &self,
         _request: Request<crate::protocol::elitea::runtime::v1::HydrateSandboxWorkspaceRequestV1>,

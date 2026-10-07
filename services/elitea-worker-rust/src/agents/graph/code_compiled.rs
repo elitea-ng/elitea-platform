@@ -240,7 +240,7 @@ fn compiled_profile_for_job<'a>(
     }
 }
 
-fn compiled_activation(activation: &[u8; 32]) -> [u8; 32] {
+pub(super) fn compiled_activation(activation: &[u8; 32]) -> [u8; 32] {
     let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
     hash.update(b"elitea.sandbox.compilation-activation.v1\0");
     hash.update(activation);

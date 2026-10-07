@@ -11,7 +11,8 @@ Current-platform code defines business behavior, not a requirement to copy its i
 
 The [merge continuation](source-mapping/main-integration-20261007.md) verifies the final handoff and records all six resolved listener failures.
 It preserves durable NATS storage and the incoming scratch-image health sidecar.
-Merged CI, current images, and isolated NATS/Code browser acceptance remain required.
+The [deployed NATS acceptance](source-mapping/code-nats-deployed-acceptance-20261007.md) records current images and verified Code cases.
+Complete Code cache, authority, recovery, editor, and Kubernetes acceptance before graph consolidation.
 No worker gate closes from the merge checks alone.
 
 ## Progression status

@@ -46,6 +46,10 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Frozen Cargo lookup](code-frozen-cargo-lookup-20261007.md) records lookup before acquisition, authority boundaries, generated contracts, and pending deployed cache acceptance.
+
+- [Deployed Code on NATS](code-nats-deployed-acceptance-20261007.md) records current image boundaries, browser cases, retained failures, and open completion requirements.
+
 - [Main merge continuation](main-integration-20261007.md) records the verified handoff, complete listener reruns, and pending current-image and NATS/Code acceptance.
 
 - [Sandbox phase deadlines](sandbox-phase-deadlines-20261002.md) separates durable readiness and execution clocks and records rolling compatibility and Docker/Kubernetes browser acceptance.

@@ -10,6 +10,18 @@ struct PendingSupervisor(Arc<Notify>);
 
 #[tonic::async_trait]
 impl SandboxSupervisorService for PendingSupervisor {
+    async fn lookup_sandbox_dependencies(
+        &self,
+        _: Request<crate::protocol::elitea::runtime::v1::LookupSandboxDependenciesRequestV1>,
+    ) -> Result<
+        Response<crate::protocol::elitea::runtime::v1::LookupSandboxDependenciesResponseV1>,
+        Status,
+    > {
+        Err(Status::unimplemented(
+            "frozen lookup is outside this fixture",
+        ))
+    }
+
     async fn submit_rust_compiled_snapshot(
         &self,
         _request: Request<
