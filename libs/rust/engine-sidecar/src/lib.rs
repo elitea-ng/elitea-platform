@@ -6,10 +6,13 @@
 //! * [`healthcheck`] — the container probe for a distroless image, which
 //!   has no shell and no curl;
 //! * [`cgroup`] — the container's memory limit and OOM count, for an engine
-//!   that sizes or supervises a worker process.
+//!   that sizes or supervises a worker process;
+//! * [`telemetry`] — stderr log lines, and OTLP span export under the
+//!   worker's switches.
 
 pub mod cgroup;
 pub mod healthcheck;
 pub mod server;
+pub mod telemetry;
 
 pub use server::{Engine, bind, router, serve};

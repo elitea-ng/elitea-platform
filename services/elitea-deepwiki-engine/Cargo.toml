@@ -61,7 +61,6 @@ tracing = "=0.1.44"
 # NFKD for the sanitizer's node-id slug (`unicodedata.normalize`). Already
 # in the tree through sqlx; pinned to the locked version.
 unicode-normalization = "=0.1.25"
-tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
 
 [dev-dependencies]
 # The sidecar tests' HTTP/1 client over the Unix socket.

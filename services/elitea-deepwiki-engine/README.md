@@ -531,13 +531,23 @@ calibration profile is an error (Python fell back to `calibrated`).
 
 ## Model client (`libs/rust/model-client`)
 
+It calls `/llm` exactly as the agent worker does — headers, the execution
+id the gateway attributes spend to, 402 scopes and refusal codes, reasoning
+fields, the `engine.model.request` span — under the shared contract in
+`libs/rust/model-client/docs/llm-caller-contract.md`, which both callers'
+tests assert from `conformance/llm-caller/contract.json`. Spans are exported
+over OTLP when `OTEL_EXPORTER_OTLP_(TRACES_)ENDPOINT` is set
+(`elitea-engine-sidecar::telemetry`, `service.name` `elitea-deepwiki-engine`).
+
 ADR-0026 decision 8: one small OpenAI-compatible client on `reqwest` 0.13
 (the copy `gix` pulls) over rustls. Indexing, generation (the native
 runner), `ask` and deep research use it.
 
 - `ModelSettings::from_llm_settings` reads the block the facade writes:
   `api_base` | `openai_api_base`, `api_key` | `openai_api_key`,
-  `organization` (sent as `OpenAI-Organization`), `model_name`, and
+  `organization` (sent as `X-Project-Id`), `execution_id` (sent as
+  `X-Elitea-Execution-Id`), `reasoning_effort` (sent only when set),
+  `model_name`, and
   `max_tokens` (default 64000), `max_retries` (2), `streaming` (true),
   `provider` (`openai` | `anthropic`; both go through the gateway's
   OpenAI-compatible surface). `temperature` is ignored, as in Python.
