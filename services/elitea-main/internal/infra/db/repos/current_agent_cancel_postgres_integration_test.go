@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
@@ -497,5 +498,131 @@ WHERE execution_id = $1 AND generation = 1`, executionID); err != nil {
 	}
 	if _, err := cancel(strangerID); !errors.Is(err, agentexecutionapp.ErrCurrentAgentCancelNotAllowed) {
 		t.Fatalf("a stranger's stop: err=%v, want ErrCurrentAgentCancelNotAllowed", err)
+	}
+}
+
+// TestPostgresCurrentAgentCancelConcurrentStopsOfAnEmptyTurnBothAnswer204:
+// a double tap (or a stop plus its timeout retry) on a turn with no output.
+// Both stops read the answer before either commits; the first deletes the
+// empty pair, and the second, re-checking the job row after the first's
+// lock is released, still matches `desired_state = 'CANCELLED'` and so
+// skips the replay path, while its projection finds no rows. That second
+// stop is the same caller's repeated stop and must be a replay (204), not
+// "projection did not settle" (502). A held lock on the job row lines both
+// stops up behind it so the interleaving is deterministic.
+func TestPostgresCurrentAgentCancelConcurrentStopsOfAnEmptyTurnBothAnswer204(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+
+	const (
+		questionID   = "20000000-0000-4000-8000-000000000181"
+		questionItem = "40000000-0000-4000-8000-000000000181"
+		responseID   = "30000000-0000-4000-8000-000000000181"
+		executionID  = "execution-stop-double-tap"
+	)
+	tx, err := pool.BeginTx(t.Context(), pgx.TxOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := tenant.BindProject(t.Context(), tx, tenant.Project{ID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	responseMessageID := insertPostgresCurrentApplicationTurn(
+		t,
+		sqlcgen.New(tx),
+		mustCurrentPGUUID(t, "10000000-0000-4000-8000-000000000031"),
+		questionID,
+		questionItem,
+		responseID,
+		"stop me twice at once",
+		executionID,
+	)
+	insertPostgresCurrentAgentCancelBinding(
+		t, tx, responseMessageID, questionID, executionID,
+		"agent.execute.application.v1", "RUNNING", "RUNNING",
+	)
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	repository, err := NewCurrentAgentCancelRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blocker, err := pool.BeginTx(t.Context(), pgx.TxOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = blocker.Rollback(context.Background()) }()
+	var blockerPID int32
+	if err := blocker.QueryRow(t.Context(), `SELECT pg_backend_pid()`).Scan(&blockerPID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := blocker.Exec(t.Context(), `
+SELECT 1 FROM elitea_runtime.execution_jobs
+WHERE execution_id = $1 AND generation = 1
+FOR UPDATE`, executionID); err != nil {
+		t.Fatal(err)
+	}
+
+	type result struct {
+		outcome agentexecutionapp.CurrentAgentCancelOutcome
+		err     error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			outcome, err := repository.CancelCurrentAgent(t.Context(), agentexecutionapp.CurrentAgentCancelRequest{
+				ProjectID:         1,
+				ActorUserID:       11,
+				ResponseMessageID: uuid.UUID(responseMessageID.Bytes).String(),
+			})
+			results <- result{outcome: outcome, err: err}
+		}()
+	}
+	// Wait until both stops are queued on the job row (the second behind the
+	// first's tuple lock): each has already taken the statement snapshot
+	// that still sees the answer.
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		var waiting int
+		if err := pool.QueryRow(t.Context(), `
+SELECT count(*) FROM pg_stat_activity
+WHERE datname = current_database() AND pid <> $1::int
+  AND wait_event_type = 'Lock' AND cardinality(pg_blocking_pids(pid)) > 0`,
+			blockerPID).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d stop(s) queued behind the job row lock", waiting)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := blocker.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	var deleted, replayed int
+	for range 2 {
+		got := <-results
+		if got.err != nil {
+			t.Fatalf("a concurrent stop failed: %v (the route answers 502)", got.err)
+		}
+		switch {
+		case got.outcome.Deleted && !got.outcome.Replay:
+			deleted++
+		case got.outcome.Replay && !got.outcome.Deleted:
+			replayed++
+		default:
+			t.Fatalf("outcome=%+v", got.outcome)
+		}
+	}
+	if deleted != 1 || replayed != 1 {
+		t.Fatalf("deleted=%d replayed=%d, want one fresh stop that deletes the empty pair and one replay", deleted, replayed)
 	}
 }
