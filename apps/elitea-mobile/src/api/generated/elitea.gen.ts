@@ -7,7 +7,7 @@
  *
  * upstream sha256:    27c4b5278cbc1415565e9b74214900b8dbe0cc7680cedfc23de341ba21d0f9c6
  * overlay sha256:     a841b06906dceacba2d34407cd109837cb418a101cfa6c4aea80d9b1ef01bf01
- * operations sha256:  ff6e5f7c7eb16a1675091bbc02f0476c073839b3db86c0153416289127dbe0d4
+ * operations sha256:  8420de61be5f45c314b934fba627a5ce4a20f7272f2366d80d32ed45dd77e0d4
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -850,6 +850,62 @@ export interface paths {
          *     (`AddParticipant`).
          */
         post: operations["addConversationParticipants"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/public_application/prompt_lib/{application_id}/{version_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                application_id: number;
+                version_name: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * Retrieve a published application by public name and version label
+         * @description NOTE(W2): internal/api/v2/eliteacore/handler.go:1319-1483.
+         */
+        get: operations["getPublicApplication"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/elitea_core/public_applications/prompt_lib": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List published applications visible without project membership
+         * @description The public catalogue. Answers `{rows, total}` where `total` counts the
+         *     FILTERED set, not the whole catalogue, so a client can page through it.
+         *
+         *     Every parameter below is read by
+         *     internal/api/v2/eliteacore/public_applications.go. A `sort_by`,
+         *     `sort_order`, `agents_type` or `statuses` value outside its allowlist,
+         *     or a `limit`/`offset` outside its range, is refused with 400 and a body
+         *     naming the parameter — it is never silently ignored. The 400 is NOT
+         *     declared as a response here: `eliteaFetch` throws on every non-2xx, so
+         *     this codebase keeps generated response types 200-only (see
+         *     apps/elitea-web/src/pages/agents/Latest.tsx).
+         *
+         *     Trending (`trend_start_period`/`trend_end_period`) is the one pylon
+         *     parameter still missing here.
+         */
+        get: operations["listPublicApplications"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -2484,6 +2540,41 @@ export interface components {
             owner_id: number;
             plugins: string[];
             suspended: boolean;
+        };
+        /** @description NOTE(W2): publicApplicationDetail response, internal/api/v2/eliteacore/handler.go:1477-1483. */
+        PublicApplicationDetail: {
+            description: string;
+            id: string;
+            name: string;
+            version_details: components["schemas"]["ApplicationVersionDetail"];
+        };
+        /** @description NOTE(W2): internal/api/v2/eliteacore/handler.go:1316. */
+        PublicApplicationList: {
+            rows: components["schemas"]["PublicApplicationSummary"][];
+            total: number;
+        };
+        /** @description NOTE(W2): internal/api/v2/eliteacore/public_applications.go — PublicApplications. */
+        PublicApplicationSummary: {
+            agent_type: string;
+            description: string;
+            id: string;
+            /** @description Whether the CALLER has liked this application. Always false when the request carries no user identity. */
+            is_liked: boolean;
+            /** @description How many people have liked this application, counted over the public project's social_likes rows for entity `application`. */
+            likes: number;
+            meta: components["schemas"]["VersionMeta"] | null;
+            name: string;
+            /** @description Always the public project id. */
+            project_id: string;
+            /** @description Tags of the published version. Empty when the version has none; never null. */
+            tags: components["schemas"]["PublicApplicationTag"][];
+            version_id: string;
+            version_name: string;
+        };
+        /** @description One tag of the published version, as the catalogue row carries it (internal/api/v2/eliteacore/public_applications.go). Only the id and the name are aggregated — the tag's `data` jsonb is not read here. */
+        PublicApplicationTag: {
+            id: number;
+            name: string;
         };
         /** @description NOTE(W2): internal/api/v2/eliteacore/handler.go:1729-1734. The limit/days query params are accepted but not read by the handler. */
         RecommendationsResponse: {
@@ -4306,6 +4397,77 @@ export interface operations {
             404: components["responses"]["404"];
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
+        };
+    };
+    getPublicApplication: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                application_id: number;
+                version_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published application detail */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicApplicationDetail"];
+                };
+            };
+            404: components["responses"]["404"];
+        };
+    };
+    listPublicApplications: {
+        parameters: {
+            query?: {
+                /**
+                 * @description One of `all`, `classic` or `pipeline`. `pipeline` keeps only pipeline agents, `classic` keeps everything else, `all` (the default) keeps both. Any other value is refused with 400.
+                 *     The allowed set is stated here rather than as an OpenAPI `enum` on purpose: an `enum` of `asc`/`desc` on a second operation makes oapi-codegen rename the FIRST operation's generated constants, which turns a two-parameter spec addition into a repository-wide generated diff. The handler's own allowlist (public_applications.go) is the enforcement point.
+                 */
+                agents_type?: string;
+                /** @description Marketplace category filter, matched against the published version's `meta.category`. The value `Other` also takes in every agent with no category at all. */
+                category?: string;
+                /** @description Maximum number of items to return */
+                limit?: components["parameters"]["Limit"];
+                /** @description Keep only the applications the CALLER has liked. A request with no user identity answers no rows rather than the generic list. */
+                my_liked?: boolean;
+                /** @description Number of items to skip before starting to collect results */
+                offset?: components["parameters"]["Offset"];
+                /** @description Case-insensitive substring search over the application name and description. */
+                query?: string;
+                /** @description Sort key — one of `id`, `name`, `created_at` or `likes`. Ties break on the application id descending, so paging stays stable. Any other value is refused with 400. */
+                sort_by?: string;
+                /** @description `asc` or `desc`. Any other value is refused with 400. */
+                sort_order?: string;
+                /** @description Comma-separated version statuses (published, draft, on_moderation, rejected, embedded). The catalogue only holds published versions, so this narrows that set; a list without `published` answers no rows. */
+                statuses?: string;
+            };
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Published applications */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicApplicationList"];
+                };
+            };
+            400: components["responses"]["InvalidClientVersion"];
+            426: components["responses"]["ClientUpgradeRequired"];
         };
     };
     getRecommendations: {

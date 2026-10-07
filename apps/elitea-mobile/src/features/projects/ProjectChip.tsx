@@ -6,15 +6,19 @@ import { usePalette } from '@/constants/use-palette';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
 import { usePersonalProjectId } from '@/state/selfIdentity';
 
+/** The active project as the user sees it: "My project" for the personal one, else its name. */
+export function useProjectLabel(): string {
+  const { project, projectId } = useProjectSelection();
+  const personal = usePersonalProjectId();
+  return projectId !== null && projectId === personal
+    ? 'My project'
+    : (project?.name ?? (projectId !== null ? `Project ${projectId}` : 'Project'));
+}
+
 /** Header chip showing the current project; opens the project switcher. */
 export function ProjectChip() {
   const palette = usePalette();
-  const { project, projectId } = useProjectSelection();
-  const personal = usePersonalProjectId();
-  const label =
-    projectId !== null && projectId === personal
-      ? 'My project'
-      : (project?.name ?? (projectId !== null ? `Project ${projectId}` : 'Project'));
+  const label = useProjectLabel();
   return (
     <Link
       href="/projects"

@@ -41,6 +41,9 @@ and Dynamic Island for a running answer, and open-app Siri / Shortcuts intents
 (New chat with an agent, Ask an agent, Open notifications); counts and generic
 text unless the workspace policy allows titles
 ([docs/native-surfaces.md](docs/native-surfaces.md)).
+Discover (1.3): the workspace's public agents with search, category, tags and icon,
+an agent page with its welcome message and conversation starters, and a chat started
+in the active project.
 Native behaviour is verified by hand with
 [docs/device-verification.md](docs/device-verification.md).
 See [docs/design.md](docs/design.md) for the planned product and

@@ -255,6 +255,12 @@ suggestions; copy, share, read aloud, dictation and regenerate also work on 1.2.
       FILE (not empty text). The file stays in `cache/export-tmp` until the next export.
 - [ ] **Suggested agents.** New chat with no search shows "Suggested"; tapping one starts the
       chat with that agent.
+- [ ] **Discover.** On a 1.3 workspace the conversation list starts with "Discover"; on a 1.2
+      workspace it does not. Discover lists the public agents (icon from the workspace,
+      category, tags); a search narrows them; an agent page shows its welcome message and
+      starters. Start chat opens a new conversation in the project shown in the header chip,
+      and the agent answers; a starter opens it with that text in the composer, unsent.
+      Switch project: the next chat from Discover lands in the new project.
 - [ ] **VoiceOver.** With VoiceOver on, send a message: "<agent> answered." is spoken once at
       the end (not while it streams); a sensitive tool pause says "Approval needed to run …".
 - [ ] **Dynamic Type and Reduce Motion.** At the largest accessibility size the composer,

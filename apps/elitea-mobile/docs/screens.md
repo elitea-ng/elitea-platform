@@ -295,7 +295,11 @@ G ──────────────────────────
  └──────────────┘ └──────────────┘
 ```
 
-- Data comes from `fetchAgents(projectId, search)`, 50 per page, loaded as you scroll.
+- **Shipped (client contract 1.3) as a pushed screen**, `/discover` and `/discover/[id]`,
+  reached from a "Discover" row at the top of the conversation list until the tab shell
+  lands. It lists the workspace's PUBLIC agents (`listPublicApplications`, 20 per page),
+  not the project's own (those stay in `/new`); see `docs/design.md` "Discover".
+- Target: data from `fetchAgents(projectId, search)`, 50 per page, loaded as you scroll.
 - Tapping a card opens an agent detail sheet: icon (48), name, description, [Start chat],
   [Talk].
 - **Scope:** only agents that a conversation can start with. Agent authoring is out of

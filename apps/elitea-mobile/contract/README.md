@@ -95,6 +95,7 @@ again. Every 1.3 operation the app uses is tagged `client`:
 | Notifications | `deleteNotification`, `deleteNotifications` (a deletion reaches the caller's other devices as a `deleted` tombstone in the `changes_since` delta) |
 | Memory | `listMemories`, `deleteMemory`, `clearMemories` (the caller's own memories in the project) |
 | Usage | `getProjectUsage` (current-period totals; money fields are removed for a member who may not see them) |
+| Discover | `listPublicApplications` (the public catalogue: `{rows, total}`, `total` counts the filtered set; rows carry the public `project_id` and the published `version_id`), `getPublicApplication` (welcome message and conversation starters; not tagged `client` upstream, read as optional enrichment: the details screen works without it) |
 
 `NativeClientPolicy` and `ClientPublicPolicy` carry the six data controls
 (`allow_share_out`, `allow_share_in`, `allow_cloud_stt`,
@@ -105,6 +106,11 @@ The app calls the 1.3 operations only when discovery says `client_contract`
 >= 1.3 (`speaksContract(document, 1, 3)`); on an older server the feature is
 hidden. The data controls default to the server's own defaults when a server
 sends none (src/security/policy.ts `DATA_CONTROL_DEFAULTS`).
+
+Starting a chat with a Discover agent follows the 1.3 server semantics: `createConversation` in the
+caller's active project, then `addConversationParticipants` with `entity_meta.project_id` set to
+the public project and `entity_settings.version_id` to the published version
+(`src/api/queries/discover.ts`).
 
 `GET /api/v2/auth/native/authorize` is a browser navigation, not an API call,
 so it is not typed; the app builds that URL itself (`src/auth/nativeAuth.ts`).

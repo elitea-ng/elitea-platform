@@ -22,4 +22,6 @@ export const queryKeys = {
   memories: (projectId: number) => ['p', projectId, 'memories'] as const,
   /** Current-period usage against the budget (client contract 1.3), keyed below by scope. */
   usage: (projectId: number) => ['p', projectId, 'usage'] as const,
+  /** The public agent catalogue as read from this project (client contract 1.3, Discover). */
+  discover: (projectId: number) => ['p', projectId, 'discover'] as const,
 };

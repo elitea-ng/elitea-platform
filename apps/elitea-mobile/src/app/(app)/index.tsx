@@ -6,6 +6,7 @@ import { OfflineNotice } from '@/components/OfflineNotice';
 import { StatusScreen } from '@/components/StatusScreen';
 import { Spacing } from '@/constants/theme';
 import { usePalette } from '@/constants/use-palette';
+import { DiscoverEntry } from '@/features/discover/DiscoverEntry';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
 import { formatAge } from '@/lib/time';
 
@@ -55,7 +56,12 @@ export default function ConversationsScreen() {
           tintColor={palette.accent}
         />
       }
-      ListHeaderComponent={<OfflineNotice visible={offline} />}
+      ListHeaderComponent={
+        <>
+          <OfflineNotice visible={offline} />
+          <DiscoverEntry />
+        </>
+      }
       onEndReachedThreshold={0.5}
       onEndReached={() => {
         if (conversations.hasNextPage && !conversations.isFetchingNextPage) {
@@ -93,8 +99,9 @@ export default function ConversationsScreen() {
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  emptyContainer: { flexGrow: 1, justifyContent: 'center' },
-  empty: { alignItems: 'center', padding: Spacing.four, gap: Spacing.two },
+  // The Discover entry stays at the top; the empty state takes the rest, centred.
+  emptyContainer: { flexGrow: 1 },
+  empty: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.four, gap: Spacing.two },
   title: { fontSize: 20, fontWeight: '600' },
   body: { fontSize: 15, textAlign: 'center' },
   row: {

@@ -42,6 +42,8 @@
     "listMemories",
     "deleteMemory",
     "clearMemories",
-    "getProjectUsage"
+    "getProjectUsage",
+    "listPublicApplications",
+    "getPublicApplication"
   ]
 }
