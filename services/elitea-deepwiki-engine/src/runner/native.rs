@@ -345,6 +345,9 @@ impl NativeRunner {
             ));
         }
         let arguments = prepare_arguments(tool, arguments)?;
+        // Refused here, before a worker starts, as well as in the worker:
+        // an index is never built without the host's project.
+        crate::storage::ProjectScope::from_arguments(&arguments)?;
         context.checkpoint()?;
         let directory = crate::generate::job_directory(
             &self.settings.ingest.scratch_path,
@@ -862,7 +865,7 @@ mod tests {
         }
         let resolved = runner.run("resolve_wiki", Map::new(), &context).await;
         assert_ne!(resolved.err(), Some(refused.clone()));
-        let generated = runner.run("generate_wiki", Map::new(), &context).await;
+        let generated = runner.run("generate_wiki", scoped(), &context).await;
         assert_ne!(generated.err(), Some(refused));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -876,7 +879,7 @@ mod tests {
         let (context, mut receiver, stop) = context();
         let task = {
             let runner = runner.clone();
-            tokio::spawn(async move { runner.run("generate_wiki", Map::new(), &context).await })
+            tokio::spawn(async move { runner.run("generate_wiki", scoped(), &context).await })
         };
         // Wait for the worker's own line, then stop.
         loop {
@@ -904,7 +907,7 @@ mod tests {
     async fn a_worker_that_dies_without_a_last_line_is_a_runtime_error() {
         let (runner, root) = scripted("#!/bin/sh\nexit 3\n");
         let (context, _receiver, _stop) = context();
-        let outcome = runner.run("generate_wiki", Map::new(), &context).await;
+        let outcome = runner.run("generate_wiki", scoped(), &context).await;
         let error = outcome
             .err()
             .unwrap_or_else(|| panic!("a dead worker succeeded"));
@@ -928,7 +931,7 @@ exit 0
 ",
         );
         let (context, _receiver, _stop) = context();
-        let outcome = runner.run("generate_wiki", Map::new(), &context).await;
+        let outcome = runner.run("generate_wiki", scoped(), &context).await;
         let error = outcome
             .err()
             .unwrap_or_else(|| panic!("an unreadable worker succeeded"));
@@ -948,7 +951,7 @@ exit 0
         let (runner, root) =
             scripted("#!/bin/sh\nprintf '{\"thinking\": \"x\"}\\n{\"resu'\nkill -9 $$\n");
         let (context, _receiver, _stop) = context();
-        let outcome = runner.run("generate_wiki", Map::new(), &context).await;
+        let outcome = runner.run("generate_wiki", scoped(), &context).await;
         let error = outcome
             .err()
             .unwrap_or_else(|| panic!("a killed worker succeeded"));
@@ -1018,7 +1021,7 @@ exit 0
         let (context, mut receiver, _stop) = context();
         let task = {
             let runner = runner.clone();
-            tokio::spawn(async move { runner.run("generate_wiki", Map::new(), &context).await })
+            tokio::spawn(async move { runner.run("generate_wiki", scoped(), &context).await })
         };
         loop {
             match receiver.recv().await {
@@ -1065,10 +1068,26 @@ exit 0
             let runner = runner.clone();
             let context = context.clone();
             async move {
-                let arguments = arguments.as_object().cloned().unwrap_or_default();
+                let mut arguments = arguments.as_object().cloned().unwrap_or_default();
+                arguments.extend(scoped());
                 runner.run(tool, arguments, &context).await
             }
         };
+        // Without the host's project, `ask` and `deep_research` are refused
+        // before anything else is read.
+        for tool in ["ask", "deep_research"] {
+            let mut arguments = Map::new();
+            arguments.insert("question".to_owned(), json!("q"));
+            arguments.insert("repo_config".to_owned(), json!({"repository": "a/b"}));
+            let refused = runner.run(tool, arguments, &context).await.err();
+            assert!(
+                refused
+                    .as_ref()
+                    .is_some_and(|e| e.error_type == ErrorType::Value
+                        && e.message.contains(crate::storage::PROJECT_ARG)),
+                "{tool}: {refused:?}"
+            );
+        }
         let gateway = json!({"api_base": "http://127.0.0.1:1", "api_key": "k", "model_name": "m"});
         for tool in ["ask", "deep_research"] {
             // `parse_request`: an unsuccessful result.
@@ -1130,6 +1149,13 @@ exit 0
         let unknown = runner.run("list_wikis", Map::new(), &context).await.err();
         assert_eq!(unknown.map(|e| e.error_type), Some(ErrorType::Key));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The argument set of a run the host stamped with a project.
+    fn scoped() -> Map<String, Value> {
+        let mut arguments = Map::new();
+        arguments.insert(crate::storage::PROJECT_ARG.to_owned(), json!("1"));
+        arguments
     }
 
     /// The product a Go integer expression such as `64*1024*1024` is.

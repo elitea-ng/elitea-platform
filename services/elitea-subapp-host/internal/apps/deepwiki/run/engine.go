@@ -58,7 +58,13 @@ func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 	for _, name := range SidecarTools {
 		tool := name
 		sidecar[tool] = func(ctx context.Context, arguments map[string]any, tc *spi.Context) (map[string]any, error) {
-			return client.Invoke(ctx, tool, arguments, tc)
+			// Every call to the engine carries the invocation's
+			// authenticated project, and only that one (project.go).
+			stamped, err := StampProject(ctx, tool, arguments)
+			if err != nil {
+				return nil, err
+			}
+			return client.Invoke(ctx, tool, stamped, tc)
 		}
 	}
 	transport := ArtifactClientFrom(settings.TLSCAFile)
@@ -80,9 +86,10 @@ func NewNamedEngineRunner(settings spi.Settings, name string) *Runner {
 		tools[name] = tool
 	}
 	return &Runner{
-		RunnerName: name,
-		Tools:      tools,
-		Egress:     spi.ParseEgressPolicy(settings.GitAllowlist),
-		Artifacts:  transport,
+		RunnerName:       name,
+		Tools:            tools,
+		Egress:           spi.ParseEgressPolicy(settings.GitAllowlist),
+		Artifacts:        transport,
+		VerifiedIdentity: settings.IdentitySecret != "",
 	}
 }

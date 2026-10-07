@@ -52,6 +52,7 @@ use crate::graph::{CodeGraph, builder, discover, node_row};
 use crate::ingest::{self, Admitted, ClonedRepository};
 use crate::llm::{ChatClient, EmbeddingClient, EmbeddingOptions, Transport, TransportSettings};
 use crate::runner::Context;
+use crate::storage::WikiKey;
 use crate::storage::build::{Build, BuildSpace, WikiRecord};
 use crate::storage::topology::PgTopologyStore;
 use crate::storage::{self, StorageError};
@@ -351,7 +352,7 @@ impl Pipeline<'_> {
             space = space.with_boot_id(boot_id);
         }
         let build = space
-            .begin(&wiki_id)
+            .begin(&WikiKey::new(request.project, wiki_id.clone()))
             .await
             .map_err(|e| storage_failure("opening a build", &e))?;
         (self.job.on_build)(build.build_id());

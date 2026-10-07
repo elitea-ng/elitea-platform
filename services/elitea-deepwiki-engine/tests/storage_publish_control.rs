@@ -26,7 +26,7 @@ fn nodes(tag: &str, count: usize) -> Vec<IndexNode> {
 }
 
 async fn staged(space: &BuildSpace, wiki: &str, tag: &str, count: usize) -> Build {
-    let mut build = space.begin(wiki).await.expect("begin");
+    let mut build = space.begin(&common::key(wiki)).await.expect("begin");
     build.stage_nodes(nodes(tag, count)).await.expect("stage");
     build
 }
@@ -66,7 +66,7 @@ async fn a_failed_publish_can_be_retried_or_abandoned() {
         .with_publish_settings(quick(PublishSettings::default()));
 
     // Refused as empty, then staged and published by the same build.
-    let mut build = space.begin(wiki).await.expect("begin");
+    let mut build = space.begin(&common::key(wiki)).await.expect("begin");
     let refused = build.publish(&WikiRecord::default()).await;
     assert!(
         matches!(&refused, Err(StorageError::Publish(m)) if m.contains("staged no nodes")),

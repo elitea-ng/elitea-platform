@@ -210,8 +210,17 @@ impl PgIndex {
         Self { db }
     }
 
+    /// The project and wiki every statement here is scoped to.
+    fn key(&self) -> &crate::storage::WikiKey {
+        self.db.reader().key()
+    }
+
     fn wiki(&self) -> &str {
-        self.db.reader().wiki_id()
+        self.key().wiki_id()
+    }
+
+    fn project(&self) -> i32 {
+        self.key().project_id()
     }
 
     fn pool(&self) -> &sqlx::PgPool {
@@ -225,8 +234,9 @@ impl PgIndex {
         limit: usize,
     ) -> Result<Vec<NodeRecord>, EngineError> {
         let sql = format!(
-            "{} WHERE wiki_id = $1 AND {clause} LIMIT ${}",
+            "{} WHERE wiki_id = $1 AND {clause} AND project_id = ${} LIMIT ${}",
             adapter::NODE_SELECT,
+            bind.len() + 3,
             bind.len() + 2
         );
         let mut query = sqlx::query(&sql).bind(self.wiki());
@@ -235,6 +245,7 @@ impl PgIndex {
         }
         let rows = query
             .bind(sql_limit(limit))
+            .bind(self.project())
             .fetch_all(self.pool())
             .await
             .map_err(database)?;
@@ -265,7 +276,7 @@ impl PgIndex {
         .fetch_one(&mut *tx)
         .await
         .map_err(database)?;
-        let scores = search::bm25_scores(tx, self.wiki(), BRANCH_FTS, &terms.unwrap_or_default())
+        let scores = search::bm25_scores(tx, self.key(), BRANCH_FTS, &terms.unwrap_or_default())
             .await
             .map_err(database)?;
         let mut ranked: Vec<(String, f64)> = matched
@@ -283,11 +294,14 @@ impl PgIndex {
 
 impl IndexStore for PgIndex {
     async fn wiki_exists(&self) -> Result<bool, EngineError> {
-        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM wikis WHERE wiki_id = $1)")
-            .bind(self.wiki())
-            .fetch_one(self.pool())
-            .await
-            .map_err(database)
+        sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM wikis WHERE wiki_id = $1 AND project_id = $2)",
+        )
+        .bind(self.wiki())
+        .bind(self.project())
+        .fetch_one(self.pool())
+        .await
+        .map_err(database)
     }
 
     async fn get_node(&self, node_id: &str) -> Result<Option<NodeRecord>, EngineError> {
@@ -339,13 +353,14 @@ impl IndexStore for PgIndex {
         // Ties on length break on node id: the table has no insertion
         // order (SQLite's rowid) to break them by.
         let sql = format!(
-            "{} WHERE wiki_id = $1 AND lower(symbol_name) LIKE lower($2) \
+            "{} WHERE wiki_id = $1 AND lower(symbol_name) LIKE lower($2) AND project_id = $3 \
              ORDER BY length(symbol_name), node_id LIMIT 1",
             adapter::NODE_SELECT
         );
         let row = sqlx::query(&sql)
             .bind(self.wiki())
             .bind(format!("%{}%", like_sqlite(name)))
+            .bind(self.project())
             .fetch_optional(self.pool())
             .await
             .map_err(database)?;
@@ -376,12 +391,14 @@ impl IndexStore for PgIndex {
                AND n.fts @@ plainto_tsquery( \
                    'deepwiki_porter', regexp_replace($2, '[^[:alnum:]]+', ' ', 'g')) \
                AND ($3::text IS NULL OR n.rel_path LIKE $3) \
-               AND ($4::text[] IS NULL OR n.symbol_type = ANY($4))",
+               AND ($4::text[] IS NULL OR n.symbol_type = ANY($4)) \
+               AND n.project_id = $5",
         )
         .bind(self.wiki())
         .bind(query)
         .bind(prefix_pattern(path_prefix))
         .bind(symbol_types)
+        .bind(self.project())
         .fetch_all(&mut *tx)
         .await
         .map_err(database)?;
@@ -389,7 +406,7 @@ impl IndexStore for PgIndex {
             .ranked(&mut tx, matched, &[query.to_owned()], limit)
             .await?;
         let ids: Vec<&str> = ranked.iter().map(|(id, _)| id.as_str()).collect();
-        let mut nodes = adapter::nodes_by_id(&mut tx, self.wiki(), &ids)
+        let mut nodes = adapter::nodes_by_id(&mut tx, self.key(), &ids)
             .await
             .map_err(database)?;
         tx.commit().await.map_err(database)?;
@@ -425,16 +442,18 @@ impl IndexStore for PgIndex {
                    SELECT plainto_tsquery('deepwiki_porter', \
                           regexp_replace(k, '[^[:alnum:]]+', ' ', 'g')) \
                    FROM unnest($2::text[]) AS k)) \
-               AND n.symbol_type NOT IN ('module_doc', 'file_doc', 'readme')",
+               AND n.symbol_type NOT IN ('module_doc', 'file_doc', 'readme') \
+               AND n.project_id = $3",
         )
         .bind(self.wiki())
         .bind(keywords)
+        .bind(self.project())
         .fetch_all(&mut *tx)
         .await
         .map_err(database)?;
         let ranked = self.ranked(&mut tx, matched, keywords, limit).await?;
         let ids: Vec<&str> = ranked.iter().map(|(id, _)| id.as_str()).collect();
-        let mut nodes = adapter::nodes_by_id(&mut tx, self.wiki(), &ids)
+        let mut nodes = adapter::nodes_by_id(&mut tx, self.key(), &ids)
             .await
             .map_err(database)?;
         tx.commit().await.map_err(database)?;
@@ -453,7 +472,8 @@ impl IndexStore for PgIndex {
         let sql = format!(
             "{} WHERE wiki_id = $1 \
                AND ($2::text[] IS NULL OR symbol_type = ANY($2)) \
-               AND ($3::text IS NULL OR rel_path LIKE $3) LIMIT $4",
+               AND ($3::text IS NULL OR rel_path LIKE $3) \
+               AND project_id = $5 LIMIT $4",
             adapter::NODE_SELECT
         );
         let rows = sqlx::query(&sql)
@@ -461,6 +481,7 @@ impl IndexStore for PgIndex {
             .bind(symbol_types)
             .bind(prefix_pattern(path_prefix))
             .bind(sql_limit(limit))
+            .bind(self.project())
             .fetch_all(self.pool())
             .await
             .map_err(database)?;
@@ -480,14 +501,17 @@ impl IndexStore for PgIndex {
         let rows = sqlx::query(
             "SELECT node_id, sum(c)::bigint AS c FROM ( \
                  SELECT source_id AS node_id, count(*) AS c FROM wiki_edges \
-                 WHERE wiki_id = $1 AND source_id = ANY($2) GROUP BY source_id \
+                 WHERE wiki_id = $1 AND source_id = ANY($2) AND project_id = $3 \
+                 GROUP BY source_id \
                  UNION ALL \
                  SELECT target_id AS node_id, count(*) AS c FROM wiki_edges \
-                 WHERE wiki_id = $1 AND target_id = ANY($2) GROUP BY target_id \
+                 WHERE wiki_id = $1 AND target_id = ANY($2) AND project_id = $3 \
+                 GROUP BY target_id \
              ) AS per GROUP BY node_id",
         )
         .bind(self.wiki())
         .bind(node_ids)
+        .bind(self.project())
         .fetch_all(self.pool())
         .await
         .map_err(database)?;
@@ -508,18 +532,21 @@ impl IndexStore for PgIndex {
         let sql = if outgoing {
             "SELECT e.target_id AS other, e.rel_type, n.symbol_name, n.symbol_type \
              FROM wiki_edges e JOIN wiki_nodes n \
-               ON n.wiki_id = e.wiki_id AND n.node_id = e.target_id \
-             WHERE e.wiki_id = $1 AND e.source_id = $2 LIMIT $3"
+               ON n.project_id = e.project_id AND n.wiki_id = e.wiki_id \
+              AND n.node_id = e.target_id \
+             WHERE e.wiki_id = $1 AND e.source_id = $2 AND e.project_id = $4 LIMIT $3"
         } else {
             "SELECT e.source_id AS other, e.rel_type, n.symbol_name, n.symbol_type \
              FROM wiki_edges e JOIN wiki_nodes n \
-               ON n.wiki_id = e.wiki_id AND n.node_id = e.source_id \
-             WHERE e.wiki_id = $1 AND e.target_id = $2 LIMIT $3"
+               ON n.project_id = e.project_id AND n.wiki_id = e.wiki_id \
+              AND n.node_id = e.source_id \
+             WHERE e.wiki_id = $1 AND e.target_id = $2 AND e.project_id = $4 LIMIT $3"
         };
         let rows = sqlx::query(sql)
             .bind(self.wiki())
             .bind(node_id)
             .bind(sql_limit(limit))
+            .bind(self.project())
             .fetch_all(self.pool())
             .await
             .map_err(database)?;

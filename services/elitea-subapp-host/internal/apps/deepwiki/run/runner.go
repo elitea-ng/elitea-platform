@@ -27,6 +27,10 @@ type Runner struct {
 	Egress     spi.EgressPolicy
 	Artifacts  ArtifactClientFactory
 	Logger     *slog.Logger
+	// VerifiedIdentity reports that this host verifies the facade's
+	// identity signature (an identity secret is configured). It decides
+	// where the index project comes from: see project.go.
+	VerifiedIdentity bool
 }
 
 // Name is the runner's name as /health reports it.
@@ -59,6 +63,13 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 		request = transformed
 	}
 	params := MergeParameters(request)
+
+	// The project the engine's index is scoped to, from authenticated
+	// context only (project.go). Resolved once here and carried in ctx, so
+	// every engine call this invocation makes — resolve_and_ask's included
+	// — is stamped with the same project, and none can name another.
+	project, projectErr := TrustedProject(call.Identity, r.VerifiedIdentity, params)
+	ctx = withProject(ctx, projectResolution{id: project, err: projectErr})
 
 	// Reader-selected wiki pages, resolved into the question BEFORE the
 	// argument set is derived — see contextpaths.go for why it happens here

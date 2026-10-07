@@ -54,6 +54,10 @@ const EMBEDDED: &[(&str, &str)] = &[
         "0004_build_boot_id.sql",
         include_str!("../../migrations/0004_build_boot_id.sql"),
     ),
+    (
+        "0005_project_scope.sql",
+        include_str!("../../migrations/0005_project_scope.sql"),
+    ),
 ];
 
 /// `migrate._BOOTSTRAP`, verbatim.
@@ -264,7 +268,7 @@ mod tests {
     fn the_embedded_set_is_valid_and_ordered() {
         let migrations = embedded().unwrap_or_default();
         let versions: Vec<&str> = migrations.iter().map(|m| m.version.as_str()).collect();
-        assert_eq!(versions, ["0001", "0002", "0003", "0004"]);
+        assert_eq!(versions, ["0001", "0002", "0003", "0004", "0005"]);
     }
 
     #[test]

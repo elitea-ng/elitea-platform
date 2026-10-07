@@ -43,11 +43,20 @@ async fn startup_reconciliation_removes_only_this_owners_builds() {
     let replica_b = BuildSpace::new(pool.clone(), "replica-b");
 
     // Replica A had two builds in flight when it died; replica B has one.
-    let mut a1 = replica_a.begin("acme--one--main").await.expect("begin");
+    let mut a1 = replica_a
+        .begin(&common::key("acme--one--main"))
+        .await
+        .expect("begin");
     a1.stage_nodes(nodes("a1")).await.expect("stage");
-    let mut a2 = replica_a.begin("acme--two--main").await.expect("begin");
+    let mut a2 = replica_a
+        .begin(&common::key("acme--two--main"))
+        .await
+        .expect("begin");
     a2.stage_nodes(nodes("a2")).await.expect("stage");
-    let mut b1 = replica_b.begin("acme--one--main").await.expect("begin");
+    let mut b1 = replica_b
+        .begin(&common::key("acme--one--main"))
+        .await
+        .expect("begin");
     b1.stage_nodes(nodes("b1")).await.expect("stage");
     let (a1_id, a2_id) = (a1.build_id().to_owned(), a2.build_id().to_owned());
     assert!(staged_rows(&pool, &a1_id).await > 0);
@@ -79,9 +88,15 @@ async fn the_sweep_removes_stale_builds_of_any_owner() {
     };
     let replica_a = BuildSpace::new(pool.clone(), "replica-a");
     let replica_b = BuildSpace::new(pool.clone(), "replica-b");
-    let mut stale = replica_a.begin("acme--one--main").await.expect("begin");
+    let mut stale = replica_a
+        .begin(&common::key("acme--one--main"))
+        .await
+        .expect("begin");
     stale.stage_nodes(nodes("stale")).await.expect("stage");
-    let mut fresh = replica_b.begin("acme--two--main").await.expect("begin");
+    let mut fresh = replica_b
+        .begin(&common::key("acme--two--main"))
+        .await
+        .expect("begin");
     fresh.stage_nodes(nodes("fresh")).await.expect("stage");
     // Replica A went away three hours ago.
     sqlx::query(
@@ -156,21 +171,30 @@ async fn a_late_reconciliation_spares_this_runs_builds() {
     let other_owner = BuildSpace::new(pool.clone(), "replica-b").with_boot_id("run-1");
     assert_eq!(this_run.boot_id(), "run-2");
 
-    let mut abandoned = earlier_run.begin("acme--one--main").await.expect("begin");
+    let mut abandoned = earlier_run
+        .begin(&common::key("acme--one--main"))
+        .await
+        .expect("begin");
     abandoned.stage_nodes(nodes("old")).await.expect("stage");
     let abandoned_id = abandoned.build_id().to_owned();
     drop(abandoned);
     // A build written before 0004: no boot id.
     sqlx::query(
-        "INSERT INTO deepwiki_build.builds (build_id, wiki_id, owner) \
-         VALUES ('pre-0004', 'acme--one--main', 'replica-a')",
+        "INSERT INTO deepwiki_build.builds (build_id, project_id, wiki_id, owner) \
+         VALUES ('pre-0004', 1, 'acme--one--main', 'replica-a')",
     )
     .execute(&pool)
     .await
     .expect("legacy row");
-    let mut mine = this_run.begin("acme--two--main").await.expect("begin");
+    let mut mine = this_run
+        .begin(&common::key("acme--two--main"))
+        .await
+        .expect("begin");
     mine.stage_nodes(nodes("mine")).await.expect("stage");
-    let mut theirs = other_owner.begin("acme--three--main").await.expect("begin");
+    let mut theirs = other_owner
+        .begin(&common::key("acme--three--main"))
+        .await
+        .expect("begin");
     theirs.stage_nodes(nodes("theirs")).await.expect("stage");
 
     // The reconciliation runs only now, after this run began a build.
@@ -236,7 +260,10 @@ async fn an_open_build_beats_in_the_background() {
         }
     };
 
-    let mut build = space.begin("acme--one--main").await.expect("begin");
+    let mut build = space
+        .begin(&common::key("acme--one--main"))
+        .await
+        .expect("begin");
     build.stage_nodes(nodes("long")).await.expect("stage");
     let id = build.build_id().to_owned();
     // No stage call follows (a long generation): the task beats anyway.
@@ -253,7 +280,10 @@ async fn an_open_build_beats_in_the_background() {
     );
 
     // A failed publish (an empty build) leaves the build beating.
-    let mut empty = space.begin("acme--two--main").await.expect("begin");
+    let mut empty = space
+        .begin(&common::key("acme--two--main"))
+        .await
+        .expect("begin");
     assert!(empty.publish(&WikiRecord::default()).await.is_err());
     let empty_id = empty.build_id().to_owned();
     age(empty_id.clone()).await;

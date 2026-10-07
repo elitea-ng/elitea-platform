@@ -10,7 +10,7 @@
 //! deepwiki-parity parse-dump <language> <repo> <files.txt> <out.jsonl>
 //! deepwiki-parity graph-dump <repo> <out-dir> [--parses-from <dir>] [--no-phase1c]
 //!                             [--through phase2 --replay <recording.jsonl>]
-//! deepwiki-parity index-dump <repo> <wiki-id> [--embeddings <dim>]
+//! deepwiki-parity index-dump <repo> <project-id> <wiki-id> [--embeddings <dim>]
 //! deepwiki-parity pages <python-dump-dir> <out-dir>
 //! deepwiki-parity structure-dump <repo> <py-dump> <out-dir> --llm-base <url>
 //!                             [--planner cluster] [--repo-name owner/name] [--branch main]
@@ -88,7 +88,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
-const USAGE: &str = "usage: deepwiki-parity parse-dump <language> <repo> <files.txt> <out.jsonl>\n       deepwiki-parity graph-dump <repo> <out-dir> [--parses-from <dir>] [--no-phase1c] [--through phase2 --replay <recording.jsonl>]\n       deepwiki-parity index-dump <repo> <wiki-id> [--embeddings <dim>]\n       deepwiki-parity structure-dump <repo> <py-dump> <out-dir> --llm-base <url> [--planner P] [--repo-name N] [--branch B] [--repo-identifier I]\n       deepwiki-parity pages <python-dump-dir> <out-dir>";
+const USAGE: &str = "usage: deepwiki-parity parse-dump <language> <repo> <files.txt> <out.jsonl>\n       deepwiki-parity graph-dump <repo> <out-dir> [--parses-from <dir>] [--no-phase1c] [--through phase2 --replay <recording.jsonl>]\n       deepwiki-parity index-dump <repo> <project-id> <wiki-id> [--embeddings <dim>]\n       deepwiki-parity structure-dump <repo> <py-dump> <out-dir> --llm-base <url> [--planner P] [--repo-name N] [--branch B] [--repo-identifier I]\n       deepwiki-parity pages <python-dump-dir> <out-dir>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -287,9 +287,17 @@ fn index_dump(args: &[String]) -> Result<(), String> {
             positional.push(arg);
         }
     }
-    let [repo, wiki_id] = positional.as_slice() else {
+    let [repo, project, wiki_id] = positional.as_slice() else {
         return Err(USAGE.to_owned());
     };
+    let key = storage::WikiKey::new(
+        project
+            .parse()
+            .ok()
+            .and_then(storage::ProjectScope::new)
+            .ok_or("<project-id> must be a positive project id")?,
+        wiki_id.as_str(),
+    );
     let dsn =
         std::env::var(storage::DSN_ENV).map_err(|_| format!("{} is not set", storage::DSN_ENV))?;
     let repo = std::fs::canonicalize(repo).map_err(|e| format!("{repo}: {e}"))?;
@@ -320,8 +328,8 @@ fn index_dump(args: &[String]) -> Result<(), String> {
         storage::migrate::apply_all(&pool)
             .await
             .map_err(|e| e.to_string())?;
-        let summary = stage_and_publish(&pool, &graph, wiki_id, dimension).await?;
-        let reader = IndexReader::new(pool.clone(), wiki_id.as_str());
+        let summary = stage_and_publish(&pool, &graph, &key, dimension).await?;
+        let reader = IndexReader::new(pool.clone(), key.clone());
         probe_queries(&reader, dimension).await?;
         let stats = reader.stats().await.map_err(|e| e.to_string())?;
         let branches: Vec<String> = stats
@@ -343,11 +351,12 @@ fn index_dump(args: &[String]) -> Result<(), String> {
 async fn stage_and_publish(
     pool: &sqlx::PgPool,
     graph: &CodeGraph,
-    wiki_id: &str,
+    key: &storage::WikiKey,
     dimension: Option<usize>,
 ) -> Result<String, String> {
+    let wiki_id = key.wiki_id();
     let space = BuildSpace::new(pool.clone(), "deepwiki-parity");
-    let mut build = space.begin(wiki_id).await.map_err(|e| e.to_string())?;
+    let mut build = space.begin(key).await.map_err(|e| e.to_string())?;
 
     let stage_started = Instant::now();
     let staged = build.stage_graph(graph).await.map_err(|e| e.to_string())?;
