@@ -1,7 +1,7 @@
 # Code chat reload authors and participant selection
 
-Date: 2026-10-07. Status: local source and focused Web checks pass.
-The rollout owner retains image delivery and deployed browser acceptance.
+Date: 2026-10-07. Status: source checks, image build, and strict local scan pass.
+Deployment and browser acceptance remain open.
 
 ## Current to new source mapping
 
@@ -70,12 +70,38 @@ Existing jsdom and setup warnings remain recorded.
 The final patch SHA-256 is `8179380e07279ac1d783d9ed4fcce092ae9ddba3c98ef4aba58ff3c1cef60588`.
 The local result SHA-256 is `f14e8f26bebe075b8665451cff849b70341411bfe16c679af1d19ce85a43476e`.
 
+## Image build and strict scan
+
+The image uses immutable source `42a0c390bc19bd46f0a3eae2f244714024595d71`.
+Its SHA-256 is `218f6dfde4dca36f50d78b45bbf6c888c11855dab928888322e26580bd2677a4`.
+The context retains 6,801 source files and the existing shipping recipe.
+Source, context, image labels, and the exported archive remain bound through separate checks.
+The application entrypoint does not run during build or scan.
+
+Build, archive export, scan, and the committed strict gate return status 0.
+No command exceeds its time or output bound.
+The scan covers Alpine 3.24.2 and reports zero HIGH and zero CRITICAL findings.
+The immutable local scanner uses Trivy 0.72.0. CI uses 0.74.
+This scan does not replace the current CI image checks.
+
+The build receipt SHA-256 is `600080d214e17b76e7f582d898ac245ee9ac7b766485bac6609434235f885e37`.
+The scan receipt SHA-256 is `2aefbb1307d8f4845f575954cf2663f410820bfbb5176331c313cd72325aea9d`.
+The report SHA-256 is `664c1a00ab61462c964ef2037a951072f57e8bc21afce0e9bdb03a2ae9820643`.
+Root separately checks the actual report, archive, command-log hashes, coverage, and finding counts.
+The builder retains its existing 8 GiB bound. The Docker VM retains the authorized 16 GiB allocation.
+Before and after capacity checks pass; they do not establish an exact peak or performance benchmark.
+
 ## Deployment and connection limits
 
 The deployed Main and Web source remains `efa7213e803d6f314ee8b6c482b78f45544140b4`.
 The deployed Web image remains `sha256:1c343b749892ac042f5389e4018432e21776d97a902e9b0eb7e8fc18adb91714`.
 The native Worker and Supervisor use source `c53ab7d5496a571c1844e9906a83c261ff0da06e`.
-The local Web correction has no new image, deployment, real browser, or CI result.
+The corrected image is built and scanned. It is not deployed at this checkpoint.
+Deployed browser acceptance remains open.
+Committed head `a4095c7ab137e0cb478ab07f942f0e0d67d3187b` later reports 67 successful checks and two skips.
+The skips cover live toolkit credentials and documentation screenshot capture.
+Its frozen CI readback digest is `8fe8a0904583c0936bd6282c1a1ac16a7d5427cc85c743ca02c00f9efa840ade`.
+These checks do not attest later uncommitted documentation or deployed browser behavior.
 These unit fixtures do not prove a deployed correction.
 
 The sidebar dot reports the aggregate browser SSE status, not Worker health.

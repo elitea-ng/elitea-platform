@@ -104,14 +104,38 @@ The later chat 839 fixture completes normally in 14 seconds after its controller
 The controller records an original-preparation identity mismatch; this run receives no cancellation or recovery credit.
 Its earlier helper readback refusal is limited to inherited immutable-image labels. All requested host fields match.
 The label correction passes actual fresh-spool initialization and helper removal. The prior refused helper and unused spool remain preserved.
+The corrected identity controller later refuses chat 844 during normal Main `PENDING` admission.
+The original Worker remains unchanged. No Stop or Worker fault occurs.
+The run completes normally in 15 seconds and returns the downstream sentinel 9999.
+The actual idle store then contains 59 jobs, 59 dispatches, and 125 checkpoints.
+This result receives no preparation-cancellation or recovery credit.
+The next controller requires the complete source-defined admission and preparation startup transitions.
 Supported application-list denial and outer artifact RBAC refusal later pass their finite cases.
 Their frozen root receipt is `6b20be7632be1bffca3de94806b16c586de0daba5968f88acf13c0ea812140b9`.
 The artifact HTTP 403 occurs at the outer RBAC gate; it does not prove a separate bucket ACL refusal.
-Registered-child export, remaining quota or authority refusals, and debug reconciliation stay open.
+Unchanged registered-child, quota, signer, and ACL component proofs retain their source boundaries.
+Replacement reconciliation of the original debug writer and reference stays open.
 Worker, Main, Supervisor, acquisition, and assembled NATS recovery require their recorded phase proofs.
 Current Kubernetes positive, cache, refusal, Stop, and owner-recovery boundaries remain separate.
 Earlier unchanged component proofs retain their original scope.
 These requirements do not create new load or HA gates for Code.
+
+The later closure audit verifies 45 source and receipt pins without runtime actions.
+Its checklist digest is `4c6a93ab083535e6920af90d0334c4bc5a26a09095562bc81449a8123ed12eb5`.
+Its source and receipt ledger digest is `cd7c03a77d1407ed1053d29374fde17540fdfd76a6e8ef89ffcfddc7f6f862b1`.
+Preparation Stop and pending cancellation across Worker loss remain the first boundary.
+After that boundary, five groups remain:
+
+1. Deploy the Web correction and verify normal creation, selection, authors, and reload in the browser.
+2. Verify live Worker and Supervisor recovery, preparation fault outcomes, and applicable debug reconciliation.
+3. Verify Main recovery during publication of the original successful compilation.
+4. Verify queued and in-flight NATS recovery with the original broker storage.
+5. Verify current hybrid Kubernetes execution, cache, refusals, Stop, recovery, and physical cleanup.
+
+Existing accepted language, cache, failure, active Stop, authority, and component proofs remove repeat checks.
+Normal runtime isolation guards remain mandatory for each new case.
+The existing Python scan exemption and unproved resolver destination enforcement remain explicit limits.
+This list does not close Code or add new requirement families.
 
 Graph gates 5a–5e follow complete Code acceptance.
 Gates 6, 7, 7a, 7b, and 8 remain part of full worker completion.
@@ -126,8 +150,12 @@ It also preserves the fresh-chat participant before navigation and accepts both 
 Six focused suites pass 76 unique tests with zero failures or skips.
 TypeScript, lint, and whitespace checks return direct status zero.
 The Web correction is published as commit `42a0c390bc19bd46f0a3eae2f244714024595d71` on PR #1084.
-Its frozen build context is ready. It has no image, deployment, or real browser acceptance at this checkpoint.
-CI at this exact head remains separate from the earlier c53 result.
+Its image `sha256:218f6dfde4dca36f50d78b45bbf6c888c11855dab928888322e26580bd2677a4` builds from the frozen context.
+The strict local Alpine scan reports zero HIGH or CRITICAL findings.
+Root verifies the build, exported archive, report, and gate chain in the reload mapping.
+Deployment and real browser acceptance remain open at this checkpoint.
+Committed a409 head later reports 67 successful CI checks and the same two documented skips.
+The readback remains separate from deployment and browser acceptance.
 Main and Web remain at efa. The separately accepted native pair remains at c53.
 The chat838 selection-loss branch and notification Offline cause remain unproved.
 These checks do not close recovery, capacity, or the complete Code gate.

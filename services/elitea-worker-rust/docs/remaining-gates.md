@@ -1026,5 +1026,6 @@ The frozen root acceptance receipt is `cbbdffb369169b57d1c6456928bc0b233d9b4cdc8
 The operator fixes affect capture matching and private spool initialization; this case requires no product source change.
 The record preserves earlier refusals and the separate permission-probe boundary.
 Preparation Stop, preparation owner loss, the remaining service-loss cases, and current-cohort Kubernetes acceptance stay open.
-The published Web reload correction still requires image delivery and browser acceptance.
+The published Web reload correction now has a built image and a passing strict local Alpine scan.
+Deployment and browser acceptance remain open; the reload mapping records their separate boundary.
 Complete Code, graph gates 5a–5e, later worker gates, and release remain open. Workspaces remain deferred.
