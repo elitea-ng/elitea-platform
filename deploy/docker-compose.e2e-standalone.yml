@@ -57,15 +57,34 @@ services:
   # bucket); domain events go to webhooks only. It replaced the plain Redis
   # that sat at REDIS_URL. JetStream (-js)
   # is required — elitea-main refuses to start without it; -m serves the
-  # healthcheck. Not published to the host: only elitea-main dials it.
+  # monitoring port nats-health probes. Not published to the host: only elitea-main dials it.
+  #
+  # `nats:2.12.0` is the scratch image: the server binary and nothing else, so
+  # no healthcheck can run inside it, and nats-server has no probe mode. The
+  # readiness probe is the `nats-health` sidecar below, which reads /healthz
+  # on the monitoring port from outside. Wait on `nats-health`, not on `nats`.
   nats:
-    image: nats:2.12.0-alpine
+    image: nats:2.12.0
     command: ["-js", "-sd", "/data", "-m", "8222"]
+
+  # The NATS readiness probe, from outside the scratch server container. It
+  # idles, and its healthcheck reads http://nats:8222/healthz with JetStream
+  # required, which is the check the server's own container used to run.
+  # python:3.12.14-slim-trixie because it is already in this stack's image set
+  # and its standard library carries an HTTP client (trixie-slim has no curl or
+  # wget). SIGINT stops it at once: Python handles SIGINT, not SIGTERM, as PID 1.
+  nats-health:
+    image: docker.io/library/python:3.12.14-slim-trixie
+    command: ["python3", "-c", "import time; time.sleep(1 << 30)"]
+    stop_signal: SIGINT
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8222/healthz?js-enabled-only=true"]
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://nats:8222/healthz?js-enabled-only=true', timeout=4)"]
       interval: 5s
       timeout: 5s
       retries: 10
+    depends_on:
+      nats:
+        condition: service_started
 
   # Creates every JetStream asset, with the same script the cluster's
   # nats-bootstrap hook Job runs (deploy/helm/nats-bootstrap/files/bootstrap.sh).
@@ -81,7 +100,7 @@ services:
     volumes:
       - ./helm/nats-bootstrap/files/bootstrap.sh:/bootstrap/bootstrap.sh:ro
     depends_on:
-      nats:
+      nats-health:
         condition: service_healthy
 
   rustfs:
@@ -113,11 +132,11 @@ services:
         i=0
         until rc alias set rustfs http://rustfs:9000 elitea elitea-dev-secret; do
           i=$((i + 1))
-          if [ "$i" -ge 30 ]; then
+          if [ "$$i" -ge 30 ]; then
             echo "rustfs alias set still failing after 30 attempts (60s) — giving up" >&2
             exit 1
           fi
-          echo "rustfs not ready yet (attempt $i/30), retrying in 2s..." >&2
+          echo "rustfs not ready yet (attempt $$i/30), retrying in 2s..." >&2
           sleep 2
         done &&
         rc mb --ignore-existing rustfs/elitea-artifacts
@@ -347,7 +366,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      nats:
+      nats-health:
         condition: service_healthy
       nats-bootstrap:
         condition: service_completed_successfully

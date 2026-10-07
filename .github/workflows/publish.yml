@@ -235,7 +235,7 @@ jobs:
             context: .
             dockerfile: ./apps/elitea-web/Containerfile
           # Standalone module outside go.work. Its Containerfile builds from
-          # golang:1.26-alpine and carries its own toolchain, so no runner-image
+          # golang:1.26-trixie and carries its own toolchain, so no runner-image
           # bump is required here. scripts/ci/check-gateway-toolchain.sh holds
           # that tag and the ci-gateway.yml pin together (#506).
           #
@@ -303,6 +303,16 @@ jobs:
           - name: elitea-inventory
             context: .
             dockerfile: ./services/elitea-inventory/Containerfile
+          # The Rust-native DeepWiki engine (ADR-0026 phase 7): the sidecar
+          # the chart runs for `deepwiki.engine.runner: native`. Repo ROOT
+          # context: the binary embeds the service migrations from
+          # services/elitea-deepwiki, outside the crate. No `target:` — the
+          # shipping stage is the last one. Unlike the Python `-engine`
+          # variant it IS released: one distroless binary, no ML closure, so
+          # there is no scan-threshold decision to wait for.
+          - name: elitea-deepwiki-engine-native
+            context: .
+            dockerfile: ./services/elitea-deepwiki-engine/Containerfile
         platform:
           - runner: ubuntu-latest
             arch: linux/amd64
@@ -503,6 +513,15 @@ jobs:
           - name: elitea-inventory
             expect_type: python-pkg
             blocking: false
+          # The Rust-native DeepWiki engine (ADR-0026 phase 7). `rustbinary`
+          # for elitea-worker-rust's reason: the Containerfile builds with
+          # cargo-auditable, and this value makes a report that only reached
+          # the distroless base FAIL instead of reading as clean. Blocking,
+          # on distroless base-nossl-debian13 plus libgcc_s (no system
+          # OpenSSL to scan); nothing here is exempt.
+          - name: elitea-deepwiki-engine-native
+            expect_type: rustbinary
+            blocking: true
 
     steps:
       - name: Checkout
@@ -655,6 +674,15 @@ jobs:
           - name: elitea-inventory
             expect_type: python-pkg
             blocking: false
+          # The Rust-native DeepWiki engine (ADR-0026 phase 7). `rustbinary`
+          # for elitea-worker-rust's reason: the Containerfile builds with
+          # cargo-auditable, and this value makes a report that only reached
+          # the distroless base FAIL instead of reading as clean. Blocking,
+          # on distroless base-nossl-debian13 plus libgcc_s (no system
+          # OpenSSL to scan); nothing here is exempt.
+          - name: elitea-deepwiki-engine-native
+            expect_type: rustbinary
+            blocking: true
 
     steps:
       - name: Checkout
@@ -1009,7 +1037,7 @@ jobs:
           #
           # scripts/ci/image-matrix.sh --verify is the real gate, and it holds
           # all six copies of the image list against docker-bake.hcl.
-          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-deepwiki" "elitea-inventory")
+          IMAGES=("elitea-main" "elitea-scheduler" "elitea-subapp-host" "elitea-ui" "elitea-web" "elitea-llm-gateway" "elitea-worker-python" "elitea-worker-rust" "elitea-deepwiki" "elitea-inventory" "elitea-deepwiki-engine-native")
           SUFFIXES=("linux-amd64" "linux-arm64")
           ORG="${{ github.repository_owner }}"
 

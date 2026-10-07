@@ -1,6 +1,6 @@
 # Rust worker verification gaps
 
-Updated: 2026-10-05.
+Updated: 2026-10-07.
 
 ## Progression decision
 
@@ -91,6 +91,12 @@ The [toolkit Test contract](source-mapping/toolkit-test.md) has gate 3 progressi
 Detailed diagnostics remain tracked by [OBS-RUST-01](source-mapping/agent-runtime.md#obs-rust-01-detailed-runtime-diagnostics).
 
 ## Maintenance rules
+
+The [Main merge continuation](source-mapping/main-integration-20261007.md) records final snapshot verification and source checks.
+All six listener failures in the retained Main packet pass their complete owning selections after the sandbox boundary is removed.
+Database and live-service skips remain explicit. Native live conformance remains unexecuted.
+The isolated candidate still lacks Worker and Supervisor; its blocked browser callback proves no Code acceptance.
+Require merged CI, current-image builds and scans, and deployed NATS/Code acceptance before graph consolidation progresses.
 
 The [2026-10-06 consolidation](source-mapping/point5-consolidation-20261006.md) records the latest Point 5 evidence.
 Real-backend editor preservation checks pass. Main's new static consumers still require database and deployed acceptance.

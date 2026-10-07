@@ -3,7 +3,7 @@
 # Same posture as deploy/qtest-mock and deploy/mock-llm: python:3.12-slim is
 # already in this stack's build graph, the server is standard library only, so
 # this pulls no new base image family and needs no network at build or run time.
-FROM python:3.12.10-slim
+FROM python:3.12.14-slim-trixie
 
 # Non-root, and a uid that collides with nothing else in the stack (elitea-main
 # is 65532, the worker 10001, mock-llm 10101, qtest-mock 10102).

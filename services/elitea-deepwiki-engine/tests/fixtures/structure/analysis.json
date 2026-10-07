@@ -1,0 +1,249 @@
+{
+ "repository_name": "acme/notes",
+ "branch": "main",
+ "analysis": {
+  "messages": [
+   [
+    "system",
+    "You are an expert software architect and comprehensive repository analysis specialist. Your mission is to perform exhaustive analysis of codebases, documenting every significant component without omission. You must analyze ALL architectural patterns, technologies, and relationships present in the repository to enable complete documentation coverage."
+   ],
+   [
+    "user",
+    "\nYou are a repository analysis specialist. Perform comprehensive bottom-up analysis of the provided codebase, focusing on capabilities and user workflows rather than abstract architecture.\n\n**REPOSITORY:** acme/notes | **BRANCH:** main\n\n**ANALYSIS FOUNDATION:**\nRepository Structure: Total files: 9\nShowing up to 25 files per directory\n📁 /\n  📄 README.md\n📁 .github/ (1 files)\n  📄 ci.yml\n📁 config/ (2 files)\n  📄 app.yaml\n  📄 settings.json\n📁 docs/ (2 files)\n  📄 guide.md\n  📄 readme-extra.md\n📁 notes/ (2 files)\n  📄 __init__.py\n  📄 api.py\n📁 notes/store/ (1 files)\n  📄 db.py\nREADME Content: [File: README.md]\n# Notes Service  \nA small notes service: store, search and authorise notes.\\n\\n[File: README.md]\n## Running  \nStart it with `python -m notes`.\\n\\n[File: README.md]\n## Layout  \nThe store lives in `notes/store`, the API in `notes/api.py`.  \nCode Samples: === notes/__init__.py ===\n\"\"\"The notes package.\"\"\"\n\n\n=== notes/api.py ===\n\"\"\"HTTP handlers for notes — création, recherche.\"\"\"\nfrom notes.store.db import NoteStore\n\n\ndef handle_create_note(store: NoteStore, body: dict) -> dict:\n    \"\"\"Create a note from a request body.\"\"\"\n    return store.save(body[\"title\"], body.get(\"text\", \"\"))\n\n\ndef handle_search(store: NoteStore, query: str) -> list:\n    return store.search(query)\n\n\n=== notes/store/db.py ===\nclass NoteStore:\n    \"\"\"SQLite-backed note storage.\"\"\"\n\n    def save(self, title, text):\n        return {\"title\": title, \"text\": text}\n\n    def search(self, query):\n        return []\n\n\n=== .github/ci.yml ===\non: push\n\n\n=== config/app.yaml ===\nname: notes\nreplicas: 2\n\n\n=== docs/guide.md ===\n# Guide\n\nUse the API to create notes and search them.\n\n\nFile Statistics: Total Files: 9\\nFile Type Distribution:\\n  - .md: 3 files\\n  - .py: 3 files\\n  - .yml: 1 files\\n  - .yaml: 1 files\\n  - .json: 1 files\n\n**ANALYSIS DIRECTIVES:**\n\n**CAPABILITY INVENTORY:** For each major folder/file in the repository structure, identify its functional purpose, primary responsibilities, inputs/outputs, and user touchpoints. Group similar capabilities naturally.\n\n**WORKFLOW MAPPING:** Trace complete user and system workflows from entry points through data processing to outputs. Document normal operations, error scenarios, configuration flows, and integration patterns.\n\n**IMPLEMENTATION ANALYSIS:** Document how capabilities are technically implemented, including architecture patterns, data handling, component interactions, and external integrations.\n\n**OUTPUT STRUCTURE:**\n\n**Executive Summary**\n- Repository purpose and primary user workflows\n- Core capabilities and their file locations  \n- Key technical patterns and integration points\n- Overall complexity and architectural approach\n\n**Capability Catalog**\n- **Core Features:** User-facing functionality with specific file paths\n- **System Operations:** Background processes, monitoring, maintenance\n- **Integration Services:** External APIs, databases, third-party services\n- **Infrastructure:** Configuration, logging, security, utilities\n- **Development Tools:** Testing, building, deployment capabilities\n\n**Workflow Documentation**  \n- **User Journeys:** Step-by-step workflows with file references\n- **Data Flows:** Information transformation and movement patterns\n- **Integration Patterns:** External system interactions and protocols\n- **Error Handling:** Failure modes and recovery mechanisms\n- **Configuration Management:** Setup and customization procedures\n\n**Technical Implementation**\n- **Component Architecture:** How pieces connect with file mappings\n- **Data Architecture:** Storage, persistence, and transformation patterns\n- **Communication Patterns:** Inter-component and external communication\n- **Performance Considerations:** Optimization strategies and bottlenecks\n- **Security Implementation:** Protection mechanisms and access controls\n\n**Discovery Insights**\n- **Strengths:** Well-implemented functionality areas\n- **Opportunities:** Missing features or improvement areas\n- **Dependencies:** External services and their integration patterns\n- **Operational Notes:** Deployment, monitoring, maintenance guidance\n\n**QUALITY REQUIREMENTS:**\n- Document ALL significant components found in the provided content (no omissions)\n- Map every capability to specific file/folder locations from the repository structure\n- Base conclusions exclusively on provided repository content\n- Focus on functional value and actual usage patterns\n- Provide concrete examples from the code samples\n- Ensure comprehensive coverage of all major components and workflows\n\nAnalyze the repository systematically, building understanding from individual file functions to complete system capabilities.\n"
+   ]
+  ],
+  "answer": "## Analysis\n\nThe notes service — store and API. 😀"
+ },
+ "repository_tree": "Total files: 9\nShowing up to 25 files per directory\n📁 /\n  📄 README.md\n📁 .github/ (1 files)\n  📄 ci.yml\n📁 config/ (2 files)\n  📄 app.yaml\n  📄 settings.json\n📁 docs/ (2 files)\n  📄 guide.md\n  📄 readme-extra.md\n📁 notes/ (2 files)\n  📄 __init__.py\n  📄 api.py\n📁 notes/store/ (1 files)\n  📄 db.py",
+ "readme_content": "[File: README.md]\n# Notes Service  \nA small notes service: store, search and authorise notes.\\n\\n[File: README.md]\n## Running  \nStart it with `python -m notes`.\\n\\n[File: README.md]\n## Layout  \nThe store lives in `notes/store`, the API in `notes/api.py`.",
+ "classic": [
+  {
+   "name": "valid",
+   "answer": "{\"wiki_title\": \"Notes\", \"overview\": \"o\", \"total_pages\": \"2\", \"sections\": [{\"section_name\": \"S\", \"section_order\": 1.0, \"description\": \"d\", \"rationale\": \"r\", \"pages\": [{\"page_name\": \"P\", \"page_order\": true, \"description\": \"d\", \"content_focus\": \"c\", \"rationale\": \"r\", \"key_files\": [\"notes/api.py\"], \"extra\": 1}, {\"page_name\": \"Q\", \"page_order\": \"2\", \"description\": \"d\", \"content_focus\": \"c\", \"rationale\": \"r\", \"metadata\": {\"k\": [1]}}]}]}",
+   "messages": [
+    [
+     "system",
+     "You are an expert technical documentation architect specializing in comprehensive repository analysis. Your task is to create complete documentation structures that capture every significant component without omission. You must ensure comprehensive coverage of all repository elements, creating structures that scale appropriately based on actual codebase complexity and component count."
+    ],
+    [
+     "user",
+     "\nYou are a documentation architect creating comprehensive wiki structure based on repository capability analysis. Focus on functional organization and user workflows rather than abstract architectural concepts.\n\nRepository Information:\n- Repository Tree: Total files: 9\nShowing up to 25 files per directory\n📁 /\n  📄 README.md\n📁 .github/ (1 files)\n  📄 ci.yml\n📁 config/ (2 files)\n  📄 app.yaml\n  📄 settings.json\n📁 docs/ (2 files)\n  📄 guide.md\n  📄 readme-extra.md\n📁 notes/ (2 files)\n  📄 __init__.py\n  📄 api.py\n📁 notes/store/ (1 files)\n  📄 db.py\n- README Content: [File: README.md]\n# Notes Service  \nA small notes service: store, search and authorise notes.\\n\\n[File: README.md]\n## Running  \nStart it with `python -m notes`.\\n\\n[File: README.md]\n## Layout  \nThe store lives in `notes/store`, the API in `notes/api.py`.  \n- Analysis: ## Analysis\n\nThe notes service — store and API. 😀\n- Target Audience: Mixed audience of developers, architects, and operators\n- Wiki Type: comprehensive\n\n**DOCUMENTATION STRUCTURE DIRECTIVES:**\n\n**CAPABILITY-DRIVEN ORGANIZATION:** Structure documentation around what users actually DO with the codebase. Group related capabilities that support complete user workflows and system operations.\n\n**COMPREHENSIVE COVERAGE:** Document ALL significant components identified in the repository analysis without omissions. Let repository complexity naturally determine documentation scope.\n\n**WORKFLOW-FOCUSED SECTIONS:** Create sections that support complete user journeys from setup through advanced usage, maintenance, and integration.\n\n**OUTPUT STRUCTURE:**\n\nCreate a comprehensive JSON structure that covers all repository capabilities identified in the analysis. Each page must have:\n- Clear functional purpose derived from repository analysis\n- Specific file/folder mappings from actual codebase structure  \n- Comprehensive retrieval query for optimal vector store content gathering\n\n**RETRIEVAL QUERY GENERATION:**\n\nFor each page, generate a comprehensive retrieval query that combines:\n- Page topic and capabilities focus\n- Specific folder/file context \n- Related functionality and workflow patterns\n- Technical implementation details needed\n\n**RETRIEVAL QUERY EXAMPLE:**\nFor a page about \"Authentication System Implementation\":\n- Topic: Authentication, user management, security\n- Folders: [\"auth/\", \"middleware/\", \"config/\"]  \n- Files: [\"auth_manager.py\", \"user_service.py\", \"security_config.py\"]\n- Generated Query: \"authentication system user management security middleware auth_manager user_service login logout session token validation authorization middleware security configuration password hashing JWT session management user roles permissions access control authentication flow\"\n\nThis query combines topic keywords with file-specific terms and related functionality to ensure comprehensive content retrieval.\n\n**QUALITY REQUIREMENTS:**\n- Map ALL components from repository analysis to specific pages\n- Ensure comprehensive coverage without arbitrary omissions  \n- Generate retrieval queries that capture both functional context and file-specific implementation details\n- Organize content around actual user workflows and system capabilities\n- Base ALL decisions on provided repository analysis content\n\n**REQUIRED JSON FORMAT:**\n\nReturn a comprehensive JSON structure with this exact format:\n\n{\n    \"wiki_title\": \"Repository-specific title based on actual analysis\",\n    \"overview\": \"Comprehensive overview that references specific repository folders and components from the analysis\",\n    \"sections\": [\n        {\n            \"section_name\": \"Section name that naturally emerges from repository analysis\",\n            \"section_order\": 1,\n            \"description\": \"Description based on actual repository characteristics\",\n            \"rationale\": \"Why this section is essential based on the specific repository structure and complexity\",\n            \"pages\": [\n                {\n                    \"page_name\": \"Page name that reflects actual repository concepts\",\n                    \"page_order\": 1,\n                    \"description\": \"Description based on actual repository needs\",\n                    \"content_focus\": \"Focus areas derived from actual repository analysis\",\n                    \"rationale\": \"Why this page is needed based on specific repository complexity and structure\",\n                    \"target_folders\": [\"Actual folders from repository analysis\"],\n                    \"key_files\": [\"Actual files from repository analysis\"],\n                    \"retrieval_query\": \"Comprehensive query combining page topic, folder/file context, related functionality, and implementation details for optimal vector store retrieval\"\n                }\n            ]\n        }\n    ],\n    \"total_pages\": \"Actual count based on repository complexity\"\n}\n\n\n**STRUCTURE REQUIREMENTS:**\n- Create complete documentation structure covering ALL repository components without omission\n- Each page provides substantial coverage of assigned components with comprehensive retrieval queries\n- Include ALL necessary pages based on repository analysis findings\n- Ensure hierarchical structure matches repository logical organization\n- Generate retrieval queries that combine functional context with specific file/folder targeting\n- Base ALL content organization on actual repository capabilities and user workflows\n- Do not create duplicate pages covering the same set of files; merge instead and broaden content_focus.\n\nAnalyze the repository systematically and create documentation structure that emerges organically from the capability analysis.\n\n**GROUNDING / NO HALLUCINATIONS:** Only reference folders/files present in repository tree or analysis. If uncertain, omit and note uncertainty.\n"
+    ]
+   ],
+   "structure": {
+    "wiki_title": "Notes",
+    "overview": "o",
+    "sections": [
+     {
+      "section_name": "S",
+      "section_order": 1,
+      "description": "d",
+      "rationale": "r",
+      "pages": [
+       {
+        "page_name": "P",
+        "page_order": 1,
+        "description": "d",
+        "content_focus": "c",
+        "rationale": "r",
+        "target_symbols": [],
+        "target_docs": [],
+        "target_folders": [],
+        "key_files": [
+         "notes/api.py"
+        ],
+        "retrieval_query": "",
+        "metadata": {}
+       },
+       {
+        "page_name": "Q",
+        "page_order": 2,
+        "description": "d",
+        "content_focus": "c",
+        "rationale": "r",
+        "target_symbols": [],
+        "target_docs": [],
+        "target_folders": [],
+        "key_files": [],
+        "retrieval_query": "",
+        "metadata": {
+         "k": [
+          1
+         ]
+        }
+       }
+      ]
+     }
+    ],
+    "total_pages": 2
+   },
+   "error": false
+  },
+  {
+   "name": "fenced",
+   "answer": "Sure:\n```JSON\n{\"wiki_title\": \"T\", \"overview\": \"\", \"sections\": [], \"total_pages\": 0}\n```",
+   "messages": [
+    [
+     "system",
+     "You are an expert technical documentation architect specializing in comprehensive repository analysis. Your task is to create complete documentation structures that capture every significant component without omission. You must ensure comprehensive coverage of all repository elements, creating structures that scale appropriately based on actual codebase complexity and component count."
+    ],
+    [
+     "user",
+     "\nYou are a documentation architect creating comprehensive wiki structure based on repository capability analysis. Focus on functional organization and user workflows rather than abstract architectural concepts.\n\nRepository Information:\n- Repository Tree: Total files: 9\nShowing up to 25 files per directory\n📁 /\n  📄 README.md\n📁 .github/ (1 files)\n  📄 ci.yml\n📁 config/ (2 files)\n  📄 app.yaml\n  📄 settings.json\n📁 docs/ (2 files)\n  📄 guide.md\n  📄 readme-extra.md\n📁 notes/ (2 files)\n  📄 __init__.py\n  📄 api.py\n📁 notes/store/ (1 files)\n  📄 db.py\n- README Content: [File: README.md]\n# Notes Service  \nA small notes service: store, search and authorise notes.\\n\\n[File: README.md]\n## Running  \nStart it with `python -m notes`.\\n\\n[File: README.md]\n## Layout  \nThe store lives in `notes/store`, the API in `notes/api.py`.  \n- Analysis: ## Analysis\n\nThe notes service — store and API. 😀\n- Target Audience: Mixed audience of developers, architects, and operators\n- Wiki Type: comprehensive\n\n**DOCUMENTATION STRUCTURE DIRECTIVES:**\n\n**CAPABILITY-DRIVEN ORGANIZATION:** Structure documentation around what users actually DO with the codebase. Group related capabilities that support complete user workflows and system operations.\n\n**COMPREHENSIVE COVERAGE:** Document ALL significant components identified in the repository analysis without omissions. Let repository complexity naturally determine documentation scope.\n\n**WORKFLOW-FOCUSED SECTIONS:** Create sections that support complete user journeys from setup through advanced usage, maintenance, and integration.\n\n**OUTPUT STRUCTURE:**\n\nCreate a comprehensive JSON structure that covers all repository capabilities identified in the analysis. Each page must have:\n- Clear functional purpose derived from repository analysis\n- Specific file/folder mappings from actual codebase structure  \n- Comprehensive retrieval query for optimal vector store content gathering\n\n**RETRIEVAL QUERY GENERATION:**\n\nFor each page, generate a comprehensive retrieval query that combines:\n- Page topic and capabilities focus\n- Specific folder/file context \n- Related functionality and workflow patterns\n- Technical implementation details needed\n\n**RETRIEVAL QUERY EXAMPLE:**\nFor a page about \"Authentication System Implementation\":\n- Topic: Authentication, user management, security\n- Folders: [\"auth/\", \"middleware/\", \"config/\"]  \n- Files: [\"auth_manager.py\", \"user_service.py\", \"security_config.py\"]\n- Generated Query: \"authentication system user management security middleware auth_manager user_service login logout session token validation authorization middleware security configuration password hashing JWT session management user roles permissions access control authentication flow\"\n\nThis query combines topic keywords with file-specific terms and related functionality to ensure comprehensive content retrieval.\n\n**QUALITY REQUIREMENTS:**\n- Map ALL components from repository analysis to specific pages\n- Ensure comprehensive coverage without arbitrary omissions  \n- Generate retrieval queries that capture both functional context and file-specific implementation details\n- Organize content around actual user workflows and system capabilities\n- Base ALL decisions on provided repository analysis content\n\n**REQUIRED JSON FORMAT:**\n\nReturn a comprehensive JSON structure with this exact format:\n\n{\n    \"wiki_title\": \"Repository-specific title based on actual analysis\",\n    \"overview\": \"Comprehensive overview that references specific repository folders and components from the analysis\",\n    \"sections\": [\n        {\n            \"section_name\": \"Section name that naturally emerges from repository analysis\",\n            \"section_order\": 1,\n            \"description\": \"Description based on actual repository characteristics\",\n            \"rationale\": \"Why this section is essential based on the specific repository structure and complexity\",\n            \"pages\": [\n                {\n                    \"page_name\": \"Page name that reflects actual repository concepts\",\n                    \"page_order\": 1,\n                    \"description\": \"Description based on actual repository needs\",\n                    \"content_focus\": \"Focus areas derived from actual repository analysis\",\n                    \"rationale\": \"Why this page is needed based on specific repository complexity and structure\",\n                    \"target_folders\": [\"Actual folders from repository analysis\"],\n                    \"key_files\": [\"Actual files from repository analysis\"],\n                    \"retrieval_query\": \"Comprehensive query combining page topic, folder/file context, related functionality, and implementation details for optimal vector store retrieval\"\n                }\n            ]\n        }\n    ],\n    \"total_pages\": \"Actual count based on repository complexity\"\n}\n\n\n**STRUCTURE REQUIREMENTS:**\n- Create complete documentation structure covering ALL repository components without omission\n- Each page provides substantial coverage of assigned components with comprehensive retrieval queries\n- Include ALL necessary pages based on repository analysis findings\n- Ensure hierarchical structure matches repository logical organization\n- Generate retrieval queries that combine functional context with specific file/folder targeting\n- Base ALL content organization on actual repository capabilities and user workflows\n- Do not create duplicate pages covering the same set of files; merge instead and broaden content_focus.\n\nAnalyze the repository systematically and create documentation structure that emerges organically from the capability analysis.\n\n**GROUNDING / NO HALLUCINATIONS:** Only reference folders/files present in repository tree or analysis. If uncertain, omit and note uncertainty.\n"
+    ]
+   ],
+   "structure": {
+    "wiki_title": "T",
+    "overview": "",
+    "sections": [],
+    "total_pages": 0
+   },
+   "error": false
+  },
+  {
+   "name": "invalid",
+   "answer": "{\"wiki_title\": 5, \"overview\": \"o\", \"sections\": [], \"total_pages\": 0}",
+   "messages": [
+    [
+     "system",
+     "You are an expert technical documentation architect specializing in comprehensive repository analysis. Your task is to create complete documentation structures that capture every significant component without omission. You must ensure comprehensive coverage of all repository elements, creating structures that scale appropriately based on actual codebase complexity and component count."
+    ],
+    [
+     "user",
+     "\nYou are a documentation architect creating comprehensive wiki structure based on repository capability analysis. Focus on functional organization and user workflows rather than abstract architectural concepts.\n\nRepository Information:\n- Repository Tree: Total files: 9\nShowing up to 25 files per directory\n📁 /\n  📄 README.md\n📁 .github/ (1 files)\n  📄 ci.yml\n📁 config/ (2 files)\n  📄 app.yaml\n  📄 settings.json\n📁 docs/ (2 files)\n  📄 guide.md\n  📄 readme-extra.md\n📁 notes/ (2 files)\n  📄 __init__.py\n  📄 api.py\n📁 notes/store/ (1 files)\n  📄 db.py\n- README Content: [File: README.md]\n# Notes Service  \nA small notes service: store, search and authorise notes.\\n\\n[File: README.md]\n## Running  \nStart it with `python -m notes`.\\n\\n[File: README.md]\n## Layout  \nThe store lives in `notes/store`, the API in `notes/api.py`.  \n- Analysis: ## Analysis\n\nThe notes service — store and API. 😀\n- Target Audience: Mixed audience of developers, architects, and operators\n- Wiki Type: comprehensive\n\n**DOCUMENTATION STRUCTURE DIRECTIVES:**\n\n**CAPABILITY-DRIVEN ORGANIZATION:** Structure documentation around what users actually DO with the codebase. Group related capabilities that support complete user workflows and system operations.\n\n**COMPREHENSIVE COVERAGE:** Document ALL significant components identified in the repository analysis without omissions. Let repository complexity naturally determine documentation scope.\n\n**WORKFLOW-FOCUSED SECTIONS:** Create sections that support complete user journeys from setup through advanced usage, maintenance, and integration.\n\n**OUTPUT STRUCTURE:**\n\nCreate a comprehensive JSON structure that covers all repository capabilities identified in the analysis. Each page must have:\n- Clear functional purpose derived from repository analysis\n- Specific file/folder mappings from actual codebase structure  \n- Comprehensive retrieval query for optimal vector store content gathering\n\n**RETRIEVAL QUERY GENERATION:**\n\nFor each page, generate a comprehensive retrieval query that combines:\n- Page topic and capabilities focus\n- Specific folder/file context \n- Related functionality and workflow patterns\n- Technical implementation details needed\n\n**RETRIEVAL QUERY EXAMPLE:**\nFor a page about \"Authentication System Implementation\":\n- Topic: Authentication, user management, security\n- Folders: [\"auth/\", \"middleware/\", \"config/\"]  \n- Files: [\"auth_manager.py\", \"user_service.py\", \"security_config.py\"]\n- Generated Query: \"authentication system user management security middleware auth_manager user_service login logout session token validation authorization middleware security configuration password hashing JWT session management user roles permissions access control authentication flow\"\n\nThis query combines topic keywords with file-specific terms and related functionality to ensure comprehensive content retrieval.\n\n**QUALITY REQUIREMENTS:**\n- Map ALL components from repository analysis to specific pages\n- Ensure comprehensive coverage without arbitrary omissions  \n- Generate retrieval queries that capture both functional context and file-specific implementation details\n- Organize content around actual user workflows and system capabilities\n- Base ALL decisions on provided repository analysis content\n\n**REQUIRED JSON FORMAT:**\n\nReturn a comprehensive JSON structure with this exact format:\n\n{\n    \"wiki_title\": \"Repository-specific title based on actual analysis\",\n    \"overview\": \"Comprehensive overview that references specific repository folders and components from the analysis\",\n    \"sections\": [\n        {\n            \"section_name\": \"Section name that naturally emerges from repository analysis\",\n            \"section_order\": 1,\n            \"description\": \"Description based on actual repository characteristics\",\n            \"rationale\": \"Why this section is essential based on the specific repository structure and complexity\",\n            \"pages\": [\n                {\n                    \"page_name\": \"Page name that reflects actual repository concepts\",\n                    \"page_order\": 1,\n                    \"description\": \"Description based on actual repository needs\",\n                    \"content_focus\": \"Focus areas derived from actual repository analysis\",\n                    \"rationale\": \"Why this page is needed based on specific repository complexity and structure\",\n                    \"target_folders\": [\"Actual folders from repository analysis\"],\n                    \"key_files\": [\"Actual files from repository analysis\"],\n                    \"retrieval_query\": \"Comprehensive query combining page topic, folder/file context, related functionality, and implementation details for optimal vector store retrieval\"\n                }\n            ]\n        }\n    ],\n    \"total_pages\": \"Actual count based on repository complexity\"\n}\n\n\n**STRUCTURE REQUIREMENTS:**\n- Create complete documentation structure covering ALL repository components without omission\n- Each page provides substantial coverage of assigned components with comprehensive retrieval queries\n- Include ALL necessary pages based on repository analysis findings\n- Ensure hierarchical structure matches repository logical organization\n- Generate retrieval queries that combine functional context with specific file/folder targeting\n- Base ALL content organization on actual repository capabilities and user workflows\n- Do not create duplicate pages covering the same set of files; merge instead and broaden content_focus.\n\nAnalyze the repository systematically and create documentation structure that emerges organically from the capability analysis.\n\n**GROUNDING / NO HALLUCINATIONS:** Only reference folders/files present in repository tree or analysis. If uncertain, omit and note uncertainty.\n"
+    ]
+   ],
+   "structure": {
+    "wiki_title": "Generated Wiki",
+    "overview": "Documentation for the repository",
+    "sections": [
+     {
+      "section_name": "Documentation",
+      "section_order": 1,
+      "description": "Main documentation",
+      "rationale": "Fallback structure due to parsing error",
+      "pages": [
+       {
+        "page_name": "Overview",
+        "page_order": 1,
+        "description": "Repository overview",
+        "content_focus": "General information",
+        "rationale": "Basic overview page for fallback structure",
+        "target_symbols": [],
+        "target_docs": [],
+        "target_folders": [],
+        "key_files": [],
+        "retrieval_query": "repository overview introduction getting started documentation README architecture",
+        "metadata": {}
+       }
+      ]
+     }
+    ],
+    "total_pages": 1
+   },
+   "error": false
+  },
+  {
+   "name": "no_json",
+   "answer": "I cannot do that.",
+   "messages": [
+    [
+     "system",
+     "You are an expert technical documentation architect specializing in comprehensive repository analysis. Your task is to create complete documentation structures that capture every significant component without omission. You must ensure comprehensive coverage of all repository elements, creating structures that scale appropriately based on actual codebase complexity and component count."
+    ],
+    [
+     "user",
+     "\nYou are a documentation architect creating comprehensive wiki structure based on repository capability analysis. Focus on functional organization and user workflows rather than abstract architectural concepts.\n\nRepository Information:\n- Repository Tree: Total files: 9\nShowing up to 25 files per directory\n📁 /\n  📄 README.md\n📁 .github/ (1 files)\n  📄 ci.yml\n📁 config/ (2 files)\n  📄 app.yaml\n  📄 settings.json\n📁 docs/ (2 files)\n  📄 guide.md\n  📄 readme-extra.md\n📁 notes/ (2 files)\n  📄 __init__.py\n  📄 api.py\n📁 notes/store/ (1 files)\n  📄 db.py\n- README Content: [File: README.md]\n# Notes Service  \nA small notes service: store, search and authorise notes.\\n\\n[File: README.md]\n## Running  \nStart it with `python -m notes`.\\n\\n[File: README.md]\n## Layout  \nThe store lives in `notes/store`, the API in `notes/api.py`.  \n- Analysis: ## Analysis\n\nThe notes service — store and API. 😀\n- Target Audience: Mixed audience of developers, architects, and operators\n- Wiki Type: comprehensive\n\n**DOCUMENTATION STRUCTURE DIRECTIVES:**\n\n**CAPABILITY-DRIVEN ORGANIZATION:** Structure documentation around what users actually DO with the codebase. Group related capabilities that support complete user workflows and system operations.\n\n**COMPREHENSIVE COVERAGE:** Document ALL significant components identified in the repository analysis without omissions. Let repository complexity naturally determine documentation scope.\n\n**WORKFLOW-FOCUSED SECTIONS:** Create sections that support complete user journeys from setup through advanced usage, maintenance, and integration.\n\n**OUTPUT STRUCTURE:**\n\nCreate a comprehensive JSON structure that covers all repository capabilities identified in the analysis. Each page must have:\n- Clear functional purpose derived from repository analysis\n- Specific file/folder mappings from actual codebase structure  \n- Comprehensive retrieval query for optimal vector store content gathering\n\n**RETRIEVAL QUERY GENERATION:**\n\nFor each page, generate a comprehensive retrieval query that combines:\n- Page topic and capabilities focus\n- Specific folder/file context \n- Related functionality and workflow patterns\n- Technical implementation details needed\n\n**RETRIEVAL QUERY EXAMPLE:**\nFor a page about \"Authentication System Implementation\":\n- Topic: Authentication, user management, security\n- Folders: [\"auth/\", \"middleware/\", \"config/\"]  \n- Files: [\"auth_manager.py\", \"user_service.py\", \"security_config.py\"]\n- Generated Query: \"authentication system user management security middleware auth_manager user_service login logout session token validation authorization middleware security configuration password hashing JWT session management user roles permissions access control authentication flow\"\n\nThis query combines topic keywords with file-specific terms and related functionality to ensure comprehensive content retrieval.\n\n**QUALITY REQUIREMENTS:**\n- Map ALL components from repository analysis to specific pages\n- Ensure comprehensive coverage without arbitrary omissions  \n- Generate retrieval queries that capture both functional context and file-specific implementation details\n- Organize content around actual user workflows and system capabilities\n- Base ALL decisions on provided repository analysis content\n\n**REQUIRED JSON FORMAT:**\n\nReturn a comprehensive JSON structure with this exact format:\n\n{\n    \"wiki_title\": \"Repository-specific title based on actual analysis\",\n    \"overview\": \"Comprehensive overview that references specific repository folders and components from the analysis\",\n    \"sections\": [\n        {\n            \"section_name\": \"Section name that naturally emerges from repository analysis\",\n            \"section_order\": 1,\n            \"description\": \"Description based on actual repository characteristics\",\n            \"rationale\": \"Why this section is essential based on the specific repository structure and complexity\",\n            \"pages\": [\n                {\n                    \"page_name\": \"Page name that reflects actual repository concepts\",\n                    \"page_order\": 1,\n                    \"description\": \"Description based on actual repository needs\",\n                    \"content_focus\": \"Focus areas derived from actual repository analysis\",\n                    \"rationale\": \"Why this page is needed based on specific repository complexity and structure\",\n                    \"target_folders\": [\"Actual folders from repository analysis\"],\n                    \"key_files\": [\"Actual files from repository analysis\"],\n                    \"retrieval_query\": \"Comprehensive query combining page topic, folder/file context, related functionality, and implementation details for optimal vector store retrieval\"\n                }\n            ]\n        }\n    ],\n    \"total_pages\": \"Actual count based on repository complexity\"\n}\n\n\n**STRUCTURE REQUIREMENTS:**\n- Create complete documentation structure covering ALL repository components without omission\n- Each page provides substantial coverage of assigned components with comprehensive retrieval queries\n- Include ALL necessary pages based on repository analysis findings\n- Ensure hierarchical structure matches repository logical organization\n- Generate retrieval queries that combine functional context with specific file/folder targeting\n- Base ALL content organization on actual repository capabilities and user workflows\n- Do not create duplicate pages covering the same set of files; merge instead and broaden content_focus.\n\nAnalyze the repository systematically and create documentation structure that emerges organically from the capability analysis.\n\n**GROUNDING / NO HALLUCINATIONS:** Only reference folders/files present in repository tree or analysis. If uncertain, omit and note uncertainty.\n"
+    ]
+   ],
+   "structure": {
+    "wiki_title": "Generated Wiki",
+    "overview": "Documentation for the repository",
+    "sections": [
+     {
+      "section_name": "Documentation",
+      "section_order": 1,
+      "description": "Main documentation",
+      "rationale": "Fallback structure due to parsing error",
+      "pages": [
+       {
+        "page_name": "Overview",
+        "page_order": 1,
+        "description": "Repository overview",
+        "content_focus": "General information",
+        "rationale": "Basic overview page for fallback structure",
+        "target_symbols": [],
+        "target_docs": [],
+        "target_folders": [],
+        "key_files": [],
+        "retrieval_query": "repository overview introduction getting started documentation README architecture",
+        "metadata": {}
+       }
+      ]
+     }
+    ],
+    "total_pages": 1
+   },
+   "error": false
+  },
+  {
+   "name": "broken",
+   "answer": "```json\n{not json}\n```",
+   "messages": [
+    [
+     "system",
+     "You are an expert technical documentation architect specializing in comprehensive repository analysis. Your task is to create complete documentation structures that capture every significant component without omission. You must ensure comprehensive coverage of all repository elements, creating structures that scale appropriately based on actual codebase complexity and component count."
+    ],
+    [
+     "user",
+     "\nYou are a documentation architect creating comprehensive wiki structure based on repository capability analysis. Focus on functional organization and user workflows rather than abstract architectural concepts.\n\nRepository Information:\n- Repository Tree: Total files: 9\nShowing up to 25 files per directory\n📁 /\n  📄 README.md\n📁 .github/ (1 files)\n  📄 ci.yml\n📁 config/ (2 files)\n  📄 app.yaml\n  📄 settings.json\n📁 docs/ (2 files)\n  📄 guide.md\n  📄 readme-extra.md\n📁 notes/ (2 files)\n  📄 __init__.py\n  📄 api.py\n📁 notes/store/ (1 files)\n  📄 db.py\n- README Content: [File: README.md]\n# Notes Service  \nA small notes service: store, search and authorise notes.\\n\\n[File: README.md]\n## Running  \nStart it with `python -m notes`.\\n\\n[File: README.md]\n## Layout  \nThe store lives in `notes/store`, the API in `notes/api.py`.  \n- Analysis: ## Analysis\n\nThe notes service — store and API. 😀\n- Target Audience: Mixed audience of developers, architects, and operators\n- Wiki Type: comprehensive\n\n**DOCUMENTATION STRUCTURE DIRECTIVES:**\n\n**CAPABILITY-DRIVEN ORGANIZATION:** Structure documentation around what users actually DO with the codebase. Group related capabilities that support complete user workflows and system operations.\n\n**COMPREHENSIVE COVERAGE:** Document ALL significant components identified in the repository analysis without omissions. Let repository complexity naturally determine documentation scope.\n\n**WORKFLOW-FOCUSED SECTIONS:** Create sections that support complete user journeys from setup through advanced usage, maintenance, and integration.\n\n**OUTPUT STRUCTURE:**\n\nCreate a comprehensive JSON structure that covers all repository capabilities identified in the analysis. Each page must have:\n- Clear functional purpose derived from repository analysis\n- Specific file/folder mappings from actual codebase structure  \n- Comprehensive retrieval query for optimal vector store content gathering\n\n**RETRIEVAL QUERY GENERATION:**\n\nFor each page, generate a comprehensive retrieval query that combines:\n- Page topic and capabilities focus\n- Specific folder/file context \n- Related functionality and workflow patterns\n- Technical implementation details needed\n\n**RETRIEVAL QUERY EXAMPLE:**\nFor a page about \"Authentication System Implementation\":\n- Topic: Authentication, user management, security\n- Folders: [\"auth/\", \"middleware/\", \"config/\"]  \n- Files: [\"auth_manager.py\", \"user_service.py\", \"security_config.py\"]\n- Generated Query: \"authentication system user management security middleware auth_manager user_service login logout session token validation authorization middleware security configuration password hashing JWT session management user roles permissions access control authentication flow\"\n\nThis query combines topic keywords with file-specific terms and related functionality to ensure comprehensive content retrieval.\n\n**QUALITY REQUIREMENTS:**\n- Map ALL components from repository analysis to specific pages\n- Ensure comprehensive coverage without arbitrary omissions  \n- Generate retrieval queries that capture both functional context and file-specific implementation details\n- Organize content around actual user workflows and system capabilities\n- Base ALL decisions on provided repository analysis content\n\n**REQUIRED JSON FORMAT:**\n\nReturn a comprehensive JSON structure with this exact format:\n\n{\n    \"wiki_title\": \"Repository-specific title based on actual analysis\",\n    \"overview\": \"Comprehensive overview that references specific repository folders and components from the analysis\",\n    \"sections\": [\n        {\n            \"section_name\": \"Section name that naturally emerges from repository analysis\",\n            \"section_order\": 1,\n            \"description\": \"Description based on actual repository characteristics\",\n            \"rationale\": \"Why this section is essential based on the specific repository structure and complexity\",\n            \"pages\": [\n                {\n                    \"page_name\": \"Page name that reflects actual repository concepts\",\n                    \"page_order\": 1,\n                    \"description\": \"Description based on actual repository needs\",\n                    \"content_focus\": \"Focus areas derived from actual repository analysis\",\n                    \"rationale\": \"Why this page is needed based on specific repository complexity and structure\",\n                    \"target_folders\": [\"Actual folders from repository analysis\"],\n                    \"key_files\": [\"Actual files from repository analysis\"],\n                    \"retrieval_query\": \"Comprehensive query combining page topic, folder/file context, related functionality, and implementation details for optimal vector store retrieval\"\n                }\n            ]\n        }\n    ],\n    \"total_pages\": \"Actual count based on repository complexity\"\n}\n\n\n**STRUCTURE REQUIREMENTS:**\n- Create complete documentation structure covering ALL repository components without omission\n- Each page provides substantial coverage of assigned components with comprehensive retrieval queries\n- Include ALL necessary pages based on repository analysis findings\n- Ensure hierarchical structure matches repository logical organization\n- Generate retrieval queries that combine functional context with specific file/folder targeting\n- Base ALL content organization on actual repository capabilities and user workflows\n- Do not create duplicate pages covering the same set of files; merge instead and broaden content_focus.\n\nAnalyze the repository systematically and create documentation structure that emerges organically from the capability analysis.\n\n**GROUNDING / NO HALLUCINATIONS:** Only reference folders/files present in repository tree or analysis. If uncertain, omit and note uncertainty.\n"
+    ]
+   ],
+   "structure": null,
+   "error": true
+  },
+  {
+   "name": "list",
+   "answer": "[1, 2]",
+   "messages": [
+    [
+     "system",
+     "You are an expert technical documentation architect specializing in comprehensive repository analysis. Your task is to create complete documentation structures that capture every significant component without omission. You must ensure comprehensive coverage of all repository elements, creating structures that scale appropriately based on actual codebase complexity and component count."
+    ],
+    [
+     "user",
+     "\nYou are a documentation architect creating comprehensive wiki structure based on repository capability analysis. Focus on functional organization and user workflows rather than abstract architectural concepts.\n\nRepository Information:\n- Repository Tree: Total files: 9\nShowing up to 25 files per directory\n📁 /\n  📄 README.md\n📁 .github/ (1 files)\n  📄 ci.yml\n📁 config/ (2 files)\n  📄 app.yaml\n  📄 settings.json\n📁 docs/ (2 files)\n  📄 guide.md\n  📄 readme-extra.md\n📁 notes/ (2 files)\n  📄 __init__.py\n  📄 api.py\n📁 notes/store/ (1 files)\n  📄 db.py\n- README Content: [File: README.md]\n# Notes Service  \nA small notes service: store, search and authorise notes.\\n\\n[File: README.md]\n## Running  \nStart it with `python -m notes`.\\n\\n[File: README.md]\n## Layout  \nThe store lives in `notes/store`, the API in `notes/api.py`.  \n- Analysis: ## Analysis\n\nThe notes service — store and API. 😀\n- Target Audience: Mixed audience of developers, architects, and operators\n- Wiki Type: comprehensive\n\n**DOCUMENTATION STRUCTURE DIRECTIVES:**\n\n**CAPABILITY-DRIVEN ORGANIZATION:** Structure documentation around what users actually DO with the codebase. Group related capabilities that support complete user workflows and system operations.\n\n**COMPREHENSIVE COVERAGE:** Document ALL significant components identified in the repository analysis without omissions. Let repository complexity naturally determine documentation scope.\n\n**WORKFLOW-FOCUSED SECTIONS:** Create sections that support complete user journeys from setup through advanced usage, maintenance, and integration.\n\n**OUTPUT STRUCTURE:**\n\nCreate a comprehensive JSON structure that covers all repository capabilities identified in the analysis. Each page must have:\n- Clear functional purpose derived from repository analysis\n- Specific file/folder mappings from actual codebase structure  \n- Comprehensive retrieval query for optimal vector store content gathering\n\n**RETRIEVAL QUERY GENERATION:**\n\nFor each page, generate a comprehensive retrieval query that combines:\n- Page topic and capabilities focus\n- Specific folder/file context \n- Related functionality and workflow patterns\n- Technical implementation details needed\n\n**RETRIEVAL QUERY EXAMPLE:**\nFor a page about \"Authentication System Implementation\":\n- Topic: Authentication, user management, security\n- Folders: [\"auth/\", \"middleware/\", \"config/\"]  \n- Files: [\"auth_manager.py\", \"user_service.py\", \"security_config.py\"]\n- Generated Query: \"authentication system user management security middleware auth_manager user_service login logout session token validation authorization middleware security configuration password hashing JWT session management user roles permissions access control authentication flow\"\n\nThis query combines topic keywords with file-specific terms and related functionality to ensure comprehensive content retrieval.\n\n**QUALITY REQUIREMENTS:**\n- Map ALL components from repository analysis to specific pages\n- Ensure comprehensive coverage without arbitrary omissions  \n- Generate retrieval queries that capture both functional context and file-specific implementation details\n- Organize content around actual user workflows and system capabilities\n- Base ALL decisions on provided repository analysis content\n\n**REQUIRED JSON FORMAT:**\n\nReturn a comprehensive JSON structure with this exact format:\n\n{\n    \"wiki_title\": \"Repository-specific title based on actual analysis\",\n    \"overview\": \"Comprehensive overview that references specific repository folders and components from the analysis\",\n    \"sections\": [\n        {\n            \"section_name\": \"Section name that naturally emerges from repository analysis\",\n            \"section_order\": 1,\n            \"description\": \"Description based on actual repository characteristics\",\n            \"rationale\": \"Why this section is essential based on the specific repository structure and complexity\",\n            \"pages\": [\n                {\n                    \"page_name\": \"Page name that reflects actual repository concepts\",\n                    \"page_order\": 1,\n                    \"description\": \"Description based on actual repository needs\",\n                    \"content_focus\": \"Focus areas derived from actual repository analysis\",\n                    \"rationale\": \"Why this page is needed based on specific repository complexity and structure\",\n                    \"target_folders\": [\"Actual folders from repository analysis\"],\n                    \"key_files\": [\"Actual files from repository analysis\"],\n                    \"retrieval_query\": \"Comprehensive query combining page topic, folder/file context, related functionality, and implementation details for optimal vector store retrieval\"\n                }\n            ]\n        }\n    ],\n    \"total_pages\": \"Actual count based on repository complexity\"\n}\n\n\n**STRUCTURE REQUIREMENTS:**\n- Create complete documentation structure covering ALL repository components without omission\n- Each page provides substantial coverage of assigned components with comprehensive retrieval queries\n- Include ALL necessary pages based on repository analysis findings\n- Ensure hierarchical structure matches repository logical organization\n- Generate retrieval queries that combine functional context with specific file/folder targeting\n- Base ALL content organization on actual repository capabilities and user workflows\n- Do not create duplicate pages covering the same set of files; merge instead and broaden content_focus.\n\nAnalyze the repository systematically and create documentation structure that emerges organically from the capability analysis.\n\n**GROUNDING / NO HALLUCINATIONS:** Only reference folders/files present in repository tree or analysis. If uncertain, omit and note uncertainty.\n"
+    ]
+   ],
+   "structure": {
+    "wiki_title": "Generated Wiki",
+    "overview": "Documentation for the repository",
+    "sections": [
+     {
+      "section_name": "Documentation",
+      "section_order": 1,
+      "description": "Main documentation",
+      "rationale": "Fallback structure due to parsing error",
+      "pages": [
+       {
+        "page_name": "Overview",
+        "page_order": 1,
+        "description": "Repository overview",
+        "content_focus": "General information",
+        "rationale": "Basic overview page for fallback structure",
+        "target_symbols": [],
+        "target_docs": [],
+        "target_folders": [],
+        "key_files": [],
+        "retrieval_query": "repository overview introduction getting started documentation README architecture",
+        "metadata": {}
+       }
+      ]
+     }
+    ],
+    "total_pages": 1
+   },
+   "error": false
+  }
+ ]
+}

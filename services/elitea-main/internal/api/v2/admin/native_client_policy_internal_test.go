@@ -23,6 +23,11 @@ func TestValidateNativeClientPolicyValues(t *testing.T) {
 		{"storage above the cap", `{"offline_max_mb":102401}`, "offline_max_mb"},
 		{"version not semver", `{"min_client_version":"1.4"}`, "min_client_version"},
 		{"version with junk", `{"min_client_version":"latest"}`, "min_client_version"},
+		{"data controls valid", `{"allow_share_out":false,"allow_share_in":false,"allow_cloud_stt":true,
+			"notification_preview":"title","allow_notification_actions":false,"allow_system_surfaces":true}`, ""},
+		{"preview none", `{"notification_preview":"none"}`, ""},
+		{"preview body is not offered", `{"notification_preview":"body"}`, "notification_preview"},
+		{"preview not a string", `{"notification_preview":true}`, "notification_preview"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -63,12 +68,21 @@ func TestNativeClientPolicySectionIsLiveAndShared(t *testing.T) {
 		keys[field["key"].(string)] = true
 	}
 	for _, key := range []string{"require_device_lock", "idle_lock_seconds", "allow_screenshots",
-		"offline_retention_days", "offline_max_mb", "offline_attachments", "min_client_version"} {
+		"offline_retention_days", "offline_max_mb", "offline_attachments", "min_client_version",
+		"allow_share_out", "allow_share_in", "allow_cloud_stt", "notification_preview",
+		"allow_notification_actions", "allow_system_surfaces"} {
 		if !keys[key] {
 			t.Errorf("field %q missing", key)
 		}
 	}
-	if len(keys) != 7 {
-		t.Errorf("section declares %d fields, want the ADR's 7", len(keys))
+	if len(keys) != 13 {
+		t.Errorf("section declares %d fields, want the ADR's 7 plus contract 1.3's 6", len(keys))
+	}
+	for _, field := range section.fields {
+		if field["key"] == "notification_preview" {
+			if enum, _ := field["enum"].([]string); len(enum) != 2 || enum[0] != "none" || enum[1] != "title" {
+				t.Errorf("notification_preview enum = %v, want [none title]", field["enum"])
+			}
+		}
 	}
 }

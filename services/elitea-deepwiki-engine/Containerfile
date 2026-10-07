@@ -3,14 +3,38 @@
 # The Rust-native DeepWiki engine (ADR-0026): one static-ish binary on a
 # distroless base. No Python, no ML closure, no shell.
 #
-# Build from the repository root:
+# Build from the repository root (the context must be the root: see the
+# migrations COPY below):
+#   docker buildx bake elitea-deepwiki-engine-native
 #   podman build -f services/elitea-deepwiki-engine/Containerfile -t elitea-deepwiki-engine-native .
 #
-# Release wiring (docker-bake target, publish.yml and ci-image-scan matrices)
-# lands in ADR-0026 phase 7, together, because the "every copy of the image
-# list agrees" gates require all of them at once.
+# Released as ghcr.io/elitea-ng/elitea-deepwiki-engine-native (ADR-0026
+# phase 7): docker-bake.hcl, publish.yml's build / scan / publish-image
+# matrices and IMAGES array, and ci-image-scan.yml name it together, and
+# scripts/ci/image-matrix.sh holds them in step.
 
-FROM rust:1.97.1-bookworm AS builder
+# Debian 13 (trixie) throughout, the release every image in this repository
+# is based on. The runtime keeps glibc and CA roots and has NO system OpenSSL:
+# the engine's TLS is rustls (reqwest, gix), so OpenSSL would only be a
+# scanned package that nothing loads. The one other library the binary needs,
+# libgcc_s, comes from distroless cc-debian13 with its package record and
+# licence, as the worker's image does it.
+FROM gcr.io/distroless/cc-debian13:nonroot AS runtime-cc
+FROM rust:1.97.1-trixie AS runtime-libraries
+COPY --from=runtime-cc /usr/lib/ /cc-lib/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/libgcc-s1* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/gcc-14-base* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /usr/share/doc/gcc-14-base/ /runtime-files/usr/share/doc/gcc-14-base/
+COPY --from=runtime-cc /usr/share/lintian/overrides/libgcc-s1 /runtime-files/usr/share/lintian/overrides/libgcc-s1
+RUN cd /cc-lib && \
+    set -- */libgcc_s.so.1 && test "$#" -eq 1 && test -f "$1" && \
+    mkdir -p /runtime-files/usr/lib && cp --parents "$1" /runtime-files/usr/lib && \
+    ln -s gcc-14-base /runtime-files/usr/share/doc/libgcc-s1
+
+FROM gcr.io/distroless/base-nossl-debian13:nonroot AS runtime-base
+COPY --from=runtime-libraries /runtime-files/ /
+
+FROM rust:1.97.1-trixie AS builder
 
 # `cargo auditable` embeds the dependency list trivy's `rustbinary` analyzer
 # reads; without it an image scan sees only the Debian base (see the
@@ -22,12 +46,27 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 WORKDIR /src/services/elitea-deepwiki-engine
 COPY services/elitea-deepwiki-engine ./
+# The service migrations, which the binary embeds (include_str!) from the
+# Python package's directory: one set of files for both runners. Load-bearing:
+# src/storage/migrate.rs reads them by a path OUTSIDE the crate
+# (../elitea-deepwiki/...), and without this line the build fails with
+# "couldn't read …/0001_wiki_index_storage.sql". `migrate` writes the same
+# schema_migrations ledger (same SHA-256 checksums) as the Python entry point.
+COPY services/elitea-deepwiki/src/elitea_deepwiki/migrations ../elitea-deepwiki/src/elitea_deepwiki/migrations
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cargo-target \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
     cp /cargo-target/release/elitea-deepwiki-engine /usr/local/bin/elitea-deepwiki-engine
+
+# Resolve every library the binary needs against the runtime image, without
+# starting it: no system OpenSSL linked or shipped, CA roots present, and the
+# whole closure found inside the runtime root. A base change that drops a
+# library fails HERE, not as a sidecar that cannot start.
+COPY services/elitea-deepwiki-engine/scripts/verify-runtime.sh /usr/local/bin/verify-runtime
+RUN --mount=type=bind,from=runtime-base,source=/,target=/runtime-root,readonly \
+    sh /usr/local/bin/verify-runtime /usr/local/bin/elitea-deepwiki-engine
 
 # The socket directory, built here because the runtime image has no shell.
 # A compose named volume (and Docker's fresh volume in particular) takes the
@@ -38,7 +77,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # as another uid. The Python image's Containerfile carries the same rule.
 RUN mkdir -p /socket-dir/run/deepwiki && chmod 0777 /socket-dir/run/deepwiki
 
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+FROM runtime-base AS runtime
 
 COPY --from=builder /usr/local/bin/elitea-deepwiki-engine /usr/local/bin/elitea-deepwiki-engine
 COPY --from=builder --chown=10001:10001 /socket-dir/run/ /run/

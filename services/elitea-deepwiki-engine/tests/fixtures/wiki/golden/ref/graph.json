@@ -1,0 +1,20 @@
+{
+  "node_count": 44,
+  "has_name_index": true,
+  "imports": {
+    "/checkout/app/handlers.py": "make_store"
+  },
+  "name_paths": {
+    "API": "plugins/notes/api/v1/notes.py",
+    "Codec": "native/codec.h",
+    "NoteStore": "app/models.py",
+    "handle_create": "app/handlers.py",
+    "Note": "app/models.py",
+    "handle_search": "app/handlers.py",
+    "dispatch": "app/handlers.py",
+    "make_store": "app/models.py",
+    "BaseStore": "app/base.py",
+    "MAX_NOTES": "app/models.py"
+  },
+  "vector_fallback_queries": []
+}

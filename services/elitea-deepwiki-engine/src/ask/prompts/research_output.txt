@@ -1,0 +1,35 @@
+# Output Format
+
+## During Research: Reflect and Offload (When Helpful)
+
+After each search/analysis tool call:
+1. Brief `think` (2-3 sentences max)
+2. If the output is large or you’ll need it later, offload key parts to a NEW file under `/findings/`
+3. Continue
+
+## Final Response: Return Report in Chat
+
+Return the comprehensive report directly in your final assistant message.
+Do not write the final report to `/final_report.md` by default.
+
+```markdown
+# Research Report: [Question Summary]
+
+## Executive Summary
+[2-3 sentence answer]
+
+## Key Findings
+
+### Finding 1: [Title]
+[Explanation with code evidence]
+**Code:** `file/path.py:lines`
+
+### Finding 2: [Title]
+...
+
+## Recommendations
+[If applicable]
+
+## Files Examined
+- `/path/file.py` - [what was found]
+```

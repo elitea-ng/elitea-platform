@@ -1,0 +1,297 @@
+{
+  "wiki_title": "Repository Technical Documentation",
+  "overview": "This wiki covers 5 pages across 2 sections: Section 0, Section 1.",
+  "sections": [
+    {
+      "section_name": "Section 0",
+      "section_order": 1,
+      "description": "Section covering 12 symbols",
+      "rationale": "Mathematical clustering: macro=0, 3 pages, 12 symbols",
+      "pages": [
+        {
+          "page_name": "Section 0 — Page 0",
+          "page_order": 1,
+          "description": "Page covering 4 symbols",
+          "content_focus": "Page covering 4 symbols",
+          "rationale": "Grouped by graph clustering (macro=0, micro=0, 4 symbols)",
+          "target_symbols": [
+            "API",
+            "GET /api/v1/notes/{var}",
+            "POST /notes/{var}"
+          ],
+          "target_docs": [],
+          "target_folders": [
+            "plugins/notes/api/v1"
+          ],
+          "key_files": [
+            "plugins/notes/api/v1/notes.py"
+          ],
+          "retrieval_query": "Section 0 — Page 0",
+          "metadata": {
+            "planner_mode": "cluster",
+            "section_id": 0,
+            "page_id": 0,
+            "cluster_node_ids": [
+              "python::notes::API",
+              "contract::rest::GET /api/v1/notes/{var}",
+              "contract::rest::POST /api/v1/notes/{var}",
+              "contract::rest::POST /notes/{var}"
+            ]
+          }
+        },
+        {
+          "page_name": "Section 0 — Page 1",
+          "page_order": 2,
+          "description": "Page covering 6 symbols",
+          "content_focus": "Page covering 6 symbols",
+          "rationale": "Grouped by graph clustering (macro=0, micro=1, 6 symbols)",
+          "target_symbols": [],
+          "target_docs": [
+            "README.md",
+            "config.yaml",
+            "plugins/notes/metadata.json"
+          ],
+          "target_folders": [
+            "plugins/notes",
+            "plugins/notes/api/v1"
+          ],
+          "key_files": [
+            "README.md",
+            "config.yaml",
+            "plugins/notes/api/v1/notes.py",
+            "plugins/notes/metadata.json"
+          ],
+          "retrieval_query": "Section 0 — Page 1",
+          "metadata": {
+            "planner_mode": "cluster",
+            "section_id": 0,
+            "page_id": 1,
+            "cluster_node_ids": [
+              "markdown::README::Notes",
+              "markdown::README::Layout",
+              "yaml::config::config",
+              "json::metadata::metadata",
+              "contract::rest::GET /notes/{var}",
+              "markdown_document::README.md"
+            ]
+          }
+        },
+        {
+          "page_name": "Section 0 — Page 2",
+          "page_order": 3,
+          "description": "Page covering 2 symbols",
+          "content_focus": "Page covering 2 symbols",
+          "rationale": "Grouped by graph clustering (macro=0, micro=2, 2 symbols)",
+          "target_symbols": [
+            "Codec"
+          ],
+          "target_docs": [
+            "README.md"
+          ],
+          "target_folders": [
+            "native"
+          ],
+          "key_files": [
+            "README.md",
+            "native/codec.h"
+          ],
+          "retrieval_query": "Section 0 — Page 2",
+          "metadata": {
+            "planner_mode": "cluster",
+            "section_id": 0,
+            "page_id": 2,
+            "cluster_node_ids": [
+              "cpp::codec::notes.Codec",
+              "markdown::README::Quick start"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "section_name": "Section 1",
+      "section_order": 2,
+      "description": "Section covering 14 symbols",
+      "rationale": "Mathematical clustering: macro=1, 2 pages, 14 symbols",
+      "pages": [
+        {
+          "page_name": "Section 1 — Page 0",
+          "page_order": 1,
+          "description": "Page covering 9 symbols",
+          "content_focus": "Page covering 9 symbols",
+          "rationale": "Grouped by graph clustering (macro=1, micro=0, 9 symbols)",
+          "target_symbols": [
+            "NoteStore",
+            "handle_create",
+            "Note"
+          ],
+          "target_docs": [],
+          "target_folders": [
+            "app"
+          ],
+          "key_files": [
+            "app/base.py",
+            "app/handlers.py",
+            "app/models.py"
+          ],
+          "retrieval_query": "Section 1 — Page 0",
+          "metadata": {
+            "planner_mode": "cluster",
+            "section_id": 1,
+            "page_id": 0,
+            "cluster_node_ids": [
+              "python::handlers::STORE",
+              "python::handlers::ROUTES",
+              "python::handlers::handle_create",
+              "python::handlers::handle_search",
+              "python::handlers::dispatch",
+              "python::models::Note",
+              "python::models::NoteStore",
+              "python::base::BaseStore",
+              "python::models::make_store"
+            ]
+          }
+        },
+        {
+          "page_name": "Section 1 — Page 1",
+          "page_order": 2,
+          "description": "Page covering 5 symbols",
+          "content_focus": "Page covering 5 symbols",
+          "rationale": "Grouped by graph clustering (macro=1, micro=1, 5 symbols)",
+          "target_symbols": [],
+          "target_docs": [
+            "docs/architecture.md",
+            "docs/usage.md"
+          ],
+          "target_folders": [
+            "docs"
+          ],
+          "key_files": [
+            "docs/architecture.md",
+            "docs/usage.md"
+          ],
+          "retrieval_query": "Section 1 — Page 1",
+          "metadata": {
+            "planner_mode": "cluster",
+            "section_id": 1,
+            "page_id": 1,
+            "cluster_node_ids": [
+              "markdown::architecture::Architecture",
+              "markdown::architecture::Codec",
+              "markdown::usage::Usage",
+              "markdown_document::docs/architecture.md",
+              "markdown_document::docs/usage.md"
+            ]
+          }
+        },
+        {
+          "page_name": "Everything At Once",
+          "page_order": 3,
+          "description": "Page covering 9 symbols",
+          "content_focus": "Page covering 9 symbols",
+          "rationale": "Grouped by graph clustering (macro=1, micro=0, 30 symbols)",
+          "target_symbols": [
+            "NoteStore",
+            "handle_create",
+            "Note",
+            "handle_search",
+            "dispatch",
+            "make_store",
+            "BaseStore",
+            "MAX_NOTES",
+            "Codec",
+            "API",
+            "NoteStore",
+            "handle_create",
+            "Note",
+            "handle_search",
+            "dispatch",
+            "make_store",
+            "BaseStore",
+            "MAX_NOTES",
+            "Codec",
+            "API",
+            "NoteStore",
+            "handle_create",
+            "Note",
+            "handle_search",
+            "dispatch",
+            "make_store",
+            "BaseStore",
+            "MAX_NOTES",
+            "Codec",
+            "API"
+          ],
+          "target_docs": [],
+          "target_folders": [
+            "app"
+          ],
+          "key_files": [
+            "app/base.py",
+            "app/handlers.py",
+            "app/models.py"
+          ],
+          "retrieval_query": "Section 1 — Page 0",
+          "metadata": {
+            "planner_mode": "cluster",
+            "section_id": 1,
+            "page_id": 0,
+            "cluster_node_ids": [
+              "python::handlers::STORE",
+              "python::handlers::ROUTES",
+              "python::handlers::handle_create",
+              "python::handlers::handle_search",
+              "python::handlers::dispatch",
+              "python::models::Note",
+              "python::models::NoteStore",
+              "python::base::BaseStore",
+              "python::models::make_store"
+            ]
+          }
+        },
+        {
+          "page_name": "Notices & Licences",
+          "page_order": 4,
+          "description": "Page covering 9 symbols",
+          "content_focus": "Page covering 9 symbols",
+          "rationale": "Hand-written page",
+          "target_symbols": [],
+          "target_docs": [
+            "NOTICE",
+            "../outside.txt"
+          ],
+          "target_folders": [
+            "app"
+          ],
+          "key_files": [
+            "app/base.py",
+            "app/handlers.py",
+            "app/models.py"
+          ],
+          "retrieval_query": "Section 1 — Page 0",
+          "metadata": {}
+        },
+        {
+          "page_name": "Store Usage Guide",
+          "page_order": 5,
+          "description": "Page covering 9 symbols",
+          "content_focus": "Page covering 9 symbols",
+          "rationale": "Hand-written page",
+          "target_symbols": [],
+          "target_docs": [],
+          "target_folders": [
+            "app"
+          ],
+          "key_files": [
+            "app/base.py",
+            "app/handlers.py",
+            "app/models.py"
+          ],
+          "retrieval_query": "Section 1 — Page 0",
+          "metadata": {}
+        }
+      ]
+    }
+  ],
+  "total_pages": 8
+}

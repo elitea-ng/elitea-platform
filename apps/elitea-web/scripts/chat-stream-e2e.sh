@@ -159,6 +159,13 @@ curl -sf -o /dev/null "http://localhost:${PORT}/app/" || {
 run_stack seed
 run_stack seed-runtime
 run_stack seed-llm
+# CHAT_STREAM_EXTRA_SEEDS: further standalone-stack.sh seed subcommands a
+# caller needs, space-separated, run in order after the three above. The
+# DeepWiki real-engine runner on the native engine names
+# `seed-deepwiki-public` here. Empty for every other caller.
+for extra_seed in ${CHAT_STREAM_EXTRA_SEEDS:-}; do
+  run_stack "$extra_seed"
+done
 
 # ── Assert the stack before driving it (#368) ────────────────────────────────
 #
@@ -366,6 +373,15 @@ while IFS= read -r live_name; do
   [ -n "$live_name" ] && LIVE_ENV_ARGS+=("-e" "$live_name")
 done <<EOF
 $(env | sed -n 's/^\(E2E_LIVE_[A-Za-z0-9_]*\)=.*/\1/p')
+EOF
+# The DeepWiki real-engine journey's variables (E2E_REAL_ENGINE_*: which
+# engine, which repository and branch, which commit the wiki must name),
+# forwarded by NAME for the same reason: deepwiki-real-engine.sh exports
+# them on the host, and the container starts from an empty environment.
+while IFS= read -r real_engine_name; do
+  [ -n "$real_engine_name" ] && LIVE_ENV_ARGS+=("-e" "$real_engine_name")
+done <<EOF
+$(env | sed -n 's/^\(E2E_REAL_ENGINE_[A-Za-z0-9_]*\)=.*/\1/p')
 EOF
 
 # shellcheck disable=SC2086 -- REPEAT_ARGS and SHARD_ARGS are deliberately word-split

@@ -6,7 +6,17 @@ name: CI — DeepWiki native engine
 # and every check here needs the same compiled dependency graph.
 #
 #   * fmt, Clippy (all + pedantic, deny), rustdoc with warnings denied;
-#   * the crate's tests, which run the sidecar on a REAL Unix socket;
+#   * the crate's tests, which run the sidecar on a REAL Unix socket and
+#     the index storage against a REAL PostgreSQL with pgvector (the
+#     `postgres` service): the retrieval parity gate over the P0 fixtures,
+#     the publish transaction under concurrent readers, the reconciliation
+#     and the migration ledger, Phase 2's store over the build space, and
+#     the native runner end to end (tests/native_generate.rs: the worker
+#     child, a repository served by `git http-backend` — git is on the
+#     runner — a mock gateway, this database; it needs the test-only
+#     `loopback-git-http` feature, which --all-features turns on).
+#     DEEPWIKI_REQUIRE_POSTGRES=1 turns their "no database → skip" into a
+#     failure here;
 #   * the release binary, and then the Go sub-application host's own tests
 #     against it (internal/apps/deepwiki/run, native_engine_test.go): the
 #     host's sidecar client, composition and upload over the Rust engine.
@@ -21,7 +31,11 @@ on:
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"
+      # The engine embeds the service migrations (include_str!).
+      - "services/elitea-deepwiki/src/elitea_deepwiki/migrations/**"
+      - "services/elitea-deepwiki/src/elitea_deepwiki/storage/migrate.py"
       - ".github/workflows/ci-deepwiki-engine.yml"
+      - "scripts/go/declared-skips.txt"
   push:
     branches:
       - main
@@ -30,7 +44,11 @@ on:
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"
+      # The engine embeds the service migrations (include_str!).
+      - "services/elitea-deepwiki/src/elitea_deepwiki/migrations/**"
+      - "services/elitea-deepwiki/src/elitea_deepwiki/storage/migrate.py"
       - ".github/workflows/ci-deepwiki-engine.yml"
+      - "scripts/go/declared-skips.txt"
   workflow_dispatch:
 
 concurrency:
@@ -49,6 +67,21 @@ jobs:
     name: Engine — lint, test, and the Go host against the binary
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The index storage tests' database (ADR-0026 decision 5).
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.5-pg16
+        env:
+          POSTGRES_USER: deepwiki
+          POSTGRES_PASSWORD: deepwiki
+          POSTGRES_DB: deepwiki
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U deepwiki"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     defaults:
       run:
         working-directory: services/elitea-deepwiki-engine
@@ -80,6 +113,9 @@ jobs:
         run: cargo doc --locked --no-deps --all-features
 
       - name: Run the crate's tests
+        env:
+          DEEPWIKI_TEST_DSN: postgresql://deepwiki:deepwiki@127.0.0.1:5432/deepwiki
+          DEEPWIKI_REQUIRE_POSTGRES: "1"
         run: cargo test --locked --all-targets --all-features
 
       - name: Build the release binary

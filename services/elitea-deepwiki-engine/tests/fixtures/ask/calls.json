@@ -1,0 +1,210 @@
+[
+ {
+  "name": "search_symbols",
+  "arguments": {
+   "query": "note store"
+  }
+ },
+ {
+  "name": "search_symbols",
+  "arguments": {
+   "query": "store",
+   "symbol_type": "class"
+  }
+ },
+ {
+  "name": "search_symbols",
+  "arguments": {
+   "query": "note",
+   "file_prefix": "app"
+  }
+ },
+ {
+  "name": "search_symbols",
+  "arguments": {
+   "query": "x",
+   "symbol_type": "bogus"
+  }
+ },
+ {
+  "name": "search_symbols",
+  "arguments": {
+   "query": "zzzz"
+  }
+ },
+ {
+  "name": "search_symbols",
+  "arguments": {
+   "query": "encode"
+  }
+ },
+ {
+  "name": "get_relationships_tool",
+  "arguments": {
+   "symbol_name": "NoteStore"
+  }
+ },
+ {
+  "name": "get_relationships_tool",
+  "arguments": {
+   "symbol_name": "Codec",
+   "direction": "incoming"
+  }
+ },
+ {
+  "name": "get_relationships_tool",
+  "arguments": {
+   "symbol_name": "Nope"
+  }
+ },
+ {
+  "name": "get_relationships_tool",
+  "arguments": {
+   "symbol_name": "MAX_NOTES",
+   "max_depth": 1
+  }
+ },
+ {
+  "name": "get_code",
+  "arguments": {
+   "symbol_name": "NoteStore",
+   "max_lines": 5
+  }
+ },
+ {
+  "name": "get_code",
+  "arguments": {
+   "symbol_name": "handle_search"
+  }
+ },
+ {
+  "name": "get_code",
+  "arguments": {
+   "symbol_name": "note"
+  }
+ },
+ {
+  "name": "get_code",
+  "arguments": {
+   "symbol_name": "Notes"
+  }
+ },
+ {
+  "name": "search_docs",
+  "arguments": {
+   "query": "storage architecture"
+  }
+ },
+ {
+  "name": "search_docs",
+  "arguments": {
+   "query": "codec encode",
+   "k": 2
+  }
+ },
+ {
+  "name": "query_graph",
+  "arguments": {
+   "expression": "type:class limit:5"
+  }
+ },
+ {
+  "name": "query_graph",
+  "arguments": {
+   "expression": "type:function file:app/*"
+  }
+ },
+ {
+  "name": "query_graph",
+  "arguments": {
+   "expression": "name:NoteStore"
+  }
+ },
+ {
+  "name": "query_graph",
+  "arguments": {
+   "expression": "text:note"
+  }
+ },
+ {
+  "name": "query_graph",
+  "arguments": {
+   "expression": "related:\"BaseStore\" dir:incoming"
+  }
+ },
+ {
+  "name": "query_graph",
+  "arguments": {
+   "expression": "type:class has_rel:inherits"
+  }
+ },
+ {
+  "name": "query_graph",
+  "arguments": {
+   "expression": "type:function connections:>3"
+  }
+ },
+ {
+  "name": "query_graph",
+  "arguments": {
+   "expression": "layer:internal type:method"
+  }
+ },
+ {
+  "name": "query_graph",
+  "arguments": {
+   "expression": "bogus:x"
+  }
+ },
+ {
+  "name": "think",
+  "arguments": {
+   "reflection": "done"
+  }
+ },
+ {
+  "name": "search_codebase",
+  "arguments": {
+   "query": "note store save"
+  }
+ },
+ {
+  "name": "search_codebase",
+  "arguments": {
+   "query": "codec",
+   "k": 3
+  }
+ },
+ {
+  "name": "get_symbol_relationships",
+  "arguments": {
+   "symbol_name": "NoteStore"
+  }
+ },
+ {
+  "name": "get_symbol_relationships",
+  "arguments": {
+   "symbol_name": "store"
+  }
+ },
+ {
+  "name": "get_symbol_relationships",
+  "arguments": {
+   "symbol_name": "zzz"
+  }
+ },
+ {
+  "name": "search_graph",
+  "arguments": {
+   "query": "handle_search"
+  }
+ },
+ {
+  "name": "search_graph",
+  "arguments": {
+   "query": "codec",
+   "k": 2,
+   "include_neighbors": false
+  }
+ }
+]

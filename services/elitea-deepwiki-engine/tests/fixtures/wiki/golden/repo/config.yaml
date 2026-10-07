@@ -1,0 +1,5 @@
+store:
+  path: notes.db
+  max_notes: 1000
+codec:
+  level: 3

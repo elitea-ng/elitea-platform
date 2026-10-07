@@ -4824,12 +4824,28 @@ export type listPublicApplicationsResponse200 = {
   status: 200;
 };
 
+export type listPublicApplicationsResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
+export type listPublicApplicationsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type listPublicApplicationsResponseSuccess =
   listPublicApplicationsResponse200 & {
     headers: Headers;
   };
+export type listPublicApplicationsResponseError = (
+  listPublicApplicationsResponse400 | listPublicApplicationsResponse426
+) & {
+  headers: Headers;
+};
+
 export type listPublicApplicationsResponse =
-  listPublicApplicationsResponseSuccess;
+  listPublicApplicationsResponseSuccess | listPublicApplicationsResponseError;
 
 export const getListPublicApplicationsUrl = (
   params?: ListPublicApplicationsParams,
@@ -4890,7 +4906,7 @@ export const getListPublicApplicationsQueryKey = (
 
 export const getListPublicApplicationsQueryOptions = <
   TData = Awaited<ReturnType<typeof listPublicApplications>>,
-  TError = unknown,
+  TError = InvalidClientVersionResponse | ClientUpgradeRequiredResponse,
 >(
   params?: ListPublicApplicationsParams,
   options?: {
@@ -4924,11 +4940,12 @@ export const getListPublicApplicationsQueryOptions = <
 export type ListPublicApplicationsQueryResult = NonNullable<
   Awaited<ReturnType<typeof listPublicApplications>>
 >;
-export type ListPublicApplicationsQueryError = unknown;
+export type ListPublicApplicationsQueryError =
+  InvalidClientVersionResponse | ClientUpgradeRequiredResponse;
 
 export function useListPublicApplications<
   TData = Awaited<ReturnType<typeof listPublicApplications>>,
-  TError = unknown,
+  TError = InvalidClientVersionResponse | ClientUpgradeRequiredResponse,
 >(
   params: undefined | ListPublicApplicationsParams,
   options: {
@@ -4955,7 +4972,7 @@ export function useListPublicApplications<
 };
 export function useListPublicApplications<
   TData = Awaited<ReturnType<typeof listPublicApplications>>,
-  TError = unknown,
+  TError = InvalidClientVersionResponse | ClientUpgradeRequiredResponse,
 >(
   params?: ListPublicApplicationsParams,
   options?: {
@@ -4982,7 +4999,7 @@ export function useListPublicApplications<
 };
 export function useListPublicApplications<
   TData = Awaited<ReturnType<typeof listPublicApplications>>,
-  TError = unknown,
+  TError = InvalidClientVersionResponse | ClientUpgradeRequiredResponse,
 >(
   params?: ListPublicApplicationsParams,
   options?: {
@@ -5005,7 +5022,7 @@ export function useListPublicApplications<
 
 export function useListPublicApplications<
   TData = Awaited<ReturnType<typeof listPublicApplications>>,
-  TError = unknown,
+  TError = InvalidClientVersionResponse | ClientUpgradeRequiredResponse,
 >(
   params?: ListPublicApplicationsParams,
   options?: {
@@ -12242,6 +12259,11 @@ export type getRecommendationsResponse200 = {
   status: 200;
 };
 
+export type getRecommendationsResponse400 = {
+  data: InvalidClientVersionResponse;
+  status: 400;
+};
+
 export type getRecommendationsResponse401 = {
   data: N401Response;
   status: 401;
@@ -12252,12 +12274,20 @@ export type getRecommendationsResponse403 = {
   status: 403;
 };
 
+export type getRecommendationsResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
 export type getRecommendationsResponseSuccess =
   getRecommendationsResponse200 & {
     headers: Headers;
   };
 export type getRecommendationsResponseError = (
-  getRecommendationsResponse401 | getRecommendationsResponse403
+  | getRecommendationsResponse400
+  | getRecommendationsResponse401
+  | getRecommendationsResponse403
+  | getRecommendationsResponse426
 ) & {
   headers: Headers;
 };
@@ -12316,7 +12346,11 @@ export const getGetRecommendationsQueryKey = (
 
 export const getGetRecommendationsQueryOptions = <
   TData = Awaited<ReturnType<typeof getRecommendations>>,
-  TError = N401Response | N403Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: GetRecommendationsParams,
@@ -12356,11 +12390,19 @@ export const getGetRecommendationsQueryOptions = <
 export type GetRecommendationsQueryResult = NonNullable<
   Awaited<ReturnType<typeof getRecommendations>>
 >;
-export type GetRecommendationsQueryError = N401Response | N403Response;
+export type GetRecommendationsQueryError =
+  | InvalidClientVersionResponse
+  | N401Response
+  | N403Response
+  | ClientUpgradeRequiredResponse;
 
 export function useGetRecommendations<
   TData = Awaited<ReturnType<typeof getRecommendations>>,
-  TError = N401Response | N403Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params: undefined | GetRecommendationsParams,
@@ -12388,7 +12430,11 @@ export function useGetRecommendations<
 };
 export function useGetRecommendations<
   TData = Awaited<ReturnType<typeof getRecommendations>>,
-  TError = N401Response | N403Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: GetRecommendationsParams,
@@ -12416,7 +12462,11 @@ export function useGetRecommendations<
 };
 export function useGetRecommendations<
   TData = Awaited<ReturnType<typeof getRecommendations>>,
-  TError = N401Response | N403Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: GetRecommendationsParams,
@@ -12440,7 +12490,11 @@ export function useGetRecommendations<
 
 export function useGetRecommendations<
   TData = Awaited<ReturnType<typeof getRecommendations>>,
-  TError = N401Response | N403Response,
+  TError =
+    | InvalidClientVersionResponse
+    | N401Response
+    | N403Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   params?: GetRecommendationsParams,

@@ -52,7 +52,7 @@ func TestIndexV2PreflightShippedBinary(t *testing.T) {
 	containers := &containerSet{}
 	t.Cleanup(containers.stopAll)
 	postgresName := containers.start(t,
-		"preflight-postgres", "postgres:16-alpine",
+		"preflight-postgres", "postgres:16-trixie",
 		[]string{
 			"-e", "POSTGRES_USER=elitea",
 			"-e", "POSTGRES_PASSWORD=elitea",

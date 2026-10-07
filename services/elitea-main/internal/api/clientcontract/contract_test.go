@@ -8,6 +8,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -673,10 +674,57 @@ func TestClientOperationsDeclareTheVersionGate(t *testing.T) {
 		if upgrade == nil || upgrade.Headers["x-min-client-version"] == nil || upgrade.Content["application/json"] == nil {
 			t.Errorf("%s (%s) does not declare 426 client_upgrade_required with X-Min-Client-Version", key, op.OperationID)
 		}
-		if bad := op.Responses["400"]; bad == nil || bad.Content["application/json"] == nil {
+		bad := op.Responses["400"]
+		if bad == nil || bad.Content["application/json"] == nil {
 			t.Errorf("%s (%s) does not declare a JSON 400 (invalid_client_version)", key, op.OperationID)
+			continue
+		}
+		if !admitsInvalidClientVersion(bad.Content["application/json"]) {
+			t.Errorf("%s (%s) declares a JSON 400 whose schema refuses the gate's "+
+				"{error, error_description} body; add InvalidClientVersionError to it (oneOf)", key, op.OperationID)
 		}
 	}
+}
+
+// admitsInvalidClientVersion reports whether a body shaped like
+// apimw.WriteInvalidClientVersion's, {"error":"invalid_client_version",
+// "error_description":"..."}, satisfies shape — directly or through one
+// alternative of a oneOf. A 400 that requires any other key (for example the
+// notifications envelope's `ok`) makes a strictly generated client fail to
+// decode the gate's answer.
+func admitsInvalidClientVersion(shape *clientcontract.Shape) bool {
+	if shape == nil {
+		return false
+	}
+	if len(shape.OneOf) > 0 {
+		for _, alternative := range shape.OneOf {
+			if admitsInvalidClientVersion(alternative) {
+				return true
+			}
+		}
+		return false
+	}
+	if shape.Type != "" && shape.Type != "object" {
+		return false
+	}
+	for _, name := range shape.Required {
+		if name != "error" && name != "error_description" {
+			return false
+		}
+	}
+	for _, name := range []string{"error", "error_description"} {
+		prop := shape.Properties[name]
+		if prop == nil {
+			continue
+		}
+		if prop.Type != "" && prop.Type != "string" {
+			return false
+		}
+		if name == "error" && len(prop.Enum) > 0 && !slices.Contains(prop.Enum, "invalid_client_version") {
+			return false
+		}
+	}
+	return true
 }
 
 func sortedOperationKeys(surface *clientcontract.Surface) []string {

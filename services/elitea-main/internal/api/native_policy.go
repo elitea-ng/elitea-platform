@@ -28,5 +28,12 @@ func (d nativePolicyDiscovery) PublicPolicy(ctx context.Context) (v2discovery.Pu
 		RequireDeviceLock: policy.RequireDeviceLock,
 		OfflineEnabled:    policy.OfflineEnabled(),
 		MinClientVersion:  policy.MinClientVersion,
+
+		AllowShareOut:            policy.AllowShareOut,
+		AllowShareIn:             policy.AllowShareIn,
+		AllowCloudSTT:            policy.AllowCloudSTT,
+		NotificationPreview:      policy.NotificationPreview,
+		AllowNotificationActions: policy.AllowNotificationActions,
+		AllowSystemSurfaces:      policy.AllowSystemSurfaces,
 	}, minimums, nil
 }

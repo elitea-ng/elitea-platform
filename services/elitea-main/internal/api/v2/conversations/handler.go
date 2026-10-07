@@ -1617,10 +1617,6 @@ func (h *Handler) DeselectConversation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-func (h *Handler) Regenerate(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
-}
-
 func (h *Handler) CreateCanvas(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	var body map[string]any

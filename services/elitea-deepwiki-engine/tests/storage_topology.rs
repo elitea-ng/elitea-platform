@@ -1,0 +1,424 @@
+//! Phase 2's PostgreSQL index ([`PgTopologyStore`]) over the P0 retrieval
+//! corpus staged in a build: the contract of every `TopologyStore` method
+//! (which rows match, the fields, the order), the dense search that ranks
+//! over ALL vectors before the prefix filter (sqlite-vec's order), the
+//! staged edge replacement, and the stop.
+//!
+//! Needs `DEEPWIKI_TEST_DSN` (see `storage_common`).
+
+mod storage_common;
+
+use elitea_deepwiki_engine::graph::EdgeRow;
+use elitea_deepwiki_engine::graph::topology::replay::standin_embedding;
+use elitea_deepwiki_engine::graph::topology::{SearchHit, TopologyStore};
+use elitea_deepwiki_engine::runner::StopSignal;
+use elitea_deepwiki_engine::storage::build::BuildSpace;
+use elitea_deepwiki_engine::storage::text::score_norm;
+use elitea_deepwiki_engine::storage::topology::{PgTopologyStore, STOPPED};
+use serde_json::json;
+use tokio::runtime::Handle;
+
+fn edge(source: &str, target: &str, rel_type: &str, weight: f64) -> EdgeRow {
+    EdgeRow {
+        source_id: source.to_owned(),
+        target_id: target.to_owned(),
+        rel_type: rel_type.to_owned(),
+        edge_class: "structural".to_owned(),
+        analysis_level: "comprehensive".to_owned(),
+        weight,
+        raw_similarity: None,
+        source_file: String::new(),
+        target_file: String::new(),
+        language: "python".to_owned(),
+        annotations: "{}".to_owned(),
+        created_by: String::new(),
+    }
+}
+
+fn ids(hits: &[SearchHit]) -> Vec<&str> {
+    hits.iter().map(|h| h.node_id.as_str()).collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines, clippy::float_cmp)] // exact ties are the order rule
+async fn the_build_space_answers_phase_2() {
+    let Some(pool) = storage_common::fresh_database("topology_store").await else {
+        return;
+    };
+    let space = BuildSpace::new(pool.clone(), "topology-test");
+    let mut build = space.begin("acme--notes--main").await.unwrap();
+    let corpus = storage_common::corpus();
+    let vectors: Vec<(String, Vec<f64>)> = corpus
+        .iter()
+        .filter(|n| !n.source_text.trim().is_empty())
+        .map(|n| (n.node_id.clone(), standin_embedding(&n.source_text)))
+        .collect();
+    build.stage_nodes(corpus.clone()).await.unwrap();
+    build
+        .stage_embeddings(vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())))
+        .await
+        .unwrap();
+    let stop = StopSignal::default();
+    let store = PgTopologyStore::new(build, Handle::current(), stop.clone());
+    let probe = vectors[0].1.clone();
+
+    let (store, checks) = tokio::task::spawn_blocking(move || {
+        let mut store = store;
+        let mut checks = Vec::new();
+        assert_eq!(store.node_count().unwrap(), 20);
+
+        // Rows in the asked order; an unknown id is None.
+        let rows = store
+            .get_nodes(&["notes/store.py::NoteStore", "missing", "README.md::module"])
+            .unwrap();
+        assert_eq!(rows[0].as_ref().unwrap().symbol_name, "NoteStore");
+        assert_eq!(rows[0].as_ref().unwrap().rel_path, "notes/store.py");
+        assert!(rows[1].is_none());
+        assert_eq!(rows[2].as_ref().unwrap().language, "markdown");
+
+        // Lexical: matches only, best (most negative) first, score_norm the
+        // logistic of the rank, ties by node id.
+        let hits = store.search_lexical("note", None, 30).unwrap();
+        assert!(!hits.is_empty());
+        for pair in hits.windows(2) {
+            let (a, b) = (pair[0].fts_rank.unwrap(), pair[1].fts_rank.unwrap());
+            assert!(a < b || (a == b && pair[0].node_id < pair[1].node_id));
+        }
+        for hit in &hits {
+            assert_eq!(hit.score_norm, Some(score_norm(hit.fts_rank.unwrap())));
+            assert!(hit.vec_distance.is_none());
+        }
+        checks.push(ids(&hits).len());
+        let limited = store.search_lexical("note", None, 2).unwrap();
+        assert_eq!(ids(&limited), ids(&hits)[..2]);
+        // The prefix is a directory: only rows under `notes/`.
+        let scoped = store.search_lexical("note", Some("notes"), 30).unwrap();
+        assert!(!scoped.is_empty());
+        assert!(scoped.iter().all(|h| h.rel_path.starts_with("notes/")));
+        // A symbol name with punctuation is folded, not parsed.
+        assert!(
+            !store
+                .search_lexical("NoteStore.save_note", None, 5)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(store.search_lexical("  ", None, 5).unwrap().is_empty());
+        assert!(store.search_lexical("::", None, 5).unwrap().is_empty());
+
+        // Phrase counts.
+        assert!(store.count_phrase_matches("save note").unwrap() >= 1);
+        assert_eq!(store.count_phrase_matches("").unwrap(), 0);
+        assert_eq!(store.count_phrase_matches("zebra unicorn").unwrap(), 0);
+
+        // Vectors back as staged (float4).
+        let stored = store
+            .get_embeddings(&["missing", "notes/store.py::NoteStore"])
+            .unwrap();
+        assert!(stored[0].is_none());
+        let stored = stored[1].as_ref().unwrap();
+        let staged = &standin_embedding(
+            &corpus
+                .iter()
+                .find(|n| n.node_id == "notes/store.py::NoteStore")
+                .unwrap()
+                .source_text,
+        );
+        assert_eq!(stored.len(), staged.len());
+        assert!(stored.iter().zip(staged).all(|(a, b)| (a - b).abs() < 1e-6));
+
+        // Dense: the k nearest of ALL vectors, THEN the prefix.
+        let global = store.search_dense(&probe, 6, None).unwrap();
+        assert_eq!(global.len(), 6);
+        assert_eq!(global[0].vec_distance.map(|d| d < 1e-6), Some(true));
+        for pair in global.windows(2) {
+            assert!(pair[0].vec_distance <= pair[1].vec_distance);
+        }
+        let scoped = store.search_dense(&probe, 6, Some("notes")).unwrap();
+        let expected: Vec<&str> = global
+            .iter()
+            .filter(|h| h.rel_path.starts_with("notes/"))
+            .map(|h| h.node_id.as_str())
+            .collect();
+        assert_eq!(ids(&scoped), expected);
+        assert!(scoped.len() <= 6);
+
+        // Edges: the rows offered are counted, the stage holds them
+        // collapsed onto the primary key.
+        let mut rows = vec![
+            edge(
+                "api.py::handle_search",
+                "notes/search.py::rank_notes",
+                "calls",
+                0.5,
+            ),
+            edge(
+                "api.py::handle_search",
+                "notes/search.py::rank_notes",
+                "calls",
+                0.7,
+            ),
+            edge(
+                "api.py::module",
+                "notes/store.py::NoteStore",
+                "imports",
+                1.0,
+            ),
+        ]
+        .into_iter();
+        assert_eq!(store.replace_edges(&mut rows).unwrap(), 3);
+        store.set_hubs(&["api.py::module"]).unwrap();
+        store.set_meta("phase2_completed", &json!(true)).unwrap();
+        (store, checks)
+    })
+    .await
+    .unwrap();
+    assert!(checks[0] > 0);
+
+    let build_id = {
+        let parts_store = store;
+        // A stop fails the next call with the stop text.
+        stop.request();
+        let (store, failed) = tokio::task::spawn_blocking(move || {
+            let mut store = parts_store;
+            let failed = store.node_count().err();
+            (store, failed)
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            failed.map(|e| e.message().to_owned()),
+            Some(STOPPED.to_owned())
+        );
+        let parts = store.into_parts();
+        assert_eq!(parts.hubs, ["api.py::module"]);
+        assert_eq!(parts.meta, [("phase2_completed".to_owned(), json!(true))]);
+        let id = parts.build.build_id().to_owned();
+        parts.build.abandon().await.unwrap();
+        id
+    };
+    let edges: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM deepwiki_build.wiki_edges WHERE build_id = $1")
+            .bind(&build_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(edges, 0, "the abandoned build took its edges along");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn replaced_edges_are_collapsed_and_clusters_written() {
+    let Some(pool) = storage_common::fresh_database("topology_writes").await else {
+        return;
+    };
+    let space = BuildSpace::new(pool.clone(), "topology-test");
+    let mut build = space.begin("acme--notes--main").await.unwrap();
+    build.stage_nodes(storage_common::corpus()).await.unwrap();
+    let build_id = build.build_id().to_owned();
+    let store = PgTopologyStore::new(build, Handle::current(), StopSignal::default());
+    let store = tokio::task::spawn_blocking(move || {
+        let mut store = store;
+        let mut rows = vec![
+            edge(
+                "api.py::handle_search",
+                "notes/search.py::rank_notes",
+                "calls",
+                0.5,
+            ),
+            edge(
+                "api.py::handle_search",
+                "notes/search.py::rank_notes",
+                "calls",
+                0.7,
+            ),
+            edge(
+                "api.py::module",
+                "notes/store.py::NoteStore",
+                "imports",
+                0.0,
+            ),
+        ]
+        .into_iter();
+        assert_eq!(store.replace_edges(&mut rows).unwrap(), 3);
+        store
+    })
+    .await
+    .unwrap();
+    let mut staged: Vec<(String, f32)> = sqlx::query_as(
+        "SELECT rel_type, weight FROM deepwiki_build.wiki_edges WHERE build_id = $1",
+    )
+    .bind(&build_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    staged.sort_by(|a, b| a.0.cmp(&b.0));
+    // The last weight of the parallel pair; a zero weight is 1.0.
+    assert_eq!(
+        staged,
+        [
+            ("calls".to_owned(), 0.7_f32),
+            ("imports".to_owned(), 1.0_f32)
+        ]
+    );
+
+    let mut build = store.into_parts().build;
+    let written = build
+        .set_clusters(&[
+            ("api.py::module".to_owned(), Some(2), Some(5)),
+            ("README.md::module".to_owned(), Some(0), None),
+        ])
+        .await
+        .unwrap();
+    assert_eq!(written, 2);
+    // Sorted here, in byte order: the server's order depends on its
+    // collation (en_US.utf8 puts "api…" before "README…").
+    let mut clusters: Vec<(String, Option<i32>, Option<i32>)> = sqlx::query_as(
+        "SELECT node_id, macro_cluster, micro_cluster FROM deepwiki_build.wiki_nodes \
+         WHERE build_id = $1 AND macro_cluster IS NOT NULL",
+    )
+    .bind(&build_id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    clusters.sort();
+    assert_eq!(
+        clusters,
+        [
+            ("README.md::module".to_owned(), Some(0), None),
+            ("api.py::module".to_owned(), Some(2), Some(5)),
+        ]
+    );
+    build.abandon().await.unwrap();
+}
+
+/// A deterministic pseudo-random stream (64-bit LCG).
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self) -> f64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        #[allow(clippy::cast_precision_loss)]
+        let unit = (self.0 >> 11) as f64 / (1_u64 << 53) as f64;
+        unit * 2.0 - 1.0
+    }
+}
+
+fn setting(name: &str, default: usize) -> usize {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
+/// The in-process dense search against the full-scan SQL query, on a
+/// medium synthetic build: `DEEPWIKI_DENSE_NODES` nodes (default 2000) of
+/// `DEEPWIKI_DENSE_DIMENSIONS` (default 64) in 20 directories, with
+/// repeated vectors (exact ties, broken by node id) and near-duplicates.
+/// Every probe, `k` and prefix gives the same hits, row for row and bit for
+/// bit. The two paths are timed over the same probes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[allow(clippy::too_many_lines)]
+async fn the_in_process_dense_search_is_the_sql_search() {
+    let Some(pool) = storage_common::fresh_database("topology_dense").await else {
+        return;
+    };
+    let nodes = setting("DEEPWIKI_DENSE_NODES", 2000);
+    let dimensions = setting("DEEPWIKI_DENSE_DIMENSIONS", 64);
+    let probes = setting("DEEPWIKI_DENSE_PROBES", 60);
+    let space = BuildSpace::new(pool.clone(), "topology-dense");
+    let mut build = space.begin("acme--dense--main").await.unwrap();
+    let mut random = Lcg(42);
+    let mut rows = Vec::with_capacity(nodes);
+    let mut vectors: Vec<(String, Vec<f64>)> = Vec::with_capacity(nodes);
+    for i in 0..nodes {
+        let directory = format!("pkg{:02}/sub{}", i % 20, i % 3);
+        let id = format!("{directory}/m{i}.py::f{i}");
+        let vector: Vec<f64> = match i % 10 {
+            // An exact copy of an earlier vector: a tie.
+            7 if i > 10 => vectors[i - 7].1.clone(),
+            // A near-duplicate of an earlier vector.
+            8 if i > 10 => vectors[i - 3]
+                .1
+                .iter()
+                .map(|v| v + random.next() * 1e-6)
+                .collect(),
+            _ => (0..dimensions).map(|_| random.next()).collect(),
+        };
+        rows.push(elitea_deepwiki_engine::storage::rows::IndexNode {
+            node_id: id.clone(),
+            rel_path: format!("{directory}/m{i}.py"),
+            file_name: format!("m{i}.py"),
+            language: "python".to_owned(),
+            symbol_name: format!("f{i}"),
+            symbol_type: "function".to_owned(),
+            source_text: format!("def f{i}(): pass"),
+            ..Default::default()
+        });
+        vectors.push((id, vector));
+    }
+    build.stage_nodes(rows).await.unwrap();
+    build
+        .stage_embeddings(vectors.iter().map(|(id, v)| (id.as_str(), v.as_slice())))
+        .await
+        .unwrap();
+    assert!(build.refresh_statistics().await);
+    let mut queries: Vec<Vec<f64>> = Vec::new();
+    for p in 0..probes {
+        queries.push(if p % 3 == 0 {
+            // A stored vector (distance 0, and its copies tie at 0).
+            vectors[(p * 7 + 7) % nodes].1.clone()
+        } else {
+            (0..dimensions).map(|_| random.next()).collect()
+        });
+    }
+    let store = PgTopologyStore::new(build, Handle::current(), StopSignal::default());
+    let (store, timings) = tokio::task::spawn_blocking(move || {
+        let mut store = store;
+        let cases: Vec<(usize, Option<&str>)> = vec![
+            (20, None),
+            (20, Some("pkg03")),
+            (20, Some("pkg03/sub1")),
+            (1, None),
+            (5, Some("pkg1")),
+            (nodes + 5, Some("pkg07")),
+        ];
+        let started = std::time::Instant::now();
+        let mut in_process = Vec::new();
+        for query in &queries {
+            for (k, prefix) in &cases {
+                in_process.push(store.search_dense(query, *k, *prefix).unwrap());
+            }
+        }
+        let process_time = started.elapsed();
+        let started = std::time::Instant::now();
+        let mut in_database = Vec::new();
+        for query in &queries {
+            for (k, prefix) in &cases {
+                in_database.push(store.search_dense_in_database(query, *k, *prefix).unwrap());
+            }
+        }
+        let database_time = started.elapsed();
+        assert_eq!(in_process.len(), in_database.len());
+        for (index, (a, b)) in in_process.iter().zip(&in_database).enumerate() {
+            assert_eq!(a, b, "search {index} differs");
+        }
+        // The fixture has ties at distance 0 and directory-scoped hits.
+        assert!(in_process.iter().any(|hits| hits.len() > 1
+            && hits[0].vec_distance == Some(0.0)
+            && hits[1].vec_distance == Some(0.0)));
+        assert!(in_process.iter().any(Vec::is_empty));
+        // A query of another dimension fails as pgvector fails.
+        assert!(store.search_dense(&[0.5; 3], 5, None).is_err());
+        (store, (process_time, database_time))
+    })
+    .await
+    .unwrap();
+    let searches = probes * 6;
+    eprintln!(
+        "dense search, {nodes} nodes x {dimensions} dimensions, {searches} searches: in process (vectors read once) {:?}, full SQL scan {:?}",
+        timings.0, timings.1
+    );
+    store.into_parts().build.abandon().await.unwrap();
+}

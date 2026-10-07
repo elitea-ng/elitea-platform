@@ -73,6 +73,12 @@ export const getGetClientDiscoveryResponseMock = (
     require_device_lock: faker.datatype.boolean(),
     offline_enabled: faker.datatype.boolean(),
     min_client_version: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    allow_share_out: faker.datatype.boolean(),
+    allow_share_in: faker.datatype.boolean(),
+    allow_cloud_stt: faker.datatype.boolean(),
+    notification_preview: faker.string.alpha({ length: { min: 10, max: 20 } }),
+    allow_notification_actions: faker.datatype.boolean(),
+    allow_system_surfaces: faker.datatype.boolean(),
   },
   min_client_version: {
     [faker.string.alphanumeric(5)]: faker.string.alpha({

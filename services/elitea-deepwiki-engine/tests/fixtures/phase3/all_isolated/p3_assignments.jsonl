@@ -1,0 +1,12 @@
+{"node_id": "py::hub.py::H", "macro_cluster": 4, "micro_cluster": 1, "is_hub": true, "hub_assignment": "4"}
+{"node_id": "py::pkg0/m0.py::X0", "macro_cluster": 4, "micro_cluster": 1, "is_hub": false, "hub_assignment": null}
+{"node_id": "py::pkg0/m2.py::X0", "macro_cluster": 2, "micro_cluster": 0, "is_hub": false, "hub_assignment": null}
+{"node_id": "py::pkg0/m2.py::X1", "macro_cluster": 2, "micro_cluster": 0, "is_hub": false, "hub_assignment": null}
+{"node_id": "py::pkg0/m2.py::X2", "macro_cluster": 2, "micro_cluster": 0, "is_hub": false, "hub_assignment": null}
+{"node_id": "py::pkg0/m4.py::X0", "macro_cluster": 4, "micro_cluster": 0, "is_hub": false, "hub_assignment": null}
+{"node_id": "py::pkg0/m4.py::X1", "macro_cluster": 4, "micro_cluster": 0, "is_hub": false, "hub_assignment": null}
+{"node_id": "py::pkg1/m1.py::X0", "macro_cluster": 1, "micro_cluster": 0, "is_hub": false, "hub_assignment": null}
+{"node_id": "py::pkg1/m1.py::X1", "macro_cluster": 1, "micro_cluster": 0, "is_hub": false, "hub_assignment": null}
+{"node_id": "py::pkg1/m3.py::X0", "macro_cluster": 3, "micro_cluster": 0, "is_hub": false, "hub_assignment": null}
+{"node_id": "py::pkg9/two.py::P", "macro_cluster": 5, "micro_cluster": 0, "is_hub": false, "hub_assignment": null}
+{"node_id": "py::pkg9/two.py::Q", "macro_cluster": 5, "micro_cluster": 0, "is_hub": false, "hub_assignment": null}

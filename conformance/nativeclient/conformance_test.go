@@ -29,6 +29,7 @@ var scenarios = []string{
 	"conversation_sync",
 	"notification_sync",
 	"chat_enrichment",
+	"contract_1_3",
 	"min_client_version",
 	"device_revocation",
 }
@@ -54,6 +55,7 @@ func TestNativeClientConformance(t *testing.T) {
 		"conversation_sync":    state.conversationSync,
 		"notification_sync":    state.notificationSync,
 		"chat_enrichment":      state.chatEnrichment,
+		"contract_1_3":         state.contract13,
 		"min_client_version":   state.minClientVersion,
 		"device_revocation":    state.deviceRevocation,
 	}

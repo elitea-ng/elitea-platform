@@ -110,6 +110,7 @@ on:
       # did not run the scan that guards it: the exemption in
       # .github/image-scan-exempt.txt was re-measured only by the daily run.
       - "services/elitea-deepwiki/**"
+      - "services/elitea-deepwiki-engine/**"
       - "apps/elitea-web/**"
       # The elitea-ui image builds the apps/elitea-ui submodule, so a submodule
       # pointer bump changes the image without changing a file in this tree.
@@ -143,6 +144,7 @@ on:
       - "services/elitea-subapp-host/**"
       - "services/elitea-llm-gateway/**"
       - "services/elitea-deepwiki/**"
+      - "services/elitea-deepwiki-engine/**"
       - "apps/elitea-web/**"
       - "apps/elitea-ui"
       - "deploy/docker/**"
@@ -376,6 +378,10 @@ jobs:
             target: final
             expect_type: gobinary
             blocking: true
+          # The two nginx images stay on nginx:stable-alpine, the one OS
+          # exception besides nats-box (owner decision 2026-10-06): every
+          # Debian userland carries HIGH findings with no fixed version, and
+          # these scans are blocking. See deploy/README.md, upgrade notes.
           - name: elitea-ui
             context: .
             dockerfile: ./deploy/docker/Containerfile.elitea-ui
@@ -473,6 +479,19 @@ jobs:
             build_args: ""
             expect_type: python-pkg
             blocking: false
+          # The Rust-native DeepWiki engine (ADR-0026 phase 7). Repo ROOT
+          # context: the binary embeds the service migrations from
+          # services/elitea-deepwiki, outside the crate. `rustbinary` and
+          # blocking for elitea-worker-rust's reasons: cargo-auditable makes
+          # the crate graph readable. The runtime is distroless
+          # base-nossl-debian13 plus libgcc_s: no system OpenSSL to scan.
+          - name: elitea-deepwiki-engine-native
+            context: .
+            dockerfile: ./services/elitea-deepwiki-engine/Containerfile
+            target: ""
+            build_args: ""
+            expect_type: rustbinary
+            blocking: true
 
     steps:
       - uses: actions/checkout@v7

@@ -1,0 +1,56 @@
+[package]
+name = "leiden-rs"
+version = "0.8.1"
+edition = "2024"
+description = "High-performance Leiden community detection algorithm for graphs in Rust"
+license = "MIT OR Apache-2.0"
+repository = "https://gitcode.com/lileeei/leiden-rs"
+keywords = ["community-detection", "graph", "clustering", "leiden", "modularity"]
+categories = ["algorithms", "data-structures", "science"]
+readme = "README.md"
+rust-version = "1.85"
+
+[dependencies]
+clap = { version = "4", features = ["derive"], optional = true }
+getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
+gryf = { version = "0.2", optional = true }
+petgraph = { version = "0.8", optional = true }
+rand = "0.9"
+rayon = { version = "1.10", optional = true }
+rustc-hash = "2"
+serde = { version = "1", features = ["derive"], optional = true }
+thiserror = "2"
+wasm-bindgen = { version = "0.2", optional = true }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+fa-leiden-cd = "0.1"
+flate2 = "1"
+ureq = "3"
+
+[[bench]]
+name = "leiden_bench"
+harness = false
+
+[[bench]]
+name = "snap_bench"
+harness = false
+required-features = ["snap-tests"]
+
+[[bin]]
+name = "leiden-cli"
+required-features = ["cli"]
+
+[[example]]
+name = "petgraph"
+required-features = ["petgraph"]
+
+[features]
+default = ["cli", "rayon", "gryf"]
+cli = ["dep:clap"]
+gryf = ["dep:gryf"]
+petgraph = ["dep:petgraph"]
+rayon = ["dep:rayon"]
+serde = ["dep:serde"]
+snap-tests = []
+wasm = ["dep:wasm-bindgen", "dep:getrandom"]

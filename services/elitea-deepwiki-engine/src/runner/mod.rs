@@ -7,9 +7,12 @@
 //!   that proves the host → socket → composition → upload path without a
 //!   model or a git host. The browser journeys run against it.
 //!
-//! The analysis engine itself (`native`) arrives in later ADR-0026 phases.
+//! * [`Runner::Native`] — the Rust engine (ADR-0026): `generate_wiki` in a
+//!   worker child process ([`native`]); `ask`, `deep_research` and
+//!   `resolve_wiki` in this process, over PostgreSQL.
 
 pub mod fixture;
+pub mod native;
 
 use crate::errors::{EngineError, ErrorType};
 use serde_json::{Map, Value};
@@ -65,6 +68,24 @@ impl StopSignal {
     pub fn is_requested(&self) -> bool {
         self.requested.load(Ordering::SeqCst)
     }
+
+    /// Resolve once a stop is requested (at once if it already was).
+    ///
+    /// A model call awaits this beside its request, so a stop aborts a
+    /// call that may otherwise wait minutes for its first token.
+    pub async fn stopped(&self) {
+        loop {
+            let notified = self.notify.notified();
+            tokio::pin!(notified);
+            // Registered before the flag is read, so a request that lands
+            // between the two still wakes this waiter.
+            notified.as_mut().enable();
+            if self.is_requested() {
+                return;
+            }
+            notified.await;
+        }
+    }
 }
 
 /// The hooks one tool run reports through.
@@ -78,6 +99,14 @@ impl Context {
     #[must_use]
     pub fn new(lines: mpsc::UnboundedSender<Line>, stop: StopSignal) -> Self {
         Self { lines, stop }
+    }
+
+    /// The invocation's stop signal (a clone sharing the flag), for the
+    /// calls that wait on it: model requests, the clone watchdog, the
+    /// worker child's supervisor.
+    #[must_use]
+    pub fn stop_signal(&self) -> StopSignal {
+        self.stop.clone()
     }
 
     /// Report progress.
@@ -141,9 +170,9 @@ pub const EXTRA_CONTEXT_PARAM: &str = "extra_context";
 /// both keys, so a request that came through the host arrives here with
 /// nothing left to do; the version key is dropped as the Python sidecar's
 /// `consume` drops it. A sidecar called directly with attachments still in
-/// place is REFUSED rather than silently answering without them: resolving
-/// them here needs the artifact client, which lands with the native `ask`
-/// (ADR-0026 phase 6).
+/// place is REFUSED rather than silently answering without them: the
+/// engine has no artifact client, and the host is the one place that
+/// resolves them.
 ///
 /// # Errors
 ///
@@ -183,6 +212,7 @@ pub fn prepare_arguments(
 pub enum Runner {
     Unavailable,
     Fixture(fixture::FixtureRunner),
+    Native(native::NativeRunner),
 }
 
 impl Runner {
@@ -192,6 +222,7 @@ impl Runner {
         match self {
             Self::Unavailable => "unavailable",
             Self::Fixture(_) => "fixture",
+            Self::Native(_) => "native",
         }
     }
 
@@ -216,11 +247,14 @@ impl Runner {
                 ),
             )),
             Self::Fixture(runner) => runner.run(tool, arguments, context).await,
+            Self::Native(runner) => runner.run(tool, arguments, context).await,
         }
     }
 
-    /// Publish a completed generation's index. Neither runner here has one.
-    #[allow(clippy::unused_async)] // The native runner's publish is async.
+    /// Publish a completed generation's index. The fixture has none; the
+    /// native worker publishes before its result line (ADR-0026 decision 5),
+    /// so there is nothing left to do here.
+    #[allow(clippy::unused_async)] // The Python sidecar's publish was async.
     pub async fn publish(&self, _result: &Value, _context: &Context) {}
 }
 

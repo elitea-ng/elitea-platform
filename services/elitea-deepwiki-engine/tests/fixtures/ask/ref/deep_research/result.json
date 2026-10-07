@@ -1,0 +1,177 @@
+{
+  "report": "# Research Report: Notes\n\n## Executive Summary\nNotes live in `NoteStore`.\n",
+  "success": true,
+  "thinking_steps": [
+    {
+      "call_id": "call_d1",
+      "input": "{'todos': [{'content': 'Find the store', 'status': 'in_progress'}, {'content': 'Write report', 'status': 'pending'}]}",
+      "step": 1,
+      "timestamp": "2026-10-05T22:14:17.419326",
+      "tool": "write_todos",
+      "tool_call_id": "call_d1",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_d2",
+      "input": "{'query': 'note store save'}",
+      "step": 2,
+      "timestamp": "2026-10-05T22:14:17.419343",
+      "tool": "search_codebase",
+      "tool_call_id": "call_d2",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_d1",
+      "output": "Updated todo list to [{'content': 'Find the store', 'status': 'in_progress'}, {'content': 'Write report', 'status': 'pending'}]",
+      "output_length": 127,
+      "output_preview": "Updated todo list to [{'content': 'Find the store', 'status': 'in_progress'}, {'content': 'Write report', 'status': 'pending'}]",
+      "step": 3,
+      "timestamp": "2026-10-05T22:14:17.424073",
+      "tool": "write_todos",
+      "tool_call_id": "call_d1",
+      "type": "tool_result"
+    },
+    {
+      "call_id": "call_d2",
+      "output": "## Search Results for: note store save\n\nFound 10 relevant items:\n\n### [1] app/models.py (unified_db_fts)\n**Symbol:** `save` (method)\n**Lines:** 19-23\n\n```\n    def save(self, note):\n        if self.size() >= MAX_NOTES:\n            raise ValueError(\"full\")\n        self.items[note.note_id] = note\n        return note\n```\n\n---\n\n### [2] app/handlers.py (unified_db_fts)\n**Symbol:** `handle_create` (function)\n**Lines:** 13-15\n\n```\ndef handle_create(note_id, body):\n    \"\"\"Create a note.\"\"\"\n    return STO",
+      "output_length": 2345,
+      "output_preview": "## Search Results for: note store save\n\nFound 10 relevant items:\n\n### [1] app/models.py (unified_db_fts)\n**Symbol:** `save` (method)\n**Lines:** 19-23\n\n```\n    def save(self, note):\n        if self.size() >= MAX_NOTES:\n            raise ValueError(\"full\")\n        self.items[note.note_id] = note\n     ...",
+      "step": 4,
+      "timestamp": "2026-10-05T22:14:17.424091",
+      "tool": "search_codebase",
+      "tool_call_id": "call_d2",
+      "type": "tool_result"
+    },
+    {
+      "call_id": "call_e1",
+      "input": "{'symbol_name': 'NoteStore'}",
+      "step": 5,
+      "timestamp": "2026-10-05T22:14:17.429457",
+      "tool": "get_symbol_relationships",
+      "tool_call_id": "call_e1",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_e2",
+      "input": "{'query': 'handle_search'}",
+      "step": 6,
+      "timestamp": "2026-10-05T22:14:17.429469",
+      "tool": "search_graph",
+      "tool_call_id": "call_e2",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_e3",
+      "input": "{'file_path': '/findings/store.md', 'content': 'NoteStore saves notes.\\nSecond line.'}",
+      "step": 7,
+      "timestamp": "2026-10-05T22:14:17.429474",
+      "tool": "write_file",
+      "tool_call_id": "call_e3",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_e1",
+      "output": "# Relationships for `NoteStore`\n\n**Matched Node:** `python::models::NoteStore`\n**Outgoing:** 6, **Incoming:** 9\n\n\n## Outgoing Relationships\n- `NoteStore` → `BaseStore` (class) [inheritance]\n- `NoteStore` → `BaseStore` (class) [references]\n- `NoteStore` → `save` (method) [defines]\n- `NoteStore` → `load` (method) [defines]\n- `NoteStore` → `__file__` (module) [component_bridge]\n- `NoteStore` → `__file__` (module) [component_bridge]\n\n## Incoming Relationships\n- `handle_create` (function) → `NoteStor",
+      "output_length": 965,
+      "output_preview": "# Relationships for `NoteStore`\n\n**Matched Node:** `python::models::NoteStore`\n**Outgoing:** 6, **Incoming:** 9\n\n\n## Outgoing Relationships\n- `NoteStore` → `BaseStore` (class) [inheritance]\n- `NoteStore` → `BaseStore` (class) [references]\n- `NoteStore` → `save` (method) [defines]\n- `NoteStore` → `lo...",
+      "step": 8,
+      "timestamp": "2026-10-05T22:14:17.433577",
+      "tool": "get_symbol_relationships",
+      "tool_call_id": "call_e1",
+      "type": "tool_result"
+    },
+    {
+      "call_id": "call_e2",
+      "output": "## Graph Search: handle_search\n\nFound 2 symbols with relationships:\n### [1] `ROUTES` (constant)\n**File:** app/handlers.py  **Lines:** 7-7\n\n```\nROUTES = {\n    \"create\": \"handle_create\",\n    \"search\": \"handle_search\",\n}\n```\n\n**Relationships:**\n  - `handle_create` -> `ROUTES` [lexical_link]\n  - `handle_search` -> `ROUTES` [hybrid_link]\n  - `dispatch` -> `ROUTES` [references]\n  - `Quick start` -> `ROUTES` [proximity]\n  - `Architecture` -> `ROUTES` [references]\n\n---\n\n### [2] `handle_search` (function",
+      "output_length": 895,
+      "output_preview": "## Graph Search: handle_search\n\nFound 2 symbols with relationships:\n### [1] `ROUTES` (constant)\n**File:** app/handlers.py  **Lines:** 7-7\n\n```\nROUTES = {\n    \"create\": \"handle_create\",\n    \"search\": \"handle_search\",\n}\n```\n\n**Relationships:**\n  - `handle_create` -> `ROUTES` [lexical_link]\n  - `handle...",
+      "step": 9,
+      "timestamp": "2026-10-05T22:14:17.433593",
+      "tool": "search_graph",
+      "tool_call_id": "call_e2",
+      "type": "tool_result"
+    },
+    {
+      "call_id": "call_e3",
+      "output": "Updated file /findings/store.md",
+      "output_length": 31,
+      "output_preview": "Updated file /findings/store.md",
+      "step": 10,
+      "timestamp": "2026-10-05T22:14:17.433601",
+      "tool": "write_file",
+      "tool_call_id": "call_e3",
+      "type": "tool_result"
+    },
+    {
+      "call_id": "call_f1",
+      "input": "{'path': '/findings'}",
+      "step": 11,
+      "timestamp": "2026-10-05T22:14:17.439326",
+      "tool": "ls",
+      "tool_call_id": "call_f1",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_f2",
+      "input": "{'file_path': '/findings/store.md'}",
+      "step": 12,
+      "timestamp": "2026-10-05T22:14:17.439338",
+      "tool": "read_file",
+      "tool_call_id": "call_f2",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_f3",
+      "input": "{'reflection': 'Enough.'}",
+      "step": 13,
+      "timestamp": "2026-10-05T22:14:17.439342",
+      "tool": "think",
+      "tool_call_id": "call_f3",
+      "type": "tool_call"
+    },
+    {
+      "call_id": "call_f3",
+      "output": "✓ Thinking recorded.\n\nReflection:\nEnough.",
+      "output_length": 41,
+      "output_preview": "✓ Thinking recorded.\n\nReflection:\nEnough.",
+      "step": 14,
+      "timestamp": "2026-10-05T22:14:17.441739",
+      "tool": "think",
+      "tool_call_id": "call_f3",
+      "type": "tool_result"
+    },
+    {
+      "call_id": "call_f1",
+      "output": "['/findings/store.md']",
+      "output_length": 22,
+      "output_preview": "['/findings/store.md']",
+      "step": 15,
+      "timestamp": "2026-10-05T22:14:17.441748",
+      "tool": "ls",
+      "tool_call_id": "call_f1",
+      "type": "tool_result"
+    },
+    {
+      "call_id": "call_f2",
+      "output": "1  NoteStore saves notes.\n2  Second line.",
+      "output_length": 41,
+      "output_preview": "1  NoteStore saves notes.\n2  Second line.",
+      "step": 16,
+      "timestamp": "2026-10-05T22:14:17.441752",
+      "tool": "read_file",
+      "tool_call_id": "call_f2",
+      "type": "tool_result"
+    }
+  ],
+  "todos": [
+    {
+      "content": "Find the store",
+      "status": "in_progress"
+    },
+    {
+      "content": "Write report",
+      "status": "pending"
+    }
+  ],
+  "total_events": 19
+}

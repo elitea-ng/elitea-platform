@@ -1,0 +1,1 @@
+{"node_id": "cpp::block::leveldb.DecodeEntry", "question": "How does the code read the three length fields at the start of each block entry, including the fast path for when all three values are small enough to fit in a single byte each?", "reason": "names the file"}

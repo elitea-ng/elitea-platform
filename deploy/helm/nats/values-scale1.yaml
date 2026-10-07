@@ -32,7 +32,7 @@ nats:
   container:
     image:
       repository: nats
-      tag: "2.12.0-alpine"
+      tag: "2.12.0"
     merge:
       # A single-node JetStream store loses its un-persisted tail on restart;
       # give it a moment to flush and keep memory modest.

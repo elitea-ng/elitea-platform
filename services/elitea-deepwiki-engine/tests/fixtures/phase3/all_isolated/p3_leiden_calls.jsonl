@@ -1,0 +1,2 @@
+{"level": "page", "partition_type": "RBConfigurationVertexPartition", "resolution": 1.0, "seed": 42, "nodes": ["py::pkg0/m2.py::X0", "py::pkg0/m2.py::X1", "py::pkg0/m2.py::X2"], "edges": [[1, 2, 1.0], [0, 1, 1.0]], "membership": [0, 0, 0], "quality": 0.0}
+{"level": "page", "partition_type": "RBConfigurationVertexPartition", "resolution": 1.0, "seed": 42, "nodes": ["py::pkg0/m4.py::X0", "py::pkg0/m4.py::X1"], "edges": [[0, 1, 1.0]], "membership": [0, 0], "quality": 0.0}

@@ -20,6 +20,9 @@
 # operations a native client depends on are described, so their thirteen ids
 # came off.
 #
+# 49 -> 48 (client contract 1.3): the agent-execution stop,
+# DELETE /elitea_core/task/..., is described as cancelChatExecution.
+#
 # RULES
 # - The list may only shrink. Describe the endpoint in v2.yaml, then delete
 #   its line here. The test fails on a line the spec now covers.
@@ -70,7 +73,6 @@ folder.delete
 folder.list
 folder.pinUpdate
 folder.update
-pipelines.stopLlmTask
 toolkits.deleteIndexItem
 toolkits.getIndexesList
 toolkits.startIndexExecution

@@ -629,6 +629,14 @@ for rel in (".github/workflows", "deploy", "scripts"):
 check("CI, compose and the test scripts run the chart's NATS image (found some)", seen, seen)
 for tag, files in sorted(seen.items()):
     check(f"nats:{tag} is the chart's pin nats:{pin}", tag == pin, sorted(files))
+# The pin is the scratch image: nothing can exec inside the server container.
+# Each compose file that runs the server must therefore carry no healthcheck on
+# it, and must probe readiness from the nats-health sidecar instead.
+for rel in ("deploy/docker-compose.yml", "deploy/docker-compose.e2e-standalone.yml", "deploy/docker-compose.standalone-full.yml"):
+    svcs = yaml.safe_load(open(root / rel))["services"]
+    check(f"{rel}: the scratch NATS server carries no in-container healthcheck", "healthcheck" not in svcs.get("nats", {}), svcs.get("nats", {}).get("healthcheck"))
+    hc = svcs.get("nats-health", {}).get("healthcheck", {}).get("test", [])
+    check(f"{rel}: nats-health probes http://nats:8222/healthz from outside", any("http://nats:8222/healthz" in str(t) for t in hc), hc)
 
 # ── the Argo CD sample ────────────────────────────────────────────────────
 def app(f):

@@ -125,6 +125,27 @@ pub fn build_index_graph_parsed(
     (graph, report, phase1c)
 }
 
+/// [`build_index_graph_parsed`], failed when a parser's worker pool could
+/// not start (its files would otherwise all carry a parse error and the
+/// index would be built from the rest).
+///
+/// # Errors
+///
+/// The pool's failure text.
+pub fn try_build_index_graph_parsed(
+    repo_root: &str,
+    discovery: &Discovery,
+    flags: &super::flags::Phase1cFlags,
+) -> Result<(CodeGraph, BuildReport, super::phase1c::Phase1cReport), String> {
+    let (built, failure) = crate::parsers::limits::with_pool_failures(|| {
+        build_index_graph_parsed(repo_root, discovery, flags)
+    });
+    match failure {
+        Some(failure) => Err(failure),
+        None => Ok(built),
+    }
+}
+
 /// Parse every discovered file with this engine's own parsers
 /// ([`crate::parsers::parser_for`]); languages without a parser are left
 /// out, as Python skips C and PHP.

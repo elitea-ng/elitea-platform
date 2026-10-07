@@ -132,11 +132,16 @@ SELECT EXISTS (
       ON binding.execution_id = job.execution_id
      AND binding.generation = job.generation
      AND binding.capability_id = job.capability_id
+    LEFT JOIN chat_conversations AS conversation
+      ON conversation.uuid::text = binding.client_stream_id
     WHERE binding.client_message_id = $1::text
       AND job.tenant_id = $2::integer::text
       AND job.resource_project_id = $2::integer
       AND job.projection_project_id = $2::integer
-      AND job.actor_id = $3::bigint::text
+      AND (
+          job.actor_id = $3::bigint::text
+          OR conversation.author_id = $3::bigint
+      )
       AND job.capability_id IN (
           'agent.execute.application.v1',
           'agent.execute.adhoc.v1'
@@ -151,6 +156,11 @@ type IsCurrentAgentCancellationReplayParams struct {
 	ActorUserID       int64  `db:"actor_user_id" json:"actor_user_id"`
 }
 
+// A replay admits the same principals CancelCurrentAgentExecution does: the
+// user who asked (the job's actor) and the conversation's author. A stop of a
+// turn with no output deletes the question and the answer, so the author is
+// resolved through the binding's client_stream_id, which admission pins to the
+// conversation uuid, not through the deleted message rows.
 func (q *Queries) IsCurrentAgentCancellationReplay(ctx context.Context, arg IsCurrentAgentCancellationReplayParams) (bool, error) {
 	row := q.db.QueryRow(ctx, isCurrentAgentCancellationReplay, arg.ResponseMessageID, arg.ProjectID, arg.ActorUserID)
 	var exists bool

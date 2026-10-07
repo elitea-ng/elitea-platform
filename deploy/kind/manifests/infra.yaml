@@ -32,7 +32,9 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: docker.io/pgvector/pgvector:0.8.5-pg16
+          # Debian 13. The data volume is an emptyDir, so a new image starts
+          # on a fresh initdb and needs no collation repair.
+          image: docker.io/pgvector/pgvector:0.8.5-pg16-trixie
           imagePullPolicy: IfNotPresent
           env:
             - { name: POSTGRES_USER, value: elitea }

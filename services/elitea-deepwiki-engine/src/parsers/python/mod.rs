@@ -26,7 +26,7 @@
 mod ast;
 mod extract;
 mod lower;
-mod text;
+pub(crate) mod text;
 mod unparse;
 
 #[cfg(test)]
@@ -67,7 +67,7 @@ impl LanguageParser for PythonParser {
 
 /// The stack of each parsing thread (address space; only touched pages
 /// are committed).
-const STACK_SIZE: usize = 256 << 20;
+const STACK_SIZE: usize = limits::LARGEST_PARSER_STACK;
 
 /// One file after pass 1, with its tree kept for the re-extraction.
 pub(crate) struct Parsed {

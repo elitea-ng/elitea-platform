@@ -8,6 +8,9 @@
 use crate::ingest::IngestSettings;
 use crate::ingest::egress::EgressPolicy;
 use crate::ingest::limits::IngestLimits;
+use crate::llm::embeddings::{DEFAULT_BATCH_SIZE, DEFAULT_CONCURRENCY, MIN_SPLIT_TOKENS};
+use crate::llm::tokens::EMBEDDING_CTX_LENGTH;
+use crate::storage::build::{MIN_STALE_AFTER, PublishSettings};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -20,6 +23,36 @@ pub const DEFAULT_SOCKET: &str = "/run/deepwiki/engine.sock";
 /// Python's `scratch_path` default.
 pub const DEFAULT_SCRATCH_PATH: &str = "/tmp/deepwiki";
 
+/// The build-space owner when neither `ELITEA_DEEPWIKI_BUILD_OWNER` nor
+/// `HOSTNAME` is set. Every such engine would share it, so it is refused
+/// when a database is configured (the reconciliation is keyed by owner).
+pub const DEFAULT_BUILD_OWNER: &str = "elitea-deepwiki-engine";
+
+/// `ELITEA_DEEPWIKI_QUERY_POOL_SIZE`'s default: the database connections
+/// the in-process query tools share.
+pub const DEFAULT_QUERY_POOL_SIZE: u32 = 8;
+/// The largest `ELITEA_DEEPWIKI_QUERY_POOL_SIZE`.
+pub const MAX_QUERY_POOL_SIZE: u32 = 256;
+
+/// A database URL. It can carry a password, so its `Debug` form is
+/// redacted and nothing formats it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DatabaseUrl(String);
+
+impl DatabaseUrl {
+    /// The URL itself, for the connection only.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for DatabaseUrl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DatabaseUrl(<redacted>)")
+    }
+}
+
 /// A setting that cannot be used.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("{0}")]
@@ -30,6 +63,101 @@ pub struct ConfigError(pub String);
 pub enum RunnerKind {
     Unavailable,
     Fixture,
+    /// The Rust engine itself (ADR-0026): `generate_wiki` in a worker
+    /// child process. Needs `ELITEA_DEEPWIKI_DATABASE_URL`.
+    Native,
+}
+
+/// The address-space cap of a generation worker when neither the setting
+/// nor a cgroup memory limit gives one (16 GiB).
+///
+/// `RLIMIT_AS` counts reserved address space, not resident memory: thread
+/// stacks (the Python parser pool reserves 256 MiB per thread) and malloc
+/// arenas count in full. The cap is therefore well above the resident
+/// peak of a large repository (1.3–3.2 GB measured on elitea-platform);
+/// it stops a runaway, it does not size the pod.
+pub const DEFAULT_WORKER_MEMORY_BYTES: u64 = 16 << 30;
+
+/// The share of the container's memory limit (cgroup v2 `memory.max`) the
+/// default address-space cap takes: 85 %, the rest for the parent and the
+/// page cache.
+pub const CGROUP_MEMORY_PERCENT: u64 = 85;
+
+/// The default address-space cap: 85 % of the cgroup memory limit when one
+/// is set, at least [`MIN_WORKER_MEMORY_BYTES`]; else
+/// [`DEFAULT_WORKER_MEMORY_BYTES`].
+#[must_use]
+pub fn default_worker_memory(cgroup_memory_max: Option<u64>) -> u64 {
+    cgroup_memory_max.map_or(DEFAULT_WORKER_MEMORY_BYTES, |limit| {
+        (limit / 100)
+            .saturating_mul(CGROUP_MEMORY_PERCENT)
+            .max(MIN_WORKER_MEMORY_BYTES)
+    })
+}
+
+/// The smallest address-space cap the settings accept (1 GiB): below it a
+/// worker cannot even start its thread pools.
+pub const MIN_WORKER_MEMORY_BYTES: u64 = 1 << 30;
+
+/// The default CPU-time cap of a generation worker (4 h of CPU).
+pub const DEFAULT_WORKER_CPU_SECONDS: u64 = 4 * 3600;
+
+/// The smallest CPU-time cap the settings accept (1 min).
+pub const MIN_WORKER_CPU_SECONDS: u64 = 60;
+
+/// The most worker threads a generation may use.
+pub const MAX_WORKER_THREADS: u64 = 256;
+
+/// The address space each worker thread is sized at: the largest parser
+/// stack (the Python parser's 256 MiB), which every thread of a parser
+/// pool reserves.
+pub const WORKER_THREAD_RESERVE_BYTES: u64 = crate::parsers::limits::LARGEST_PARSER_STACK as u64;
+
+/// The address space a worker needs besides its parser stacks (1 GiB):
+/// the heap, the malloc arenas, the runtime's own threads.
+pub const WORKER_MEMORY_HEADROOM_BYTES: u64 = 1 << 30;
+
+/// The address space `threads` parser threads need:
+/// `threads × 256 MiB + 1 GiB`.
+#[must_use]
+pub fn worker_memory_needed(threads: u64) -> u64 {
+    threads
+        .saturating_mul(WORKER_THREAD_RESERVE_BYTES)
+        .saturating_add(WORKER_MEMORY_HEADROOM_BYTES)
+}
+
+/// The limits of one `generate_wiki` worker child process (ADR-0026
+/// decision 10). The child applies them to itself before it reads its
+/// request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkerSettings {
+    /// `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES`: `RLIMIT_AS`, default 85 % of
+    /// the cgroup memory limit, else 16 GiB ([`default_worker_memory`]).
+    pub memory_bytes: u64,
+    /// `ELITEA_DEEPWIKI_WORKER_CPU_SECONDS`: `RLIMIT_CPU` (soft; the hard
+    /// limit is 10 s above it), default 4 h.
+    pub cpu_seconds: u64,
+    /// `ELITEA_DEEPWIKI_WORKER_THREADS`: the child's parser and runtime
+    /// threads (`RAYON_NUM_THREADS`, the tokio workers), default the
+    /// available parallelism, at most 8. Each parser thread reserves its
+    /// stack in the address space the cap counts.
+    pub threads: usize,
+}
+
+impl Default for WorkerSettings {
+    fn default() -> Self {
+        Self {
+            memory_bytes: DEFAULT_WORKER_MEMORY_BYTES,
+            cpu_seconds: DEFAULT_WORKER_CPU_SECONDS,
+            threads: default_worker_threads(),
+        }
+    }
+}
+
+/// The available parallelism, at most 8.
+#[must_use]
+pub fn default_worker_threads() -> usize {
+    std::thread::available_parallelism().map_or(4, |n| n.get().min(8))
 }
 
 /// Everything the sidecar reads from the environment.
@@ -41,6 +169,96 @@ pub struct Settings {
     /// Repository ingest: the git-host allowlist, the per-job limits and
     /// the scratch root (see `ingest::limits` for the defaults).
     pub ingest: IngestSettings,
+    /// `ELITEA_DEEPWIKI_DATABASE_URL`: the `deepwiki` database (the Python
+    /// service's variable). Unset: no index storage, no reconciliation.
+    pub database_url: Option<DatabaseUrl>,
+    /// `ELITEA_DEEPWIKI_BUILD_OWNER`, else `HOSTNAME` (the pod name): the
+    /// identity a build is recorded under. It must survive a restart of
+    /// this process and differ between replicas, because the startup
+    /// reconciliation deletes this owner's builds from earlier runs. With a
+    /// database configured, one of the two must be set
+    /// ([`DEFAULT_BUILD_OWNER`] is refused).
+    pub build_owner: String,
+    /// `ELITEA_DEEPWIKI_BUILD_STALE_SECONDS` (default 2 h, at least 300):
+    /// the sweep deletes a build whose heartbeat is older.
+    pub build_stale_after: Duration,
+    /// `ELITEA_DEEPWIKI_PUBLISH_*`: the publish transaction's timeouts,
+    /// `work_mem` and concurrency.
+    pub publish: PublishSettings,
+    /// The model client's process-wide settings.
+    pub model: ModelEnvSettings,
+    /// The `generate_wiki` worker child's limits.
+    pub worker: WorkerSettings,
+    /// `ELITEA_DEEPWIKI_QUERY_POOL_SIZE` (default 8, at most 256): the
+    /// connections of the pool that `ask`, `deep_research` and
+    /// `resolve_wiki` share in the native runner. A query waits for a free
+    /// connection (30 s), so this also caps their concurrent reads. The
+    /// clean-up of a killed worker's build has its own pool.
+    pub query_pool_size: u32,
+}
+
+/// What the environment decides about model calls; the invocation's
+/// `llm_settings` decide the rest (`llm::settings`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelEnvSettings {
+    /// `ELITEA_DEEPWIKI_TLS_CA_FILE`: a PEM bundle trusted in addition to
+    /// the platform roots, for a gateway behind a private CA. The Go host
+    /// reads the same variable for its callback hop.
+    pub tls_ca_file: Option<PathBuf>,
+    /// `WIKI_EMBED_BATCH_SIZE` (unprefixed: the Python indexer's name):
+    /// inputs per embedding request, default 64.
+    pub embed_batch_size: usize,
+    /// `ELITEA_DEEPWIKI_EMBED_CONCURRENCY`: embedding requests in flight,
+    /// default 4. The Python engine sent them one at a time.
+    pub embed_concurrency: usize,
+    /// `ELITEA_DEEPWIKI_EMBED_CTX_TOKENS`: the embedding window, in
+    /// `cl100k_base` tokens, default 8191 (`LangChain`'s). Set it below the
+    /// embedding model's own context when that model's tokenizer counts
+    /// more tokens than `cl100k_base` for the same text. At least
+    /// [`MIN_SPLIT_TOKENS`].
+    pub embed_ctx_tokens: usize,
+    /// `ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS`: the longest one model
+    /// stream may run, default 7200 (Python had no limit).
+    pub stream_total: Duration,
+}
+
+fn model_settings(
+    raw: &impl Fn(&str) -> Option<String>,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> Result<ModelEnvSettings, ConfigError> {
+    let batch = match lookup("WIKI_EMBED_BATCH_SIZE").filter(|v| !v.is_empty()) {
+        None => DEFAULT_BATCH_SIZE,
+        Some(text) => match text.trim().parse::<usize>() {
+            Ok(value) if value > 0 => value,
+            _ => {
+                return Err(ConfigError(format!(
+                    "WIKI_EMBED_BATCH_SIZE must be a whole number of at least 1, got '{text}'"
+                )));
+            }
+        },
+    };
+    let concurrency = positive_count(raw, "EMBED_CONCURRENCY", DEFAULT_CONCURRENCY as u64)?;
+    let ctx_tokens = positive_count(raw, "EMBED_CTX_TOKENS", EMBEDDING_CTX_LENGTH as u64)?;
+    let embed_ctx_tokens = usize::try_from(ctx_tokens)
+        .ok()
+        .filter(|tokens| *tokens >= MIN_SPLIT_TOKENS)
+        .ok_or_else(|| {
+            ConfigError(format!(
+                "{ENV_PREFIX}EMBED_CTX_TOKENS must be a whole number of at least {MIN_SPLIT_TOKENS}, got '{ctx_tokens}'"
+            ))
+        })?;
+    Ok(ModelEnvSettings {
+        tls_ca_file: raw("TLS_CA_FILE").map(PathBuf::from),
+        embed_batch_size: batch,
+        embed_concurrency: usize::try_from(concurrency)
+            .map_err(|_| ConfigError(format!("{ENV_PREFIX}EMBED_CONCURRENCY is out of range")))?,
+        embed_ctx_tokens,
+        stream_total: positive_seconds(
+            raw,
+            "MODEL_STREAM_TOTAL_SECONDS",
+            crate::llm::Timeouts::default().stream_total,
+        )?,
+    })
 }
 
 /// A whole number of at least 1, or the default when unset.
@@ -83,6 +301,149 @@ fn positive_seconds(
         .map_err(|_| ConfigError(format!("{ENV_PREFIX}{name} is out of range, got '{text}'")))
 }
 
+/// [`positive_seconds`], at most `max`.
+fn bounded_seconds(
+    raw: &impl Fn(&str) -> Option<String>,
+    name: &str,
+    default: Duration,
+    max: Duration,
+) -> Result<Duration, ConfigError> {
+    let value = positive_seconds(raw, name, default)?;
+    if value > max {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}{name} must be at most {} seconds, got {}",
+            max.as_secs(),
+            value.as_secs_f64()
+        )));
+    }
+    Ok(value)
+}
+
+/// [`positive_count`], at most `max`.
+fn bounded_count(
+    raw: &impl Fn(&str) -> Option<String>,
+    name: &str,
+    default: u32,
+    max: u32,
+) -> Result<u32, ConfigError> {
+    let value = positive_count(raw, name, u64::from(default))?;
+    u32::try_from(value)
+        .ok()
+        .filter(|v| *v <= max)
+        .ok_or_else(|| {
+            ConfigError(format!(
+                "{ENV_PREFIX}{name} must be at most {max}, got {value}"
+            ))
+        })
+}
+
+fn publish_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<PublishSettings, ConfigError> {
+    let defaults = PublishSettings::default();
+    // PostgreSQL holds a timeout in milliseconds in a 32-bit integer
+    // (about 24.8 days); a day is far beyond any publish.
+    let day = Duration::from_hours(24);
+    Ok(PublishSettings {
+        statement_timeout: bounded_seconds(
+            raw,
+            "PUBLISH_STATEMENT_TIMEOUT_SECONDS",
+            defaults.statement_timeout,
+            day,
+        )?,
+        lock_timeout: bounded_seconds(
+            raw,
+            "PUBLISH_LOCK_TIMEOUT_SECONDS",
+            defaults.lock_timeout,
+            day,
+        )?,
+        work_mem_mb: bounded_count(raw, "PUBLISH_WORK_MEM_MB", defaults.work_mem_mb, 4096)?,
+        slots: bounded_count(raw, "PUBLISH_SLOTS", defaults.slots, 64)?,
+        analyze_lock_timeout: bounded_seconds(
+            raw,
+            "PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS",
+            defaults.analyze_lock_timeout,
+            day,
+        )?,
+    })
+}
+
+/// The build owner: `ELITEA_DEEPWIKI_BUILD_OWNER`, else `HOSTNAME`. With a
+/// database, the shared default is refused.
+fn build_owner(
+    raw: &impl Fn(&str) -> Option<String>,
+    lookup: &impl Fn(&str) -> Option<String>,
+    has_database: bool,
+) -> Result<String, ConfigError> {
+    let owner = raw("BUILD_OWNER")
+        .map(|v| v.trim().to_owned())
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            lookup("HOSTNAME")
+                .map(|v| v.trim().to_owned())
+                .filter(|v| !v.is_empty())
+        })
+        .unwrap_or_else(|| DEFAULT_BUILD_OWNER.to_owned());
+    if has_database && owner == DEFAULT_BUILD_OWNER {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}DATABASE_URL is set, but the build owner is the shared default '{DEFAULT_BUILD_OWNER}' (neither {ENV_PREFIX}BUILD_OWNER nor HOSTNAME is set). The build reconciliation is keyed by owner, so engines that share it can delete each other's builds. Set {ENV_PREFIX}BUILD_OWNER (or HOSTNAME) to a name that is unique to this engine and stays the same across its restarts (in Kubernetes, the pod name)."
+        )));
+    }
+    Ok(owner)
+}
+
+fn worker_settings(
+    raw: &impl Fn(&str) -> Option<String>,
+    cgroup_memory_max: Option<u64>,
+) -> Result<WorkerSettings, ConfigError> {
+    let defaults = WorkerSettings::default();
+    let memory_bytes = positive_count(
+        raw,
+        "WORKER_MEMORY_BYTES",
+        default_worker_memory(cgroup_memory_max),
+    )?;
+    if memory_bytes < MIN_WORKER_MEMORY_BYTES {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}WORKER_MEMORY_BYTES must be at least {MIN_WORKER_MEMORY_BYTES} (1 GiB of address space), got {memory_bytes}"
+        )));
+    }
+    let cpu_seconds = positive_count(raw, "WORKER_CPU_SECONDS", defaults.cpu_seconds)?;
+    if cpu_seconds < MIN_WORKER_CPU_SECONDS {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}WORKER_CPU_SECONDS must be at least {MIN_WORKER_CPU_SECONDS}, got {cpu_seconds}"
+        )));
+    }
+    // Unset: the default, lowered until its stacks fit the memory cap.
+    let fitting =
+        memory_bytes.saturating_sub(WORKER_MEMORY_HEADROOM_BYTES) / WORKER_THREAD_RESERVE_BYTES;
+    let default_threads = (defaults.threads as u64).min(fitting).max(1);
+    let threads = positive_count(raw, "WORKER_THREADS", default_threads)?;
+    if threads > MAX_WORKER_THREADS {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}WORKER_THREADS must be at most {MAX_WORKER_THREADS}, got {threads}"
+        )));
+    }
+    Ok(WorkerSettings {
+        memory_bytes,
+        cpu_seconds,
+        threads: usize::try_from(threads)
+            .map_err(|_| ConfigError(format!("{ENV_PREFIX}WORKER_THREADS is out of range")))?,
+    })
+}
+
+/// Refuse a thread count whose parser stacks do not fit the worker's
+/// address-space cap: every parser pool would fail to start (or the run
+/// would die of an allocation failure) on every repository.
+fn check_worker_fits(worker: &WorkerSettings) -> Result<(), ConfigError> {
+    let threads = worker.threads as u64;
+    let needed = worker_memory_needed(threads);
+    if needed > worker.memory_bytes {
+        return Err(ConfigError(format!(
+            "{ENV_PREFIX}WORKER_THREADS={threads} does not fit {ENV_PREFIX}WORKER_MEMORY_BYTES={}: each worker thread reserves {WORKER_THREAD_RESERVE_BYTES} bytes of stack and the worker needs {WORKER_MEMORY_HEADROOM_BYTES} bytes more, so {threads} threads need {needed} bytes of address space. Lower the threads or raise the memory cap.",
+            worker.memory_bytes
+        )));
+    }
+    Ok(())
+}
+
 fn ingest_settings(raw: &impl Fn(&str) -> Option<String>) -> Result<IngestSettings, ConfigError> {
     let defaults = IngestLimits::default();
     Ok(IngestSettings {
@@ -110,15 +471,28 @@ impl Settings {
     ///
     /// A [`ConfigError`] naming the variable and the value it refused.
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+        Self::from_lookup_and_memory_limit(
+            lookup,
+            crate::cgroup::Cgroup::discover().and_then(|c| c.memory_max()),
+        )
+    }
+
+    /// [`Settings::from_lookup`] with the container's memory limit given
+    /// (cgroup v2 `memory.max`, `None` for none), which sets the default of
+    /// `ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES`.
+    ///
+    /// # Errors
+    ///
+    /// See [`Settings::from_lookup`].
+    pub fn from_lookup_and_memory_limit(
+        lookup: impl Fn(&str) -> Option<String>,
+        cgroup_memory_max: Option<u64>,
+    ) -> Result<Self, ConfigError> {
         let raw = |name: &str| lookup(&format!("{ENV_PREFIX}{name}")).filter(|v| !v.is_empty());
         let runner = match raw("RUNNER").as_deref().map(str::trim) {
             None | Some("unavailable") => RunnerKind::Unavailable,
             Some("fixture") => RunnerKind::Fixture,
-            Some("native") => {
-                return Err(ConfigError(format!(
-                    "{ENV_PREFIX}RUNNER=native: the native analysis engine is not part of this build yet (ADR-0026 phases 2-6); use 'fixture' or 'unavailable'"
-                )));
-            }
+            Some("native") => RunnerKind::Native,
             Some("legacy") => {
                 return Err(ConfigError(format!(
                     "{ENV_PREFIX}RUNNER=legacy names the Python engine, which this binary is not; run the elitea-deepwiki -engine image for it"
@@ -126,7 +500,7 @@ impl Settings {
             }
             Some(other) => {
                 return Err(ConfigError(format!(
-                    "{ENV_PREFIX}RUNNER must be one of ['unavailable', 'fixture'], got '{other}'"
+                    "{ENV_PREFIX}RUNNER must be one of ['unavailable', 'fixture', 'native'], got '{other}'"
                 )));
             }
         };
@@ -153,11 +527,52 @@ impl Settings {
         let engine_socket =
             PathBuf::from(raw("ENGINE_SOCKET").unwrap_or_else(|| DEFAULT_SOCKET.to_owned()));
         let ingest = ingest_settings(&raw)?;
+        let model = model_settings(&raw, &lookup)?;
+        let database_url = raw("DATABASE_URL")
+            .map(|url| url.trim().to_owned())
+            .filter(|url| !url.is_empty())
+            .map(DatabaseUrl);
+        let build_owner = build_owner(&raw, &lookup, database_url.is_some())?;
+        let build_stale_after = positive_seconds(
+            &raw,
+            "BUILD_STALE_SECONDS",
+            crate::storage::build::DEFAULT_STALE_AFTER,
+        )?;
+        if build_stale_after < MIN_STALE_AFTER {
+            return Err(ConfigError(format!(
+                "{ENV_PREFIX}BUILD_STALE_SECONDS must be at least {} (a live build beats its heartbeat every tenth of it and must survive a few missed beats), got {}",
+                MIN_STALE_AFTER.as_secs(),
+                build_stale_after.as_secs_f64()
+            )));
+        }
+        let publish = publish_settings(&raw)?;
+        let worker = worker_settings(&raw, cgroup_memory_max)?;
+        let query_pool_size = bounded_count(
+            &raw,
+            "QUERY_POOL_SIZE",
+            DEFAULT_QUERY_POOL_SIZE,
+            MAX_QUERY_POOL_SIZE,
+        )?;
+        if runner == RunnerKind::Native {
+            check_worker_fits(&worker)?;
+        }
+        if runner == RunnerKind::Native && database_url.is_none() {
+            return Err(ConfigError(format!(
+                "{ENV_PREFIX}RUNNER=native needs {ENV_PREFIX}DATABASE_URL: the native engine stages and publishes every index in the deepwiki PostgreSQL database (ADR-0026 decision 5) and has no other index storage. Set it to the database the migrations ran on, or use 'fixture' or 'unavailable'."
+            )));
+        }
         Ok(Self {
             runner,
             fixture_step,
             engine_socket,
             ingest,
+            database_url,
+            build_owner,
+            build_stale_after,
+            publish,
+            model,
+            worker,
+            query_pool_size,
         })
     }
 
@@ -181,7 +596,7 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
             .collect();
-        Settings::from_lookup(|name| map.get(name).cloned())
+        Settings::from_lookup_and_memory_limit(|name| map.get(name).cloned(), None)
     }
 
     #[test]
@@ -200,7 +615,12 @@ mod tests {
     #[test]
     fn unparsable_values_fail_the_start() {
         assert!(settings(&[("ELITEA_DEEPWIKI_RUNNER", "bogus")]).is_err());
-        assert!(settings(&[("ELITEA_DEEPWIKI_RUNNER", "native")]).is_err());
+        // Native without a database: refused at start, naming the setting.
+        let native = settings(&[("ELITEA_DEEPWIKI_RUNNER", "native")]);
+        assert!(
+            matches!(&native, Err(ConfigError(m)) if m.contains("ELITEA_DEEPWIKI_DATABASE_URL")),
+            "{native:?}"
+        );
         assert!(settings(&[("ELITEA_DEEPWIKI_RUNNER", "legacy")]).is_err());
         assert!(settings(&[("ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS", "x")]).is_err());
         assert!(settings(&[("ELITEA_DEEPWIKI_FIXTURE_STEP_SECONDS", "-1")]).is_err());
@@ -264,6 +684,275 @@ mod tests {
     }
 
     #[test]
+    fn storage_settings_default_and_parse() {
+        let parsed = settings(&[]);
+        assert_eq!(parsed.as_ref().map(|s| s.database_url.clone()), Ok(None));
+        assert_eq!(
+            parsed.as_ref().map(|s| s.build_owner.clone()),
+            Ok(DEFAULT_BUILD_OWNER.to_owned())
+        );
+        assert_eq!(
+            parsed.map(|s| s.build_stale_after),
+            Ok(Duration::from_hours(2))
+        );
+        let parsed = settings(&[
+            (
+                "ELITEA_DEEPWIKI_DATABASE_URL",
+                "postgresql://u:secret@db/deepwiki",
+            ),
+            ("HOSTNAME", "deepwiki-7f9c"),
+            ("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "600"),
+        ]);
+        let Ok(parsed) = parsed else {
+            panic!("settings refused");
+        };
+        assert_eq!(parsed.build_owner, "deepwiki-7f9c");
+        assert_eq!(parsed.build_stale_after, Duration::from_mins(10));
+        assert_eq!(parsed.query_pool_size, DEFAULT_QUERY_POOL_SIZE);
+        // The password never reaches a Debug form.
+        assert!(!format!("{parsed:?}").contains("secret"));
+        assert_eq!(
+            parsed.database_url.as_ref().map(DatabaseUrl::expose),
+            Some("postgresql://u:secret@db/deepwiki")
+        );
+        let owner = settings(&[
+            ("HOSTNAME", "pod"),
+            ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+        ]);
+        assert_eq!(owner.map(|s| s.build_owner), Ok("replica-a".to_owned()));
+        assert!(settings(&[("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "0")]).is_err());
+    }
+
+    #[test]
+    fn the_query_pool_size_parses_strictly() {
+        let size = |value: &str| {
+            settings(&[("ELITEA_DEEPWIKI_QUERY_POOL_SIZE", value)]).map(|s| s.query_pool_size)
+        };
+        assert_eq!(size("16"), Ok(16));
+        assert_eq!(size(" 256 "), Ok(MAX_QUERY_POOL_SIZE));
+        for refused in ["0", "257", "-1", "eight"] {
+            assert!(
+                matches!(size(refused), Err(ConfigError(m)) if m.contains("QUERY_POOL_SIZE")),
+                "{refused}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_database_refuses_the_shared_default_owner() {
+        let dsn = (
+            "ELITEA_DEEPWIKI_DATABASE_URL",
+            "postgresql://u:p@db/deepwiki",
+        );
+        let refused = settings(&[dsn]);
+        assert!(
+            matches!(&refused, Err(ConfigError(m)) if m.contains("ELITEA_DEEPWIKI_BUILD_OWNER") && m.contains("HOSTNAME")),
+            "{refused:?}"
+        );
+        // Blank values do not count as set.
+        assert!(
+            settings(&[
+                dsn,
+                ("HOSTNAME", "  "),
+                ("ELITEA_DEEPWIKI_BUILD_OWNER", " ")
+            ])
+            .is_err()
+        );
+        // Naming the default explicitly is the same sharing.
+        assert!(settings(&[dsn, ("ELITEA_DEEPWIKI_BUILD_OWNER", DEFAULT_BUILD_OWNER)]).is_err());
+        assert_eq!(
+            settings(&[dsn, ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a")]).map(|s| s.build_owner),
+            Ok("replica-a".to_owned())
+        );
+        assert_eq!(
+            settings(&[dsn, ("HOSTNAME", "pod-1")]).map(|s| s.build_owner),
+            Ok("pod-1".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_stale_limit_has_a_floor() {
+        assert!(settings(&[("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "299")]).is_err());
+        assert!(settings(&[("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "60")]).is_err());
+        assert_eq!(
+            settings(&[("ELITEA_DEEPWIKI_BUILD_STALE_SECONDS", "300")])
+                .map(|s| s.build_stale_after),
+            Ok(Duration::from_mins(5))
+        );
+    }
+
+    #[test]
+    fn the_publish_settings_default_and_parse() {
+        assert_eq!(
+            settings(&[]).map(|s| s.publish),
+            Ok(PublishSettings {
+                statement_timeout: Duration::from_mins(30),
+                lock_timeout: Duration::from_secs(30),
+                work_mem_mb: 64,
+                slots: 2,
+                analyze_lock_timeout: Duration::from_secs(5),
+            })
+        );
+        assert_eq!(
+            settings(&[
+                ("ELITEA_DEEPWIKI_PUBLISH_STATEMENT_TIMEOUT_SECONDS", "3600"),
+                ("ELITEA_DEEPWIKI_PUBLISH_LOCK_TIMEOUT_SECONDS", "2.5"),
+                ("ELITEA_DEEPWIKI_PUBLISH_WORK_MEM_MB", "256"),
+                ("ELITEA_DEEPWIKI_PUBLISH_SLOTS", "1"),
+                ("ELITEA_DEEPWIKI_PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS", "1"),
+            ])
+            .map(|s| s.publish),
+            Ok(PublishSettings {
+                statement_timeout: Duration::from_hours(1),
+                lock_timeout: Duration::from_millis(2500),
+                work_mem_mb: 256,
+                slots: 1,
+                analyze_lock_timeout: Duration::from_secs(1),
+            })
+        );
+        for (name, bad) in [
+            ("PUBLISH_STATEMENT_TIMEOUT_SECONDS", "0"),
+            ("PUBLISH_STATEMENT_TIMEOUT_SECONDS", "x"),
+            ("PUBLISH_STATEMENT_TIMEOUT_SECONDS", "86401"),
+            ("PUBLISH_LOCK_TIMEOUT_SECONDS", "-1"),
+            ("PUBLISH_WORK_MEM_MB", "0"),
+            ("PUBLISH_WORK_MEM_MB", "64MB"),
+            ("PUBLISH_WORK_MEM_MB", "4097"),
+            ("PUBLISH_SLOTS", "0"),
+            ("PUBLISH_SLOTS", "65"),
+            ("PUBLISH_SLOTS", "1.5"),
+            ("PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS", "inf"),
+        ] {
+            let key = format!("ELITEA_DEEPWIKI_{name}");
+            assert!(settings(&[(key.as_str(), bad)]).is_err(), "{name}={bad}");
+        }
+    }
+
+    #[test]
+    fn native_runs_with_a_database() {
+        let parsed = settings(&[
+            ("ELITEA_DEEPWIKI_RUNNER", "native"),
+            (
+                "ELITEA_DEEPWIKI_DATABASE_URL",
+                "postgresql://u:p@db/deepwiki",
+            ),
+            ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+        ]);
+        assert_eq!(parsed.map(|s| s.runner), Ok(RunnerKind::Native));
+    }
+
+    #[test]
+    fn the_worker_limits_default_and_parse_strictly() {
+        let defaults = settings(&[]).map(|s| s.worker);
+        assert_eq!(defaults, Ok(WorkerSettings::default()));
+        assert_eq!(
+            WorkerSettings::default().memory_bytes,
+            DEFAULT_WORKER_MEMORY_BYTES
+        );
+        let set = settings(&[
+            ("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "2147483648"),
+            ("ELITEA_DEEPWIKI_WORKER_CPU_SECONDS", "600"),
+            ("ELITEA_DEEPWIKI_WORKER_THREADS", "2"),
+        ])
+        .map(|s| s.worker);
+        assert_eq!(
+            set,
+            Ok(WorkerSettings {
+                memory_bytes: 2 << 30,
+                cpu_seconds: 600,
+                threads: 2,
+            })
+        );
+        for (name, bad) in [
+            ("WORKER_MEMORY_BYTES", "0"),
+            ("WORKER_MEMORY_BYTES", "16GiB"),
+            ("WORKER_MEMORY_BYTES", "1048576"),
+            ("WORKER_CPU_SECONDS", "-1"),
+            ("WORKER_CPU_SECONDS", "59"),
+            ("WORKER_CPU_SECONDS", "1.5"),
+            ("WORKER_THREADS", "0"),
+            ("WORKER_THREADS", "257"),
+        ] {
+            let key = format!("ELITEA_DEEPWIKI_{name}");
+            assert!(settings(&[(key.as_str(), bad)]).is_err(), "{name}={bad}");
+        }
+    }
+
+    #[test]
+    fn the_memory_cap_defaults_to_the_cgroup_limit() {
+        let read = |limit: Option<u64>, pairs: &[(&str, &str)]| {
+            let map: HashMap<String, String> = pairs
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect();
+            Settings::from_lookup_and_memory_limit(|name| map.get(name).cloned(), limit)
+                .map(|s| s.worker.memory_bytes)
+        };
+        assert_eq!(read(None, &[]), Ok(DEFAULT_WORKER_MEMORY_BYTES));
+        // 85 % of an 8 GiB container.
+        assert_eq!(read(Some(8 << 30), &[]), Ok((8 << 30) / 100 * 85));
+        // Never below the floor.
+        assert_eq!(read(Some(512 << 20), &[]), Ok(MIN_WORKER_MEMORY_BYTES));
+        // The setting beats the cgroup.
+        assert_eq!(
+            read(
+                Some(8 << 30),
+                &[("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "2147483648")]
+            ),
+            Ok(2 << 30)
+        );
+    }
+
+    #[test]
+    fn native_threads_must_fit_the_memory_cap() {
+        let native = [
+            ("ELITEA_DEEPWIKI_RUNNER", "native"),
+            (
+                "ELITEA_DEEPWIKI_DATABASE_URL",
+                "postgresql://u:p@db/deepwiki",
+            ),
+            ("ELITEA_DEEPWIKI_BUILD_OWNER", "replica-a"),
+        ];
+        let with = |extra: &[(&'static str, &'static str)]| {
+            let mut pairs = native.to_vec();
+            pairs.extend_from_slice(extra);
+            settings(&pairs)
+        };
+        // 8 threads × 256 MiB + 1 GiB = 3 GiB > 2 GiB.
+        let refused = with(&[
+            ("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "2147483648"),
+            ("ELITEA_DEEPWIKI_WORKER_THREADS", "8"),
+        ]);
+        assert!(
+            matches!(&refused, Err(ConfigError(m)) if m.contains("WORKER_THREADS=8") && m.contains("3221225472")),
+            "{refused:?}"
+        );
+        // 4 threads need exactly 2 GiB.
+        let fits = with(&[
+            ("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "2147483648"),
+            ("ELITEA_DEEPWIKI_WORKER_THREADS", "4"),
+        ]);
+        assert_eq!(fits.map(|s| s.worker.threads), Ok(4));
+        // Unset threads: the default is lowered to fit (at least 1).
+        let lowered = with(&[("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "1610612736")]);
+        assert_eq!(
+            lowered.map(|s| s.worker.threads),
+            Ok(default_worker_threads().min(2))
+        );
+        // 1 GiB holds no parser thread at all.
+        assert!(with(&[("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "1073741824")]).is_err());
+        // The fixture runner never starts a worker: not checked.
+        assert!(
+            settings(&[
+                ("ELITEA_DEEPWIKI_RUNNER", "fixture"),
+                ("ELITEA_DEEPWIKI_WORKER_MEMORY_BYTES", "1073741824"),
+                ("ELITEA_DEEPWIKI_WORKER_THREADS", "8"),
+            ])
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn the_fixture_step_is_seconds() {
         let parsed = settings(&[
             ("ELITEA_DEEPWIKI_RUNNER", "fixture"),
@@ -273,5 +962,54 @@ mod tests {
             parsed.map(|s| (s.runner, s.fixture_step)),
             Ok((RunnerKind::Fixture, Duration::from_millis(250)))
         );
+    }
+
+    #[test]
+    fn the_model_settings_read_their_python_names() {
+        let defaults = settings(&[]).map(|s| s.model);
+        assert_eq!(
+            defaults,
+            Ok(ModelEnvSettings {
+                tls_ca_file: None,
+                embed_batch_size: DEFAULT_BATCH_SIZE,
+                embed_concurrency: DEFAULT_CONCURRENCY,
+                embed_ctx_tokens: EMBEDDING_CTX_LENGTH,
+                stream_total: Duration::from_hours(2),
+            })
+        );
+        let set = settings(&[
+            ("ELITEA_DEEPWIKI_TLS_CA_FILE", "/etc/ca.pem"),
+            ("WIKI_EMBED_BATCH_SIZE", "16"),
+            ("ELITEA_DEEPWIKI_EMBED_CONCURRENCY", "2"),
+            ("ELITEA_DEEPWIKI_EMBED_CTX_TOKENS", "4096"),
+            ("ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS", "10800"),
+        ])
+        .map(|s| s.model);
+        assert_eq!(
+            set,
+            Ok(ModelEnvSettings {
+                tls_ca_file: Some(PathBuf::from("/etc/ca.pem")),
+                embed_batch_size: 16,
+                embed_concurrency: 2,
+                embed_ctx_tokens: 4096,
+                stream_total: Duration::from_hours(3),
+            })
+        );
+        assert!(settings(&[("WIKI_EMBED_BATCH_SIZE", "0")]).is_err());
+        for bad in ["0", "255", "-1", "8k"] {
+            let refused = settings(&[("ELITEA_DEEPWIKI_EMBED_CTX_TOKENS", bad)]);
+            assert!(
+                refused
+                    .as_ref()
+                    .is_err_and(|e| e.to_string().contains("EMBED_CTX_TOKENS")),
+                "'{bad}': {refused:?}"
+            );
+        }
+        assert_eq!(
+            settings(&[("ELITEA_DEEPWIKI_EMBED_CTX_TOKENS", "256")])
+                .map(|s| s.model.embed_ctx_tokens),
+            Ok(256)
+        );
+        assert!(settings(&[("ELITEA_DEEPWIKI_MODEL_STREAM_TOTAL_SECONDS", "0")]).is_err());
     }
 }

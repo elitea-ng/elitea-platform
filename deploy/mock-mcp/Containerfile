@@ -2,13 +2,17 @@
 #
 # Two stages, because the server must speak real TLS (the worker's MCP client
 # is `https_only` and offers no verification switch — see server.py's header)
-# and python:3.12-slim carries libssl but not the `openssl` command line.
+# and python:3.12-slim carries libssl but not the `openssl` command line. The
+# TLS stage is debian:trixie-slim, the base python:3.12.14-slim-trixie is built
+# on, so it shares that layer and adds no new OS family.
 #
 # The certificate is minted HERE, at build time, rather than at container
 # start: the same bytes then survive every restart, so the trust bundle this
 # image hands the worker cannot go stale while a run is in flight.
-FROM docker.io/library/alpine:3.20 AS tls
-RUN apk add --no-cache openssl
+FROM docker.io/library/debian:trixie-slim AS tls
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openssl \
+ && rm -rf /var/lib/apt/lists/*
 # A real two-level chain — a CA that signs a separate leaf — and NOT a
 # self-signed leaf doubling as its own trust anchor. rustls builds a path from
 # the presented certificate to an anchor and applies CA rules to the anchor
@@ -46,10 +50,10 @@ RUN mkdir -p /out \
 # `ca.key` is not copied into the runtime image at all, so nothing here can mint
 # a second certificate.
 
-# python:3.12.10-slim is already in this stack's build graph (mock-llm and
-# services/elitea-worker-python both build from it), so this pulls no new base
-# image family. Standard library only: no pip install, no network at run time.
-FROM docker.io/library/python:3.12.10-slim
+# python:3.12.14-slim-trixie is already in this stack's build graph (mock-llm
+# and services/elitea-worker-python both build from it), so this pulls no new
+# base image family. Standard library only: no pip install, no network at run time.
+FROM docker.io/library/python:3.12.14-slim-trixie
 
 # Non-root, and a uid that collides with nothing else in the stack (elitea-main
 # is 65532, the worker 10001, mock-llm 10101).

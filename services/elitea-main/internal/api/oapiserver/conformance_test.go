@@ -130,7 +130,9 @@ const (
 	// 51 -> 49, when the client contract 1.1 described participant add and
 	// remove (participant.addParticipantIntoConversation and
 	// participant.deleteParticipantFromConversation).
-	maxAllowlistEntries = 49
+	// 49 -> 48, when client contract 1.3 described the agent-execution stop
+	// (pipelines.stopLlmTask, now cancelChatExecution).
+	maxAllowlistEntries = 48
 )
 
 // buildFullSurfaceConfig returns a RouterConfig for the real production
@@ -236,6 +238,9 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// never serves a request, so an inert handler is enough.
 		CurrentAgentStart:         http.NotFoundHandler(),
 		CurrentNotificationEvents: http.NotFoundHandler(),
+		// Client contract 1.3: cancelChatExecution, registered only when the
+		// cancel route is composed (production_router.go).
+		CurrentAgentCancel: http.NotFoundHandler(),
 		RuntimeRoutes: api.RuntimeRoutes{
 			Validation:      http.NotFoundHandler(),
 			ExecutionEvents: http.NotFoundHandler(),

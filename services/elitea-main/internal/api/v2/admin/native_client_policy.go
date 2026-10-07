@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/clientversion"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
@@ -122,13 +123,69 @@ func nativeClientPolicySection() map[string]any {
 				"section": section,
 				"default": defaults.MinClientVersion,
 			},
+			// Data controls (client contract 1.3). The app enforces each one;
+			// discovery publishes them so a share extension or a widget obeys
+			// them before the app holds a token.
+			{
+				"key":         platformconfig.KeyNativeAllowShareOut,
+				"type":        "boolean",
+				"title":       "Allow Copy, Share and Export",
+				"description": "Whether people may copy, share or export messages and transcripts out of the app.",
+				"section":     section,
+				"default":     defaults.AllowShareOut,
+			},
+			{
+				"key":         platformconfig.KeyNativeAllowShareIn,
+				"type":        "boolean",
+				"title":       "Allow Sharing Into the App",
+				"description": "Whether other apps may send text, links, files or photos to an agent through the system share sheet.",
+				"section":     section,
+				"default":     defaults.AllowShareIn,
+			},
+			{
+				"key":   platformconfig.KeyNativeAllowCloudSTT,
+				"type":  "boolean",
+				"title": "Allow Cloud Speech Recognition",
+				"description": "When off, dictation runs on the device only. When on, the app may use a recogniser " +
+					"that sends audio off the device.",
+				"section": section,
+				"default": defaults.AllowCloudSTT,
+			},
+			{
+				"key":   platformconfig.KeyNativeNotificationPreview,
+				"type":  "string",
+				"title": "Notification Preview",
+				"description": "What a notification shows on the lock screen: `none` shows a generic text only, " +
+					"`title` shows the conversation or item title. Message content is never shown.",
+				"section": section,
+				"default": defaults.NotificationPreview,
+				"enum":    platformconfig.NotificationPreviewValues(),
+			},
+			{
+				"key":         platformconfig.KeyNativeAllowNotificationActions,
+				"type":        "boolean",
+				"title":       "Allow Notification Actions",
+				"description": "Whether a notification offers actions such as Mark as read. A decision always needs the app unlocked.",
+				"section":     section,
+				"default":     defaults.AllowNotificationActions,
+			},
+			{
+				"key":   platformconfig.KeyNativeAllowSystemSurfaces,
+				"type":  "boolean",
+				"title": "Show Titles on Widgets and Quick Actions",
+				"description": "When off, widgets and home-screen quick actions show counts only. When on, they may " +
+					"show conversation and agent titles, which are then visible outside the app's lock.",
+				"section": section,
+				"default": defaults.AllowSystemSurfaces,
+			},
 		},
 	}
 }
 
 // validateNativeClientPolicyValues applies the rules the schema cannot: integer
-// ranges (JSON numbers arrive as float64, so integrality too) and the version
-// grammar. The generic validator has already checked each value's JSON type.
+// ranges (JSON numbers arrive as float64, so integrality too), the version
+// grammar, and the notification_preview values (also an `enum` in the schema;
+// checked here as well so this function alone is the whole rule). The generic validator has already checked each value's JSON type.
 func validateNativeClientPolicyValues(values map[string]any) string {
 	bounds := map[string]int64{
 		platformconfig.KeyNativeIdleLockSeconds:      platformconfig.MaxIdleLockSeconds,
@@ -147,6 +204,13 @@ func validateNativeClientPolicyValues(values map[string]any) string {
 		number, ok := raw.(float64)
 		if !ok || math.IsNaN(number) || number != math.Trunc(number) || number < 0 || number > float64(bounds[key]) {
 			return fmt.Sprintf("%q must be a whole number from 0 to %d", key, bounds[key])
+		}
+	}
+	if raw, present := values[platformconfig.KeyNativeNotificationPreview]; present {
+		preview, _ := raw.(string)
+		if !platformconfig.ValidNotificationPreview(preview) {
+			return fmt.Sprintf("%q must be one of: %s", platformconfig.KeyNativeNotificationPreview,
+				strings.Join(platformconfig.NotificationPreviewValues(), ", "))
 		}
 	}
 	if raw, present := values[platformconfig.KeyNativeMinClientVersion]; present {

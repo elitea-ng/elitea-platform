@@ -7,7 +7,7 @@ name: CI — Gateway
 #
 # THE PIN BELOW IS THE SERIES `1.26`, NOT THE PATCH `1.26.4` (#506).
 #
-# services/elitea-llm-gateway/Containerfile builds from `golang:1.26-alpine`, so
+# services/elitea-llm-gateway/Containerfile builds from `golang:1.26-trixie`, so
 # the released image takes each 1.26 patch. An exact patch pin here tested the
 # gateway on a toolchain the image no longer uses: the scan in ci-image-scan.yml
 # reported 9 HIGH findings against stdlib v1.26.4, all fixed in 1.26.6. A
@@ -81,7 +81,7 @@ jobs:
       # The gateway must be TESTED on the toolchain it SHIPS (#506). The pin
       # below and services/elitea-llm-gateway/Containerfile are two files that
       # nothing compared, so they drifted: this workflow asked for the exact
-      # patch 1.26.4 while the image had already moved to golang:1.26-alpine.
+      # patch 1.26.4 while the image had already moved to golang:1.26-alpine (now -trixie).
       # This step is the comparison. It runs BEFORE setup-go, so a disagreement
       # is reported instead of installed, and it needs no toolchain of its own.
       - name: The workflow pin matches the shipped toolchain

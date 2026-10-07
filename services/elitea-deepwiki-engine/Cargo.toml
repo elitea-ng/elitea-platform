@@ -19,19 +19,66 @@ base64 = "=0.22.1"
 # mailmap, archive). The ssh and file transports compile in with the
 # blocking client but are unreachable: a CloneTarget holds only http(s).
 gix = { version = "=0.88.0", default-features = false, features = ["blocking-http-transport-reqwest-rust-tls", "worktree-mutation", "sha1", "max-performance-safe"] }
+# The Mermaid sanitizer is ~150 transcribed Python regular expressions,
+# several with look-around, which `regex` lacks. A backtracking engine
+# with `sre`'s match preference. Already in the tree (tiktoken-rs uses it);
+# this pins the same version as a direct dependency.
+fancy-regex = "=0.19.2"
 globset = "=0.4.20"
 http-body-util = "=0.1.5"
 hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1"] }
 hyper-util = { version = "=0.1.20", default-features = false, features = ["tokio"] }
 indexmap = "=2.14.2"
+# Dense vectors on the PostgreSQL index (ADR-0026 decision 5). Its `sqlx`
+# feature accepts sqlx 0.8 and 0.9 and resolves 0.9 by default; the exact
+# sqlx pin below keeps one sqlx (0.8.6) in the lock.
+pgvector = { version = "=0.4.2", features = ["sqlx"] }
 rayon = "=1.12.0"
 regex = "=1.13.1"
+# Leiden community detection for Phase 3 clustering (ADR-0026 decision 6):
+# leiden-rs 0.8.1, VENDORED from the crates.io archive (sha256 c7bbf470…6d42)
+# minus its Cargo.lock (see vendor/README.md) because it is a single-author crate
+# hosted on gitcode. No default features: no CLI, no rayon (one thread, so
+# a seed gives one result), no gryf. Called only behind
+# `graph::clustering::Partitioner`.
+leiden-rs = { path = "vendor/leiden-rs", version = "=0.8.1", default-features = false }
+# Substring search over the page index (`wiki::search`). Already in the
+# tree (regex, gix, …); pinned to the locked version.
+memchr = "=2.8.3"
+# The model client (ADR-0026 decision 8): one small OpenAI-compatible client
+# for embeddings and chat completions. reqwest 0.13.5 is the copy gix already
+# pulls (with rustls/aws-lc-rs and the platform verifier), so the async
+# client adds no TLS stack. No default features: no native-tls, no cookies,
+# no decompression; `stream` is not needed (`Response::chunk` reads SSE).
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "http2"] }
+# The generation worker child (ADR-0026 decision 10): its own `RLIMIT_AS` /
+# `RLIMIT_CPU`, the parent's SIGTERM-then-SIGKILL stop, and (Linux) a death
+# signal when the parent goes away. Safe wrappers, so the crate keeps
+# `unsafe_code = "forbid"`. Already in the tree (gix, tempfile); the exact
+# pin the worker crate uses.
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "process"] }
+# The migration ledger checksum (`migrate.py`: SHA-256 hex). Already in
+# the tree through sqlx-postgres.
+sha2 = "=0.10.9"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = { version = "=1.0.151", features = ["preserve_order"] }
+serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
+# The index storage (ADR-0026 decision 5): PostgreSQL only, no macros (no
+# compile-time database), no migrate feature (the ledger is `migrate.py`'s,
+# ported in `storage::migrate`). TLS through rustls with aws-lc-rs, the
+# provider the tree already carries for gix/reqwest.
+sqlx = { version = "=0.8.6", default-features = false, features = ["json", "postgres", "runtime-tokio", "tls-rustls-aws-lc-rs"] }
 thiserror = "=2.0.20"
-tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+# Token budgets (ADR-0026 decision 8): the o200k_base BPE the Python
+# TokenCounter used, plus cl100k_base for the embedding length split that
+# LangChain's OpenAIEmbeddings did. Both BPE files are compiled in
+# (`include_str!`), so there is no runtime download and no chars/4 fallback.
+tiktoken-rs = "=0.12.1"
+tokio = { version = "=1.53.1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-stream = { version = "=0.1.19", features = ["sync"] }
 tracing = "=0.1.44"
+# NFKD for the sanitizer's node-id slug (`unicodedata.normalize`). Already
+# in the tree through sqlx; pinned to the locked version.
+unicode-normalization = "=0.1.25"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
 tree-sitter = "=0.27.0"
 # The C# grammar `tree_sitter_language_pack` 1.16.1 builds (its
@@ -55,7 +102,23 @@ tree-sitter-typescript = "=0.23.2"
 zeroize = "=1.9.0"
 
 [dev-dependencies]
+# A throwaway CA and server certificate per test run, for the model client's
+# ELITEA_DEEPWIKI_TLS_CA_FILE test. Generated at run time because macOS
+# refuses a TLS leaf valid for more than 825 days, so a committed fixture
+# would need rotating.
+rcgen = { version = "=0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
 tokio = { version = "=1.53.1", features = ["test-util"] }
+# The TLS side of the model client's mock gateway; the version reqwest uses.
+tokio-rustls = { version = "=0.26.6", default-features = false, features = ["aws_lc_rs", "tls12"] }
+
+[features]
+# TEST ONLY. In a debug build, a `repo_config` base URL of
+# `http://127.0.0.1:<port>` or `http://localhost:<port>` clones over plain
+# http, so the end-to-end tests can serve a repository with
+# `git http-backend` to the worker CHILD process (which cannot be handed a
+# pre-admitted target). A release build ignores the feature: the clone URL
+# is always `https://` there. CI enables it through `--all-features`.
+loopback-git-http = []
 
 [lints.rust]
 unsafe_code = "forbid"

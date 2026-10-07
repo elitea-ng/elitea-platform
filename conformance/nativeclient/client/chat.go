@@ -9,6 +9,10 @@ import (
 // AdhocContract is the execution contract of a plain model turn.
 const AdhocContract = "agent.execute.adhoc.v1"
 
+// ApplicationContract is the execution contract of a turn answered by an
+// agent participant (participant_id > 0).
+const ApplicationContract = "agent.execute.application.v1"
+
 // ChatAdmission is the answer to a chat send (200, `created` false on a
 // replay of the same question_id).
 type ChatAdmission struct {

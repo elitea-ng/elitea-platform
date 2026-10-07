@@ -1,0 +1,98 @@
+{
+  "prompts": [
+    {
+      "file": "repo_analysis_system.txt",
+      "source": "src/elitea_deepwiki/engine/agents/wiki_graph_optimized.py",
+      "symbol": "OptimizedWikiGenerationAgent._llm_analyze_repository",
+      "selector": "system[1]",
+      "sha256": "b1733af7bd6e2c13442b79b9726b8233e150d7daaa9f2cd6d0f6f939f460722f"
+    },
+    {
+      "file": "repo_analysis_structured_system.txt",
+      "source": "src/elitea_deepwiki/engine/agents/wiki_graph_optimized.py",
+      "symbol": "OptimizedWikiGenerationAgent._llm_analyze_repository",
+      "selector": "system[0]",
+      "sha256": "9c075eb2fde0ef9002d129cedcb8084ba550136007215b9857605733da827e15"
+    },
+    {
+      "file": "repo_analysis_user.txt",
+      "source": "src/elitea_deepwiki/engine/prompts/wiki_prompts_enhanced.py",
+      "symbol": "ENHANCED_REPO_ANALYSIS_PROMPT",
+      "sha256": "2262d465d4d78d5d152862111066eabec19b1c3abffcbd1cdc5764dd28d09e37"
+    },
+    {
+      "file": "repo_analysis_structured_user.txt",
+      "source": "src/elitea_deepwiki/engine/prompts/wiki_prompts_enhanced.py",
+      "symbol": "STRUCTURED_REPO_ANALYSIS_PROMPT",
+      "sha256": "d76c98c711fa186ab37452722d2c192c7c00442a1fc454b3525148efe8e4abd6"
+    },
+    {
+      "file": "structure_system.txt",
+      "source": "src/elitea_deepwiki/engine/agents/wiki_graph_optimized.py",
+      "symbol": "OptimizedWikiGenerationAgent.generate_wiki_structure",
+      "selector": "system[0]",
+      "sha256": "9a574bbe9655c26555a7abed79a741488edd52b8575e2a9354bfdb2741374a8e"
+    },
+    {
+      "file": "structure_user.txt",
+      "source": "src/elitea_deepwiki/engine/prompts/wiki_prompts_enhanced.py",
+      "symbol": "ENHANCED_WIKI_STRUCTURE_PROMPT",
+      "sha256": "c693b5446d1a583fd43d63cbc1bf6f1fc37f52ccd0acdf0543a6e82008e5d1c2"
+    },
+    {
+      "file": "target_audience_mixed.txt",
+      "source": "src/elitea_deepwiki/engine/prompts/wiki_prompts_enhanced.py",
+      "symbol": "TARGET_AUDIENCES",
+      "selector": "['mixed']",
+      "sha256": "2136ec76fa540ea3a2d836aafb75a5d81cfb08468d5bf42d0df748b5429aa44e"
+    },
+    {
+      "file": "batched_naming_system.txt",
+      "source": "src/elitea_deepwiki/engine/wiki_structure_planner/cluster_planner.py",
+      "symbol": "BATCHED_NAMING_SYSTEM",
+      "sha256": "aa39108bb844d946b6dff21f76413df6fa68117945c57a4ab4b88544bcf1de99"
+    },
+    {
+      "file": "batched_naming_user.txt",
+      "source": "src/elitea_deepwiki/engine/wiki_structure_planner/cluster_planner.py",
+      "symbol": "BATCHED_NAMING_USER",
+      "sha256": "8a212ba7fb764d1478d13c48477634f75671954680f5628309f06b70785d1d3d"
+    },
+    {
+      "file": "page_naming_system.txt",
+      "source": "src/elitea_deepwiki/engine/wiki_structure_planner/cluster_planner.py",
+      "symbol": "PAGE_NAMING_SYSTEM",
+      "sha256": "5028c989be5cafaf7fb0bd1a5930b310078cfbfda114a8ff8c1c2d23f3ce9c18"
+    },
+    {
+      "file": "page_naming_user.txt",
+      "source": "src/elitea_deepwiki/engine/wiki_structure_planner/cluster_planner.py",
+      "symbol": "PAGE_NAMING_USER",
+      "sha256": "346d85a197fdd70a87a8ace7ed451608990c2a5173b17a26f4d763362dee3449"
+    },
+    {
+      "file": "section_from_pages_system.txt",
+      "source": "src/elitea_deepwiki/engine/wiki_structure_planner/cluster_planner.py",
+      "symbol": "SECTION_FROM_PAGES_SYSTEM",
+      "sha256": "0c608d1cd7e1daa613d14e084548cd3452bdfb26e7b8b62f39333fdd3a50511b"
+    },
+    {
+      "file": "section_from_pages_user.txt",
+      "source": "src/elitea_deepwiki/engine/wiki_structure_planner/cluster_planner.py",
+      "symbol": "SECTION_FROM_PAGES_USER",
+      "sha256": "ab4f25c717c9d30a04e40ddb0d0f826e2c5542e22c1f10168c8690bd2bf2aa54"
+    },
+    {
+      "file": "section_naming_system.txt",
+      "source": "src/elitea_deepwiki/engine/wiki_structure_planner/cluster_planner.py",
+      "symbol": "SECTION_NAMING_SYSTEM",
+      "sha256": "cd0cdbdd675c586097adb850b46875f64ae2775d55a65355e7c9b11a55897acc"
+    },
+    {
+      "file": "section_naming_user.txt",
+      "source": "src/elitea_deepwiki/engine/wiki_structure_planner/cluster_planner.py",
+      "symbol": "SECTION_NAMING_USER",
+      "sha256": "0c66e18f78b354900304b318a4ea03491745d4c3913f05b6aca24a5225125f11"
+    }
+  ]
+}

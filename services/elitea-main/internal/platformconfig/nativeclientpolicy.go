@@ -24,7 +24,32 @@ const (
 	KeyNativeOfflineMaxMB         = "offline_max_mb"
 	KeyNativeOfflineAttachments   = "offline_attachments"
 	KeyNativeMinClientVersion     = "min_client_version"
+
+	// Data controls (client contract 1.3). Each one gates a client feature
+	// that moves content across the app's boundary; an enterprise admin can
+	// switch each off.
+	KeyNativeAllowShareOut            = "allow_share_out"
+	KeyNativeAllowShareIn             = "allow_share_in"
+	KeyNativeAllowCloudSTT            = "allow_cloud_stt"
+	KeyNativeNotificationPreview      = "notification_preview"
+	KeyNativeAllowNotificationActions = "allow_notification_actions"
+	KeyNativeAllowSystemSurfaces      = "allow_system_surfaces"
 )
+
+// The values of KeyNativeNotificationPreview: what a notification may show on
+// the lock screen and in the notification centre.
+const (
+	// NotificationPreviewNone: a generic text only ("New activity").
+	NotificationPreviewNone = "none"
+	// NotificationPreviewTitle: the conversation or item title, never content.
+	NotificationPreviewTitle = "title"
+)
+
+// NotificationPreviewValues lists the allowed notification_preview values in
+// the order the admin form offers them.
+func NotificationPreviewValues() []string {
+	return []string{NotificationPreviewNone, NotificationPreviewTitle}
+}
 
 // Bounds the save path enforces (admin.validateNativeClientPolicyValues). The
 // loader re-applies them, so a row written by hand cannot widen them either.
@@ -48,6 +73,26 @@ type NativeClientPolicy struct {
 	OfflineMaxMB         int64  `json:"offline_max_mb"`
 	OfflineAttachments   bool   `json:"offline_attachments"`
 	MinClientVersion     string `json:"min_client_version"`
+
+	// Data controls (client contract 1.3).
+	//
+	// AllowShareOut: copy, share and export of messages and transcripts.
+	AllowShareOut bool `json:"allow_share_out"`
+	// AllowShareIn: the system share sheet may send content into the app.
+	AllowShareIn bool `json:"allow_share_in"`
+	// AllowCloudSTT: dictation may use a speech recogniser that sends audio
+	// off the device (the platform's server recogniser or the workspace's
+	// transcription model). Off means on-device recognition only.
+	AllowCloudSTT bool `json:"allow_cloud_stt"`
+	// NotificationPreview is NotificationPreviewNone or NotificationPreviewTitle.
+	NotificationPreview string `json:"notification_preview"`
+	// AllowNotificationActions: actions on a notification (mark read, open an
+	// approval) without opening the app first. A decision always needs the
+	// app unlocked.
+	AllowNotificationActions bool `json:"allow_notification_actions"`
+	// AllowSystemSurfaces: widgets, quick actions and other surfaces outside
+	// the app may show titles. Off means they show counts only.
+	AllowSystemSurfaces bool `json:"allow_system_surfaces"`
 }
 
 // DefaultNativeClientPolicy is the policy of a deployment that never saved the
@@ -62,7 +107,25 @@ func DefaultNativeClientPolicy() NativeClientPolicy {
 		OfflineMaxMB:         512,
 		OfflineAttachments:   true,
 		MinClientVersion:     "",
+
+		AllowShareOut:            true,
+		AllowShareIn:             true,
+		AllowCloudSTT:            false,
+		NotificationPreview:      NotificationPreviewNone,
+		AllowNotificationActions: true,
+		AllowSystemSurfaces:      false,
 	}
+}
+
+// ValidNotificationPreview reports whether value is an allowed
+// notification_preview, compared exactly (no trimming or case folding).
+func ValidNotificationPreview(value string) bool {
+	for _, allowed := range NotificationPreviewValues() {
+		if value == allowed {
+			return true
+		}
+	}
+	return false
 }
 
 // OfflineEnabled is the public bit: retention 0 disables offline storage.
@@ -98,6 +161,14 @@ func NativeClientPolicyFromValues(values Values) NativeClientPolicy {
 	}
 	if version := values.trimmed(KeyNativeMinClientVersion); version != "" && clientversion.Valid(version) {
 		policy.MinClientVersion = version
+	}
+	policy.AllowShareOut = values.Bool(KeyNativeAllowShareOut, policy.AllowShareOut)
+	policy.AllowShareIn = values.Bool(KeyNativeAllowShareIn, policy.AllowShareIn)
+	policy.AllowCloudSTT = values.Bool(KeyNativeAllowCloudSTT, policy.AllowCloudSTT)
+	policy.AllowNotificationActions = values.Bool(KeyNativeAllowNotificationActions, policy.AllowNotificationActions)
+	policy.AllowSystemSurfaces = values.Bool(KeyNativeAllowSystemSurfaces, policy.AllowSystemSurfaces)
+	if preview, ok := values[KeyNativeNotificationPreview].(string); ok && ValidNotificationPreview(preview) {
+		policy.NotificationPreview = preview
 	}
 	return policy
 }

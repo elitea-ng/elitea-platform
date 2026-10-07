@@ -1,6 +1,6 @@
 # Rust worker remaining gates
 
-Updated: 2026-10-06. Incoming Main integration baseline: `22403f640` (NATS replacement merged).
+Updated: 2026-10-07. Incoming Main integration baseline: `781bf6ece` (Trixie and native-client changes).
 
 This register orders implementation work. The [testing register](testing-gaps.md) owns detailed proof requirements.
 Source mappings remain the behavioral evidence for each capability.
@@ -8,6 +8,11 @@ Source mappings remain the behavioral evidence for each capability.
 [Current integration](source-mapping/main-integration-20261001.md) records the migration collision, CI repairs, and preserved Point 5 checkpoint.
 [NATS integration](source-mapping/main-nats-integration-20261006.md) records transport conflict resolution and separates earlier Code evidence from new deployment requirements.
 Current-platform code defines business behavior, not a requirement to copy its implementation or security defects.
+
+The [merge continuation](source-mapping/main-integration-20261007.md) verifies the final handoff and records all six resolved listener failures.
+It preserves durable NATS storage and the incoming scratch-image health sidecar.
+Merged CI, current images, and isolated NATS/Code browser acceptance remain required.
+No worker gate closes from the merge checks alone.
 
 ## Progression status
 

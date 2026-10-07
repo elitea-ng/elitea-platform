@@ -29,10 +29,9 @@ func TestNativeClientPolicyOverlay(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := NativeClientPolicyFromValues(values)
-	want := NativeClientPolicy{
-		RequireDeviceLock: true, IdleLockSeconds: 300, AllowScreenshots: false,
-		OfflineRetentionDays: 0, OfflineMaxMB: 64, OfflineAttachments: false, MinClientVersion: "1.4.0",
-	}
+	want := DefaultNativeClientPolicy()
+	want.RequireDeviceLock, want.IdleLockSeconds, want.AllowScreenshots = true, 300, false
+	want.OfflineRetentionDays, want.OfflineMaxMB, want.OfflineAttachments, want.MinClientVersion = 0, 64, false, "1.4.0"
 	if got != want {
 		t.Fatalf("overlay = %+v, want %+v", got, want)
 	}
@@ -64,8 +63,52 @@ func TestNativeClientPolicyJSONKeyOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := `{"require_device_lock":false,"idle_lock_seconds":0,"allow_screenshots":true,` +
-		`"offline_retention_days":30,"offline_max_mb":512,"offline_attachments":true,"min_client_version":""}`
+		`"offline_retention_days":30,"offline_max_mb":512,"offline_attachments":true,"min_client_version":"",` +
+		`"allow_share_out":true,"allow_share_in":true,"allow_cloud_stt":false,"notification_preview":"none",` +
+		`"allow_notification_actions":true,"allow_system_surfaces":false}`
 	if string(body) != want {
 		t.Fatalf("client_policy JSON = %s\nwant %s", body, want)
+	}
+}
+
+// TestNativeClientPolicyDataControlDefaults pins the client contract 1.3
+// defaults: what a deployment that never saved the section allows. Sharing and
+// notification actions are on (SaaS behaviour); cloud speech-to-text and
+// titles on system surfaces (widgets, quick actions) are off, and a
+// notification shows no preview.
+func TestNativeClientPolicyDataControlDefaults(t *testing.T) {
+	got := DefaultNativeClientPolicy()
+	if !got.AllowShareOut || !got.AllowShareIn || !got.AllowNotificationActions {
+		t.Errorf("share out/in and notification actions default on, got %+v", got)
+	}
+	if got.AllowCloudSTT || got.AllowSystemSurfaces {
+		t.Errorf("cloud STT and system-surface titles default off, got %+v", got)
+	}
+	if got.NotificationPreview != NotificationPreviewNone {
+		t.Errorf("notification_preview default = %q, want none", got.NotificationPreview)
+	}
+}
+
+func TestNativeClientPolicyDataControlOverlay(t *testing.T) {
+	var values Values
+	if err := json.Unmarshal([]byte(`{
+		"allow_share_out": false, "allow_share_in": false, "allow_cloud_stt": true,
+		"notification_preview": "title", "allow_notification_actions": false,
+		"allow_system_surfaces": true}`), &values); err != nil {
+		t.Fatal(err)
+	}
+	got := NativeClientPolicyFromValues(values)
+	if got.AllowShareOut || got.AllowShareIn || !got.AllowCloudSTT || got.NotificationPreview != NotificationPreviewTitle ||
+		got.AllowNotificationActions || !got.AllowSystemSurfaces {
+		t.Fatalf("overlay = %+v", got)
+	}
+	for _, junk := range []string{`{"notification_preview": "body"}`, `{"notification_preview": 1}`, `{"notification_preview": " Title "}`} {
+		values = nil
+		if err := json.Unmarshal([]byte(junk), &values); err != nil {
+			t.Fatal(err)
+		}
+		if got := NativeClientPolicyFromValues(values); got.NotificationPreview != NotificationPreviewNone {
+			t.Errorf("%s: notification_preview = %q, want the default none", junk, got.NotificationPreview)
+		}
 	}
 }

@@ -19,7 +19,7 @@ import (
 )
 
 // These tests run against the real PostgreSQL service the Test job in
-// .github/workflows/ci-go.yml provisions (postgres:16-alpine, exported as
+// .github/workflows/ci-go.yml provisions (pgvector/pgvector:0.8.5-pg16-trixie, exported as
 // ELITEA_TEST_DATABASE_URL), on the baseline tenant schema p_1 the 001_initial
 // migration creates. Every statement in internal/infra/db/repos/applications.go
 // was previously unexecuted in any environment; these exercise all twelve

@@ -4,7 +4,14 @@
 #   certs        generate local mTLS + runtime-plane material (idempotent)
 #   build        rebuild the stack's images from source (`up` reuses existing
 #                tags, so a code change needs this first)
-#   up           bring the stack up and wait for healthy
+#   up           bring the stack up and wait for healthy. It starts postgres
+#                first and runs pg-collation-repair before the rest
+#   pg-collation-repair
+#                reindex every database whose recorded collation version
+#                differs from the C library's, then record the new version.
+#                Needed once on a volume that an older image created (the
+#                Debian 12 to Debian 13 move changed glibc). Idempotent, and
+#                a no-op on a fresh volume
 #   seed         E2E/DEV CONVENIENCE, not required for a working stack: schema
 #                + OIDC users + RBAC fixtures — delegates to the E2E seeder
 #   seed-runtime E2E/DEV CONVENIENCE, not required for a working stack: `up`
@@ -34,13 +41,21 @@
 #   seed-native  NATIVE-CLIENT CONFORMANCE CONVENIENCE (ADR-0025 WP7), not
 #                required for a working stack: gives the chat persona
 #                (NATIVE_CONFORMANCE_USER, default e2e-chat@autotest.local) the
-#                notification update grant inside its personal project and
+#                notification update and delete grants inside its personal project and
 #                one fresh unseen notification there, so the suite's
 #                notification delta has a row to change. It registers no
 #                native client: the suite does that itself through the admin
 #                API, after it has proved the "no client, no endpoints" leg.
 #                deploy/scripts/native-conformance.sh calls it
-#   check        verify the gateway mTLS hop, the runtime plane and the chat
+#   seed-deepwiki-public
+#                DEEPWIKI NATIVE REAL-ENGINE CONVENIENCE, not required for a
+#                working stack: an ANONYMOUS GitHub repository toolkit
+#                (p_90200.configuration 9011, no token) beside the seed's
+#                9010, whose literal token GitHub refuses with 401 even for a
+#                public repository. Run after `seed`.
+#                apps/elitea-web/scripts/deepwiki-real-engine.sh calls it
+#                for DEEPWIKI_REAL_ENGINE=native
+#   check       verify the gateway mTLS hop, the runtime plane and the chat
 #                critical path (delegates the last to chat-smoke.py), plus the
 #                embedding path (embedding-path-check.sh) and a REAL elitea-sdk
 #                EliteAClient (sdk-client-check.sh). It counts
@@ -223,6 +238,48 @@ WORKER_JOIN_TIMEOUT="${STANDALONE_WORKER_JOIN_TIMEOUT:-90}"
 # ExitCode is 0 on a running container too, so it is read only in the exited
 # branch. A container whose health is `starting` or `unhealthy` is NOT settled:
 # this must never turn a real failure green.
+# ── Collation version repair ────────────────────────────────────────────────
+#
+# PostgreSQL records the C library's collation version per database. When the
+# image's glibc changes (pgvector/pgvector:*-pg18 moved from Debian 12 to
+# `-trixie`, glibc 2.36 to 2.41), text indexes built under the old rules can
+# be out of order, and the server logs "database ... has a collation version
+# mismatch". The repair is REINDEX DATABASE, then ALTER DATABASE ... REFRESH
+# COLLATION VERSION, for each database that reports a mismatch.
+#
+# Idempotent: after the refresh the versions match and the query returns
+# nothing. A fresh volume records the current version at initdb, so it is a
+# no-op there too. template0 accepts no connections and is skipped; nothing
+# builds indexes in it. REINDEX DATABASE reindexes only the database it is
+# connected to, so each one is run from inside its own database.
+pg_collation_repair() {
+  local dbs db
+  dbs="$($COMPOSE_BIN $COMPOSE_F exec -T postgres \
+           psql -U elitea -d postgres -v ON_ERROR_STOP=1 -tAc \
+           "SELECT datname FROM pg_database
+             WHERE datallowconn
+               AND datcollversion IS DISTINCT FROM pg_database_collation_actual_version(oid)")" || {
+    echo "ERROR: could not read collation versions from the postgres service." >&2
+    return 1
+  }
+  if [ -z "$dbs" ]; then
+    echo "→ PostgreSQL collation versions match; nothing to reindex."
+    return 0
+  fi
+  while IFS= read -r db; do
+    [ -n "$db" ] || continue
+    echo "→ Collation version changed for database ${db}: REINDEX, then REFRESH COLLATION VERSION…"
+    # psql interpolates :"db" (a quoted identifier) only in input it reads,
+    # not in -c, so the statements go in on stdin.
+    printf 'REINDEX DATABASE :"db";\n' |
+      $COMPOSE_BIN $COMPOSE_F exec -T postgres \
+        psql -U elitea -d "$db" -v ON_ERROR_STOP=1 -v db="$db" -q || return 1
+    printf 'ALTER DATABASE :"db" REFRESH COLLATION VERSION;\n' |
+      $COMPOSE_BIN $COMPOSE_F exec -T postgres \
+        psql -U elitea -d postgres -v ON_ERROR_STOP=1 -v db="$db" -q || return 1
+  done <<< "$dbs"
+}
+
 stack_is_settled() {
   $COMPOSE_BIN $COMPOSE_F ps --all --format json 2>/dev/null | python3 -c '
 import json, re, sys
@@ -827,6 +884,12 @@ case "${1:-}" in
       echo "         apps/elitea-web/scripts/e2e-stack.sh down" >&2
       exit 1
     fi
+    # PostgreSQL first, alone, so a volume created by an older image gets its
+    # collation repair before any service builds on its indexes. A fresh
+    # volume makes this a no-op.
+    echo "→ Starting PostgreSQL for the collation version check…"
+    $COMPOSE_BIN $COMPOSE_F up -d --wait postgres
+    pg_collation_repair
     echo "→ Bringing up the full standalone stack (${COMPOSE_BIN})…"
     # `--wait` returns 1 on a stack that is COMPLETELY healthy, because it reads
     # a one-shot job's exit as a failure even when the code is 0. This stack has
@@ -857,6 +920,10 @@ case "${1:-}" in
     echo "     OIDC provider http://localhost:${OIDC_PORT}"
     echo "     gateway       https://localhost:${STANDALONE_GATEWAY_PORT:-8085} (mTLS)"
     echo "   Next: $0 seed && $0 seed-runtime && $0 seed-llm && $0 check"
+    ;;
+
+  pg-collation-repair)
+    pg_collation_repair
     ;;
 
   build)
@@ -1308,8 +1375,9 @@ SQL
     # rule) carries HAND-LISTED grants, not the central corpus (see the seed's
     # comment on why: shared/0090's backfill skips any pair a project already
     # overrides). The list grants the notification LIST but not the UPDATE a
-    # client needs to mark one seen, so the grant is added here, beside the
-    # list, rather than widening the E2E seed every journey shares.
+    # client needs to mark one seen, nor the DELETE the 1.3 notification
+    # deletes need, so both grants are added here, beside the list, rather
+    # than widening the E2E seed every journey shares.
     #
     # The notification is inserted per run: the suite marks it seen, so a
     # re-run against the same stack needs a fresh unseen row. Fails loudly
@@ -1334,10 +1402,16 @@ BEGIN
       current_setting('native.user');
   END IF;
 END $$;
+-- update: mark one seen (notification_sync); delete: the 1.3 single and
+-- bulk notification deletes (contract_1_3), which require their own grant.
 INSERT INTO public.auth_core__project_role_permission (project_id, role_id, permission)
-SELECT r.project_id, r.id, 'models.notifications.notification.update'
+SELECT r.project_id, r.id, p.permission
 FROM public.auth_core__user u
 JOIN public.auth_core__project_role r ON r.project_id = 90100 + u.id AND r.name = 'admin'
+CROSS JOIN (VALUES
+    ('models.notifications.notification.update'),
+    ('models.notifications.notification.delete')
+) AS p(permission)
 WHERE u.email = current_setting('native.user')
 ON CONFLICT DO NOTHING;
 INSERT INTO centry.notifications (uuid, is_seen, project_id, user_id, meta, event_type)
@@ -1346,6 +1420,38 @@ SELECT gen_random_uuid(), false, 90100 + u.id, u.id,
        'native_conformance'
 FROM public.auth_core__user u
 WHERE u.email = current_setting('native.user');
+SQL
+    ;;
+
+  seed-deepwiki-public)
+    # The DeepWiki real-engine journey on the NATIVE engine clones a public
+    # repository from github.com (the native clone speaks HTTPS only, so the
+    # git daemon the legacy run uses cannot serve it). The seed's repository
+    # toolkit 9010 carries the literal token `e2e-not-a-real-token`, and the
+    # native clone sends it as Basic auth: GitHub answers 401 for a bad
+    # credential even on a public repository, so the clone would fail. This
+    # row is the same toolkit with no token at all, which the engine clones
+    # anonymously. The journey points its wiki toolkit at it through the
+    # settings panel (E2E_REAL_ENGINE_CODE_TOOLKIT). Fails loudly when the
+    # seed has not run (no tenant schema), rather than leaving the journey
+    # to report a missing row as a product defect.
+    echo "→ Seeding the anonymous GitHub repository toolkit (p_90200.configuration 9011)…"
+    $COMPOSE_BIN $COMPOSE_F exec -T postgres \
+      psql -v ON_ERROR_STOP=1 -U elitea -d elitea <<'SQL'
+DO $$
+BEGIN
+  IF to_regclass('p_90200.configuration') IS NULL THEN
+    RAISE EXCEPTION 'seed-deepwiki-public: p_90200.configuration does not exist; run seed first';
+  END IF;
+END $$;
+INSERT INTO p_90200.configuration
+    (id, project_id, elitea_title, type, section, data, meta, shared, status_ok, source, created_at, updated_at)
+VALUES
+    (9011, 90200, 'e2e-github-public', 'github', 'toolkits',
+     '{"base_url":"https://api.github.com"}',
+     '{}', false, true, 'user', NOW(), NOW())
+ON CONFLICT (id) DO UPDATE
+    SET type = EXCLUDED.type, section = EXCLUDED.section, data = EXCLUDED.data, updated_at = NOW();
 SQL
     ;;
 
@@ -1614,8 +1720,8 @@ PY
     NETWORK="${PROJECT}_default"
     RUNTIME_CERTS="${REPO_ROOT}/deploy/certs/runtime"
     probe() {
-      # postgres:18 rather than the alpine-based images: this needs the openssl
-      # CLI, and alpine:3.20 does not ship one.
+      # postgres:18 rather than the slim helper images: this needs the openssl
+      # CLI, and debian:trixie-slim does not ship one.
       $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" \
         --entrypoint sh docker.io/library/postgres:18 -c "$1" 2>&1 || true
     }
@@ -1638,11 +1744,15 @@ PY
     echo "→ command bus (JetStream):"
     STREAM="ELITEA_RT_V1_AGENT"
     DURABLE="elitea-agent-worker-v1"
-    NATS_CONTAINER="$($ENGINE ps --format '{{.Names}}' | grep -m1 "${PROJECT}.*-nats-[0-9]" || true)"
-    # /jsz?consumers=true from the server's own monitoring port, read inside
-    # its container: it names the stream AND its durable, so a stream the
-    # bootstrap created without the consumer does not pass.
-    jsz="$($ENGINE exec "$NATS_CONTAINER" wget -qO- 'http://127.0.0.1:8222/jsz?consumers=true' 2>&1 || true)"
+    # The server image is scratch (no shell, no wget), so the monitoring port
+    # is read from the nats-health sidecar, which has Python on the same
+    # network.
+    NATS_HEALTH_CONTAINER="$($ENGINE ps --format '{{.Names}}' | grep -m1 "${PROJECT}.*-nats-health-[0-9]" || true)"
+    # /jsz?consumers=true from the server's own monitoring port: it names the
+    # stream AND its durable, so a stream the bootstrap created without the
+    # consumer does not pass.
+    jsz="$($ENGINE exec "$NATS_HEALTH_CONTAINER" python3 -c \
+      "import urllib.request; print(urllib.request.urlopen('http://nats:8222/jsz?consumers=true', timeout=10).read().decode())" 2>&1 || true)"
     case "$jsz" in
       *"${STREAM}"*"${DURABLE}"*) ok "${STREAM} has its durable consumer ${DURABLE}" ;;
       *) fail "${STREAM} or its durable ${DURABLE} is missing — nats-bootstrap did not run" ;;
@@ -1701,17 +1811,22 @@ PY
     #
     # WAITED FOR, not sampled once: the worker has no healthcheck, so
     # `compose up -d --wait` does not wait for it, and it connects only after a
-    # start-up that imports the whole SDK. The poll runs inside the NATS
-    # container; the last reply is printed either way.
-    connz="$($ENGINE exec "$NATS_CONTAINER" sh -c \
-      "deadline=\$(( \$(date +%s) + ${WORKER_JOIN_TIMEOUT} ))
-       while : ; do
-         reply=\$(wget -qO- 'http://127.0.0.1:8222/connz?limit=1024' 2>&1 || true)
-         case \"\$reply\" in *standalone-agent-worker*) break ;; esac
-         [ \$(date +%s) -lt \$deadline ] || break
-         sleep 2
-       done
-       printf '%s' \"\$reply\"" 2>&1 || true)"
+    # start-up that imports the whole SDK. The poll runs in the nats-health
+    # sidecar; the last reply is printed either way.
+    connz="$($ENGINE exec "$NATS_HEALTH_CONTAINER" python3 -c '
+import sys, time, urllib.request
+deadline = time.time() + float(sys.argv[1])
+reply = ""
+while True:
+    try:
+        reply = urllib.request.urlopen("http://nats:8222/connz?limit=1024", timeout=10).read().decode()
+    except Exception as exc:
+        reply = str(exc)
+    if "standalone-agent-worker" in reply or time.time() >= deadline:
+        break
+    time.sleep(2)
+sys.stdout.write(reply)
+' "${WORKER_JOIN_TIMEOUT}" 2>&1 || true)"
     case "$connz" in
       *standalone-agent-worker*) ok "worker connected to the command bus" ;;
       *)

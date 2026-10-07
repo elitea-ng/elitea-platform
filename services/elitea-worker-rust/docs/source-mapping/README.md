@@ -46,6 +46,8 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Main merge continuation](main-integration-20261007.md) records the verified handoff, complete listener reruns, and pending current-image and NATS/Code acceptance.
+
 - [Sandbox phase deadlines](sandbox-phase-deadlines-20261002.md) separates durable readiness and execution clocks and records rolling compatibility and Docker/Kubernetes browser acceptance.
 
 - [Main integration and PR 883 release preparation](main-integration-20261001.md) records conflict resolution, migration identities, fresh CI repairs, and preserved Point 5 work.

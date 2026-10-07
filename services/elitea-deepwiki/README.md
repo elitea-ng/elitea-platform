@@ -702,7 +702,7 @@ cd services/elitea-deepwiki && python -m pip install -e ".[test]" && python -m p
 The storage-parity suite needs PostgreSQL with pgvector:
 
 ```bash
-podman run -d --name dwpg -e POSTGRES_USER=deepwiki -e POSTGRES_PASSWORD=deepwiki -e POSTGRES_DB=deepwiki -p 15434:5432 pgvector/pgvector:0.8.5-pg16
+podman run -d --name dwpg -e POSTGRES_USER=deepwiki -e POSTGRES_PASSWORD=deepwiki -e POSTGRES_DB=deepwiki -p 15434:5432 pgvector/pgvector:0.8.5-pg16-trixie
 ```
 
 ```bash
@@ -750,14 +750,56 @@ A Job, never a startup step. Two replicas starting together would both
 migrate, and the second would either race the first or have to decide whether
 finding the work done is an error.
 
+### The migration role needs CREATE on the database
+
+Migration 0003 creates schema `deepwiki_build` (the Rust engine's build space,
+ADR-0026 decision 5; 0004 adds a column to it). `CREATE SCHEMA` needs the
+`CREATE` privilege on the DATABASE, which is more than rights on schema
+`public`: a role that owns the database has it, a role that was only granted
+`public` fails 0003 with `permission denied for database`, and the migration
+Job stops there. Before the first upgrade that carries 0003, either
+
+```sql
+GRANT CREATE ON DATABASE deepwiki TO <migration role>;
+```
+
+or let an administrator create the schema for that role, after which the
+migration's `IF NOT EXISTS` needs no database privilege:
+
+```sql
+CREATE SCHEMA deepwiki_build AUTHORIZATION <migration role>;
+```
+
+The Helm chart does not create database roles: the Job and the Deployment use
+whatever role `ELITEA_DEEPWIKI_DATABASE_URL` names (the chart-wide
+`postgresql.existingSecret`, or `deepwiki.secrets.ELITEA_DEEPWIKI_DATABASE_URL`),
+so this grant is the operator's (see the `deepwiki.migrate` block of
+`deploy/helm/elitea/values.yaml`). The same role serves the engine: it needs
+`USAGE` on the schema and read/write on its tables, and ownership of the live
+and staging tables for the engine's `ANALYZE` after a publish.
+
 ### Two images, and the default one refuses every tool
 
-`docker buildx bake elitea-deepwiki` builds the shipping image: the whole SPI,
-the engine SOURCE, and none of its ~92-package closure. It refuses every tool
-and `GET /health` names the refusing runner, so it cannot look like it has an
-engine. `docker buildx bake elitea-deepwiki-engine` builds the one that can
-actually generate a wiki. Only the first is released — publishing a multi-GB ML
-closure needs a scan-threshold decision that P3 does not make.
+**The shipping engine is the Rust-native one (ADR-0026 phase 7):**
+`ghcr.io/elitea-ng/elitea-deepwiki-engine-native`, built by `docker buildx
+bake elitea-deepwiki-engine-native` from `services/elitea-deepwiki-engine`,
+released, scanned and signed with the other images, and selected in Helm by
+`deepwiki.engine.runner: native` (the migrate Job then runs that image's
+`migrate` subcommand against the same ledger). Its runbook is
+`services/elitea-deepwiki-engine/README.md`. It embeds this package's
+`migrations/` directory, so the SQL files stay here, one set for both runners.
+
+The two Python images below are the LEGACY engine path, kept behind
+`deepwiki.engine.runner: legacy` until the native engine's parity sign-off:
+
+`docker buildx bake elitea-deepwiki` builds the released Python image: the
+whole SPI, the engine SOURCE, and none of its ~92-package closure. It refuses
+every tool and `GET /health` names the refusing runner, so it cannot look like
+it has an engine. `docker buildx bake elitea-deepwiki-engine` builds the
+Python one that can actually generate a wiki (the `-engine` tag the chart's
+`legacy` runner requires). Only the first is released — publishing a multi-GB
+ML closure needs a scan-threshold decision that P3 does not make, and the
+native engine is what removes the need to make it.
 
 ### Kubernetes
 

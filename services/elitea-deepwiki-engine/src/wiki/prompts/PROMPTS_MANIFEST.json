@@ -1,0 +1,26 @@
+{
+  "_comment": "ADR-0026 decision 8: every prompt the page path sends, embedded verbatim. sha256 is of the Python VALUE (UTF-8); tests/wiki_prompts.rs re-derives it from the Python source.",
+  "prompts": [
+    {
+      "file": "page_content_v3_tone_adjusted.txt",
+      "source": "services/elitea-deepwiki/src/elitea_deepwiki/engine/prompts/wiki_prompts_enhanced.py",
+      "symbol": "ENHANCED_CONTENT_GENERATION_PROMPT_V3_TONE_ADJUSTED",
+      "sha256": "6f7fe0b51094a6be0e4d43f42246cdd614302506a8ecac31f03b8aeed7646ab8",
+      "chars": 19269
+    },
+    {
+      "file": "target_audience_mixed.txt",
+      "source": "services/elitea-deepwiki/src/elitea_deepwiki/engine/prompts/wiki_prompts_enhanced.py",
+      "symbol": "TARGET_AUDIENCES['mixed']",
+      "sha256": "2136ec76fa540ea3a2d836aafb75a5d81cfb08468d5bf42d0df748b5429aa44e",
+      "chars": 55
+    },
+    {
+      "file": "page_content_system.txt",
+      "source": "services/elitea-deepwiki/src/elitea_deepwiki/engine/agents/wiki_graph_optimized.py",
+      "symbol": "OptimizedWikiGenerationAgent._generate_simple (system message)",
+      "sha256": "09c5c6de893d4d0efcc3a1cc434c8c5ebf2604778243471c61afd61788bf37b6",
+      "chars": 90
+    }
+  ]
+}

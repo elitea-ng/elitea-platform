@@ -1,0 +1,550 @@
+{
+ "question": "How are notes stored and searched?",
+ "ask": [
+  {
+   "tool_calls": [
+    {
+     "id": "call_a1",
+     "name": "search_symbols",
+     "arguments": {
+      "query": "note store"
+     }
+    },
+    {
+     "id": "call_a2",
+     "name": "query_graph",
+     "arguments": {
+      "expression": "type:class limit:5"
+     }
+    }
+   ]
+  },
+  {
+   "content": "Let me look closer.",
+   "tool_calls": [
+    {
+     "id": "call_b1",
+     "name": "get_relationships_tool",
+     "arguments": {
+      "symbol_name": "NoteStore"
+     }
+    },
+    {
+     "id": "call_b2",
+     "name": "get_code",
+     "arguments": {
+      "symbol_name": "NoteStore",
+      "max_lines": 20
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "id": "call_c1",
+     "name": "search_docs",
+     "arguments": {
+      "query": "storage architecture"
+     }
+    },
+    {
+     "id": "call_c2",
+     "name": "think",
+     "arguments": {
+      "reflection": "NoteStore persists notes."
+     }
+    }
+   ]
+  },
+  {
+   "content": "Notes are stored by `NoteStore` in `app/models.py`.\n\n---\n**Files Referenced:**\n- `app/models.py` \u2014 the store\n"
+  }
+ ],
+ "deep_research": [
+  {
+   "tool_calls": [
+    {
+     "id": "call_d1",
+     "name": "write_todos",
+     "arguments": {
+      "todos": [
+       {
+        "content": "Find the store",
+        "status": "in_progress"
+       },
+       {
+        "content": "Write report",
+        "status": "pending"
+       }
+      ]
+     }
+    },
+    {
+     "id": "call_d2",
+     "name": "search_codebase",
+     "arguments": {
+      "query": "note store save"
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "id": "call_e1",
+     "name": "get_symbol_relationships",
+     "arguments": {
+      "symbol_name": "NoteStore"
+     }
+    },
+    {
+     "id": "call_e2",
+     "name": "search_graph",
+     "arguments": {
+      "query": "handle_search"
+     }
+    },
+    {
+     "id": "call_e3",
+     "name": "write_file",
+     "arguments": {
+      "file_path": "/findings/store.md",
+      "content": "NoteStore saves notes.\nSecond line."
+     }
+    }
+   ]
+  },
+  {
+   "tool_calls": [
+    {
+     "id": "call_f1",
+     "name": "ls",
+     "arguments": {
+      "path": "/findings"
+     }
+    },
+    {
+     "id": "call_f2",
+     "name": "read_file",
+     "arguments": {
+      "file_path": "/findings/store.md"
+     }
+    },
+    {
+     "id": "call_f3",
+     "name": "think",
+     "arguments": {
+      "reflection": "Enough."
+     }
+    }
+   ]
+  },
+  {
+   "content": "# Research Report: Notes\n\n## Executive Summary\nNotes live in `NoteStore`.\n"
+  }
+ ],
+ "vfs": [
+  {
+   "name": "ls",
+   "arguments": {
+    "path": "/"
+   }
+  },
+  {
+   "name": "write_file",
+   "arguments": {
+    "file_path": "/a.md",
+    "content": "hello\nworld"
+   }
+  },
+  {
+   "name": "write_file",
+   "arguments": {
+    "file_path": "/a.md",
+    "content": "x\ny\nx"
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "/a.md"
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "/missing.md"
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "/a.md",
+    "offset": 1,
+    "limit": 1
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "/a.md",
+    "offset": 10
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "a.md"
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "/../etc/passwd"
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "/findings/../a.md"
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "~/a.md"
+   }
+  },
+  {
+   "name": "edit_file",
+   "arguments": {
+    "file_path": "/a.md",
+    "old_string": "x",
+    "new_string": "z"
+   }
+  },
+  {
+   "name": "edit_file",
+   "arguments": {
+    "file_path": "/a.md",
+    "old_string": "x",
+    "new_string": "z",
+    "replace_all": true
+   }
+  },
+  {
+   "name": "edit_file",
+   "arguments": {
+    "file_path": "/a.md",
+    "old_string": "q",
+    "new_string": "z"
+   }
+  },
+  {
+   "name": "edit_file",
+   "arguments": {
+    "file_path": "/a.md",
+    "old_string": "z",
+    "new_string": "z"
+   }
+  },
+  {
+   "name": "edit_file",
+   "arguments": {
+    "file_path": "/nope.md",
+    "old_string": "z",
+    "new_string": "w"
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "/a.md"
+   }
+  },
+  {
+   "name": "write_file",
+   "arguments": {
+    "file_path": "/dir/b.py",
+    "content": "def f():\n    return 1\n"
+   }
+  },
+  {
+   "name": "write_file",
+   "arguments": {
+    "file_path": "/dir/sub/c.md",
+    "content": "return here\nand return again\n"
+   }
+  },
+  {
+   "name": "write_file",
+   "arguments": {
+    "file_path": "/e.md",
+    "content": ""
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "/e.md"
+   }
+  },
+  {
+   "name": "ls",
+   "arguments": {
+    "path": "/"
+   }
+  },
+  {
+   "name": "ls",
+   "arguments": {
+    "path": "/dir"
+   }
+  },
+  {
+   "name": "ls",
+   "arguments": {
+    "path": "/dir/"
+   }
+  },
+  {
+   "name": "ls",
+   "arguments": {
+    "path": "/nothing"
+   }
+  },
+  {
+   "name": "ls",
+   "arguments": {
+    "path": "relative"
+   }
+  },
+  {
+   "name": "glob",
+   "arguments": {
+    "pattern": "*.py"
+   }
+  },
+  {
+   "name": "glob",
+   "arguments": {
+    "pattern": "/*.md"
+   }
+  },
+  {
+   "name": "glob",
+   "arguments": {
+    "pattern": "**/*.md"
+   }
+  },
+  {
+   "name": "glob",
+   "arguments": {
+    "pattern": "*.md",
+    "path": "/dir"
+   }
+  },
+  {
+   "name": "glob",
+   "arguments": {
+    "pattern": "*.{py,md}"
+   }
+  },
+  {
+   "name": "glob",
+   "arguments": {
+    "pattern": "["
+   }
+  },
+  {
+   "name": "glob",
+   "arguments": {
+    "pattern": "*.zzz"
+   }
+  },
+  {
+   "name": "grep",
+   "arguments": {
+    "pattern": "return"
+   }
+  },
+  {
+   "name": "grep",
+   "arguments": {
+    "pattern": "return",
+    "output_mode": "content"
+   }
+  },
+  {
+   "name": "grep",
+   "arguments": {
+    "pattern": "return",
+    "output_mode": "count"
+   }
+  },
+  {
+   "name": "grep",
+   "arguments": {
+    "pattern": "return",
+    "glob": "*.py"
+   }
+  },
+  {
+   "name": "grep",
+   "arguments": {
+    "pattern": "return",
+    "path": "/dir/sub"
+   }
+  },
+  {
+   "name": "grep",
+   "arguments": {
+    "pattern": "zzz"
+   }
+  },
+  {
+   "name": "grep",
+   "arguments": {
+    "pattern": "return",
+    "output_mode": "content",
+    "max_count": 1
+   }
+  },
+  {
+   "name": "grep",
+   "arguments": {
+    "pattern": "re.urn"
+   }
+  },
+  {
+   "name": "delete",
+   "arguments": {
+    "file_path": "/dir"
+   }
+  },
+  {
+   "name": "delete",
+   "arguments": {
+    "file_path": "/dir"
+   }
+  },
+  {
+   "name": "ls",
+   "arguments": {
+    "path": "/"
+   }
+  },
+  {
+   "name": "write_file",
+   "arguments": {
+    "file_path": "/big.txt",
+    "content": {
+     "$repeat": [
+      "x",
+      100000
+     ]
+    }
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "/big.txt"
+   }
+  },
+  {
+   "name": "write_file",
+   "arguments": {
+    "file_path": "/long.txt",
+    "content": {
+     "$repeat": [
+      "a",
+      12000
+     ]
+    }
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "/long.txt"
+   }
+  },
+  {
+   "name": "write_todos",
+   "arguments": {
+    "todos": [
+     {
+      "content": "A",
+      "status": "pending"
+     },
+     {
+      "content": "B",
+      "status": "in_progress"
+     }
+    ]
+   }
+  },
+  {
+   "name": "write_todos",
+   "arguments": {
+    "todos": [
+     {
+      "content": "A",
+      "status": "bogus"
+     }
+    ]
+   }
+  },
+  {
+   "name": "write_todos",
+   "arguments": {
+    "todos": [
+     {
+      "content": "A"
+     }
+    ]
+   }
+  },
+  {
+   "name": "write_todos",
+   "arguments": {
+    "todos": []
+   }
+  },
+  {
+   "name": "read_file",
+   "arguments": {}
+  },
+  {
+   "name": "read_file",
+   "arguments": {
+    "file_path": "/a.md",
+    "limit": "many"
+   }
+  },
+  {
+   "name": "nonexistent_tool",
+   "arguments": {
+    "x": 1
+   }
+  }
+ ],
+ "resolve": {
+  "question": "Where are notes {stored}?",
+  "wikis": [
+   {
+    "wiki_id": "acme--notes--main",
+    "wiki_title": "Notes",
+    "description": "A notes service xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   {
+    "wiki_id": "acme--other--main",
+    "wiki_title": null,
+    "description": null
+   },
+   "bare--id--main"
+  ]
+ }
+}

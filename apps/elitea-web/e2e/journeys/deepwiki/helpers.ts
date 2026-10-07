@@ -63,10 +63,14 @@ export async function readObject(page: Page, key: string): Promise<{ status: num
   return { status: response.status(), text: await response.text() };
 }
 
-/** Lists the keys under a wiki id, the way DeleteWikiButton does. */
-export async function listKeys(page: Page, wikiId: string): Promise<string[]> {
+/**
+ * Lists the keys under a wiki id, the way DeleteWikiButton does. `limit`
+ * is the listing's page size: a wiki generated from a real repository can
+ * hold more than the default 200 objects.
+ */
+export async function listKeys(page: Page, wikiId: string, limit = 200): Promise<string[]> {
   const response = await page.request.get(
-    `${BASE_URL}/api/v2/artifacts/objects/${SEEDED.projectId}/${SEEDED.bucket}?prefix=${encodeURIComponent(wikiId + '/')}&limit=200`,
+    `${BASE_URL}/api/v2/artifacts/objects/${SEEDED.projectId}/${SEEDED.bucket}?prefix=${encodeURIComponent(wikiId + '/')}&limit=${limit}`,
   );
   if (response.status() === 404) return [];
   expect(response.ok(), `listing ${wikiId}: ${response.status()}`).toBe(true);

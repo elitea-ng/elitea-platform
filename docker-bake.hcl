@@ -146,8 +146,29 @@ target "elitea-deepwiki-engine" {
   cache-to   = ["type=gha,mode=max,scope=elitea-deepwiki-engine"]
 }
 
+# The Rust-native DeepWiki engine (ADR-0026), and the engine sidecar the
+# chart runs for `deepwiki.engine.runner: native`. One binary on distroless
+# base-nossl-debian13 plus libgcc_s, built with cargo-auditable. Its own repository, not a tag
+# suffix of elitea-deepwiki: it is a different image with a different scan
+# surface (`rustbinary`, not `python-pkg`).
+#
+# Repo-root context, because the binary embeds the service migrations
+# (include_str!) from services/elitea-deepwiki/src/elitea_deepwiki/migrations,
+# outside the crate. The Containerfile COPYs exactly that directory.
+#
+# Out of `group "default"`, like the worker: it compiles ~420 crates from
+# source. Name it to build it.
+target "elitea-deepwiki-engine-native" {
+  context    = "."
+  dockerfile = "services/elitea-deepwiki-engine/Containerfile"
+  tags       = ["${REGISTRY}/elitea-deepwiki-engine-native:${TAG}"]
+  cache-from = ["type=gha,scope=elitea-deepwiki-engine-native"]
+  cache-to   = ["type=gha,mode=max,scope=elitea-deepwiki-engine-native"]
+  platforms  = ["linux/amd64", "linux/arm64"]
+}
+
 group "deepwiki" {
-  targets = ["elitea-deepwiki", "elitea-deepwiki-engine"]
+  targets = ["elitea-deepwiki", "elitea-deepwiki-engine", "elitea-deepwiki-engine-native"]
 }
 
 # The Inventory provider engine (ADR-0023 H4c). Context is the repository root

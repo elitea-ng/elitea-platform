@@ -705,7 +705,12 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // stay `handwritten` and two ids came off the reverse-check allowlist),
 // listParticipantCandidates and downloadConversationAttachment (native client
 // reads; no browser caller yet). The manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 307;
+// 307 -> 308 (client contract 1.3): cancelChatExecution describes the
+// agent-execution stop the web already calls through a hand-written client
+// (pipelines.stopLlmTask stays `handwritten`; its id came off the
+// reverse-check allowlist). The fourteen operations 1.3 only tags `client`
+// were already counted. The manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 308;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

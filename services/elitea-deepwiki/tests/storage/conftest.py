@@ -7,7 +7,7 @@ exact failure mode this whole phase exists to avoid.
 
     podman run -d --name dwpg -e POSTGRES_PASSWORD=deepwiki \\
         -e POSTGRES_USER=deepwiki -e POSTGRES_DB=deepwiki \\
-        -p 15434:5432 pgvector/pgvector:0.8.5-pg16
+        -p 15434:5432 pgvector/pgvector:0.8.5-pg16-trixie
     export DEEPWIKI_TEST_DSN=postgresql://deepwiki:deepwiki@127.0.0.1:15434/deepwiki
 """
 
@@ -119,6 +119,23 @@ def dsn() -> str:
     pytest.skip(message)
 
 
+#: The clean slate the PostgreSQL fixture starts from: every object the
+#: migrations create, dropped in dependency order. The build space schema
+#: (0003) goes BEFORE the text search configuration: its generated `fts`
+#: column depends on `deepwiki_porter`, so dropping the configuration first
+#: fails on any database a previous run migrated.
+#: `test_migrations.py` checks this list against the migration files.
+RESET_STATEMENTS: tuple[str, ...] = (
+    "DROP SCHEMA IF EXISTS deepwiki_build CASCADE",
+    "DROP TABLE IF EXISTS wiki_bm25_postings, wiki_bm25_terms, "
+    "wiki_bm25_docs, wiki_bm25_meta, wiki_node_embeddings, "
+    "wiki_edges, wiki_nodes, wikis, invocation_events, invocations, "
+    "schema_migrations CASCADE",
+    "DROP TEXT SEARCH CONFIGURATION IF EXISTS deepwiki_porter",
+    "DROP TEXT SEARCH DICTIONARY IF EXISTS deepwiki_stem",
+)
+
+
 @pytest.fixture(scope="session")
 def postgres_backend(dsn: str, corpus, embeddings, documents) -> Iterator[Any]:
     """A migrated database loaded with the fixture corpus."""
@@ -131,13 +148,8 @@ def postgres_backend(dsn: str, corpus, embeddings, documents) -> Iterator[Any]:
     try:
         # A clean slate: parity must not depend on leftovers from a prior run.
         with connection.cursor() as cursor:
-            cursor.execute(
-                "DROP TABLE IF EXISTS wiki_bm25_postings, wiki_bm25_terms, "
-                "wiki_bm25_docs, wiki_bm25_meta, wiki_node_embeddings, "
-                "wiki_edges, wiki_nodes, wikis, schema_migrations CASCADE"
-            )
-            cursor.execute("DROP TEXT SEARCH CONFIGURATION IF EXISTS deepwiki_porter")
-            cursor.execute("DROP TEXT SEARCH DICTIONARY IF EXISTS deepwiki_stem")
+            for statement in RESET_STATEMENTS:
+                cursor.execute(statement)
         connection.commit()
 
         apply_all(connection)

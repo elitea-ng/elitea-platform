@@ -441,3 +441,10 @@ The [typed failure mapping](docs/source-mapping/code-terminal-failure-20261006.m
 Its focused Rust and Main checks pass. Deployed negative UI acceptance remains open.
 Parallel, Map, resilience, data shaping, and HTTP actions retain their separate acceptance gates.
 Workspaces remain in the post-worker backlog, outside active Point 5 scope.
+
+## Main merge continuation, 2026-10-07
+
+The [integration mapping](docs/source-mapping/main-integration-20261007.md) records source, snapshot, deployment-render, generation, and listener verification.
+The merge preserves existing runtime work and mandatory NATS replacement.
+These source checks do not prove current images, integrated CI, or candidate Code recovery.
+All worker gates retain their requirement-specific acceptance boundaries.

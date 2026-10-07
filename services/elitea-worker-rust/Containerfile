@@ -1,23 +1,27 @@
 # syntax=docker/dockerfile:1.7
 
-# Keep the GCC runtime from the same Debian release, with its package records and licenses.
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime-cc
-FROM rust:1.97.1-bookworm AS runtime-libraries
-COPY --from=runtime-cc /lib/ /cc-lib/
+# Debian 13 (trixie) throughout, the release every image in this repository
+# is based on. Keep the GCC runtime from the same Debian release, with its
+# package records and licenses. Debian 13 is merged-/usr, so libgcc_s lives in
+# /usr/lib/<triplet>/, and its base package is gcc-14-base (gcc-12-base on
+# Debian 12). services/elitea-deepwiki-engine/Containerfile does the same.
+FROM gcr.io/distroless/cc-debian13:nonroot AS runtime-cc
+FROM rust:1.97.1-trixie AS runtime-libraries
+COPY --from=runtime-cc /usr/lib/ /cc-lib/
 COPY --from=runtime-cc /var/lib/dpkg/status.d/libgcc-s1* /runtime-files/var/lib/dpkg/status.d/
-COPY --from=runtime-cc /var/lib/dpkg/status.d/gcc-12-base* /runtime-files/var/lib/dpkg/status.d/
-COPY --from=runtime-cc /usr/share/doc/gcc-12-base/ /runtime-files/usr/share/doc/gcc-12-base/
+COPY --from=runtime-cc /var/lib/dpkg/status.d/gcc-14-base* /runtime-files/var/lib/dpkg/status.d/
+COPY --from=runtime-cc /usr/share/doc/gcc-14-base/ /runtime-files/usr/share/doc/gcc-14-base/
 COPY --from=runtime-cc /usr/share/lintian/overrides/libgcc-s1 /runtime-files/usr/share/lintian/overrides/libgcc-s1
 RUN cd /cc-lib && \
     set -- */libgcc_s.so.1 && test "$#" -eq 1 && test -f "$1" && \
-    mkdir -p /runtime-files/lib && cp --parents "$1" /runtime-files/lib && \
-    ln -s gcc-12-base /runtime-files/usr/share/doc/libgcc-s1
+    mkdir -p /runtime-files/usr/lib && cp --parents "$1" /runtime-files/usr/lib && \
+    ln -s gcc-14-base /runtime-files/usr/share/doc/libgcc-s1
 
 # Rust TLS uses rustls. This base retains glibc and CA roots without system OpenSSL.
-FROM gcr.io/distroless/base-nossl-debian12:nonroot AS runtime-base
+FROM gcr.io/distroless/base-nossl-debian13:nonroot AS runtime-base
 COPY --from=runtime-libraries /runtime-files/ /
 
-FROM rust:1.97.1-bookworm AS builder-base
+FROM rust:1.97.1-trixie AS builder-base
 
 WORKDIR /src
 
@@ -66,7 +70,7 @@ if grep -Eq 'Shared library: \[(libssl|libcrypto)[.]' /tmp/runtime-dynamic; then
     echo 'System OpenSSL is not part of this runtime.' >&2
     exit 1
 fi
-test ! -e /runtime-root/var/lib/dpkg/status.d/libssl3
+test -z "$(find /runtime-root/var/lib/dpkg/status.d -name 'libssl*')"
 test -z "$(find /runtime-root -name 'libssl.so*' -o -name 'libcrypto.so*')"
 test -s /runtime-root/etc/ssl/certs/ca-certificates.crt
 interpreter="$(readelf --program-headers --wide "$artifact" | sed -n 's/.*Requesting program interpreter: \(.*\)]/\1/p')"
