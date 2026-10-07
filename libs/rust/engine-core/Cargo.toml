@@ -1,0 +1,20 @@
+[package]
+name = "elitea-engine-core"
+description = "Error contract, NDJSON stream, stop flag, secrets and Python-compatible text for the engine sidecars."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# `preserve_order`: the engines answer with Python dicts, whose key order is
+# insertion order; `pyjson` writes them back in that order.
+serde_json = { version = "1.0.151", features = ["preserve_order", "float_roundtrip"] }
+tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
+zeroize = "1.9.0"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt", "sync", "time"] }
+
+[lints]
+workspace = true

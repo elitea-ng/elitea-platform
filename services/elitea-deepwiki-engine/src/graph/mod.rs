@@ -43,7 +43,7 @@ pub mod markdown_structure;
 pub mod orm;
 pub mod phase1c;
 pub mod pyre;
-pub mod pystr;
+pub use elitea_engine_core::pystr;
 pub mod repo_files;
 pub mod shared_str;
 pub mod sql;

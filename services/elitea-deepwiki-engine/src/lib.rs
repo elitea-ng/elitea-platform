@@ -8,14 +8,14 @@
 pub mod ask;
 pub mod cgroup;
 pub mod config;
-pub mod errors;
+pub use elitea_engine_core::errors;
 pub mod generate;
 pub mod graph;
 pub mod healthcheck;
 pub mod ingest;
 pub mod llm;
 pub mod parsers;
-pub mod pyjson;
+pub use elitea_engine_core::pyjson;
 pub mod runner;
 pub mod server;
 pub mod source;

@@ -592,6 +592,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
+ "elitea-engine-core",
  "fancy-regex",
  "gix",
  "globset",
@@ -628,6 +629,15 @@ dependencies = [
  "tree-sitter-rust",
  "tree-sitter-typescript",
  "unicode-normalization",
+ "zeroize",
+]
+
+[[package]]
+name = "elitea-engine-core"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tokio",
  "zeroize",
 ]
 

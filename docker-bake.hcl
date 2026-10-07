@@ -117,6 +117,7 @@ target "elitea-subapp-host" {
 # It replaced the Python elitea-deepwiki images, which are no longer built.
 #
 # Repo-root context, as the Containerfile COPYs services/elitea-deepwiki-engine
+# and the shared engine crates in libs/rust
 # from there (the crate embeds its own migrations).
 #
 # Out of `group "default"`, like the worker: it compiles ~420 crates from

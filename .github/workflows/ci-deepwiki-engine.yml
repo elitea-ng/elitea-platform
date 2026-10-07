@@ -17,6 +17,10 @@ name: CI — DeepWiki native engine
 #     `loopback-git-http` feature, which --all-features turns on).
 #     DEEPWIKI_REQUIRE_POSTGRES=1 turns their "no database → skip" into a
 #     failure here;
+#   * the shared engine crates in libs/rust (ADR-0027) — fmt, Clippy,
+#     rustdoc and their own tests — in this job rather than one of their
+#     own, because the engine compiles the same crates and a separate job
+#     would spend a slot of the 20 on a duplicate dependency build;
 #   * the release binary, and then the Go sub-application host's own tests
 #     against it (internal/apps/deepwiki/run, native_engine_test.go): the
 #     host's sidecar client, composition and upload over the Rust engine.
@@ -28,6 +32,7 @@ on:
   pull_request:
     paths:
       - "services/elitea-deepwiki-engine/**"
+      - "libs/rust/**"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"
@@ -38,6 +43,7 @@ on:
       - main
     paths:
       - "services/elitea-deepwiki-engine/**"
+      - "libs/rust/**"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"
@@ -93,7 +99,19 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-          workspaces: services/elitea-deepwiki-engine
+          workspaces: |
+            services/elitea-deepwiki-engine
+            libs/rust
+
+      - name: Shared crates — formatting, Clippy, rustdoc, tests
+        working-directory: libs/rust
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo doc --locked --workspace --no-deps --all-features
+          cargo test --locked --workspace --all-targets --all-features
 
       - name: Check formatting
         run: cargo fmt --all -- --check

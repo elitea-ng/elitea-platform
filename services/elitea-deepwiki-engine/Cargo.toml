@@ -7,6 +7,9 @@ publish = false
 description = "The Rust-native DeepWiki engine behind the sub-application host's engine sidecar socket (ADR-0026)."
 
 [dependencies]
+# The engine sidecars' shared foundation (ADR-0027): errors, the NDJSON
+# stream and stop flag, secrets, Python-compatible text.
+elitea-engine-core = { path = "../../libs/rust/engine-core" }
 axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 # The Authorization header value. Already in the tree (gix-transport,
 # reqwest use the same version); a direct pin so the header is built here.

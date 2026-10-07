@@ -24,7 +24,7 @@ pub mod egress;
 pub mod identity;
 pub mod limits;
 pub mod providers;
-pub mod secret;
+pub use elitea_engine_core::secret;
 
 use crate::errors::{EngineError, ErrorType};
 use artifact::{ArtifactCaps, ArtifactTarget, PlatformObjects};
