@@ -1,0 +1,19 @@
+SECTION CLUSTER — {node_count} symbols across {file_count} files
+
+PAGES IN THIS SECTION:
+{pages_json}
+
+Output ONLY valid JSON in this exact shape (no markdown fences):
+{{
+    "section_name": "...",
+    "section_description": "...",
+    "pages": [
+        {{
+            "page_id": <integer matching the input page_id>,
+            "page_name": "...",
+            "description": "...",
+            "retrieval_query": "..."
+        }}
+        /* one entry per input page, in the same order */
+    ]
+}}

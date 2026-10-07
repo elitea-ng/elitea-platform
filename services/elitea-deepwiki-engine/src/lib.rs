@@ -16,6 +16,8 @@ pub mod runner;
 pub mod server;
 pub mod source;
 pub mod storage;
+pub mod structure;
+pub mod wiki;
 
 use config::{RunnerKind, Settings};
 use runner::Runner;

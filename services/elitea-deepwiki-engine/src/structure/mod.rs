@@ -1,0 +1,417 @@
+//! Repository analysis and wiki structure planning: the first two nodes of
+//! `generate_wiki`'s agent graph (`analyze_repository` →
+//! `generate_wiki_structure`, `agents/wiki_graph_optimized.py`; ADR-0026
+//! phase 5a).
+//!
+//! * [`analysis`] — the repository-analysis model call and its inputs.
+//! * [`cluster`] — the cluster planner (`planner_type=cluster`, what the
+//!   web app sends), over the index rows of Phase 3 ([`index`]).
+//! * [`plan_wiki_structure`] — the planner choice; the classic single-call
+//!   planner (`ENHANCED_WIKI_STRUCTURE_PROMPT`) that `auto` reaches for a
+//!   small repository, and that every deepagents choice falls back to
+//!   (Python's fallback when deepagents failed; deepagents is a later
+//!   unit, 5d).
+//!
+//! What page generation reads from the result is the
+//! [`spec::WikiStructureSpec`] (sections → pages with `target_symbols`,
+//! `target_docs`, `target_folders`, `key_files`, `retrieval_query` and, for
+//! the cluster planner, `metadata.cluster_node_ids`) and
+//! [`analysis::RepositoryAnalysis::repository_context`].
+
+pub mod analysis;
+pub mod centrality;
+pub mod cluster;
+pub mod files;
+pub mod index;
+pub mod model;
+pub mod parse;
+pub mod prompts;
+pub mod spec;
+pub mod validation;
+
+use crate::errors::{EngineError, ErrorType};
+use crate::llm::{ChatMessage, count_tokens};
+use analysis::RepositoryAnalysis;
+use cluster::{ClusterPlanner, ClusterSettings};
+use index::PlannerIndex;
+use model::{ChatModel, user_request};
+use spec::WikiStructureSpec;
+
+/// The structure planner the request names (`_resolve_planner_choice`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlannerChoice {
+    Cluster,
+    DeepAgents,
+    /// By size: deepagents for a large repository, else the classic one.
+    Auto,
+}
+
+impl PlannerChoice {
+    /// `planner_mode` or `planner_type` (the first that is set), else
+    /// `DEEPWIKI_STRUCTURE_PLANNER`, else `auto`. `agent`, `agentic` and
+    /// `deepagents` are deepagents; anything unknown is `auto`.
+    #[must_use]
+    pub fn resolve(raw: Option<&str>) -> Self {
+        match raw.map(|r| r.trim().to_lowercase()).as_deref() {
+            Some("agent" | "agentic" | "deepagents") => Self::DeepAgents,
+            Some("cluster") => Self::Cluster,
+            _ => Self::Auto,
+        }
+    }
+}
+
+/// The environment the two nodes read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StructureSettings {
+    /// `DEEPWIKI_USE_STRUCTURED_REPO_ANALYSIS=1`: the JSON analysis prompt.
+    pub structured_analysis: bool,
+    /// `DEEPWIKI_DEEPAGENTS_FILE_THRESHOLD` (2000). Python's `int`: a
+    /// negative value means "always" (for a non-empty file list).
+    pub deepagents_file_threshold: i64,
+    /// `DEEPWIKI_DEEPAGENTS_REPOCTX_TOKENS` (8000), as the file threshold.
+    pub deepagents_token_threshold: i64,
+    pub cluster: ClusterSettings,
+}
+
+impl Default for StructureSettings {
+    fn default() -> Self {
+        Self {
+            structured_analysis: false,
+            deepagents_file_threshold: 2000,
+            deepagents_token_threshold: 8000,
+            cluster: ClusterSettings::default(),
+        }
+    }
+}
+
+impl StructureSettings {
+    /// From an environment lookup. A threshold is read as Python's
+    /// `int()` reads it; one that is not an integer is the default
+    /// (`_get_env_int`).
+    #[must_use]
+    pub fn from_lookup(exclude_tests: bool, lookup: impl Fn(&str) -> Option<String>) -> Self {
+        let int = |name: &str, default: i64| match lookup(name) {
+            Some(value) if !value.is_empty() => py_int(&value).unwrap_or_else(|| {
+                tracing::warn!("Invalid int for {name}='{value}', using default {default}");
+                default
+            }),
+            _ => default,
+        };
+        Self {
+            structured_analysis: lookup("DEEPWIKI_USE_STRUCTURED_REPO_ANALYSIS").as_deref()
+                == Some("1"),
+            deepagents_file_threshold: int("DEEPWIKI_DEEPAGENTS_FILE_THRESHOLD", 2000),
+            deepagents_token_threshold: int("DEEPWIKI_DEEPAGENTS_REPOCTX_TOKENS", 8000),
+            cluster: ClusterSettings::from_lookup(exclude_tests, &lookup),
+        }
+    }
+
+    /// From the process environment.
+    #[must_use]
+    pub fn from_env(exclude_tests: bool) -> Self {
+        Self::from_lookup(exclude_tests, |name| std::env::var(name).ok())
+    }
+}
+
+/// Why the deepagents planner "fails": the reason in the fallback warning.
+pub const DEEPAGENTS_UNSUPPORTED: &str = "The deepagents structure planner is not supported by the native engine yet (ADR-0026 phase 5d)";
+
+/// A broken embedded template: a bug, reported as a `RuntimeError`.
+pub(crate) fn template_error(error: &prompts::FormatError) -> EngineError {
+    EngineError::new(ErrorType::Runtime, error.to_string())
+}
+
+/// `_should_use_deepagents_structure_planner` for `auto` (and for a
+/// cluster planner that could not run): at least `file_threshold` files, or
+/// a repository context of at least `token_threshold` tokens.
+///
+/// # Errors
+///
+/// Only a broken tokenizer build.
+pub fn auto_uses_deepagents(
+    files: usize,
+    repository_context: &str,
+    settings: &StructureSettings,
+) -> Result<bool, EngineError> {
+    let as_i64 = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
+    if files > 0 && as_i64(files) >= settings.deepagents_file_threshold {
+        return Ok(true);
+    }
+    Ok(!repository_context.is_empty()
+        && as_i64(count_tokens(repository_context)?) >= settings.deepagents_token_threshold)
+}
+
+/// Python's `int(text)` for base 10: surrounding whitespace, an optional
+/// sign, ASCII digits with single underscores between them. A value past
+/// the `i64` range saturates (Python's integers are unbounded, and a
+/// threshold that large is never reached either way). `None` where Python
+/// raises `ValueError`. Python also takes non-ASCII decimal digits
+/// (`int("٣")`); those read as invalid here.
+#[must_use]
+pub fn py_int(text: &str) -> Option<i64> {
+    let text = crate::graph::pystr::strip(text);
+    let (negative, digits) = match text.as_bytes().first() {
+        Some(b'-') => (true, &text[1..]),
+        Some(b'+') => (false, &text[1..]),
+        _ => (false, text),
+    };
+    if digits.is_empty() || digits.starts_with('_') || digits.ends_with('_') {
+        return None;
+    }
+    let mut value: i128 = 0;
+    let mut previous_underscore = false;
+    for c in digits.chars() {
+        if c == '_' {
+            if previous_underscore {
+                return None;
+            }
+            previous_underscore = true;
+            continue;
+        }
+        previous_underscore = false;
+        let digit = c.to_digit(10).filter(|_| c.is_ascii_digit())?;
+        value = value.saturating_mul(10).saturating_add(i128::from(digit));
+    }
+    let value = if negative { -value } else { value };
+    Some(i64::try_from(value).unwrap_or(if negative { i64::MIN } else { i64::MAX }))
+}
+
+/// `generate_wiki_structure`.
+///
+/// `cluster_index` is the index after Phase 3; without it the cluster
+/// planner cannot run, and the choice falls back to `auto` as Python's did
+/// when it found no `.wiki.db`.
+///
+/// When the choice lands on deepagents (asked for, or `auto` over the
+/// size thresholds), the classic planner runs instead, with Python's
+/// fallback warning: Python fell back the same way whenever deepagents
+/// failed, and here it is not ported (ADR-0026 phase 5d).
+///
+/// # Errors
+///
+/// A failed classic model call, a classic answer that holds broken JSON,
+/// or a stop.
+pub async fn plan_wiki_structure(
+    model: &impl ChatModel,
+    choice: PlannerChoice,
+    analysis: &RepositoryAnalysis,
+    cluster_index: Option<&PlannerIndex>,
+    settings: &StructureSettings,
+) -> Result<WikiStructureSpec, EngineError> {
+    if choice == PlannerChoice::Cluster {
+        if let Some(index) = cluster_index {
+            return ClusterPlanner::new(index, settings.cluster)
+                .plan_structure(model)
+                .await;
+        }
+        tracing::warn!(
+            "Cluster-based structure planner failed, falling back to deepagents: no cluster index"
+        );
+    }
+    let deepagents = match choice {
+        PlannerChoice::DeepAgents => true,
+        PlannerChoice::Cluster | PlannerChoice::Auto => {
+            auto_uses_deepagents(analysis.files.len(), &analysis.repository_context, settings)?
+        }
+    };
+    if deepagents {
+        // Python ran the deepagents planner and, when it raised, fell back
+        // to the classic one with this warning (no progress line). The
+        // planner is not ported, so it always "fails" here.
+        tracing::info!("Structure planner: deepagents (auto)");
+        tracing::warn!(
+            "Deepagents structure planner failed, falling back to LLM: {DEEPAGENTS_UNSUPPORTED}"
+        );
+    }
+    classic_structure(model, analysis).await
+}
+
+/// The most pages a classic answer creates. Real answers hold tens of
+/// pages (the prompt scales them with the repository); every page is one
+/// model call and one file, so a runaway answer is cut here.
+pub const MAX_CLASSIC_PAGES: usize = 500;
+
+/// Keep the first `max_pages` pages in structure order and drop the rest
+/// (and the sections left without a page), with a warning.
+/// DELIBERATE DIFFERENCE: Python generated every page the model listed.
+pub fn cap_pages(spec: &mut WikiStructureSpec, max_pages: usize) {
+    let total: usize = spec.sections.iter().map(|s| s.pages.len()).sum();
+    if total <= max_pages {
+        return;
+    }
+    let mut room = max_pages;
+    for section in &mut spec.sections {
+        section.pages.truncate(room);
+        room -= section.pages.len();
+    }
+    let before = spec.sections.len();
+    spec.sections.retain(|s| !s.pages.is_empty());
+    tracing::warn!(
+        pages = total,
+        kept = max_pages,
+        sections_dropped = before - spec.sections.len(),
+        "the structure lists more pages than the cap; the rest are dropped"
+    );
+    spec.total_pages = i64::try_from(max_pages).unwrap_or(i64::MAX);
+}
+
+/// The classic planner's messages.
+///
+/// # Errors
+///
+/// Only a broken prompt template.
+pub fn classic_messages(analysis: &RepositoryAnalysis) -> Result<Vec<ChatMessage>, EngineError> {
+    // `repo_context or str(repo_analysis)`.
+    let summary;
+    let repo_analysis = if analysis.repository_context.is_empty() {
+        summary = analysis.summary.to_python_str();
+        summary.as_str()
+    } else {
+        analysis.repository_context.as_str()
+    };
+    let user = prompts::format(
+        prompts::STRUCTURE_USER,
+        &[
+            ("repository_tree", &analysis.repository_tree),
+            ("readme_content", &analysis.readme_content),
+            ("repo_analysis", repo_analysis),
+            ("target_audience", prompts::TARGET_AUDIENCE_MIXED),
+            ("wiki_type", "comprehensive"),
+        ],
+    )
+    .map_err(|e| template_error(&e))?;
+    Ok(vec![
+        ChatMessage::System(prompts::STRUCTURE_SYSTEM),
+        ChatMessage::User(user),
+    ])
+}
+
+/// The classic single-call planner: the structure prompt, the answer's
+/// JSON validated as a `WikiStructureSpec`; an answer that does not
+/// validate becomes the fallback structure (one "Overview" page). At most
+/// [`MAX_CLASSIC_PAGES`] pages are kept.
+///
+/// # Errors
+///
+/// The model call's failure, or an answer whose JSON candidate does not
+/// parse (Python failed the node with "Structure generation failed").
+pub async fn classic_structure(
+    model: &impl ChatModel,
+    analysis: &RepositoryAnalysis,
+) -> Result<WikiStructureSpec, EngineError> {
+    let messages = classic_messages(analysis)?;
+    let answer = model.complete(&user_request(messages)).await?;
+    let data = parse::structure_json(&answer).map_err(|error| {
+        EngineError::new(
+            ErrorType::Runtime,
+            format!("Structure generation failed: {}", error.0),
+        )
+    })?;
+    match WikiStructureSpec::validate(&data) {
+        Ok(mut spec) => {
+            cap_pages(&mut spec, MAX_CLASSIC_PAGES);
+            Ok(spec)
+        }
+        Err(error) => {
+            tracing::warn!(
+                "WikiStructureSpec validation failed; using fallback structure. Error: {error}"
+            );
+            WikiStructureSpec::validate(&parse::fallback_structure())
+                .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn planner_choice_follows_the_aliases() {
+        assert_eq!(
+            PlannerChoice::resolve(Some(" Cluster ")),
+            PlannerChoice::Cluster
+        );
+        assert_eq!(
+            PlannerChoice::resolve(Some("agentic")),
+            PlannerChoice::DeepAgents
+        );
+        assert_eq!(PlannerChoice::resolve(Some("classic")), PlannerChoice::Auto);
+        assert_eq!(PlannerChoice::resolve(None), PlannerChoice::Auto);
+    }
+
+    /// Python's `int()` (python3.12): `int(" -5 ")` = -5, `int("1_000")` =
+    /// 1000, `int("+007")` = 7; `int("1__0")`, `int("_1")`, `int("1_")`,
+    /// `int("1.0")`, `int("")`, `int("- 1")` raise `ValueError`.
+    #[test]
+    fn thresholds_parse_as_python_int() {
+        assert_eq!(py_int(" -5 "), Some(-5));
+        assert_eq!(py_int("1_000"), Some(1000));
+        assert_eq!(py_int("+007"), Some(7));
+        assert_eq!(py_int("\u{3000}12\n"), Some(12));
+        assert_eq!(py_int("99999999999999999999999"), Some(i64::MAX));
+        assert_eq!(py_int("-99999999999999999999999"), Some(i64::MIN));
+        for bad in ["1__0", "_1", "1_", "1.0", "", "- 1", "+", "0x10", "1e3"] {
+            assert_eq!(py_int(bad), None, "{bad:?}");
+        }
+        // A negative threshold: any non-empty file list or context.
+        let always = StructureSettings::from_lookup(false, |name| {
+            name.starts_with("DEEPWIKI_DEEPAGENTS_")
+                .then(|| "-1".to_owned())
+        });
+        assert_eq!(always.deepagents_file_threshold, -1);
+        assert_eq!(auto_uses_deepagents(1, "", &always), Ok(true));
+        assert_eq!(auto_uses_deepagents(0, "x", &always), Ok(true));
+        assert_eq!(auto_uses_deepagents(0, "", &always), Ok(false));
+        let underscored = StructureSettings::from_lookup(false, |name| {
+            (name == "DEEPWIKI_DEEPAGENTS_FILE_THRESHOLD").then(|| " 1_500 ".to_owned())
+        });
+        assert_eq!(underscored.deepagents_file_threshold, 1500);
+    }
+
+    #[test]
+    fn a_classic_answer_keeps_at_most_the_page_cap() {
+        let section = |name: &str, pages: usize| {
+            serde_json::json!({
+                "section_name": name, "section_order": 1, "description": "d", "rationale": "r",
+                "pages": (0..pages).map(|i| serde_json::json!({
+                    "page_name": format!("{name} {i}"), "page_order": i, "description": "d",
+                    "content_focus": "c", "rationale": "r",
+                })).collect::<Vec<_>>(),
+            })
+        };
+        let data = serde_json::json!({
+            "wiki_title": "W", "overview": "o", "total_pages": 9,
+            "sections": [section("A", 3), section("B", 4), section("C", 2)],
+        });
+        let mut spec = WikiStructureSpec::validate(&data).expect("valid");
+        let unchanged = spec.clone();
+        cap_pages(&mut spec, 9);
+        assert_eq!(spec, unchanged);
+        cap_pages(&mut spec, 5);
+        let names: Vec<(&str, usize)> = spec
+            .sections
+            .iter()
+            .map(|s| (s.section_name.as_str(), s.pages.len()))
+            .collect();
+        assert_eq!(names, [("A", 3), ("B", 2)]);
+        assert_eq!(spec.total_pages, 5);
+    }
+
+    #[test]
+    fn auto_measures_files_then_tokens() {
+        let settings = StructureSettings::default();
+        assert_eq!(auto_uses_deepagents(2000, "", &settings), Ok(true));
+        assert_eq!(auto_uses_deepagents(1999, "short", &settings), Ok(false));
+        let long = "word ".repeat(9000);
+        assert_eq!(auto_uses_deepagents(10, &long, &settings), Ok(true));
+        let custom = StructureSettings::from_lookup(false, |name| {
+            (name == "DEEPWIKI_DEEPAGENTS_FILE_THRESHOLD").then(|| "5".to_owned())
+        });
+        assert_eq!(auto_uses_deepagents(5, "", &custom), Ok(true));
+        let invalid = StructureSettings::from_lookup(false, |name| {
+            (name == "DEEPWIKI_DEEPAGENTS_FILE_THRESHOLD").then(|| "five".to_owned())
+        });
+        assert_eq!(invalid.deepagents_file_threshold, 2000);
+    }
+}

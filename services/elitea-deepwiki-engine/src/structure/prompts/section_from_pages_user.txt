@@ -1,0 +1,10 @@
+SECTION (derived from {page_count} named pages, {node_count} symbols total)
+
+PAGES IN THIS SECTION:
+{pages_json}
+
+Output ONLY valid JSON (no markdown fences):
+{{
+    "section_name": "...",
+    "section_description": "..."
+}}
