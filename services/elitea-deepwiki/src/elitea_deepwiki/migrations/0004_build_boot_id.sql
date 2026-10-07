@@ -1,0 +1,20 @@
+-- The process run that opened a build.
+--
+-- ADR-0026 decision 5. ADDITIVE ONLY: 0003 is applied and checksummed in
+-- both runners' ledger, so it is never edited; this file adds one nullable
+-- column. The Python engine never writes the build space.
+--
+-- WHY. 0003 keyed the startup reconciliation by `owner` alone: "delete every
+-- build of my owner, because at startup none of them can be mine". That
+-- holds only if the reconciliation runs before the process opens a build.
+-- It does not when the database is down at boot and the reconciliation is
+-- retried at a later tick: by then this process can have builds of its own,
+-- and the owner-wide delete removes them. `boot_id` names the process run
+-- (a random id drawn at process start), so the reconciliation deletes the
+-- builds of this owner from EARLIER runs only:
+--
+--     DELETE ... WHERE owner = $owner AND boot_id IS DISTINCT FROM $boot_id
+--
+-- A row written before this migration has no `boot_id` (NULL), which is
+-- distinct from every run's id, so a predecessor's builds are still found.
+ALTER TABLE deepwiki_build.builds ADD COLUMN IF NOT EXISTS boot_id TEXT;

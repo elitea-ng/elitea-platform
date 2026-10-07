@@ -3007,6 +3007,18 @@ deepwiki:
   # The service's own migrations, run as a pre-install/pre-upgrade Job from the
   # service's own image. See templates/deepwiki/migrate-job.yaml for why this
   # is not part of elitea-migrate.
+  #
+  # Database privileges: the chart creates no database role. The Job runs as
+  # the role in ELITEA_DEEPWIKI_DATABASE_URL (postgresql.existingSecret by
+  # default), and that role needs CREATE on the DATABASE, not only on schema
+  # public: migration 0003 runs CREATE SCHEMA deepwiki_build (ADR-0026). The
+  # database owner has it. For any other role, before the upgrade that brings
+  # 0003, run as an administrator either
+  #   GRANT CREATE ON DATABASE <db> TO <role>;
+  # or
+  #   CREATE SCHEMA deepwiki_build AUTHORIZATION <role>;
+  # Without it the Job fails with "permission denied for database" and the
+  # release stops at the hook. See services/elitea-deepwiki/README.md.
   migrate:
     enabled: true
     backoffLimit: 3

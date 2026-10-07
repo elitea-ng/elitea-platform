@@ -22,6 +22,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 WORKDIR /src/services/elitea-deepwiki-engine
 COPY services/elitea-deepwiki-engine ./
+# The service migrations, which the binary embeds (include_str!) from the
+# Python package's directory: one set of files for both runners.
+COPY services/elitea-deepwiki/src/elitea_deepwiki/migrations ../elitea-deepwiki/src/elitea_deepwiki/migrations
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \

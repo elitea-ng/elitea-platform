@@ -6,11 +6,13 @@ same Unix socket. The Go sub-application host (`services/elitea-subapp-host`)
 keeps the provider SPI, admission, the parameter merge, the egress check,
 composition and upload. This crate runs the tools.
 
-**Status: ADR-0026 phase 2.** Phase 1 delivered the sidecar protocol, the
+**Status: ADR-0026 phase 3.** Phase 1 delivered the sidecar protocol, the
 `unavailable` and `fixture` runners, and the container probe. Phase 2 adds
 the front half of the engine: repository ingest, the eight language parsers,
 and the code graph (Phase 1 build plus the Phase 1c passes), each proven equal
-to the Python engine (see [Parity](#parity-with-the-python-engine)). Nothing
+to the Python engine (see [Parity](#parity-with-the-python-engine)). Phase 3
+adds the [index storage](#index-storage-srcstorage): PostgreSQL only, with a
+build space, a transactional publish and the read path. Nothing
 calls them from the socket yet: the `native` runner arrives with
 `generate_wiki` (phase 5). Until then `ELITEA_DEEPWIKI_RUNNER=native` refuses
 to start, so a deployment cannot ask for the engine and get a refusal at
@@ -196,6 +198,236 @@ module that reproduces it: text sliced by code point at byte offsets, files
 dropped on one bad UTF-8 byte, doubled visits, and names that collide across
 packages with the last file winning.
 
+## Model client (`src/llm/`)
+
+ADR-0026 decision 8: one small OpenAI-compatible client on `reqwest` 0.13
+(the copy `gix` pulls) over rustls. Not wired to a runner yet; indexing
+(phase 3), generation (5) and `ask` / deep research (6) build on it.
+
+- `ModelSettings::from_llm_settings` reads the block the facade writes:
+  `api_base` | `openai_api_base`, `api_key` | `openai_api_key`,
+  `organization` (sent as `OpenAI-Organization`), `model_name`, and
+  `max_tokens` (default 64000), `max_retries` (2), `streaming` (true),
+  `provider` (`openai` | `anthropic`; both go through the gateway's
+  OpenAI-compatible surface). `temperature` is ignored, as in Python.
+  Missing transport fails with the Python messages
+  (`llm_settings.api_base is required`). Unlike Python, a missing
+  `model_name` or `embedding_model` is refused at once instead of
+  defaulting to `gpt-4o-mini` / `text-embedding-3-large`.
+- `EmbeddingClient`: batches of `WIKI_EMBED_BATCH_SIZE` (64), at most
+  300 000 tokens per request, `ELITEA_DEEPWIKI_EMBED_CONCURRENCY` (4) in
+  flight. Texts above 8191 `cl100k_base` tokens are embedded in windows
+  and averaged, as LangChain did. The dimension comes from the first
+  response and is enforced for the rest of the run.
+- `ChatClient`: blocking and SSE-streamed completions with tool calls
+  (streamed deltas assembled by `index`; a new id, or a new name once a
+  call's arguments began, on a used index starts another call; a skipped
+  index leaves no slot; a slot with arguments and no name is refused),
+  usage, `max_completion_tokens`,
+  temperature 0.1 / 0.0 (`Sampling::Deterministic`) / 1.0 for `o*`
+  models. System messages take only `'static` prompts; repository text
+  goes in user messages.
+- Retries: the `openai` SDK's policy (408/409/429/5xx and connection
+  failures, `retry-after`, 0.5 s doubling to 8 s with jitter). A stop
+  aborts a request or a wait at once.
+- Timeouts: connect 10 s, blocking call 600 s, stream silence 300 s,
+  stream total 30 min. SSE caps: 1 MiB per line and per event, 64 MiB
+  per stream. Lines end in `\n`, `\r\n` or a lone `\r`; a leading UTF-8
+  BOM is skipped.
+- `ELITEA_DEEPWIKI_TLS_CA_FILE` is trusted in addition to the platform
+  roots. Redirects are refused (the bearer key must not follow one).
+- Errors: timeouts → `timeout_error`; 429/503 after the retries →
+  `service_busy`; 402 → `invalid_input`; 404 → `resource_not_found`;
+  other refusals and malformed replies → `inference_failed`. The key is
+  never in an error or a log line; upstream text is redacted and cut.
+- `count_tokens` is `token_counter.py` over the embedded `o200k_base`
+  BPE, with no `chars/4` fallback.
+
+`tests/llm_client.rs` runs the client against a mock gateway on loopback
+(and over TLS with a throwaway CA). `ELITEA_DEEPWIKI_LIVE_LLM=1` adds a
+chat, stream and tool-call round trip against the LAN vLLM
+(`ELITEA_DEEPWIKI_LIVE_LLM_BASE`, `ELITEA_DEEPWIKI_LIVE_LLM_MODEL`).
+
+## Index storage (`src/storage/`)
+
+ADR-0026 decision 5, with the owner's rule: **no SQLite anywhere**. There is
+no `.wiki.db`, no sqlite-vec, no FAISS and no docstore. The index is the
+ADR-0022 schema in the `deepwiki` database, unchanged.
+
+**Migrations.** The SQL files stay in
+`services/elitea-deepwiki/src/elitea_deepwiki/migrations/`; the binary
+embeds them (`include_str!`). `elitea-deepwiki-engine migrate` reads
+`ELITEA_DEEPWIKI_DATABASE_URL` and writes the `schema_migrations` ledger as
+`python -m elitea_deepwiki.storage` does: the same versions, names and
+SHA-256 of the text Python reads (`\r\n` translated), the same refusal of
+an applied migration whose file changed. Either runner continues where the
+other stopped. `tests/storage_migrate.rs` runs `migrate.discover()` with
+python3 and compares every checksum; a file in the directory that is not
+embedded fails it. The URL form only (`postgresql://…`): sqlx does not read
+psycopg's `key=value` form.
+
+Migration 0003 (additive, applied by both runners) adds schema
+`deepwiki_build`: `builds (build_id, wiki_id, owner, started_at,
+heartbeat_at)` and UNLOGGED copies of `wiki_nodes` (with the folded
+`deepwiki_porter` tsvector and its GIN index), `wiki_edges` and
+`wiki_node_embeddings` keyed by `build_id`, plus `bm25_docs` /
+`bm25_postings` (see below). Every staging row cascades from its `builds`
+row. Migration 0004 (additive) adds the nullable `builds.boot_id`; 0003 is
+never edited, because both runners checksum it.
+
+**Database privileges.** The role in `ELITEA_DEEPWIKI_DATABASE_URL` that
+runs the migrations needs `CREATE` on the database itself, not only on
+schema `public`: 0003 runs `CREATE SCHEMA deepwiki_build` (ADR-0026 keeps
+the build space in its own schema). A role that owns the database has it; a
+role that was only granted rights on `public` fails 0003 with `permission
+denied for database`. Grant it once (`GRANT CREATE ON DATABASE deepwiki TO
+<role>`), or pre-create the schema as an administrator
+(`CREATE SCHEMA deepwiki_build AUTHORIZATION <role>`; the migration's
+`IF NOT EXISTS` then needs no database privilege). The serving role needs
+`USAGE` on the schema and read/write on its tables, and must own the live
+and staging tables to `ANALYZE` them (a skipped `ANALYZE` is logged, not
+an error).
+
+**Build and publish** (`storage::build`). A build stages the code graph with
+`COPY` in the text format, in rounds of 2,000 nodes. Rows map as
+`storage/publish.py` maps the `.wiki.db` rows: NULL text becomes `""`,
+flags become booleans, parallel edges collapse onto `(source, target,
+rel_type)` with the first position and the last `edge_class` / `weight`, a
+weight of 0 becomes 1.0, `metadata` stays `{}`. Vectors are written as the
+shortest decimal text of each `f64`, the text Python's `repr` gave, so
+pgvector rounds them to the same `float4`.
+
+`Build::publish` is one transaction: lock the build row; queue without a
+timeout behind a publish of the same wiki, then for one of
+`ELITEA_DEEPWIKI_PUBLISH_SLOTS` (default 2) publish slots per database
+(transaction-scoped advisory locks: a publish waits, it does not fail; every
+replica must use the same number); set `statement_timeout`
+(`ELITEA_DEEPWIKI_PUBLISH_STATEMENT_TIMEOUT_SECONDS`, default 1800),
+`lock_timeout` (`…_PUBLISH_LOCK_TIMEOUT_SECONDS`, default 30) and `work_mem`
+(`…_PUBLISH_WORK_MEM_MB`, default 64, so the slots bound the memory the
+publishes take together); upsert the `wikis` row (`registry_from_result`'s
+fields; an absent field keeps the stored value), refuse an empty build,
+delete the wiki's live rows, `INSERT … SELECT` nodes, edges and vectors,
+write both `wiki_bm25_*` branches, delete the build, commit. A reader sees
+the old index or the new one. After the commit the live tables are
+`ANALYZE`d one by one, best effort, each with a short `lock_timeout`
+(`…_PUBLISH_ANALYZE_LOCK_TIMEOUT_SECONDS`, default 5): a table that another
+`ANALYZE` or a vacuum holds is skipped and logged
+(`PublishCounts::statistics_refreshed` is then false). All five settings are
+strict-parsed.
+
+`publish` takes `&mut self`: on an error the transaction rolled back, the
+build keeps its rows and its heartbeat, and the caller retries the publish
+(a timeout, a lost connection), stages more and retries, or calls
+`abandon`. After a success the build is gone. The BM25 statistics are `publish.py`'s: the `'bm25'` branch from
+Python `str.split()` tokens of the document text (tokenised in Rust while
+staging, because a PostgreSQL regular expression is not Python's
+whitespace), k1 1.5, b 0.75; the `'fts'` branch from the lexemes and
+position counts of the published tsvectors, k1 1.2, b 0.75; a document
+without tokens takes no `doc_idx`.
+
+**Reconciliation.** `ELITEA_DEEPWIKI_BUILD_OWNER` (default `HOSTNAME`, the
+pod name) is the owner a build is recorded under, together with the boot id
+of the process run (random, drawn at start). With
+`ELITEA_DEEPWIKI_DATABASE_URL` set, one of the two must be set: the
+fallback owner `elitea-deepwiki-engine` would be shared by every engine
+without them, and the start is refused with an error that says so. `serve`
+deletes this owner's builds of EARLIER runs (`owner = $1 AND boot_id IS
+DISTINCT FROM $run`; a build from before 0004 has no boot id and goes too),
+never this run's and never another replica's, so a reconciliation that
+succeeds late (the database was down at start) cannot remove builds this run
+already opened. It sweeps builds whose heartbeat is older than
+`ELITEA_DEEPWIKI_BUILD_STALE_SECONDS` (default 7200, at least 300) every
+quarter of that (10 s to 10 min), skipping a build a publish holds locked.
+An open `Build` beats its heartbeat from a background task every tenth of
+the limit (100 ms to 1 min), so a long model call after staging does not get
+it swept; the task stops when the build is dropped, published or abandoned.
+A database that is not up yet is retried; it never stops the sidecar. A
+swept build cannot heartbeat, stage or publish.
+
+**Read path** (`storage::search`, `storage::adapter`). Ports of
+`PostgresBackend`'s searches with the same SQL — dense exact `<->` (no HNSW
+index), the folded `plainto_tsquery` FTS ranked by the `'fts'` statistics
+and negated, BM25 from the `'bm25'` statistics — and of `base.rrf_fuse`
+(weights 0.4 / 0.6, k 60, pools of 30, stable on ties). `UnifiedDb` is
+`PostgresUnifiedDB`: `search_hybrid`, `get_node`, `get_nodes_by_ids`,
+`get_edges_from`, `get_edges_to`, `vec_available`, `get_meta`, with the
+legacy row shapes. Every multi-statement read runs in one `REPEATABLE READ
+READ ONLY` transaction.
+
+### Deliberate differences from the Python storage
+
+- **The publish is atomic.** `publish.py` committed every batch of 500 nodes
+  and upserted over the old rows, so a reader could see a mix and a node the
+  new graph dropped stayed. The publish now replaces the wiki's rows in one
+  transaction.
+- **A multi-statement search reads one snapshot** (above). Python ran each
+  statement in its own transaction.
+- **Planner statistics.** The publish `ANALYZE`s the staged tables before
+  it and the live tables right after its commit (best effort, see above),
+  and turns nested loops off for its bulk statements. Without that, freshly
+  replaced rows were planned with the old row counts: one `INSERT … SELECT`
+  took 23 s and a BM25 search did not finish in 10 minutes on a 5,000-node
+  wiki. The live `ANALYZE` is not inside the transaction: there it held its
+  lock on the shared tables until the commit and cancelled autovacuum.
+- **The `path_prefix` filter escapes `_` and `\`** as well as `%`.
+- **A NUL in text** is stored as U+FFFD. Python's publish failed on it in
+  psycopg; the elitea-platform corpus has such a node (a PDF fixture).
+- **A `'bm25'` term over 1 kB gets no posting** (it still counts in its
+  document's length, so lengths and `avgdl` stay exact). The term is in
+  0001's B-tree keys, which cannot hold it; the corpus has a 108 kB token.
+- **The migrator holds an advisory lock** while it runs, so two replicas
+  cannot apply one file twice. The ledger is unchanged.
+
+### Retrieval parity
+
+`tests/storage_parity.rs` ports `tests/storage/test_retrieval_parity.py`
+over `conformance/provider/fixtures/deepwiki/retrieval/sample-repo` (20
+nodes, 11 recorded queries), through the build space and the publish rather
+than direct inserts:
+
+| Branch | Result |
+| --- | --- |
+| dense | exact: order (up to recorded ties) and L2 distances within 1e-6, 11/11 queries |
+| bm25 | exact: order and scores within 1e-6, 11/11; `doc_count` 20, `avgdl` 36.25, 279 terms, k1 1.5, b 0.75 |
+| fts | match set 11/11, no recorded ordering crossed, 0 inversions over the 4 discriminating queries |
+| fused | equals the frozen RRF over the components for 11/11; equals the recording for the 8 queries without a dense tie in the top 10 |
+
+`tests/storage_reconcile.rs` covers the owner and boot-id reconciliation,
+the sweep and the background heartbeat; `tests/storage_publish_control.rs`
+the retry and abandon after a failed publish, the statement and lock
+timeouts, the slot queue, the `ANALYZE` after the commit and two concurrent
+publishes (of one wiki, of two wikis).
+
+The tests need PostgreSQL with pgvector: they skip, with a message, when
+`DEEPWIKI_TEST_DSN` is unset, and fail when `DEEPWIKI_REQUIRE_POSTGRES=1`
+is set as well (CI sets both). Each test creates its own database.
+
+### End to end on elitea-platform
+
+`deepwiki-parity index-dump <repo> <wiki-id> [--embeddings <dim>]` builds
+the graph, stages it, publishes it into `ELITEA_DEEPWIKI_DATABASE_URL` and
+times a few searches. Measured 2026-10-05 (Apple M4 Pro under load, podman
+VM, pgvector 0.8.5 / PostgreSQL 16, 384-dimension pseudo-vectors, before
+the postings were inserted in key order):
+
+| Step | Rows | Time |
+| --- | --- | --- |
+| graph build | 150,942 nodes, 373,281 edges | 5.8 s |
+| stage (`COPY`) | 150,942 nodes, 282,861 edges after collapse, 150,924 BM25 documents, 5,071,704 postings | 81 s |
+| stage vectors | 150,942 × 384 | 11 s |
+| publish (one transaction) | the above, plus 150,852 FTS documents | 288 s |
+
+Peak RSS 1.30 GB (the graph; staging holds one round of 2,000 nodes).
+Searches on the published index: FTS 64–488 ms, BM25 21–419 ms, exact
+dense scan 880 ms. Most of the publish was the two postings inserts (137 s
+and 58 s, random B-tree inserts); they now insert in key order with
+`work_mem` (64 MB by default, `ELITEA_DEEPWIKI_PUBLISH_WORK_MEM_MB`), not
+yet re-measured. The run needs about 10 GB of database disk
+(WAL included); a full host disk stopped the second run. Run `index-dump`
+on a small corpus (spring-petclinic, CleanArchitecture, leveldb) on a
+shared machine.
+
 ## Parity with the Python engine
 
 The parity tools are in `parity/`. They run the Python engine itself (the
@@ -262,7 +494,15 @@ cargo test --locked --all-targets
 ```
 
 The tests run the sidecar on a real Unix socket. Two of them read the
-shared fixtures in `conformance/provider/fixtures/deepwiki/`.
+shared fixtures in `conformance/provider/fixtures/deepwiki/`. The storage
+tests need PostgreSQL with pgvector (they skip without it):
+
+```bash
+podman run -d --name dwpg -e POSTGRES_USER=deepwiki -e POSTGRES_PASSWORD=deepwiki \
+    -e POSTGRES_DB=deepwiki -p 15436:5432 docker.io/pgvector/pgvector:0.8.5-pg16
+DEEPWIKI_TEST_DSN=postgresql://deepwiki:deepwiki@127.0.0.1:15436/deepwiki \
+DEEPWIKI_REQUIRE_POSTGRES=1 cargo test --locked --all-targets
+```
 
 The Go host's own client, composition and upload against this binary:
 
