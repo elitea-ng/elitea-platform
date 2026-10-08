@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
-use adk_rust::graph::{END, GraphError, Node, NodeContext, NodeOutput, State};
+use adk_graph::{END, GraphError, Node, NodeContext, NodeOutput, State};
 use async_trait::async_trait;
 use minijinja::value::Value as JinjaValue;
 use minijinja::{Environment, Error as JinjaError, ErrorKind, UndefinedBehavior};
@@ -58,16 +58,13 @@ struct RouteTarget {
 
 /// Validated route table shared by deterministic and model-backed routing.
 #[derive(Clone)]
-pub(super) struct RouteTargets {
+pub struct RouteTargets {
     routes: Vec<RouteTarget>,
     default: RouteTarget,
 }
 
 impl RouteTargets {
-    pub(super) fn new(
-        routes: Vec<String>,
-        default: String,
-    ) -> Result<Self, RouterConfigurationError> {
+    pub fn new(routes: Vec<String>, default: String) -> Result<Self, RouterConfigurationError> {
         if routes.len() > MAX_ROUTES {
             return Err(RouterConfigurationError::ResourceExhausted);
         }
@@ -104,7 +101,8 @@ impl RouteTargets {
         Ok(Self { routes, default })
     }
 
-    pub(super) fn resolve(&self, rendered: &str) -> (&str, &str) {
+    #[must_use]
+    pub fn resolve(&self, rendered: &str) -> (&str, &str) {
         let label = normalized_route_label(rendered.trim());
         self.routes
             .iter()
@@ -115,22 +113,23 @@ impl RouteTargets {
             )
     }
 
-    pub(super) fn declared(&self) -> impl Iterator<Item = &str> {
+    pub fn declared(&self) -> impl Iterator<Item = &str> {
         self.routes
             .iter()
             .map(|route| route.target.as_str())
             .chain(std::iter::once(self.default.target.as_str()))
     }
 
-    pub(super) fn labels(&self) -> impl Iterator<Item = &str> {
+    pub fn labels(&self) -> impl Iterator<Item = &str> {
         self.routes.iter().map(|route| route.label.as_str())
     }
 
-    pub(super) fn route_count(&self) -> usize {
+    #[must_use]
+    pub fn route_count(&self) -> usize {
         self.routes.len()
     }
 
-    pub(super) fn digest_into(&self, context: &mut digest::Context) {
+    pub fn digest_into(&self, context: &mut digest::Context) {
         for route in &self.routes {
             digest_field(context, route.target.as_bytes());
         }
@@ -140,7 +139,7 @@ impl RouteTargets {
 
 /// Strict authority-free definition of one deterministic Router node.
 #[derive(Clone)]
-pub(super) struct RouterNodeDefinition {
+pub struct RouterNodeDefinition {
     id: String,
     condition: String,
     routes: RouteTargets,
@@ -148,7 +147,7 @@ pub(super) struct RouterNodeDefinition {
 }
 
 impl RouterNodeDefinition {
-    pub(super) fn from_yaml(yaml: &str) -> Result<Self, RouterConfigurationError> {
+    pub fn from_yaml(yaml: &str) -> Result<Self, RouterConfigurationError> {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(RouterConfigurationError::ResourceExhausted);
         }
@@ -183,19 +182,22 @@ impl RouterNodeDefinition {
         })
     }
 
-    pub(super) fn id(&self) -> &str {
+    #[must_use]
+    pub fn id(&self) -> &str {
         &self.id
     }
 
-    pub(super) fn input_keys(&self) -> &[String] {
+    #[must_use]
+    pub fn input_keys(&self) -> &[String] {
         &self.input
     }
 
-    pub(super) fn route_targets(&self) -> impl Iterator<Item = &str> {
+    pub fn route_targets(&self) -> impl Iterator<Item = &str> {
         self.routes.declared()
     }
 
-    pub(super) fn config_digest(&self) -> [u8; 32] {
+    #[must_use]
+    pub fn config_digest(&self) -> [u8; 32] {
         let mut context = digest::Context::new(&digest::SHA256);
         context.update(CONFIG_DIGEST_DOMAIN);
         digest_field(&mut context, self.id.as_bytes());
@@ -208,12 +210,13 @@ impl RouterNodeDefinition {
     }
 }
 
-pub(super) struct RouterNode {
+pub struct RouterNode {
     definition: RouterNodeDefinition,
 }
 
 impl RouterNode {
-    pub(super) const fn new(definition: RouterNodeDefinition) -> Self {
+    #[must_use]
+    pub const fn new(definition: RouterNodeDefinition) -> Self {
         Self { definition }
     }
 }
@@ -343,7 +346,8 @@ fn validate_target(target: &str) -> Result<(), RouterConfigurationError> {
     Ok(())
 }
 
-pub(super) fn normalized_route_label(value: &str) -> String {
+#[must_use]
+pub fn normalized_route_label(value: &str) -> String {
     value
         .bytes()
         .filter(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
@@ -351,7 +355,8 @@ pub(super) fn normalized_route_label(value: &str) -> String {
         .collect()
 }
 
-pub(super) fn graph_target(target: &str) -> &str {
+#[must_use]
+pub fn graph_target(target: &str) -> &str {
     if target == "END" { END } else { target }
 }
 
@@ -411,7 +416,7 @@ fn copy_digest(value: &[u8]) -> [u8; 32] {
 }
 
 #[derive(Debug, Error)]
-pub(super) enum RouterConfigurationError {
+pub enum RouterConfigurationError {
     #[error("the Router YAML is malformed")]
     MalformedYaml {
         #[source]

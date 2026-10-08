@@ -4,20 +4,20 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use adk_rust::{
+use adk_core::{
     Agent, Artifacts, CallbackContext, Content, InvocationContext, Memory, ReadonlyContext,
     RunConfig, SecretRequest, SharedState, State, ToolOutcome,
 };
 use async_trait::async_trait;
 use serde_json::Value;
 
-pub(super) struct ParallelInvocationContext {
+pub struct ParallelInvocationContext {
     parent: Arc<dyn InvocationContext>,
     cancelled: Arc<AtomicBool>,
 }
 
 impl ParallelInvocationContext {
-    pub(super) fn new(parent: Arc<dyn InvocationContext>, cancelled: Arc<AtomicBool>) -> Self {
+    pub fn new(parent: Arc<dyn InvocationContext>, cancelled: Arc<AtomicBool>) -> Self {
         Self { parent, cancelled }
     }
 }
@@ -48,22 +48,22 @@ impl ReadonlyContext for ParallelInvocationContext {
     fn state(&self) -> Option<&dyn State> {
         self.parent.state()
     }
-    fn try_app_name(&self) -> adk_rust::Result<adk_rust::AppName> {
+    fn try_app_name(&self) -> adk_core::Result<adk_core::AppName> {
         self.parent.try_app_name()
     }
-    fn try_user_id(&self) -> adk_rust::Result<adk_rust::UserId> {
+    fn try_user_id(&self) -> adk_core::Result<adk_core::UserId> {
         self.parent.try_user_id()
     }
-    fn try_session_id(&self) -> adk_rust::Result<adk_rust::SessionId> {
+    fn try_session_id(&self) -> adk_core::Result<adk_core::SessionId> {
         self.parent.try_session_id()
     }
-    fn try_invocation_id(&self) -> adk_rust::Result<adk_rust::InvocationId> {
+    fn try_invocation_id(&self) -> adk_core::Result<adk_core::InvocationId> {
         self.parent.try_invocation_id()
     }
-    fn try_identity(&self) -> adk_rust::Result<adk_rust::AdkIdentity> {
+    fn try_identity(&self) -> adk_core::Result<adk_core::AdkIdentity> {
         self.parent.try_identity()
     }
-    fn try_execution_identity(&self) -> adk_rust::Result<adk_rust::ExecutionIdentity> {
+    fn try_execution_identity(&self) -> adk_core::Result<adk_core::ExecutionIdentity> {
         self.parent.try_execution_identity()
     }
 }
@@ -95,7 +95,7 @@ impl InvocationContext for ParallelInvocationContext {
     fn memory(&self) -> Option<Arc<dyn Memory>> {
         self.parent.memory()
     }
-    fn session(&self) -> &dyn adk_rust::Session {
+    fn session(&self) -> &dyn adk_core::Session {
         self.parent.session()
     }
     fn run_config(&self) -> &RunConfig {
@@ -134,10 +134,10 @@ impl InvocationContext for ParallelInvocationContext {
     fn requires_tool_confirmation(&self, tool_name: &str) -> bool {
         self.parent.requires_tool_confirmation(tool_name)
     }
-    async fn get_secret(&self, name: &str) -> adk_rust::Result<Option<String>> {
+    async fn get_secret(&self, name: &str) -> adk_core::Result<Option<String>> {
         self.parent.get_secret(name).await
     }
-    async fn get_secret_for(&self, request: &SecretRequest) -> adk_rust::Result<Option<String>> {
+    async fn get_secret_for(&self, request: &SecretRequest) -> adk_core::Result<Option<String>> {
         self.parent.get_secret_for(request).await
     }
 }

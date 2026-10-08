@@ -1022,6 +1022,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-agent-runtime"
+version = "0.1.0"
+dependencies = [
+ "adk-core",
+ "adk-graph",
+ "adk-session",
+ "async-trait",
+ "base64 0.23.1",
+ "minijinja",
+ "regex",
+ "ring",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "elitea-llm-wire"
 version = "0.1.0"
 dependencies = [
@@ -1042,6 +1062,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "chrono",
+ "elitea-agent-runtime",
  "elitea-llm-wire",
  "futures-util",
  "hmac 0.13.0",

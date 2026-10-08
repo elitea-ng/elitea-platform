@@ -2,14 +2,14 @@
 
 use std::future::Future;
 
-pub(super) enum ObservationFailure<E> {
+pub enum ObservationFailure<E> {
     Deadline,
     Platform(E),
 }
 
 /// Both futures belong to this attempt. Dropping the attempt drops both.
 /// The caller retains the original dispatch identity and absolute deadline.
-pub(super) async fn drive<S, P, T, E>(
+pub async fn drive<S, P, T, E>(
     submission: S,
     platform: P,
     deadline: tokio::time::Instant,

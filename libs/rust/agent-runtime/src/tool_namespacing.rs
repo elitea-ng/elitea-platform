@@ -3,18 +3,18 @@
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct RenamedTool {
+pub struct RenamedTool {
     /// The owning toolset's name — an MCP connection's name, or a configured
     /// toolkit's.
-    pub(crate) toolkit: String,
+    pub toolkit: String,
     /// The name the server published, which another toolset also published.
-    pub(crate) original: String,
+    pub original: String,
     /// The name the model is offered instead.
-    pub(crate) exposed: String,
+    pub exposed: String,
 }
 
 #[must_use]
-pub(crate) fn renamed_tools_notice_text(renamed: &[RenamedTool]) -> Option<String> {
+pub fn renamed_tools_notice_text(renamed: &[RenamedTool]) -> Option<String> {
     if renamed.is_empty() {
         return None;
     }

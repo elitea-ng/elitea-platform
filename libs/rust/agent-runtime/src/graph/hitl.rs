@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use adk_rust::graph::{END, GraphError, Node, NodeContext, NodeOutput};
+use adk_graph::{END, GraphError, Node, NodeContext, NodeOutput};
 use async_trait::async_trait;
 use ring::digest;
 use serde::Deserialize;
@@ -26,11 +26,11 @@ const HITL_CONFIG_DIGEST_DOMAIN: &[u8] = b"elitea.graph.hitl.config.v1\0";
 const HITL_INTERRUPT_SCHEMA: &str = "elitea.graph.hitl-interrupt.v1";
 const PIPELINE_HITL_INTERACTION_TYPE: &str = "pipeline_hitl_node";
 const PIPELINE_HITL_HISTORY_CONTRACT_VERSION: u8 = 1;
-pub(crate) const HITL_RESUME_STATE_KEY: &str = "__elitea_hitl_resume_v1";
+pub const HITL_RESUME_STATE_KEY: &str = "__elitea_hitl_resume_v1";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum HitlAction {
+pub enum HitlAction {
     Approve,
     Reject,
     Edit,
@@ -48,7 +48,7 @@ impl HitlAction {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum HitlMessageKind {
+pub enum HitlMessageKind {
     #[default]
     Fixed,
     Variable,
@@ -118,7 +118,7 @@ struct RawHitlNodeDefinition {
 
 /// Strict, bounded source contract for one stored pipeline `type: hitl` node.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct HitlNodeDefinition {
+pub struct HitlNodeDefinition {
     id: String,
     input: Vec<String>,
     user_message: HitlMessageDefinition,
@@ -129,7 +129,7 @@ pub(crate) struct HitlNodeDefinition {
 
 impl HitlNodeDefinition {
     /// Parse the single-node YAML mapping selected by the pipeline compiler.
-    pub(crate) fn from_yaml(yaml: &str) -> Result<Self, HitlConfigurationError> {
+    pub fn from_yaml(yaml: &str) -> Result<Self, HitlConfigurationError> {
         if yaml.is_empty() || yaml.len() > MAX_YAML_NODE_BYTES {
             return Err(HitlConfigurationError::ResourceExhausted);
         }
@@ -176,32 +176,32 @@ impl HitlNodeDefinition {
     }
 
     #[must_use]
-    pub(crate) fn id(&self) -> &str {
+    pub fn id(&self) -> &str {
         &self.id
     }
 
     #[must_use]
-    pub(crate) fn input_keys(&self) -> &[String] {
+    pub fn input_keys(&self) -> &[String] {
         &self.input
     }
 
     #[must_use]
-    pub(crate) const fn message_kind(&self) -> HitlMessageKind {
+    pub const fn message_kind(&self) -> HitlMessageKind {
         self.user_message.kind
     }
 
     #[must_use]
-    pub(crate) fn message_template(&self) -> &str {
+    pub fn message_template(&self) -> &str {
         &self.user_message.value
     }
 
     #[must_use]
-    pub(crate) fn edit_state_key(&self) -> Option<&str> {
+    pub fn edit_state_key(&self) -> Option<&str> {
         self.edit_state_key.as_deref()
     }
 
     #[must_use]
-    pub(crate) fn available_actions(&self) -> Vec<HitlAction> {
+    pub fn available_actions(&self) -> Vec<HitlAction> {
         [HitlAction::Approve, HitlAction::Reject, HitlAction::Edit]
             .into_iter()
             .filter(|action| self.action_is_available(*action))
@@ -209,12 +209,13 @@ impl HitlNodeDefinition {
     }
 
     /// Configured successors used by the whole-document compiler.
-    pub(crate) fn route_targets(&self) -> impl Iterator<Item = &str> {
+    pub fn route_targets(&self) -> impl Iterator<Item = &str> {
         self.routes.iter().map(|(_, target)| target)
     }
 
     /// Stable node-definition digest used by the pipeline definition lineage.
-    pub(crate) const fn config_digest(&self) -> [u8; 32] {
+    #[must_use]
+    pub const fn config_digest(&self) -> [u8; 32] {
         self.config_digest
     }
 
@@ -232,7 +233,8 @@ impl HitlNodeDefinition {
         }
     }
 
-    pub(super) fn route(&self, action: HitlAction) -> Option<&str> {
+    #[must_use]
+    pub fn route(&self, action: HitlAction) -> Option<&str> {
         self.action_is_available(action)
             .then(|| self.routes.get(action))
             .flatten()
@@ -269,13 +271,13 @@ impl HitlNodeDefinition {
 }
 
 /// ADK-Rust node that pauses and later performs one authorized route decision.
-pub(crate) struct HitlNode {
+pub struct HitlNode {
     definition: HitlNodeDefinition,
 }
 
 impl HitlNode {
     #[must_use]
-    pub(crate) const fn new(definition: HitlNodeDefinition) -> Self {
+    pub const fn new(definition: HitlNodeDefinition) -> Self {
         Self { definition }
     }
 
@@ -569,9 +571,10 @@ fn render_template(
 }
 
 fn display_state_value(value: &Value) -> String {
-    value
-        .as_str()
-        .map_or_else(|| value.to_string(), ToOwned::to_owned)
+    value.as_str().map_or_else(
+        || crate::canonical::to_string(value).unwrap_or_else(|_| value.to_string()),
+        ToOwned::to_owned,
+    )
 }
 
 fn config_digest(raw: &RawHitlNodeDefinition) -> [u8; 32] {
@@ -632,7 +635,7 @@ fn default_inputs() -> Vec<String> {
 
 /// Stable, data-free compiler error for a stored pipeline HITL node.
 #[derive(Debug, Error)]
-pub(crate) enum HitlConfigurationError {
+pub enum HitlConfigurationError {
     #[error("the HITL YAML node exceeds its resource bound")]
     ResourceExhausted,
     #[error("the HITL YAML node is malformed")]
@@ -646,7 +649,7 @@ pub(crate) enum HitlConfigurationError {
 
 impl HitlConfigurationError {
     #[must_use]
-    pub(crate) const fn code(&self) -> &'static str {
+    pub const fn code(&self) -> &'static str {
         match self {
             Self::ResourceExhausted => "graph.hitl.configuration_resource_exhausted",
             Self::MalformedYaml { .. } => "graph.hitl.malformed_yaml",
@@ -655,8 +658,11 @@ impl HitlConfigurationError {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn authorized_resume_fixture(
+/// A resume value the node accepts for `definition` (tests only; the worker's
+/// HITL tests build it through the `test-support` feature).
+#[cfg(any(test, feature = "test-support"))]
+#[must_use]
+pub fn authorized_resume_fixture(
     definition: &HitlNodeDefinition,
     action: &str,
     value: &Value,
@@ -670,4 +676,26 @@ pub(crate) fn authorized_resume_fixture(
             }
         }
     })
+}
+
+/// Rendered state values do not depend on `serde_json`'s `preserve_order`.
+#[cfg(test)]
+mod order_tests {
+    use serde_json::Value;
+
+    use super::display_state_value;
+
+    #[test]
+    fn object_state_values_render_in_key_order() {
+        let value: Value =
+            serde_json::from_str(r#"{"zeta":[{"b":2,"a":1}],"alpha":"one"}"#).expect("fixture");
+        assert_eq!(
+            display_state_value(&value),
+            r#"{"alpha":"one","zeta":[{"a":1,"b":2}]}"#
+        );
+        assert_eq!(
+            display_state_value(&Value::String("text".to_owned())),
+            "text"
+        );
+    }
 }

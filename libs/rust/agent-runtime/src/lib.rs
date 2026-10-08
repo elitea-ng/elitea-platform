@@ -4,8 +4,12 @@
 //! * [`host`] — the host interface: definitions, models, tools, events,
 //!   state, memory, approvals and the execution guard, each documented with
 //!   the worker code it replaces;
+//! * [`graph`] — pipeline graph nodes and value types with no cloud
+//!   coupling (YAML contract, Printer, Router, State Modifier, HITL, node
+//!   recovery, activation and turn checkpointers, parallel branch control);
 //! * [`canonical`] — order-explicit JSON for digests and rendered values, so
-//!   no digest depends on `serde_json`'s `preserve_order`.
+//!   no digest depends on `serde_json`'s `preserve_order`;
+//! * [`tool_namespacing`] — the provider-alias notice for renamed tools.
 //!
 //! The move from `services/elitea-worker-rust` is staged; `EXTRACTION.md`
 //! holds the dependency map and the remaining stages. The worker re-exports
@@ -24,4 +28,6 @@
 )]
 
 pub mod canonical;
+pub mod graph;
 pub mod host;
+pub mod tool_namespacing;

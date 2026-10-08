@@ -7,7 +7,7 @@ use serde::de::{Deserializer, SeqAccess, Visitor};
 use thiserror::Error;
 
 const MAX_YAML_NODE_BYTES: usize = 64 * 1024;
-pub(crate) const MAX_NODE_ID_BYTES: usize = 128;
+pub const MAX_NODE_ID_BYTES: usize = 128;
 const MAX_OUTPUT_KEY_BYTES: usize = 256;
 const MAX_BRANCHES: usize = 16;
 const MAX_CONCURRENCY: u32 = 8;
@@ -215,7 +215,8 @@ impl ParallelNodeDefinition {
         &self.output
     }
 
-    pub(crate) fn output_keys(&self) -> &[String] {
+    #[must_use]
+    pub fn output_keys(&self) -> &[String] {
         std::slice::from_ref(&self.output)
     }
 
@@ -225,7 +226,8 @@ impl ParallelNodeDefinition {
     }
 
     /// Stable digest bound into every child checkpoint thread identity.
-    pub(crate) fn config_digest(&self) -> [u8; 32] {
+    #[must_use]
+    pub fn config_digest(&self) -> [u8; 32] {
         let mut context = digest::Context::new(&digest::SHA256);
         context.update(CONFIG_DIGEST_DOMAIN);
         digest_field(&mut context, self.id.as_bytes());
@@ -244,7 +246,7 @@ impl ParallelNodeDefinition {
         digest_bytes(context.finish().as_ref())
     }
 
-    pub(crate) fn validate(&self) -> Result<(), ParallelConfigurationError> {
+    pub fn validate(&self) -> Result<(), ParallelConfigurationError> {
         if self.node_type != "parallel" {
             return Err(ParallelConfigurationError::Invalid(
                 "the node type must be parallel",
@@ -362,7 +364,8 @@ impl ParallelConfigurationError {
     }
 }
 
-pub(crate) fn valid_graph_id(value: &str) -> bool {
+#[must_use]
+pub fn valid_graph_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_NODE_ID_BYTES
         && value
@@ -371,7 +374,8 @@ pub(crate) fn valid_graph_id(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':'))
 }
 
-pub(crate) fn valid_output_key(value: &str) -> bool {
+#[must_use]
+pub fn valid_output_key(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= MAX_OUTPUT_KEY_BYTES
         && !value

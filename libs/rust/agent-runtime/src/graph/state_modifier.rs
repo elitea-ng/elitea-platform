@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
-use adk_rust::graph::{GraphError, Node, NodeContext, NodeOutput};
+use adk_graph::{GraphError, Node, NodeContext, NodeOutput};
 use async_trait::async_trait;
 use base64::Engine as _;
 use minijinja::value::Value as JinjaValue;
@@ -46,7 +46,7 @@ struct RawStateModifierNodeDefinition {
 
 /// Strict, authority-free YAML definition for one state transformation.
 #[derive(Clone)]
-pub(super) struct StateModifierNodeDefinition {
+pub struct StateModifierNodeDefinition {
     id: String,
     template: String,
     variables_to_clean: Vec<String>,
@@ -56,7 +56,7 @@ pub(super) struct StateModifierNodeDefinition {
 }
 
 impl StateModifierNodeDefinition {
-    pub(super) fn from_yaml(yaml: &str) -> Result<Self, StateModifierConfigurationError> {
+    pub fn from_yaml(yaml: &str) -> Result<Self, StateModifierConfigurationError> {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(StateModifierConfigurationError::ResourceExhausted);
         }
@@ -125,27 +125,33 @@ impl StateModifierNodeDefinition {
         })
     }
 
-    pub(super) fn id(&self) -> &str {
+    #[must_use]
+    pub fn id(&self) -> &str {
         &self.id
     }
 
-    pub(super) fn input_keys(&self) -> &[String] {
+    #[must_use]
+    pub fn input_keys(&self) -> &[String] {
         &self.input
     }
 
-    pub(super) fn output_keys(&self) -> &[String] {
+    #[must_use]
+    pub fn output_keys(&self) -> &[String] {
         &self.output
     }
 
-    pub(super) fn variables_to_clean(&self) -> &[String] {
+    #[must_use]
+    pub fn variables_to_clean(&self) -> &[String] {
         &self.variables_to_clean
     }
 
-    pub(super) fn transition(&self) -> Option<&str> {
+    #[must_use]
+    pub fn transition(&self) -> Option<&str> {
         self.transition.as_deref()
     }
 
-    pub(super) fn config_digest(&self) -> [u8; 32] {
+    #[must_use]
+    pub fn config_digest(&self) -> [u8; 32] {
         let mut context = digest::Context::new(&digest::SHA256);
         context.update(CONFIG_DIGEST_DOMAIN);
         digest_field(&mut context, self.id.as_bytes());
@@ -178,12 +184,13 @@ fn validate_unique(values: &[String]) -> Result<(), StateModifierConfigurationEr
 }
 
 /// ADK graph node that renders a bounded template and emits state updates.
-pub(super) struct StateModifierNode {
+pub struct StateModifierNode {
     definition: StateModifierNodeDefinition,
 }
 
 impl StateModifierNode {
-    pub(super) const fn new(definition: StateModifierNodeDefinition) -> Self {
+    #[must_use]
+    pub const fn new(definition: StateModifierNodeDefinition) -> Self {
         Self { definition }
     }
 }
@@ -253,7 +260,7 @@ fn render_template(
 
 // serde_json arbitrary-precision numbers serialize as private maps. Convert
 // numeric primitives explicitly so templates receive numbers instead of maps.
-pub(super) fn template_value(value: &Value) -> JinjaValue {
+pub fn template_value(value: &Value) -> JinjaValue {
     match value {
         Value::Null => JinjaValue::from(()),
         Value::Bool(value) => JinjaValue::from(*value),
@@ -418,7 +425,7 @@ impl io::Write for BoundedWriter {
 }
 
 #[derive(Debug, Error)]
-pub(super) enum StateModifierConfigurationError {
+pub enum StateModifierConfigurationError {
     #[error("the state modifier node exceeds its resource bound")]
     ResourceExhausted,
     #[error("the state modifier YAML is malformed")]
