@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactElement } from 'react';
-import { FlatList, StyleSheet, type RefreshControlProps } from 'react-native';
+import { FlatList, StyleSheet, type LayoutChangeEvent, type RefreshControlProps } from 'react-native';
 
 import { SwipeActions, type RowAction } from '@/components/SwipeActions';
 import type { SnippetPart } from '@/db/search';
@@ -62,6 +62,9 @@ export function ConversationList({
   footer,
   refreshControl,
   onEndReached,
+  selectedId = null,
+  opensInPlace = false,
+  onLayout,
 }: {
   rows: readonly ChatListItem[];
   now?: number;
@@ -76,6 +79,11 @@ export function ConversationList({
   footer?: ReactElement;
   refreshControl?: ReactElement<RefreshControlProps>;
   onEndReached?: () => void;
+  /** The chat open beside the list (regular width, issue #15): its row is highlighted. */
+  selectedId?: number | null;
+  /** A tap opens the chat beside the list rather than navigating: no disclosure chevrons. */
+  opensInPlace?: boolean;
+  onLayout?: (event: LayoutChangeEvent) => void;
 }) {
   const { colors, space } = useDesign();
   const rowsActions: ChatRowActions | null = actions ?? (onDelete !== undefined ? { onDelete } : null);
@@ -100,6 +108,7 @@ export function ConversationList({
     <>
       <FlatList<ChatSection<ChatListItem>>
         testID="chats-list"
+        onLayout={onLayout}
         contentInsetAdjustmentBehavior="automatic"
         keyboardDismissMode="on-drag"
         keyboardShouldPersistTaps="handled"
@@ -134,6 +143,8 @@ export function ConversationList({
                       onPress={() => onOpen(row)}
                       onLongPress={hasMenu ? () => setMenu(row) : undefined}
                       a11y={a11y}
+                      current={selectedId === row.id}
+                      chevron={opensInPlace ? false : undefined}
                     />
                   )}
                 </SwipeActions>

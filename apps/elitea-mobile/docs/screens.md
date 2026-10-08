@@ -213,7 +213,14 @@ G ──────────────────────────
   hit shows the matched passage under the title.
 - **Empty:** the full mascot with [New chat]. **No results:** the bust with
   "Nothing found for '…'".
-- **iPad:** split view, with this list on the left and the thread on the right.
+- **iPad (regular width, ≥ 700 pt: full screen, 2/3 Split View, a wide Stage Manager window):**
+  two panes, this list on the left (about a third, 320–400 pt) and the selected chat on the
+  right, with its own bar (title and actions); the navigation bar is the list's, with an inline
+  title. A tap selects (highlighted, read as selected, no chevron); nothing selected shows "No
+  chat selected" with New chat. Below 700 pt (1/3 and most 1/2 splits) it is the phone stack.
+  The selection survives a change of width: collapsing pushes the open chat, and a chat opened
+  on its own screen is the one selected when the two panes come back. It is per workspace and
+  project and wiped with the session.
 
 ## 4. Chat thread (`/c/[id]`)
 

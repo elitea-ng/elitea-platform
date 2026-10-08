@@ -1,18 +1,22 @@
-import { router, Stack } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { router, Stack, useIsFocused } from 'expo-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, RefreshControl, StyleSheet, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { flattenConversationPages, useConversations } from '@/api/queries/conversations';
 import { OfflineNotice } from '@/components/OfflineNotice';
 import { StatusScreen } from '@/components/StatusScreen';
 import { useDesign } from '@/design/DesignProvider';
 import { buildChatRows, buildSearchRows } from '@/features/chats/chatListModel';
+import { ThreadView } from '@/features/chat/ThreadView';
 import { ConversationList, type ChatListItem, type ChatRowActions } from '@/features/chats/ConversationList';
 import { UNTITLED } from '@/features/chats/ConversationRow';
 import { isOfflineError, OFFLINE_EMPTY } from '@/features/chats/offlineEmpty';
 import { UndoToast } from '@/features/chats/UndoToast';
 import { useConversationSearch, useListActionsAvailable, useSavedPinnedRows } from '@/features/chats/useChatListData';
 import { usePendingDelete } from '@/features/chats/usePendingDelete';
+import { clearSelectedChat, selectChat, useSelectedChat } from '@/features/chats/selectedChat';
+import { isTwoPane, listPaneWidth, useScreenWidth } from '@/features/chats/twoPane';
 import { useProjectSelection } from '@/features/projects/useProjectSelection';
 import { WorkspacePill } from '@/features/workspaces/WorkspacePill';
 import { log } from '@/lib/log';
@@ -37,6 +41,13 @@ const FAILED_COPY = {
  * rename, pin and delete (swipe, long press, accessibility actions; queued on the device and
  * sent when the workspace can take them); and full-text search over the titles and messages
  * kept on the device, which works offline (src/db/search.ts).
+ *
+ * At regular width (iPad full screen, 2/3 Split View, a wide Stage Manager window; issue #15)
+ * the list and the selected chat sit side by side: a tap opens the chat in the detail column.
+ * Below it, the phone stack: a tap pushes the chat's own screen. The selection is kept across
+ * a change of width: collapsing with a chat open pushes that chat, and a chat opened on its own
+ * screen is the one selected when the two panes come back. The lock screen and the privacy
+ * cover sit above both columns, like any screen.
  */
 export default function ConversationsScreen() {
   const design = useDesign();
@@ -54,6 +65,22 @@ export default function ConversationsScreen() {
   const hits = useConversationSearch(projectId, query);
   const workspaceId = useSession((session) => session.workspaceId);
   const deleteScope = useMemo(() => ({ workspaceId, projectId }), [workspaceId, projectId]);
+  const screen = useScreenWidth();
+  const twoPane = isTwoPane(screen.width);
+  const selectedId = useSelectedChat(deleteScope);
+  const focused = useIsFocused();
+  // Two panes collapsing into the phone stack with a chat open (rotation, Split View, Stage
+  // Manager): that chat is pushed, so it stays open. Only a change seen after the first layout
+  // counts: the window's width is a guess until the screen has measured its own.
+  const wasTwoPane = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (!screen.measured) return;
+    const was = wasTwoPane.current;
+    wasTwoPane.current = twoPane;
+    if (was === true && !twoPane && focused && selectedId !== null) {
+      router.push({ pathname: '/c/[id]', params: { id: String(selectedId) } });
+    }
+  }, [screen.measured, twoPane, focused, selectedId]);
   // The delete goes to the project (and workspace) the row was in when it was confirmed:
   // conversation ids are per project, so the same id elsewhere is another chat.
   const removal = usePendingDelete<ChatListItem, DeleteScope>(deleteScope, (row, scope) => {
@@ -93,7 +120,11 @@ export default function ConversationsScreen() {
   // The native search field lives in the navigation bar (iOS UISearchController, Android
   // header search view). It searches the titles and messages kept on the device (the
   // encrypted store's full-text index), so it works offline too.
-  const header = <Stack.Screen options={searchBarOptions(design, { placeholder: 'Search chats', onChange: setQuery })} />;
+  // Two panes share one navigation bar: an inline title there, so the bar keeps one height and
+  // the detail column (which starts under it) does not move while the list scrolls.
+  const header = (
+    <Stack.Screen options={{ ...searchBarOptions(design, { placeholder: 'Search chats', onChange: setQuery }), headerLargeTitle: !twoPane }} />
+  );
 
   if (selection.noProject) {
     return <StatusScreen title="No active project" body="Your account has no active project in this workspace." />;
@@ -139,6 +170,8 @@ export default function ConversationsScreen() {
             style: 'destructive',
             onPress: () => {
               haptic('swipeActionThreshold');
+              // The open chat is going: the detail column closes with it.
+              clearSelectedChat(deleteScope, row.id);
               removal.start(row);
               resolve(true);
             },
@@ -162,13 +195,20 @@ export default function ConversationsScreen() {
     onRename: actionsAvailable ? (row) => router.push({ pathname: '/rename', params: { id: String(row.id), name: row.name ?? '' } }) : null,
   };
 
-  return (
+  const open = (row: ChatListItem) => {
+    if (twoPane) selectChat(deleteScope, row.id);
+    else router.push({ pathname: '/c/[id]', params: { id: String(row.id) } });
+  };
+
+  const list = (
     <>
-      {header}
       <ConversationList
         rows={rows}
         results={searching}
-        onOpen={(row) => router.push({ pathname: '/c/[id]', params: { id: String(row.id) } })}
+        onOpen={open}
+        selectedId={twoPane ? selectedId : null}
+        opensInPlace={twoPane}
+        onLayout={twoPane ? undefined : screen.onLayout}
         // Offline too: the actions are queued on the device and sent on reconnect.
         actions={actions}
         refreshControl={
@@ -210,9 +250,46 @@ export default function ConversationsScreen() {
       />
     </>
   );
+
+  if (!twoPane) {
+    return (
+      <>
+        {header}
+        {list}
+      </>
+    );
+  }
+  return (
+    <>
+      {header}
+      <View testID="chats-two-pane" style={[styles.row, { backgroundColor: colors.background }]} onLayout={screen.onLayout}>
+        <View
+          testID="chats-list-pane"
+          style={[styles.listPane, { width: listPaneWidth(screen.width), borderEndColor: colors.separator }]}>
+          {list}
+        </View>
+        {/* The detail column starts under the (translucent) navigation bar: its safe area. */}
+        <SafeAreaView edges={['top']} style={styles.flex} testID="chats-detail-pane">
+          {selectedId !== null ? (
+            <ThreadView key={`${workspaceId ?? ''}:${projectId}:${selectedId}`} id={String(selectedId)} chrome="pane" inFront={focused} />
+          ) : (
+            <EmptyState
+              mascot="none"
+              title="No chat selected"
+              body="Choose a chat from the list, or start a new one."
+              action={{ title: 'New chat', onPress: () => router.push('/new') }}
+            />
+          )}
+        </SafeAreaView>
+      </View>
+    </>
+  );
 }
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   footer: { padding: 16 },
+  flex: { flex: 1 },
+  row: { flex: 1, flexDirection: 'row' },
+  listPane: { borderEndWidth: StyleSheet.hairlineWidth },
 });

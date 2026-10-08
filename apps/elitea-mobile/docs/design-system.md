@@ -1132,7 +1132,7 @@ the code and covered by a test or a preview; **open** items say why.
 | X15 | Pure-black dark | Closed (plum night tokens) |
 | X16 | Black on magenta | Closed (`correctAccent`, §3.3) |
 | X17 | Android dynamic colour | Decided: the workspace brand wins, else Zefir (§3.4); no "Match system colours" option in v1. |
-| X18 | iPad locked to portrait | **Open:** `orientation: 'portrait'` with `supportsTablet: true`. Discover's grid already widens to 4 columns, but a split view and rotation need their own package. |
+| X18 | iPad locked to portrait | Mostly closed (#15): iPad turns every way and is resizable (`ios.requireFullScreen: false`: all four `~ipad` orientations, Split View, Stage Manager; phones stay portrait, pinned by `scripts/ipad-orientation.test.mjs`). Chats is two panes at ≥ 700 pt (`src/features/chats/twoPane.ts`), the phone stack below. **Open:** hardware-keyboard shortcuts and the ⌘-hold overlay need native `UIKeyCommand`s (#66); on-device check of rotation and the Split View sizes. |
 
 ### Per screen
 

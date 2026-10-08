@@ -24,6 +24,8 @@ export function ConversationRow({
   onPress,
   onLongPress,
   a11y,
+  current = false,
+  chevron,
 }: {
   title: string | null | undefined;
   age: string;
@@ -32,12 +34,16 @@ export function ConversationRow({
   onPress: () => void;
   onLongPress?: () => void;
   a11y?: SwipeRowA11y;
+  /** Open in the detail column beside the list (regular width, issue #15): highlighted, read as selected. */
+  current?: boolean;
+  /** False when a tap opens the chat beside the list instead of navigating (no disclosure chevron). */
+  chevron?: boolean;
 }) {
   const { colors } = useDesign();
   const name = title || UNTITLED;
   const passage = snippet && snippet.length > 0 ? snippet.map((part) => part.text).join('') : null;
   return (
-    <View style={{ backgroundColor: colors.surface }}>
+    <View style={{ backgroundColor: current ? colors.accentSoft : colors.surface }}>
       <ListRow
         title={name}
         value={age}
@@ -63,6 +69,8 @@ export function ConversationRow({
         accessibilityActions={a11y?.accessibilityActions}
         onAccessibilityAction={a11y?.onAccessibilityAction}
         busy={a11y?.accessibilityState?.busy === true}
+        current={current}
+        chevron={chevron}
       />
     </View>
   );

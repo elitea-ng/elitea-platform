@@ -85,6 +85,11 @@ export interface ListRowProps {
   destructive?: boolean;
   /** Marks the selected row of a choice list (check on iOS, the row reads as selected). */
   selected?: boolean;
+  /**
+   * The row whose content is open beside the list (a split view's selection): read as selected,
+   * no check. The caller draws the highlight (its own background).
+   */
+  current?: boolean;
   disabled?: boolean;
   accessibilityLabel?: string;
   accessibilityHint?: string;
@@ -120,7 +125,8 @@ export function ListRow({
   trailing,
   onPress,
   destructive = false,
-  selected,
+  selected: choice,
+  current = false,
   disabled = false,
   accessibilityLabel,
   accessibilityHint,
@@ -165,7 +171,8 @@ export function ListRow({
       ) : null}
     </>
   );
-  const check = selected ? <Icon name="check" size={20} tone="accent" weight="semibold" /> : null;
+  const selected = choice ?? (current ? true : undefined);
+  const check = choice ? <Icon name="check" size={20} tone="accent" weight="semibold" /> : null;
   const showChevron = chevron ?? (onPress !== undefined && !destructive && selected === undefined);
   const body = (
     <View style={[styles.row, minHeight]}>

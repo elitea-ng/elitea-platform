@@ -164,6 +164,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   slug: identity.slug,
   ...(eas.owner ? { owner: eas.owner } : {}),
   version: '0.1.0',
+  // Phones (and Android) stay portrait. iPad turns every way and runs in Split View, Slide Over
+  // and Stage Manager (issue #15): with `ios.requireFullScreen` false, prebuild writes all four
+  // orientations to UISupportedInterfaceOrientations~ipad (App Store multitasking needs them)
+  // and UIRequiresFullScreen false. The Chats tab is two panes at regular width
+  // (src/features/chats/twoPane.ts). scripts/ipad-orientation.test.mjs pins the Info.plist.
   orientation: 'portrait',
   // App icons and splash: Agent Zefirca head mark (docs/assets.md). The second, user-confirmed
   // icon ("Zefir Night", self-hosted workspaces) is the expo-alternate-app-icons entry below.
@@ -174,6 +179,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     bundleIdentifier: identity.bundleId,
     privacyManifests: privacyManifests(eas),
     supportsTablet: true,
+    // Resizable on iPad (see `orientation` above); never set this true, it would lock iPad to portrait.
+    requireFullScreen: false,
     // Icon Composer document: light and dark gradient fills; the system derives Dark, Tinted, Clear.
     icon: './assets/zefirca.icon',
     infoPlist: {

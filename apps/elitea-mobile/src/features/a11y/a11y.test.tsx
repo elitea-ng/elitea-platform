@@ -106,8 +106,8 @@ describe('announcer', () => {
 });
 
 describe('useTurnAnnouncements', () => {
-  function Probe({ live }: { live: LiveTurn | null }) {
-    useTurnAnnouncements(live, 'Zefir Helper');
+  function Probe({ live, enabled }: { live: LiveTurn | null; enabled?: boolean }) {
+    useTurnAnnouncements(live, 'Zefir Helper', enabled);
     return <Text>probe</Text>;
   }
   const live = (turn: Partial<TurnState>): LiveTurn =>
@@ -126,6 +126,20 @@ describe('useTurnAnnouncements', () => {
       jest.advanceTimersByTime(1000);
     });
     expect(spy.mock.calls).toEqual([['Zefir Helper answered.']]);
+    await view.unmount();
+    jest.useRealTimers();
+  });
+
+  it('says nothing while another screen is in front (the detail column under the same chat, #15)', async () => {
+    jest.useFakeTimers();
+    const spy = jest.spyOn(AccessibilityInfo, 'announceForAccessibility').mockImplementation(() => {});
+    spy.mockClear();
+    const view = await render(<Probe live={live({ phase: 'sending' })} enabled={false} />);
+    await view.rerender(<Probe live={live({ phase: 'done', content: 'abc' })} enabled={false} />);
+    await act(async () => {
+      jest.advanceTimersByTime(1000);
+    });
+    expect(spy).not.toHaveBeenCalled();
     await view.unmount();
     jest.useRealTimers();
   });

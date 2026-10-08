@@ -36,8 +36,13 @@ export function turnAnnouncement(
   }
 }
 
-/** Announces the live turn's phase changes (debounced), for the thread screen. */
-export function useTurnAnnouncements(live: LiveTurn | null, author: string | null): void {
+/**
+ * Announces the live turn's phase changes (debounced), for the thread screen. `enabled` false
+ * keeps it quiet (the phase is still tracked): the detail column beside the Chats list while
+ * another screen is in front, which may be the same chat on its own screen (issue #15), so a
+ * screen reader hears an answer once.
+ */
+export function useTurnAnnouncements(live: LiveTurn | null, author: string | null, enabled = true): void {
   const announcer = useRef<Announcer | null>(null);
   const previous = useRef<{ questionId: string; phase: TurnState['phase'] } | null>(null);
   useEffect(() => {
@@ -55,7 +60,7 @@ export function useTurnAnnouncements(live: LiveTurn | null, author: string | nul
     // A turn found already finished on mount (re-attached) is not news.
     if (before === null && live.turn.phase !== 'sending' && live.turn.phase !== 'streaming') return;
     const text = turnAnnouncement(before, live.turn, { author, regeneration: live.regeneration !== null });
-    if (text !== null) announcer.current?.say(text);
+    if (text !== null && enabled) announcer.current?.say(text);
     // Phase changes only; the live object changes on every delta.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live?.questionId, phase]);

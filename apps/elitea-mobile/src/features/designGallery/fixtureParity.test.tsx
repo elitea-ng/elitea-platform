@@ -37,13 +37,13 @@ describe('design-tab previews draw the real screens’ components (D2)', () => {
     ['(app)/(tabs)/chats/index.tsx', 'design-secondary/index.tsx', /OFFLINE_EMPTY\.title/],
     // The agent sheet opens at full height, Start chat in view (S5); the preview as the route.
     ['(app)/_layout.tsx', 'design-secondary/_layout.tsx', /sheetOptions\(design, 'detail'\)/],
-    ['(app)/c/[id].tsx', 'design-chat.tsx', /<ThreadLayout\b/],
-    ['(app)/c/[id].tsx', 'design-chat.tsx', /<PersistedMessage\b/],
-    ['(app)/c/[id].tsx', 'design-chat.tsx', /<LiveReply\b/],
-    ['(app)/c/[id].tsx', 'design-chat.tsx', /<AnswerActions\b/],
-    ['(app)/c/[id].tsx', 'design-chat.tsx', /<PauseCard\b/],
-    ['(app)/c/[id].tsx', 'design-chat.tsx', /<ChatEmptyState\b/],
-    ['(app)/c/[id].tsx', 'design-chat.tsx', /<Composer\b/],
+    ['../features/chat/ThreadView.tsx', 'design-chat.tsx', /<ThreadLayout\b/],
+    ['../features/chat/ThreadView.tsx', 'design-chat.tsx', /<PersistedMessage\b/],
+    ['../features/chat/ThreadView.tsx', 'design-chat.tsx', /<LiveReply\b/],
+    ['../features/chat/ThreadView.tsx', 'design-chat.tsx', /<AnswerActions\b/],
+    ['../features/chat/ThreadView.tsx', 'design-chat.tsx', /<PauseCard\b/],
+    ['../features/chat/ThreadView.tsx', 'design-chat.tsx', /<ChatEmptyState\b/],
+    ['../features/chat/ThreadView.tsx', 'design-chat.tsx', /<Composer\b/],
   ])('%s and %s both use %p', (real, preview, pattern) => {
     expect(read(real)).toMatch(pattern);
     expect(read(preview)).toMatch(pattern);
