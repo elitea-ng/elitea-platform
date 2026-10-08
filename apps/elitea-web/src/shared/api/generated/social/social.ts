@@ -60,6 +60,7 @@ import type {
   ErrorResponse,
   FeedbackCreateRequest,
   FeedbackListResponse,
+  InvalidClientVersionError,
   N400Response,
   N401Response,
   N403Response,
@@ -2352,7 +2353,7 @@ export type pinEntityResponse200 = {
 };
 
 export type pinEntityResponse400 = {
-  data: N400Response;
+  data: ErrorResponse | InvalidClientVersionError;
   status: 400;
 };
 
@@ -2369,6 +2370,11 @@ export type pinEntityResponse403 = {
 export type pinEntityResponse404 = {
   data: N404Response;
   status: 404;
+};
+
+export type pinEntityResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type pinEntityResponse500 = {
@@ -2389,6 +2395,7 @@ export type pinEntityResponseError = (
   | pinEntityResponse401
   | pinEntityResponse403
   | pinEntityResponse404
+  | pinEntityResponse426
   | pinEntityResponse500
   | pinEntityResponse503
 ) & {
@@ -2410,8 +2417,16 @@ export const getPinEntityUrl = (
  * Store one shared pin per project, entity type, and entity identifier.
  * Repeated requests update the last pinner and timestamp.
  * Conversation pins require the caller's existing chat detail access.
- * NOTE(W2): internal/infra/db/repos/social_pins.go:66 implements the shared
+ * NOTE(W2): internal/infra/db/repos/social_pins.go:73 implements the shared
  * centry.social_pins key defined by migrations/shared/0064_centry_social_pins.sql.
+ *
+ * Client contract 1.4 (entity_type `conversation`, entity_id the
+ * conversation's numeric id): the pin is the project's, shared by its
+ * members, and shows as `is_pinned` on the conversation's list row. A
+ * new pin re-delivers that row in the `changes_since` delta of every
+ * member who can see the conversation, so a pin set in the web app
+ * reaches the caller's devices and the other way round. A conversation
+ * the caller cannot see answers 404 and pins nothing.
  * @summary Pin an entity for the project
  */
 export const pinEntity = async (
@@ -2443,7 +2458,12 @@ export const getPinEntityQueryKey = (
 export const getPinEntityQueryOptions = <
   TData = Awaited<ReturnType<typeof pinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2486,12 +2506,22 @@ export type PinEntityQueryResult = NonNullable<
   Awaited<ReturnType<typeof pinEntity>>
 >;
 export type PinEntityQueryError =
-  N400Response | N401Response | N403Response | N404Response | ErrorResponse;
+  | ErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse;
 
 export function usePinEntity<
   TData = Awaited<ReturnType<typeof pinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2517,7 +2547,12 @@ export function usePinEntity<
 export function usePinEntity<
   TData = Awaited<ReturnType<typeof pinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2543,7 +2578,12 @@ export function usePinEntity<
 export function usePinEntity<
   TData = Awaited<ReturnType<typeof pinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2565,7 +2605,12 @@ export function usePinEntity<
 export function usePinEntity<
   TData = Awaited<ReturnType<typeof pinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2601,7 +2646,7 @@ export type unpinEntityResponse200 = {
 };
 
 export type unpinEntityResponse400 = {
-  data: N400Response;
+  data: ErrorResponse | InvalidClientVersionError;
   status: 400;
 };
 
@@ -2618,6 +2663,11 @@ export type unpinEntityResponse403 = {
 export type unpinEntityResponse404 = {
   data: N404Response;
   status: 404;
+};
+
+export type unpinEntityResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
 };
 
 export type unpinEntityResponse500 = {
@@ -2638,6 +2688,7 @@ export type unpinEntityResponseError = (
   | unpinEntityResponse401
   | unpinEntityResponse403
   | unpinEntityResponse404
+  | unpinEntityResponse426
   | unpinEntityResponse500
   | unpinEntityResponse503
 ) & {
@@ -2658,7 +2709,11 @@ export const getUnpinEntityUrl = (
 /**
  * Remove the project pin regardless of which member last pinned it.
  * Repeated requests succeed. Conversation access is required before removal.
- * NOTE(W2): internal/infra/db/repos/social_pins.go:108 uses the canonical shared key.
+ * NOTE(W2): internal/infra/db/repos/social_pins.go:137 uses the canonical shared key.
+ *
+ * Client contract 1.4: removing a conversation pin re-delivers the
+ * conversation's list row (`is_pinned: false`) in the `changes_since`
+ * delta; a repeated unpin removes nothing and re-delivers nothing.
  * @summary Remove a shared project pin
  */
 export const unpinEntity = async (
@@ -2690,7 +2745,12 @@ export const getUnpinEntityQueryKey = (
 export const getUnpinEntityQueryOptions = <
   TData = Awaited<ReturnType<typeof unpinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2735,12 +2795,22 @@ export type UnpinEntityQueryResult = NonNullable<
   Awaited<ReturnType<typeof unpinEntity>>
 >;
 export type UnpinEntityQueryError =
-  N400Response | N401Response | N403Response | N404Response | ErrorResponse;
+  | ErrorResponse
+  | InvalidClientVersionError
+  | N401Response
+  | N403Response
+  | N404Response
+  | ClientUpgradeRequiredResponse;
 
 export function useUnpinEntity<
   TData = Awaited<ReturnType<typeof unpinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2766,7 +2836,12 @@ export function useUnpinEntity<
 export function useUnpinEntity<
   TData = Awaited<ReturnType<typeof unpinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2792,7 +2867,12 @@ export function useUnpinEntity<
 export function useUnpinEntity<
   TData = Awaited<ReturnType<typeof unpinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
@@ -2814,7 +2894,12 @@ export function useUnpinEntity<
 export function useUnpinEntity<
   TData = Awaited<ReturnType<typeof unpinEntity>>,
   TError =
-    N400Response | N401Response | N403Response | N404Response | ErrorResponse,
+    | ErrorResponse
+    | InvalidClientVersionError
+    | N401Response
+    | N403Response
+    | N404Response
+    | ClientUpgradeRequiredResponse,
 >(
   projectId: string,
   entityType: string,
