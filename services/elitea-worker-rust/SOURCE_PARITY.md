@@ -476,3 +476,17 @@ Their source mappings retain the logical-to-dispatch correction and the source-d
 Chat845 later cancels downstream preparation after the original preparation window is missed.
 Its first Code job already completes. No Worker fault occurs.
 All three original runtimes are physically removed, but preparation-Stop and recovery receive no credit.
+
+## Code live canvas terminal correction, 2026-10-08
+
+Chat848 proves ordinary early Stop before user Code and durable cancelled History.
+Its live canvas remains active after cancellation.
+The [terminal callback mapping](docs/source-mapping/code-live-canvas-terminal-20261008.md) records the correction through the existing event bridge.
+The canvas requires matching response and generation, then clears active nodes and sets Stopped or Error.
+The selection passes75 unique source tests. Node26 CI, image, and deployed browser proof remain open.
+This source correction supplies no pending preparation or Worker-loss proof.
+
+The separate [chat850 mapping](docs/source-mapping/code-pending-stop-owner-recovery-20261008.md) closes pending preparation Stop across Worker loss.
+The fresh-spool replacement settles the same run under claim2/epoch2, without user Code or downstream execution.
+Original runtime removal, canonical cancellation, independent acknowledgement drain, and normal reloaded History pass.
+The live canvas correction and remaining service-loss and Kubernetes proofs stay separate.

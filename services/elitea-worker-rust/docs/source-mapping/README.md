@@ -1,5 +1,8 @@
 # Source-to-Rust mapping
 
+The [Code live canvas terminal mapping](code-live-canvas-terminal-20261008.md) records the matching-run callback correction and its separate deployment requirements.
+The [pending preparation Stop mapping](code-pending-stop-owner-recovery-20261008.md) records accepted Worker-loss recovery and normal reloaded History.
+
 These ledgers map observable Elitea behavior to concrete Rust ownership. They
 are compatibility evidence, not a byte-for-byte port plan.
 

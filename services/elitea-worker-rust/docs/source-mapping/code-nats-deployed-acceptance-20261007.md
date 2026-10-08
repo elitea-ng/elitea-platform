@@ -122,6 +122,50 @@ This run receives no preparation-Stop or Worker-recovery credit.
 The readback digest is `2b60dc93c0155027612eaf0cdf43e0b39ada2223126a2385d910a53ba79a89cd`.
 The removal digest is `f9dc33b72c4a5c6157d8a50b9096de2d642f69407e83910cf6e4949255b613a7`.
 
+Chat847 later completes normally after the observer misses the original preparation window.
+Its four original jobs complete, and all four runtimes return HTTP 404 with list absence.
+The Worker stays unchanged. This run supplies no Stop or recovery proof.
+Its root readback digest is `2c9f83a8fdd2833344c46b4a7a4011718d961649d22ce76e436a6cd2e0746606`.
+
+Chat848 uses one continuous normal browser Run and Stop flow.
+It settles as CANCELLED before any user Code or downstream job starts.
+One projected 28-byte failure contains registered code9 and the exact canonical cancellation message.
+One claim1/epoch1 settlement commits, and the original preparation runtime returns HTTP 404 with list absence.
+The original preparation completes during the Stop transition; no pending cancellation cut or Worker loss occurs.
+Reloaded History retains CANCELLED/TERMINAL, and Restore Test selects the original terminal run.
+The root readback digest is `d8bd9093c3ebde4345e46494a4bdeed0d707dd53aa9fb394ab03922903492d6d`.
+The browser receipt digest is `bd18f164e4102ddf2400d9c1475fcf75c07fec1b0db6d334af4a6084cce100f9`.
+This proves early Stop before user Code. It supplies no pending preparation cancellation or recovery credit.
+
+The live canvas still reports an active run after this durable cancellation.
+Chat and History already report cancellation.
+The [terminal callback correction](code-live-canvas-terminal-20261008.md) passes 75 focused source tests.
+Its shipping image and deployed browser verification remain open.
+
+The source review also confirms four private harness corrections.
+Forbidden material mount sources can use an immutable conservative set from full locked preservation.
+Runtime, job, claim, phase, and all16 isolation checks must stay current.
+Canonical cancellation uses nullable database error columns; its wire payload supplies code9.
+Main command and outbox identifiers are distinct. The observer must retain their exact execution/generation join.
+Ordinary claimed cancellation leaves the Product outbox retirement flag false and its retirement code null.
+Terminal execution state excludes publication and visibility repair. Independent NATS queue observations must prove acknowledgement drain.
+These corrections supply no additional application or recovery proof.
+
+Chat849 completes normally after a root browser selector error misses the Stop control.
+Its four original jobs complete, and all four runtimes return HTTP 404 with list absence.
+The original Worker remains unchanged. The idle store retains71 jobs,71 dispatches, and149 checkpoints.
+The root readback digest is `65e3f66b0488d90fcf6a055dff8a21d4607cccd9fdb2e73155e34541294aae33`.
+This run receives no Stop or recovery credit.
+
+Chat850 later closes [pending preparation Stop across Worker loss](code-pending-stop-owner-recovery-20261008.md).
+The original running preparer has no result at the fault cut, and all16 isolation checks pass.
+The fresh-spool replacement settles the same run under claim2/epoch2, with no user Code or downstream job.
+One canonical cancellation, one settlement, original runtime removal, and independent NATS acknowledgement drain pass.
+Normal live chat, reloaded History, and Restore Test retain the same cancelled run.
+The root acceptance digest is `56984a80275c3d3b1be7f0f2f55baa5bef5c6b4169ae84c9f6aad07e9e80f77c`.
+The idle store now retains72 terminal jobs,72 dispatches, and151 checkpoints.
+Live owner loss and preparation outcomes, Main publication loss, NATS restart, and Kubernetes remain separate runtime groups.
+
 Supported application-list denial and outer artifact RBAC refusal later pass their finite cases.
 Their frozen root receipt is `6b20be7632be1bffca3de94806b16c586de0daba5968f88acf13c0ea812140b9`.
 The artifact HTTP 403 occurs at the outer RBAC gate; it does not prove a separate bucket ACL refusal.

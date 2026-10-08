@@ -92,6 +92,22 @@ export function useRunEvent(setFlowNodes: SetFlowNodes, yamlJsonObject: YamlPipe
       : { ...node, data: { ...suspended.data, timeline: [...suspended.data.timeline] } }));
   }, [setFlowNodes]);
 
+  const applyExecutionFailure = useCallback((event: RunSocketEvent) => {
+    const identity = runIdentity.current, terminal = runPipelineStatus.current;
+    if (!identity || !terminal || identity.responseId !== event.message_id || identity.generation !== event.execution_generation) return;
+    const status = event.code === 'CANCELLED' ? PipelineStatus.Stopped : PipelineStatus.Error;
+    terminal.data.status = status;
+    terminal.data.recoveryPaused = false;
+    if (status === PipelineStatus.Error && typeof event.content === 'string') terminal.data.error = event.content;
+    terminal.data.timeline = terminal.data.timeline.map(step =>
+      step.status === PipelineStatus.InProgress || step.status === PipelineStatus.Interrupt ? { ...step, status } : step);
+    setPipelineRunNodes(prev => prev.map(node => node.id !== terminal.id ? node
+      : { ...node, data: { ...terminal.data, timeline: [...terminal.data.timeline] } }));
+    setFlowNodes(prev => prev.map(node => ({ ...node, data: { ...node.data, isPerforming: undefined } }) as unknown as FlowNode));
+    setIsRunningPipeline(false);
+    clearRunParseStatus();
+  }, [clearRunParseStatus, setFlowNodes]);
+
   const onRcvAgentEvent = useCallback(
     (event: RunSocketEvent) => {
       if ((event.type === 'agent_start' || event.type === 'start_task') && isRootNodeRecoveryOwner(event.response_metadata)) {
@@ -100,6 +116,10 @@ export function useRunEvent(setFlowNodes: SetFlowNodes, yamlJsonObject: YamlPipe
       }
       if (event.type === 'agent_node_recovery_required') {
         applyRecoveryPause(event);
+        return;
+      }
+      if (event.type === 'execution.failed') {
+        applyExecutionFailure(event);
         return;
       }
       parseRunEvent(
@@ -139,7 +159,7 @@ export function useRunEvent(setFlowNodes: SetFlowNodes, yamlJsonObject: YamlPipe
         });
       }
     },
-    [applyRecoveryPause, isRunningPipeline, nextRunName, setFlowNodes, yamlJsonObject.interrupt_after, yamlJsonObject.interrupt_before, yamlJsonObject.nodes],
+    [applyExecutionFailure, applyRecoveryPause, isRunningPipeline, nextRunName, setFlowNodes, yamlJsonObject.interrupt_after, yamlJsonObject.interrupt_before, yamlJsonObject.nodes],
   );
 
   useEffect(() => {

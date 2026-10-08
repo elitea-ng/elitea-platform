@@ -123,6 +123,14 @@ Workspaces remain outside this register in the post-worker backlog.
 The [Web reload correction](source-mapping/code-chat-reload-ui-20261007.md) passes source tests, image build, strict local Alpine scan, deployment, and normal author/selection browser verification.
 Its browser receipt is `9406b43e2e008c791f2487476d2699097287773473936b8fcde6b5830e43de5f`.
 
+Chat848 proves early Stop before user Code, canonical cancellation, runtime removal, and reloaded terminal History.
+The original preparation completes during Stop. Pending preparation cancellation and Worker-loss recovery remain unproved.
+The [live canvas terminal correction](source-mapping/code-live-canvas-terminal-20261008.md) passes75 focused source tests.
+Node26 CI, its shipping image, and deployed browser verification remain open.
+Later [chat850](source-mapping/code-pending-stop-owner-recovery-20261008.md) closes pending preparation Stop across Worker loss.
+The replacement settles the original run without user Code or downstream dispatch. Runtime removal and reloaded terminal History pass.
+Distinct preparation failure messages, live owner loss, Main publication, NATS restart, and Kubernetes remain open.
+
 Later preparation fixtures 839 and 844 complete normally after controller refusals before Stop or Worker loss.
 They do not close preparation cancellation or owner recovery.
 The historical checkpoint retains 59 jobs, 59 dispatches, and 125 checkpoints after the second normal run.

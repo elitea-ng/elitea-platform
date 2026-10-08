@@ -14,6 +14,8 @@ It preserves durable NATS storage and the incoming scratch-image health sidecar.
 The [deployed NATS acceptance](source-mapping/code-nats-deployed-acceptance-20261007.md) records current images and verified Code cases.
 Complete Code cache, authority, recovery, editor, and Kubernetes acceptance before graph consolidation.
 No worker gate closes from the merge checks alone.
+The [live canvas terminal correction](source-mapping/code-live-canvas-terminal-20261008.md) passes focused source checks; image and browser acceptance remain open.
+The [pending preparation Stop case](source-mapping/code-pending-stop-owner-recovery-20261008.md) passes Worker-loss recovery and normal browser reload in chat850.
 
 ## Progression status
 

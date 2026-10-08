@@ -77,6 +77,7 @@ interface RunResponseMetadata {
 export interface RunSocketEvent {
   readonly message_id?: string;
   readonly execution_generation?: string;
+  readonly code?: string;
   readonly type: string;
   readonly response_metadata: RunResponseMetadata;
   readonly content?: unknown;
