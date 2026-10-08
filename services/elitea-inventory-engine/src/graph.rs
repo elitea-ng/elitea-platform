@@ -212,6 +212,22 @@ pub fn layer_of(entity_type: &str) -> Option<&'static str> {
         .map(|(layer, _)| *layer)
 }
 
+/// `KnowledgeGraph.LAYER_TYPE_MAPPING[layer]` (lowercase layer name): the
+/// types listed under it, in source order. Unlike [`layer_of`], a type listed
+/// twice belongs to both layers here, as the Python set membership has it.
+#[must_use]
+pub fn layer_types(layer: &str) -> Option<&'static [&'static str]> {
+    LAYERS
+        .iter()
+        .find(|(name, _)| *name == layer)
+        .map(|(_, types)| *types)
+}
+
+/// The layer names of `LAYER_TYPE_MAPPING`, in source order.
+pub fn layer_names() -> impl Iterator<Item = &'static str> {
+    LAYERS.iter().map(|(name, _)| *name)
+}
+
 /// Where an entity was found: `Citation.to_dict()`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Citation {
