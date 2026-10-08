@@ -257,6 +257,7 @@ jobs:
           cache-dependency-path: services/elitea-llm-gateway/go.sum
 
       - name: Install current binary indexing prerequisites
+        timeout-minutes: 10
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends \
