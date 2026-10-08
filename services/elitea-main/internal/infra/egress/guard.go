@@ -1,49 +1,38 @@
+// Package egress is elitea-main's guard for outbound HTTP to a destination a
+// tenant chose: webhook receivers, MCP servers and their OAuth endpoints, and
+// GitHub Enterprise bases for Code workspaces. It is the one egress path future
+// HTTP actions may use.
+//
+// # What it enforces
+//
+//   - Every connection re-resolves the host, refuses forbidden addresses, and
+//     dials the checked IP literal, so DNS rebinding cannot swap the address
+//     between the check and the connect (dialContext).
+//   - Loopback and private-network addresses (RFC 1918, ULA, CGNAT,
+//     benchmarking, site-local) are refused unless the operator's allowlist
+//     declares private egress. Unspecified, link-local, multicast, reserved,
+//     IETF-protocol, discard, Teredo and cloud-metadata addresses are refused
+//     whatever the allowlist says (classify.go).
+//   - IPv4 reached through an IPv6 form (IPv4-mapped, NAT64 64:ff9b::/96, 6to4)
+//     is classified as the IPv4 address it reaches.
+//   - The transport never uses a proxy, so the address checked is the address
+//     dialled. It caps response headers at MaxResponseHeaderBytes and verifies
+//     TLS against the URL host (net/http's default; the pinned IP literal is
+//     only the TCP address).
+//   - RoundTripper returns a transport only. A redirect is returned to the
+//     caller, never followed: only http.Client follows redirects.
+//
+// # Allowlists are the outer bound
+//
+// The operator allowlists (ELITEA_WEBHOOK_EGRESS_ALLOWLIST,
+// ELITEA_MCP_EGRESS_ALLOWLIST, ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST, and the
+// Code workspace host allowlist) use libs/go/egresslib's grammar. This guard
+// asks one question of them: does an entry declare private egress? It never
+// widens past the forbidden classes.
+//
+// The guard used to live in internal/api/webhook. It moved here so
+// infrastructure adapters can use it without importing the api layer.
 package egress
-
-// SSRF hardening for outbound webhook destinations.
-//
-// # WHAT WAS MISSING
-//
-// #876 accepted any `url` a caller supplied and dialled it unchecked, both
-// when a webhook was first created (Handler.Create/Update) and every time it
-// actually fired (Dispatcher.attempt/send). A caller with the ordinary
-// `configurations.configuration.create` permission on their own project could
-// register a webhook pointed at 127.0.0.1, at 169.254.169.254 (the cloud
-// instance-metadata endpoint every provider serves unauthenticated), or at a
-// name that resolves inside the cluster's own private network — and this
-// platform would then make that request FOR them, with this service's own
-// network identity, on every matching domain event.
-//
-// # THE ESTABLISHED PATTERN THIS REUSES
-//
-// libs/go/egresslib is already this platform's ONE grammar for an operator-
-// authored egress allowlist (GATEWAY_EGRESS_ALLOWLIST, the gateway's
-// governance_config `egress_allowlist` rows). Its AllowsPrivateNetwork
-// documents the exact distinction this file needs: an allowlist entry can
-// explicitly declare that PRIVATE (RFC1918/ULA) egress is intended, but
-// link-local (169.254.0.0/16, fe80::/10 — the metadata range) is refused
-// UNCONDITIONALLY, because "an entry naming one declares nothing this package
-// can grant" (egresslib's own doc comment). DestinationGuard below applies
-// that exact split to a webhook destination: ELITEA_WEBHOOK_EGRESS_ALLOWLIST
-// is parsed with egresslib.Parse, and AllowsPrivateNetwork() is the ONE
-// question this file asks it — not Allows(host), which governs a different
-// question (an operator NAMING specific public hosts) that does not apply
-// here: a webhook destination is chosen by the tenant, not curated by the
-// operator, so the control this file needs is "may this deployment's tenants
-// reach private addresses at all", not "which public hosts may they reach".
-//
-// # WHAT elitea-main DID NOT ALREADY HAVE
-//
-// Unlike the LLM gateway, this service dials no bifrost SSRF-safe transport.
-// internal/providerhost/material.GitEgressPolicy (DeepWiki/Inventory) and
-// internal/api/v2/configurations/toolkit_check.go's ELITEA_TOOLKIT_CHECK_ALLOWLIST
-// are both NAME allowlists with no DNS resolution and no dial-time pinning —
-// they answer "did an operator name this host", never "does this host
-// resolve somewhere it should not". A webhook destination is different: it is
-// whatever a tenant types, so the control has to be about WHERE that name
-// resolves, not a curated list of vendor hosts. DestinationGuard is the first
-// dial-time, DNS-aware SSRF guard in this service, built from scratch but
-// over egresslib's existing grammar and constant set.
 
 import (
 	"context"
@@ -58,87 +47,98 @@ import (
 	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
 )
 
-// ErrDestinationRefused is the sentinel every refusal in this file wraps, so
-// a caller can `errors.Is` it regardless of which specific reason fired.
+// ErrDestinationRefused is the sentinel every refusal wraps, so a caller can
+// errors.Is it whichever reason fired. The text predates the move out of the
+// webhook package and is kept because the webhook form shows it verbatim.
 var ErrDestinationRefused = errors.New("webhook destination refused")
 
-// dnsLookupTimeout bounds ONE resolution — at create/update time, and again
-// at dial time (see DestinationGuard.dialContext's doc comment for why dial
-// time resolves AGAIN rather than trusting the create-time answer).
-const dnsLookupTimeout = 5 * time.Second
+const (
+	// dnsLookupTimeout bounds ONE resolution, at validation and at dial time.
+	dnsLookupTimeout = 5 * time.Second
+	// dialTimeout bounds ONE literal-IP TCP connect.
+	dialTimeout = 10 * time.Second
 
-// dialTimeout bounds ONE literal-IP TCP connect, once resolution and
-// filtering have already picked which addresses are permitted.
-const dialTimeout = 10 * time.Second
+	// MaxResponseHeaderBytes bounds one response's header block. net/http's
+	// default is 10 MiB, which lets a hostile destination make Main buffer
+	// megabytes before any caller-side body limit applies.
+	MaxResponseHeaderBytes = 64 << 10
+	// MaxResolvedAddresses bounds one resolution. A larger answer is refused
+	// rather than truncated, so the dial loop never walks an unbounded list.
+	MaxResolvedAddresses = 32
+)
 
-// Resolver is the seam DestinationGuard resolves hostnames through. Tests
-// substitute a fake so validation is deterministic and does not depend on the
-// test runner's own network access or a real DNS answer for a fixture
-// hostname — the same reason internal/api/v2/configurations/toolkit_check.go
-// checks a host STRING against an allowlist rather than resolving it: a unit
-// test must not depend on live DNS. Here resolution is the whole point, so
-// instead of avoiding it, the resolver itself is substitutable.
+// Resolver is the seam the guard resolves host names through. Tests supply a
+// fake so validation never depends on live DNS.
 type Resolver interface {
 	LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error)
 }
 
-// DestinationGuard is a webhook `url`'s SSRF gate: DENIES loopback, private,
-// link-local, multicast and unspecified destinations by default, has an
-// operator-controlled escape hatch for the private (not link-local) class,
-// and re-resolves and re-checks EVERY dial rather than trusting a check done
-// minutes or days earlier — a webhook row, once created, can be dialled
-// indefinitely, and DNS is not something this service controls.
+// Guard is the SSRF gate for a tenant-chosen destination. It is safe for
+// concurrent use and immutable after New.
 type Guard struct {
-	allowlist *egresslib.Allowlist
-	resolver  Resolver
+	allowlist    *egresslib.Allowlist
+	allowPrivate bool
+	resolver     Resolver
+	httpsOnly    bool
 }
 
-// New builds a guard over an allowlist (nil is the same as an
-// empty one — see egresslib.Allowlist's own nil-receiver methods). It uses
-// net.DefaultResolver; NewWithResolver is the seam tests use
-// to substitute a fake.
-func New(allowlist *egresslib.Allowlist) *Guard {
-	return NewWithResolver(allowlist, net.DefaultResolver)
-}
+// Option configures a Guard built by New.
+type Option func(*Guard)
 
-// NewWithResolver is New with an injectable
-// resolver, for tests that must not depend on live DNS.
-func NewWithResolver(allowlist *egresslib.Allowlist, resolver Resolver) *Guard {
-	if resolver == nil {
-		resolver = net.DefaultResolver
+// WithResolver replaces net.DefaultResolver. A nil resolver is ignored.
+func WithResolver(resolver Resolver) Option {
+	return func(g *Guard) {
+		if resolver != nil {
+			g.resolver = resolver
+		}
 	}
-	return &Guard{allowlist: allowlist, resolver: resolver}
 }
 
-// ParseAllowlist reads DestinationAllowlistEnv's grammar (see
-// egresslib's package doc): a comma/whitespace-free list of hosts, `*.`
-// wildcards and CIDR blocks. An empty string parses to an empty, "refuse all
-// private destinations" allowlist.
+// RequireHTTPS refuses every http destination, in Validate and in
+// RoundTripper. Transport() cannot see the scheme, so a caller with this
+// policy must send through RoundTripper.
+func RequireHTTPS() Option {
+	return func(g *Guard) { g.httpsOnly = true }
+}
+
+// New builds a guard over an allowlist. A nil allowlist refuses every private
+// destination.
+func New(allowlist *egresslib.Allowlist, opts ...Option) *Guard {
+	g := &Guard{allowlist: allowlist, resolver: net.DefaultResolver}
+	for _, opt := range opts {
+		opt(g)
+	}
+	g.allowPrivate = declaresPrivateEgress(allowlist)
+	return g
+}
+
+// NewWithResolver is New with an injectable resolver, for tests that must not
+// depend on live DNS.
+func NewWithResolver(allowlist *egresslib.Allowlist, resolver Resolver) *Guard {
+	return New(allowlist, WithResolver(resolver))
+}
+
+// ParseAllowlist reads egresslib's grammar: hosts, `*.` wildcards and CIDR
+// blocks. An empty list refuses every private destination.
 func ParseAllowlist(raw []string) (*egresslib.Allowlist, error) {
 	return egresslib.Parse(raw)
 }
 
 func (g *Guard) allowsPrivate() bool {
-	return g != nil && g.allowlist != nil && g.allowlist.AllowsPrivateNetwork()
+	return g != nil && g.allowPrivate
 }
 
-// Validate checks a webhook `url` BEFORE it is ever stored — Handler.Create
-// and Handler.Update both call this and answer 400 on a refusal, so a
-// disallowed destination never reaches the table in the first place. It is
-// deliberately the SAME filtering dialContext applies at send time
-// (permittedIPs), so a URL this method accepts is, at the moment it was
-// checked, one dialContext would also accept.
-//
-// "At the moment it was checked" is doing real work in that sentence: DNS is
-// not a fact this service controls, and a hostname that resolved to a public
-// address today can resolve to 169.254.169.254 tomorrow (DNS rebinding, or
-// simply an operator repointing a record). That is exactly why dialContext
-// below re-resolves and re-checks on every single delivery attempt instead of
-// trusting this method's answer — this method is the create-time UX (a clear
-// 400 instead of a silently inert webhook), not the enforcement boundary.
+// Validate checks a destination URL before it is stored or used. It applies
+// the same filter as dialContext, so a URL it accepts is, at the moment it
+// was checked, one dialContext would also accept. DNS can change afterwards,
+// which is why dialContext checks again: this is the clear-400 UX, not the
+// enforcement boundary.
 func (g *Guard) Validate(ctx context.Context, rawURL string) error {
-	_, host, err := parseDestinationURL(rawURL)
+	u, host, err := parseDestinationURL(rawURL)
 	if err != nil {
+		return err
+	}
+	if err := g.checkScheme(u.Scheme); err != nil {
 		return err
 	}
 	ips, err := g.resolveHost(ctx, host)
@@ -146,24 +146,54 @@ func (g *Guard) Validate(ctx context.Context, rawURL string) error {
 		return fmt.Errorf("%w: could not resolve %q: %v", ErrDestinationRefused, host, err)
 	}
 	if len(g.permittedIPs(ips)) == 0 {
-		return fmt.Errorf(
-			"%w: %q does not resolve to a permitted destination "+
-				"(loopback, private-network, link-local and multicast addresses are refused)",
-			ErrDestinationRefused, host)
+		return notPermitted(host)
 	}
 	return nil
 }
 
-// Transport returns an *http.Transport whose DialContext is dialContext, so
-// every connection a Dispatcher makes through it is re-validated and pinned
-// to a specific, already-checked IP literal. A Dispatcher built WITHOUT a
-// guard (nil) uses http.DefaultTransport and performs no SSRF check at all —
-// see NewDispatcher's doc comment for why that is an explicit, documented
-// choice rather than an oversight.
+// Transport returns an *http.Transport that dials only through dialContext,
+// never uses a proxy, and caps response headers. Callers that must keep an
+// *http.Transport (to clone it or close idle connections) use this; it does
+// not enforce RequireHTTPS. An *http.Transport never follows redirects; an
+// http.Client wrapped around it does, so such a client must set its own
+// CheckRedirect (each hop still dials through the guard).
 func (g *Guard) Transport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.Proxy = nil
 	t.DialContext = g.dialContext
+	t.DialTLSContext = nil
+	t.MaxResponseHeaderBytes = MaxResponseHeaderBytes
 	return t
+}
+
+// RoundTripper returns the guarded transport as an http.RoundTripper that
+// also enforces the scheme policy per request. It is the constructor for any
+// new egress path: a RoundTripper cannot follow a redirect, so a 3xx is
+// returned to the caller and its Location is never dialled.
+func (g *Guard) RoundTripper() http.RoundTripper {
+	return &roundTripper{guard: g, transport: g.Transport()}
+}
+
+type roundTripper struct {
+	guard     *Guard
+	transport *http.Transport
+}
+
+func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if err := rt.guard.checkScheme(req.URL.Scheme); err != nil {
+		// The RoundTripper contract: close the body even on error.
+		if req.Body != nil {
+			_ = req.Body.Close()
+		}
+		return nil, err
+	}
+	return rt.transport.RoundTrip(req)
+}
+
+// CloseIdleConnections lets http.Client.CloseIdleConnections reach the
+// guarded transport, so its owner can release pooled connections on shutdown.
+func (rt *roundTripper) CloseIdleConnections() {
+	rt.transport.CloseIdleConnections()
 }
 
 // DialContext is dialContext for a caller that builds its own transport, such
@@ -173,37 +203,17 @@ func (g *Guard) DialContext(ctx context.Context, network, addr string) (net.Conn
 	return g.dialContext(ctx, network, addr)
 }
 
-// dialContext is the actual SSRF enforcement boundary: it runs once per TCP
-// connection net/http's Transport opens, which for a webhook POST is once per
-// delivery attempt.
-//
-// # Why this re-resolves instead of trusting Validate's answer
-//
-// A destination is stored once and dialled for the lifetime of the webhook —
-// possibly years apart from the create-time check. Trusting a stale
-// resolution would let an attacker register a webhook pointed at a hostname
-// that resolves PUBLIC at creation time and repoint it to 169.254.169.254
-// (or anywhere else) the moment it passes validation: classic DNS rebinding,
-// and the exact attack a "check the name, then dial the name" design is
-// vulnerable to. Resolving HERE, immediately before the dial, and then
-// dialling the resolved IP LITERAL rather than the original hostname (see
-// below) closes that gap: net/http never gets a second chance to resolve the
-// name again after this check has passed, because it is never given the name
-// to resolve — only the connection this function already opened.
-//
-// # Why the IP literal, not the hostname, is what gets dialled
-//
-// If this returned a plain net.Dialer.DialContext(ctx, network, addr) using
-// the ORIGINAL addr (still a hostname:port), Go's own dialer would resolve it
-// AGAIN internally — a second, uncontrolled resolution this function has no
-// visibility into, and the classic bypass: check public, dial private. By
-// resolving ourselves and handing net.Dialer a literal IP:port, the address
-// that gets a TCP SYN is provably the SAME address this function just
-// filtered. TLS (for an https destination) is unaffected: net/http's
-// Transport wraps the returned net.Conn in TLS using the URL's hostname as
-// ServerName regardless of what address the connection itself was opened to,
-// so certificate validation still checks the name the caller asked for.
+// dialContext is the enforcement boundary: it runs once per TCP connection.
+// It resolves the host itself, filters the answers, and dials the checked IP
+// literal, so net/http never resolves the name again after the check (the
+// DNS-rebinding bypass). TLS still verifies the URL's host name: net/http
+// sets ServerName from the request, not from the address dialled.
 func (g *Guard) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	switch network {
+	case "tcp", "tcp4", "tcp6":
+	default:
+		return nil, fmt.Errorf("%w: network %q is not tcp", ErrDestinationRefused, network)
+	}
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDestinationRefused, err)
@@ -214,10 +224,7 @@ func (g *Guard) dialContext(ctx context.Context, network, addr string) (net.Conn
 	}
 	allowed := g.permittedIPs(ips)
 	if len(allowed) == 0 {
-		return nil, fmt.Errorf(
-			"%w: %q does not resolve to a permitted destination "+
-				"(loopback, private-network, link-local and multicast addresses are refused)",
-			ErrDestinationRefused, host)
+		return nil, notPermitted(host)
 	}
 
 	dialer := &net.Dialer{Timeout: dialTimeout}
@@ -232,35 +239,37 @@ func (g *Guard) dialContext(ctx context.Context, network, addr string) (net.Conn
 	return nil, lastErr
 }
 
-// permittedIPs is the ONE filtering rule Validate and dialContext both apply,
-// so a URL cannot be accepted by one and refused by the other. It keeps every
-// resolved address whose class is not blocked outright, and additionally
-// keeps a loopback/private address when the allowlist explicitly permits
-// private-network egress. Link-local, multicast and unspecified addresses are
-// never kept, regardless of the allowlist — see classifyDestinationIP.
+func notPermitted(host string) error {
+	return fmt.Errorf(
+		"%w: %q does not resolve to a permitted destination "+
+			"(loopback, private-network, link-local, multicast and reserved addresses are refused)",
+		ErrDestinationRefused, host)
+}
+
+// permittedIPs is the ONE filter Validate and dialContext both apply. It keeps
+// public addresses, and private ones only when the allowlist declares private
+// egress. Forbidden addresses are never kept.
 func (g *Guard) permittedIPs(ips []net.IP) []net.IP {
 	allowPrivate := g.allowsPrivate()
 	allowed := make([]net.IP, 0, len(ips))
 	for _, ip := range ips {
-		blocked, always, _ := classifyDestinationIP(ip)
-		if !blocked {
+		switch classify(ip) {
+		case classPublic:
 			allowed = append(allowed, ip)
-			continue
-		}
-		if !always && allowPrivate {
-			allowed = append(allowed, ip)
+		case classPrivate:
+			if allowPrivate {
+				allowed = append(allowed, ip)
+			}
 		}
 	}
 	return allowed
 }
 
-// resolveHost resolves host to its IP addresses. An IP literal resolves to
-// itself (no DNS involved, so nothing to rebind). "localhost" is resolved to
-// 127.0.0.1 without a system lookup — the same special-case egresslib's own
-// NamesPrivateNetwork documents ("the one name whose meaning is fixed by
-// every resolver on the planet") — so a receiver's DNS or hosts file cannot
-// make "localhost" resolve to something this function would not otherwise
-// classify as loopback.
+// resolveHost resolves host to at most MaxResolvedAddresses addresses. An IP
+// literal resolves to itself. "localhost" is pinned to 127.0.0.1 so a hosts
+// file cannot make it mean something else. Zoned answers are dropped: a zone
+// only qualifies a link-local or interface-scoped address, never a
+// destination this guard could permit.
 func (g *Guard) resolveHost(ctx context.Context, host string) ([]net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return []net.IP{ip}, nil
@@ -277,45 +286,35 @@ func (g *Guard) resolveHost(ctx context.Context, host string) ([]net.IP, error) 
 	if len(addrs) == 0 {
 		return nil, errors.New("no addresses returned")
 	}
+	if len(addrs) > MaxResolvedAddresses {
+		return nil, fmt.Errorf("%d addresses returned, more than %d", len(addrs), MaxResolvedAddresses)
+	}
 	ips := make([]net.IP, 0, len(addrs))
 	for _, a := range addrs {
-		ips = append(ips, a.IP)
+		if a.Zone == "" {
+			ips = append(ips, a.IP)
+		}
 	}
 	return ips, nil
 }
 
-// classifyDestinationIP reports whether ip belongs to a class this guard ever
-// refuses (blocked), and whether that refusal is UNCONDITIONAL — never
-// liftable by the allowlist (always). reason is a short, caller-safe
-// description used in refusal messages.
-//
-// The unconditional classes (link-local, multicast, unspecified) are exactly
-// the ranges egresslib's own privateBlocks deliberately EXCLUDES, for the
-// same reason stated there: link-local is where cloud instance-metadata
-// endpoints live (169.254.169.254 first among them), and an operator naming
-// one in an allowlist "declares nothing this package can grant".
-func classifyDestinationIP(ip net.IP) (blocked, always bool, reason string) {
-	switch {
-	case ip.IsUnspecified():
-		return true, true, "the unspecified address"
-	case ip.IsLoopback():
-		return true, false, "a loopback address"
-	case ip.IsLinkLocalUnicast(), ip.IsLinkLocalMulticast(), ip.IsInterfaceLocalMulticast():
-		return true, true, "a link-local address (this range includes every cloud provider's instance-metadata endpoint)"
-	case ip.IsMulticast():
-		return true, true, "a multicast address"
-	case ip.IsPrivate():
-		return true, false, "a private-network address"
+func (g *Guard) checkScheme(scheme string) error {
+	switch strings.ToLower(scheme) {
+	case "https":
+		return nil
+	case "http":
+		if g.httpsOnly {
+			return fmt.Errorf("%w: this destination must use https", ErrDestinationRefused)
+		}
+		return nil
 	default:
-		return false, false, ""
+		return fmt.Errorf("%w: scheme %q is not http or https", ErrDestinationRefused, scheme)
 	}
 }
 
-// parseDestinationURL validates the SYNTACTIC shape a webhook `url` must
-// have, independent of where it resolves: a non-empty http(s) URL with a
-// host. It is called by Validate and reused by dialContext's callers through
-// Validate; dialContext itself receives an already-split host:port from
-// net/http and does not re-parse a URL.
+// parseDestinationURL validates the syntactic shape a destination must have,
+// independent of where it resolves: a non-empty URL with a host. Validate
+// checks the scheme against the guard's policy.
 func parseDestinationURL(raw string) (*url.URL, string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -324,11 +323,6 @@ func parseDestinationURL(raw string) (*url.URL, string, error) {
 	u, err := url.Parse(trimmed)
 	if err != nil {
 		return nil, "", fmt.Errorf("%w: %q is not a valid URL", ErrDestinationRefused, raw)
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "http", "https":
-	default:
-		return nil, "", fmt.Errorf("%w: scheme %q is not http or https", ErrDestinationRefused, u.Scheme)
 	}
 	host := u.Hostname()
 	if host == "" {

@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/EliteaAI/elitea-platform/libs/go/egresslib"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/egress"
 )
 
 type CodeRepositoryFile struct {
@@ -68,34 +68,9 @@ func NewCodeWorkspaceGitHub(allowed *egresslib.Allowlist) (*CodeWorkspaceGitHub,
 	if allowed == nil || !allowed.Configured() {
 		return nil, ErrCodeWorkspaceCapability
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(address)
-		if err != nil || network != "tcp" {
-			return nil, ErrCodeWorkspaceUnavailable
-		}
-		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		defer cancel()
-		addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if err != nil || len(addresses) > 32 {
-			return nil, ErrCodeWorkspaceUnavailable
-		}
-		for _, candidate := range addresses {
-			ip := candidate.IP
-			if candidate.Zone != "" || !ip.IsGlobalUnicast() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-				continue
-			}
-			if (ip.IsPrivate() || ip.IsLoopback()) && !allowed.AllowsPrivateNetwork() {
-				continue
-			}
-			connection, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), port))
-			if err == nil {
-				return connection, nil
-			}
-		}
-		return nil, ErrCodeWorkspaceUnavailable
-	}
+	// The host allowlist names the GitHub base; the egress guard decides where
+	// that name may resolve, re-checks every dial, and never uses a proxy.
+	transport := egress.New(allowed).Transport()
 	return &CodeWorkspaceGitHub{allowed, &http.Client{Transport: transport, Timeout: 15 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return ErrCodeWorkspaceUnavailable }}}, nil
 }
