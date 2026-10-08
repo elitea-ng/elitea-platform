@@ -31,6 +31,8 @@ enum Behavior {
     Succeed,
     Fail,
     Authorization(Arc<AtomicBool>),
+    /// The call succeeds, then the writer lease is lost before the result commits.
+    SucceedThenLoseLease(Arc<Lease>),
 }
 
 /// The shared fixture journal ignores the activation; a real journal is one per activation.
@@ -82,6 +84,10 @@ impl Tool for EffectTool {
         match &self.behavior {
             Behavior::Authorization(authorized) if !authorized.load(Ordering::SeqCst) => {
                 Err(delegated_authorization_error_fixture("mcp"))
+            }
+            Behavior::SucceedThenLoseLease(lease) => {
+                lease.0.store(false, Ordering::SeqCst);
+                Ok(json!({"report": {"created": true}, "messages": []}))
             }
             Behavior::Succeed | Behavior::Authorization(_) => Ok(json!({
                 "report": {"created": true},
@@ -258,6 +264,24 @@ async fn effectful_tool_failure_stops_with_its_error_and_is_not_called_again() {
     };
     assert!(error.to_string().contains("tool_execution"), "{error}");
     // The journal keeps the uncertain effect: the same attempt is never dispatched again.
+    let output = node.execute(&context(state())).await.unwrap();
+    assert!(recovery_card(&output));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn effect_whose_result_cannot_be_recorded_is_reported_and_never_repeated() {
+    let factory = scoped();
+    let behavior = Behavior::SucceedThenLoseLease(Arc::clone(&factory.0.lease));
+    let (node, calls) = node(&factory, behavior, false);
+    let Err(error) = node.execute(&context(state())).await else {
+        panic!("an unrecorded effect was reported as committed");
+    };
+    assert!(
+        error.to_string().contains("result could not be recorded"),
+        "{error}"
+    );
+    factory.0.lease.0.store(true, Ordering::SeqCst);
     let output = node.execute(&context(state())).await.unwrap();
     assert!(recovery_card(&output));
     assert_eq!(calls.load(Ordering::SeqCst), 1);

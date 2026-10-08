@@ -38,7 +38,7 @@ Design and guarantees: [`../direct-tool-effects-design.md`](../direct-tool-effec
 
 ## Tests
 
-New file `src/agents/graph/node_recovery_direct_tool_tests.rs`, with 7 tests:
+New file `src/agents/graph/node_recovery_direct_tool_tests.rs`, with 8 tests:
 - `effectful_direct_tool_runs_once_and_its_committed_result_is_replayed`
 - `started_attempt_without_result_never_repeats_an_effectful_tool`
 - `effectful_tool_failure_stops_with_its_error_and_is_not_called_again`
@@ -46,6 +46,7 @@ New file `src/agents/graph/node_recovery_direct_tool_tests.rs`, with 7 tests:
 - `blocked_sensitive_effectful_tool_stops_the_pipeline_without_a_journal_record`
 - `effectful_authorization_challenge_pauses_then_skip_stops_without_a_journal_record`
 - `effectful_tool_requires_the_fenced_writer_before_any_call`
+- `effect_whose_result_cannot_be_recorded_is_reported_and_never_repeated`
 
 `src/agents/graph/direct_tool_tests.rs`:
 - `blocked_effectful_sensitive_tool_stops_the_whole_pipeline_under_node_recovery`
@@ -61,7 +62,7 @@ New file `src/agents/graph/node_recovery_direct_tool_tests.rs`, with 7 tests:
 - the direct-node wording assertions in the toolkit and MCP scope tests.
 
 Results:
-- `cargo test --all-features`: lib 2029 passed, 0 failed, 63 ignored; all integration test targets pass. DB-gated tests are skipped without
+- `cargo test --all-features`: lib 2030 passed, 0 failed, 63 ignored; all integration test targets pass. DB-gated tests are skipped without
   `ELITEA_TEST_DATABASE_URL`, and the new tests use the in-memory journal fixture.
 - `cargo clippy --all-targets --all-features -D warnings` and `cargo fmt --check` are clean.
 - Helm: `render-worker-sandbox.sh` passes, and `render-worker.sh` ran 8 assertions, all passed.
@@ -96,6 +97,8 @@ Pending: a local rehearsal stack with `agent_node_recovery: true`. The check cov
 tool.
 
 ## Follow-ups
+
+Code review: findings fixed (unrecorded-result message, Helm refusal text). The others are recorded as gaps 3-6 in the design note.
 
 - Wire operator retry/stop and result projection for direct-tool recovery cards.
 - Move LLM-node effectful tools onto the same journal (Gate 6).

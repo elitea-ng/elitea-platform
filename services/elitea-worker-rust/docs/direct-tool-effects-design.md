@@ -17,6 +17,7 @@ dispatched twice**.
 | Reject or block | No call. The whole pipeline stops with the "blocked by user" message and `_pipeline_blocked`. Declared outputs get no tool data, and no downstream node runs. |
 | Auth-guarded MCP | Shows the authorize / skip card. Skip stops the whole pipeline with its message. Authorize runs the call once. |
 | Tool returns an error | The pipeline stops with the typed `pipeline.tool_failed` error, as for read-only tools. The attempt is recorded as an uncertain effect and is never re-dispatched. |
+| Tool ran but its result could not be journaled (lease lost, result over the 1 MiB journal cap) | Typed `pipeline.tool_failed`, saying "The tool completed, but its result could not be recorded. It will not run again." No re-dispatch. |
 | Worker dies during the call | The node does not call the tool again. Run recovery refuses a direct-tool frontier, and a re-entered attempt returns the recovery card. |
 | No fenced node writer (`agent_node_recovery` off) | Effectful tools are refused before any pause or call. Read-only tools run as before. |
 
@@ -79,6 +80,7 @@ What we deliberately do not port:
 | Worker × effectful call, result committed | R | `RecoverableNode` result replay | `effectful_direct_tool_runs_once_and_its_committed_result_is_replayed` |
 | Worker × crash after Started, before result | C | `direct_tool.rs:886`. Run recovery refuses a direct-tool frontier (`compiler.rs:766`). | `started_attempt_without_result_never_repeats_an_effectful_tool` |
 | Worker × tool error | F (typed) + C record | `direct_tool.rs:574-592` | `effectful_tool_failure_stops_with_its_error_and_is_not_called_again` |
+| Worker × result not journaled after the call | F (typed) + C record | `direct_tool.rs` `dispatch` (`completed` flag) | `effect_whose_result_cannot_be_recorded_is_reported_and_never_repeated` |
 | Worker × block / skip | F (stop with message) | `direct_tool.rs:514`, `:719` | `blocked_effectful_sensitive_tool_stops_the_whole_pipeline_under_node_recovery`, `skipped_effectful_authorization_stops_the_whole_pipeline_under_node_recovery` |
 | PostgreSQL × journal append | Fenced | `StateWriterLease` in `postgres_checkpointer/node_attempts.rs` | Existing node-recovery Postgres tests (DB-gated) |
 
@@ -91,6 +93,22 @@ What we deliberately do not port:
    call.
 2. **Auth challenge crash.** A crash while an effectful MCP call is answering an auth challenge
    leaves a `Started` record, so re-entry shows the conservative card.
-3. **LLM-node receipts.** Pipeline LLM nodes admit effectful sensitive tools without an effect
+3. **Repeated auth challenge with identical state.** An auth challenge raised inside an effectful
+   call is recorded as a terminal no-effect failure for its activation. If a later visit reaches
+   byte-identical state (for example, a second Authorize that the server challenges again, or a crash
+   before the challenge's interrupt checkpoint), the node stops with a typed failure instead of a
+   fresh card. This never causes a second call. The root fix is a first-class no-effect pass-through
+   outcome in `RecoverableNode`, which would also remove the per-call hand-over slot. It touches
+   Code-node recovery, so it is a follow-up.
+4. **Limits inherited from the journal.** The activation input is the full graph state, capped at
+   8 MiB (`NodeAttemptActivation::from_context`), and committed updates are capped at 1 MiB. Above
+   these limits an effectful direct call is refused or reported as unrecorded.
+5. **Missing writer is detected at run time.** The authority is attached after assembly
+   (`src/agents/session.rs:1606`). With the flag off, upstream nodes run before the effectful node
+   refuses. The committed runtime configs enable the flag.
+6. **No real-PostgreSQL journal tests.** The direct-tool journal tests use the in-memory fixture
+   journal. No DB-gated test covers `postgres_checkpointer/node_attempts.rs` yet, for Code nodes
+   either. Crash-window and second-claim tests against PostgreSQL are a follow-up.
+7. **LLM-node receipts.** Pipeline LLM nodes admit effectful sensitive tools without an effect
    receipt (`src/agents/graph/llm.rs:1326-1470`). They should move to the same journal so the two
    node kinds share one guarantee (Gate 6, `docs/remaining-gates.md:60`).

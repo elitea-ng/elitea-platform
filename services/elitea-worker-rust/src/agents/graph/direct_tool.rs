@@ -6,6 +6,7 @@
 //! exactly once. It never creates a second agent/model turn.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use adk_rust::graph::{END, GraphError, Node, NodeContext, NodeOutput, State};
@@ -554,6 +555,7 @@ impl DirectToolNode {
                 .await;
         };
         let control = Arc::new(Mutex::new(None));
+        let completed = Arc::new(AtomicBool::new(false));
         let attempt = DirectToolAttempt {
             node: self.clone(),
             tool: Arc::clone(tool),
@@ -562,6 +564,7 @@ impl DirectToolNode {
             remaining,
             authorization_refresh,
             control: Arc::clone(&control),
+            completed: Arc::clone(&completed),
         };
         let recoverable = RecoverableNode::new(
             Arc::new(attempt),
@@ -586,7 +589,11 @@ impl DirectToolNode {
             tracing::error!(failure_reason = %error, "pipeline direct-tool node recovery stopped");
             DirectNodeFailure::policy(
                 "tool_execution",
-                "The tool attempt was stopped by node recovery.",
+                if completed.load(Ordering::SeqCst) {
+                    "The tool completed, but its result could not be recorded. It will not run again."
+                } else {
+                    "The tool attempt was stopped by node recovery."
+                },
             )
         })
     }
@@ -847,6 +854,9 @@ struct DirectToolAttempt {
     remaining: Option<Value>,
     authorization_refresh: bool,
     control: Arc<Mutex<Option<Result<NodeOutput, DirectNodeFailure>>>>,
+    // Set once the call returned a result, so a failed journal commit is not reported
+    // as a failed tool.
+    completed: Arc<AtomicBool>,
 }
 
 #[async_trait]
@@ -910,7 +920,10 @@ impl NodeAttemptBody for DirectToolAttempt {
                     ReplaySafety::NoExternalEffect,
                 ))
             }
-            Ok(output) => Ok(output),
+            Ok(output) => {
+                self.completed.store(true, Ordering::SeqCst);
+                Ok(output)
+            }
             Err(failure) => {
                 let recorded = match failure.stage {
                     "argument_digest" => NodeFailure::new(

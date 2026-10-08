@@ -56,7 +56,7 @@ data:
     {{- end }}
     {{- if or $r.agentModelCheckpointRecovery $r.agentNodeRecovery (gt (len $r.sandboxRuntimes) 0) }}
     {{- if ne (include "elitea-worker.isRust" .) "true" }}
-    {{- fail "worker.runtime checkpoint recovery and sandbox profiles require the Rust worker" }}
+    {{- fail "worker.runtime agentModelCheckpointRecovery, agentNodeRecovery and sandbox profiles require the Rust worker" }}
     {{- end }}
     {{- end }}
     {{- if $r.agentModelCheckpointRecovery }}
