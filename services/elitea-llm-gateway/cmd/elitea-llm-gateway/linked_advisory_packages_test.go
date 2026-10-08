@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -19,7 +20,8 @@ var advisoryPackagesWithoutFix = []string{
 
 // TestNoBinaryLinksAdvisoryPackagesWithoutFix lists every non-test dependency of
 // every package in the module (all shipped binaries) and fails if one is, or is
-// under, an advisoryPackagesWithoutFix entry.
+// under, an advisoryPackagesWithoutFix entry. It lists the graph the images
+// build: linux on both published architectures, with cgo off.
 func TestNoBinaryLinksAdvisoryPackagesWithoutFix(t *testing.T) {
 	const self = "github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway/cmd/elitea-llm-gateway"
 	assertNoLinkedAdvisoryPackages(t, self, advisoryPackagesWithoutFix)
@@ -31,26 +33,29 @@ func assertNoLinkedAdvisoryPackages(t *testing.T, self string, banned []string) 
 	if err != nil {
 		t.Fatalf("go tool not found on PATH: %v", err)
 	}
-	cmd := exec.Command(goTool, "list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", "./...")
-	cmd.Dir = filepath.Join("..", "..") // module root
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("go list -deps ./...: %v\n%s", err, stderr.String())
-	}
-	sawSelf := false
-	for _, pkg := range strings.Fields(string(out)) {
-		if pkg == self {
-			sawSelf = true
+	for _, goarch := range []string{"amd64", "arm64"} {
+		cmd := exec.Command(goTool, "list", "-deps", "-f", "{{if not .Standard}}{{.ImportPath}}{{end}}", "./...")
+		cmd.Dir = filepath.Join("..", "..") // module root
+		cmd.Env = append(os.Environ(), "GOOS=linux", "GOARCH="+goarch, "CGO_ENABLED=0")
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("linux/%s: go list -deps ./...: %v\n%s", goarch, err, stderr.String())
 		}
-		for _, b := range banned {
-			if pkg == b || strings.HasPrefix(pkg, b+"/") {
-				t.Errorf("%s is linked into a binary of this module; it carries an advisory with no fix this module can take", pkg)
+		sawSelf := false
+		for _, pkg := range strings.Fields(string(out)) {
+			if pkg == self {
+				sawSelf = true
+			}
+			for _, b := range banned {
+				if pkg == b || strings.HasPrefix(pkg, b+"/") {
+					t.Errorf("linux/%s: %s is linked into a binary of this module; it carries an advisory with no fix this module can take", goarch, pkg)
+				}
 			}
 		}
-	}
-	if !sawSelf {
-		t.Fatalf("go list -deps ./... did not report %s; the scan did not cover this module", self)
+		if !sawSelf {
+			t.Fatalf("linux/%s: go list -deps ./... did not report %s; the scan did not cover this module", goarch, self)
+		}
 	}
 }
