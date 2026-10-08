@@ -560,6 +560,36 @@ impl Graph {
         orphaned.len()
     }
 
+    /// Forget everything one source said: every file it cited
+    /// ([`Graph::remove_file`]) and every edge it recorded. Entities other
+    /// sources still cite stay. Returns the number of entities removed.
+    pub fn remove_source(&mut self, source_toolkit: &str) -> usize {
+        let mut files: Vec<String> = Vec::new();
+        for (_, node) in self.nodes() {
+            for citation in node
+                .get("citations")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if citation.get("source_toolkit").and_then(Value::as_str) == Some(source_toolkit)
+                    && let Some(path) = citation.get("file_path").and_then(Value::as_str)
+                    && !files.iter().any(|known| known == path)
+                {
+                    files.push(path.to_owned());
+                }
+            }
+        }
+        let removed = files
+            .iter()
+            .map(|path| self.remove_file(source_toolkit, path))
+            .sum();
+        self.retain_edges(|_, _, edge| {
+            edge.get("source_toolkit").and_then(Value::as_str) != Some(source_toolkit)
+        });
+        removed
+    }
+
     /// Set a node's embedding vector; `false` for an unknown node.
     pub fn set_embedding(&mut self, entity_id: &str, vector: &[f64]) -> bool {
         let Some(node) = self.nodes.get_mut(entity_id) else {

@@ -55,6 +55,9 @@ pub type Chat = Arc<dyn Fn(ChatRequest) -> Boxed<ChatResponse> + Send + Sync>;
 pub type SourceCall =
     Arc<dyn Fn(String, String, Map<String, Value>) -> Boxed<String> + Send + Sync>;
 
+/// Embed one query (the graph's stamped model, through the gateway).
+pub type Embed = Arc<dyn Fn(String) -> Boxed<Vec<f64>> + Send + Sync>;
+
 /// A source toolkit of the graph (its `sources` row).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceToolkit {
@@ -266,12 +269,86 @@ fn sanitize(name: &str) -> String {
 /// One offered tool, and what answers it.
 enum Offered {
     Graph(&'static str, &'static str),
+    Local(Local),
     Source { toolkit_id: String, tool: String },
 }
 
-fn offered_tools(sources: &[SourceToolkit]) -> (Vec<ToolDefinition>, Vec<(String, Offered)>) {
+/// The chat agent's own tools (`_build_chat_tools`), answered by the
+/// retrieval functions that port them.
+#[derive(Clone, Copy)]
+enum Local {
+    Pattern,
+    Vocabulary,
+    Semantic,
+    ListCommunities,
+    CommunityDetail,
+    FindCommunity,
+    SearchCommunity,
+}
+
+fn local_tools(view: &GraphView, semantic: bool) -> Vec<(&'static str, Local, Value)> {
+    let mut tools = vec![
+        (
+            "query_pattern",
+            Local::Pattern,
+            json!({"type": "object", "properties": {"pattern": {"type": "string",
+                "description": "A Cypher-like pattern, e.g. (A:class)-[:calls*1..2]->(?)"}}, "required": ["pattern"]}),
+        ),
+        (
+            "get_pattern_vocabulary",
+            Local::Vocabulary,
+            json!({"type": "object", "properties": {}}),
+        ),
+    ];
+    if semantic {
+        tools.push((
+            "semantic_search",
+            Local::Semantic,
+            json!({"type": "object", "properties": {"query": {"type": "string"},
+                "top_k": {"type": "integer", "default": 10}}, "required": ["query"]}),
+        ));
+    }
+    if retrieval::community_tools::has_communities(view) {
+        tools.push((
+            "list_communities",
+            Local::ListCommunities,
+            json!({"type": "object", "properties": {"top_n": {"type": "integer", "default": 0}}}),
+        ));
+        tools.push((
+            "get_community_detail",
+            Local::CommunityDetail,
+            json!({"type": "object", "properties": {"community_id": {"type": "string"}}, "required": ["community_id"]}),
+        ));
+        tools.push((
+            "find_entity_community",
+            Local::FindCommunity,
+            json!({"type": "object", "properties": {"entity_name": {"type": "string"}}, "required": ["entity_name"]}),
+        ));
+        tools.push((
+            "search_within_community",
+            Local::SearchCommunity,
+            json!({"type": "object", "properties": {"community_id": {"type": "string"}, "query": {"type": "string"}},
+                "required": ["community_id", "query"]}),
+        ));
+    }
+    tools
+}
+
+fn offered_tools(
+    view: &GraphView,
+    semantic: bool,
+    sources: &[SourceToolkit],
+) -> (Vec<ToolDefinition>, Vec<(String, Offered)>) {
     let mut definitions = Vec::new();
     let mut routes = Vec::new();
+    for (name, local, parameters) in local_tools(view, semantic) {
+        definitions.push(ToolDefinition {
+            name: name.to_owned(),
+            description: description(name),
+            parameters,
+        });
+        routes.push((name.to_owned(), Offered::Local(local)));
+    }
     for tool in graph_tools() {
         definitions.push(ToolDefinition {
             name: tool.name.to_owned(),
@@ -382,6 +459,7 @@ pub async fn investigate(
     chat: &Chat,
     sources: &[SourceToolkit],
     call_source: &SourceCall,
+    embed: Option<&Embed>,
     stop: &StopSignal,
 ) -> Result<Investigation, EngineError> {
     let template = investigate_asset()["system_prompt"]
@@ -389,7 +467,7 @@ pub async fn investigate(
         .unwrap_or_default();
     let system = render(template, &[("filters", &question.filter_text())]);
     let max_rounds = investigate_asset()["max_iterations"].as_u64().unwrap_or(50);
-    let (definitions, routes) = offered_tools(sources);
+    let (definitions, routes) = offered_tools(view, embed.is_some(), sources);
     let mut messages = vec![
         ChatMessage::SystemPrompt(SystemPrompt::text(system)),
         ChatMessage::User(question.text.clone()),
@@ -432,6 +510,13 @@ pub async fn investigate(
                     None => format!("Error: unknown tool '{}'", tool_call.name),
                     Some((_, Offered::Graph(tool, family))) => {
                         graph_call(view, tool, family, arguments)
+                    }
+                    Some((_, Offered::Local(local))) => {
+                        match local_call(view, *local, arguments, embed).await {
+                            Ok(text) => text,
+                            Err(error) if error == EngineError::cancelled() => return Err(error),
+                            Err(error) => format!("Error: {}", error.message),
+                        }
                     }
                     Some((_, Offered::Source { toolkit_id, tool })) => {
                         match call_source(toolkit_id.clone(), tool.clone(), arguments.clone()).await
@@ -478,6 +563,58 @@ fn record(
         "input": preview(&elitea_engine_core::pyjson::dumps(&Value::Object(shown))),
         "output_preview": preview(output),
     }));
+}
+
+/// One of the chat agent's own tools.
+async fn local_call(
+    view: &GraphView,
+    local: Local,
+    arguments: &Map<String, Value>,
+    embed: Option<&Embed>,
+) -> Result<String, EngineError> {
+    use retrieval::community_tools as communities;
+    let text = |key: &str| {
+        arguments
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let number = |key: &str| {
+        arguments
+            .get(key)
+            .and_then(Value::as_u64)
+            .and_then(|n| usize::try_from(n).ok())
+    };
+    Ok(match local {
+        Local::Pattern => retrieval::pattern::query_pattern(view, &text("pattern")),
+        Local::Vocabulary => retrieval::pattern::pattern_vocabulary(view),
+        Local::ListCommunities => {
+            communities::list_communities(view, number("top_n").filter(|n| *n > 0))
+        }
+        Local::CommunityDetail => communities::get_community_detail(view, &text("community_id")),
+        Local::FindCommunity => communities::find_entity_community(view, &text("entity_name")),
+        Local::SearchCommunity => {
+            communities::search_within_community(view, &text("community_id"), &text("query"))
+        }
+        Local::Semantic => {
+            let Some(embed) = embed else {
+                return Ok("Error: this graph has no embeddings".to_owned());
+            };
+            let query = text("query");
+            let vector = embed(query.clone()).await?;
+            let stamped = retrieval::semantic::stamped_model(view).map(str::to_owned);
+            retrieval::semantic::semantic_search_tool(
+                view,
+                &query,
+                &vector,
+                number("top_k").unwrap_or(10),
+                None,
+                None,
+                stamped.as_deref(),
+            )?
+        }
+    })
 }
 
 /// A graph tool's text, from the retrieval handler that answers it.

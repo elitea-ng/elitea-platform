@@ -137,8 +137,68 @@ impl NativeRunner {
             "get_sources_status" => self.sources_status(key, params).await,
             "get_ingestion_status" => self.ingestion_status(key, params).await,
             "investigate" => self.investigate(key, params, context).await,
+            "remove_source_entities" => self.remove_source(key, params).await,
             other => self.read(other, family, key, params).await,
         }
+    }
+
+    /// `remove_source_entities`: the source's citations, its edges and the
+    /// entities only it cited go; its status and file hashes too. Under the
+    /// ingestion lease, so it cannot interleave with a run.
+    ///
+    /// The Python handler matched the toolkit id against citations that
+    /// carry the source NAME (so it almost never matched), deleted shared
+    /// entities outright when it did, and left the source's status behind.
+    async fn remove_source(
+        &self,
+        key: GraphKey,
+        params: &Map<String, Value>,
+    ) -> Result<Value, EngineError> {
+        let store_error =
+            |e: crate::store::StoreError| EngineError::new(ErrorType::Runtime, e.to_string());
+        let (toolkit_id, name) = Self::source_identity(params)?;
+        let Some(_lease) = sources::lease(&self.pool, key).await.map_err(store_error)? else {
+            return Err(EngineError::new(
+                ErrorType::Runtime,
+                "an ingestion of this Inventory toolkit is running; remove the source when it finishes",
+            ));
+        };
+        let mut graph = store::load(&self.pool, key)
+            .await
+            .map_err(store_error)?
+            .map(|(graph, _)| graph)
+            .unwrap_or_default();
+        let removed = graph.remove_source(&name);
+        sources::remove(&self.pool, key, &graph, &toolkit_id, &name)
+            .await
+            .map_err(store_error)?;
+        Ok(crate::retrieval::answer(format!(
+            "Removed {removed} entities from toolkit {toolkit_id}"
+        )))
+    }
+
+    /// The source a `remove_source_entities` call names: the expanded
+    /// `source` object (the facade's) as `(status key, citation name)`, else
+    /// a bare `toolkit_id` / `source_toolkit`, which names both.
+    fn source_identity(params: &Map<String, Value>) -> Result<(String, String), EngineError> {
+        if let Some(source) = params.get("source").and_then(Value::as_object) {
+            let id = match source.get("toolkit_id") {
+                Some(Value::String(text)) => text.clone(),
+                Some(other) if !other.is_null() => other.to_string(),
+                _ => String::new(),
+            };
+            let name = source
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map_or_else(|| format!("toolkit_{id}"), str::to_owned);
+            return Ok((id, name));
+        }
+        let id = text_param(params, &["toolkit_id", "source_toolkit"])
+            .ok_or_else(|| invalid("remove_source_entities needs the source toolkit"))?
+            .to_owned();
+        Ok((id.clone(), id))
     }
 
     /// `investigate`: the model agent (`crate::investigate`) over the
@@ -201,8 +261,46 @@ impl NativeRunner {
             key.project_id,
             model_name,
         );
-        let result =
-            agent::investigate(&question, &view, &chat, &toolkits, &call_source, &stop).await?;
+        // Semantic search when the graph has vectors: the query is embedded
+        // with the model the graph was built with, so the two compare.
+        let embed: Option<agent::Embed> = crate::retrieval::semantic::stamped_model(&view)
+            .filter(|_| crate::retrieval::semantic::has_embeddings(&view))
+            .map(|model| {
+                let client = EmbeddingClient::new(
+                    self.transport.clone(),
+                    settings.clone(),
+                    model,
+                    EmbeddingOptions {
+                        ctx_setting: EMBEDDING_CTX_SETTING,
+                        ..EmbeddingOptions::default()
+                    },
+                );
+                let stop = stop.clone();
+                let embed: agent::Embed = Arc::new(move |query: String| {
+                    let (client, stop) = (client.clone(), stop.clone());
+                    Box::pin(async move {
+                        let vectors = client.embed_documents(&[query], &stop).await?;
+                        Ok(vectors
+                            .into_iter()
+                            .next()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(f64::from)
+                            .collect())
+                    })
+                });
+                embed
+            });
+        let result = agent::investigate(
+            &question,
+            &view,
+            &chat,
+            &toolkits,
+            &call_source,
+            embed.as_ref(),
+            &stop,
+        )
+        .await?;
         Ok(crate::retrieval::answer(agent::report(
             &result,
             json_format(params),

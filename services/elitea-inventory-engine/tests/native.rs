@@ -185,5 +185,37 @@ async fn run_ingestion_over_the_socket_builds_the_graph_and_reports_status() {
             .and_then(|l| l["error"]["message"].as_str())
             .is_some_and(|m| m.starts_with("no LLM model is configured"))
     );
+    // The source goes: its entities, its status.
+    let mut remove = arguments.clone();
+    remove["params"] = json!({"source": arguments["params"]["source"].clone()});
+    let removed = invoke(&socket, "remove_source_entities", &remove).await;
+    let text = removed
+        .last()
+        .and_then(|l| l["result"]["result"].as_str())
+        .unwrap_or_default()
+        .to_owned();
+    assert!(
+        text.starts_with("Removed ") && text.ends_with(" entities from toolkit 5"),
+        "{removed:?}"
+    );
+    let (graph, _) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("a graph");
+    assert!(
+        graph.nodes().all(|(_, n)| n["citations"]
+            .as_array()
+            .is_none_or(|c| c.iter().all(|c| c["source_toolkit"] != json!("repo")))),
+        "nothing the source cited is left"
+    );
+    let status = invoke(&socket, "get_sources_status", &status_arguments).await;
+    let summary: Value = serde_json::from_str(
+        status
+            .last()
+            .and_then(|l| l["result"]["result"].as_str())
+            .unwrap_or_default(),
+    )
+    .expect("json");
+    assert_eq!(summary["total_sources"], json!(0));
     let _ = std::fs::remove_dir_all(&root);
 }

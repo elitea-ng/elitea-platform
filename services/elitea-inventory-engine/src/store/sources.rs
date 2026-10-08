@@ -201,6 +201,43 @@ pub async fn complete(
     Ok(revision)
 }
 
+/// Commit a source's removal in ONE transaction: the graph without it, and
+/// its status row and file hashes gone. Returns the graph's revision.
+///
+/// # Errors
+///
+/// See [`super::save`].
+pub async fn remove(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    toolkit_id: &str,
+    source_name: &str,
+) -> Result<i64> {
+    let mut transaction = pool.begin().await?;
+    let revision = write_graph(&mut transaction, key, graph).await?;
+    sqlx::query(
+        "DELETE FROM inventory_graph.source_files
+          WHERE project_id = $1 AND application_id = $2 AND source_name = $3",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .bind(source_name)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        "DELETE FROM inventory_graph.sources
+          WHERE project_id = $1 AND application_id = $2 AND toolkit_id = $3",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .bind(toolkit_id)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(revision)
+}
+
 /// The `sources_status.json` document of a graph:
 /// `{sources: {toolkit_id: {...}}, last_modified}`, timestamps ISO 8601.
 ///
