@@ -61,12 +61,13 @@ Web (`apps/elitea-web/`):
   refreshes its `compiler.rs` citations.
 - `Containerfile:32`: `VITE_GRAPH_EXTENSIONS_REHEARSAL` build argument, default `false`.
 
-New `t()` keys use default strings. `en.json` belongs to PR #1084, so these keys wait for the Wave 2 backfill:
-`pipelines.graphExtensions.splitOut.envelopeHelp`, `pipelines.graphExtensions.regroup`,
+New `t()` keys are in `en.json`, added by `scripts/i18n-backfill.mjs`, because the CI en.json sync gate requires
+them: `pipelines.graphExtensions.splitOut.envelopeHelp`, `pipelines.graphExtensions.regroup`,
 `pipelines.graphExtensions.regroupHelp`, `pipelines.graphExtensions.aggregateEmptyHelp`,
 `pipelines.graphExtensions.aggregateFlatDescription`.
 
-No file changed by PR #1084 is touched.
+`en.json` is the only file this PR shares with PR #1084. The five keys are appended at the end of the file, and #1084 changes
+only one line near line 4494, so the two edits do not overlap. No other file changed by PR #1084 is touched.
 
 ## 3. Tests
 
@@ -96,7 +97,7 @@ Full suites (local, 2026-10-08):
 | `cargo fmt --all -- --check` | clean |
 | Web `vitest --project node src/features/pipelines` | 2,485 passed, 1 expected fail (an existing `it.fails`), 0 skipped |
 | Web `npm run typecheck`, `npm run lint` | clean |
-| `node scripts/i18n-backfill.mjs --check` | flags the 5 new keys above, as expected, plus the 28 dynamic-key flags already on main |
+| `node scripts/i18n-backfill.mjs --check` | OK after the backfill (only the dynamic-key flags already on main) |
 
 Skipped or limited:
 - `ELITEA_REQUIRE_NATS_SECURE_TEST` was not set locally. It needs the CI NATS test server, so the secure NATS test
@@ -289,7 +290,7 @@ own checkpointed state, call nothing external and resolve no credential.
 ## 10. Open limits and follow-ups
 
 - **Wave 2:** public failure kinds `pipeline.shaping_invalid`/`pipeline.shaping_limit` in `protocol/output.rs`,
-  the `en.json` backfill, a catalog link from `data-shaping-node-catalog.md`, the Map cohort, and the gate flip after
+  a catalog link from `data-shaping-node-catalog.md`, the Map cohort, and the gate flip after
   deployed acceptance.
 - **Terminal result rendering:** list results render as "Pipeline completed." in chat (§7). This is a separate
   follow-up.
