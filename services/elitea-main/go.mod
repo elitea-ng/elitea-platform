@@ -1,6 +1,6 @@
 module github.com/EliteaAI/elitea-platform/services/elitea-main
 
-go 1.25.8
+go 1.25.13
 
 replace github.com/EliteaAI/elitea-platform/libs/proto/gen/go => ../../libs/proto/gen/go
 

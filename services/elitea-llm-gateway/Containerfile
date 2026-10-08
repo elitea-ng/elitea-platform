@@ -2,8 +2,8 @@
 #
 # elitea-llm-gateway is a STANDALONE Go module that needs Go 1.26.4 or above
 # (required by github.com/maximhq/bifrost/core). It is deliberately NOT part of
-# the root go.work workspace — that workspace stays on Go 1.25.8 for elitea-main
-# and elitea-scheduler, whose toolchain must not be bumped.
+# the root go.work workspace — that workspace stays on the Go 1.25 series for
+# elitea-main and elitea-scheduler, whose toolchain must not be bumped.
 #
 # ── THE BUILD CONTEXT IS THE REPOSITORY ROOT ─────────────────────────────────
 #

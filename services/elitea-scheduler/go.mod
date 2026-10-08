@@ -1,6 +1,6 @@
 module github.com/EliteaAI/elitea-platform/services/elitea-scheduler
 
-go 1.25.0
+go 1.25.13
 
 replace github.com/EliteaAI/elitea-platform/libs/go/observability => ../../libs/go/observability
 
