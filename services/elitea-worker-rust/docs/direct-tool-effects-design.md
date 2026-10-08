@@ -1,115 +1,96 @@
 # Effectful tools in pipeline direct tool nodes
 
-Status: proposed. The capability stays disabled. Assembly still refuses effectful direct tools, and the
-refusal now names the node kind and the missing guarantees.
+Status: implemented for direct `toolkit` and `mcp` nodes behind the node-recovery journal.
+Operator retry/stop for an uncertain direct-tool effect and an LLM-node receipt are open (see "Gaps").
 
 ## Decision summary
 
-- A direct tool node (`type: toolkit` or `type: mcp`) may run a tool that is not annotated read-only
-  only when Gate 6 (`docs/remaining-gates.md:60`) is satisfied for that node. Gate 6 requires durable
-  intent, an effect receipt, idempotency or reconciliation, approval, and fencing.
-- Sensitive effectful tools use the existing direct-node confirmation (`execute_sensitive`) without
-  changes. The receipt is the new part.
-- Non-sensitive effectful tools use the same intent and receipt, but without a pause.
-- Until the effect owner described below ships, assembly refuses these tools with
-  `native_agent.unsupported_capability` and a data-free message (`src/agents/pipeline.rs:2233`).
-  The browser keeps the code-mapped text "Configuration type is not supported."
-  (`services/elitea-main/internal/transport/runtimegrpc/output/server.go:1112`).
+A direct tool node may now run a tool that is not annotated read-only. This covers configured
+toolkit actions and MCP tools without `readOnlyHint`. The business behaviour follows the current
+platform, with one rule the current platform does not enforce: **an external effect is never
+dispatched twice**.
+
+| Situation | Behaviour |
+|---|---|
+| Non-sensitive effectful tool | Runs once, and its output is projected like a read-only tool's. |
+| Sensitive effectful tool | Pauses with approve / reject / block_with_comment. Approve runs the tool once. |
+| Reject or block | No call. The whole pipeline stops with the "blocked by user" message and `_pipeline_blocked`. Declared outputs get no tool data, and no downstream node runs. |
+| Auth-guarded MCP | Shows the authorize / skip card. Skip stops the whole pipeline with its message. Authorize runs the call once. |
+| Tool returns an error | The pipeline stops with the typed `pipeline.tool_failed` error, as for read-only tools. The attempt is recorded as an uncertain effect and is never re-dispatched. |
+| Worker dies during the call | The node does not call the tool again. Run recovery refuses a direct-tool frontier, and a re-entered attempt returns the recovery card. |
+| No fenced node writer (`agent_node_recovery` off) | Effectful tools are refused before any pause or call. Read-only tools run as before. |
 
 ## Current platform behaviour (reference only)
 
 The behaviour we keep from elitea-sdk:
 
-- A sensitive tool in a pipeline toolkit or MCP node pauses before the tool runs, with approve,
-  reject or block_with_comment (`elitea_sdk/runtime/middleware/sensitive_tool_guard.py:257-341`).
-  There is no edit action.
-- On block, the pipeline stops with an assistant message and `_pipeline_blocked`, and declared
-  outputs are nulled (`tools/function.py:282-335`).
-- On an auth-guarded MCP tool, the node shows the authorize/skip card (`tools/function.py:377-426`).
-  Skip ends the pipeline and a failed refresh fails closed (`:337-376`).
-- Effectful and read-only tools are treated the same way.
+- The sensitive pause (`elitea_sdk/runtime/middleware/sensitive_tool_guard.py:257-341`).
+- The block termination: an assistant message, `_pipeline_blocked`, declared outputs nulled, and
+  the pipeline routed to END (`tools/function.py:282-335`).
+- The MCP authorize/skip card (`tools/function.py:377-426`) and its skip and refresh-failed
+  terminations (`:337-376`).
 
 What we deliberately do not port:
 
-- **Fail-open decisions.** A non-dict resume, or a missing or unknown action, counts as approve
-  (`sensitive_tool_guard.py:314-333`). Rust rejects malformed decisions (`src/agents/graph/direct_tool.rs:886-935`).
-- **Repeated effects.** If the process dies after the tool returns but before the step checkpoint,
-  the approved tool runs again. Nothing records that the effect already happened.
-- **MCP auth identity without the graph step**, so revisits of a looped node are not told apart.
-  Rust uses `pipeline:{node}:{step}` (`direct_tool.rs:1039`).
+- **Fail-open decisions.** A non-dict resume, or an unknown or missing action, counts as approve
+  (`sensitive_tool_guard.py:314-333`). Rust rejects malformed decisions
+  (`src/agents/graph/direct_tool.rs` `sensitive_decision`).
+- **Repeated effects.** In elitea-sdk an approved tool runs again if the process dies after the call
+  but before the step checkpoint.
+- **MCP auth identity without the graph step.** Rust uses `pipeline:{node}:{step}`.
 
-## Current Rust state
+## Mechanism
 
-| Concern | Where | Behaviour |
-|---|---|---|
-| Assembly gate | `src/agents/pipeline.rs:2122` | Refuses `!is_read_only()` with `unsupported_direct_tool_effect()` |
-| Runtime gate (defence in depth) | `src/agents/graph/direct_tool.rs:413` | Same rule at node execution |
-| Sensitive pause | `direct_tool.rs:472-511`, `:770-870` | Interrupt carries masked args, argument digest and definition digest. The decision must match all three. |
-| MCP authorization | `direct_tool.rs:606-704` | The placeholder tool is read-only by construction (`src/toolkits/mcp.rs:843-845`), so it already passes the gate |
-| Read-only source | ADK MCP toolset, `readOnlyHint` (default false); toolkits per tool | `idempotentHint` is not used today |
-| Receipt types | `src/agents/graph/node_recovery.rs:83-97` (`ReplaySafety`) | Code nodes already append a fenced `Started` record before dispatch and record `CompletedExternalEffect` after it. Direct, LLM and ordinary tool paths do not. |
+1. **Admission** (`src/agents/pipeline.rs` `build_direct_tool_resolver`). The read-only refusal is
+   removed. Policy blocklists still apply first, through `unsupported_direct_tool_scope`.
+2. **Writer requirement** (`direct_tool.rs:426-431`). Without node-recovery authority, an effectful
+   tool fails with a static policy error before any pause or call. The compiler attaches the
+   authority to every direct node (`compiler.rs:1317-1319`).
+3. **Decisions before the journal.** The sensitive pause, approve/block, and MCP authorize/skip are
+   decided in `execute_mapped` and `execute_sensitive` before `dispatch`. A pause or block therefore
+   writes no journal record.
+4. **Journaled dispatch** (`direct_tool.rs:536-592`). For an effectful tool, `dispatch` runs one
+   `DirectToolAttempt` (`:842`) under `RecoverableNode`, which appends a fenced `Started` before the
+   body runs.
+   - **Body** (`:867-937`). A re-entered `Started` returns `UnknownExternalEffect` without calling the
+     tool (`:886`).
+   - **Successful call.** The result is committed to the journal and replayed from it on re-entry.
+   - **Tool error.** It is recorded as `UnknownExternalEffect`. A projection failure is recorded as
+     `CompletedExternalEffect`.
+   - **Handed-over outcomes** (`:574-592`). An auth challenge raised inside the call, and this visit's
+     own typed tool failure, are passed back so the person sees the normal card or error. The
+     journal still keeps the uncertain record.
+5. **Identity.** The journal activation binds the execution, node, definition digest, graph step
+   and input state digest (`node_recovery_runtime.rs` `NodeAttemptActivation`). The decision state
+   differs between pause and resume, so the pause and the approved dispatch are different
+   activations.
+6. **Configuration.**
+   - `agent_node_recovery: true` is set in `deploy/runtime/worker-runtime.json` and
+     `worker-runtime.nats-secure.json` (the local/rehearsal stack).
+   - Helm has a `worker.runtime.agentNodeRecovery` toggle for Rust installs. It defaults to false
+     because the chart's default worker is Python and the runtime file is shared between them.
 
-## Design
+## Recovery guarantees
 
-1. **Admission.** Remove the read-only refusal only behind a capability that the effect owner turns
-   on. An unknown or unclassified tool stays refused. Policy (blocked toolkit or tool) still runs
-   first and uses `unsupported_direct_tool_scope()`.
-2. **Effect identity.** `effect_id = SHA-256(domain || execution || node || graph step || call_id ||
-   definition_digest || argument_digest)`. This reuses the digests the confirmation already binds,
-   so approval and effect refer to the same call. Arguments are never stored in clear. Only the
-   digest and the existing masked preview are kept.
-3. **Confirmation (sensitive only).** Keep `execute_sensitive` unchanged. An approval only allows the
-   effect. It is not the effect record.
-4. **Durable intent.** Before `tool.execute`, append a fenced `Started{effect_id}` record under the
-   claim's `StateWriterLease`. If the append fails, the tool does not run (typed failure, the
-   decision is kept).
-5. **Receipt.** After the tool returns, write `CompletedExternalEffect{receipt_id}` with the bounded,
-   redacted projected output. It is written in the same transaction as the step checkpoint, or
-   strictly before it.
-6. **Replay.** On re-execution of the node:
-   - receipt found → project the stored output and never call the tool (class R);
-   - `Started` without a receipt and the tool declares idempotency (MCP `idempotentHint`, or a
-     toolkit action with an idempotency key) → retry with the same key (class I);
-   - otherwise → `UnknownExternalEffect`: no blind repeat. Use reconciliation from owner proof where
-     the toolkit offers it. If it does not, return a typed failure with a support reference and
-     route it to the operator, keeping partial results (class C, falling back to F).
-7. **Bounds.** The receipt payload is capped by the existing pipeline output limit. There is one
-   receipt per (node, step), and the count per execution is capped.
+| Component × phase | Class | Enforcing code | Proof |
+|---|---|---|---|
+| Worker × admission, no fenced writer | F | `direct_tool.rs:426-431` | `effectful_tool_requires_the_fenced_writer_before_any_call` |
+| Worker × sensitive pause / decision | R | `execute_sensitive`, digest-bound decision | `sensitive_effectful_pause_leaves_no_started_attempt_and_approval_runs_once` |
+| Worker × effectful call, result committed | R | `RecoverableNode` result replay | `effectful_direct_tool_runs_once_and_its_committed_result_is_replayed` |
+| Worker × crash after Started, before result | C | `direct_tool.rs:886`. Run recovery refuses a direct-tool frontier (`compiler.rs:766`). | `started_attempt_without_result_never_repeats_an_effectful_tool` |
+| Worker × tool error | F (typed) + C record | `direct_tool.rs:574-592` | `effectful_tool_failure_stops_with_its_error_and_is_not_called_again` |
+| Worker × block / skip | F (stop with message) | `direct_tool.rs:514`, `:719` | `blocked_effectful_sensitive_tool_stops_the_whole_pipeline_under_node_recovery`, `skipped_effectful_authorization_stops_the_whole_pipeline_under_node_recovery` |
+| PostgreSQL × journal append | Fenced | `StateWriterLease` in `postgres_checkpointer/node_attempts.rs` | Existing node-recovery Postgres tests (DB-gated) |
 
-## Recovery guarantees (target)
+## Gaps
 
-| Component × phase | Today | Target |
-|---|---|---|
-| Worker × effectful direct tool call | F: refused at admission | R once a receipt exists. I for idempotent tools. Otherwise C with an F fallback. |
-| Worker × sensitive pause/decision | R (graph checkpoint + digest-bound decision) | unchanged |
-| Main × admission | F (typed refusal) | unchanged |
-| PostgreSQL × intent/receipt write | n/a | Intent before effect. Receipt with checkpoint. A writer-fence loss stops the effect. |
-
-## Known adjacent gap
-
-Pipeline LLM nodes admit effectful sensitive tools today. Admission is a blocklist (`src/toolkits/policy.rs:227-240`),
-and approval runs through the ADK confirmation path (`src/agents/graph/llm.rs:1326-1470`) with no
-effect receipt. They have the same repeated-effect window as point 2 of "What we deliberately do not
-port". The effect owner above should serve both node kinds, so the two get one guarantee.
-This is recorded as a gap; this change does not alter it.
-
-## Tests required before enabling
-
-- Each crash window on real PostgreSQL: before intent, after intent and before the effect, after
-  the effect and before the receipt, after the receipt and before the checkpoint. Exactly one effect
-  for idempotent tools, and no blind repeat for the others.
-- A second claim taking over a paused or in-flight node while the old writer is fenced.
-- Approve, reject and block on effectful toolkit and MCP tools. Replay of a consumed decision gives
-  `StaleDecision`.
-- Logs and events contain no argument values, only digests and the masked preview.
-- Limit and limit+1 for the receipt payload and the receipt count.
-- Browser: sensitive effectful MCP tool (mock `echo`) shows the approve/block card, survives a
-  reload, and a Worker restart after approval does not repeat the call.
-
-## Options
-
-| Option | Outcome |
-|---|---|
-| A. Keep the refusal (this change) | Clear, typed error. No customer-visible effect from direct nodes. |
-| B. Implement the effect owner for direct nodes, then LLM nodes | Business parity with stronger durability. A multi-PR slice of Gate 6. |
-| C. Admit with confirmation only | Rejected. It ports the repeated-effect defect and fails Gate 6. |
+1. **No operator actions for direct-tool recovery cards.** Operator retry/stop and committed-result
+   projection for direct nodes are not wired: `node_recovery_spec` and `node_result_projector` are
+   Code-only (`compiler.rs:786-830`). A direct-tool recovery card therefore fails closed on operator
+   actions. It is reached only by re-entering the same uncertain attempt. It never causes a second
+   call.
+2. **Auth challenge crash.** A crash while an effectful MCP call is answering an auth challenge
+   leaves a `Started` record, so re-entry shows the conservative card.
+3. **LLM-node receipts.** Pipeline LLM nodes admit effectful sensitive tools without an effect
+   receipt (`src/agents/graph/llm.rs:1326-1470`). They should move to the same journal so the two
+   node kinds share one guarantee (Gate 6, `docs/remaining-gates.md:60`).

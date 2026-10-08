@@ -2119,11 +2119,6 @@ fn build_direct_tool_resolver(
                 .get(selection.tool())
                 .cloned()
                 .ok_or_else(invalid_direct_tool_scope)?;
-            if !tool.is_read_only() {
-                // Direct effects need graph-native durable confirmation and an
-                // effect receipt/reconciliation owner before activation.
-                return Err(unsupported_direct_tool_effect());
-            }
             tools.insert(
                 (selection.alias().to_owned(), selection.tool().to_owned()),
                 ResolvedDirectTool::new(tool, profile.sensitive_direct_tool(selection)),
@@ -2227,14 +2222,6 @@ const fn unsupported_direct_tool_scope() -> NativeAgentAssemblyError {
     NativeAgentAssemblyError::new(
         NativeAgentAssemblyErrorCode::UnsupportedCapability,
         "a pipeline direct tool node selected a tool whose graph authorization is not enabled",
-    )
-}
-
-const fn unsupported_direct_tool_effect() -> NativeAgentAssemblyError {
-    NativeAgentAssemblyError::new(
-        NativeAgentAssemblyErrorCode::UnsupportedCapability,
-        "a pipeline direct tool node selected an effectful tool; direct effects need durable \
-         confirmation and an effect receipt, which are not enabled for direct tool nodes",
     )
 }
 

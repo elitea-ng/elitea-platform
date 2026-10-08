@@ -2790,7 +2790,7 @@ fn assert_nested_sensitive_browser_completion(resumed: &[Value], expected_path: 
 }
 
 #[tokio::test]
-async fn toolkit_node_materializes_read_only_action_but_rejects_remote_effect() {
+async fn toolkit_node_materializes_read_only_and_effectful_actions() {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     let assembler = PipelineNativeAgentAssembler::with_state(
         Arc::clone(&sessions),
@@ -2810,22 +2810,10 @@ async fn toolkit_node_materializes_read_only_action_but_rejects_remote_effect() 
 
     let effect =
         toolkit_pipeline_request("release_repository", &["create_branch"], "create_branch");
-    let result = assembler.assemble(authorized(&effect)).await;
-    let Err(error) = result else {
-        panic!("effectful direct Toolkit node was assembled");
-    };
-    assert_eq!(
-        error.code(),
-        NativeAgentAssemblyErrorCode::UnsupportedCapability
-    );
-    assert_direct_tool_node_message(&error);
-    let message = error.to_string();
-    assert!(message.contains("effectful tool"), "{message}");
-    assert!(message.contains("durable confirmation"), "{message}");
-    assert!(message.contains("effect receipt"), "{message}");
-    for data in ["create_branch", "release_repository", "group/project"] {
-        assert!(!message.contains(data), "{message}");
-    }
+    assembler
+        .assemble(authorized(&effect))
+        .await
+        .expect("effectful direct Toolkit assembly");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -4182,7 +4170,7 @@ async fn mcp_node_discovers_and_executes_one_read_without_a_model_turn() {
 }
 
 #[tokio::test]
-async fn mcp_node_rejects_server_declared_effect_before_tool_execution() {
+async fn mcp_node_assembles_server_declared_effect_without_executing_it() {
     let sessions: Arc<dyn SessionService> = Arc::new(InMemorySessionService::new());
     let tool_calls = Arc::new(AtomicUsize::new(0));
     let connector = Arc::new(PipelineMcpConnector {
@@ -4198,14 +4186,10 @@ async fn mcp_node_rejects_server_declared_effect_before_tool_execution() {
         &["lookup_release"],
         "lookup_release",
     );
-    let result = assembler.assemble(authorized(&request)).await;
-    let Err(error) = result else {
-        panic!("effectful direct MCP node was assembled");
-    };
-    assert_eq!(
-        error.code(),
-        NativeAgentAssemblyErrorCode::UnsupportedCapability
-    );
+    assembler
+        .assemble(authorized(&request))
+        .await
+        .expect("effectful direct MCP assembly");
     assert_eq!(tool_calls.load(Ordering::Acquire), 0);
 }
 

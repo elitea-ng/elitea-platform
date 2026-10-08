@@ -1312,10 +1312,12 @@ impl PipelineDefinition {
                 };
                 let transition = node.transition().map(ToOwned::to_owned);
                 let node_id = node.id().to_owned();
-                let mut next = builder.node(
-                    DirectToolNode::new(node.clone(), self.state.clone(), resolver)
-                        .with_events(runtimes.events.clone()),
-                );
+                let mut direct = DirectToolNode::new(node.clone(), self.state.clone(), resolver)
+                    .with_events(runtimes.events.clone());
+                if let Some(authority) = runtimes.node_recovery.clone() {
+                    direct = direct.with_node_recovery(authority);
+                }
+                let mut next = builder.node(direct);
                 if let Some(transition) = transition {
                     let target = if transition == "END" {
                         END

@@ -18,6 +18,7 @@
   "spool_root": "/var/lib/elitea-worker/output-spool",
   "spool_key_path": "/run/elitea-runtime/worker-output-spool-key",
   "agent_checkpoint_connection_path": "/run/elitea-runtime/agent-checkpoint-connection",
+  "agent_node_recovery": true,
   "limits": {
     "nats_fetch_batch": 4,
     "nats_fetch_expires_millis": 5000,

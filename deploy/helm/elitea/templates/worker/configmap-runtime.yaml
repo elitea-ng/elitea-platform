@@ -54,13 +54,16 @@ data:
     {{- if ne (get $pairs ($r.natsStream | toString)) ($r.natsConsumer | toString) }}
     {{- fail (printf "worker.runtime.natsStream %q with natsConsumer %q is not a command bus route. The streams and their durables are fixed (docs/runtime-command-bus.md): %v." ($r.natsStream | toString) ($r.natsConsumer | toString) $pairs) }}
     {{- end }}
-    {{- if or $r.agentModelCheckpointRecovery (gt (len $r.sandboxRuntimes) 0) }}
+    {{- if or $r.agentModelCheckpointRecovery $r.agentNodeRecovery (gt (len $r.sandboxRuntimes) 0) }}
     {{- if ne (include "elitea-worker.isRust" .) "true" }}
     {{- fail "worker.runtime checkpoint recovery and sandbox profiles require the Rust worker" }}
     {{- end }}
     {{- end }}
     {{- if $r.agentModelCheckpointRecovery }}
     {{- $_ := set $config "agent_model_checkpoint_recovery" true }}
+    {{- end }}
+    {{- if $r.agentNodeRecovery }}
+    {{- $_ := set $config "agent_node_recovery" true }}
     {{- end }}
     {{- if gt (len $r.sandboxRuntimes) 0 }}
     {{- $_ := set $config "sandbox_runtimes" $r.sandboxRuntimes }}
