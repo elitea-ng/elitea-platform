@@ -14,8 +14,8 @@ import (
 	"sync"
 	"testing"
 
-	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	agentexecutionapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 )
@@ -59,10 +59,12 @@ func TestExecutionInterruptHTTPAgainstPostgres(t *testing.T) {
 	// Refused callers change nothing: a member outside the conversation, a
 	// member of another project, and the owner through another project.
 	for name, attempt := range map[string]func() *httptest.ResponseRecorder{
-		"outsider":        func() *httptest.ResponseRecorder { return call(interruptOutsider, http.MethodPost, decision, tabA) },
-		"foreign actor":   func() *httptest.ResponseRecorder { return call(interruptForeigner, http.MethodPost, decision, tabA) },
-		"foreign project": func() *httptest.ResponseRecorder { return call(interruptOwner, http.MethodPost, strings.Replace(decision, "/prompt_lib/1/", "/prompt_lib/2/", 1), tabA) },
-		"outsider list":   func() *httptest.ResponseRecorder { return call(interruptOutsider, http.MethodGet, base, nil) },
+		"outsider":      func() *httptest.ResponseRecorder { return call(interruptOutsider, http.MethodPost, decision, tabA) },
+		"foreign actor": func() *httptest.ResponseRecorder { return call(interruptForeigner, http.MethodPost, decision, tabA) },
+		"foreign project": func() *httptest.ResponseRecorder {
+			return call(interruptOwner, http.MethodPost, strings.Replace(decision, "/prompt_lib/1/", "/prompt_lib/2/", 1), tabA)
+		},
+		"outsider list": func() *httptest.ResponseRecorder { return call(interruptOutsider, http.MethodGet, base, nil) },
 	} {
 		if w := attempt(); w.Code != http.StatusForbidden {
 			t.Errorf("%s: %d %s", name, w.Code, w.Body.String())
