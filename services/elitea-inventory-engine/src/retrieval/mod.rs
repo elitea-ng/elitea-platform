@@ -48,7 +48,13 @@ impl ViewCache {
             self.forget(key);
             return Ok(None);
         };
-        let view = Arc::new(GraphView::new(graph, revision));
+        let mut view = GraphView::new(graph, revision);
+        for (source, document, acl) in
+            crate::store::sources::restricted_documents(pool, key).await?
+        {
+            view.restricted.insert((source, document), acl);
+        }
+        let view = Arc::new(view);
         if let Ok(mut views) = self.views.lock() {
             views.insert(key, Arc::clone(&view));
         }

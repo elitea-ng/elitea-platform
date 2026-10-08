@@ -46,6 +46,10 @@ const EMBEDDED: &[(&str, &str)] = &[
         "0002_sources.sql",
         include_str!("../../migrations/0002_sources.sql"),
     ),
+    (
+        "0003_documents.sql",
+        include_str!("../../migrations/0003_documents.sql"),
+    ),
 ];
 
 /// Rows per multi-row INSERT: 7 bound columns a row stay far below the 65535
@@ -519,7 +523,7 @@ pub async fn delete(pool: &PgPool, key: GraphKey) -> Result<bool> {
     .execute(&mut *transaction)
     .await?
     .rows_affected();
-    for table in ["inventory_graph.sources", "inventory_graph.source_files"] {
+    for table in ["inventory_graph.sources", "inventory_graph.documents"] {
         sqlx::query(&format!(
             "DELETE FROM {table} WHERE project_id = $1 AND application_id = $2"
         ))

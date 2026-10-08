@@ -471,7 +471,7 @@ async fn a_source_is_cloned_ingested_and_re_ingested_incrementally() {
             .any(|(_, n)| n["name"] == json!("hello") && n["type"] == json!("function")),
         "the re-read file's function"
     );
-    let hashes = sources::file_hashes(&pool, key, "repo")
+    let hashes = sources::document_versions(&pool, key, "repo")
         .await
         .expect("hashes");
     assert_eq!(
@@ -832,5 +832,62 @@ async fn a_source_with_a_model_gets_entities_facts_and_relations() {
         "the file contains what the model found"
     );
     assert_eq!(graph.node(&file).expect("file")["fact_count"], json!(1));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Documents that are not text (ADR-0028 D4): an RTF and an e-mail in the
+/// tree are extracted and cited like any file; an image is still skipped.
+#[cfg(feature = "documents")]
+#[test]
+fn documents_in_a_tree_are_extracted() {
+    let root = scratch("documents");
+    write(
+        &root,
+        "policies/refunds.rtf",
+        br"{\rtf1\ansi{\fonttbl\f0\fswiss Helvetica;}\f0\pard Refunds are accepted within thirty days.\par}",
+    );
+    write(
+        &root,
+        "mail/decision.eml",
+        b"From: cfo@example.com\r\nSubject: Refund approvals\r\nContent-Type: text/plain\r\n\r\nBilling approves every refund.\r\n",
+    );
+    write(&root, "logo.png", b"\x89PNG\r\n\x1a\n");
+    let (context, _lines, _) = context();
+    let mut graph = Graph::new();
+    let outcome = ingest_tree(
+        &mut graph,
+        &source(&json!({})),
+        &root,
+        &BTreeMap::new(),
+        &context,
+    )
+    .expect("ingests");
+    assert_eq!(outcome.documents_processed, 2, "{outcome:?}");
+    assert_eq!(outcome.skipped_unsupported, 1, "the image");
+    assert_eq!(
+        outcome.documents["policies/refunds.rtf"].mime,
+        "application/rtf"
+    );
+    let rtf = graph
+        .node(&entity_id(
+            "file",
+            "policies/refunds.rtf",
+            Some("policies/refunds.rtf"),
+        ))
+        .expect("the document's node");
+    assert_eq!(
+        rtf["citations"][0]["doc_id"],
+        json!("repo://policies/refunds.rtf")
+    );
+    assert!(rtf["line_count"].as_u64().is_some_and(|n| n >= 1));
+    assert!(
+        graph
+            .node(&entity_id(
+                "file",
+                "mail/decision.eml",
+                Some("mail/decision.eml")
+            ))
+            .is_some()
+    );
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -25,8 +25,12 @@ pub mod source;
 
 use crate::extract;
 use crate::graph::Graph;
-use crate::store::sources::{self as source_store, Completion, RunCounts, SourceStatus};
+use crate::store::sources::{
+    self as source_store, Completion, DocumentState, RunCounts, SourceStatus,
+};
 use crate::store::{self, GraphKey, StoreError};
+use elitea_content_source::git::GitSource;
+use elitea_content_source::{Acl, ContentSource};
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::stream::Context;
 use elitea_repo_ingest::IngestSettings;
@@ -56,8 +60,10 @@ pub struct Outcome {
     pub skipped_empty: usize,
     /// Files that are not UTF-8 text (the API read failed on them too).
     pub skipped_unreadable: usize,
-    /// Every file the source has now, with its hash.
+    /// Every document the source has now, with its version.
     pub hashes: BTreeMap<String, String>,
+    /// Every document the source has now, as the store keeps it.
+    pub documents: BTreeMap<String, DocumentState>,
     /// Files a parser failed on (`path: error`); they still have their
     /// file node.
     pub parse_errors: Vec<String>,
@@ -73,55 +79,35 @@ pub struct Outcome {
     pub embeddings_generated: usize,
 }
 
-/// Every regular file under `root`, as `/`-separated relative paths in
-/// byte order (git's tree order). `.git` and symbolic links are skipped:
-/// the API listing reported neither as a readable file.
-fn list_files(root: &Path) -> std::io::Result<Vec<String>> {
-    let mut found = Vec::new();
-    let mut pending = vec![PathBuf::new()];
-    while let Some(relative) = pending.pop() {
-        for entry in std::fs::read_dir(root.join(&relative))? {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let kind = entry.file_type()?;
-            let path = relative.join(&name);
-            if kind.is_dir() {
-                if !(relative.as_os_str().is_empty() && name == ".git") {
-                    pending.push(path);
-                }
-            } else if kind.is_file() {
-                found.push(
-                    path.components()
-                        .map(|part| part.as_os_str().to_string_lossy().into_owned())
-                        .collect::<Vec<_>>()
-                        .join("/"),
-                );
-            }
-        }
-    }
-    found.sort_unstable();
-    Ok(found)
-}
-
 /// A selected file whose content changed (or is new): it is read this run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileToRead {
+    /// The document's key in its source (a repository path for git).
     pub path: String,
     pub text: String,
+    /// The document's version (a git file's: the SHA-256 of its bytes).
     pub hash: String,
+    pub mime: String,
+    pub acl: Acl,
 }
 
-/// Step 4a: select and read the files of `root`, compare each with the
-/// last completed run's hash, and remove what changed or deleted files
-/// said. Returns the counts so far and the files to read.
+/// Step 4a: list the source's documents, select them as the SDK loader
+/// selected files, compare each version with the last completed run's,
+/// read and extract the new and changed ones, and remove what changed or
+/// deleted documents said. Returns the counts so far and the documents to
+/// read.
+///
+/// Any [`ContentSource`] (ADR-0028): a git checkout lists its files; a
+/// document that is not text is extracted (`elitea-doc-extract`) when this
+/// build can, and skipped as unsupported otherwise.
 ///
 /// # Errors
 ///
-/// The tree cannot be listed, or a stop was requested.
-pub fn prepare(
+/// The source cannot be listed, or a stop was requested.
+pub async fn prepare<S: ContentSource>(
     graph: &mut Graph,
     source: &Source,
-    root: &Path,
+    documents: &S,
     previous: &BTreeMap<String, String>,
     context: &Context,
 ) -> Result<(Outcome, Vec<FileToRead>), EngineError> {
@@ -129,44 +115,79 @@ pub fn prepare(
         whitelist: source.whitelist.clone(),
         blacklist: source.blacklist.clone(),
     };
-    let listed = list_files(root).map_err(|error| {
-        EngineError::new(
-            ErrorType::Runtime,
-            format!("the checked-out tree cannot be listed: {error}"),
-        )
-    })?;
+    let listed = documents
+        .list()
+        .await
+        .map_err(|error| EngineError::new(ErrorType::Runtime, error.to_string()))?;
     let mut outcome = Outcome::default();
     let mut to_read = Vec::new();
-    for path in &listed {
+    for reference in &listed {
         context.checkpoint()?;
-        match selection.admit(path) {
+        let path = &reference.key;
+        match selection.admit_document(path, &reference.mime) {
             Err(Skipped::Whitelist) => outcome.skipped_whitelist += 1,
             Err(Skipped::Blacklist) => outcome.skipped_blacklist += 1,
             Err(Skipped::UnsupportedExtension) => outcome.skipped_unsupported += 1,
             Ok(()) => {
-                let Ok(bytes) = std::fs::read(root.join(path)) else {
-                    outcome.skipped_unreadable += 1;
-                    continue;
-                };
-                if bytes.is_empty() {
+                if reference.size == 0 {
                     outcome.skipped_empty += 1;
                     continue;
                 }
-                let Ok(text) = String::from_utf8(bytes) else {
+                let state = DocumentState {
+                    version: reference.version.clone(),
+                    mime: reference.mime.clone(),
+                    acl: reference.acl.clone(),
+                };
+                if previous.get(path) == Some(&reference.version) {
+                    outcome.unchanged += 1;
+                    outcome
+                        .hashes
+                        .insert(path.clone(), reference.version.clone());
+                    outcome.documents.insert(path.clone(), state);
+                    continue;
+                }
+                let Ok(document) = documents.fetch(path).await else {
                     outcome.skipped_unreadable += 1;
                     continue;
                 };
-                let hash = files::content_hash(&text);
-                outcome.hashes.insert(path.clone(), hash.clone());
-                if previous.get(path) == Some(&hash) {
-                    outcome.unchanged += 1;
-                } else {
-                    to_read.push(FileToRead {
-                        path: path.clone(),
-                        text,
-                        hash,
-                    });
+                // Extraction is CPU work (a PDF, a spreadsheet): off the
+                // runtime's threads.
+                let mime = reference.mime.clone();
+                let extracted = tokio::task::spawn_blocking(move || {
+                    elitea_doc_extract::extract(&mime, &document.bytes)
+                })
+                .await
+                .unwrap_or_else(|join| {
+                    elitea_doc_extract::Extracted::Unreadable(format!(
+                        "extraction ended abnormally ({join})"
+                    ))
+                });
+                let text = match extracted {
+                    elitea_doc_extract::Extracted::Text { text, .. } => text,
+                    elitea_doc_extract::Extracted::Unsupported => {
+                        outcome.skipped_unsupported += 1;
+                        continue;
+                    }
+                    elitea_doc_extract::Extracted::Unreadable(_) => {
+                        outcome.skipped_unreadable += 1;
+                        continue;
+                    }
+                };
+                if text.is_empty() {
+                    outcome.skipped_empty += 1;
+                    continue;
                 }
+                outcome
+                    .hashes
+                    .insert(path.clone(), reference.version.clone());
+                outcome.documents.insert(path.clone(), state);
+                to_read.push(FileToRead {
+                    path: path.clone(),
+                    text,
+                    hash: reference.version.clone(),
+                    mime: reference.mime.clone(),
+                    acl: reference.acl.clone(),
+                });
             }
         }
     }
@@ -341,9 +362,11 @@ pub fn quality_pass(graph: &mut Graph) -> usize {
     pruned
 }
 
-/// Step 4 of the run, over a checked-out tree: update `graph` with the
-/// files of `root` that `source` selects, given the hashes of the last
-/// completed run.
+/// Step 4 of the run over a checked-out tree, without a model: update
+/// `graph` with the files of `root` that `source` selects, given the
+/// versions of the last completed run. A synchronous wrapper (its own
+/// current-thread runtime) for callers outside one; the run itself uses
+/// [`prepare`] on the source directly.
 ///
 /// In the Python pipeline's order: every selected file is read and
 /// compared first ([`prepare`]); the files to read are parsed and each
@@ -361,7 +384,12 @@ pub fn ingest_tree(
     previous: &BTreeMap<String, String>,
     context: &Context,
 ) -> Result<Outcome, EngineError> {
-    let (mut outcome, to_read) = prepare(graph, source, root, previous, context)?;
+    let checkout = GitSource::new(root);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .build()
+        .map_err(|error| EngineError::new(ErrorType::Runtime, error.to_string()))?;
+    let (mut outcome, to_read) =
+        runtime.block_on(prepare(graph, source, &checkout, previous, context))?;
     let parsed = parse_files(source, root, &to_read, context);
     let (relations, _) = assemble(
         graph,
@@ -790,29 +818,21 @@ async fn run_started(
         .map_err(|e| store_error(&e))?
         .map(|(graph, _)| graph)
         .unwrap_or_default();
-    let previous = source_store::file_hashes(pool, key, &source.name)
+    let previous = source_store::document_versions(pool, key, &source.name)
         .await
         .map_err(|e| store_error(&e))?;
 
     let (_scratch, cloned) = clone(settings, &repo_config, key, source, context).await?;
 
     let tree = cloned.path.clone();
+    let checkout = GitSource::new(&tree);
+    let mut graph = graph;
+    let (outcome, to_read) = prepare(&mut graph, source, &checkout, &previous, context).await?;
     let source_for_tree = source.clone();
     let context_for_tree = context.clone();
-    let prepared = tokio::task::spawn_blocking(move || {
-        let mut graph = graph;
-        let prepared = prepare(
-            &mut graph,
-            &source_for_tree,
-            &tree,
-            &previous,
-            &context_for_tree,
-        )
-        .map(|(outcome, to_read)| {
-            let parsed = parse_files(&source_for_tree, &tree, &to_read, &context_for_tree);
-            (outcome, to_read, parsed)
-        });
-        (graph, prepared)
+    let (to_read, parsed) = tokio::task::spawn_blocking(move || {
+        let parsed = parse_files(&source_for_tree, &tree, &to_read, &context_for_tree);
+        (to_read, parsed)
     })
     .await
     .map_err(|join| {
@@ -821,8 +841,7 @@ async fn run_started(
             format!("the ingestion task ended abnormally ({join})"),
         )
     })?;
-    let (mut graph, prepared) = prepared;
-    let (mut outcome, to_read, parsed) = prepared?;
+    let mut outcome = outcome;
     context.checkpoint()?;
 
     build(
@@ -849,7 +868,7 @@ async fn run_started(
         &Completion {
             toolkit_id: &source.status_key(),
             source_name: &source.name,
-            hashes: &outcome.hashes,
+            documents: &outcome.documents,
             counts,
             commit_sha: Some(cloned.identity.commit()),
         },

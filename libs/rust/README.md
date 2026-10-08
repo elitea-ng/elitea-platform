@@ -12,6 +12,8 @@ native Inventory engine (`services/elitea-inventory-engine`).
 | `code-parsers` | tree-sitter parsers for Python, Go, TypeScript, JavaScript, Java, C#, C++ and Rust, plus Kotlin and Swift (regex ports of the Inventory parsers) → symbols and relationships |
 | `graph-algos` | Seeded two-pass Leiden (RB-configuration) over the vendored `leiden-rs`, communities numbered by size |
 | `repo-ingest` | Admitted shallow git clones (gix, egress allowlist, limits), artifact-folder downloads, file discovery; refusals name the consumer's settings (`names::SettingNames`) |
+| `content-source` | The source-agnostic content layer (ADR-0028): `ContentSource` (list documents with a version, mime type and ACL; fetch their bytes), the document model, `Acl`/`Caller`; git (a checked-out tree) is the first connector |
+| `doc-extract` | Document bytes to text: text decoded strictly; PDF, Office, spreadsheets, e-mail and HTML through xberg (pinned) behind the `documents` feature, on its own large-stack thread with page/size/time caps |
 | `pg-migrate` | The forward-only, checksummed Postgres migration runner: each consumer passes its own ledger table and advisory-lock name, so two engines on one database never share a ledger |
 
 ## Layout rules
@@ -22,8 +24,9 @@ native Inventory engine (`services/elitea-inventory-engine`).
   tree, nothing else.
 - **Caret ranges here, exact pins in services.** A shared crate states the
   lowest version it needs; each service's lock decides the exact one. The
-  one exception is the tree-sitter grammars in `code-parsers`: parser output
-  is a function of the grammar revision, so they stay exactly pinned.
+  exceptions are the tree-sitter grammars in `code-parsers` and xberg in
+  `doc-extract`: their output is a function of their revision, so they stay
+  exactly pinned.
 - **Lints match the services:** `unsafe_code = "forbid"`, Clippy `all` and
   `pedantic` denied.
 - **No engine-specific code.** A crate here must not know which engine it

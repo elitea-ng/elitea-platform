@@ -42,6 +42,19 @@ normalisation inside the store.
 applies the migrations (ledger `inventory_graph.schema_migrations`); the
 PostgreSQL tests need `INVENTORY_TEST_DSN` (see the test's header).
 
+## Enterprise content (ADR-0028)
+
+Ingestion reads through `elitea-content-source`: a source lists documents —
+each with a version, a mime type and an ACL — and the engine fetches the new
+and changed ones. Git (a checked-out tree) is the first connector. A document
+that is not text (PDF, Office, spreadsheets, e-mail, HTML) is extracted by
+`elitea-doc-extract` (xberg, the `documents` feature, on by default; about
++29 MB of binary) and cited like any file. The `documents` table keeps each
+document's version, mime type and ACL; every read tool and `investigate` see
+only what the caller may read — the user id the sub-application host
+verified (`caller_user_id`) — and a caller without one sees project-wide
+documents only.
+
 ## Ingestion (`src/ingest`)
 
 One run reads one source into one toolkit's graph: the ingestion lease (one

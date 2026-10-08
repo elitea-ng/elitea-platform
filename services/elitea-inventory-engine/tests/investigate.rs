@@ -126,7 +126,7 @@ async fn investigate_asks_the_model_with_graph_and_source_tools() {
         &sources::Completion {
             toolkit_id: "5",
             source_name: "repo",
-            hashes: &BTreeMap::new(),
+            documents: &BTreeMap::new(),
             counts: sources::RunCounts::default(),
             commit_sha: None,
         },

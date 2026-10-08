@@ -23,6 +23,9 @@ pub struct GraphView {
     by_type: HashMap<String, Vec<String>>,
     /// The graph's revision in the store.
     pub revision: i64,
+    /// The graph's restricted documents (ADR-0028 D3): `(source name,
+    /// document key)` → readers. Empty for a graph of project-wide sources.
+    pub restricted: HashMap<(String, String), elitea_content_source::Acl>,
 }
 
 impl GraphView {
@@ -66,7 +69,79 @@ impl GraphView {
             by_name,
             by_type,
             revision,
+            restricted: HashMap::new(),
         }
+    }
+
+    /// The view `caller` may read, or `None` when it is this one (no
+    /// restricted document hides anything from them).
+    ///
+    /// What a hidden document said goes, as an incremental run removes a
+    /// deleted file ([`Graph::remove_file`]): its citations, the edges
+    /// found in it, and the entities only it cited. A community that loses
+    /// a member also loses its model-written label and summary — they were
+    /// written from the hidden content — and keeps a neutral label.
+    #[must_use]
+    pub fn for_caller(&self, caller: &elitea_content_source::Caller) -> Option<Self> {
+        let hidden: Vec<&(String, String)> = self
+            .restricted
+            .iter()
+            .filter(|(_, acl)| !acl.admits(caller))
+            .map(|(document, _)| document)
+            .collect();
+        if hidden.is_empty() {
+            return None;
+        }
+        let mut graph = self.graph.clone();
+        for (source, key) in hidden {
+            graph.remove_file(source, key);
+        }
+        let kept: std::collections::HashSet<String> =
+            graph.nodes().map(|(id, _)| id.to_owned()).collect();
+        if let Some(Value::Object(communities)) = graph
+            .metadata
+            .get_mut("community_data")
+            .and_then(|data| data.get_mut("communities"))
+        {
+            let present: std::collections::HashSet<String> =
+                self.graph.nodes().map(|(id, _)| id.to_owned()).collect();
+            for (index, (community_id, community)) in communities.iter_mut().enumerate() {
+                let Some(fields) = community.as_object_mut() else {
+                    continue;
+                };
+                let before = fields
+                    .get("members")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len);
+                if let Some(Value::Array(members)) = fields.get_mut("members") {
+                    members.retain(|member| {
+                        member
+                            .as_str()
+                            .is_none_or(|id| !present.contains(id) || kept.contains(id))
+                    });
+                }
+                if let Some(Value::Array(centroids)) = fields.get_mut("centroids") {
+                    centroids.retain(|centroid| {
+                        centroid["id"].as_str().is_none_or(|id| kept.contains(id))
+                    });
+                }
+                let after = fields
+                    .get("members")
+                    .and_then(Value::as_array)
+                    .map_or(0, Vec::len);
+                if after < before {
+                    let _ = community_id;
+                    fields.insert(
+                        "label".to_owned(),
+                        Value::String(format!("Community {index}")),
+                    );
+                    fields.insert("summary".to_owned(), Value::Null);
+                }
+            }
+        }
+        let mut filtered = Self::new(graph, self.revision);
+        filtered.restricted.clone_from(&self.restricted);
+        Some(filtered)
     }
 
     /// A node's attributes.

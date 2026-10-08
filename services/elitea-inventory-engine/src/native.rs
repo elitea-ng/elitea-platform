@@ -65,6 +65,19 @@ fn text_param<'a>(params: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a s
         .filter(|text| !text.is_empty())
 }
 
+/// The caller the host verified (`caller_user_id`, ADR-0028 D3). Absent
+/// on an unsigned hop: such a caller sees project-wide documents only.
+fn caller_of(arguments: &Map<String, Value>) -> elitea_content_source::Caller {
+    elitea_content_source::Caller {
+        user_id: arguments.get("caller_user_id").and_then(|id| match id {
+            Value::String(text) if !text.is_empty() => Some(text.clone()),
+            Value::Number(number) => Some(number.to_string()),
+            _ => None,
+        }),
+        ..elitea_content_source::Caller::default()
+    }
+}
+
 fn json_format(params: &Map<String, Value>) -> bool {
     text_param(params, &["output_format"]).is_some_and(|f| f.eq_ignore_ascii_case("json"))
 }
@@ -137,9 +150,15 @@ impl NativeRunner {
             "run_ingestion" => self.run_ingestion(key, params, context).await,
             "get_sources_status" => self.sources_status(key, params).await,
             "get_ingestion_status" => self.ingestion_status(key, params).await,
-            "investigate" => self.investigate(key, params, context).await,
+            "investigate" => {
+                self.investigate(key, params, &caller_of(arguments), context)
+                    .await
+            }
             "remove_source_entities" => self.remove_source(key, params).await,
-            other => self.read(other, family, key, params).await,
+            other => {
+                self.read(other, family, key, params, &caller_of(arguments))
+                    .await
+            }
         }
     }
 
@@ -208,6 +227,7 @@ impl NativeRunner {
         &self,
         key: GraphKey,
         params: &Map<String, Value>,
+        caller: &elitea_content_source::Caller,
         context: &Context,
     ) -> Result<Value, EngineError> {
         use crate::investigate::{self as agent, Question, SourceToolkit};
@@ -228,12 +248,15 @@ impl NativeRunner {
                 invalid("no LLM model is configured for this Inventory toolkit; set llm_model in the toolkit configuration")
             })?;
         let settings = Self::model_settings(params, &model_name)?;
-        let view = self
+        let stored = self
             .views
             .view(&self.pool, key)
             .await
             .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?
             .unwrap_or_default();
+        // The agent reads only what the caller may (ADR-0028 D3).
+        let filtered = stored.for_caller(caller);
+        let view = filtered.as_ref().unwrap_or(&stored);
         let document = sources::status_document(&self.pool, key)
             .await
             .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?;
@@ -264,8 +287,8 @@ impl NativeRunner {
         );
         // Semantic search when the graph has vectors: the query is embedded
         // with the model the graph was built with, so the two compare.
-        let embed: Option<agent::Embed> = crate::retrieval::semantic::stamped_model(&view)
-            .filter(|_| crate::retrieval::semantic::has_embeddings(&view))
+        let embed: Option<agent::Embed> = crate::retrieval::semantic::stamped_model(view)
+            .filter(|_| crate::retrieval::semantic::has_embeddings(view))
             .map(|model| {
                 let client = EmbeddingClient::new(
                     self.transport.clone(),
@@ -294,7 +317,7 @@ impl NativeRunner {
             });
         let result = agent::investigate(
             &question,
-            &view,
+            view,
             &chat,
             &toolkits,
             &call_source,
@@ -316,18 +339,20 @@ impl NativeRunner {
         family: &str,
         key: GraphKey,
         params: &Map<String, Value>,
+        caller: &elitea_content_source::Caller,
     ) -> Result<Value, EngineError> {
-        let view = self
+        let stored = self
             .views
             .view(&self.pool, key)
             .await
             .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?
             .unwrap_or_default();
+        let filtered = stored.for_caller(caller);
         let call = crate::retrieval::Call {
             tool,
             family,
             params,
-            view: &view,
+            view: filtered.as_ref().unwrap_or(&stored),
         };
         crate::retrieval::dispatch(&call).unwrap_or_else(|| {
             Err(EngineError::new(
