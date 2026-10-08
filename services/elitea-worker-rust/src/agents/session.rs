@@ -51,7 +51,7 @@ use super::events::{
     AgentEventProjector, ApplicationToolPresentationCatalog, CompletedAgentBrowserOutput,
     OrdinaryProjectionInput, PipelineProjectionInput, ToolkitAttributionCatalog,
 };
-use super::graph::compiler::PipelineDefinition;
+use super::graph::compiler::{PipelineConfigurationError, PipelineDefinition};
 use super::graph::resume::{PipelineResumeError, PipelineResumeErrorCode};
 use super::graph::{
     EliteaGraphAgent, PIPELINE_COMPLETED_CONTENT, PipelineNodeEventReceiver,
@@ -1644,7 +1644,7 @@ pub(super) async fn assemble_pipeline_native(
     ));
     let graph = definition
         .compile_with_runtime(ROOT_AGENT_NAME, turn_checkpointer, resume, &node_runtimes)
-        .map_err(|error| pipeline_configuration_error(error.code()))?;
+        .map_err(|error| pipeline_configuration_error(&error))?;
     let OrdinaryNativeAgentPlan {
         user_id,
         session_id,
@@ -3115,20 +3115,11 @@ fn pipeline_resume_error(error: &PipelineResumeError) -> NativeAgentAssemblyErro
     NativeAgentAssemblyError::new(code, "the checkpointed pipeline decision was rejected")
 }
 
-fn pipeline_configuration_error(code: &str) -> NativeAgentAssemblyError {
-    let code = match code {
-        "graph.pipeline.configuration_resource_exhausted" => {
-            NativeAgentAssemblyErrorCode::ResourceExhausted
-        }
-        "graph.pipeline.unsupported_capability" => {
-            NativeAgentAssemblyErrorCode::UnsupportedCapability
-        }
-        "graph.pipeline.malformed_yaml" | "graph.pipeline.invalid_configuration" => {
-            NativeAgentAssemblyErrorCode::InvalidInput
-        }
-        _ => NativeAgentAssemblyErrorCode::InvalidConfiguration,
-    };
-    NativeAgentAssemblyError::new(code, "the stored pipeline could not be compiled")
+fn pipeline_configuration_error(error: &PipelineConfigurationError) -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::from_pipeline_configuration(
+        error,
+        "the stored pipeline could not be compiled",
+    )
 }
 
 #[cfg(test)]

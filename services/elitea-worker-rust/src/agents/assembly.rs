@@ -328,8 +328,8 @@ impl OrdinaryNoToolProfile {
         let instructions = version
             .get("instructions")
             .and_then(Value::as_str)
-            .filter(|value| bounded_instruction(value, expected_agent_type == "agent"))
-            .ok_or_else(invalid_profile)?;
+            .ok_or_else(invalid_profile)
+            .and_then(|value| admitted_instruction(value, expected_agent_type == "agent"))?;
         let rendered = if expected_agent_type == "agent" {
             variables.render(instructions)
         } else {
@@ -765,8 +765,8 @@ fn application_model_for_agent_type(
     let instructions = version
         .get("instructions")
         .and_then(Value::as_str)
-        .filter(|value| bounded_instruction(value, expected_agent_type == "agent"))
-        .ok_or_else(invalid_profile)?;
+        .ok_or_else(invalid_profile)
+        .and_then(|value| admitted_instruction(value, expected_agent_type == "agent"))?;
     // A PIPELINE's `instructions` carry the graph YAML, and `assistant.py`'s
     // `pipeline()` (:886-905) hands `self.prompt` to `create_graph` WITHOUT
     // calling `_resolve_jinja2_variables`. Only the react-agent path (:794)
@@ -1134,13 +1134,43 @@ fn bounded_runtime_identity(value: &str) -> bool {
 /// profile never refuses a graph that Main admits and the compiler accepts.
 fn bounded_instruction(value: &str, allow_empty: bool) -> bool {
     (allow_empty || !value.is_empty())
-        && value.len()
-            <= if allow_empty {
-                super::request::MAX_AGENT_INSTRUCTION_BYTES
-            } else {
-                super::graph::compiler::MAX_PIPELINE_YAML_BYTES
-            }
+        && value.len() <= instruction_byte_bound(allow_empty)
         && !value.contains('\0')
+}
+
+const fn instruction_byte_bound(allow_empty: bool) -> usize {
+    if allow_empty {
+        super::request::MAX_AGENT_INSTRUCTION_BYTES
+    } else {
+        super::graph::compiler::MAX_PIPELINE_YAML_BYTES
+    }
+}
+
+/// Admit the saved instructions, naming the bound when they are merely too big.
+///
+/// A malformed value (empty graph, NUL) stays a generic invalid profile. A value
+/// past the byte bound is the registered agent-settings limit, so the person is
+/// told which section to shrink instead of "The execution input is invalid.".
+fn admitted_instruction(value: &str, allow_empty: bool) -> Result<&str, NativeAgentAssemblyError> {
+    if bounded_instruction(value, allow_empty) {
+        return Ok(value);
+    }
+    if value.len() > instruction_byte_bound(allow_empty) {
+        return Err(if allow_empty {
+            NativeAgentAssemblyError::agent_settings_limit(
+                "the saved agent instructions exceed their size limit",
+                "native_agent.instruction_bytes_exceeded",
+                "instruction_bytes",
+            )
+        } else {
+            NativeAgentAssemblyError::agent_settings_limit(
+                "the saved pipeline YAML exceeds its size limit",
+                "graph.pipeline.yaml_bytes_exceeded",
+                "yaml_bytes",
+            )
+        });
+    }
+    Err(invalid_profile())
 }
 
 fn bounded_adhoc_instruction(value: &str) -> bool {

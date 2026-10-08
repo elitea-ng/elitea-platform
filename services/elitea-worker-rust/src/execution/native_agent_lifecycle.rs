@@ -32,7 +32,8 @@ use crate::agents::events::{
     ProjectedAgentEventBatch,
 };
 use crate::agents::runtime::{
-    NativeAgentAssembler, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode, NativeAgentRun,
+    NativeAgentAssembler, NativeAgentAssemblyCause, NativeAgentAssemblyError,
+    NativeAgentAssemblyErrorCode, NativeAgentRun,
 };
 use crate::protocol::control::AgentControlClient;
 use crate::protocol::elitea::runtime::v1::NodeEventV1;
@@ -288,6 +289,8 @@ where
             tracing::error!(
                 event = "agent_native_assembly_failed",
                 error_code = error.code().as_str(),
+                cause_code = error.cause().map(NativeAgentAssemblyCause::code),
+                cause_detail = error.cause().and_then(NativeAgentAssemblyCause::detail),
                 failure_reason = %error,
                 "native agent assembly failed; execution cannot start"
             );
@@ -1453,6 +1456,9 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
         NativeAgentAssemblyErrorCode::AuthorizationFailed => {
             RuntimeFailureKind::AuthorizationFailed
         }
+        NativeAgentAssemblyErrorCode::InputLimit(field) => {
+            RuntimeFailureKind::ExecutionInputFieldLimit(field)
+        }
         NativeAgentAssemblyErrorCode::InvalidConfiguration
         | NativeAgentAssemblyErrorCode::InvalidResult => RuntimeFailureKind::Internal,
     }
@@ -1475,7 +1481,9 @@ fn projection_failure(error: &AgentEventProjectionError) -> RuntimeFailureKind {
 #[cfg(test)]
 mod taxonomy_tests {
     use super::assembly_failure;
-    use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
+    use crate::agents::runtime::{
+        NativeAgentAssemblyCause, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
+    };
     use crate::protocol::output::{ModelBudgetScope, RuntimeFailureKind};
 
     #[test]
@@ -1572,6 +1580,56 @@ mod taxonomy_tests {
             RuntimeFailureKind::Internal
         );
         assert_eq!(super::model_failure(None), RuntimeFailureKind::Internal);
+    }
+
+    /// The pipeline bounds are already registered as a readable message: the
+    /// agent-settings input limit. Prove the whole chain from the real compiler
+    /// error to the terminal text, and that the id-shape refusal stays generic.
+    #[test]
+    fn pipeline_bound_refusals_end_as_the_agent_settings_message() {
+        use crate::agents::graph::compiler::PipelineDefinition;
+        use crate::protocol::InputLimitField;
+        use crate::protocol::output::runtime_error_policy;
+
+        let mut nodes = String::from("entry_point: n0\nnodes:\n");
+        for n in 0..129 {
+            std::fmt::Write::write_fmt(
+                &mut nodes,
+                format_args!("  - id: n{n}\n    type: state_modifier\n    transition: END\n"),
+            )
+            .expect("write to string");
+        }
+        let Err(configuration) = PipelineDefinition::from_yaml(&nodes) else {
+            panic!("129 nodes were admitted");
+        };
+        let error =
+            NativeAgentAssemblyError::from_pipeline_configuration(&configuration, "fixture");
+        assert_eq!(
+            error.code(),
+            NativeAgentAssemblyErrorCode::InputLimit(InputLimitField::AgentSettings)
+        );
+        assert!(!error.retryable());
+        let kind = assembly_failure(&error);
+        assert_eq!(
+            kind,
+            RuntimeFailureKind::ExecutionInputFieldLimit(InputLimitField::AgentSettings)
+        );
+        let (_, message, retryable) = runtime_error_policy(kind);
+        assert_eq!(message, InputLimitField::AgentSettings.safe_message());
+        assert!(!retryable);
+
+        let Err(configuration) = PipelineDefinition::from_yaml(
+            "entry_point: 1.5\nnodes:\n  - id: a\n    type: state_modifier\n",
+        ) else {
+            panic!("a float id was admitted");
+        };
+        let error =
+            NativeAgentAssemblyError::from_pipeline_configuration(&configuration, "fixture");
+        assert_eq!(assembly_failure(&error), RuntimeFailureKind::InvalidInput);
+        assert_eq!(
+            error.cause().map(NativeAgentAssemblyCause::code),
+            Some("graph.pipeline.invalid_identifier")
+        );
     }
 
     #[test]

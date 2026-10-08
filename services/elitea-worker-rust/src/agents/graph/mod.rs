@@ -28,6 +28,10 @@ mod code_state_tests;
 mod code_tests;
 pub(crate) mod compiler;
 #[cfg(test)]
+mod compiler_identifier_tests;
+#[cfg(test)]
+mod compiler_limit_tests;
+#[cfg(test)]
 mod compiler_tests;
 mod decision;
 mod direct_tool;

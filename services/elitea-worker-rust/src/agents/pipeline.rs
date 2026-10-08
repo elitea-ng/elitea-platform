@@ -2186,19 +2186,10 @@ fn tool_binding_error(error: ToolBindingError) -> NativeAgentAssemblyError {
 }
 
 fn pipeline_configuration_error(error: &PipelineConfigurationError) -> NativeAgentAssemblyError {
-    let code = match error.code() {
-        "graph.pipeline.configuration_resource_exhausted" => {
-            NativeAgentAssemblyErrorCode::ResourceExhausted
-        }
-        "graph.pipeline.unsupported_capability" => {
-            NativeAgentAssemblyErrorCode::UnsupportedCapability
-        }
-        "graph.pipeline.malformed_yaml" | "graph.pipeline.invalid_configuration" => {
-            NativeAgentAssemblyErrorCode::InvalidInput
-        }
-        _ => NativeAgentAssemblyErrorCode::InvalidConfiguration,
-    };
-    NativeAgentAssemblyError::new(code, "the stored pipeline definition could not be admitted")
+    NativeAgentAssemblyError::from_pipeline_configuration(
+        error,
+        "the stored pipeline definition could not be admitted",
+    )
 }
 
 const fn invalid_pipeline_tool_scope() -> NativeAgentAssemblyError {
