@@ -9,21 +9,15 @@ name: CI — Desktop client
 # the host embeds. It does NOT build a signed bundle; that is a release step
 # (apps/elitea-desktop/README.md, "Release signing").
 #
-# Path-filtered: the web files named here are exactly the ones the desktop mode
-# adds or reads. A change to the rest of apps/elitea-web is gated by ci-web.yml.
+# Path-filtered: the desktop bundle embeds the whole elitea-web app (the shell
+# imports `App`), so any change under apps/elitea-web/src can break it; the filter
+# covers all of it, still as one job. ci-web.yml gates the same files for the web.
 
 on:
   pull_request:
     paths:
       - "apps/elitea-desktop/**"
-      - "apps/elitea-web/src/entries/desktop/**"
-      - "apps/elitea-web/src/shared/desktop/**"
-      - "apps/elitea-web/src/shared/api/http.ts"
-      - "apps/elitea-web/src/shared/api/httpBody.ts"
-      - "apps/elitea-web/src/shared/api/httpNative.ts"
-      - "apps/elitea-web/src/shared/api/nativeTransport.ts"
-      - "apps/elitea-web/src/shared/api/reauth-policy.ts"
-      - "apps/elitea-web/src/shared/api/sse/useEventSource.ts"
+      - "apps/elitea-web/src/**"
       - "apps/elitea-web/vite.config.ts"
       - "apps/elitea-web/package.json"
       - "apps/elitea-web/package-lock.json"
@@ -33,14 +27,7 @@ on:
       - main
     paths:
       - "apps/elitea-desktop/**"
-      - "apps/elitea-web/src/entries/desktop/**"
-      - "apps/elitea-web/src/shared/desktop/**"
-      - "apps/elitea-web/src/shared/api/http.ts"
-      - "apps/elitea-web/src/shared/api/httpBody.ts"
-      - "apps/elitea-web/src/shared/api/httpNative.ts"
-      - "apps/elitea-web/src/shared/api/nativeTransport.ts"
-      - "apps/elitea-web/src/shared/api/reauth-policy.ts"
-      - "apps/elitea-web/src/shared/api/sse/useEventSource.ts"
+      - "apps/elitea-web/src/**"
       - "apps/elitea-web/vite.config.ts"
       - "apps/elitea-web/package.json"
       - "apps/elitea-web/package-lock.json"
