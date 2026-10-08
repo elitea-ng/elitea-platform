@@ -13,7 +13,10 @@
 //! * output is deterministic — files may be parsed in parallel, but any
 //!   cross-file registry is filled and read in the caller's (sorted) order;
 //! * `symbol_type` / `rel_type` values are [`model`]'s wire values, and the
-//!   extraction semantics are the Python visitor's for that language.
+//!   extraction semantics are the Python visitor's for that language —
+//!   except Kotlin and Swift, which keep the output model of the Inventory
+//!   engine's Python regex parsers but extract it from a tree-sitter tree
+//!   (see their module docs for what that changes).
 
 pub mod cpp;
 pub mod csharp;
@@ -24,10 +27,10 @@ pub mod kotlin;
 mod limits;
 pub mod model;
 pub mod python;
-mod regex_support;
 pub mod rust_lang;
 pub mod swift;
 pub mod typescript;
+mod visit_support;
 
 pub use limits::{LARGEST_PARSER_STACK, with_pool_failures};
 
@@ -70,8 +73,7 @@ pub fn parser_for(language: &str) -> Option<Box<dyn LanguageParser>> {
 
 /// The tree-sitter grammar this crate parses `language` with (`path` picks
 /// TSX over TypeScript), for a caller that needs only the syntax tree, such
-/// as a syntax-aware chunker. Kotlin and Swift are regex ports and have
-/// none.
+/// as a syntax-aware chunker.
 #[must_use]
 pub fn grammar_for(language: &str, path: &str) -> Option<tree_sitter::Language> {
     Some(match language {
@@ -80,8 +82,10 @@ pub fn grammar_for(language: &str, path: &str) -> Option<tree_sitter::Language> 
         "go" => tree_sitter_go::LANGUAGE.into(),
         "java" => tree_sitter_java::LANGUAGE.into(),
         "javascript" => tree_sitter_javascript::LANGUAGE.into(),
+        "kotlin" => tree_sitter_kotlin_ng::LANGUAGE.into(),
         "python" => tree_sitter_python::LANGUAGE.into(),
         "rust" => tree_sitter_rust::LANGUAGE.into(),
+        "swift" => tree_sitter_swift::LANGUAGE.into(),
         "typescript" if typescript::ast::is_tsx(path) => {
             tree_sitter_typescript::LANGUAGE_TSX.into()
         }
