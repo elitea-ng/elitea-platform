@@ -47,7 +47,7 @@ export const UpdateConversationRequest = zod
       .string()
       .nullish()
       .describe(
-        "The new title, trimmed; 1 to 255 characters after trimming, no control characters. `null` does not rename.\n",
+        "The new title, trimmed; 1 to 256 characters after trimming, no control characters. `null` does not rename.\n",
       ),
     is_private: zod
       .boolean()

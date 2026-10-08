@@ -70,7 +70,7 @@ func (s *suite) contract14(t *testing.T) {
 	if got := current("rename"); got["name"] != "renamed natively" {
 		t.Errorf("the delta after a rename carries name %#v", got["name"])
 	}
-	for _, body := range []map[string]any{{"name": ""}, {"name": "   "}, {"name": 7}, {"name": strings.Repeat("n", 256)}} {
+	for _, body := range []map[string]any{{"name": ""}, {"name": "   "}, {"name": 7}, {"name": strings.Repeat("n", 257)}} {
 		refused := need(t)(api.Do(ctx, http.MethodPut, item, body, nil))
 		if refused.Status != http.StatusBadRequest {
 			t.Errorf("rename with %v: %s, want 400", body, refused)

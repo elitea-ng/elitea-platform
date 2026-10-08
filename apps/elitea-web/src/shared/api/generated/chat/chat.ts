@@ -2933,7 +2933,7 @@ export const getUpdateConversationUrl = (
  * The route writes only the keys the body states. A body with `name`
  * alone renames the conversation and leaves its privacy, folder,
  * instructions and settings as they are. `name` is trimmed; a name that
- * is not a string, is blank after trimming, is longer than 255
+ * is not a string, is blank after trimming, is longer than 256
  * characters or contains a control character answers 400 and writes
  * nothing. `null` or an absent `name` does not rename.
  *

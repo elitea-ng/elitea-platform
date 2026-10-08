@@ -880,9 +880,11 @@ func (h *Handler) statesStoredName(r *http.Request, projectID, conversationID st
 // characters (runes). Pylon's ConversationUpdate capped it at 50
 // (elitea_core/utils/chat_constants.py); the create route here never did, so
 // conversations named from a first message are longer, and a rename of one
-// must still be able to send its name back. 255 bounds what a client can
-// write without refusing a name the product itself produces.
-const MaxConversationNameLength = 255
+// must still be able to send its name back. 256 bounds what a client can
+// write without refusing a name the product itself produces, and is the
+// limit agent-zefir's rename field (CONVERSATION_NAME_MAX) enforces, so the
+// app's longest accepted title is never refused here.
+const MaxConversationNameLength = 256
 
 // conversationNameFromBody reads the `name` a PUT states (client contract 1.4
 // updateConversation, and the web rail's rename). Absent or null means the
