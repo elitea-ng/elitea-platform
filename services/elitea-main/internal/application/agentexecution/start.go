@@ -15,6 +15,7 @@ import (
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	scope "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executionchildscope"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/google/uuid"
 )
 
@@ -412,6 +413,11 @@ func currentApplicationInput(
 	versionDetails = appendCurrentApplicationProjectContext(versionDetails, projectContextText)
 	versionDetails, err = freezeCurrentHTTPActionRequests(target.ApplicationID, target.ApplicationVersionID, versionDetails)
 	if err != nil {
+		// A pipeline over the shared size bounds keeps the unsupported-start
+		// identity and also carries the typed limit, so the route can name it.
+		if errors.Is(err, pipelinelimits.ErrInstructionsTooLarge) || errors.Is(err, pipelinelimits.ErrTooManyNodes) {
+			return nil, unsupportedStartBecause("pipeline exceeds a size bound", err)
+		}
 		return nil, ErrUnsupportedCurrentAgentStart
 	}
 	applicationFields := map[string]any{

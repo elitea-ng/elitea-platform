@@ -14,6 +14,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,13 +36,9 @@ type FrozenNode struct {
 	Transition     *string  `json:"transition"`
 }
 
-// Pipeline bounds mirror the Worker compiler (elitea-worker-rust
-// src/agents/graph/compiler.rs MAX_PIPELINE_YAML_BYTES / MAX_PIPELINE_NODES).
-const (
-	maxPipelineInstructionsBytes = 512 * 1024
-	maxPipelineNodes             = 128
-	maxHTTPInstructionsBytes     = 64 * 1024
-)
+// The pipeline bounds (512 KiB, 128 nodes) live in pipelinelimits, shared with
+// the save path; only the stricter HTTP-bearing cap is local.
+const maxHTTPInstructionsBytes = 64 * 1024
 
 // FreezeSnapshot emits one Main-owned wire image from saved YAML tokens.
 // Pipelines without a top-level `type: http` node return nil without passing
@@ -67,7 +64,7 @@ func FreezeSnapshot(applicationID, versionID int64, instructions string) (*Froze
 		return nil, err
 	}
 	nodes := root["nodes"]
-	if nodes == nil || nodes.Kind != yaml.SequenceNode || len(nodes.Content) > 128 {
+	if nodes == nil || nodes.Kind != yaml.SequenceNode || len(nodes.Content) > pipelinelimits.MaxNodes {
 		return nil, ErrInvalid
 	}
 	snapshot := &FrozenSnapshot{SchemaVersion: SnapshotSchema, ApplicationID: strconv.FormatInt(applicationID, 10), VersionID: strconv.FormatInt(versionID, 10), InstructionsDigest: Digest([]byte(instructions))}
@@ -141,8 +138,8 @@ func FreezeSnapshot(applicationID, versionID int64, instructions string) (*Froze
 // document the Worker could read as HTTP still reaches the strict grammar, and
 // it rejects only documents the Worker compiler rejects as well.
 func declaresHTTPNode(instructions string) (bool, error) {
-	if len(instructions) > maxPipelineInstructionsBytes {
-		return false, ErrInvalid
+	if len(instructions) > pipelinelimits.MaxInstructionsBytes {
+		return false, pipelinelimits.ErrInstructionsTooLarge
 	}
 	decoder := yaml.NewDecoder(strings.NewReader(instructions))
 	var document yaml.Node
@@ -160,8 +157,8 @@ func declaresHTTPNode(instructions string) (bool, error) {
 			continue
 		}
 		nodes := yamlAliased(root.Content[i+1])
-		if len(nodes.Content) > maxPipelineNodes {
-			return false, ErrInvalid
+		if len(nodes.Content) > pipelinelimits.MaxNodes {
+			return false, pipelinelimits.ErrTooManyNodes
 		}
 		for _, node := range nodes.Content {
 			if node = yamlAliased(node); node.Kind != yaml.MappingNode {

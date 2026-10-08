@@ -18,6 +18,8 @@ import (
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -592,6 +594,10 @@ func writeStartError(writer http.ResponseWriter, err error) {
 	case errors.Is(err, agentexecutionapp.ErrInvalidCurrentAgentStart),
 		errors.Is(err, agentexecutionapp.ErrInvalidAgentAdmission):
 		writeError(writer, http.StatusBadRequest, "Invalid agent execution request")
+	case errors.Is(err, pipelinelimits.ErrInstructionsTooLarge):
+		writePipelineLimit(writer, pipelinelimits.ErrInstructionsTooLarge)
+	case errors.Is(err, pipelinelimits.ErrTooManyNodes):
+		writePipelineLimit(writer, pipelinelimits.ErrTooManyNodes)
 	case errors.Is(err, agentexecutionapp.ErrUnsupportedCurrentAgentStart):
 		writeUnsupported(writer)
 	case errors.Is(err, agentexecutionapp.ErrCurrentAgentRegenerationStillFinalizing):
@@ -627,6 +633,18 @@ func writeStartError(writer http.ResponseWriter, err error) {
 	default:
 		writeError(writer, http.StatusInternalServerError, "Failed to start agent execution")
 	}
+}
+
+// writePipelineLimit answers the shared pipeline size refusal with its stable
+// code and readable message (never pipeline content), in the same 422 envelope
+// writeUnsupported uses.
+func writePipelineLimit(writer http.ResponseWriter, refusal error) {
+	var api *apierr.APIError
+	if !errors.As(refusal, &api) {
+		writeUnsupported(writer)
+		return
+	}
+	writeJSON(writer, http.StatusUnprocessableEntity, map[string]string{"error": api.Code, "message": api.Message})
 }
 
 func writeUnsupported(writer http.ResponseWriter) {

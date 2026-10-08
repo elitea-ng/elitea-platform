@@ -19,6 +19,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/applications"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -918,6 +919,20 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		if !found {
 			apierr.Write(w, apierr.BadRequest("version id mismatch: not found for this application"))
 			return
+		}
+
+		// A pipeline definition over the save-time bounds is refused before
+		// any write, so a refused request changes nothing. The repository
+		// applies the same check to the version write itself.
+		if instructions, ok := versionData["instructions"].(string); ok {
+			for _, ver := range versions {
+				if ver.ID == versionID && ver.AgentType == "pipeline" {
+					if err := pipelinelimits.Check(instructions); err != nil {
+						apierr.Write(w, err)
+						return
+					}
+				}
+			}
 		}
 
 		// Reject renaming protected versions (base, latest)
