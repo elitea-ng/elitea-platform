@@ -3,8 +3,6 @@
 //! The binding contract is `docs/split-out-aggregate-contract.md`. Every walk
 //! here is iterative, so adversarial nesting never grows the call stack, and no
 //! error or log text carries data values, pointer text or state values.
-// Consumed by split_out.rs and aggregate.rs (Track A2/A3).
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -112,6 +110,7 @@ impl Pointer {
         self.tokens.first().map_or("", String::as_str)
     }
 
+    #[cfg(test)]
     pub(super) fn token_count(&self) -> usize {
         self.tokens.len()
     }
@@ -451,24 +450,23 @@ impl RetainSpec {
 
 // ---------------------------------------------------------------- envelope
 
-/// A strict `{parent_index, position, data}` row emitted by `split_out`.
+/// The indices of a strict `{parent_index, position, data}` row emitted by
+/// `split_out`. `parse_envelope` also proves that `data` is an object.
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Envelope<'a> {
+pub(super) struct Envelope {
     pub(super) parent_index: u64,
     pub(super) position: u64,
-    pub(super) data: &'a Map<String, Value>,
 }
 
-pub(super) fn parse_envelope(row: &Value) -> Option<Envelope<'_>> {
+pub(super) fn parse_envelope(row: &Value) -> Option<Envelope> {
     let object = row.as_object()?;
-    if object.len() != 3 {
+    if object.len() != 3 || !object.get("data")?.is_object() {
         return None;
     }
     let index = |key: &str| exact_u64(object.get(key)?.as_number()?).ok();
     Some(Envelope {
         parent_index: index("parent_index")?,
         position: index("position")?,
-        data: object.get("data")?.as_object()?,
     })
 }
 
@@ -651,6 +649,7 @@ impl CanonicalKey {
     }
 }
 
+#[cfg(test)]
 pub(super) fn canonical_key(value: &Value, max_depth: usize) -> Result<CanonicalKey, ShapingCode> {
     let mut key = CanonicalKey::default();
     key.push(value, max_depth)?;
@@ -813,10 +812,12 @@ impl Budget {
         })
     }
 
+    #[cfg(test)]
     pub(super) const fn bytes_used(&self) -> usize {
         self.bytes
     }
 
+    #[cfg(test)]
     pub(super) const fn values_used(&self) -> usize {
         self.values
     }
@@ -850,6 +851,18 @@ impl Budget {
     /// Returns the new value total. Iterative, stops at the first violation.
     fn count_values(&self, root: &Value, root_depth: usize) -> Result<usize, ShapingLimitKind> {
         let mut total = self.values;
+        if !root.is_array() && !root.is_object() {
+            // Scalars are the common collected value; skip the walk allocation.
+            if root_depth > self.limits.depth {
+                return Err(ShapingLimitKind::Depth);
+            }
+            total += 1;
+            return if total > self.limits.values {
+                Err(ShapingLimitKind::Values)
+            } else {
+                Ok(total)
+            };
+        }
         let mut stack = vec![(root, root_depth)];
         while let Some((value, depth)) = stack.pop() {
             if depth > self.limits.depth {
@@ -973,6 +986,7 @@ impl ShapingError {
         self
     }
 
+    #[cfg(test)]
     pub(super) const fn code(&self) -> ShapingCode {
         self.code
     }

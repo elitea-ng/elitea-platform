@@ -27,6 +27,7 @@ use serde::de::{Deserializer, SeqAccess, Visitor};
 use serde_json::json;
 use thiserror::Error;
 
+use super::aggregate::{AggregateNode, AggregateNodeDefinition};
 use super::application::{
     APPLICATION_MESSAGES_STATE_KEY, APPLICATION_RESULT_STATE_KEY, APPLICATION_TASK_STATE_KEY,
     ApplicationNode, ApplicationNodeDefinition, PipelineApplicationResolver,
@@ -527,6 +528,7 @@ enum PipelineNodeDefinition {
     Router(RouterNodeDefinition),
     StateModifier(StateModifierNodeDefinition),
     SplitOut(SplitOutNodeDefinition),
+    Aggregate(AggregateNodeDefinition),
 }
 
 impl PipelineNodeDefinition {
@@ -544,6 +546,7 @@ impl PipelineNodeDefinition {
             Self::Router(node) => node.id(),
             Self::StateModifier(node) => node.id(),
             Self::SplitOut(node) => node.id(),
+            Self::Aggregate(node) => node.id(),
         }
     }
 
@@ -559,6 +562,7 @@ impl PipelineNodeDefinition {
             Self::Router(node) => node.input_keys(),
             Self::StateModifier(node) => node.input_keys(),
             Self::SplitOut(node) => node.input_keys(),
+            Self::Aggregate(node) => node.input_keys(),
         }
     }
 
@@ -573,6 +577,7 @@ impl PipelineNodeDefinition {
             Self::Llm(node) => node.output_keys(),
             Self::StateModifier(node) => node.output_keys(),
             Self::SplitOut(node) => node.output_keys(),
+            Self::Aggregate(node) => node.output_keys(),
         }
     }
 
@@ -588,7 +593,8 @@ impl PipelineNodeDefinition {
             | Self::Llm(_)
             | Self::Printer(_)
             | Self::Router(_)
-            | Self::SplitOut(_) => &[],
+            | Self::SplitOut(_)
+            | Self::Aggregate(_) => &[],
             Self::StateModifier(node) => node.variables_to_clean(),
         }
     }
@@ -606,7 +612,8 @@ impl PipelineNodeDefinition {
             | Self::Printer(_)
             | Self::Router(_)
             | Self::StateModifier(_)
-            | Self::SplitOut(_) => None,
+            | Self::SplitOut(_)
+            | Self::Aggregate(_) => None,
         }
     }
 
@@ -624,6 +631,7 @@ impl PipelineNodeDefinition {
             Self::Router(node) => node.route_targets().collect(),
             Self::StateModifier(node) => node.transition().into_iter().collect(),
             Self::SplitOut(node) => node.transition().into_iter().collect(),
+            Self::Aggregate(node) => node.transition().into_iter().collect(),
         }
     }
 
@@ -641,6 +649,7 @@ impl PipelineNodeDefinition {
             Self::Router(node) => node.config_digest(),
             Self::StateModifier(node) => node.config_digest(),
             Self::SplitOut(node) => node.config_digest(),
+            Self::Aggregate(node) => node.config_digest(),
         }
     }
 }
@@ -797,6 +806,7 @@ impl PipelineDefinition {
                             | PipelineNodeDefinition::Code(_)
                             | PipelineNodeDefinition::StateModifier(_)
                             | PipelineNodeDefinition::SplitOut(_)
+                            | PipelineNodeDefinition::Aggregate(_)
                             | PipelineNodeDefinition::Decision(_)
                             | PipelineNodeDefinition::Router(_)
                             | PipelineNodeDefinition::Parallel(_)
@@ -923,7 +933,8 @@ impl PipelineDefinition {
                 | PipelineNodeDefinition::Router(_)
                 | PipelineNodeDefinition::Code(_)
                 | PipelineNodeDefinition::StateModifier(_)
-                | PipelineNodeDefinition::SplitOut(_) => {}
+                | PipelineNodeDefinition::SplitOut(_)
+                | PipelineNodeDefinition::Aggregate(_) => {}
             }
         }
     }
@@ -942,7 +953,8 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Router(_)
             | PipelineNodeDefinition::Code(_)
             | PipelineNodeDefinition::StateModifier(_)
-            | PipelineNodeDefinition::SplitOut(_) => &[],
+            | PipelineNodeDefinition::SplitOut(_)
+            | PipelineNodeDefinition::Aggregate(_) => &[],
         })
     }
 
@@ -960,7 +972,8 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Router(_)
             | PipelineNodeDefinition::Code(_)
             | PipelineNodeDefinition::StateModifier(_)
-            | PipelineNodeDefinition::SplitOut(_) => None,
+            | PipelineNodeDefinition::SplitOut(_)
+            | PipelineNodeDefinition::Aggregate(_) => None,
         })
     }
 
@@ -1007,7 +1020,8 @@ impl PipelineDefinition {
             | PipelineNodeDefinition::Router(_)
             | PipelineNodeDefinition::Code(_)
             | PipelineNodeDefinition::StateModifier(_)
-            | PipelineNodeDefinition::SplitOut(_) => None,
+            | PipelineNodeDefinition::SplitOut(_)
+            | PipelineNodeDefinition::Aggregate(_) => None,
         })
     }
 
@@ -1393,21 +1407,15 @@ impl PipelineDefinition {
             }
             PipelineNodeDefinition::Router(node) => builder.node(RouterNode::new(node.clone())),
             PipelineNodeDefinition::StateModifier(node) => {
-                let transition = node.transition().map(ToOwned::to_owned);
-                let node_id = node.id().to_owned();
-                let mut next = builder.node(StateModifierNode::new(node.clone()));
-                if let Some(transition) = transition {
-                    let target = if transition == "END" {
-                        END
-                    } else {
-                        transition.as_str()
-                    };
-                    next = next.edge(&node_id, target);
-                }
-                next
+                let next = builder.node(StateModifierNode::new(node.clone()));
+                bind_transition(next, node.id(), node.transition())
             }
             PipelineNodeDefinition::SplitOut(node) => {
                 let next = builder.node(SplitOutNode::new(node.clone()));
+                bind_transition(next, node.id(), node.transition())
+            }
+            PipelineNodeDefinition::Aggregate(node) => {
+                let next = builder.node(AggregateNode::new(node.clone()));
                 bind_transition(next, node.id(), node.transition())
             }
         })
@@ -1589,6 +1597,7 @@ impl PipelineDefinition {
                     (node.transition(), node.output_keys())
                 }
                 PipelineNodeDefinition::SplitOut(node) => (node.transition(), node.output_keys()),
+                PipelineNodeDefinition::Aggregate(node) => (node.transition(), node.output_keys()),
                 PipelineNodeDefinition::Decision(_)
                 | PipelineNodeDefinition::Hitl(_)
                 | PipelineNodeDefinition::Printer(_)
@@ -2057,12 +2066,16 @@ fn parse_pipeline_node_admitting(
         "split_out" if shaping_admitted => SplitOutNodeDefinition::from_yaml(&encoded)
             .map(PipelineNodeDefinition::SplitOut)
             .map_err(|_| PipelineConfigurationError::Invalid("a SplitOut node is invalid")),
+        "aggregate" if shaping_admitted => AggregateNodeDefinition::from_yaml(&encoded)
+            .map(PipelineNodeDefinition::Aggregate)
+            .map_err(|_| PipelineConfigurationError::Invalid("an Aggregate node is invalid")),
         _ => Err(PipelineConfigurationError::Unsupported(
             "the pipeline contains a node type that is not enabled",
         )),
     }
 }
 
+#[allow(clippy::too_many_lines)] // One exhaustive arm per node family keeps each rule visible.
 fn validate_node_state(
     node: &PipelineNodeDefinition,
     state: &BTreeMap<String, String>,
@@ -2156,7 +2169,8 @@ fn validate_node_state(
         | PipelineNodeDefinition::Router(_)
         | PipelineNodeDefinition::Code(_)
         | PipelineNodeDefinition::StateModifier(_)
-        | PipelineNodeDefinition::SplitOut(_) => {}
+        | PipelineNodeDefinition::SplitOut(_)
+        | PipelineNodeDefinition::Aggregate(_) => {}
     }
     if node
         .edit_state_key()
@@ -2176,6 +2190,7 @@ fn validate_shaping_channels(
 ) -> Result<(), PipelineConfigurationError> {
     let source_kind = match node {
         PipelineNodeDefinition::SplitOut(node) => node.source_state_type(),
+        PipelineNodeDefinition::Aggregate(_) => "list",
         _ => return Ok(()),
     };
     let user_key = |key: &str| !builtin_state_key(key) && !reserved_user_state_key(key);
@@ -2400,6 +2415,7 @@ fn definition_digest(
             PipelineNodeDefinition::Router(_) => b"router".as_slice(),
             PipelineNodeDefinition::StateModifier(_) => b"state_modifier".as_slice(),
             PipelineNodeDefinition::SplitOut(_) => b"split_out".as_slice(),
+            PipelineNodeDefinition::Aggregate(_) => b"aggregate".as_slice(),
         };
         digest_field(&mut context, kind);
         digest_field(&mut context, &node.config_digest());

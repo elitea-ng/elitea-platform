@@ -4,8 +4,6 @@
 //! name only config field paths and input row indices. A limit hit while
 //! charging a final output row carries no item, because output rows are not
 //! input rows.
-// Wired into compiler.rs behind the graph-extensions gate by the integrating change.
-#![cfg_attr(not(test), allow(dead_code))]
 
 use std::collections::hash_map::Entry as HashEntry;
 use std::collections::{BTreeSet, HashMap};
@@ -130,12 +128,14 @@ struct RawField {
     null: Option<NullPolicy>,
 }
 
+#[derive(Clone)]
 struct GroupBy {
     pointer: Pointer,
     output: String,
     missing: MissingPolicy,
 }
 
+#[derive(Clone)]
 struct Operation {
     kind: OperationKind,
     output: String,
@@ -148,6 +148,7 @@ struct Operation {
 }
 
 /// Strict, authority-free YAML definition of one `aggregate` node.
+#[derive(Clone)]
 pub(super) struct AggregateNodeDefinition {
     id: String,
     source: String,

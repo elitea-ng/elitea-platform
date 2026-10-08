@@ -358,7 +358,6 @@ fn envelopes_are_strict() {
     let parsed = parse_envelope(&envelope).expect("envelope");
     assert_eq!(parsed.parent_index, 2);
     assert_eq!(parsed.position, 10);
-    assert_eq!(parsed.data, &object(json!({"x": 1})));
     assert!(parse_envelope(&value(r#"{"parent_index":-0,"position":0,"data":{}}"#)).is_some());
     for refused in [
         r#"{"parent_index":0,"position":0,"data":{},"extra":1}"#,
