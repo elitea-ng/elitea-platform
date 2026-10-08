@@ -21,6 +21,9 @@ mod code_runtime;
 pub(crate) mod code_trace;
 mod code_workspace;
 pub(crate) use code_remote::CodeRuntimeFactory;
+mod aggregate;
+#[cfg(test)]
+mod aggregate_tests;
 mod code_state;
 #[cfg(test)]
 mod code_state_tests;
