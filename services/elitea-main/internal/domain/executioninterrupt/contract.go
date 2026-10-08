@@ -5,6 +5,8 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/noderecovery"
 )
 
 // Typed failures. Callers branch with errors.Is; none carries a value, display
@@ -89,57 +91,15 @@ const (
 // Open reports whether the card counts toward MaxOpenInterrupts.
 func (s State) Open() bool { return s == StatePending || s == StateDecided }
 
-// ValidDigest matches the contract's lowercase 64-hex, never all zeros.
-func ValidDigest(value string) bool {
-	if len(value) != 64 {
-		return false
-	}
-	zero := true
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-		zero = zero && c == '0'
-	}
-	return !zero
-}
+// ValidDigest matches the contract's lowercase 64-hex, never all zeros
+// (the node recovery id grammar).
+func ValidDigest(value string) bool { return noderecovery.ValidID(value) }
 
 // ValidExecutionID matches Main currentRuntimeID: 32 lowercase hex.
-func ValidExecutionID(value string) bool {
-	if len(value) != 32 {
-		return false
-	}
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
+func ValidExecutionID(value string) bool { return noderecovery.ValidExecutionID(value) }
 
 // ValidResponseMessageID matches a nonzero lowercase 36-character UUID.
-func ValidResponseMessageID(value string) bool {
-	if len(value) != 36 {
-		return false
-	}
-	zero := true
-	for i := 0; i < len(value); i++ {
-		c := value[i]
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if c != '-' {
-				return false
-			}
-			continue
-		}
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-		zero = zero && c == '0'
-	}
-	return !zero
-}
+func ValidResponseMessageID(value string) bool { return noderecovery.ValidResponseMessageID(value) }
 
 func safeText(value string, maxBytes int) bool {
 	return value != "" && len(value) <= maxBytes && utf8.ValidString(value) &&

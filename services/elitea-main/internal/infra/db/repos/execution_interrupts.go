@@ -61,23 +61,38 @@ func checkInterruptPermission(ctx context.Context, tx sqlExecutor, projectID, ac
 
 var interruptWriteTx = pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite}
 
-// lockOwnedResponse locks the response row (when lock is set), then, in a new
-// statement, checks that the actor may decide its cards: the conversation's
-// author or the question's author, and still a user participant of the
-// conversation (the ResolveCurrentContinuation rule). A missing response and
-// a foreign one are indistinguishable (ErrNotAllowed).
+// lockOwnedResponse checks that the actor may decide the response's cards:
+// the conversation's author or the question's author, and still a user
+// participant of the conversation (the ResolveCurrentContinuation rule). A
+// missing response and a foreign one are indistinguishable (ErrNotAllowed).
+//
+// With lock set, the first statement locks the row only when the predicate
+// holds, so a caller who may not decide never takes the lock. A READ COMMITTED
+// statement that waited for the lock does not re-read the conversation and
+// participant rows it joined, so the predicate is evaluated again in a new
+// statement while the lock is held.
 func lockOwnedResponse(ctx context.Context, tx sqlExecutor, selector domain.Selector, lock bool) (int64, error) {
+	query := ownedResponseSQL
 	if lock {
-		var locked int
-		err := tx.QueryRow(ctx, `SELECT 1 FROM chat_message_group WHERE uuid = $1::uuid FOR UPDATE`, selector.ResponseMessageID).Scan(&locked)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return 0, domain.ErrNotAllowed
-		}
-		if err != nil {
-			return 0, err
-		}
+		query += "\nFOR UPDATE OF response"
 	}
-	const query = `
+	conversationID, err := ownedResponse(ctx, tx, query, selector)
+	if err != nil || !lock {
+		return conversationID, err
+	}
+	return ownedResponse(ctx, tx, ownedResponseSQL, selector)
+}
+
+func ownedResponse(ctx context.Context, tx sqlExecutor, query string, selector domain.Selector) (int64, error) {
+	var conversationID int64
+	err := tx.QueryRow(ctx, query, selector.ResponseMessageID, selector.ActorUserID).Scan(&conversationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, domain.ErrNotAllowed
+	}
+	return conversationID, err
+}
+
+const ownedResponseSQL = `
 SELECT conversation.id
 FROM chat_message_group response
 JOIN chat_conversations conversation ON conversation.id = response.conversation_id
@@ -92,13 +107,6 @@ WHERE response.uuid = $1::uuid
    JOIN chat_participants participant ON participant.id = mapping.participant_id AND participant.entity_name = 'user'
    WHERE mapping.conversation_id = conversation.id
     AND participant.entity_meta->>'id' ~ '^[1-9][0-9]{0,17}$' AND (participant.entity_meta->>'id')::bigint = $2)`
-	var conversationID int64
-	err := tx.QueryRow(ctx, query, selector.ResponseMessageID, selector.ActorUserID).Scan(&conversationID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, domain.ErrNotAllowed
-	}
-	return conversationID, err
-}
 
 // Raise records one card idempotently (contract §5). A byte-identical replay
 // of the card and frontier is a no-op; different bytes under the same key, a
@@ -508,7 +516,11 @@ ORDER BY card.decided_at, card.interrupt_key`, scope.responseID, scope.projectID
 				return domain.ErrLedgerFault
 			}
 			entry.Action, entry.Value, entry.CredentialRef = decision.Action, decision.Value, decision.CredentialRef
-			entry.DecisionSHA256 = domain.DecisionSHA256(entry.InterruptKey, entry.RequestID, entry.Revision, entry.Action, entry.Value, entry.CredentialRef)
+			digest, err := domain.DecisionSHA256(entry.InterruptKey, entry.RequestID, entry.Revision, entry.Action, entry.Value, entry.CredentialRef)
+			if err != nil {
+				return domain.ErrLedgerFault
+			}
+			entry.DecisionSHA256 = digest
 			if size, err := entry.CanonicalSize(); err != nil || size > domain.MaxFetchEntryBytes {
 				return domain.ErrLedgerFault
 			}
@@ -574,7 +586,11 @@ FOR UPDATE`, scope.responseID, ack.InterruptKey, scope.projectID).Scan(&row.stat
 		if err != nil {
 			return domain.ErrLedgerFault
 		}
-		if domain.DecisionSHA256(ack.InterruptKey, ack.RequestID, row.revision, decision.Action, decision.Value, decision.CredentialRef) != ack.DecisionSHA256 {
+		digest, err := domain.DecisionSHA256(ack.InterruptKey, ack.RequestID, row.revision, decision.Action, decision.Value, decision.CredentialRef)
+		if err != nil {
+			return domain.ErrLedgerFault
+		}
+		if digest != ack.DecisionSHA256 {
 			return domain.ErrAckConflict
 		}
 		next, transition := domain.StateConsumed, "CONSUMED"

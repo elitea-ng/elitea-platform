@@ -138,8 +138,8 @@ func TestDecisionSHA256MatchesFetchFixture(t *testing.T) {
 		t.Fatalf("fixture decisions = %d", len(fetch.Decisions))
 	}
 	for _, entry := range fetch.Decisions {
-		got := DecisionSHA256(entry.InterruptKey, entry.RequestID, entry.Revision, entry.Action, entry.Value, entry.CredentialRef)
-		if got != entry.DecisionSHA256 {
+		got, err := DecisionSHA256(entry.InterruptKey, entry.RequestID, entry.Revision, entry.Action, entry.Value, entry.CredentialRef)
+		if err != nil || got != entry.DecisionSHA256 {
 			t.Errorf("%s: digest %s, fixture %s", entry.InterruptKey, got, entry.DecisionSHA256)
 		}
 	}
@@ -284,6 +284,18 @@ func TestRaiseCardAtLimitAndLimitPlusOne(t *testing.T) {
 	}
 	if _, _, err := ParseCard(sized(MaxCardBytes - base + 1)); !errors.Is(err, ErrInvalidCard) {
 		t.Fatalf("card at %d bytes: err=%v", MaxCardBytes+1, err)
+	}
+
+	// The same card with every message character escaped as \uXXXX is valid
+	// although its raw form is far over the canonical bound.
+	args := MaxCardBytes - base + 1
+	escaped := bytes.Replace(atLimit, []byte(strings.Repeat("€", 8192)), []byte(strings.Repeat(`\u20ac`, 8192)), 1)
+	escaped = bytes.Replace(escaped, []byte(`"`+strings.Repeat("a", args)+`"`), []byte(`"`+strings.Repeat(`\u0061`, args)+`"`), 1)
+	if len(escaped) <= 2*MaxCardBytes {
+		t.Fatalf("escaped fixture is only %d bytes", len(escaped))
+	}
+	if _, canonical, err := ParseCard(escaped); err != nil || !bytes.Equal(canonical, atLimit) {
+		t.Fatalf("escaped card of %d raw bytes: err=%v", len(escaped), err)
 	}
 
 	id := func(n int) []byte {

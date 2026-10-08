@@ -46,7 +46,7 @@ func ParseDecisionRequest(raw []byte) (Decision, []byte, error) {
 // DecisionSHA256 is the contract §7 digest that binds a fetched decision to
 // its ACK: SHA-256 over the canonical {action, credential_ref, interrupt_key,
 // request_id, revision, value}, credential_ref null when absent.
-func DecisionSHA256(interruptKey, requestID string, revision int64, action Action, value string, credentialRef *string) string {
+func DecisionSHA256(interruptKey, requestID string, revision int64, action Action, value string, credentialRef *string) (string, error) {
 	var ref any
 	if credentialRef != nil {
 		ref = *credentialRef
@@ -60,12 +60,10 @@ func DecisionSHA256(interruptKey, requestID string, revision int64, action Actio
 		"value":          value,
 	})
 	if err != nil {
-		// Unreachable: every member above is a supported type. An empty
-		// digest never matches an ACK, so the failure stays closed.
-		return ""
+		return "", err
 	}
 	sum := sha256.Sum256(encoded)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // FetchedDecision is one entry of fanout-interrupt-fetch.v1. It never carries

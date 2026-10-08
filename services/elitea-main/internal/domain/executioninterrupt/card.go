@@ -6,8 +6,10 @@ import (
 )
 
 // maxRawCardBytes bounds parse work on a non-canonical raise before the
-// canonical card is measured against MaxCardBytes.
-const maxRawCardBytes = 2 * MaxCardBytes
+// canonical card is measured against MaxCardBytes. A producer may escape every
+// character as \uXXXX (6 raw bytes for one canonical ASCII byte), so a raw card
+// up to 6x the canonical bound can still be a valid card.
+const maxRawCardBytes = 6 * MaxCardBytes
 
 // Card holds the fields of a raised card that the ledger indexes. The full
 // card is kept only as its canonical bytes; display text is never decoded into

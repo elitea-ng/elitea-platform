@@ -167,6 +167,16 @@ func TestConfigExecutionInterruptsAPIIsExplicitAndRequiresAgentDispatch(t *testi
 		t.Fatal("execution interrupts API unexpectedly enabled by default")
 	}
 
+	// With the runtime disabled the flag is refused, not silently ignored.
+	for _, value := range []string{"true", "yes"} {
+		if _, err := ConfigFromEnv(mapLookup(map[string]string{"ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED": value})); err == nil {
+			t.Fatalf("flag %q with the runtime disabled was accepted", value)
+		}
+	}
+	if _, err := ConfigFromEnv(mapLookup(map[string]string{"ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED": "false"})); err != nil {
+		t.Fatalf("explicit false with the runtime disabled: %v", err)
+	}
+
 	withDispatch := func() map[string]string {
 		environment := validEnvironment()
 		environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"

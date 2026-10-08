@@ -125,6 +125,9 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 				return Config{}, errors.New("runtime SSE stream limits require explicit enablement")
 			}
 		}
+		if value, _ := lookup("ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED"); value != "" && value != "false" {
+			return Config{}, errors.New("ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED requires ELITEA_RUNTIME_ENABLED=true")
+		}
 		return Config{}, nil
 	case "true":
 	default:
