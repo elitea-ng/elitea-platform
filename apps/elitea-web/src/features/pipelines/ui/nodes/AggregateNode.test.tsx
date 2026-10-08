@@ -71,6 +71,8 @@ describe('AggregateNode authored YAML', () => {
     expect(currentExtensionDocument().nodes?.find((node) => node.id === 'extension')?.['regroup']).toBe('parent');
     expect(screen.getByText(/Parent rebuilds each split parent row/u)).toBeTruthy();
     expect(screen.getByText(/Empty input gives one row/u)).toBeTruthy();
+    expect(screen.getByText(/Each result row holds the group fields and the operation results side by side/u)).toBeTruthy();
+    expect(screen.queryByText(/keeps group keys and operation values separate/u)).toBeNull();
     await user.selectOptions(screen.getByLabelText('Operation 1'), 'collect_rows');
     const retain = screen.getByLabelText('Retain fields');
     expect([...retain.querySelectorAll('option')].map((option) => option.value)).toEqual(['all', 'only', 'except']);

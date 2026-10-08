@@ -15,7 +15,7 @@ export function AggregateSettings(props: ExtensionSettingsProps): ReactNode {
   const source = extensionText(node['source']);
   const output = extensionStrings(node['output'])[0] ?? '';
   return <Stack spacing={2}>
-    <Typography variant="bodySmall">{t('pipelines.graphExtensions.aggregateDescription', 'Group list rows and calculate explicit results. Each result keeps group keys and operation values separate.')}</Typography>
+    <Typography variant="bodySmall">{t('pipelines.graphExtensions.aggregateFlatDescription', 'Group list rows and calculate explicit results. Each result row holds the group fields and the operation results side by side.')}</Typography>
     <StateChannelSelect label={t('pipelines.graphExtensions.source', 'Source state variable')} value={source} types={['list']}
       exclude={output} disabled={disabled} change={(value) => change('source', value)} />
     <ExtensionChoice label={t('pipelines.graphExtensions.layout', 'Input row layout')} value={extensionText(node['layout']) || 'plain'}
