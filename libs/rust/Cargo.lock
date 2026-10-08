@@ -1334,6 +1334,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "elitea-engine-core",
+ "elitea-llm-wire",
  "rcgen",
  "reqwest",
  "serde_json",

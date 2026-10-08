@@ -19,8 +19,12 @@ use super::sse::{SseDecoder, SseEvent, SseLimits};
 use super::transport::{BodyError, Call, Transport, read_limited};
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::stream::StopSignal;
+use elitea_llm_wire::openai::{DONE, TypeCheck, UsageProfile, parse_usage, reasoning_text};
+use elitea_llm_wire::route::CHAT_COMPLETIONS_PATH;
+use elitea_llm_wire::tool_calls::{
+    ToolCallAssembler, ToolCallLimits, ToolCallProfile, parse_lenient_delta,
+};
 use serde_json::{Map, Value, json};
-use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
 
 /// A blocking completion's body cap: a 64k-token answer is well under
@@ -32,6 +36,15 @@ const MAX_TOOL_CALLS: usize = 128;
 
 /// One tool call's assembled arguments.
 const MAX_TOOL_ARGUMENT_BYTES: usize = 1024 * 1024;
+
+/// The lenient assembly's bounds. Names and ids are not bounded there: the
+/// request bounded the tool names, and an id is only echoed back.
+const TOOL_CALL_LIMITS: ToolCallLimits = ToolCallLimits {
+    max_calls: MAX_TOOL_CALLS,
+    max_argument_bytes: MAX_TOOL_ARGUMENT_BYTES,
+    max_name_bytes: usize::MAX,
+    max_id_bytes: usize::MAX,
+};
 
 /// The sampling policy of a call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,7 +276,7 @@ fn uses_developer_role(model: &str) -> bool {
 impl ChatClient {
     #[must_use]
     pub fn new(transport: Transport, settings: ModelSettings) -> Self {
-        let url = format!("{}/chat/completions", settings.api_base);
+        let url = format!("{}{CHAT_COMPLETIONS_PATH}", settings.api_base);
         Self {
             transport,
             settings,
@@ -530,22 +543,18 @@ fn encode(body: &Value) -> Result<Vec<u8>, EngineError> {
         .map_err(|_| EngineError::new(ErrorType::Runtime, "the chat request cannot be encoded"))
 }
 
+/// The `usage` of a body or a chunk, read leniently: a count that is
+/// absent or not a whole number is 0.
 fn usage_of(value: &Value) -> Option<Usage> {
-    let usage = value.get("usage").filter(|u| u.is_object())?;
-    let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
-    let detail = |group: &str, name: &str| {
-        usage
-            .get(group)
-            .and_then(|details| details.get(name))
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-    };
+    let usage = parse_usage(value.get("usage"), UsageProfile::Lenient)
+        .ok()
+        .flatten()?;
     Some(Usage {
-        prompt_tokens: field("prompt_tokens"),
-        completion_tokens: field("completion_tokens"),
-        total_tokens: field("total_tokens"),
-        reasoning_tokens: detail("completion_tokens_details", "reasoning_tokens"),
-        cached_tokens: detail("prompt_tokens_details", "cached_tokens"),
+        prompt_tokens: usage.prompt_tokens,
+        completion_tokens: usage.completion_tokens,
+        total_tokens: usage.total_tokens,
+        reasoning_tokens: usage.reasoning_tokens.unwrap_or(0),
+        cached_tokens: usage.cached_tokens.unwrap_or(0),
     })
 }
 
@@ -553,14 +562,7 @@ fn usage_of(value: &Value) -> Option<Usage> {
 /// `DeepSeek`, the gateway) or `reasoning` (newer vLLM). Both present and
 /// different is refused, as the worker refuses it.
 fn reasoning_of(part: &Value) -> Result<Option<&str>, String> {
-    let text = |key: &str| part.get(key).and_then(Value::as_str);
-    match (text("reasoning_content"), text("reasoning")) {
-        (Some(a), Some(b)) if a != b => {
-            Err("the answer carries two different reasoning texts".to_owned())
-        }
-        (Some(a), _) => Ok(Some(a)),
-        (None, b) => Ok(b),
-    }
+    reasoning_text(part, TypeCheck::Lenient).map_err(|error| error.to_string())
 }
 
 /// A Qwen3-style model served without a reasoning parser puts its whole
@@ -661,36 +663,29 @@ fn parse_completion(value: &Value) -> Result<ChatResponse, String> {
     })
 }
 
-#[derive(Debug, Default)]
-struct PartialCall {
-    id: String,
-    name: String,
-    /// The name is whole: a fragment carried `arguments` with it or after
-    /// it. A different name after that is another call, never a suffix.
-    name_complete: bool,
-    arguments: String,
-}
-
-/// Where a streamed call is kept: its `index`, then the generation of that
-/// index (a server that reuses an index for a new call, with a new id or a
-/// new name, starts the next generation).
-type CallKey = (u64, u32);
-
 /// Builds one answer from the stream's deltas.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct Assembler {
     content: String,
     reasoning: String,
-    /// The calls, ordered by index, then by generation. An index the server
-    /// skipped leaves no slot.
-    calls: BTreeMap<CallKey, PartialCall>,
-    /// The current generation of each index.
-    generations: HashMap<u64, u32>,
-    /// The call the last fragment went to, for a server without `index`.
-    last: Option<CallKey>,
+    /// The tool calls, assembled leniently (`elitea_llm_wire::tool_calls`).
+    tools: ToolCallAssembler,
     finish_reason: Option<String>,
     usage: Option<Usage>,
     done: bool,
+}
+
+impl Default for Assembler {
+    fn default() -> Self {
+        Self {
+            content: String::new(),
+            reasoning: String::new(),
+            tools: ToolCallAssembler::new(ToolCallProfile::Lenient, TOOL_CALL_LIMITS),
+            finish_reason: None,
+            usage: None,
+            done: false,
+        }
+    }
 }
 
 impl Assembler {
@@ -700,7 +695,7 @@ impl Assembler {
         on_text: &mut (dyn FnMut(&str) + Send),
     ) -> Result<(), String> {
         let data = event.data.trim();
-        if data == "[DONE]" {
+        if data == DONE {
             self.done = true;
             return Ok(());
         }
@@ -753,130 +748,24 @@ impl Assembler {
     }
 
     fn tool_delta(&mut self, delta: &Value) -> Result<(), String> {
-        let id = delta.get("id").and_then(Value::as_str).unwrap_or("");
-        let function = delta.get("function");
-        let name = function
-            .and_then(|f| f.get("name"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let key = self.call_key(delta.get("index"), id, name)?;
-        self.last = Some(key);
-        let call = self.calls.entry(key).or_default();
-        if !id.is_empty() && call.id.is_empty() {
-            id.clone_into(&mut call.id);
-        }
-        let Some(function) = function else {
-            return Ok(());
-        };
-        // OpenAI sends the name once; a server that repeats it in every
-        // fragment is matched by the equality test. A name split over
-        // fragments is joined only until the arguments start.
-        if !name.is_empty() && call.name != name {
-            call.name.push_str(name);
-        }
-        match function.get("arguments") {
-            None | Some(Value::Null) => {}
-            Some(Value::String(fragment)) => {
-                call.name_complete |= !call.name.is_empty();
-                call.arguments.push_str(fragment);
-            }
-            Some(other) => {
-                call.name_complete |= !call.name.is_empty();
-                call.arguments.push_str(&other.to_string());
-            }
-        }
-        if call.arguments.len() > MAX_TOOL_ARGUMENT_BYTES {
-            return Err("a tool call's arguments exceed their size cap".to_owned());
-        }
-        Ok(())
-    }
-
-    /// The call a fragment belongs to, created when it is new.
-    ///
-    /// `index` names the call. On an index already in use, a fragment with
-    /// a different non-empty id, or a different name once the call's name
-    /// is complete, starts a new call. A server that omits `index` sends
-    /// each call whole: a new id or a new complete name starts a new call.
-    fn call_key(&mut self, index: Option<&Value>, id: &str, name: &str) -> Result<CallKey, String> {
-        let starts_new = |call: &PartialCall| {
-            let new_id = !id.is_empty() && !call.id.is_empty() && call.id != id;
-            let new_name = !name.is_empty() && call.name_complete && call.name != name;
-            new_id || new_name
-        };
-        let key = match index.filter(|v| !v.is_null()) {
-            Some(index) => {
-                let index = index
-                    .as_u64()
-                    .ok_or("a tool call index is not a whole number")?;
-                match self.generations.get(&index).copied() {
-                    None => (index, 0),
-                    Some(generation) => {
-                        let current = (index, generation);
-                        match self.calls.get(&current) {
-                            Some(call) if starts_new(call) => {
-                                same_id_renamed(call, id)?;
-                                (index, generation + 1)
-                            }
-                            _ => current,
-                        }
-                    }
-                }
-            }
-            None => match self
-                .last
-                .and_then(|key| self.calls.get(&key).map(|call| (key, call)))
-            {
-                Some((key, call)) if !starts_new(call) => key,
-                Some((_, call)) => {
-                    same_id_renamed(call, id)?;
-                    (self.next_index(), 0)
-                }
-                None => (self.next_index(), 0),
-            },
-        };
-        if !self.calls.contains_key(&key) {
-            if self.calls.len() >= MAX_TOOL_CALLS {
-                return Err(format!(
-                    "the answer makes more than {MAX_TOOL_CALLS} tool calls"
-                ));
-            }
-            self.generations.insert(key.0, key.1);
-        }
-        Ok(key)
-    }
-
-    /// The index after every index seen, for a call without one.
-    fn next_index(&self) -> u64 {
-        self.calls
-            .keys()
-            .next_back()
-            .map_or(0, |(index, _)| index.saturating_add(1))
+        parse_lenient_delta(delta)
+            .and_then(|delta| self.tools.apply(delta))
+            .map_err(|error| error.to_string())
     }
 
     fn finish(self) -> Result<ChatResponse, String> {
-        let mut tool_calls = Vec::with_capacity(self.calls.len());
-        for ((index, _), call) in self.calls {
-            if call.name.is_empty() {
-                // A slot that got no name and no arguments carries nothing
-                // to run (a keep-alive fragment, an id alone): dropped.
-                if call.arguments.is_empty() {
-                    continue;
-                }
-                return Err(format!(
-                    "streamed tool call at index {index} has arguments but no name"
-                ));
-            }
-            let position = tool_calls.len();
-            tool_calls.push(ToolCall {
-                id: if call.id.is_empty() {
-                    format!("call_{position}")
-                } else {
-                    call.id
-                },
+        let tool_calls = self
+            .tools
+            .finish()
+            .and_then(Iterator::collect::<Result<Vec<_>, _>>)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|call| ToolCall {
+                id: call.id,
                 name: call.name,
                 arguments: call.arguments,
-            });
-        }
+            })
+            .collect();
         let (content, leaked) = split_leaked_reasoning(self.content);
         let reasoning = if self.reasoning.is_empty() {
             leaked
@@ -891,18 +780,6 @@ impl Assembler {
             usage: self.usage,
         })
     }
-}
-
-/// A call whose id stays the same but whose complete name changes is
-/// not two calls and not one: refused.
-fn same_id_renamed(call: &PartialCall, id: &str) -> Result<(), String> {
-    if !call.id.is_empty() && (id.is_empty() || call.id == id) {
-        return Err(format!(
-            "streamed tool call {} changed its name after its arguments began",
-            call.id
-        ));
-    }
-    Ok(())
 }
 
 #[cfg(test)]

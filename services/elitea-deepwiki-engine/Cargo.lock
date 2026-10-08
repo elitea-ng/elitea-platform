@@ -628,10 +628,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-llm-wire"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "elitea-model-client"
 version = "0.1.0"
 dependencies = [
  "elitea-engine-core",
+ "elitea-llm-wire",
  "reqwest",
  "serde_json",
  "tiktoken-rs",
