@@ -34,6 +34,6 @@ it("deletes the attachment temp files when the active workspace is put aside", a
   setSession({ hydrated: true, serverOrigin: 'https://a.example.com', workspaceId: TEST_WORKSPACE });
   await suspendActiveWorkspace();
   expect([...fs.__deleted].sort()).toEqual(
-    ['DocumentPicker', 'ImageManipulator', 'ImagePicker', 'att-tmp', 'att-up', 'export-tmp'].sort(),
+    ['DocumentPicker', 'DocumentScan', 'ImageManipulator', 'com.apple.DocumentCamera', 'ImagePicker', 'att-tmp', 'att-up', 'export-tmp'].sort(),
   );
 });

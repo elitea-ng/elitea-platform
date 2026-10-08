@@ -40,7 +40,8 @@ import { useAgents, useAgentVersion } from '@/api/queries/agents';
 import { AttachButton, AttachmentTrayView, type PickSource } from '@/features/chat/attachments/AttachmentTrayView';
 import { attachmentGate, handoffPick, type GateInput } from '@/features/chat/attachments/gate';
 import { PickerPermissionError, pickFiles, pickPhotos, takePhoto } from '@/features/chat/attachments/pickers';
-import { attachmentLimits } from '@/features/chat/attachments/prepare';
+import { attachmentLimits, type PickedFile } from '@/features/chat/attachments/prepare';
+import { useDocumentScan } from '@/features/chat/attachments/scan/useDocumentScan';
 import { useAttachmentTray } from '@/features/chat/attachments/useAttachmentTray';
 import { ImageViewer } from '@/features/chat/attachments/AttachmentStrip';
 import { useAttachmentOpener } from '@/features/chat/attachments/useAttachmentOpener';
@@ -293,12 +294,37 @@ export default function ThreadScreen() {
   const opener = useAttachmentOpener(projectId, conversationUuid);
   const canOpenFiles = contract11 && online && !isOfflineCopy(detail);
 
+  // "Scan document" (iOS): VisionKit, or the sample pages in a development build on the simulator.
+  const documentScan = useDocumentScan(limits);
+  const scanInto = async (): Promise<{ files: PickedFile[]; warnings: string[] } | null> => {
+    const outcome = await documentScan.scan(() => tray.usage());
+    if (outcome.kind === 'refused') {
+      setThreadNote(outcome.message);
+      return null;
+    }
+    return outcome.kind === 'files' ? outcome : null;
+  };
+  // While a scan is up or being made, another attach waits, and a send is held (it would go
+  // without the scan).
+  const scanBusy = documentScan.phase !== 'idle';
+  const attachReason = gateReason ?? (scanBusy ? 'The scan is still being prepared.' : null);
   const pickInto = async (source: PickSource) => {
     try {
-      const picked =
-        source === 'photos' ? await pickPhotos(limits.maxFiles - tray.sendable) : source === 'camera' ? await takePhoto() : await pickFiles();
+      let scanWarnings: string[] = [];
+      let picked: PickedFile[];
+      if (source === 'scan') {
+        const scanned = await scanInto();
+        if (scanned === null) return;
+        picked = scanned.files;
+        scanWarnings = scanned.warnings;
+      } else {
+        picked =
+          source === 'photos' ? await pickPhotos(limits.maxFiles - tray.sendable) : source === 'camera' ? await takePhoto() : await pickFiles();
+      }
       if (picked.length === 0) return;
-      const { refused, warnings } = tray.add(picked);
+      const added = tray.add(picked);
+      const refused = added.refused;
+      const warnings = [...added.warnings, ...(refused.length === 0 ? scanWarnings : [])];
       // Success is silent: the file is in the tray (audit X8). A refusal is an error note above
       // the composer, not a modal alert; a warning alone (the file IS attached, with a caveat)
       // is an information note, not an error.
@@ -313,7 +339,7 @@ export default function ThreadScreen() {
         setThreadNote('Allow camera access in Settings to take a photo here.');
         return;
       }
-      setThreadNote("Those files couldn't be opened.");
+      setThreadNote(source === 'scan' ? "The scan couldn't be saved. Try again." : "Those files couldn't be opened.");
     }
   };
   const pickedOnOpen = useRef(false);
@@ -327,6 +353,7 @@ export default function ThreadScreen() {
     else Alert.alert(plan.title, plan.message);
   });
   const sendWithFiles = async (text: string, mentions: SendExtras['mentions']): Promise<string | null> => {
+    if (scanBusy) return 'The scan is still being prepared. Send once it is in the tray.';
     if (trayItems.length === 0) return turn.send(text, { mentions });
     if (gateReason) return gateReason;
     // Every file first: a message with files is sent (or queued) only once all are stored.
@@ -768,17 +795,22 @@ export default function ThreadScreen() {
             externalSuggestions={suggestionState}
             onPickExternal={pickExternal}
             accessory={
-              (target.ok && target.kind === 'agent' && target.choices.length > 1 && chosenKey !== null) || trayItems.length > 0 ? (
+              (target.ok && target.kind === 'agent' && target.choices.length > 1 && chosenKey !== null) || trayItems.length > 0 || documentScan.phase === 'preparing' ? (
                 <>
                   {target.ok && target.kind === 'agent' && target.choices.length > 1 && chosenKey !== null ? (
                     <TargetChip current={target.agent} choices={target.choices} onChoose={(id) => setTarget(chosenKey, id)} />
                   ) : null}
-                  <AttachmentTrayView items={trayItems} onRemove={(id) => tray.remove(id)} onRetry={(id) => tray.retry(id)} />
+                  <AttachmentTrayView
+                    items={trayItems}
+                    pending={documentScan.phase === 'preparing' ? { name: 'Scan', meta: 'Preparing…' } : null}
+                    onRemove={(id) => tray.remove(id)}
+                    onRetry={(id) => tray.retry(id)}
+                  />
                 </>
               ) : null
             }
             allowEmptyText={trayItems.length > 0}
-            leading={<AttachButton disabledReason={gateReason} onPick={(source) => void pickInto(source)} onBlocked={showToast} />}
+            leading={<AttachButton disabledReason={attachReason} scan={documentScan.source} onPick={(source) => void pickInto(source)} onBlocked={showToast} />}
             onSend={({ text, mentions }) => sendWithFiles(text, mentions)}
             onStop={contract13 && online && turn.canStop ? stopWithFiles : null}
             dictation={dictation}

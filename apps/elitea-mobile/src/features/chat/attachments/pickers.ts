@@ -3,6 +3,10 @@ import { Directory, File, Paths } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 
 import type { PickedFile } from '@/features/chat/attachments/prepare';
+import { scanInFlight } from '@/features/chat/attachments/scan/scanInFlight';
+
+/** VisionKit's own scratch directory (scan/scanPipeline.ts VISIONKIT_CACHE_DIR). */
+const VISIONKIT_SCRATCH = 'com.apple.DocumentCamera';
 
 /**
  * The three ways to pick files. Each asks for its permission only when used
@@ -57,10 +61,13 @@ export async function pickFiles(): Promise<PickedFile[]> {
 /**
  * Where the pickers and the image re-encode leave their copies, under the
  * app's cache: expo-image-picker ("ImagePicker", the library and the camera),
- * expo-document-picker ("DocumentPicker", copyToCacheDirectory) and
- * expo-image-manipulator ("ImageManipulator").
+ * expo-document-picker ("DocumentPicker", copyToCacheDirectory),
+ * expo-image-manipulator ("ImageManipulator"), the document scan
+ * ("DocumentScan": its pages, PDF and recognised text, scan/scanPipeline.ts)
+ * and VisionKit's own scratch directory ("com.apple.DocumentCamera", which
+ * the document camera creates in the app's caches).
  */
-export const PICKER_CACHE_DIRS = ['ImagePicker', 'DocumentPicker', 'ImageManipulator'] as const;
+export const PICKER_CACHE_DIRS = ['ImagePicker', 'DocumentPicker', 'ImageManipulator', 'DocumentScan', 'com.apple.DocumentCamera'] as const;
 
 /** True for a file one of the pickers copied into the app's cache (ours to delete). */
 export function isPickerCopy(uri: string, cacheUri: string = Paths.cache.uri): boolean {
@@ -81,9 +88,14 @@ export function discardPickerCopy(uri: string): void {
   }
 }
 
-/** Deletes the picker copies a crash or a kill left behind (app start). */
+/**
+ * Deletes the picker copies a crash or a kill left behind (app start), and those of a workspace
+ * put aside. VisionKit's scratch directory is left alone while a scan runs (its camera may be
+ * capturing into it); that scan deletes it when it ends.
+ */
 export function sweepPickerCopies(): void {
   for (const name of PICKER_CACHE_DIRS) {
+    if (name === VISIONKIT_SCRATCH && scanInFlight()) continue;
     try {
       const dir = new Directory(Paths.cache, name);
       if (dir.exists) dir.delete();

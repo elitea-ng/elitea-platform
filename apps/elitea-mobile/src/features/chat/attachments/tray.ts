@@ -32,6 +32,8 @@ export interface TrayItem {
   filepath: string | null;
   /** The picker's copy of the file (in the app's cache), deleted with the item. */
   pickedUri: string;
+  /** The chip's short title and detail (PickedFile.display), when the name is too long. */
+  display?: { title: string; detail: string };
 }
 
 export interface TrayDeps {
@@ -142,11 +144,18 @@ export class AttachmentTray {
     return this.items.filter((i) => i.state !== 'failed').length;
   }
 
+  /**
+   * What the message carries so far (everything not failed): the count and bytes new files are
+   * checked against. A scan is fitted to the room this leaves before it is built.
+   */
+  usage(): { count: number; totalBytes: number } {
+    const held = this.items.filter((i) => i.state !== 'failed');
+    return { count: held.length, totalBytes: held.reduce((n, i) => n + (i.ready?.size ?? i.size ?? 0), 0) };
+  }
+
   /** Checks and prepares picked files; answers what was refused and what is worth a warning. */
   add(picked: readonly PickedFile[]): { refused: Refusal[]; warnings: string[] } {
-    const held = this.items.filter((i) => i.state !== 'failed');
-    const totalBytes = held.reduce((n, i) => n + (i.ready?.size ?? i.size ?? 0), 0);
-    const { accepted, refused, warnings } = checkFiles(picked, this.limits, { count: held.length, totalBytes });
+    const { accepted, refused, warnings } = checkFiles(picked, this.limits, this.usage());
     for (const file of picked) if (!accepted.some((a) => a.uri === file.uri)) this.deps.discardPicked?.(file.uri);
     const added: { item: TrayItem; file: CheckedFile }[] = accepted.map((file) => ({
       file,
@@ -162,6 +171,7 @@ export class AttachmentTray {
         ready: null,
         filepath: null,
         pickedUri: file.uri,
+        ...(file.display ? { display: file.display } : null),
       },
     }));
     if (added.length === 0) return { refused, warnings };

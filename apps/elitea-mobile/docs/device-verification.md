@@ -239,6 +239,39 @@ Set `native_client_policy.offline_retention_days` > 0 on the workspace first; wi
 - [ ] **VoiceOver / TalkBack.** On a chat row the rotor (actions) offers Pin (or Unpin), Rename
       and Delete; Undo on the toast is reachable; the toast is announced.
 
+## 9b. Document scan (issue #10, iOS: `src/features/chat/attachments/scan/*`, `native-modules/`)
+
+The simulator has no camera (the iOS 27 simulator's VisionKit even says it is supported, then
+fails with AVFoundation -11800, so the app never offers it there). A development build on the
+simulator offers "Scan document (sample pages)" instead, which feeds three bundled pages through
+the same native PDF and text recognition into the tray: `/design-chat?state=scan&scan=pdf|text`
+runs it without a server and logs what was made (`[design-scan]` in Metro). Checked on the
+simulator: the PDF's invisible text layer (read back with PDFium, the workspace's extractor),
+the OCR text, the page images deleted, only the PDF or `.txt` left. Upload and send are covered
+by `src/features/chat/documentScan.screen.test.tsx`. These need a device:
+
+- [ ] **Document camera.** Attach → Scan document opens VisionKit full screen (first time: the
+      camera prompt, worded "take a photo or scan a document"). Scan three pages, Save: the
+      sheet "Attach the scan as" offers "PDF (3 pages)" and "Text only".
+- [ ] **Three pages → one PDF, answered on both workers.** Send with "What is the total on the
+      last page?" to a model and to an agent with `attachments`, on a Python-worker and a
+      Rust-worker stack: the answer quotes the page's text (the PDF's invisible text layer is
+      what the workspace extracts).
+- [ ] **Text only with a text-only model.** The `.txt` attaches; the model answers from it.
+- [ ] **Nothing in Photos.** Photos shows no new item after either mode.
+- [ ] **Temp files.** Files.app / `xcrun simctl get_app_container … data` (or Xcode's container
+      download on a device): `Library/Caches/DocumentScan/` holds only the PDF or `.txt` until
+      the send settles, nothing after it; and nothing after Settings → sign out or a workspace
+      switch.
+- [ ] **Cancel.** Cancel in the camera, and Cancel on the format sheet: nothing attached, the
+      scan directory gone.
+- [ ] **Camera refused.** With camera access off in Settings, VisionKit shows its own notice;
+      the thread is unchanged.
+- [ ] **Light, dark, a brand.** The scan chip in the tray (document tile, "PDF"/"TXT") reads in
+      all three.
+
+Android: not offered (no "Scan document" row) until the ML Kit document scanner lands (#20).
+
 ## 10. Chat quick wins (client contract 1.3: `src/features/chat/actions/*`, `src/features/speech/*`, `src/features/a11y/*`)
 
 Needs a 1.3 workspace (discovery `client_contract` 1.3) for feedback, Stop, export and

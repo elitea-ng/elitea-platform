@@ -93,6 +93,20 @@ describe('AttachmentTray', () => {
     expect(refused.map((r) => [r.name, r.reason])).toEqual([['y.txt', 'count']]);
   });
 
+  it('answers what it holds (count and bytes, failed files left out), the room a scan is fitted to', async () => {
+    const { tray } = makeTray({ prepare: async (file) => (file.name === 'bad.pdf' ? Promise.reject(new Error('no')) : { uri: file.uri, uploadName: file.name, displayName: file.name, size: file.size ?? 0, mimeType: 'application/pdf', kind: file.kind, temporary: false }) });
+    expect(tray.usage()).toEqual({ count: 0, totalBytes: 0 });
+    tray.add([picked('a.pdf', 300), picked('bad.pdf', 50), picked('b.pdf', 200)]);
+    await flush();
+    expect(tray.usage()).toEqual({ count: 2, totalBytes: 500 });
+  });
+
+  it("keeps a picked file's short display (a scan's title and date) on its item", async () => {
+    const { tray } = makeTray();
+    tray.add([{ ...picked('Scan 2026-10-08 14.05.pdf'), display: { title: 'Scan 14.05', detail: 'Oct 8' } }, picked('a.pdf')]);
+    expect(tray.getSnapshot().map((i) => i.display ?? null)).toEqual([{ title: 'Scan 14.05', detail: 'Oct 8' }, null]);
+  });
+
   it('marks a file that cannot be prepared as failed, and will not send until it is removed', async () => {
     const { tray } = makeTray({ prepare: async () => Promise.reject(new Error('not an image')) });
     tray.add([picked('cat.png')]);

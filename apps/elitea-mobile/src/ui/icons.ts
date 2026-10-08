@@ -43,6 +43,7 @@ const KIT_ICONS = {
   keyboard: ['keyboard', 'keyboard'],
   arrowDown: ['arrow.down', 'arrow_downward'],
   document: ['doc', 'description'],
+  scanDocument: ['doc.viewfinder', 'document_scanner'],
   code: ['chevron.left.forwardslash.chevron.right', 'code'],
   speakerOff: ['speaker.slash', 'volume_off'],
   retry: ['arrow.clockwise', 'refresh'],

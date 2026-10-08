@@ -249,7 +249,8 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       'expo-image-picker',
       {
         photosPermission: `${identity.displayName} attaches the photos you choose to a message.`,
-        cameraPermission: `${identity.displayName} uses the camera to take a photo you attach to a message.`,
+        // Also the document scanner's (VisionKit asks with NSCameraUsageDescription too).
+        cameraPermission: `${identity.displayName} uses the camera to take a photo or scan a document you attach to a message.`,
         microphonePermission: MICROPHONE_USAGE,
       },
     ],
@@ -341,8 +342,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     typedRoutes: true,
     reactCompiler: true,
     // The App Intents Swift (app-intents/) is compiled into the app target (Apple's metadata
-    // extraction does not see intents inside a static pod).
-    inlineModules: { watchedDirectories: ['app-intents'] },
+    // extraction does not see intents inside a static pod). native-modules/: the document
+    // scanner (VisionKit camera, PDF, on-device text recognition) for attachments.
+    inlineModules: { watchedDirectories: ['app-intents', 'native-modules'] },
   },
   // Binaries and OTA updates match by fingerprint; eas.json's build profiles set the channel.
   runtimeVersion: { policy: 'fingerprint' },

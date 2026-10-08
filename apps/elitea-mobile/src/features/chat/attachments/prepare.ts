@@ -88,6 +88,13 @@ export interface PickedFile {
   /** Bytes, when the picker knew. */
   size: number | null;
   mimeType: string | null;
+  /**
+   * What the tray chip shows instead of the name, when the name is too long to tell files
+   * apart at chip width (a scan's "Scan 2026-10-08 14.05.pdf" lost its date to truncation):
+   * `title` on the first line, `detail` before the size on the second. The name is still what
+   * is sent and what VoiceOver reads.
+   */
+  display?: { title: string; detail: string };
 }
 
 export interface CheckedFile extends PickedFile {

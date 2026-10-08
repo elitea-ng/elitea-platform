@@ -20,4 +20,14 @@ describe('AttachmentTrayView', () => {
     expect(screen.getByText('XLSX')).toBeTruthy();
     expect(screen.getByText('budget.xlsx').props.ellipsizeMode).toBe('middle');
   });
+
+  it('a scan shows its short title with the date on the second line, so the date is never truncated away (F4)', async () => {
+    const scan = { ...SAMPLE_TRAY[0], id: 's1', name: 'Scan 2026-10-08 14.05.pdf', size: 1300, state: 'ready' as const, display: { title: 'Scan 14.05', detail: 'Oct 8' } };
+    await render(<AttachmentTrayView items={[scan]} onRemove={jest.fn()} onRetry={jest.fn()} />);
+    expect(screen.getByText('Scan 14.05')).toBeTruthy();
+    expect(screen.getByText('Oct 8 · 1 KB')).toBeTruthy();
+    // VoiceOver and the remove button still name the file in full.
+    expect(screen.getByLabelText('Scan 2026-10-08 14.05.pdf, ready')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove Scan 2026-10-08 14.05.pdf' })).toBeTruthy();
+  });
 });

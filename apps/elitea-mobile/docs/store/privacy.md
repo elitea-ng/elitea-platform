@@ -26,7 +26,7 @@ host in the code.
 | Device label (`Agent Zefir on iPhone` / `on iPad` / `on <Android model>`), platform, app version | at sign-in, shown on the consent page and in the user's device list | src/auth/deviceInfo.ts, src/auth/nativeAuth.ts |
 | Access and refresh tokens (bearer) | every request | src/auth/, src/api/ |
 | Messages the user writes, regenerate and stop requests | when sending | src/api/queries/sendMessage.ts |
-| Photos, camera pictures and files the user attaches | only when picked and sent | src/features/chat/attachments/ |
+| Photos, camera pictures, document scans (PDF with its recognised text, or the text alone) and files the user attaches | only when picked and sent | src/features/chat/attachments/ |
 | Like / dislike and the optional comment | when given | src/api/queries/feedback.ts |
 | Discover search text | when searching agents | src/api/queries/discover.ts |
 | Notification read / dismiss, memory edits, device revoke | when done | src/api/queries/ |
@@ -39,6 +39,11 @@ systems; the app does not create or send it.
 
 - Dictation: on-device speech recognition only
   (`requiresOnDeviceRecognition`); audio never leaves the device.
+- Document scans (iOS): VisionKit's document camera and Vision text
+  recognition, both on the device. Pages are written to the app's caches only
+  (never the photo library), deleted once the PDF or text is made; that file
+  is deleted after the upload, and the scan directory at start and when the
+  workspace is put aside or ended (src/features/chat/attachments/scan/).
 - The offline store (SQLCipher, key in the Keychain / Keystore), only when the
   workspace policy allows it; wiped on log out, revoke and workspace removal.
 - Widgets and the Live Activity: counts (and titles only if the workspace
