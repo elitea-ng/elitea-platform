@@ -9,7 +9,8 @@ native Inventory engine (`services/elitea-inventory-engine`).
 | `engine-core` | The sidecar error contract, the NDJSON stream and stop flag, zeroizing secrets, Python-compatible JSON/string/value semantics |
 | `engine-sidecar` | The Unix-socket NDJSON server the host's engine client speaks, over any `Engine` (tools + run); the distroless container probe; the cgroup reader; process tracing with OTLP span export under the worker's switches |
 | `model-client` | The OpenAI-compatible gateway client: chat (blocking, streamed, tool calls, reasoning), batched embeddings, SSE, token counting; follows the `/llm` caller contract the worker follows (`model-client/docs/llm-caller-contract.md`) |
-| `code-parsers` | tree-sitter parsers for Python, Go, TypeScript, JavaScript, Java, C#, C++ and Rust, plus Kotlin and Swift (regex ports of the Inventory parsers) → symbols and relationships |
+| `adk-gateway` | An adk-rust model (`adk_core::Llm`) over `model-client`: an engine's agent runs on adk's `LlmAgent` and `Runner` while every model call follows the `/llm` caller contract; `adk-core` is pinned `~2.2.0` (adk breaks its API between minors, and the worker pins `=2.2.0`) |
+| `code-parsers` | tree-sitter parsers for Python, Go, TypeScript, JavaScript, Java, C#, C++, Rust, Kotlin and Swift → symbols and relationships; `grammar_for` gives a language's grammar to a syntax-aware chunker |
 | `graph-algos` | Seeded two-pass Leiden (RB-configuration) over the vendored `leiden-rs`, communities numbered by size |
 | `repo-ingest` | Admitted shallow git clones (gix, egress allowlist, limits), artifact-folder downloads, file discovery; refusals name the consumer's settings (`names::SettingNames`) |
 | `content-source` | The source-agnostic content layer (ADR-0028): `ContentSource` (list documents with a version, mime type and ACL; fetch their bytes), the document model, `Acl`/`Caller`; git (a checked-out tree) is the first connector |
