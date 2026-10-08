@@ -79,6 +79,8 @@ pub mod shaping_bench;
 #[cfg(test)]
 mod shaping_compiler_tests;
 #[cfg(test)]
+mod shaping_pg_tests;
+#[cfg(test)]
 mod shaping_property_tests;
 mod split_out;
 #[cfg(test)]
