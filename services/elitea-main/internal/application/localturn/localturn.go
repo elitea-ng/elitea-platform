@@ -36,6 +36,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -542,13 +543,14 @@ func boundReport(report LocalWorkReport) boundedReport {
 	return out
 }
 
-// cleanReported makes one reported string storable: control characters become
+// cleanReported makes one reported string storable: control characters and
+// format characters (bidi overrides and isolates, zero-width marks) become
 // spaces, invalid UTF-8 is dropped, and the result is cut to limit bytes on a
 // rune boundary.
 func cleanReported(value string, limit int) string {
 	var builder strings.Builder
 	for _, r := range strings.ToValidUTF8(value, "") {
-		if r < ' ' || r == 0x7f {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
 			r = ' '
 		}
 		if builder.Len()+utf8.RuneLen(r) > limit {

@@ -81,3 +81,25 @@ func TestResponseMessageIDIsStableAndOwnNamespace(t *testing.T) {
 		t.Fatal("response id must depend on the question")
 	}
 }
+
+func TestCleanReportedReplacesControlAndFormatRunes(t *testing.T) {
+	cases := map[string]string{
+		"a\u202eb":         "a b", // bidi override
+		"a\u2066b\u2069c":  "a b c",
+		"a\u200eb\u200fc":  "a b c",
+		"a\u200bb":         "a b", // zero width space (Cf)
+		"a\u0085b":         "a b", // C1 control
+		"a\x7fb\tc":        "a b c",
+		"  trimmed\u202d ": "trimmed",
+		"bad\xffutf8":      "badutf8",
+	}
+	for in, want := range cases {
+		if got := cleanReported(in, 100); got != want {
+			t.Errorf("cleanReported(%q) = %q, want %q", in, got, want)
+		}
+	}
+	// Multi-byte runes are never split by the byte limit.
+	if got := cleanReported("ééé", 5); got != "éé" {
+		t.Errorf("limit cut = %q", got)
+	}
+}
