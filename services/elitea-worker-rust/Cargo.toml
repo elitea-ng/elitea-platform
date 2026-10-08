@@ -17,6 +17,8 @@ sandbox-supervisor = ["dep:adk-sandbox", "dep:x509-parser", "dep:kube", "dep:k8s
 # Rehearsal-only admission of graph extension nodes (split_out, aggregate).
 # Production builds leave it off until deployed acceptance flips the gate.
 graph-extensions-rehearsal = []
+# Benchmark entry points only; never enabled in an image.
+graph-shaping-bench = ["graph-extensions-rehearsal"]
 
 [dependencies]
 adk-anthropic = "=2.2.0"
@@ -80,7 +82,7 @@ tonic-prost-build = "=0.14.6"
 [[bench]]
 name = "graph_shaping"
 harness = false
-required-features = ["graph-extensions-rehearsal"]
+required-features = ["graph-shaping-bench"]
 
 [dev-dependencies]
 http-body = "=1.1.0"

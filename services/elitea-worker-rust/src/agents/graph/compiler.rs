@@ -2191,7 +2191,17 @@ fn validate_shaping_channels(
     let source_kind = match node {
         PipelineNodeDefinition::SplitOut(node) => node.source_state_type(),
         PipelineNodeDefinition::Aggregate(_) => "list",
-        _ => return Ok(()),
+        PipelineNodeDefinition::Code(_)
+        | PipelineNodeDefinition::Application(_)
+        | PipelineNodeDefinition::Parallel(_)
+        | PipelineNodeDefinition::Map(_)
+        | PipelineNodeDefinition::Decision(_)
+        | PipelineNodeDefinition::DirectTool(_)
+        | PipelineNodeDefinition::Hitl(_)
+        | PipelineNodeDefinition::Llm(_)
+        | PipelineNodeDefinition::Printer(_)
+        | PipelineNodeDefinition::Router(_)
+        | PipelineNodeDefinition::StateModifier(_) => return Ok(()),
     };
     let user_key = |key: &str| !builtin_state_key(key) && !reserved_user_state_key(key);
     let ([source], [output]) = (node.input_keys(), node.output_keys()) else {

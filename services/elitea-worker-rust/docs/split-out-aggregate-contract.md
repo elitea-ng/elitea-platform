@@ -243,7 +243,9 @@ restored. This is documented behavior, not an error.
 ## 6. Errors
 
 A failure is `GraphError::NodeExecutionFailed { node: <node id>, message }`, where the message is
-`graph.shaping.<code>: <config field> at item <i>[ position <p>]`.
+`graph.shaping.<code>: <config field>[ at item <i>][ position <p>]`. A failure that belongs to no single input row
+has no item: for example `invalid_source`, `limits.input_items`, or a limit hit while Aggregate charges its final
+output rows.
 
 - The config field is the path of a configuration key, such as `split.path`, `operations[1].field` or
   `limits.bytes`.

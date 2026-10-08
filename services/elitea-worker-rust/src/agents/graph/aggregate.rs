@@ -694,8 +694,9 @@ fn aggregate<'a>(
     let max_depth = field_depth(limits);
     let mut slots = HashMap::<CanonicalKey, usize>::new();
     let mut groups = Vec::<Group<'a>>::new();
-    // One scratch key per run; a key is cloned only for a new group.
+    // One scratch key and value list per run; both are cloned only for a new group.
     let mut key = CanonicalKey::default();
+    let mut values = Vec::with_capacity(definition.group_by.len());
     if definition.group_by.is_empty() {
         groups.push(Group::new(definition, 0, Vec::new()));
     }
@@ -705,24 +706,19 @@ fn aggregate<'a>(
             0
         } else {
             key.clear();
+            values.clear();
             for (index, entry) in definition.group_by.iter().enumerate() {
                 let value = group_value(entry, view, index).map_err(at(item))?;
                 key.push(value, max_depth)
                     .map_err(|code| key_error(code, &format!("group_by[{index}]")))
                     .map_err(at(item))?;
+                values.push(value);
             }
             if let Some(slot) = slots.get(&key) {
                 *slot
             } else {
                 check_new_group(limits, groups.len() + 1).map_err(at(item))?;
-                let keys = definition
-                    .group_by
-                    .iter()
-                    .enumerate()
-                    .map(|(index, entry)| group_value(entry, view, index))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(at(item))?;
-                groups.push(Group::new(definition, item, keys));
+                groups.push(Group::new(definition, item, values.clone()));
                 slots.insert(key.clone(), groups.len() - 1);
                 groups.len() - 1
             }

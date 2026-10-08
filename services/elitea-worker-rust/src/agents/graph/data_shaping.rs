@@ -230,7 +230,9 @@ pub(super) struct FieldSelection {
 }
 
 /// Outcome of one selection. `Value` never holds JSON null.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `Debug` exists only in tests: `Value` holds item data.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(test, derive(Debug))]
 pub(super) enum Selected<'a> {
     Value(&'a Value),
     Null,
