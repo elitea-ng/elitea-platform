@@ -3,6 +3,7 @@
 The [Code live canvas terminal mapping](code-live-canvas-terminal-20261008.md) records the matching-run callback correction and its separate deployment requirements.
 The [pending preparation Stop mapping](code-pending-stop-owner-recovery-20261008.md) records accepted Worker-loss recovery and normal reloaded History.
 The [live owner recovery mapping](code-live-owner-recovery-20261008.md) records the original JavaScript result after Worker and Supervisor loss.
+The [compiled publication mapping](code-compiled-publication-main-recovery-20261008.md) records the original compiler receipt after Main loss and normal browser reload.
 
 These ledgers map observable Elitea behavior to concrete Rust ownership. They
 are compatibility evidence, not a byte-for-byte port plan.

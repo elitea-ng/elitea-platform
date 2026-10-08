@@ -126,13 +126,15 @@ Its browser receipt is `9406b43e2e008c791f2487476d2699097287773473936b8fcde6b583
 Chat848 proves early Stop before user Code, canonical cancellation, runtime removal, and reloaded terminal History.
 The original preparation completes during Stop. Pending preparation cancellation and Worker-loss recovery remain unproved.
 The [live canvas terminal correction](source-mapping/code-live-canvas-terminal-20261008.md) passes75 focused source tests.
-Node26 CI, its shipping image, and deployed browser verification remain open.
+Its Node26 production image and strict Alpine scan later pass. Node26 CI and deployed browser verification remain open.
 Later [chat850](source-mapping/code-pending-stop-owner-recovery-20261008.md) closes pending preparation Stop across Worker loss.
 The replacement settles the original run without user Code or downstream dispatch. Runtime removal and reloaded terminal History pass.
 
 The later [chat851 mapping](source-mapping/code-live-owner-recovery-20261008.md) closes live Worker and Supervisor loss for the same original JavaScript runtime.
 Original typed result2, checkpoint claim2/epoch2, one settlement, runtime removal, NATS drain, and live/reloaded support reference pass.
-Distinct preparation failure messages, debug replacement, Main publication, NATS restart, and Kubernetes remain open.
+Later [chat852](source-mapping/code-compiled-publication-main-recovery-20261008.md) closes Main loss during original compiled-result publication.
+The same compiler receipt becomes Ready. One result and settlement, physical removal, NATS drain, and exact live/reloaded answer pass.
+Distinct preparation failure messages, debug replacement, NATS restart, and Kubernetes remain open.
 
 Later preparation fixtures 839 and 844 complete normally after controller refusals before Stop or Worker loss.
 They do not close preparation cancellation or owner recovery.

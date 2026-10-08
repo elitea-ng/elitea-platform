@@ -483,7 +483,8 @@ Chat848 proves ordinary early Stop before user Code and durable cancelled Histor
 Its live canvas remains active after cancellation.
 The [terminal callback mapping](docs/source-mapping/code-live-canvas-terminal-20261008.md) records the correction through the existing event bridge.
 The canvas requires matching response and generation, then clears active nodes and sets Stopped or Error.
-The selection passes75 unique source tests. Node26 CI, image, and deployed browser proof remain open.
+The selection passes75 unique source tests. Its Node26 production image and strict Alpine scan later pass.
+Node26 CI and deployed browser proof remain open.
 This source correction supplies no pending preparation or Worker-loss proof.
 
 The separate [chat850 mapping](docs/source-mapping/code-pending-stop-owner-recovery-20261008.md) closes pending preparation Stop across Worker loss.
@@ -496,4 +497,6 @@ The same runtime returns count2 after both independently verified live cuts.
 Main grants checkpoint recovery at claim2/epoch2. The original result projects once before the next empty-source node fails safely.
 Both original runtimes are removed. NATS drains, and normal reloaded chat retains the same error code and support reference.
 
-Preparation outcomes, debug replacement, Main publication, NATS restart, Kubernetes, and the live canvas image remain open.
+The [chat852 mapping](docs/source-mapping/code-compiled-publication-main-recovery-20261008.md) closes Main loss during original successful compilation publication.
+The same compiler receipt becomes Ready. One result and settlement, physical removal, NATS drain, and exact live/reloaded answer pass.
+Preparation outcomes, debug replacement, NATS restart, Kubernetes, and deployed canvas acceptance remain open.

@@ -14,7 +14,8 @@ It preserves durable NATS storage and the incoming scratch-image health sidecar.
 The [deployed NATS acceptance](source-mapping/code-nats-deployed-acceptance-20261007.md) records current images and verified Code cases.
 Complete Code cache, authority, recovery, editor, and Kubernetes acceptance before graph consolidation.
 No worker gate closes from the merge checks alone.
-The [live canvas terminal correction](source-mapping/code-live-canvas-terminal-20261008.md) passes focused source checks; image and browser acceptance remain open.
+The [live canvas terminal correction](source-mapping/code-live-canvas-terminal-20261008.md) passes source checks, Node26 production build, and strict Alpine scan.
+Its deployed browser acceptance remains open.
 The [pending preparation Stop case](source-mapping/code-pending-stop-owner-recovery-20261008.md) passes Worker-loss recovery and normal browser reload in chat850.
 
 ## Progression status
@@ -1038,6 +1039,8 @@ The [chat851 mapping](source-mapping/code-live-owner-recovery-20261008.md) close
 The same runtime returns count2. Main grants checkpoint recovery at claim2/epoch2, then the next empty-source node fails safely.
 One settlement, both runtime removals, NATS drain, and the same live/reloaded support reference pass.
 
-The [finite checklist](source-mapping/code-nats-deployed-acceptance-20261007.md) retains four runtime groups and the separate live canvas image requirement.
-Preparation outcomes and debug replacement remain open within the first group. Main publication, NATS restart, and Kubernetes remain open.
+Later [chat852](source-mapping/code-compiled-publication-main-recovery-20261008.md) closes Main loss during publication of the original successful compilation.
+The same compiler receipt becomes Ready. One result and settlement, physical removal, NATS drain, and exact live/reloaded answer pass.
+The [finite checklist](source-mapping/code-nats-deployed-acceptance-20261007.md) retains three runtime groups and separate deployed canvas acceptance.
+Preparation outcomes and debug replacement remain open within the first group. NATS restart and Kubernetes remain open.
 Complete Code, graph gates 5a–5e, later worker gates, and release remain open. Workspaces remain deferred.

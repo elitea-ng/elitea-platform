@@ -172,14 +172,21 @@ One settlement, both runtime removals, NATS drain, and normal live/reloaded supp
 The root acceptance digest is `320c26ce098c1ba52137a0beeb2f5640b0b4a66f1901977ebd5aa5d3b7969f01`.
 The idle store now retains74 terminal jobs,74 dispatches, and157 checkpoints.
 
-Preparation outcomes and debug replacement, Main publication loss, NATS restart, and Kubernetes remain separate runtime groups.
+Later chat852 closes [Main recovery during original compilation publication](code-compiled-publication-main-recovery-20261008.md).
+The strict cut retains Publishing after Main stops and binds the original successful compiler receipt and descriptor.
+The same snapshot becomes Ready after Main restarts. One result and matching SUCCEEDED settlement commit.
+Both original runtimes are removed. NATS drains, and the same140-byte answer survives normal live chat and reload.
+The root acceptance digest is `bbd428515651d077ed20779901512e8d4623ca412a6907e000f3fbdea4f361b9`.
+The idle store retains76 terminal jobs,76 resolved dispatches,161 checkpoints, and one compiled snapshot.
+
+Preparation outcomes and debug replacement, NATS restart, and Kubernetes remain separate runtime groups.
 
 Supported application-list denial and outer artifact RBAC refusal later pass their finite cases.
 Their frozen root receipt is `6b20be7632be1bffca3de94806b16c586de0daba5968f88acf13c0ea812140b9`.
 The artifact HTTP 403 occurs at the outer RBAC gate; it does not prove a separate bucket ACL refusal.
 Unchanged registered-child, quota, signer, and ACL component proofs retain their source boundaries.
 Replacement reconciliation of the original debug writer and reference stays open.
-Worker, Main, Supervisor, acquisition, and assembled NATS recovery require their recorded phase proofs.
+Accepted Worker, Main, and Supervisor cases retain their recorded phase boundaries. Remaining acquisition and assembled NATS proofs stay open.
 Current Kubernetes positive, cache, refusal, Stop, and owner-recovery boundaries remain separate.
 Earlier unchanged component proofs retain their original scope.
 These requirements do not create new load or HA gates for Code.
@@ -189,12 +196,15 @@ Its checklist digest is `4c6a93ab083535e6920af90d0334c4bc5a26a09095562bc81449a81
 Its source and receipt ledger digest is `cd7c03a77d1407ed1053d29374fde17540fdfd76a6e8ef89ffcfddc7f6f862b1`.
 Chat850 closes preparation Stop and pending cancellation across Worker loss.
 Chat851 closes live Worker and Supervisor recovery for the original JavaScript job.
-Four runtime groups remain:
+Chat852 closes Main recovery during publication of the original successful compilation.
+Three runtime groups remain:
 
 1. Verify preparation fault outcomes and applicable debug replacement reconciliation.
-2. Verify Main recovery during publication of the original successful compilation.
-3. Verify queued and in-flight NATS recovery with the original broker storage.
-4. Verify current hybrid Kubernetes execution, cache, refusals, Stop, recovery, and physical cleanup.
+2. Verify queued and in-flight NATS recovery with the original broker storage.
+3. Verify current hybrid Kubernetes execution, cache, refusals, Stop, recovery, and physical cleanup.
+
+The separate [live canvas image](code-live-canvas-terminal-20261008.md) passes Node26 production build and strict local Alpine scan.
+Its deployment and normal browser verification remain open.
 
 The later exact Web deployment and normal browser checks close the separate author and fresh-selection correction.
 Their receipt digest is `9406b43e2e008c791f2487476d2699097287773473936b8fcde6b5830e43de5f`.

@@ -79,7 +79,8 @@ The frozen earlier controller and all accepted historical receipts remain unchan
 
 This case closes live Worker and Supervisor loss for the original JavaScript Code job.
 Preparation failure outcomes and replacement debug reconciliation remain open.
-Main compilation publication loss, queued/in-flight NATS loss, and current Kubernetes acceptance remain open.
-The separate live canvas correction still requires its shipping image and deployed browser acceptance.
+Later [chat852](code-compiled-publication-main-recovery-20261008.md) closes Main compilation publication loss for the original successful compiler receipt.
+Queued/in-flight NATS loss and current Kubernetes acceptance remain open.
+The separate live canvas image later passes build and strict scan. Its deployed browser acceptance remains open.
 Stored cleanup flags remain false. Independent removal checks supply physical cleanup proof.
 Product and execution-store observations are sequential, not atomic. This case supplies no performance benchmark.
