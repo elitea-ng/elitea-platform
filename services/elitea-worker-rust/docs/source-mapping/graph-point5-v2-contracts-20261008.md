@@ -133,7 +133,11 @@ Reviews and scans:
 - `cargo deny --all-features check advisories`: not run — this PR changes no Rust code or dependency
   (Worker changes are documentation only).
 - Supply chain: no new dependency; the Go test uses `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3, already a
-  direct dependency of `services/elitea-main`. `golangci-lint` v2.9.0 runs in CI (not installed locally).
+  direct dependency of `services/elitea-main`. `golangci-lint` v2.9.0 runs in CI (not installed locally); its first
+  run flagged staticcheck QF1001 in the new test (fixed; `staticcheck -checks all` is clean locally).
+- CI `Test` job: fails on `TestPublicPinRoutesConcurrentUpsertsKeepOneSharedRow`
+  (`services/elitea-main/internal/api/v2/folders`, concurrent pin → HTTP 500). Pre-existing: `main` fails the same
+  test on its last two Go CI runs (`604a49e1`, `fcf86c31`); this PR does not touch that package.
 
 ## D2 decisions confirmed
 
