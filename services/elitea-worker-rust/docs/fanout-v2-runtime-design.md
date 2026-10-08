@@ -445,6 +445,11 @@ continuation running p95 ≤ 5 s; another tab drops the card ≤ 3 s. Per-child 
 
 ## 15. Performance, durability, resilience and security
 
+Mechanisms marked (Wave 2) are new code with the proposed name and location; the others exist on `main`. All
+fan-out limits live in one module, `src/agents/graph/fanout/limits.rs` (Wave 2), and the test
+`fanout_limits_match_contract_schemas` asserts they equal the bounds in `libs/jsonschema/runtime/v1/fanout-*.schema.json`,
+so the Worker and the wire contract cannot drift.
+
 ### Performance
 
 Budgets (PLAN §4; measured in Wave 2 and recorded in the source mapping):
@@ -462,6 +467,14 @@ Budgets (PLAN §4; measured in Wave 2 and recorded in the source mapping):
 
 No per-chunk or per-item Main transaction: progress is coalesced per activation, and decisions never write the parent.
 
+| Requirement | Enforced by (code mechanism) | Proven by (test) |
+|---|---|---|
+| ≤ 2 parent rows per activation | `FanoutRunner` writes the parent only in `freeze()` and `join()`; no other method takes the parent checkpointer (Wave 2, `fanout/runner.rs`); `record_decisions` deleted | `parent_rows_bounded_with_16_reverse_answered_cards`: counting checkpointer, 16 cards answered in reverse order → exactly 2 parent appends (budget) |
+| 2 transactions to prepare N children | batched `activate_children(&[ChildIdentity])` (`INSERT … SELECT unnest … ON CONFLICT`) + one `DISTINCT ON (thread_id)` receipt read (Wave 2, `state/postgres_checkpointer/fanout_children.rs`) | `prepare_64_children_uses_two_transactions` (PG, statement counter: 2 at N=1, 16, 64) |
+| ≤ 4 progress frames/s per activation | `ProgressCoalescer` with `COALESCE_INTERVAL = 250 ms`, `COALESCE_MAX_BYTES = 64 KiB` (Wave 2, `execution/fanout_progress.rs`); lifecycle frames bypass it by type | `coalescer_caps_frames_and_keeps_deltas_exact` (8 streaming children, 10 s paused clock → ≤ 41 progress frames, concatenated deltas byte-equal) |
+| No fetch while no card is open; 1 s → 5 s backoff | `DecisionTick` armed only when `open_cards > 0`; `DECISION_TICK_MIN = 1 s`, `DECISION_TICK_MAX = 5 s` (Wave 2, `fanout/runner.rs`) | `no_fetch_without_open_cards_and_backoff_to_5s` (paused clock, fetch counter: 0 with no cards; 1,2,4,5,5 s intervals) |
+| Per-child overhead p99 ≤ 30 ms; restore 64 children p95 ≤ 500 ms; pool wait p99 ≤ 50 ms | the batching above; `spawn_blocking` for ≥ 256 KiB payloads only if Track C numbers require it | `fanout_load` (PG, ignored by default, `ELITEA_TEST_DATABASE_URL`): 32 activations × 8 children, asserts the three percentiles |
+
 ### Durability
 
 Every crash window this design creates or touches, with its recovery rule, is in §8. The ones that must be proven on
@@ -469,6 +482,15 @@ real PostgreSQL with process replacement or second-worker takeover are: cross-ex
 of completed children; `after_fetch`, `after_apply`, `before_ack`, `after_child_receipt`, `before_join`; the two-claim
 apply race (exactly 1 apply); decide vs park (exactly 1 continuation). The only window that can repeat an external
 effect is the approval-replay window, and effectful workers stay closed until Gate 6 receipts (§11).
+
+| Requirement | Enforced by (code mechanism) | Proven by (test) |
+|---|---|---|
+| Child identity survives continuation, reclaim, generation bump | frozen child thread ids stored in the occurrence (Track C1); `fanout_children.rs` derives nothing from `execution_id`/generation (Wave 2) | `lineage_identical_across_execution_claim_and_generation` (PG); `rewind_creates_fresh_children` (PG) |
+| Decision applied at most once per pause | `apply_decision` proves `child latest == Paused(interrupt_id)` at `child_paused_checkpoint_id` before resuming; typed `ApplyOutcome::{Applied, AlreadyApplied, Stale, Held}` (Wave 2, `fanout/apply.rs`) | crash seams `after_fetch`, `after_apply`, `before_ack` (PG + `writer_at` later claim): exactly one resume, ACK replay accepted |
+| Zombie writes fenced | `lock_current_writer` on every save (`state/postgres_checkpointer.rs:944`), `PostgresCheckpointError::WriterNotCurrent` (`:112`) | `two_claims_apply_same_key_exactly_once` (PG, second claim; stale claim gets `writer_not_current`) |
+| Completed children never re-run | child `Completed` receipt short-circuits invocation (receipt read in `restore`, Wave 2) | `cross_execution_restore_zero_reinvocations` (PG: pause 2/4 under E1, decide under E2 → 0 model calls for completed children) |
+| One continuation per parked response | Main: response row lock + `decision_revision` + partial unique index (contract §8, Track M2 / Wave 2) | `decide_vs_park_exactly_one_continuation` (Main PG barrier test) |
+| Join after crash is deterministic | `freeze()` returns the stored occurrence at the same step; join reads receipts only | crash seams `after_child_receipt`, `before_join` (PG) |
 
 ### Resilience
 
@@ -482,6 +504,16 @@ effect is the approval-replay window, and effectful workers stay closed until Ga
   output; regenerate supersedes cards in the same transaction.
 - **Failures are typed** (`graph.*` codes, fixed catalog messages). Nothing is coerced: a stale or unprovable decision
   is ACKed `stale`, never applied to a different pause.
+
+| Requirement | Enforced by (code mechanism) | Proven by (test) |
+|---|---|---|
+| 16 branches, 64 items, ≤ 8 running | `MAX_PARALLEL_BRANCHES = 16`, `MAX_MAP_ITEMS = 64` (today `map_reduce.rs:22`), `MAX_RUNNING_CHILDREN = 8` (today `map_reduce.rs:23`) in `fanout/limits.rs`, checked by the planners at compile/freeze before any child starts; `FanoutError::ResourceExhausted` | `planner_limits_at_bound_and_bound_plus_one` (16/17 branches, 64/65 items, 8/9 concurrency) |
+| 512 KiB per child value, 8 MiB joined | `MAX_CHILD_VALUE_BYTES` (today `MAX_BRANCH_RESULT_BYTES`, `parallel.rs:36`), `MAX_JOINED_BYTES` (today `parallel.rs:37`, `map_reduce.rs:26`), checked before the state update | boundary tests at 512 KiB / +1 and 8 MiB / +1 → typed `resource_exhausted`, parent state unchanged |
+| 16 open cards | `MAX_OPEN_CARDS = 16` (today `MAX_PAUSE_CARDS`, `parallel.rs:38`); admission closes at 16 | `map_admission_stops_at_16_open_cards` |
+| 64 child permits, released while paused; 16 streams per model | `FanoutAdmission { child_permits: Semaphore(64), model_streams: per-model Semaphore(16) }` (Wave 2, `execution/fanout_admission.rs`); permit dropped on `Paused` | `paused_child_releases_permit`; `model_stream_cap_16` |
+| No nested fan-out; ≤ 3 agent tiers | compiler rejects a fan-out inside a fan-out worker and a worker whose depth + member tier exceeds `MAX_AGENT_PATH_TIERS` (`agents/events.rs:108`) with `graph.fanout.invalid_worker` (Wave 2) | `nested_fanout_rejected_at_compile`; `member_tier_counts_toward_three_tiers` |
+| Deadline, cancel, lease loss | `select!` over `sleep_until(deadline)` + cancel `Notify` (no polling); lease loss maps `WriterNotCurrent` to `FanoutStop::LeaseLost` (control stop, no failure output) | `cancel_latency_under_100ms` (4-thread runtime, barriers); `deadline_with_only_paused_children_parks`; `lease_revoke_mid_child_emits_no_failure` (`TestStateWriterLease::revoke`) |
+| Collect entries safe and bounded | `CollectedFailure { index, status, error: { code, message_safe } }` built only from `valid_failure_code` (`parallel.rs:1346`) and a fixed catalog; ≤ 512 bytes | `collect_entry_contains_no_item_data` (event + state capture) |
 
 ### Security
 
@@ -505,6 +537,16 @@ effect is the approval-replay window, and effectful workers stay closed until Ga
 - **Supply chain.** The runner uses only crates already in the Worker (`tokio`, `futures`, `serde_json`, `sha2`). Any
   new dependency in Wave 2 must be justified in its source mapping and pass `cargo deny`/`cargo audit` with
   `--locked`.
+
+| Requirement | Enforced by (code mechanism) | Proven by (test) |
+|---|---|---|
+| Decision authorized for the exact actor/project/response inside the decision transaction | Main decide transaction locks the response and card rows, then rechecks ownership, membership and RBAC before the CAS (Track M2 `Decide`) | `decide_foreign_actor_refused` and `decide_foreign_project_refused` (Main PG, negative authz: 403/404, row unchanged) |
+| Worker applies only fenced, fetched decisions | private fetch/ACK require mTLS + `X-Elitea-Claim-Id` + `X-Elitea-Fence`, rechecked under the job lock with the DB clock; `NODE_RECOVERY` claims refused (Wave 2 Main route) | `fetch_with_stale_fence_refused`; `ack_from_old_claim_refused` (Main PG, second claim) |
+| Identifiers from YAML/browser/model never authorize | Worker re-derives `interrupt_key` from the frozen child identity and its own checkpoint (`fanout/apply.rs`); a non-provable key → `ApplyOutcome::Stale` | `foreign_key_decision_runs_no_child` (unit) |
+| Reject and auth Skip are never permission | `DirectHitlAction` is applied exactly (`agents/direct_hitl.rs:132-142`); missing/stale decision has no default action | `reject_and_skip_never_execute_tool` (unit, tool-call counter = 0) |
+| No tokens, prompts, item data, tool args or values in logs/events | safe-field-only log types `FanoutActivationLog { node, activation_label, total, running, paused, failed }` and `FanoutChildLog { ordinal, status, code }` (Wave 2); card display built only from the closed `fanout-interrupt-card` schema type; `credential_ref` is an opaque newtype without `Display` | `fanout_logs_and_events_carry_no_sensitive_fields` (tracing capture + frame capture: no prompt/item/arg/value/token substrings, schema-valid frames only) |
+| Effectful workers closed until Gate 6 | compiler admits only platform-classified read-only tools in fan-out workers (Wave 2, `parallel_compiler.rs`, `map_compiler.rs`) | `effectful_worker_rejected_at_compile` |
+| Supply chain | no new crate; `cargo deny --all-features check advisories` and `cargo test --locked` on the implementing PR | CI + recorded audit output in its source mapping |
 
 ## 16. Rejected alternatives
 

@@ -383,11 +383,27 @@ token reads; inputs ≤ 256 KiB; rendered request ≤ 384 KiB; response ≤ 2 Mi
 Each action is one Lookup, one Begin, one dispatch and one Commit; no per-chunk writes. The dedicated 32-slot pool
 (≤ 8 per execution) keeps HTTP latency away from token, version and artifact reads (§11).
 
+| Requirement | Enforced by (code mechanism) | Proven by (test) |
+| --- | --- | --- |
+| Inputs ≤ 256 KiB | `httpaction.MaxInputsBytes = 256 << 10` (Wave 2), checked in `DecodeInvocationV3` next to `Decode` (`contract.go:103`) before base64 decode, Lookup or any DB read; typed `ErrInputsTooLarge` (wraps `ErrInvalid`) → 413 `invalid_input` | Boundary `TestDecodeInvocationV3InputsBoundary` (`httpaction/contract_test.go`, Wave 2): 256 KiB accepted; 256 KiB + 1 → 413 `invalid_input`; no effect row |
+| Invocation body ≤ 768 KiB | `MaxInvocation` (`contract.go:24`), enforced in `Decode` (`contract.go:103-108`) before parsing | Boundary `TestDecodeInvocationBoundary` (same file): 768 KiB accepted, + 1 → `ErrInvalid` |
+| Rendered request ≤ 384 KiB | `MaxRequest` (`contract.go:23`); `render.go` (Wave 2) checks the wire length before `Request.Validate`; `ErrRequestTooLarge` → `invalid_input` | Boundary `TestRenderRequestBoundary` (`httpaction/render_test.go`, Wave 2): 384 KiB renders; + 1 → `invalid_input`, 0 dispatches |
+| Response ≤ 2 MiB, inline ≤ 512 KiB | `MaxResponse` (`contract.go:25`, applied `:303-305`); `MaxInline` (`contract.go:26`, `:482`) | Boundary `TestExecuteResponseBoundary` (`service_test.go`, Wave 2): 2 MiB ok, + 1 → `failed/response_too_large`; 512 KiB inline, + 1 → artifact |
+| ≤ 30 s per call | `Request.TimeoutMS` default and cap 30000 (`contract.go:270-273`) | Boundary `TestValidateTimeoutBoundary` (`frozen_test.go`/`service_test.go`, Wave 2): 30000 ok, 30001 → `ErrInvalid` |
+| One Lookup, Begin, dispatch, Commit per action; no per-chunk writes | `Effects` port has exactly these four calls (`service.go:31`); no streaming write method exists | Budget `TestHTTPActionWriteCount` (`repos/http_action_effects_postgres_integration_test.go`, Wave 2): exactly 1 INSERT + 1 UPDATE on `execution_http_effects` per action, 0 others |
+| Main overhead ≤ 15 ms p95 excl. remote call | Single-transaction Begin (§16 Security); no extra RPC on the path | Budget `BenchmarkHTTPActionOverhead` (Wave 2), 1,000 runs against a stub remote, real PostgreSQL: p95 ≤ 15 ms |
+| 16 concurrent actions add ≤ 50 ms p95 to token reads; dedicated 32 slots, ≤ 8 per execution | `httpActionRequests chan struct{}` cap `maxHTTPActionSlots = 32` and per-execution counter `maxHTTPActionPerExecution = 8` in `content_server.go` (Wave 2), modelled on `attachmentRequests` (`content_server.go:126-130`); `acquireSlot` returns 503 + `Retry-After` (`content_server.go:1097-1107`) before any work | Budget `TestHTTPActionPoolIsolation` (`storage/content_server_test.go`, Wave 2): 16 concurrent 30 s stubs, token-read p95 added ≤ 50 ms; boundary: 8 in flight ok, 9th → 503 `Retry-After`; 33rd global → 503 |
+
 ### Durability
 
 Every crash window and its recovery rule is in §13 (18 cases). The invariant: Begin is durable before the call, a
 `dispatching` row is never dispatched again, and an unknown outcome becomes `uncertain/reconciliation_required`
 for 5b. Cases 1, 3, 4, 5, 10 and 16 are proven on real PostgreSQL, case 1 with a counting server and process loss.
+
+| Requirement | Enforced by (code mechanism) | Proven by (test) |
+| --- | --- | --- |
+| Crash windows §13 cases 1-18 | Effects repo (Wave 2, `M/internal/infra/db/repos/http_action_effects.go`): `INSERT ... ON CONFLICT DO NOTHING` on `(execution_id, generation, activation_id)`; Commit fenced by `dispatch_claim_id` + lease epoch; typed `ErrDispatchInFlight` → `uncertain` | Crash-window PG, file `http_action_effects_postgres_integration_test.go` (Wave 2): 1 `TestCrashWorkerAfterCommitBeforeCheckpoint` (counting server, process replacement, 0 extra requests); 2 `TestCrashAfterJournalBeforePost` (1 request); 3 `TestCrashMainBetweenBeginAndCommit` (next Lookup → `uncertain`, 0 re-dispatch); 4 `TestSecondRequestWhileDispatching`; 5 `TestBegin32ConcurrentOneDispatch` (1 row, 1 `dispatch=true`); 10 `TestLeaseLostCommitRefused`; 16 `TestRecoverCompletedFromInputsBytes` |
+| Cases 6-9, 11-15, 17, 18 | See rows below; remaining mechanisms are the same repo and `Service.Execute` (`service.go:64`) | 6 `TestRetryAfter503BeforeEffect`, 7 `TestRetryAfter503AfterEffect` (unit, Lookup returns state, 1 dispatch); 8 `TestReplayDifferentInputs409` (replay: 409, 0 extra requests); 9 `TestRemoteClosesMidResponseUncertain` (service); 11 `TestRedirectRefusedNoFollow` + `TestEgressConstructorRejectsClient` (constructor); 12 `TestDialRefusesRebindToBlockedIP`; 13 `TestRuleDisabledBetweenFreezeAndCall`; 14 `TestLiveCredentialRevisionUsed`; 15 `TestActorLosesConfigAccess403`; 17 `TestMapChildrenDistinctActivation`; 18 `TestFanoutUncertainStopsOnlyChild` |
 
 ### Resilience
 
@@ -396,6 +412,13 @@ for 5b. Cases 1, 3, 4, 5, 10 and 16 are proven on real PostgreSQL, case 1 with a
   for pool saturation (retried only when no effect exists).
 - Cancellation and lease loss: the Commit is fenced by the original dispatch claim; a lost lease leaves the row
   `dispatching` and it becomes `uncertain` on the next Lookup (case 10).
+
+| Requirement | Enforced by (code mechanism) | Proven by (test) |
+| --- | --- | --- |
+| Bounds: ≤ 32 query names per rule; header and path segment limits (≤ 1024 bytes per segment) | `httpaction.MaxQueryNames = 32` and `MaxSegmentBytes = 1024` (Wave 2, `render.go`/rule validator); checked at rule write and at render before dispatch; `ErrRuleInvalid`, `invalid_input` | Boundary `TestRuleQueryNamesBoundary` (32 ok, 33 refused at write); `TestRenderSegmentBoundary` (1024 ok, 1025 → `invalid_input`; `.`, `..`, empty refused) — `httpaction/render_test.go` (Wave 2) |
+| Typed failures `policy_denied`, `invalid_input`, `redirect_refused`, 409, 503 `Retry-After` | Closed set of failure codes in `contract.go` (`ErrInvalid`/`ErrUnauthorized`/`ErrUnavailable`, `contract.go:28-30`) plus Wave 2 `ErrNonDeterministic` → 409; handler maps error type to status, no string matching | Table test `TestFailureCodeMapping` (`storage/runtime_http_action_test.go`, Wave 2): each typed error → exact status and code; unknown error → 500 `internal`, no detail text |
+| 503 retried only when no effect exists | Worker retries the same invocation; Lookup returns the stored receipt first (§7, §8) | Cases 6 and 7 above (second request never dispatches) |
+| Cancellation and lease loss: Commit fenced by the original dispatch claim | `Commit` updates `WHERE dispatch_claim_id = $claim AND lease_epoch = $epoch`; 0 rows → `ErrFenced`, row left `dispatching` | Lease-loss PG `TestLeaseLostCommitRefused` (case 10); cancellation `TestCancelDuringDispatchLeavesDispatching` (cancel ctx mid-call → row `dispatching`, next Lookup `uncertain`) — Wave 2 |
 
 ### Security
 
@@ -420,6 +443,19 @@ for 5b. Cases 1, 3, 4, 5, 10 and 16 are proven on real PostgreSQL, case 1 with a
 - **Effects.** No external call is repeated without a durable receipt (§8).
 - **Supply chain.** No new dependency. Main uses the standard library HTTP stack; the Worker reuses its existing
   `encode_component` logic only as a fixture.
+
+| Requirement | Enforced by (code mechanism) | Proven by (test) |
+| --- | --- | --- |
+| Authority inside the effect transaction | `Effects.Begin` (Wave 2) opens one Begin transaction: `SELECT ... FROM http_action_rules ... FOR SHARE`, recheck `enabled` and egress allowlist, live RBAC of the original actor on `configuration_id`, live credential revision, then INSERT the effect row; any failed recheck → `ErrUnauthorized`/`policy_denied`, no row (fail closed). Project from trusted execution scope, never YAML | Negative-authz `TestBeginForeignActorRefused` and `TestBeginForeignProjectRuleRefused` (PG, `http_action_effects_postgres_integration_test.go`, Wave 2): 403/`policy_denied`, 0 effect rows, 0 requests; `TestBeginConcurrentRuleDisable` (PG): disable ordered before Begin → denied, after → one dispatch, never both |
+| Rule authoring by project admins; guard at write and dial time | Permission `models.http_action_rules.manage` (proposal) checked in the admin handler (Wave 2, `repos/http_action_rules.go` + API package); `egress.Guard.Validate` at write and in `DialContext` (`ssrf.go:158,191`) | Negative-authz `TestRuleWriteWithoutPermission403` and cross-project write refused; `TestRuleWriteOutsideAllowlistRefused`; `TestDialRefusesRuleAllowedYesterday` (guard test) |
+| Strict input handling: no URL/method/credential in YAML; segment-encoding; allowed query names; restricted headers; CR/LF/NUL; `.`/`..` | `deny_unknown_fields`/`additionalProperties: false` in `http-action-node.schema.json`; `Parse`/`Validate` (`contract.go:157,254`); Wave 2 `render.go` typed `ErrRenderRefused` before Lookup | Fixture `http-action-render-vectors-v1.json` (25 vectors: 15 request, 10 error code) run by Go `TestRenderVectors` and Rust `render_vectors_match` ; schema fixtures `TestHTTPActionSchemaFixtures`; every restricted header refused (table test) |
+| Egress guard: no redirects, blocked ranges incl. CGNAT/NAT64/IPv4-mapped, `Proxy = nil`, HTTPS only, TLS verified, resolve-filter-dial IP literal | `M/internal/infra/egress` (Track M1): constructor accepts only `*http.Transport` (cannot wire a redirect-following client); `Proxy = nil`; `MaxResponseHeaderBytes = 64 << 10`; blocked-class list; current guard `DestinationGuard` (`ssrf.go:110,182,225`) | Guard tests `TestBlockedClassesTable` (each class incl. mapped/NAT64/`100.100.100.200`), `TestProxyEnvIgnored` (`HTTPS_PROXY` set → target dialed, 0 proxy hits), `TestHTTPSOnly`, `TestTLSHostMismatchRefused`, `TestRedirectRefusedNoFollow`, `TestResponseHeaders64KiBBoundary` (64 KiB ok, + 1 refused) — `internal/infra/egress/*_test.go` (Wave 2) |
+| Credentials by reference; never in YAML, invocation, receipts, events, logs | `Credentials` port resolves `configuration_id` server-side; receipt type has the eight fixed fields only (`contract.go:92-101`); Wave 2 redaction type `httpActionLogFields{rule, status_class, bytes, duration, digest}`; request, response, header and credential types do not implement the log-fields interface and are never passed to the logger | Log-capture `TestHTTPActionLogsAndEventsNoSensitive` (`storage/runtime_http_action_test.go`, Wave 2): run with sentinel secret, URL with query, header, bodies; captured logs, spans, events and receipt JSON contain none of the sentinels |
+| No secrets or data in logs | Same `httpActionLogFields` is the only logger argument on this path; `Request` and `Receipt.Result` implement `slog.LogValuer` returning only their digest and size (redaction by type), so passing either to a logger cannot emit content (Wave 2) | Same log-capture test, failure paths included (policy_denied, uncertain, panic-free error path) |
+| No external call repeated without a durable receipt | Begin durable before dispatch; `dispatching` never re-dispatched (§8); owner never answers `verified_no_effect` for HTTP (`http_action_recovery.go:30-31`) | Cases 1, 3, 4, 5 above; `TestOwnerNeverVerifiedNoEffectForHTTP` (`repos/http_action_recovery_test.go`, Wave 2) |
+| No new dependency | `go.mod`/`Cargo.toml` unchanged in the PR | CI diff check `go mod tidy` + `cargo deny check` clean; PR must add 0 new findings |
+
+- **Scanners:** `govulncheck` (Main) and `cargo deny --all-features check advisories` (Worker) run on the implementing PR; they find vulnerable dependencies only, never defects in this design's code.
 
 ## 17. Schema index
 

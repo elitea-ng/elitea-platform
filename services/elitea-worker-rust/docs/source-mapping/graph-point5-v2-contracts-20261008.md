@@ -34,7 +34,7 @@ Deliberately not ported:
 | D4 Parallel doc superseded | `services/elitea-worker-rust/docs/parallel-pipeline-node-design.md` | Complete-set sections marked superseded, history kept. |
 | D5 HTTP action node design | `services/elitea-worker-rust/docs/http-action-node-design.md`; `libs/jsonschema/runtime/v1/http-action-*.schema.json` (5); fixtures `http-action-*` (9 valid, 17 invalid, 25 render vectors) | Revision 2 operation + bindings, Main renders, invocation v3, effects, rules by project admins, egress, content pool, crash cases. |
 | D6 Database action node outline | `services/elitea-worker-rust/docs/database-action-node-design.md` | Wave 3 outline. |
-| Schema validation in CI | `services/elitea-main/internal/runtimecontracts/schemas_test.go`; `.github/workflows/ci-go.yml` | Runs in the Go CI job (`go test`). `ci-go.yml` now also triggers on `libs/jsonschema/**`. |
+| Schema validation in CI | `services/elitea-main/internal/runtimecontracts/schemas_test.go` | Runs in the Go CI job (`go test`). |
 
 ## Conformance test
 
@@ -57,6 +57,10 @@ unbounded property named `default` each made the test fail. Independent cross-ch
 (Draft202012Validator + referencing registry): 102/102 fixtures behave as intended. `golangci-lint` was not run locally (not installed); CI runs it.
 
 
+Known gap (CI unchanged by user decision): `ci-go.yml` triggers on `services/elitea-main/**` and `libs/proto/**`, not
+on `libs/jsonschema/**`. A schema- or fixture-only change does not start the Go job by itself; such a change must also
+touch the contract document under `libs/proto/contracts/` (which it should anyway) until CI owners add the path.
+
 ## How the fixtures were created
 
 All fixtures are synthetic; none comes from a UI session or a database. The `fanout-*` schemas and fixtures were
@@ -67,54 +71,69 @@ independently, so a hand edit that breaks a fixture fails CI.
 
 ## Performance
 
-- **Budgets stated:** fan-out D1 §9 and §15 (≤2 parent rows per activation, 2 transactions to prepare N children, ≤4
-  progress frames/s, per-child overhead p99 ≤30 ms, restore of 64 children p95 ≤500 ms, pool wait p99 ≤50 ms, decision
-  POST p95 ≤150 ms, live pickup p95 ≤2 s, parked → running p95 ≤5 s, other tab ≤3 s); contract D2 §12 (one
-  transaction per decision, 0 fetches with no open card, fetch ≤16 × 64 KiB); HTTP D5 §16 (Main overhead ≤15 ms p95,
-  ≤50 ms p95 added to token reads under 16 concurrent actions); DB D6 §12 (*proposal* ≤15 ms p95 Main overhead).
-- **Measured:** nothing at runtime — this track ships no runtime code. The Wave 2 tracks measure against these
-  budgets. The contract test runs in about 0.2–0.3 s.
-- **Result:** not applicable for runtime; budgets recorded for Wave 2.
+This PR ships no runtime code, so it enforces no runtime budget itself. Every budget is assigned a named mechanism and
+a named proving test in the designs, to be built and measured by the implementing tracks: D1 §15 Performance table
+(parent rows, 2-transaction prepare, coalescer, decision tick, load percentiles), D2 §12 Performance table (single
+decide transaction, POST p95 ≤ 150 ms, fetch caps), D5 §16, D6 §12.
+
+| Rule this PR enforces | Mechanism | Test | Result |
+|---|---|---|---|
+| The contract check stays cheap | one in-process compile of 20 schemas, no network | `TestRuntimeContractSchemasAndFixtures` (`services/elitea-main/internal/runtimecontracts/schemas_test.go:289`) | 0.2–0.3 s locally |
 
 ## Durability
 
-- **Crash windows named:** D1 §8 (12 windows of the fan-out apply path, adjusted to the child-checkpoint apply point),
-  D2 §12 (ledger windows: raise, decide, fetch-before-ACK, lost ACK response, stop/regenerate, park vs decide), D5 §13
-  (18 HTTP crash cases), D6 §12 (database unknown-outcome windows).
-- **Tested now:** the identities that make recovery idempotent are pinned by vectors and recomputed in CI:
-  `interrupt_key`, member `call_id`, `decision_sha256`, HTTP body and request digests.
-- **Result:** vectors pass. Real-PostgreSQL and process-loss proofs are listed per window for Wave 2 (D1 §13, D5 §15).
+Crash windows and recovery rules: D1 §8 and §15 Durability table (named PG and crash-seam tests per window), D2 §12
+Durability table, D5 §13 (18 cases, each with a named test in §16), D6 §12.
+
+| Rule this PR enforces | Mechanism | Test | Result |
+|---|---|---|---|
+| Recovery identities are reproducible across languages (`interrupt_key`, member `call_id`) | length-prefixed SHA-256 preimage defined in D2 §3.1/§3.3; vectors `libs/jsonschema/runtime/v1/fixtures/fanout-interrupt-key-vectors-v1.json` | `TestFanoutInterruptKeyAndMemberCallIDVectors` (`services/elitea-main/internal/runtimecontracts/schemas_test.go:345`) | pass |
+| ACK binding digest is reproducible | `decision_sha256` over canonical JSON (D2 §7) | `TestFanoutDecisionDigestsInFetchFixtures` (`services/elitea-main/internal/runtimecontracts/schemas_test.go:406`) | pass |
+| HTTP effect digests are reproducible | render vectors `fixtures/http-action-render-vectors-v1.json` | `TestHTTPActionRenderVectorsAreSelfConsistent` (`services/elitea-main/internal/runtimecontracts/schemas_test.go:454`) | pass |
+| Canonical bytes are byte-stable across Go/Rust/Python | reference writer `writeCanonical`/`writeCanonicalString` (`services/elitea-main/internal/runtimecontracts/schemas_test.go:212,257`) | fixture round trip in `TestRuntimeContractSchemasAndFixtures` (`services/elitea-main/internal/runtimecontracts/schemas_test.go:289`) | pass (102/102 fixtures) |
 
 ## Resilience
 
-- **Bounds stated:** every schema object is closed and every string, array and number bounded — enforced by the
-  conformance test's strictness lint over all 20 new schemas. Design bounds: 16 branches, 64 items, ≤8 running, 16
-  open cards, 512 KiB item, 8 MiB joined, 8 KiB decision, 32 KiB card, 64 KiB fetch entry, 64 child permits, 16
-  streams per model, HTTP 256 KiB inputs / 384 KiB request / 2 MiB response / 30 s, DB 1,000 rows / 512 KiB / 30 s.
-- **Typed failures and control stops:** D1 §6 and §15, D2 §6 errors, D5 §16, D6 §12.
-- **Tested now:** 46 + 17 invalid fixtures (unknown keys, out-of-range values, wrong combinations, raw tokens, URL in
-  YAML, plain-http origins) are rejected by the schemas in Go and in Python.
-- **Result:** pass.
+Bounds, typed failures, cancellation, deadline and lease-loss handling: D1 §15 Resilience table (limits module
+`fanout/limits.rs` plus `fanout_limits_match_contract_schemas`), D2 §12 Resilience table
+(`TestExecutionInterruptLimitsMatchContractSchemas`), D5 §16, D6 §12.
+
+| Rule this PR enforces | Mechanism | Test | Result |
+|---|---|---|---|
+| Every contract object is closed; every string, array and number is bounded | `lintStrict` (`services/elitea-main/internal/runtimecontracts/schemas_test.go:132`) over every `fanout-*`/`http-action-*` schema | `TestRuntimeContractSchemasAndFixtures` (`services/elitea-main/internal/runtimecontracts/schemas_test.go:289`); mutation: an unbounded property named `default` fails | pass |
+| Bounds hold at the edge | invalid fixtures one defect away from a valid one (e.g. `fanout-member-v1.invalid.parallel-ordinal-over-16`, `…map-member-out-of-range`, `fanout-interrupt-list-v1.invalid.seventeen-open`, `fanout-member-status-v1.invalid.end-with-open-cards`) | same test: 46 + 17 invalid fixtures rejected, 28 + 9 valid accepted | pass |
+| Malformed fixtures cannot hide | family-prefixed names must match `fixtureName` (`services/elitea-main/internal/runtimecontracts/schemas_test.go:30`) | same test; mutation: misnamed fixtures fail | pass |
 
 ## Security
 
-- **Threats addressed in the designs** (D1 §15, D2 §12, D5 §16, D6 §12): authorization inside the effect/decision
-  transaction for the exact actor, project and target; identifiers from YAML, browser or model never authorize;
-  consume-once and multi-tab safety (CAS, `request_id` replay, 409, ACK after child save); rejection and auth Skip
-  never become permission; egress only through the hardened guard (no redirects, private/CGNAT/metadata/NAT64 ranges
-  blocked, `Proxy=nil`, HTTPS with verified TLS); credentials by reference only (`credential_ref`,
-  `configuration_id`), never in YAML, bodies, events, checkpoints or logs; parameterized database access only, frozen
-  statements, read-only transactions for reads; no prompts, item data, tool arguments, decision values or URLs in
-  events or logs; no arbitrary code outside the Code sandbox.
-- **Enforced now by schemas:** card `display` is closed (no `www_authenticate`, tokens or checkpoint ids); decision
-  bodies refuse unknown fields such as a raw token; `credential_ref` is required for `authorize` and forbidden
-  otherwise; HTTP node YAML refuses URL, method and credential keys; rule origins must be `https://` without a path;
-  fetch entries cannot carry `decided_by`.
-- **Evidence redaction:** fixtures use synthetic ids only; no real tokens, URLs with secrets or customer data.
-- **Supply chain:** no new dependency. The Go test uses `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3, already a
-  direct dependency of `services/elitea-main` (`go.mod`). `govulncheck` is not installed locally and no CI workflow
-  runs it, so it was not run; this PR adds no dependency or production code, so it cannot change its findings.
-  `golangci-lint` v2.9.0 runs in CI (not installed locally).
+Threat model and per-rule mechanism + test: D1 §15 Security table, D2 §12 Security table (negative-authz,
+fencing, consume-once, log-capture tests), D5 §16, D6 §12. Summary of the threats: authorization inside the
+effect/decision transaction, identifiers that never authorize, consume-once and multi-tab, rejection/Skip never
+permission, egress only through the hardened guard (no redirects, private/CGNAT/metadata/NAT64 blocked, `Proxy=nil`,
+HTTPS), credentials by reference only, parameterized database access only, no secrets/prompts/item data/tool
+arguments/decision values in events or logs, no arbitrary code outside the Code sandbox.
+
+| Rule this PR enforces | Mechanism | Test | Result |
+|---|---|---|---|
+| Card display cannot carry secrets | closed `display` in `fanout-interrupt-card.schema.json` | fixture `fanout-interrupt-card-v1.invalid.secret-display-field` rejected | pass |
+| Decision bodies carry no tokens; `credential_ref` only for `authorize` | `fanout-interrupt-decision-request.schema.json` | `…decision-request-v1.invalid.raw-token-in-body`, `…authorize-without-credential-ref`, `…credential-ref-on-approve` rejected | pass |
+| Resolved frames and fetch entries leak no value or actor | `fanout-interrupt-resolved`, `fanout-interrupt-fetch` schemas | `…resolved-v1.invalid.value-leaked`, `…fetch-v1.invalid.decided-by-leaked` rejected | pass |
+| No URL, method or credential in HTTP YAML; no CR/LF header injection | `http-action-node.schema.json` | `http-action-node-v2.invalid.{url,method,credential}-in-yaml`, `…crlf-header-value` rejected | pass |
+| Rule origins are https without userinfo or path | `http-action-rule.schema.json` | `http-action-rule-v1.invalid.{http-origin,origin-with-path}` rejected | pass |
+| Fixtures contain no real secrets | synthetic values only | security review (below) | pass |
+
+Reviews and scans:
+- `code-review` (high): 9 findings; 8 fixed, 1 skipped (adding `libs/jsonschema/**` to `ci-go.yml` — CI changes are
+  out of scope by user decision; the gap is recorded above).
+- `security-review`: no vulnerabilities found (fixtures synthetic; schemas refuse plain-http origins, userinfo,
+  CR/LF headers, raw tokens; the test-only package and docs add no attack surface).
+- `govulncheck ./...` in `services/elitea-main` (local go1.26.5): 7 reachable findings, all in the Go standard library
+  of the local toolchain (GO-2026-6218, -6091, -6090, -6089, -6088, -5972, -5026; fixed in go1.26.6), all
+  pre-existing and none reachable from `internal/runtimecontracts`. New findings from this PR: 0.
+- `cargo deny --all-features check advisories`: not run — this PR changes no Rust code or dependency
+  (Worker changes are documentation only).
+- Supply chain: no new dependency; the Go test uses `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3, already a
+  direct dependency of `services/elitea-main`. `golangci-lint` v2.9.0 runs in CI (not installed locally).
 
 ## Decisions in D2 that need the reviewer's confirmation
 

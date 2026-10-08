@@ -368,6 +368,12 @@ Wave 2 Worker and Main tests must load the same fixtures instead of copying them
 
 ## 12. Performance, durability, resilience and security
 
+Mechanisms marked (M2) are built by Track M2 in `services/elitea-main/internal/infra/db/repos/execution_interrupts.go`
+and `internal/api/v2/agentexecution/interrupts.go`; (Wave 2) marks later wiring. Main's limits are named constants in
+one place (`internal/domain/executioninterrupt/limits.go`, M2) and the Main test
+`TestExecutionInterruptLimitsMatchContractSchemas` asserts they equal the schema bounds, so Go, Rust and the schemas
+cannot drift. The schemas themselves are enforced now by `services/elitea-main/internal/runtimecontracts/schemas_test.go`.
+
 ### Performance
 
 | Budget | Limit |
@@ -378,6 +384,13 @@ Wave 2 Worker and Main tests must load the same fixtures instead of copying them
 | Frames per card | 1 `agent_interrupt_pending` + 1 `agent_hitl_resolved`; lifecycle frames are never coalesced but are O(members), not O(tokens) |
 | Ledger rows | 1 row per card + 1 audit row per transition; 0 parent checkpoint rows per card |
 | Live pickup / parked wake / other tab | p95 ≤ 2 s / ≤ 5 s / ≤ 3 s |
+
+| Requirement | Enforced by (code mechanism) | Proven by (test) |
+|---|---|---|
+| One transaction per decision | `Repo.Decide` runs lock, CAS, audit, revision bump and (when parked) continuation + outbox in one `pgx.Tx` (M2; continuation Wave 2) | `TestDecideSingleTransaction` (PG, statement log: one BEGIN/COMMIT per POST) |
+| Decision POST p95 ≤ 150 ms | the single transaction above, indexed by the primary key | `TestDecideLatencyBudget` (PG, 200 sequential POSTs, p95 ≤ 150 ms) |
+| Fetch ≤ 16 entries × ≤ 64 KiB | `maxFetchDecisions = 16`, `maxFetchEntryBytes = 65536` checked while building the response (Wave 2 route); `LIMIT 16` in the query | `TestFetchCapsEntriesAndBytes` (17 DECIDED rows impossible by cap; oversized entry → typed fault) |
+| 0 fetches with no open card | Worker `DecisionTick` (runtime design §15) | Worker `no_fetch_without_open_cards_and_backoff_to_5s` |
 
 ### Durability
 
@@ -392,6 +405,15 @@ Wave 2 Worker and Main tests must load the same fixtures instead of copying them
 
 Rows are keyed by the root response, so they survive continuation executions and Worker replacement.
 
+| Requirement | Enforced by (code mechanism) | Proven by (test) |
+|---|---|---|
+| Idempotent raise | `Repo.Raise`: `INSERT … ON CONFLICT (root_response_id, interrupt_key) DO NOTHING`, then byte-compare `card_json`; mismatch → `ErrInterruptRaiseConflict` (M2) | `TestRaiseReplayIdenticalIsNoop`, `TestRaiseReplayDifferentBytesFaults` (PG) |
+| State coherence | table CHECK constraints per state (section 5), so an incoherent row cannot be written (M2 migration) | `TestInterruptStateChecksRejectIncoherentRows` (PG, direct INSERT/UPDATE attempts fail) |
+| Exactly one DECIDED under contention | `UPDATE … WHERE state='PENDING' AND revision=$expected` under the row lock (M2) | `TestDecideFiftyConcurrentTwoTabs` (PG: 1 DECIDED, 49 replay/409) |
+| Exactly one continuation per response | response row lock + `decision_revision` + partial unique index `one_active_continuation_per_response` (Wave 2) | `TestDecideVersusParkExactlyOneContinuation` (PG barrier) |
+| ACK replay safe | `Repo.Ack` stores canonical ACK bytes; byte-identical replay → `replay:true`, conflict → `ErrInterruptAckConflict` (M2) | `TestAckReplayIdenticalAndConflicting` (PG) |
+| Cancel/supersede atomic with stop/regenerate | `Repo.CancelAllForResponse` / `SupersedeForResponse` called inside the stop and regenerate transactions (M2 repo, Wave 2 call sites) | `TestCancelMovesOpenRowsToCancelled`; `TestLateAckAfterCancelRefused` (PG) |
+
 ### Resilience
 
 - Bounds: 16 open cards per response; decision body ≤ 8 KiB; card ≤ 32 KiB; fetch entry ≤ 64 KiB; ≤ 16 entries per
@@ -400,6 +422,14 @@ Rows are keyed by the root response, so they survive continuation executions and
 - Private calls are one bounded attempt, no redirects, no automatic retry. The public API returns typed errors
   (400/404/409) and never a partial state.
 - The Main API is behind a flag that is off in production until Wave 2 acceptance.
+
+| Requirement | Enforced by (code mechanism) | Proven by (test) |
+|---|---|---|
+| 16 open cards per response | `maxOpenInterrupts = 16`; `Raise` counts `PENDING`+`DECIDED` under the response lock → `ErrInterruptCapReached` (M2) | `TestRaiseCapAtSixteenAndSeventeen` (PG boundary) |
+| Decision body ≤ 8192 bytes | `maxDecisionBodyBytes = 8192` via `http.MaxBytesReader` before decoding → 400 `agent_interrupt_invalid_decision` (M2) | `TestDecisionBodyAtLimitAndLimitPlusOne` |
+| Card ≤ 32 KiB, interrupt id printable ASCII ≤ 512 | `maxCardBytes = 32768` and the card schema type checked in `Raise` before insert (M2/Wave 2) | `TestRaiseCardAtLimitAndLimitPlusOne`; schema fixtures `fanout-interrupt-card-v1.invalid.*` |
+| Strict input | `DisallowUnknownFields` decoding into closed request types mirroring `fanout-interrupt-decision-request` (M2) | `TestDecisionRejectsUnknownFieldsAndRawTokens` (uses the schema's invalid fixtures as request bodies) |
+| Private calls bounded | Worker client: one attempt, no redirect policy, request deadline (Wave 2, `execution/fanout_decisions.rs`) | `fetch_client_single_attempt_no_redirect` |
 
 ### Security
 
@@ -418,6 +448,16 @@ Rows are keyed by the root response, so they survive continuation executions and
 - **Rejection is never permission.** `reject` and auth `skip` are recorded and applied as such.
 - **Supply chain.** The conformance test uses `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3, already a direct
   dependency of `services/elitea-main`. No new dependency.
+
+| Requirement | Enforced by (code mechanism) | Proven by (test) |
+|---|---|---|
+| Authorization inside the transaction, fail closed | `Decide` locks the response then rechecks original-actor ownership, membership, active user/project and `models.chat.messages.create` before the CAS; any failure aborts (M2) | `TestDecideForeignActorRefused`, `TestDecideForeignProjectRefused`, `TestDecideRemovedMemberRefused` (PG negative authz, row unchanged) |
+| `interruptKey` grants nothing | lookup is `WHERE root_response_id = $authorizedResponse AND interrupt_key = $key` (M2) | `TestDecideKeyFromOtherResponseIs404` |
+| Private routes fenced | mTLS + `X-Elitea-Claim-Id` + `X-Elitea-Fence`, recheck under job lock with the DB clock, `RUNNING` claims only (Wave 2) | `TestFetchStaleFenceRefused`, `TestFetchNodeRecoveryClaimRefused`, `TestAckOldClaimRefused` |
+| Consume-once | CAS + `request_id` byte replay + ACK bound to `request_id`, `revision`, `decision_sha256` (M2/Wave 2) | `TestDecideFiftyConcurrentTwoTabs`; `TestAckWithWrongDecisionDigestRefused` |
+| No secrets in bodies, frames, logs, audit | `CredentialRef` opaque type (no `String()` with the value; token resolved server-side only); log fields restricted to `interruptLogFields{response, key_prefix, state, revision, actor_id}` (M2); resolved frame type has no `value` field | `TestDecisionRejectsUnknownFieldsAndRawTokens`; `TestInterruptLogsCarryNoValues` (log capture: no value, display text, args or token substrings) |
+| Reject/Skip never permission | stored action is applied verbatim; no default action anywhere in the decide or fetch path | `TestFetchReturnsExactAction` |
+| Supply chain | no new dependency (`santhosh-tekuri/jsonschema/v6` already required); `govulncheck` on the implementing PR | recorded audit output in the source mapping |
 
 ## 13. Open points for the reviewer
 
