@@ -279,6 +279,27 @@ fn missing_and_null_lists() {
 }
 
 #[test]
+fn empty_list_policies_still_check_every_parent() {
+    let empty = format!("{ROWS}\nmissing_list: empty\nnull_list: empty\nretain: {{mode: all}}");
+    for (source, expected) in [
+        (
+            json!([{"f": [1]}, "scalar parent"]),
+            "graph.shaping.invalid_row: retain at item 1",
+        ),
+        (
+            json!([{"f": [1]}, {"d": 1}]),
+            "graph.shaping.field_collision: destination at item 1",
+        ),
+        (
+            json!([{"f": [1]}, {"d": 1, "f": null}]),
+            "graph.shaping.field_collision: destination at item 1",
+        ),
+    ] {
+        assert_eq!(fail(&empty, &source).1, expected, "{source}");
+    }
+}
+
+#[test]
 fn scalar_at_path_is_a_type_mismatch_never_wrapped() {
     for bad in [json!("s"), json!(1), json!(true), json!({"a": 1})] {
         let (code, message) = fail(ROWS, &json!([{"f": [1]}, {"f": bad}]));

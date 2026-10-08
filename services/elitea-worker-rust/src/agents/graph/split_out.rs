@@ -266,15 +266,16 @@ fn split_parent(
     let list = match &definition.path {
         None => parent,
         Some(path) => match path.resolve(parent) {
+            // An empty policy emits no rows but still checks the parent.
             None => {
                 return match definition.missing_list {
-                    ListPolicy::Empty => Ok(()),
+                    ListPolicy::Empty => retained_map(definition, parent, parent_index).map(drop),
                     ListPolicy::Error => Err(at(ShapingCode::MissingField, "split.path")),
                 };
             }
             Some(Value::Null) => {
                 return match definition.null_list {
-                    ListPolicy::Empty => Ok(()),
+                    ListPolicy::Empty => retained_map(definition, parent, parent_index).map(drop),
                     ListPolicy::Error => Err(at(ShapingCode::NullValue, "split.path")),
                 };
             }

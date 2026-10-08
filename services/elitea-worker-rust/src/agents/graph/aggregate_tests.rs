@@ -409,6 +409,23 @@ fn empty_input_follows_decision_u2() {
 
 // ---------------------------------------------------------------- operations
 
+/// `first` keeps applying its policies to every row after it found a value.
+#[test]
+fn first_checks_every_row_after_it_found_a_value() {
+    let source = r#"[{"v":1},{"w":0},{"v":null},{"v":4}]"#;
+    let first = |field: &str| {
+        format!("operations: [{{operation: first, output: out, field: {{path: /v{field}}}}}]\n")
+    };
+    assert_eq!(
+        run_err(&first(""), source),
+        "graph.shaping.missing_field: operations[0].field at item 1"
+    );
+    assert_eq!(
+        run_err(&first(", missing: skip, null: error"), source),
+        "graph.shaping.null_value: operations[0].field at item 2"
+    );
+}
+
 #[test]
 fn operations_apply_the_missing_and_null_policies() {
     let source = r#"[{"v":1},{"w":0},{"v":null},{"v":4}]"#;

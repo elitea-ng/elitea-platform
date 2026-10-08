@@ -34,7 +34,9 @@ Both node types reject unknown keys.
 | `values` | 32,768 | both | JSON values in the emitted list, containers included. The list itself counts as 1. |
 
 The `values` ceiling is half the whole-state checkpoint structure limit (65,536). A maximal shaping output can
-therefore still pass a later Map or Parallel checkpoint boundary.
+therefore still pass a later Map or Parallel checkpoint boundary. A SplitOut envelope row holds at least 5 values
+(row, `parent_index`, `position`, `data` and the element), so under the default `values` ceiling SplitOut emits at most
+6,553 rows. `values` is reached before `output_items` for scalar elements.
 
 A node YAML larger than 64 KiB is refused.
 
@@ -100,7 +102,8 @@ A node YAML larger than 64 KiB is refused.
 - `destination` equal to the last token of a one-token `split.path` replaces the list field with its element.
   This is n8n's common pattern, and with `remove_source: true` it does not collide.
 - A missing list follows `missing_list`, and a null list follows `null_list`. With `empty`, the parent produces no
-  rows. With `error`, the node fails with `missing_field` or `null_value`.
+  rows, but its retention checks (`invalid_row`, `field_collision`, `only` selections) still run. With `error`, the
+  node fails with `missing_field` or `null_value`.
 - An empty list produces zero rows for that parent.
 - A value at `split.path` that is neither a list nor null fails with `type_mismatch`. A scalar is never wrapped.
 - For every parent with `all` or `except`, a retained top-level name equal to `destination` fails with
@@ -142,7 +145,8 @@ The policies apply in this order:
    step.
 3. Apply the `null` policy.
 
-A skipped row does not contribute to that operation.
+A skipped row does not contribute to that operation. Every row passes the policies, also after `first` has found
+its value.
 
 **Operations:**
 

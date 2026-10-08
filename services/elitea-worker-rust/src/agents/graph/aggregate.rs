@@ -492,8 +492,10 @@ impl<'a> Accumulator<'a> {
                 }
             }
             Self::First(first) => {
+                // Every row still passes the field policies.
+                let selected = selected_value(operation.select(index, view)?);
                 if first.is_none() {
-                    *first = selected_value(operation.select(index, view)?);
+                    *first = selected;
                 }
             }
             Self::Last(last) => {
