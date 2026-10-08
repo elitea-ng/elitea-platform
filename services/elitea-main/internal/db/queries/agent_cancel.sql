@@ -138,16 +138,11 @@ WITH target AS MATERIALIZED (
 ), retained AS (
     UPDATE chat_message_group AS response
     SET is_streaming = FALSE,
-        -- A stopped answer is settled and is not an error: `is_error: false`
-        -- is what the client contract's settle check reads (an ABSENT
-        -- `is_error` means "still running"), so it is stamped here rather
-        -- than left for the worker's later CANCELLED terminal. A value the
-        -- row already carries wins (the right-hand side of `||`).
-        meta = jsonb_build_object('is_error', FALSE) || (response.meta
+        meta = response.meta
             - 'hitl_interrupt'
             - 'hitl_interrupts'
             - 'authorization_requests'
-            - 'node_recovery_required_v1'),
+            - 'node_recovery_required_v1',
         updated_at = clock_timestamp()
     FROM target
     WHERE response.id = target.response_message_group_id
