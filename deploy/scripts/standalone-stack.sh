@@ -1497,13 +1497,17 @@ SQL
     # Each assertion in this subcommand holds exactly one accepting arm, so the
     # accepting arms are the assertions. One site sits inside a loop and makes
     # one assertion per listener, so the listener list adds its extra rounds.
-    # The list is declared here, and counted here, so the two cannot disagree.
-    # Read scripts/lib/assertion-floor.sh.
+    # The edge identity probes hold two sites inside a loop over their targets,
+    # so that list adds two assertions per extra target. Both lists are
+    # declared here, and counted here, so the lists and the floor cannot
+    # disagree. Read scripts/lib/assertion-floor.sh.
     RUNTIME_LISTENERS=("control 9443" "output 9444" "content 9445")
+    IDENTITY_PROBE_TARGETS=("https://elitea-platform-edge/api/v2/social/author"
+                            "http://elitea-main:8080/api/v2/social/author")
     ASSERTION_SITE_PATTERN='(^|[^[:alnum:]_])ok[[:space:]]+"'
     ASSERTION_SITE_RANGE='/^  check)$/,/^    ;;$/'
     ASSERTION_SITES="$(derive_assertion_floor "$0" "$ASSERTION_SITE_PATTERN" "$ASSERTION_SITE_RANGE")"
-    EXPECTED_ASSERTIONS=$(( ASSERTION_SITES + ${#RUNTIME_LISTENERS[@]} - 1 ))
+    EXPECTED_ASSERTIONS=$(( ASSERTION_SITES + ${#RUNTIME_LISTENERS[@]} - 1 + 2 * (${#IDENTITY_PROBE_TARGETS[@]} - 1) ))
     ALLOW_SKIPS=0
     for check_arg in "${@:2}"; do
       case "$check_arg" in
@@ -1856,7 +1860,10 @@ sys.stdout.write(reply)
     # user — so a down edge or an unmounted route cannot pass for a refusal.
     echo "→ edge identity projection (inside the network):"
     if [ -z "${spoof_jwt:-}" ] || [ -z "${spoof_other:-}" ]; then
-      skip "no PAT and second user to contrast the probes against (run: $0 seed-runtime)"
+      for target in "${IDENTITY_PROBE_TARGETS[@]}"; do
+        skip "no PAT and second user to contrast the ${target%%/api/*} probes against (run: $0 seed-runtime)"
+        skip "no PAT to show a real credential still works at ${target%%/api/*} (run: $0 seed-runtime)"
+      done
     else
       identity_probe() {
         $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
@@ -1874,8 +1881,7 @@ except Exception as error:
     print('ERR', type(error).__name__)
 " "$@" 2>&1 || true
       }
-      for target in "https://elitea-platform-edge/api/v2/social/author" \
-                    "http://elitea-main:8080/api/v2/social/author"; do
+      for target in "${IDENTITY_PROBE_TARGETS[@]}"; do
         out="$(identity_probe "$target" 'X-Auth-Type: user' "X-Auth-ID: ${spoof_other}" \
                  "X-Auth-User-ID: ${spoof_other}" 'X-Auth-Signature: v1.0.AAAA')"
         case "$out" in
