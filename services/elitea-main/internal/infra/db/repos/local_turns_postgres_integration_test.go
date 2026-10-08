@@ -335,3 +335,90 @@ WHERE execution_id = $1`, started.ExecutionID); err != nil {
 		t.Fatalf("an expired commit wrote %d messages (%v)", messages, err)
 	}
 }
+
+// TestPostgresLocalTurnMemorySavedDuringTurnIsRecalledNextTurn: the next-turn
+// guarantee holds across a local turn. A memory saved (through the cloud
+// memory API) while turn N runs is newer than turn N's question, because the
+// commit dates the question at the turn's start, so turn N+1 reserves it even
+// though it shares no word with the input and eight older memories outrank it.
+func TestPostgresLocalTurnMemorySavedDuringTurnIsRecalledNextTurn(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const user int64 = 4521
+	var conversationID int
+	var conversationUUID string
+	if err := pool.QueryRow(ctx, `
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
+VALUES (gen_random_uuid(), 'memory across turns', $1, 'elitea') RETURNING id, uuid::text`, user).
+		Scan(&conversationID, &conversationUUID); err != nil {
+		t.Fatal(err)
+	}
+	for _, seed := range []string{`('user', '{"id": 4521}')`, `('dummy', '{}')`} {
+		if _, err := pool.Exec(ctx, `
+WITH p AS (
+    INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta, meta)
+    SELECT gen_random_uuid(), v.name, v.meta::jsonb, '{}'::json FROM (VALUES `+seed+`) AS v(name, meta)
+    RETURNING id
+)
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) SELECT $1, id FROM p`, conversationID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	memoriesRepo := NewMemoriesRepo(pool)
+	long := strings.Repeat("restaurant dinner booking preference detail ", 7)
+	for i := 0; i < 8; i++ {
+		created, err := memoriesRepo.Create(ctx, "1", strconv.FormatInt(user, 10), memories.MemoryEntry{
+			Content: strconv.Itoa(i) + " " + long, Enabled: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := pool.Exec(ctx, `
+UPDATE p_1.personal_memory_entries SET created_at = now() - make_interval(mins => $2) WHERE id = $1::bigint`,
+			created.ID, 120-i); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := 0
+	service, err := localturn.NewService(NewLocalTurnsRepo(pool), &localTurnPolicy{allowed: true},
+		memoriesRepo, &localTurnAudit{},
+		func() (string, error) {
+			ids++
+			return strings.Repeat("0", 31) + strconv.Itoa(ids), nil
+		}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const input = "Book a restaurant for dinner, same preference as before."
+	first, err := service.Start(ctx, localturn.StartRequest{
+		ProjectID: 1, ActorUserID: user, TokenID: "79", ConversationUUID: conversationUUID,
+		QuestionID: "21111111-2222-4333-8444-555555555555", UserInput: input,
+	})
+	if err != nil {
+		t.Fatalf("start turn N: %v", err)
+	}
+	// Saved while turn N runs, from the web; no word in common with the input.
+	fresh, err := memoriesRepo.Create(ctx, "1", strconv.FormatInt(user, 10), memories.MemoryEntry{
+		Content: "Prefers dark mode in every editor.", Enabled: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Commit(ctx, localturn.CommitRequest{
+		ProjectID: 1, ActorUserID: user, ExecutionID: first.ExecutionID,
+		UserMessage: input, AssistantMessage: "Booked.",
+	}); err != nil {
+		t.Fatalf("commit turn N: %v", err)
+	}
+	second, err := service.Start(ctx, localturn.StartRequest{
+		ProjectID: 1, ActorUserID: user, TokenID: "79", ConversationUUID: conversationUUID,
+		QuestionID: "31111111-2222-4333-8444-555555555555", UserInput: input,
+	})
+	if err != nil {
+		t.Fatalf("start turn N+1: %v", err)
+	}
+	if !strings.Contains(second.Recall.Text, "Prefers dark mode in every editor.") ||
+		!containsRecallID(second.Recall.IDs, fresh.ID) {
+		t.Fatalf("turn N+1 recall = %+v, want the memory saved during turn N", second.Recall)
+	}
+}
