@@ -41,6 +41,8 @@ describe('keyConnection', () => {
       'PRAGMA cipher_memory_security = ON;',
       'SELECT count(*) AS n FROM sqlite_master;',
       'PRAGMA journal_mode = WAL;',
+      // Freed pages are zeroed: a deleted message's bytes do not linger in free space.
+      'PRAGMA secure_delete = ON;',
     ]);
   });
 

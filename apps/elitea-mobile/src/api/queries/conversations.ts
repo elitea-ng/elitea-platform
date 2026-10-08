@@ -2,13 +2,14 @@ import { useInfiniteQuery, type InfiniteData } from '@tanstack/react-query';
 
 import { sessionApiClient, type ApiClient } from '@/api/client';
 import { unwrap } from '@/api/errors';
-import type { components } from '@/api/generated/elitea.gen';
+import type { ConversationSummary } from '@/db/repo';
 import { queryKeys } from '@/api/queries/keys';
 import { syncManager } from '@/sync/appSync';
 import { useDeviceCopy } from '@/api/queries/deviceCopy';
 import { offlineConversationRows, readWithFallback } from '@/sync/offlineReads';
 
-export type ConversationSummary = components['schemas']['ConversationSummary'];
+/** A list row as any supported server sends it (`is_pinned` is absent on a 1.3 server; see src/db/repo.ts). */
+export type { ConversationSummary };
 
 export const CONVERSATIONS_PAGE_SIZE = 30;
 
@@ -108,19 +109,4 @@ export function useConversations(projectId: number | null) {
       fetchConversationPage(projectId as number, pageParam, sessionApiClient(), signal),
     getNextPageParam: nextConversationOffset,
   });
-}
-
-/**
- * Deletes one of the caller's conversations (`deleteConversation`, 204). Resolves true when the
- * server removed it (or it was already gone: 404); false when it refused or could not be reached.
- */
-export async function deleteConversation(projectId: number, conversationId: number, client: ApiClient = sessionApiClient()): Promise<boolean> {
-  try {
-    const { response } = await client.DELETE('/elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}', {
-      params: { path: { project_id: String(projectId), conversation_id: String(conversationId) } },
-    });
-    return response.ok || response.status === 404;
-  } catch {
-    return false;
-  }
 }

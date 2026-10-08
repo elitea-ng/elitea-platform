@@ -221,6 +221,24 @@ Set `native_client_policy.offline_retention_days` > 0 on the workspace first; wi
       "Sending…" and relaunch online: it is sent once (the server replays the same
       `question_id`).
 
+## 9a. Chats list: pin, rename, delete, offline search (issue #6, `src/db/search.ts`, `src/sync/conversationOps.ts`)
+
+- [ ] **FTS5 in the SQLCipher build.** On a dev build, open `/design-tabs/chats?q=nata`: the
+      Lisbon chat is found by its message text, and the Metro log has `design preview search
+      store` with a `cipher` version and `fts5: true`. (The real store's index is in the same
+      file: the "SQLCipher is linked" check above also covers it.)
+- [ ] **Offline search.** With a synced workspace, airplane mode on: a word that is only in a
+      message (not a title) finds that chat, with the passage under the title.
+- [ ] **Web → app.** Rename and pin a chat in the web app (server with client contract 1.4):
+      after the next sync the app shows the new name and the chat under Pinned; unpin on the web
+      moves it back.
+- [ ] **App → web, offline.** In airplane mode, rename, pin and delete (wait out the Undo):
+      the list shows all three at once. Back online, the web app shows them after a reload.
+- [ ] **Delete elsewhere.** Delete a chat on another device: after the next sync it is gone
+      here, also from search.
+- [ ] **VoiceOver / TalkBack.** On a chat row the rotor (actions) offers Pin (or Unpin), Rename
+      and Delete; Undo on the toast is reachable; the toast is announced.
+
 ## 10. Chat quick wins (client contract 1.3: `src/features/chat/actions/*`, `src/features/speech/*`, `src/features/a11y/*`)
 
 Needs a 1.3 workspace (discovery `client_contract` 1.3) for feedback, Stop, export and

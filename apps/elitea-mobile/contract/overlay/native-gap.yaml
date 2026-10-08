@@ -5,11 +5,11 @@
 # (contract/elitea-v2.yaml) does not define yet, each with where its shape was
 # observed (`x-zefir-source`) and what will replace it (`x-zefir-until`).
 #
-# It is EMPTY since the pin moved to elitea-platform v4.7.0 (d6f572dbd, client
-# contract 1.3): the 1.3 gap it carried (cancelChatExecution and the six
-# data-control keys of NativeClientPolicy / ClientPublicPolicy) is now defined
-# upstream and tagged `client`. Earlier it was empty from v4.2.0 (1.1) to
-# v4.3.2 (1.2). The file and its rules stay for the next gap.
+# It is EMPTY since the pin moved to elitea-platform v4.11.0 (604a49e10,
+# client contract 1.4): the 1.4 gap it carried (updateConversation and
+# ConversationSummary.is_pinned) is now defined upstream and tagged `client`.
+# Earlier it was empty from v4.7.0 (1.3) until the 1.4 work, and from v4.2.0
+# (1.1) to v4.3.2 (1.2). The file and its rules stay for the next gap.
 #
 # Rules enforced by scripts/contract.mjs build:
 #   - an operation (path + method) that upstream already defines is a hard
@@ -25,5 +25,5 @@
 openapi: 3.0.3
 info:
   title: Agent Zefir native-gap overlay
-  version: 0.4.0
+  version: 0.6.0
 paths: {}

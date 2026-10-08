@@ -46,6 +46,9 @@
     "listPublicApplications",
     "getPublicApplication",
     "listNativeDevices",
-    "revokeNativeDevice"
+    "revokeNativeDevice",
+    "updateConversation",
+    "pinEntity",
+    "unpinEntity"
   ]
 }

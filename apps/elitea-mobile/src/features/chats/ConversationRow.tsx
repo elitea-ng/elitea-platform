@@ -2,34 +2,64 @@ import { View } from 'react-native';
 
 import type { SwipeRowA11y } from '@/components/SwipeToDelete';
 import { useDesign } from '@/design/DesignProvider';
-import { ListRow } from '@/ui';
+import type { SnippetPart } from '@/db/search';
+import { Icon, ListRow, Text } from '@/ui';
+
+export const UNTITLED = 'Untitled conversation';
 
 /**
- * One row of the Chats list: the conversation's title and its age. The Chats tab and its
- * `__DEV__` preview (`/design-tabs/chats`) both draw this (through `ConversationList`), so the
- * review screenshots show the list the user gets (D2). When the list gains an avatar, a preview
- * line or an unread state, it is added here, with "unread" in the spoken label and an
- * emphasized title, never by colour alone. `a11y` carries the swipe's Delete action so
- * VoiceOver/TalkBack can reach it (§4.11), and its busy state while the delete runs.
+ * One row of the Chats list: the conversation's title and its age, a pin glyph when it is
+ * pinned (design-system §4.4; "pinned" is also in the spoken label, never the glyph alone), and
+ * for a search hit in a message the matched passage under the title, the matched words in bold
+ * (weight, not colour alone). The Chats tab and its `__DEV__` preview (`/design-tabs/chats`)
+ * both draw this (through `ConversationList`), so the review screenshots show the list the user
+ * gets (D2). `a11y` carries the row's actions (Pin, Rename, Delete) so VoiceOver/TalkBack can
+ * reach them (§4.11), and its busy state while one runs; a long press opens the same actions.
  */
 export function ConversationRow({
   title,
   age,
+  pinned = false,
+  snippet = null,
   onPress,
+  onLongPress,
   a11y,
 }: {
   title: string | null | undefined;
   age: string;
+  pinned?: boolean;
+  snippet?: readonly SnippetPart[] | null;
   onPress: () => void;
+  onLongPress?: () => void;
   a11y?: SwipeRowA11y;
 }) {
   const { colors } = useDesign();
+  const name = title || UNTITLED;
+  const passage = snippet && snippet.length > 0 ? snippet.map((part) => part.text).join('') : null;
   return (
     <View style={{ backgroundColor: colors.surface }}>
       <ListRow
-        title={title || 'Untitled conversation'}
+        title={name}
         value={age}
+        leading={pinned ? <Icon name="pin" size={17} tone="secondaryBrand" /> : undefined}
+        footer={
+          snippet && passage ? (
+            <Text variant="footnote" tone="secondary" numberOfLines={2} testID="chat-snippet">
+              {snippet.map((part, i) =>
+                part.match ? (
+                  <Text key={i} variant="footnote" tone="primary" emphasized>
+                    {part.text}
+                  </Text>
+                ) : (
+                  part.text
+                ),
+              )}
+            </Text>
+          ) : undefined
+        }
+        accessibilityLabel={[name, pinned ? 'pinned' : null, age, passage].filter(Boolean).join(', ')}
         onPress={onPress}
+        onLongPress={onLongPress}
         accessibilityActions={a11y?.accessibilityActions}
         onAccessibilityAction={a11y?.onAccessibilityAction}
         busy={a11y?.accessibilityState?.busy === true}

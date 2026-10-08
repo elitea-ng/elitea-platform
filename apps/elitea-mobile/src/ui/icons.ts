@@ -60,6 +60,8 @@ const KIT_ICONS = {
   sparkles: ['sparkles', 'auto_awesome'],
   bellOff: ['bell.slash', 'notifications_off'],
   version: ['number', 'tag'],
+  rename: ['pencil', 'edit'],
+  unpin: ['pin.slash', 'keep_off'],
 } as const satisfies Record<string, readonly [SFSymbol, AndroidSymbol]>;
 
 export const ICONS = { ...(tokenIcons as Record<keyof typeof tokenIcons, readonly [SFSymbol, AndroidSymbol]>), ...KIT_ICONS };

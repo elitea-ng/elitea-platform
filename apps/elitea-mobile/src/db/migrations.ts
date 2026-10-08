@@ -15,7 +15,14 @@ import type { Db } from '@/db/sql';
  * - `sync_state`: one `changes_since` cursor per synced list (scope), with
  *   the generation counters a full resync sweeps by;
  * - `meta`: key/value (origin);
- * - `outbox` (2): sends waiting for the workspace (src/sync/outbox.ts).
+ * - `outbox` (2): sends waiting for the workspace (src/sync/outbox.ts);
+ * - `conversation_search`, `message_search` (3): the offline chat search, FTS5
+ *   tables INSIDE this encrypted file (no plaintext side table or file),
+ *   kept in step with `conversations` and `messages` by triggers, so every
+ *   writer (sync, retention, a tombstone, a dropped project) maintains the
+ *   index without knowing about it (src/db/search.ts);
+ * - `conversation_ops` (3): list actions (rename, pin, delete) waiting for
+ *   the workspace (src/sync/conversationOps.ts).
  *
  * `messages` has no foreign key to `conversations`: a transcript may be
  * synced for a conversation the list filter does not include (a shared one).
@@ -100,6 +107,72 @@ export const MIGRATIONS: readonly Migration[] = [
         created_ms INTEGER NOT NULL
       );
       CREATE INDEX outbox_by_conversation ON outbox (project_id, conversation_uuid, created_ms);
+    `,
+  },
+  {
+    // Offline search and the list actions. The FTS rowid IS the row's rowid
+    // in its table: the triggers delete by it, so removing a row (any
+    // writer, any WHERE) removes its index entry. Those rowids are stable:
+    // the store never runs a full VACUUM (only `incremental_vacuum`, which
+    // moves no rows). The message text is the row's `content` (the text the
+    // thread shows; attachments are items, not text).
+    version: 3,
+    sql: `
+      CREATE VIRTUAL TABLE conversation_search USING fts5(
+        name, tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3'
+      );
+      CREATE VIRTUAL TABLE message_search USING fts5(
+        body, tokenize = 'unicode61 remove_diacritics 2', prefix = '2 3'
+      );
+      -- secure-delete: removing a row erases its tokens from the index b-tree at once,
+      -- instead of leaving them behind a delete marker until a merge happens to rewrite
+      -- that segment (a retained-out or deleted chat's words must not stay recoverable
+      -- by whoever holds the key). Needs SQLite 3.42+ (the SQLCipher build is 3.53).
+      INSERT INTO conversation_search (conversation_search, rank) VALUES ('secure-delete', 1);
+      INSERT INTO message_search (message_search, rank) VALUES ('secure-delete', 1);
+      CREATE TRIGGER conversation_search_insert AFTER INSERT ON conversations BEGIN
+        INSERT INTO conversation_search (rowid, name) VALUES (new.rowid, new.name);
+      END;
+      CREATE TRIGGER conversation_search_update AFTER UPDATE OF name ON conversations BEGIN
+        DELETE FROM conversation_search WHERE rowid = old.rowid;
+        INSERT INTO conversation_search (rowid, name) VALUES (new.rowid, new.name);
+      END;
+      CREATE TRIGGER conversation_search_delete AFTER DELETE ON conversations BEGIN
+        DELETE FROM conversation_search WHERE rowid = old.rowid;
+      END;
+      CREATE TRIGGER message_search_insert AFTER INSERT ON messages BEGIN
+        INSERT INTO message_search (rowid, body) VALUES (
+          new.rowid,
+          CASE WHEN json_valid(new.row_json) AND json_type(new.row_json, '$.content') = 'text'
+            THEN json_extract(new.row_json, '$.content') ELSE '' END
+        );
+      END;
+      CREATE TRIGGER message_search_update AFTER UPDATE OF row_json ON messages BEGIN
+        DELETE FROM message_search WHERE rowid = old.rowid;
+        INSERT INTO message_search (rowid, body) VALUES (
+          new.rowid,
+          CASE WHEN json_valid(new.row_json) AND json_type(new.row_json, '$.content') = 'text'
+            THEN json_extract(new.row_json, '$.content') ELSE '' END
+        );
+      END;
+      CREATE TRIGGER message_search_delete AFTER DELETE ON messages BEGIN
+        DELETE FROM message_search WHERE rowid = old.rowid;
+      END;
+      INSERT INTO conversation_search (rowid, name) SELECT rowid, name FROM conversations;
+      INSERT INTO message_search (rowid, body)
+        SELECT rowid, CASE WHEN json_valid(row_json) AND json_type(row_json, '$.content') = 'text'
+          THEN json_extract(row_json, '$.content') ELSE '' END
+        FROM messages;
+      CREATE TABLE conversation_ops (
+        project_id INTEGER NOT NULL,
+        conversation_id INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        value TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        next_attempt_ms INTEGER NOT NULL DEFAULT 0,
+        created_ms INTEGER NOT NULL,
+        PRIMARY KEY (project_id, conversation_id, kind)
+      );
     `,
   },
 ];

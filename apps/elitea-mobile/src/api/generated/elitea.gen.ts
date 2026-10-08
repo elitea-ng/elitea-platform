@@ -5,9 +5,9 @@
  * Apache-2.0, see contract/LICENSE.elitea) merged with the Agent Zefir
  * native-gap overlay and pruned to contract/client-operations.json.
  *
- * upstream sha256:    27c4b5278cbc1415565e9b74214900b8dbe0cc7680cedfc23de341ba21d0f9c6
- * overlay sha256:     a841b06906dceacba2d34407cd109837cb418a101cfa6c4aea80d9b1ef01bf01
- * operations sha256:  c19eb8cf8af7cc311fb799a8ce7a5974c8ef7f3566175c38224e7ccdeb6fefaa
+ * upstream sha256:    4b0307162a8f95fb401f64dfb4c71eb8ac2abde2dacdb06502b72d7a26ca21b1
+ * overlay sha256:     150a9e084a8afb335b2a43841256b5be5399f5514dd438d01ee437d2604c992f
+ * operations sha256:  c350fd90f6b306c1b70751f6f4b3a5128a8fe54bb5aeae6180a4793b31eff1f9
  */
 export interface paths {
     "/.well-known/elitea-client": {
@@ -508,7 +508,25 @@ export interface paths {
          *     instead.
          */
         get: operations["getConversation"];
-        put?: never;
+        /**
+         * Rename a conversation, or change its privacy, folder or settings
+         * @description Client contract 1.4. Needs `models.chat.conversation.update` and
+         *     access to the conversation itself (the chat authority's detail
+         *     rule, the same one the web app's rename passes); a conversation the
+         *     caller cannot see answers 404.
+         *
+         *     The route writes only the keys the body states. A body with `name`
+         *     alone renames the conversation and leaves its privacy, folder,
+         *     instructions and settings as they are. `name` is trimmed; a name that
+         *     is not a string, is blank after trimming, is longer than 256
+         *     characters or contains a control character answers 400 and writes
+         *     nothing. `null` or an absent `name` does not rename.
+         *
+         *     A rename reaches the caller's other devices through the
+         *     `changes_since` delta of the conversation list (the row comes back
+         *     with its new `name` and `updated_at`).
+         */
+        put: operations["updateConversation"];
         post?: never;
         /**
          * Delete a conversation and its stored attachments
@@ -944,10 +962,10 @@ export interface paths {
          *     internal/api/v2/eliteacore/public_applications.go. A `sort_by`,
          *     `sort_order`, `agents_type` or `statuses` value outside its allowlist,
          *     or a `limit`/`offset` outside its range, is refused with 400 and a body
-         *     naming the parameter — it is never silently ignored. The 400 is NOT
-         *     declared as a response here: `eliteaFetch` throws on every non-2xx, so
-         *     this codebase keeps generated response types 200-only (see
-         *     apps/elitea-web/src/pages/agents/Latest.tsx).
+         *     naming the parameter (InvalidQueryParameterError) — it is never
+         *     silently ignored. A native client whose `X-Client-Version` does not
+         *     parse gets the same status and the same `{error, error_description}`
+         *     keys, with `error: invalid_client_version`.
          *
          *     Trending (`trend_start_period`/`trend_end_period`) is the one pylon
          *     parameter still missing here.
@@ -1054,6 +1072,8 @@ export interface paths {
          *
          *     Idempotent for the same caller: stopping an answer that this caller
          *     already stopped answers 204 again, also after the run has settled.
+         *     The response message id may be sent in either case; the server folds
+         *     it to the lowercase spelling it stored.
          *     An answer that completed (or failed) on its own, one that is not this
          *     caller's, or one that does not exist answers 409 without saying
          *     which; for a completed answer the transcript already holds it.
@@ -1287,6 +1307,53 @@ export interface paths {
         put?: never;
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/social/pin/prompt_lib/{project_id}/{entity_type}/{entity_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                entity_id: number;
+                entity_type: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pin an entity for the project
+         * @description Store one shared pin per project, entity type, and entity identifier.
+         *     Repeated requests update the last pinner and timestamp.
+         *     Conversation pins require the caller's existing chat detail access.
+         *     NOTE(W2): internal/infra/db/repos/social_pins.go:73 implements the shared
+         *     centry.social_pins key defined by migrations/shared/0064_centry_social_pins.sql.
+         *
+         *     Client contract 1.4 (entity_type `conversation`, entity_id the
+         *     conversation's numeric id): the pin is the project's, shared by its
+         *     members, and shows as `is_pinned` on the conversation's list row. A
+         *     new pin re-delivers that row in the `changes_since` delta of every
+         *     member who can see the conversation, so a pin set in the web app
+         *     reaches the caller's devices and the other way round. A conversation
+         *     the caller cannot see answers 404 and pins nothing.
+         */
+        post: operations["pinEntity"];
+        /**
+         * Remove a shared project pin
+         * @description Remove the project pin regardless of which member last pinned it.
+         *     Repeated requests succeed. Conversation access is required before removal.
+         *     NOTE(W2): internal/infra/db/repos/social_pins.go:137 uses the canonical shared key.
+         *
+         *     Client contract 1.4: removing a conversation pin re-delivers the
+         *     conversation's list row (`is_pinned: false`) in the `changes_since`
+         *     delta; a repeated unpin removes nothing and re-delivers nothing.
+         */
+        delete: operations["unpinEntity"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2115,6 +2182,8 @@ export interface components {
             /** @description Always -1 today; see the schema description. */
             duration: number;
             id: number;
+            /** @description Client contract 1.4. The conversation is pinned in its project: the project holds a conversation pin for it (pinEntity with entity_type `conversation`, the pin the web app's "Pin on top" sets). A pin is shared by the project, not kept per member, and the row never says who pinned it. A pin or unpin re-delivers the row in the `changes_since` delta; it does not change `updated_at`. A server before 1.4 omits the field, which means not pinned. */
+            is_pinned: boolean;
             message_groups_count: number;
             /** @description Carries `single_participant` (the entity this conversation was filtered by, when entity_name/entity_meta_id were sent) among other conversation-level flags (`is_hidden`, etc). */
             meta?: {
@@ -2240,6 +2309,13 @@ export interface components {
             /** @description Always invalid_client_version. */
             error: string;
             error_description: string;
+        };
+        /** @description The 400 answer of listPublicApplications. A query parameter outside its allowlist or range answers `error: invalid_query_parameter` with `param` naming it and `msg` saying what it must be; the version gate answers `error: invalid_client_version` with no `param`. NOTE(W2): internal/api/v2/eliteacore/public_applications.go:280 (`writePublicApplicationsQueryError`). */
+        InvalidQueryParameterError: {
+            error: string;
+            error_description: string;
+            msg?: string;
+            param?: string;
         };
         LlmSettings: {
             max_tokens?: number;
@@ -2570,6 +2646,10 @@ export interface components {
             /** Format: int64 */
             total: number;
         };
+        /** @description NOTE(W2): `{"ok": true}` acknowledgements — SetDefaultVersion (internal/api/v2/applications/handler.go:981), BatchReplaceVersion (:994), UpdateAttachmentStorage (internal/api/v2/eliteacore/handler.go:1783), UpdateIcon (:1860), BatchUpdateEntitySettings (internal/api/v2/conversations/handler.go:675), and social/handler.go's UpdateAuthor (:133, 166), Like (:271, plus the no-op shortcuts at :253, 258), Unlike (:304, plus :288, 293), Pin (:324, plus :315), and Unpin (:344, plus :335). */
+        OkResponse: {
+            ok: boolean;
+        };
         /** @description A project member. NOTE(W2): internal/api/v2/conversations/candidates.go:40 (`ParticipantCandidate`). */
         ParticipantCandidate: {
             already_participant: boolean;
@@ -2810,6 +2890,39 @@ export interface components {
         };
         /** @description Opaque tool/toolkit settings blob — see marker. */
         ToolSettings: unknown;
+        /** @description The body of updateConversation. Every key is optional and only the keys present are written; a native client renames with `name` alone. NOTE(W2): internal/api/v2/conversations/handler.go (`Update`, `conversationNameFromBody`) reads these keys and ignores any other. */
+        UpdateConversationRequest: {
+            /** @description One of the caller's own folders; `null` takes it out of its folder. */
+            folder_id?: number | null;
+            instructions?: string;
+            /** @description `false` publishes the conversation in its project. Making a public conversation private is the author's alone. */
+            is_private?: boolean;
+            /** @description Replaces the whole settings document when present. */
+            meta?: {
+                [key: string]: unknown;
+            };
+            /** @description The new title, trimmed; 1 to 256 characters after trimming, no control characters. `null` does not rename. */
+            name?: string | null;
+        };
+        /** @description A conversation as updateConversation answers it. `id` is the numeric id AS A STRING, as in createConversation's answer; `uuid` is the id the chat send path takes. NOTE(W2): internal/infra/db/repos/conversations.go:685 (`Update`) fills these from the UPDATE's RETURNING row. Any other key it carries (a `message_count` of 0, which is not counted here) is not part of the answer's meaning. */
+        UpdatedConversation: {
+            /** Format: date-time */
+            created_at: string;
+            created_by: string;
+            folder_id?: string | null;
+            id: string;
+            instructions?: string;
+            is_private: boolean;
+            meta?: {
+                [key: string]: unknown;
+            };
+            name: string;
+            project_id: string;
+            /** Format: date-time */
+            updated_at: string;
+            /** Format: uuid */
+            uuid: string;
+        };
         UsageDailyEntry: {
             /** Format: int64 */
             api_requests: number;
@@ -3794,6 +3907,52 @@ export interface operations {
             500: components["responses"]["500"];
         };
     };
+    updateConversation: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                /** @description The conversation's numeric id or its UUID; both resolve. */
+                conversation_id: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateConversationRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated conversation. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdatedConversation"];
+                };
+            };
+            /** @description A body that is not a JSON object, an invalid `name` or `instructions`, a privacy change only the author may make, or a native client version that does not parse (invalid_client_version). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            500: components["responses"]["500"];
+        };
+    };
     deleteConversation: {
         parameters: {
             query?: never;
@@ -4043,6 +4202,7 @@ export interface operations {
             400: components["responses"]["InvalidClientVersion"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
+            404: components["responses"]["404"];
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
@@ -4130,6 +4290,7 @@ export interface operations {
             400: components["responses"]["InvalidClientVersion"];
             401: components["responses"]["401"];
             403: components["responses"]["403"];
+            404: components["responses"]["404"];
             426: components["responses"]["ClientUpgradeRequired"];
             500: components["responses"]["500"];
         };
@@ -4613,7 +4774,15 @@ export interface operations {
                     "application/json": components["schemas"]["PublicApplicationList"];
                 };
             };
-            400: components["responses"]["InvalidClientVersion"];
+            /** @description A refused query parameter (`error: invalid_query_parameter`, with `param` and `msg`), or a native client version that does not parse (`error: invalid_client_version`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvalidQueryParameterError"];
+                };
+            };
             426: components["responses"]["ClientUpgradeRequired"];
         };
     };
@@ -5272,6 +5441,124 @@ export interface operations {
             400: components["responses"]["400"];
             401: components["responses"]["401"];
             426: components["responses"]["ClientUpgradeRequired"];
+        };
+    };
+    pinEntity: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                entity_id: number;
+                entity_type: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pinned or updated the shared project pin */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description An unknown entity type, an invalid id, or a native client version that does not parse (invalid_client_version). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            /** @description Pin storage failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Pin storage or project authorization is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    unpinEntity: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The native client's version, MAJOR.MINOR.PATCH with an optional -prerelease (ADR-0025 decision 5). Judged only for a caller authenticated by a native access token (and on the native token endpoint): below the minimum answers 426, a value that does not parse answers 400. Ignored for every other caller. */
+                "X-Client-Version"?: components["parameters"]["XClientVersion"];
+            };
+            path: {
+                entity_id: number;
+                entity_type: string;
+                /** @description Project identifier (extracted from URL path) */
+                project_id: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed the shared pin or confirmed it is absent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OkResponse"];
+                };
+            };
+            /** @description An unknown entity type, an invalid id, or a native client version that does not parse (invalid_client_version). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"] | components["schemas"]["InvalidClientVersionError"];
+                };
+            };
+            401: components["responses"]["401"];
+            403: components["responses"]["403"];
+            404: components["responses"]["404"];
+            426: components["responses"]["ClientUpgradeRequired"];
+            /** @description Unpin storage failed */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Pin storage or project authorization is unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
         };
     };
 }

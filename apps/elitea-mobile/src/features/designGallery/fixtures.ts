@@ -8,20 +8,30 @@ export interface SampleChat {
   name: string;
   /** Minutes before "now" the chat was last updated (the list groups by day). */
   minutesAgo: number;
+  /** Pinned in the project (client contract 1.4). */
+  pinned?: boolean;
+  /** Message text the offline search preview indexes. */
+  messages?: readonly string[];
 }
 
 export const SAMPLE_CHATS: readonly SampleChat[] = [
-  { id: 1, name: 'Zefir launch planning', minutesAgo: 12 },
-  { id: 2, name: 'Q3 planning', minutesAgo: 3 * 60 },
-  { id: 3, name: 'Film club charter', minutesAgo: 26 * 60 },
-  { id: 4, name: 'Trip to Lisbon', minutesAgo: 4 * 24 * 60 },
-  { id: 5, name: 'Onboarding checklist', minutesAgo: 9 * 24 * 60 },
-  { id: 6, name: 'Release notes v1.60', minutesAgo: 23 * 24 * 60 },
+  { id: 1, name: 'Zefir launch planning', minutesAgo: 12, pinned: true, messages: ['Launch checklist: store listing, privacy labels and the TestFlight group.'] },
+  { id: 2, name: 'Q3 planning', minutesAgo: 3 * 60, messages: ['Draft the Q3 goals: retention, the Android build and offline search.'] },
+  { id: 3, name: 'Film club charter', minutesAgo: 26 * 60, messages: ['Draft the bylaws and pick a café near the station for the first meeting.'] },
+  {
+    id: 4,
+    name: 'Trip to Lisbon',
+    minutesAgo: 4 * 24 * 60,
+    pinned: true,
+    messages: ['Pastéis de nata at Manteigaria, then tram 28 up to the castle.', 'Book the Sintra day trip for Friday.'],
+  },
+  { id: 5, name: 'Onboarding checklist', minutesAgo: 9 * 24 * 60, messages: ['Add the planning doc to the onboarding pack.'] },
+  { id: 6, name: 'Release notes v1.60', minutesAgo: 23 * 24 * 60, messages: ['Search now finds words inside messages, offline too.'] },
 ];
 
-/** A sample chat as a server row (`updated_at`), relative to `now`. */
-export function sampleChatRow(chat: SampleChat, now: number): { id: number; name: string; updated_at: string } {
-  return { id: chat.id, name: chat.name, updated_at: new Date(now - chat.minutesAgo * 60_000).toISOString() };
+/** A sample chat as a server row (`updated_at`, `is_pinned`), relative to `now`. */
+export function sampleChatRow(chat: SampleChat, now: number): { id: number; name: string; updated_at: string; is_pinned: boolean } {
+  return { id: chat.id, name: chat.name, updated_at: new Date(now - chat.minutesAgo * 60_000).toISOString(), is_pinned: chat.pinned === true };
 }
 
 /** The signed-in user of the previews. */

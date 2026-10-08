@@ -1,12 +1,14 @@
 import { parseServerTime } from '@/lib/time';
 
-export type ChatSectionKey = 'today' | 'yesterday' | 'week' | 'older';
+export type ChatSectionKey = 'pinned' | 'today' | 'yesterday' | 'week' | 'older' | 'results';
 
 export const CHAT_SECTION_TITLE: Record<ChatSectionKey, string> = {
+  pinned: 'Pinned',
   today: 'Today',
   yesterday: 'Yesterday',
   week: 'Previous 7 days',
   older: 'Earlier',
+  results: 'Results',
 };
 
 export interface ChatSection<T> {
@@ -35,13 +37,13 @@ export function chatSectionOf(updatedAt: unknown, now: number = Date.now()): Cha
 }
 
 /**
- * The Chats list's sections (docs/screens.md §3): Today, Yesterday, Previous 7 days, Earlier, in
- * that order, each keeping the server's order (newest first). Empty sections are left out. The
- * contract has no pinned conversations yet, so there is no Pinned section.
+ * The Chats list's sections (docs/screens.md §3): Pinned (client contract 1.4 `is_pinned`), then
+ * Today, Yesterday, Previous 7 days, Earlier, in that order, each keeping the server's order
+ * (newest first). A pinned chat is only in Pinned. Empty sections are left out.
  */
-export function groupChatsByDate<T extends { updated_at?: unknown }>(rows: readonly T[], now: number = Date.now()): ChatSection<T>[] {
-  const order: ChatSectionKey[] = ['today', 'yesterday', 'week', 'older'];
+export function groupChatsByDate<T extends { updated_at?: unknown; pinned?: boolean }>(rows: readonly T[], now: number = Date.now()): ChatSection<T>[] {
+  const order: ChatSectionKey[] = ['pinned', 'today', 'yesterday', 'week', 'older'];
   const buckets = new Map<ChatSectionKey, T[]>(order.map((key) => [key, []]));
-  for (const row of rows) buckets.get(chatSectionOf(row.updated_at, now))!.push(row);
+  for (const row of rows) buckets.get(row.pinned === true ? 'pinned' : chatSectionOf(row.updated_at, now))!.push(row);
   return order.filter((key) => buckets.get(key)!.length > 0).map((key) => ({ key, title: CHAT_SECTION_TITLE[key], data: buckets.get(key)! }));
 }

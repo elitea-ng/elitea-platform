@@ -48,4 +48,7 @@ export async function keyConnection(
     throw new DbOpenError('wrong_key', error);
   }
   await raw.exec('PRAGMA journal_mode = WAL;');
+  // Deleted content is overwritten with zeros, so a removed message's bytes (row_json, the
+  // FTS content) do not linger in freed pages until something reuses them. Per connection.
+  await raw.exec('PRAGMA secure_delete = ON;');
 }

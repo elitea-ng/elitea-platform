@@ -976,9 +976,8 @@ Landed on `feat/redesign-entry-home`:
   Attach hand the new conversation a one-time action in memory (`IntentHandoff.then`), so a URL
   can never start the microphone or a picker. Up to five recent chats; the mascot empty state
   when there are none.
-- **Chats** (`ConversationList`): inset-grouped sections by local day (Today, Yesterday, Previous
-  7 days, Earlier; the contract has no pinned chats), swipe left to Delete (`deleteConversation`,
-  confirmed first; also an accessibility action), none on the offline copy.
+- **Chats** (`ConversationList`): inset-grouped sections, Pinned first (client contract 1.4), then
+  by local day (Today, Yesterday, Previous 7 days, Earlier). Row actions are in §13.
 - **Switchers** are native sheets with detents (`sheetOptions`, Done for VoiceOver): projects by
   NAME under the active workspace (never "Project #id"), workspaces each with its mark in its
   OWN corrected accent (`WorkspaceSummary.brand`, `markTint`).
@@ -1198,3 +1197,42 @@ the code and covered by a test or a preview; **open** items say why.
 | Android 16: insets, predictive back, 200 % font, themed icon | **Open:** no Android build on this machine; code paths typed and unit-tested |
 | Brands: Zefir, magenta, green, lemon (low contrast, corrected) | Done (`brand.test.ts`, previews) |
 | Touch targets asserted by a test | Done (`kit.test.tsx`) |
+
+## 13. Chats list actions and offline search (as built, issue #6)
+
+Landed on `feat/conversation-list`:
+
+- **Sections.** Pinned on top (pinned rows from the loaded pages plus the saved copy's pinned rows,
+  so a chat pinned long ago is not stuck on a later page), then by local day. A pinned row has
+  the pin glyph in `secondary` as its leading element and "pinned" in its spoken label, never the
+  glyph alone (§4.4).
+- **Swipe actions (§4.11).** iOS: the leading swipe toggles Pin/Unpin (`secondarySoft` fill,
+  `secondarySoftOn` icon and label, a proven pair), the trailing swipe Deletes (`danger`). There
+  is no Archive in the contract, so the trailing swipe is Delete, and it always asks first
+  (the system alert); a full swipe therefore never deletes on its own. Android: the trailing
+  swipe only (M3 has no leading swipe actions); Pin and Rename are in the long-press menu. The
+  threshold haptic plays once when a swipe crosses it (§1.10). `SwipeActions` is the two-sided
+  sibling of `SwipeToDelete`.
+- **Long press** opens `ActionMenu` with Pin/Unpin, Rename and Delete; the same three are the
+  row's accessibility actions (`pin`, `rename`, `delete`).
+- **Delete** asks, then the row leaves with a floating "Chat deleted · Undo" (`UndoToast`, glass,
+  announced, Undo is a real button) for 6 s (12 s with a screen reader) before it is sent. Leaving
+  the screen or deleting another chat sends the waiting one (it was confirmed).
+- **Rename** is a native sheet (`/rename`, `sheetOptions(design, 'half')`) with Cancel and Save in
+  its bar and one field (Return saves; Save is off for a blank or unchanged name). Preview:
+  `/design-rename?name=…`.
+- **Queued, offline too.** Rename, pin and delete are queued in the encrypted store
+  (`conversation_ops`) and the list shows them at once; they are sent when the workspace can take
+  them (reconnect, foreground, unlock) with backoff, and a refused one is dropped with an alert
+  while the list returns to what the server says. Without an offline store they are sent at once.
+- **Search** is the header field, now over titles AND message text through the FTS5 index inside
+  the SQLCipher store (`src/db/search.ts`), the same online and offline (the workspace offers no
+  conversation search). Results are one Results section; a message hit shows the matched passage
+  under the title (footnote, matched words emphasized: weight, not colour alone). Without a store
+  it falls back to the title filter over the loaded rows.
+- **Gating.** Pin and Rename appear only when discovery says `client_contract` >= 1.4; Delete
+  and search do not depend on it.
+- **Previews:** `/design-tabs/chats` (sample pins; `?q=lisbon` types a query and runs the real
+  FTS5 search over a throwaway SQLCipher database on the device; `?undo=1` shows the toast),
+  `/design-rename`; both take `?brand=`.
+

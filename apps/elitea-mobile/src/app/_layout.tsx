@@ -12,6 +12,7 @@ import { UpgradeRequired } from '@/components/UpgradeRequired';
 import { queryClient, wireFocusManager, wireUpgradeRecovery } from '@/api/queryClient';
 import { startOfflineStore } from '@/db/startOfflineStore';
 import { wireNetwork } from '@/lib/network';
+import { startConversationOps } from '@/sync/appConversationOps';
 import { startOutbox } from '@/sync/appOutbox';
 import { startSync } from '@/sync/appSync';
 import { LockGate } from '@/security/lock/LockGate';
@@ -46,6 +47,8 @@ startSync();
 // Connectivity: react-query's online state, the outbox drain and sync on reconnect.
 wireNetwork();
 startOutbox();
+// The Chats list's queued actions (rename, pin, delete) drain on the same triggers.
+startConversationOps();
 // Attachment copies a crash or a kill left behind (downloads opened, chunks staged, files picked).
 sweepDownloadTemp();
 sweepUploadTemp();
@@ -212,6 +215,7 @@ function RoutedStack({ connected, signedIn }: { connected: boolean; signedIn: bo
         <Stack.Screen name="design-entry" options={{ headerShown: false }} />
         <Stack.Screen name="design-workspaces" options={{ headerShown: true, title: 'Workspaces', ...sheetOptions(design) }} />
         <Stack.Screen name="design-projects" options={{ headerShown: true, title: 'Projects', ...sheetOptions(design) }} />
+        <Stack.Screen name="design-rename" options={{ headerShown: true, title: 'Rename', ...sheetOptions(design, 'half') }} />
       </Stack.Protected>
       <Stack.Protected guard={signedIn}>
         <Stack.Screen name="(app)" />

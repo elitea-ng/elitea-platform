@@ -19,7 +19,7 @@ describe('migrate', () => {
     await migrate(db, MIGRATIONS.slice(0, 1));
     await db.run("INSERT INTO conversations (project_id, id, row_json) VALUES (7, 1, '{}')");
     expect(await tables(db)).not.toContain('outbox');
-    expect(await migrate(db)).toBe(2);
+    expect(await migrate(db)).toBe(SCHEMA_VERSION);
     expect(await tables(db)).toContain('outbox');
     expect(await db.get('SELECT count(*) AS n FROM conversations')).toEqual({ n: 1 });
   });

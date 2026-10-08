@@ -206,9 +206,11 @@ G ──────────────────────────
   use the footnote role, uppercase on iOS and sentence case on Android.
 - **Avatar:** the agent icon if it has one, else the mascot bust (with the single-use
   rule, design-system §4.6 and §5), else a monogram.
-- Swipe actions follow design-system §4.11. Long-press opens Pin, Rename, Archive and
-  Delete.
-- Search is local over cached titles while offline, and server-side when online.
+- Swipe actions follow design-system §4.11 (as built: §13). Long-press opens Pin, Rename and
+  Delete (the contract has no Archive). Pin and Rename need client contract 1.4.
+- Search is over the titles and messages kept on the device (the encrypted store's FTS5
+  index), the same online and offline: the workspace offers no conversation search. A message
+  hit shows the matched passage under the title.
 - **Empty:** the full mascot with [New chat]. **No results:** the bust with
   "Nothing found for '…'".
 - **iPad:** split view, with this list on the left and the thread on the right.

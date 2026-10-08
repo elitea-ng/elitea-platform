@@ -8,7 +8,12 @@ import { parseServerTime } from '@/lib/time';
  * queries by; nothing here interprets message content.
  */
 
-export type ConversationSummary = components['schemas']['ConversationSummary'];
+/**
+ * A conversation list row as any supported server sends it. Client contract 1.4 makes
+ * `is_pinned` required, but a 1.3 server omits it (which means not pinned), and rows saved
+ * from one stay in the store; so it is optional here and read as `row.is_pinned === true`.
+ */
+export type ConversationSummary = Omit<components['schemas']['ConversationSummary'], 'is_pinned'> & { is_pinned?: boolean };
 export type ConversationDetail = components['schemas']['ConversationDetail'];
 export type ConversationMessage = components['schemas']['ConversationMessage'];
 export type Notification = components['schemas']['Notification'];
@@ -61,7 +66,7 @@ export async function deleteConversation(tx: SqlExecutor, projectId: number, con
 
 /** Everything of one project (the caller lost access to it: 403), unsent messages included. */
 export async function dropProject(tx: SqlExecutor, projectId: number): Promise<void> {
-  for (const table of ['messages', 'conversations', 'notifications', 'sync_state', 'outbox']) {
+  for (const table of ['messages', 'conversations', 'notifications', 'sync_state', 'outbox', 'conversation_ops']) {
     await tx.run(`DELETE FROM ${table} WHERE project_id = ?`, [projectId]);
   }
 }

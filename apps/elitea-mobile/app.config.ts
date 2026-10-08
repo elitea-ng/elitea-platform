@@ -236,8 +236,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       { faceIDPermission: `${identity.displayName} uses Face ID to unlock your workspace.` },
     ],
     // The offline store is SQLCipher (src/db/). Needs a native build; Expo Go and web have
-    // no SQLCipher, and the store refuses to run without it (src/db/open.ts).
-    ['expo-sqlite', { useSQLCipher: true }],
+    // no SQLCipher, and the store refuses to run without it (src/db/open.ts). FTS5 (on by
+    // default, stated so it is never turned off by accident) is the offline chat search; its
+    // index is a table inside the same encrypted file (src/db/search.ts,
+    // scripts/sqlite-fts5-build.test.mjs).
+    ['expo-sqlite', { useSQLCipher: true, enableFTS: true }],
     // Attachments: the photo library and the camera, asked for only when the user picks.
     // The picker takes photos only; the microphone text is the dictation one (the same
     // NSMicrophoneUsageDescription; `false` here would block RECORD_AUDIO for dictation too).

@@ -3,7 +3,7 @@ This directory redistributes one file from the Elitea project, unmodified:
   contract/elitea-v2.yaml
     from:   https://github.com/elitea-ng/elitea-platform (elitea-platform)
     path:   services/elitea-main/api/openapi/v2.yaml
-    commit: e7585fee2578779b7e293be196182f8db42263a1
+    commit: 604a49e102f40f322fb1f41ac1ce45b634e29bfa
 
 That file is licensed under the Apache License, Version 2.0. The upstream
 NOTICE file and the full license text follow.

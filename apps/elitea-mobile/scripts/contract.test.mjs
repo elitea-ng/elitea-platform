@@ -277,15 +277,36 @@ describe('buildContract (real inputs)', () => {
   });
 });
 
-describe('client contract 1.3 (pinned upstream)', () => {
-  it('pins a server that speaks client contract 1.3 and needs no overlay', () => {
+describe('client contract 1.4 (pinned upstream)', () => {
+  it('pins a server that speaks client contract 1.4; the overlay is empty', () => {
     const { doc } = buildContract();
-    assert.equal(doc.info['x-elitea-client-contract'], '1.3');
+    assert.equal(doc.info['x-elitea-client-contract'], '1.4');
     const overlay = YAML.parse(readFileSync(new URL('../contract/overlay/native-gap.yaml', import.meta.url), 'utf8'));
     assert.deepEqual(overlay.paths, {});
     assert.equal(overlay['x-zefir-extend'], undefined);
   });
 
+  it('defines rename (updateConversation, name alone), pin/unpin and is_pinned upstream, tagged client', () => {
+    const { doc } = buildContract();
+    const item = doc.paths['/elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}'];
+    assert.equal(item.put.operationId, 'updateConversation');
+    assert.equal(item.put.tags.at(-1), 'client');
+    const body = doc.components.schemas.UpdateConversationRequest;
+    assert.equal(item.put.requestBody.content['application/json'].schema.$ref, '#/components/schemas/UpdateConversationRequest');
+    assert.equal(body.properties.name.type, 'string');
+    assert.equal(body.required, undefined, 'a body with name alone renames');
+    assert.ok(item.put.responses['400'] && item.put.responses['404'] && item.put.responses['426']);
+    assert.ok(item.get && item.delete, 'the GET and DELETE stay');
+    const pin = doc.paths['/social/pin/prompt_lib/{project_id}/{entity_type}/{entity_id}'];
+    assert.equal(pin.post.operationId, 'pinEntity');
+    assert.equal(pin.delete.operationId, 'unpinEntity');
+    assert.equal(pin.post.tags.at(-1), 'client');
+    const summary = doc.components.schemas.ConversationSummary;
+    assert.equal(summary.properties.is_pinned.type, 'boolean');
+  });
+});
+
+describe('client contract 1.3 (still served by the 1.4 pin)', () => {
   it('keeps the 1.3 operations the app uses, every one tagged client', () => {
     const { doc } = buildContract();
     const ops = {};

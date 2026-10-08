@@ -38,6 +38,8 @@ export default function AppLayout() {
       <Stack.Screen name="c/[id]" options={{ title: 'Conversation' }} />
       <Stack.Screen name="projects" options={{ title: 'Projects', ...switcher }} />
       <Stack.Screen name="workspaces" options={{ title: 'Workspaces', ...switcher }} />
+      {/* Rename a chat (client contract 1.4): a sheet with Cancel and Save in its bar (§4.10). */}
+      <Stack.Screen name="rename" options={{ title: 'Rename', ...sheetOptions(design, 'half') }} />
       {/* A modal always has a visible way out (audit 2.10): Cancel for VoiceOver and Switch Control. */}
       <Stack.Screen
         name="new"

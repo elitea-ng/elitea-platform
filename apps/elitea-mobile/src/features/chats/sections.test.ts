@@ -24,4 +24,16 @@ describe('Chats sections by local day', () => {
       ['Earlier', [3]],
     ]);
   });
+
+  it('puts pinned chats first, in their own section only', () => {
+    const rows = [
+      { id: 1, updated_at: at(0, 12) },
+      { id: 2, updated_at: at(20), pinned: true },
+      { id: 3, updated_at: at(0, 9), pinned: true },
+    ];
+    expect(groupChatsByDate(rows, NOW).map((s) => [s.key, s.data.map((r) => r.id)])).toEqual([
+      ['pinned', [2, 3]],
+      ['today', [1]],
+    ]);
+  });
 });

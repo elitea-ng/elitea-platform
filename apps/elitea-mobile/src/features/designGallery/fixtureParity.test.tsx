@@ -20,6 +20,10 @@ const read = (relative: string) => fs.readFileSync(path.join(__dirname, '../../a
 describe('design-tab previews draw the real screens’ components (D2)', () => {
   it.each([
     ['(app)/(tabs)/chats/index.tsx', 'design-tabs/chats/index.tsx', /<ConversationList\b/],
+    ['(app)/(tabs)/chats/index.tsx', 'design-tabs/chats/index.tsx', /<UndoToast\b/],
+    ['(app)/(tabs)/chats/index.tsx', 'design-tabs/chats/index.tsx', /buildChatRows\(/],
+    ['(app)/(tabs)/chats/index.tsx', 'design-tabs/chats/index.tsx', /buildSearchRows\(/],
+    ['(app)/rename.tsx', 'design-rename.tsx', /<RenameView\b/],
     ['(app)/(tabs)/(home)/index.tsx', 'design-tabs/home/index.tsx', /<HomeView\b/],
     ['(app)/(tabs)/(home)/index.tsx', 'design-tabs/home/index.tsx', /homeHeaderOptions\(/],
     ['(app)/(tabs)/settings/index.tsx', 'design-tabs/settings/index.tsx', /<SettingsList\b/],

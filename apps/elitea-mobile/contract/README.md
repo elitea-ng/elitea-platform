@@ -10,7 +10,7 @@ this repository.
 | `elitea-v2.yaml.sha256` | `shasum -a 256` of the copy; `npm run contract:verify` fails on any change. |
 | `LICENSE.elitea` | The upstream Apache-2.0 license text and NOTICE, required to redistribute the copy. |
 | `client-operations.json` | The app's declared API surface: the operationIds kept in the generated client. |
-| `overlay/native-gap.yaml` | **Our own** OpenAPI fragment for REST operations the pinned contract does not define yet, plus `x-zefir-extend` additions to upstream operations and schemas. Each entry records where its shape was observed (`x-zefir-source`) and what will replace it (`x-zefir-until`). Empty since v4.7.0 (client contract 1.3); it was empty from v4.2.0 (1.1) to v4.3.2 (1.2) and carried the unreleased 1.3 gap in between. |
+| `overlay/native-gap.yaml` | **Our own** OpenAPI fragment for REST operations the pinned contract does not define yet, plus `x-zefir-extend` additions to upstream operations and schemas. Each entry records where its shape was observed (`x-zefir-source`) and what will replace it (`x-zefir-until`). It is empty since v4.11.0 (client contract 1.4); it carried the unreleased 1.4 gap (rename, `is_pinned`) before that release and the unreleased 1.3 gap before v4.7.0, and was empty from v4.2.0 (1.1) to v4.3.2 (1.2) and from v4.7.0 (1.3) until the 1.4 work. |
 
 ## Generated client
 
@@ -34,13 +34,13 @@ regenerate. Server-sent-event endpoints are typed by hand in `src/api/sse/`.
 | | |
 |---|---|
 | Repository | `elitea-ng/elitea-platform` |
-| Commit | `d6f572dbd5f170ee161f49be48092f6e85be893b` (tag `v4.7.0`, 2026-10-06; the file is byte-identical to its introduction in that commit, PR #1090) |
+| Commit | `604a49e102f40f322fb1f41ac1ce45b634e29bfa` (tag `v4.11.0`, 2026-10-08; the file is byte-identical to its introduction in that commit, PR #1139) |
 | Path | `services/elitea-main/api/openapi/v2.yaml` |
-| Client contract | `1.3` (`info.x-elitea-client-contract`) |
-| SHA-256 | `27c4b5278cbc1415565e9b74214900b8dbe0cc7680cedfc23de341ba21d0f9c6` |
-| Size | 26,344 lines |
-| License | Apache-2.0 (see `LICENSE.elitea`; LICENSE and NOTICE unchanged between v4.3.2 and v4.7.0) |
-| Copied | 2026-10-06 |
+| Client contract | `1.4` (`info.x-elitea-client-contract`) |
+| SHA-256 | `4b0307162a8f95fb401f64dfb4c71eb8ac2abde2dacdb06502b72d7a26ca21b1` |
+| Size | 26,542 lines |
+| License | Apache-2.0 (see `LICENSE.elitea`; LICENSE and NOTICE unchanged between v4.3.2 and v4.11.0) |
+| Copied | 2026-10-08 |
 
 ## Bumping the pinned contract
 
@@ -83,7 +83,7 @@ The route and the trace fields exist on a 1.1 server too; a 1.1 server sends
 `agent_tool_error` with the interrupt's repr for a pause, which the app still
 recognises.
 
-## Client contract 1.3 (pinned, no overlay)
+## Client contract 1.3 (no overlay)
 
 The server's 1.3 work (elitea-platform PR #1090) is released in v4.7.0 and
 pinned above; the overlay that carried its gap before the release is empty
@@ -114,6 +114,26 @@ the public project and `entity_settings.version_id` to the published version
 
 `GET /api/v2/auth/native/authorize` is a browser navigation, not an API call,
 so it is not typed; the app builds that URL itself (`src/auth/nativeAuth.ts`).
+
+## Client contract 1.4 (pinned, no overlay)
+
+The server's 1.4 work (elitea-platform PR #1139) is released in v4.11.0 and pinned above; the
+overlay that carried its gap before the release is empty again. The Chats list (agent-zefir
+issue #6) uses:
+
+| Area | What |
+|---|---|
+| Rename | `updateConversation`: `PUT /elitea_core/conversation/prompt_lib/{project_id}/{conversation_id}` with `{name}` alone (`UpdateConversationRequest`). The server trims the name and answers 400 for a blank one, one longer than 256 characters (code points) or one with a control character (`unicode.IsControl`); the rename sheet sends a name that passes all three (`cleanConversationName`). The answer (`UpdatedConversation`) carries `id` as a string; the app does not read it. |
+| Pin | `pinEntity` / `unpinEntity` on `/social/pin/prompt_lib/{project_id}/conversation/{id}` (a shared project pin), tagged `client` from 1.4 |
+| Pinned flag | `ConversationSummary.is_pinned` (required from 1.4), also in the `changes_since` delta (a pin re-delivers the row without changing `updated_at`) |
+
+The app calls rename and pin only when discovery says `client_contract` >= 1.4
+(`useListActionsAvailable`, `src/features/chats/useChatListData.ts`); on a 1.3 server Pin and
+Rename are hidden and Delete and search work as before. A 1.3 server omits `is_pinned`
+although the 1.4 type says it is required, so the app reads it as `row.is_pinned === true`.
+
+There is no server-side conversation search in 1.3 or the planned 1.4; the list's search is
+the on-device FTS5 index (`src/db/search.ts`).
 
 ## Non-affiliation
 
