@@ -330,3 +330,39 @@ The protected bootstrap identity permits INFO requests and lacks STREAM.MSG.GET 
 Main [jetstream.go](../../../elitea-main/internal/transport/commandbus/jetstream.go#L131) already uses an authorized subject DirectGet path.
 Its helper adaptation remains pending separate source review and a successful ordinary query.
 No broker policy, permission grant, configuration, or previous receipt changes.
+
+## Original Code execution across broker loss, 2026-10-08
+
+The later helper uses Main's existing subject DirectGet authority and its own reply inbox.
+Fresh INFO requires direct reads and one stored message per delivery subject.
+The helper checks the exact stream, subject, sequence, signed-body digest, and size.
+The reply-header digest describes DirectGet metadata, not original stored headers.
+TLS, resource, route, runtime, preservation, and fault guards remain unchanged.
+No broker permission, configuration, certificate, or material changes occur.
+
+The root source review is `6d10fabe732afa106e2fc5e977b217bf8f0a738ea3166132ee11a863caae4d93`.
+Thirty-five focused pure checks pass with zero skips.
+The separate live read succeeds with TLS1.3, the original route, an absent retired message, and an empty queue.
+Its receipt is `9d3b0c91ac418811e9a394c09a5d192e38af940523b8d42ffa8373728da3c7fc`.
+This read provides no broker recovery evidence.
+
+Chat855 uses the saved application147/version178 through one normal UI Send.
+Root binds the actual execution, original outbox-derived delivery subject, and stream sequence32.
+The exact signed envelope matches the published PostgreSQL digest.
+The original Code process remains live before and after the isolated broker receives SIGKILL.
+The same broker restarts with its original store, configuration, and TLS material.
+The surviving Worker records disconnect and reconnect events.
+
+The original Code result is `2` once; the result survives UI reload.
+One original visit, intent, completed journal, output, and committed settlement remain recorded.
+Both original jobs and dispatches complete.
+Both captured runtimes pass all16 isolation and durable binding checks.
+Both runtime IDs return HTTP404 and are absent from the complete runtime list.
+The original message retires after PostgreSQL settlement, and the durable consumer drains.
+
+The root acceptance receipt is `f56669dbd0c56a23989f4a6b4747b21b9a10ad033839e63f394d2d1470748791`.
+The technical result is `a9e58b0773e5ee932c7bd5d14da8a9e4461a25e4c56de2ef4381525b87c9ef06`.
+The runtime watch is `b24dcde54c1cb918982ede0121a42b59a2dbfbedc5119322ce4aa2a420c17b8b`.
+The removal receipt is `98a6e3559a296a98150de16e9f900268247c0e7b432c8213d6ed83051d2766a3`.
+This case proves original execution survival across broker loss and reconnect.
+It observes no redelivery and does not close queued delivery, full F5, Code, or worker acceptance.
