@@ -51,7 +51,7 @@ builds. Tidy changed nothing else: no other module version moved, and the `go` d
 `go.work.sum` is unchanged, and the workspace build (`go build ./services/elitea-main/... ./services/elitea-scheduler/...`)
 passes.
 
-Every other module in `go.work` was checked, and none requires any of the three modules: `conformance/nativeclient`,
+None of the other modules in `go.work` requires any of the three modules. The checked modules are `conformance/nativeclient`,
 `gen/go`, `libs/go/{authlib,egresslib,eventslib,natsconn,observability,rpclib}`, `libs/proto/gen/go`,
 `services/elitea-subapp-host` and `tools/uictl`. elitea-llm-gateway is outside `go.work` and was checked with
 `GOWORK=off`. Its `klauspost/compress` (v1.20.0) and `x/crypto` (v0.57.0) were already past the fixed versions.
@@ -89,7 +89,40 @@ The existing tests that pin the behavior, all of which pass on v0.30.0:
 
 ## Tests
 
-TESTS_PLACEHOLDER
+Runs are from 2026-10-08 on darwin/arm64. Toolchains: go1.25.13 (elitea-main, elitea-scheduler) and go1.26.6
+(elitea-llm-gateway, `GOWORK=off`). PostgreSQL tests used a throwaway `pgvector/pgvector:0.8.1-pg18` container. All
+runs used `-count=1`. Counts come from `go test -json`.
+
+| Run | Packages ok / fail | Tests pass / fail / skip | Subtests pass / fail / skip |
+| --- | --- | --- | --- |
+| `go vet ./...` in all three modules | clean | — | — |
+| elitea-main `-race`, the 26 packages whose graph includes cel-go or compress | 26 / 0 | 2,551 / 0 / 60 | 3,239 / 0 / 0 |
+| elitea-scheduler `-race`, the 2 packages whose graph includes compress | 2 / 0 | 56 / 0 / 6 | 8 / 0 / 0 |
+| elitea-llm-gateway `GOWORK=off go test -race ./...` (module CLAUDE.md gate) | 19 / 0 | 1,127 / 0 / 3 | 508 / 0 / 0 |
+| elitea-main `go test ./...` | 185 / 0 (22 without tests) | 7,665 / 0 / 63 | 8,130 / 0 / 4 |
+| elitea-scheduler `go test ./...` | 8 / 0 (2 without tests) | 134 / 0 / 6 | 16 / 0 / 0 |
+| elitea-llm-gateway `GOWORK=off go test ./...` | 19 / 0 (1 without tests) | 1,127 / 0 / 3 | 508 / 0 / 0 |
+| `-race` re-run of `cmd/elitea-main` and `cmd/elitea-scheduler` after the final guard change | 2 / 0 | 106 / 0 / 6 | 151 / 0 / 0 |
+
+Each skip needs a service this local run did not provide. None of them covers CEL or compress code:
+
+- **NATS:** 44 skips in elitea-main, 6 in elitea-scheduler and 3 in elitea-llm-gateway.
+  - These tests need `ELITEA_TEST_NATS_URL`, `ELITEA_TEST_NATS_SERVER_BIN`, `ELITEA_TEST_NATS_SECURE_CONF` or
+    `ELITEA_TEST_NATS_CLI_BIN`.
+  - They include the opt-in JetStream reliability and visibility-repair gates.
+- **Storage emulators:** 15 elitea-main skips need `S3_ENDPOINT_URL` or the Azure/GCS emulators. This includes the
+  `s3`, `azure` and `gcs` subtests of `TestArtifactConformance`.
+- **Deployed stack:** 8 elitea-main contract tests need `CONTRACT_AUTH_TOKEN`.
+- **Opt-in gates:** 6 elitea-main skips need an explicit flag. The flags are `ELITEA_RUNTIME_SYSTEM_TEST`,
+  `ELITEA_INDEX_V2_PREFLIGHT_SYSTEM_TEST`, `ELITEA_INDEX_BINDING_CROSS_PROCESS_TEST`,
+  `ELITEA_INDEX_SDK_SERIALIZATION_GATE`, `ELITEA_COMPILED_SNAPSHOT_PG_REQUIRED` and `ELITEA_TEST_LLM_BASE_URL`.
+- **Editor PostgreSQL fixture:** 4 elitea-main skips need `ELITEA_EDITOR_TEST_DATABASE_URL`.
+- **pgvector subtest:** 1 elitea-main subtest skips because the installed-SDK process is absent.
+
+CI provides the NATS and emulator services (`ci-go.yml:335-400`).
+
+`golangci-lint` is not installed locally, so the lint gate was not run here. `ci-go.yml` and `ci-gateway.yml` run it.
+This is an open item, not a pass.
 
 ## Performance
 
@@ -106,13 +139,14 @@ TESTS_PLACEHOLDER
 - CEL compile happens once per rule write (main) or rule load (gateway), and the environment is built once
   (`routing_cel.go:50-55`). The new parser node counter is O(nodes) bookkeeping on that path only. The per-request
   `Program.Eval` path changes only where the upstream commits above say.
-- The guard tests add about 0.1–0.4 s each, which is one `go list -deps` per module.
+- Each guard test runs two `go list -deps` calls, one per architecture. Measured warm: 2.3 s (elitea-main), 0.2 s
+  (elitea-scheduler) and 0.7 s (elitea-llm-gateway).
 
 ## Durability
 
 Not applicable: the change touches no durable write, checkpoint, lease, receipt or migration, so it creates no crash
-window. Routing-rule rows are unchanged. A row stored before this change that v0.30.0 refuses (more than 100,000 nodes)
-fails to load as a typed compile error, and is not silently accepted.
+window. Routing-rule rows are unchanged. v0.30.0 refuses a stored rule above 100,000 nodes. That row fails to load with a
+typed compile error and is never accepted silently.
 
 ## Resilience
 
@@ -127,26 +161,35 @@ fails to load as a typed compile error, and is not silently accepted.
 
 ## Security
 
-- **Fixed:** GO-2026-6094 and GO-2026-5841 are removed from elitea-main, elitea-scheduler and elitea-llm-gateway.
-  Neither was reachable before the change: `cel-go/ext` and `compress/s2` are not in any module's
-  `go list -deps ./...` package graph.
+- **Fixed:** GO-2026-6094 and GO-2026-5841 are gone from elitea-main, elitea-scheduler and elitea-llm-gateway.
+  - Neither was reachable before the change.
+  - `cel-go/ext` and `compress/s2` are absent from every module's `go list -deps ./...` package graph.
+  - `klauspost/compress` reaches the binaries only as `compress/flate`, through nats.go's WebSocket transport
+    (`nats.go@v1.53.1/ws.go:33`).
+  - `flate` and `internal/le` are byte-identical between v1.18.5 and v1.18.7, so the compress bump changes no linked
+    code.
 - **Deferred, enforced in code:** GO-2026-6354/6355 (`x/crypto/ssh`) and GO-2026-5932 (`x/crypto/openpgp`).
   - The linked x/crypto packages are `blake2b`, `chacha20`, `chacha20poly1305`, `cryptobyte`, `curve25519`, `hkdf`,
     `nacl/box`, `nacl/secretbox`, `pkcs12`, `salsa20` and `internal/*`. `ssh` and `openpgp` are absent from every
     module's non-test and test graphs.
-  - `TestNoBinaryLinksAdvisoryPackagesWithoutFix` in each affected module (`linked_advisory_packages_test.go:19`,
-    `:27`, `:32`) runs `go list -deps ./...` over the module root. It fails if a banned package or any subpackage is
-    linked into any shipped binary.
-  - The test also fails if the scan did not cover the module (`:57`).
-  - Red proof: banning `golang.org/x/crypto/nacl`, which elitea-main does link, made it fail with
-    `golang.org/x/crypto/nacl/secretbox … nacl/box is linked into a binary of this module`. Restoring the real list
-    made it pass.
+  - `TestNoBinaryLinksAdvisoryPackagesWithoutFix` in each affected module fails if a banned package or any of its
+    subpackages is linked into a shipped binary.
+  - It runs `go list -deps ./...` over the module root with `GOOS=linux CGO_ENABLED=0` for `amd64` and `arm64`.
+    This is the graph the images build.
+  - It also fails if the scan did not report the module's own `cmd` package.
+  - Anchors in elitea-main and elitea-scheduler `cmd/<service>/linked_advisory_packages_test.go`: ban list `:20`,
+    test `:29`, helper `:34`, build environment `:43`, coverage check `:61`.
+  - Anchors in the elitea-llm-gateway copy: ban list `:17`, test `:25`, helper `:30`, build environment `:39`,
+    coverage check `:57`.
+  - Red proof: banning `golang.org/x/crypto/nacl`, which elitea-main links, made the test fail on both architectures.
+    The failure named `nacl/secretbox` and `nacl/box`. Restoring the real list made it pass.
 - **GO-2026-5932 exposure assessment:** the advisory is a blanket "unmaintained, unsafe by design" notice for
   `x/crypto/openpgp/*`, and it applies to every x/crypto version.
-  - No Go code in the repository imports `openpgp` or `ssh` (`git grep` finds only the guard tests' own lists), and no dependency of elitea-main, elitea-scheduler or
-    elitea-llm-gateway links it.
-  - Exposure is nil while the guard holds. govulncheck will keep reporting it at module level (and in binary mode on
-    stripped binaries, which have no symbol table) until upstream withdraws or retires the package.
+  - No Go code in the repository imports `openpgp` or `ssh`. `git grep` finds only the guard tests' own lists.
+  - No dependency of elitea-main, elitea-scheduler or elitea-llm-gateway links either package.
+  - Exposure is nil while the guard holds.
+  - govulncheck keeps reporting it at module level until upstream withdraws or retires the package. Binary mode
+    reports it too, because stripped binaries have no symbol table.
 - **Supply chain:**
   - No new dependency; only the version moves listed above.
   - Versions are exact in `go.mod`, and the hashes in `go.sum` were verified by the Go checksum database during
@@ -165,8 +208,8 @@ No new findings were added.
 On a stripped binary, binary mode cannot resolve symbols, so it lists module-level matches under "Symbol Results".
 The source-mode result ("0 called", "0 in packages you import") is the authoritative reachability answer.
 
-With the local default toolchain go1.26.5, elitea-llm-gateway source mode also reports eight standard-library
-advisories, all fixed in go1.26.6: GO-2026-6218, 6090, 6089, 6088, 5972, 5026, 6091 and 5942. These are pre-existing
+The local default toolchain is go1.26.5. With it, elitea-llm-gateway source mode also reports eight standard-library
+advisories. go1.26.6 fixes all eight: GO-2026-6218, 6090, 6089, 6088, 5972, 5026, 6091 and 5942. These are pre-existing
 and toolchain-dependent. The gateway image builds from the floating `golang:1.26-trixie`
 (`services/elitea-llm-gateway/Containerfile:35`), which tracks the patch series. The go1.26.6 scan shows none of them.
 
