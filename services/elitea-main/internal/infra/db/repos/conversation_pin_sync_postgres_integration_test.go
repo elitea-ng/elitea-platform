@@ -82,6 +82,7 @@ func asUser(id string) context.Context {
 
 func TestConversationPinReachesTheOtherDeviceThroughTheDelta(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
+	grantPinMembership(t, pool, 1, 7, 8, 9)
 	repo := NewConversationsRepo(pool)
 	pins := NewCurrentSocialPinsRepository(pool)
 	ctx := context.Background()
@@ -212,6 +213,7 @@ func TestConversationPinReachesTheOtherDeviceThroughTheDelta(t *testing.T) {
 // row, and its pin goes with it.
 func TestDeletingAPinnedConversationIsOneDeletedTombstone(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
+	grantPinMembership(t, pool, 1, 7, 8, 9)
 	repo := NewConversationsRepo(pool)
 	pins := NewCurrentSocialPinsRepository(pool)
 	numericID, conversationUUID, _ := seedConversationWithParticipant(t, repo, "bye")
@@ -253,6 +255,7 @@ func TestDeletingAPinnedConversationIsOneDeletedTombstone(t *testing.T) {
 // commits.
 func TestAPinRacingTheConversationDeleteLeavesNoOrphanPin(t *testing.T) {
 	pool := newMigratedPostgresIntegrationPool(t)
+	grantPinMembership(t, pool, 1, 7, 8, 9)
 	repo := NewConversationsRepo(pool)
 	pins := NewCurrentSocialPinsRepository(pool)
 	numericID, _, _ := seedConversationWithParticipant(t, repo, "racing")
