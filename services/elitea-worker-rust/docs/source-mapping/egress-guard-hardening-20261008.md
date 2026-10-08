@@ -152,11 +152,11 @@ Command results:
 
   | Package | Top-level tests passed | Skipped |
   | --- | --- | --- |
-  | `internal/infra/egress` | 15 | 0 |
+  | `internal/infra/egress` | 18 | 0 |
   | `internal/api/webhook` | 24 (including the PostgreSQL tests `TestWebhookDestinationIsRefusedAtCreate` and `TestWebhookSmuggledIntoTableIsRefusedAtDialAndLoggedBlocked`) | 0 |
   | `internal/api/v2/eliteacore` | 357 | 0 |
   | `internal/infra/storage` | 280 | 0 |
-  | **Total** | **676** (858 including subtests) | **0** |
+  | **Total** | **679**, plus 858 subtests | **0** |
 
 - `go test -race -count=1` passes for those packages and for `internal/api`, `cmd/...` and
   `internal/runtimecomposition` (12 packages).
@@ -263,6 +263,21 @@ No other component (Worker, Sandbox supervisor, NATS, PostgreSQL, LLM gateway, W
 | `Guard.allowlist` was dead state | Fixed: removed. |
 | Unchecked `http.DefaultTransport` type assertion | Fixed: falls back to net/http's documented defaults. |
 
+`security-review` on the branch diff found no vulnerability at confidence 8 or above. It checked and rejected 16
+candidates: IPv4-mapped, NAT64, 6to4, IPv4-compatible, zone handling, numeric hosts, rebinding, allowlist
+widening, the HTTPS-only `Proxy` hook, the checks removed from the Code workspace dialler, TLS, redirects, and
+error-message leakage.
+
+Its one theoretical note is that SIIT `::ffff:0:a.b.c.d` is classed public. It reaches IPv4 only through a
+translator on the destination network, and the old code was the same. It is listed in the follow-ups below.
+
+The `.claude/rules/security.md` checklist:
+- no hardcoded secrets;
+- the inputs that matter (URLs and resolved addresses) are validated;
+- no SQL is touched;
+- no HTML rendering is touched;
+- error messages carry the host only.
+
 ## Real-browser evidence
 
 - **Stack:** the local NATS candidate (`http://localhost:18094`, candidate `a5994fa609c2`), signed-in project
@@ -322,5 +337,6 @@ No other component (Worker, Sandbox supervisor, NATS, PostgreSQL, LLM gateway, W
 - **OpenAPI text** for the webhook `url` field (`api/openapi/v2.yaml:11691`, generated `api.gen.go:9622`) still
   lists only "loopback, private, link-local or multicast". Updating it requires regenerating the API, so it is
   left for a contract pass.
+- **SIIT `::ffff:0:0:0/96`** (IPv4-translated) could join `forbiddenBlocks` in a later pass.
 - **Toolchain:** go1.26.5 → go1.26.6 clears all 7 standard-library advisories. That change belongs to the parallel
   Go-module and toolchain sessions.
