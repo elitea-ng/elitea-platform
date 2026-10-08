@@ -1,0 +1,87 @@
+# Manual EAS Submit of a finished production build to TestFlight (iOS) and the
+# Play internal testing track (Android), docs/release.md "Submit".
+#
+# Needs the EXPO_TOKEN repository secret, and on EAS: the App Store Connect API
+# key and the Google Play service account key (`eas credentials`), plus
+# submit.production.ios.ascAppId in eas.json once the App Store Connect app exists.
+name: EAS submit
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform
+        type: choice
+        options: [ios, android, all]
+        default: ios
+      build_id:
+        description: "EAS build id to submit (empty: the latest production build of each platform)"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eas-submit-${{ inputs.platform }}
+  cancel-in-progress: false
+
+env:
+  EAS_CLI_VERSION: 24.12.0
+
+jobs:
+  submit:
+    name: EAS submit (${{ inputs.platform }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require the EXPO_TOKEN secret
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::Repository secret EXPO_TOKEN is not set (docs/release.md, 'GitHub Actions secret')."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - uses: expo/expo-github-action@v9
+        with:
+          eas-version: ${{ env.EAS_CLI_VERSION }}
+          packager: npm
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Project is linked and the stores are configured
+        env:
+          PLATFORM: ${{ inputs.platform }}
+        run: node scripts/eas-preflight.mjs submit "$PLATFORM"
+
+      - name: Submit
+        env:
+          PLATFORM: ${{ inputs.platform }}
+          BUILD_ID: ${{ inputs.build_id }}
+        run: |
+          if [ -n "$BUILD_ID" ]; then
+            if ! [[ "$BUILD_ID" =~ ^[0-9a-fA-F-]{36}$ ]]; then
+              echo "::error::build_id must be an EAS build id (UUID)."
+              exit 1
+            fi
+            if [ "$PLATFORM" = "all" ]; then
+              echo "::error::A build id belongs to one platform: pick ios or android."
+              exit 1
+            fi
+            target=(--id "$BUILD_ID")
+          else
+            target=(--latest)
+          fi
+          eas submit --profile production --platform "$PLATFORM" "${target[@]}" --non-interactive

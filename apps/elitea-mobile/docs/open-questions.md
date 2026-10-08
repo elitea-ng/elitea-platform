@@ -31,7 +31,9 @@ Decide which legal entity publishes the app. Then:
   number.
 - Register a Google Play developer account as an organization.
 - Assign ownership of the `ca.zefir.agent` identifiers and the signing keys.
-- Decide whether EAS manages signing credentials.
+- Decide whether EAS manages signing credentials. **Proposed: yes**, with the
+  steps, the account list and the remaining owner decisions in
+  [release.md](release.md) (§1 to §6, §13).
 
 ## 4. Encryption export compliance
 
@@ -44,8 +46,17 @@ as HTTPS.
   `ITSAppUsesNonExemptEncryption` / App Store Connect answers are required.
 - Check the French import declaration if the app is distributed in France.
 
-`app.config.ts` currently holds a placeholder value, which must be resolved before
-submission.
+**Proposed (2026-10-07):** `ITSAppUsesNonExemptEncryption = NO`. On iOS every
+cryptographic operation runs in Apple's operating system: SQLCipher is compiled
+against CommonCrypto (`SQLCIPHER_CRYPTO_CC`), TLS is URLSession, keys are in the
+Keychain, and expo-crypto is used for digests and random bytes only. That is
+Apple's "encryption limited to that within the Apple operating system" (no
+documentation, no French declaration), and mass-market apps need no BIS annual
+report since 2021. Android bundles OpenSSL for SQLCipher; Play asks nothing, but
+France on Play needs a check. Reasoning and the triggers to revisit it:
+[store/export-compliance.md](store/export-compliance.md). The owner confirms
+before the first submission. The planned attachment AES-GCM must use CryptoKit or
+CommonCrypto to keep this answer.
 
 ## 5. MDM managed configuration
 

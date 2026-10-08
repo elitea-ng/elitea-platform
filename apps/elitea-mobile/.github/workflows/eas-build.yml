@@ -1,0 +1,89 @@
+# Manual EAS Build (docs/release.md, "Builds from GitHub Actions"). Runs only when
+# dispatched; normal CI (ci.yml) never builds or talks to Expo.
+#
+# Needs the EXPO_TOKEN repository secret (an Expo robot-user access token) and a
+# linked EAS project (app.config.ts `easLink`). The build itself runs on EAS
+# servers: this job queues it (--no-wait) and prints the build page links, so it
+# takes a few minutes of Actions time, not the length of a native build.
+name: EAS build
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: eas.json build profile
+        type: choice
+        options: [preview, production, development, development-simulator]
+        default: preview
+      platform:
+        description: Platform
+        type: choice
+        options: [all, ios, android]
+        default: all
+      submit:
+        description: "production only: when the build finishes, submit it to TestFlight / Play internal testing"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: eas-build-${{ inputs.profile }}-${{ inputs.platform }}
+  cancel-in-progress: false
+
+env:
+  # Bump deliberately (eas.json cli.version is the floor).
+  EAS_CLI_VERSION: 24.12.0
+
+jobs:
+  build:
+    name: EAS build (${{ inputs.profile }}, ${{ inputs.platform }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Require the EXPO_TOKEN secret
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::Repository secret EXPO_TOKEN is not set (docs/release.md, 'GitHub Actions secret')."
+            exit 1
+          fi
+
+      - name: Submit only with the production profile
+        if: inputs.submit && inputs.profile != 'production'
+        env:
+          PROFILE: ${{ inputs.profile }}
+        run: |
+          echo "::error::Only production builds go to TestFlight / Play (got profile '$PROFILE')."
+          exit 1
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - uses: expo/expo-github-action@v9
+        with:
+          eas-version: ${{ env.EAS_CLI_VERSION }}
+          packager: npm
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Project is linked to EAS
+        run: node scripts/eas-preflight.mjs build
+
+      - name: Queue the build
+        env:
+          PROFILE: ${{ inputs.profile }}
+          PLATFORM: ${{ inputs.platform }}
+          SUBMIT: ${{ inputs.submit }}
+        run: |
+          args=(build --profile "$PROFILE" --platform "$PLATFORM" --non-interactive --no-wait)
+          if [ "$SUBMIT" = "true" ]; then args+=(--auto-submit); fi
+          eas "${args[@]}"

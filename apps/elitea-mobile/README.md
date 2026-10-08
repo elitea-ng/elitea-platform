@@ -103,6 +103,15 @@ behaviour in `app.config.ts` and config plugins, not by editing them. Planned
 native modules such as SQLCipher, secure storage and biometrics require a
 development build (`npx expo run:ios|android` or EAS Build), not Expo Go.
 
+### Releases
+
+Cloud builds, TestFlight, Play testing and over-the-air updates go through EAS
+(`eas.json`, profiles `development`, `development-simulator`, `preview`,
+`production`). The runbook, including the one-time account setup the owner
+still has to do, is [docs/release.md](docs/release.md); store listing, privacy
+and export-compliance drafts are in [docs/store/](docs/store/README.md). The
+`EAS build` and `EAS submit` GitHub workflows run only when dispatched by hand.
+
 ## Repository layout
 
 ```
