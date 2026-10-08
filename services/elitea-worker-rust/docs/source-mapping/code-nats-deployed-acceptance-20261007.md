@@ -265,3 +265,24 @@ PostgreSQL remains authoritative; NATS supplies transport.
 The latest misses concern harness identity, admission, diagnostics, and UI timing.
 They do not establish a Code product defect or successful recovery.
 The source maps retain each accepted application behavior and each remaining fault boundary.
+
+## Normal broker fixture, 2026-10-08
+
+Chat853 uses application147 and named version178 through the normal UI.
+The original JavaScript node returns `2`; the same answer survives reload.
+One original visit, one completed Code journal, one output, and one committed settlement remain recorded.
+Two original dispatches and jobs complete.
+Both captured runtimes pass all16 isolation checks and durable binding checks.
+Both runtime IDs return HTTP404 and are absent from the complete runtime list.
+
+The root fixture receipt is `3e94673b25d905c0a46be0480b0489d80d50c3c8b30908b815ac870ad8916581`.
+The runtime capture is `1593fb3e0275819dee15e0670a99b35b24291d9fa27de4250db5f382aa7118f7`.
+The physical removal receipt is `6dbeb972adafc75503873e4498103eac90ab17a20931787f11da461780d807b3`.
+The normal stream and durable consumer finish empty.
+
+The collector exits before case authorization or broker control.
+Its source omits Main's legitimate `CLAIMED` waiting state; the exact exit cause was not captured.
+The same-owner run has no owner-adoption receipt, so that verifier expectation requires source review.
+The historical schema placeholder is replaced with the accepted deployment schema before this run.
+All prior source packets and evidence remain preserved.
+This fixture supplies no broker-loss, redelivery, owner-replacement, or complete Code acceptance.
