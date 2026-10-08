@@ -36,7 +36,7 @@ use super::graph::resume::{
 };
 use super::graph::static_pause::PipelineTextContinuation;
 use super::pipeline::PipelineExecutionProfile;
-use super::request::AgentExecutionRequest;
+use super::request::{AgentExecutionPayload, AgentExecutionRequest};
 use super::session::{AuthorizedNativeCommandBinding, OrdinaryNativeAgentPlan};
 use crate::protocol::control::{ClaimBoundRuntimeContextAuthority, ClaimBoundSessionAuthority};
 use crate::state::StateWriterLease;
@@ -421,47 +421,7 @@ pub(super) fn admit_pipeline_plan<'a>(
     tracing::Span::current().record("stage", "start_admission");
     let has_continuation = has_continuation(request);
     let start = if has_continuation {
-        if request
-            .payload
-            .meta
-            .contains_key(super::graph::static_tool_pause::STATIC_TOOL_RESUME_META_KEY)
-        {
-            let decisions =
-                super::graph::static_tool_pause::parse_static_tool_decisions(&request.payload.meta)
-                    .map_err(|_| {
-                        NativeAgentAssemblyError::new(
-                            NativeAgentAssemblyErrorCode::InvalidInput,
-                            "the static graph selection is malformed",
-                        )
-                    })?
-                    .ok_or_else(|| {
-                        NativeAgentAssemblyError::new(
-                            NativeAgentAssemblyErrorCode::InvalidInput,
-                            "the static graph selection is missing",
-                        )
-                    })?;
-            // The common typed transport rejects HITL/meta mixing and client checkpoint selectors.
-            DirectHitlDecisionSet::from_payload(&request.payload)
-                .map_err(|error| direct_hitl_admission_error(&error))?;
-            PipelineNativeStart::StaticTools(decisions)
-        } else if request.payload.should_continue && !request.payload.hitl_resume {
-            if !request.payload.mcp_tokens.is_empty()
-                || !request.payload.ignored_mcp_servers.is_empty()
-                || !request.payload.user_declined_mcp_servers.is_empty()
-            {
-                PipelineMcpAuthorizationContinuation::from_payload(&request.payload)
-                    .map(PipelineNativeStart::McpAuthorization)
-                    .map_err(|error| pipeline_hitl_admission_error(&error))?
-            } else {
-                PipelineTextContinuation::from_payload(&request.payload)
-                    .map(PipelineNativeStart::Text)
-                    .map_err(|error| pipeline_hitl_admission_error(&error))?
-            }
-        } else {
-            PipelineContinuationDecision::from_payload(&request.payload)
-                .map(PipelineNativeStart::Hitl)
-                .map_err(|error| pipeline_hitl_admission_error(&error))?
-        }
+        pipeline_continuation_start(&request.payload)?
     } else if request.payload.is_regenerate {
         PipelineNativeStart::Regenerate
     } else {
@@ -495,6 +455,57 @@ pub(super) fn admit_pipeline_plan<'a>(
         start.is_hitl_resume(),
     )?;
     Ok((profile, plan, toolsets, start))
+}
+
+/// Select the typed pipeline continuation from Main's payload alone.
+///
+/// This is routing, not authorization: every variant still binds its decision
+/// to the latest durable graph event and checkpoint before the graph resumes.
+pub(crate) fn pipeline_continuation_start(
+    payload: &AgentExecutionPayload,
+) -> Result<PipelineNativeStart, NativeAgentAssemblyError> {
+    Ok(
+        if payload
+            .meta
+            .contains_key(super::graph::static_tool_pause::STATIC_TOOL_RESUME_META_KEY)
+        {
+            let decisions =
+                super::graph::static_tool_pause::parse_static_tool_decisions(&payload.meta)
+                    .map_err(|_| {
+                        NativeAgentAssemblyError::new(
+                            NativeAgentAssemblyErrorCode::InvalidInput,
+                            "the static graph selection is malformed",
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        NativeAgentAssemblyError::new(
+                            NativeAgentAssemblyErrorCode::InvalidInput,
+                            "the static graph selection is missing",
+                        )
+                    })?;
+            // The common typed transport rejects HITL/meta mixing and client checkpoint selectors.
+            DirectHitlDecisionSet::from_payload(payload)
+                .map_err(|error| direct_hitl_admission_error(&error))?;
+            PipelineNativeStart::StaticTools(decisions)
+        } else if payload.should_continue && !payload.hitl_resume {
+            if !payload.mcp_tokens.is_empty()
+                || !payload.ignored_mcp_servers.is_empty()
+                || !payload.user_declined_mcp_servers.is_empty()
+            {
+                PipelineMcpAuthorizationContinuation::from_payload(payload)
+                    .map(PipelineNativeStart::McpAuthorization)
+                    .map_err(|error| pipeline_hitl_admission_error(&error))?
+            } else {
+                PipelineTextContinuation::from_payload(payload)
+                    .map(PipelineNativeStart::Text)
+                    .map_err(|error| pipeline_hitl_admission_error(&error))?
+            }
+        } else {
+            PipelineContinuationDecision::from_payload(payload)
+                .map(PipelineNativeStart::Hitl)
+                .map_err(|error| pipeline_hitl_admission_error(&error))?
+        },
+    )
 }
 
 pub(crate) enum PipelineNativeStart {
