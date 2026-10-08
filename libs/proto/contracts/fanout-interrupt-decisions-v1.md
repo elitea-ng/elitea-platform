@@ -264,8 +264,13 @@ decision_sha256 = lowercase_hex(SHA-256(canonical_json({
   action, credential_ref (null when absent), interrupt_key, request_id, revision, value })))
 ```
 
-Canonical JSON is the node-recovery receipt form: keys sorted at every level, compact UTF-8, exact integers, no HTML
-escaping, no trailing newline. Fixtures: `fanout-interrupt-fetch-v1.json` (the Go test recomputes both digests).
+Canonical JSON (shared with `services/elitea-worker-rust/docs/http-action-node-design.md` §6): object keys sorted by
+UTF-8 bytes at every level, compact, exact integers, strings escaped only for `"`, `\` and characters below U+0020
+(short forms `\b \t \n \f \r`, otherwise `\u00xx` lowercase), every other character raw UTF-8 (including U+2028,
+U+2029 and `<>&`), no trailing newline. Rust `serde_json` and Python `json.dumps(sort_keys=True,
+separators=(",",":"), ensure_ascii=False)` produce it directly. Go `encoding/json` does not (it always escapes U+2028
+and U+2029), so Main uses a small canonical writer; the conformance test contains a reference one. Fixtures:
+`fanout-interrupt-fetch-v1.json` (the Go test recomputes the digests).
 
 When the Worker fetches:
 - **Live:** only while the activation has at least one open card, every 1 s, backing off to 5 s while fetches return
@@ -348,7 +353,7 @@ the pending fan-out node and fetches.
 1. compiles the schema (Draft 2020-12, `$ref` by `$id`) and checks `$id = elitea.<area>.<stem>.v<N>`;
 2. lints strictness: closed objects, `maxLength` on strings, `maxItems` on arrays, `minimum`/`maximum` on numbers;
 3. requires at least one valid and two invalid fixtures; valid fixtures must pass and invalid ones must fail;
-4. requires every fixture to be byte-canonical JSON (round trip);
+4. requires every fixture to be byte-canonical JSON in the form defined in section 7 (round trip);
 5. recomputes `interrupt_key`, member `call_id` and `decision_sha256` from the vectors.
 
 Fixture names: `<stem>-v<N>[.<variant>].json` (valid) and `<stem>-v<N>.invalid.<reason>.json` (one defect each).

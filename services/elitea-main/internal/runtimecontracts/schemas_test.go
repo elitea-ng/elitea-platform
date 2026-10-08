@@ -6,9 +6,11 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -175,8 +177,12 @@ func jsonIndex(index int) string {
 	return string(raw)
 }
 
-// canonicalJSON matches the node-recovery receipt canonicalization: sorted
-// keys, compact, exact numbers, no HTML escaping, no trailing newline.
+// canonicalJSON implements the contract canonical form: object keys sorted by
+// UTF-8 bytes at every level, compact, numbers kept as their exact text,
+// strings escaped only for '"', '\\' and controls below U+0020 (short forms
+// for \\b \\t \\n \\f \\r, otherwise \\u00xx), everything else raw UTF-8, no
+// trailing newline. encoding/json differs (it always escapes U+2028/U+2029),
+// so it is not used for output.
 func canonicalJSON(t *testing.T, raw []byte) []byte {
 	t.Helper()
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -189,12 +195,82 @@ func canonicalJSON(t *testing.T, raw []byte) []byte {
 		t.Fatal("trailing data")
 	}
 	var out bytes.Buffer
-	encoder := json.NewEncoder(&out)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(value); err != nil {
-		t.Fatal(err)
+	writeCanonical(t, &out, value)
+	return out.Bytes()
+}
+
+func writeCanonical(t *testing.T, out *bytes.Buffer, value any) {
+	t.Helper()
+	switch typed := value.(type) {
+	case nil:
+		out.WriteString("null")
+	case bool:
+		if typed {
+			out.WriteString("true")
+		} else {
+			out.WriteString("false")
+		}
+	case json.Number:
+		out.WriteString(typed.String())
+	case string:
+		writeCanonicalString(out, typed)
+	case []any:
+		out.WriteByte('[')
+		for index, item := range typed {
+			if index > 0 {
+				out.WriteByte(',')
+			}
+			writeCanonical(t, out, item)
+		}
+		out.WriteByte(']')
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		out.WriteByte('{')
+		for index, key := range keys {
+			if index > 0 {
+				out.WriteByte(',')
+			}
+			writeCanonicalString(out, key)
+			out.WriteByte(':')
+			writeCanonical(t, out, typed[key])
+		}
+		out.WriteByte('}')
+	default:
+		t.Fatalf("unexpected JSON value %T", value)
 	}
-	return bytes.TrimSuffix(out.Bytes(), []byte("\n"))
+}
+
+func writeCanonicalString(out *bytes.Buffer, value string) {
+	out.WriteByte('"')
+	for _, character := range value {
+		switch character {
+		case '"':
+			out.WriteString(`\"`)
+		case '\\':
+			out.WriteString(`\\`)
+		case '\b':
+			out.WriteString(`\b`)
+		case '\t':
+			out.WriteString(`\t`)
+		case '\n':
+			out.WriteString(`\n`)
+		case '\f':
+			out.WriteString(`\f`)
+		case '\r':
+			out.WriteString(`\r`)
+		default:
+			if character < 0x20 {
+				fmt.Fprintf(out, `\u%04x`, character)
+			} else {
+				out.WriteRune(character)
+			}
+		}
+	}
+	out.WriteByte('"')
 }
 
 func TestRuntimeContractSchemasAndFixtures(t *testing.T) {
