@@ -129,6 +129,15 @@ Recovery-guarantee rows for what this touches (Main × admission):
 - No new dependency; `go.mod`/`go.sum` unchanged. `govulncheck ./...`: 0 vulnerabilities reachable from
   our code; 5 in required modules that our code does not call (pre-existing, unchanged by this PR).
 
+## Reviews
+
+- `code-review` (high) on the branch diff: 6 findings. Fixed: trailing values were accepted, unknown top-level
+  fields were dropped, and the validate-cel limit test padded with an unknown field. Kept as follow-ups (below):
+  the gateway load path has no CEL cap, over-cap rules saved earlier cannot be updated, and each package keeps
+  its own private bounded decoder.
+- `security-review` on the branch: no findings. The authorization group is unchanged, no SQL was touched, error
+  strings are constants or byte counts, and decoding uses the same typed structs.
+
 ## Real-browser evidence
 
 **Not yet collected.** Deploying a rebuilt `elitea-main` image to the local rehearsal stack needs the user's
