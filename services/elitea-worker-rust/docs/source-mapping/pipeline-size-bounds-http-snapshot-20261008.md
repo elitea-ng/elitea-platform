@@ -38,18 +38,65 @@ the value later.
   bound + 1 byte, instead of at roughly 400 KB.
 - Worker library: 1,832 passed, 0 failed, 2 ignored. Strict all-target, all-feature Clippy and fmt pass.
 
-## Performance, durability and resilience
+## Performance
 
-**Performance.** The pre-scan is a single YAML parse, already paid by the previous code. Non-HTTP pipelines skip
-snapshot construction and receipt encoding entirely, so start-path work goes down for every pipeline.
+**Budget.** No added work on the start path.
 
-**Durability.** No state, migration or recovery path changes. Saved-child bytes are preserved exactly, which the test
-asserts.
+**Result.**
+- The pre-scan is one YAML parse, which the previous code already paid.
+- Non-HTTP pipelines now skip snapshot construction and receipt encoding entirely, so start-path work drops for every
+  pipeline.
+- The Worker change compares against a constant. No new allocation or I/O.
 
-**Resilience.**
-- Bounds stay explicit, and all three checks now agree.
+## Durability
+
+**Threat.** Changing persisted bytes or checkpoint lineage.
+
+**Result.**
+- No state, migration, checkpoint or recovery path changes.
+- Saved-child version bytes are preserved exactly; `runtime_saved_child_scope_non_http_test.go` asserts byte
+  equality.
+
+## Resilience
+
+**Bounds.**
+- One explicit bound in all three checks: 512 KiB of pipeline YAML and 128 nodes.
+- Multi-document YAML and non-mapping roots are refused.
 - HTTP detection errs toward strict: aliases are followed, and merge keys are treated as possible HTTP nodes.
-- Remaining gap: refusals still show generic text (follow-up 3).
+
+**Remaining gap.** Refusals still surface generic text (follow-up 3).
+
+## Security
+
+**Threats considered.**
+1. A pipeline evading the HTTP grammar by hiding an http node behind an alias or merge key. Mitigated: the pre-scan
+   follows aliases and treats merge keys as possible HTTP nodes. Tests cover both.
+2. Larger accepted input as a resource-exhaustion vector. Bounded at the compiler's existing 512 KiB and 128 nodes,
+   so no new maximum is introduced.
+3. Authorization. Unchanged: start and saved-child authority checks run as before. The pre-scan only decides
+   whether the strict grammar applies.
+
+**Known pre-existing gap (unchanged from main).** An aliased `type` value (`type: *k`) is read as the alias name by
+the strict loop. Fix it separately by denying `AliasNode` on `type`.
+
+**Evidence handling.** This record contains no secrets or credentials. Fixture YAML is synthetic.
+
+**Security review (2026-10-08).** No vulnerability meets the >80% confidence bar. The reasons:
+- The Worker has no `http` node: `parse_pipeline_node` has no `http` arm, and unknown types fall through to
+  `Unsupported`.
+- Main's HTTP executor is not wired in production. Even if it were, `FrozenSnapshot.Verify` fails closed
+  (`ErrUnauthorized`) without a valid snapshot.
+- Author-supplied `http_action_snapshot` fields are stripped before freezing, on both the start and saved-child paths.
+- Saved-child authority (`CaptureSavedChildCatalog`: project/actor match, edge selection, member equality, frozen
+  definition SHA) is unchanged.
+
+Invariant for future work: if an `http` node is ever added to the Worker, its type detection must match
+`declaresHTTPNode` exactly, or the Worker must refuse any `http` node that arrives without a verified snapshot.
+
+**Dependency audits.**
+- No dependencies were added or changed: no `go.mod`, `Cargo.toml` or lockfile changes.
+- `govulncheck` and `cargo deny`/`cargo audit` are not installed locally, and CI runs only container image scans.
+  Per the user's decision (2026-10-08), CI stays unchanged for now. This is recorded as an open gate item, not a pass.
 
 ## Browser evidence
 
