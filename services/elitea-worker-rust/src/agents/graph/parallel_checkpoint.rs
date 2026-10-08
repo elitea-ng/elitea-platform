@@ -11,11 +11,12 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     PARALLEL_RESUME_STATE_KEY, ParallelActivation, ParallelBlocked, ParallelCheckpointAppender,
-    ParallelDecision, ParallelPauseCard, business_state, parallel_error, validate_state,
-    validate_values,
+    ParallelChildOrigin, ParallelDecision, ParallelPauseCard, business_state, parallel_error,
+    validate_state, validate_values,
 };
 
-pub(super) const OCCURRENCE_KEY: &str = "elitea.graph.parallel.occurrence.v1";
+pub(super) const OCCURRENCE_KEY: &str = "elitea.graph.parallel.occurrence.v2";
+const LEGACY_OCCURRENCE_KEY: &str = "elitea.graph.parallel.occurrence.v1";
 const BRANCH_RECEIPT_KEY: &str = "elitea.graph.parallel.branch-receipt.v1";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -34,6 +35,8 @@ pub(super) struct FrozenBranchInput {
 pub(super) struct FrozenOccurrence {
     pub(super) activation: ParallelActivation,
     pub(super) branches: Vec<FrozenBranchInput>,
+    pub(super) origin: ParallelChildOrigin,
+    pub(super) child_threads: Vec<String>,
     pub(super) cards: Vec<(usize, ParallelPauseCard)>,
     pub(super) decisions: Option<Vec<ParallelDecision>>,
     pub(super) resume_inputs: BTreeMap<usize, State>,
@@ -56,10 +59,14 @@ impl ParallelOccurrenceCheckpointer {
         activation: &ParallelActivation,
         context: &NodeContext,
         branches: Vec<FrozenBranchInput>,
+        origin: ParallelChildOrigin,
+        child_threads: Vec<String>,
     ) -> Result<FrozenOccurrence, GraphError> {
         let expected = FrozenOccurrence {
             activation: activation.clone(),
             branches,
+            origin,
+            child_threads,
             cards: Vec::new(),
             decisions: None,
             resume_inputs: BTreeMap::new(),
@@ -70,6 +77,7 @@ impl ParallelOccurrenceCheckpointer {
         if let Some(checkpoint) = latest.as_ref() {
             super::structure::validate_checkpoint(checkpoint)?;
             validate_freeze_parent(checkpoint, activation, context)?;
+            refuse_legacy(checkpoint)?;
             if checkpoint.step == context.step && checkpoint.metadata.contains_key(OCCURRENCE_KEY) {
                 let frozen = occurrence_from(checkpoint, activation)?;
                 if frozen.activation != expected.activation || frozen.branches != expected.branches
@@ -79,6 +87,7 @@ impl ParallelOccurrenceCheckpointer {
                 return Ok(frozen);
             }
         }
+        validate_lineage(&expected, activation)?;
         let mut checkpoint = match latest.as_ref() {
             Some(checkpoint) if checkpoint.step == context.step => checkpoint.clone(),
             _ => Checkpoint::new(
@@ -242,6 +251,7 @@ pub(super) fn occurrence_from(
     activation: &ParallelActivation,
 ) -> Result<FrozenOccurrence, GraphError> {
     super::structure::validate_checkpoint(checkpoint)?;
+    refuse_legacy(checkpoint)?;
     let raw = checkpoint
         .metadata
         .get(OCCURRENCE_KEY)
@@ -255,6 +265,7 @@ pub(super) fn occurrence_from(
     {
         return Err(occurrence_error());
     }
+    validate_lineage(&occurrence, activation)?;
     if let Some(blocked) = occurrence.blocked.as_ref()
         && !occurrence.branches.iter().any(|branch| {
             branch.ordinal == blocked.ordinal
@@ -265,6 +276,40 @@ pub(super) fn occurrence_from(
         return Err(occurrence_error());
     }
     Ok(occurrence)
+}
+
+/// The previous occurrence format froze no child identity. Refuse it by type.
+fn refuse_legacy(checkpoint: &Checkpoint) -> Result<(), GraphError> {
+    if checkpoint.metadata.contains_key(LEGACY_OCCURRENCE_KEY) {
+        return Err(parallel_error(
+            "graph.parallel.unsupported_occurrence",
+            "the parallel occurrence format is no longer supported",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_lineage(
+    occurrence: &FrozenOccurrence,
+    activation: &ParallelActivation,
+) -> Result<(), GraphError> {
+    occurrence
+        .origin
+        .validate()
+        .map_err(|_| occurrence_error())?;
+    let threads = &occurrence.child_threads;
+    if threads.len() != occurrence.branches.len()
+        || threads.iter().any(|thread| {
+            thread.is_empty()
+                || thread.len() > 512
+                || thread.chars().any(char::is_control)
+                || *thread == activation.root_thread_id
+        })
+        || threads.iter().collect::<BTreeSet<_>>().len() != threads.len()
+    {
+        return Err(occurrence_error());
+    }
+    Ok(())
 }
 
 fn refresh_identity(checkpoint: &mut Checkpoint) {

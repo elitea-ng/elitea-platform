@@ -98,6 +98,13 @@ impl Checkpointer for Store {
     }
 }
 
+fn test_origin() -> MapExecutionIdentity {
+    MapExecutionIdentity {
+        execution_id: "test-execution".to_owned(),
+        generation: 1,
+    }
+}
+
 #[derive(Default)]
 struct Children {
     stores: Mutex<BTreeMap<String, Arc<Store>>>,
@@ -106,18 +113,27 @@ struct Children {
 }
 #[async_trait]
 impl MapChildCheckpointerFactory for Children {
-    async fn for_item(
+    fn execution_identity(&self, root_thread: &str) -> Result<MapExecutionIdentity, GraphError> {
+        if root_thread != "root" {
+            return Err(GraphError::CheckpointError("scope".to_owned()));
+        }
+        Ok(MapExecutionIdentity {
+            execution_id: "test-execution".to_owned(),
+            generation: 1,
+        })
+    }
+    fn item_thread_id(
         &self,
         activation: &MapActivation,
         item: &FrozenMapItem,
         _worker: &str,
-        _kind: MapWorkerKind,
-    ) -> Result<MapChildCheckpoint, GraphError> {
+        _origin: &MapExecutionIdentity,
+    ) -> Result<String, GraphError> {
         if activation.root_thread_id != "root" {
             return Err(GraphError::CheckpointError("scope".to_owned()));
         }
         let label = item_identity(activation, item)?;
-        let thread = if self.foreign {
+        Ok(if self.foreign {
             "root".to_owned()
         } else if self.collide {
             "child".to_owned()
@@ -127,7 +143,17 @@ impl MapChildCheckpointerFactory for Children {
                 write!(&mut encoded, "{byte:02x}").unwrap();
             }
             encoded
-        };
+        })
+    }
+    async fn for_item(
+        &self,
+        activation: &MapActivation,
+        item: &FrozenMapItem,
+        worker: &str,
+        _kind: MapWorkerKind,
+        origin: &MapExecutionIdentity,
+    ) -> Result<MapChildCheckpoint, GraphError> {
+        let thread = self.item_thread_id(activation, item, worker, origin)?;
         let store = self
             .stores
             .lock()
@@ -622,10 +648,18 @@ fn invalid_sources_and_resource_limits_fail_before_dispatch() {
         json!((0..65).collect::<Vec<_>>()),
         json!(["x".repeat(MAX_ITEM_BYTES)]),
     ] {
-        assert!(definition.freeze(&context(items, false), [9; 32]).is_err());
+        assert!(
+            definition
+                .freeze(&context(items, false), [9; 32], test_origin())
+                .is_err()
+        );
     }
     let items = Value::Array((0..5).map(|_| Value::String("x".repeat(450_000))).collect());
-    assert!(definition.freeze(&context(items, false), [9; 32]).is_err());
+    assert!(
+        definition
+            .freeze(&context(items, false), [9; 32], test_origin())
+            .is_err()
+    );
 }
 
 #[test]
@@ -659,23 +693,35 @@ fn collisions_reserved_controls_and_duplicate_channels_are_rejected() {
 fn duplicate_items_step_worker_and_sequence_binding_are_distinct() {
     let config = definition();
     let context = context(json!(["same", "same"]), false);
-    let plan = config.freeze(&context, [9; 32]).unwrap();
+    let plan = config.freeze(&context, [9; 32], test_origin()).unwrap();
     assert_ne!(
         item_identity(&plan.activation, &plan.items[0]).unwrap(),
         item_identity(&plan.activation, &plan.items[1]).unwrap()
     );
     let mut later = context;
     later.step = 1;
-    assert!(plan.activation != config.freeze(&later, [9; 32]).unwrap().activation);
-    assert!(plan.activation != config.freeze(&later, [8; 32]).unwrap().activation);
+    assert!(
+        plan.activation
+            != config
+                .freeze(&later, [9; 32], test_origin())
+                .unwrap()
+                .activation
+    );
+    assert!(
+        plan.activation
+            != config
+                .freeze(&later, [8; 32], test_origin())
+                .unwrap()
+                .activation
+    );
     let mut config = definition();
     config.broadcast = vec!["prefix".to_owned(), "kept".to_owned()];
-    let first = config.freeze(&later, [9; 32]).unwrap();
+    let first = config.freeze(&later, [9; 32], test_origin()).unwrap();
     config.broadcast.reverse();
     assert_ne!(
         first.activation.config_digest,
         config
-            .freeze(&later, [9; 32])
+            .freeze(&later, [9; 32], test_origin())
             .unwrap()
             .activation
             .config_digest
@@ -814,17 +860,29 @@ fn deep_value(depth: usize) -> Value {
 fn adversarial_compact_source_and_broadcast_values_fail_structure_guard() {
     for depth in [48, 60, 96, 512] {
         let source = context(Value::Array(vec![deep_value(depth)]), false);
-        assert!(definition().freeze(&source, [9; 32]).is_err());
+        assert!(
+            definition()
+                .freeze(&source, [9; 32], test_origin())
+                .is_err()
+        );
         let mut broadcast = context(json!([0]), false);
         broadcast
             .state
             .insert("prefix".to_owned(), deep_value(depth));
-        assert!(definition().freeze(&broadcast, [9; 32]).is_err());
+        assert!(
+            definition()
+                .freeze(&broadcast, [9; 32], test_origin())
+                .is_err()
+        );
     }
     let wide = Value::Array(vec![Value::Null; 32_769]);
     assert!(
         definition()
-            .freeze(&context(Value::Array(vec![wide]), false), [9; 32])
+            .freeze(
+                &context(Value::Array(vec![wide]), false),
+                [9; 32],
+                test_origin()
+            )
             .is_err()
     );
 }
@@ -909,4 +967,33 @@ async fn original_deadline_stops_and_drops_owned_effectfree_futures_without_repl
     assert!(calls <= 4);
     node.execute_outcome(&context).await.unwrap();
     assert_eq!(workers.calls.lock().unwrap().len(), calls);
+}
+
+#[tokio::test]
+async fn a_legacy_map_occurrence_without_frozen_child_identity_is_refused_by_type() {
+    let (node, store, children, workers) = setup(Workers::new(Mode::Normal), definition());
+    let context = context(json!([0, 1]), false);
+    let mut legacy = Checkpoint::new(
+        "root",
+        context.state.clone(),
+        context.step,
+        vec!["map_items".to_owned()],
+    );
+    legacy.metadata.insert(
+        "elitea.graph.map.occurrence.v1".to_owned(),
+        json!({"activation": {}, "items": []}),
+    );
+    store.save(&legacy).await.unwrap();
+    let error = node
+        .execute_outcome(&context)
+        .await
+        .err()
+        .expect("a legacy occurrence is refused");
+    assert!(
+        error
+            .to_string()
+            .contains("graph.map.unsupported_occurrence")
+    );
+    assert!(children.stores.lock().unwrap().is_empty());
+    assert!(workers.calls.lock().unwrap().is_empty());
 }

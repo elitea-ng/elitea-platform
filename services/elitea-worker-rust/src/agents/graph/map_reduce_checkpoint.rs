@@ -14,7 +14,8 @@ use super::{
     validate_values,
 };
 
-const OCCURRENCE_KEY: &str = "elitea.graph.map.occurrence.v1";
+const OCCURRENCE_KEY: &str = "elitea.graph.map.occurrence.v2";
+const LEGACY_OCCURRENCE_KEY: &str = "elitea.graph.map.occurrence.v1";
 const ITEM_RECEIPT_KEY: &str = "elitea.graph.map.item-receipt.v1";
 
 /// Compose this wrapper with both the ADK parent and the Map node.
@@ -47,6 +48,7 @@ impl MapOccurrenceCheckpointer {
             {
                 return Err(map_error("stale_activation"));
             }
+            refuse_legacy(saved)?;
             if saved.metadata.contains_key(OCCURRENCE_KEY) {
                 let existing = occurrence(saved, &plan.activation)?;
                 if existing.items != plan.items {
@@ -54,6 +56,9 @@ impl MapOccurrenceCheckpointer {
                 }
                 return Ok(existing);
             }
+        }
+        if !valid_lineage(&plan, &plan.activation.root_thread_id) {
+            return Err(map_error("corrupt_occurrence"));
         }
         let mut candidate = latest.as_ref().map_or_else(
             || {
@@ -155,8 +160,37 @@ impl MapOccurrenceCheckpointer {
     }
 }
 
+/// The previous occurrence format froze no child identity. Refuse it by type.
+fn refuse_legacy(saved: &Checkpoint) -> Result<(), GraphError> {
+    if saved.metadata.contains_key(LEGACY_OCCURRENCE_KEY) {
+        return Err(map_error("unsupported_occurrence"));
+    }
+    Ok(())
+}
+
+fn valid_lineage(plan: &FrozenMap, root_thread: &str) -> bool {
+    let threads = &plan.item_threads;
+    threads.len() == plan.items.len()
+        && threads.iter().all(|thread| {
+            !thread.is_empty()
+                && thread.len() <= 512
+                && !thread.chars().any(char::is_control)
+                && thread != root_thread
+        })
+        && threads
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            == threads.len()
+        && !plan.origin.execution_id.is_empty()
+        && plan.origin.execution_id.len() <= 256
+        && !plan.origin.execution_id.chars().any(char::is_control)
+        && plan.origin.generation >= 1
+}
+
 fn occurrence(saved: &Checkpoint, activation: &MapActivation) -> Result<FrozenMap, GraphError> {
     validate_checkpoint_boundary(saved)?;
+    refuse_legacy(saved)?;
     let plan: FrozenMap = serde_json::from_value(
         saved
             .metadata
@@ -176,6 +210,7 @@ fn occurrence(saved: &Checkpoint, activation: &MapActivation) -> Result<FrozenMa
             .iter()
             .enumerate()
             .any(|(index, item)| item.index != index)
+        || !valid_lineage(&plan, &activation.root_thread_id)
     {
         return Err(map_error("corrupt_occurrence"));
     }

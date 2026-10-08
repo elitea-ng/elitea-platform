@@ -172,6 +172,11 @@ mod tests {
         let occurrence = FrozenOccurrence {
             activation: activation.clone(),
             branches,
+            origin: crate::agents::graph::ParallelChildOrigin {
+                execution_id: "execution".into(),
+                generation: 1,
+            },
+            child_threads: vec!["child0".into(), "child1".into()],
             cards,
             decisions: None,
             resume_inputs: BTreeMap::new(),

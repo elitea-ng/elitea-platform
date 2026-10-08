@@ -116,6 +116,7 @@ pub(crate) use parallel::{
 pub(crate) use parallel::{
     ParallelActivation, ParallelBranchExecution, ParallelCheckpointAppender,
     ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
+    ParallelChildOrigin,
 };
 pub(crate) use printer::{PRINTER_PAUSE_METADATA_KEY, PrinterPauseCatalog, PrinterPauseMetadata};
 

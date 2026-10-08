@@ -20,8 +20,8 @@ use super::parallel::{
     PARALLEL_RESUME_STATE_KEY, ParallelActivation, ParallelBlocked, ParallelBranchExecution,
     ParallelBranchGraphFactory, ParallelBranchPause, ParallelBranchTerminal,
     ParallelCheckpointAppender, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
-    ParallelDecision, ParallelNodeOutcome, ParallelOccurrenceCheckpointer, ParallelPauseCard,
-    PreparedParallelActivation, PreparedParallelBranch, projected_input_digest,
+    ParallelChildOrigin, ParallelDecision, ParallelNodeOutcome, ParallelOccurrenceCheckpointer,
+    ParallelPauseCard, PreparedParallelActivation, PreparedParallelBranch, projected_input_digest,
 };
 use super::{ParallelBranchDefinition, ParallelNodeDefinition};
 
@@ -164,20 +164,41 @@ struct MemoryChildCheckpoints {
 
 #[async_trait]
 impl ParallelChildCheckpointerFactory for MemoryChildCheckpoints {
+    fn child_origin(&self, _: &ParallelActivation) -> Result<ParallelChildOrigin, GraphError> {
+        Ok(ParallelChildOrigin {
+            execution_id: "test-execution".to_owned(),
+            generation: 1,
+        })
+    }
+
+    fn branch_thread_id(
+        &self,
+        activation: &ParallelActivation,
+        branch: &ParallelBranchDefinition,
+        ordinal: usize,
+        input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
+    ) -> Result<String, GraphError> {
+        Ok(format!(
+            "test:{}:{}:{}:{}:{}:{}:{ordinal}:{input_digest:?}",
+            activation.root_thread_id,
+            activation.node_id,
+            activation.step,
+            origin.execution_id,
+            origin.generation,
+            branch.id(),
+        ))
+    }
+
     async fn for_branch(
         &self,
         activation: &ParallelActivation,
         branch: &ParallelBranchDefinition,
         ordinal: usize,
         input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, GraphError> {
-        let thread_id = format!(
-            "test:{}:{}:{}:{}:{ordinal}:{input_digest:?}",
-            activation.root_thread_id,
-            activation.node_id,
-            activation.step,
-            branch.id(),
-        );
+        let thread_id = self.branch_thread_id(activation, branch, ordinal, input_digest, origin)?;
         let mut stores = self.stores.lock().await;
         let store = Arc::clone(
             stores
@@ -952,7 +973,7 @@ fn ready_branches(prepared: PreparedParallelActivation) -> Vec<PreparedParallelB
 
 fn stored_activation(checkpoint: &Checkpoint) -> ParallelActivation {
     serde_json::from_value(
-        checkpoint.metadata["elitea.graph.parallel.occurrence.v1"]["activation"].clone(),
+        checkpoint.metadata["elitea.graph.parallel.occurrence.v2"]["activation"].clone(),
     )
     .unwrap()
 }
@@ -1338,7 +1359,7 @@ async fn a_pause_receipt_cannot_attach_to_an_advanced_parent_frontier() {
     assert!(
         !latest
             .metadata
-            .contains_key("elitea.graph.parallel.occurrence.v1")
+            .contains_key("elitea.graph.parallel.occurrence.v2")
     );
     assert_eq!(runs["a"].load(Ordering::SeqCst), 1);
     assert_eq!(runs["b"].load(Ordering::SeqCst), 1);
@@ -1414,7 +1435,7 @@ async fn decisions_cannot_overwrite_competing_business_state_or_receipts() {
         )
         .unwrap()
     );
-    assert!(competing.metadata["elitea.graph.parallel.occurrence.v1"]["decisions"].is_null());
+    assert!(competing.metadata["elitea.graph.parallel.occurrence.v2"]["decisions"].is_null());
     assert_eq!(runs["a"].load(Ordering::SeqCst), 1);
     assert_eq!(runs["b"].load(Ordering::SeqCst), 1);
 }
@@ -1697,4 +1718,39 @@ async fn structural_parent_rejection_precedes_checkpoint_mint_and_child_effects(
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn a_legacy_occurrence_without_frozen_child_identity_is_refused_by_type() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let thread = "root-legacy";
+    let state = HashMap::from([("input".to_owned(), json!("original"))]);
+    let mut legacy = Checkpoint::new(thread, state.clone(), 3, vec!["gather".to_owned()]);
+    legacy.metadata.insert(
+        "elitea.graph.parallel.occurrence.v1".to_owned(),
+        json!({"activation": {}, "branches": []}),
+    );
+    checkpoints.parent.save(&legacy).await.unwrap();
+    let node = DurableParallelNode::new(
+        definition(&[("a", "a"), ("b", "b")], 2),
+        runtime(
+            Arc::clone(&checkpoints),
+            HashMap::from([
+                ("a".to_owned(), constant(json!({"output": "a"}))),
+                ("b".to_owned(), constant(json!({"output": "b"}))),
+            ]),
+        ),
+    );
+    let error = node
+        .execute(&NodeContext::new(state, ExecutionConfig::new(thread), 3))
+        .await
+        .err()
+        .expect("a legacy occurrence is refused");
+    assert!(
+        error
+            .to_string()
+            .contains("graph.parallel.unsupported_occurrence")
+    );
+    assert!(checkpoints.issued_threads.lock().await.is_empty());
+    assert_eq!(checkpoints.parent.list(thread).await.unwrap().len(), 1);
 }

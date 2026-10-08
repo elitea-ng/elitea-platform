@@ -303,6 +303,7 @@ fn approve_all(pause: &Value) -> State {
 /// the process dies before the fourth is admitted. Execution 2 (a later claim)
 /// restores the occurrence; execution 3 is the HITL continuation.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // One scenario across three executions.
 async fn parallel_children_survive_a_new_execution_and_resume_from_their_own_checkpoint() {
     let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
         eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");

@@ -94,6 +94,7 @@ impl MapDefinition {
         &self,
         context: &NodeContext,
         worker_digest: [u8; 32],
+        origin: MapExecutionIdentity,
     ) -> Result<FrozenMap, GraphError> {
         self.validate()?;
         validate_state_structure(&context.state)?;
@@ -154,6 +155,9 @@ impl MapDefinition {
         let plan = FrozenMap {
             activation,
             items: frozen,
+            origin,
+            // Minted by the child factory once the activation and items exist.
+            item_threads: Vec::new(),
             stop: None,
         };
         bounded(&plan, MAX_PLAN_BYTES)?;
@@ -198,6 +202,10 @@ pub(crate) fn item_identity(
 pub(crate) struct FrozenMap {
     pub(crate) activation: MapActivation,
     pub(crate) items: Vec<FrozenMapItem>,
+    /// The execution identity under which the occurrence first froze its items.
+    pub(crate) origin: MapExecutionIdentity,
+    /// Frozen child threads, index-aligned with `items`.
+    pub(crate) item_threads: Vec<String>,
     pub(crate) stop: Option<MapStop>,
 }
 
@@ -230,7 +238,8 @@ pub(crate) enum MapWorkerKind {
     Application,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct MapExecutionIdentity {
     pub(crate) execution_id: String,
     pub(crate) generation: u64,
@@ -243,12 +252,21 @@ pub(crate) trait MapChildCheckpointerFactory: Send + Sync {
     fn execution_identity(&self, _root_thread: &str) -> Result<MapExecutionIdentity, GraphError> {
         Err(map_error("invalid_turn_authority"))
     }
+    /// Pure derivation of an item thread from a frozen origin. Activates nothing.
+    fn item_thread_id(
+        &self,
+        activation: &MapActivation,
+        item: &FrozenMapItem,
+        worker: &str,
+        origin: &MapExecutionIdentity,
+    ) -> Result<String, GraphError>;
     async fn for_item(
         &self,
         activation: &MapActivation,
         item: &FrozenMapItem,
         worker: &str,
         kind: MapWorkerKind,
+        origin: &MapExecutionIdentity,
     ) -> Result<MapChildCheckpoint, GraphError>;
 }
 
@@ -339,9 +357,23 @@ impl DurableMapNode {
         &self,
         context: &NodeContext,
     ) -> Result<MapNodeOutcome, GraphError> {
-        let proposed = self
-            .definition
-            .freeze(context, self.graphs.owned_definition_digest())?;
+        let origin = self
+            .children
+            .execution_identity(&context.config.thread_id)?;
+        let mut proposed = self.definition.freeze(
+            context,
+            self.graphs.owned_definition_digest(),
+            origin.clone(),
+        )?;
+        for item in &proposed.items {
+            proposed.item_threads.push(self.children.item_thread_id(
+                &proposed.activation,
+                item,
+                &self.definition.worker,
+                &origin,
+            )?);
+        }
+        bounded(&proposed, MAX_PLAN_BYTES)?;
         let plan = self.parent.freeze(context, proposed).await?;
         if let Some(stop) = plan.stop {
             return Ok(MapNodeOutcome::Stopped(stop));
@@ -364,7 +396,7 @@ impl DurableMapNode {
         }
         let mut prepared = Vec::with_capacity(plan.items.len());
         let mut threads = BTreeSet::new();
-        for item in &plan.items {
+        for (index, item) in plan.items.iter().enumerate() {
             if let Some(stop) = self.control_stop(context) {
                 self.parent
                     .record_stop(&plan.activation, stop.clone())
@@ -376,6 +408,7 @@ impl DurableMapNode {
                 item,
                 &self.definition.worker,
                 self.graphs.worker_kind(),
+                &plan.origin,
             );
             let child = match self.deadline {
                 Some(deadline) => {
@@ -390,6 +423,9 @@ impl DurableMapNode {
                 }
                 None => admission.await?,
             };
+            if plan.item_threads.get(index) != Some(&child.thread_id) {
+                return Err(map_error("corrupt_occurrence"));
+            }
             if child.thread_id.is_empty()
                 || child.thread_id.len() > 512
                 || child.thread_id == plan.activation.root_thread_id

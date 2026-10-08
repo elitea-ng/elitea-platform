@@ -45,7 +45,8 @@ const BRANCH_INPUT_DIGEST_DOMAIN: &[u8] = b"elitea.graph.parallel.branch-input.v
 ///
 /// The ADK step is restored unchanged while the node remains pending and moves
 /// forward before a later loop visit. The child checkpoint factory adds its
-/// opaque execution/generation/definition scope before deriving a child thread.
+/// opaque definition scope and the occurrence's frozen origin before deriving a
+/// child thread.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ParallelActivation {
@@ -84,6 +85,31 @@ impl ParallelActivation {
     }
 }
 
+/// The execution identity under which an occurrence first froze its children.
+/// Restores, continuations and reclaims reuse it; they never re-read their own.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ParallelChildOrigin {
+    pub(crate) execution_id: String,
+    pub(crate) generation: u64,
+}
+
+impl ParallelChildOrigin {
+    pub(super) fn validate(&self) -> Result<(), GraphError> {
+        if self.execution_id.is_empty()
+            || self.execution_id.len() > 256
+            || self.execution_id.chars().any(char::is_control)
+            || self.generation == 0
+        {
+            return Err(parallel_error(
+                "graph.parallel.corrupt_occurrence",
+                "the frozen child origin is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// A child-thread checkpointer minted from the current opaque graph authority.
 ///
 /// The thread ID is safe routing metadata. The checkpointer remains the sole
@@ -96,12 +122,31 @@ pub(crate) struct ParallelChildCheckpoint {
 
 #[async_trait]
 pub(crate) trait ParallelChildCheckpointerFactory: Send + Sync {
+    /// The current claim's identity, used only when an occurrence first freezes.
+    fn child_origin(
+        &self,
+        activation: &ParallelActivation,
+    ) -> Result<ParallelChildOrigin, GraphError>;
+
+    /// Pure derivation of a branch thread from a frozen origin. Activates nothing.
+    fn branch_thread_id(
+        &self,
+        activation: &ParallelActivation,
+        branch: &ParallelBranchDefinition,
+        ordinal: usize,
+        input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
+    ) -> Result<String, GraphError>;
+
+    /// Derive the thread from `origin`, then activate its writer under the
+    /// current claim authority.
     async fn for_branch(
         &self,
         activation: &ParallelActivation,
         branch: &ParallelBranchDefinition,
         ordinal: usize,
         input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, GraphError>;
 }
 
@@ -332,12 +377,22 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
     ) -> Result<PreparedParallelActivation, GraphError> {
         self.validate(definition)?;
         let inputs = self.project_inputs(activation, definition, &context.state)?;
-        let occurrence = self.parent.freeze(activation, context, inputs).await?;
+        let (origin, threads) = self.mint_lineage(activation, definition, &inputs)?;
+        let occurrence = self
+            .parent
+            .freeze(activation, context, inputs, origin, threads)
+            .await?;
         if let Some(blocked) = occurrence.blocked.clone() {
             return Ok(PreparedParallelActivation::Blocked(blocked));
         }
         let mut restored = self
-            .restore_branches(activation, definition, &occurrence.branches)
+            .restore_branches(
+                activation,
+                definition,
+                &occurrence.branches,
+                &occurrence.origin,
+                &occurrence.child_threads,
+            )
             .await?;
         self.prepare_resume(activation, &occurrence, &mut restored, context)
             .await?;
@@ -384,6 +439,34 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
 }
 
 impl AdkParallelBranchRuntime {
+    /// Propose the lineage a brand-new occurrence freezes. An existing
+    /// occurrence keeps its own and ignores this.
+    fn mint_lineage(
+        &self,
+        activation: &ParallelActivation,
+        definition: &ParallelNodeDefinition,
+        inputs: &[FrozenBranchInput],
+    ) -> Result<(ParallelChildOrigin, Vec<String>), GraphError> {
+        let origin = self.checkpoints.child_origin(activation)?;
+        let mut threads = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let branch = definition.branches().get(input.ordinal).ok_or_else(|| {
+                parallel_error(
+                    "graph.parallel.corrupt_occurrence",
+                    "a frozen branch ordinal is invalid",
+                )
+            })?;
+            threads.push(self.checkpoints.branch_thread_id(
+                activation,
+                branch,
+                input.ordinal,
+                &input.input_digest,
+                &origin,
+            )?);
+        }
+        Ok((origin, threads))
+    }
+
     fn project_inputs(
         &self,
         activation: &mut ParallelActivation,
@@ -437,16 +520,19 @@ impl AdkParallelBranchRuntime {
         Ok(frozen)
     }
 
+    #[allow(clippy::too_many_lines)] // Keep child admission, frozen-identity and receipt replay checks together.
     async fn restore_branches(
         &self,
         activation: &ParallelActivation,
         definition: &ParallelNodeDefinition,
         inputs: &[FrozenBranchInput],
+        origin: &ParallelChildOrigin,
+        child_threads: &[String],
     ) -> Result<PreparedBranchSet, GraphError> {
         let mut prepared = Vec::with_capacity(inputs.len());
         let mut pauses = BTreeMap::new();
         let mut expected = Vec::new();
-        for input in inputs.iter().cloned() {
+        for (position, input) in inputs.iter().cloned().enumerate() {
             let branch = definition
                 .branches()
                 .get(input.ordinal)
@@ -459,8 +545,20 @@ impl AdkParallelBranchRuntime {
                 .clone();
             let child = self
                 .checkpoints
-                .for_branch(activation, &branch, input.ordinal, &input.input_digest)
+                .for_branch(
+                    activation,
+                    &branch,
+                    input.ordinal,
+                    &input.input_digest,
+                    origin,
+                )
                 .await?;
+            if child_threads.get(position) != Some(&child.thread_id) {
+                return Err(parallel_error(
+                    "graph.parallel.corrupt_occurrence",
+                    "a restored branch does not match its frozen identity",
+                ));
+            }
             if !child.admitted_threads.contains(&child.thread_id)
                 || child.admitted_threads.len() > 129
                 || child.admitted_threads.iter().any(|thread| {
