@@ -60,6 +60,19 @@ SELECT EXISTS (
       AND (j.resource_project_id = $2 OR j.projection_project_id = $2)
       AND j.actor_id = $3
       AND (j.settled_at IS NULL OR j.settled_at > now() - `+attributionSlackSQL+`)
+) OR EXISTS (
+    -- A desktop local turn (ADR-0029 decision 5c, shared 0155): the same
+    -- rule. Live means not committed and not past its deadline, or
+    -- committed less than the slack ago.
+    SELECT 1
+    FROM elitea_runtime.local_turn_executions AS l
+    WHERE l.execution_id = $1
+      AND l.project_id = $2
+      AND l.actor_id = $3
+      AND (
+          (l.committed_at IS NULL AND l.expires_at > now())
+          OR l.committed_at > now() - `+attributionSlackSQL+`
+      )
 )`, executionID, project, userID).Scan(&ok); err != nil {
 		return false, fmt.Errorf("verify execution attribution: %w", err)
 	}

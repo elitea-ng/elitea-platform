@@ -2303,6 +2303,15 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("load SCIM caller-address settings: %w", err)
 	}
 
+	// One native policy reader for the router (discovery, token responses,
+	// the 426 gate, the admin save's invalidation) AND the local turn start,
+	// so a save that turns local work off is seen by both at once.
+	nativePolicy := native.policy(pool)
+	currentLocalTurns, err := composeLocalTurns(pool, nativePolicy, auditRecorder, apiGroupAuth, logger)
+	if err != nil {
+		return fmt.Errorf("compose local turn routes: %w", err)
+	}
+
 	r := api.NewRouter(api.RouterConfig{
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
@@ -2311,7 +2320,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		PublicOrigin:                 publicOrigin,
 		NativeClients:                native.registry,
 		NativeStore:                  native.store,
-		NativePolicy:                 native.policy(pool),
+		NativePolicy:                 nativePolicy,
 		NativeAccess:                 native.validator,
 		NativeSecureCookies:          os.Getenv("COOKIE_SECURE") != "false",
 		Mailer:                       mailComposer,
@@ -2378,6 +2387,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SCIMAccessTokenTTL:         scimAccessTokenTTL,
 		SCIMClientAddresses:        scimClientAddresses,
 		CurrentAgentCancel:         currentAgentCancel,
+		CurrentLocalTurns:          currentLocalTurns,
 		CurrentNodeRecovery:        currentNodeRecovery,
 		CurrentApplicationTask:     currentApplicationTask,
 		CurrentIndexCancel:         currentIndexCancel,

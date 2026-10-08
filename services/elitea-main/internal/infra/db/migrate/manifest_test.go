@@ -637,7 +637,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 154: shared/0154_agent_stop_question_author.sql, the question author a
 	// chat stop removed, so a repeated stop by that author still replays
 	// (client contract 1.3). Nullable, no backfill, no permission.
-	require.EqualValues(t, 154, Head(shared))
+	//
+	// 155: shared/0155_local_turn_executions.sql, the execution of a desktop
+	// local turn (ADR-0029 decision 5c, client contract 1.5): the id the /llm
+	// edge keeps, its project/actor/conversation binding, its 24 h deadline
+	// and its one commit. No permission (`models.chat.messages.create`).
+	require.EqualValues(t, 155, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
