@@ -70,14 +70,14 @@ No file changed by PR #1084 is touched.
 
 ## 3. Tests
 
-Shaping suites, 85 tests (Worker, `src/agents/graph/`):
+Shaping suites, 86 tests (Worker, `src/agents/graph/`):
 
 | File | Tests | Scope |
 |---|---|---|
 | `data_shaping_tests.rs` | 26 | pointers, policies, retention, envelopes, decimals, canonical keys, limits, budget, errors |
 | `split_out_tests.rs` | 18 | schema, modes, retention, list policies, limits, digest, leak checks, node update |
 | `aggregate_tests.rs` | 19 | schema, operations, policy matrix, integers, grouping, limits, regroup, digest, node update |
-| `shaping_compiler_tests.rs` | 10 | gate on and off, channel validation, compiled pipelines, log capture, digest |
+| `shaping_compiler_tests.rs` | 11 | gate on and off, channel validation, compiled pipelines, log capture, alias amplification, digest |
 | `shaping_property_tests.rs` | 10 | P1–P7 at 2,000 seeded cases each, plus 3 adversarial cases |
 | `shaping_pg_tests.rs` | 2 | PostgreSQL 18 process replacement |
 
@@ -91,7 +91,7 @@ Full suites (local, 2026-10-08):
 | Command | Result |
 |---|---|
 | `cargo test --locked` (default features) | 1,999 passed, 0 failed, 2 ignored |
-| `cargo test --locked --all-targets --all-features --no-fail-fast` with PG18, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` | 2,198 passed, 0 failed, 63 ignored (13 targets, at commit `cb6b51d2`) |
+| `cargo test --locked --all-targets --all-features --no-fail-fast` with PG18, `ELITEA_REQUIRE_POSTGRES_RECEIPT_TESTS=1` | 2,198 passed, 0 failed, 63 ignored at `cb6b51d2`; 2,199 passed, 0 failed, 63 ignored after merging `origin/main` (`27d89c2e`, 13 targets) |
 | `cargo clippy --locked --all-targets --all-features -- -D warnings` | clean |
 | `cargo fmt --all -- --check` | clean |
 | Web `vitest --project node src/features/pipelines` | 2,485 passed, 1 expected fail (an existing `it.fails`), 0 skipped |
@@ -153,11 +153,21 @@ two-writes expectation makes the test fail.
 Limit: the continuation is accepted against the stored pause, but the test does not prove the continuation is
 required. Resuming without it also passes, because the pause checkpoint is already marked as cleared.
 
+## 5a. Recovery guarantees
+
+| Component × phase | Class | Enforcing code | Proof |
+|---|---|---|---|
+| Worker crash or replacement after a shaping checkpoint | R — Resume | ADK checkpoint per step on the PostgreSQL checkpointer; `recovery_frontier_supported` admits both nodes (`compiler.rs:797`) | `shaping_pg_tests.rs:256`: the replacement process resumes, SplitOut does not run again, one write |
+| Worker crash during a shaping node | R — Resume | The node writes nothing until its single update; the pre-node checkpoint stays the latest | `node_emits_one_update_and_leaves_source_untouched`, `node_emits_exactly_one_update_to_its_output`; the browser failure run wrote nothing after `split` |
+| Shaping limit or data failure | F — Typed failure | `ShapingError::into_graph_error` `data_shaping.rs:1052`; input state is preserved | §6 tests; browser item 4 |
+| Main, NATS, LLM gateway, sandbox supervisor | Unchanged | Shaping adds no call to these components | – |
+
 ## 6. Resilience
 
 | Rule | Code mechanism | Proving test |
 |---|---|---|
 | Node YAML ≤ 64 KiB | `parse_node_yaml` `data_shaping.rs:43` | `node_yaml_is_bounded` `data_shaping_tests.rs:830` |
+| YAML alias amplification fails fast | outer pipeline parse plus the 64 KiB node cap | `alias_amplification_in_a_shaping_node_fails_fast` `shaping_compiler_tests.rs:253` (8⁹ alias expansion refused in < 2 s with a typed error) |
 | Unknown keys refused | `deny_unknown_fields` on every raw struct (`split_out.rs:51`, `aggregate.rs:79` and their nested types, `data_shaping.rs` `RawRetain`/`RawLimits`) | `config_refusals` `split_out_tests.rs:53`, `invalid_configurations_are_refused` `aggregate_tests.rs:116` |
 | Limits only lower named ceilings | `LIMIT_CEILINGS` `data_shaping.rs:24`, `from_raw` `:760` | `limits_default_to_their_ceilings_and_only_lower_them` `data_shaping_tests.rs:572` (limit and limit+1) |
 | Input checked before work | `check_input` `data_shaping.rs:815` | `too_many_input_rows_fail_fast` `shaping_property_tests.rs:435` (10,000 accepted, 10,001 refused) |
@@ -235,6 +245,24 @@ the seeded test user `e2e-chat@autotest.local`. The YAML was entered in the edit
 | Writes to builtin, reserved or other channels | `validate_shaping_channels` (`compiler.rs:2187`); exactly one update | `state_channels_are_validated_at_compile_time` (`shaping_compiler_tests.rs:207`) |
 | Gate bypass in production | `SHAPING_INTEGRATION_READY = cfg!(feature)` (`compiler.rs:2013`), the only parser of node types | `shaping_nodes_are_refused_as_not_enabled_while_the_gate_is_off`, `production_builds_refuse_shaping_yaml`, browser item 5 |
 | Supply chain | No new dependency. `Cargo.lock` and `package-lock.json` are unchanged. | `cargo deny --all-features check advisories` and `npm audit --omit=dev`: only findings already on main (h2 RUSTSEC-2026-0258, rsa RUSTSEC-2023-0071 via sqlx-mysql, yanked chacha20; katex/mermaid low) |
+
+Checklist (`.claude/rules/security.md`), by category:
+- **Trust boundaries and identity:** not applicable. No identity is read, and no header or IP is trusted.
+- **Authorization:** no new route or RPC. Channel authority is enforced at compile time (`compiler.rs:2187`) and
+  proven by `state_channels_are_validated_at_compile_time`.
+- **Input, parsing and amplification:**
+  - size is bounded before parsing (64 KiB per node);
+  - alias expansion fails fast (`alias_amplification_in_a_shaping_node_fails_fast`);
+  - depth and collections are bounded (§6);
+  - schemas are strict (`deny_unknown_fields`).
+- **Injection and construction:** no SQL, shell, URL or template is built. Paths are RFC 6901 pointers only.
+  Web renders through MUI with no raw HTML.
+- **Egress and SSRF:** not applicable; there are no outbound calls.
+- **Secrets:**
+  - none in the diff (pattern scan of added lines: 0 matches);
+  - no credentials are handled;
+  - errors carry no data.
+- **Supply chain:** no new dependency. The audits above report only findings already on main.
 
 Authority, egress, credentials and effects are not applicable: shaping nodes read and write only the activation's
 own checkpointed state, call nothing external and resolve no credential.

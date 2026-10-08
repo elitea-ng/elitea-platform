@@ -248,6 +248,39 @@ mod rehearsal {
         );
     }
 
+    /// A YAML alias bomb inside a shaping node fails fast with a typed error.
+    #[test]
+    fn alias_amplification_in_a_shaping_node_fails_fast() {
+        let mut bomb = String::from(
+            "x0: &x0 [aaaaaaaaaaaaaaaa, aaaaaaaaaaaaaaaa, aaaaaaaaaaaaaaaa, aaaaaaaaaaaaaaaa, aaaaaaaaaaaaaaaa, aaaaaaaaaaaaaaaa, aaaaaaaaaaaaaaaa, aaaaaaaaaaaaaaaa]\n",
+        );
+        for level in 1..=8 {
+            let previous = level - 1;
+            bomb.push_str(&format!(
+                "x{level}: &x{level} [*x{previous}, *x{previous}, *x{previous}, *x{previous}, *x{previous}, *x{previous}, *x{previous}, *x{previous}]\n"
+            ));
+        }
+        let node = format!(
+            "{}retain: {{mode: except, fields: *x8}}\n{}",
+            SPLIT_NODE.replace("retain: {mode: all}\n", ""),
+            bomb
+        );
+        let started = std::time::Instant::now();
+        let error = definition(STATE, &[&node]).err();
+        assert!(
+            matches!(
+                error,
+                Some(
+                    "graph.pipeline.invalid_configuration"
+                        | "graph.pipeline.malformed_yaml"
+                        | "graph.pipeline.configuration_resource_exhausted"
+                )
+            ),
+            "{error:?}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
+
     #[test]
     fn pipeline_digest_binds_the_shaping_configuration() {
         let first = definition(STATE, &[SPLIT_NODE]).expect("split pipeline");
