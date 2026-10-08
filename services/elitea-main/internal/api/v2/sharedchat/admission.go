@@ -20,8 +20,10 @@ import (
 //   - a process-wide cap on verifications running at the same time
 //     (verifyGate), so the CPU the KDF can take is bounded however many
 //     requests arrive;
-//   - a per-client attempt budget (attemptBudget), so one client cannot use
-//     the whole cap and online guessing of one link's password is slow.
+//   - an attempt budget per client and link (attemptBudget), so one client
+//     cannot use the whole cap, online guessing of one link's password is
+//     slow, and callers sharing one address (no trusted proxy configured)
+//     cannot spend each other's budget on other links.
 //
 // Both answer 429 with Retry-After. Both are in memory and per replica: with N
 // replicas the effective limits are N times the stated ones.
@@ -49,8 +51,12 @@ const (
 	// clients are dropped and then the oldest.
 	maxTrackedUnlockClients = 10_000
 
-	// maxClientKeyLength bounds one tracked key.
+	// maxClientKeyLength bounds the client part of one tracked key.
 	maxClientKeyLength = 64
+
+	// budgetLinkKeyBytes is how much of the token hash names the link in a
+	// budget key: 128 bits, enough that two links never share a budget.
+	budgetLinkKeyBytes = 16
 
 	// ipv6ClientPrefixBits groups IPv6 clients by the /64 one end site is
 	// normally assigned, so rotating through a /64 is one client.

@@ -1,6 +1,7 @@
 package sharedchat
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -65,7 +66,7 @@ type Handler struct {
 	now         func() time.Time
 
 	// Unlock admission (admission.go): a process-wide cap on password
-	// verifications running at once, and a per-client attempt budget.
+	// verifications running at once, and an attempt budget per client and link.
 	verify   func(password string, hash, salt []byte) bool
 	gate     *verifyGate
 	attempts *attemptBudget
@@ -98,7 +99,7 @@ func (h *Handler) WithVerifySlots(n int) *Handler {
 	return h
 }
 
-// WithAttemptBudget replaces the per-client unlock budget. Test-only.
+// WithAttemptBudget replaces the per-client-and-link unlock budget. Test-only.
 func (h *Handler) WithAttemptBudget(attempts int, window time.Duration, maxClients int) *Handler {
 	h.attempts = newAttemptBudget(attempts, window, maxClients)
 	h.attempts.now = h.clock
@@ -361,7 +362,7 @@ type lockedResponse struct {
 //     already implies.
 //
 //  6. WORK BOUNDS. The unlock route is bounded in-process (admission.go): a
-//     per-client attempt budget and a cap on concurrent verifications. This
+//     per-client-and-link attempt budget and a cap on concurrent verifications. This
 //     read has no KDF, so its bounds are structural: the token space makes
 //     guessing infeasible, the response is capped at maxSharedMessages
 //     groups, and the token lookup is a single indexed equality on one central
@@ -458,7 +459,7 @@ type unlockRequest struct {
 //
 //     BOUNDED WORK. The KDF is the cost of this route, and the caller has no
 //     session, so admission is checked before the store is read and before
-//     any key is derived: a per-client attempt budget and a process-wide cap
+//     any key is derived: a per-client-and-link attempt budget and a process-wide cap
 //     on verifications in flight (admission.go). Either one answers 429 with
 //     Retry-After and a fixed message.
 //
@@ -497,8 +498,11 @@ func (h *Handler) Unlock(w http.ResponseWriter, r *http.Request) {
 
 	// Admission: before the store and before the KDF. The client is charged
 	// first so one client cannot hold the verification slots; a request
-	// refused only for lack of a slot is given its attempt back.
-	key := clientKey(r, h.clients)
+	// refused only for lack of a slot is given its attempt back. The budget
+	// is per client AND link, so callers that share one address (no trusted
+	// proxy CIDRs configured) keep a separate budget for each link.
+	tokenHash := hashToken(token)
+	key := clientKey(r, h.clients) + "|" + hex.EncodeToString(tokenHash[:budgetLinkKeyBytes])
 	if ok, retry := h.attempts.take(key); !ok {
 		writeTooMany(w, retry, tooManyAttemptsMessage)
 		return
@@ -521,7 +525,7 @@ func (h *Handler) Unlock(w http.ResponseWriter, r *http.Request) {
 	var resolved Resolved
 	var resolvedOK bool
 
-	link, err := h.store.ResolveByTokenHash(r.Context(), hashToken(token))
+	link, err := h.store.ResolveByTokenHash(r.Context(), tokenHash)
 	switch {
 	case err == nil:
 		resolved, resolvedOK = link, true
@@ -549,7 +553,7 @@ func (h *Handler) Unlock(w http.ResponseWriter, r *http.Request) {
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     UnlockCookieName,
-		Value:    grantValue(h.grantSecret, hashToken(token)),
+		Value:    grantValue(h.grantSecret, tokenHash),
 		Path:     unlockCookiePath,
 		HttpOnly: true,
 		Secure:   r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),

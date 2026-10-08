@@ -172,6 +172,27 @@ func TestUnlockAppliesAPerClientAttemptBudget(t *testing.T) {
 	}
 }
 
+// TestUnlockBudgetIsPerLink: the budget is charged per client AND link. When
+// every caller arrives from one address (no trusted proxy configured, so the
+// key is the ingress), spending it on one link must not refuse another link.
+func TestUnlockBudgetIsPerLink(t *testing.T) {
+	v := &stubVerifier{}
+	fx := newAdmissionFixture(t, func(h *sharedchat.Handler) *sharedchat.Handler {
+		return h.WithPasswordVerifier(v.verify).WithAttemptBudget(1, time.Hour, 100)
+	})
+	other, _ := createLink(t, fx.router, `{"password":"another horse"}`)
+	const ingress = "10.0.0.1:1"
+	if rec := postUnlock(fx.router, fx.token, "x", ingress, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("first attempt status = %d, want 403", rec.Code)
+	}
+	if rec := postUnlock(fx.router, fx.token, "x", ingress, nil); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("same link again status = %d, want 429", rec.Code)
+	}
+	if rec := postUnlock(fx.router, other, "x", ingress, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("another link from the same address status = %d, want 403", rec.Code)
+	}
+}
+
 // TestUnlockBudgetKeyIgnoresForwardedFor: with no resolver wired the key is
 // the socket peer; a caller-supplied X-Forwarded-For does not select it.
 func TestUnlockBudgetKeyIgnoresForwardedFor(t *testing.T) {
