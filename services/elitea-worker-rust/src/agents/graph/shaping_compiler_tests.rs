@@ -147,6 +147,62 @@ mod rehearsal {
         assert!(!message.contains("SECRET-SENTINEL-42"));
     }
 
+    const LOG_CHILD_ENV: &str = "ELITEA_SHAPING_LOG_CHILD";
+
+    /// Failure logs name the node, code and config field, never item data.
+    /// A child process owns a global subscriber, so parallel tests cannot
+    /// change callsite interest while the logs are captured.
+    #[test]
+    fn shaping_failure_logs_carry_no_item_values() {
+        let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "agents::graph::shaping_compiler_tests::rehearsal::shaping_failure_log_child",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(LOG_CHILD_ENV, "1")
+            .output()
+            .expect("log child process");
+        let logged = String::from_utf8_lossy(&output.stdout);
+        assert!(output.status.success(), "{logged}");
+        assert!(logged.contains("CHILD-RAN"), "{logged}");
+        assert!(logged.contains("Data shaping node failed"), "{logged}");
+        assert!(logged.contains("type_mismatch"), "{logged}");
+        assert!(logged.contains("operations[0].field"), "{logged}");
+        assert!(!logged.contains("SECRET-SENTINEL-42"), "{logged}");
+    }
+
+    #[tokio::test]
+    async fn shaping_failure_log_child() {
+        if std::env::var(LOG_CHILD_ENV).is_err() {
+            return;
+        }
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(std::io::stdout)
+            .init();
+        let split = SPLIT_NODE.replace("transition: END", "transition: join");
+        let join = JOIN_NODE.replace(
+            "operations: [{operation: collect, field: {path: /items}, output: items}]",
+            "operations: [{operation: sum_int, field: {path: /items}, output: total}]",
+        );
+        let definition = definition(ROUND_TRIP_STATE, &[&split, &join]).expect("failing pipeline");
+        let mut input = State::new();
+        input.insert(
+            "orders".to_owned(),
+            json!([{"id": "SECRET-SENTINEL-42", "items": ["SECRET-SENTINEL-42"]}]),
+        );
+        let error = run(&definition, input)
+            .await
+            .expect_err("sum_int over text");
+        let message = error.to_string();
+        assert!(message.contains("graph.shaping.type_mismatch: operations[0].field at item 0"));
+        assert!(!message.contains("SECRET-SENTINEL-42"));
+        println!("CHILD-RAN");
+    }
+
     #[test]
     fn state_channels_are_validated_at_compile_time() {
         let invalid = "graph.pipeline.invalid_configuration";
