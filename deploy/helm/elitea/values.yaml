@@ -586,6 +586,14 @@ main:
     # disallow) or by fronting elitea-main with a Gateway. Do not assume the
     # plain-Ingress path is covered by this chart.
     #
+    # The chart therefore REFUSES to render a plain Ingress while Form sign-in
+    # (main.fileConfig.authConfig.enabled) is on, unless the operator states
+    # via identityHeadersStrippedByController below that the controller removes
+    # the X-Auth-* and X-Elitea-* identity names listed here (including
+    # X-Auth-Signature) from inbound requests. On the Gateway API path the list
+    # must name at least X-Auth-Type, X-Auth-ID, X-Auth-User-ID and
+    # X-Auth-Signature (case-insensitive).
+    #
     # X-Elitea-Llm-Hop IS DELIBERATELY ABSENT, and a gate fails if it appears.
     # It is the LLM gateway's hop marker (#164): the gateway stamps it on every
     # outbound provider request and refuses a request that arrives already
@@ -594,11 +602,13 @@ main:
     # marker is not identity — it grants nothing, and recognising it only
     # refuses the caller's own request. Both traefik edges carry the same
     # exception, and edge_identity_strip_test.go holds them together.
+    identityHeadersStrippedByController: false
     stripIdentityHeaders:
       - X-Auth-Type
       - X-Auth-Id
       - X-Auth-User-Id
       - X-Auth-Reference
+      - X-Auth-Signature
       - X-Auth-Avatar
       - X-Auth-Avatar-State
       - X-Auth-Session-Id
