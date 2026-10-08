@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -516,5 +517,105 @@ func TestIsUniqueViolation(t *testing.T) {
 	}
 	if isUniqueViolation(errors.New("some other error")) {
 		t.Error("unrelated error should not be a unique violation")
+	}
+}
+
+// --- request-body and CEL bounds -------------------------------------------
+
+// paddedJSON returns prefix + 'a'*k + suffix with k chosen so the result is
+// exactly n bytes, so a test can sit on the byte limit and one past it.
+func paddedJSON(t *testing.T, n int, prefix, suffix string) string {
+	t.Helper()
+	k := n - len(prefix) - len(suffix)
+	if k < 0 {
+		t.Fatalf("cannot pad to %d bytes: fixed part is %d", n, len(prefix)+len(suffix))
+	}
+	return prefix + strings.Repeat("a", k) + suffix
+}
+
+func TestGovernanceBodyBound(t *testing.T) {
+	routes := []struct {
+		name, method, target string
+		prefix, suffix       string
+	}{
+		{"create", http.MethodPost, "/governance", `{"type":"budget","name":"n","data":{"pad":"`, `"}}`},
+		{"update", http.MethodPut, "/governance/abc", `{"type":"budget","name":"n","data":{"pad":"`, `"}}`},
+		{"validate-cel", http.MethodPost, "/governance/validate-cel", `{"cel":"provider == \"openai\"","pad":"`, `"}`},
+	}
+	for _, rt := range routes {
+		t.Run(rt.name+"/at limit", func(t *testing.T) {
+			q := &fakeQuerier{rowResult: okRow("abc", "budget", "n", nil, true)}
+			rr := doJSON(NewGovernanceHandler(q), rt.method, rt.target,
+				paddedJSON(t, maxGovernanceRequestBytes, rt.prefix, rt.suffix))
+			if rr.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rr.Code, rr.Body.String())
+			}
+		})
+		t.Run(rt.name+"/limit+1", func(t *testing.T) {
+			q := &fakeQuerier{rowResult: okRow("abc", "budget", "n", nil, true)}
+			rr := doJSON(NewGovernanceHandler(q), rt.method, rt.target,
+				paddedJSON(t, maxGovernanceRequestBytes+1, rt.prefix, rt.suffix))
+			if rr.Code != http.StatusRequestEntityTooLarge {
+				t.Fatalf("status = %d, want 413; body=%s", rr.Code, rr.Body.String())
+			}
+			var resp map[string]string
+			_ = json.NewDecoder(rr.Body).Decode(&resp)
+			if resp["error"] != "request body too large" {
+				t.Errorf("error = %q, want %q", resp["error"], "request body too large")
+			}
+			if q.lastSQL != "" {
+				t.Errorf("an oversized body reached the database: %q", q.lastSQL)
+			}
+		})
+	}
+}
+
+// celOfLength returns a valid boolean routing predicate exactly n bytes long.
+func celOfLength(t *testing.T, n int) string {
+	t.Helper()
+	return paddedJSON(t, n, `provider == "`, `"`)
+}
+
+func TestCompileRoutingCELLengthBound(t *testing.T) {
+	if err := CompileRoutingCEL(celOfLength(t, maxRoutingCELBytes)); err != nil {
+		t.Fatalf("expression at the limit refused: %v", err)
+	}
+	err := CompileRoutingCEL(celOfLength(t, maxRoutingCELBytes+1))
+	if !errors.Is(err, ErrRoutingCELTooLong) {
+		t.Fatalf("err = %v, want ErrRoutingCELTooLong", err)
+	}
+}
+
+func TestValidateCELActionOverCELCap(t *testing.T) {
+	h := NewGovernanceHandler(&fakeQuerier{})
+	cel := celOfLength(t, maxRoutingCELBytes+1)
+	body, _ := json.Marshal(ValidateCELRequest{CEL: cel})
+	rr := doJSON(h, http.MethodPost, "/governance/validate-cel", string(body))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (valid:false envelope)", rr.Code)
+	}
+	var resp map[string]any
+	_ = json.NewDecoder(rr.Body).Decode(&resp)
+	if resp["valid"] != false {
+		t.Fatalf("expected valid=false, got %v", resp["valid"])
+	}
+	if msg, _ := resp["error"].(string); strings.Contains(msg, cel) {
+		t.Error("the refusal echoes the expression back")
+	}
+}
+
+func TestCreateRoutingRuleOverCELCap(t *testing.T) {
+	q := &fakeQuerier{rowResult: okRow("x", "routing_rule", "r", nil, true)}
+	data := map[string]any{
+		"cel":     celOfLength(t, maxRoutingCELBytes+1),
+		"targets": []any{map[string]any{"provider": "openai", "model": "gpt-4o", "weight": 1.0}},
+	}
+	body, _ := json.Marshal(GovernanceRow{Type: "routing_rule", Name: "r", Data: data})
+	rr := doJSON(NewGovernanceHandler(q), http.MethodPost, "/governance", string(body))
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+	if q.lastSQL != "" {
+		t.Errorf("a refused rule reached the database: %q", q.lastSQL)
 	}
 }
