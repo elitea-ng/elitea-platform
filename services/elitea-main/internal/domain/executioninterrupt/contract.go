@@ -15,6 +15,7 @@ var (
 	ErrInvalidAck      = errors.New("execution interrupt ack is invalid")
 	ErrInvalidFrontier = errors.New("execution interrupt frontier is invalid")
 	ErrInvalidRaise    = errors.New("execution interrupt raise is invalid")
+	ErrInvalidClose    = errors.New("execution interrupt close is invalid")
 	// ErrNotAllowed hides whether a response exists from a caller who may not see it.
 	ErrNotAllowed = errors.New("execution interrupt access is not allowed")
 	// ErrNotFound means the authorized response has no card under the key.

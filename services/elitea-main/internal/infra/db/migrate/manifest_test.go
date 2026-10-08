@@ -637,7 +637,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// 154: shared/0154_agent_stop_question_author.sql, the question author a
 	// chat stop removed, so a repeated stop by that author still replays
 	// (client contract 1.3). Nullable, no backfill, no permission.
-	require.EqualValues(t, 154, Head(shared))
+	//
+	// 155: shared/0155_execution_interrupts.sql, the per-interrupt HITL
+	// decision ledger (execution_interrupts, its per-response revision row
+	// and audit; fanout-interrupt-decisions-v1 §5). New tables only, no
+	// backfill, no permission; unwired until Wave 2.
+	require.EqualValues(t, 155, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)
