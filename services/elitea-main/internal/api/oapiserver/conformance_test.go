@@ -132,7 +132,9 @@ const (
 	// participant.deleteParticipantFromConversation).
 	// 49 -> 48, when client contract 1.3 described the agent-execution stop
 	// (pipelines.stopLlmTask, now cancelChatExecution).
-	maxAllowlistEntries = 48
+	// 48 -> 47, when client contract 1.4 described the conversation PUT
+	// (conversation.edit, now updateConversation).
+	maxAllowlistEntries = 47
 )
 
 // buildFullSurfaceConfig returns a RouterConfig for the real production

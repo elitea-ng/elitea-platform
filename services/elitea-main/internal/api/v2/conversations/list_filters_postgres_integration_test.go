@@ -31,6 +31,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	platformmigrations "github.com/EliteaAI/elitea-platform/services/elitea-main/migrations"
 )
 
 const listFiltersDatabaseURL = "ELITEA_TEST_DATABASE_URL"
@@ -95,6 +96,15 @@ CREATE TABLE p_1.chat_message_group (
     conversation_id integer NOT NULL REFERENCES p_1.chat_conversations(id)
 );`); err != nil {
 		t.Fatalf("create the listing fixture schema: %v", err)
+	}
+	// The list row's `is_pinned` (client contract 1.4) reads the project
+	// pins, declared in the shared schema by shared/0064.
+	shared, err := platformmigrations.Files.ReadFile("shared/0064_centry_social_pins.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, string(shared)); err != nil {
+		t.Fatalf("apply shared/0064: %v", err)
 	}
 	return pool
 }

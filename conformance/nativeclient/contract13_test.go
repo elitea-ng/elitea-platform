@@ -31,10 +31,11 @@ func (s *suite) contract13(t *testing.T) {
 	api := s.main.api
 	project := s.projectID
 
-	// Discovery speaks 1.3 and publishes the data controls.
+	// Discovery speaks 1.3 or a later 1.x (contract 1.4 is additive) and
+	// publishes the data controls.
 	discovery := mustJSON(t, need(t)(api.Get(ctx, "/.well-known/elitea-client")), http.StatusOK)
-	if discovery["client_contract"] != "1.3" {
-		t.Errorf("discovery client_contract = %v, want 1.3", discovery["client_contract"])
+	if !speaksAtLeast(discovery["client_contract"], 1, 3) {
+		t.Errorf("discovery client_contract = %v, want 1.3 or later", discovery["client_contract"])
 	}
 	policy, _ := discovery["client_policy"].(map[string]any)
 	for _, key := range []string{"allow_share_out", "allow_share_in", "allow_cloud_stt", "allow_notification_actions", "allow_system_surfaces"} {

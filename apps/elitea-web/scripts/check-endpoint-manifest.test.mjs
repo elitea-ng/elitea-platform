@@ -710,7 +710,12 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // (pipelines.stopLlmTask stays `handwritten`; its id came off the
 // reverse-check allowlist). The fourteen operations 1.3 only tags `client`
 // were already counted. The manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 308;
+// 308 -> 309 (client contract 1.4): updateConversation describes the
+// conversation PUT the web already sends through a hand-written client
+// (conversation.edit stays `handwritten`; its id came off the reverse-check
+// allowlist). pinEntity and unpinEntity, which 1.4 only tags `client`, were
+// already counted. The manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 309;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

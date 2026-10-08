@@ -41,31 +41,39 @@
  */
 import * as zod from "zod";
 
-export const ConversationSummary = zod
+export const UpdateConversationRequest = zod
   .object({
-    id: zod.int(),
-    name: zod.string(),
-    created_at: zod.string(),
-    updated_at: zod.string(),
-    duration: zod
-      .int()
-      .describe("Always -1 today; see the schema description."),
-    message_groups_count: zod.int(),
-    is_pinned: zod
-      .boolean()
-      .describe(
-        'Client contract 1.4. The conversation is pinned in its project: the project holds a conversation pin for it (pinEntity with entity_type `conversation`, the pin the web app\'s "Pin on top" sets). A pin is shared by the project, not kept per member, and the row never says who pinned it. A pin or unpin re-delivers the row in the `changes_since` delta; it does not change `updated_at`. A server before 1.4 omits the field, which means not pinned.\n',
-      ),
-    meta: zod
-      .record(zod.string(), zod.unknown())
+    name: zod
+      .string()
       .nullish()
       .describe(
-        "Carries `single_participant` (the entity this conversation was filtered by, when entity_name/entity_meta_id were sent) among other conversation-level flags (`is_hidden`, etc).\n",
+        "The new title, trimmed; 1 to 256 characters after trimming, no control characters. `null` does not rename.\n",
       ),
+    is_private: zod
+      .boolean()
+      .optional()
+      .describe(
+        "`false` publishes the conversation in its project. Making a public conversation private is the author's alone.\n",
+      ),
+    folder_id: zod
+      .int()
+      .nullish()
+      .describe(
+        "One of the caller's own folders; `null` takes it out of its folder.",
+      ),
+    instructions: zod.string().optional(),
+    meta: zod
+      .record(zod.string(), zod.unknown())
+      .optional()
+      .describe("Replaces the whole settings document when present."),
   })
   .describe(
-    "One row of listConversations — the run-history panel's (issue #868) light projection of a conversation. `duration` is a placeholder: internal/api/v2/conversations/handler.go's List always answers `-1` for it (no per-conversation duration is computed server-side yet); a caller wanting a displayed duration derives one from created_at/updated_at instead of trusting this field.\n",
+    "The body of updateConversation. Every key is optional and only the keys present are written; a native client renames with `name` alone. NOTE(W2): internal/api/v2/conversations/handler.go (`Update`, `conversationNameFromBody`) reads these keys and ignores any other.\n",
   );
 
-export type ConversationSummary = zod.input<typeof ConversationSummary>;
-export type ConversationSummaryOutput = zod.output<typeof ConversationSummary>;
+export type UpdateConversationRequest = zod.input<
+  typeof UpdateConversationRequest
+>;
+export type UpdateConversationRequestOutput = zod.output<
+  typeof UpdateConversationRequest
+>;

@@ -35,6 +35,7 @@ function context(id = 42): ConversationSummary {
     updated_at: "2026-10-02T15:00:00Z",
     duration: 0,
     message_groups_count: 2,
+    is_pinned: false,
     meta: { is_hidden: true, editor_test: identity },
   };
 }
