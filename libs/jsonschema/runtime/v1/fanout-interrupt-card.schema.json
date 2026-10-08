@@ -35,7 +35,7 @@
       "type": "string",
       "minLength": 1,
       "maxLength": 512,
-      "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+      "pattern": "^[\\x21-\\x7e][\\x20-\\x7e]{0,511}$"
     },
     "kind": {
       "enum": [
@@ -226,7 +226,60 @@
       "then": {
         "properties": {
           "parent_agent_path": {
-            "minItems": 1
+            "minItems": 1,
+            "contains": {
+              "required": [
+                "sibling_ordinal"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "display": {
+            "properties": {
+              "guardrail_type": {
+                "const": "pipeline_static"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "available_actions": {
+            "items": {
+              "const": "continue"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "display": {
+            "properties": {
+              "guardrail_type": {
+                "const": "pipeline_hitl"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "available_actions": {
+            "items": {
+              "enum": [
+                "approve",
+                "reject",
+                "edit"
+              ]
+            }
           }
         }
       }

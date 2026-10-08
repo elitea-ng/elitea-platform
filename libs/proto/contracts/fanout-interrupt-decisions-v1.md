@@ -94,13 +94,15 @@ U64(n) = u64 big-endian
 A new pause of the same child (a later checkpoint) is a new key. Rewind or regenerate creates a new occurrence, new
 children and therefore new keys. A worker restart or a continuation execution re-derives the same key, so a decision
 survives both. Main never parses or recomputes the key. Vectors: `fanout-interrupt-key-vectors-v1.json` (includes a
-Map ordinal 64 case with non-ASCII ids and the coordinator case).
+Map ordinal 64 case with a non-ASCII `tool_call_id` and the coordinator case).
 
 ### 3.2 `interrupt_id`
 
 The existing Worker interrupt id stays on the card because Web merges and keys cards by it
 (`apps/elitea-web`, Track W). The Worker must keep it unique within one root response. Main refuses a raise whose
-`interrupt_id` equals another open card's id under a different key (typed fault, no row).
+`interrupt_id` equals another open card's id under a different key (typed fault, no row). Grammar: printable ASCII,
+1–512 characters, so the schema bound equals Main's existing 512-byte bound (`continue.go:188,211,342`).
+ASSUMPTION: every Worker interrupt id is ASCII (provider tool-call ids and digests); Wave 2 asserts it in a test.
 
 ### 3.3 Member hierarchy tier (user decision, PLAN §6 UI correction)
 
@@ -111,6 +113,9 @@ Fan-out members render exactly like today's EliteaUI sub-agent instances. No new
 - `call_id = "fo1_" + lowercase_hex(SHA-256("elitea.graph.fanout-member-call.v1" 0x00 || LP(child_thread)))`. It is
   stable across restarts and continuations because `child_thread` is frozen. Vectors in the same fixture.
 - `sibling_ordinal`: the 1-based member ordinal, the backend-authoritative ordinal used by `computeBreadcrumbs`.
+  Required on the member tier: when `fanout_v1` is present the schema requires at least one tier with
+  `sibling_ordinal`. It must equal `fanout_v1.ordinal`; JSON Schema cannot express that, so producers and Wave 2
+  consumer tests check it.
 - Labels therefore come out of the existing breadcrumb contract unchanged: three branches of `Researcher` that call
   `Sub` render `Researcher (1) ▸ Sub`, `Researcher (2) ▸ Sub`; distinct branch names are not numbered; leaf tiers are
   never numbered. Cards bucket by `parent_agent_call_id` as today
@@ -126,7 +131,7 @@ Fan-out members render exactly like today's EliteaUI sub-agent instances. No new
 buckets for more than 16 items (PLAN §6 answer 5). It never creates a container and carries no item content.
 - `activation`: 16 lowercase hex, the first 64 bits of
   `SHA-256("elitea.graph.fanout-activation-label.v1" 0x00 || LP(private activation identity))`.
-- `member`: the Parallel branch id, or the decimal 0-based Map item index.
+- `member`: the Parallel branch id, or the decimal 0-based Map item index (`0`–`63`).
 - `ordinal`: 1-based, equal to the member tier's `sibling_ordinal`. `total`: member count.
 - Parallel: `ordinal`, `total` ≤ 16. Map: ≤ 64.
 
@@ -144,7 +149,8 @@ auth. Headers such as `www_authenticate`, tokens, resource metadata and checkpoi
 canonical card is at most 32 KiB; Main enforces bytes.
 
 Coherence the schema enforces: hierarchy is null/null/[] or name/call_id/≥1 tier; a card with `fanout_v1` has at
-least one tier; `available_actions` and `display.guardrail_type` match `kind`.
+least one tier carrying `sibling_ordinal`; `available_actions` and `display.guardrail_type` match `kind`; a static
+pause (`pipeline_static`) offers only `continue`, and a HITL node (`pipeline_hitl`) only `approve`, `reject`, `edit`.
 
 ## 5. Ledger (Main)
 
@@ -327,7 +333,8 @@ the pending fan-out node and fetches.
   that accepts the frame (pattern `services/elitea-main/internal/infra/db/repos/node_recovery_projection.go`).
 - Member status values: `start` (also sent again when a paused member resumes), `end`, `paused`, `failed`,
   `cancelled`. `cancelled` is added to the brief's four for fail-after-drain and user stop. `open_interrupts` is ≥1
-  only for `paused`.
+  for `paused`, 0 for `end`, `failed` and `cancelled`, and may be ≥1 for `start` (a resumed multi-card Agent member
+  can still hold another open card).
 - `agent_hitl_resolved` carries the action but never the value. An answered `ask_user` summary on reload comes from the
   persisted message, as today.
 - Every member-scoped frame (tool, LLM, interrupt, progress) carries the three hierarchy fields and `fanout_v1`.

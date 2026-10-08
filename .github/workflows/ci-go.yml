@@ -9,6 +9,9 @@ on:
       - "services/elitea-worker-python/**"
       - "libs/go/**"
       - "libs/proto/**"
+      # services/elitea-main/internal/runtimecontracts validates these schemas
+      # and fixtures, so a schema-only change must run it.
+      - "libs/jsonschema/**"
       # The native client conformance module (ADR-0025 WP7) is in go.work, so
       # its helpers' unit tests, vet and lint run here; the suite itself is
       # behind the `conformance` tag and runs in ci-web-e2e.yml.
@@ -51,6 +54,9 @@ on:
       - "services/elitea-worker-python/**"
       - "libs/go/**"
       - "libs/proto/**"
+      # services/elitea-main/internal/runtimecontracts validates these schemas
+      # and fixtures, so a schema-only change must run it.
+      - "libs/jsonschema/**"
       # The native client conformance module (ADR-0025 WP7) is in go.work, so
       # its helpers' unit tests, vet and lint run here; the suite itself is
       # behind the `conformance` tag and runs in ci-web-e2e.yml.

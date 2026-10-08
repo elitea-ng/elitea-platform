@@ -83,7 +83,7 @@ func loadContractSchemas(t *testing.T) map[string]*contractSchema {
 		if !regexp.MustCompile(`^elitea\.[a-z]+\.` + regexp.QuoteMeta(stem) + `\.v[0-9]+$`).MatchString(id) {
 			t.Fatal(path, "$id must be elitea.<area>.<stem>.v<N>, got", id)
 		}
-		lintStrict(t, stem, "#", root)
+		lintStrict(t, stem, "#", root, false)
 		// Register under the resolved $id so cross-schema $ref by $id resolves
 		// regardless of compile order.
 		if err := compiler.AddResource(resourceURL+id, document); err != nil {
@@ -120,18 +120,29 @@ func typeIncludes(node map[string]any, name string) bool {
 
 var applicatorBranch = regexp.MustCompile(`/(oneOf|anyOf|allOf|not|if|then|else)(/|$)`)
 
+// schemaMaps are keywords whose object values map arbitrary names to schemas,
+// so every member is walked whatever its name.
+var schemaMaps = map[string]bool{"properties": true, "patternProperties": true, "$defs": true, "dependentSchemas": true}
+
 // lintStrict enforces closed objects and explicit bounds on every typed
 // subschema. Data-valued keywords (const, enum) are not walked. A bare
 // {"type": ...} inside an applicator branch only narrows a property that is
-// bounded where it is defined, so it is not a definition.
-func lintStrict(t *testing.T, stem, at string, value any) {
+// bounded where it is defined, so it is not a definition. nameMap is true when
+// value maps property names to schemas.
+func lintStrict(t *testing.T, stem, at string, value any, nameMap bool) {
 	t.Helper()
 	switch node := value.(type) {
 	case []any:
 		for index, item := range node {
-			lintStrict(t, stem, at+"/"+jsonIndex(index), item)
+			lintStrict(t, stem, at+"/"+jsonIndex(index), item, false)
 		}
 	case map[string]any:
+		if nameMap {
+			for name, child := range node {
+				lintStrict(t, stem, at+"/"+name, child, false)
+			}
+			return
+		}
 		if _, typed := node["type"]; typed && len(node) == 1 && applicatorBranch.MatchString(at) {
 			return
 		}
@@ -167,7 +178,7 @@ func lintStrict(t *testing.T, stem, at string, value any) {
 			if key == "const" || key == "enum" || key == "default" || key == "examples" {
 				continue
 			}
-			lintStrict(t, stem, at+"/"+key, child)
+			lintStrict(t, stem, at+"/"+key, child, schemaMaps[key])
 		}
 	}
 }
@@ -283,8 +294,12 @@ func TestRuntimeContractSchemasAndFixtures(t *testing.T) {
 	}
 	for _, path := range paths {
 		name := filepath.Base(path)
+		if !inFamily(name) {
+			continue
+		}
 		match := fixtureName.FindStringSubmatch(name)
-		if match == nil || !inFamily(match[1]) {
+		if match == nil || match[3] == ".invalid" {
+			t.Errorf("%s: fixture name must be <stem>-v<N>[.<variant>].json or <stem>-v<N>.invalid.<reason>.json", name)
 			continue
 		}
 		schema, ok := schemas[match[1]]

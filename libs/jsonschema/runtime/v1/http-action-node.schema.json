@@ -70,7 +70,8 @@
               },
               "value": {
                 "type": "string",
-                "maxLength": 8192
+                "maxLength": 8192,
+                "pattern": "^[^\\x00\\r\\n]*$"
               }
             },
             "oneOf": [

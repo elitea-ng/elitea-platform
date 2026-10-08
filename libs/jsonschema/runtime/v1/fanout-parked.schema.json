@@ -45,7 +45,7 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 512,
-            "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+            "pattern": "^[\\x21-\\x7e][\\x20-\\x7e]{0,511}$"
           }
         }
       }

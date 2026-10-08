@@ -29,12 +29,12 @@ Deliberately not ported:
 | Brief item | File(s) | Notes |
 |---|---|---|
 | D1 Fan-out V2 runtime design | `services/elitea-worker-rust/docs/fanout-v2-runtime-design.md` | One `FanoutRunner` for Parallel and Map; frozen child identity; ≤2 parent rows per activation; per-interrupt apply proven on the child checkpoint; live + parked triggers; failure, budgets, sequence, crash-window matrix, delete-list. |
-| D2 Interrupt decision contract | `libs/proto/contracts/fanout-interrupt-decisions-v1.md`; `libs/jsonschema/runtime/v1/fanout-*.schema.json` (15); `libs/jsonschema/runtime/v1/fixtures/fanout-*` (27 valid, 41 invalid) | Card, ledger, public decision API, private fetch/ACK, park/wake, frames, hierarchy (`Parent (1) ▸ Sub`), key/digest vectors. Track M2 implements the ledger and API from it. |
+| D2 Interrupt decision contract | `libs/proto/contracts/fanout-interrupt-decisions-v1.md`; `libs/jsonschema/runtime/v1/fanout-*.schema.json` (15); `libs/jsonschema/runtime/v1/fixtures/fanout-*` (28 valid, 46 invalid) | Card, ledger, public decision API, private fetch/ACK, park/wake, frames, hierarchy (`Parent (1) ▸ Sub`), key/digest vectors. Track M2 implements the ledger and API from it. |
 | D3 Map V1 rewrite | `services/elitea-worker-rust/docs/map-reduce-pipeline-node-design.md` | Describes the shipped V1 code; V2 items point to D1. |
 | D4 Parallel doc superseded | `services/elitea-worker-rust/docs/parallel-pipeline-node-design.md` | Complete-set sections marked superseded, history kept. |
-| D5 HTTP action node design | `services/elitea-worker-rust/docs/http-action-node-design.md`; `libs/jsonschema/runtime/v1/http-action-*.schema.json` (5); fixtures `http-action-*` (9 valid, 16 invalid, 25 render vectors) | Revision 2 operation + bindings, Main renders, invocation v3, effects, rules by project admins, egress, content pool, crash cases. |
+| D5 HTTP action node design | `services/elitea-worker-rust/docs/http-action-node-design.md`; `libs/jsonschema/runtime/v1/http-action-*.schema.json` (5); fixtures `http-action-*` (9 valid, 17 invalid, 25 render vectors) | Revision 2 operation + bindings, Main renders, invocation v3, effects, rules by project admins, egress, content pool, crash cases. |
 | D6 Database action node outline | `services/elitea-worker-rust/docs/database-action-node-design.md` | Wave 3 outline. |
-| Schema validation in CI | `services/elitea-main/internal/runtimecontracts/schemas_test.go` | Runs in the Go CI job (`go test`). |
+| Schema validation in CI | `services/elitea-main/internal/runtimecontracts/schemas_test.go`; `.github/workflows/ci-go.yml` | Runs in the Go CI job (`go test`). `ci-go.yml` now also triggers on `libs/jsonschema/**`. |
 
 ## Conformance test
 
@@ -42,21 +42,28 @@ Deliberately not ported:
 schema with the existing `github.com/santhosh-tekuri/jsonschema/v6` dependency:
 1. Draft 2020-12 compile, `$ref` by `$id`, `$id = elitea.<area>.<stem>.v<N>`.
 2. Strictness lint: closed objects, `maxLength`, `maxItems`, `minimum`/`maximum` on every typed subschema.
-3. ≥1 valid and ≥2 invalid fixtures per schema; valid pass, invalid fail.
+3. ≥1 valid and ≥2 invalid fixtures per schema; valid pass, invalid fail; a family-prefixed fixture with a malformed
+   name fails the test instead of being skipped.
 4. Fixtures are byte-canonical JSON (the canonical rule shared by D2 §7 and D5 §6; the test has a reference writer
    because Go `encoding/json` always escapes U+2028/U+2029).
 5. Recomputes `interrupt_key`, member `call_id`, `decision_sha256` and the HTTP render vectors' body and request
    digests.
 
 Evidence on 2026-10-08 (darwin/arm64, go1.26.5): `go vet` clean; `go test -count=1 -v ./internal/runtimecontracts/`
-4/4 PASS (`TestRuntimeContractSchemasAndFixtures`, `TestFanoutInterruptKeyAndMemberCallIDVectors`,
+4/4 PASS, 0 skips (`TestRuntimeContractSchemasAndFixtures`, `TestFanoutInterruptKeyAndMemberCallIDVectors`,
 `TestFanoutDecisionDigestsInFetchFixtures`, `TestHTTPActionRenderVectorsAreSelfConsistent`). Mutation check: a
-non-canonical fixture, a corrupted valid fixture, an extra field and a wrong key digest each made the test fail.
-Independent cross-check with Python `jsonschema` 4.26 (Draft202012Validator + referencing registry): 95/95 fixtures
-behave as intended. `golangci-lint` was not run locally (not installed); CI runs it.
+non-canonical fixture, a corrupted valid fixture, an extra field, a wrong key digest, a misnamed fixture and an
+unbounded property named `default` each made the test fail. Independent cross-check with Python `jsonschema` 4.26
+(Draft202012Validator + referencing registry): 102/102 fixtures behave as intended. `golangci-lint` was not run locally (not installed); CI runs it.
 
-Note: `ci-go.yml` triggers on `services/elitea-main/**` and `libs/proto/**`, not on `libs/jsonschema/**`. A future
-schema-only change does not start the Go job by itself; touch the contract doc or the test in the same change.
+
+## How the fixtures were created
+
+All fixtures are synthetic; none comes from a UI session or a database. The `fanout-*` schemas and fixtures were
+written by a one-off Python generator (each invalid fixture is one valid fixture with exactly one defect; digests
+computed with `hashlib`), and the `http-action-*` render vectors by a Python reference renderer using the Worker
+`encode_component` character set. The generators are not committed: the Go test recomputes every digest
+independently, so a hand edit that breaks a fixture fails CI.
 
 ## Performance
 
@@ -85,7 +92,7 @@ schema-only change does not start the Go job by itself; touch the contract doc o
   open cards, 512 KiB item, 8 MiB joined, 8 KiB decision, 32 KiB card, 64 KiB fetch entry, 64 child permits, 16
   streams per model, HTTP 256 KiB inputs / 384 KiB request / 2 MiB response / 30 s, DB 1,000 rows / 512 KiB / 30 s.
 - **Typed failures and control stops:** D1 §6 and §15, D2 §6 errors, D5 §16, D6 §12.
-- **Tested now:** 41 + 16 invalid fixtures (unknown keys, out-of-range values, wrong combinations, raw tokens, URL in
+- **Tested now:** 46 + 17 invalid fixtures (unknown keys, out-of-range values, wrong combinations, raw tokens, URL in
   YAML, plain-http origins) are rejected by the schemas in Go and in Python.
 - **Result:** pass.
 
