@@ -181,7 +181,7 @@ func TestPublicPinRoutesShareCanonicalRowsAndEnforceChatAuthority(t *testing.T) 
 
 			// Equal entity IDs in two tenants must remain separate shared pins.
 			if _, err := pool.Exec(t.Context(), `CREATE SCHEMA p_2;
-CREATE TABLE p_2.chat_conversations(id integer PRIMARY KEY,is_private boolean,meta jsonb);
+CREATE TABLE p_2.chat_conversations(id integer PRIMARY KEY,is_private boolean,meta jsonb,sync_at timestamptz NOT NULL DEFAULT clock_timestamp());
 CREATE TABLE p_2.chat_participants(id integer PRIMARY KEY,entity_name text,entity_meta jsonb);
 CREATE TABLE p_2.chat_participant_mapping(conversation_id integer,participant_id integer);
 INSERT INTO p_2.chat_participants VALUES (9,'user','{"id":9}');`); err != nil {
