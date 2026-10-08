@@ -41,58 +41,61 @@
  */
 import * as zod from "zod";
 
-export const ClientPublicPolicy = zod
+export const LocalWorkPolicy = zod
   .object({
-    require_device_lock: zod
+    allowed: zod.boolean().describe("Local work is permitted. Default false."),
+    shell: zod
       .boolean()
-      .describe(
-        "The client must refuse to run without a device passcode or biometric lock.",
-      ),
-    offline_enabled: zod.boolean().describe("Offline storage is allowed."),
-    min_client_version: zod
+      .describe("Local turns may run shell commands. Default true."),
+    max_sandbox_mode: zod
       .string()
       .describe(
-        "Deployment-wide minimum client version; empty means none. The document's per-client `min_client_version` entry, when present, is never lower than this.",
+        "The widest sandbox mode a local command may use: `read-only`, `workspace-write` (the default) or `full-access`. A user may always choose a narrower one. Treat an unknown value as `read-only`.",
       ),
-    allow_share_out: zod
+    network: zod
       .boolean()
       .describe(
-        "Client contract 1.3. Copy, share and export of messages and transcripts out of the app are allowed. Default true.",
+        "Sandboxed local commands may reach the network. Default false.",
       ),
-    allow_share_in: zod
+    command_allow: zod
+      .array(zod.string())
+      .describe(
+        "Command patterns that run without asking the user. At most 200 patterns of at most 512 bytes. Applied before workspace and user rules.",
+      ),
+    command_deny: zod
+      .array(zod.string())
+      .describe(
+        "Command patterns that never run. A deny wins over an allow. Same bounds.",
+      ),
+    path_deny: zod
+      .array(zod.string())
+      .describe(
+        "Path patterns local tools must not read or write. Same bounds.",
+      ),
+    local_mcp: zod
       .boolean()
       .describe(
-        "Client contract 1.3. The system share sheet may send text, links, files and photos into the app. Default true.",
+        "The user may configure local (stdio) MCP servers. Default false.",
       ),
-    allow_cloud_stt: zod
+    local_index: zod
       .boolean()
       .describe(
-        "Client contract 1.3. Dictation may use a recogniser that sends audio off the device (the platform's server recogniser or the workspace's transcription model). False means on-device recognition only. Default false.",
+        "The app may build a local index of a workspace. Default true.",
       ),
-    notification_preview: zod
-      .string()
-      .describe(
-        "Client contract 1.3. What a notification shows on the lock screen: `none` (a generic text only, the default) or `title` (the conversation or item title). Message content is never shown. Treat an unknown value as `none`.",
-      ),
-    allow_notification_actions: zod
+    cloud_sync: zod
       .boolean()
       .describe(
-        "Client contract 1.3. A notification may offer actions (mark read, open an approval). A decision always needs the app unlocked. Default true.",
+        "A workspace folder may be synced to an artifact bucket. Default false.",
       ),
-    allow_system_surfaces: zod
+    memory_write: zod
       .boolean()
       .describe(
-        "Client contract 1.3. Widgets, home-screen quick actions and other surfaces outside the app may show conversation and agent titles. False means counts only. Default false.",
-      ),
-    local_work_allowed: zod
-      .boolean()
-      .describe(
-        "Client contract 1.5 (ADR-0029 decision 6). The token policy's `local_work.allowed`: a desktop app may offer local work. The rest of the `local_work` group travels only with a token. Default false.",
+        "Local turns may save to the user's cloud memory. Recall is always allowed. Default true.",
       ),
   })
   .describe(
-    "The public subset of the native client policy (ADR-0025 decision 5); the full policy travels with every token response. NOTE(W2): internal/api/v2/discovery/document.go:100 (`PublicPolicy`).",
+    "Client contract 1.5 (ADR-0029 decision 6). What a desktop app may do on the user's machine. The desktop enforces every field. The server enforces only `allowed`: it refuses a local turn start while it is false. A local turn's audit records what the client reports, which the server cannot verify. NOTE(W2): internal/platformconfig/nativeclientpolicy.go:110 (`LocalWorkPolicy`).",
   );
 
-export type ClientPublicPolicy = zod.input<typeof ClientPublicPolicy>;
-export type ClientPublicPolicyOutput = zod.output<typeof ClientPublicPolicy>;
+export type LocalWorkPolicy = zod.input<typeof LocalWorkPolicy>;
+export type LocalWorkPolicyOutput = zod.output<typeof LocalWorkPolicy>;

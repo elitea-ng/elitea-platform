@@ -20,7 +20,7 @@ const Path = "/.well-known/elitea-client"
 
 // ClientContract is the client contract version this server speaks
 // (ADR-0025 decision 6). WP5 adds the contract lock that pins it.
-const ClientContract = "1.4"
+const ClientContract = "1.5"
 
 // Deployment kinds (ADR-0025 decision 1). The value is process configuration
 // (ELITEA_DEPLOYMENT_KIND), not an admin setting: it states who operates the
@@ -117,6 +117,11 @@ type PublicPolicy struct {
 	NotificationPreview      string `json:"notification_preview"`
 	AllowNotificationActions bool   `json:"allow_notification_actions"`
 	AllowSystemSurfaces      bool   `json:"allow_system_surfaces"`
+
+	// LocalWorkAllowed is `local_work.allowed` (client contract 1.5,
+	// ADR-0029 decision 6): whether a desktop may offer local work at all.
+	// The rest of the local_work group travels only with a token.
+	LocalWorkAllowed bool `json:"local_work_allowed"`
 }
 
 // DefaultPublicPolicy is the subset served without a policy source: no device
@@ -128,6 +133,7 @@ func DefaultPublicPolicy() PublicPolicy {
 		RequireDeviceLock: false, OfflineEnabled: true, MinClientVersion: "",
 		AllowShareOut: true, AllowShareIn: true, AllowCloudSTT: false,
 		NotificationPreview: "none", AllowNotificationActions: true, AllowSystemSurfaces: false,
+		LocalWorkAllowed: false,
 	}
 }
 

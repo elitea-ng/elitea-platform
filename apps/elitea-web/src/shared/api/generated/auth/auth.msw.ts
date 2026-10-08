@@ -80,6 +80,30 @@ export const getExchangeNativeTokenResponseMock = (
         }),
         allow_notification_actions: faker.datatype.boolean(),
         allow_system_surfaces: faker.datatype.boolean(),
+        local_work: {
+          allowed: faker.datatype.boolean(),
+          shell: faker.datatype.boolean(),
+          max_sandbox_mode: faker.string.alpha({
+            length: { min: 10, max: 20 },
+          }),
+          network: faker.datatype.boolean(),
+          command_allow: Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+          command_deny: Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+          path_deny: Array.from(
+            { length: faker.number.int({ min: 1, max: 10 }) },
+            (_, i) => i + 1,
+          ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+          local_mcp: faker.datatype.boolean(),
+          local_index: faker.datatype.boolean(),
+          cloud_sync: faker.datatype.boolean(),
+          memory_write: faker.datatype.boolean(),
+        },
       },
     },
     undefined,

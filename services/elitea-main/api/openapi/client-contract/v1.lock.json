@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.4",
+  "client_contract": "1.5",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -1494,6 +1494,7 @@
                     "allow_share_in",
                     "allow_share_out",
                     "allow_system_surfaces",
+                    "local_work_allowed",
                     "min_client_version",
                     "notification_preview",
                     "offline_enabled",
@@ -1513,6 +1514,9 @@
                       "type": "boolean"
                     },
                     "allow_system_surfaces": {
+                      "type": "boolean"
+                    },
+                    "local_work_allowed": {
                       "type": "boolean"
                     },
                     "min_client_version": {
@@ -8528,6 +8532,7 @@
                     "allow_share_out",
                     "allow_system_surfaces",
                     "idle_lock_seconds",
+                    "local_work",
                     "min_client_version",
                     "notification_preview",
                     "offline_attachments",
@@ -8557,6 +8562,66 @@
                     "idle_lock_seconds": {
                       "type": "integer",
                       "format": "int64"
+                    },
+                    "local_work": {
+                      "type": "object",
+                      "required": [
+                        "allowed",
+                        "cloud_sync",
+                        "command_allow",
+                        "command_deny",
+                        "local_index",
+                        "local_mcp",
+                        "max_sandbox_mode",
+                        "memory_write",
+                        "network",
+                        "path_deny",
+                        "shell"
+                      ],
+                      "properties": {
+                        "allowed": {
+                          "type": "boolean"
+                        },
+                        "cloud_sync": {
+                          "type": "boolean"
+                        },
+                        "command_allow": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "command_deny": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "local_index": {
+                          "type": "boolean"
+                        },
+                        "local_mcp": {
+                          "type": "boolean"
+                        },
+                        "max_sandbox_mode": {
+                          "type": "string"
+                        },
+                        "memory_write": {
+                          "type": "boolean"
+                        },
+                        "network": {
+                          "type": "boolean"
+                        },
+                        "path_deny": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "shell": {
+                          "type": "boolean"
+                        }
+                      }
                     },
                     "min_client_version": {
                       "type": "string"
