@@ -1,10 +1,11 @@
 //! The native runner (`ELITEA_INVENTORY_RUNNER=native`): the engine itself,
 //! over the PostgreSQL graph store.
 //!
-//! Served so far: `run_ingestion` (clone, parsers, model, communities,
-//! embeddings — `crate::ingest`) and the two status tools that report on it.
-//! The retrieval tools land with ADR-0027 P4; until then they are refused
-//! by name, never answered empty.
+//! Every tool of both families: `run_ingestion` (clone, parsers, model,
+//! communities, embeddings — `crate::ingest`), the status tools,
+//! `remove_source_entities`, `investigate` (`crate::investigate`), and the
+//! read tools (`crate::retrieval`). A tool the dispatch does not know is
+//! refused by name, never answered empty (a test holds the tables to it).
 
 // The reports are built line by line, as the Python handlers built them.
 #![allow(clippy::format_push_string)]
@@ -708,6 +709,38 @@ fn status_text(summary: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The tools `run` answers itself, before the read dispatch.
+    const RUN_TOOLS: [&str; 5] = [
+        "run_ingestion",
+        "get_sources_status",
+        "get_ingestion_status",
+        "investigate",
+        "remove_source_entities",
+    ];
+
+    #[test]
+    fn every_admitted_tool_is_served_natively() {
+        let view = crate::retrieval::view::GraphView::default();
+        let params = Map::new();
+        for (family, table) in [
+            ("inventory", &tools::INVENTORY_TOOLS[..]),
+            ("inventory_search", &tools::SEARCH_TOOLS[..]),
+        ] {
+            for tool in table {
+                let call = crate::retrieval::Call {
+                    tool,
+                    family,
+                    params: &params,
+                    view: &view,
+                };
+                assert!(
+                    RUN_TOOLS.contains(tool) || crate::retrieval::dispatch(&call).is_some(),
+                    "{family}/{tool} would be refused as not native yet"
+                );
+            }
+        }
+    }
 
     #[test]
     fn reports_follow_the_python_text() {

@@ -200,16 +200,6 @@ const LAYERS: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// The types of a layer (`LAYER_TYPE_MAPPING[layer]`), the layer name
-/// matched exactly; `None` for a name that is not a layer.
-#[must_use]
-pub fn layer_types(layer: &str) -> Option<&'static [&'static str]> {
-    LAYERS
-        .iter()
-        .find(|(name, _)| *name == layer)
-        .map(|(_, types)| *types)
-}
-
 /// The layer `add_entity` assigns to a type (`TYPE_TO_LAYER`), matched
 /// lowercase; `None` for a type outside every layer.
 #[must_use]

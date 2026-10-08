@@ -166,11 +166,16 @@ async fn run_ingestion_over_the_socket_builds_the_graph_and_reports_status() {
             .is_some_and(|t| t.starts_with("No active ingestion for this toolkit."))
     );
 
-    // Not native yet: refused by name, not answered empty.
-    let refused = invoke(&socket, "search_graph", &arguments).await;
-    assert_eq!(
-        refused.last().map(|l| l["error"]["error_type"].clone()),
-        Some(json!("FileNotFoundError"))
+    // A read tool answers from the stored graph, through the view cache.
+    let mut search = arguments.clone();
+    search["params"] = json!({"query": "refund"});
+    let found = invoke(&socket, "search_graph", &search).await;
+    assert!(
+        found
+            .last()
+            .and_then(|l| l["result"]["result"].as_str())
+            .is_some_and(|t| t.contains("Refund requests")),
+        "{found:?}"
     );
 
     // No LLM model: refused before anything runs.

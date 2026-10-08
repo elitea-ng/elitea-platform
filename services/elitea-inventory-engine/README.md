@@ -3,19 +3,22 @@
 The Rust-native Inventory engine (ADR-0027) behind the sub-application host's
 engine sidecar socket, built on the shared engine crates in `libs/rust`.
 
-**State: P3e, `run_ingestion` served natively.** It serves the Inventory tool table on the same
+**State: P4, every Inventory tool served natively.** It serves the Inventory tool table on the same
 socket protocol the Python sidecar spoke, with two runners:
 
 | `ELITEA_INVENTORY_RUNNER` | What answers |
 |---|---|
 | `unavailable` (default) | every tool is refused (`FileNotFoundError`): an engine that is not wired must look broken |
 | `fixture` | the canned graph every Inventory fixture runner replays |
-| `native` | the engine itself over PostgreSQL (`ELITEA_INVENTORY_DATABASE_URL`): `run_ingestion`, `get_sources_status`, `get_ingestion_status`; the retrieval tools are refused by name until P4 |
+| `native` | the engine itself over PostgreSQL (`ELITEA_INVENTORY_DATABASE_URL`): every tool of the `inventory` and `inventory_search` families |
 
 The knowledge graph and its PostgreSQL store (P3a), file ingestion (P3b), the
 parser stage (P3c) and the model stage (P3d) are in; communities, embeddings and
-the native runner (P3e) serve `run_ingestion` on the socket. Retrieval and
-`investigate` land in P4.
+the native runner (P3e) serve `run_ingestion` on the socket; the read tools
+(`src/retrieval`, held to goldens the Python handlers produced) and
+`investigate` (`src/investigate.rs`: the toolkit's model with the graph tools
+and the source toolkits' read-only tools through elitea-main's `test_tool`
+route) complete it (P4).
 
 The model stage (`src/extract`) uses the Python engine's prompts and type tables
 as data: `assets/python_inventory.json`, generated from its source by
