@@ -100,9 +100,16 @@ func (r *CurrentSocialPinsRepository) Pin(ctx context.Context, projectID, entity
 		return err
 	}
 	visible, identity := access.Predicate(schema, "c", 5, chatauthority.Detail)
+	// FOR SHARE OF c: the pin holds the conversation row until it commits.
+	// A plain read let a concurrent Delete remove the row and run its pin
+	// DELETE (which cannot see an uncommitted pin) between this INSERT and
+	// the commit, leaving a pin for a conversation that no longer exists.
+	// With the lock, a Delete that got there first makes this SELECT skip
+	// the gone row (404), and one that comes second waits for the pin and
+	// then removes it.
 	query := fmt.Sprintf(`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at)
 	 SELECT $1, $2, $3, $4, NOW(), NOW() FROM %s.chat_conversations c
-	 WHERE c.id=$3 AND %s`, schema, visible) + upsert
+	 WHERE c.id=$3 AND %s FOR SHARE OF c`, schema, visible) + upsert
 	return pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
 		var inserted bool
 		if err := tx.QueryRow(ctx, query, append([]any{entity, project, id, actor}, identity...)...).Scan(&inserted); errors.Is(err, pgx.ErrNoRows) {
@@ -124,8 +131,14 @@ func (r *CurrentSocialPinsRepository) Pin(ctx context.Context, projectID, entity
 // updated_at (the row's "last modified") and the lost-access markers stay as
 // they are.
 func stampConversationPin(ctx context.Context, tx pgx.Tx, schema string, id int32) error {
-	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_conversations SET sync_at = clock_timestamp() WHERE id = $1`, schema), id); err != nil {
+	tag, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_conversations SET sync_at = clock_timestamp() WHERE id = $1`, schema), id)
+	if err != nil {
 		return fmt.Errorf("stamp pinned conversation: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		// The conversation went away under the pin; never commit a pin
+		// (or an unpin's stamp) for a row that is gone.
+		return apierr.NotFound("chat resource not found")
 	}
 	return nil
 }

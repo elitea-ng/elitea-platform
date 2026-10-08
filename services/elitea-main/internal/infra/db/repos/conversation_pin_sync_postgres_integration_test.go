@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -238,5 +239,95 @@ func TestDeletingAPinnedConversationIsOneDeletedTombstone(t *testing.T) {
 	}
 	if left != 0 {
 		t.Fatalf("%d pin rows outlived the conversation", left)
+	}
+}
+
+// TestAPinRacingTheConversationDeleteLeavesNoOrphanPin is the regression for
+// review F3 on PR #1139. Delete removes the conversation and then its pin in
+// one transaction; a Pin that read the conversation before that commit used
+// to insert its pin unseen by Delete's pin DELETE, find the row gone at the
+// sync_at stamp, ignore that, and commit a centry.social_pins row for a
+// conversation that no longer exists. The interleaving is forced here: the
+// test's transaction deletes the conversation (as Delete does) and holds it
+// uncommitted until Pin is blocked on the row, then removes the pin and
+// commits.
+func TestAPinRacingTheConversationDeleteLeavesNoOrphanPin(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	repo := NewConversationsRepo(pool)
+	pins := NewCurrentSocialPinsRepository(pool)
+	numericID, _, _ := seedConversationWithParticipant(t, repo, "racing")
+	id, _ := strconv.ParseInt(numericID, 10, 64)
+	ctx := context.Background()
+
+	deleting, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = deleting.Rollback(ctx) }()
+	var deleterPID int
+	if err := deleting.QueryRow(ctx, `SELECT pg_backend_pid()`).Scan(&deleterPID); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`SELECT set_config('elitea.sync_cascade', 'conversation', true)`,
+		`DELETE FROM p_1.chat_participant_mapping WHERE conversation_id = $1`,
+		`DELETE FROM p_1.chat_message_items WHERE message_group_id IN (SELECT id FROM p_1.chat_message_group WHERE conversation_id = $1)`,
+		`DELETE FROM p_1.chat_message_group WHERE conversation_id = $1`,
+		`DELETE FROM p_1.chat_selected_conversations WHERE conversation_id = $1`,
+		`DELETE FROM p_1.chat_conversations WHERE id = $1`,
+	} {
+		args := []any{id}
+		if !strings.Contains(statement, "$1") {
+			args = nil
+		}
+		if _, err := deleting.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+
+	pinned := make(chan error, 1)
+	go func() { pinned <- pins.Pin(asUser("7"), "1", "conversation", numericID) }()
+
+	// Wait until Pin is blocked on a lock the deleting transaction holds.
+	deadline := time.Now().Add(4 * time.Second)
+	for {
+		var waiting int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE datname = current_database() AND wait_event_type = 'Lock' AND pid <> $1`, deleterPID).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		select {
+		case err := <-pinned:
+			t.Fatalf("Pin finished (%v) before the delete committed; the race was not forced", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Pin never blocked on the deleting transaction")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	if err := deleteConversationPin(ctx, deleting, "1", id); err != nil {
+		t.Fatal(err)
+	}
+	if err := deleting.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pinErr := <-pinned
+
+	var left int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM centry.social_pins
+		WHERE entity = 'conversation' AND project_id = 1 AND entity_id = $1`, id).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left != 0 {
+		t.Fatalf("%d pin rows outlived the deleted conversation (Pin answered %v)", left, pinErr)
+	}
+	var refusal *apierr.APIError
+	if !errors.As(pinErr, &refusal) || refusal.Status != http.StatusNotFound {
+		t.Fatalf("Pin on a conversation deleted under it = %v, want 404", pinErr)
 	}
 }
