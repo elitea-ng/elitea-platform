@@ -827,7 +827,11 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// "newest version of this canvas" lookup the turn resolvers now make for
 	// every canvas on every turn (canvas text in chat history, #1097). An
 	// index and no permission, so no shared sibling.
-	require.EqualValues(t, 147, Head(tenant))
+	// 148: tenant/0148_chat_message_group_author_newest_index.sql, an index on
+	// chat_message_group (author_participant_id, created_at DESC) for the
+	// "user's previous turn" lookup memory recall makes on every turn
+	// (ADR-0029 decision 8). An index and no permission, so no shared sibling.
+	require.EqualValues(t, 148, Head(tenant))
 
 	// The agentstate scope is this branch's, and it is counted separately: the
 	// native runtime's ADK sessions and graph checkpoints live in their own
