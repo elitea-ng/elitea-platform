@@ -21,6 +21,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/contextsettings"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/publicproject"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -713,6 +714,8 @@ const maxProjectAuthors = 1000
 // ListAuthors lists the people who hold a role in the named project. The
 // route gate has already established that the caller is one of them. The list
 // carries e-mail addresses, so it must never reach past the project's members.
+// In the public project, which sign-up enrolment can give every user, only the
+// caller's own row carries one.
 func (h *Handler) ListAuthors(w http.ResponseWriter, r *http.Request) {
 	if h.pool == nil {
 		writeJSON(w, http.StatusOK, []any{})
@@ -739,6 +742,14 @@ func (h *Handler) ListAuthors(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
+	caller := int64(-1)
+	if user, ok := auth.UserFromContext(ctx); ok {
+		if owner, ok := user.OwningUserID(); ok {
+			caller = owner
+		}
+	}
+	publicListing := int(project) == publicproject.ID()
+
 	items := make([]map[string]any, 0)
 	for rows.Next() {
 		var id int
@@ -746,10 +757,14 @@ func (h *Handler) ListAuthors(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&id, &name, &email, &avatar, &desc); err != nil {
 			continue
 		}
-		items = append(items, map[string]any{
+		item := map[string]any{
 			"id": intToStr(id), "name": name, "email": email,
 			"avatar": avatar, "description": desc,
-		})
+		}
+		if publicListing && int64(id) != caller {
+			delete(item, "email")
+		}
+		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to list authors"})

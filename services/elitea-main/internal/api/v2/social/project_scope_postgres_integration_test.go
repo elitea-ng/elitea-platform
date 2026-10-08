@@ -167,3 +167,43 @@ func TestSocialGetAuthorIsAlwaysTheCallersOwnProfile(t *testing.T) {
 		}
 	}
 }
+
+// TestSocialAuthorListingOfThePublicProjectShowsOnlyTheCallersEmail: sign-up
+// enrolment can put every user in the public project, so its listing would be
+// the whole platform's e-mail directory. It lists the members, and only the
+// caller's own row carries an address.
+func TestSocialAuthorListingOfThePublicProjectShowsOnlyTheCallersEmail(t *testing.T) {
+	t.Setenv("PUBLIC_PROJECT_ID", "8")
+	pool := newCurrentAuthorsPostgresPool(t)
+	prepareProjectScopeDatabase(t, pool)
+	if _, err := pool.Exec(context.Background(),
+		`INSERT INTO public.auth_core__project_user_role (project_id, user_id) VALUES (8, 2)`); err != nil {
+		t.Fatal(err)
+	}
+	router := projectScopeRouter(pool)
+
+	recorder := projectScopeGet(router, "3", "/api/v2/social/authors/8")
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", recorder.Code, recorder.Body)
+	}
+	var authors []map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &authors); err != nil {
+		t.Fatal(err)
+	}
+	if len(authors) != 2 {
+		t.Fatalf("listed %d authors, want both members: %s", len(authors), recorder.Body)
+	}
+	for _, author := range authors {
+		email, present := author["email"]
+		switch author["id"] {
+		case "3":
+			if email != "foreign-canary@eight.example" {
+				t.Fatalf("the caller's own row lost its e-mail: %v", author)
+			}
+		default:
+			if present {
+				t.Fatalf("another member's e-mail is listed in the public project: %v", author)
+			}
+		}
+	}
+}

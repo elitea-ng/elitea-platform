@@ -32,9 +32,8 @@ const authorCountedProjectsMax = 100
 //     them: the e-mail is included, and the counts are taken over the projects
 //     the two have in common (for the author themself, all their projects);
 //   - anyone else: no `email` key at all (not an empty string) and zero counts.
-//     The public project is not special-cased: its schema also holds its
-//     members' unpublished work, so counting it for a non-member would reveal
-//     exactly what the rule above withholds.
+//     The public project never makes two users colleagues: sign-up enrolment
+//     can put every user in it. The author's own card still counts it.
 //
 // An id that names no user, an id that is not a number and an id the caller has
 // no relation to all answer 200; the first two answer the same empty object,
@@ -79,7 +78,14 @@ func (h *Handler) Author(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	shared, err := h.sharedProjects(ctx, int32(caller), int32(author))
+	// Zero excludes nothing: the author's own card covers all their projects.
+	var excluded int32
+	if int32(caller) != int32(author) {
+		if public, err := strconv.ParseInt(publicProjectIDOrDefault(), 10, 32); err == nil {
+			excluded = int32(public)
+		}
+	}
+	shared, err := h.sharedProjects(ctx, int32(caller), int32(author), excluded)
 	if err != nil {
 		slog.ErrorContext(ctx, "author lookup: shared project read failed", "error", err)
 		apierr.WriteStatus(w, http.StatusInternalServerError, "author lookup failed")
@@ -119,18 +125,18 @@ func (h *Handler) Author(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, body)
 }
 
-// sharedProjects returns the ids of the projects both users hold a role in, in
-// ascending order and at most authorCountedProjectsMax of them. Called with the
-// same user twice it returns that user's own projects.
-func (h *Handler) sharedProjects(ctx context.Context, caller, author int32) ([]int32, error) {
+// sharedProjects returns the ids of the projects both users hold a role in,
+// except excluded, in ascending order and at most authorCountedProjectsMax of
+// them. Called with the same user twice it returns that user's own projects.
+func (h *Handler) sharedProjects(ctx context.Context, caller, author, excluded int32) ([]int32, error) {
 	rows, err := h.pool.Query(ctx, `
 		SELECT DISTINCT author_role.project_id
 		FROM auth_core__project_user_role author_role
 		JOIN auth_core__project_user_role caller_role
 		  ON caller_role.project_id = author_role.project_id AND caller_role.user_id = $1
-		WHERE author_role.user_id = $2
+		WHERE author_role.user_id = $2 AND author_role.project_id <> $4
 		ORDER BY author_role.project_id
-		LIMIT $3`, caller, author, authorCountedProjectsMax)
+		LIMIT $3`, caller, author, authorCountedProjectsMax, excluded)
 	if err != nil {
 		return nil, fmt.Errorf("query shared projects: %w", err)
 	}

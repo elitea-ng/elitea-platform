@@ -29,6 +29,7 @@ const (
 	callerB   = "11" // shares project 7 with the author
 	callerC   = "12" // member of project 9 only: shares nothing
 	callerD   = "13" // member of nothing
+	callerE   = "14" // member of the public project (1) only
 	authorMax = 100  // eliteacore.authorCountedProjectsMax
 )
 
@@ -131,16 +132,18 @@ INSERT INTO public.auth_core__user (id, email, name) VALUES
     (10, 'author@example.test', 'Author A'),
     (11, 'colleague@example.test', 'Colleague B'),
     (12, 'stranger@example.test', 'Stranger C'),
-    (13, 'loner@example.test', 'Loner D');
+    (13, 'loner@example.test', 'Loner D'),
+    (14, 'enrolled@example.test', 'Enrolled E');
 INSERT INTO centry.social_users (user_id, avatar, description) VALUES (10, 'avatar-a', 'about A');
 INSERT INTO public.auth_core__project_user_role (project_id, user_id) VALUES
-    (1, 10), (7, 10), (8, 10), (7, 11), (9, 12);`)
+    (1, 10), (7, 10), (8, 10), (7, 11), (9, 12), (1, 14);`)
 	// Project 7: 2 agents (one a pipeline), 1 toolkit, 2 collections.
 	seedAuthorTenant(t, pool, 7, 2, 1, 1, 2)
 	// Project 8: 1 agent, 3 toolkits, no collections table at all.
 	seedAuthorTenant(t, pool, 8, 1, 0, 3, 0)
-	// Project 1 is the public project (PUBLIC_PROJECT_ID defaults to 1): it
-	// gets no special treatment, because its schema holds members' work too.
+	// Project 1 is the public project (PUBLIC_PROJECT_ID defaults to 1). Sign-up
+	// enrolment can put every user in it, so sharing it makes nobody a
+	// colleague; the author's own card still counts it.
 	seedAuthorTenant(t, pool, 1, 5, 0, 5, 0)
 }
 
@@ -202,7 +205,9 @@ func TestAuthorCardTellsEachCallerOnlyWhatTheirRelationAllows(t *testing.T) {
 		}
 	})
 
-	for _, stranger := range []struct{ name, id string }{{"member elsewhere", callerC}, {"member of nothing", callerD}} {
+	for _, stranger := range []struct{ name, id string }{
+		{"member elsewhere", callerC}, {"member of nothing", callerD}, {"fellow member of the public project only", callerE},
+	} {
 		t.Run(stranger.name+" gets no e-mail key and zero counts", func(t *testing.T) {
 			code, card := fetchAuthor(t, pool, session(stranger.id), authorA)
 			if code != http.StatusOK {
