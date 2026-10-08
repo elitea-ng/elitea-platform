@@ -2067,3 +2067,65 @@ func TestAddParticipant_AnswersOnlyTheAddedRowsInRequestOrder(t *testing.T) {
 		t.Fatalf("answer = %+v, want participants 30 then 20 only", got)
 	}
 }
+
+// TestUpdate_ValidatesTheName pins the rename half of client contract 1.4
+// (updateConversation): a `name` the body states must be a string that is not
+// blank after trimming, at most 255 characters and free of control
+// characters, and it is stored trimmed. A body that does not state `name`
+// (or states null) is a settings write and passes the repository no name.
+func TestUpdate_ValidatesTheName(t *testing.T) {
+	long := strings.Repeat("ж", 255)
+	cases := []struct {
+		label    string
+		body     string
+		status   int
+		wantName string
+	}{
+		{"a number", `{"name": 123}`, http.StatusBadRequest, ""},
+		{"an object", `{"name": {"x": 1}}`, http.StatusBadRequest, ""},
+		{"empty", `{"name": ""}`, http.StatusBadRequest, ""},
+		{"blank", `{"name": "   \t "}`, http.StatusBadRequest, ""},
+		{"too long", `{"name": "` + long + `x"}`, http.StatusBadRequest, ""},
+		{"a newline", `{"name": "one\ntwo"}`, http.StatusBadRequest, ""},
+		{"a NUL", `{"name": "one\u0000two"}`, http.StatusBadRequest, ""},
+		{"padded", `{"name": "  Trip notes  "}`, http.StatusOK, "Trip notes"},
+		{"at the limit", `{"name": "` + long + `"}`, http.StatusOK, long},
+		{"null is absent", `{"name": null, "is_private": true}`, http.StatusOK, ""},
+		{"absent", `{"meta": {"k": 1}}`, http.StatusOK, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			called := false
+			var stored string
+			repo := &mockRepo{
+				updateFn: func(_ context.Context, _, conversationID string, conv conversations.Conversation) (conversations.Conversation, error) {
+					called = true
+					stored = conv.Name
+					conv.ID = conversationID
+					return conv, nil
+				},
+			}
+			router := newRouter(conversations.NewHandler(repo))
+			req := httptest.NewRequest(http.MethodPut, "/projects/1/conversations/5", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Code != tc.status {
+				t.Fatalf("status = %d, want %d: %s", w.Code, tc.status, w.Body.String())
+			}
+			if tc.status != http.StatusOK {
+				if called {
+					t.Fatal("a refused name reached the repository")
+				}
+				var body map[string]any
+				if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || body["error"] == nil {
+					t.Fatalf("400 body = %s, want the JSON {error} shape", w.Body.String())
+				}
+				return
+			}
+			if stored != tc.wantName {
+				t.Fatalf("stored name = %q, want %q", stored, tc.wantName)
+			}
+		})
+	}
+}

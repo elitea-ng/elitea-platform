@@ -63,6 +63,13 @@ func socialPinID(value string) (int32, error) {
 }
 
 // Pin replaces the last pinner without creating another shared row.
+//
+// A conversation pin also stamps the conversation's sync_at (client contract
+// 1.4): the list row carries `is_pinned`, and the `changes_since` delta
+// re-delivers a row only when its stamp moves. The pin and the stamp commit in
+// one transaction, so a reader that sees the new stamp sees the pin. Only a
+// NEW pin stamps; repeating a pin rewrites the last pinner, which no row
+// shows.
 func (r *CurrentSocialPinsRepository) Pin(ctx context.Context, projectID, entity, entityID string) error {
 	project, id, actor, err := validateSocialPin(ctx, projectID, entity, entityID)
 	if err != nil {
@@ -74,37 +81,59 @@ func (r *CurrentSocialPinsRepository) Pin(ctx context.Context, projectID, entity
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	query := `INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at)
-	 VALUES ($1, $2, $3, $4, NOW(), NOW())`
-	args := []any{entity, project, id, actor}
-	if entity == "conversation" {
-		access, err := chatauthority.Load(ctx, r.pool, projectID)
-		if err != nil {
-			return err
+	const upsert = ` ON CONFLICT (entity, project_id, entity_id)
+	 DO UPDATE SET user_id=EXCLUDED.user_id, updated_at=EXCLUDED.updated_at RETURNING (xmax = 0)`
+	if entity != "conversation" {
+		var inserted bool
+		if err := r.pool.QueryRow(ctx, `INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, NOW(), NOW())`+upsert, entity, project, id, actor).Scan(&inserted); err != nil {
+			return fmt.Errorf("pin shared entity: %w", err)
 		}
-		schema, err := tenantschema.Quote(projectID)
-		if err != nil {
-			return err
-		}
-		visible, identity := access.Predicate(schema, "c", 5, chatauthority.Detail)
-		query = fmt.Sprintf(`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at)
-		 SELECT $1, $2, $3, $4, NOW(), NOW() FROM %s.chat_conversations c
-		 WHERE c.id=$3 AND %s`, schema, visible)
-		args = append(args, identity...)
+		return nil
 	}
-	query += ` ON CONFLICT (entity, project_id, entity_id)
-	 DO UPDATE SET user_id=EXCLUDED.user_id, updated_at=EXCLUDED.updated_at RETURNING id`
-	var pinID int64
-	if err := r.pool.QueryRow(ctx, query, args...).Scan(&pinID); errors.Is(err, pgx.ErrNoRows) {
-		return apierr.NotFound("chat resource not found")
-	} else if err != nil {
-		return fmt.Errorf("pin shared entity: %w", err)
+	access, err := chatauthority.Load(ctx, r.pool, projectID)
+	if err != nil {
+		return err
+	}
+	schema, err := tenantschema.Quote(projectID)
+	if err != nil {
+		return err
+	}
+	visible, identity := access.Predicate(schema, "c", 5, chatauthority.Detail)
+	query := fmt.Sprintf(`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at)
+	 SELECT $1, $2, $3, $4, NOW(), NOW() FROM %s.chat_conversations c
+	 WHERE c.id=$3 AND %s`, schema, visible) + upsert
+	return pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+		var inserted bool
+		if err := tx.QueryRow(ctx, query, append([]any{entity, project, id, actor}, identity...)...).Scan(&inserted); errors.Is(err, pgx.ErrNoRows) {
+			return apierr.NotFound("chat resource not found")
+		} else if err != nil {
+			return fmt.Errorf("pin shared conversation: %w", err)
+		}
+		if !inserted {
+			return nil
+		}
+		return stampConversationPin(ctx, tx, schema, id)
+	})
+}
+
+// stampConversationPin moves the conversation's sync_at so the list delta
+// re-delivers the row with its new `is_pinned`. The tenant's BEFORE UPDATE
+// trigger (tenant/0144 chat_sync_stamp) writes clock_timestamp() whatever the
+// statement sets, and no other column changes: a pin is not an edit, so
+// updated_at (the row's "last modified") and the lost-access markers stay as
+// they are.
+func stampConversationPin(ctx context.Context, tx pgx.Tx, schema string, id int32) error {
+	if _, err := tx.Exec(ctx, fmt.Sprintf(`UPDATE %s.chat_conversations SET sync_at = clock_timestamp() WHERE id = $1`, schema), id); err != nil {
+		return fmt.Errorf("stamp pinned conversation: %w", err)
 	}
 	return nil
 }
 
 // Unpin removes the shared row regardless of which authorized member pinned it.
-// Repeating the operation on an accessible entity succeeds.
+// Repeating the operation on an accessible entity succeeds. Removing a
+// conversation pin stamps the conversation as Pin does; a repeated unpin
+// removes nothing and stamps nothing.
 func (r *CurrentSocialPinsRepository) Unpin(ctx context.Context, projectID, entity, entityID string) error {
 	project, id, _, err := validateSocialPin(ctx, projectID, entity, entityID)
 	if err != nil {
@@ -136,13 +165,18 @@ func (r *CurrentSocialPinsRepository) Unpin(ctx context.Context, projectID, enti
 	), removed AS (
 	 DELETE FROM centry.social_pins WHERE entity=$1 AND project_id=$2 AND entity_id=$3
 	 AND EXISTS (SELECT 1 FROM visible) RETURNING id
-	) SELECT EXISTS (SELECT 1 FROM visible)`, schema, visible)
-	var allowed bool
-	if err := r.pool.QueryRow(ctx, query, append([]any{entity, project, id}, identity...)...).Scan(&allowed); err != nil {
-		return fmt.Errorf("unpin shared conversation: %w", err)
-	}
-	if !allowed {
-		return apierr.NotFound("chat resource not found")
-	}
-	return nil
+	) SELECT EXISTS (SELECT 1 FROM visible), EXISTS (SELECT 1 FROM removed)`, schema, visible)
+	return pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+		var allowed, removed bool
+		if err := tx.QueryRow(ctx, query, append([]any{entity, project, id}, identity...)...).Scan(&allowed, &removed); err != nil {
+			return fmt.Errorf("unpin shared conversation: %w", err)
+		}
+		if !allowed {
+			return apierr.NotFound("chat resource not found")
+		}
+		if !removed {
+			return nil
+		}
+		return stampConversationPin(ctx, tx, schema, id)
+	})
 }

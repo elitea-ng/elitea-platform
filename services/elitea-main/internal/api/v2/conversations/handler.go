@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -558,7 +560,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch conversations
 	args = append(args, limit, offset)
-	q := conversationSelectSQL(s, false) + fmt.Sprintf(`
+	q := conversationSelectSQL(s, projectID, false) + fmt.Sprintf(`
 		%s
 		ORDER BY c.created_at DESC, c.id DESC
 		LIMIT $%d OFFSET $%d`, baseWhere, argIdx, argIdx+1)
@@ -801,9 +803,12 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var conv Conversation
-	if name, ok := body["name"].(string); ok {
-		conv.Name = name
+	name, err := conversationNameFromBody(body)
+	if err != nil {
+		apierr.Write(w, err)
+		return
 	}
+	conv.Name = name
 	if folderID, exists := body["folder_id"]; exists {
 		if folderID == nil {
 			nullStr := ""
@@ -846,6 +851,47 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// MaxConversationNameLength is the longest name a rename stores, in
+// characters (runes). Pylon's ConversationUpdate capped it at 50
+// (elitea_core/utils/chat_constants.py); the create route here never did, so
+// conversations named from a first message are longer, and a rename of one
+// must still be able to send its name back. 255 bounds what a client can
+// write without refusing a name the product itself produces.
+const MaxConversationNameLength = 255
+
+// conversationNameFromBody reads the `name` a PUT states (client contract 1.4
+// updateConversation, and the web rail's rename). Absent or null means the
+// request does not rename, and "" is returned. A stated name must be a string
+// that is not blank after trimming, at most MaxConversationNameLength
+// characters and free of control characters; it is returned trimmed.
+//
+// Before 1.4 a non-string name was dropped and an empty one was stored as no
+// change, so a client that cleared the field got 200 and the old title back
+// on its next sync. Both are 400 now, before anything is written.
+func conversationNameFromBody(body map[string]any) (string, error) {
+	raw, present := body["name"]
+	if !present || raw == nil {
+		return "", nil
+	}
+	name, ok := raw.(string)
+	if !ok {
+		return "", apierr.BadRequest("name must be a string")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", apierr.BadRequest("name must not be empty")
+	}
+	if utf8.RuneCountInString(name) > MaxConversationNameLength {
+		return "", apierr.BadRequest(fmt.Sprintf("name must be at most %d characters", MaxConversationNameLength))
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return "", apierr.BadRequest("name must not contain control characters")
+		}
+	}
+	return name, nil
 }
 
 // Delete removes a conversation and, with it, the stored bytes of every

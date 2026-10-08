@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.3"
+  x-elitea-client-contract: "1.4"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -2134,7 +2134,7 @@ components:
         for it (no per-conversation duration is computed server-side yet); a
         caller wanting a displayed duration derives one from
         created_at/updated_at instead of trusting this field.
-      required: [id, name, created_at, updated_at, duration, message_groups_count]
+      required: [id, name, created_at, updated_at, duration, message_groups_count, is_pinned]
       properties:
         id: { type: integer }
         name: { type: string }
@@ -2144,6 +2144,17 @@ components:
           type: integer
           description: Always -1 today; see the schema description.
         message_groups_count: { type: integer }
+        is_pinned:
+          type: boolean
+          description: >
+            Client contract 1.4. The conversation is pinned in its project:
+            the project holds a conversation pin for it (pinEntity with
+            entity_type `conversation`, the pin the web app's "Pin on top"
+            sets). A pin is shared by the project, not kept per member, and
+            the row never says who pinned it. A pin or unpin re-delivers the
+            row in the `changes_since` delta; it does not change
+            `updated_at`. A server before 1.4 omits the field, which means
+            not pinned.
         meta:
           type: object
           additionalProperties: true
@@ -2805,6 +2816,72 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ConversationParticipant'
+
+    UpdateConversationRequest:
+      type: object
+      description: >
+        The body of updateConversation. Every key is optional and only the
+        keys present are written; a native client renames with `name` alone.
+        NOTE(W2): internal/api/v2/conversations/handler.go (`Update`,
+        `conversationNameFromBody`) reads these keys and ignores any other.
+      properties:
+        name:
+          type: string
+          nullable: true
+          description: >
+            The new title, trimmed; 1 to 255 characters after trimming, no
+            control characters. `null` does not rename.
+        is_private:
+          type: boolean
+          description: >
+            `false` publishes the conversation in its project. Making a
+            public conversation private is the author's alone.
+        folder_id:
+          type: integer
+          nullable: true
+          description: One of the caller's own folders; `null` takes it out of its folder.
+        instructions:
+          type: string
+        meta:
+          type: object
+          additionalProperties: true
+          description: Replaces the whole settings document when present.
+          x-elitea-passthrough: >-
+            NOTE(W2): the `chat_conversations.meta` jsonb column, written whole
+            (internal/infra/db/repos/conversations.go:768). Several writers own
+            keys in it (steps_limit, internal_tools, is_hidden,
+            single_participant), so its key set is not fixed by this route.
+
+    UpdatedConversation:
+      type: object
+      description: >
+        A conversation as updateConversation answers it. `id` is the numeric
+        id AS A STRING, as in createConversation's answer; `uuid` is the id
+        the chat send path takes. NOTE(W2):
+        internal/infra/db/repos/conversations.go:685 (`Update`) fills these
+        from the UPDATE's RETURNING row. Any other key it carries (a
+        `message_count` of 0, which is not counted here) is not part of the
+        answer's meaning.
+      required: [id, uuid, project_id, name, created_at, updated_at, created_by, is_private]
+      properties:
+        id: { type: string }
+        uuid: { type: string, format: uuid }
+        project_id: { type: string }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        created_by: { type: string }
+        folder_id: { type: string, nullable: true }
+        is_private: { type: boolean }
+        instructions: { type: string }
+        meta:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the `chat_conversations.meta` jsonb column, re-emitted
+            verbatim (internal/infra/db/repos/conversations.go:809). Several
+            writers own keys in it (steps_limit, internal_tools, is_hidden,
+            single_participant), so its key set is not fixed by this route.
 
     ConversationDetail:
       type: object
@@ -15784,6 +15861,65 @@ paths:
           $ref: "#/components/responses/ClientUpgradeRequired"
         "500":
           $ref: "#/components/responses/500"
+    put:
+      operationId: updateConversation
+      summary: Rename a conversation, or change its privacy, folder or settings
+      description: |
+        Client contract 1.4. Needs `models.chat.conversation.update` and
+        access to the conversation itself (the chat authority's detail
+        rule, the same one the web app's rename passes); a conversation the
+        caller cannot see answers 404.
+
+        The route writes only the keys the body states. A body with `name`
+        alone renames the conversation and leaves its privacy, folder,
+        instructions and settings as they are. `name` is trimmed; a name that
+        is not a string, is blank after trimming, is longer than 255
+        characters or contains a control character answers 400 and writes
+        nothing. `null` or an absent `name` does not rename.
+
+        A rename reaches the caller's other devices through the
+        `changes_since` delta of the conversation list (the row comes back
+        with its new `name` and `updated_at`).
+      tags:
+        - chat
+        - client
+      parameters:
+        - $ref: "#/components/parameters/XClientVersion"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateConversationRequest"
+      responses:
+        "200":
+          description: The updated conversation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdatedConversation"
+        "400":
+          description: >
+            A body that is not a JSON object, an invalid `name` or
+            `instructions`, a privacy change only the author may make, or a
+            native client version that does not parse
+            (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/ErrorResponse"
+                  - $ref: "#/components/schemas/InvalidClientVersionError"
+        "401":
+          $ref: "#/components/responses/401"
+        "403":
+          $ref: "#/components/responses/403"
+        "404":
+          $ref: "#/components/responses/404"
+        "426":
+          $ref: "#/components/responses/ClientUpgradeRequired"
+        "500":
+          $ref: "#/components/responses/500"
     delete:
       operationId: deleteConversation
       summary: Delete a conversation and its stored attachments
@@ -23403,9 +23539,19 @@ paths:
         Store one shared pin per project, entity type, and entity identifier.
         Repeated requests update the last pinner and timestamp.
         Conversation pins require the caller's existing chat detail access.
-        NOTE(W2): internal/infra/db/repos/social_pins.go:66 implements the shared
+        NOTE(W2): internal/infra/db/repos/social_pins.go:73 implements the shared
         centry.social_pins key defined by migrations/shared/0064_centry_social_pins.sql.
-      tags: [social]
+
+        Client contract 1.4 (entity_type `conversation`, entity_id the
+        conversation's numeric id): the pin is the project's, shared by its
+        members, and shows as `is_pinned` on the conversation's list row. A
+        new pin re-delivers that row in the `changes_since` delta of every
+        member who can see the conversation, so a pin set in the web app
+        reaches the caller's devices and the other way round. A conversation
+        the caller cannot see answers 404 and pins nothing.
+      tags: [social, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
         '200':
           description: Pinned or updated the shared project pin
@@ -23413,7 +23559,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OkResponse'
-        '400': { $ref: '#/components/responses/400' }
+        '400':
+          description: >
+            An unknown entity type, an invalid id, or a native client version
+            that does not parse (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '404': { $ref: '#/components/responses/404' }
         '503':
           description: Pin storage or project authorization is unavailable
@@ -23436,8 +23592,14 @@ paths:
       description: |
         Remove the project pin regardless of which member last pinned it.
         Repeated requests succeed. Conversation access is required before removal.
-        NOTE(W2): internal/infra/db/repos/social_pins.go:108 uses the canonical shared key.
-      tags: [social]
+        NOTE(W2): internal/infra/db/repos/social_pins.go:137 uses the canonical shared key.
+
+        Client contract 1.4: removing a conversation pin re-delivers the
+        conversation's list row (`is_pinned: false`) in the `changes_since`
+        delta; a repeated unpin removes nothing and re-delivers nothing.
+      tags: [social, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
       responses:
         '200':
           description: Removed the shared pin or confirmed it is absent
@@ -23445,7 +23607,17 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/OkResponse'
-        '400': { $ref: '#/components/responses/400' }
+        '400':
+          description: >
+            An unknown entity type, an invalid id, or a native client version
+            that does not parse (invalid_client_version).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ErrorResponse'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
         '404': { $ref: '#/components/responses/404' }
         '503':
           description: Pin storage or project authorization is unavailable
