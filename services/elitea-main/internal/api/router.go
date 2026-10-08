@@ -502,7 +502,10 @@ type RouterConfig struct {
 	// rediscovering.
 	PipelineTriggers    *v2pipelinetriggers.Handler
 	CurrentNodeRecovery http.Handler
-	CurrentAgentCancel  http.Handler
+	// CurrentExecutionInterrupts serves the per-interrupt HITL list/decision
+	// API. It is nil unless ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED.
+	CurrentExecutionInterrupts http.Handler
+	CurrentAgentCancel         http.Handler
 	// CurrentApplicationTask serves the legacy application_task path (issue
 	// 254 P2): GET polls the run bound to a response message, DELETE stops
 	// it through the SAME use case CurrentAgentCancel runs.

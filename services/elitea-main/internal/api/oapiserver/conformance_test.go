@@ -243,6 +243,10 @@ func buildFullSurfaceConfig() api.RouterConfig {
 		// Client contract 1.3: cancelChatExecution, registered only when the
 		// cancel route is composed (production_router.go).
 		CurrentAgentCancel: http.NotFoundHandler(),
+		// listExecutionInterrupts and decideExecutionInterrupt: registered only
+		// when the interrupt route is composed (production_router.go), i.e.
+		// ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true.
+		CurrentExecutionInterrupts: http.NotFoundHandler(),
 		RuntimeRoutes: api.RuntimeRoutes{
 			Validation:      http.NotFoundHandler(),
 			ExecutionEvents: http.NotFoundHandler(),

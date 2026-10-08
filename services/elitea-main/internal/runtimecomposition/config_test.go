@@ -158,6 +158,63 @@ func TestConfigAgentExecutionDispatchIsOptionalAndMayShareTheIndexStream(t *test
 	}
 }
 
+func TestConfigExecutionInterruptsAPIIsExplicitAndRequiresAgentDispatch(t *testing.T) {
+	baseline, err := ConfigFromEnv(mapLookup(validEnvironment()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseline.ExecutionInterruptsAPIEnabled {
+		t.Fatal("execution interrupts API unexpectedly enabled by default")
+	}
+
+	withDispatch := func() map[string]string {
+		environment := validEnvironment()
+		environment["ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED"] = "true"
+		environment["ELITEA_RUNTIME_CURRENT_MAIN_BASE_URL"] = "https://elitea-gateway"
+		environment["ELITEA_RUNTIME_AGENT_EXECUTION_COMMAND_STREAM"] = "ELITEA_RT_V1_AGENT"
+		return environment
+	}
+
+	environment := withDispatch()
+	config, err := ConfigFromEnv(mapLookup(environment))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.ExecutionInterruptsAPIEnabled {
+		t.Fatal("unset flag must stay off even with agent dispatch")
+	}
+
+	environment["ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED"] = "true"
+	config, err = ConfigFromEnv(mapLookup(environment))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !config.ExecutionInterruptsAPIEnabled {
+		t.Fatal("explicit true with agent dispatch was not honoured")
+	}
+
+	environment["ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED"] = "false"
+	config, err = ConfigFromEnv(mapLookup(environment))
+	if err != nil || config.ExecutionInterruptsAPIEnabled {
+		t.Fatalf("explicit false: enabled=%v err=%v", config.ExecutionInterruptsAPIEnabled, err)
+	}
+
+	for _, value := range []string{"yes", "TRUE", "1", " true"} {
+		environment := withDispatch()
+		environment["ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED"] = value
+		if _, err := ConfigFromEnv(mapLookup(environment)); err == nil || !strings.Contains(err.Error(), "must be true or false") {
+			t.Fatalf("invalid value %q accepted: %v", value, err)
+		}
+	}
+
+	withoutDispatch := validEnvironment()
+	withoutDispatch["ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED"] = "true"
+	if _, err := ConfigFromEnv(mapLookup(withoutDispatch)); err == nil ||
+		!strings.Contains(err.Error(), "requires active agent execution dispatch") {
+		t.Fatalf("true without agent dispatch error=%v", err)
+	}
+}
+
 func TestConfigAgentExecutionCurrentMainOriginFailsClosed(t *testing.T) {
 	for name, value := range map[string]string{
 		"plaintext": "http://elitea-gateway",

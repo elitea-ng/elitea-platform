@@ -69,6 +69,12 @@ type Config struct {
 	AgentExecutionCommandStream   string
 	CurrentMainBaseURL            string
 
+	// ExecutionInterruptsAPIEnabled registers the per-interrupt HITL decision
+	// API (ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED). Default off; it
+	// requires agent execution dispatch because the ledger it reads and
+	// decides exists only with the agent runtime.
+	ExecutionInterruptsAPIEnabled bool
+
 	// NATSURL and NATSMaterial: the runtime plane's own NATS connection, as
 	// the elitea-main-runtime identity (ELITEA_RUNTIME_NATS_URL,
 	// ELITEA_RUNTIME_NATS_TLS_{CA,CERT,KEY}_FILE).
@@ -193,6 +199,14 @@ func ConfigFromEnv(lookup LookupEnv) (Config, error) {
 		}
 	default:
 		return Config{}, errors.New("ELITEA_RUNTIME_AGENT_EXECUTION_DISPATCH_ENABLED must be true or false")
+	}
+	interruptsAPIEnabled, _ := lookup("ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED")
+	switch interruptsAPIEnabled {
+	case "", "false":
+	case "true":
+		config.ExecutionInterruptsAPIEnabled = true
+	default:
+		return Config{}, errors.New("ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED must be true or false")
 	}
 	discoveryEnabled, _ := lookup("ELITEA_RUNTIME_TOOLKIT_DISCOVERY_ENABLED")
 	switch discoveryEnabled {
@@ -326,6 +340,9 @@ func (c Config) Validate() error {
 	}
 	if c.ToolkitDiscoveryEnabled && (!c.Enabled || (!c.IndexIngestDispatchEnabled && !c.AgentExecutionDispatchEnabled)) {
 		return errors.New("toolkit discovery requires an active worker runtime")
+	}
+	if c.ExecutionInterruptsAPIEnabled && (!c.Enabled || !c.AgentExecutionDispatchEnabled) {
+		return errors.New("execution interrupts API requires active agent execution dispatch")
 	}
 	if !c.Enabled {
 		return nil

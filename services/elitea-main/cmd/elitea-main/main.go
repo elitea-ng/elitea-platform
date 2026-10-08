@@ -1659,6 +1659,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// for the tick and the settings routes to disagree on a dependency.
 	var pipelineTriggers *v2pipelinetriggers.Handler
 	var currentNodeRecovery http.Handler
+	var currentExecutionInterrupts http.Handler
 	var currentAgentCancel http.Handler
 	var currentApplicationTask http.Handler
 	var currentIndexCancel http.Handler
@@ -1892,6 +1893,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		if publicRoutes.NodeRecovery != nil {
 			currentNodeRecovery, err = agentexecutionapi.NewCurrentNodeRecoveryRoute(publicRoutes.NodeRecovery, apiGroupAuth, legacyrbac.NewPostgresResolver(pool))
+			if err != nil {
+				return err
+			}
+		}
+		if publicRoutes.ExecutionInterrupts != nil {
+			currentExecutionInterrupts, err = agentexecutionapi.NewCurrentExecutionInterruptRoute(publicRoutes.ExecutionInterrupts, apiGroupAuth, legacyrbac.NewPostgresResolver(pool))
 			if err != nil {
 				return err
 			}
@@ -2379,6 +2386,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SCIMClientAddresses:        scimClientAddresses,
 		CurrentAgentCancel:         currentAgentCancel,
 		CurrentNodeRecovery:        currentNodeRecovery,
+		CurrentExecutionInterrupts: currentExecutionInterrupts,
 		CurrentApplicationTask:     currentApplicationTask,
 		CurrentIndexCancel:         currentIndexCancel,
 		CurrentIndexMeta:           currentIndexMeta,
