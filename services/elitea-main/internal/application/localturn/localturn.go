@@ -352,6 +352,16 @@ func (s *Service) Commit(ctx context.Context, request CommitRequest) (CommittedT
 	if !validCommit(request) {
 		return CommittedTurn{}, ErrInvalid
 	}
+	// The policy is read at commit too: turning local work off stops a turn
+	// already started, not only new ones. Unreadable means refused, like Start.
+	policy, err := s.policy.Policy(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "local turn: native client policy unreadable", "err", err)
+		return CommittedTurn{}, ErrUnavailable
+	}
+	if !policy.LocalWork.Allowed {
+		return CommittedTurn{}, ErrLocalWorkDisabled
+	}
 	report := boundReport(request.Report)
 	exchanges := request.HITLExchanges
 	if exchanges == nil {

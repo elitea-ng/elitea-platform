@@ -124,7 +124,7 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) VALUE
 	}
 
 	// The /llm edge keeps the id for the caller only.
-	verifier := NewExecutionAttributionVerifier(pool)
+	verifier := NewExecutionAttributionVerifier(pool).WithLocalWorkPolicy(policy)
 	assertVerified := func(project, userID string, want bool) {
 		t.Helper()
 		got, err := verifier.VerifyExecution(ctx, project, userID, started.ExecutionID)
@@ -134,6 +134,23 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) VALUE
 	}
 	assertVerified("1", strconv.FormatInt(user, 10), true)
 	assertVerified("1", strconv.FormatInt(stranger, 10), false)
+
+	// Turning local work off stops a turn already started: /llm no longer
+	// attributes it, and the commit is refused until the policy is back.
+	policy.allowed = false
+	assertVerified("1", strconv.FormatInt(user, 10), false)
+	if _, err := service.Commit(ctx, localturn.CommitRequest{
+		ProjectID: 1, ActorUserID: user, ExecutionID: started.ExecutionID,
+		UserMessage: "Fix the failing test", AssistantMessage: "x",
+	}); !errors.Is(err, localturn.ErrLocalWorkDisabled) {
+		t.Fatalf("commit with local work off = %v, want ErrLocalWorkDisabled", err)
+	}
+	// A verifier built without a policy never attributes a local turn.
+	if got, err := NewExecutionAttributionVerifier(pool).VerifyExecution(ctx, "1", strconv.FormatInt(user, 10), started.ExecutionID); err != nil || got {
+		t.Fatalf("policy-less verifier = %v, %v; want false", got, err)
+	}
+	policy.allowed = true
+	assertVerified("1", strconv.FormatInt(user, 10), true)
 
 	// A retried start replays the same execution, with a fresh recall.
 	replayed, err := service.Start(ctx, start)
@@ -303,7 +320,7 @@ SET started_at = now() - interval '25 hours', expires_at = now() - interval '1 h
 WHERE execution_id = $1`, started.ExecutionID); err != nil {
 		t.Fatal(err)
 	}
-	live, err := NewExecutionAttributionVerifier(pool).VerifyExecution(ctx, "1", "4511", started.ExecutionID)
+	live, err := NewExecutionAttributionVerifier(pool).WithLocalWorkPolicy(&localTurnPolicy{allowed: true}).VerifyExecution(ctx, "1", "4511", started.ExecutionID)
 	if err != nil || live {
 		t.Fatalf("an expired local turn verified as live (%v, %v)", live, err)
 	}
