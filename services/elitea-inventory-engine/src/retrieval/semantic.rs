@@ -15,11 +15,10 @@
 //! gateway, and [`check_space`] (v1's `embeddings.check`) refuses a call
 //! whose configured model differs from the stamp.
 //!
-//! Similarity is computed as numpy computed it: vectors as `float32`, the
-//! dot products and norms rounded to `float32` (accumulated here in `f64`,
-//! where a BLAS `sdot` accumulates in `float32` lanes — the difference is
-//! below the 4-decimal rounding of the score except on a rounding
-//! boundary), the score rounded to 4 decimals.
+//! PostgreSQL ranks the entities (pgvector's cosine distance over `float4`
+//! vectors, as numpy compared `float32` ones: `store::vectors::rank`); this
+//! module filters the ranking to what the caller's view holds and what the
+//! query asks for, rounds the score to 4 decimals and words the answer.
 //!
 //! `file_pattern` is Python's glob-to-regex (`.` literal, `*` any run, `?`
 //! one character, searched anywhere in the entity's first cited file, any
@@ -34,6 +33,7 @@ use super::view::GraphView;
 use super::{Call, Handled};
 use crate::embed::MODEL_KEY;
 use crate::graph::{layer_of, layer_types};
+pub use crate::store::vectors::Ranking;
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::pyjson::float_repr;
 use elitea_engine_core::pyvalue::{py_repr, py_str, py_truthy};
@@ -56,8 +56,6 @@ pub fn handle(_call: &Call<'_>) -> Handled {
 pub struct SemanticQuery<'a> {
     /// The query text (for the answer's wording).
     pub query: &'a str,
-    /// The query embedded with the graph's stamped model.
-    pub vector: &'a [f64],
     pub top_k: usize,
     /// Only entities of this type (any case).
     pub entity_type: Option<&'a str>,
@@ -151,56 +149,26 @@ fn lowered_chars(text: &str) -> Vec<char> {
     text.to_lowercase().chars().collect()
 }
 
-/// `float32` rounding of an `f64`.
-#[allow(clippy::cast_possible_truncation, reason = "numpy's float32")]
-fn f32_of(value: f64) -> f32 {
-    value as f32
-}
-
-/// numpy's `float32` dot product.
-fn dot32(a: &[f32], b: &[f32]) -> f32 {
-    f32_of(
-        a.iter()
-            .zip(b)
-            .map(|(x, y)| f64::from(*x) * f64::from(*y))
-            .sum(),
-    )
-}
-
 /// Python's `round(value, 4)`.
 fn round4(value: f64) -> f64 {
     format!("{value:.4}").parse().unwrap_or(value)
 }
 
-fn as_vector(value: &Value) -> Vec<f32> {
-    value
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .map(|item| f32_of(item.as_f64().unwrap_or(0.0)))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// `KnowledgeGraph.semantic_search` with the query already embedded: the
-/// entities at or above `min_score`, best first (ties by lowercased name),
-/// at most `top_k`.
+/// `KnowledgeGraph.semantic_search` over a `ranking` of the query (the
+/// entities at or above `min_score`, best first): the ranked entities the
+/// view holds that pass the filters, ties by lowercased name, at most
+/// `top_k`.
 ///
 /// # Errors
 ///
-/// An entity's vector has another width than the query's — numpy's
-/// `ValueError` message.
+/// The ranking failed: an entity's vector has another width than the
+/// query's (numpy's `ValueError` message).
 pub fn semantic_search(
     view: &GraphView,
     query: &SemanticQuery<'_>,
+    ranking: &Ranking,
 ) -> Result<Vec<SemanticHit>, String> {
-    let wanted: Vec<f32> = query.vector.iter().map(|v| f32_of(*v)).collect();
-    let wanted_norm = dot32(&wanted, &wanted).sqrt();
-    if wanted_norm == 0.0 {
-        return Ok(Vec::new());
-    }
+    let ranked = ranking.as_ref().map_err(Clone::clone)?;
     let pattern: Option<Vec<char>> = query
         .file_pattern
         .filter(|p| !p.is_empty())
@@ -217,11 +185,15 @@ pub fn semantic_search(
             .unwrap_or("")
             .to_lowercase()
     };
-    let mut hits: Vec<(SemanticHit, String)> = Vec::new();
-    for (id, node) in view.graph.nodes() {
-        let Some(embedding) = node.get("embedding").filter(|e| py_truthy(e)) else {
+    let mut hits: Vec<(SemanticHit, String, Option<usize>)> = Vec::new();
+    for (id, score) in ranked {
+        // An entity the caller may not read is not in the view.
+        let Some(node) = view.node(id) else {
             continue;
         };
+        if *score < query.min_score {
+            continue;
+        }
         let kind = text(node, "type");
         if entity_type.as_ref().is_some_and(|wanted| *wanted != kind) {
             continue;
@@ -238,39 +210,27 @@ pub fn semantic_search(
                 continue;
             }
         }
-        let vector = as_vector(embedding);
-        if vector.len() != wanted.len() {
-            return Err(format!(
-                "shapes ({},) and ({},) not aligned: {} (dim 0) != {} (dim 0)",
-                wanted.len(),
-                vector.len(),
-                wanted.len(),
-                vector.len()
-            ));
-        }
-        let norm = dot32(&vector, &vector).sqrt();
-        if norm == 0.0 {
-            continue;
-        }
-        let score = f64::from(dot32(&wanted, &vector) / (wanted_norm * norm));
-        if score < query.min_score {
-            continue;
-        }
         hits.push((
             SemanticHit {
-                id: id.to_owned(),
-                score: round4(score),
+                id: id.clone(),
+                score: round4(*score),
             },
             text(node, "name"),
+            view.graph.position(id),
         ));
     }
-    hits.sort_by(|(a, a_name), (b, b_name)| {
-        b.score.total_cmp(&a.score).then_with(|| a_name.cmp(b_name))
+    // Python's stable sort over the graph's node order: ties of the
+    // rounded score by lowercased name, then by node order.
+    hits.sort_by(|(a, a_name, a_at), (b, b_name, b_at)| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| a_name.cmp(b_name))
+            .then_with(|| a_at.cmp(b_at))
     });
     Ok(hits
         .into_iter()
         .take(query.top_k)
-        .map(|(hit, _)| hit)
+        .map(|(hit, _, _)| hit)
         .collect())
 }
 
@@ -337,11 +297,15 @@ pub(super) fn location_and_description(node: &Map<String, Value>, show_empty_pat
 
 /// The wrapper's `semantic_search` text for an embedded query.
 #[must_use]
-pub fn semantic_search_text(view: &GraphView, query: &SemanticQuery<'_>) -> String {
+pub fn semantic_search_text(
+    view: &GraphView,
+    query: &SemanticQuery<'_>,
+    ranking: &Ranking,
+) -> String {
     if !has_embeddings(view) {
         return "Semantic search unavailable — no entity embeddings found.\nRe-run ingestion with an embedding model configured to enable semantic search.".to_owned();
     }
-    let results = match semantic_search(view, query) {
+    let results = match semantic_search(view, query, ranking) {
         Ok(results) => results,
         Err(error) => return format!("Semantic search failed: {error}"),
     };
@@ -389,8 +353,8 @@ pub fn semantic_search_text(view: &GraphView, query: &SemanticQuery<'_>) -> Stri
 /// The chat agent's `semantic_search` tool: `top_k` capped at 50, the
 /// wrapper's `min_score` 0.3, the type and layer filters the chat applied
 /// (one each at most), and v1's embedding-space check against the
-/// toolkit's `configured` model. `vector` is `query` embedded with the
-/// graph's [`stamped_model`].
+/// toolkit's `configured` model. `ranking` ranks `query` embedded with the
+/// graph's [`stamped_model`] at [`DEFAULT_MIN_SCORE`].
 ///
 /// # Errors
 ///
@@ -398,7 +362,7 @@ pub fn semantic_search_text(view: &GraphView, query: &SemanticQuery<'_>) -> Stri
 pub fn semantic_search_tool(
     view: &GraphView,
     query: &str,
-    vector: &[f64],
+    ranking: &Ranking,
     top_k: usize,
     entity_type: Option<&str>,
     layer: Option<&str>,
@@ -409,13 +373,13 @@ pub fn semantic_search_tool(
         view,
         &SemanticQuery {
             query,
-            vector,
             top_k: top_k.min(CHAT_MAX_TOP_K),
             entity_type,
             layer,
             file_pattern: None,
             min_score: DEFAULT_MIN_SCORE,
         },
+        ranking,
     ))
 }
 

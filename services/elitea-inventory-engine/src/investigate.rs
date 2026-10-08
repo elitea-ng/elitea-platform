@@ -55,8 +55,10 @@ pub type Chat = Arc<dyn Fn(ChatRequest) -> Boxed<ChatResponse> + Send + Sync>;
 pub type SourceCall =
     Arc<dyn Fn(String, String, Map<String, Value>) -> Boxed<String> + Send + Sync>;
 
-/// Embed one query (the graph's stamped model, through the gateway).
-pub type Embed = Arc<dyn Fn(String) -> Boxed<Vec<f64>> + Send + Sync>;
+/// Rank the graph's entities against one query: the query embedded with
+/// the graph's stamped model (through the gateway), ranked by PostgreSQL at
+/// the chat tool's minimum score.
+pub type Embed = Arc<dyn Fn(String) -> Boxed<retrieval::semantic::Ranking> + Send + Sync>;
 
 /// A source toolkit of the graph (its `sources` row).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -602,12 +604,12 @@ async fn local_call(
                 return Ok("Error: this graph has no embeddings".to_owned());
             };
             let query = text("query");
-            let vector = embed(query.clone()).await?;
+            let ranking = embed(query.clone()).await?;
             let stamped = retrieval::semantic::stamped_model(view).map(str::to_owned);
             retrieval::semantic::semantic_search_tool(
                 view,
                 &query,
-                &vector,
+                &ranking,
                 number("top_k").unwrap_or(10),
                 None,
                 None,

@@ -365,6 +365,12 @@ impl Graph {
         self.nodes.get(id)
     }
 
+    /// A node's place in insertion order.
+    #[must_use]
+    pub fn position(&self, id: &str) -> Option<usize> {
+        self.nodes.get_index_of(id)
+    }
+
     /// Every node, in insertion order.
     pub fn nodes(&self) -> impl Iterator<Item = (&str, &Map<String, Value>)> {
         self.nodes.iter().map(|(id, node)| (id.as_str(), node))

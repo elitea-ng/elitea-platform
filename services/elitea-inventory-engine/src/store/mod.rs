@@ -23,6 +23,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 pub mod sources;
+pub mod vectors;
 
 /// The DSN variable: the engine's database. Unset, the engine stores
 /// nothing (the fixture runner needs no database).
@@ -49,6 +50,10 @@ const EMBEDDED: &[(&str, &str)] = &[
     (
         "0003_documents.sql",
         include_str!("../../migrations/0003_documents.sql"),
+    ),
+    (
+        "0004_entity_vectors.sql",
+        include_str!("../../migrations/0004_entity_vectors.sql"),
     ),
 ];
 

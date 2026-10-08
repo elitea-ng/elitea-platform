@@ -286,7 +286,8 @@ impl NativeRunner {
             model_name,
         );
         // Semantic search when the graph has vectors: the query is embedded
-        // with the model the graph was built with, so the two compare.
+        // with the model the graph was built with, so the two compare, and
+        // PostgreSQL ranks the entities (pgvector).
         let embed: Option<agent::Embed> = crate::retrieval::semantic::stamped_model(view)
             .filter(|_| crate::retrieval::semantic::has_embeddings(view))
             .map(|model| {
@@ -299,18 +300,28 @@ impl NativeRunner {
                         ..EmbeddingOptions::default()
                     },
                 );
-                let stop = stop.clone();
+                let (stop, pool) = (stop.clone(), self.pool.clone());
                 let embed: agent::Embed = Arc::new(move |query: String| {
-                    let (client, stop) = (client.clone(), stop.clone());
+                    let (client, stop, pool) = (client.clone(), stop.clone(), pool.clone());
                     Box::pin(async move {
                         let vectors = client.embed_documents(&[query], &stop).await?;
-                        Ok(vectors
+                        let vector: Vec<f64> = vectors
                             .into_iter()
                             .next()
                             .unwrap_or_default()
                             .into_iter()
                             .map(f64::from)
-                            .collect())
+                            .collect();
+                        store::vectors::rank(
+                            &pool,
+                            key,
+                            &vector,
+                            crate::retrieval::semantic::DEFAULT_MIN_SCORE,
+                        )
+                        .await
+                        .map_err(|e| {
+                            EngineError::new(ErrorType::Runtime, format!("the graph store failed: {e}"))
+                        })
                     })
                 });
                 embed
