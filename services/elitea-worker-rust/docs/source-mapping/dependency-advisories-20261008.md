@@ -196,8 +196,13 @@ Not applicable: no durable state, schema, checkpoint, claim or spool format chan
 
 ## Recovery guarantees
 
-This change adds no runtime phase and alters no checkpoint, claim, delivery or settlement path. The touched
-(component × phase) rows:
+This change adds no runtime phase and alters no checkpoint, claim, delivery or settlement path.
+
+The platform matrix in `services/elitea-worker-rust/docs/recovery-guarantees.md` (#1148) is not changed. It classifies
+crash and fault outcomes per component and phase, and no such outcome moves. The MySQL row below is a refusal of a
+misconfigured server, not a fault mode.
+
+The touched (component × phase) rows:
 
 | Component × phase | Class | Enforcing code | Proof |
 | --- | --- | --- | --- |
