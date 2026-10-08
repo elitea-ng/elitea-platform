@@ -15,7 +15,9 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use thiserror::Error;
 
+use super::PIPELINE_YAML_BUDGET;
 use super::yaml::{valid_graph_id, valid_output_key};
+use crate::bounded_yaml;
 
 const MAX_YAML_NODE_BYTES: usize = 64 * 1024;
 const MAX_INPUT_KEYS: usize = 64;
@@ -133,8 +135,11 @@ impl HitlNodeDefinition {
         if yaml.is_empty() || yaml.len() > MAX_YAML_NODE_BYTES {
             return Err(HitlConfigurationError::ResourceExhausted);
         }
-        let mut raw = serde_yaml_ng::from_str::<RawHitlNodeDefinition>(yaml)
-            .map_err(|source| HitlConfigurationError::MalformedYaml { source })?;
+        let mut raw = bounded_yaml::from_str_as_yaml_error::<RawHitlNodeDefinition>(
+            yaml,
+            PIPELINE_YAML_BUDGET,
+        )
+        .map_err(|source| HitlConfigurationError::MalformedYaml { source })?;
         if raw.input.is_empty() {
             raw.input = default_inputs();
         }

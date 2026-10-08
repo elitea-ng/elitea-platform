@@ -22,6 +22,7 @@ use serde_json::{Map, Value, json};
 use thiserror::Error;
 use tracing::Instrument as _;
 
+use super::compiler::PIPELINE_YAML_BUDGET;
 use super::node_recovery::{NodeFailure, NodeFailureClass, NodeRecoveryPolicy, ReplaySafety};
 use super::node_recovery_runtime::{
     NodeAttemptAuthority, NodeAttemptBody, NodeRecoveryFactory, RecoverableNode,
@@ -29,6 +30,7 @@ use super::node_recovery_runtime::{
 use super::yaml::{valid_graph_id, valid_output_key};
 use crate::agents::application_tools::PIPELINE_APPLICATION_NODE_METADATA_KEY;
 use crate::agents::events::mask_sensitive_arguments;
+use crate::bounded_yaml;
 use crate::toolkits::{
     DelegatedAuthorizationRequirement, SensitiveToolPolicy, delegated_authorization_requirement,
 };
@@ -145,8 +147,11 @@ impl DirectToolNodeDefinition {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(DirectToolConfigurationError::ResourceExhausted);
         }
-        let raw = serde_yaml_ng::from_str::<RawDirectToolNodeDefinition>(yaml)
-            .map_err(|source| DirectToolConfigurationError::MalformedYaml { source })?;
+        let raw = bounded_yaml::from_str_as_yaml_error::<RawDirectToolNodeDefinition>(
+            yaml,
+            PIPELINE_YAML_BUDGET,
+        )
+        .map_err(|source| DirectToolConfigurationError::MalformedYaml { source })?;
         Self::from_raw(raw)
     }
 

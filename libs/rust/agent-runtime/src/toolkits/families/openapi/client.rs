@@ -14,7 +14,7 @@ use hyper_rustls::HttpsConnector;
 use hyper_util::client::legacy::Client as HyperClient;
 use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::{TokioExecutor, TokioTimer};
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use reqwest::header::{
     ACCEPT, AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HeaderMap, HeaderName,
     HeaderValue, USER_AGENT,
@@ -46,6 +46,12 @@ const MAX_HEADER_VALUE_BYTES: usize = 16 * 1024;
 const MAX_QUERY_BYTES: usize = 128 * 1024;
 const MAX_REGEXP_BYTES: usize = 4 * 1024;
 const USER_AGENT_VALUE: &str = "elitea-worker-rust/0.1";
+
+/// Unicode line separators and characters that NFKC-normalize to `/`, `\\` or `.`.
+const PATH_VALUE_REFUSED_CHARS: [char; 9] = [
+    '\u{2024}', '\u{2025}', '\u{2028}', '\u{2029}', '\u{fe52}', '\u{fe68}', '\u{ff0e}', '\u{ff0f}',
+    '\u{ff3c}',
+];
 
 const COMPONENT_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
@@ -459,8 +465,9 @@ impl OpenApiClient {
                     if !path.contains(&placeholder) {
                         return Err(invalid_configuration());
                     }
-                    let encoded = encode_component(&serialize_simple(value, false)?, false);
-                    path = path.replace(&placeholder, &encoded);
+                    let value = serialize_simple(value, false)?;
+                    validate_path_value(&value)?;
+                    path = path.replace(&placeholder, &encode_component(&value, false));
                 }
                 OpenApiParameterLocation::Query => {
                     query.extend(serialize_query(parameter, value)?);
@@ -492,6 +499,10 @@ impl OpenApiClient {
         let combined_path = format!("{base_path}{}", path.as_str());
         if combined_path.len() > MAX_QUERY_BYTES {
             return Err(resource_exhausted());
+        }
+        // `set_path` drops dot segments, which would leave the selected operation.
+        if combined_path.split('/').any(is_dot_segment) {
+            return Err(invalid_input());
         }
         endpoint.set_path(&combined_path);
         let query = query.join("&");
@@ -799,6 +810,31 @@ fn scalar(value: &Value) -> Result<String, OpenApiClientError> {
         Value::Number(value) => Ok(value.to_string()),
         Value::Null | Value::Array(_) | Value::Object(_) => Err(invalid_input()),
     }
+}
+
+/// Refuse a path value that could leave its one segment, also after one percent-decode:
+/// empty values, dot segments, backslashes, control characters and `PATH_VALUE_REFUSED_CHARS`.
+/// A `/` stays allowed: it is encoded as `%2F` and cannot form a dot segment.
+fn validate_path_value(value: &str) -> Result<(), OpenApiClientError> {
+    let decoded = percent_decode_str(value).decode_utf8_lossy();
+    for candidate in [value, decoded.as_ref()] {
+        if candidate.is_empty()
+            || candidate.split('/').any(is_dot_segment)
+            || candidate
+                .chars()
+                .any(|c| c == '\\' || c.is_control() || PATH_VALUE_REFUSED_CHARS.contains(&c))
+        {
+            return Err(invalid_input());
+        }
+    }
+    Ok(())
+}
+
+fn is_dot_segment(segment: &str) -> bool {
+    matches!(
+        percent_decode_str(segment).decode_utf8_lossy().as_ref(),
+        "." | ".."
+    )
 }
 
 fn encode_component(value: &str, allow_reserved: bool) -> String {

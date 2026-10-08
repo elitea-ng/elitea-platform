@@ -6,6 +6,9 @@ use serde::Deserialize;
 use serde::de::{Deserializer, SeqAccess, Visitor};
 use thiserror::Error;
 
+use super::PIPELINE_YAML_BUDGET;
+use crate::bounded_yaml;
+
 const MAX_YAML_NODE_BYTES: usize = 64 * 1024;
 pub const MAX_NODE_ID_BYTES: usize = 128;
 const MAX_OUTPUT_KEY_BYTES: usize = 256;
@@ -178,8 +181,11 @@ impl ParallelNodeDefinition {
         if yaml.is_empty() || yaml.len() > MAX_YAML_NODE_BYTES {
             return Err(ParallelConfigurationError::ResourceExhausted);
         }
-        let raw = serde_yaml_ng::from_str::<RawParallelNodeDefinition>(yaml)
-            .map_err(|source| ParallelConfigurationError::MalformedYaml { source })?;
+        let raw = bounded_yaml::from_str_as_yaml_error::<RawParallelNodeDefinition>(
+            yaml,
+            PIPELINE_YAML_BUDGET,
+        )
+        .map_err(|source| ParallelConfigurationError::MalformedYaml { source })?;
         let definition = Self::from_raw(raw)?;
         definition.validate()?;
         Ok(definition)

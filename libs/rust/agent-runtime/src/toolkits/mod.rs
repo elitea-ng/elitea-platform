@@ -81,6 +81,8 @@ mod kubernetes_tests;
 #[cfg(test)]
 mod mcp_tests;
 #[cfg(test)]
+mod openapi_bounds_tests;
+#[cfg(test)]
 mod openapi_tests;
 #[cfg(test)]
 mod policy_tests;

@@ -175,7 +175,8 @@ fn anchored_saved_code_matches_the_shared_main_declaration_fixture() {
     assert_eq!(pipeline.node_count(), 1);
     // This is the same Value -> reserialized node -> owning Code parser path
     // used by parse_pipeline_node; no independent YAML interpretation is used.
-    let document: serde_yaml_ng::Value = serde_yaml_ng::from_str(saved).unwrap();
+    let document: serde_yaml_ng::Value =
+        crate::bounded_yaml::from_str(saved, super::super::compiler::PIPELINE_YAML_BUDGET).unwrap();
     let encoded = serde_yaml_ng::to_string(&document["nodes"][0]).unwrap();
     let definition = super::super::code::CodeNodeDefinition::from_yaml(&encoded).unwrap();
     let actual = serde_json::to_string(&definition).unwrap();

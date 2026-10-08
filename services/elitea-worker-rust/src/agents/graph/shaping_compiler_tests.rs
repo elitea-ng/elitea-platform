@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "inline test fixtures, not stored or fetched documents"
+)]
+
 //! Compiler admission, state validation and graph execution of data shaping nodes.
 
 use super::compiler::shaping_node_admission;

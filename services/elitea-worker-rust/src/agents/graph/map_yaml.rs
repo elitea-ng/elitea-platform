@@ -4,7 +4,9 @@ use adk_rust::graph::GraphError;
 use ring::digest;
 use serde::Deserialize;
 
+use super::compiler::PIPELINE_YAML_BUDGET;
 use super::map_reduce::{MapDefinition, MapReduction};
+use crate::bounded_yaml;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,8 +42,9 @@ impl MapNodeDefinition {
         if yaml.is_empty() || yaml.len() > 64 * 1024 {
             return Err(super::map_reduce::map_error("resource_exhausted"));
         }
-        let raw: RawMapNodeDefinition = serde_yaml_ng::from_str(yaml)
-            .map_err(|_| super::map_reduce::map_error("invalid_configuration"))?;
+        let raw: RawMapNodeDefinition =
+            bounded_yaml::from_str_as_yaml_error(yaml, PIPELINE_YAML_BUDGET)
+                .map_err(|_| super::map_reduce::map_error("invalid_configuration"))?;
         if raw.node_type != "map"
             || raw
                 .transition

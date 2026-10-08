@@ -4,6 +4,8 @@
 //! here is iterative, so adversarial nesting never grows the call stack, and no
 //! error or log text carries data values, pointer text or state values.
 
+use elitea_agent_runtime::bounded_yaml::{self, BoundedYamlError};
+use elitea_agent_runtime::graph::PIPELINE_YAML_BUDGET;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::io;
@@ -46,8 +48,10 @@ pub(super) fn parse_node_yaml<T: DeserializeOwned>(
     if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
         return Err(ShapingConfigurationError::ResourceExhausted);
     }
-    serde_yaml_ng::from_str(yaml)
-        .map_err(|source| ShapingConfigurationError::MalformedYaml { source })
+    bounded_yaml::from_str(yaml, PIPELINE_YAML_BUDGET).map_err(|error| match error {
+        BoundedYamlError::BudgetExceeded(_) => ShapingConfigurationError::ResourceExhausted,
+        BoundedYamlError::Malformed(source) => ShapingConfigurationError::MalformedYaml { source },
+    })
 }
 
 /// A literal object key: non-empty, bounded, without control characters.

@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "inline test fixtures, not stored or fetched documents"
+)]
+
 use adk_rust::graph::GraphError;
 use ring::digest;
 use serde_json::{Map, Number, Value, json};
