@@ -565,7 +565,7 @@ async fn checkpoint_inspection_requires_one_live_poll_without_fresh_authority() 
         .unwrap_or_else(|_| panic!("live inspection"));
     assert_eq!(*state.calls.lock().expect("calls"), ["renew", "observe"]);
     let (_pending, session) = inspection.into_session_inspection();
-    assert_eq!(session.into_writer_binding().execution_id, "execution/one");
+    assert_eq!(session.into_writer_binding().execution_id, "execution-one");
     assert!(monitor.activate_checkpoint_inspection().await.is_err());
     monitor.close().await.expect("close");
 }

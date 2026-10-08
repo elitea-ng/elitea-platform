@@ -50,7 +50,6 @@ use crate::agents::session::{BoundOrdinaryAgentModel, DurableModelCompletion};
 const MODEL_ROUTE: &str = elitea_llm_wire::route::CHAT_COMPLETIONS_ROUTE;
 const MAX_ORIGIN_BYTES: usize = 2_048;
 const MAX_MODEL_NAME_BYTES: usize = 256;
-pub(super) const MAX_EXECUTION_ID_BYTES: usize = 256;
 const MAX_INSTRUCTION_BYTES: usize = crate::agents::request::MAX_AGENT_INSTRUCTION_BYTES;
 const MAX_REQUEST_BYTES: usize = 8 * 1_024 * 1_024;
 const MAX_SSE_EVENT_BYTES: usize = 256 * 1_024;
@@ -310,11 +309,14 @@ impl ModelGatewayClient {
         validate_invocation(&invocation)?;
         let token = context.model_facade_token();
         let billing_project_id = context.resource_project_id();
+        // The caller contract's execution-id rule, which the /llm edge applies
+        // by DROPPING any other id (the call would lose its attribution):
+        // refused here so a runtime that mints one is visible (#1156).
         let execution_id = context.execution_id().to_owned();
         if model_owner_project_id == 0
             || billing_project_id == 0
             || token.is_empty()
-            || !bounded_header_text(&execution_id, MAX_EXECUTION_ID_BYTES)
+            || !valid_execution_id(&execution_id)
         {
             return Err(ModelFacadeError::InvalidInvocation);
         }
@@ -1856,7 +1858,7 @@ fn valid_timeout(value: Duration) -> bool {
     !value.is_zero() && value <= MAX_TIMEOUT && value.subsec_nanos().is_multiple_of(1_000_000)
 }
 
-pub(super) use elitea_llm_wire::headers::bounded_header_text;
+pub(super) use elitea_llm_wire::headers::{bounded_header_text, valid_execution_id};
 
 #[cfg(test)]
 pub(crate) struct CapturedModelRequest {

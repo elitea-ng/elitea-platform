@@ -363,7 +363,7 @@ impl ClaimScopedEliteaContext {
 
     #[cfg(test)]
     pub(super) fn fixture(project_id: u64, token: &str) -> Self {
-        Self::fixture_with_execution_id(project_id, token, "execution/fixture-one")
+        Self::fixture_with_execution_id(project_id, token, "0123456789abcdef0123456789abcdef")
     }
 
     #[cfg(test)]

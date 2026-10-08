@@ -40,11 +40,10 @@ use tracing::Instrument as _;
 use zeroize::Zeroizing;
 
 use super::openai_compatible_facade::{
-    MAX_EXECUTION_ID_BYTES, ModelFacadeError, ModelFacadeInvocation, ModelGatewayClient,
-    ModelReasoningEffort, bounded_header_text, budget_refusal, gateway_sse_splitter,
-    is_generic_rejection, model_error, next_response_chunk, rejection_with_detail, sse_error,
-    valid_tool_call_id, valid_tool_name, validate_invocation, validate_llm_request,
-    validate_response_head,
+    ModelFacadeError, ModelFacadeInvocation, ModelGatewayClient, ModelReasoningEffort,
+    budget_refusal, gateway_sse_splitter, is_generic_rejection, model_error, next_response_chunk,
+    rejection_with_detail, sse_error, valid_execution_id, valid_tool_call_id, valid_tool_name,
+    validate_invocation, validate_llm_request, validate_response_head,
 };
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::agents::context_budget::RequestContextBudget;
@@ -96,7 +95,7 @@ impl ModelGatewayClient {
         if model_owner_project_id == 0
             || billing_project_id == 0
             || token.is_empty()
-            || !bounded_header_text(&execution_id, MAX_EXECUTION_ID_BYTES)
+            || !valid_execution_id(&execution_id)
         {
             return Err(ModelFacadeError::InvalidInvocation);
         }

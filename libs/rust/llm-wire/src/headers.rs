@@ -38,7 +38,8 @@ pub fn valid_execution_id(id: &str) -> bool {
 
 /// Text a header may carry without question: non-empty, at most
 /// `max_bytes`, ASCII, and free of control characters. The worker holds a
-/// model name, a tool name, a tool-call id and its execution id to it.
+/// model name, a tool name and a tool-call id to it (its execution id to
+/// [`valid_execution_id`], #1156).
 #[must_use]
 pub fn bounded_header_text(value: &str, max_bytes: usize) -> bool {
     !value.is_empty()

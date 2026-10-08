@@ -1468,7 +1468,7 @@ pub(crate) fn test_lease_monitored_input_execution(
     LeaseMonitoredAgentExecution {
         claim: AcceptedAgentClaim {
             identity: ExecutionIdentityV1 {
-                execution_id: "execution/one".to_owned(),
+                execution_id: "execution-one".to_owned(),
                 generation: 2,
                 ..ExecutionIdentityV1::default()
             },
@@ -1498,7 +1498,7 @@ pub(crate) fn test_lease_monitored_input_execution(
 pub(crate) fn test_runtime_context_authority() -> ClaimBoundRuntimeContextAuthority {
     ClaimBoundRuntimeContextAuthority {
         sandbox: None,
-        execution_id: "execution/one".to_owned(),
+        execution_id: "execution-one".to_owned(),
         generation: 2,
         claim_id: "claim-1".to_owned(),
         fence_token: Zeroizing::new(vec![b'f'; 32]),
@@ -1508,7 +1508,7 @@ pub(crate) fn test_runtime_context_authority() -> ClaimBoundRuntimeContextAuthor
 
 #[cfg(test)]
 pub(crate) fn test_session_authority() -> ClaimBoundSessionAuthority {
-    test_session_authority_for("execution/one", 3)
+    test_session_authority_for("execution-one", 3)
 }
 
 #[cfg(test)]

@@ -197,7 +197,7 @@ mod tests {
             assert_eq!(request.method(), Method::PUT);
             assert_eq!(
                 request.uri().path(),
-                "/executions/execution%2Fone/generations/2/inputs/settings%20id/versions/v%2F1/toolkit-discovery-result"
+                "/executions/execution-one/generations/2/inputs/settings%20id/versions/v%2F1/toolkit-discovery-result"
             );
             assert_eq!(request.headers()[CLAIM_HEADER], "claim-1");
             assert_eq!(
@@ -216,7 +216,7 @@ mod tests {
 
     fn authority() -> ClaimBoundInputAuthority<'static> {
         ClaimBoundInputAuthority {
-            execution_id: "execution/one",
+            execution_id: "execution-one",
             generation: 2,
             content_id: "settings id",
             immutable_version: "v/1",
