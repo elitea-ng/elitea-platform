@@ -1819,22 +1819,26 @@ fn pipeline_completion_event_from_state(state: &State, policy: &PipelineResultPo
 /// Select the chat text of a finished pipeline turn.
 ///
 /// The runtime trace names the node that wrote last. Its declared outputs
-/// win, then its assistant message. Without a usable trace, the static chain
-/// applies: terminal outputs, the last assistant message, declared state.
+/// win, then its assistant message; a blank traced answer selects nothing.
+/// Only without a trace does the static chain apply: terminal outputs, the
+/// last assistant message, declared state.
 /// The text is bounded; an oversized value is truncated, never dropped.
 pub(super) fn select_pipeline_result(
     state: &State,
     policy: &PipelineResultPolicy,
 ) -> Option<String> {
-    let traced = ResultTrace::from_state(state).and_then(|trace| {
-        render_traced_keys(state, trace.keys()).or_else(|| {
-            (trace.messages() && trace.keys().is_empty())
-                .then(|| select_last_assistant_message(state.get("messages")))
-                .flatten()
-        })
-    });
-    traced
-        .or_else(|| select_last_state_value(state, &policy.terminal_data_keys))
+    // A trace proves which node wrote last; when it renders blank, no static
+    // value may stand in for that node's answer.
+    if let Some(trace) = ResultTrace::from_state(state) {
+        return render_traced_keys(state, trace.keys())
+            .or_else(|| {
+                (trace.messages() && trace.keys().is_empty())
+                    .then(|| select_last_assistant_message(state.get("messages")))
+                    .flatten()
+            })
+            .map(RenderedResult::into_bounded_text);
+    }
+    select_last_state_value(state, &policy.terminal_data_keys)
         .or_else(|| select_last_assistant_message(state.get("messages")))
         .or_else(|| select_last_state_value(state, &policy.fallback_data_keys))
         .map(RenderedResult::into_bounded_text)

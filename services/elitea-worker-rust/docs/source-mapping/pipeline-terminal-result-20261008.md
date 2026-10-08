@@ -7,7 +7,7 @@ Problem: a pipeline that ends on a non-LLM node, or has no LLM node, showed the 
 
 | Behaviour | Current platform (business reference) | This change |
 |---|---|---|
-| Which value is the answer | Static topology. It takes the outputs of value-producing nodes that route to END, picks the last declared populated variable, then the last populated state variable in dict order (`elitea_sdk/runtime/langchain/langraph_agent.py` `collect_terminal_output_variables` ~252, `extract_terminal_state_output` ~286, `extract_state_fallback_output` ~185). | The **node that actually wrote last in this turn**, recorded at run time. The static chain stays only as a fallback. |
+| Which value is the answer | Static topology. It takes the outputs of value-producing nodes that route to END, picks the last declared populated variable, then the last populated state variable in dict order (`elitea_sdk/runtime/langchain/langraph_agent.py` `collect_terminal_output_variables` ~252, `extract_terminal_state_output` ~286, `extract_state_fallback_output` ~185). | The **node that actually wrote last in this turn**, recorded at run time. The trace is authoritative: if its answer is blank, the chat shows "Pipeline completed." and never a static value that node did not produce. The static chain applies only when no node wrote a traceable output. |
 | Several outputs | The last declared one wins and the rest are hidden. | One JSON object with every output the node wrote, in declared order (user decision). |
 | Records and objects | Compact `json.dumps` text, shown as plain Markdown. | Pretty JSON in a `json` code block. |
 | Lists of chat content blocks | Joined text (`_is_content_block` ~118). | The same rule for objects. A list of plain strings in state is data and renders as JSON. |

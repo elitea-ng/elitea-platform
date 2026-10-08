@@ -412,15 +412,26 @@ fn the_runtime_trace_selects_the_last_writer_before_the_static_chain() {
         Some("model answer")
     );
 
-    // Blank traced values fall through to the unchanged static chain.
+    // The trace is authoritative: a blank traced value never surfaces a
+    // static value that the last writer did not produce.
     state.insert("ran".to_owned(), json!(""));
     state.insert(
         trace_key.clone(),
         json!({"node": "writer", "keys": ["ran"], "messages": false}),
     );
-    assert_eq!(
-        select_pipeline_result(&state, &policy).as_deref(),
-        Some("static terminal")
+    assert_eq!(select_pipeline_result(&state, &policy), None);
+    state.insert(
+        "messages".to_owned(),
+        json!([{"role": "assistant", "content": [{"type": "thinking", "thinking": "x"}]}]),
+    );
+    state.insert(
+        trace_key.clone(),
+        json!({"node": "llm", "keys": [], "messages": true}),
+    );
+    assert_eq!(select_pipeline_result(&state, &policy), None);
+    state.insert(
+        trace_key.clone(),
+        json!({"node": "writer", "keys": ["ran"], "messages": false}),
     );
 
     // An oversized value is truncated with a notice, never dropped.
