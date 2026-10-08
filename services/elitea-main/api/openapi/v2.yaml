@@ -3493,11 +3493,7 @@ components:
             required: [card, state, revision]
             properties:
               card:
-                type: object
-                additionalProperties: true
-                description: >-
-                  An elitea.pipeline.fanout-interrupt-card.v1 document, served
-                  as stored (libs/jsonschema/runtime/v1/fanout-interrupt-card.schema.json).
+                $ref: '#/components/schemas/ExecutionInterruptCard'
               state:
                 type: string
                 enum: [PENDING, DECIDED]
@@ -3505,6 +3501,117 @@ components:
                 type: integer
                 format: int64
                 minimum: 1
+
+    ExecutionInterruptCard:
+      type: object
+      additionalProperties: false
+      description: >-
+        One per-interrupt card, served exactly as stored. Mirrors
+        elitea.pipeline.fanout-interrupt-card.v1
+        (libs/jsonschema/runtime/v1/fanout-interrupt-card.schema.json), which
+        also owns the cross-field rules this schema cannot express: the
+        hierarchy is null/null/[] or name/call_id/one or more tiers, a card
+        with fanout_v1 has a tier whose sibling_ordinal equals its ordinal,
+        and available_actions and display.guardrail_type match kind.
+      required: [schema, interrupt_key, interrupt_id, kind, available_actions, payload_sha256, display,
+                 parent_agent_name, parent_agent_call_id, parent_agent_path, fanout_v1]
+      properties:
+        schema:
+          type: string
+          enum: [elitea.pipeline.fanout-interrupt-card.v1]
+        interrupt_key:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          minLength: 64
+          maxLength: 64
+        interrupt_id:
+          type: string
+          description: Printable ASCII, 1 to 512 characters.
+          minLength: 1
+          maxLength: 512
+        kind:
+          type: string
+          x-go-type: string
+          enum: [tool_guard, hitl_node, ask_user, delegated_auth]
+        available_actions:
+          type: array
+          minItems: 1
+          maxItems: 4
+          uniqueItems: true
+          items:
+            type: string
+            x-go-type: string
+            enum: [approve, reject, edit, block_with_comment, answer, authorize, skip, continue]
+        payload_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          minLength: 64
+          maxLength: 64
+        display:
+          $ref: '#/components/schemas/ExecutionInterruptCardDisplay'
+        parent_agent_name:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 2048
+        parent_agent_call_id:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 512
+        parent_agent_path:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, call_id]
+            properties:
+              name: {type: string, minLength: 1, maxLength: 2048}
+              call_id: {type: string, minLength: 1, maxLength: 512}
+              sibling_ordinal: {type: integer, minimum: 1, maximum: 64}
+        fanout_v1:
+          type: object
+          nullable: true
+          additionalProperties: false
+          description: Fan-out member metadata (fanout-member.v1); null for a coordinator card.
+          required: [kind, node, activation, member, ordinal, total]
+          properties:
+            kind:
+              type: string
+              x-go-type: string
+              enum: [parallel, map]
+            node: {type: string, pattern: '^[A-Za-z0-9_.:-]{1,128}$', minLength: 1, maxLength: 128}
+            activation: {type: string, pattern: '^[0-9a-f]{16}$', minLength: 16, maxLength: 16}
+            member: {type: string, pattern: '^[A-Za-z0-9_.:-]{1,128}$', minLength: 1, maxLength: 128}
+            ordinal: {type: integer, minimum: 1, maximum: 64}
+            total: {type: integer, minimum: 1, maximum: 64}
+
+    ExecutionInterruptCardDisplay:
+      type: object
+      additionalProperties: false
+      maxProperties: 13
+      description: >-
+        Only fields today's card shows. Headers, tokens, resource metadata and
+        checkpoint ids are never in a card.
+      required: [message, guardrail_type]
+      properties:
+        message: {type: string, minLength: 1, maxLength: 8192}
+        guardrail_type:
+          type: string
+          x-go-type: string
+          enum: [sensitive_tool, pipeline_hitl, pipeline_static, clarifying_question, mcp_auth]
+        node_name: {type: string, minLength: 1, maxLength: 128}
+        tool_name: {type: string, minLength: 1, maxLength: 512}
+        toolkit_name: {type: string, minLength: 1, maxLength: 512}
+        toolkit_type: {type: string, minLength: 1, maxLength: 128}
+        action_label: {type: string, minLength: 1, maxLength: 512}
+        tool_call_id: {type: string, minLength: 1, maxLength: 512}
+        tool_args_json: {type: string, minLength: 1, maxLength: 16384}
+        policy_message: {type: string, minLength: 1, maxLength: 2048}
+        interaction_type: {type: string, minLength: 1, maxLength: 64}
+        edit_state_key: {type: string, minLength: 1, maxLength: 128}
+        server_url: {type: string, pattern: '^https://', minLength: 9, maxLength: 2048}
 
     ExecutionInterruptError:
       type: object

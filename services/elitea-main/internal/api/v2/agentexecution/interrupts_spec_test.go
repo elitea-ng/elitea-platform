@@ -1,8 +1,12 @@
 package agentexecution
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/getkin/kin-openapi/openapi3"
@@ -105,5 +109,46 @@ func TestExecutionInterruptSpecMatchesRoute(t *testing.T) {
 	}
 	if value := body.Properties["value"]; value == nil || value.Value == nil || value.Value.MaxLength == nil || *value.Value.MaxLength != 8192 {
 		t.Error("the decision request value must be capped at 8192")
+	}
+}
+
+// TestExecutionInterruptCardSpecAcceptsContractCards keeps the OpenAPI card
+// schema a faithful mirror of fanout-interrupt-card.v1: every valid contract
+// card validates against it, and the closed-object and bound fixtures the
+// OpenAPI subset can express are refused.
+func TestExecutionInterruptCardSpecAcceptsContractCards(t *testing.T) {
+	doc, err := openapi3.NewLoader().LoadFromData(specfiles.SpecYAML)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := doc.Components.Schemas["ExecutionInterruptCard"]
+	if ref == nil || ref.Value == nil {
+		t.Fatal("v2.yaml has no ExecutionInterruptCard schema")
+	}
+	paths, err := filepath.Glob(filepath.Join(interruptContractDir, "fixtures", "fanout-interrupt-card-v1*.json"))
+	if err != nil || len(paths) == 0 {
+		t.Fatal(paths, err)
+	}
+	expressible := map[string]bool{
+		"fanout-interrupt-card-v1.invalid.secret-display-field.json":  true,
+		"fanout-interrupt-card-v1.invalid.plain-http-server-url.json": true,
+	}
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var card any
+		if err := json.Unmarshal(raw, &card); err != nil {
+			t.Fatal(err)
+		}
+		name := filepath.Base(path)
+		err = ref.Value.VisitJSON(card)
+		switch {
+		case !strings.Contains(name, ".invalid.") && err != nil:
+			t.Errorf("%s: valid contract card refused by v2.yaml: %v", name, err)
+		case expressible[name] && err == nil:
+			t.Errorf("%s: invalid contract card accepted by v2.yaml", name)
+		}
 	}
 }

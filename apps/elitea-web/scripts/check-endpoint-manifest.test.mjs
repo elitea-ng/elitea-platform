@@ -715,7 +715,11 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // (conversation.edit stays `handwritten`; its id came off the reverse-check
 // allowlist). pinEntity and unpinEntity, which 1.4 only tags `client`, were
 // already counted. The manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 309;
+// 309 -> 311 (per-interrupt HITL ledger, Point 5 Track M2):
+// listExecutionInterrupts and decideExecutionInterrupt. Main registers them
+// only behind ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED and no web code
+// calls them in Wave 1, so the manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 311;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the
