@@ -322,7 +322,9 @@ func parseDestinationURL(raw string) (*url.URL, string, error) {
 	}
 	u, err := url.Parse(trimmed)
 	if err != nil {
-		return nil, "", fmt.Errorf("%w: %q is not a valid URL", ErrDestinationRefused, raw)
+		// Never echo the input: it may carry userinfo or a token, and
+		// refusals are logged and stored.
+		return nil, "", fmt.Errorf("%w: the destination is not a valid URL", ErrDestinationRefused)
 	}
 	host := u.Hostname()
 	if host == "" {

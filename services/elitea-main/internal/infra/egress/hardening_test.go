@@ -373,3 +373,56 @@ func TestGuardRoundTripperReleasesIdleConnections(t *testing.T) {
 		t.Fatal("RoundTripper does not expose CloseIdleConnections")
 	}
 }
+
+// TestGuardFilterBudget pins the per-dial cost of the filter: classifying an
+// address allocates nothing, and filtering a full MaxResolvedAddresses answer
+// allocates only the result slice.
+func TestGuardFilterBudget(t *testing.T) {
+	public := net.ParseIP("93.184.216.34")
+	if allocs := testing.AllocsPerRun(100, func() { _ = classify(public) }); allocs != 0 {
+		t.Fatalf("classify allocates %.0f times per call, want 0", allocs)
+	}
+	ips := make([]net.IP, MaxResolvedAddresses)
+	for i := range ips {
+		ips[i] = net.IPv4(93, 184, 216, byte(i+1))
+	}
+	g := New(privateAllowlist(t))
+	if allocs := testing.AllocsPerRun(100, func() { _ = g.permittedIPs(ips) }); allocs > 1 {
+		t.Fatalf("permittedIPs allocates %.0f times for %d answers, want at most 1", allocs, MaxResolvedAddresses)
+	}
+}
+
+func BenchmarkGuardPermittedIPs(b *testing.B) {
+	ips := make([]net.IP, MaxResolvedAddresses)
+	for i := range ips {
+		ips[i] = net.IPv4(93, 184, 216, byte(i+1))
+	}
+	g := New(nil)
+	b.ReportAllocs()
+	for b.Loop() {
+		_ = g.permittedIPs(ips)
+	}
+}
+
+// TestGuardRefusalsNeverEchoURLSecrets proves a refusal carries at most the
+// host: the MCP proxies log it and the webhook delivery log stores it, so
+// userinfo, path and query (where tokens live) must never reach the message.
+func TestGuardRefusalsNeverEchoURLSecrets(t *testing.T) {
+	const secret = "s3cr3t-token"
+	g := singleHostGuard(t, nil, "internal.example", "10.0.0.5", RequireHTTPS())
+	for _, raw := range []string{
+		"http://user:" + secret + "@[::1/hook?token=" + secret,        // unparseable
+		"https://user:" + secret + "@internal.example/p?token=" + secret, // private
+		"http://user:" + secret + "@internal.example/?token=" + secret,   // https-only policy
+		"ftp://user:" + secret + "@internal.example/" + secret,           // scheme
+		"https://user:" + secret + "@unknown.example/?token=" + secret,   // no DNS answer
+	} {
+		err := g.Validate(context.Background(), raw)
+		if !errors.Is(err, ErrDestinationRefused) {
+			t.Fatalf("Validate = %v, want a refusal", err)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("refusal echoes URL secrets: %q", err.Error())
+		}
+	}
+}
