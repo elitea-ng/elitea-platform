@@ -13,6 +13,7 @@ native Inventory engine (`services/elitea-inventory-engine`).
 | `graph-algos` | Seeded two-pass Leiden (RB-configuration) over the vendored `leiden-rs`, communities numbered by size |
 | `repo-ingest` | Admitted shallow git clones (gix, egress allowlist, limits), artifact-folder downloads, file discovery; refusals name the consumer's settings (`names::SettingNames`) |
 | `content-source` | The source-agnostic content layer (ADR-0028): `ContentSource` (list documents with a version, mime type and ACL; fetch their bytes), the document model, `Acl`/`Caller`; git (a checked-out tree) is the first connector |
+| `conversation` | An agent's conversation (`Msg`, `Call`) and its summarisation (`LangChain`'s `SummarizationMiddleware`: model-profile thresholds, a cut that keeps calls with their results, `compact`); the `DeepWiki` agents and Inventory's `investigate` |
 | `doc-extract` | Document bytes to text: text decoded strictly; PDF, Office, spreadsheets, e-mail and HTML through xberg (pinned) behind the `documents` feature, on its own large-stack thread with page/size/time caps |
 | `pg-migrate` | The forward-only, checksummed Postgres migration runner: each consumer passes its own ledger table and advisory-lock name, so two engines on one database never share a ledger |
 

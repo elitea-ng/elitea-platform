@@ -17,7 +17,7 @@ use crate::ingest::{self, ModelOptions, Outcome, RunOptions};
 use crate::store::{self, GraphKey, sources};
 use crate::tools;
 use elitea_engine_core::errors::{EngineError, ErrorType};
-use elitea_engine_core::stream::Context;
+use elitea_engine_core::stream::{Context, StopSignal};
 use elitea_model_client::chat::ChatClient;
 use elitea_model_client::embeddings::{EmbeddingClient, EmbeddingOptions};
 use elitea_model_client::settings::ModelSettings;
@@ -221,6 +221,82 @@ impl NativeRunner {
         Ok((id.clone(), id))
     }
 
+    /// `semantic_search` for an investigation, when the graph has vectors:
+    /// the query is embedded with the model the graph was built with, so
+    /// the two compare, and PostgreSQL ranks the entities (pgvector).
+    fn ranker(
+        &self,
+        view: &crate::retrieval::view::GraphView,
+        settings: &ModelSettings,
+        key: GraphKey,
+        stop: &StopSignal,
+    ) -> Option<crate::investigate::Embed> {
+        crate::retrieval::semantic::stamped_model(view)
+            .filter(|_| crate::retrieval::semantic::has_embeddings(view))
+            .map(|model| {
+                let client = EmbeddingClient::new(
+                    self.transport.clone(),
+                    settings.clone(),
+                    model,
+                    EmbeddingOptions {
+                        ctx_setting: EMBEDDING_CTX_SETTING,
+                        ..EmbeddingOptions::default()
+                    },
+                );
+                let (stop, pool) = (stop.clone(), self.pool.clone());
+                let embed: crate::investigate::Embed = Arc::new(move |query: String| {
+                    let (client, stop, pool) = (client.clone(), stop.clone(), pool.clone());
+                    Box::pin(async move {
+                        let vectors = client.embed_documents(&[query], &stop).await?;
+                        let vector: Vec<f64> = vectors
+                            .into_iter()
+                            .next()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(f64::from)
+                            .collect();
+                        store::vectors::rank(
+                            &pool,
+                            key,
+                            &vector,
+                            crate::retrieval::semantic::DEFAULT_MIN_SCORE,
+                        )
+                        .await
+                        .map_err(|e| {
+                            EngineError::new(
+                                ErrorType::Runtime,
+                                format!("the graph store failed: {e}"),
+                            )
+                        })
+                    })
+                });
+                embed
+            })
+    }
+
+    /// The investigation's model: the toolkit's, through the gateway, and
+    /// its summarisation policy (the client reports usage, so the count
+    /// scales).
+    fn chat_model(
+        &self,
+        settings: &ModelSettings,
+        stop: &StopSignal,
+    ) -> crate::investigate::ChatModel {
+        let client = Arc::new(ChatClient::new(self.transport.clone(), settings.clone()));
+        let stop = stop.clone();
+        crate::investigate::ChatModel {
+            chat: Arc::new(move |request| {
+                let (client, stop) = (Arc::clone(&client), stop.clone());
+                Box::pin(async move { client.complete(&request, &stop).await })
+            }),
+            policy: elitea_conversation::Policy::for_model(
+                &settings.model_name,
+                settings.provider == elitea_model_client::settings::Provider::Anthropic,
+                true,
+            ),
+        }
+    }
+
     /// `investigate`: the model agent (`crate::investigate`) over the
     /// graph's view and its source toolkits.
     async fn investigate(
@@ -270,66 +346,19 @@ impl NativeRunner {
                 kind: row["toolkit_type"].as_str().unwrap_or_default().to_owned(),
             })
             .collect();
-        let client = Arc::new(ChatClient::new(self.transport.clone(), settings.clone()));
         let stop = context.stop_signal();
-        let chat: agent::Chat = {
-            let stop = stop.clone();
-            Arc::new(move |request| {
-                let (client, stop) = (Arc::clone(&client), stop.clone());
-                Box::pin(async move { client.complete(&request, &stop).await })
-            })
-        };
         let call_source = source_caller(
             self.transport.http_client().clone(),
             &settings,
             key.project_id,
             model_name,
         );
-        // Semantic search when the graph has vectors: the query is embedded
-        // with the model the graph was built with, so the two compare, and
-        // PostgreSQL ranks the entities (pgvector).
-        let embed: Option<agent::Embed> = crate::retrieval::semantic::stamped_model(view)
-            .filter(|_| crate::retrieval::semantic::has_embeddings(view))
-            .map(|model| {
-                let client = EmbeddingClient::new(
-                    self.transport.clone(),
-                    settings.clone(),
-                    model,
-                    EmbeddingOptions {
-                        ctx_setting: EMBEDDING_CTX_SETTING,
-                        ..EmbeddingOptions::default()
-                    },
-                );
-                let (stop, pool) = (stop.clone(), self.pool.clone());
-                let embed: agent::Embed = Arc::new(move |query: String| {
-                    let (client, stop, pool) = (client.clone(), stop.clone(), pool.clone());
-                    Box::pin(async move {
-                        let vectors = client.embed_documents(&[query], &stop).await?;
-                        let vector: Vec<f64> = vectors
-                            .into_iter()
-                            .next()
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(f64::from)
-                            .collect();
-                        store::vectors::rank(
-                            &pool,
-                            key,
-                            &vector,
-                            crate::retrieval::semantic::DEFAULT_MIN_SCORE,
-                        )
-                        .await
-                        .map_err(|e| {
-                            EngineError::new(ErrorType::Runtime, format!("the graph store failed: {e}"))
-                        })
-                    })
-                });
-                embed
-            });
+        let embed = self.ranker(view, &settings, key, &stop);
+        let model = self.chat_model(&settings, &stop);
         let result = agent::investigate(
             &question,
             view,
-            &chat,
+            &model,
             &toolkits,
             &call_source,
             embed.as_ref(),

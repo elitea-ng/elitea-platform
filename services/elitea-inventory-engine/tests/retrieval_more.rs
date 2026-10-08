@@ -10,11 +10,11 @@
 mod common;
 
 use elitea_inventory_engine::graph::Graph;
-use elitea_inventory_engine::store::{self, GraphKey, vectors};
 use elitea_inventory_engine::retrieval::view::GraphView;
 use elitea_inventory_engine::retrieval::{
     Call, admin_tools, community_tools, dispatch, pattern, semantic,
 };
+use elitea_inventory_engine::store::{self, GraphKey, vectors};
 use serde_json::{Map, Value, json};
 
 const GRAPH: &str = include_str!("fixtures/retrieval_more/graph.json");
@@ -32,14 +32,25 @@ async fn stored(name: &str) -> Option<(sqlx::PgPool, GraphKey)> {
     let pool = common::database(name).await?;
     let key = GraphKey::new(1, 1).expect("key");
     let document: Value = serde_json::from_str(GRAPH).expect("graph json");
-    store::save(&pool, key, &Graph::from_node_link(&document).expect("node-link"))
-        .await
-        .expect("save");
+    store::save(
+        &pool,
+        key,
+        &Graph::from_node_link(&document).expect("node-link"),
+    )
+    .await
+    .expect("save");
     Some((pool, key))
 }
 
-async fn rank(pool: &sqlx::PgPool, key: GraphKey, vector: &[f64], min_score: f64) -> vectors::Ranking {
-    vectors::rank(pool, key, vector, min_score).await.expect("rank")
+async fn rank(
+    pool: &sqlx::PgPool,
+    key: GraphKey,
+    vector: &[f64],
+    min_score: f64,
+) -> vectors::Ranking {
+    vectors::rank(pool, key, vector, min_score)
+        .await
+        .expect("rank")
 }
 
 fn goldens() -> Value {
@@ -151,7 +162,13 @@ async fn the_semantic_tool_checks_the_space_and_caps_top_k() {
     };
     let view = view_of(GRAPH);
     assert_eq!(semantic::stamped_model(&view), Some("text-embed-x"));
-    let ranking = rank(&pool, key, &[1.0, 0.0, 0.0, 0.0], semantic::DEFAULT_MIN_SCORE).await;
+    let ranking = rank(
+        &pool,
+        key,
+        &[1.0, 0.0, 0.0, 0.0],
+        semantic::DEFAULT_MIN_SCORE,
+    )
+    .await;
     let refused = semantic::semantic_search_tool(
         &view,
         "auth",

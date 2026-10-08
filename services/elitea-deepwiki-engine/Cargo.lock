@@ -544,11 +544,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-conversation"
+version = "0.1.0"
+dependencies = [
+ "elitea-engine-core",
+ "elitea-model-client",
+ "serde_json",
+]
+
+[[package]]
 name = "elitea-deepwiki-engine"
 version = "0.1.0"
 dependencies = [
  "axum",
  "elitea-code-parsers",
+ "elitea-conversation",
  "elitea-engine-core",
  "elitea-engine-sidecar",
  "elitea-graph-algos",

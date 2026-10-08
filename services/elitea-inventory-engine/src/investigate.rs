@@ -22,10 +22,15 @@
 //!   the credentials stay in the platform and the user's own permissions
 //!   apply; tools are named `{toolkit_name[:20]}_{tool}` as in Python;
 //! * citations are read from the answer, as `_extract_citations_from_answer`
-//!   did.
+//!   did;
+//! * the conversation is summarised when it nears the model's context
+//!   (`elitea-conversation`, `LangChain`'s `SummarizationMiddleware` as the
+//!   `DeepWiki` agents use it): fifty rounds of tool output would otherwise
+//!   overflow it, where the Python agent simply failed.
 
 use crate::extract::assets::render;
 use crate::retrieval::{self, Call, view::GraphView};
+use elitea_conversation::{DEFAULT_SUMMARY_PROMPT, Msg, Policy, compact};
 use elitea_engine_core::errors::EngineError;
 use elitea_engine_core::stream::StopSignal;
 use elitea_model_client::chat::{
@@ -49,6 +54,14 @@ pub type Boxed<T> = Pin<Box<dyn Future<Output = Result<T, EngineError>> + Send>>
 
 /// One chat completion with tools (the gateway client in production).
 pub type Chat = Arc<dyn Fn(ChatRequest) -> Boxed<ChatResponse> + Send + Sync>;
+
+/// The model an investigation talks to: its completions, and when its
+/// conversation is summarised (`Policy::for_model` of its name).
+#[derive(Clone)]
+pub struct ChatModel {
+    pub chat: Chat,
+    pub policy: Policy,
+}
 
 /// One source-toolkit tool call: `(toolkit_id, tool_name, arguments)` → the
 /// tool's result as text.
@@ -458,7 +471,7 @@ pub fn citations_in(answer: &str) -> Vec<Value> {
 pub async fn investigate(
     question: &Question,
     view: &GraphView,
-    chat: &Chat,
+    model: &ChatModel,
     sources: &[SourceToolkit],
     call_source: &SourceCall,
     embed: Option<&Embed>,
@@ -470,20 +483,14 @@ pub async fn investigate(
     let system = render(template, &[("filters", &question.filter_text())]);
     let max_rounds = investigate_asset()["max_iterations"].as_u64().unwrap_or(50);
     let (definitions, routes) = offered_tools(view, embed.is_some(), sources);
-    let mut messages = vec![
-        ChatMessage::SystemPrompt(SystemPrompt::text(system)),
-        ChatMessage::User(question.text.clone()),
-    ];
+    let system = SystemPrompt::text(system);
+    let mut messages = vec![Msg::User(question.text.clone())];
     let mut result = Investigation::default();
     for _ in 0..max_rounds {
         if stop.is_requested() {
             return Err(EngineError::cancelled());
         }
-        let mut request = ChatRequest::new(messages.clone());
-        request.tools.clone_from(&definitions);
-        request.sampling = Sampling::Default;
-        request.max_tokens = Some(4096);
-        let response = match chat(request).await {
+        let response = match next_reply(model, &system, &definitions, &mut messages).await {
             Ok(response) => response,
             Err(error) if error == EngineError::cancelled() => return Err(error),
             Err(error) => {
@@ -500,9 +507,14 @@ pub async fn investigate(
             result.answer = response.content;
             return Ok(result);
         }
-        messages.push(ChatMessage::Assistant {
-            content: (!response.content.is_empty()).then(|| response.content.clone()),
-            tool_calls: response.tool_calls.clone(),
+        messages.push(Msg::Ai {
+            content: response.content.clone(),
+            calls: response
+                .tool_calls
+                .iter()
+                .map(elitea_conversation::Call::from_tool_call)
+                .collect(),
+            total_tokens: response.usage.map(|usage| usage.total_tokens),
         });
         for tool_call in &response.tool_calls {
             let arguments = tool_call.parsed_arguments();
@@ -536,14 +548,41 @@ pub async fn investigate(
                 arguments.as_ref().ok(),
                 &output,
             );
-            messages.push(ChatMessage::Tool {
-                tool_call_id: tool_call.id.clone(),
+            messages.push(Msg::Tool {
+                call_id: tool_call.id.clone(),
+                name: tool_call.name.clone(),
                 content: output,
             });
         }
     }
     LIMIT_MESSAGE.clone_into(&mut result.answer);
     Ok(result)
+}
+
+/// One round's reply: the conversation summarised when it is due, then the
+/// model called with the system prompt, the conversation and the offered
+/// tools (temperature and length as Python set them).
+async fn next_reply(
+    model: &ChatModel,
+    system: &SystemPrompt,
+    definitions: &[ToolDefinition],
+    messages: &mut Vec<Msg>,
+) -> Result<ChatResponse, EngineError> {
+    *messages = compact(
+        &model.policy,
+        DEFAULT_SUMMARY_PROMPT,
+        Some(4096),
+        std::mem::take(messages),
+        |request| (model.chat)(request),
+    )
+    .await?;
+    let mut conversation = vec![ChatMessage::SystemPrompt(system.clone())];
+    conversation.extend(messages.iter().map(Msg::to_chat));
+    let mut request = ChatRequest::new(conversation);
+    request.tools = definitions.to_vec();
+    request.sampling = Sampling::Default;
+    request.max_tokens = Some(4096);
+    (model.chat)(request).await
 }
 
 /// Record one call as `{tool, input, output_preview}` (the non-empty
@@ -720,4 +759,87 @@ pub fn missing_question() -> String {
         "error": "Missing required parameter: question",
         "usage": "Provide a 'question' parameter with your investigation query"
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::Graph;
+    use elitea_model_client::chat::ToolCall;
+    use std::sync::Mutex;
+
+    /// A long investigation is summarised instead of growing past the
+    /// model's context: the model asks for a graph search six times, the
+    /// conversation crosses the policy's threshold, the old rounds are
+    /// replaced by the summary, and the answer still arrives.
+    #[tokio::test]
+    async fn a_long_investigation_is_summarised() {
+        let requests: Arc<Mutex<Vec<ChatRequest>>> = Arc::default();
+        let seen = Arc::clone(&requests);
+        let chat: Chat = Arc::new(move |request: ChatRequest| {
+            let rounds = seen
+                .lock()
+                .map(|mut all| {
+                    all.push(request.clone());
+                    all.iter().filter(|r| !r.tools.is_empty()).count()
+                })
+                .unwrap_or_default();
+            Box::pin(async move {
+                let mut response = ChatResponse::default();
+                if request.tools.is_empty() {
+                    "the searches found nothing".clone_into(&mut response.content);
+                } else if rounds <= 6 {
+                    response.tool_calls.push(ToolCall {
+                        id: format!("c{rounds}"),
+                        name: "search_knowledge_graph".to_owned(),
+                        arguments: format!(r#"{{"query": "refund {rounds}"}}"#),
+                    });
+                } else {
+                    "Nothing about refunds.".clone_into(&mut response.content);
+                }
+                Ok(response)
+            })
+        });
+        let model = ChatModel {
+            chat,
+            policy: Policy {
+                trigger_tokens: 200,
+                keep_tokens: None,
+                chars_per_token: 4.0,
+                scale: false,
+            },
+        };
+        let call_source: SourceCall = Arc::new(|_, _, _| Box::pin(async { Ok(String::new()) }));
+        let question = Question {
+            text: "Where are refunds handled?".to_owned(),
+            ..Question::default()
+        };
+        let Ok(result) = investigate(
+            &question,
+            &GraphView::new(Graph::new(), 1),
+            &model,
+            &[],
+            &call_source,
+            None,
+            &StopSignal::default(),
+        )
+        .await
+        else {
+            panic!("investigates");
+        };
+        assert_eq!(result.answer, "Nothing about refunds.");
+        assert_eq!(result.tool_calls.len(), 6);
+        let requests = requests.lock().map(|r| r.clone()).unwrap_or_default();
+        let summaries = requests.iter().filter(|r| r.tools.is_empty()).count();
+        assert!(summaries >= 1, "the conversation was summarised");
+        let last = requests.last().unwrap_or_else(|| panic!("requests"));
+        let ChatMessage::User(first) = &last.messages[1] else {
+            panic!("a user message after the system prompt");
+        };
+        assert!(
+            first.starts_with("Here is a summary of the conversation to date:"),
+            "{first}"
+        );
+        assert!(last.messages.len() <= 1 + 1 + elitea_conversation::KEEP_MESSAGES);
+    }
 }

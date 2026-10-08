@@ -1235,6 +1235,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "elitea-conversation"
+version = "0.1.0"
+dependencies = [
+ "elitea-engine-core",
+ "elitea-model-client",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "elitea-doc-extract"
 version = "0.1.0"
 dependencies = [

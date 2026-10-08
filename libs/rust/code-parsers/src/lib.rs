@@ -82,7 +82,9 @@ pub fn grammar_for(language: &str, path: &str) -> Option<tree_sitter::Language> 
         "javascript" => tree_sitter_javascript::LANGUAGE.into(),
         "python" => tree_sitter_python::LANGUAGE.into(),
         "rust" => tree_sitter_rust::LANGUAGE.into(),
-        "typescript" if typescript::ast::is_tsx(path) => tree_sitter_typescript::LANGUAGE_TSX.into(),
+        "typescript" if typescript::ast::is_tsx(path) => {
+            tree_sitter_typescript::LANGUAGE_TSX.into()
+        }
         "typescript" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
         _ => return None,
     })

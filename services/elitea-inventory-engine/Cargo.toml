@@ -19,6 +19,8 @@ elitea-content-source = { path = "../../libs/rust/content-source" }
 elitea-doc-extract = { path = "../../libs/rust/doc-extract" }
 # The tree-sitter parsers (and the Kotlin/Swift ports) of the parser stage.
 elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
+# investigate's conversation and its summarisation (shared with DeepWiki).
+elitea-conversation = { path = "../../libs/rust/conversation" }
 elitea-model-client = { path = "../../libs/rust/model-client" }
 elitea-pg-migrate = { path = "../../libs/rust/pg-migrate" }
 elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
