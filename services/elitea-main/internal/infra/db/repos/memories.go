@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -220,6 +221,27 @@ const (
 	currentMemoryRecallMaxChars   = 2000
 )
 
+// ResolveCurrentMemoryRecall answers which of the user's enabled memories
+// belong in this turn, by keyword overlap with the input and then recency,
+// within currentMemoryRecallMaxEntries / currentMemoryRecallMaxChars.
+//
+// NEXT-TURN GUARANTEE (ADR-0029 decision 8). With many memories, a memory the
+// user has just saved, which shares no word with the next message, would be
+// ranked out by older overlapping entries. So the resolver RESERVES one slot
+// for the user's most recently saved enabled memory when it was created after
+// the user's previous turn in this project. Overlap-ranked entries never take
+// that slot, and the character budget is cut from the other entries first.
+//
+// "The user's previous turn" is the newest chat_message_group in the project
+// that one of the user's own `user` participant rows authored, in any
+// conversation. The lookup is cheap: a user has few participant rows, and
+// tenant/0148 indexes chat_message_group (author_participant_id, created_at
+// DESC). It is read in the same statement as the candidates, so one turn
+// costs one round trip. Every caller resolves recall BEFORE it writes the
+// turn's own question group (cloud admission in start.go/adhoc.go, the
+// desktop local-turn start), so the newest user message is the previous turn,
+// never the current one. A user with no message in the project has no
+// previous turn, and the newest memory is then always reserved.
 func (r *MemoriesRepo) ResolveCurrentMemoryRecall(
 	ctx context.Context,
 	projectID, actorUserID int64,
@@ -230,12 +252,22 @@ func (r *MemoriesRepo) ResolveCurrentMemoryRecall(
 		return agentexecutionapp.CurrentMemoryRecall{}, err
 	}
 	q := fmt.Sprintf(`
-		SELECT id::text, content, tags
-		FROM %s.personal_memory_entries
-		WHERE user_id = $1 AND enabled = TRUE
-		ORDER BY created_at DESC, id DESC
-		LIMIT %d`, s, currentMemoryRecallPoolSize)
-	rows, err := r.pool.Query(ctx, q, fmt.Sprintf("%d", actorUserID))
+		WITH previous_turn AS (
+			SELECT max(message.created_at) AS at
+			FROM %[1]s.chat_participants AS participant
+			JOIN %[1]s.chat_message_group AS message
+			  ON message.author_participant_id = participant.id
+			WHERE participant.entity_name = 'user'
+			  AND participant.entity_meta ->> 'id' = ($1::bigint)::text
+		)
+		SELECT memory.id::text, memory.content,
+		       (previous_turn.at IS NULL OR memory.created_at > previous_turn.at) AS after_previous_turn
+		FROM %[1]s.personal_memory_entries AS memory
+		CROSS JOIN previous_turn
+		WHERE memory.user_id = $1::bigint AND memory.enabled = TRUE
+		ORDER BY memory.created_at DESC, memory.id DESC
+		LIMIT %[2]d`, s, currentMemoryRecallPoolSize)
+	rows, err := r.pool.Query(ctx, q, actorUserID)
 	if err != nil {
 		return agentexecutionapp.CurrentMemoryRecall{}, fmt.Errorf("memories: resolve recall: %w", err)
 	}
@@ -247,14 +279,18 @@ func (r *MemoriesRepo) ResolveCurrentMemoryRecall(
 		rank    int // position in the most-recent-first read; lower is more recent
 	}
 	candidates := make([]candidate, 0, currentMemoryRecallPoolSize)
+	reservedID := ""
 	for rows.Next() {
 		var id, content string
-		var tags []string
-		if err := rows.Scan(&id, &content, &tags); err != nil {
+		var afterPreviousTurn bool
+		if err := rows.Scan(&id, &content, &afterPreviousTurn); err != nil {
 			return agentexecutionapp.CurrentMemoryRecall{}, fmt.Errorf("memories: scan recall row: %w", err)
 		}
+		// Only the single most recent memory (rank 0) can hold the slot.
+		if len(candidates) == 0 && afterPreviousTurn {
+			reservedID = id
+		}
 		candidates = append(candidates, candidate{id: id, content: content, rank: len(candidates)})
-		_ = tags // scored via keywordOverlapScore below, which reads content only
 	}
 	if err := rows.Err(); err != nil {
 		return agentexecutionapp.CurrentMemoryRecall{}, fmt.Errorf("memories: recall rows: %w", err)
@@ -284,22 +320,39 @@ func (r *MemoriesRepo) ResolveCurrentMemoryRecall(
 		return pool[i].rank < pool[j].rank // tie: most recent first
 	})
 
+	// The reserved entry takes its share of the budget first (truncated only
+	// if it alone exceeds the whole budget). The other entries share what is
+	// left, so they are the ones truncated or dropped.
+	slots := currentMemoryRecallMaxEntries
+	budget := currentMemoryRecallMaxChars
+	if reservedID != "" {
+		slots--
+		budget -= len(truncateRecallText(candidates[0].content, currentMemoryRecallMaxChars))
+	}
 	var (
 		selected []string
 		ids      []string
-		budget   = currentMemoryRecallMaxChars
 	)
+	// The output keeps the ranked order, so the reserved entry sits where its
+	// own score puts it, and a turn whose newest memory already ranks in reads
+	// as it did before the reservation existed.
 	for _, c := range pool {
-		if len(selected) >= currentMemoryRecallMaxEntries || budget <= 0 {
-			break
+		if c.id == reservedID {
+			selected = append(selected, truncateRecallText(c.content, currentMemoryRecallMaxChars))
+			ids = append(ids, c.id)
+			continue
 		}
-		text := c.content
-		if len(text) > budget {
-			text = text[:budget]
+		if slots <= 0 || budget <= 0 {
+			continue
+		}
+		text := truncateRecallText(c.content, budget)
+		if text == "" {
+			continue
 		}
 		selected = append(selected, text)
 		ids = append(ids, c.id)
 		budget -= len(text)
+		slots--
 	}
 	if len(selected) == 0 {
 		return agentexecutionapp.CurrentMemoryRecall{}, nil
@@ -317,6 +370,23 @@ func (r *MemoriesRepo) ResolveCurrentMemoryRecall(
 		Count: len(selected),
 		IDs:   ids,
 	}, nil
+}
+
+// truncateRecallText cuts text to at most limit bytes without splitting a
+// UTF-8 sequence, so a truncated memory never reaches the prompt as invalid
+// text.
+func truncateRecallText(text string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(text) <= limit {
+		return text
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut]
 }
 
 // RecordCurrentMemoryUsage stamps how many memories a turn actually used
