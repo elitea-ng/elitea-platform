@@ -292,7 +292,15 @@ func signProjection(header http.Header, signer *TrustedProxyResolver, decision f
 		header.Set(IdentitySignatureHeader, "-")
 		return true
 	}
-	return signer.SignIdentityProjection(header, decision.Source.Method, decision.Source.URI) == nil
+	if signer.SignIdentityProjection(header, decision.Source.Method, decision.Source.URI) != nil {
+		// Withdraw the unsigned projection: the edge relays the headers of a
+		// non-2xx EdgeAuth answer to the client.
+		for _, name := range []string{"X-Auth-Type", "X-Auth-ID", "X-Auth-User-ID", "X-Auth-Reference"} {
+			header.Del(name)
+		}
+		return false
+	}
+	return true
 }
 
 func writeEdgeAuthOK(writer http.ResponseWriter) {

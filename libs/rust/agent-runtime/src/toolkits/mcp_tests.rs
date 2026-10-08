@@ -1601,7 +1601,13 @@ fn platform_reserved_header_names_are_refused_in_direct_mcp_headers() {
             "{name} must be refused"
         );
     }
-    for name in ["X-Authorization-Hint", "x-authz", "X-Custom"] {
+    for name in [
+        "X-Authorization-Hint",
+        "x-authz",
+        "X-Custom",
+        "X-Auth-Token",
+        "X-Auth-Key",
+    ] {
         let headers = direct_config(json!({name: "value"}), &tokens)
             .request_headers_for_test()
             .expect("headers");

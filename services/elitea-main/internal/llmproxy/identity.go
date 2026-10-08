@@ -296,7 +296,7 @@ func stripIdentityHeaders(h http.Header) {
 	// avatar) — the gateway and providers never see inbound authentication
 	// context, and a name added to the projection later is covered too.
 	for name := range h {
-		if strings.HasPrefix(strings.ToLower(name), "x-auth-") {
+		if len(name) >= len("x-auth-") && strings.EqualFold(name[:len("x-auth-")], "x-auth-") {
 			delete(h, name)
 		}
 	}

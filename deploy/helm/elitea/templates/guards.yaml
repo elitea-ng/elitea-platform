@@ -44,6 +44,10 @@
 {{- end }}
 {{- end }}
 
+{{- if and .Values.networkPolicies.enabled .Values.worker.enabled .Values.worker.platformEdge.enabled (ne .Values.worker.platformEdge.mainService (include "elitea-main.fullname" .)) }}
+{{- fail (printf "worker.platformEdge.mainService is %q, but the platform edge NetworkPolicy admits egress only to this chart's elitea-main pods (Service %q). Point the edge at that Service, or set networkPolicies.enabled=false together with networkPolicies.externallyManaged=true and admit the edge's real upstream in your own policy." .Values.worker.platformEdge.mainService (include "elitea-main.fullname" .)) }}
+{{- end }}
+
 {{- if and .Values.networkPolicies.main.noExternalIngress .Values.main.enabled .Values.main.ingress.enabled }}
 {{- fail "networkPolicies.main.noExternalIngress=true contradicts main.ingress.enabled=true: the Ingress or HTTPRoute exists to carry outside traffic to elitea-main. Set one of them to false, or keep noExternalIngress=false and list the gateway in networkPolicies.main.ingressFrom." }}
 {{- end }}

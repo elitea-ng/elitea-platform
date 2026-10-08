@@ -1016,7 +1016,13 @@ fn platform_reserved_header_names_are_refused_in_configured_headers() {
         };
         assert_eq!(error.code(), OpenApiConfigErrorCode::InvalidConfiguration);
     }
-    for name in ["X-Authorization-Hint", "x-authz", "X-Custom"] {
+    for name in [
+        "X-Authorization-Hint",
+        "x-authz",
+        "X-Custom",
+        "X-Auth-Token",
+        "X-Auth-Key",
+    ] {
         let configured = settings(
             &json!({"api_key":"key","auth_type":"Bearer","headers":{name:"value"}}),
             &["get_users_by_id"],

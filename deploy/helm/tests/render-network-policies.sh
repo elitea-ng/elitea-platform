@@ -280,6 +280,8 @@ refuses "default values without the ingress decision" "explicit decision about w
   "${STANDALONE[@]}" --set networkPolicies.main.noExternalIngress=false
 refuses "an unfilled placeholder peer" "unfilled placeholder" "${STANDALONE[@]}" \
   -f <(printf 'networkPolicies:\n  main:\n    extraIngressFrom:\n      - namespaceSelector:\n          matchLabels:\n            kubernetes.io/metadata.name: ""\n')
+refuses "platform edge pointed at another Main Service" "worker.platformEdge.mainService is" \
+  "${STANDALONE[@]}" "${NOEXT[@]}" "${WORKER[@]}" --set worker.platformEdge.mainService=elsewhere
 refuses "noExternalIngress with main.ingress.enabled (gateway-api)" "contradicts main.ingress.enabled" \
   "${STANDALONE[@]}" "${NOEXT[@]}" --set main.ingress.enabled=true --set networkPolicies.main.ingressFrom[0].podSelector.matchLabels.x=y --set main.ingress.gatewayApi=true \
   --set main.ingress.gateway.name=shared-gateway --set main.ingress.gateway.namespace=gateway-system

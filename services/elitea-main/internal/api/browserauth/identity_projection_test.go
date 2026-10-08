@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	forwardapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/edgeauth"
 )
 
 var identityProjectionTestClock = time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
@@ -283,5 +285,28 @@ func TestIdentityProjectionVerificationAllocationBudget(t *testing.T) {
 	})
 	if allocations > identityProjectionVerifyAllocBudget {
 		t.Fatalf("verification allocates %.0f times per request, budget %d", allocations, identityProjectionVerifyAllocBudget)
+	}
+}
+
+// A projection EdgeAuth cannot sign is withdrawn, so the error response that
+// follows carries no identity headers for the edge to relay.
+func TestSignProjectionWithdrawsAnUnsignableProjection(t *testing.T) {
+	resolver := newSigningTestResolver(t, identityProjectionTestSecret(), identityProjectionTestClock)
+	header := http.Header{}
+	header.Set("X-Auth-Type", "user")
+	header.Set("X-Auth-ID", "7")
+	header.Set("X-Auth-User-ID", "7")
+	header.Set("X-Auth-Reference", "-")
+	decision := forwardapp.Decision{
+		Source:         forwardapp.Source{Method: http.MethodGet, URI: "/x\n/y"},
+		Authentication: forwardapp.Authentication{Type: forwardapp.AuthenticationUser},
+	}
+	if signProjection(header, resolver, decision) {
+		t.Fatal("signProjection() = true, want false")
+	}
+	for _, name := range []string{"X-Auth-Type", "X-Auth-ID", "X-Auth-User-ID", "X-Auth-Reference", IdentitySignatureHeader} {
+		if value := header.Get(name); value != "" {
+			t.Fatalf("%s = %q after a refused signature, want absent", name, value)
+		}
 	}
 }
