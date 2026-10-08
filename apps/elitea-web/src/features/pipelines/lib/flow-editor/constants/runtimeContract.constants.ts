@@ -125,7 +125,7 @@ export const ReservedStateKeys: readonly ReservedStateKey[] = [
   { key: '__elitea_llm_tool_resume_v1', citation: 'compiler.rs:1459 (llm.rs:58)', reason: 'LLM tool resume channel' },
   { key: '__elitea_pipeline_node_event_scope_v1', citation: 'compiler.rs:1460 (node_events.rs:35)', reason: 'node event scope channel' },
   // The runtime last-writer trace that selects the pipeline result.
-  { key: '__elitea_pipeline_result_trace_v1', citation: 'compiler.rs:2300 (pipeline_result.rs:18)', reason: 'pipeline result trace channel' },
+  { key: '__elitea_pipeline_result_trace_v1', citation: 'compiler.rs:2320 (pipeline_result.rs:18)', reason: 'pipeline result trace channel' },
   // The four `matches!` literals at compiler.rs:1463-1466.
   { key: '__elitea_application_task_v1', citation: 'compiler.rs:1463 (application.rs:43)', reason: 'Agent task channel' },
   { key: '__elitea_application_messages_v1', citation: 'compiler.rs:1464 (application.rs:44)', reason: 'Agent messages channel' },

@@ -90,7 +90,7 @@ describe('ReservedStateKeys mirrors reserved_user_state_key (worker compiler.rs:
     }
   });
 
-  it('reserves the pipeline result trace channel (worker compiler.rs:2300)', () => {
+  it('reserves the pipeline result trace channel (worker compiler.rs:2320)', () => {
     expect(isReservedStateKey('__elitea_pipeline_result_trace_v1')).toBe(true);
   });
 
