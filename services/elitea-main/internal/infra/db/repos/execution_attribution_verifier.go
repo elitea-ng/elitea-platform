@@ -16,6 +16,8 @@ import (
 	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // attributionSlackSQL is how far outside an execution's lifetime a call may
@@ -29,6 +31,32 @@ const attributionSlackSQL = `interval '5 minutes'`
 // elitea_runtime.execution_jobs.
 type ExecutionAttributionVerifier struct {
 	pool *pgxpool.Pool
+	// localWork is the native client policy. Without it no local turn is
+	// attributed: attributing is the optional outcome, so absence fails closed.
+	localWork LocalWorkPolicy
+}
+
+// LocalWorkPolicy is the native client policy (*nativepolicy.Service).
+type LocalWorkPolicy interface {
+	Policy(ctx context.Context) (platformconfig.NativeClientPolicy, error)
+}
+
+// WithLocalWorkPolicy makes the verifier attribute an uncommitted desktop
+// local turn only while the policy's local_work.allowed is true, so turning
+// local work off also stops turns already started. A policy that cannot be
+// read means the turn is not attributed; the /llm call itself is unaffected
+// (the edge drops an unverified id).
+func (v *ExecutionAttributionVerifier) WithLocalWorkPolicy(policy LocalWorkPolicy) *ExecutionAttributionVerifier {
+	v.localWork = policy
+	return v
+}
+
+func (v *ExecutionAttributionVerifier) localWorkAllowed(ctx context.Context) bool {
+	if v.localWork == nil {
+		return false
+	}
+	policy, err := v.localWork.Policy(ctx)
+	return err == nil && policy.LocalWork.Allowed
 }
 
 func NewExecutionAttributionVerifier(pool *pgxpool.Pool) *ExecutionAttributionVerifier {
@@ -51,6 +79,7 @@ func (v *ExecutionAttributionVerifier) VerifyExecution(ctx context.Context, proj
 	if err != nil || project < 1 || userID == "" || executionID == "" {
 		return false, nil
 	}
+	localAllowed := v.localWorkAllowed(ctx)
 	var ok bool
 	if err := v.pool.QueryRow(ctx, `
 SELECT EXISTS (
@@ -66,14 +95,15 @@ SELECT EXISTS (
     -- committed less than the slack ago.
     SELECT 1
     FROM elitea_runtime.local_turn_executions AS l
-    WHERE l.execution_id = $1
+    WHERE $4::boolean
+      AND l.execution_id = $1
       AND l.project_id = $2
       AND l.actor_id = $3
       AND (
           (l.committed_at IS NULL AND l.expires_at > now())
           OR l.committed_at > now() - `+attributionSlackSQL+`
       )
-)`, executionID, project, userID).Scan(&ok); err != nil {
+)`, executionID, project, userID, localAllowed).Scan(&ok); err != nil {
 		return false, fmt.Errorf("verify execution attribution: %w", err)
 	}
 	return ok, nil

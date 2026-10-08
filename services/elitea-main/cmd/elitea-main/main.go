@@ -2034,6 +2034,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// BF0.9c: compose the mTLS streaming reverse proxy to elitea-llm-gateway-svc.
 	// Gated on LLM_GATEWAY_URL so the proxy is only enabled in deployments where
 	// the gateway service is reachable.
+	// The ONE native policy reader, built here because the /llm edge's
+	// execution verifier needs it too: it stops attributing an uncommitted
+	// local turn the moment `local_work.allowed` is turned off.
+	nativePolicy := native.policy(pool)
 	var gatewayProxy http.Handler
 	var gatewayProjectResolver apimw.PersonalProjectResolver
 	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" {
@@ -2047,7 +2051,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// The analytics reads decide active users and run spend from
 			// the inbound execution id, so the edge keeps it only for a live
 			// execution of the caller.
-			ExecutionVerifier: dbrepos.NewExecutionAttributionVerifier(pool),
+			ExecutionVerifier: dbrepos.NewExecutionAttributionVerifier(pool).WithLocalWorkPolicy(nativePolicy),
 		})
 		if gwErr != nil {
 			return fmt.Errorf("compose llm gateway proxy: %w", gwErr)
@@ -2306,7 +2310,6 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// One native policy reader for the router (discovery, token responses,
 	// the 426 gate, the admin save's invalidation) AND the local turn start,
 	// so a save that turns local work off is seen by both at once.
-	nativePolicy := native.policy(pool)
 	currentLocalTurns, err := composeLocalTurns(pool, nativePolicy, auditRecorder, apiGroupAuth, logger)
 	if err != nil {
 		return fmt.Errorf("compose local turn routes: %w", err)

@@ -1,9 +1,15 @@
 package localturn
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+
+	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/audit"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 func TestBoundReportCutsAndCounts(t *testing.T) {
@@ -101,5 +107,72 @@ func TestCleanReportedReplacesControlAndFormatRunes(t *testing.T) {
 	// Multi-byte runes are never split by the byte limit.
 	if got := cleanReported("ééé", 5); got != "éé" {
 		t.Errorf("limit cut = %q", got)
+	}
+}
+
+type commitFakeStore struct{ commits int }
+
+func (s *commitFakeStore) StartLocalTurn(context.Context, StartRecord) (StartedTurn, error) {
+	return StartedTurn{}, nil
+}
+
+func (s *commitFakeStore) CommitLocalTurn(context.Context, CommitRecord) (CommittedTurn, error) {
+	s.commits++
+	return CommittedTurn{}, nil
+}
+
+type commitFakePolicy struct {
+	allowed bool
+	err     error
+}
+
+func (p commitFakePolicy) Policy(context.Context) (platformconfig.NativeClientPolicy, error) {
+	policy := platformconfig.DefaultNativeClientPolicy()
+	policy.LocalWork.Allowed = p.allowed
+	return policy, p.err
+}
+
+type commitFakeMemories struct{}
+
+func (commitFakeMemories) ResolveCurrentMemoryRecall(context.Context, int64, int64, string) (agentexecutionapp.CurrentMemoryRecall, error) {
+	return agentexecutionapp.CurrentMemoryRecall{}, nil
+}
+
+func (commitFakeMemories) RecordCurrentMemoryUsage(context.Context, int64, string, int) error {
+	return nil
+}
+
+type commitFakeAudit struct{}
+
+func (commitFakeAudit) Record(context.Context, audit.Event) {}
+
+func TestCommitHonoursTheLocalWorkPolicy(t *testing.T) {
+	commit := CommitRequest{
+		ProjectID: 1, ActorUserID: 2, ExecutionID: strings.Repeat("a", 32),
+		UserMessage: "hi", AssistantMessage: "hello",
+	}
+	for name, test := range map[string]struct {
+		policy commitFakePolicy
+		want   error
+		writes int
+	}{
+		"allowed":    {commitFakePolicy{allowed: true}, nil, 1},
+		"disabled":   {commitFakePolicy{allowed: false}, ErrLocalWorkDisabled, 0},
+		"unreadable": {commitFakePolicy{allowed: true, err: errors.New("db down")}, ErrUnavailable, 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := &commitFakeStore{}
+			service, err := NewService(store, test.policy, commitFakeMemories{}, commitFakeAudit{},
+				func() (string, error) { return strings.Repeat("b", 32), nil }, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.Commit(context.Background(), commit); !errors.Is(err, test.want) {
+				t.Fatalf("Commit = %v, want %v", err, test.want)
+			}
+			if store.commits != test.writes {
+				t.Fatalf("store commits = %d, want %d", store.commits, test.writes)
+			}
+		})
 	}
 }
