@@ -111,8 +111,17 @@ func TestTrustedProxyResolverVerifiesOnlyConfiguredImmediatePeerForIdentity(t *t
 	trusted := httptest.NewRequest(http.MethodGet, "/projects/project/default/1", nil)
 	trusted.RemoteAddr = "10.20.30.40:43120"
 	trusted.Header.Set("X-Forwarded-For", "not-part-of-identity-peer-proof")
+	trusted.Header.Set("X-Auth-Type", "user")
+	trusted.Header.Set("X-Auth-ID", "7")
+	// A trusted peer is necessary and never sufficient.
+	if err := resolver.VerifyForwardedIdentityPeer(trusted); !errors.Is(err, ErrInvalidForwardedRequest) {
+		t.Fatalf("unsigned trusted peer error = %v, want %v", err, ErrInvalidForwardedRequest)
+	}
+	if err := resolver.SignIdentityProjection(trusted.Header, http.MethodGet, "/projects/project/default/1"); err != nil {
+		t.Fatal(err)
+	}
 	if err := resolver.VerifyForwardedIdentityPeer(trusted); err != nil {
-		t.Fatalf("trusted peer error = %v", err)
+		t.Fatalf("signed trusted peer error = %v", err)
 	}
 
 	for _, request := range []*http.Request{
@@ -186,15 +195,18 @@ func TestTrustedProxyResolverRejectsUnsafeConfiguration(t *testing.T) {
 		{TrustedProxyCIDRs: []string{"10.0.0.0/8"}, PublicOrigin: "https://user@elitea.example.test"},
 	}
 	for _, config := range tests {
+		// A valid secret, so each case is refused for its own defect.
+		config.IdentityProjectionSecret = []byte("0123456789abcdef0123456789abcdef")
 		if _, err := NewTrustedProxyResolver(config); !errors.Is(err, ErrInvalidForwardedRequest) {
 			t.Fatalf("NewTrustedProxyResolver(%+v) error = %v", config, err)
 		}
 	}
 
 	development, err := NewTrustedProxyResolver(TrustedProxyConfig{
-		TrustedProxyCIDRs: []string{"127.0.0.0/8"},
-		PublicOrigin:      "http://localhost:8080",
-		Development:       true,
+		TrustedProxyCIDRs:        []string{"127.0.0.0/8"},
+		PublicOrigin:             "http://localhost:8080",
+		Development:              true,
+		IdentityProjectionSecret: []byte("0123456789abcdef0123456789abcdef"),
 	})
 	if err != nil || development.publicScheme != "http" {
 		t.Fatalf("development resolver = %+v, %v", development, err)
@@ -204,8 +216,9 @@ func TestTrustedProxyResolverRejectsUnsafeConfiguration(t *testing.T) {
 func newTestTrustedProxyResolver(t *testing.T) *TrustedProxyResolver {
 	t.Helper()
 	resolver, err := NewTrustedProxyResolver(TrustedProxyConfig{
-		TrustedProxyCIDRs: []string{"10.0.0.0/8"},
-		PublicOrigin:      "https://elitea.example.test",
+		TrustedProxyCIDRs:        []string{"10.0.0.0/8"},
+		PublicOrigin:             "https://elitea.example.test",
+		IdentityProjectionSecret: []byte("0123456789abcdef0123456789abcdef"),
 	})
 	if err != nil {
 		t.Fatal(err)
