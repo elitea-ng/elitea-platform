@@ -28,6 +28,7 @@ use tokio::sync::Notify;
 const ROOT: &str = "thread-1";
 const DEFINITION: [u8; 32] = [0x51; 32];
 const RESUME_KEY: &str = "__elitea_hitl_resume_v1";
+const MARKER: &str = "fanout-private-input-7f3a";
 
 /// Count each node of each branch. `prep` runs once before the owned node, so a
 /// resume that restarts the branch instead of restoring it shows up here.
@@ -1048,15 +1049,19 @@ async fn frozen_child_identity_cannot_be_reused_across_tenant_project_or_definit
         2,
         "a completed child leaked across definitions"
     );
-    let owned = frozen_threads(&owner.load(ROOT).await.unwrap().expect("owner occurrence"));
-    let foreign = frozen_threads(
+    let owner_threads = frozen_threads(&owner.load(ROOT).await.unwrap().expect("owner occurrence"));
+    let foreign_threads = frozen_threads(
         &other_definition
             .load(ROOT)
             .await
             .unwrap()
             .expect("other definition occurrence"),
     );
-    assert!(owned.iter().all(|thread| !foreign.contains(thread)));
+    assert!(
+        owner_threads
+            .iter()
+            .all(|thread| !foreign_threads.contains(thread))
+    );
 }
 
 /// The fan-out runtime writes no log line. If one is ever added, it must not
@@ -1100,7 +1105,6 @@ async fn fanout_restore_and_lease_loss_log_no_payload_or_identity() {
         .finish();
     let _guard = tracing::subscriber::set_default(subscriber);
 
-    const MARKER: &str = "fanout-private-input-7f3a";
     let context = parallel_context(HashMap::from([("input".to_owned(), json!(MARKER))]));
     let runs = Arc::new(BranchRuns::new(&["done_a", "done_b", "ask", "late"]));
     let definition = four_branches();

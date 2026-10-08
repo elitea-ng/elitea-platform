@@ -477,6 +477,8 @@ impl DurableMapNode {
             }
             prepared.push((item.clone(), child));
         }
+        // Fired on lease loss so admitted siblings stop instead of running to completion.
+        let siblings = FanoutCancellation::new();
         let mut pending = prepared.into_iter();
         let mut running = FuturesUnordered::new();
         let mut outcomes = Vec::with_capacity(plan.items.len());
@@ -488,7 +490,7 @@ impl DurableMapNode {
         if admission_open {
             for _ in 0..self.definition.max_concurrency {
                 if let Some((item, child)) = pending.next() {
-                    running.push(self.run_item(item, child, context));
+                    running.push(self.run_item(item, child, context, &siblings));
                 }
             }
         }
@@ -497,9 +499,10 @@ impl DurableMapNode {
             let mut result = match result {
                 Ok(result) => result,
                 Err(error) => {
-                    // Lease loss: close admission and let admitted items drain.
+                    // Lease loss: close admission and stop the admitted siblings.
                     lease_error.get_or_insert(error);
                     admission_open = false;
+                    siblings.cancel();
                     continue;
                 }
             };
@@ -520,7 +523,7 @@ impl DurableMapNode {
             outcomes.push((index, result));
             context.report_progress();
             if admission_open && let Some((item, child)) = pending.next() {
-                running.push(self.run_item(item, child, context));
+                running.push(self.run_item(item, child, context, &siblings));
             }
         }
         if let Some(error) = lease_error {
@@ -573,12 +576,13 @@ impl DurableMapNode {
         item: FrozenMapItem,
         child: MapChildCheckpoint,
         context: &NodeContext,
+        siblings: &FanoutCancellation,
     ) -> (
         usize,
         Result<Result<Map<String, Value>, MapStop>, GraphError>,
     ) {
         let index = item.index;
-        let result = match self.run_item_inner(item, child, context).await {
+        let result = match self.run_item_inner(item, child, context, siblings).await {
             Err(error) if is_lease_lost(&error) => Err(error),
             Err(_) => Ok(Err(MapStop::Failed { index })),
             Ok(result) => Ok(result),
@@ -592,6 +596,7 @@ impl DurableMapNode {
         item: FrozenMapItem,
         child: MapChildCheckpoint,
         context: &NodeContext,
+        siblings: &FanoutCancellation,
     ) -> Result<Result<Map<String, Value>, MapStop>, GraphError> {
         let checkpoint = Arc::new(MapReceiptCheckpointer::new(
             child.checkpointer,
@@ -669,6 +674,9 @@ impl DurableMapNode {
                 return Ok(Err(MapStop::DeadlineExceeded));
             }
             () = latch_cancelled(self.cancellation.as_deref()) => {
+                return Ok(Err(MapStop::Cancelled));
+            }
+            () = siblings.cancelled() => {
                 return Ok(Err(MapStop::Cancelled));
             }
             outcome = graph.invoke_detailed(input, config) => outcome,

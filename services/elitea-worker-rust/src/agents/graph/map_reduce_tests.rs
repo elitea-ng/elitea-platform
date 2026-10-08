@@ -196,6 +196,8 @@ enum Mode {
     DeepRuntimeInput,
     /// Every item announces itself, then pends forever.
     Hold,
+    /// Items at or after this index announce themselves, then pend forever.
+    HoldFrom(usize),
 }
 struct Workers {
     calls: Arc<Mutex<Vec<usize>>>,
@@ -250,7 +252,7 @@ impl Node for Worker {
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         let active_item = ActiveItem(&self.active);
         self.peak.fetch_max(active, Ordering::SeqCst);
-        if matches!(self.mode, Mode::Hold) {
+        if matches!(self.mode, Mode::Hold) || matches!(self.mode, Mode::HoldFrom(n) if index >= n) {
             if let Some(entered) = &self.entered {
                 let _ = entered.send(());
             }
@@ -1141,6 +1143,54 @@ async fn a_lease_lost_item_is_a_control_stop_and_records_nothing() {
     assert_eq!(
         *workers.calls.lock().unwrap(),
         vec![0],
+        "admitted after lease loss"
+    );
+    assert!(stored_stop(&store).is_null(), "lease loss was recorded");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lease_lost_item_stops_its_admitted_siblings() {
+    let store = Arc::new(Store::default());
+    let children = Arc::new(Children {
+        lease_lost_first: true,
+        ..Children::default()
+    });
+    let (entered, mut entries) = tokio::sync::mpsc::unbounded_channel();
+    let mut workers = Workers::new(Mode::HoldFrom(1));
+    workers.entered = Some(entered);
+    let workers = Arc::new(workers);
+    let mut definition = definition();
+    definition.max_concurrency = 2;
+    let node = DurableMapNode::new(
+        definition,
+        Arc::new(MapOccurrenceCheckpointer::new(store.clone())),
+        children,
+        workers.clone(),
+    )
+    .unwrap();
+    let run = tokio::spawn(async move {
+        node.execute_outcome(&context(json!([0, 1, 2]), false))
+            .await
+    });
+    entries.recv().await.expect("the sibling item entered");
+    let error = tokio::time::timeout(Duration::from_secs(5), run)
+        .await
+        .expect("lease loss must stop the admitted sibling")
+        .expect("Map task")
+        .err()
+        .expect("lease loss is a control error");
+    assert!(
+        matches!(&error, GraphError::CheckpointError(message) if message == LEASE_LOST),
+        "{error}"
+    );
+    assert_eq!(
+        workers.active.load(Ordering::SeqCst),
+        0,
+        "a sibling kept running"
+    );
+    assert_eq!(
+        *workers.calls.lock().unwrap(),
+        vec![0, 1],
         "admitted after lease loss"
     );
     assert!(stored_stop(&store).is_null(), "lease loss was recorded");

@@ -77,7 +77,10 @@ impl ParallelOccurrenceCheckpointer {
         if let Some(checkpoint) = latest.as_ref() {
             super::structure::validate_checkpoint(checkpoint)?;
             validate_freeze_parent(checkpoint, activation, context)?;
-            refuse_legacy(checkpoint)?;
+            if checkpoint.step == context.step {
+                // Only this activation's own frontier can hold its legacy occurrence.
+                refuse_legacy(checkpoint)?;
+            }
             if checkpoint.step == context.step && checkpoint.metadata.contains_key(OCCURRENCE_KEY) {
                 let frozen = occurrence_from(checkpoint, activation)?;
                 if frozen.activation != expected.activation || frozen.branches != expected.branches
