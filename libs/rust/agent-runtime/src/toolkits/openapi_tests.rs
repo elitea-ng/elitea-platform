@@ -994,3 +994,104 @@ fn recursive_server_variable_defaults_stop_at_the_materialization_bound() {
 }
 
 // No SDK schema gate (sdk_conformance.rs): OpenAPI tools are generated from the configured spec and the SDK snapshot lists no static args_schemas for "openapi".
+
+const PLATFORM_RESERVED_HEADER_NAMES: [&str; 5] = [
+    "X-Auth-Type",
+    "x-auth-id",
+    "X-AUTH-USER-ID",
+    "X-Auth-Signature",
+    "X-Elitea-Project-Id",
+];
+
+#[test]
+fn platform_reserved_header_names_are_refused_in_configured_headers() {
+    for name in PLATFORM_RESERVED_HEADER_NAMES {
+        let configured = settings(
+            &json!({"api_key":"key","auth_type":"Bearer","headers":{name:"value"}}),
+            &["get_users_by_id"],
+        );
+        let Err(error) = OpenApiToolkitConfig::parse("Customer API", &configured, &Map::new())
+        else {
+            panic!("{name} must be refused");
+        };
+        assert_eq!(error.code(), OpenApiConfigErrorCode::InvalidConfiguration);
+    }
+    for name in ["X-Authorization-Hint", "x-authz", "X-Custom"] {
+        let configured = settings(
+            &json!({"api_key":"key","auth_type":"Bearer","headers":{name:"value"}}),
+            &["get_users_by_id"],
+        );
+        OpenApiToolkitConfig::parse("Customer API", &configured, &Map::new())
+            .unwrap_or_else(|_| panic!("{name} stays allowed"));
+    }
+}
+
+#[test]
+fn platform_reserved_header_names_are_refused_as_custom_auth_header_names() {
+    for name in PLATFORM_RESERVED_HEADER_NAMES {
+        let configured = settings(
+            &json!({"api_key":"key","auth_type":"Custom","custom_header_name":name}),
+            &["get_users_by_id"],
+        );
+        let Err(error) = OpenApiToolkitConfig::parse("Customer API", &configured, &Map::new())
+        else {
+            panic!("{name} must be refused");
+        };
+        assert_eq!(error.code(), OpenApiConfigErrorCode::InvalidConfiguration);
+    }
+    let configured = settings(
+        &json!({"api_key":"key","auth_type":"Custom","custom_header_name":"X-Authorization-Hint"}),
+        &["get_users_by_id"],
+    );
+    OpenApiToolkitConfig::parse("Customer API", &configured, &Map::new())
+        .expect("a neighbouring name stays allowed");
+}
+
+#[tokio::test]
+async fn platform_reserved_header_names_are_refused_in_per_call_headers() {
+    let config = OpenApiToolkitConfig::parse(
+        "Customer API",
+        &settings(
+            &json!({"api_key":"key","auth_type":"Bearer"}),
+            &["create_user"],
+        ),
+        &Map::new(),
+    )
+    .expect("API-key config");
+    let operation = config.operations()[0].clone();
+    let transport = Arc::new(FixtureTransport {
+        requests: Mutex::new(Vec::new()),
+        token_requests: Mutex::new(Vec::new()),
+        token: String::new(),
+        responses: Mutex::new(vec![OpenApiResponse {
+            status: StatusCode::CREATED,
+            body: Vec::new(),
+        }]),
+    });
+    let client = OpenApiClient::with_transport(config.into_client_parts(), transport.clone());
+    for name in PLATFORM_RESERVED_HEADER_NAMES {
+        let error = client
+            .execute(
+                &operation,
+                json!({"body_json":"{}","headers":{name:"value"}})
+                    .as_object()
+                    .expect("header arguments"),
+            )
+            .await
+            .expect_err("reserved header refused");
+        assert_eq!(
+            error.code(),
+            super::families::openapi::client::OpenApiClientErrorCode::InvalidInput
+        );
+    }
+    client
+        .execute(
+            &operation,
+            json!({"body_json":"{}","headers":{"X-Authorization-Hint":"value"}})
+                .as_object()
+                .expect("header arguments"),
+        )
+        .await
+        .expect("a neighbouring name stays allowed");
+    assert_eq!(transport.requests.lock().expect("requests").len(), 1);
+}

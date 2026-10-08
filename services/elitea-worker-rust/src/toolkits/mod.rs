@@ -25,6 +25,48 @@ pub(crate) use direct_runtime::{
 )]
 pub(crate) use elitea_agent_runtime::toolkits::*;
 
+/// Header-name prefixes owned by the platform edge and Main. Toolkit settings
+/// and per-call arguments never set them on an outbound request.
+const RESERVED_PLATFORM_HEADER_PREFIXES: [&str; 2] = ["x-auth-", "x-elitea-"];
+
+/// Whether `name` (compared ASCII case-insensitively) is a platform-owned
+/// header that user-configured toolkit headers must not carry.
+#[must_use]
+pub(crate) fn is_reserved_platform_header(name: &str) -> bool {
+    RESERVED_PLATFORM_HEADER_PREFIXES.iter().any(|prefix| {
+        name.as_bytes()
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
+    })
+}
+
+#[cfg(test)]
+mod reserved_header_tests {
+    use super::is_reserved_platform_header;
+
+    #[test]
+    fn platform_prefixes_match_case_insensitively_on_the_dashed_prefix() {
+        for name in [
+            "x-auth-id",
+            "X-Auth-Type",
+            "X-AUTH-USER-ID",
+            "X-Elitea-Project-Id",
+        ] {
+            assert!(is_reserved_platform_header(name), "{name}");
+        }
+        for name in [
+            "x-authz",
+            "x-auth",
+            "X-Authorization-Hint",
+            "X-Custom",
+            "x-elitea",
+            "",
+        ] {
+            assert!(!is_reserved_platform_header(name), "{name}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod artifact_tests;
 #[cfg(test)]

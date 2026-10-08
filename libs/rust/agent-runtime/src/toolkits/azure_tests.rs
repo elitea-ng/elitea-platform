@@ -586,6 +586,8 @@ fn optional_argument_shapes_and_bounds_are_strict() {
     for invalid in [
         json!({"headers":{"Authorization":"secret"}}),
         json!({"headers":{"Host":"evil.example"}}),
+        json!({"headers":{"X-AUTH-USER-ID":"1"}}),
+        json!({"headers":{"X-Elitea-Project-Id":"1"}}),
         json!({"json":{},"data":"x"}),
         json!({"json":{},"files":{"f":"x"}}),
         json!({"files":{}}),

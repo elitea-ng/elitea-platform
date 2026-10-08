@@ -2634,7 +2634,8 @@ fn insert_dynamic_header(
             | "upgrade"
             | "forwarded"
             | "via"
-    ) || name.as_str().starts_with("proxy-")
+    ) || crate::toolkits::is_reserved_platform_header(name.as_str())
+        || name.as_str().starts_with("proxy-")
         || name.as_str().starts_with("x-forwarded-")
     {
         return Err(invalid_input());

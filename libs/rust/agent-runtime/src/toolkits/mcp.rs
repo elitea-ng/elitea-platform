@@ -1061,18 +1061,19 @@ fn parse_static_headers(
 }
 
 fn reserved_mcp_header(name: &reqwest_mcp::header::HeaderName) -> bool {
-    matches!(
-        name.as_str(),
-        "accept"
-            | "connection"
-            | "content-length"
-            | "content-type"
-            | "host"
-            | "mcp-protocol-version"
-            | "mcp-session-id"
-            | "transfer-encoding"
-            | "upgrade"
-    )
+    super::is_reserved_platform_header(name.as_str())
+        || matches!(
+            name.as_str(),
+            "accept"
+                | "connection"
+                | "content-length"
+                | "content-type"
+                | "host"
+                | "mcp-protocol-version"
+                | "mcp-session-id"
+                | "transfer-encoding"
+                | "upgrade"
+        )
 }
 
 fn parse_endpoint(settings: &Map<String, Value>) -> Result<String, McpMaterializationError> {
