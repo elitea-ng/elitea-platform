@@ -2,8 +2,6 @@
 //!
 //! The binding contract is `docs/split-out-aggregate-contract.md` (section 3).
 //! The node is a pure function of its source value and configuration.
-// Registered by the compiler behind the rehearsal gate (Track A).
-#![cfg_attr(not(test), allow(dead_code))]
 
 use adk_rust::graph::{GraphError, Node, NodeContext, NodeOutput};
 use async_trait::async_trait;
@@ -354,8 +352,9 @@ impl Node for SplitOutNode {
         let value = run(&self.definition, source)
             .map_err(|error| error.into_graph_error(self.definition.id()))?;
         let mut output = NodeOutput::new();
-        for key in &self.definition.output {
-            output = output.with_update(key, value.clone());
+        // `from_raw` admits exactly one output key.
+        if let Some(key) = self.definition.output.first() {
+            output = output.with_update(key, value);
         }
         Ok(output)
     }

@@ -70,6 +70,8 @@ pub(crate) mod resume;
 mod router;
 #[cfg(test)]
 mod routing_tests;
+#[cfg(test)]
+mod shaping_compiler_tests;
 mod split_out;
 #[cfg(test)]
 mod split_out_tests;
