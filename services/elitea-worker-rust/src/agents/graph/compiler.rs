@@ -534,14 +534,12 @@ fn exclusive_transitions(mut graph: StateGraph) -> StateGraph {
                 .get(target.as_str())
                 .is_some_and(|count| *count > 1)
         {
+            let target = std::mem::take(target);
             let route = target.clone();
             *edge = Edge::Conditional {
                 source: std::mem::take(source),
                 router: Arc::new(move |_: &State| route.clone()),
-                targets: HashMap::from([(
-                    target.clone(),
-                    EdgeTarget::Node(std::mem::take(target)),
-                )]),
+                targets: HashMap::from([(target.clone(), EdgeTarget::Node(target))]),
             };
         }
     }

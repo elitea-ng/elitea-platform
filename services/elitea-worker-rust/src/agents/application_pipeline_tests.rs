@@ -1292,6 +1292,74 @@ nodes:
     transition: END
 "#;
 
+const SHARED_NODE_CHILD: &str = r#"
+state: {input: str, messages: list, picked: str, verdict: str}
+entry_point: pick
+nodes:
+  - id: pick
+    type: router
+    condition: "{{ input }}"
+    routes: [left, right]
+    default_output: right
+    input: [input]
+  - id: left
+    type: state_modifier
+    template: "LEFT"
+    output: [picked]
+    transition: finish
+  - id: right
+    type: state_modifier
+    template: "RIGHT"
+    output: [picked]
+    transition: finish
+  - id: finish
+    type: state_modifier
+    template: "{{ picked }} DONE"
+    input: [picked]
+    output: [verdict]
+    transition: END
+"#;
+
+const LOOP_TO_ENTRY_CHILD: &str = r#"
+state: {input: str, messages: list, visited: str, verdict: str}
+entry_point: gate
+nodes:
+  - id: gate
+    type: router
+    condition: "{% if visited %}finish{% else %}mark{% endif %}"
+    routes: [mark, finish]
+    default_output: finish
+    input: [visited]
+  - id: mark
+    type: state_modifier
+    template: "ONCE"
+    output: [visited]
+    transition: gate
+  - id: finish
+    type: state_modifier
+    template: "{{ visited }} {{ input }}"
+    input: [visited, input]
+    output: [verdict]
+    transition: END
+"#;
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_parent_receives_the_result_of_a_saved_child_whose_branches_converge() {
+    for (child, task, expected) in [
+        (SHARED_NODE_CHILD, "left", "LEFT DONE"),
+        (SHARED_NODE_CHILD, "right", "RIGHT DONE"),
+        (LOOP_TO_ENTRY_CHILD, "ship it", "ONCE ship it"),
+    ] {
+        let harness = saved_child_harness(RESPONSE_ONLY_ROOT, child);
+        let result = harness
+            .tool
+            .execute(context(), json!({"task": task}))
+            .await
+            .expect("the parent pipeline must run");
+        assert_eq!(result, json!({"response": expected}));
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn a_parent_receives_the_result_of_a_saved_child_whose_branches_both_end() {
     for (task, expected) in [("left", "LEFT"), ("right", "RIGHT")] {
