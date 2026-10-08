@@ -9,6 +9,7 @@
 //! * [`runner`] — what answers a tool;
 //! * [`native`] — the native runner, over the graph store;
 //! * [`retrieval`] — the read tools over a loaded graph;
+//! * [`investigate`] — the model agent over the graph and its sources;
 //! * [`graph`] — the knowledge graph, with the Python graph's semantics;
 //! * [`store`] — the graph's PostgreSQL storage;
 //! * [`ingest`] — a source's files into the graph;
@@ -24,6 +25,7 @@ pub mod extract;
 pub mod fixture;
 pub mod graph;
 pub mod ingest;
+pub mod investigate;
 pub mod native;
 pub mod retrieval;
 pub mod runner;

@@ -136,8 +136,77 @@ impl NativeRunner {
             "run_ingestion" => self.run_ingestion(key, params, context).await,
             "get_sources_status" => self.sources_status(key, params).await,
             "get_ingestion_status" => self.ingestion_status(key, params).await,
+            "investigate" => self.investigate(key, params, context).await,
             other => self.read(other, family, key, params).await,
         }
+    }
+
+    /// `investigate`: the model agent (`crate::investigate`) over the
+    /// graph's view and its source toolkits.
+    async fn investigate(
+        &self,
+        key: GraphKey,
+        params: &Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        use crate::investigate::{self as agent, Question, SourceToolkit};
+        let Some(question) = Question::from_params(params) else {
+            return Ok(crate::retrieval::answer(agent::missing_question()));
+        };
+        let model_name = text_param(params, &["llm_model", "toolkit_configuration_llm_model"])
+            .map(str::to_owned)
+            .or_else(|| {
+                params
+                    .get("llm_settings")
+                    .and_then(|s| s.get("model_name"))
+                    .and_then(Value::as_str)
+                    .filter(|m| !m.is_empty())
+                    .map(str::to_owned)
+            })
+            .ok_or_else(|| {
+                invalid("no LLM model is configured for this Inventory toolkit; set llm_model in the toolkit configuration")
+            })?;
+        let settings = Self::model_settings(params, &model_name)?;
+        let view = self
+            .views
+            .view(&self.pool, key)
+            .await
+            .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?
+            .unwrap_or_default();
+        let document = sources::status_document(&self.pool, key)
+            .await
+            .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?;
+        let toolkits: Vec<SourceToolkit> = document["sources"]
+            .as_object()
+            .into_iter()
+            .flat_map(|rows| rows.values())
+            .map(|row| SourceToolkit {
+                toolkit_id: row["toolkit_id"].as_str().unwrap_or_default().to_owned(),
+                name: row["toolkit_name"].as_str().unwrap_or_default().to_owned(),
+                kind: row["toolkit_type"].as_str().unwrap_or_default().to_owned(),
+            })
+            .collect();
+        let client = Arc::new(ChatClient::new(self.transport.clone(), settings.clone()));
+        let stop = context.stop_signal();
+        let chat: agent::Chat = {
+            let stop = stop.clone();
+            Arc::new(move |request| {
+                let (client, stop) = (Arc::clone(&client), stop.clone());
+                Box::pin(async move { client.complete(&request, &stop).await })
+            })
+        };
+        let call_source = source_caller(
+            self.transport.http_client().clone(),
+            &settings,
+            key.project_id,
+            model_name,
+        );
+        let result =
+            agent::investigate(&question, &view, &chat, &toolkits, &call_source, &stop).await?;
+        Ok(crate::retrieval::answer(agent::report(
+            &result,
+            json_format(params),
+        )))
     }
 
     /// A read tool over the graph's current view (an empty graph when the
@@ -336,6 +405,72 @@ impl NativeRunner {
         };
         Ok(json!({"success": true, "result": text}))
     }
+}
+
+/// The `test_tool` route as a source-tool caller: `POST
+/// {platform}/api/v2/elitea_core/test_tool/prompt_lib/{project}/{toolkit}`
+/// with the invocation's bearer. The platform reloads the toolkit's own
+/// settings and credentials and applies the user's permissions; the engine
+/// sends only the tool and its arguments.
+fn source_caller(
+    client: reqwest::Client,
+    settings: &ModelSettings,
+    project_id: i64,
+    model: String,
+) -> crate::investigate::SourceCall {
+    let platform = settings
+        .api_base
+        .trim_end_matches('/')
+        .trim_end_matches("/v1")
+        .trim_end_matches("/llm")
+        .to_owned();
+    let bearer = settings.api_key.expose().to_owned();
+    Arc::new(
+        move |toolkit_id: String, tool: String, arguments: Map<String, Value>| {
+            let url = format!(
+                "{platform}/api/v2/elitea_core/test_tool/prompt_lib/{project_id}/{toolkit_id}"
+            );
+            let (client, bearer, model) = (client.clone(), bearer.clone(), model.clone());
+            Box::pin(async move {
+                let body = json!({
+                    "request_id": format!("investigate-{toolkit_id}-{tool}"),
+                    "tool_name": tool,
+                    "tool_params": arguments,
+                    "toolkit_config": {"toolkit_id": toolkit_id},
+                    "llm_model": model,
+                });
+                let response = client
+                    .post(&url)
+                    .bearer_auth(bearer)
+                    .json(&body)
+                    .timeout(std::time::Duration::from_secs(90))
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        EngineError::new(
+                            ErrorType::Runtime,
+                            format!("the source tool call failed: {e}"),
+                        )
+                    })?;
+                let status = response.status().as_u16();
+                let answer: Value = response.json().await.unwrap_or(Value::Null);
+                if answer["ok"] == json!(true) {
+                    return Ok(match &answer["result"] {
+                        Value::String(text) => text.clone(),
+                        Value::Null if answer["truncated"] == json!(true) => {
+                            "The tool's answer was too large to return.".to_owned()
+                        }
+                        other => elitea_engine_core::pyjson::dumps(other),
+                    });
+                }
+                let reason = answer["error"].as_str().unwrap_or("no reason given");
+                Err(EngineError::new(
+                    ErrorType::Runtime,
+                    format!("the source tool answered {status}: {reason}"),
+                ))
+            })
+        },
+    )
 }
 
 /// `_ingestion_report`, from the run's outcome (or its failure).

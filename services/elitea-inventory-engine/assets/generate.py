@@ -52,6 +52,13 @@ constants = module_values(
         "KNOWN_TYPE_PREFIXES",
         "KNOWN_TYPE_SUFFIXES",
         "SIGNIFICANT_ENTITY_TYPES",
+        "INVENTORY_CHAT_SYSTEM_PROMPT",
+        "TOOL_DESCRIPTIONS",
+        "READ_ONLY_PREFIXES",
+        "WRITE_OPERATION_PATTERNS",
+        "DEFAULT_MAX_ITERATIONS",
+        "DEFAULT_LLM_TEMPERATURE",
+        "DEFAULT_LLM_MAX_TOKENS",
     },
 )
 extractors = module_values(
@@ -129,6 +136,15 @@ asset = {
     "known_type_suffixes": list(constants["KNOWN_TYPE_SUFFIXES"]),
     "significant_entity_types": sorted(constants["SIGNIFICANT_ENTITY_TYPES"]),
     "normalize_goldens": goldens,
+    "investigate": {
+        "system_prompt": constants["INVENTORY_CHAT_SYSTEM_PROMPT"],
+        "tool_descriptions": constants["TOOL_DESCRIPTIONS"],
+        "read_only_prefixes": list(constants["READ_ONLY_PREFIXES"]),
+        "write_operation_patterns": list(constants["WRITE_OPERATION_PATTERNS"]),
+        "max_iterations": constants["DEFAULT_MAX_ITERATIONS"],
+        "temperature": constants["DEFAULT_LLM_TEMPERATURE"],
+        "max_tokens": constants["DEFAULT_LLM_MAX_TOKENS"],
+    },
 }
 with open(os.path.join(HERE, "python_inventory.json"), "w", encoding="utf-8") as handle:
     json.dump(asset, handle, indent=1, ensure_ascii=False)
