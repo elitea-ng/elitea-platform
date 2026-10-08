@@ -163,8 +163,11 @@ Authority:
 Main renders. Rust only needs the same functions to build `inputs` and to check its own fixtures. Both languages must
 pass `fixtures/http-action-render-vectors-v1.json`.
 
-Inputs are canonical JSON: keys sorted, no whitespace, UTF-8, strings escaped only for `"`, `\` and control
-characters below U+0020 (`\b \t \n \f \r` short forms, others `\u00xx` lowercase hex).
+Inputs are canonical JSON as defined once in `libs/proto/contracts/fanout-interrupt-decisions-v1.md` §7: keys sorted
+by UTF-8 bytes, no whitespace, exact numbers, UTF-8, strings escaped only for `"`, `\` and control characters below
+U+0020 (`\b \t \n \f \r` short forms, others `\u00xx` lowercase hex), U+2028, U+2029 and `<>&` raw, no trailing
+newline. The conformance test `services/elitea-main/internal/runtimecontracts/schemas_test.go` holds a reference
+writer.
 
 ```json
 {"body": "<json | string | artifact>", "headers": {"x-trace-id": "..."}, "idempotency_key": "...",
@@ -371,7 +374,54 @@ Budgets:
 
 Browser confirmation: deferred to the gate flip. Until then, browser regression of unchanged flows only.
 
-## 16. Schema index
+## 16. Performance, durability, resilience and security
+
+### Performance
+
+Budgets in §15: Main overhead ≤ 15 ms p95 excluding the remote call; 16 concurrent HTTP actions add ≤ 50 ms p95 to
+token reads; inputs ≤ 256 KiB; rendered request ≤ 384 KiB; response ≤ 2 MiB (inline ≤ 512 KiB); ≤ 30 s per call.
+Each action is one Lookup, one Begin, one dispatch and one Commit; no per-chunk writes. The dedicated 32-slot pool
+(≤ 8 per execution) keeps HTTP latency away from token, version and artifact reads (§11).
+
+### Durability
+
+Every crash window and its recovery rule is in §13 (18 cases). The invariant: Begin is durable before the call, a
+`dispatching` row is never dispatched again, and an unknown outcome becomes `uncertain/reconciliation_required`
+for 5b. Cases 1, 3, 4, 5, 10 and 16 are proven on real PostgreSQL, case 1 with a counting server and process loss.
+
+### Resilience
+
+- Bounds: the sizes and timeout above; ≤ 32 allowed query names per rule; header and path segment limits (§6).
+- Typed failures: `policy_denied`, `invalid_input`, `redirect_refused`, 409 non-determinism, 503 with `Retry-After`
+  for pool saturation (retried only when no effect exists).
+- Cancellation and lease loss: the Commit is fenced by the original dispatch claim; a lost lease leaves the row
+  `dispatching` and it becomes `uncertain` on the next Lookup (case 10).
+
+### Security
+
+- **Authority inside the effect transaction.** Begin runs in one transaction that reads the rule (`FOR SHARE`),
+  rechecks that it is enabled and still inside the egress allowlist, rechecks the original actor's live RBAC on
+  `configuration_id`, reads the live credential revision, and inserts the effect row. A concurrent disable or
+  permission removal is ordered before or after it, never interleaved. Identifiers from YAML (`operation`) only
+  select a rule inside the execution's project; the project comes from the trusted execution scope, never from the
+  YAML, the browser or the model.
+- **Rule authoring.** Project admins with the new permission, validated against the egress guard at write time and at
+  dial time (§5).
+- **Input handling.** Strict schemas (`additionalProperties: false`, bounds). The YAML cannot contain a URL, method,
+  credential or templated string. Path values are segment-encoded, query names must be on the rule's list,
+  restricted headers and CR/LF/NUL are refused, `.`/`..` segments are refused (§6).
+- **Egress.** Only through the hardened guard: no redirects (transport-only constructor), private, CGNAT, metadata and
+  NAT64 ranges blocked including IPv4-mapped forms, `Proxy = nil`, HTTPS only with TLS verified against the URL host,
+  DNS resolved and filtered before dialing the IP literal (§10).
+- **Credentials by reference.** `configuration_id` is resolved server-side by Main; credentials never appear in YAML,
+  invocation, receipts, events or logs.
+- **No secrets or data in logs.** Logs and spans carry rule name, status class, sizes, digests and durations; never
+  URLs with query strings, headers, request or response bodies, or credentials.
+- **Effects.** No external call is repeated without a durable receipt (§8).
+- **Supply chain.** No new dependency. Main uses the standard library HTTP stack; the Worker reuses its existing
+  `encode_component` logic only as a fixture.
+
+## 17. Schema index
 
 | Schema `$id` | File | Purpose |
 | --- | --- | --- |
@@ -381,7 +431,7 @@ Browser confirmation: deferred to the gate flip. Until then, browser regression 
 | `elitea.runtime.http-action-receipt.v2` | `http-action-receipt.schema.json` | Mirror of the existing Go receipt |
 | `elitea.runtime.http-action-render-vectors.v1` | `http-action-render-vectors.schema.json` | Go/Rust render fixture shape |
 
-## 17. Rejected alternatives
+## 18. Rejected alternatives
 
 - Worker renders the full request and Main verifies it: two renderers can drift.
 - String or Jinja URL templating in YAML: injection risk.

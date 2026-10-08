@@ -144,7 +144,59 @@ without a marker table is refused at rule-write time, so this case applies only 
 - 4 connections per execution is enforced under concurrency.
 - Real PostgreSQL 18 and MySQL runs in CI.
 
-## 12. Rejected alternatives
+## 12. Performance, durability, resilience and security
+
+Outline-level; numbers marked *proposal* are confirmed in the Wave 3 design.
+
+### Performance
+
+| Budget | Limit |
+|---|---|
+| Statement timeout / lock timeout | 30 s / 5 s |
+| Rows / output | ≤ 1,000 rows / ≤ 512 KiB projected output |
+| Parameters | ≤ 100, each ≤ 64 KiB |
+| Connections | ≤ 4 per execution |
+| Main overhead per action (intent + receipt), excluding the statement | ≤ 15 ms p95 (*proposal*, same as HTTP) |
+
+One intent write (Begin) and one receipt write (Commit) per action; no per-row writes.
+
+### Durability
+
+| Window | Durable state | Recovery rule |
+|---|---|---|
+| Crash before Begin | Nothing | Retry; Begin inserts the intent |
+| Crash after Begin, before the statement | Intent `dispatching` with the session id | Marker absent after the session is gone → `verified_no_effect`; retry is allowed |
+| Crash during or after a write, before Commit | Intent `dispatching` | Wait until the recorded backend pid / `CONNECTION_ID()` is gone, read the marker: present → committed without result (operator resumes through 5b), absent → `verified_no_effect` |
+| Read action crash | Nothing external | Safe to retry: reads run in a read-only transaction |
+| Write rule without a marker table | — | Refused in V1 (no unknown-outcome proof) |
+
+### Resilience
+
+- Every bound above is enforced before execution (parameter count and size, single statement, placeholder count) or by
+  the database (timeouts, read-only transaction).
+- Typed failures: `policy_denied`, `invalid_input`, `statement_timeout`, `uncertain/reconciliation_required`.
+- Cancellation cancels the statement; lease loss leaves the intent `dispatching` for reconciliation, never a blind
+  retry.
+
+### Security
+
+- **Authority inside the effect transaction.** The intent row is written in the same Main transaction that rechecks
+  the rule (enabled, mode, statement digest) and the original actor's live RBAC on the configuration. Fail closed.
+- **Parameterized only.** The statement is frozen at version freeze and authored by a project admin under the new
+  permission; parameters are typed and bound only through sqlx `.bind()`; no string-built SQL; nothing from model
+  output ever becomes SQL text (the legacy raw-SQL tool is not ported).
+- **Least privilege.** Reads run in `START TRANSACTION READ ONLY`, and Main refuses DML text in read rules; writes
+  need a write rule and a marker table.
+- **Egress and TLS.** Database hosts must be inside the operator egress allowlist; resolved addresses are checked
+  before connecting; TLS `VerifyFull`/`VerifyIdentity` only. PostgreSQL activation waits until sqlx's ambient
+  TLS-file seam is removed (§10).
+- **Credentials by reference.** Connection credentials come from the configuration, resolved server-side; never in
+  YAML, events or logs.
+- **No data in logs.** Logs carry rule name, row count, byte count, duration and digests; never statement parameters,
+  rows or connection strings.
+- **Supply chain.** Reuses the Worker's existing `sqlx` dependency; no new crate.
+
+## 13. Rejected alternatives
 
 - Main-executed Go drivers: duplicates dialect semantics and keeps customer database connections in Main.
 - String interpolation, multiple statements, transactions in V1.

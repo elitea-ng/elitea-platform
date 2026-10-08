@@ -194,7 +194,7 @@ Rules:
   (`credential_ref`), never a token. ASSUMPTION: the existing MCP token store can return a short opaque reference;
   Wave 2 confirms its API.
 - Cancellation and supersede run in the same transaction as the stop/regenerate (pattern
-  `services/elitea-main/internal/db/queries/agent_cancel.sql:128`). A dead fence then blocks any late ACK.
+  `services/elitea-main/internal/db/queries/agent_cancel.sql:53-55`, the `cancelled` CTE). A dead fence then blocks any late ACK.
 
 ## 6. Public decision API
 
@@ -341,7 +341,7 @@ the pending fan-out node and fetches.
   `CompilerAdmittedNodeTypes`). The Main API flag is off in production.
 - Until Wave 2 moves root pauses, the existing root path (`meta.hitl_interrupts`, `ResumeCurrentAgentHITL`, complete
   set) is unchanged. When it moves, the complete-set checks (`continue.go:409-432`,
-  `internal/db/queries/agent_chat.sql:1889,1893,1917`) are removed in the same change; there is no period with two
+  `internal/db/queries/agent_chat.sql:2145,2153,2368,2380`) are removed in the same change; there is no period with two
   authorities for one response.
 - Deploy Main before Worker. An old Worker never raises `agent_interrupt_pending`, so the ledger stays empty for its
   executions.
@@ -359,7 +359,60 @@ the pending fan-out node and fetches.
 Fixture names: `<stem>-v<N>[.<variant>].json` (valid) and `<stem>-v<N>.invalid.<reason>.json` (one defect each).
 Wave 2 Worker and Main tests must load the same fixtures instead of copying them.
 
-## 12. Open points for the reviewer
+## 12. Performance, durability, resilience and security
+
+### Performance
+
+| Budget | Limit |
+|---|---|
+| Decision POST | p95 ≤ 150 ms: one transaction (response row lock, card row CAS, audit insert, revision bump, and the wake continuation plus outbox row only when parked) |
+| GET list | ≤ 16 cards × ≤ 32 KiB |
+| Private fetch | 0 calls while no card is open; ≤ 1/s otherwise (5 s at idle backoff); ≤ 16 entries × ≤ 64 KiB |
+| Frames per card | 1 `agent_interrupt_pending` + 1 `agent_hitl_resolved`; lifecycle frames are never coalesced but are O(members), not O(tokens) |
+| Ledger rows | 1 row per card + 1 audit row per transition; 0 parent checkpoint rows per card |
+| Live pickup / parked wake / other tab | p95 ≤ 2 s / ≤ 5 s / ≤ 3 s |
+
+### Durability
+
+| Window | Durable state | Recovery rule |
+|---|---|---|
+| Card frame accepted, ledger insert | Same transaction as frame acceptance | A replayed frame is a byte-identical no-op; different bytes under the key are a typed fault |
+| Decision committed | Row `DECIDED`, revision and (if parked) wake continuation + outbox in one transaction | Delivered by the next live fetch, the restore fetch, or the wake continuation |
+| Fetched, Worker died before apply or ACK | Row `DECIDED` | Refetched under the new claim; the child checkpoint decides apply vs already-applied (runtime design §8) |
+| ACK sent, response lost | Row `CONSUMED`/`SUPERSEDED` with exact ACK bytes | Byte-identical replay returns `replay:true`; a conflicting replay is 409 |
+| Stop, regenerate, new turn | Open rows → `CANCELLED`/`SUPERSEDED` in the stop transaction | The dead fence blocks a late ACK |
+| Park vs decide race | Response row lock + `decision_revision` + one-active-continuation index | Exactly one continuation |
+
+Rows are keyed by the root response, so they survive continuation executions and Worker replacement.
+
+### Resilience
+
+- Bounds: 16 open cards per response; decision body ≤ 8 KiB; card ≤ 32 KiB; fetch entry ≤ 64 KiB; ≤ 16 entries per
+  fetch; hierarchy ≤ 3 tiers; ordinal ≤ 64; every string, array and number in every schema is bounded and every object
+  is closed (§11).
+- Private calls are one bounded attempt, no redirects, no automatic retry. The public API returns typed errors
+  (400/404/409) and never a partial state.
+- The Main API is behind a flag that is off in production until Wave 2 acceptance.
+
+### Security
+
+- **Authority inside the transaction.** The POST locks the response and card rows, then rechecks the original actor's
+  ownership and membership, the active user and project, and RBAC (`models.chat.messages.create`) before the CAS. GET
+  uses `models.applications.task.get`. The route's `responseMessageID` selects the response only after
+  authorization; `interruptKey` selects a card inside that response and grants nothing by itself. Fail closed.
+- **Private routes.** mTLS workload certificate, claim id and fence; `RUNNING` claims only; authority repeated with the
+  DB clock under the job lock; the private `frontier` and `decided_by` never leave Main.
+- **Consume-once.** CAS on `expected_revision`, `request_id` replay with byte equality, 409 otherwise; ACK binds
+  `request_id`, `revision` and `decision_sha256`.
+- **No secrets.** Decision bodies never carry tokens (`credential_ref` only, resolved server-side for the original
+  actor); `agent_hitl_resolved` never carries the value; logs and audit rows carry keys, states, actor/claim ids and
+  digests, never values, display text or tool arguments. Nothing sensitive goes into URLs: path parameters are opaque
+  ids and digests, and there are no query strings.
+- **Rejection is never permission.** `reject` and auth `skip` are recorded and applied as such.
+- **Supply chain.** The conformance test uses `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3, already a direct
+  dependency of `services/elitea-main`. No new dependency.
+
+## 13. Open points for the reviewer
 
 1. Coordinator cards keep the interrupt `kind`; "kind empty" is read as `fanout_v1` null (section 1).
 2. The open-card cap counts `PENDING` and `DECIDED` (section 5).
