@@ -29,6 +29,9 @@ mod code_tests;
 pub(crate) mod compiler;
 #[cfg(test)]
 mod compiler_tests;
+mod data_shaping;
+#[cfg(test)]
+mod data_shaping_tests;
 mod decision;
 mod direct_tool;
 #[cfg(test)]
