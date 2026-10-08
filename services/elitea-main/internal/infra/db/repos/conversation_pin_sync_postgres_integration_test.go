@@ -14,6 +14,7 @@ package repos
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -27,6 +28,7 @@ import (
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/changesync"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
 type pinSyncPage struct {
@@ -190,8 +192,13 @@ func TestConversationPinReachesTheOtherDeviceThroughTheDelta(t *testing.T) {
 	// nothing is stamped).
 	backdate(t, pool, "p_1.chat_conversations", private, 30*time.Second)
 	before := syncAt(t, pool, "p_1.chat_conversations", private)
-	if err := pins.Pin(asUser("9"), "1", "conversation", numericID); err == nil {
-		t.Fatal("user 9 pinned a private conversation it cannot see")
+	// The refusal must be the access rule's 404, not any error: a 500 from
+	// the upsert, a 403 before the predicate runs, or a failing authority
+	// load would all leave the old `err == nil` check green.
+	refused := pins.Pin(asUser("9"), "1", "conversation", numericID)
+	var refusal *apierr.APIError
+	if !errors.As(refused, &refusal) || refusal.Status != http.StatusNotFound {
+		t.Fatalf("user 9 pinning a private conversation it cannot see = %v, want the 404 access refusal", refused)
 	}
 	if after := syncAt(t, pool, "p_1.chat_conversations", private); !after.Equal(before) {
 		t.Fatalf("a refused pin stamped the conversation: %v -> %v", before, after)
