@@ -540,7 +540,7 @@ func TestGovernanceBodyBound(t *testing.T) {
 	}{
 		{"create", http.MethodPost, "/governance", `{"type":"budget","name":"n","data":{"pad":"`, `"}}`},
 		{"update", http.MethodPut, "/governance/abc", `{"type":"budget","name":"n","data":{"pad":"`, `"}}`},
-		{"validate-cel", http.MethodPost, "/governance/validate-cel", `{"cel":"provider == \"openai\"","pad":"`, `"}`},
+		{"validate-cel", http.MethodPost, "/governance/validate-cel", `{"cel":"provider == \"`, `\""}`},
 	}
 	for _, rt := range routes {
 		t.Run(rt.name+"/at limit", func(t *testing.T) {
@@ -617,5 +617,32 @@ func TestCreateRoutingRuleOverCELCap(t *testing.T) {
 	}
 	if q.lastSQL != "" {
 		t.Errorf("a refused rule reached the database: %q", q.lastSQL)
+	}
+}
+
+func TestGovernanceBodyStrictDecode(t *testing.T) {
+	cases := []struct {
+		name, target, body string
+		want               int
+	}{
+		{"second value", "/governance", `{"type":"budget","name":"n"}{"type":"budget","name":"m"}`, http.StatusBadRequest},
+		{"trailing garbage", "/governance", `{"type":"budget","name":"n"} garbage`, http.StatusBadRequest},
+		{"unknown field", "/governance", `{"type":"budget","name":"n","enabeld":true}`, http.StatusBadRequest},
+		{"unknown cel field", "/governance/validate-cel", `{"cel":"provider == \"openai\"","expr":"x"}`, http.StatusBadRequest},
+		{"trailing whitespace", "/governance", "{\"type\":\"budget\",\"name\":\"n\"}\n", http.StatusOK},
+		{"valid prefix then whitespace past the limit", "/governance",
+			`{"type":"budget","name":"n"}` + strings.Repeat(" ", maxGovernanceRequestBytes), http.StatusRequestEntityTooLarge},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &fakeQuerier{rowResult: okRow("abc", "budget", "n", nil, true)}
+			rr := doJSON(NewGovernanceHandler(q), http.MethodPost, tc.target, tc.body)
+			if rr.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body=%s", rr.Code, tc.want, rr.Body.String())
+			}
+			if tc.want != http.StatusOK && q.lastSQL != "" {
+				t.Errorf("a refused body reached the database: %q", q.lastSQL)
+			}
+		})
 	}
 }

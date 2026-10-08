@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net/http"
 	"strings"
@@ -219,20 +220,28 @@ func (h *GovernanceHandler) ValidateCEL(w http.ResponseWriter, r *http.Request) 
 }
 
 // decodeGovernanceJSON decodes a body of at most maxGovernanceRequestBytes into
-// dst. An oversized body is a 413 and a malformed one a 400; either way it
-// writes the response and returns false before any database work starts.
+// dst. The body must be exactly one JSON value with no unknown top-level field:
+// a misspelt key or a second value would otherwise be dropped silently. An
+// oversized body is a 413 and any other refusal a 400; either way it writes the
+// response and returns false before any database work starts.
 func decodeGovernanceJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxGovernanceRequestBytes)
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		var maxBytesError *http.MaxBytesError
-		if errors.As(err, &maxBytesError) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
-			return false
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	err := decoder.Decode(dst)
+	if err == nil {
+		var trailing json.RawMessage
+		if err = decoder.Decode(&trailing); errors.Is(err, io.EOF) {
+			return true
 		}
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	}
+	var maxBytesError *http.MaxBytesError
+	if errors.As(err, &maxBytesError) {
+		writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
 		return false
 	}
-	return true
+	writeError(w, http.StatusBadRequest, "invalid request body")
+	return false
 }
 
 // decodeGovernanceBody decodes a request body into a GovernanceRow, writing a

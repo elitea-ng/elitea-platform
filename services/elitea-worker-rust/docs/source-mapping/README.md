@@ -427,3 +427,4 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 
 - [Toolkit request recovery](toolkit-request-recovery.md) records browser recovery before execution ID receipt and one-call evidence.
 - [Deferred MCP elicitation](external-mcp-elicitation-deferred.md) records the later client approval option and its authority boundary.
+- [Governance body bounds](governance-body-bounds-20261008.md) records the 256 KiB governance body limit, 413 refusal, strict decode, and 8 KiB routing CEL cap.
