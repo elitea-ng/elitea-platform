@@ -805,8 +805,17 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	var conv Conversation
 	name, err := conversationNameFromBody(body)
 	if err != nil {
-		apierr.Write(w, err)
-		return
+		// A name identical to the stored one is not a rename. Create stores
+		// any string (a first message with a newline, a name past the rename
+		// limit), and the web's Make public / Make private echo the stored
+		// name with `is_private`; refusing that echo would block a valid
+		// privacy change over a name the server itself accepted. Only the
+		// refusal path pays for the extra read.
+		if !h.statesStoredName(r, projectID, conversationID, body) {
+			apierr.Write(w, err)
+			return
+		}
+		name = ""
 	}
 	conv.Name = name
 	if folderID, exists := body["folder_id"]; exists {
@@ -851,6 +860,20 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// statesStoredName reports whether the body's `name` is exactly the name the
+// conversation already has, so an echo of it is no rename at all.
+func (h *Handler) statesStoredName(r *http.Request, projectID, conversationID string, body map[string]any) bool {
+	stated, ok := body["name"].(string)
+	if !ok {
+		return false
+	}
+	current, err := h.repo.Get(r.Context(), projectID, conversationID)
+	if err != nil {
+		return false
+	}
+	return current.Name == stated
 }
 
 // MaxConversationNameLength is the longest name a rename stores, in

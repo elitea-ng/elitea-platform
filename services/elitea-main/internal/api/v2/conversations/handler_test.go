@@ -2098,6 +2098,9 @@ func TestUpdate_ValidatesTheName(t *testing.T) {
 			called := false
 			var stored string
 			repo := &mockRepo{
+				getFn: func(_ context.Context, _, conversationID string) (conversations.Conversation, error) {
+					return conversations.Conversation{ID: conversationID, Name: "Old title"}, nil
+				},
 				updateFn: func(_ context.Context, _, conversationID string, conv conversations.Conversation) (conversations.Conversation, error) {
 					called = true
 					stored = conv.Name
@@ -2127,5 +2130,73 @@ func TestUpdate_ValidatesTheName(t *testing.T) {
 				t.Fatalf("stored name = %q, want %q", stored, tc.wantName)
 			}
 		})
+	}
+}
+
+// TestUpdate_EchoedStoredNameIsNotValidated is the regression for review F1
+// on PR #1139. Create stores any string as the name (a first message with a
+// newline, a name past the rename limit, repeated "(copy)"), and the web's
+// Make public / Make private PUTs `{name: <stored name>, is_private}`. A name
+// identical to the stored one is not a rename, so the rename rules must not
+// refuse it: the privacy change is written and the name is left alone.
+func TestUpdate_EchoedStoredNameIsNotValidated(t *testing.T) {
+	cases := map[string]string{
+		"a newline":      "Hi\nplease summarise",
+		"too long":       strings.Repeat("n", conversations.MaxConversationNameLength+40),
+		"blank":          "   ",
+		"a vertical tab": "one\vtwo",
+	}
+	for label, storedName := range cases {
+		t.Run(label, func(t *testing.T) {
+			var got *conversations.Conversation
+			repo := &mockRepo{
+				getFn: func(_ context.Context, _, conversationID string) (conversations.Conversation, error) {
+					return conversations.Conversation{ID: conversationID, Name: storedName}, nil
+				},
+				updateFn: func(_ context.Context, _, conversationID string, conv conversations.Conversation) (conversations.Conversation, error) {
+					got = &conv
+					conv.ID = conversationID
+					return conv, nil
+				},
+			}
+			router := newRouter(conversations.NewHandler(repo))
+			body, _ := json.Marshal(map[string]any{"name": storedName, "is_private": false})
+			req := httptest.NewRequest(http.MethodPut, "/projects/7/conversations/5", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", w.Code, w.Body.String())
+			}
+			if got == nil {
+				t.Fatal("the privacy change never reached the repository")
+			}
+			if got.Name != "" {
+				t.Fatalf("repository got name %q, want no rename", got.Name)
+			}
+			if got.IsPrivate == nil || *got.IsPrivate {
+				t.Fatalf("is_private = %v, want false written", got.IsPrivate)
+			}
+		})
+	}
+
+	// A different invalid name is still refused, even though the stored
+	// name is itself invalid.
+	repo := &mockRepo{
+		getFn: func(_ context.Context, _, conversationID string) (conversations.Conversation, error) {
+			return conversations.Conversation{ID: conversationID, Name: "a\nb"}, nil
+		},
+		updateFn: func(_ context.Context, _, _ string, _ conversations.Conversation) (conversations.Conversation, error) {
+			t.Fatal("a changed invalid name reached the repository")
+			return conversations.Conversation{}, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+	req := httptest.NewRequest(http.MethodPut, "/projects/7/conversations/5", strings.NewReader(`{"name": "a\nc"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("changed invalid name: status = %d, want 400", w.Code)
 	}
 }
