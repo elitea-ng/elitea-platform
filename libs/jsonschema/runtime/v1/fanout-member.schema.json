@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-member.v1",
+  "title": "Fan-out member metadata (fanout_v1)",
+  "description": "Additional grouping and counter metadata for one Parallel branch or Map item. It never creates a visual container; hierarchy comes from parent_agent_*.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "node",
+    "activation",
+    "member",
+    "ordinal",
+    "total"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "parallel",
+        "map"
+      ]
+    },
+    "node": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+    },
+    "activation": {
+      "type": "string",
+      "minLength": 16,
+      "maxLength": 16,
+      "pattern": "^[0-9a-f]{16}$"
+    },
+    "member": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+    },
+    "ordinal": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 64
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "parallel"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "ordinal": {
+            "maximum": 16
+          },
+          "total": {
+            "maximum": 16
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "map"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "member": {
+            "pattern": "^(0|[1-9][0-9]?)$",
+            "maxLength": 2
+          }
+        }
+      }
+    }
+  ]
+}

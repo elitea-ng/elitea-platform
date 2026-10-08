@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-parked.v1",
+  "title": "Parked terminal frame metadata",
+  "description": "response_metadata.fanout_parked_v1 on the terminal frame of an execution that parked because nothing could run. Web reconciles from it and never creates cards from it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "decision_revision_seen",
+    "pending"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.fanout-parked.v1"
+    },
+    "decision_revision_seen": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "pending": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "interrupt_key",
+          "interrupt_id"
+        ],
+        "properties": {
+          "interrupt_key": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "not": {
+              "const": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+          },
+          "interrupt_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+          }
+        }
+      }
+    }
+  }
+}

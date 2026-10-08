@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-interrupt-key-vectors.v1",
+  "title": "interrupt_key and member call_id test vectors",
+  "description": "Cross-language vectors for the Worker-minted interrupt_key and the fan-out member tier call_id.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "interrupt_keys",
+    "member_call_ids"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.fanout-interrupt-key-vectors.v1"
+    },
+    "interrupt_keys": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "inputs",
+          "preimage_hex",
+          "interrupt_key"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+          },
+          "inputs": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "root_thread",
+              "fanout_node_id",
+              "step",
+              "config_digest",
+              "ordinal",
+              "child_thread",
+              "child_paused_checkpoint_id",
+              "interrupt_id",
+              "tool_call_id"
+            ],
+            "properties": {
+              "root_thread": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+              },
+              "fanout_node_id": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9_.:-]{0,128}$"
+              },
+              "step": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9223372036854775807
+              },
+              "config_digest": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 64,
+                "pattern": "^([0-9a-f]{64})?$"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 64
+              },
+              "child_thread": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+              },
+              "child_paused_checkpoint_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+              },
+              "interrupt_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+              },
+              "tool_call_id": {
+                "type": "string",
+                "minLength": 0,
+                "maxLength": 512,
+                "pattern": "^[^\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]*$"
+              }
+            }
+          },
+          "preimage_hex": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 8192,
+            "pattern": "^([0-9a-f]{2})+$"
+          },
+          "interrupt_key": {
+            "type": "string",
+            "minLength": 64,
+            "maxLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "not": {
+              "const": "0000000000000000000000000000000000000000000000000000000000000000"
+            }
+          }
+        }
+      }
+    },
+    "member_call_ids": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "child_thread",
+          "call_id"
+        ],
+        "properties": {
+          "child_thread": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+          },
+          "call_id": {
+            "type": "string",
+            "minLength": 68,
+            "maxLength": 68,
+            "pattern": "^fo1_[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  }
+}

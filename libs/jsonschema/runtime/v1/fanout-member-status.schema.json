@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-member-status.v1",
+  "title": "agent_fanout_member frame metadata",
+  "description": "Lifecycle frame per member, sent immediately (not coalesced). start is repeated when a paused member resumes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "status",
+    "fanout_v1",
+    "open_interrupts",
+    "parent_agent_name",
+    "parent_agent_call_id",
+    "parent_agent_path"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.fanout-member-status.v1"
+    },
+    "status": {
+      "enum": [
+        "start",
+        "end",
+        "paused",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "fanout_v1": {
+      "$ref": "elitea.pipeline.fanout-member.v1"
+    },
+    "open_interrupts": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 16
+    },
+    "parent_agent_name": {
+      "$ref": "elitea.pipeline.fanout-hierarchy.v1#/properties/parent_agent_name"
+    },
+    "parent_agent_call_id": {
+      "$ref": "elitea.pipeline.fanout-hierarchy.v1#/properties/parent_agent_call_id"
+    },
+    "parent_agent_path": {
+      "$ref": "elitea.pipeline.fanout-hierarchy.v1#/properties/parent_agent_path"
+    }
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "parent_agent_name": {
+              "type": "null"
+            },
+            "parent_agent_call_id": {
+              "type": "null"
+            },
+            "parent_agent_path": {
+              "maxItems": 0
+            }
+          }
+        },
+        {
+          "properties": {
+            "parent_agent_name": {
+              "type": "string"
+            },
+            "parent_agent_call_id": {
+              "type": "string"
+            },
+            "parent_agent_path": {
+              "minItems": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "properties": {
+        "parent_agent_path": {
+          "minItems": 1
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "paused"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "open_interrupts": {
+            "minimum": 1
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "open_interrupts": {
+            "maximum": 0
+          }
+        }
+      }
+    }
+  ]
+}

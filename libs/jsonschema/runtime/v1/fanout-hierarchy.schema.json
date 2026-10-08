@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-hierarchy.v1",
+  "title": "Existing sub-agent hierarchy fields",
+  "description": "The existing parent_agent_* contract every member-scoped frame carries. Coordinator scope is null/null/[]. A fan-out member adds one tier whose call_id is derived from the frozen child identity and whose sibling_ordinal is the 1-based member ordinal.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "parent_agent_name",
+    "parent_agent_call_id",
+    "parent_agent_path"
+  ],
+  "properties": {
+    "parent_agent_name": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "parent_agent_call_id": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "parent_agent_path": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "call_id"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+          },
+          "call_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^[^\\x00-\\x1f\\x7f-\\x9f\u2028\u2029]+$"
+          },
+          "sibling_ordinal": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          }
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "parent_agent_name": {
+          "type": "null"
+        },
+        "parent_agent_call_id": {
+          "type": "null"
+        },
+        "parent_agent_path": {
+          "maxItems": 0
+        }
+      }
+    },
+    {
+      "properties": {
+        "parent_agent_name": {
+          "type": "string"
+        },
+        "parent_agent_call_id": {
+          "type": "string"
+        },
+        "parent_agent_path": {
+          "minItems": 1
+        }
+      }
+    }
+  ]
+}
