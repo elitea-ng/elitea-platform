@@ -101,8 +101,8 @@ ARG CARGO_BUILD_JOBS
 #
 # They were simply not working: see the 391 KB restore recorded in that
 # action's policy step. With the mount entry real, a pull request that touches
-# only src/ recompiles this crate and relinks it, instead of building all 418
-# crates from an empty registry.
+# only src/ recompiles the local crates (this one and vendor/*) and relinks,
+# instead of building all 418 crates from an empty registry.
 #
 # ── EVERY LOCAL CRATE IS REBUILT; ONLY REGISTRY CRATES COME FROM THE CACHE ──
 #

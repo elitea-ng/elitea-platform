@@ -42,17 +42,23 @@ can say "unchanged" for a unit last compiled from other content.
 ## Tests
 
 `scripts/contract/test_cargo_target_cache_freshness.py`: 3 tests, 0 skips. CI
-`ci-python` collects every `scripts/contract/test_*.py`, so no workflow changes.
+`ci-python` collects every `scripts/contract/test_*.py`. Its `pull_request`
+path filter does not include Containerfiles, so a PR that changes only a
+Containerfile does not run this gate (see follow-ups). No workflow was changed.
 
-- Every Containerfile/Dockerfile in the repository that builds with
-  `CARGO_TARGET_DIR` on a cache mount must use `sharing=locked` and touch
-  `/src` before the build.
+- Every Containerfile/Dockerfile in the repository that runs `cargo build`
+  with a cache mount other than cargo's registry and git caches must use
+  `sharing=locked` and touch `/src` before the build. This holds however the
+  target directory is named: inline or `ENV CARGO_TARGET_DIR`, `--target-dir`,
+  or the default `./target`.
 - The three named Containerfiles must contain the expected number of such
   builds, so a rename fails the test instead of making it pass vacuously.
-- The checker is shown to reject an unlocked mount, a missing touch, and a
-  touch placed after the build.
+- The checker is shown to reject an unlocked mount, a missing touch, a touch
+  placed after the build, and each alternative way of naming the target
+  directory.
 
-Red/green: against origin/main's worker Containerfile, 2 of the 3 tests fail.
+Red/green: against origin/main's worker, engine or code-runner Containerfile,
+2 of the 3 tests fail.
 With the fix, all 3 pass. `docker buildx build --call=check` reports no
 warnings for any of the three Containerfiles.
 
@@ -61,8 +67,8 @@ warnings for any of the three Containerfiles.
 - Mechanism: the cache mounts are kept, and only local crates are recompiled
   (Containerfile `RUN` steps above).
 - Measured (code runner, isolated builder, cache already warm): the fixed build
-  compiled only `elitea-code-runner` in 22 s. All 71 other packages came from
-  the cache.
+  compiled only `elitea-code-runner` in 22 s. No dependency was recompiled
+  (the first build of the run logged 89 `Compiling` lines).
 - Cost: a build that reruns the step now also recompiles unchanged local path
   crates. These are the worker's `vendor/adk-*` and the engine's
   `libs/rust/*`. A context with no changes still hits the BuildKit layer cache
@@ -122,5 +128,7 @@ No browser evidence: there is no runtime or UI behaviour to observe.
 ## Follow-ups
 
 - Rerun the worker-image proof on a host with free memory, or in CI.
+- Add Rust Containerfiles to a workflow path filter that runs this gate. This
+  needs a CI workflow change, which was out of scope here.
 - Content-based freshness (`-Zchecksum-freshness`) would allow unchanged local
   crates to be reused once it is stable in cargo.
