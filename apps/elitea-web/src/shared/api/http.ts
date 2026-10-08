@@ -127,6 +127,9 @@ export interface HttpClient {
   delete<T>(path: string, options?: HttpRequestOptions): Promise<HttpResult<T>>;
 }
 
+import { isPreEncodedBody, serializeBody } from './httpBody';
+import { applyAuthHeaders, devBearer, judgeNativeResponse, requestInit } from './httpNative';
+import { getNativeTransport, type NativeTransport } from './nativeTransport';
 import {
   credentialRefusalCode,
   needsReauth,
@@ -169,41 +172,6 @@ function buildUrl(base: string, path: string, query?: HttpRequestOptions['query'
   return url.toString();
 }
 
-/** True for the `BodyInit` variants `fetch` already knows how to send verbatim, with their own Content-Type — JSON-stringifying any of these silently discards the payload (`JSON.stringify(new FormData())` is `"{}"`, no throw). */
-function isPreEncodedBody(body: unknown): body is FormData | Blob | URLSearchParams | ArrayBuffer {
-  return body instanceof FormData || body instanceof Blob || body instanceof URLSearchParams || body instanceof ArrayBuffer;
-}
-
-/**
- * BUG FIX, found while porting Wave-2 unit C1 (chat model/store): this used
- * to `JSON.stringify` every non-string body unconditionally, including
- * `FormData` — `JSON.stringify(new FormData())` returns `"{}"` (FormData has
- * no enumerable own properties), so a multipart upload's real payload was
- * silently replaced with an empty JSON object and no error was ever thrown.
- * Reproduced live: `shared/api/generated/artifacts/artifacts.ts`'s
- * `createArtifact` and `shared/api/generated/applications/applications.ts`'s
- * `uploadApplicationIcon` both build a `FormData` and pass it straight into
- * `eliteaFetch({ body: formData })` — both were silently sending an empty
- * body to the server. `FormData`/`Blob`/`URLSearchParams`/`ArrayBuffer` are
- * passed through unchanged now; `prepare()` below also stops forcing
- * `Content-Type: application/json` onto them, so `fetch` sets its own
- * (for `FormData`, `multipart/form-data` with the correct boundary).
- */
-function serializeBody(method: HttpMethod, body: unknown, url: string): string | FormData | Blob | URLSearchParams | ArrayBuffer | undefined {
-  if (body === undefined) return undefined;
-  if (method === 'GET' || method === 'HEAD') {
-    throw new TypeError(`http: ${method} ${url} cannot carry a request body`);
-  }
-  if (typeof body === 'string') return body;
-  if (isPreEncodedBody(body)) return body;
-  try {
-    return JSON.stringify(body);
-  } catch (cause) {
-    // Programmer error — rethrown with context (§3.6).
-    throw new TypeError(`http: request body for ${method} ${url} is not JSON-serializable`, { cause });
-  }
-}
-
 /** The base URL with its trailing `/api/v2` removed: the root that `/llm` and `/api/v2` share. A path prefix before `/api/v2` stays. */
 function siblingRoot(base: URL): string {
   return base.origin + base.pathname.replace(/(\/api\/v2)?\/?$/, '');
@@ -214,7 +182,15 @@ interface PreparedRequest {
   init: RequestInit;
 }
 
-function prepare(cfg: HttpConfig, credentials: RequestCredentials, method: HttpMethod, path: string, options: HttpRequestOptions): PreparedRequest {
+function prepare(
+  cfg: HttpConfig,
+  credentials: RequestCredentials,
+  method: HttpMethod,
+  path: string,
+  options: HttpRequestOptions,
+  bearer: string | undefined,
+  native: NativeTransport | undefined,
+): PreparedRequest {
   const base = new URL(cfg.baseUrl, window.location.origin);
   const url = buildUrl(options.originRoot === true ? siblingRoot(base) : base.toString(), path, options.query);
   const headers = new Headers(options.headers);
@@ -223,16 +199,13 @@ function prepare(cfg: HttpConfig, credentials: RequestCredentials, method: HttpM
     headers.set('Content-Type', 'application/json');
   }
   if (cfg.tracingEnabled === true) headers.set('traceparent', generateTraceparent());
-  // Behaviour 6: statically eliminated from production bundles — Vite
-  // replaces `import.meta.env.DEV` with `false` there, so no dev-token code
-  // path can exist outside dev builds (V4 proves this with a bundle grep).
+  // Behaviour 6: the dev token is resolved in `httpNative.resolveBearer`,
+  // statically eliminated from production bundles (V4 greps for it).
   if (import.meta.env.DEV) {
-    if (cfg.devToken !== undefined && cfg.devToken !== '') {
-      headers.set('Authorization', `Bearer ${cfg.devToken}`);
-    }
     headers.set('Cache-Control', 'no-cache'); // parity: eliteaApi.js:63
   }
-  const init: RequestInit = { method, headers, credentials };
+  applyAuthHeaders(headers, bearer, native);
+  const init = requestInit(method, headers, credentials, native);
   if (body !== undefined) init.body = body;
   if (options.signal !== undefined) init.signal = options.signal;
   return { url, init };
@@ -347,7 +320,7 @@ export function createHttpClient(cfg: HttpConfig): HttpClient {
   };
 
   async function request<T>(method: HttpMethod, path: string, options: HttpRequestOptions = {}): Promise<HttpResult<T>> {
-    const { url, init } = prepare(cfg, credentials, method, path, options);
+    const { url, init } = prepare(cfg, credentials, method, path, options, devBearer(cfg.devToken), undefined);
 
     let response: Response;
     try {
@@ -384,15 +357,40 @@ export function createHttpClient(cfg: HttpConfig): HttpClient {
     return toResult<T>(response, options.binary === true);
   }
 
+  /**
+   * The request path of a native client (ADR-0029): bearer from the transport,
+   * no cookies, one refresh on a 401 — in place of behaviours 2/2c/3, which are
+   * about a cookie session and a popup. The browser path above is untouched.
+   */
+  async function requestNative<T>(native: NativeTransport, method: HttpMethod, path: string, options: HttpRequestOptions): Promise<HttpResult<T>> {
+    const bearer = await native.accessToken();
+    const { url, init } = prepare(cfg, credentials, method, path, options, bearer, native);
+    const send = (): Promise<Response> => (native.fetch ?? fetch)(url, init);
+    let first: Response;
+    try {
+      first = await send();
+    } catch (cause) {
+      return fromException<T>(cause, url);
+    }
+    const answer = await judgeNativeResponse({ native, first, bearer, init, send, url, signal: options.signal });
+    return answer.kind === 'response' ? toResult<T>(answer.response, options.binary === true) : failure(answer.failure);
+  }
+
+  /** Chosen per call, not per client: clients are built before the desktop entry registers its transport. */
+  function dispatch<T>(method: HttpMethod, path: string, options: HttpRequestOptions = {}): Promise<HttpResult<T>> {
+    const native = getNativeTransport();
+    return native === undefined ? request<T>(method, path, options) : requestNative<T>(native, method, path, options);
+  }
+
   return {
     baseUrl: cfg.baseUrl,
     credentials,
     reauthConfigured: cfg.reauthenticate !== undefined,
-    request,
-    get: (path, options) => request('GET', path, options),
-    post: (path, options) => request('POST', path, options),
-    put: (path, options) => request('PUT', path, options),
-    patch: (path, options) => request('PATCH', path, options),
-    delete: (path, options) => request('DELETE', path, options),
+    request: dispatch,
+    get: (path, options) => dispatch('GET', path, options),
+    post: (path, options) => dispatch('POST', path, options),
+    put: (path, options) => dispatch('PUT', path, options),
+    patch: (path, options) => dispatch('PATCH', path, options),
+    delete: (path, options) => dispatch('DELETE', path, options),
   };
 }
