@@ -1407,18 +1407,18 @@ fn only_the_enabled_smart_tools_toggle_is_reported_and_non_booleans_are_refused(
 }
 
 #[derive(Clone, Default)]
-struct CapturedOutput {
+pub(super) struct CapturedOutput {
     bytes: Arc<Mutex<Vec<u8>>>,
 }
 
 impl CapturedOutput {
-    fn text(&self) -> String {
+    pub(super) fn text(&self) -> String {
         String::from_utf8(self.bytes.lock().expect("captured tracing lock").clone())
             .expect("captured tracing UTF-8")
     }
 }
 
-struct CapturedWriter {
+pub(super) struct CapturedWriter {
     bytes: Arc<Mutex<Vec<u8>>>,
 }
 
