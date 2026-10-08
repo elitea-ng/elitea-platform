@@ -538,7 +538,8 @@ pub async fn extract_file(
         }
         dedupe_facts(facts)
     };
-    let (entity_results, facts) = tokio::join!(join_all(entity_calls), fact_calls);
+    let (entity_results, facts) =
+        tokio::join!(futures_util::future::join_all(entity_calls), fact_calls);
     if stop.is_requested() {
         return Err(EngineError::cancelled());
     }
@@ -731,42 +732,6 @@ fn shift_lines(item: &mut Map<String, Value>, start_line: usize) {
             item.insert(key.to_owned(), json!(line + offset));
         }
     }
-}
-
-/// `futures::future::join_all` over a small set, in order.
-async fn join_all<F: Future>(futures: impl IntoIterator<Item = F>) -> Vec<F::Output> {
-    let mut set = Vec::new();
-    for future in futures {
-        set.push(Box::pin(future));
-    }
-    let mut outputs = Vec::with_capacity(set.len());
-    // Polled together: each is driven while the others wait on the model.
-    let mut pending: Vec<_> = set.into_iter().map(Some).collect();
-    let mut results: Vec<Option<F::Output>> = (0..pending.len()).map(|_| None).collect();
-    std::future::poll_fn(|cx| {
-        let mut all_done = true;
-        for (slot, result) in pending.iter_mut().zip(results.iter_mut()) {
-            if let Some(future) = slot {
-                match future.as_mut().poll(cx) {
-                    std::task::Poll::Ready(output) => {
-                        *result = Some(output);
-                        *slot = None;
-                    }
-                    std::task::Poll::Pending => all_done = false,
-                }
-            }
-        }
-        if all_done {
-            std::task::Poll::Ready(())
-        } else {
-            std::task::Poll::Pending
-        }
-    })
-    .await;
-    for output in results.into_iter().flatten() {
-        outputs.push(output);
-    }
-    outputs
 }
 
 /// `RelationExtractor.build_entity_id_lookup` + `resolve_entity_id`.

@@ -23,7 +23,11 @@ elitea-model-client = { path = "../../libs/rust/model-client" }
 elitea-pg-migrate = { path = "../../libs/rust/pg-migrate" }
 elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
 # The graph's node and edge order is insertion order (graph.json, search ties).
+# join_all for the per-file model calls.
+futures-util = { version = "=0.3.34", default-features = false, features = ["std"] }
 indexmap = { version = "=2.14.2", features = ["serde"] }
+# The wall-clock stamps graph metadata carries (embeddings_generated_at).
+jiff = "=0.2.38"
 # Entity ids are Python's md5 prefix; file hashes its sha256.
 md-5 = "=0.10.6"
 sha2 = "=0.10.9"
