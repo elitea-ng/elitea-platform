@@ -60,6 +60,9 @@ pub(crate) use map_reduce::{
 mod parallel;
 #[cfg(test)]
 mod parallel_tests;
+mod pipeline_result;
+#[cfg(test)]
+mod pipeline_result_graph_tests;
 mod printer;
 #[cfg(test)]
 mod printer_tests;
