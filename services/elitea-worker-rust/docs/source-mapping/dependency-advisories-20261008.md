@@ -194,6 +194,44 @@ Not applicable: no durable state, schema, checkpoint, claim or spool format chan
   is absent from errors.
 - Container swaps cloned the existing config through the Docker API without printing environment values.
 
+## Recovery guarantees
+
+This change adds no runtime phase and alters no checkpoint, claim, delivery or settlement path. The touched
+(component × phase) rows:
+
+| Component × phase | Class | Enforcing code | Proof |
+| --- | --- | --- | --- |
+| Worker × tool call (SQL toolkit, MySQL), server without TLS | **F**: typed pre-dispatch failure `InvalidConfiguration` | `client.rs:34,244` (`MYSQL_TLS_MODE`) | `sql_tests.rs:832`: zero bytes sent, typed error, password absent |
+| Worker × model call, tool call, output delivery over hyper/h2 (reqwest, tonic, kube, bollard) | Unchanged | `h2` 0.4.16 (`Cargo.lock:1420`); no Worker code changed | Full Worker suite; browser runs settle and retire (below) |
+| Main, scheduler, subapp-host, gateway × build | Not a runtime phase | `go` directives; `toolchain_floor_test.go:82`; `check-gateway-toolchain.sh` section 4 | Floor gate and the fail-closed container run |
+
+**Why F for the MySQL row.**
+- R, I and C do not apply: nothing was dispatched, so there is no effect to resume, retry or reconcile.
+- The cause is the server's configuration (no TLS), and a retry cannot change it.
+- The error is typed and readable, and it carries no secret.
+
+## Security categories (`rules/security.md`)
+
+| Category | Applies? | How it was checked |
+| --- | --- | --- |
+| Trust boundaries and identity | No | No identity, header or edge code changed |
+| Authorization (object level) | No | No route, RPC or repository changed |
+| Input, parsing and amplification | Indirectly | `h2` 0.4.16 bounds queued empty DATA frames inside the library; no project parser changed |
+| Injection and construction | No | No SQL, template, shell or URL construction changed. SQL execution and parameters are unchanged. `check-gateway-toolchain.sh` reads only a repo-committed file, with a digits-and-dots regex. |
+| Egress and SSRF | Yes (TLS) | MySQL keeps `VerifyIdentity` (certificate and hostname verified). The test proves a non-TLS server is refused before authentication. PostgreSQL keeps `VerifyFull`. |
+| Secrets | Yes | Secret scan of the branch diff: 0 hits on added lines. The test asserts the password is absent from the error's `Display` and `Debug`. No environment values were printed during the container swaps. |
+| Supply chain and deployment | Yes | govulncheck, `cargo deny` and `Cargo.lock` checksum verification (before and after above); no new dependency |
+
+**Open item on supply chain.** The rule asks for "base images pinned to exact versions or digests; no floating tags
+for shipped images."
+- The Go builder stages keep their series tags (`golang:1.25-trixie`, `golang:1.26-trixie`). This is the
+  repository's documented choice (#433, #506) so the stdlib takes patch releases. The `go` directive floor now
+  guarantees the patch level.
+- The builder is not the shipped image. The shipped runtime bases (`gcr.io/distroless/static-debian13:nonroot`,
+  `cc-debian13:nonroot`) are also floating, and that predates this change.
+- Pinning digests needs a bump process (for example Dependabot on Containerfiles), so it is left for a user
+  decision.
+
 ## Browser evidence
 
 **Stack and images.**
