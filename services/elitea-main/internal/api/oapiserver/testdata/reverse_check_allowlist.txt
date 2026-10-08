@@ -23,6 +23,10 @@
 # 49 -> 48 (client contract 1.3): the agent-execution stop,
 # DELETE /elitea_core/task/..., is described as cancelChatExecution.
 #
+# 48 -> 47 (client contract 1.4): the conversation PUT the web rail renames
+# through, PUT /elitea_core/conversation/..., is described as
+# updateConversation.
+#
 # RULES
 # - The list may only shrink. Describe the endpoint in v2.yaml, then delete
 #   its line here. The test fails on a line the spec now covers.
@@ -45,7 +49,6 @@ chat.getChatConfig
 conversation.deleteAllMessages
 conversation.deleteMessage
 conversation.deleteSummary
-conversation.edit
 conversation.generateSummary
 conversation.getContextAnalytics
 conversation.getContextStatus

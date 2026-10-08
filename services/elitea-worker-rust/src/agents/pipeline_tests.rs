@@ -2691,6 +2691,9 @@ async fn saved_pipeline_sensitive_llm_keeps_call_identity_and_wrapper_hierarchy(
         .as_str()
         .expect("nested sensitive-tool identity")
         .to_owned();
+    // The nested call's paused frame names the PUBLIC interrupt id the card
+    // was rewritten to, not the child's local one.
+    assert_llm_node_call_paused(&paused, "call_mcp", "awaiting_approval", "sensitive_tool");
     let graph_interrupt = graph_interrupt.expect("private nested tool interruption");
     let binding = pipeline_tool_event_binding(&graph_interrupt, "elitea-agent", &private_thread)
         .expect("root and nested tool checkpoint binding");
@@ -3478,6 +3481,12 @@ async fn pipeline_instruction_pause_proof(instructions: bool) {
     assert_eq!(pending["available_actions"], json!(["answer"]));
     assert_eq!(pending["tool_call_id"], "call_ask_user");
     assert_eq!(pending["questions"][0]["id"], "q1");
+    assert_llm_node_call_paused(
+        &paused,
+        "call_ask_user",
+        "awaiting_input",
+        ASK_USER_GUARDRAIL_TYPE,
+    );
     let interrupt_id = pending["interrupt_id"]
         .as_str()
         .expect("ask_user interrupt identity")
@@ -3869,6 +3878,63 @@ async fn run_llm_node_block(action: &str, comment: Option<&str>, expected_reason
     assert_llm_blocked_continuation(&captured, expected_reason);
 }
 
+/// A pipeline LLM node's tool call that pauses ends with `agent_tool_paused`
+/// BEFORE its interrupt card (client contract 1.2), exactly like a direct
+/// agent's (`pause_frames_tests.rs`): the call already sent
+/// `agent_tool_start`, so without the paused frame a client keeps it spinning
+/// and elitea-main stores its trace row with no finish reason.
+fn assert_llm_node_call_paused(
+    events: &[Value],
+    call_id: &str,
+    finish_reason: &str,
+    guardrail_type: &str,
+) {
+    let order: Vec<&str> = events
+        .iter()
+        .map(|event| event["type"].as_str().unwrap_or_default())
+        .collect();
+    let start = order
+        .iter()
+        .position(|t| *t == "agent_tool_start")
+        .expect("LLM-node tool start");
+    let paused = order
+        .iter()
+        .position(|t| *t == "agent_tool_paused")
+        .unwrap_or_else(|| {
+            panic!("a paused LLM-node call must end with agent_tool_paused, got {order:?}")
+        });
+    let interrupt = order
+        .iter()
+        .position(|t| *t == "agent_hitl_interrupt")
+        .expect("LLM-node interrupt card");
+    assert!(
+        start < paused && paused < interrupt,
+        "frame order {order:?}"
+    );
+    assert!(
+        !order.contains(&"agent_tool_error"),
+        "a pause is not a failure: {order:?}"
+    );
+    let interrupt_id = events[interrupt]["response_metadata"]["hitl_interrupt"]["interrupt_id"]
+        .as_str()
+        .expect("singular interrupt identity");
+    let metadata = &events[paused]["response_metadata"];
+    assert_eq!(metadata["tool_run_id"], call_id);
+    assert_eq!(metadata["finish_reason"], finish_reason);
+    assert_eq!(metadata["error"], Value::Null);
+    assert_eq!(
+        metadata["pause"],
+        json!({"interrupt_id": interrupt_id, "guardrail_type": guardrail_type})
+    );
+    let stored = events[paused..]
+        .iter()
+        .filter(|event| event["type"] == "partial_message")
+        .find_map(|event| event["response_metadata"]["tool_calls"].get(call_id))
+        .expect("a partial_message storing the paused call");
+    assert_eq!(stored["finish_reason"], finish_reason, "{stored}");
+    assert_eq!(stored["pause"]["interrupt_id"], interrupt_id);
+}
+
 fn assert_llm_node_pause_progress(pause_events: &[Value]) -> Vec<Value> {
     let interrupts = pause_events
         .iter()
@@ -3876,6 +3942,12 @@ fn assert_llm_node_pause_progress(pause_events: &[Value]) -> Vec<Value> {
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(interrupts.len(), 1);
+    assert_llm_node_call_paused(
+        pause_events,
+        "call_mcp",
+        "awaiting_approval",
+        "sensitive_tool",
+    );
     let model_start = pause_events
         .iter()
         .find(|event| event["type"] == "agent_llm_start")

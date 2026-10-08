@@ -965,10 +965,37 @@ func (r *ConversationsRepo) Delete(ctx context.Context, projectID, conversationI
 	if ct.RowsAffected() == 0 {
 		return nil, apierr.NotFound("conversation not found")
 	}
+	if err := deleteConversationPin(ctx, transaction, projectID, id); err != nil {
+		return nil, err
+	}
 	if err := transaction.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("conversations: delete commit: %w", err)
 	}
 	return attachments, nil
+}
+
+// deleteConversationPin removes the project pin of a deleted conversation
+// (client contract 1.4 shows it as the row's `is_pinned`). Nothing would read
+// an orphan pin, but it would outlive the row in the shared table. Guarded by
+// to_regclass because fixtures build tenant tables without the shared schema;
+// on a deployment shared/0064 always declares it.
+func deleteConversationPin(ctx context.Context, tx pgx.Tx, projectID string, conversationID int64) error {
+	project, err := strconv.ParseInt(projectID, 10, 32)
+	if err != nil {
+		return nil // not a tenant id, so no pin can name it
+	}
+	var present bool
+	if err := tx.QueryRow(ctx, `SELECT to_regclass('centry.social_pins') IS NOT NULL`).Scan(&present); err != nil {
+		return fmt.Errorf("conversations: delete pin: %w", err)
+	}
+	if !present {
+		return nil
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM centry.social_pins
+		WHERE entity = 'conversation' AND project_id = $1 AND entity_id = $2`, project, conversationID); err != nil {
+		return fmt.Errorf("conversations: delete pin: %w", err)
+	}
+	return nil
 }
 
 // participantIdentityQuery finds the participant row that already describes the

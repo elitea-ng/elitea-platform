@@ -20,7 +20,7 @@ const Path = "/.well-known/elitea-client"
 
 // ClientContract is the client contract version this server speaks
 // (ADR-0025 decision 6). WP5 adds the contract lock that pins it.
-const ClientContract = "1.3"
+const ClientContract = "1.4"
 
 // Deployment kinds (ADR-0025 decision 1). The value is process configuration
 // (ELITEA_DEPLOYMENT_KIND), not an admin setting: it states who operates the

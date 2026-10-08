@@ -3371,7 +3371,7 @@ async fn sensitive_interrupt_lifecycle_case() {
         panic!("valid HITL input must reach authorization");
     };
     let progress_state =
-        FakeProgressState::new(std::iter::repeat_n(LiveProgressAction::Acknowledge, 8), []);
+        FakeProgressState::new(std::iter::repeat_n(LiveProgressAction::Acknowledge, 10), []);
     let connector = FakeProgressConnector {
         state: Arc::clone(&progress_state),
     };
@@ -3410,11 +3410,11 @@ async fn sensitive_interrupt_lifecycle_case() {
 
     assert!(matches!(
         completion.disposition(),
-        AgentAuthorizedLifecycleDisposition::ExecutedSettledAcked { sequence: 13, .. }
+        AgentAuthorizedLifecycleDisposition::ExecutedSettledAcked { sequence: 15, .. }
     ));
     let frames = progress_state.frames.lock().expect("HITL lifecycle frames");
-    assert_eq!(frames.len(), 9);
-    let event_types = frames[..8]
+    assert_eq!(frames.len(), 11);
+    let event_types = frames[..10]
         .iter()
         .map(|frame| match frame.payload.as_ref() {
             Some(execution_output_frame_v1::Payload::NodeEvent(event)) => event.r#type.as_str(),
@@ -3430,11 +3430,30 @@ async fn sensitive_interrupt_lifecycle_case() {
             "partial_message",
             "agent_tool_start",
             "partial_message",
+            "agent_tool_paused",
+            "partial_message",
             "agent_hitl_interrupt",
             "agent_hitl_interrupt",
         ]
     );
-    let Some(execution_output_frame_v1::Payload::NodeEvent(interrupt)) = frames[7].payload.as_ref()
+    // The paused call ends with agent_tool_paused, not a still-running row
+    // (agent-zefir#21), before the interrupt itself.
+    let Some(execution_output_frame_v1::Payload::NodeEvent(paused)) = frames[6].payload.as_ref()
+    else {
+        panic!("paused tool frame must carry a NodeEvent");
+    };
+    let paused_metadata: serde_json::Value =
+        serde_json::from_slice(&paused.response_metadata).expect("paused tool metadata");
+    assert_eq!(paused_metadata["finish_reason"], "awaiting_approval");
+    assert_eq!(paused_metadata["pause"]["guardrail_type"], "sensitive_tool");
+    let encoded_paused = crate::protocol::node_event::encode_current_node_event_json(paused)
+        .expect("canonical paused tool event");
+    assert!(
+        !encoded_paused
+            .windows(b"never-publish".len())
+            .any(|window| window == b"never-publish")
+    );
+    let Some(execution_output_frame_v1::Payload::NodeEvent(interrupt)) = frames[9].payload.as_ref()
     else {
         panic!("aggregate HITL result frame must carry the interrupt");
     };
@@ -3452,7 +3471,7 @@ async fn sensitive_interrupt_lifecycle_case() {
             .any(|window| window == b"never-publish")
     );
     let Some(execution_output_frame_v1::Payload::AgentExecution(result)) =
-        frames[8].payload.as_ref()
+        frames[10].payload.as_ref()
     else {
         panic!("HITL terminal must carry the bound agent result");
     };

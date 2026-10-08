@@ -41,31 +41,23 @@
  */
 import * as zod from "zod";
 
-export const ConversationSummary = zod
+export const UpdatedConversation = zod
   .object({
-    id: zod.int(),
+    id: zod.string(),
+    uuid: zod.uuid(),
+    project_id: zod.string(),
     name: zod.string(),
-    created_at: zod.string(),
-    updated_at: zod.string(),
-    duration: zod
-      .int()
-      .describe("Always -1 today; see the schema description."),
-    message_groups_count: zod.int(),
-    is_pinned: zod
-      .boolean()
-      .describe(
-        'Client contract 1.4. The conversation is pinned in its project: the project holds a conversation pin for it (pinEntity with entity_type `conversation`, the pin the web app\'s "Pin on top" sets). A pin is shared by the project, not kept per member, and the row never says who pinned it. A pin or unpin re-delivers the row in the `changes_since` delta; it does not change `updated_at`. A server before 1.4 omits the field, which means not pinned.\n',
-      ),
-    meta: zod
-      .record(zod.string(), zod.unknown())
-      .nullish()
-      .describe(
-        "Carries `single_participant` (the entity this conversation was filtered by, when entity_name/entity_meta_id were sent) among other conversation-level flags (`is_hidden`, etc).\n",
-      ),
+    created_at: zod.iso.datetime({ offset: true }),
+    updated_at: zod.iso.datetime({ offset: true }),
+    created_by: zod.string(),
+    folder_id: zod.string().nullish(),
+    is_private: zod.boolean(),
+    instructions: zod.string().optional(),
+    meta: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(
-    "One row of listConversations — the run-history panel's (issue #868) light projection of a conversation. `duration` is a placeholder: internal/api/v2/conversations/handler.go's List always answers `-1` for it (no per-conversation duration is computed server-side yet); a caller wanting a displayed duration derives one from created_at/updated_at instead of trusting this field.\n",
+    "A conversation as updateConversation answers it. `id` is the numeric id AS A STRING, as in createConversation's answer; `uuid` is the id the chat send path takes. NOTE(W2): internal/infra/db/repos/conversations.go:685 (`Update`) fills these from the UPDATE's RETURNING row. Any other key it carries (a `message_count` of 0, which is not counted here) is not part of the answer's meaning.\n",
   );
 
-export type ConversationSummary = zod.input<typeof ConversationSummary>;
-export type ConversationSummaryOutput = zod.output<typeof ConversationSummary>;
+export type UpdatedConversation = zod.input<typeof UpdatedConversation>;
+export type UpdatedConversationOutput = zod.output<typeof UpdatedConversation>;

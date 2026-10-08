@@ -50,6 +50,8 @@ mod native_runtime_tests;
 #[cfg(test)]
 mod ordinary_tests;
 #[cfg(test)]
+mod pause_frames_tests;
+#[cfg(test)]
 mod pipeline_tests;
 #[cfg(test)]
 mod runtime_tests;

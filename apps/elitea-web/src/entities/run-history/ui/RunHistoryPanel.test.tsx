@@ -44,6 +44,7 @@ const ONE_RUN_LISTING: ConversationListing = {
       updated_at: '2026-01-01T00:01:05.000000',
       duration: -1,
       message_groups_count: 3,
+      is_pinned: false,
       meta: null,
     },
   ],
