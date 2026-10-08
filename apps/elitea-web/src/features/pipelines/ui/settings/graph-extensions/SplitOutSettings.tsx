@@ -51,6 +51,7 @@ export function SplitOutSettings(props: ExtensionSettingsProps): ReactNode {
     <StateChannelSelect label={t('pipelines.graphExtensions.output', 'Output list state variable')} value={output} types={['list']}
       exclude={source} disabled={disabled} change={(value) => change('output', value === '' ? [] : [value])} />
     <Typography variant="bodySmall">{t('pipelines.graphExtensions.splitResult', 'Each result has identity, original ordinals, and data. The output list is replaced once.')}</Typography>
+    <Typography variant="bodySmall">{t('pipelines.graphExtensions.splitOut.envelopeHelp', 'Each output row is {parent_index, position, data}. data holds the retained fields and the item.')}</Typography>
     <ExtensionLimits {...props} />
   </Stack>;
 }

@@ -39,7 +39,7 @@ describe('NODE_ID_PATTERN mirrors valid_graph_id (worker yaml.rs:362)', () => {
   });
 });
 
-describe('CompilerAdmittedNodeTypes mirrors parse_pipeline_node (worker compiler.rs:1236)', () => {
+describe('CompilerAdmittedNodeTypes mirrors parse_pipeline_node (worker compiler.rs:1963)', () => {
   it('holds exactly the eleven parsed types the compiler has an arm for', () => {
     expect([...CompilerAdmittedNodeTypes].sort()).toEqual(
       ['agent', 'code', 'decision', 'hitl', 'llm', 'mcp', 'parallel', 'printer', 'router', 'state_modifier', 'toolkit'].sort(),

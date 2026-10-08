@@ -4,8 +4,8 @@ import AccordionSummary from '@mui/material/AccordionSummary';
 import AccordionDetails from '@mui/material/AccordionDetails';
 import Stack from '@mui/material/Stack';
 import { t } from '@/shared/i18n';
-import { extensionNumberText, extensionRecord, patchExtensionRecord } from '../../../lib/graphExtensions.helpers';
-import { SHAPING_LIMITS, type ExtensionSettingsProps } from '../../../lib/graphExtensions.types';
+import { extensionNumberText, extensionRecord, extensionText, patchExtensionRecord } from '../../../lib/graphExtensions.helpers';
+import { SHAPING_LIMITS, shapingLimitKeys, type ExtensionSettingsProps } from '../../../lib/graphExtensions.types';
 import { ExtensionField } from './ExtensionFields';
 
 export function ExtensionLimits({ node, disabled, change, remove }: ExtensionSettingsProps): ReactNode {
@@ -13,7 +13,7 @@ export function ExtensionLimits({ node, disabled, change, remove }: ExtensionSet
   return <Accordion className="nodrag nopan nowheel">
     <AccordionSummary>{t('pipelines.graphExtensions.limits', 'Processing limits')}</AccordionSummary>
     <AccordionDetails><Stack spacing={2}>
-      {Object.entries(SHAPING_LIMITS).map(([key, maximum]) => <ExtensionField key={key}
+      {shapingLimitKeys(extensionText(node['type'])).map((key) => [key, SHAPING_LIMITS[key as keyof typeof SHAPING_LIMITS]] as const).map(([key, maximum]) => <ExtensionField key={key}
         label={t(`pipelines.graphExtensions.limits.${key}`, key)} value={extensionNumberText(limits[key])} disabled={disabled} number
         help={t('pipelines.graphExtensions.limitCeiling', 'Leave empty for {{maximum}}. A configured limit can only lower this ceiling.', { maximum })}
         change={(value) => {

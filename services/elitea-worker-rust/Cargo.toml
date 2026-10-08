@@ -14,6 +14,9 @@ required-features = ["sandbox-supervisor"]
 [features]
 # Container access belongs to the dedicated supervisor, never the default worker.
 sandbox-supervisor = ["dep:adk-sandbox", "dep:x509-parser", "dep:kube", "dep:k8s-openapi", "dep:futures-util"]
+# Rehearsal-only admission of graph extension nodes (split_out, aggregate).
+# Production builds leave it off until deployed acceptance flips the gate.
+graph-extensions-rehearsal = []
 
 [dependencies]
 adk-anthropic = "=2.2.0"
