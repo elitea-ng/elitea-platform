@@ -69,6 +69,11 @@ const MAX_TOOL_RESULT_CHUNKS: usize = MAX_TOOL_RESULT_BYTES / INLINE_TEXT_CHUNK_
 /// the way out, and a fixed raw offset would produce a chunk that fits for
 /// ASCII and violates the frame for the same number of emoji.
 const TOOL_OUTPUT_CHUNK_EVENT: &str = "agent_tool_output_chunk";
+/// A tool call that paused for the user (client contract 1.2), and its two
+/// pause finish reasons on this runtime's direct pauses.
+const TOOL_PAUSED_EVENT: &str = "agent_tool_paused";
+const PAUSE_AWAITING_APPROVAL: &str = "awaiting_approval";
+const PAUSE_AWAITING_INPUT: &str = "awaiting_input";
 const MAX_TOOL_OUTPUT_CHUNK_BUDGET_BYTES: usize = MAX_CURRENT_NODE_EVENT_JSON_BYTES / 2;
 const MAX_TOOL_OUTPUT_CHUNKS: usize = 64;
 /// One ADK event may complete several tool calls at once, so the chunk budget
@@ -1731,35 +1736,50 @@ impl AgentEventProjector {
             _ => AgentEventProjectionError::invalid_state(),
         })?;
         let tool_args = mask_sensitive_arguments(&active.arguments, 0)?;
+        let active = active.clone();
         let message = policy.policy_message().to_owned();
+        // The pending interrupt is ONE object, sent both as the singular
+        // `hitl_interrupt` and as the only entry of `hitl_interrupts` — the
+        // shape `ClientFrameHitlInterruptDetail` documents and the Python
+        // worker sends (agent-zefir#21). It used to be the boolean `true`.
+        let pending = json!({
+            "type": "hitl",
+            "interrupt_id": interrupt_id,
+            "call_digest": call_digest,
+            "guardrail_type": "sensitive_tool",
+            "node_name": "sensitive_tool_guard",
+            "message": policy.policy_message(),
+            "available_actions": ["approve", "reject", "block_with_comment"],
+            "routes": {},
+            "tool_call_id": call_id,
+            "tool_name": request.tool_name,
+            "toolkit_name": policy.toolkit_name(),
+            "toolkit_type": policy.toolkit_type(),
+            "action_label": policy.action_name(),
+            "tool_args": tool_args,
+            "policy_message": policy.policy_message(),
+        });
         let metadata = json!({
             "thread_id": self.context.thread_id,
             "chat_project_id": self.context.chat_project_id,
             "message": message.clone(),
-            "hitl_interrupt": true,
-            "hitl_interrupts": [{
-                "type": "hitl",
-                "interrupt_id": interrupt_id,
-                "call_digest": call_digest,
-                "guardrail_type": "sensitive_tool",
-                "node_name": "sensitive_tool_guard",
-                "message": policy.policy_message(),
-                "available_actions": ["approve", "reject", "block_with_comment"],
-                "routes": {},
-                "tool_call_id": call_id,
-                "tool_name": request.tool_name,
-                "toolkit_name": policy.toolkit_name(),
-                "toolkit_type": policy.toolkit_type(),
-                "action_label": policy.action_name(),
-                "tool_args": tool_args,
-                "policy_message": policy.policy_message(),
-            }],
+            "hitl_interrupt": pending,
+            "hitl_interrupts": [pending],
             "node_name": "sensitive_tool_guard",
             "available_actions": ["approve", "reject", "block_with_comment"],
             "routes": {},
             "edit_state_key": Value::Null,
         });
         let mut batch = ProjectedAgentEventBatch::new();
+        self.push_tool_paused(
+            &mut batch,
+            call_id,
+            &active,
+            PAUSE_AWAITING_APPROVAL,
+            &interrupt_id,
+            "sensitive_tool",
+            event.timestamp,
+        )?;
         batch.push(self.event(
             "agent_hitl_interrupt",
             &Value::String(message),
@@ -1793,11 +1813,12 @@ impl AgentEventProjector {
             return Err(AgentEventProjectionError::invalid_state());
         }
         validate_tool_event_value(&request.args)?;
-        let _active = self
+        let active = self
             .active_tools
             .get(call_id)
             .filter(|active| active.name == request.tool_name && active.arguments == request.args)
-            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            .ok_or_else(AgentEventProjectionError::invalid_state)?
+            .clone();
         let questions = event
             .provider_metadata
             .get(ASK_USER_METADATA_KEY)
@@ -1814,33 +1835,43 @@ impl AgentEventProjector {
         let message = questions.message().to_owned();
         let question_values = questions.questions_value();
         let tool_args = questions.arguments_value();
+        let pending = json!({
+            "type": "hitl",
+            "interrupt_id": interrupt_id,
+            "call_digest": call_digest,
+            "guardrail_type": ASK_USER_GUARDRAIL_TYPE,
+            "node_name": ASK_USER_TOOL_NAME,
+            "message": message,
+            "questions": question_values,
+            "available_actions": [ASK_USER_ANSWER_ACTION],
+            "routes": {},
+            "tool_call_id": call_id,
+            "tool_name": ASK_USER_TOOL_NAME,
+            "toolkit_name": ASK_USER_TOOL_NAME,
+            "toolkit_type": "internal",
+            "tool_args": tool_args,
+        });
         let metadata = json!({
             "thread_id": self.context.thread_id,
             "chat_project_id": self.context.chat_project_id,
             "message": message,
-            "hitl_interrupt": true,
-            "hitl_interrupts": [{
-                "type": "hitl",
-                "interrupt_id": interrupt_id,
-                "call_digest": call_digest,
-                "guardrail_type": ASK_USER_GUARDRAIL_TYPE,
-                "node_name": ASK_USER_TOOL_NAME,
-                "message": message,
-                "questions": question_values,
-                "available_actions": [ASK_USER_ANSWER_ACTION],
-                "routes": {},
-                "tool_call_id": call_id,
-                "tool_name": ASK_USER_TOOL_NAME,
-                "toolkit_name": ASK_USER_TOOL_NAME,
-                "toolkit_type": "internal",
-                "tool_args": tool_args,
-            }],
+            "hitl_interrupt": pending,
+            "hitl_interrupts": [pending],
             "node_name": ASK_USER_TOOL_NAME,
             "available_actions": [ASK_USER_ANSWER_ACTION],
             "routes": {},
             "edit_state_key": Value::Null,
         });
         let mut batch = ProjectedAgentEventBatch::new();
+        self.push_tool_paused(
+            &mut batch,
+            call_id,
+            &active,
+            PAUSE_AWAITING_INPUT,
+            &interrupt_id,
+            ASK_USER_GUARDRAIL_TYPE,
+            event.timestamp,
+        )?;
         batch.push(self.event(
             "agent_hitl_interrupt",
             &Value::String(message),
@@ -3017,6 +3048,45 @@ impl AgentEventProjector {
         self.event("agent_tool_end", &Value::Null, None, entry, occurred_at)
             .is_ok()
             && self.tool_partial_event(id, entry, occurred_at).is_ok()
+    }
+
+    /// End a call that PAUSED for the user rather than finishing (client
+    /// contract 1.2, agent-zefir#21): `agent_tool_paused` with `error: null`,
+    /// a pause `finish_reason` and `pause: {interrupt_id, guardrail_type}`,
+    /// then the same entry as a `partial_message` so elitea-main stores the
+    /// trace row as paused instead of still running. The call stays in
+    /// `active_tools`: the run is paused, not finished, and the continued run
+    /// starts it again under a new id.
+    #[allow(clippy::too_many_arguments)]
+    fn push_tool_paused(
+        &self,
+        batch: &mut ProjectedAgentEventBatch,
+        call_id: &str,
+        active: &ActiveToolCall,
+        finish_reason: &str,
+        interrupt_id: &str,
+        guardrail_type: &str,
+        occurred_at: DateTime<Utc>,
+    ) -> Result<(), AgentEventProjectionError> {
+        let timestamp_finish = occurred_at.to_rfc3339_opts(SecondsFormat::AutoSi, false);
+        let mut entry = tool_entry(
+            call_id,
+            active,
+            Some(&timestamp_finish),
+            Some(finish_reason),
+            None,
+            None,
+        );
+        entry
+            .as_object_mut()
+            .ok_or_else(AgentEventProjectionError::invalid_state)?
+            .insert(
+                "pause".to_owned(),
+                json!({"interrupt_id": interrupt_id, "guardrail_type": guardrail_type}),
+            );
+        batch.push(self.event(TOOL_PAUSED_EVENT, &Value::Null, None, &entry, occurred_at)?)?;
+        batch.push(self.tool_partial_event(call_id, &entry, occurred_at)?)?;
+        Ok(())
     }
 
     fn tool_partial_event(

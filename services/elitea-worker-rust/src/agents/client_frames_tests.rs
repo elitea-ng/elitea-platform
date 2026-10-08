@@ -141,6 +141,11 @@ fn capture() -> BTreeMap<&'static str, Value> {
         .collect();
     captured.insert("tool_end", first_of(&finish, "agent_tool_end"));
 
+    // A sensitive tool call that paused for approval (agent-zefir#21).
+    let (paused, card) = super::pause_frames_tests::sensitive_pause_frames();
+    captured.insert("tool_paused", paused);
+    captured.insert("sensitive_hitl_interrupt", card);
+
     // The answer stopped at the model's output limit.
     let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
         .expect("projector");
