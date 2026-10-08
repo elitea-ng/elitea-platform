@@ -34,7 +34,7 @@ It covers two scopes:
   Wave 2, right after fan-out. Coordinator cards use the same schemas with an **empty hierarchy**
   (`parent_agent_name: null`, `parent_agent_call_id: null`, `parent_agent_path: []`) and `fanout_v1: null`. The
   interrupt `kind` is always set: the ledger needs it, and the brief's "kind set to empty" is read as the fan-out
-  `fanout_v1.kind`. Reviewers: confirm this reading.
+  `fanout_v1.kind` ("no fan-out metadata"). Confirmed (section 13).
 
 Out of scope: progress coalescing and scheduling (runtime design), node recovery (`node-recovery-v1.md`, lands with
 #1084), effect receipts (Gate 6).
@@ -194,8 +194,7 @@ Rules:
 - **Open cap.** At most 16 open cards (`PENDING` or `DECIDED`) per root response. This is exact: the Worker counts a
   card as open until it is consumed and stops admitting work at 16 (same bound as `MAX_PAUSE_CARDS`,
   `src/agents/graph/parallel.rs:38`, and `maxCurrentHITLDecisions`, `continue.go:22`). A raise beyond the cap is a
-  typed fault. The binding plan says "16 PENDING"; counting `DECIDED` too is the stricter, exact form. Reviewers:
-  confirm.
+  typed fault. The plan said "16 PENDING"; counting `DECIDED` too is the exact form (confirmed, section 13).
 - **Secrets.** `decision_json` holds the canonical decision body. Delegated auth stores a token-store reference
   (`credential_ref`), never a token. ASSUMPTION: the existing MCP token store can return a short opaque reference;
   Wave 2 confirms its API.
@@ -243,9 +242,10 @@ socket.
 After commit Main emits `agent_hitl_resolved` (section 9), so other tabs drop the card. If the execution is parked,
 the same transaction admits the wake continuation (section 8).
 
-**Tightening to review:** today an `edit`/`answer` value may be 256 KiB (`maxCurrentHITLValueBytes`, `continue.go:21`).
-The binding 8 KiB decision bound makes larger edits impossible in the ledger. Wave 2 must either accept that or carry
-large values as a content reference.
+**8 KiB decision cap (confirmed, section 13):** today an `edit`/`answer` value may be 256 KiB
+(`maxCurrentHITLValueBytes`, `continue.go:21`). The ledger keeps the 8 KiB cap: a larger body is refused with 400
+`agent_interrupt_invalid_decision`, and no content-reference path is added. When root pauses move to the ledger in
+Wave 2 this is a deliberate tightening of today's root limit.
 
 ## 7. Private Worker routes
 
@@ -459,9 +459,14 @@ Rows are keyed by the root response, so they survive continuation executions and
 | Reject/Skip never permission | stored action is applied verbatim; no default action anywhere in the decide or fetch path | `TestFetchReturnsExactAction` |
 | Supply chain | no new dependency (`santhosh-tekuri/jsonschema/v6` already required); `govulncheck` on the implementing PR | recorded audit output in the source mapping |
 
-## 13. Open points for the reviewer
+## 13. Confirmed decisions
 
-1. Coordinator cards keep the interrupt `kind`; "kind empty" is read as `fanout_v1` null (section 1).
-2. The open-card cap counts `PENDING` and `DECIDED` (section 5).
-3. The 8 KiB decision bound vs today's 256 KiB edit values (section 6).
-4. `agent_interrupt_already_resolved` instead of the bare `already_resolved` (section 6).
+Confirmed by the user, relayed through the Point 5 planning session, 2026-10-08. Track M2 implements the ledger from this contract.
+
+1. Coordinator (root) cards keep their interrupt `kind`; "kind empty" means no fan-out metadata (`fanout_v1: null`)
+   (section 1).
+2. The 16-card cap counts `PENDING` + `DECIDED` (section 5).
+3. The 8 KiB decision cap stands; larger `edit`/`answer` values do not go through the ledger (section 6).
+4. The 409 code is `agent_interrupt_already_resolved` (section 6).
+5. Static pauses use the `continue` action; member status includes `cancelled`; `interrupt_id` is printable ASCII,
+   at most 512 characters (sections 1, 3.2, 9).

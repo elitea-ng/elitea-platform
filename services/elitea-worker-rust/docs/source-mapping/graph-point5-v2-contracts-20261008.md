@@ -135,13 +135,15 @@ Reviews and scans:
 - Supply chain: no new dependency; the Go test uses `github.com/santhosh-tekuri/jsonschema/v6` v6.0.3, already a
   direct dependency of `services/elitea-main`. `golangci-lint` v2.9.0 runs in CI (not installed locally).
 
-## Decisions in D2 that need the reviewer's confirmation
+## D2 decisions confirmed
 
-1. Coordinator cards keep the interrupt `kind`; "kind empty" read as `fanout_v1: null`.
-2. Open-card cap counts `PENDING` + `DECIDED` (exact form of "16 PENDING").
-3. 8 KiB decision bound vs today's 256 KiB `edit`/`answer` values.
-4. 409 code spelled `agent_interrupt_already_resolved`.
-5. New action `continue` for static pauses; new member status `cancelled`.
+Confirmed by the user, relayed through the Point 5 planning session, 2026-10-08 (recorded in D2 §13):
+
+1. Coordinator cards keep the interrupt `kind`; "kind empty" means no fan-out metadata (`fanout_v1: null`).
+2. The 16-card cap counts `PENDING` + `DECIDED`.
+3. The 8 KiB decision cap stands; larger `edit`/`answer` values do not go through the ledger.
+4. 409 code `agent_interrupt_already_resolved`.
+5. Static pauses use `continue`; member status includes `cancelled`; `interrupt_id` printable ASCII ≤ 512.
 
 ## Corrections to the plan found while writing
 

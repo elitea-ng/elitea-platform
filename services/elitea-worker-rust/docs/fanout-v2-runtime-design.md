@@ -440,7 +440,7 @@ continuation running p95 ≤ 5 s; another tab drops the card ≤ 3 s. Per-child 
 | Continuation churn while parked | Revision coalescing; a grace timer only if measured. |
 | Permit release on pause allows many paused children | Bounded by N per activation and the 16-card cap. |
 | 64 MiB per-thread cap still reachable on long pipelines (no retention) | Out of scope; flagged to the durability owner. |
-| Decision value bound (8 KiB) vs today's 256 KiB edit values | Contract §6 open point. |
+| Decision value bound (8 KiB) vs today's 256 KiB edit values | Confirmed 2026-10-08 (contract §13): the cap stands; larger values are refused with 400. |
 | Merge conflicts with #1084 | Wave 2 starts after it merges. |
 
 ## 15. Performance, durability, resilience and security
