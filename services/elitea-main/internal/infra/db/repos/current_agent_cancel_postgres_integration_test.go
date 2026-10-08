@@ -8,6 +8,7 @@ import (
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/db/sqlcgen"
+	executiondomain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/execution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -729,4 +730,112 @@ UPDATE chat_conversations SET author_id = $1 WHERE uuid = $2::uuid`,
 	if _, err := cancel(lapsed, lapsedActorID); !errors.Is(err, agentexecutionapp.ErrCurrentAgentCancelNotAllowed) {
 		t.Fatalf("a job actor with no standing: err=%v, want ErrCurrentAgentCancelNotAllowed", err)
 	}
+}
+
+// TestPostgresCurrentAgentStopSettlesAKeptAnswerAsNotAnError pins the client
+// contract's settle check on a stopped turn that kept partial output
+// (agent-zefir#21): an answer is settled when `is_streaming` is false AND
+// `metadata.is_error` is PRESENT; an absent `is_error` reads as "still
+// running". Both writers of a stopped answer left it absent: the synchronous
+// Stop projection never set it, and the worker's later CANCELLED terminal
+// deleted it.
+func TestPostgresCurrentAgentStopSettlesAKeptAnswerAsNotAnError(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	seedCurrentAgentContinuationSchema(t, pool)
+
+	const (
+		questionID   = "20000000-0000-4000-8000-000000000171"
+		questionItem = "40000000-0000-4000-8000-000000000171"
+		responseID   = "30000000-0000-4000-8000-000000000171"
+		executionID  = "execution-stop-keeps-partial-output"
+
+		currentAgentStopConversationID = "10000000-0000-4000-8000-000000000031"
+	)
+	tx, err := pool.BeginTx(t.Context(), pgx.TxOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if err := tenant.BindProject(t.Context(), tx, tenant.Project{ID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	responseMessageID := insertPostgresCurrentApplicationTurn(
+		t, sqlcgen.New(tx),
+		mustCurrentPGUUID(t, currentAgentStopConversationID),
+		questionID, questionItem, responseID, "tell me a long story", executionID,
+	)
+	insertPostgresCurrentAgentCancelBinding(
+		t, tx, responseMessageID, questionID, executionID,
+		"agent.execute.application.v1", "RUNNING", "RUNNING",
+	)
+	// The partial answer the worker streamed before the stop.
+	if _, err := tx.Exec(t.Context(), `
+WITH item AS (
+    INSERT INTO chat_message_items (uuid, item_type, order_index, meta, message_group_id)
+    SELECT gen_random_uuid(), 'text_message', 0, '{}'::jsonb, response.id
+    FROM chat_message_group AS response WHERE response.uuid = $1
+    RETURNING id
+)
+INSERT INTO chat_messages_text (id, content) SELECT id, 'Once upon a' FROM item`, responseMessageID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	settled := func(stage string) {
+		t.Helper()
+		var isStreaming bool
+		var isError *string
+		if err := pool.QueryRow(t.Context(), `
+SELECT is_streaming, meta ->> 'is_error'
+FROM p_1.chat_message_group WHERE uuid = $1`, responseMessageID).Scan(&isStreaming, &isError); err != nil {
+			t.Fatal(err)
+		}
+		if isStreaming || isError == nil || *isError != "false" {
+			got := "<absent>"
+			if isError != nil {
+				got = *isError
+			}
+			t.Fatalf("%s: is_streaming=%t is_error=%s, want a settled answer with is_error false", stage, isStreaming, got)
+		}
+	}
+
+	repository, err := NewCurrentAgentCancelRepository(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := repository.CancelCurrentAgent(t.Context(), agentexecutionapp.CurrentAgentCancelRequest{
+		ProjectID:         1,
+		ActorUserID:       11,
+		ResponseMessageID: uuid.UUID(responseMessageID.Bytes).String(),
+	})
+	if err != nil || outcome.Deleted || outcome.Replay {
+		t.Fatalf("stop: outcome=%+v err=%v, want the partial answer kept", outcome, err)
+	}
+	settled("after the Stop projection")
+
+	// The worker's CANCELLED terminal arrives later. Start it from a row as an
+	// older stop left it (no is_error), so a terminal that missed the row
+	// could not pass by leaving the Stop projection's value in place.
+	if _, err := pool.Exec(t.Context(), `
+UPDATE p_1.chat_message_group SET meta = meta - 'is_error' WHERE uuid = $1`, responseMessageID); err != nil {
+		t.Fatal(err)
+	}
+	// The terminal matches its response through the binding's client_stream_id,
+	// which admission pins to the conversation uuid. The shared cancel fixture
+	// leaves a placeholder there, and a CANCELLED terminal that matches no row
+	// is (deliberately) a silent no-op, so pin the real value.
+	if _, err := pool.Exec(t.Context(), `
+UPDATE elitea_runtime.agent_execution_jobs SET client_stream_id = $1
+WHERE execution_id = $2`, currentAgentStopConversationID, executionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistCurrentAgentRuntimeTerminal(
+		t.Context(), pgxExecutor{queryer: pool}, 1, executiondomain.AgentApplicationCapability,
+		outputRecord{ExecutionID: executionID, Generation: 1}, "CANCELLED", "Execution was cancelled.",
+	); err != nil {
+		t.Fatal(err)
+	}
+	settled("after the worker's CANCELLED terminal")
 }
