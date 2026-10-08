@@ -3,14 +3,15 @@ package runtimecontracts
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -46,12 +47,11 @@ func inFamily(stem string) bool {
 
 func readJSON(t *testing.T, path string) any {
 	t.Helper()
-	file, err := os.Open(path)
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
-	value, err := jsonschema.UnmarshalJSON(file)
+	value, err := jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	if err != nil {
 		t.Fatal(path, err)
 	}
@@ -173,8 +173,7 @@ func lintStrict(t *testing.T, stem, at string, value any) {
 }
 
 func jsonIndex(index int) string {
-	raw, _ := json.Marshal(index)
-	return string(raw)
+	return strconv.Itoa(index)
 }
 
 // canonicalJSON implements the contract canonical form: object keys sorted by
@@ -264,7 +263,10 @@ func writeCanonicalString(out *bytes.Buffer, value string) {
 			out.WriteString(`\r`)
 		default:
 			if character < 0x20 {
-				fmt.Fprintf(out, `\u%04x`, character)
+				const hexDigits = "0123456789abcdef"
+				out.WriteString(`\u00`)
+				out.WriteByte(hexDigits[character>>4])
+				out.WriteByte(hexDigits[character&0xf])
 			} else {
 				out.WriteRune(character)
 			}
@@ -428,5 +430,61 @@ func TestFanoutDecisionDigestsInFetchFixtures(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no decision digests checked")
+	}
+}
+
+// TestHTTPActionRenderVectorsAreSelfConsistent checks the stated digests and
+// encodings of every successful render vector. The renderer itself is Wave 2;
+// this keeps the vectors honest until then.
+func TestHTTPActionRenderVectorsAreSelfConsistent(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(schemaDir, "fixtures", "http-action-render-vectors-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Vectors []struct {
+			ID     string `json:"id"`
+			Expect struct {
+				OK *struct {
+					BodyB64       string `json:"body_b64"`
+					BodySHA256    string `json:"body_sha256"`
+					BodyUTF8      string `json:"body_utf8"`
+					RequestWire   string `json:"request_wire"`
+					RequestDigest string `json:"request_digest"`
+				} `json:"ok"`
+			} `json:"expect"`
+		} `json:"vectors"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, vector := range fixture.Vectors {
+		ok := vector.Expect.OK
+		if ok == nil {
+			continue
+		}
+		body, err := base64.StdEncoding.DecodeString(ok.BodyB64)
+		if err != nil {
+			t.Fatal(vector.ID, err)
+		}
+		if string(body) != ok.BodyUTF8 {
+			t.Errorf("%s: body_b64 and body_utf8 differ", vector.ID)
+		}
+		bodySum := sha256.Sum256(body)
+		if hex.EncodeToString(bodySum[:]) != ok.BodySHA256 {
+			t.Errorf("%s: body_sha256 differs", vector.ID)
+		}
+		if !bytes.Equal(canonicalJSON(t, []byte(ok.RequestWire)), []byte(ok.RequestWire)) {
+			t.Errorf("%s: request_wire is not canonical JSON", vector.ID)
+		}
+		wireSum := sha256.Sum256([]byte(ok.RequestWire))
+		if hex.EncodeToString(wireSum[:]) != ok.RequestDigest {
+			t.Errorf("%s: request_digest differs", vector.ID)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no successful render vectors")
 	}
 }
