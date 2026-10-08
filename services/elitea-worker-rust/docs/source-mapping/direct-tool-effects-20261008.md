@@ -28,6 +28,7 @@ Design and guarantees: [`../direct-tool-effects-design.md`](../direct-tool-effec
   - journaled `dispatch` at `:536-592`;
   - `DirectToolAttempt` at `:842-937`.
 - `src/agents/graph/compiler.rs:1315-1319`: attaches the node-recovery authority.
+- `src/agents/graph/compiler.rs` `select_pipeline_result`: a set `_pipeline_blocked` message is the pipeline's answer.
 - `src/agents/graph/node_recovery_runtime.rs`: the test module is visible inside the graph module
   (test-only).
 - `deploy/runtime/worker-runtime.json`, `deploy/runtime/worker-runtime.nats-secure.json`:
@@ -48,6 +49,9 @@ New file `src/agents/graph/node_recovery_direct_tool_tests.rs`, with 8 tests:
 - `effectful_tool_requires_the_fenced_writer_before_any_call`
 - `effect_whose_result_cannot_be_recorded_is_reported_and_never_repeated`
 
+`src/agents/graph/compiler_tests.rs`:
+- `blocked_pipeline_answers_with_its_stop_message_not_unwritten_outputs`
+
 `src/agents/graph/direct_tool_tests.rs`:
 - `blocked_effectful_sensitive_tool_stops_the_whole_pipeline_under_node_recovery`
 - `skipped_effectful_authorization_stops_the_whole_pipeline_under_node_recovery`
@@ -62,7 +66,7 @@ New file `src/agents/graph/node_recovery_direct_tool_tests.rs`, with 8 tests:
 - the direct-node wording assertions in the toolkit and MCP scope tests.
 
 Results:
-- `cargo test --all-features`: lib 2030 passed, 0 failed, 63 ignored; all integration test targets pass. DB-gated tests are skipped without
+- `cargo test --all-features`: lib 2031 passed, 0 failed, 63 ignored; all integration test targets pass. DB-gated tests are skipped without
   `ELITEA_TEST_DATABASE_URL`, and the new tests use the in-memory journal fixture.
 - `cargo clippy --all-targets --all-features -D warnings` and `cargo fmt --check` are clean.
 - Helm: `render-worker-sandbox.sh` passes, and `render-worker.sh` ran 8 assertions, all passed.
@@ -92,9 +96,54 @@ test.
 
 ## Browser evidence
 
-Pending: a local rehearsal stack with `agent_node_recovery: true`. The check covers a direct MCP
-`echo` node (non-sensitive and sensitive: approve, block, reload) and an LLM node with the same
-tool.
+Real browser (Claude desktop built-in browser), no response mocks, with reloads, on a separate local stack built
+from this branch.
+
+**Stack.** Compose project `elitea-dtfx` (`deploy/scripts/standalone-stack.sh` with `STANDALONE_WORKER=rust`), at
+`http://dtfx.localhost:18140`.
+- Images are tagged `dtfx-20261008`. Final worker image `sha256:fac953b5…`, built from commit `7740d591`. Main is
+  `sha256:ae4e9479…` and web is `sha256:241e6128…`.
+- `agent_node_recovery: true` comes from `deploy/runtime/worker-runtime.json`.
+- The MCP server is `deploy/mock-mcp`. Its `echo` and `reverse` tools declare no `readOnlyHint`, so both are
+  effectful.
+- Every real effect was counted from the mock's `tools/call` log lines.
+
+**Fixtures.**
+- Created in the UI as `e2e-admin@autotest.local` in Default Project (1):
+  - MCP "mock effects" (url, TLS verification on, selected tools `echo` and `reverse`);
+  - pipelines "dtfx direct echo" (direct `mcp` node → `echo`), "dtfx sensitive reverse" (`reverse` → downstream
+    `echo`), and "dtfx llm echo" (`llm` node with `tool_names: {mock effects: [echo]}`).
+- The YAML was entered in the pipeline editor.
+- Two settings were applied through the admin API from the same browser session:
+  - **Guardrails.** `sensitive_tools: {mcp: [reverse]}` went through `PUT /api/v2/admin/plugin_config_values/administration/guardrails`,
+    because the admin form's "Add toolkit" does not render a new row (a pre-existing UI defect; a saved row does
+    render).
+  - **Stale model row.** One seeded model row (configuration 2) was deleted, as `seed-llm` itself advises, so that
+    project 1 resolves the credentialed mock model.
+
+| Case | Result | `tools/call` delta |
+|---|---|---|
+| Direct `echo` (non-sensitive, effectful) | `{"output":"dtfx-echo-one"}` | +1 |
+| Direct `echo` with a wrong output type | Typed "tool result does not match the node output mapping"; not re-run | +1 (the effect itself) |
+| Sensitive `reverse`: pause | Approval card `mockeffects.reverse`, which is still there after a reload | 0 |
+| Sensitive `reverse`: approve | `reverse` once, then downstream `echo`; result persists after reload, and reload adds no calls | +2 |
+| Sensitive `reverse`: reject (with comment) | **Pipeline stopped** — the action **reverse** … was **blocked** by user. Downstream nodes skipped (exec `7743913a…`) | 0 |
+| Approve in the turn after a block | Normal result; no stale stop message (exec `d9b3e7ea…` → `29ab358b…`) | +2 |
+| LLM node calling effectful `echo` | `MOCK: tool echo said {"output":"dtfx-llm-echo"}`; persists after reload (exec `2114adab…`) | +1 |
+
+**Found during verification and fixed in this PR.** A blocked pipeline answered with the `{}` default of a
+terminal output instead of its stop message. `select_pipeline_result` now prefers `_pipeline_blocked`, proven by
+`compiler_tests::blocked_pipeline_answers_with_its_stop_message_not_unwritten_outputs`.
+
+**Found during verification, out of scope:**
+- **Sensitive tools file.** The worker's `--toolkit-security-config` file is only the startup default. The
+  run-time sensitive-tool policy comes from the platform Guardrails setting in the execution input.
+- **Stale worker binary.** The worker image can contain another branch's binary: the build uses the shared
+  `/cargo-target` cache mount, and BuildKit reuses the layer. A separate task has been opened. Workaround: touch the
+  sources and build with `--no-cache`.
+- **MCP tool discovery.** Main-side discovery (`mcp_sync_tools`) answers "MCP tool discovery failed" for the
+  private `mcp-mock` host. Runtime calls go through the Worker and are not affected.
+- **Admin Guardrails form.** "Add toolkit" does not render a new row.
 
 ## Follow-ups
 
