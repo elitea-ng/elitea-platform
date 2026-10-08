@@ -96,6 +96,13 @@ CREATE UNIQUE INDEX execution_interrupts_one_open_interrupt_id
     ON elitea_runtime.execution_interrupts (root_response_id, interrupt_id)
     WHERE state IN ('PENDING', 'DECIDED');
 
+-- FK support: job and claim deletes (project deprovisioning) look cards up by
+-- the raising execution and the consuming claim.
+CREATE INDEX execution_interrupts_execution
+    ON elitea_runtime.execution_interrupts (execution_id, generation);
+CREATE INDEX execution_interrupts_consumed_claim
+    ON elitea_runtime.execution_interrupts (consumed_claim_id) WHERE consumed_claim_id IS NOT NULL;
+
 CREATE TABLE elitea_runtime.execution_interrupt_audit (
     root_response_id UUID NOT NULL,
     interrupt_key TEXT NOT NULL,

@@ -17,13 +17,18 @@ import (
 // ExecutionInterruptRepository is the per-interrupt HITL decision ledger
 // (libs/proto/contracts/fanout-interrupt-decisions-v1.md §5-§7).
 //
-// Lock order, the same in every write: the chat_message_group response row,
-// then the execution_interrupt_responses row, then card rows. Every write runs
-// READ COMMITTED behind these row locks, so a waiting transaction re-reads the
-// committed winner instead of failing with a serialization error: 50 tabs
-// deciding one card produce one DECIDED row and 49 replays or 409s, never a
-// 500. Authorization is rechecked after the response lock, inside the effect
-// transaction, so a revocation that commits while a request waits is seen.
+// Lock order, the same in every write: the chat_message_group response row
+// (Raise, Decide; the caller's stop/regenerate transaction for Cancel and
+// Supersede), then the execution_interrupt_responses row, then execution job
+// and claim rows (Ack, Fetch; Wave 2 continuation admission), then card rows.
+// Every write runs READ COMMITTED behind these row locks, so a waiting
+// transaction re-reads the committed winner instead of failing with a
+// serialization error: 50 tabs deciding one card produce one DECIDED row and
+// 49 replays or 409s, never a 500. Every authority predicate (ownership,
+// membership, RBAC, the private claim) is evaluated in a new statement after
+// the lock it depends on is held, because a READ COMMITTED statement that
+// waited for a lock does not re-read the tables it joined. So a revocation that
+// commits while a request waits is seen.
 type ExecutionInterruptRepository struct {
 	projects    projectStore
 	shared      sharedStore
@@ -56,12 +61,23 @@ func checkInterruptPermission(ctx context.Context, tx sqlExecutor, projectID, ac
 
 var interruptWriteTx = pgx.TxOptions{IsoLevel: pgx.ReadCommitted, AccessMode: pgx.ReadWrite}
 
-// lockOwnedResponse locks the response row for an actor who may decide its
-// cards: the conversation's author or the question's author, and still a
-// user participant of the conversation (the ResolveCurrentContinuation rule).
-// A missing response and a foreign one are indistinguishable (ErrNotAllowed).
+// lockOwnedResponse locks the response row (when lock is set), then, in a new
+// statement, checks that the actor may decide its cards: the conversation's
+// author or the question's author, and still a user participant of the
+// conversation (the ResolveCurrentContinuation rule). A missing response and
+// a foreign one are indistinguishable (ErrNotAllowed).
 func lockOwnedResponse(ctx context.Context, tx sqlExecutor, selector domain.Selector, lock bool) (int64, error) {
-	query := `
+	if lock {
+		var locked int
+		err := tx.QueryRow(ctx, `SELECT 1 FROM chat_message_group WHERE uuid = $1::uuid FOR UPDATE`, selector.ResponseMessageID).Scan(&locked)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, domain.ErrNotAllowed
+		}
+		if err != nil {
+			return 0, err
+		}
+	}
+	const query = `
 SELECT conversation.id
 FROM chat_message_group response
 JOIN chat_conversations conversation ON conversation.id = response.conversation_id
@@ -76,10 +92,6 @@ WHERE response.uuid = $1::uuid
    JOIN chat_participants participant ON participant.id = mapping.participant_id AND participant.entity_name = 'user'
    WHERE mapping.conversation_id = conversation.id
     AND participant.entity_meta->>'id' ~ '^[1-9][0-9]{0,17}$' AND (participant.entity_meta->>'id')::bigint = $2)`
-	if lock {
-		query += `
-FOR UPDATE OF response`
-	}
 	var conversationID int64
 	err := tx.QueryRow(ctx, query, selector.ResponseMessageID, selector.ActorUserID).Scan(&conversationID)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -131,6 +143,23 @@ func raiseExecutionInterrupt(ctx context.Context, tx sqlExecutor, input domain.R
 	}
 	if err != nil {
 		return domain.RaiseResult{}, err
+	}
+	// The raising execution must be an agent execution of this project bound
+	// to this root response; a frame cannot raise into another response.
+	var bound bool
+	err = tx.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM elitea_runtime.agent_execution_jobs binding
+  JOIN elitea_runtime.execution_jobs j USING (execution_id, generation)
+  WHERE binding.execution_id = $1 AND binding.generation = $2 AND binding.client_message_id = $3
+   AND j.resource_project_id = $4 AND j.projection_project_id = $4 AND j.tenant_id = $4::text
+   AND j.capability_id IN ('agent.execute.application.v1', 'agent.execute.adhoc.v1') AND binding.capability_id = j.capability_id)`,
+		input.ExecutionID, input.Generation, input.RootResponseID, input.ProjectID).Scan(&bound)
+	if err != nil {
+		return domain.RaiseResult{}, err
+	}
+	if !bound {
+		return domain.RaiseResult{}, domain.ErrInvalidRaise
 	}
 	var storedProject, storedConversation int64
 	err = tx.QueryRow(ctx, `
@@ -273,20 +302,35 @@ func (r *ExecutionInterruptRepository) Decide(ctx context.Context, input domain.
 	if r == nil || r.projects == nil || r.permissions == nil || !input.Selector.Valid() {
 		return domain.DecideResult{}, domain.ErrNotAllowed
 	}
-	if !domain.ValidDigest(input.InterruptKey) || len(input.Canonical) == 0 || len(input.Canonical) > domain.MaxDecisionBodyBytes {
+	if !domain.ValidDigest(input.InterruptKey) {
+		return domain.DecideResult{}, domain.ErrNotFound
+	}
+	// The stored bytes are the only source of the decision: re-derive it here
+	// so a caller cannot pair a validated struct with different bytes.
+	decision, canonical, err := domain.ParseDecisionRequest(input.Canonical)
+	if err != nil || !bytes.Equal(canonical, input.Canonical) {
 		return domain.DecideResult{}, domain.ErrInvalidDecision
 	}
 	selector := input.Selector
 	var result domain.DecideResult
-	err := r.projects.WithinProjectTx(ctx, selector.ProjectID, interruptWriteTx, func(tx sqlExecutor) error {
+	err = r.projects.WithinProjectTx(ctx, selector.ProjectID, interruptWriteTx, func(tx sqlExecutor) error {
 		if _, err := lockOwnedResponse(ctx, tx, selector, true); err != nil {
 			return err
 		}
 		if err := r.permissions(ctx, tx, selector.ProjectID, selector.ActorUserID, domain.PermissionDecide); err != nil {
 			return err
 		}
+		var decisionRevision int64
+		err := tx.QueryRow(ctx, `SELECT decision_revision FROM elitea_runtime.execution_interrupt_responses
+WHERE root_response_id = $1::uuid AND project_id = $2 FOR UPDATE`, selector.ResponseMessageID, selector.ProjectID).Scan(&decisionRevision)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
 		var row lockedInterrupt
-		err := tx.QueryRow(ctx, `
+		err = tx.QueryRow(ctx, `
 SELECT state, revision, request_id, decision_json, available_actions, interrupt_id
 FROM elitea_runtime.execution_interrupts
 WHERE root_response_id = $1::uuid AND interrupt_key = $2 AND project_id = $3
@@ -299,22 +343,21 @@ FOR UPDATE`, selector.ResponseMessageID, input.InterruptKey, selector.ProjectID)
 			return err
 		}
 		result = domain.DecideResult{
-			InterruptKey: input.InterruptKey, InterruptID: row.interruptID, Action: input.Decision.Action,
-			RequestID: input.Decision.RequestID,
+			InterruptKey: input.InterruptKey, InterruptID: row.interruptID, Action: decision.Action,
+			RequestID: decision.RequestID,
 		}
 		if row.state != domain.StatePending {
-			replay := row.requestID != nil && *row.requestID == input.Decision.RequestID && bytes.Equal(row.decision, input.Canonical)
+			replay := row.requestID != nil && *row.requestID == decision.RequestID && bytes.Equal(row.decision, canonical)
 			if !replay || (row.state != domain.StateDecided && row.state != domain.StateConsumed) {
 				return domain.ErrAlreadyResolved
 			}
-			result.State, result.Revision, result.Replay = row.state, row.revision, true
-			return tx.QueryRow(ctx, `SELECT decision_revision FROM elitea_runtime.execution_interrupt_responses
-WHERE root_response_id = $1::uuid`, selector.ResponseMessageID).Scan(&result.DecisionRevision)
+			result.State, result.Revision, result.Replay, result.DecisionRevision = row.state, row.revision, true, decisionRevision
+			return nil
 		}
-		if !slices.Contains(row.actions, string(input.Decision.Action)) {
+		if !slices.Contains(row.actions, string(decision.Action)) {
 			return domain.ErrInvalidDecision
 		}
-		if input.Decision.ExpectedRevision != row.revision {
+		if decision.ExpectedRevision != row.revision {
 			return domain.ErrAlreadyResolved
 		}
 		err = tx.QueryRow(ctx, `
@@ -334,7 +377,7 @@ WITH decided AS (
   SELECT root_response_id, interrupt_key, 'DECIDED', revision, $6 FROM decided
 )
 SELECT decided.revision, bumped.decision_revision FROM decided, bumped`,
-			selector.ResponseMessageID, input.InterruptKey, row.revision, input.Decision.RequestID, input.Canonical,
+			selector.ResponseMessageID, input.InterruptKey, row.revision, decision.RequestID, canonical,
 			selector.ActorUserID).Scan(&result.Revision, &result.DecisionRevision)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return domain.ErrAlreadyResolved
@@ -389,13 +432,19 @@ func (r *ExecutionInterruptRepository) lockInterruptClaim(ctx context.Context, t
 	}
 	var scope interruptClaimScope
 	var manifest []byte
-	err := tx.QueryRow(ctx, interruptClaimAuthoritySQL, fence.ClaimID, fence.ExecutionID, fence.Generation, fence.WorkloadIdentity, fence.FenceToken).
-		Scan(&scope.projectID, &scope.actorID, &scope.responseID, &manifest)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return interruptClaimScope{}, domain.ErrStaleFence
-	}
-	if err != nil {
-		return interruptClaimScope{}, err
+	// The first lookup takes the locks; a READ COMMITTED statement that waited
+	// does not re-read its joined rows, so the second lookup re-evaluates the
+	// lease, session, deadline and terminal checks with the database clock
+	// while the locks are held (contract §7; node_recovery_control.go).
+	for range 2 {
+		err := tx.QueryRow(ctx, interruptClaimAuthoritySQL, fence.ClaimID, fence.ExecutionID, fence.Generation, fence.WorkloadIdentity, fence.FenceToken).
+			Scan(&scope.projectID, &scope.actorID, &scope.responseID, &manifest)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return interruptClaimScope{}, domain.ErrStaleFence
+		}
+		if err != nil {
+			return interruptClaimScope{}, err
+		}
 	}
 	if len(manifest) != 32 || !domain.ValidResponseMessageID(scope.responseID) {
 		return interruptClaimScope{}, domain.ErrStaleFence
@@ -423,30 +472,37 @@ func (r *ExecutionInterruptRepository) FetchDecided(ctx context.Context, fence d
 		if err != nil {
 			return err
 		}
-		err = tx.QueryRow(ctx, `SELECT decision_revision FROM elitea_runtime.execution_interrupt_responses
-WHERE root_response_id = $1::uuid AND project_id = $2`, scope.responseID, scope.projectID).Scan(&fetch.DecisionRevision)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
+		// One statement, one snapshot: the revision and the rows agree.
 		rows, err := tx.Query(ctx, `
-SELECT interrupt_key, interrupt_id, revision, request_id, decision_json
-FROM elitea_runtime.execution_interrupts
-WHERE root_response_id = $1::uuid AND project_id = $2 AND state = 'DECIDED'
-ORDER BY decided_at, interrupt_key
-LIMIT $3`, scope.responseID, scope.projectID, domain.MaxFetchDecisions+1)
+SELECT response.decision_revision, card.interrupt_key, card.interrupt_id, card.revision, card.request_id, card.decision_json
+FROM elitea_runtime.execution_interrupt_responses response
+LEFT JOIN LATERAL (
+  SELECT interrupt_key, interrupt_id, revision, request_id, decision_json, decided_at
+  FROM elitea_runtime.execution_interrupts
+  WHERE root_response_id = response.root_response_id AND project_id = response.project_id AND state = 'DECIDED'
+  ORDER BY decided_at, interrupt_key
+  LIMIT $3
+) card ON TRUE
+WHERE response.root_response_id = $1::uuid AND response.project_id = $2
+ORDER BY card.decided_at, card.interrupt_key`, scope.responseID, scope.projectID, domain.MaxFetchDecisions+1)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var entry domain.FetchedDecision
+			var key, interruptID, requestID *string
+			var revision *int64
 			var stored []byte
-			if err := rows.Scan(&entry.InterruptKey, &entry.InterruptID, &entry.Revision, &entry.RequestID, &stored); err != nil {
+			if err := rows.Scan(&fetch.DecisionRevision, &key, &interruptID, &revision, &requestID, &stored); err != nil {
 				return err
 			}
+			if key == nil {
+				continue // the response has no DECIDED card
+			}
+			if interruptID == nil || revision == nil || requestID == nil {
+				return domain.ErrLedgerFault
+			}
+			entry := domain.FetchedDecision{InterruptKey: *key, InterruptID: *interruptID, Revision: *revision, RequestID: *requestID}
 			decision, canonical, err := domain.ParseDecisionRequest(stored)
 			if err != nil || !bytes.Equal(canonical, stored) || decision.RequestID != entry.RequestID {
 				return domain.ErrLedgerFault
@@ -477,17 +533,16 @@ LIMIT $3`, scope.responseID, scope.projectID, domain.MaxFetchDecisions+1)
 // The ACK must bind the fetched request_id, revision and decision_sha256. The
 // canonical ACK bytes are stored; a byte-identical replay returns Replay and
 // any other ACK of a closed card is ErrAckConflict.
-func (r *ExecutionInterruptRepository) Ack(ctx context.Context, fence domain.ClaimFence, ack domain.Ack, canonical []byte) (domain.AckResult, error) {
+func (r *ExecutionInterruptRepository) Ack(ctx context.Context, fence domain.ClaimFence, raw []byte) (domain.AckResult, error) {
 	if r == nil || r.shared == nil || r.permissions == nil {
 		return domain.AckResult{}, domain.ErrStaleFence
 	}
-	if !domain.ValidDigest(ack.InterruptKey) || len(canonical) == 0 || len(canonical) > domain.MaxAckBodyBytes ||
-		(ack.Outcome == domain.AckApplied) != (ack.ChildCheckpointID != nil) ||
-		(ack.Outcome != domain.AckApplied && ack.Outcome != domain.AckStale) {
+	ack, canonical, err := domain.ParseAck(raw)
+	if err != nil {
 		return domain.AckResult{}, domain.ErrInvalidAck
 	}
 	result := domain.AckResult{InterruptKey: ack.InterruptKey}
-	err := r.shared.WithinTx(ctx, interruptWriteTx, func(tx sqlExecutor) error {
+	err = r.shared.WithinTx(ctx, interruptWriteTx, func(tx sqlExecutor) error {
 		scope, err := r.lockInterruptClaim(ctx, tx, fence)
 		if err != nil {
 			return err
@@ -578,6 +633,16 @@ func (r *ExecutionInterruptRepository) SupersedeForResponse(ctx context.Context,
 func closeOpenExecutionInterrupts(ctx context.Context, tx sqlExecutor, rootResponseID string, state domain.State, by domain.Closer) ([]domain.Resolved, error) {
 	if tx == nil || !domain.ValidResponseMessageID(rootResponseID) || !by.Valid() {
 		return nil, domain.ErrInvalidClose
+	}
+	// Take the per-response lock that Raise takes, so a raise in flight
+	// commits first and its card is closed by the UPDATE below.
+	var locked int
+	err := tx.QueryRow(ctx, `SELECT 1 FROM elitea_runtime.execution_interrupt_responses WHERE root_response_id = $1::uuid FOR UPDATE`, rootResponseID).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return []domain.Resolved{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("execution interrupt close: %w", err)
 	}
 	var actor, claim any
 	if by.ActorUserID > 0 {

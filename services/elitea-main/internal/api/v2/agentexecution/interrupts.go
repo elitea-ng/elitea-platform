@@ -1,6 +1,7 @@
 package agentexecution
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -92,7 +93,7 @@ func NewCurrentExecutionInterruptRoute(useCase ExecutionInterruptUseCase, authCo
 			return
 		}
 		if r.ContentLength != 0 || len(r.TransferEncoding) != 0 || r.URL.RawQuery != "" {
-			writeError(w, http.StatusBadRequest, "Invalid interrupt request")
+			writeInterruptCode(w, http.StatusBadRequest, "agent_interrupt_invalid_decision", "This interrupt request is not valid.")
 			return
 		}
 		listed, err := useCase.List(r.Context(), selector)
@@ -104,7 +105,7 @@ func NewCurrentExecutionInterruptRoute(useCase ExecutionInterruptUseCase, authCo
 		for _, item := range listed.Interrupts {
 			body.Interrupts = append(body.Interrupts, interruptListItem{Card: item.Card, State: item.State, Revision: item.Revision})
 		}
-		writeJSON(w, http.StatusOK, body)
+		writeInterruptJSON(w, body)
 	})
 	decide := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		selector, ok := interruptSelector(w, r)
@@ -122,12 +123,12 @@ func NewCurrentExecutionInterruptRoute(useCase ExecutionInterruptUseCase, authCo
 			writeInterruptError(w, r, domain.ErrInvalidDecision, fields)
 			return
 		}
-		decision, canonical, err := domain.ParseDecisionRequest(raw)
+		_, canonical, err := domain.ParseDecisionRequest(raw)
 		if err != nil {
 			writeInterruptError(w, r, err, fields)
 			return
 		}
-		result, err := useCase.Decide(r.Context(), domain.DecideInput{Selector: selector, InterruptKey: key, Decision: decision, Canonical: canonical})
+		result, err := useCase.Decide(r.Context(), domain.DecideInput{Selector: selector, InterruptKey: key, Canonical: canonical})
 		if err != nil {
 			writeInterruptError(w, r, err, fields)
 			return
@@ -168,6 +169,22 @@ func interruptSelector(w http.ResponseWriter, r *http.Request) (domain.Selector,
 		return domain.Selector{}, false
 	}
 	return selector, true
+}
+
+// writeInterruptJSON writes a 200 without HTML escaping, so stored card text
+// reaches the client as the bytes the ledger holds.
+func writeInterruptJSON(w http.ResponseWriter, value any) {
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		writeError(w, http.StatusInternalServerError, "Interrupt request failed")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body.Bytes())
 }
 
 // writeInterruptCode writes the fanout-interrupt-error.v1 envelope.

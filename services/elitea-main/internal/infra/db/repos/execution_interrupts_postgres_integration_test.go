@@ -22,6 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	domain "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/executioninterrupt"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenant"
 )
 
 const interruptContractFixtures = "../../../../../../libs/jsonschema/runtime/v1/fixtures"
@@ -41,7 +42,7 @@ type interruptHarness struct {
 	t              *testing.T
 	pool           *pgxpool.Pool
 	repo           *ExecutionInterruptRepository
-	executionID    string
+	executions     map[string]string
 	conversationID int64
 	responses      []string
 	sequence       int
@@ -54,10 +55,9 @@ func newInterruptHarness(t *testing.T) *interruptHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := &interruptHarness{t: t, pool: pool, repo: repo, executionID: strings.Repeat("ab", 16)}
+	h := &interruptHarness{t: t, pool: pool, repo: repo, executions: map[string]string{}}
 	h.seedPrincipals()
 	h.conversationID = h.seedConversation()
-	h.seedExecution(h.executionID)
 	return h
 }
 
@@ -127,7 +127,8 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) SELEC
 	return conversationID
 }
 
-// newResponse seeds a question by user 8 and the agent's response to it.
+// newResponse seeds a question by user 8, the agent's response to it, and the
+// running execution bound to that response.
 func (h *interruptHarness) newResponse() string {
 	h.t.Helper()
 	var responseID string
@@ -150,6 +151,16 @@ RETURNING uuid::text`, h.conversationID).Scan(&responseID); err != nil {
 		h.t.Fatal(err)
 	}
 	h.responses = append(h.responses, responseID)
+	sum := sha256.Sum256([]byte(h.t.Name() + responseID))
+	executionID := hex.EncodeToString(sum[:16])
+	h.seedExecution(executionID)
+	h.exec(`
+INSERT INTO elitea_runtime.agent_execution_jobs (
+    execution_id, generation, capability_id, input_bundle_id, request_entry_id,
+    client_stream_id, client_message_id, client_execution_generation, sio_event
+) VALUES ($1, 1, 'agent.execute.application.v1', $2, 'request', 'stream-1', $3, '1', 'chat_predict')`,
+		executionID, "bundle-"+executionID, responseID)
+	h.executions[responseID] = executionID
 	return responseID
 }
 
@@ -179,20 +190,15 @@ INSERT INTO elitea_runtime.execution_jobs (
 		executionID, "command-"+executionID, "bundle-"+executionID, "idempotency-"+executionID)
 }
 
-// bindLiveClaim binds the execution to the response and gives it a live,
-// granted command, a current workload session and an ordinary claim.
-func (h *interruptHarness) bindLiveClaim(executionID, responseID string) domain.ClaimFence {
+// bindLiveClaim gives the response's execution a live, granted command, a
+// current workload session and an ordinary claim.
+func (h *interruptHarness) bindLiveClaim(responseID string) domain.ClaimFence {
 	h.t.Helper()
+	executionID := h.executions[responseID]
 	fence := domain.ClaimFence{
 		ClaimID: "claim-" + executionID, ExecutionID: executionID, Generation: 1,
 		WorkloadIdentity: "spiffe://elitea.test/runtime/rust-worker", FenceToken: []byte(strings.Repeat("f", 32)),
 	}
-	h.exec(`
-INSERT INTO elitea_runtime.agent_execution_jobs (
-    execution_id, generation, capability_id, input_bundle_id, request_entry_id,
-    client_stream_id, client_message_id, client_execution_generation, sio_event
-) VALUES ($1, 1, 'agent.execute.application.v1', $2, 'request', 'stream-1', $3, '1', 'chat_predict')`,
-		executionID, "bundle-"+executionID, responseID)
 	envelope := []byte("envelope-" + executionID)
 	digest := sha256.Sum256(envelope)
 	h.exec(`
@@ -252,7 +258,7 @@ func (h *interruptHarness) card(fixture string, mutate func(map[string]any)) (ke
 func (h *interruptHarness) raiseInput(responseID string, raw []byte) domain.RaiseInput {
 	h.sequence++
 	return domain.RaiseInput{
-		ProjectID: 1, RootResponseID: responseID, ExecutionID: h.executionID, Generation: 1,
+		ProjectID: 1, RootResponseID: responseID, ExecutionID: h.executions[responseID], Generation: 1,
 		SourceEventID: fmt.Sprintf("event-%s-%d", h.t.Name(), h.sequence), SourceClaimID: "claim-raise",
 		Frontier: domain.Frontier{ChildThread: "child-thread-1", FanoutNode: "research", Ordinal: 1},
 		Card:     raw,
@@ -287,10 +293,10 @@ func decisionBody(t *testing.T, requestSeed, action, value string, credentialRef
 }
 
 func (h *interruptHarness) decide(actor int64, responseID, key, requestSeed, action, value string) (domain.DecideResult, error) {
-	decision, canonical := decisionBody(h.t, requestSeed, action, value, "")
+	_, canonical := decisionBody(h.t, requestSeed, action, value, "")
 	return h.repo.Decide(h.t.Context(), domain.DecideInput{
 		Selector:     domain.Selector{ProjectID: 1, ActorUserID: actor, ResponseMessageID: responseID},
-		InterruptKey: key, Decision: decision, Canonical: canonical,
+		InterruptKey: key, Canonical: canonical,
 	})
 }
 
@@ -519,10 +525,13 @@ func TestDecideRefusesInvalidActionStaleRevisionAndUnknownKey(t *testing.T) {
 	if _, err := h.decide(interruptOwner, response, key, "r", "edit", "x"); !errors.Is(err, domain.ErrInvalidDecision) {
 		t.Fatalf("action not offered: %v", err)
 	}
-	decision, canonical := decisionBody(t, "stale", "approve", "", "")
-	decision.ExpectedRevision = 2
+	staleSum := sha256.Sum256([]byte("stale"))
+	_, canonical, err := domain.ParseDecisionRequest([]byte(`{"action":"approve","expected_revision":2,"request_id":"` + hex.EncodeToString(staleSum[:]) + `","value":""}`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := h.repo.Decide(t.Context(), domain.DecideInput{
-		Selector: domain.Selector{ProjectID: 1, ActorUserID: interruptOwner, ResponseMessageID: response}, InterruptKey: key, Decision: decision, Canonical: canonical,
+		Selector: domain.Selector{ProjectID: 1, ActorUserID: interruptOwner, ResponseMessageID: response}, InterruptKey: key, Canonical: canonical,
 	}); !errors.Is(err, domain.ErrAlreadyResolved) {
 		t.Fatalf("stale expected revision: %v", err)
 	}
@@ -644,8 +653,8 @@ func TestDecideAuthorizationInsideTheTransaction(t *testing.T) {
 	key := h.raise(response, "fanout-interrupt-card-v1.json")
 	refused := func(name string, selector domain.Selector) {
 		t.Helper()
-		decision, canonical := decisionBody(t, name, "approve", "", "")
-		_, err := h.repo.Decide(t.Context(), domain.DecideInput{Selector: selector, InterruptKey: key, Decision: decision, Canonical: canonical})
+		_, canonical := decisionBody(t, name, "approve", "", "")
+		_, err := h.repo.Decide(t.Context(), domain.DecideInput{Selector: selector, InterruptKey: key, Canonical: canonical})
 		if !errors.Is(err, domain.ErrNotAllowed) {
 			t.Errorf("%s: %v, want ErrNotAllowed", name, err)
 		}
@@ -766,17 +775,17 @@ func (h *interruptHarness) ack(fence domain.ClaimFence, ack domain.Ack) (domain.
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	parsed, canonical, err := domain.ParseAck(encoded)
+	_, canonical, err := domain.ParseAck(encoded)
 	if err != nil {
 		h.t.Fatalf("ack fixture: %v", err)
 	}
-	return h.repo.Ack(h.t.Context(), fence, parsed, canonical)
+	return h.repo.Ack(h.t.Context(), fence, canonical)
 }
 
 func TestFetchAndAckUnderTheLiveClaim(t *testing.T) {
 	h := newInterruptHarness(t)
 	response := h.newResponse()
-	fence := h.bindLiveClaim(h.executionID, response)
+	fence := h.bindLiveClaim(response)
 	empty, err := h.repo.FetchDecided(t.Context(), fence)
 	if err != nil || len(empty.Decisions) != 0 || empty.DecisionRevision != 0 {
 		t.Fatalf("fetch before any card = %+v, %v", empty, err)
@@ -787,9 +796,9 @@ func TestFetchAndAckUnderTheLiveClaim(t *testing.T) {
 	if _, err := h.decide(interruptOwner, response, approve, "fetch-approve", "approve", ""); err != nil {
 		t.Fatal(err)
 	}
-	decision, canonical := decisionBody(t, "fetch-auth", "authorize", "", "tsr_4f9a1c2b7d3e8f60")
+	_, canonical := decisionBody(t, "fetch-auth", "authorize", "", "tsr_4f9a1c2b7d3e8f60")
 	if _, err := h.repo.Decide(t.Context(), domain.DecideInput{
-		Selector: domain.Selector{ProjectID: 1, ActorUserID: interruptAsker, ResponseMessageID: response}, InterruptKey: auth, Decision: decision, Canonical: canonical,
+		Selector: domain.Selector{ProjectID: 1, ActorUserID: interruptAsker, ResponseMessageID: response}, InterruptKey: auth, Canonical: canonical,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -863,7 +872,7 @@ func TestFetchAndAckUnderTheLiveClaim(t *testing.T) {
 func TestFetchAndAckRefuseStaleFences(t *testing.T) {
 	h := newInterruptHarness(t)
 	response := h.newResponse()
-	fence := h.bindLiveClaim(h.executionID, response)
+	fence := h.bindLiveClaim(response)
 	key := h.raise(response, "fanout-interrupt-card-v1.json")
 	if _, err := h.decide(interruptOwner, response, key, "fence", "approve", ""); err != nil {
 		t.Fatal(err)
@@ -891,28 +900,40 @@ func TestFetchAndAckRefuseStaleFences(t *testing.T) {
 		}
 	}
 	for name, statement := range map[string]string{
-		"node recovery claim": `UPDATE elitea_runtime.execution_claims SET recovery_mode = 'NODE_RECOVERY' WHERE claim_id = $1`,
-		"released claim":      `UPDATE elitea_runtime.execution_claims SET released_at = clock_timestamp() WHERE claim_id = $1`,
-		"stopped execution":   `UPDATE elitea_runtime.execution_jobs SET desired_state = 'CANCELLED' WHERE execution_id = (SELECT execution_id FROM elitea_runtime.execution_claims WHERE claim_id = $1)`,
+		"node recovery claim":   `UPDATE elitea_runtime.execution_claims SET recovery_mode = 'NODE_RECOVERY' WHERE claim_id = $1`,
+		"released claim":        `UPDATE elitea_runtime.execution_claims SET released_at = clock_timestamp() WHERE claim_id = $1`,
+		"stopped execution":     `UPDATE elitea_runtime.execution_jobs SET desired_state = 'CANCELLED' WHERE execution_id = (SELECT execution_id FROM elitea_runtime.execution_claims WHERE claim_id = $1)`,
+		"expired lease":         `UPDATE elitea_runtime.execution_claims SET claimed_at = clock_timestamp() - interval '2 seconds', lease_expires_at = clock_timestamp() - interval '1 second' WHERE claim_id = $1`,
+		"expired session":       `UPDATE elitea_runtime.workload_sessions SET expires_at = clock_timestamp() - interval '1 second' WHERE workload_session_id = (SELECT workload_session_id FROM elitea_runtime.execution_claims WHERE claim_id = $1)`,
+		"revoked session":       `UPDATE elitea_runtime.workload_sessions SET revoked_at = clock_timestamp() WHERE workload_session_id = (SELECT workload_session_id FROM elitea_runtime.execution_claims WHERE claim_id = $1)`,
+		"past command deadline": `UPDATE elitea_runtime.command_outbox SET deadline = clock_timestamp() - interval '1 second' WHERE execution_id = (SELECT execution_id FROM elitea_runtime.execution_claims WHERE claim_id = $1)`,
+		"terminal result": `INSERT INTO elitea_runtime.output_inbox (
+    event_id, logical_output_id, execution_id, generation, claim_id, fence_token, workload_identity, workload_session_id,
+    producer_id, claim_attempt, lease_epoch, stream_id, sequence, payload_type, payload_digest, payload_bytes,
+    settlement_proposal_id, settlement_outcome, settlement_proposal_bytes, settlement_proposal_digest,
+    settlement_idempotency_key, occurred_at)
+SELECT 'terminal-' || c.claim_id, 'terminal-output', c.execution_id, 1, c.claim_id, c.fence_token, c.workload_identity,
+    c.workload_session_id, c.producer_id, 1, 1, 'stream', 1, 'INDEX_INGEST_RESULT', decode(repeat('ab', 32), 'hex'), '{}'::bytea,
+    'proposal-terminal', 'SUCCEEDED', '{}'::bytea, decode(repeat('ab', 32), 'hex'), 'idempotency-terminal', now()
+FROM elitea_runtime.execution_claims c WHERE c.claim_id = $1`,
 	} {
-		tx, err := h.pool.Begin(t.Context())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := tx.Exec(t.Context(), statement, fence.ClaimID); err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		if err := tx.Commit(t.Context()); err != nil {
-			t.Fatal(err)
-		}
+		h.exec(statement, fence.ClaimID)
 		if _, err := h.repo.FetchDecided(t.Context(), fence); !errors.Is(err, domain.ErrStaleFence) {
 			t.Errorf("%s fetch: %v", name, err)
 		}
 		if _, err := h.ack(fence, ack); !errors.Is(err, domain.ErrStaleFence) {
 			t.Errorf("%s ack: %v", name, err)
 		}
-		h.exec(`UPDATE elitea_runtime.execution_claims SET recovery_mode = 'NONE', released_at = NULL WHERE claim_id = $1`, fence.ClaimID)
+		h.exec(`UPDATE elitea_runtime.execution_claims SET recovery_mode = 'NONE', released_at = NULL,
+ lease_expires_at = clock_timestamp() + interval '10 minutes' WHERE claim_id = $1`, fence.ClaimID)
 		h.exec(`UPDATE elitea_runtime.execution_jobs SET desired_state = 'RUNNING' WHERE execution_id = $1`, fence.ExecutionID)
+		h.exec(`UPDATE elitea_runtime.workload_sessions SET expires_at = clock_timestamp() + interval '1 hour', revoked_at = NULL
+ WHERE workload_session_id = (SELECT workload_session_id FROM elitea_runtime.execution_claims WHERE claim_id = $1)`, fence.ClaimID)
+		h.exec(`UPDATE elitea_runtime.command_outbox SET deadline = clock_timestamp() + interval '1 hour' WHERE execution_id = $1`, fence.ExecutionID)
+		h.exec(`DELETE FROM elitea_runtime.output_inbox WHERE execution_id = $1`, fence.ExecutionID)
+		if live, err := h.repo.FetchDecided(t.Context(), fence); err != nil || len(live.Decisions) != 1 {
+			t.Fatalf("after restoring %s: %+v %v", name, live, err)
+		}
 	}
 	// The original actor losing the decision permission stops delivery.
 	h.exec(`DELETE FROM public.auth_core__project_user_role WHERE project_id = 1 AND user_id = 8`)
@@ -928,7 +949,7 @@ func TestFetchAndAckRefuseStaleFences(t *testing.T) {
 func TestLateAckAfterCancelRefused(t *testing.T) {
 	h := newInterruptHarness(t)
 	response := h.newResponse()
-	fence := h.bindLiveClaim(h.executionID, response)
+	fence := h.bindLiveClaim(response)
 	key := h.raise(response, "fanout-interrupt-card-v1.json")
 	if _, err := h.decide(interruptOwner, response, key, "late-ack", "approve", ""); err != nil {
 		t.Fatal(err)
@@ -999,10 +1020,12 @@ func (c *interruptStatementCounter) take() []string {
 	return out
 }
 
-// TestDecideSingleTransaction pins the per-decision budget: one transaction,
-// at most 9 statements (3 tenant binding, 1 response lock, 3 RBAC, 1 card
-// lock, 1 CAS+revision+audit), and 3 row writes (card, response revision,
-// audit). A replay is one transaction of the same reads plus one.
+// TestDecideSingleTransaction pins the per-decision budget: one transaction
+// and at most 11 statements: 3 tenant binding, 1 response row lock, 1
+// ownership and membership check (re-read after the lock), 3 RBAC, 1
+// per-response row lock, 1 card lock, 1 CAS+revision+audit. It writes 3 rows
+// (card, response revision, audit). A replay is the same reads without the
+// CAS.
 func TestDecideSingleTransaction(t *testing.T) {
 	h := newInterruptHarness(t)
 	response := h.newResponse()
@@ -1019,8 +1042,8 @@ func TestDecideSingleTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	decision, canonical := decisionBody(t, "budget", "approve", "", "")
-	input := domain.DecideInput{Selector: domain.Selector{ProjectID: 1, ActorUserID: interruptOwner, ResponseMessageID: response}, InterruptKey: key, Decision: decision, Canonical: canonical}
+	_, canonical := decisionBody(t, "budget", "approve", "", "")
+	input := domain.DecideInput{Selector: domain.Selector{ProjectID: 1, ActorUserID: interruptOwner, ResponseMessageID: response}, InterruptKey: key, Canonical: canonical}
 	counter.take()
 	if _, err := repo.Decide(t.Context(), input); err != nil {
 		t.Fatal(err)
@@ -1040,8 +1063,8 @@ func TestDecideSingleTransaction(t *testing.T) {
 		t.Fatalf("decision used begins=%d commits=%d: %v", begins, commits, statements)
 	}
 	work := len(statements) - begins - commits
-	if work > 9 {
-		t.Fatalf("decision used %d statements, budget 9: %v", work, statements)
+	if work > 11 {
+		t.Fatalf("decision used %d statements, budget 11: %v", work, statements)
 	}
 	t.Logf("decision statements: %d work + BEGIN/COMMIT: %v", work, statements)
 	var writes int
@@ -1054,7 +1077,7 @@ func TestDecideSingleTransaction(t *testing.T) {
 	if _, err := repo.Decide(t.Context(), input); err != nil {
 		t.Fatal(err)
 	}
-	if replay := counter.take(); len(replay) > 12 {
+	if replay := counter.take(); len(replay) > 12 { // 10 reads + BEGIN/COMMIT
 		t.Fatalf("replay used %d statements: %v", len(replay), replay)
 	}
 }
@@ -1162,7 +1185,7 @@ func TestDecideWaitsForAnInFlightDecision(t *testing.T) {
 	go func() {
 		result, err := h.repo.Decide(t.Context(), domain.DecideInput{
 			Selector:     domain.Selector{ProjectID: 1, ActorUserID: interruptOwner, ResponseMessageID: response},
-			InterruptKey: key, Decision: decision, Canonical: canonical,
+			InterruptKey: key, Canonical: canonical,
 		})
 		same <- outcome{result, err}
 	}()
@@ -1179,5 +1202,200 @@ func TestDecideWaitsForAnInFlightDecision(t *testing.T) {
 	}
 	if got := <-other; !errors.Is(got.err, domain.ErrAlreadyResolved) {
 		t.Fatalf("other request after the in-flight decision = %+v, %v; want 409", got.result, got.err)
+	}
+}
+
+// The decider loses conversation membership while waiting for another tab's
+// lock on the response. The ownership rule is re-read after the lock, so the
+// decision is refused (review finding: one-statement lock+check used the
+// pre-wait snapshot).
+func TestDecideRechecksMembershipAfterTheLockWait(t *testing.T) {
+	h := newInterruptHarness(t)
+	response := h.newResponse()
+	key := h.raise(response, "fanout-interrupt-card-v1.json")
+	holder, err := h.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	if _, err := holder.Exec(t.Context(), `SELECT 1 FROM p_1.chat_message_group WHERE uuid = $1::uuid FOR UPDATE`, response); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.decide(interruptAsker, response, key, "member-wait", "approve", "")
+		done <- err
+	}()
+	h.waitForLockWaiters(1)
+	h.exec(`DELETE FROM p_1.chat_participant_mapping mapping USING p_1.chat_participants participant
+WHERE mapping.participant_id = participant.id AND participant.entity_meta->>'id' = '8'`)
+	if err := holder.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, domain.ErrNotAllowed) {
+		t.Fatalf("decision by a member removed during the wait: %v, want ErrNotAllowed", err)
+	}
+	if got := h.row(response, key); got.state != "PENDING" {
+		t.Fatalf("row = %+v", got)
+	}
+}
+
+// The claim's lease expires while FetchDecided waits for the job lock. The
+// authority is looked up again after the lock with the database clock
+// (contract §7), so nothing is delivered under the expired lease.
+func TestFetchRechecksTheClaimAfterTheLockWait(t *testing.T) {
+	h := newInterruptHarness(t)
+	response := h.newResponse()
+	fence := h.bindLiveClaim(response)
+	key := h.raise(response, "fanout-interrupt-card-v1.json")
+	if _, err := h.decide(interruptOwner, response, key, "lease-wait", "approve", ""); err != nil {
+		t.Fatal(err)
+	}
+	h.exec(`UPDATE elitea_runtime.execution_claims SET lease_expires_at = clock_timestamp() + interval '1500 milliseconds' WHERE claim_id = $1`, fence.ClaimID)
+	holder, err := h.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = holder.Rollback(context.Background()) }()
+	if _, err := holder.Exec(t.Context(), `SELECT 1 FROM elitea_runtime.execution_jobs WHERE execution_id = $1 FOR UPDATE`, fence.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.repo.FetchDecided(t.Context(), fence)
+		done <- err
+	}()
+	h.waitForLockWaiters(1)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var expired bool
+		if err := h.pool.QueryRow(t.Context(), `SELECT lease_expires_at <= clock_timestamp() FROM elitea_runtime.execution_claims WHERE claim_id = $1`, fence.ClaimID).Scan(&expired); err != nil {
+			t.Fatal(err)
+		}
+		if expired {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("lease did not expire")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if err := holder.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; !errors.Is(err, domain.ErrStaleFence) {
+		t.Fatalf("fetch after the lease expired during the wait: %v, want ErrStaleFence", err)
+	}
+}
+
+// A raise is in flight (its card is written, not committed) when a stop
+// closes the response. Cancel takes the per-response lock itself, so it waits
+// for the raise and closes the new card too instead of leaving it PENDING.
+func TestCancelSeesACardRaisedWhileItWaited(t *testing.T) {
+	h := newInterruptHarness(t)
+	response := h.newResponse()
+	first := h.raise(response, "fanout-interrupt-card-v1.json")
+	key, raw := h.card("fanout-interrupt-card-v1.json", nil)
+	raising, err := h.pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raising.Rollback(context.Background()) }()
+	if err := tenant.BindProject(t.Context(), raising, tenant.Project{ID: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raiseExecutionInterrupt(t.Context(), pgxExecutor{queryer: raising}, h.raiseInput(response, raw)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan []domain.Resolved, 1)
+	go func() {
+		done <- closeOpen(t, h, response, domain.StateCancelled, domain.Closer{ActorUserID: interruptOwner})
+	}()
+	h.waitForLockWaiters(1)
+	if err := raising.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if closed := <-done; len(closed) != 2 {
+		t.Fatalf("cancel closed %d cards, want 2", len(closed))
+	}
+	for _, k := range []string{first, key} {
+		if got := h.row(response, k); got.state != "CANCELLED" {
+			t.Fatalf("card %s = %+v", k[:8], got)
+		}
+	}
+}
+
+// Raise binds the raising execution to the root response and the project.
+func TestRaiseRefusesAnExecutionNotBoundToTheResponse(t *testing.T) {
+	h := newInterruptHarness(t)
+	mine, other := h.newResponse(), h.newResponse()
+	_, raw := h.card("fanout-interrupt-card-v1.json", nil)
+	input := h.raiseInput(mine, raw)
+	input.ExecutionID = h.executions[other]
+	if _, err := h.repo.Raise(t.Context(), input); !errors.Is(err, domain.ErrInvalidRaise) {
+		t.Fatalf("execution of another response: %v", err)
+	}
+	h.exec(`UPDATE elitea_runtime.execution_jobs SET resource_project_id = 2, projection_project_id = 2, tenant_id = '2' WHERE execution_id = $1`, h.executions[mine])
+	if _, err := h.repo.Raise(t.Context(), h.raiseInput(mine, raw)); !errors.Is(err, domain.ErrInvalidRaise) {
+		t.Fatalf("execution of another project: %v", err)
+	}
+}
+
+// More than MaxOpenInterrupts open or DECIDED rows can only come from a
+// broken invariant; List and FetchDecided refuse them instead of truncating.
+func TestFetchAndListRefuseMoreThanTheCap(t *testing.T) {
+	h := newInterruptHarness(t)
+	response := h.newResponse()
+	fence := h.bindLiveClaim(response)
+	var last string
+	for i := range domain.MaxOpenInterrupts {
+		last = h.raise(response, "fanout-interrupt-card-v1.json")
+		if _, err := h.decide(interruptOwner, response, last, fmt.Sprintf("cap-%d", i), "approve", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if fetch, err := h.repo.FetchDecided(t.Context(), fence); err != nil || len(fetch.Decisions) != domain.MaxOpenInterrupts {
+		t.Fatalf("fetch at the cap = %d, %v", len(fetch.Decisions), err)
+	}
+	h.exec(`INSERT INTO elitea_runtime.execution_interrupts (
+    root_response_id, interrupt_key, project_id, conversation_id, execution_id, generation, interrupt_id, kind,
+    available_actions, frontier, card_json, payload_sha256, source_event_id, state, revision, request_id,
+    decision_json, decided_by, decided_at)
+SELECT root_response_id, repeat('e', 64), project_id, conversation_id, execution_id, generation, 'injected', kind,
+    available_actions, frontier, card_json, payload_sha256, 'injected-event', state, revision, request_id,
+    decision_json, decided_by, decided_at
+FROM elitea_runtime.execution_interrupts WHERE interrupt_key = $1`, last)
+	if _, err := h.repo.FetchDecided(t.Context(), fence); !errors.Is(err, domain.ErrLedgerFault) {
+		t.Fatalf("fetch over the cap: %v", err)
+	}
+	if _, err := h.repo.List(t.Context(), domain.Selector{ProjectID: 1, ActorUserID: interruptOwner, ResponseMessageID: response}); !errors.Is(err, domain.ErrLedgerFault) {
+		t.Fatalf("list over the cap: %v", err)
+	}
+}
+
+// Every invalid ACK fixture is refused before any row is touched.
+func TestAckRefusesInvalidBodies(t *testing.T) {
+	h := newInterruptHarness(t)
+	response := h.newResponse()
+	fence := h.bindLiveClaim(response)
+	key := h.raise(response, "fanout-interrupt-card-v1.json")
+	if _, err := h.decide(interruptOwner, response, key, "ack-invalid", "approve", ""); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := filepath.Glob(filepath.Join(interruptContractFixtures, "fanout-interrupt-ack-request-v1.invalid.*.json"))
+	if err != nil || len(paths) == 0 {
+		t.Fatal(paths, err)
+	}
+	for _, path := range paths {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.repo.Ack(t.Context(), fence, raw); !errors.Is(err, domain.ErrInvalidAck) {
+			t.Errorf("%s: %v", filepath.Base(path), err)
+		}
+	}
+	if got := h.row(response, key); got.state != "DECIDED" {
+		t.Fatalf("row = %+v", got)
 	}
 }

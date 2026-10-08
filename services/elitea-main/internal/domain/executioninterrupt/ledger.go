@@ -39,12 +39,11 @@ type RaiseResult struct {
 	Replay       bool
 }
 
-// DecideInput is one parsed public decision. Canonical is the canonical body
-// returned by ParseDecisionRequest.
+// DecideInput is one public decision. Canonical is the canonical body from
+// ParseDecisionRequest; the ledger re-derives the decision from these bytes.
 type DecideInput struct {
 	Selector     Selector
 	InterruptKey string
-	Decision     Decision
 	Canonical    []byte
 }
 

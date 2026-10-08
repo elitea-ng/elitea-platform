@@ -269,6 +269,9 @@ func TestExecutionInterruptListMatchesContract(t *testing.T) {
 			if w.Code != spec.status {
 				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 			}
+			if spec.status == 400 {
+				assertContractBody(t, "fanout-interrupt-error", w.Body.Bytes())
+			}
 			if spec.status == 200 {
 				assertContractBody(t, "fanout-interrupt-list", w.Body.Bytes())
 				if useCase.selector != (domain.Selector{ProjectID: 7, ActorUserID: 11, ResponseMessageID: interruptTestResponse}) {
