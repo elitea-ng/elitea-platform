@@ -427,3 +427,4 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 
 - [Toolkit request recovery](toolkit-request-recovery.md) records browser recovery before execution ID receipt and one-call evidence.
 - [Deferred MCP elicitation](external-mcp-elicitation-deferred.md) records the later client approval option and its authority boundary.
+- [Go module advisories](go-module-advisories-20261008.md) records the cel-go and klauspost/compress fixes, the deferred x/crypto fix (Go 1.26), and the guard against linking x/crypto/ssh and openpgp.
