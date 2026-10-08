@@ -84,18 +84,21 @@ Changed expectations in existing tests:
 - `direct_tool_tests.rs` and `pipeline_tests.rs` (an MCP dict result): a dict result now renders as fenced pretty JSON instead of compact text.
 - `result_policy_prefers_terminal_data_then_ai_messages_then_declared_state` passes unchanged.
 
-Full suites, at commit `e4983711`:
+Full suites:
 
 | Command | Result |
 |---|---|
-| `cargo test --locked --all-targets --all-features --no-fail-fast` (PG18, receipt tests required) | 2,134 passed, 0 failed, 63 ignored (13 targets) |
-| `cargo test --locked` | 1,944 passed, 0 failed, 2 ignored |
+| `cargo test --locked --all-targets --all-features --no-fail-fast` (PG18, receipt tests required) | `e4983711`: 2,134 passed, 0 failed, 63 ignored (13 targets). Final head `3fb51906`: 2,133 passed, 1 failed, 63 ignored. The failure is `execution::output_delivery_tests::pending_frame_from_another_fence_fails_closed`; this branch does not change `src/execution`, and the test passed 8 of 8 isolated runs. |
+| `cargo test --locked` (final head) | 1,944 passed, 0 failed, 2 ignored |
 | `cargo clippy --locked --all-targets --all-features -- -D warnings`, `cargo fmt --check` | clean |
 | `go test ./internal/infra/storage/...` (Main) | pass |
 | Web vitest `lib/flow-editor/constants` | 48 passed |
 | Web `typecheck`, `lint` | clean |
 
 Skipped: the secure-NATS test (`ELITEA_REQUIRE_NATS_SECURE_TEST`). It needs the CI NATS test server.
+
+One earlier full run at `3fb51906` had 16 PostgreSQL harness failures. The admin connection hit its 5 s acquire
+timeout while a release image build saturated the machine. The rerun above had none of them.
 
 ## 4. Performance
 
@@ -131,7 +134,7 @@ Skipped: the secure-NATS test (`ELITEA_REQUIRE_NATS_SECURE_TEST`). It needs the 
 
 | Component | Image | Commit |
 |---|---|---|
-| Worker | `elitea-worker-rust:result-fix-e49837110bc8` (`04ed38f5dfd9`) | `e4983711`, default features |
+| Worker | `elitea-worker-rust:result-fix-e49837110bc8` (`04ed38f5dfd9`), then `result-fix-3fb519060495` | `e4983711`, then the final head `3fb51906`, default features. Chat 6 was re-checked on the final image: `L` gives "LEFT ran for L", and the answer stays after reload. |
 | Main | `elitea-main:result-fix-8d6b08fcd2c4` (`b29a0de819c3`) | `8d6b08fc` |
 | Web | `elitea-web:result-fix-8d6b08fcd2c4` (`a1f6c1052d41`) | `8d6b08fc`; later commits only touched Worker code and a Web citation |
 
@@ -165,7 +168,24 @@ Checklist (`.claude/rules/security.md`):
 - **Strict schema:** the trace is read fail-closed.
 - **Injection:** no SQL, shell, URL or template is built.
 
-## 9. Follow-ups
+## 9. Reviews
+
+- **`code-review` (high):** 3 findings.
+  - **Fixed in `3fb51906`, 2 findings:** a blank traced value could fall back to an unrelated static value. That
+    happened when a later node cleaned the traced key, and when the assistant message was thinking-only. The trace is
+    now authoritative.
+  - **Kept, 1 finding:** the other Web reserved-key citations are stale on main. PR #1157 refreshes them, and
+    changing them here would conflict.
+- **`security-review`:** no findings. Checked:
+  - spoofing the trace (the reserved key, declared outputs only, internal-key filtering, Map/Parallel/nested
+    pipelines);
+  - the new data display;
+  - fence injection (pretty JSON, DOMPurify in the Web Markdown renderer);
+  - logging.
+- **Earlier subagent finding**, fixed in `8d6b08fc`: empty defaults no longer appear in the static fallback.
+- **Guard** added in `e4983711`: a node not bound to its trace fails the compile.
+
+## 10. Follow-ups
 
 - **ADK fan-in join** (existing defect, flagged as a separate task): a node reached by two direct edges waits for both. A nested pipeline with two branches to END never produces its result. Converging router branches may hang at the root, but this is not verified.
 - **Structured Code nodes with `output: []`:** they write keys they did not declare, so they are not traced. The static chain applies.
