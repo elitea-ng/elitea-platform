@@ -988,7 +988,8 @@ func (c *interruptStatementCounter) TraceQueryStart(ctx context.Context, _ *pgx.
 	return ctx
 }
 
-func (c *interruptStatementCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+func (c *interruptStatementCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {
+}
 
 func (c *interruptStatementCounter) take() []string {
 	c.mu.Lock()
