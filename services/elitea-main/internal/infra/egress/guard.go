@@ -76,7 +76,6 @@ type Resolver interface {
 // Guard is the SSRF gate for a tenant-chosen destination. It is safe for
 // concurrent use and immutable after New.
 type Guard struct {
-	allowlist    *egresslib.Allowlist
 	allowPrivate bool
 	resolver     Resolver
 	httpsOnly    bool
@@ -94,9 +93,8 @@ func WithResolver(resolver Resolver) Option {
 	}
 }
 
-// RequireHTTPS refuses every http destination, in Validate and in
-// RoundTripper. Transport() cannot see the scheme, so a caller with this
-// policy must send through RoundTripper.
+// RequireHTTPS refuses every http destination, in Validate and in every
+// request sent through Transport or RoundTripper.
 func RequireHTTPS() Option {
 	return func(g *Guard) { g.httpsOnly = true }
 }
@@ -104,7 +102,7 @@ func RequireHTTPS() Option {
 // New builds a guard over an allowlist. A nil allowlist refuses every private
 // destination.
 func New(allowlist *egresslib.Allowlist, opts ...Option) *Guard {
-	g := &Guard{allowlist: allowlist, resolver: net.DefaultResolver}
+	g := &Guard{resolver: net.DefaultResolver}
 	for _, opt := range opts {
 		opt(g)
 	}
@@ -152,48 +150,45 @@ func (g *Guard) Validate(ctx context.Context, rawURL string) error {
 }
 
 // Transport returns an *http.Transport that dials only through dialContext,
-// never uses a proxy, and caps response headers. Callers that must keep an
-// *http.Transport (to clone it or close idle connections) use this; it does
-// not enforce RequireHTTPS. An *http.Transport never follows redirects; an
-// http.Client wrapped around it does, so such a client must set its own
-// CheckRedirect (each hop still dials through the guard).
+// never uses a proxy, caps response headers, and enforces the scheme policy.
+// An *http.Transport never follows redirects; an http.Client wrapped around
+// it does, so such a client must set its own CheckRedirect (each hop still
+// dials through the guard).
 func (g *Guard) Transport() *http.Transport {
-	t := http.DefaultTransport.(*http.Transport).Clone()
+	var t *http.Transport
+	if base, ok := http.DefaultTransport.(*http.Transport); ok {
+		t = base.Clone()
+	} else {
+		// Another package wrapped DefaultTransport; start from net/http's
+		// documented defaults instead of panicking.
+		t = &http.Transport{
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		}
+	}
 	t.Proxy = nil
+	if g.httpsOnly {
+		// net/http asks Proxy about every request before dialling, so this
+		// is where the transport sees the scheme. It never returns a proxy.
+		t.Proxy = func(req *http.Request) (*url.URL, error) {
+			return nil, g.checkScheme(req.URL.Scheme)
+		}
+	}
 	t.DialContext = g.dialContext
 	t.DialTLSContext = nil
 	t.MaxResponseHeaderBytes = MaxResponseHeaderBytes
 	return t
 }
 
-// RoundTripper returns the guarded transport as an http.RoundTripper that
-// also enforces the scheme policy per request. It is the constructor for any
-// new egress path: a RoundTripper cannot follow a redirect, so a 3xx is
-// returned to the caller and its Location is never dialled.
+// RoundTripper returns the guarded transport as an http.RoundTripper. It is
+// the constructor for any new egress path: a RoundTripper cannot follow a
+// redirect, so a 3xx is returned to the caller and its Location is never
+// dialled.
 func (g *Guard) RoundTripper() http.RoundTripper {
-	return &roundTripper{guard: g, transport: g.Transport()}
-}
-
-type roundTripper struct {
-	guard     *Guard
-	transport *http.Transport
-}
-
-func (rt *roundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if err := rt.guard.checkScheme(req.URL.Scheme); err != nil {
-		// The RoundTripper contract: close the body even on error.
-		if req.Body != nil {
-			_ = req.Body.Close()
-		}
-		return nil, err
-	}
-	return rt.transport.RoundTrip(req)
-}
-
-// CloseIdleConnections lets http.Client.CloseIdleConnections reach the
-// guarded transport, so its owner can release pooled connections on shutdown.
-func (rt *roundTripper) CloseIdleConnections() {
-	rt.transport.CloseIdleConnections()
+	return g.Transport()
 }
 
 // DialContext is dialContext for a caller that builds its own transport, such

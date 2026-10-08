@@ -38,7 +38,9 @@ destination in Main:
 - **TLS** is verified against the URL host, which is net/http's default. The pinned IP literal is only the TCP
   address.
 - **`RoundTripper()`** is the transport-only constructor for new egress paths. A 3xx goes back to the caller and
-  is never followed. The optional `RequireHTTPS()` policy refuses `http` in `Validate` and per request.
+  is never followed. The optional `RequireHTTPS()` policy refuses `http` in `Validate` and in the transport itself:
+  net/http consults `Proxy` before every dial, so an HTTPS-only guard installs a `Proxy` function that checks the
+  scheme and never returns a proxy. A caller holding the concrete `*http.Transport` cannot bypass the policy.
 - **Refusals** carry at most the host. They never echo userinfo, path or query.
 
 ## Business behavior and what was not ported
@@ -64,7 +66,7 @@ Two deliberate behaviour changes affect users:
 
 | Change | Before | After | Reason |
 | --- | --- | --- | --- |
-| Webhook delivery and a 3xx | Followed up to 10 redirects. A 3xx counted as success. | Not followed. Only 2xx is success, and a 3xx is logged as a failed attempt and retried. | Following a 307/308 re-sends the signed body to a Location the tenant never registered. |
+| Webhook delivery and a 3xx | Followed up to 10 redirects. A 3xx counted as success. | Not followed. Only 2xx is success. A 3xx is logged as `failed` with its code after one attempt: it answers the same way on every attempt, so it is terminal like a refusal. A receiver that redirects (for example an http→https 301) must be re-registered at its final URL. | Following a 307/308 re-sends the signed body to a Location the tenant never registered. |
 | CGNAT, benchmarking and site-local destinations | Allowed by default. | Refused unless the allowlist declares private egress. An entry naming a CGNAT or benchmarking address or block (for example `100.64.0.0/10`) now counts as that declaration. | They are internal ranges (Tailscale, carrier NAT, labs), and CGNAT contains a metadata endpoint. |
 
 The webhook refusal text keeps its existing prefix, `webhook destination refused: "<host>" does not resolve to a
@@ -77,10 +79,10 @@ Paths are relative to `services/elitea-main/`.
 
 | Path | Change |
 | --- | --- |
-| `internal/infra/egress/guard.go` | Moved from `internal/api/webhook/ssrf.go` (commit `037ab73e`, a pure move). Adds `Proxy = nil` and the header cap (`:160-166`), `RoundTripper` with the scheme policy (`:173-197`), the TCP-only dial (`:211-216`), the 32-answer bound and the zone drop (`:273-299`), `checkScheme` (`:301`), and redaction of unparseable URLs (`parseDestinationURL`). |
+| `internal/infra/egress/guard.go` | Moved from `internal/api/webhook/ssrf.go` (commit `037ab73e`, a pure move). Adds `Proxy = nil`, the HTTPS-only `Proxy` scheme check, the header cap, and a fallback when another package has wrapped `http.DefaultTransport` (`Transport`, `:157-184`), `RoundTripper` (`:190`), the TCP-only dial (`:206-211`), the 32-answer bound and the zone drop (`:268-294`), `checkScheme` (`:296`), and redaction of unparseable URLs (`parseDestinationURL`, `:313`). |
 | `internal/infra/egress/classify.go` | New. `forbiddenBlocks` (`:24`), `privateBlocks` (`:41`), `classify` (`:76`), NAT64/6to4 `embeddedIPv4` (`:98`), `declaresPrivateEgress` (`:117`). |
 | `internal/api/webhook/ssrf.go` | Thin aliases (`DestinationGuard = egress.Guard`, the same sentinel). Every caller is unchanged. |
-| `internal/api/webhook/dispatcher.go` | `CheckRedirect` returns `http.ErrUseLastResponse` (`:211`). Success is 2xx only (`:334`). |
+| `internal/api/webhook/dispatcher.go` | `CheckRedirect` returns `http.ErrUseLastResponse` (`:211`). Success is 2xx only (`:337`). A 3xx is terminal after one attempt (`:347`). |
 | `internal/api/v2/eliteacore/mcp_oauth_egress.go` | The cloned OAuth/DCR transport drops `Proxy` and caps headers (`:111-112`). |
 | `internal/infra/storage/code_workspace_github.go` | The inline dialler is replaced by `egress.New(allowed).Transport()` (`:73`). |
 | `deploy/helm/elitea/values.yaml` | The MCP allowlist comments now describe the private and forbidden classes and the no-proxy rule. |
@@ -128,12 +130,15 @@ during the session:
 | `TestGuardRoundTripperReturnsRedirectUnfollowed` | A 307 is returned and the Location gets 0 hits. |
 | `TestGuardTransportCapsResponseHeaders` | A 32 KiB header passes; a 128 KiB header is refused. |
 | `TestGuardRequireHTTPSRefusesPlainHTTP` | `Validate` and `RoundTrip` refuse `http` before any connection. The default policy keeps `http`. |
+| `TestGuardRequireHTTPSHoldsOnTheRawTransport` | `Transport().RoundTrip` on an HTTPS-only guard refuses `http`, with 0 target hits and 0 proxy hits while `HTTP(S)_PROXY` is set. |
+| `TestGuardRoundTripperRefusesANilURL` | A request with a nil URL returns an error instead of panicking. |
+| `TestGuardTransportSurvivesAReplacedDefaultTransport` | With `http.DefaultTransport` wrapped by another package, construction does not panic and the transport stays hardened. |
 | `TestGuardVerifiesTLSAgainstTheURLHost` | A certificate for `example.com` passes; `wrong.example`, dialled to the same IP, fails with `x509.HostnameError`. |
 | `TestGuardBoundsResolution` | 32 answers pass and 33 are refused. Zoned answers are refused. A `udp` dial is refused. |
 | `TestGuardRefusalsNeverEchoURLSecrets` | Five refusal paths never contain URL userinfo, path or query secrets. |
 | `TestGuardFilterBudget`, `BenchmarkGuardPermittedIPs` | `classify` allocates 0 times. Filtering 32 answers allocates once. |
 | `TestGuardRoundTripperReleasesIdleConnections` | `http.Client.CloseIdleConnections` reaches the guarded transport. |
-| `webhook/dispatcher_test.go` `TestDispatcherDoesNotFollowRedirects` | The signed body is not re-sent, and a 307 is logged as failed with code 307. |
+| `webhook/dispatcher_test.go` `TestDispatcherDoesNotFollowRedirects` | The signed body is not re-sent, and a 307 is logged as failed with code 307 after exactly one attempt. |
 | `eliteacore/mcp_oauth_egress_test.go` | A base transport with `ProxyFromEnvironment` loses its proxy and gains the header cap. |
 | `storage/code_workspace_github_egress_test.go` | `0.0.0.1`, `192.0.0.8`, `240.0.0.1`, `100.100.100.200` and `64:ff9b::a9fe:a9fe` are refused before connect. No proxy, and the cap is set. |
 
@@ -170,10 +175,10 @@ and filtering at most 32 answers.
 - **Measured:** `BenchmarkGuardPermittedIPs` filters 32 answers in 4.4–5.6 µs/op, 896 B/op, 1 alloc/op (3 runs on
   an arm64 Mac). That is below 0.1% of a typical DNS lookup.
 - **Enforced:** `TestGuardFilterBudget` keeps `classify` at 0 allocations and filtering at 1 or fewer allocations.
-  `MaxResolvedAddresses = 32` bounds the dial loop (`guard.go:67`, `:283`).
+  `MaxResolvedAddresses = 32` bounds the dial loop (`guard.go:67`, `:284`).
 - **Memory:** `MaxResponseHeaderBytes = 64 KiB` (`guard.go:64`) replaces net/http's 10 MiB default per response.
-- **Webhooks:** a 3xx now costs up to three attempts with the existing backoff, instead of up to 10 redirect hops
-  per attempt. That is strictly fewer outbound requests.
+- **Webhooks:** a 3xx now costs one request and no backoff, instead of up to 10 redirect hops on each of up to
+  three attempts.
 
 ## Durability
 
@@ -193,7 +198,8 @@ What changes is when a webhook delivery is logged:
 | DNS answers | `MaxResolvedAddresses` 32; more is a typed refusal | `TestGuardBoundsResolution` (limit / limit+1) |
 | Connect time | `dialTimeout` 10 s per address (unchanged) | existing |
 | Response headers | `MaxResponseHeaderBytes` 64 KiB | `TestGuardTransportCapsResponseHeaders` |
-| Redirects | `RoundTripper` never follows; webhook `CheckRedirect` returns the 3xx | `TestGuardRoundTripperReturnsRedirectUnfollowed`, `TestDispatcherDoesNotFollowRedirects` |
+| Redirects | `RoundTripper` never follows; webhook `CheckRedirect` returns the 3xx, which is terminal | `TestGuardRoundTripperReturnsRedirectUnfollowed`, `TestDispatcherDoesNotFollowRedirects` |
+| Construction | No unchecked `http.DefaultTransport` assertion; a nil request URL is an error, not a panic | `TestGuardTransportSurvivesAReplacedDefaultTransport`, `TestGuardRoundTripperRefusesANilURL` |
 | Network | TCP only | `TestGuardBoundsResolution` |
 | Typed failures | Every refusal wraps `egress.ErrDestinationRefused` (the same value as `webhook.ErrDestinationRefused`) | all refusal tests use `errors.Is` |
 
@@ -207,9 +213,9 @@ dialer, and never wraps `context.Canceled` as a refusal.
 | SSRF to metadata or reserved space | `classify` and `forbiddenBlocks` (`classify.go:24`, `:76`) | `TestGuardAddressClasses`; browser case 1 |
 | IPv6 wrappers of internal IPv4 | `embeddedIPv4` (`classify.go:98`); IPv4-mapped forms are matched natively | the NAT64, 6to4 and mapped rows of the table; browser case 2 |
 | DNS rebinding | Re-resolve and dial the checked IP literal (unchanged) | existing `TestDestinationGuardDialsThePinnedIPNotTheHostname`, the PostgreSQL dial-time test |
-| Proxy bypass | `Proxy = nil` (`guard.go:162`, `mcp_oauth_egress.go:111`) | `TestGuardTransportIgnoresProxyEnvironment`, the MCP test |
-| Redirect to an unvetted host | `RoundTripper` (`guard.go:173`); webhook `CheckRedirect` | the redirect tests |
-| Downgrade to http, for policies that require HTTPS | `RequireHTTPS` / `checkScheme` (`guard.go:100`, `:301`) | `TestGuardRequireHTTPSRefusesPlainHTTP` |
+| Proxy bypass | `Proxy = nil` (`guard.go:172`, `mcp_oauth_egress.go:111`) | `TestGuardTransportIgnoresProxyEnvironment`, the MCP test |
+| Redirect to an unvetted host | `RoundTripper` (`guard.go:190`); webhook `CheckRedirect` | the redirect tests |
+| Downgrade to http, for policies that require HTTPS | `RequireHTTPS` / `checkScheme`, enforced by the transport's `Proxy` hook (`guard.go:98`, `:176`, `:296`) | `TestGuardRequireHTTPSRefusesPlainHTTP`, `TestGuardRequireHTTPSHoldsOnTheRawTransport` |
 | TLS bypass from IP pinning | net/http `ServerName` from the URL host, with no `InsecureSkipVerify` | `TestGuardVerifiesTLSAgainstTheURLHost` |
 | Secrets in logs, delivery log and errors | Refusals carry the host only (`parseDestinationURL`) | `TestGuardRefusalsNeverEchoURLSecrets` |
 | Operator allowlist widened by a metadata entry | `declaresPrivateEgress` ignores entries inside forbidden space | `TestGuardAllowlistNamingANewPrivateClassDeclaresPrivateEgress` |
@@ -226,9 +232,8 @@ go1.26.5:
 - GO-2026-6088 to 6091;
 - GO-2026-6218.
 
-All are fixed in go1.26.6. **origin/main reports the identical set, so no finding is new.** One trace now runs
-through `egress.roundTripper.RoundTrip`, which calls `http.Transport.RoundTrip`, but net/http was already called
-on every egress path.
+All are fixed in go1.26.6. **origin/main reports the identical set, so no finding is new** (rerun after the
+review fixes: same set).
 
 Authorization is unchanged: the guard runs after the existing route permission checks.
 
@@ -242,6 +247,21 @@ Authorization is unchanged: the guard runs after the existing route permission c
 | Main × Code preparation (GitHub read) | I — read-only fetch, repeated on retry; refusal is the typed `ErrCodeWorkspaceUnavailable` | `code_workspace_github.go:73` | storage suite (280), Code workspace egress test |
 
 No other component (Worker, Sandbox supervisor, NATS, PostgreSQL, LLM gateway, Web) is touched.
+
+## Reviews
+
+`code-review` (high effort) on the full branch diff reported 8 findings:
+
+| Finding | Disposition |
+| --- | --- |
+| A webhook receiver that redirects (for example an http→https 301) now always fails | Kept, as the deliberate change recorded above. Reviewer sign-off is requested in the PR. |
+| A 3xx was retried like a transient error | Fixed: a 3xx is terminal after one attempt (`dispatcher.go:347`). |
+| `RequireHTTPS` could be bypassed through `Transport()` | Fixed: the transport enforces it through its `Proxy` hook (`guard.go:176`). |
+| `RoundTrip` panicked on a nil `req.URL` | Fixed: the wrapper was removed and net/http returns an error. |
+| The sentinel text still says "webhook" | Kept: it is the existing readable error that the webhook form shows. |
+| Main keeps a second private-range table next to `egresslib` | Kept: `egresslib.privateBlocks` mirrors bifrost's dialer for the LLM gateway, and widening it would widen gateway egress. Main's extra ranges live in `classify.go`. |
+| `Guard.allowlist` was dead state | Fixed: removed. |
+| Unchecked `http.DefaultTransport` type assertion | Fixed: falls back to net/http's documented defaults. |
 
 ## Real-browser evidence
 
@@ -272,6 +292,9 @@ No other component (Worker, Sandbox supervisor, NATS, PostgreSQL, LLM gateway, W
 - **Reload:** after a full page reload the list holds exactly the public webhook (`active: false`, event
   `egress.test.never`). Neither refused URL was stored.
 - **Fixtures:** all three cases were created through the UI. The inactive test webhook remains in project 2.
+- **Scope of the browser run:** it used the branch before the review fixes above. Those fixes do not touch the
+  path the browser exercised (webhook create-time validation). The 3xx-terminal and HTTPS-only fixes are proven
+  by the Go tests only.
 - **Incident during evidence capture:**
   - One stray `docker exec … /elitea-main -version` started a second Main process in the candidate container.
     `-version` is not a flag.

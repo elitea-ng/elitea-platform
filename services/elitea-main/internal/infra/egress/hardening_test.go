@@ -411,7 +411,7 @@ func TestGuardRefusalsNeverEchoURLSecrets(t *testing.T) {
 	const secret = "s3cr3t-token"
 	g := singleHostGuard(t, nil, "internal.example", "10.0.0.5", RequireHTTPS())
 	for _, raw := range []string{
-		"http://user:" + secret + "@[::1/hook?token=" + secret,        // unparseable
+		"http://user:" + secret + "@[::1/hook?token=" + secret,           // unparseable
 		"https://user:" + secret + "@internal.example/p?token=" + secret, // private
 		"http://user:" + secret + "@internal.example/?token=" + secret,   // https-only policy
 		"ftp://user:" + secret + "@internal.example/" + secret,           // scheme
@@ -426,3 +426,59 @@ func TestGuardRefusalsNeverEchoURLSecrets(t *testing.T) {
 		}
 	}
 }
+
+// TestGuardRequireHTTPSHoldsOnTheRawTransport proves the HTTPS-only policy is
+// enforced by the *http.Transport itself, so a caller that needs the concrete
+// transport cannot bypass it, and that the policy still never uses a proxy.
+func TestGuardRequireHTTPSHoldsOnTheRawTransport(t *testing.T) {
+	var proxyHits, hits atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxyHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer proxy.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv("HTTP_PROXY", proxy.URL)
+	t.Setenv("HTTPS_PROXY", proxy.URL)
+	g, port := loopbackTarget(t, server, RequireHTTPS())
+
+	req, _ := http.NewRequest(http.MethodGet, "http://receiver.example:"+port+"/", nil)
+	if _, err := g.Transport().RoundTrip(req); !errors.Is(err, ErrDestinationRefused) {
+		t.Fatalf("Transport().RoundTrip(http) = %v, want ErrDestinationRefused", err)
+	}
+	if hits.Load() != 0 || proxyHits.Load() != 0 {
+		t.Fatalf("target hits=%d proxy hits=%d, want 0 and 0", hits.Load(), proxyHits.Load())
+	}
+}
+
+// TestGuardRoundTripperRefusesANilURL proves a malformed request is a typed
+// error, not a panic on the request path.
+func TestGuardRoundTripperRefusesANilURL(t *testing.T) {
+	for _, g := range []*Guard{New(nil), New(nil, RequireHTTPS())} {
+		if _, err := g.RoundTripper().RoundTrip(&http.Request{Method: http.MethodGet}); err == nil {
+			t.Fatal("RoundTrip(nil URL) = nil error, want an error")
+		}
+	}
+}
+
+// TestGuardTransportSurvivesAReplacedDefaultTransport proves building a guard
+// transport never panics when another package has wrapped
+// http.DefaultTransport (instrumentation does this), and stays hardened.
+func TestGuardTransportSurvivesAReplacedDefaultTransport(t *testing.T) {
+	original := http.DefaultTransport
+	http.DefaultTransport = roundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("unused") })
+	defer func() { http.DefaultTransport = original }()
+
+	transport := New(nil).Transport()
+	if transport.Proxy != nil || transport.MaxResponseHeaderBytes != MaxResponseHeaderBytes || transport.DialContext == nil {
+		t.Fatal("guard transport built from a replaced DefaultTransport is not hardened")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

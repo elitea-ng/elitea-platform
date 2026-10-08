@@ -412,7 +412,7 @@ func TestRedeliverRefusesAnUnknownDeliveryID(t *testing.T) {
 
 // TestDispatcherDoesNotFollowRedirects proves a delivery never follows a 3xx:
 // the signed body is not re-sent to the Location, and the 3xx is logged as a
-// failed delivery like any other non-2xx answer.
+// failed delivery after one attempt, since retrying cannot change it.
 func TestDispatcherDoesNotFollowRedirects(t *testing.T) {
 	var followed atomic.Int32
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -455,5 +455,8 @@ func TestDispatcherDoesNotFollowRedirects(t *testing.T) {
 	}
 	if logged.ResponseCode == nil || *logged.ResponseCode != http.StatusTemporaryRedirect {
 		t.Errorf("response code = %v, want 307", logged.ResponseCode)
+	}
+	if logged.Attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (a redirect answers the same way every time)", logged.Attempts)
 	}
 }
