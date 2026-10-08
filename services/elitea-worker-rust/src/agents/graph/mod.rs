@@ -73,8 +73,13 @@ pub(crate) mod resume;
 mod router;
 #[cfg(test)]
 mod routing_tests;
+#[cfg(feature = "graph-extensions-rehearsal")]
+#[doc(hidden)]
+pub mod shaping_bench;
 #[cfg(test)]
 mod shaping_compiler_tests;
+#[cfg(test)]
+mod shaping_property_tests;
 mod split_out;
 #[cfg(test)]
 mod split_out_tests;
