@@ -199,17 +199,20 @@ impl PipelineExecutionProfile {
         snapshot: &FrozenToolSnapshot<'_>,
         policy: &ToolAdmissionPolicy,
     ) -> Result<(), NativeAgentAssemblyError> {
+        // Each refusal names the node kind that selected the alias.
+        type ScopeError = fn() -> NativeAgentAssemblyError;
         let mut aliases = BTreeMap::new();
-        for alias in self
+        let llm_aliases = self
             .definition
             .llm_tool_selections()
             .map(super::graph::LlmToolkitSelection::alias)
-            .chain(
-                self.definition
-                    .direct_tool_selections()
-                    .map(super::graph::DirectToolSelection::alias),
-            )
-        {
+            .map(|alias| (alias, invalid_pipeline_tool_scope as ScopeError));
+        let direct_aliases = self
+            .definition
+            .direct_tool_selections()
+            .map(super::graph::DirectToolSelection::alias)
+            .map(|alias| (alias, invalid_direct_tool_scope as ScopeError));
+        for (alias, invalid_scope) in llm_aliases.chain(direct_aliases) {
             if alias == ASK_USER_TOOLSET_NAME
                 || snapshot
                     .iter()
@@ -221,9 +224,9 @@ impl PipelineExecutionProfile {
             let mut matches = snapshot.iter().filter(|reference| {
                 !key.is_empty() && legacy_toolkit_key(reference.toolkit_name()) == key
             });
-            let canonical = matches.next().ok_or_else(invalid_pipeline_tool_scope)?;
+            let canonical = matches.next().ok_or_else(invalid_scope)?;
             if matches.next().is_some() {
-                return Err(invalid_pipeline_tool_scope());
+                return Err(invalid_scope());
             }
             aliases.insert(alias.to_owned(), canonical.toolkit_name().to_owned());
         }
@@ -286,22 +289,22 @@ impl PipelineExecutionProfile {
                 .iter()
                 .filter(|reference| reference.toolkit_name() == selection.alias());
             let Some(reference) = matches.next() else {
-                return Err(invalid_pipeline_tool_scope());
+                return Err(invalid_direct_tool_scope());
             };
             let expected_kind = match selection.kind() {
                 DirectToolNodeKind::Toolkit => FrozenToolKind::Configured,
                 DirectToolNodeKind::Mcp => FrozenToolKind::Mcp,
             };
             if matches.next().is_some() || reference.kind() != expected_kind {
-                return Err(invalid_pipeline_tool_scope());
+                return Err(invalid_direct_tool_scope());
             }
             if policy.toolkit_decision(reference.tool_type()) != ToolAdmissionDecision::Allowed {
-                return Err(unsupported_pipeline_tool_scope());
+                return Err(unsupported_direct_tool_scope());
             }
             if policy.tool_decision(reference.tool_type(), selection.tool())
                 != ToolAdmissionDecision::Allowed
             {
-                return Err(unsupported_pipeline_tool_scope());
+                return Err(unsupported_direct_tool_scope());
             }
             if let Some(sensitive) = policy.sensitive_tool(
                 reference.tool_type(),
@@ -323,7 +326,7 @@ impl PipelineExecutionProfile {
                         .iter()
                         .any(|name| name.as_str() == Some(selection.tool()))
             }) {
-                return Err(invalid_pipeline_tool_scope());
+                return Err(invalid_direct_tool_scope());
             }
         }
         let mut application_identities = BTreeMap::new();
@@ -2094,12 +2097,10 @@ fn build_direct_tool_resolver(
         .collect::<BTreeSet<_>>();
     let mut tools = BTreeMap::new();
     for alias in aliases {
-        let toolset = toolsets
-            .get(alias)
-            .ok_or_else(invalid_pipeline_tool_scope)?;
+        let toolset = toolsets.get(alias).ok_or_else(invalid_direct_tool_scope)?;
         let available = toolset.tools();
         if available.len() > MAX_PIPELINE_MATERIALIZED_TOOLS {
-            return Err(invalid_pipeline_tool_scope());
+            return Err(invalid_direct_tool_scope());
         }
         let mut by_name = BTreeMap::new();
         for tool in available {
@@ -2107,7 +2108,7 @@ fn build_direct_tool_resolver(
                 .insert(tool.name().to_owned(), Arc::clone(tool))
                 .is_some()
             {
-                return Err(invalid_pipeline_tool_scope());
+                return Err(invalid_direct_tool_scope());
             }
         }
         for selection in selections
@@ -2117,11 +2118,11 @@ fn build_direct_tool_resolver(
             let tool = by_name
                 .get(selection.tool())
                 .cloned()
-                .ok_or_else(invalid_pipeline_tool_scope)?;
+                .ok_or_else(invalid_direct_tool_scope)?;
             if !tool.is_read_only() {
                 // Direct effects need graph-native durable confirmation and an
                 // effect receipt/reconciliation owner before activation.
-                return Err(unsupported_pipeline_tool_scope());
+                return Err(unsupported_direct_tool_effect());
             }
             tools.insert(
                 (selection.alias().to_owned(), selection.tool().to_owned()),
@@ -2212,6 +2213,28 @@ const fn unsupported_pipeline_tool_scope() -> NativeAgentAssemblyError {
     NativeAgentAssemblyError::new(
         NativeAgentAssemblyErrorCode::UnsupportedCapability,
         "a pipeline LLM node selected a tool whose graph authorization is not enabled",
+    )
+}
+
+const fn invalid_direct_tool_scope() -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::InvalidInput,
+        "a pipeline direct tool node references a tool outside its frozen scope",
+    )
+}
+
+const fn unsupported_direct_tool_scope() -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::UnsupportedCapability,
+        "a pipeline direct tool node selected a tool whose graph authorization is not enabled",
+    )
+}
+
+const fn unsupported_direct_tool_effect() -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::UnsupportedCapability,
+        "a pipeline direct tool node selected an effectful tool; direct effects need durable \
+         confirmation and an effect receipt, which are not enabled for direct tool nodes",
     )
 }
 

@@ -1258,6 +1258,12 @@ fn admission_error(
     }
 }
 
+fn assert_direct_tool_node_message(error: &super::runtime::NativeAgentAssemblyError) {
+    let message = error.to_string();
+    assert!(message.contains("direct tool node"), "{message}");
+    assert!(!message.contains("LLM node"), "{message}");
+}
+
 fn timestamp(second: u32) -> chrono::DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 20, 12, 0, second)
         .single()
@@ -1467,6 +1473,9 @@ fn llm_tool_scope_is_exact_sensitive_tools_bind_and_blocked_authority_fails_clos
             error.code(),
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         );
+        let message = error.to_string();
+        assert!(message.contains("LLM node"), "{message}");
+        assert!(!message.contains("direct tool node"), "{message}");
     }
 
     let sensitive = runtime_tool_policy(&json!({
@@ -1497,6 +1506,7 @@ fn toolkit_node_scope_is_exact_and_sensitive_read_is_bound_for_graph_confirmatio
     ] {
         let error = admission_error(authorized(&invalid).admit_pipeline_with_policy(&empty_policy));
         assert_eq!(error.code(), NativeAgentAssemblyErrorCode::InvalidInput);
+        assert_direct_tool_node_message(&error);
     }
 
     for policy in [
@@ -1512,6 +1522,7 @@ fn toolkit_node_scope_is_exact_and_sensitive_read_is_bound_for_graph_confirmatio
             error.code(),
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         );
+        assert_direct_tool_node_message(&error);
     }
     let sensitive = runtime_tool_policy(&json!({
         "toolkit_security": {"sensitive_tools": {"gitlab_org": ["get_issues"]}}
@@ -1543,6 +1554,7 @@ fn mcp_node_scope_is_exact_and_sensitive_read_uses_the_graph_confirmation() {
     ] {
         let error = admission_error(authorized(&invalid).admit_pipeline_with_policy(&empty_policy));
         assert_eq!(error.code(), NativeAgentAssemblyErrorCode::InvalidInput);
+        assert_direct_tool_node_message(&error);
     }
 
     for policy in [
@@ -1558,6 +1570,7 @@ fn mcp_node_scope_is_exact_and_sensitive_read_uses_the_graph_confirmation() {
             error.code(),
             NativeAgentAssemblyErrorCode::UnsupportedCapability
         );
+        assert_direct_tool_node_message(&error);
     }
     let sensitive = runtime_tool_policy(&json!({
         "toolkit_security": {"sensitive_tools": {"mcp": ["lookup_release"]}}
@@ -2805,6 +2818,14 @@ async fn toolkit_node_materializes_read_only_action_but_rejects_remote_effect() 
         error.code(),
         NativeAgentAssemblyErrorCode::UnsupportedCapability
     );
+    assert_direct_tool_node_message(&error);
+    let message = error.to_string();
+    assert!(message.contains("effectful tool"), "{message}");
+    assert!(message.contains("durable confirmation"), "{message}");
+    assert!(message.contains("effect receipt"), "{message}");
+    for data in ["create_branch", "release_repository", "group/project"] {
+        assert!(!message.contains(data), "{message}");
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
