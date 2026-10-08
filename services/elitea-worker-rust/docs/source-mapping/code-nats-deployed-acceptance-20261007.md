@@ -286,3 +286,47 @@ The same-owner run has no owner-adoption receipt, so that verifier expectation r
 The historical schema placeholder is replaced with the accepted deployment schema before this run.
 All prior source packets and evidence remain preserved.
 This fixture supplies no broker-loss, redelivery, owner-replacement, or complete Code acceptance.
+
+## Broker harness binding review, 2026-10-08
+
+Chat854 uses the same saved application147/version178 through one normal UI Send.
+Its original JavaScript result is `2`; the same answer survives reload.
+One original visit, completed Code journal, output, and settlement remain recorded.
+Both original jobs and dispatches complete.
+Both runtimes pass all16 checks and durable binding checks.
+Both IDs return HTTP404 and are absent from the complete runtime list.
+
+The root normal-run receipt is `66ce178bf05a9593213da0179899614f0a2b4b74947ce3f3948aa18f2398cc3d`.
+The runtime watch is `3d78d0500432f498fc01b67f4264e69ca60bdf5da71c58c99700b8fc671823c6`.
+The removal receipt is `a39e7b89aa69de5d4128568c04be894e3428bc6fbc746688a28cdbd8adbb6c0a`.
+The collector binds the actual execution, delivery, and stream sequence before its helper refuses.
+No broker control occurs; the normal queue drains.
+This run provides no broker-loss, redelivery, or complete Code acceptance.
+
+Source review separates ordinary completion from recovery-owner admission.
+Normal success has one original intent, its completed bound job, and a Completed journal with typed updates.
+Main creates owner-admission receipts during NODE_RECOVERY reconciliation.
+The corrected verifier requires zero such admissions for this surviving-worker case.
+Its root review is `ae4f92142d04aee52c598bde21dd213e20e0fc97eceec3b9384d1e3c91fc7289`.
+Twenty-two focused pure cases pass; they provide source verification, not deployed recovery evidence.
+
+The original helper mounts an empty certificate directory and suppresses its first exception stage.
+Its retained readback is `ffbb59c22428df84b7e0ebd52d496fabdcff4994f1d3e49aae3ee9c4ad03708b`.
+The helper remains exited, with its original state and mounts preserved.
+The certificate selector correction uses the established candidate material without copying credential bytes.
+The subject prefix has21 characters; its64-character token gives85.
+That length check remains correct and unchanged.
+
+Main [dispatch.go](../../../elitea-main/internal/application/agentexecution/dispatch.go#L112) appends the prepared envelope using outboxID as deliveryID.
+[producer.go](../../../elitea-main/internal/transport/commandbus/producer.go#L147) checks the signed idempotency key against deliveryID.
+[contract.go](../../../elitea-main/internal/transport/commandbus/contract.go#L165) derives the subject token from SHA256(deliveryID).
+The harness correction retains independent command and outbox IDs and uses the outbox-derived token.
+Its source review is `abbea2067485a200e247949dd3d4d9d557827b5a09b39acca9ad405a07c4d7ad`.
+Ten focused pure cases pass; the subsequent ordinary metadata query remains a separate runtime check.
+
+That query refuses at message_get with RuntimeError.
+The retained diagnostic is `fa254534e94456f7d41e8bda551f8b1a1c06fc3c1c1ae123975c5d677860539f`.
+The protected bootstrap identity permits INFO requests and lacks STREAM.MSG.GET permission.
+Main [jetstream.go](../../../elitea-main/internal/transport/commandbus/jetstream.go#L131) already uses an authorized subject DirectGet path.
+Its helper adaptation remains pending separate source review and a successful ordinary query.
+No broker policy, permission grant, configuration, or previous receipt changes.
