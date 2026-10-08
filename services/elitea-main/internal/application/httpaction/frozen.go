@@ -35,9 +35,26 @@ type FrozenNode struct {
 	Transition     *string  `json:"transition"`
 }
 
+// Pipeline bounds mirror the Worker compiler (elitea-worker-rust
+// src/agents/graph/compiler.rs MAX_PIPELINE_YAML_BYTES / MAX_PIPELINE_NODES).
+const (
+	maxPipelineInstructionsBytes = 512 * 1024
+	maxPipelineNodes             = 128
+	maxHTTPInstructionsBytes     = 64 * 1024
+)
+
 // FreezeSnapshot emits one Main-owned wire image from saved YAML tokens.
+// Pipelines without a top-level `type: http` node return nil without passing
+// through the HTTP snapshot grammar; the Worker owns their validation.
 func FreezeSnapshot(applicationID, versionID int64, instructions string) (*FrozenSnapshot, error) {
-	if applicationID <= 0 || versionID <= 0 || len(instructions) > 64*1024 {
+	if applicationID <= 0 || versionID <= 0 {
+		return nil, ErrInvalid
+	}
+	declared, err := declaresHTTPNode(instructions)
+	if err != nil || !declared {
+		return nil, err
+	}
+	if len(instructions) > maxHTTPInstructionsBytes {
 		return nil, ErrInvalid
 	}
 	decoder := yaml.NewDecoder(bytes.NewBufferString(instructions))
@@ -116,6 +133,56 @@ func FreezeSnapshot(applicationID, versionID int64, instructions string) (*Froze
 		return nil, nil
 	}
 	return snapshot, nil
+}
+
+// declaresHTTPNode is the structural pre-scan that scopes the strict grammar
+// to pipelines authoring a top-level HTTP node. It over-approximates (aliases
+// are followed and a merge key counts as a possible HTTP node) so every
+// document the Worker could read as HTTP still reaches the strict grammar, and
+// it rejects only documents the Worker compiler rejects as well.
+func declaresHTTPNode(instructions string) (bool, error) {
+	if len(instructions) > maxPipelineInstructionsBytes {
+		return false, ErrInvalid
+	}
+	decoder := yaml.NewDecoder(strings.NewReader(instructions))
+	var document yaml.Node
+	if decoder.Decode(&document) != nil || len(document.Content) != 1 || decoder.Decode(new(yaml.Node)) != io.EOF {
+		return false, ErrInvalid
+	}
+	root := yamlAliased(document.Content[0])
+	if root.Kind != yaml.MappingNode {
+		return false, ErrInvalid
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if key := yamlAliased(root.Content[i]); key.Tag == "!!merge" {
+			return true, nil
+		} else if key.Value != "nodes" {
+			continue
+		}
+		nodes := yamlAliased(root.Content[i+1])
+		if len(nodes.Content) > maxPipelineNodes {
+			return false, ErrInvalid
+		}
+		for _, node := range nodes.Content {
+			if node = yamlAliased(node); node.Kind != yaml.MappingNode {
+				continue
+			}
+			for j := 0; j+1 < len(node.Content); j += 2 {
+				key := yamlAliased(node.Content[j])
+				if key.Tag == "!!merge" || key.Value == "type" && yamlAliased(node.Content[j+1]).Value == "http" {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, nil
+}
+
+func yamlAliased(node *yaml.Node) *yaml.Node {
+	if node.Kind == yaml.AliasNode && node.Alias != nil {
+		return node.Alias
+	}
+	return node
 }
 
 func FrozenBindingDigest(snapshot FrozenSnapshot, node FrozenNode) string {
