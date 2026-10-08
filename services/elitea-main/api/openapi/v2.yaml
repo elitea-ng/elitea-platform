@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.4"
+  x-elitea-client-contract: "1.5"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -10786,7 +10786,7 @@ components:
       description: >-
         The public subset of the native client policy (ADR-0025 decision 5);
         the full policy travels with every token response. NOTE(W2):
-        internal/api/v2/discovery/document.go:65 (`PublicPolicy`).
+        internal/api/v2/discovery/document.go:100 (`PublicPolicy`).
       required:
         - require_device_lock
         - offline_enabled
@@ -10797,6 +10797,7 @@ components:
         - notification_preview
         - allow_notification_actions
         - allow_system_surfaces
+        - local_work_allowed
       properties:
         require_device_lock:
           type: boolean
@@ -10846,6 +10847,12 @@ components:
             Client contract 1.3. Widgets, home-screen quick actions and other
             surfaces outside the app may show conversation and agent titles.
             False means counts only. Default false.
+        local_work_allowed:
+          type: boolean
+          description: >-
+            Client contract 1.5 (ADR-0029 decision 6). The token policy's
+            `local_work.allowed`: a desktop app may offer local work. The rest
+            of the `local_work` group travels only with a token. Default false.
     NativeOAuthError:
       type: object
       description: >-
@@ -10905,7 +10912,7 @@ components:
         fields are enforced by the client; the server refuses versions below
         `min_client_version` with 426. Adding a field is additive; renaming or
         removing one bumps `client_contract`. NOTE(W2):
-        internal/platformconfig/nativeclientpolicy.go:43 (`NativeClientPolicy`).
+        internal/platformconfig/nativeclientpolicy.go:219 (`NativeClientPolicy`).
       required:
         - require_device_lock
         - idle_lock_seconds
@@ -10920,6 +10927,7 @@ components:
         - notification_preview
         - allow_notification_actions
         - allow_system_surfaces
+        - local_work
       properties:
         require_device_lock:
           type: boolean
@@ -10985,6 +10993,74 @@ components:
             Client contract 1.3. Widgets, home-screen quick actions and other
             surfaces outside the app may show conversation and agent titles.
             False means counts only. Default false.
+        local_work:
+          $ref: '#/components/schemas/LocalWorkPolicy'
+    LocalWorkPolicy:
+      type: object
+      description: >-
+        Client contract 1.5 (ADR-0029 decision 6). What a desktop app may do
+        on the user's machine. The desktop enforces every field. The server
+        enforces only `allowed`: it refuses a local turn start while it is
+        false. A local turn's audit records what the client reports, which the
+        server cannot verify. NOTE(W2):
+        internal/platformconfig/nativeclientpolicy.go:110 (`LocalWorkPolicy`).
+      required:
+        - allowed
+        - shell
+        - max_sandbox_mode
+        - network
+        - command_allow
+        - command_deny
+        - path_deny
+        - local_mcp
+        - local_index
+        - cloud_sync
+        - memory_write
+      properties:
+        allowed:
+          type: boolean
+          description: Local work is permitted. Default false.
+        shell:
+          type: boolean
+          description: Local turns may run shell commands. Default true.
+        max_sandbox_mode:
+          type: string
+          description: >-
+            The widest sandbox mode a local command may use: `read-only`,
+            `workspace-write` (the default) or `full-access`. A user may always
+            choose a narrower one. Treat an unknown value as `read-only`.
+        network:
+          type: boolean
+          description: Sandboxed local commands may reach the network. Default false.
+        command_allow:
+          type: array
+          items: { type: string }
+          description: >-
+            Command patterns that run without asking the user. At most 200
+            patterns of at most 512 bytes. Applied before workspace and user
+            rules.
+        command_deny:
+          type: array
+          items: { type: string }
+          description: Command patterns that never run. A deny wins over an allow. Same bounds.
+        path_deny:
+          type: array
+          items: { type: string }
+          description: Path patterns local tools must not read or write. Same bounds.
+        local_mcp:
+          type: boolean
+          description: The user may configure local (stdio) MCP servers. Default false.
+        local_index:
+          type: boolean
+          description: The app may build a local index of a workspace. Default true.
+        cloud_sync:
+          type: boolean
+          description: A workspace folder may be synced to an artifact bucket. Default false.
+        memory_write:
+          type: boolean
+          description: >-
+            Local turns may save to the user's cloud memory. Recall is always
+            allowed. Default true.
     InvalidQueryParameterError:
       type: object
       description: >-
