@@ -106,6 +106,13 @@ pub use yaml::{
     ParallelNodeDefinition, ParallelWaitPolicy,
 };
 
+#[cfg(test)]
+pub(crate) use parallel::{
+    AdkParallelBranchRuntime, DurableParallelNode, PARALLEL_INTERRUPT_SCHEMA,
+    PARALLEL_RESUME_STATE_KEY, ParallelBranchGraphFactory, ParallelBranchPause,
+    ParallelBranchRuntime, ParallelBranchTerminal, ParallelDecision,
+    ParallelOccurrenceCheckpointer, ParallelPauseCard, PreparedParallelActivation,
+};
 pub(crate) use parallel::{
     ParallelActivation, ParallelBranchExecution, ParallelCheckpointAppender,
     ParallelCheckpointAuthority, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,

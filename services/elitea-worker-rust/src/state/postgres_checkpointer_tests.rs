@@ -2473,4 +2473,5 @@ async fn postgres_recursive_application_threads_preserve_takeover_and_completed_
     assert!(family.load("thread-1/delegate/inner").await.is_err());
 }
 
+mod fanout_lineage;
 mod graph_receipts;
