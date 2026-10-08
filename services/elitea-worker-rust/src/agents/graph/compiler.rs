@@ -1747,7 +1747,10 @@ pub(super) fn select_pipeline_result(
     state: &State,
     policy: &PipelineResultPolicy,
 ) -> Option<String> {
-    select_last_state_value(state, &policy.terminal_data_keys)
+    // A blocked or skipped tool stops the pipeline: its message is the answer, not the
+    // defaults of outputs that no node wrote.
+    select_last_state_value(state, &["_pipeline_blocked".to_owned()])
+        .or_else(|| select_last_state_value(state, &policy.terminal_data_keys))
         .or_else(|| select_last_assistant_message(state.get("messages")))
         .or_else(|| select_last_state_value(state, &policy.fallback_data_keys))
         .filter(|content| content.len() <= MAX_PIPELINE_RESULT_BYTES)

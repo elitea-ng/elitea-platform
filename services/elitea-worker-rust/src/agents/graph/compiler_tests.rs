@@ -347,6 +347,41 @@ fn result_policy_prefers_terminal_data_then_ai_messages_then_declared_state() {
 }
 
 #[test]
+fn blocked_pipeline_answers_with_its_stop_message_not_unwritten_outputs() {
+    let policy = PipelineResultPolicy {
+        terminal_data_keys: vec!["echoed".to_owned()],
+        fallback_data_keys: vec!["echoed".to_owned(), "reversed".to_owned()],
+    };
+    // A downstream terminal node never ran, so its dict output keeps its `{}` default.
+    let mut state = HashMap::from([
+        ("echoed".to_owned(), json!({})),
+        ("reversed".to_owned(), json!(null)),
+        (
+            "_pipeline_blocked".to_owned(),
+            json!("**Pipeline stopped** — the action was **blocked** by user."),
+        ),
+        (
+            "messages".to_owned(),
+            json!([{"role": "assistant", "content": "**Pipeline stopped** — the action was **blocked** by user."}]),
+        ),
+    ]);
+    assert_eq!(
+        select_pipeline_result(&state, &policy).as_deref(),
+        Some("**Pipeline stopped** — the action was **blocked** by user.")
+    );
+
+    // An unset or blank marker leaves the normal order untouched.
+    for unset in [json!(null), json!("")] {
+        state.insert("_pipeline_blocked".to_owned(), unset);
+        state.insert("echoed".to_owned(), json!({"output": "done"}));
+        assert_eq!(
+            select_pipeline_result(&state, &policy).as_deref(),
+            Some(r#"{"output":"done"}"#)
+        );
+    }
+}
+
+#[test]
 fn runtime_owned_custom_reducers_append_merge_and_clear() {
     assert_eq!(
         append_or_clear_list(json!([{"id": 1}]), json!([{"id": 2}])),
