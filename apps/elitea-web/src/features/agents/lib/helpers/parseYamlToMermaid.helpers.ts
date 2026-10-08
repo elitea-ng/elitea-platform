@@ -48,6 +48,8 @@
  */
 import { load } from 'js-yaml';
 
+import { normalizePipelineNodeIdentifiers } from '@/shared/lib/pipelineNodeIdentifiers';
+
 /**
  * The three `PipelineNodeTypes` wire values this diagram renderer actually
  * branches on — see the module doc comment's DISCLOSED REDESIGN note.
@@ -111,8 +113,9 @@ type JinjaTreeNode =
   | { type: 'if' | 'elif' | 'else'; condition?: string; children: JinjaTreeNode[] };
 
 /** Sanitize ID for Mermaid compatibility (alphanumeric and underscore only). `parseYamlToMermaid.helpers.js:5`. */
-function sanitizeId(id: string | undefined): string {
-  return id?.replace(/[^a-zA-Z0-9_]/g, '_') ?? '';
+function sanitizeId(id: unknown): string {
+  // Integer ids are normalized to strings on load; any other non-string (a fraction, boolean, ...) is not a node id.
+  return typeof id === 'string' ? id.replace(/[^a-zA-Z0-9_]/g, '_') : '';
 }
 
 /** Generate a mermaid diagram edge line. `parseYamlToMermaid.helpers.js:9-12`. */
@@ -281,7 +284,8 @@ export function parseYamlToMermaid(yamlString: string): string {
   let yamlJson: PipelineYamlDocument = {};
   let mermaidDiagram = 'graph TD\n';
   try {
-    yamlJson = (load(yamlString) as PipelineYamlDocument | undefined) ?? {};
+    // `id: 1` loads as a number; the diagram is keyed by the same decimal strings the runtime uses.
+    yamlJson = normalizePipelineNodeIdentifiers((load(yamlString) as PipelineYamlDocument | undefined) ?? {});
   } catch {
     // Parse error: swallow and return '', matching the baseline exactly.
     return '';
