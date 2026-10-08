@@ -129,7 +129,42 @@ from main.
 Parallel and Map cannot run in a browser until their Wave 2 composition, so positive browser proof of this fix is
 the gate-flip criterion in `PLAN.md` §4. This PR runs the regression set over the unchanged checkpoint paths.
 
-_Filled in after the rehearsal deploy; see the section below._
+**Stack.** Rust rehearsal, `http://localhost:18084` (user's choice).
+- Main: `elitea-main:gate5-platform-completion-v2-20261005`.
+- Web: `elitea-web:gate5-ci-ca8fee8f4-20261006`.
+- Command bus: Redis Streams.
+- Sign-in: the stack's local mock OIDC, as `admin@centry.user`, project "Private" (id 2).
+
+**Worker image.** `elitea-worker-rust:c1-lineage-rehearsal-2ba248a0d-20261008` (`sha256:1fe79847ed6b…`).
+- Revision `2ba248a0d`: the stack's own Worker base `d6568bae8` (on the #1084 branch) plus the five C1 commits
+  cherry-picked, conflict-free.
+- Why not the PR head: `main` moved the command bus to NATS and deleted the Redis transport (#1081, #1085), so a
+  main-based Worker cannot attach to this Redis stack.
+- Built from the repository `Containerfile` with a private BuildKit cache id. The shared `/cargo-target` cache held
+  a Debian 13 `aws-lc-sys` object that fails to link on this bookworm base. This was a local, uncommitted build
+  setting only.
+- Deployment: the running Worker container was cloned with only the image changed (same network aliases, mounts,
+  env, user, entrypoint, command and restart policy). The original container was kept as
+  `elitea-rust-rehearsal-elitea-worker-1-pre-c1` and restored after the run.
+- No response mocks. The model is the stack's configured `vllm/CONTINUATION-REPAIR-FIXTURE` route through its LLM
+  gateway.
+
+**Fixtures.** All are pre-existing entities created through the UI by earlier sessions; none was created or edited
+from the database in this run. The database was only read to find them and to confirm settlement.
+
+| # | Flow | Chat / execution | Result | After reload |
+|---|---|---|---|---|
+| 2 | Saved Agent "Full Name Resolver" (app 9) making two model-selected parallel Application calls with different input ("Elena" → Name Resolver, "Kowalski" → Surname Resolver) | chat 828, execution `e046ff38…` | Pass. The Worker log shows `tool_execution_mode="parallel_applications"`, with the two nested model requests started 5 ms apart (16:07:20.283 and .288). One combined answer; `executed_settled_acked`; Main `SUCCEEDED`, claim attempt 1. | Same single answer |
+| 3 | Pipeline "Gate5 typed parent" (app 136) calling the saved child pipeline "Gate5 typed child" (app 135) with typed values | chat 829, execution `bb2e5ac2…` | Pass. Output `4\|2\|3\|for orders\|2\|True` (child count 3 → parent `+1`; 2 items; label "for orders"). `SUCCEEDED`. | Same output |
+| 4 | Worker restart mid-run: a second Full Name Resolver turn ("Marco Rossi") with `docker restart` at 16:09:40.8 while 3 nested model requests were in flight | chat 828, execution `0ffaef9a…` | Pass: **R**. The run finished inside the 10 s graceful stop. After restart, the un-ACKed Redis command was redelivered every 5 s: first `retained_no_ack` (`agent_delivery.checkpoint_output_reclaim`), then 5 × `agent_output.invalid_durable_state` no-ACK. At 16:10:31 the replacement claim (attempt 2) published the terminal once and settled `SUCCEEDED` (`executed_settled_acked` → `executed_retired`), and redelivery stopped. About 50 s to settle. | One answer, with both sub-agent sections |
+| 1 | Pipeline with a nested saved Agent pausing on a sensitive-tool HITL, approve → complete | — | **Not provable on this stack.** (a) The guardrail policy is `sensitive_tools = {}` (`centry.platform_config`), and the only `delete_file` toolkit (artifact) is skipped as `unsupported_toolkit_family` in this runtime. (b) No MCP server is attached to the rehearsal network. (c) Main refuses every HITL continuation here: pipeline 130 "Gate5 HITL history" paused correctly (chat 830, execution `40f5bf1c…`, card survives reload), but Approve returned `422 unsupported_agent_execution` from Main twice, before any Worker involvement. | Card still pending (unchanged) |
+
+Flow 1 therefore stays open. It needs a stack whose Main supports HITL continuation and has a sensitive tool the
+runtime admits, such as the NATS candidate stack (current main), with this PR's Worker built on that lineage.
+
+Observation outside this PR's code: in flow 4 the `invalid_durable_state` no-ACK retries before the old claim
+expired add about 40 s of recovery latency on the Redis transport. This path is unchanged here, and Redis is
+removed on main.
 
 ## Open limits and follow-ups
 
