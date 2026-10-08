@@ -595,9 +595,21 @@ enum KeyItem<'a> {
 }
 
 impl CanonicalKey {
+    /// Empties the key so one buffer can be reused per row.
+    pub(super) fn clear(&mut self) {
+        self.0.clear();
+    }
+
     /// Appends one component; values deeper than `max_depth` (root = 1) fail.
     pub(super) fn push(&mut self, value: &Value, max_depth: usize) -> Result<(), ShapingCode> {
         let buffer = &mut self.0;
+        if max_depth == 0 {
+            return Err(ShapingCode::LimitExceeded);
+        }
+        // Scalar group keys are the common case; they need no walk stack.
+        if push_scalar(buffer, value)? {
+            return Ok(());
+        }
         let mut stack = vec![KeyItem::Value(value, 1)];
         while let Some(item) = stack.pop() {
             let (value, depth) = match item {
@@ -610,21 +622,10 @@ impl CanonicalKey {
             if depth > max_depth {
                 return Err(ShapingCode::LimitExceeded);
             }
+            if push_scalar(buffer, value)? {
+                continue;
+            }
             match value {
-                Value::Null => buffer.push(0),
-                Value::Bool(false) => buffer.push(1),
-                Value::Bool(true) => buffer.push(2),
-                Value::Number(number) => {
-                    let decimal = decimal(number)?;
-                    buffer.push(3);
-                    buffer.push(u8::from(decimal.negative));
-                    push_bytes(buffer, decimal.digits.as_bytes());
-                    buffer.extend_from_slice(&decimal.exponent.to_be_bytes());
-                }
-                Value::String(text) => {
-                    buffer.push(4);
-                    push_bytes(buffer, text.as_bytes());
-                }
                 Value::Array(items) => {
                     buffer.push(5);
                     buffer.extend_from_slice(&(items.len() as u64).to_be_bytes());
@@ -643,10 +644,54 @@ impl CanonicalKey {
                         stack.push(KeyItem::Key(key));
                     }
                 }
+                Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
             }
         }
         Ok(())
     }
+}
+
+/// Encodes a scalar; returns `false` for containers.
+fn push_scalar(buffer: &mut Vec<u8>, value: &Value) -> Result<bool, ShapingCode> {
+    match value {
+        Value::Null => buffer.push(0),
+        Value::Bool(false) => buffer.push(1),
+        Value::Bool(true) => buffer.push(2),
+        Value::Number(number) => push_number(buffer, number)?,
+        Value::String(text) => {
+            buffer.push(4);
+            push_bytes(buffer, text.as_bytes());
+        }
+        Value::Array(_) | Value::Object(_) => return Ok(false),
+    }
+    Ok(true)
+}
+
+/// Encodes `(sign, digits, exponent)` exactly as `decimal` normalizes it.
+/// Plain integer text takes an allocation-free path.
+fn push_number(buffer: &mut Vec<u8>, number: &Number) -> Result<(), ShapingCode> {
+    let text = number.as_str();
+    let (negative, unsigned) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    if !unsigned.is_empty() && unsigned.bytes().all(|byte| byte.is_ascii_digit()) {
+        let significant = unsigned.trim_start_matches('0');
+        let digits = significant.trim_end_matches('0');
+        let exponent = i64::try_from(significant.len() - digits.len())
+            .map_err(|_| ShapingCode::UnsupportedNumber)?;
+        buffer.push(3);
+        buffer.push(u8::from(negative && !digits.is_empty()));
+        push_bytes(buffer, digits.as_bytes());
+        buffer.extend_from_slice(&exponent.to_be_bytes());
+        return Ok(());
+    }
+    let decimal = decimal(number)?;
+    buffer.push(3);
+    buffer.push(u8::from(decimal.negative));
+    push_bytes(buffer, decimal.digits.as_bytes());
+    buffer.extend_from_slice(&decimal.exponent.to_be_bytes());
+    Ok(())
 }
 
 #[cfg(test)]

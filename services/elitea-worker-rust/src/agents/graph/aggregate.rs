@@ -5,7 +5,6 @@
 //! charging a final output row carries no item, because output rows are not
 //! input rows.
 
-use std::collections::hash_map::Entry as HashEntry;
 use std::collections::{BTreeSet, HashMap};
 use std::slice;
 
@@ -695,6 +694,8 @@ fn aggregate<'a>(
     let max_depth = field_depth(limits);
     let mut slots = HashMap::<CanonicalKey, usize>::new();
     let mut groups = Vec::<Group<'a>>::new();
+    // One scratch key per run; a key is cloned only for a new group.
+    let mut key = CanonicalKey::default();
     if definition.group_by.is_empty() {
         groups.push(Group::new(definition, 0, Vec::new()));
     }
@@ -703,22 +704,27 @@ fn aggregate<'a>(
         let slot = if definition.group_by.is_empty() {
             0
         } else {
-            let mut key = CanonicalKey::default();
-            let mut keys = Vec::with_capacity(definition.group_by.len());
+            key.clear();
             for (index, entry) in definition.group_by.iter().enumerate() {
                 let value = group_value(entry, view, index).map_err(at(item))?;
                 key.push(value, max_depth)
                     .map_err(|code| key_error(code, &format!("group_by[{index}]")))
                     .map_err(at(item))?;
-                keys.push(value);
             }
-            match slots.entry(key) {
-                HashEntry::Occupied(slot) => *slot.get(),
-                HashEntry::Vacant(slot) => {
-                    check_new_group(limits, groups.len() + 1).map_err(at(item))?;
-                    groups.push(Group::new(definition, item, keys));
-                    *slot.insert(groups.len() - 1)
-                }
+            if let Some(slot) = slots.get(&key) {
+                *slot
+            } else {
+                check_new_group(limits, groups.len() + 1).map_err(at(item))?;
+                let keys = definition
+                    .group_by
+                    .iter()
+                    .enumerate()
+                    .map(|(index, entry)| group_value(entry, view, index))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(at(item))?;
+                groups.push(Group::new(definition, item, keys));
+                slots.insert(key.clone(), groups.len() - 1);
+                groups.len() - 1
             }
         };
         if let Some(group) = groups.get_mut(slot) {
