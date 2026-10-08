@@ -66,7 +66,7 @@ use parallel_compiler::validate_parallel_ownership;
 #[allow(unused_imports)] // Public continuation binding is staged behind the Parallel gate.
 pub(crate) use parallel_compiler::{ParallelBranchContinuation, ParallelCompilerBinding};
 
-const MAX_PIPELINE_YAML_BYTES: usize = 512 * 1024;
+pub(crate) const MAX_PIPELINE_YAML_BYTES: usize = 512 * 1024;
 const MAX_PIPELINE_NODES: usize = 128;
 const MAX_PIPELINE_STATE_KEYS: usize = 256;
 const MAX_STATIC_INTERRUPTS: usize = 128;

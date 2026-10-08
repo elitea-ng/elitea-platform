@@ -97,7 +97,7 @@ const admittedNodeTypeSet: ReadonlySet<string> = new Set<string>(CompilerAdmitte
 export const isCompilerAdmittedNodeType = (type: string): boolean => admittedNodeTypeSet.has(type);
 
 // ─────────────────────────────────────────────────────────────────────────
-// Reserved state keys — `compiler.rs:2316` `reserved_user_state_key`
+// Reserved state keys — `compiler.rs:2326` `reserved_user_state_key`
 // ─────────────────────────────────────────────────────────────────────────
 
 /** One reserved state key plus the runtime line that reserves it. */
@@ -111,50 +111,50 @@ export interface ReservedStateKey {
 }
 
 /**
- * `compiler.rs:2316-2350` (`reserved_user_state_key`), called from
- * `compiler.rs:2233` on EVERY key of the document's own `state:` mapping:
+ * `compiler.rs:2326-2360` (`reserved_user_state_key`), called from
+ * `compiler.rs:2243` on EVERY key of the document's own `state:` mapping:
  *
  * ```rust
  * if !valid_output_key(&key) || reserved_user_state_key(&key) {
  * ```
  *
  * Declaring any of these as a pipeline state variable rejects the whole
- * document. Note the asymmetry with `builtin_state_key` (`compiler.rs:2296`):
+ * document. Note the asymmetry with `builtin_state_key` (`compiler.rs:2306`):
  * `input` and `messages` are builtin but NOT reserved — they are exactly the
  * two `DefaultState` keys the editor seeds, and they stay legal.
  */
 export const ReservedStateKeys: readonly ReservedStateKey[] = [
-  { key: '__elitea_parallel_agent_inputs_v1', citation: 'compiler.rs:2322 (parallel_application.rs:13)', reason: 'fixed Parallel frozen Agent inputs' },
-  { key: '__elitea_parallel_resume_v1', citation: 'compiler.rs:2321 (parallel.rs:40)', reason: 'fixed Parallel resume channel' },
+  { key: '__elitea_parallel_agent_inputs_v1', citation: 'compiler.rs:2332 (parallel_application.rs:13)', reason: 'fixed Parallel frozen Agent inputs' },
+  { key: '__elitea_parallel_resume_v1', citation: 'compiler.rs:2331 (parallel.rs:40)', reason: 'fixed Parallel resume channel' },
   // The four private resume/scope channels, held by name, not by literal.
-  { key: '__elitea_hitl_resume_v1', citation: 'compiler.rs:2318 (hitl.rs:29)', reason: 'HITL resume channel' },
-  { key: '__elitea_tool_resume_v1', citation: 'compiler.rs:2319 (direct_tool.rs:44)', reason: 'direct-tool resume channel' },
-  { key: '__elitea_llm_tool_resume_v1', citation: 'compiler.rs:2320 (llm.rs:58)', reason: 'LLM tool resume channel' },
-  { key: '__elitea_pipeline_node_event_scope_v1', citation: 'compiler.rs:2323 (node_events.rs:35)', reason: 'node event scope channel' },
-  // The `matches!` constants at compiler.rs:2326-2329.
-  { key: '__elitea_application_task_v1', citation: 'compiler.rs:2326 (application.rs:43)', reason: 'Agent task channel' },
-  { key: '__elitea_application_messages_v1', citation: 'compiler.rs:2327 (application.rs:44)', reason: 'Agent messages channel' },
-  { key: '__elitea_application_result_v1', citation: 'compiler.rs:2328 (application.rs:45)', reason: 'Agent result channel' },
-  { key: '__elitea_subgraph_result_v1', citation: 'compiler.rs:2329 (compiler.rs:75)', reason: 'subgraph result channel' },
-  // The fifteen plain literals at compiler.rs:2334-2348.
-  { key: 'output', citation: 'compiler.rs:2334', reason: 'runtime-owned output channel' },
-  { key: 'result', citation: 'compiler.rs:2335', reason: 'runtime-owned result channel' },
-  { key: 'router_output', citation: 'compiler.rs:2336', reason: 'router decision channel' },
-  { key: 'elitea_response', citation: 'compiler.rs:2337', reason: 'runtime response channel' },
-  { key: 'printer_output', citation: 'compiler.rs:2338', reason: 'printer output channel' },
-  { key: 'state_types', citation: 'compiler.rs:2339', reason: 'state type table' },
-  { key: 'context_info', citation: 'compiler.rs:2340', reason: 'runtime context channel' },
-  { key: 'hitl_decisions', citation: 'compiler.rs:2341', reason: 'HITL decision log' },
-  { key: 'hitl_interrupt', citation: 'compiler.rs:2342', reason: 'HITL interrupt channel' },
-  { key: 'parallel_tasks', citation: 'compiler.rs:2343', reason: 'parallel task channel' },
-  { key: '_pipeline_blocked', citation: 'compiler.rs:2344', reason: 'pipeline block flag' },
-  { key: 'session_id', citation: 'compiler.rs:2345', reason: 'runtime session identity' },
-  { key: 'thread_id', citation: 'compiler.rs:2346', reason: 'runtime thread identity' },
-  { key: 'execution_finished', citation: 'compiler.rs:2347', reason: 'run completion flag' },
-  { key: 'chat_history', citation: 'compiler.rs:2348', reason: 'runtime chat history' },
+  { key: '__elitea_hitl_resume_v1', citation: 'compiler.rs:2328 (hitl.rs:29)', reason: 'HITL resume channel' },
+  { key: '__elitea_tool_resume_v1', citation: 'compiler.rs:2329 (direct_tool.rs:44)', reason: 'direct-tool resume channel' },
+  { key: '__elitea_llm_tool_resume_v1', citation: 'compiler.rs:2330 (llm.rs:58)', reason: 'LLM tool resume channel' },
+  { key: '__elitea_pipeline_node_event_scope_v1', citation: 'compiler.rs:2333 (node_events.rs:35)', reason: 'node event scope channel' },
+  // The `matches!` constants at compiler.rs:2336-2339.
+  { key: '__elitea_application_task_v1', citation: 'compiler.rs:2336 (application.rs:43)', reason: 'Agent task channel' },
+  { key: '__elitea_application_messages_v1', citation: 'compiler.rs:2337 (application.rs:44)', reason: 'Agent messages channel' },
+  { key: '__elitea_application_result_v1', citation: 'compiler.rs:2338 (application.rs:45)', reason: 'Agent result channel' },
+  { key: '__elitea_subgraph_result_v1', citation: 'compiler.rs:2339 (compiler.rs:75)', reason: 'subgraph result channel' },
+  // The fifteen plain literals at compiler.rs:2344-2358.
+  { key: 'output', citation: 'compiler.rs:2344', reason: 'runtime-owned output channel' },
+  { key: 'result', citation: 'compiler.rs:2345', reason: 'runtime-owned result channel' },
+  { key: 'router_output', citation: 'compiler.rs:2346', reason: 'router decision channel' },
+  { key: 'elitea_response', citation: 'compiler.rs:2347', reason: 'runtime response channel' },
+  { key: 'printer_output', citation: 'compiler.rs:2348', reason: 'printer output channel' },
+  { key: 'state_types', citation: 'compiler.rs:2349', reason: 'state type table' },
+  { key: 'context_info', citation: 'compiler.rs:2350', reason: 'runtime context channel' },
+  { key: 'hitl_decisions', citation: 'compiler.rs:2351', reason: 'HITL decision log' },
+  { key: 'hitl_interrupt', citation: 'compiler.rs:2352', reason: 'HITL interrupt channel' },
+  { key: 'parallel_tasks', citation: 'compiler.rs:2353', reason: 'parallel task channel' },
+  { key: '_pipeline_blocked', citation: 'compiler.rs:2354', reason: 'pipeline block flag' },
+  { key: 'session_id', citation: 'compiler.rs:2355', reason: 'runtime session identity' },
+  { key: 'thread_id', citation: 'compiler.rs:2356', reason: 'runtime thread identity' },
+  { key: 'execution_finished', citation: 'compiler.rs:2357', reason: 'run completion flag' },
+  { key: 'chat_history', citation: 'compiler.rs:2358', reason: 'runtime chat history' },
 ];
 
 const reservedStateKeySet: ReadonlySet<string> = new Set(ReservedStateKeys.map(entry => entry.key));
 
-/** Mirrors `compiler.rs:2316`'s `reserved_user_state_key` — true when the compiler refuses `key` in a user `state:` block. */
+/** Mirrors `compiler.rs:2326`'s `reserved_user_state_key` — true when the compiler refuses `key` in a user `state:` block. */
 export const isReservedStateKey = (key: string): boolean => reservedStateKeySet.has(key) || key.startsWith('__elitea_application_variable_');
