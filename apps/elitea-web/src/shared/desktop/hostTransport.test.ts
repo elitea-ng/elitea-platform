@@ -7,6 +7,7 @@ interface Calls {
   accessToken: Mock<HostBridge['accessToken']>;
   refresh: Mock<HostBridge['refresh']>;
   wipe: Mock<HostBridge['wipe']>;
+  signOut: Mock<HostBridge['signOut']>;
 }
 
 /** A host bridge whose spies are returned apart from it, so no method is read off the object. */
@@ -15,15 +16,26 @@ function bridge(overrides: Partial<Calls> = {}): HostBridge & { calls: Calls } {
     accessToken: vi.fn<HostBridge['accessToken']>().mockResolvedValue({ token: 'a1', expiresIn: 900 }),
     refresh: vi.fn<HostBridge['refresh']>().mockResolvedValue('refreshed'),
     wipe: vi.fn<HostBridge['wipe']>().mockResolvedValue(),
+    signOut: vi.fn<HostBridge['signOut']>().mockResolvedValue(),
     ...overrides,
   };
-  return { state: vi.fn(), connect: vi.fn(), signIn: vi.fn(), signOut: vi.fn(), ...calls, calls };
+  return { state: vi.fn(), connect: vi.fn(), signIn: vi.fn(), openExternal: vi.fn(), ...calls, calls };
 }
 
 function make(b: HostBridge, now = () => 1_000_000) {
   const onSignedOut = vi.fn();
-  const transport = createHostTransport({ bridge: b, clientVersion: '0.1.0', onSignedOut, now });
-  return { transport, onSignedOut };
+  const onUpgradeRequired = vi.fn();
+  const clearLocalData = vi.fn<() => Promise<void>>().mockResolvedValue();
+  const transport = createHostTransport({
+    bridge: b,
+    clientVersion: '0.1.0',
+    origin: 'https://h.example',
+    onSignedOut,
+    onUpgradeRequired,
+    clearLocalData,
+    now,
+  });
+  return { transport, onSignedOut, onUpgradeRequired, clearLocalData };
 }
 
 describe('createHostTransport', () => {
@@ -112,5 +124,51 @@ describe('createHostTransport', () => {
     const { transport } = make(bridge());
     expect(transport.headers).toEqual({ 'X-Client-Version': '0.1.0' });
     expect(typeof transport.createEventSource).toBe('function');
+  });
+
+  it('device_revoked wipes the webview data as well as the host', async () => {
+    const b = bridge();
+    const { transport, onSignedOut, clearLocalData } = make(b);
+    transport.signOut('device_revoked');
+    await vi.waitFor(() => expect(onSignedOut).toHaveBeenCalledWith('device_revoked'));
+    expect(clearLocalData).toHaveBeenCalledTimes(1);
+    expect(b.calls.wipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('logout revokes through the host, clears local data, then reports', async () => {
+    const b = bridge();
+    const order: string[] = [];
+    b.calls.signOut.mockImplementation(() => {
+      order.push('host');
+      return Promise.resolve();
+    });
+    const { transport, onSignedOut, clearLocalData } = make(b);
+    clearLocalData.mockImplementation(() => {
+      order.push('local');
+      return Promise.resolve();
+    });
+    onSignedOut.mockImplementation(() => order.push('reload'));
+    await transport.logout?.();
+    expect(order).toEqual(['local', 'host', 'reload']);
+    expect(onSignedOut).toHaveBeenCalledWith('logout');
+    expect(b.calls.wipe).not.toHaveBeenCalled();
+    expect(await transport.accessToken()).toBeUndefined();
+  });
+
+  it('logout still returns to the sign-in screen when the host call fails', async () => {
+    const b = bridge();
+    b.calls.signOut.mockRejectedValue('keychain locked');
+    const { transport, onSignedOut } = make(b);
+    await transport.logout?.();
+    expect(onSignedOut).toHaveBeenCalledWith('logout');
+  });
+
+  it('a 426 from the token endpoint reaches onUpgradeRequired and is not a sign-out', async () => {
+    const { transport, onUpgradeRequired, onSignedOut } = make(
+      bridge({ refresh: vi.fn().mockResolvedValue('upgrade_required') }),
+    );
+    expect(await transport.refresh('a1')).toBe('unavailable');
+    expect(onUpgradeRequired).toHaveBeenCalledTimes(1);
+    expect(onSignedOut).not.toHaveBeenCalled();
   });
 });

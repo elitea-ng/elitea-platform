@@ -42,11 +42,13 @@ export interface HostBridge {
   signIn(): Promise<HostState>;
   accessToken(): Promise<HostAccessToken | null>;
   /** Force a refresh-token exchange. `ended`: the server refused the refresh token. `unavailable`: try again later. */
-  refresh(): Promise<'refreshed' | 'ended' | 'unavailable'>;
+  refresh(): Promise<'refreshed' | 'ended' | 'unavailable' | 'upgrade_required'>;
   /** Revoke the device session server-side, then forget it locally. */
   signOut(): Promise<void>;
   /** Forget the session and wipe local data without contacting the server (`device_revoked`). */
   wipe(): Promise<void>;
+  /** Open an http(s) URL in the system browser (the opener plugin). */
+  openExternal(url: string): Promise<void>;
 }
 
 export function createHostBridge(invoke: HostInvoke): HostBridge {
@@ -55,9 +57,10 @@ export function createHostBridge(invoke: HostInvoke): HostBridge {
     connect: (url) => invoke<HostDeployment>('host_connect', { url }),
     signIn: () => invoke<HostState>('host_sign_in'),
     accessToken: () => invoke<HostAccessToken | null>('host_access_token'),
-    refresh: () => invoke<'refreshed' | 'ended' | 'unavailable'>('host_refresh'),
+    refresh: () => invoke<'refreshed' | 'ended' | 'unavailable' | 'upgrade_required'>('host_refresh'),
     signOut: () => invoke<void>('host_sign_out'),
     wipe: () => invoke<void>('host_wipe'),
+    openExternal: (url) => invoke<void>('plugin:opener|open_url', { url }),
   };
 }
 

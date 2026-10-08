@@ -13,7 +13,9 @@
  * - `:` lines are comments (heartbeats); `event`, `data` (multi-line, joined
  *   with LF), `id` (ignored when it contains NUL) and `retry` (digits only).
  * - A blank line dispatches. An event with no `data` is not dispatched, but
- *   its `id` still moves `lastEventId` (the resume cursor).
+ *   its `id` still moves `lastEventId` (the resume cursor). The cursor moves
+ *   at dispatch only: an `id:` line of an event cut off by the end of the
+ *   stream is discarded with it.
  * - An event larger than `maxEventChars` is dropped, which bounds memory
  *   against a misbehaving peer.
  */
@@ -44,6 +46,8 @@ export class EventStreamParser {
   private dataParts: string[] = [];
   private dataLength = 0;
   private dropping = false;
+  /** The current event's `id:` value; committed to `lastEventId` only when the event is dispatched. */
+  private idBuffer: string | null = null;
 
   constructor(options: { maxEventChars?: number; lastEventId?: string | null } = {}) {
     this.maxEventChars = options.maxEventChars ?? DEFAULT_MAX_EVENT_CHARS;
@@ -136,7 +140,7 @@ export class EventStreamParser {
         this.addData(value);
         break;
       case 'id':
-        if (!value.includes('\0')) this.lastEventId = value;
+        if (!value.includes('\0')) this.idBuffer = value;
         break;
       case 'retry':
         if (/^\d+$/.test(value)) this.retryMs = Number(value);
@@ -157,6 +161,10 @@ export class EventStreamParser {
   }
 
   private dispatch(out: SseEvent[]): void {
+    // The standard sets the last event id here, before looking at the data, so
+    // an unterminated final event (no blank line) never moves the cursor.
+    if (this.idBuffer !== null) this.lastEventId = this.idBuffer;
+    this.idBuffer = null;
     const hadData = this.dataParts.length > 0;
     const dropped = this.dropping;
     const event = this.eventType === '' ? 'message' : this.eventType;

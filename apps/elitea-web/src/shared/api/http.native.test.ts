@@ -181,3 +181,30 @@ describe('native transport — 401 handling', () => {
     expect(!result.ok && result.error.kind === 'http' && result.error.status).toBe(426);
   });
 });
+
+describe('native transport — failures before the request is sent', () => {
+  it('an access-token failure (offline with an expired token) is a network failure value, not a throw', async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    transport({ fetch: fetchMock, accessToken: vi.fn<NativeTransport['accessToken']>().mockRejectedValue('could not reach the deployment') });
+
+    const result = await createHttpClient({ baseUrl: BASE }).get('/x');
+
+    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error.kind).toBe('network');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('native transport — bearer scope', () => {
+  it('does not attach the bearer to a URL outside the deployment origin', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(json(200, {})));
+    const t = transport({ fetch: fetchMock });
+    setNativeTransport({ ...t, headers: {}, fetch: fetchMock, origin: 'https://elitea.example.com' });
+
+    await createHttpClient({ baseUrl: 'https://elsewhere.example/api/v2' }).get('/x');
+    await createHttpClient({ baseUrl: BASE }).get('/x');
+
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).has('Authorization')).toBe(false);
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).get('Authorization')).toBe('Bearer tok-1');
+  });
+});

@@ -69,4 +69,19 @@ describe('EventStreamParser', () => {
     p.pushText('data: partial');
     expect(p.end()).toEqual([]);
   });
+
+  it('commits the resume cursor at dispatch, not when the id line is read', () => {
+    const p = new EventStreamParser({ lastEventId: '1' });
+    expect(p.pushText('id: 2\ndata: b')).toEqual([]);
+    expect(p.end()).toEqual([]);
+    // The event never completed, so the cursor must still point at event 1:
+    // resuming from 2 would skip an event the application never saw.
+    expect(p.lastEventId).toBe('1');
+  });
+
+  it('still moves the cursor for a completed event without data', () => {
+    const p = new EventStreamParser({ lastEventId: '1' });
+    expect(p.pushText('id: 5\n\n')).toEqual([]);
+    expect(p.lastEventId).toBe('5');
+  });
 });

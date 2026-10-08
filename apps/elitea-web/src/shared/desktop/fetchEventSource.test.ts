@@ -107,6 +107,29 @@ describe('FetchEventSource', () => {
     es.close();
   });
 
+  it('never sends an empty Last-Event-ID header', async () => {
+    const first = stream();
+    const second = stream();
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(first.response).mockResolvedValueOnce(second.response);
+    const es = new FetchEventSource('https://h.example/s', setup(fetchMock).deps);
+    await vi.advanceTimersByTimeAsync(0);
+    first.send('id\ndata: x\n\n'); // `id` with an empty value resets the cursor to ""
+    first.end();
+    await vi.advanceTimersByTimeAsync(60);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(new Headers(fetchMock.mock.calls[1]?.[1]?.headers).has('Last-Event-ID')).toBe(false);
+    es.close();
+  });
+
+  it('refuses to attach the bearer to a URL outside the deployment origin', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(stream().response);
+    const { deps } = setup(fetchMock, { origin: 'https://h.example' });
+    const es = new FetchEventSource('https://evil.example/s', deps);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(es.readyState).toBe(FetchEventSource.CLOSED);
+  });
+
   it('retries a network failure instead of failing', async () => {
     const s = stream();
     const fetchMock = vi.fn<typeof fetch>().mockRejectedValueOnce(new TypeError('offline')).mockResolvedValueOnce(s.response);

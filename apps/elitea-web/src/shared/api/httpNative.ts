@@ -18,6 +18,19 @@ export function devBearer(devToken: string | undefined): string | undefined {
   return import.meta.env.DEV && devToken !== undefined && devToken !== '' ? devToken : undefined;
 }
 
+/**
+ * The bearer, or `undefined` when `url` is not on the deployment origin the
+ * transport is bound to: the token must not travel anywhere else.
+ */
+export function bearerFor(native: NativeTransport | undefined, url: string, bearer: string | undefined): string | undefined {
+  if (native?.origin === undefined || bearer === undefined) return bearer;
+  try {
+    return new URL(url).origin === new URL(native.origin).origin ? bearer : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Bearer + the transport's fixed headers (`X-Client-Version`). */
 export function applyAuthHeaders(headers: Headers, bearer: string | undefined, native: NativeTransport | undefined): void {
   if (bearer !== undefined) headers.set('Authorization', `Bearer ${bearer}`);
@@ -109,7 +122,8 @@ async function replayAfterRefresh(attempt: NativeAttempt): Promise<NativeAnswer>
     return sessionEnded(first);
   }
   if (attempt.signal?.aborted === true) return { kind: 'failure', failure: { kind: 'aborted', url: attempt.url } };
-  (init.headers as Headers).set('Authorization', `Bearer ${fresh}`);
+  const scoped = bearerFor(native, attempt.url, fresh);
+  if (scoped !== undefined) (init.headers as Headers).set('Authorization', `Bearer ${scoped}`);
   let response: Response;
   try {
     response = await attempt.send();

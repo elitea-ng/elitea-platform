@@ -128,7 +128,7 @@ export interface HttpClient {
 }
 
 import { isPreEncodedBody, serializeBody } from './httpBody';
-import { applyAuthHeaders, devBearer, judgeNativeResponse, requestInit } from './httpNative';
+import { applyAuthHeaders, bearerFor, devBearer, judgeNativeResponse, requestInit } from './httpNative';
 import { getNativeTransport, type NativeTransport } from './nativeTransport';
 import {
   credentialRefusalCode,
@@ -204,7 +204,7 @@ function prepare(
   if (import.meta.env.DEV) {
     headers.set('Cache-Control', 'no-cache'); // parity: eliteaApi.js:63
   }
-  applyAuthHeaders(headers, bearer, native);
+  applyAuthHeaders(headers, bearerFor(native, url, bearer), native);
   const init = requestInit(method, headers, credentials, native);
   if (body !== undefined) init.body = body;
   if (options.signal !== undefined) init.signal = options.signal;
@@ -363,7 +363,10 @@ export function createHttpClient(cfg: HttpConfig): HttpClient {
    * about a cookie session and a popup. The browser path above is untouched.
    */
   async function requestNative<T>(native: NativeTransport, method: HttpMethod, path: string, options: HttpRequestOptions): Promise<HttpResult<T>> {
-    const bearer = await native.accessToken();
+    // Offline with an expired token the host cannot refresh: a failure value, not a throw.
+    const token = await native.accessToken().then((value) => ({ value }), (cause: unknown) => ({ cause }));
+    if ('cause' in token) return fromException<T>(token.cause, path);
+    const bearer = token.value;
     const { url, init } = prepare(cfg, credentials, method, path, options, bearer, native);
     const send = (): Promise<Response> => (native.fetch ?? fetch)(url, init);
     let first: Response;

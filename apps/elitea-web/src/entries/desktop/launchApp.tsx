@@ -17,6 +17,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { setNativeTransport, type NativeSignOutReason } from '@/shared/api/nativeTransport';
 import { desktopRuntimeConfig, readPublicProjectId } from '@/shared/desktop/deploymentConfig';
 import type { HostBridge, HostState } from '@/shared/desktop/hostBridge';
+import { installExternalLinks } from '@/shared/desktop/externalLinks';
 import { createHostTransport } from '@/shared/desktop/hostTransport';
 
 export interface LaunchOptions {
@@ -27,6 +28,14 @@ export interface LaunchOptions {
   onUpgradeRequired: () => void;
 }
 
+/**
+ * The host's CORS-free fetch, with redirects switched off at the source: the
+ * plugin ignores `redirect: 'error'`, and a followed redirect would carry the
+ * bearer token to wherever the server (or an attacker on its path) points.
+ */
+const noRedirectFetch: typeof hostFetch = (input, init) =>
+  hostFetch(input, { ...init, maxRedirections: 0 });
+
 export async function launchApp(options: LaunchOptions): Promise<Root> {
   const { bridge, state, container } = options;
   if (state.origin === null) throw new Error('desktop: launchApp needs a configured deployment origin');
@@ -35,13 +44,16 @@ export async function launchApp(options: LaunchOptions): Promise<Root> {
     createHostTransport({
       bridge,
       clientVersion: state.clientVersion,
-      fetch: hostFetch,
+      fetch: noRedirectFetch,
+      origin: state.origin,
       onSignedOut: options.onSignedOut,
       onUpgradeRequired: options.onUpgradeRequired,
     }),
   );
-  const config = desktopRuntimeConfig(state.origin, await readPublicProjectId(hostFetch, state.origin));
+  const config = desktopRuntimeConfig(state.origin, await readPublicProjectId(noRedirectFetch, state.origin));
   (globalThis as { elitea_ui_config?: unknown }).elitea_ui_config = config;
+
+  installExternalLinks(bridge);
 
   const { App } = await import('@/app/App');
   const root = createRoot(container);

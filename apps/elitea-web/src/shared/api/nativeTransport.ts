@@ -18,7 +18,7 @@
  */
 
 /** Why the client gave up its session. */
-export type NativeSignOutReason = 'refresh_failed' | 'device_revoked';
+export type NativeSignOutReason = 'refresh_failed' | 'device_revoked' | 'logout';
 
 /**
  * How a refresh ended. `unavailable` (network down, server busy) is NOT a
@@ -40,6 +40,18 @@ export interface NativeTransport {
   refresh(failedToken: string | undefined): Promise<RefreshOutcome>;
   /** The session is over; `device_revoked` means local data must be wiped. */
   signOut(reason: NativeSignOutReason): void;
+  /**
+   * The person chose to log out: revoke the session server-side, forget it,
+   * wipe local data, and return to the sign-in screen. When present,
+   * `performLogout()` calls this instead of navigating to the server's logout
+   * URL (the bundled app cannot serve it, and a reload would still be signed in).
+   */
+  logout?(): Promise<void>;
+  /**
+   * The deployment origin. The bearer token is attached only to URLs on this
+   * origin, whatever a caller passes.
+   */
+  readonly origin?: string;
   /** Headers sent on every request, e.g. `X-Client-Version` (ADR-0025 426 gate). */
   readonly headers?: Readonly<Record<string, string>>;
   /** Network layer override; the desktop host routes it through Rust (no CORS). */

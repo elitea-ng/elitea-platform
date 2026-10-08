@@ -14,12 +14,17 @@ import type { NativeSignOutReason, NativeTransport, RefreshOutcome } from '@/sha
 
 import { fetchEventSourceFactory } from './fetchEventSource';
 import type { HostBridge } from './hostBridge';
+import { clearAllLocalData } from './localData';
 
 /** Renew this long before the token's stated expiry, so a request never races it. */
 const EXPIRY_SKEW_MS = 30_000;
 
 export interface HostTransportOptions {
   bridge: HostBridge;
+  /** The connected deployment origin; the bearer goes nowhere else. */
+  origin: string;
+  /** Clears the webview's own storage; default: the full sweep in `localData.ts`. */
+  clearLocalData?: () => Promise<void>;
   /** `X-Client-Version`, sent on every request (the 426 gate is per client id). */
   clientVersion: string;
   /** The network layer: the host's CORS-free fetch in the app, a stub in tests. */
@@ -66,6 +71,11 @@ export function createHostTransport(options: HostTransportOptions): NativeTransp
       .refresh()
       .then(async (outcome): Promise<RefreshOutcome> => {
         cached = undefined;
+        if (outcome === 'upgrade_required') {
+          // Not a session failure: the build is too old. Tell the shell, keep the session.
+          options.onUpgradeRequired?.();
+          return 'unavailable';
+        }
         if (outcome !== 'refreshed') return outcome;
         return (await load()) === undefined ? 'ended' : 'refreshed';
       })
@@ -77,23 +87,39 @@ export function createHostTransport(options: HostTransportOptions): NativeTransp
     return refreshInFlight;
   };
 
+  const clearLocalData = options.clearLocalData ?? clearAllLocalData;
+
   const signOut = (reason: NativeSignOutReason): void => {
     if (signedOut) return;
     signedOut = true;
     cached = undefined;
     // The session is already dead server-side (device revoked, or a refresh
     // token that no longer works), so there is nothing to revoke: the host
-    // only forgets it and wipes local data.
-    void bridge
-      .wipe()
+    // forgets it and wipes the keychain, the policy file and (authoritatively)
+    // the webview's browsing data. The page's own sweep runs first.
+    void clearLocalData()
+      .catch(() => undefined)
+      .then(() => bridge.wipe())
       .catch(() => undefined)
       .finally(() => onSignedOut(reason));
+  };
+
+  /** The person chose to log out: revoke server-side, forget, wipe, reload. */
+  const logout = async (): Promise<void> => {
+    if (signedOut) return;
+    signedOut = true;
+    cached = undefined;
+    await clearLocalData().catch(() => undefined);
+    await bridge.signOut().catch(() => undefined);
+    onSignedOut('logout');
   };
 
   const base = {
     accessToken,
     refresh,
     signOut,
+    logout,
+    origin: options.origin,
     headers: { 'X-Client-Version': options.clientVersion },
     ...(options.fetch !== undefined ? { fetch: options.fetch } : {}),
     ...(options.onUpgradeRequired !== undefined ? { onUpgradeRequired: options.onUpgradeRequired } : {}),

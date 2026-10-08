@@ -19,8 +19,10 @@
  *
  * Differences by design: a 401 is answered by one token refresh and an
  * immediate retry (the transport owns single-flight); a second 401 signs the
- * session out and fails permanently. Redirects are refused so a bearer token
- * cannot be forwarded to a host the user did not choose.
+ * session out and fails permanently. Redirects are not followed (the host's
+ * fetch is given `maxRedirections: 0`; see `entries/desktop/launchApp.tsx`) so
+ * a bearer token cannot be forwarded to a host the user did not choose, and a
+ * URL off the deployment origin never gets the token at all.
  */
 import type { EventSourceLike, NativeTransport } from '@/shared/api/nativeTransport';
 
@@ -35,7 +37,7 @@ const DEFAULT_RETRY_MS = 3000;
 type Listener = (event: MessageEvent) => void;
 
 export interface FetchEventSourceDeps {
-  transport: Pick<NativeTransport, 'accessToken' | 'refresh' | 'signOut' | 'headers' | 'fetch'>;
+  transport: Pick<NativeTransport, 'accessToken' | 'refresh' | 'signOut' | 'headers' | 'fetch' | 'origin'>;
   /** Reconnect delay when the server sent no `retry:`. */
   defaultRetryMs?: number;
 }
@@ -91,6 +93,8 @@ export class FetchEventSource implements EventSourceLike {
   /** One connection attempt: `ended` (reconnect) or `failed` (permanent). */
   private async connect(refreshed: boolean): Promise<'ended' | 'failed'> {
     const { transport } = this.deps;
+    // The bearer goes to the connected deployment and nowhere else.
+    if (!this.onDeploymentOrigin()) return 'failed';
     const token = await transport.accessToken();
     const response = await (transport.fetch ?? fetch)(this.url, {
       method: 'GET',
@@ -117,6 +121,11 @@ export class FetchEventSource implements EventSourceLike {
     return 'ended';
   }
 
+  private onDeploymentOrigin(): boolean {
+    const { origin } = this.deps.transport;
+    return origin === undefined || new URL(this.url).origin === new URL(origin).origin;
+  }
+
   private sessionEnded(): 'failed' {
     this.deps.transport.signOut('refresh_failed');
     return 'failed';
@@ -125,7 +134,7 @@ export class FetchEventSource implements EventSourceLike {
   private requestHeaders(token: string | undefined): Headers {
     const headers = new Headers({ Accept: 'text/event-stream', 'Cache-Control': 'no-cache' });
     if (token !== undefined) headers.set('Authorization', `Bearer ${token}`);
-    if (this.lastEventId !== null) headers.set('Last-Event-ID', this.lastEventId);
+    if (this.lastEventId !== null && this.lastEventId !== '') headers.set('Last-Event-ID', this.lastEventId);
     for (const [name, value] of Object.entries(this.deps.transport.headers ?? {})) headers.set(name, value);
     return headers;
   }
