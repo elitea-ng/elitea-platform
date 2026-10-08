@@ -93,10 +93,20 @@ the strict loop. Fix it separately by denying `AliasNode` on `type`.
 Invariant for future work: if an `http` node is ever added to the Worker, its type detection must match
 `declaresHTTPNode` exactly, or the Worker must refuse any `http` node that arrives without a verified snapshot.
 
-**Dependency audits.**
-- No dependencies were added or changed: no `go.mod`, `Cargo.toml` or lockfile changes.
-- `govulncheck` and `cargo deny`/`cargo audit` are not installed locally, and CI runs only container image scans.
-  Per the user's decision (2026-10-08), CI stays unchanged for now. This is recorded as an open gate item, not a pass.
+**Dependency audits (2026-10-08).** This PR changes no dependencies. Every finding below already exists on `main`;
+remediation is tracked as a separate dependency-hygiene task.
+
+- `govulncheck` v1.1.4, run with local Go 1.26.5 on the touched Main packages:
+  - 7 reachable standard-library vulnerabilities (e.g. GO-2026-5026 `net/http`, `encoding/asn1`), all fixed in Go
+    1.26.6;
+  - 1 imported and 3 required-module vulnerabilities, which the scan reports as not called.
+  - Production images build on the floating `golang:1.25-trixie` tag (`go.mod` says `go 1.25.8`), so the effective
+    exposure depends on the patch release picked up at build time.
+- `cargo-deny` 0.20.2 advisories on the Worker:
+  - RUSTSEC-2026-0258 (`h2` 0.4.15, through `hyper`/`bollard`);
+  - RUSTSEC-2023-0071 (`rsa` 0.9.10, through `sqlx-mysql`; no fixed release exists);
+  - one yanked `chacha20` 0.10.1.
+- No CI changes, per the user's decision.
 
 ## Browser evidence
 
