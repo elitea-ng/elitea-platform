@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use super::super::parallel::ParallelCheckpointAppender;
 use super::{
-    FrozenMap, MAX_CHECKPOINT_BYTES, MAX_ITEM_BYTES, MapActivation, MapStop, bounded, map_error,
-    validate_checkpoint_boundary, validate_metadata, validate_state_boundary, validate_value,
-    validate_values,
+    FrozenMap, MAX_CHECKPOINT_BYTES, MAX_ITEM_BYTES, MapActivation, MapStop, bounded,
+    is_lease_lost, map_error, validate_checkpoint_boundary, validate_metadata,
+    validate_state_boundary, validate_value, validate_values,
 };
 
 const OCCURRENCE_KEY: &str = "elitea.graph.map.occurrence.v2";
@@ -517,7 +517,18 @@ impl<N: Node + 'static> Node for MapLifecycleNode<N> {
                 })?;
                 Ok(NodeOutput::new().with_interrupt(interrupted.interrupt))
             }
-            _ => {
+            result => {
+                // Lease loss and cancellation are control stops: record nothing.
+                if let Err(error) = result
+                    && (is_lease_lost(&error)
+                        || context
+                            .config
+                            .parent_context
+                            .as_ref()
+                            .is_some_and(|parent| parent.is_cancelled()))
+                {
+                    return Err(error);
+                }
                 validate_state_boundary(&context.state, MAX_CHECKPOINT_BYTES)?;
                 self.checkpoint.capture(MapItemReceipt::Failed)?;
                 let saved = Checkpoint::new(

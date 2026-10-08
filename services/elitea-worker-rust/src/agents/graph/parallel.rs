@@ -16,6 +16,7 @@ use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::fanout_control::{FanoutCancellation, is_lease_lost, latch_cancelled};
 use super::yaml::{ParallelBranchDefinition, ParallelNodeDefinition};
 
 #[path = "parallel_checkpoint.rs"]
@@ -264,6 +265,8 @@ pub(crate) enum ParallelBranchOutcome {
     Blocked,
     Failed(String),
     Cancelled,
+    /// The writer fence was lost. A control stop, never a branch outcome.
+    LeaseLost(GraphError),
 }
 
 pub(crate) enum PreparedParallelActivation {
@@ -429,6 +432,16 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
             return ParallelBranchOutcome::Cancelled;
         }
         let result = self.invoke_inner(activation, branch, context).await;
+        // Lease loss outranks cancellation: the claim machinery must see it unchanged.
+        if let Err(error) = result {
+            return if is_lease_lost(&error) {
+                ParallelBranchOutcome::LeaseLost(error)
+            } else if is_cancelled(context) {
+                ParallelBranchOutcome::Cancelled
+            } else {
+                ParallelBranchOutcome::Failed(graph_error_code(&error).to_owned())
+            };
+        }
         if is_cancelled(context) {
             return ParallelBranchOutcome::Cancelled;
         }
@@ -829,6 +842,7 @@ pub(crate) struct DurableParallelNode {
     runtime: Arc<dyn ParallelBranchRuntime>,
     deadline: Option<tokio::time::Instant>,
     cleanup_timeout: Duration,
+    cancellation: Option<Arc<FanoutCancellation>>,
 }
 
 impl DurableParallelNode {
@@ -841,7 +855,19 @@ impl DurableParallelNode {
             runtime,
             deadline: None,
             cleanup_timeout: Duration::from_secs(5),
+            cancellation: None,
         }
+    }
+
+    /// Supply the owner's cancellation latch. The owner fires it; the node never polls.
+    pub(crate) fn with_cancellation(mut self, cancellation: Arc<FanoutCancellation>) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+
+    pub(crate) fn with_cleanup_timeout(mut self, cleanup_timeout: Duration) -> Self {
+        self.cleanup_timeout = cleanup_timeout;
+        self
     }
 
     /// Supply the deadline from root execution authority at assembly.
@@ -873,12 +899,19 @@ impl DurableParallelNode {
         self.collect_outcomes(&activation, ordered, context).await
     }
 
-    fn check_running(&self, context: &NodeContext) -> Result<(), GraphError> {
-        if is_cancelled(context)
+    fn stop_requested(&self, context: &NodeContext) -> bool {
+        is_cancelled(context)
+            || self
+                .cancellation
+                .as_deref()
+                .is_some_and(FanoutCancellation::is_cancelled)
             || self
                 .deadline
                 .is_some_and(|deadline| deadline <= tokio::time::Instant::now())
-        {
+    }
+
+    fn check_running(&self, context: &NodeContext) -> Result<(), GraphError> {
+        if self.stop_requested(context) {
             return Err(parallel_error(
                 "graph.parallel.cancelled",
                 "the parallel execution was cancelled",
@@ -887,6 +920,7 @@ impl DurableParallelNode {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // Keep admission, stop and lease-loss ordering in one select loop.
     async fn drain_branches(
         &self,
         activation: &ParallelActivation,
@@ -911,63 +945,101 @@ impl DurableParallelNode {
         }
         let mut pending = prepared.into_iter();
         let mut inflight = FuturesUnordered::new();
-        for _ in 0..max_concurrency {
-            if let Some(branch) = pending.next() {
-                inflight.push(self.invoke_branch(activation.clone(), branch, &run_context));
+        let mut ordered = Vec::with_capacity(self.definition.branches().len());
+        let mut admission_open = true;
+        let mut stopping = false;
+        let mut cleanup_deadline = None;
+        let mut lease_error = None;
+        let latch = self.cancellation.as_deref();
+        if self.stop_requested(context) {
+            self.begin_stop(
+                &mut admission_open,
+                &mut stopping,
+                &mut cleanup_deadline,
+                &cancel_signal,
+            );
+        } else {
+            for _ in 0..max_concurrency {
+                if let Some(branch) = pending.next() {
+                    inflight.push(self.invoke_branch(activation.clone(), branch, &run_context));
+                }
             }
         }
 
-        let mut ordered = Vec::with_capacity(self.definition.branches().len());
-        let mut admission_open = true;
-        let mut cancelled = false;
-        let mut cleanup_deadline = None;
+        // The owner fires the latch and the deadline is absolute: nothing here polls.
         while !inflight.is_empty() {
-            if !cancelled
-                && (is_cancelled(context)
-                    || self
-                        .deadline
-                        .is_some_and(|deadline| tokio::time::Instant::now() >= deadline))
-            {
-                admission_open = false;
-                cancelled = true;
-                cancel_signal.store(true, Ordering::Release);
-                cleanup_deadline = Some(tokio::time::Instant::now() + self.cleanup_timeout);
-            }
             let outcome = tokio::select! {
                 biased;
-                () = tokio::time::sleep(Duration::from_millis(10)) => {
-                    let now = tokio::time::Instant::now();
-                    if cleanup_deadline.is_some_and(|deadline| now >= deadline) {
-                        return Err(parallel_error("graph.parallel.cancellation_cleanup_failed", "parallel cancellation cleanup exceeded its bound"));
-                    }
+                () = latch_cancelled(latch), if !stopping => {
+                    self.begin_stop(&mut admission_open, &mut stopping, &mut cleanup_deadline, &cancel_signal);
                     continue;
+                }
+                () = tokio::time::sleep_until(self.deadline.unwrap_or_else(tokio::time::Instant::now)),
+                    if !stopping && self.deadline.is_some() => {
+                    self.begin_stop(&mut admission_open, &mut stopping, &mut cleanup_deadline, &cancel_signal);
+                    continue;
+                }
+                () = tokio::time::sleep_until(cleanup_deadline.unwrap_or_else(tokio::time::Instant::now)),
+                    if stopping => {
+                    return Err(parallel_error("graph.parallel.cancellation_cleanup_failed", "parallel cancellation cleanup exceeded its bound"));
                 }
                 outcome = inflight.next() => outcome,
             };
-            let Some(outcome) = outcome else {
+            let Some((ordinal, branch, result)) = outcome else {
                 break;
             };
-            match &outcome.2 {
-                ParallelBranchOutcome::Completed(_) | ParallelBranchOutcome::Paused(_) => {}
+            let result = match result {
+                ParallelBranchOutcome::Completed(_) | ParallelBranchOutcome::Paused(_) => {
+                    Some(result)
+                }
                 ParallelBranchOutcome::Blocked | ParallelBranchOutcome::Failed(_) => {
                     admission_open = false;
+                    Some(result)
                 }
                 ParallelBranchOutcome::Cancelled => {
-                    admission_open = false;
-                    cancelled = true;
-                    cancel_signal.store(true, Ordering::Release);
-                    cleanup_deadline
-                        .get_or_insert_with(|| tokio::time::Instant::now() + self.cleanup_timeout);
+                    self.begin_stop(
+                        &mut admission_open,
+                        &mut stopping,
+                        &mut cleanup_deadline,
+                        &cancel_signal,
+                    );
+                    Some(result)
                 }
+                ParallelBranchOutcome::LeaseLost(error) => {
+                    lease_error.get_or_insert(error);
+                    self.begin_stop(
+                        &mut admission_open,
+                        &mut stopping,
+                        &mut cleanup_deadline,
+                        &cancel_signal,
+                    );
+                    None
+                }
+            };
+            if let Some(result) = result {
+                ordered.push((ordinal, branch, result));
             }
-            ordered.push(outcome);
-            if admission_open && let Some(branch) = pending.next() {
+            if !stopping && self.stop_requested(context) {
+                self.begin_stop(
+                    &mut admission_open,
+                    &mut stopping,
+                    &mut cleanup_deadline,
+                    &cancel_signal,
+                );
+            }
+            if admission_open
+                && !stopping
+                && let Some(branch) = pending.next()
+            {
                 inflight.push(self.invoke_branch(activation.clone(), branch, &run_context));
             }
         }
 
         ordered.sort_by_key(|(ordinal, _, _)| *ordinal);
-        if cancelled {
+        if let Some(error) = lease_error {
+            return Err(error);
+        }
+        if stopping {
             return Err(parallel_error(
                 "graph.parallel.cancelled",
                 "the parallel execution was cancelled",
@@ -975,6 +1047,22 @@ impl DurableParallelNode {
         }
         self.check_running(context)?;
         Ok(ordered)
+    }
+
+    /// Close admission, tell running children to stop and bound their cleanup.
+    fn begin_stop(
+        &self,
+        admission_open: &mut bool,
+        stopping: &mut bool,
+        cleanup_deadline: &mut Option<tokio::time::Instant>,
+        cancel_signal: &AtomicBool,
+    ) {
+        *admission_open = false;
+        if !*stopping {
+            *stopping = true;
+            cancel_signal.store(true, Ordering::Release);
+            *cleanup_deadline = Some(tokio::time::Instant::now() + self.cleanup_timeout);
+        }
     }
 
     async fn collect_outcomes(

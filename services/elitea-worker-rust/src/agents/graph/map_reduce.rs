@@ -14,6 +14,8 @@ use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
+use super::fanout_control::{FanoutCancellation, is_lease_lost, latch_cancelled};
+
 #[path = "map_reduce_checkpoint.rs"]
 mod checkpoint;
 pub(crate) use checkpoint::{MapItemExecution, MapOccurrenceCheckpointer};
@@ -310,6 +312,7 @@ pub(crate) struct DurableMapNode {
     children: Arc<dyn MapChildCheckpointerFactory>,
     graphs: Arc<dyn MapWorkerGraphFactory>,
     deadline: Option<tokio::time::Instant>,
+    cancellation: Option<Arc<FanoutCancellation>>,
 }
 
 impl DurableMapNode {
@@ -327,7 +330,14 @@ impl DurableMapNode {
             children,
             graphs,
             deadline: None,
+            cancellation: None,
         })
+    }
+
+    /// Supply the owner's cancellation latch. The owner fires it; the node never polls.
+    pub(crate) fn with_cancellation(mut self, cancellation: Arc<FanoutCancellation>) -> Self {
+        self.cancellation = Some(cancellation);
+        self
     }
 
     pub(crate) fn with_deadline(mut self, deadline: tokio::time::Instant) -> Self {
@@ -339,8 +349,30 @@ impl DurableMapNode {
         self.parent.clone()
     }
 
+    fn is_cancelled(&self, context: &NodeContext) -> bool {
+        cancelled(context)
+            || self
+                .cancellation
+                .as_deref()
+                .is_some_and(FanoutCancellation::is_cancelled)
+    }
+
+    /// Cancellation is a control stop: the owner decides again on the next
+    /// claim, so it is never recorded. Every other stop stays durable.
+    async fn settle_stop(
+        &self,
+        activation: &MapActivation,
+        stop: MapStop,
+    ) -> Result<MapNodeOutcome, GraphError> {
+        if stop == MapStop::Cancelled {
+            return Err(map_error("cancelled"));
+        }
+        self.parent.record_stop(activation, stop.clone()).await?;
+        Ok(MapNodeOutcome::Stopped(stop))
+    }
+
     fn control_stop(&self, context: &NodeContext) -> Option<MapStop> {
-        if cancelled(context) {
+        if self.is_cancelled(context) {
             Some(MapStop::Cancelled)
         } else if self
             .deadline
@@ -379,10 +411,7 @@ impl DurableMapNode {
             return Ok(MapNodeOutcome::Stopped(stop));
         }
         if let Some(stop) = self.control_stop(context) {
-            self.parent
-                .record_stop(&plan.activation, stop.clone())
-                .await?;
-            return Ok(MapNodeOutcome::Stopped(stop));
+            return self.settle_stop(&plan.activation, stop).await;
         }
         let schema = context
             .parent_schema()
@@ -398,10 +427,7 @@ impl DurableMapNode {
         let mut threads = BTreeSet::new();
         for (index, item) in plan.items.iter().enumerate() {
             if let Some(stop) = self.control_stop(context) {
-                self.parent
-                    .record_stop(&plan.activation, stop.clone())
-                    .await?;
-                return Ok(MapNodeOutcome::Stopped(stop));
+                return self.settle_stop(&plan.activation, stop).await;
             }
             let admission = self.children.for_item(
                 &plan.activation,
@@ -458,7 +484,7 @@ impl DurableMapNode {
         let expired = self
             .deadline
             .is_some_and(|deadline| deadline <= tokio::time::Instant::now());
-        let mut admission_open = !cancelled(context) && !expired;
+        let mut admission_open = !self.is_cancelled(context) && !expired;
         if admission_open {
             for _ in 0..self.definition.max_concurrency {
                 if let Some((item, child)) = pending.next() {
@@ -466,7 +492,17 @@ impl DurableMapNode {
                 }
             }
         }
-        while let Some((index, mut result)) = running.next().await {
+        let mut lease_error = None;
+        while let Some((index, result)) = running.next().await {
+            let mut result = match result {
+                Ok(result) => result,
+                Err(error) => {
+                    // Lease loss: close admission and let admitted items drain.
+                    lease_error.get_or_insert(error);
+                    admission_open = false;
+                    continue;
+                }
+            };
             if let Ok(outputs) = &result {
                 match serialized_len(outputs, MAX_ITEM_BYTES) {
                     Ok(size)
@@ -478,7 +514,7 @@ impl DurableMapNode {
                     _ => result = Err(MapStop::ResourceExhausted { index }),
                 }
             }
-            if result.is_err() || cancelled(context) {
+            if result.is_err() || self.is_cancelled(context) {
                 admission_open = false;
             }
             outcomes.push((index, result));
@@ -486,6 +522,9 @@ impl DurableMapNode {
             if admission_open && let Some((item, child)) = pending.next() {
                 running.push(self.run_item(item, child, context));
             }
+        }
+        if let Some(error) = lease_error {
+            return Err(error);
         }
         outcomes.sort_by_key(|(index, _)| *index);
         let stop = if let Some(stop) = self.control_stop(context) {
@@ -496,10 +535,7 @@ impl DurableMapNode {
                 .find_map(|(_, result)| result.as_ref().err().cloned())
         };
         if let Some(stop) = stop {
-            self.parent
-                .record_stop(&plan.activation, stop.clone())
-                .await?;
-            return Ok(MapNodeOutcome::Stopped(stop));
+            return self.settle_stop(&plan.activation, stop).await;
         }
         if outcomes.len() != plan.items.len() {
             return Err(map_error("incomplete_collection"));
@@ -537,12 +573,16 @@ impl DurableMapNode {
         item: FrozenMapItem,
         child: MapChildCheckpoint,
         context: &NodeContext,
-    ) -> (usize, Result<Map<String, Value>, MapStop>) {
+    ) -> (
+        usize,
+        Result<Result<Map<String, Value>, MapStop>, GraphError>,
+    ) {
         let index = item.index;
-        let result = self
-            .run_item_inner(item, child, context)
-            .await
-            .unwrap_or(Err(MapStop::Failed { index }));
+        let result = match self.run_item_inner(item, child, context).await {
+            Err(error) if is_lease_lost(&error) => Err(error),
+            Err(_) => Ok(Err(MapStop::Failed { index })),
+            Ok(result) => Ok(result),
+        };
         (index, result)
     }
 
@@ -576,7 +616,7 @@ impl DurableMapNode {
                 return Err(map_error("corrupt_receipt"));
             }
         }
-        if cancelled(context) {
+        if self.is_cancelled(context) {
             return Ok(Err(MapStop::Cancelled));
         }
         let execution = MapItemExecution::new(
@@ -621,18 +661,17 @@ impl DurableMapNode {
         } else {
             input
         };
-        let outcome = match self.deadline {
-            Some(deadline) => tokio::select! {
-                biased;
-                () = tokio::time::sleep_until(deadline) => {
-                    return Ok(Err(MapStop::DeadlineExceeded));
-                }
-                () = wait_for_cancellation(context) => {
-                    return Ok(Err(MapStop::Cancelled));
-                }
-                outcome = graph.invoke_detailed(input, config) => outcome,
-            },
-            None => graph.invoke_detailed(input, config).await,
+        // The deadline is absolute and the owner fires the latch: nothing here polls.
+        let outcome = tokio::select! {
+            biased;
+            () = tokio::time::sleep_until(self.deadline.unwrap_or_else(tokio::time::Instant::now)),
+                if self.deadline.is_some() => {
+                return Ok(Err(MapStop::DeadlineExceeded));
+            }
+            () = latch_cancelled(self.cancellation.as_deref()) => {
+                return Ok(Err(MapStop::Cancelled));
+            }
+            outcome = graph.invoke_detailed(input, config) => outcome,
         };
         match outcome {
             Ok(outcome) => {
@@ -656,6 +695,7 @@ impl DurableMapNode {
             Err(GraphError::Interrupted(_)) => {
                 Ok(Err(MapStop::UnexpectedPause { index: item.index }))
             }
+            Err(error) if is_lease_lost(&error) => Err(error),
             Err(_) => Ok(Err(MapStop::Failed { index: item.index })),
         }
     }
@@ -842,10 +882,4 @@ fn validate_values_with_limits<'a>(
         visit(value, maximum_depth, &mut remaining)?;
     }
     Ok(())
-}
-
-async fn wait_for_cancellation(context: &NodeContext) {
-    while !cancelled(context) {
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
 }

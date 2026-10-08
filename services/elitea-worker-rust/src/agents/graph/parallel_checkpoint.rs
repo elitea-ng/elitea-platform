@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     PARALLEL_RESUME_STATE_KEY, ParallelActivation, ParallelBlocked, ParallelCheckpointAppender,
-    ParallelChildOrigin, ParallelDecision, ParallelPauseCard, business_state, parallel_error,
-    validate_state, validate_values,
+    ParallelChildOrigin, ParallelDecision, ParallelPauseCard, business_state, is_lease_lost,
+    parallel_error, validate_state, validate_values,
 };
 
 pub(super) const OCCURRENCE_KEY: &str = "elitea.graph.parallel.occurrence.v2";
@@ -604,6 +604,16 @@ impl<N: Node + 'static> Node for ParallelBranchLifecycleNode<N> {
                 Ok(NodeOutput::new().with_interrupt(interrupt))
             }
             Err(error) => {
+                // Lease loss and cancellation are control stops: record nothing.
+                if is_lease_lost(&error)
+                    || context
+                        .config
+                        .parent_context
+                        .as_ref()
+                        .is_some_and(|parent| parent.is_cancelled())
+                {
+                    return Err(error);
+                }
                 let code = super::graph_error_code(&error).to_owned();
                 self.checkpoint.capture(BranchReceipt::Failed { code })?;
                 let checkpoint = Checkpoint::new(

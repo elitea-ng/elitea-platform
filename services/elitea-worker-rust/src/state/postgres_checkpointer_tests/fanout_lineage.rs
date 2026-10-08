@@ -60,9 +60,18 @@ impl BranchRuns {
     }
 }
 
+type BranchHook = Arc<
+    dyn Fn(&str) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync,
+>;
+type ItemHook = Arc<
+    dyn Fn(usize) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send + Sync,
+>;
+
 struct LineageBranches {
     runs: Arc<BranchRuns>,
     pausing: &'static str,
+    /// Runs inside the owned node, after it is counted and before it returns.
+    hook: Option<BranchHook>,
 }
 
 #[async_trait]
@@ -105,11 +114,16 @@ impl ParallelBranchGraphFactory for LineageBranches {
         });
         let work_runs = Arc::clone(&self.runs);
         let work_name = name.clone();
+        let work_hook = self.hook.clone();
         let work = FunctionNode::new(&name, move |context| {
             let runs = Arc::clone(&work_runs);
             let name = work_name.clone();
+            let hook = work_hook.clone();
             async move {
                 runs.work[&name].fetch_add(1, Ordering::SeqCst);
+                if let Some(hook) = hook {
+                    hook(&name).await;
+                }
                 if pauses && !context.state.contains_key(RESUME_KEY) {
                     return Ok(NodeOutput::interrupt_with_data(
                         "Child paused.",
@@ -218,12 +232,21 @@ fn parallel_runtime(
     checkpointer: &Arc<PostgresCheckpointer>,
     runs: &Arc<BranchRuns>,
 ) -> Arc<AdkParallelBranchRuntime> {
+    parallel_runtime_with(checkpointer, runs, None)
+}
+
+fn parallel_runtime_with(
+    checkpointer: &Arc<PostgresCheckpointer>,
+    runs: &Arc<BranchRuns>,
+    hook: Option<BranchHook>,
+) -> Arc<AdkParallelBranchRuntime> {
     let parent: Arc<dyn ParallelCheckpointAppender> = checkpointer.clone();
     Arc::new(AdkParallelBranchRuntime::new(
         checkpointer.clone(),
         Arc::new(LineageBranches {
             runs: Arc::clone(runs),
             pausing: "ask",
+            hook,
         }),
         Arc::new(ParallelOccurrenceCheckpointer::new(parent)),
     ))
@@ -420,11 +443,14 @@ async fn parallel_children_survive_a_new_execution_and_resume_from_their_own_che
 struct LineageWorkers {
     calls: Arc<std::sync::Mutex<Vec<usize>>>,
     hold: Option<(usize, Arc<Notify>)>,
+    /// Runs inside the worker, after the item is counted and before it returns.
+    hook: Option<ItemHook>,
 }
 
 struct LineageWorker {
     calls: Arc<std::sync::Mutex<Vec<usize>>>,
     hold: Option<(usize, Arc<Notify>)>,
+    hook: Option<ItemHook>,
 }
 
 #[async_trait]
@@ -446,6 +472,9 @@ impl Node for LineageWorker {
         {
             started.notify_one();
             std::future::pending::<()>().await;
+        }
+        if let Some(hook) = &self.hook {
+            hook(index).await;
         }
         Ok(NodeOutput::new().with_update("item_result", json!({"value": context.state["entity"]})))
     }
@@ -472,6 +501,7 @@ impl MapWorkerGraphFactory for LineageWorkers {
         let worker = LineageWorker {
             calls: Arc::clone(&self.calls),
             hold: self.hold.clone(),
+            hook: self.hook.clone(),
         };
         Ok(StateGraph::new(StateSchema::simple(&[
             "entity",
@@ -577,6 +607,7 @@ async fn map_items_completed_before_a_takeover_by_a_new_execution_do_not_run_aga
         LineageWorkers {
             calls: Arc::clone(&calls),
             hold: Some((2, Arc::clone(&started))),
+            hook: None,
         },
     );
     tokio::select! {
@@ -602,6 +633,7 @@ async fn map_items_completed_before_a_takeover_by_a_new_execution_do_not_run_aga
         LineageWorkers {
             calls: Arc::clone(&calls),
             hold: None,
+            hook: None,
         },
     )
     .execute_outcome(&context)
@@ -621,5 +653,303 @@ async fn map_items_completed_before_a_takeover_by_a_new_execution_do_not_run_aga
         *calls.lock().expect("call log"),
         vec![0, 1, 2, 2],
         "completed items ran again after the takeover"
+    );
+}
+
+fn two_branches() -> ParallelNodeDefinition {
+    ParallelNodeDefinition::from_yaml(
+        r"
+id: gather
+type: parallel
+branches:
+  - id: first
+    node: done_a
+  - id: second
+    node: done_b
+max_concurrency: 1
+wait: all
+error_policy: fail_after_drain
+output: [gathered]
+transition: END
+        ",
+    )
+    .expect("valid two-branch parallel fixture")
+}
+
+fn revoke_on(name: &'static str, lease: &Arc<TestStateWriterLease>) -> BranchHook {
+    let lease = Arc::clone(lease);
+    Arc::new(move |running| {
+        if running == name {
+            lease.revoke();
+        }
+        Box::pin(async {})
+    })
+}
+
+async fn failed_receipts(database: &IsolatedPostgres) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
+         WHERE metadata::jsonb::text LIKE '%\"status\": \"failed\"%'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("count failed fan-out receipts")
+}
+
+fn assert_lease_lost(error: &GraphError) {
+    let text = error.to_string();
+    assert!(text.contains("checkpoint.writer_not_current"), "{text}");
+    assert!(!text.contains("branch_failed"), "{text}");
+}
+
+/// C1c (Parallel). The writer fence is lost while the first branch runs. That
+/// is a control stop: no failed receipt, the second branch never starts, and a
+/// later claim restores the occurrence and completes it.
+#[tokio::test]
+async fn parallel_lease_loss_mid_branch_is_a_control_stop_a_later_claim_completes() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_test_schema(&database.pool).await;
+    let runs = Arc::new(BranchRuns::new(&["done_a", "done_b", "ask", "late"]));
+    let definition = two_branches();
+    let context = parallel_context(original_state());
+
+    let lease = Arc::new(TestStateWriterLease::current());
+    let first = claim(&database, "execution-1", 1, Arc::clone(&lease)).await;
+    let error = DurableParallelNode::new(
+        definition.clone(),
+        parallel_runtime_with(&first, &runs, Some(revoke_on("done_a", &lease))),
+    )
+    .execute(&context)
+    .await
+    .err()
+    .expect("lease loss stops the node");
+    assert_lease_lost(&error);
+    assert_eq!(
+        runs.work("done_b"),
+        0,
+        "a branch was admitted after lease loss"
+    );
+    assert_eq!(failed_receipts(&database).await, 0);
+
+    let second = claim(
+        &database,
+        "execution-2",
+        2,
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await;
+    let output = DurableParallelNode::new(definition, parallel_runtime(&second, &runs))
+        .execute(&context)
+        .await
+        .expect("a later claim completes the restored occurrence");
+    let gathered = output.updates["gathered"]
+        .as_array()
+        .expect("joined parallel result");
+    assert_eq!(
+        gathered
+            .iter()
+            .map(|entry| entry["outputs"]["output"].clone())
+            .collect::<Vec<_>>(),
+        vec![json!("done_a"), json!("done_b")]
+    );
+    assert_eq!(runs.work("done_b"), 1);
+    assert_eq!(failed_receipts(&database).await, 0);
+}
+
+/// C1c (Map). Item 0 loses the fence. The Map records no stop and admits no
+/// further item; a later claim finishes every item.
+#[tokio::test]
+async fn map_lease_loss_mid_item_records_no_stop_and_a_later_claim_completes() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_test_schema(&database.pool).await;
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let context = map_context();
+
+    let lease = Arc::new(TestStateWriterLease::current());
+    let first = claim(&database, "execution-1", 1, Arc::clone(&lease)).await;
+    let revoking = Arc::clone(&lease);
+    let hook: ItemHook = Arc::new(move |index| {
+        if index == 0 {
+            revoking.revoke();
+        }
+        Box::pin(async {})
+    });
+    let error = map_node(
+        &first,
+        LineageWorkers {
+            calls: Arc::clone(&calls),
+            hold: None,
+            hook: Some(hook),
+        },
+    )
+    .execute_outcome(&context)
+    .await
+    .err()
+    .expect("lease loss is a control error");
+    assert_lease_lost(&error);
+    assert_eq!(*calls.lock().expect("call log"), vec![0]);
+    assert_eq!(failed_receipts(&database).await, 0);
+    let recorded_stops: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints \
+         WHERE jsonb_typeof(metadata::jsonb -> 'elitea.graph.map.occurrence.v2' -> 'stop') \
+               IN ('object', 'string')",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("count recorded Map stops");
+    assert_eq!(recorded_stops, 0, "lease loss was recorded as a Map stop");
+
+    let second = claim(
+        &database,
+        "execution-2",
+        2,
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await;
+    let outcome = map_node(
+        &second,
+        LineageWorkers {
+            calls: Arc::clone(&calls),
+            hold: None,
+            hook: None,
+        },
+    )
+    .execute_outcome(&context)
+    .await
+    .expect("a later claim restores the Map occurrence");
+    let MapNodeOutcome::Completed(output) = outcome else {
+        panic!("the restored Map stopped");
+    };
+    assert_eq!(output.updates["mapped"].as_array().map(Vec::len), Some(3));
+    let calls = calls.lock().expect("call log").clone();
+    for index in [1, 2] {
+        assert_eq!(
+            calls.iter().filter(|call| **call == index).count(),
+            1,
+            "item {index} ran an unexpected number of times: {calls:?}"
+        );
+    }
+}
+
+/// C1e. Two claims race for one frozen occurrence. Claim A is parked inside its
+/// branch while the later claim B restores and completes the node. When A
+/// resumes, the database fence rejects it as lease loss: not Ok, not a failed
+/// branch, and B's completed checkpoints stay the latest.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One scenario across three executions.
+async fn a_superseded_claim_cannot_overwrite_the_later_claims_completed_children() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_test_schema(&database.pool).await;
+    let runs = Arc::new(BranchRuns::new(&["done_a", "done_b", "ask", "late"]));
+    let definition = two_branches();
+    let context = parallel_context(original_state());
+
+    // Freeze under execution 1 without running a branch.
+    let first = claim(
+        &database,
+        "execution-1",
+        1,
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await;
+    let first_runtime = parallel_runtime(&first, &runs);
+    let mut activation = ParallelActivation {
+        root_thread_id: ROOT.to_owned(),
+        node_id: definition.id().to_owned(),
+        step: 4,
+        config_digest: definition.config_digest(),
+    };
+    let PreparedParallelActivation::Ready(_) = first_runtime
+        .prepare(&mut activation, &definition, &context)
+        .await
+        .expect("freeze the occurrence under execution 1")
+    else {
+        panic!("unexpected blocked occurrence");
+    };
+    drop(first_runtime);
+
+    // Claim A restores and parks inside its first branch.
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let (parked, resume) = (Arc::clone(&entered), Arc::clone(&release));
+    let park: BranchHook = Arc::new(move |name| {
+        let (parked, resume) = (Arc::clone(&parked), Arc::clone(&resume));
+        let first = name == "done_a";
+        Box::pin(async move {
+            if first {
+                parked.notify_one();
+                resume.notified().await;
+            }
+        })
+    });
+    let claim_a = claim(
+        &database,
+        "execution-2",
+        2,
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await;
+    let node_a = DurableParallelNode::new(
+        definition.clone(),
+        parallel_runtime_with(&claim_a, &runs, Some(park)),
+    );
+    let context_a = parallel_context(original_state());
+    let task_a = tokio::spawn(async move { node_a.execute(&context_a).await });
+    entered.notified().await;
+
+    // Claim B is later, restores the same occurrence and completes it.
+    let claim_b = claim(
+        &database,
+        "execution-3",
+        3,
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await;
+    let completed = DurableParallelNode::new(definition, parallel_runtime(&claim_b, &runs))
+        .execute(&context)
+        .await
+        .expect("the later claim completes the occurrence");
+    assert_eq!(
+        completed.updates["gathered"].as_array().map(Vec::len),
+        Some(2)
+    );
+
+    // Releasing A must now be refused by the fence.
+    release.notify_one();
+    let error = task_a
+        .await
+        .expect("claim A task")
+        .err()
+        .expect("the superseded claim must not succeed");
+    assert_lease_lost(&error);
+    assert_eq!(failed_receipts(&database).await, 0);
+
+    let stale_latest: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM elitea_runtime.agent_graph_checkpoints c \
+         WHERE thread_id <> $1 \
+           AND save_ordinal = (SELECT max(save_ordinal) \
+                               FROM elitea_runtime.agent_graph_checkpoints m \
+                               WHERE m.thread_id = c.thread_id) \
+           AND (writer_execution_id <> 'execution-3' OR pending_nodes <> '[]')",
+    )
+    .bind(ROOT)
+    .fetch_one(&database.pool)
+    .await
+    .expect("inspect the latest child checkpoints");
+    assert_eq!(
+        stale_latest, 0,
+        "a child's latest checkpoint is not claim B's completed one"
     );
 }

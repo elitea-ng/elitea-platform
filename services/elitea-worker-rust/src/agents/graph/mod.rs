@@ -33,6 +33,7 @@ mod decision;
 mod direct_tool;
 #[cfg(test)]
 mod direct_tool_tests;
+pub(crate) mod fanout_control;
 mod hitl;
 #[cfg(test)]
 mod hitl_tests;
