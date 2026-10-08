@@ -182,25 +182,13 @@ func (s *Sources) invoke(forward material.Forwarder, logger *slog.Logger) http.H
 	if s == nil {
 		return nil
 	}
-	// The grant-only rewrite: the callback block alone, as DeepWiki's
-	// `wiki_query` gets it (material.ReferenceRewriter with no Field).
-	grant := material.ReferenceRewriter{
-		Provider:     "inventory",
-		Refused:      material.ErrRejected,
-		Unavailable:  material.ErrSourceUnavailable,
-		Minter:       s.Minter,
-		CallbackBase: s.CallbackBase,
-		Lifetime:     s.Lifetime,
-	}
 	return material.Invocation{
 		Provider: "Inventory",
 		Rewrite:  s.Rewrite,
-		RewriteFor: func(_, toolName string) material.Rewriter {
-			if slices.Contains(GrantTools, toolName) {
-				return grant.Rewrite
-			}
-			return nil
-		},
+		// The grant-only tools get the callback block alone, as DeepWiki's
+		// `wiki_query` does.
+		RewriteFor: material.ForTools(
+			material.CallbackOnly("inventory", s.Minter, s.CallbackBase, s.Lifetime), GrantTools...),
 		Forward: forward,
 		Path: func(r *http.Request) string {
 			return spi.InvokePath(
