@@ -211,6 +211,30 @@ func TestHandlerPostgres_PipelineLimitsOnUpdateVersion(t *testing.T) {
 	}
 }
 
+// Turning a version into a pipeline bounds the instructions it already stores,
+// even when the request carries none.
+func TestHandlerPostgres_PipelineLimitsOnAgentTypeChange(t *testing.T) {
+	f := newLimitsFixture(t)
+	big := strings.Repeat("a", pipelinelimits.MaxInstructionsBytes+1)
+	recorder, created := do(t, f.router, http.MethodPost, "/applications/prompt_lib/1",
+		pipelineCreateBody("flip-big", "openai", big))
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("seed agent: %d %s", recorder.Code, truncateForLog(recorder.Body.String()))
+	}
+	path := "/version/prompt_lib/1/" + created["id"].(string) + "/" + created["version_details"].(map[string]any)["id"].(string)
+	recorder, _ = do(t, f.router, http.MethodPut, path, map[string]any{"agent_type": "pipeline"})
+	requireLimitRefusal(t, "flip over-bound agent to pipeline", recorder.Code, recorder.Body.String(), "512 KiB")
+	if n := f.count(t, `SELECT count(*) FROM p_1.application_versions WHERE agent_type = 'pipeline' AND octet_length(instructions) > $1`, pipelinelimits.MaxInstructionsBytes); n != 0 {
+		t.Errorf("a refused type change stored %d over-bound pipelines", n)
+	}
+
+	appID, versionID := f.createPipeline(t, "flip-small", "openai")
+	recorder, _ = do(t, f.router, http.MethodPut, "/version/prompt_lib/1/"+appID+"/"+versionID, map[string]any{"agent_type": "pipeline"})
+	if recorder.Code != http.StatusCreated {
+		t.Errorf("flip in-bound agent to pipeline: %d %s", recorder.Code, truncateForLog(recorder.Body.String()))
+	}
+}
+
 // An agent is not a pipeline: its instructions are prose and are not bounded here.
 func TestHandlerPostgres_PipelineLimitsDoNotApplyToAgents(t *testing.T) {
 	f := newLimitsFixture(t)

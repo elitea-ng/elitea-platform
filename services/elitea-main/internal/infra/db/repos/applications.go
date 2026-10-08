@@ -790,6 +790,10 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 		if err := r.checkPipelineInstructions(ctx, s, applicationID, versionID, v); err != nil {
 			return applications.Version{}, err
 		}
+	} else if v.AgentType == pipelineAgentType {
+		if err := r.checkStoredPipelineInstructions(ctx, s, applicationID, versionID); err != nil {
+			return applications.Version{}, err
+		}
 	}
 
 	setClauses := []string{}
@@ -936,6 +940,30 @@ func (r *ApplicationsRepo) checkPipelineInstructions(ctx context.Context, schema
 		return nil
 	}
 	return refusal
+}
+
+// checkStoredPipelineInstructions bounds the instructions a version already
+// stores when a request turns it into a pipeline without sending new ones, so
+// a type change cannot store an over-bound pipeline. Only the length crosses
+// the wire for an over-size text; an in-bound text is read to count its nodes.
+func (r *ApplicationsRepo) checkStoredPipelineInstructions(ctx context.Context, schema, applicationID, versionID string) error {
+	var size int
+	var instructions string
+	err := r.pool.QueryRow(ctx, fmt.Sprintf(
+		`SELECT octet_length(COALESCE(instructions, '')),
+		        CASE WHEN octet_length(COALESCE(instructions, '')) <= $3 THEN COALESCE(instructions, '') ELSE '' END
+		   FROM %s.application_versions WHERE application_id = $1 AND id = $2`, schema),
+		applicationID, versionID, pipelinelimits.MaxInstructionsBytes).Scan(&size, &instructions)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return apierr.NotFound("version not found")
+	}
+	if err != nil {
+		return fmt.Errorf("applications: update version: stored instructions: %w", err)
+	}
+	if size > pipelinelimits.MaxInstructionsBytes {
+		return pipelinelimits.ErrInstructionsTooLarge
+	}
+	return pipelinelimits.Check(instructions)
 }
 
 func (r *ApplicationsRepo) DeleteVersion(ctx context.Context, projectID, applicationID, versionID string) error {
