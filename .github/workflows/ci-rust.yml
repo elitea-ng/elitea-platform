@@ -7,6 +7,9 @@ on:
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"
+      # elitea-llm-wire, a path dependency (the /llm caller contract crate);
+      # it inherits package fields and lints from the libs/rust workspace.
+      - "libs/rust/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The SDK schema gate reads both (src/toolkits/sdk_conformance.rs).
@@ -28,6 +31,9 @@ on:
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"
+      # elitea-llm-wire, a path dependency (the /llm caller contract crate);
+      # it inherits package fields and lints from the libs/rust workspace.
+      - "libs/rust/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The SDK schema gate reads both (src/toolkits/sdk_conformance.rs).
