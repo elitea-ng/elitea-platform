@@ -465,8 +465,14 @@ The source record preserves capture-matcher fixes, the restricted descriptor-bas
 
 The [reload mapping](docs/source-mapping/code-chat-reload-ui-20261007.md) traces persisted Main authors and selected participants into Web rendering and fresh-chat navigation.
 Its immutable 42a0 source passes 76 focused Web tests, image build, and the strict local Alpine scan with zero HIGH or CRITICAL findings.
-The corrected image remains undeployed; browser acceptance stays open.
+The later exact Web deployment and normal author/selection browser acceptance pass.
+The frozen browser receipt is `9406b43e2e008c791f2487476d2699097287773473936b8fcde6b5830e43de5f`.
+
 The deployed native source remains c53. No product source changes for the later preparation-test controller fixes.
 Chats 839 and 844 complete normally after their capture controllers refuse before Stop or Worker loss.
 These normal results do not close preparation cancellation or recovery.
 Their source mappings retain the logical-to-dispatch correction and the source-defined admission transitions.
+
+Chat845 later cancels downstream preparation after the original preparation window is missed.
+Its first Code job already completes. No Worker fault occurs.
+All three original runtimes are physically removed, but preparation-Stop and recovery receive no credit.

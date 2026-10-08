@@ -1,7 +1,7 @@
 # Code chat reload authors and participant selection
 
-Date: 2026-10-07. Status: source checks, image build, and strict local scan pass.
-Deployment and browser acceptance remain open.
+Date: 2026-10-08. Status: source checks, image build, strict local scan, deployment, and author/selection browser acceptance pass.
+Complete Code acceptance remains open.
 
 ## Current to new source mapping
 
@@ -91,7 +91,7 @@ Root separately checks the actual report, archive, command-log hashes, coverage,
 The builder retains its existing 8 GiB bound. The Docker VM retains the authorized 16 GiB allocation.
 Before and after capacity checks pass; they do not establish an exact peak or performance benchmark.
 
-## Deployment and connection limits
+## Earlier deployment checkpoint and connection limits
 
 The deployed Main and Web source remains `efa7213e803d6f314ee8b6c482b78f45544140b4`.
 The deployed Web image remains `sha256:1c343b749892ac042f5389e4018432e21776d97a902e9b0eb7e8fc18adb91714`.
@@ -111,3 +111,54 @@ A successful open can therefore change Offline to Connected.
 No saved notification status or browser online state identifies the actual incident cause.
 No browser connection-limit cause is established. The connection policy remains unchanged.
 The correction adds no Code runtime, capacity, recovery, or Kubernetes completion claim.
+
+## Exact Web deployment and browser acceptance, 2026-10-08
+
+Root deploys only the accepted Web image from immutable source 42a0.
+The startup receipt digest is `da6120e39fa53111b5dd5dc12d099c95dfcac4a0698616188d52f16519e061d3`.
+The old Web container remains stopped and preserved with its complete specification.
+The native Worker, Supervisor, Main, storage, material, profiles, and protected containers remain unchanged.
+The new Web specification digest is `a5cfbaabf372b60453bb8ef2a54a4f1fdd52751f0a20835ec73b62d2c1bf1863`.
+Startup checks do not establish browser acceptance.
+
+Normal chat843 reload now shows its original pipeline author.
+It retains `PIPELINE_CODE_FAILED` and support reference `36b7ada7-8b9a-58e5-b5a0-7132721509dc`.
+No new Send occurs in chat843.
+Normal fresh `/chat` selection attaches the saved empty-Code pipeline and allocates chat846.
+The selected pipeline survives ordinary reload before Send.
+
+One normal Send in chat846 reaches the existing empty-Code refusal.
+The live and reloaded answers show the selected pipeline author.
+Both retain `PIPELINE_CODE_FAILED` and support reference `91c9f267-a32f-5050-a835-1f43e859f2a5`.
+The browser acceptance receipt digest is `9406b43e2e008c791f2487476d2699097287773473936b8fcde6b5830e43de5f`.
+This receipt closes the author and fresh-selection correction.
+It does not close preparation Stop or owner recovery.
+
+An independent read-only check verifies complete protected specifications and the retained old Web.
+It verifies the accepted native chain, all material and profiles, 62 terminal jobs, and zero candidate runtimes.
+Its digest is `9df3e9be644a59ff058549bd9fd39a0a306edc8d481bc714506d507ea64e8617`.
+The exact accepted Web overlay digest is `d151b07eaa29732b9df8a97ac1374540ea172d6c823cd56df5968d05cca6d484`.
+Later fault controllers must verify this overlay and preserve every non-Web guard.
+
+## Cancelled editor history policy
+
+Chat845 History retains its original CANCELLED terminal run and original visits after reload.
+Restore Test retains the original pipeline author and trace without active-run state.
+Main `internal/db/queries/agent_cancel.sql` retains empty editor Test turns.
+Main `internal/infra/db/repos/configuration_validation_results.go` removes their cancellation error fields during terminal projection.
+Terminal Restore plays the persisted conversation. It does not replay the live cancellation error or support bubble.
+This behavior adds no defect or acceptance gate.
+
+The source review digest is `9be86c77cd7c9b686df9257e7b509ecdda28e6b11cba26271fcd8f09be747f39`.
+The source map digest is `75f40d519b5dd06b7de5e12d5062a91a96ba8f165db94176203ea18e0cd3343b`.
+Preparation Stop acceptance still requires its actual phase, live cancellation, original terminal History, cleanup, and no new admission.
+Chat845 misses that phase and receives no preparation-Stop credit.
+
+## Later CI boundary
+
+Evidence commit `4a66c7192ff0b70c275738dcd58ff63dcfaf299b` reports 66 successful checks, one cancellation, and the same two declared skips.
+The Runtime worker job stalls during Ubuntu package-index acquisition before worker installation or tests.
+Its preserved log digest is `7e5ee93f6f4c07581e2c2defc06fdc1d25bf4b41252608b41343d0834b133ddd`.
+The exact snapshot digest is `f5094ccbc0402c96c13e11b6c35781a5c7e07622d9fbd6f0b1bc5e804a586c04`.
+The prerequisite step now has a ten-minute bound. It retains every package and source.
+Later CI acceptance remains open until its exact head passes.

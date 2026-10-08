@@ -1026,6 +1026,9 @@ The frozen root acceptance receipt is `cbbdffb369169b57d1c6456928bc0b233d9b4cdc8
 The operator fixes affect capture matching and private spool initialization; this case requires no product source change.
 The record preserves earlier refusals and the separate permission-probe boundary.
 Preparation Stop, preparation owner loss, the remaining service-loss cases, and current-cohort Kubernetes acceptance stay open.
-The published Web reload correction now has a built image and a passing strict local Alpine scan.
-Deployment and browser acceptance remain open; the reload mapping records their separate boundary.
+
+The published Web reload correction passes build, strict local Alpine scan, exact deployment, and normal author/selection browser acceptance.
+The browser receipt is `9406b43e2e008c791f2487476d2699097287773473936b8fcde6b5830e43de5f`.
+Chat845 misses the original preparation Stop window and receives no preparation-Stop or Worker-recovery credit.
+The [finite checklist](source-mapping/code-nats-deployed-acceptance-20261007.md) retains five remaining runtime groups and their UI requirements.
 Complete Code, graph gates 5a–5e, later worker gates, and release remain open. Workspaces remain deferred.

@@ -110,6 +110,18 @@ The run completes normally in 15 seconds and returns the downstream sentinel 999
 The actual idle store then contains 59 jobs, 59 dispatches, and 125 checkpoints.
 This result receives no preparation-cancellation or recovery credit.
 The next controller requires the complete source-defined admission and preparation startup transitions.
+
+The later chat845 controller observes the original preparer running, but the normal UI Stop misses that preparation window.
+The first Code job completes before Stop cancels downstream preparation.
+The original execution settles as CANCELLED with one output and one settlement.
+All three sandbox runtimes later return HTTP 404 and are absent from the runtime list.
+The store contains 62 terminal jobs, 62 dispatches, and 130 checkpoints after this run.
+No Worker loss occurs. The original Worker and unused fresh spool remain preserved.
+
+This run receives no preparation-Stop or Worker-recovery credit.
+The readback digest is `2b60dc93c0155027612eaf0cdf43e0b39ada2223126a2385d910a53ba79a89cd`.
+The removal digest is `f9dc33b72c4a5c6157d8a50b9096de2d642f69407e83910cf6e4949255b613a7`.
+
 Supported application-list denial and outer artifact RBAC refusal later pass their finite cases.
 Their frozen root receipt is `6b20be7632be1bffca3de94806b16c586de0daba5968f88acf13c0ea812140b9`.
 The artifact HTTP 403 occurs at the outer RBAC gate; it does not prove a separate bucket ACL refusal.
@@ -124,13 +136,16 @@ The later closure audit verifies 45 source and receipt pins without runtime acti
 Its checklist digest is `4c6a93ab083535e6920af90d0334c4bc5a26a09095562bc81449a8123ed12eb5`.
 Its source and receipt ledger digest is `cd7c03a77d1407ed1053d29374fde17540fdfd76a6e8ef89ffcfddc7f6f862b1`.
 Preparation Stop and pending cancellation across Worker loss remain the first boundary.
-After that boundary, five groups remain:
+After that boundary, four runtime groups remain:
 
-1. Deploy the Web correction and verify normal creation, selection, authors, and reload in the browser.
-2. Verify live Worker and Supervisor recovery, preparation fault outcomes, and applicable debug reconciliation.
-3. Verify Main recovery during publication of the original successful compilation.
-4. Verify queued and in-flight NATS recovery with the original broker storage.
-5. Verify current hybrid Kubernetes execution, cache, refusals, Stop, recovery, and physical cleanup.
+1. Verify live Worker and Supervisor recovery, preparation fault outcomes, and applicable debug reconciliation.
+2. Verify Main recovery during publication of the original successful compilation.
+3. Verify queued and in-flight NATS recovery with the original broker storage.
+4. Verify current hybrid Kubernetes execution, cache, refusals, Stop, recovery, and physical cleanup.
+
+The later exact Web deployment and normal browser checks close the separate author and fresh-selection correction.
+Their receipt digest is `9406b43e2e008c791f2487476d2699097287773473936b8fcde6b5830e43de5f`.
+The remaining runtime cases retain their required live, History, and reload checks.
 
 Existing accepted language, cache, failure, active Stop, authority, and component proofs remove repeat checks.
 Normal runtime isolation guards remain mandatory for each new case.
@@ -159,3 +174,31 @@ The readback remains separate from deployment and browser acceptance.
 Main and Web remain at efa. The separately accepted native pair remains at c53.
 The chat838 selection-loss branch and notification Offline cause remain unproved.
 These checks do not close recovery, capacity, or the complete Code gate.
+
+## Acceptance controller and application ownership
+
+The private Python controller is an acceptance harness. It is not a shipped application service.
+It reads bounded database metadata and exact runtime specifications.
+Root owns normal UI Run and Stop actions.
+The controller applies only the exact fault in a reviewed root authorization.
+It does not write claims, checkpoints, journals, or business results.
+
+Refused or missed cuts provide no recovery credit.
+
+The UI submits normal application requests to Main.
+Main owns PostgreSQL execution state and sends durable command identifiers through NATS.
+The Rust Worker obtains Main claim authority and evaluates the graph.
+The Code owners create durable preparation and execution dispatches.
+The Sandbox Supervisor owns the isolated preparer and Code runtime lifecycle.
+PostgreSQL remains authoritative; NATS supplies transport.
+
+| Application owner | Source owner | Harness observation |
+| --- | --- | --- |
+| Graph Code activation and preparation | Worker `src/agents/graph/code_runtime.rs`, `code_preparation.rs`, and `code_attempt_remote.rs` | Original activation, request, preparation, and dispatch identities. |
+| Claim and recovery authority | Main `internal/infra/db/repos/claims.go` and `model_checkpoint_authority.go` | Current claim attempt, lease epoch, and checkpoint authority. |
+| Preparation cancellation and cleanup | Worker `src/sandbox/docker_preparation.rs`, `docker_supervisor.rs`, and vendored Docker job adapter | Exact original child state, isolation guards, cancellation, and physical removal. |
+| Terminal result delivery | Worker `src/execution/output_delivery.rs` and Main `internal/infra/db/repos/output_inbox.go` | One original output and settlement. |
+
+The latest misses concern harness identity, admission, diagnostics, and UI timing.
+They do not establish a Code product defect or successful recovery.
+The source maps retain each accepted application behavior and each remaining fault boundary.

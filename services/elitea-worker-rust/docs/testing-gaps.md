@@ -120,12 +120,18 @@ The later chat 843 case closes actual failed-journal replay on its accepted curr
 State rename reference rewriting remains a separate editor gap.
 Workspaces remain outside this register in the post-worker backlog.
 
-The [Web reload correction](source-mapping/code-chat-reload-ui-20261007.md) now passes source tests, image build, and its strict local Alpine scan.
-Deployment and ordinary browser verification remain required.
+The [Web reload correction](source-mapping/code-chat-reload-ui-20261007.md) passes source tests, image build, strict local Alpine scan, deployment, and normal author/selection browser verification.
+Its browser receipt is `9406b43e2e008c791f2487476d2699097287773473936b8fcde6b5830e43de5f`.
+
 Later preparation fixtures 839 and 844 complete normally after controller refusals before Stop or Worker loss.
 They do not close preparation cancellation or owner recovery.
-The current idle store retains 59 jobs, 59 dispatches, and 125 checkpoints after the second normal run.
+The historical checkpoint retains 59 jobs, 59 dispatches, and 125 checkpoints after the second normal run.
 Controller source corrections must cover the exact Main admission and preparation startup states before another fault release.
+
+Later chat845 observes preparation, but normal UI Stop misses that window and cancels downstream preparation after the first Code job completes.
+The original run settles as CANCELLED. All three runtimes are physically removed.
+The idle store then retains 62 terminal jobs, 62 dispatches, and 130 checkpoints.
+No Worker fault occurs. This run closes no preparation-Stop or owner-recovery row.
 
 Update this register with each relevant implementation slice.
 Keep detailed source mappings authoritative for business behavior and implementation ownership.
