@@ -223,7 +223,7 @@ func TestGuardRoundTripperReturnsRedirectUnfollowed(t *testing.T) {
 	defer redirector.Close()
 
 	g, port := loopbackTarget(t, redirector)
-	var rt http.RoundTripper = g.RoundTripper()
+	rt := g.RoundTripper()
 	req, _ := http.NewRequest(http.MethodPost, "http://receiver.example:"+port+"/hook", strings.NewReader("{}"))
 	resp, err := rt.RoundTrip(req)
 	if err != nil {
