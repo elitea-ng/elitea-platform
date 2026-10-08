@@ -7,6 +7,13 @@ publish = false
 description = "The Rust-native Inventory engine behind the sub-application host's engine sidecar socket (ADR-0027)."
 
 [dependencies]
+# investigate's agent loop (adk-rust; the worker's version, without its
+# patches, which only its durable history needs). No default features:
+# no skills, artifacts or plugins.
+adk-agent = { version = "=2.2.0", default-features = false }
+adk-core = { version = "=2.2.0", default-features = false }
+adk-runner = { version = "=2.2.0", default-features = false }
+adk-session = { version = "=2.2.0", default-features = false }
 # The engine sidecars' shared crates (ADR-0027): the error contract, the
 # NDJSON stream and stop flag, Python-compatible text; the socket server, the
 # container probe and process tracing.
@@ -17,8 +24,10 @@ elitea-graph-algos = { path = "../../libs/rust/graph-algos" }
 # The content layer and document extraction (ADR-0028).
 elitea-content-source = { path = "../../libs/rust/content-source" }
 elitea-doc-extract = { path = "../../libs/rust/doc-extract" }
-# The tree-sitter parsers (and the Kotlin/Swift ports) of the parser stage.
+# The tree-sitter parsers of the parser stage.
 elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
+# adk's model over the gateway client.
+elitea-adk-gateway = { path = "../../libs/rust/adk-gateway" }
 # investigate's conversation and its summarisation (shared with DeepWiki).
 elitea-conversation = { path = "../../libs/rust/conversation" }
 elitea-model-client = { path = "../../libs/rust/model-client" }
@@ -45,6 +54,8 @@ sqlx = { version = "=0.8.6", default-features = false, features = ["json", "post
 # Chunking a file for the model (by syntax where a grammar exists).
 text-splitter = { version = "=0.33.0", features = ["code"] }
 thiserror = "=2.0.21"
+# The investigation's cancellation token (adk's runner takes one).
+tokio-util = { version = "=0.7.19", default-features = false }
 tokio = { version = "=1.53.2", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "=0.1.44"
 

@@ -285,6 +285,7 @@ impl NativeRunner {
         let client = Arc::new(ChatClient::new(self.transport.clone(), settings.clone()));
         let stop = stop.clone();
         crate::investigate::ChatModel {
+            name: settings.model_name.clone(),
             chat: Arc::new(move |request| {
                 let (client, stop) = (Arc::clone(&client), stop.clone());
                 Box::pin(async move { client.complete(&request, &stop).await })
@@ -331,8 +332,7 @@ impl NativeRunner {
             .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?
             .unwrap_or_default();
         // The agent reads only what the caller may (ADR-0028 D3).
-        let filtered = stored.for_caller(caller);
-        let view = filtered.as_ref().unwrap_or(&stored);
+        let view = stored.for_caller(caller).map_or(stored, Arc::new);
         let document = sources::status_document(&self.pool, key)
             .await
             .map_err(|e| EngineError::new(ErrorType::Runtime, e.to_string()))?;
@@ -353,7 +353,7 @@ impl NativeRunner {
             key.project_id,
             model_name,
         );
-        let embed = self.ranker(view, &settings, key, &stop);
+        let embed = self.ranker(&view, &settings, key, &stop);
         let model = self.chat_model(&settings, &stop);
         let result = agent::investigate(
             &question,

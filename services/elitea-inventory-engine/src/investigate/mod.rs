@@ -26,27 +26,29 @@
 //! * the conversation is summarised when it nears the model's context
 //!   (`elitea-conversation`, `LangChain`'s `SummarizationMiddleware` as the
 //!   `DeepWiki` agents use it): fifty rounds of tool output would otherwise
-//!   overflow it, where the Python agent simply failed.
+//!   overflow it, where the Python agent simply failed;
+//! * the loop is adk-rust's (`LlmAgent` + `Runner`, the model through
+//!   `elitea-adk-gateway`): see [`investigate`].
 
-use crate::extract::assets::render;
+mod run;
+
+pub use run::investigate;
+
 use crate::retrieval::{self, Call, view::GraphView};
-use elitea_conversation::{DEFAULT_SUMMARY_PROMPT, Msg, Policy, compact};
+use elitea_conversation::Policy;
 use elitea_engine_core::errors::EngineError;
-use elitea_engine_core::stream::StopSignal;
-use elitea_model_client::chat::{
-    ChatMessage, ChatRequest, ChatResponse, Sampling, SystemPrompt, ToolDefinition,
-};
+use elitea_model_client::chat::{ChatRequest, ChatResponse, ToolDefinition};
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
-const SOURCE_TOOLS: &str = include_str!("../assets/source_tools.json");
-const ASSET: &str = include_str!("../assets/python_inventory.json");
+const SOURCE_TOOLS: &str = include_str!("../../assets/source_tools.json");
+const ASSET: &str = include_str!("../../assets/python_inventory.json");
 
 /// The answer the model gives when the rounds run out (the SDK's message).
-const LIMIT_MESSAGE: &str =
+pub(crate) const LIMIT_MESSAGE: &str =
     "Maximum tool execution iterations (50) reached. Stopping tool execution.";
 
 /// A future the agent awaits.
@@ -59,6 +61,8 @@ pub type Chat = Arc<dyn Fn(ChatRequest) -> Boxed<ChatResponse> + Send + Sync>;
 /// conversation is summarised (`Policy::for_model` of its name).
 #[derive(Clone)]
 pub struct ChatModel {
+    /// The model's name (adk's `Llm::name`).
+    pub name: String,
     pub chat: Chat,
     pub policy: Policy,
 }
@@ -171,7 +175,7 @@ pub struct Investigation {
     pub error: Option<String>,
 }
 
-fn investigate_asset() -> &'static Value {
+pub(crate) fn investigate_asset() -> &'static Value {
     static PARSED: OnceLock<Value> = OnceLock::new();
     PARSED.get_or_init(|| {
         serde_json::from_str::<Value>(ASSET)
@@ -282,7 +286,7 @@ fn sanitize(name: &str) -> String {
 }
 
 /// One offered tool, and what answers it.
-enum Offered {
+pub(crate) enum Offered {
     Graph(&'static str, &'static str),
     Local(Local),
     Source { toolkit_id: String, tool: String },
@@ -291,7 +295,7 @@ enum Offered {
 /// The chat agent's own tools (`_build_chat_tools`), answered by the
 /// retrieval functions that port them.
 #[derive(Clone, Copy)]
-enum Local {
+pub(crate) enum Local {
     Pattern,
     Vocabulary,
     Semantic,
@@ -349,7 +353,7 @@ fn local_tools(view: &GraphView, semantic: bool) -> Vec<(&'static str, Local, Va
     tools
 }
 
-fn offered_tools(
+pub(crate) fn offered_tools(
     view: &GraphView,
     semantic: bool,
     sources: &[SourceToolkit],
@@ -462,132 +466,9 @@ pub fn citations_in(answer: &str) -> Vec<Value> {
     citations
 }
 
-/// Run one investigation.
-///
-/// # Errors
-///
-/// Only a stop; a failed model call or tool ends the investigation with
-/// its `error` set, as Python reported it.
-pub async fn investigate(
-    question: &Question,
-    view: &GraphView,
-    model: &ChatModel,
-    sources: &[SourceToolkit],
-    call_source: &SourceCall,
-    embed: Option<&Embed>,
-    stop: &StopSignal,
-) -> Result<Investigation, EngineError> {
-    let template = investigate_asset()["system_prompt"]
-        .as_str()
-        .unwrap_or_default();
-    let system = render(template, &[("filters", &question.filter_text())]);
-    let max_rounds = investigate_asset()["max_iterations"].as_u64().unwrap_or(50);
-    let (definitions, routes) = offered_tools(view, embed.is_some(), sources);
-    let system = SystemPrompt::text(system);
-    let mut messages = vec![Msg::User(question.text.clone())];
-    let mut result = Investigation::default();
-    for _ in 0..max_rounds {
-        if stop.is_requested() {
-            return Err(EngineError::cancelled());
-        }
-        let response = match next_reply(model, &system, &definitions, &mut messages).await {
-            Ok(response) => response,
-            Err(error) if error == EngineError::cancelled() => return Err(error),
-            Err(error) => {
-                result.error = Some(error.message);
-                return Ok(result);
-            }
-        };
-        if let Some(usage) = &response.usage {
-            result.tokens_in += usage.prompt_tokens;
-            result.tokens_out += usage.completion_tokens;
-        }
-        if response.tool_calls.is_empty() {
-            result.citations = citations_in(&response.content);
-            result.answer = response.content;
-            return Ok(result);
-        }
-        messages.push(Msg::Ai {
-            content: response.content.clone(),
-            calls: response
-                .tool_calls
-                .iter()
-                .map(elitea_conversation::Call::from_tool_call)
-                .collect(),
-            total_tokens: response.usage.map(|usage| usage.total_tokens),
-        });
-        for tool_call in &response.tool_calls {
-            let arguments = tool_call.parsed_arguments();
-            let output = match &arguments {
-                Err(error) => format!("Error: {}", error.message),
-                Ok(arguments) => match routes.iter().find(|(name, _)| *name == tool_call.name) {
-                    None => format!("Error: unknown tool '{}'", tool_call.name),
-                    Some((_, Offered::Graph(tool, family))) => {
-                        graph_call(view, tool, family, arguments)
-                    }
-                    Some((_, Offered::Local(local))) => {
-                        match local_call(view, *local, arguments, embed).await {
-                            Ok(text) => text,
-                            Err(error) if error == EngineError::cancelled() => return Err(error),
-                            Err(error) => format!("Error: {}", error.message),
-                        }
-                    }
-                    Some((_, Offered::Source { toolkit_id, tool })) => {
-                        match call_source(toolkit_id.clone(), tool.clone(), arguments.clone()).await
-                        {
-                            Ok(text) => text,
-                            Err(error) if error == EngineError::cancelled() => return Err(error),
-                            Err(error) => format!("Error: {}", error.message),
-                        }
-                    }
-                },
-            };
-            record(
-                &mut result,
-                &tool_call.name,
-                arguments.as_ref().ok(),
-                &output,
-            );
-            messages.push(Msg::Tool {
-                call_id: tool_call.id.clone(),
-                name: tool_call.name.clone(),
-                content: output,
-            });
-        }
-    }
-    LIMIT_MESSAGE.clone_into(&mut result.answer);
-    Ok(result)
-}
-
-/// One round's reply: the conversation summarised when it is due, then the
-/// model called with the system prompt, the conversation and the offered
-/// tools (temperature and length as Python set them).
-async fn next_reply(
-    model: &ChatModel,
-    system: &SystemPrompt,
-    definitions: &[ToolDefinition],
-    messages: &mut Vec<Msg>,
-) -> Result<ChatResponse, EngineError> {
-    *messages = compact(
-        &model.policy,
-        DEFAULT_SUMMARY_PROMPT,
-        Some(4096),
-        std::mem::take(messages),
-        |request| (model.chat)(request),
-    )
-    .await?;
-    let mut conversation = vec![ChatMessage::SystemPrompt(system.clone())];
-    conversation.extend(messages.iter().map(Msg::to_chat));
-    let mut request = ChatRequest::new(conversation);
-    request.tools = definitions.to_vec();
-    request.sampling = Sampling::Default;
-    request.max_tokens = Some(4096);
-    (model.chat)(request).await
-}
-
 /// Record one call as `{tool, input, output_preview}` (the non-empty
 /// arguments, both at most 500 characters).
-fn record(
+pub(crate) fn record(
     result: &mut Investigation,
     name: &str,
     arguments: Option<&Map<String, Value>>,
@@ -607,7 +488,7 @@ fn record(
 }
 
 /// One of the chat agent's own tools.
-async fn local_call(
+pub(crate) async fn local_call(
     view: &GraphView,
     local: Local,
     arguments: &Map<String, Value>,
@@ -659,7 +540,7 @@ async fn local_call(
 }
 
 /// A graph tool's text, from the retrieval handler that answers it.
-fn graph_call(
+pub(crate) fn graph_call(
     view: &GraphView,
     tool: &str,
     family: &str,
@@ -765,7 +646,8 @@ pub fn missing_question() -> String {
 mod tests {
     use super::*;
     use crate::graph::Graph;
-    use elitea_model_client::chat::ToolCall;
+    use elitea_engine_core::stream::StopSignal;
+    use elitea_model_client::chat::{ChatMessage, ToolCall};
     use std::sync::Mutex;
 
     /// A long investigation is summarised instead of growing past the
@@ -801,6 +683,7 @@ mod tests {
             })
         });
         let model = ChatModel {
+            name: "m".to_owned(),
             chat,
             policy: Policy {
                 trigger_tokens: 200,
@@ -816,7 +699,7 @@ mod tests {
         };
         let Ok(result) = investigate(
             &question,
-            &GraphView::new(Graph::new(), 1),
+            Arc::new(GraphView::new(Graph::new(), 1)),
             &model,
             &[],
             &call_source,
@@ -841,5 +724,145 @@ mod tests {
             "{first}"
         );
         assert!(last.messages.len() <= 1 + 1 + elitea_conversation::KEEP_MESSAGES);
+    }
+
+    /// A model that answers `script(round)` (1-based, tool-offering calls
+    /// only), and the stop it may request.
+    fn scripted(
+        script: impl Fn(usize) -> Result<ChatResponse, EngineError> + Send + Sync + 'static,
+    ) -> ChatModel {
+        let rounds = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let script = Arc::new(script);
+        ChatModel {
+            name: "m".to_owned(),
+            chat: Arc::new(move |request: ChatRequest| {
+                let round = if request.tools.is_empty() {
+                    0
+                } else {
+                    rounds.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+                };
+                let answer = script(round);
+                Box::pin(async move { answer })
+            }),
+            policy: Policy::for_model("m", false, false),
+        }
+    }
+
+    fn call(name: &str, arguments: &str) -> ChatResponse {
+        ChatResponse {
+            tool_calls: vec![ToolCall {
+                id: format!("c-{name}"),
+                name: name.to_owned(),
+                arguments: arguments.to_owned(),
+            }],
+            usage: Some(elitea_model_client::chat::Usage {
+                prompt_tokens: 10,
+                completion_tokens: 5,
+                total_tokens: 15,
+                ..Default::default()
+            }),
+            ..ChatResponse::default()
+        }
+    }
+
+    async fn run(model: &ChatModel, stop: &StopSignal) -> Result<Investigation, EngineError> {
+        let call_source: SourceCall = Arc::new(|_, _, _| Box::pin(async { Ok(String::new()) }));
+        investigate(
+            &Question {
+                text: "Where are refunds handled?".to_owned(),
+                ..Question::default()
+            },
+            Arc::new(GraphView::new(Graph::new(), 1)),
+            model,
+            &[],
+            &call_source,
+            None,
+            stop,
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn the_fiftieth_round_ends_with_the_limit_message() {
+        let model = scripted(|_| Ok(call("list_entity_types", "{}")));
+        let Ok(result) = run(&model, &StopSignal::default()).await else {
+            panic!("investigates");
+        };
+        assert_eq!(result.answer, LIMIT_MESSAGE);
+        assert_eq!(result.tool_calls.len(), 50, "the 50th round's tools ran");
+        assert!(result.citations.is_empty());
+        assert_eq!((result.tokens_in, result.tokens_out), (500, 250));
+        assert_eq!(result.error, None);
+    }
+
+    #[tokio::test]
+    async fn a_failed_model_call_keeps_what_was_recorded() {
+        let model = scripted(|round| match round {
+            1 | 2 => Ok(call("list_entity_types", "{}")),
+            _ => Err(EngineError::new(
+                elitea_engine_core::errors::ErrorType::Runtime,
+                "the gateway refused the call: 429",
+            )),
+        });
+        let Ok(result) = run(&model, &StopSignal::default()).await else {
+            panic!("a failure is a result, not an error");
+        };
+        assert_eq!(
+            result.error.as_deref(),
+            Some("the gateway refused the call: 429")
+        );
+        assert_eq!(result.tool_calls.len(), 2);
+        assert_eq!(result.tokens_in, 20);
+        assert!(result.answer.is_empty());
+    }
+
+    #[tokio::test]
+    async fn bad_arguments_and_unknown_tools_are_answered_and_recorded() {
+        let model = scripted(|round| match round {
+            1 => Ok(call("search_knowledge_graph", "[1]")),
+            2 => Ok(call("no_such_tool", "{}")),
+            _ => Ok(ChatResponse {
+                content: "Refunds live in `RefundService`.".to_owned(),
+                ..ChatResponse::default()
+            }),
+        });
+        let Ok(result) = run(&model, &StopSignal::default()).await else {
+            panic!("investigates");
+        };
+        assert_eq!(result.answer, "Refunds live in `RefundService`.");
+        assert_eq!(result.citations, [json!({"entity_name": "RefundService"})]);
+        let tools: Vec<&str> = result
+            .tool_calls
+            .iter()
+            .filter_map(|c| c["tool"].as_str())
+            .collect();
+        assert_eq!(tools, ["search_knowledge_graph", "no_such_tool"]);
+        assert_eq!(
+            result.tool_calls[0]["output_preview"],
+            json!(
+                "Error: the arguments of tool call 'search_knowledge_graph' are not a JSON object"
+            )
+        );
+        assert!(
+            result.tool_calls[1]["output_preview"]
+                .as_str()
+                .is_some_and(|text| text.contains("no_such_tool")),
+            "{}",
+            result.tool_calls[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_stop_cancels_the_investigation() {
+        let stop = StopSignal::default();
+        let requested = stop.clone();
+        let model = scripted(move |round| {
+            if round == 2 {
+                requested.request();
+            }
+            Ok(call("list_entity_types", "{}"))
+        });
+        let outcome = run(&model, &stop).await;
+        assert!(outcome.is_err_and(|e| e == EngineError::cancelled()));
     }
 }
