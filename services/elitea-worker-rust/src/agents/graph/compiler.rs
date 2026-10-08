@@ -471,7 +471,20 @@ impl PipelineGraphBuilder {
         }
     }
 
+    /// Every traced node must have been bound under its own ID; an unclaimed
+    /// entry would silently drop that node's result.
+    fn ensure_result_trace_bound(&self) -> Result<(), PipelineConfigurationError> {
+        if self.result_trace.is_empty() {
+            Ok(())
+        } else {
+            Err(PipelineConfigurationError::Invalid(
+                "a pipeline node was not bound to its result trace",
+            ))
+        }
+    }
+
     fn into_agent(self) -> Result<GraphAgentBuilder, PipelineConfigurationError> {
+        self.ensure_result_trace_bound()?;
         match self.target {
             PipelineGraphTarget::Agent(builder) => Ok(*builder),
             PipelineGraphTarget::Subgraph { .. } => Err(PipelineConfigurationError::Invalid(
@@ -481,6 +494,7 @@ impl PipelineGraphBuilder {
     }
 
     fn into_subgraph(self) -> Result<StateGraph, PipelineConfigurationError> {
+        self.ensure_result_trace_bound()?;
         match self.target {
             PipelineGraphTarget::Subgraph { graph, .. } => Ok(graph),
             PipelineGraphTarget::Agent(_) => Err(PipelineConfigurationError::Invalid(
@@ -2440,5 +2454,30 @@ impl PipelineConfigurationError {
             Self::Unsupported(_) => "graph.pipeline.unsupported_capability",
             Self::Graph(_) => "graph.pipeline.compile_failed",
         }
+    }
+}
+
+#[cfg(test)]
+mod result_trace_binding_tests {
+    use super::{PipelineGraphBuilder, PipelineGraphTarget, ResultTraceOutputs, StateGraph};
+    use adk_rust::graph::StateSchema;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn an_unclaimed_result_trace_entry_refuses_the_graph() {
+        let builder = PipelineGraphBuilder {
+            target: PipelineGraphTarget::Subgraph {
+                graph: StateGraph::new(StateSchema::new()),
+                terminal: super::SUBGRAPH_RESULT_NODE,
+            },
+            result_trace: BTreeMap::from([(
+                "renamed".to_owned(),
+                ResultTraceOutputs::new(vec!["answer".to_owned()], false),
+            )]),
+        };
+        let Err(error) = builder.into_subgraph() else {
+            panic!("an unclaimed trace entry must refuse the graph");
+        };
+        assert_eq!(error.code(), "graph.pipeline.invalid_configuration");
     }
 }
