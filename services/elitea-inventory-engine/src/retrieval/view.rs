@@ -5,7 +5,7 @@
 //! Python always read a graph loaded from `graph.json`, so a node's
 //! incoming edges come in the order their links appear in the document
 //! (source node order, then each source's edge order) — which is the order
-//! [`Graph::edges`] yields. [`GraphView::predecessors`] keeps that order.
+//! [`Graph::edges`] yields. `GraphView::in_edges` keeps that order.
 
 use crate::graph::Graph;
 use serde_json::{Map, Value};
