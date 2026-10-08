@@ -159,8 +159,61 @@ from the database in this run. The database was only read to find them and to co
 | 4 | Worker restart mid-run: a second Full Name Resolver turn ("Marco Rossi") with `docker restart` at 16:09:40.8 while 3 nested model requests were in flight | chat 828, execution `0ffaef9a…` | Pass: **R**. The run finished inside the 10 s graceful stop. After restart, the un-ACKed Redis command was redelivered every 5 s: first `retained_no_ack` (`agent_delivery.checkpoint_output_reclaim`), then 5 × `agent_output.invalid_durable_state` no-ACK. At 16:10:31 the replacement claim (attempt 2) published the terminal once and settled `SUCCEEDED` (`executed_settled_acked` → `executed_retired`), and redelivery stopped. About 50 s to settle. | One answer, with both sub-agent sections |
 | 1 | Pipeline with a nested saved Agent pausing on a sensitive-tool HITL, approve → complete | — | **Not provable on this stack.** (a) The guardrail policy is `sensitive_tools = {}` (`centry.platform_config`), and the only `delete_file` toolkit (artifact) is skipped as `unsupported_toolkit_family` in this runtime. (b) No MCP server is attached to the rehearsal network. (c) Main refuses every HITL continuation here: pipeline 130 "Gate5 HITL history" paused correctly (chat 830, execution `40f5bf1c…`, card survives reload), but Approve returned `422 unsupported_agent_execution` from Main twice, before any Worker involvement. | Card still pending (unchanged) |
 
-Flow 1 therefore stays open. It needs a stack whose Main supports HITL continuation and has a sensitive tool the
-runtime admits, such as the NATS candidate stack (current main), with this PR's Worker built on that lineage.
+Flow 1 was not provable on the rehearsal stack. It is proven on the fresh stack below.
+
+### Fresh full stack built from this branch
+
+**Stack.** A disposable standalone stack, built from scratch from this branch at `e1c5762db` with
+`deploy/scripts/standalone-stack.sh` (`certs`, `build`, `up`, `seed`, `seed-llm`) and `STANDALONE_WORKER=rust`.
+- Compose project `elitea-c1-20261008`, NATS command bus, private image tags `:c1-20261008`.
+- Worker `elitea-worker-rust:c1-20261008` (`sha256:360f70ede7ea…`), Main `sha256:9fe66483b71d…`, Web
+  `sha256:f47688080b75…`, gateway `sha256:60b0ad4e8036…`, mock LLM `sha256:087294bac2c1…`, mock MCP
+  `sha256:4d8bd51dbcd5…`.
+- Browser host `http://c1.localhost:18097`. The built-in browser profile is shared with other local stacks, and
+  `elitea_session` is a fixed cookie name, so `localhost` sessions were overwritten (`session_unknown`). A local
+  overlay sets only `OIDC_REDIRECT_URI` to the `c1.localhost` host. Sign-in: the stack's mock OIDC, as
+  `e2e-admin@autotest.local`, project "Default Project" (id 1).
+- Model `vllm/E2E-MOCK-MODEL` (the `seed-llm` route through the LLM gateway to the stack's mock LLM). The
+  `E2E-MOCK-MODEL` row from `seed` has no provider credential: the gateway answers `could not auto resolve a
+  provider`. The project default and the agents were set to the `vllm/` row in the UI.
+
+**Fixtures.**
+- Created in the UI:
+  - OpenAPI toolkit 1 `c1_mock_tools`, using the mock's own spec: `mock_tool_status` is GET (read-only),
+    `mock_tool_create_item` is POST (effectful).
+  - MCP toolkits 2 `c1_mcp_echo` (`/mcp`) and 3 `c1_mcp_auth` (`/mcp-auth`, which always answers 401).
+    `selected_tools` was set in the Raw Json view, because Main's tool discovery is refused by its
+    private-destination guard on this stack.
+  - Agents: 1 "c1 sensitive agent", 5 "c1 echo child", 6 "c1 parallel parent".
+  - Pipelines: 2 nested agent, 3 direct toolkit → MCP, 4 direct MCP.
+- Set through the admin API with the page's own session: guardrails `sensitive_tools` `{"*": [mock_tool_status,
+  mock_tool_create_item, echo, get_issues]}`. The admin "Add toolkit" button rendered no row. The guardrails
+  were reset to `{}` after the run.
+- Prompts use the mock LLM's `[[mock:call_tool …]]` marker.
+
+| # | Flow | Chat / execution | Result | After reload |
+|---|---|---|---|---|
+| 1 | Pipeline 2 runs the saved Agent 1 as a nested node; the Agent calls sensitive `mock_tool_status` | chat 2 | **Pass.** Card "Sensitive Action Authorization Required, c1_mock_tools.mock_tool_status" under the `C1 SENSITIVE AGENT` node. Approve resumed the nested Agent and the run completed. | Card kept; the streamed nested-node section is not shown after reload (UI only) |
+| 5 | Parent Agent 6 calls two child Agents in parallel; child 5 completes, child 1 pauses on the sensitive card. `docker restart` of the Worker while paused, then reload, then Approve | chat 5, pause `e5cd0651…`, resume `1917b8f1…` | **Pass: C1 lineage across a new execution and a Worker restart.** `tool_execution_mode="parallel_applications"`, pause `stream_disposition="paused"`. The resume (a new execution, claim accepted after the restart) used `direct_hitl_resume` and settled `executed_settled_acked`. The completed child's model was called **once** in total (mock journal count 1 before restart and 1 after resume), so it did not run again. One combined answer holds both child results. | Card kept across the restart |
+| 6 | Agent 1 in chat: sensitive read-only tool, Approve | chat 1 | Pass. Card, reload, Approve, resume. | Card kept |
+| 7 | Agent 1 in chat: effectful `mock_tool_create_item`, Reject | chat 1 | Pass. Result `sensitive_tool_blocked`, `denied_reason: denied by user`; the tool did not run. | — |
+| 8 | Agent 1 in chat: auth guard on `c1_mcp_auth` through its `mcp_authorize_<id>` proxy, Skip Auth | chat 1, `d6f440a7…` | Pass. `mcp_authorization_required` pause, card "Authorization required … The protected tool has not run". Skip gives `user_declined`; nothing ran. Authorize is disabled: Main cannot read the mock's OAuth metadata through its egress guard. | Card kept |
+| 9 | Pipeline 3 direct `toolkit` node on sensitive `mock_tool_status` | chat 3 | Pass for the HITL: card without a model turn, reload, Approve, resume. | Card kept |
+| 10 | Pipeline 4 direct `mcp` node on `c1_mcp_auth` `echo` (sensitive and auth-guarded) | chat 4 | Sensitive card → Approve → auth card (both pass, both survive reload). **Skip Auth fails** with "The execution input is invalid". The same failure occurs without the sensitive step. See the defect below. | Cards kept |
+
+Every approved `mock_tool_status` call reached the tool with `read_only=true` and then returned
+`tool.execution.unavailable`. The cause is the environment, not the HITL path: the Worker's OpenAPI client is
+HTTPS-only, and the mock LLM serves `/tool` on plain HTTP. The repository's e2e spec
+(`chat.tail-sensitive-tools.spec.ts`) asserts only `tool mock_tool_status said`, which this answer meets. For the
+same reason, pipeline 3 stopped after its first node ("Later nodes did not run").
+
+**Defect found, outside this PR (pre-existing on `main`).** Skip Auth or Authorize on a pipeline's direct MCP node
+always fails. Main sends `hitl_resume=true` with an `mcp_auth` decision
+(`services/elitea-main/internal/application/agentexecution/continue.go`). `agents/runtime.rs:448-465` therefore
+routes it to `PipelineContinuationDecision::Sensitive`, which returns `corrupt()` at `agents/graph/resume.rs:539`.
+`PipelineMcpAuthorizationContinuation` accepts only a payload without `hitl_*` fields, which Main never sends. Its
+unit-test fixture `mcp_resume_payload` strips those fields, so the tests did not see it. This PR touches none of
+these files. A separate task tracks the fix.
 
 Observation outside this PR's code: in flow 4 the `invalid_durable_state` no-ACK retries before the old claim
 expired add about 40 s of recovery latency on the Redis transport. This path is unchanged here, and Redis is
