@@ -195,20 +195,17 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// The key bytes are discarded on purpose. Every handler reads the variable
 	// again, so passing them on would create a SECOND key source, and one key
 	// source is the rule #411/#399 established. This call decides one thing
-	// only: whether the process may continue.
-	masterKey, err := v2secrets.MasterKeyFromEnv(os.Getenv)
+	// only: whether the process may continue. An ABSENT key stops the process
+	// too, unless the development opt-out is set (master_key_gate.go).
+	masterKeyWarning, err := requireVaultMasterKey(os.Getenv)
 	if err != nil {
 		return err
 	}
-	if masterKey == nil {
-		// The ABSENT case stays supported: no compose file and no chart in
-		// deploy/ except the staging one supplies a key, and the E2E stack
-		// seeds unwrapped key rows on purpose. It is a real local shape, so it
-		// must not stop the service — but it must not be quiet either, because
-		// the operator cannot tell it apart from a key that failed to arrive.
-		logger.Warn("no project vault master key: every project vault key is stored UNWRAPPED, "+
-			"so anyone who can read the database can open every project secret",
-			"variable", v2secrets.MasterKeyEnvVar)
+	if masterKeyWarning != "" {
+		// The development opt-out. Loud on purpose: the operator cannot tell
+		// this shape apart from a key that failed to arrive.
+		logger.Warn(masterKeyWarning,
+			"variable", v2secrets.MasterKeyEnvVar, "opt_out", v2secrets.AllowUnwrappedEnvVar)
 	}
 
 	// APPLICATION_SECRET_KEY signs personal access tokens. internal/api/router.go

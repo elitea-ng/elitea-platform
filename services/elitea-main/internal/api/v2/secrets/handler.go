@@ -74,14 +74,20 @@ func WithPermissionResolver(resolver auth.PermissionResolver) Option {
 // master key names it, so an operator can search the logs for it.
 const MasterKeyEnvVar = "SECRETS_MASTER_KEY"
 
+// AllowUnwrappedEnvVar is the explicit, development-only opt-out that lets
+// cmd/elitea-main start with NO master key, storing project vault keys
+// unwrapped. It follows the ELITEA_DEV_* convention of the other local-machine
+// flags. Without it an absent master key stops the service at start-up.
+const AllowUnwrappedEnvVar = "ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS"
+
 // MasterKeyFromEnv reads the master key and validates it.
 //
 // It separates the two cases the old NewHandler answered identically:
 //
-//   - ABSENT: key is nil and err is nil. The deployment asks for unwrapped
-//     storage. That stays supported, because centry supports it and because a
-//     local stack has no key to give. The caller must say so out loud —
-//     cmd/elitea-main logs a warning that names the consequence.
+//   - ABSENT: key is nil and err is nil. This function only parses; whether a
+//     keyless start is allowed is decided by cmd/elitea-main, which refuses it
+//     unless AllowUnwrappedEnvVar is set (and then logs a warning that names
+//     the consequence).
 //   - MALFORMED: err is not nil. The deployment asks for wrapped storage and
 //     cannot get it. A wrong length, bad base64, or a stray space or tab from a
 //     mounted secret is an operator error. It is never an instruction to
@@ -113,8 +119,7 @@ func MasterKeyFromEnv(getenv func(string) string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf(
 			"%s is set and malformed: %w; supply a base64url-encoded 32-byte Fernet key "+
-				"with no stray spaces or tabs, or remove the variable to store project "+
-				"vault keys unwrapped", MasterKeyEnvVar, err)
+				"with no stray spaces or tabs", MasterKeyEnvVar, err)
 	}
 	return raw, nil
 }

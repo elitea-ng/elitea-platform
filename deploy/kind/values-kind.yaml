@@ -110,6 +110,9 @@ main:
   env:
     APPLICATION_SECRET_KEY: "changeme-kind"
     COOKIE_SECURE: "false"
+    # Throwaway cluster: no master-key Secret is created, so Main opts out of
+    # the mandatory key explicitly.
+    ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "true"
 
     # The Configurations plane. It is on for ONE reason: ELITEA_AI_PROJECT_ID
     # below is refused unless it is (cmd/elitea-main/configurations_config.go
