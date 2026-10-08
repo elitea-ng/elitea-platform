@@ -72,6 +72,7 @@ export function useQuickActions(): void {
   useEffect(() => {
     if (workspaceId === null) return;
     void applyQuickActions(
+      workspaceId,
       buildQuickActions({ workspaceId, projectId, allowTitles, unread, recent: JSON.parse(recentKey) as RecentChat[] }),
     );
   }, [workspaceId, projectId, allowTitles, unread, recentKey]);

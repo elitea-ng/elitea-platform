@@ -1,5 +1,5 @@
 import { SCHEMA_VERSION } from '@/db/migrations';
-import { OfflineStore, type StoreKeys } from '@/db/offlineStore';
+import { OfflineStore, type StoreKeys, type StoreUsage } from '@/db/offlineStore';
 import { dbNameFor } from '@/security/workspaceRegistry';
 import { STRICT_DEFAULTS } from '@/security/policy';
 import { nodeSqliteDriver, tempDir } from '@/test/nodeSqlite';
@@ -28,17 +28,40 @@ function memoryKeys(initial: string | null = null) {
   return keys;
 }
 
-function setup(options: { cipher?: boolean; keys?: ReturnType<typeof memoryKeys>; gate?: () => boolean } = {}) {
+function setup(
+  options: {
+    cipher?: boolean;
+    keys?: ReturnType<typeof memoryKeys>;
+    gate?: () => boolean;
+    isActive?: () => boolean;
+    now?: () => number;
+    usage?: StoreUsage;
+  } = {},
+) {
   const driver = nodeSqliteDriver(tempDir(), { cipher: options.cipher ?? true });
   const keys = options.keys ?? memoryKeys();
   const store = new OfflineStore({
     driver,
     keys,
     keyGate: options.gate ?? (() => true),
-    isActive: () => true,
+    isActive: options.isActive ?? (() => true),
     getPolicy: () => ({ ...STRICT_DEFAULTS, offline_retention_days: 30, offline_max_mb: 0 }),
+    now: options.now,
+    usage: options.usage,
   });
   return { driver, keys, store };
+}
+
+function memoryUsage() {
+  const at = new Map<string, number>();
+  const usage: StoreUsage & { at: Map<string, number> } = {
+    read: jest.fn(async (id: string) => at.get(id) ?? null),
+    record: jest.fn(async (id: string, when: number) => {
+      at.set(id, when);
+    }),
+    at,
+  };
+  return usage;
 }
 
 beforeEach(() => {
@@ -165,5 +188,97 @@ describe('OfflineStore.wipe', () => {
     driver.remove.mockRejectedValueOnce(new Error('io'));
     await expect(store.wipe(WS)).rejects.toThrow('io');
     expect(keys.remove).toHaveBeenCalled();
+  });
+});
+
+// #45: a workspace put aside cannot be opened without its key (behind the
+// device lock), so enforceRetention cannot run on it. Retention drops what
+// had no server activity for `offline_retention_days`, and a workspace's file
+// only receives data while it is open: one not used for longer than that
+// holds nothing retention would keep.
+describe('OfflineStore.expireIfUnused', () => {
+  const DAY = 86_400_000;
+  function putAside() {
+    let clock = 1_000 * DAY;
+    let active = true;
+    const usage = memoryUsage();
+    const ctx = setup({ isActive: () => active, now: () => clock, usage });
+    return {
+      ...ctx,
+      usage,
+      setActive: (value: boolean) => {
+        active = value;
+      },
+      advance: (ms: number) => {
+        clock += ms;
+      },
+      now: () => clock,
+    };
+  }
+
+  it('records when the workspace was last used: at open, on retain and at close', async () => {
+    const t = putAside();
+    await t.store.open(ORIGIN, WS);
+    expect(t.usage.at.get(WS)).toBe(t.now());
+    t.advance(DAY);
+    await t.store.retain();
+    expect(t.usage.at.get(WS)).toBe(t.now());
+    t.advance(DAY);
+    await t.store.close();
+    expect(t.usage.at.get(WS)).toBe(t.now());
+  });
+
+  it('deletes the file and key of a workspace put aside and not used for longer than its retention', async () => {
+    const t = putAside();
+    await t.store.open(ORIGIN, WS);
+    await t.store.close();
+    t.setActive(false);
+    t.advance(30 * DAY + 1);
+    expect(await t.store.expireIfUnused(WS, 30)).toBe(true);
+    expect(t.driver.exists(DB_NAME)).toBe(false);
+    expect(t.keys.stored()).toBeNull();
+  });
+
+  it('keeps it while it was used within its retention', async () => {
+    const t = putAside();
+    await t.store.open(ORIGIN, WS);
+    await t.store.close();
+    t.setActive(false);
+    t.advance(30 * DAY);
+    expect(await t.store.expireIfUnused(WS, 30)).toBe(false);
+    expect(t.driver.exists(DB_NAME)).toBe(true);
+    expect(t.keys.stored()).not.toBeNull();
+  });
+
+  it('never deletes the file of the bound workspace, or the open one', async () => {
+    const t = putAside();
+    await t.store.open(ORIGIN, WS);
+    t.advance(90 * DAY);
+    expect(await t.store.expireIfUnused(WS, 30)).toBe(false);
+    // Bound to another workspace while this file is still open (a switch under way).
+    t.setActive(false);
+    expect(await t.store.expireIfUnused(WS, 30)).toBe(false);
+    expect(t.store.status).toBe('open');
+    expect(t.driver.exists(DB_NAME)).toBe(true);
+  });
+
+  it('keeps a file whose last use is unknown (written by an older app version) until it is opened', async () => {
+    const t = putAside();
+    await t.store.open(ORIGIN, WS);
+    await t.store.close();
+    t.usage.at.clear();
+    t.setActive(false);
+    t.advance(90 * DAY);
+    expect(await t.store.expireIfUnused(WS, 30)).toBe(false);
+    expect(t.driver.exists(DB_NAME)).toBe(true);
+  });
+
+  it('does nothing for a retention of 0 (offline storage off is a wipe, not an expiry)', async () => {
+    const t = putAside();
+    await t.store.open(ORIGIN, WS);
+    await t.store.close();
+    t.setActive(false);
+    t.advance(90 * DAY);
+    expect(await t.store.expireIfUnused(WS, 0)).toBe(false);
   });
 });

@@ -48,3 +48,40 @@ it('waits for the workspace list before classifying the launch link', async () =
   expect((Alert.alert as jest.Mock).mock.calls[0][0]).toBe('Switch workspace?');
   await unmount();
 });
+
+// #46: with no workspace active the connect screen reads the link's `server`
+// param itself. `useLinkingURL` keeps returning that URL, so once the user
+// picked a workspace there (another one than the link's) the same URL must
+// not come back as "Add workspace?".
+it('a link the connect screen already read is not offered again once a workspace is active', async () => {
+  fake.values.set(wsKey(SECURE_KEYS.serverOrigin, A), ORIGIN_A);
+  fake.values.set(DEVICE_KEYS.workspaces, registryValue([A], A));
+  await refreshWorkspaceList();
+  setSession({ hydrated: true, serverOrigin: null, workspaceId: null });
+  mockUrl.current = `${identity.connectSchemes[0]}://connect?server=${encodeURIComponent('https://alias.example.com')}`;
+
+  const { rerender, unmount } = await renderHook(() => useIncomingConnectLink(true));
+  expect(Alert.alert).not.toHaveBeenCalled();
+
+  await act(async () => {
+    setSession({ serverOrigin: ORIGIN_A, workspaceId: A });
+  });
+  await rerender({});
+
+  expect(Alert.alert).not.toHaveBeenCalled();
+  await unmount();
+});
+
+it('a new connect link opened after that is still offered', async () => {
+  fake.values.set(wsKey(SECURE_KEYS.serverOrigin, A), ORIGIN_A);
+  fake.values.set(DEVICE_KEYS.workspaces, registryValue([A], A));
+  await refreshWorkspaceList();
+  setSession({ hydrated: true, serverOrigin: ORIGIN_A, workspaceId: A });
+  mockUrl.current = `${identity.connectSchemes[0]}://connect?server=${encodeURIComponent('https://c.example.com')}`;
+
+  const { unmount } = await renderHook(() => useIncomingConnectLink(true));
+
+  expect(Alert.alert).toHaveBeenCalledTimes(1);
+  expect((Alert.alert as jest.Mock).mock.calls[0][0]).toBe('Add workspace?');
+  await unmount();
+});

@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 
 import { log } from '@/lib/log';
 import { registerWipeHook } from '@/security/endSession';
+import { maySurfaceWorkspace } from '@/features/surfaces/surfaceGate';
 
 /**
  * Home-screen quick actions (long-press the app icon), for the ACTIVE
@@ -102,8 +103,19 @@ export function actionBelongsTo(action: QuickActions.Action, workspaceId: string
 
 let lastKey: string | null = null;
 
-/** Replaces the items (skipped when nothing changed). Never throws. */
-export async function applyQuickActions(actions: readonly QuickActions.Action[]): Promise<void> {
+/**
+ * Replaces the items with `actions` of `workspaceId` (null: clearing, always
+ * allowed). Skipped when nothing changed, and when that workspace may not be
+ * surfaced now (surfaceGate): a wipe hook that runs after `quick_actions`
+ * re-renders the signed-in layout while the session still names the old
+ * workspace, and its effect would put that workspace's titles back after the
+ * clear (#42). An item built for another workspace is never set. Never throws.
+ */
+export async function applyQuickActions(workspaceId: string | null, actions: readonly QuickActions.Action[]): Promise<void> {
+  if (actions.length > 0) {
+    if (workspaceId === null || !maySurfaceWorkspace(workspaceId)) return;
+    if (actions.some((action) => action.params?.workspace !== workspaceId)) return;
+  }
   const key = JSON.stringify(actions);
   if (key === lastKey) return;
   lastKey = key;
@@ -117,7 +129,7 @@ export async function applyQuickActions(actions: readonly QuickActions.Action[])
 }
 
 export function clearQuickActions(): Promise<void> {
-  return applyQuickActions([]);
+  return applyQuickActions(null, []);
 }
 
 /**

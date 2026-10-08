@@ -61,6 +61,13 @@ const MetaSchema = z.object({
   v: z.literal(1),
   dbName: z.string().regex(DB_NAME_RE),
   addedAt: z.number().int().nonnegative(),
+  /**
+   * When this workspace's database was last open (opened, retention re-run,
+   * closed): its file receives data only then. Absent in a slot written by
+   * an older app version. Lets a put-aside workspace's retention be applied
+   * without opening it (src/db/offlineStore.ts `expireIfUnused`, #45).
+   */
+  usedAt: z.number().int().nonnegative().optional(),
 });
 export type WorkspaceMeta = z.infer<typeof MetaSchema>;
 
@@ -220,6 +227,22 @@ export async function readWorkspaceMeta(id: string): Promise<WorkspaceMeta | nul
 export async function workspaceDbName(id: string): Promise<string> {
   const meta = await readWorkspaceMeta(id);
   return meta?.dbName ?? dbNameFor(id);
+}
+
+/** When the slot's database was last open, or null when unknown. Rejects on a keychain error. */
+export async function readWorkspaceUsedAt(id: string): Promise<number | null> {
+  return (await readWorkspaceMeta(id))?.usedAt ?? null;
+}
+
+/**
+ * Stamps the slot's meta with `at` as the last use of its database. A slot
+ * without a readable meta is left alone (its meta is never guessed: it
+ * names the database file). Rejects on a keychain error.
+ */
+export async function recordWorkspaceUse(id: string, at: number): Promise<void> {
+  const meta = await readWorkspaceMeta(id);
+  if (meta === null || !Number.isSafeInteger(at) || at < 0) return;
+  await setSecureItemIn(id, SECURE_KEYS.workspaceMeta, JSON.stringify({ ...meta, usedAt: at }));
 }
 
 /** The id of the slot whose stored origin is `origin`, or null. Rejects when a slot's origin cannot be read. */

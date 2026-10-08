@@ -4,10 +4,16 @@ import { DbOpenError, keyConnection } from '@/db/open';
 import { enforceRetention } from '@/db/retention';
 import { Db, type RawConnection } from '@/db/sql';
 import { log } from '@/lib/log';
-import { registerStoredWipeHook, registerWipeHook } from '@/security/endSession';
+import { isEndingSession, registerStoredWipeHook, registerWipeHook } from '@/security/endSession';
 import { getPolicy, type ClientPolicy } from '@/security/policy';
 import { boundWorkspace } from '@/security/secureStorage';
-import { LEGACY_DB_NAME, registerLegacyDatabaseRemover, workspaceDbName } from '@/security/workspaceRegistry';
+import {
+  LEGACY_DB_NAME,
+  readWorkspaceUsedAt,
+  recordWorkspaceUse,
+  registerLegacyDatabaseRemover,
+  workspaceDbName,
+} from '@/security/workspaceRegistry';
 
 /**
  * The encrypted offline store (ADR-0025 WP6, plan-app B4.6): one SQLCipher
@@ -31,6 +37,11 @@ import { LEGACY_DB_NAME, registerLegacyDatabaseRemover, workspaceDbName } from '
  *   workspace that is not active, and a policy that turns offline storage
  *   off. Close first when it is the open one, then the file with its -wal/-shm
  *   sidecars, then the key.
+ * - `expireIfUnused(workspaceId, days)`: retention for a workspace put aside
+ *   (its key is behind the device lock, so `enforceRetention` cannot run on
+ *   it). The last time a file was open is stamped in the slot's meta at open,
+ *   on retain and at close; a file not open for longer than the retention
+ *   window holds nothing retention would keep, and is deleted with its key.
  *
  * All three are serialised, so a wipe never races an open.
  */
@@ -70,11 +81,21 @@ export interface OfflineStoreDeps {
    * queued before a switch never opens a file for the wrong workspace.
    */
   isActive?: (workspaceId: string) => boolean;
+  /** Last use of a workspace's file (default: its slot's meta). */
+  usage?: StoreUsage;
 }
+
+export interface StoreUsage {
+  read(workspaceId: string): Promise<number | null>;
+  record(workspaceId: string, at: number): Promise<void>;
+}
+
+const DAY_MS = 86_400_000;
 
 export type StoreStatus = 'closed' | 'open' | 'unavailable';
 
 const defaultKeys: StoreKeys = { read: readDbKey, create: (id) => createDbKey(id), remove: deleteDbKey };
+const defaultUsage: StoreUsage = { read: readWorkspaceUsedAt, record: recordWorkspaceUse };
 
 export class OfflineStore {
   private db: Db | null = null;
@@ -86,6 +107,7 @@ export class OfflineStore {
   private readonly keys: StoreKeys;
   private readonly policy: () => Readonly<ClientPolicy>;
   private readonly now: () => number;
+  private readonly usage: StoreUsage;
 
   private keyGate: () => boolean;
   private readonly dbName: (workspaceId: string) => Promise<string>;
@@ -98,6 +120,21 @@ export class OfflineStore {
     this.policy = deps.getPolicy ?? getPolicy;
     this.now = deps.now ?? Date.now;
     this.keyGate = deps.keyGate ?? (() => false);
+    this.usage = deps.usage ?? defaultUsage;
+  }
+
+  /**
+   * Stamps the last use of `workspaceId`'s file. Not while a session ends:
+   * its slot is being wiped, and a write then could leave a meta item behind.
+   * Never throws (a keychain error only makes a later expiry earlier).
+   */
+  private async recordUse(workspaceId: string): Promise<void> {
+    if (isEndingSession()) return;
+    try {
+      await this.usage.record(workspaceId, this.now());
+    } catch (error) {
+      log.info('offline store use not recorded', { error });
+    }
   }
 
   /** Installs the device-lock gate (the binding does, at startup). Until then no key is released. */
@@ -165,6 +202,7 @@ export class OfflineStore {
       } catch (error) {
         log.warn('offline retention failed', { error });
       }
+      await this.recordUse(workspaceId);
       this.emit();
       return db;
     });
@@ -230,9 +268,13 @@ export class OfflineStore {
     }
   }
 
-  /** Closes the connection (lock, sign-out). The file and key stay. */
+  /** Closes the connection (lock, sign-out, a switch). The file and key stay. */
   close(): Promise<void> {
-    return this.serial(() => this.closeNow());
+    return this.serial(async () => {
+      const open = this.get() ? this.workspaceId : null;
+      await this.closeNow();
+      if (open !== null) await this.recordUse(open);
+    });
   }
 
   /**
@@ -285,6 +327,35 @@ export class OfflineStore {
       } catch (error) {
         log.warn('offline retention failed', { error });
       }
+      if (this.workspaceId !== null) await this.recordUse(this.workspaceId);
+    });
+  }
+
+  /**
+   * Retention for a workspace that is put aside (#45). `enforceRetention`
+   * drops whatever had no server activity for `retentionDays`, and the file
+   * only receives data while it is open, so a file last open more than
+   * `retentionDays` ago holds nothing it would keep (sync cursors and unsent
+   * outbox entries included: they are as old). Deletes the file (with its
+   * sidecars) and the key; the next open starts an empty one.
+   *
+   * Never the open file or the bound workspace's, and nothing when the last
+   * use is unknown (a slot written by an older app version: retention runs
+   * when it is opened, as before). Serialised with open, so a switch to the
+   * workspace in the meantime wins. True when the file was deleted; throws if
+   * a delete failed.
+   */
+  expireIfUnused(workspaceId: string, retentionDays: number): Promise<boolean> {
+    return this.serial(async () => {
+      if (!(retentionDays > 0)) return false;
+      if (this.get() !== null && this.workspaceId === workspaceId) return false;
+      if (this.isActive(workspaceId)) return false;
+      const usedAt = await this.usage.read(workspaceId);
+      if (usedAt === null || this.now() - usedAt <= retentionDays * DAY_MS) return false;
+      if (this.isActive(workspaceId)) return false;
+      await this.deps.driver.remove(await this.dbName(workspaceId));
+      await this.keys.remove(workspaceId);
+      return true;
     });
   }
 }

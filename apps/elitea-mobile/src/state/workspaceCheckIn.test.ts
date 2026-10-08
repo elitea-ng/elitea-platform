@@ -18,7 +18,7 @@ import {
 import { registryValue, wsKey, type FakeSecureStore } from '@/test/fakeSecureStore';
 
 jest.mock('expo-secure-store', () => require('@/test/fakeSecureStore').fakeSecureStoreModule());
-jest.mock('@/db/offlineStore', () => ({ offlineStore: { wipe: jest.fn(async () => undefined) } }));
+jest.mock('@/db/offlineStore', () => ({ offlineStore: { wipe: jest.fn(async () => undefined), expireIfUnused: jest.fn(async () => false) } }));
 const fake = jest.requireMock<FakeSecureStore>('expo-secure-store');
 
 const A = 'aaaaaaaaaaaa';
@@ -54,14 +54,17 @@ function twoWorkspaces() {
   setSession({ hydrated: true, serverOrigin: ORIGIN_A, workspaceId: A });
 }
 
-function deps(overrides: Partial<CheckInDeps> = {}): CheckInDeps & { wipe: jest.Mock; wipeOfflineStore: jest.Mock } {
+type MockDeps = CheckInDeps & { wipe: jest.Mock; wipeOfflineStore: jest.Mock; expireOfflineStore: jest.Mock };
+
+function deps(overrides: Partial<CheckInDeps> = {}): MockDeps {
   return {
     now: () => clock,
     checkIn: checkInStoredSession,
     wipe: jest.fn(async () => true),
     wipeOfflineStore: jest.fn(async () => undefined),
+    expireOfflineStore: jest.fn(async () => false),
     ...overrides,
-  } as CheckInDeps & { wipe: jest.Mock; wipeOfflineStore: jest.Mock };
+  } as MockDeps;
 }
 
 function tokenEndpoint(outcome: TokenOutcome) {
@@ -156,5 +159,40 @@ describe('checkInPutAsideWorkspaces', () => {
     const refresh = tokenEndpoint({ kind: 'device_revoked' });
     await checkInPutAsideWorkspaces(deps());
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  // #45: a lowered offline_retention_days (> 0) reaches a workspace put aside
+  // without opening it (its key is behind the device lock).
+  it('expires the database of a workspace put aside by the retention of its new policy', async () => {
+    twoWorkspaces();
+    tokenEndpoint(ok({ offline_retention_days: 7 }));
+    const d = deps();
+    await checkInPutAsideWorkspaces(d);
+    expect(d.expireOfflineStore).toHaveBeenCalledWith(B, 7);
+    expect(d.expireOfflineStore).not.toHaveBeenCalledWith(A, expect.anything());
+    expect(d.wipeOfflineStore).not.toHaveBeenCalled();
+  });
+
+  it('a developer sign-in (no device session) or no answer: expires by the retention of the stored policy', async () => {
+    nativeSlot(A, ORIGIN_A);
+    fake.values.set(wsKey(SECURE_KEYS.serverOrigin, B), ORIGIN_B);
+    fake.values.set(wsKey(SECURE_KEYS.credentialKind, B), 'pat');
+    fake.values.set(wsKey(SECURE_KEYS.policy, B), JSON.stringify({ v: 1, origin: ORIGIN_B, policy: { offline_retention_days: 5 } }));
+    fake.values.set(DEVICE_KEYS.workspaces, registryValue([A, B], A));
+    bindWorkspace(A);
+    setSession({ hydrated: true, serverOrigin: ORIGIN_A, workspaceId: A });
+    const d = deps();
+    await checkInPutAsideWorkspaces(d);
+    expect(d.expireOfflineStore).toHaveBeenCalledWith(B, 5);
+    expect(d.wipe).not.toHaveBeenCalled();
+  });
+
+  it('expires nothing for a slot with no stored policy of its origin', async () => {
+    twoWorkspaces();
+    fake.values.set(wsKey(SECURE_KEYS.policy, B), JSON.stringify({ v: 1, origin: 'https://other.example.com', policy: { offline_retention_days: 5 } }));
+    tokenEndpoint({ kind: 'network' });
+    const d = deps();
+    await checkInPutAsideWorkspaces(d);
+    expect(d.expireOfflineStore).not.toHaveBeenCalled();
   });
 });

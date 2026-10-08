@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 
 import { actionBelongsTo, applyQuickActions, buildQuickActions, clearQuickActions } from '@/features/quickActions/quickActions';
 import { handleQuickAction } from '@/features/quickActions/useQuickActions';
-import { endSession, registerRevokeHook, suspendActiveWorkspace } from '@/security/endSession';
+import { endSession, registerRevokeHook, registerWipeHook, suspendActiveWorkspace } from '@/security/endSession';
 import { bindWorkspace } from '@/security/secureStorage';
 import { __resetSessionForTests, setSession } from '@/state/session';
 
@@ -21,6 +21,7 @@ const recent = [
 beforeEach(() => {
   __resetSessionForTests();
   setSession({ serverOrigin: 'https://ai.example.com', workspaceId: W, projectId: 7 });
+  bindWorkspace(W);
   setItems.mockClear();
 });
 
@@ -124,15 +125,15 @@ describe('a chat action and the selected project', () => {
 describe('applying the items', () => {
   it('sets them once per change and clears them', async () => {
     const actions = buildQuickActions({ workspaceId: W, allowTitles: false, unread: 1, recent: [] });
-    await applyQuickActions(actions);
-    await applyQuickActions(actions);
+    await applyQuickActions(W, actions);
+    await applyQuickActions(W, actions);
     expect(setItems).toHaveBeenCalledTimes(1);
     await clearQuickActions();
     expect(setItems).toHaveBeenLastCalledWith([]);
   });
 
   it('clears them when the workspace is wiped or switched away (a registered wipe hook)', async () => {
-    await applyQuickActions(buildQuickActions({ workspaceId: W, allowTitles: false, unread: 5, recent: [] }));
+    await applyQuickActions(W, buildQuickActions({ workspaceId: W, allowTitles: false, unread: 5, recent: [] }));
     setItems.mockClear();
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     await suspendActiveWorkspace();
@@ -144,7 +145,7 @@ describe('applying the items', () => {
   it('clears them before the server revoke of a log out', async () => {
     jest.spyOn(console, 'warn').mockImplementation(() => {});
     bindWorkspace(W);
-    await applyQuickActions(buildQuickActions({ workspaceId: W, projectId: 7, allowTitles: true, unread: 0, recent }));
+    await applyQuickActions(W, buildQuickActions({ workspaceId: W, projectId: 7, allowTitles: true, unread: 0, recent }));
     setItems.mockClear();
     let clearedBeforeRevoke = false;
     const unregister = registerRevokeHook(async () => {
@@ -156,5 +157,39 @@ describe('applying the items', () => {
       unregister();
     }
     expect(clearedBeforeRevoke).toBe(true);
+  });
+
+  // #42: a later wipe hook (live turns cleared, the store closed, the query
+  // cache cleared) re-renders the signed-in layout while the session still
+  // names the old workspace; its effect must not put the titles back.
+  it('items republished by a re-render while the session ends do not outlive the wipe', async () => {
+    jest.spyOn(console, 'warn').mockImplementation(() => {});
+    const titled = (unread: number) => buildQuickActions({ workspaceId: W, projectId: 7, allowTitles: true, unread, recent });
+    await applyQuickActions(W, titled(0));
+    const off = registerWipeHook('zz_rerender', () => applyQuickActions(W, titled(7)));
+    try {
+      await endSession({ reason: 'user_logout' });
+      expect(setItems).toHaveBeenLastCalledWith([]);
+
+      bindWorkspace(W);
+      setSession({ serverOrigin: 'https://ai.example.com', workspaceId: W, projectId: 7 });
+      await applyQuickActions(W, titled(3));
+      await suspendActiveWorkspace();
+      expect(setItems).toHaveBeenLastCalledWith([]);
+    } finally {
+      off();
+    }
+  });
+
+  it('sets nothing for a workspace that is not the bound one', async () => {
+    bindWorkspace('bbbbbbbbbbbb');
+    await applyQuickActions(W, buildQuickActions({ workspaceId: W, allowTitles: false, unread: 9, recent: [] }));
+    expect(setItems).not.toHaveBeenCalled();
+    bindWorkspace(null);
+  });
+
+  it('sets nothing when an item was built for another workspace than the one named', async () => {
+    await applyQuickActions(W, buildQuickActions({ workspaceId: 'bbbbbbbbbbbb', allowTitles: false, unread: 9, recent: [] }));
+    expect(setItems).not.toHaveBeenCalled();
   });
 });
