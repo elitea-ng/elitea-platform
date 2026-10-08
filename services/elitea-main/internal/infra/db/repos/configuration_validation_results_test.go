@@ -57,7 +57,7 @@ func TestCurrentAgentCancellationSettlesWithoutFailureMetadata(t *testing.T) {
 				t.Fatalf("terminal projection calls=%d", len(executor.execCalls))
 			}
 			call := executor.execCalls[0]
-			if !strings.Contains(call.sql, "WHEN $4::boolean THEN message_group.meta - 'is_error' - 'error'") {
+			if !strings.Contains(call.sql, "WHEN $4::boolean THEN (message_group.meta - 'error' - 'error_code')\n            || jsonb_build_object('is_error', FALSE)") {
 				t.Fatal("terminal projection does not preserve partial content without failure metadata")
 			}
 			if got, ok := call.args[3].(bool); !ok || got != test.isCancellation {

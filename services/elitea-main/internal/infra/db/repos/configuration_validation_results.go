@@ -461,7 +461,8 @@ func persistCurrentAgentRuntimeTerminal(
 UPDATE %s AS message_group
 SET is_streaming = FALSE,
     meta = CASE
-        WHEN $4::boolean THEN message_group.meta - 'is_error' - 'error' - 'error_code'
+        WHEN $4::boolean THEN (message_group.meta - 'error' - 'error_code')
+            || jsonb_build_object('is_error', FALSE)
         ELSE message_group.meta || jsonb_build_object(
             'is_error', TRUE,
             'error', $3::text,

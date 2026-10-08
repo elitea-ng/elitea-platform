@@ -427,4 +427,5 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 
 - [Toolkit request recovery](toolkit-request-recovery.md) records browser recovery before execution ID receipt and one-call evidence.
 - [Deferred MCP elicitation](external-mcp-elicitation-deferred.md) records the later client approval option and its authority boundary.
+- [Pipeline size bounds and HTTP snapshot scope](pipeline-size-bounds-http-snapshot-20261008.md) records one 512 KiB pipeline bound across Main and Worker, the non-HTTP snapshot scope, browser evidence and follow-ups.
 - [Graph fan-out child lineage](graph-fanout-child-lineage-20261008.md) records frozen Parallel/Map child identity across executions, lease-loss control stops and event-driven cancellation (Point 5 C1).
