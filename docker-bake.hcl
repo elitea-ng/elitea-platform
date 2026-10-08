@@ -75,7 +75,8 @@ target "elitea-worker-python" {
 
 # The native Rust agent worker, and the chart's default `worker.runtime` since
 # it started shipping. Repo-root context for the same reason as the Python
-# worker: the Containerfile COPYs libs/proto from outside its own directory.
+# worker: the Containerfile COPYs libs/proto and libs/rust from outside its
+# own directory.
 #
 # Out of `group "default"` on the same grounds as elitea-worker-python, and
 # more so: this compiles 418 crates from source. Name it to build it.

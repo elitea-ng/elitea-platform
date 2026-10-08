@@ -1,0 +1,2347 @@
+{
+  "language": "swift",
+  "files": {
+    "Encoding.swift": {
+      "file_path": "Encoding.swift",
+      "language": "swift",
+      "symbols": [
+        {
+          "name": "Café",
+          "symbol_type": "class",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 4,
+              "column": 0
+            },
+            "end": {
+              "line": 6,
+              "column": 1
+            }
+          },
+          "file_path": "Encoding.swift",
+          "parent_symbol": null,
+          "full_name": "Encoding.Café",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": "Größe  doc.",
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "is_struct": true,
+            "is_exported": false
+          }
+        },
+        {
+          "name": "größe",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 5,
+              "column": 4
+            },
+            "end": {
+              "line": 5,
+              "column": 20
+            }
+          },
+          "file_path": "Encoding.swift",
+          "parent_symbol": "Encoding.Café",
+          "full_name": "Encoding.größe",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": false,
+            "type": "Int",
+            "is_exported": false
+          }
+        }
+      ],
+      "relationships": [
+        {
+          "source_symbol": "Encoding",
+          "target_symbol": "Foundation",
+          "relationship_type": "imports",
+          "source_file": "Encoding.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 17
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        }
+      ],
+      "imports": [],
+      "exports": [],
+      "dependencies": [],
+      "module_docstring": null,
+      "errors": [],
+      "warnings": []
+    },
+    "Missing.swift": {
+      "file_path": "Missing.swift",
+      "language": "swift",
+      "symbols": [],
+      "relationships": [],
+      "imports": [],
+      "exports": [],
+      "dependencies": [],
+      "module_docstring": null,
+      "errors": [
+        "[Errno 2] No such file or directory: 'Missing.swift'"
+      ],
+      "warnings": []
+    },
+    "Models.swift": {
+      "file_path": "Models.swift",
+      "language": "swift",
+      "symbols": [
+        {
+          "name": "User",
+          "symbol_type": "class",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 7,
+              "column": 0
+            },
+            "end": {
+              "line": 16,
+              "column": 1
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": null,
+          "full_name": "Models.User",
+          "visibility": "public",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": "A user of the app.\nUsers are identified by `id`.",
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "public",
+            "is_struct": true,
+            "is_exported": false
+          }
+        },
+        {
+          "name": "id",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 8,
+              "column": 4
+            },
+            "end": {
+              "line": 8,
+              "column": 23
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": "Models.User",
+          "full_name": "Models.id",
+          "visibility": "public",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "public",
+            "mutable": false,
+            "type": "UUID",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "name",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 9,
+              "column": 4
+            },
+            "end": {
+              "line": 9,
+              "column": 20
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": "Models.User",
+          "full_name": "Models.name",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": true,
+            "type": "String",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "email",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 10,
+              "column": 4
+            },
+            "end": {
+              "line": 10,
+              "column": 35
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": "Models.User",
+          "full_name": "Models.email",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": true,
+            "type": "String?",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "guest",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 11,
+              "column": 4
+            },
+            "end": {
+              "line": 11,
+              "column": 66
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": "Models.User",
+          "full_name": "Models.guest",
+          "visibility": "internal",
+          "is_static": true,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": false,
+            "modifiers": [
+              "static"
+            ],
+            "is_exported": false
+          }
+        },
+        {
+          "name": "displayName",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 13,
+              "column": 4
+            },
+            "end": {
+              "line": 15,
+              "column": 5
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": "Models.User",
+          "full_name": "Models.displayName",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": true,
+            "type": "String",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "PaymentMethod",
+          "symbol_type": "enum",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 19,
+              "column": 0
+            },
+            "end": {
+              "line": 22,
+              "column": 1
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": null,
+          "full_name": "Models.PaymentMethod",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": "Where a payment comes from.",
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "raw_type": "String, CaseIterable",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "Expr",
+          "symbol_type": "enum",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 24,
+              "column": 0
+            },
+            "end": {
+              "line": 27,
+              "column": 1
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": null,
+          "full_name": "Models.Expr",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "indirect": true,
+            "is_exported": false
+          }
+        },
+        {
+          "name": "BaseController",
+          "symbol_type": "class",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 29,
+              "column": 0
+            },
+            "end": {
+              "line": 38,
+              "column": 1
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": null,
+          "full_name": "Models.BaseController",
+          "visibility": "open",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "open",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "tableView",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 31,
+              "column": 4
+            },
+            "end": {
+              "line": 31,
+              "column": 46
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": "Models.BaseController",
+          "full_name": "Models.tableView",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": true,
+            "type": "UITableView!",
+            "modifiers": [
+              "weak"
+            ],
+            "is_exported": false
+          }
+        },
+        {
+          "name": "formatter",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 32,
+              "column": 4
+            },
+            "end": {
+              "line": 32,
+              "column": 55
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": "Models.BaseController",
+          "full_name": "Models.formatter",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": true,
+            "type": "DateFormatter",
+            "modifiers": [
+              "lazy"
+            ],
+            "is_exported": false
+          }
+        },
+        {
+          "name": "viewDidLoad",
+          "symbol_type": "function",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 34,
+              "column": 4
+            },
+            "end": {
+              "line": 37,
+              "column": 5
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": "Models.BaseController",
+          "full_name": "Models.viewDidLoad",
+          "visibility": "open",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "open",
+            "modifiers": [
+              "override"
+            ],
+            "is_exported": false
+          }
+        },
+        {
+          "name": "ProfileController",
+          "symbol_type": "class",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 40,
+              "column": 0
+            },
+            "end": {
+              "line": 57,
+              "column": 1
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": null,
+          "full_name": "Models.ProfileController",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "final": true,
+            "is_exported": false
+          }
+        },
+        {
+          "name": "service",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 41,
+              "column": 4
+            },
+            "end": {
+              "line": 41,
+              "column": 36
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": "Models.ProfileController",
+          "full_name": "Models.service",
+          "visibility": "private",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "private",
+            "mutable": false,
+            "type": "UserService",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "render",
+          "symbol_type": "function",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 48,
+              "column": 4
+            },
+            "end": {
+              "line": 52,
+              "column": 5
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": "Models.ProfileController",
+          "full_name": "Models.render",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": true,
+          "docstring": null,
+          "comments": [],
+          "return_type": "String",
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "is_async": true,
+            "return_type": "String",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "make",
+          "symbol_type": "function",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 54,
+              "column": 4
+            },
+            "end": {
+              "line": 56,
+              "column": 5
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": "Models.ProfileController",
+          "full_name": "Models.make",
+          "visibility": "internal",
+          "is_static": true,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": "ProfileController",
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "modifiers": [
+              "class"
+            ],
+            "is_static": true,
+            "return_type": "ProfileController",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "Completion",
+          "symbol_type": "type_alias",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 59,
+              "column": 0
+            },
+            "end": {
+              "line": 59,
+              "column": 52
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": null,
+          "full_name": "Models.Completion",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "aliased_type": "(Result<T, Error>) -> Void",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "UserID",
+          "symbol_type": "type_alias",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 60,
+              "column": 0
+            },
+            "end": {
+              "line": 60,
+              "column": 30
+            }
+          },
+          "file_path": "Models.swift",
+          "parent_symbol": null,
+          "full_name": "Models.UserID",
+          "visibility": "public",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "public",
+            "aliased_type": "UUID",
+            "is_exported": false
+          }
+        }
+      ],
+      "relationships": [
+        {
+          "source_symbol": "Models",
+          "target_symbol": "Foundation",
+          "relationship_type": "imports",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 17
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Models",
+          "target_symbol": "SwiftUI",
+          "relationship_type": "imports",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 3,
+              "column": 0
+            },
+            "end": {
+              "line": 3,
+              "column": 14
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "User",
+          "target_symbol": "Codable",
+          "relationship_type": "implementation",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 7,
+              "column": 20
+            },
+            "end": {
+              "line": 7,
+              "column": 27
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "User",
+          "target_symbol": "Identifiable",
+          "relationship_type": "implementation",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 7,
+              "column": 29
+            },
+            "end": {
+              "line": 7,
+              "column": 41
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "User",
+          "target_symbol": "Equatable",
+          "relationship_type": "implementation",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 7,
+              "column": 43
+            },
+            "end": {
+              "line": 7,
+              "column": 52
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "PaymentMethod",
+          "target_symbol": "String",
+          "relationship_type": "implementation",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 19,
+              "column": 20
+            },
+            "end": {
+              "line": 19,
+              "column": 26
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "PaymentMethod",
+          "target_symbol": "CaseIterable",
+          "relationship_type": "implementation",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 19,
+              "column": 28
+            },
+            "end": {
+              "line": 19,
+              "column": 40
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "BaseController",
+          "target_symbol": "NSObject",
+          "relationship_type": "inheritance",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 30,
+              "column": 27
+            },
+            "end": {
+              "line": 30,
+              "column": 35
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "BaseController",
+          "target_symbol": "UITableViewDelegate",
+          "relationship_type": "implementation",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 30,
+              "column": 37
+            },
+            "end": {
+              "line": 30,
+              "column": 56
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "ProfileController",
+          "target_symbol": "BaseController",
+          "relationship_type": "inheritance",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 40,
+              "column": 31
+            },
+            "end": {
+              "line": 40,
+              "column": 45
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "ProfileController",
+          "target_symbol": "ProfileViewDelegate",
+          "relationship_type": "implementation",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 40,
+              "column": 47
+            },
+            "end": {
+              "line": 40,
+              "column": 66
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Models",
+          "target_symbol": "DateFormatter",
+          "relationship_type": "aggregation",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 32,
+              "column": 40
+            },
+            "end": {
+              "line": 32,
+              "column": 55
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Models",
+          "target_symbol": "viewDidLoad",
+          "relationship_type": "calls",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 35,
+              "column": 8
+            },
+            "end": {
+              "line": 35,
+              "column": 27
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Models",
+          "target_symbol": "reloadData",
+          "relationship_type": "calls",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 36,
+              "column": 8
+            },
+            "end": {
+              "line": 36,
+              "column": 30
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Models",
+          "target_symbol": "MainActor",
+          "relationship_type": "decorates",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 48,
+              "column": 4
+            },
+            "end": {
+              "line": 48,
+              "column": 14
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Models",
+          "target_symbol": "Summary",
+          "relationship_type": "aggregation",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 50,
+              "column": 22
+            },
+            "end": {
+              "line": 50,
+              "column": 41
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Models",
+          "target_symbol": "uppercased",
+          "relationship_type": "calls",
+          "source_file": "Models.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 51,
+              "column": 15
+            },
+            "end": {
+              "line": 51,
+              "column": 40
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        }
+      ],
+      "imports": [],
+      "exports": [],
+      "dependencies": [],
+      "module_docstring": null,
+      "errors": [],
+      "warnings": []
+    },
+    "Services.swift": {
+      "file_path": "Services.swift",
+      "language": "swift",
+      "symbols": [
+        {
+          "name": "UserService",
+          "symbol_type": "interface",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 4,
+              "column": 0
+            },
+            "end": {
+              "line": 8,
+              "column": 1
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": null,
+          "full_name": "Services.UserService",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "fetch",
+          "symbol_type": "function",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 6,
+              "column": 4
+            },
+            "end": {
+              "line": 6,
+              "column": 45
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.UserService",
+          "full_name": "Services.fetch",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": true,
+          "docstring": null,
+          "comments": [],
+          "return_type": "User",
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "is_async": true,
+            "return_type": "User",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "cacheSize",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 7,
+              "column": 4
+            },
+            "end": {
+              "line": 7,
+              "column": 30
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.UserService",
+          "full_name": "Services.cacheSize",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": true,
+            "type": "Int",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "Cache",
+          "symbol_type": "interface",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 10,
+              "column": 0
+            },
+            "end": {
+              "line": 11,
+              "column": 1
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": null,
+          "full_name": "Services.Cache",
+          "visibility": "public",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "public",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "SessionStore",
+          "symbol_type": "class",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 13,
+              "column": 0
+            },
+            "end": {
+              "line": 22,
+              "column": 1
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": null,
+          "full_name": "Services.SessionStore",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "is_actor": true,
+            "is_exported": false
+          }
+        },
+        {
+          "name": "sessions",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 14,
+              "column": 4
+            },
+            "end": {
+              "line": 14,
+              "column": 47
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.SessionStore",
+          "full_name": "Services.sessions",
+          "visibility": "private",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "private",
+            "mutable": true,
+            "type": "[UUID: Session]",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "store",
+          "symbol_type": "function",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 16,
+              "column": 4
+            },
+            "end": {
+              "line": 19,
+              "column": 5
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.SessionStore",
+          "full_name": "Services.store",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "count",
+          "symbol_type": "function",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 21,
+              "column": 4
+            },
+            "end": {
+              "line": 21,
+              "column": 41
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.SessionStore",
+          "full_name": "Services.count",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": "Int",
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "modifiers": [
+              "nonisolated"
+            ],
+            "return_type": "Int",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "User_extension",
+          "symbol_type": "class",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 24,
+              "column": 0
+            },
+            "end": {
+              "line": 30,
+              "column": 1
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": null,
+          "full_name": "Services.User_extension",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "is_extension": true,
+            "conformance": [
+              "CustomStringConvertible"
+            ],
+            "is_exported": false
+          }
+        },
+        {
+          "name": "description",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 25,
+              "column": 4
+            },
+            "end": {
+              "line": 25,
+              "column": 47
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.User_extension",
+          "full_name": "Services.description",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": true,
+            "type": "String",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "random",
+          "symbol_type": "function",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 27,
+              "column": 4
+            },
+            "end": {
+              "line": 29,
+              "column": 5
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.User_extension",
+          "full_name": "Services.random",
+          "visibility": "internal",
+          "is_static": true,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": "User",
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "modifiers": [
+              "static"
+            ],
+            "is_static": true,
+            "return_type": "User",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "Array_extension",
+          "symbol_type": "class",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 32,
+              "column": 0
+            },
+            "end": {
+              "line": 36,
+              "column": 1
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": null,
+          "full_name": "Services.Array_extension",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "is_extension": true,
+            "is_exported": false
+          }
+        },
+        {
+          "name": "sortedByName",
+          "symbol_type": "function",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 33,
+              "column": 4
+            },
+            "end": {
+              "line": 35,
+              "column": 5
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.Array_extension",
+          "full_name": "Services.sortedByName",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": "[User]",
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "return_type": "[User]",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "Clamped",
+          "symbol_type": "class",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 38,
+              "column": 0
+            },
+            "end": {
+              "line": 42,
+              "column": 1
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": null,
+          "full_name": "Services.Clamped",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "is_struct": true,
+            "is_exported": false
+          }
+        },
+        {
+          "name": "wrappedValue",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 40,
+              "column": 4
+            },
+            "end": {
+              "line": 40,
+              "column": 27
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.Clamped",
+          "full_name": "Services.wrappedValue",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": true,
+            "type": "Value",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "range",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 41,
+              "column": 4
+            },
+            "end": {
+              "line": 41,
+              "column": 33
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.Clamped",
+          "full_name": "Services.range",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": false,
+            "type": "ClosedRange<Value>",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "Settings",
+          "symbol_type": "class",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 44,
+              "column": 0
+            },
+            "end": {
+              "line": 47,
+              "column": 1
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": null,
+          "full_name": "Services.Settings",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "is_struct": true,
+            "is_exported": false
+          }
+        },
+        {
+          "name": "volume",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 45,
+              "column": 4
+            },
+            "end": {
+              "line": 45,
+              "column": 60
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.Settings",
+          "full_name": "Services.volume",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": true,
+            "type": "Int",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "theme",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 46,
+              "column": 4
+            },
+            "end": {
+              "line": 46,
+              "column": 42
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.Settings",
+          "full_name": "Services.theme",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": true,
+            "type": "String",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "RemoteUserService",
+          "symbol_type": "class",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 49,
+              "column": 0
+            },
+            "end": {
+              "line": 63,
+              "column": 1
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": null,
+          "full_name": "Services.RemoteUserService",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "final": true,
+            "is_exported": false
+          }
+        },
+        {
+          "name": "Output",
+          "symbol_type": "type_alias",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 50,
+              "column": 4
+            },
+            "end": {
+              "line": 50,
+              "column": 27
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.RemoteUserService",
+          "full_name": "Services.Output",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "aliased_type": "User",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "session",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 51,
+              "column": 4
+            },
+            "end": {
+              "line": 51,
+              "column": 35
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.RemoteUserService",
+          "full_name": "Services.session",
+          "visibility": "private",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "private",
+            "mutable": false,
+            "type": "URLSession",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "cacheSize",
+          "symbol_type": "variable",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 52,
+              "column": 4
+            },
+            "end": {
+              "line": 52,
+              "column": 36
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.RemoteUserService",
+          "full_name": "Services.cacheSize",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": null,
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "mutable": true,
+            "type": "Int",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "fetch",
+          "symbol_type": "function",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 54,
+              "column": 4
+            },
+            "end": {
+              "line": 58,
+              "column": 5
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.RemoteUserService",
+          "full_name": "Services.fetch",
+          "visibility": "internal",
+          "is_static": false,
+          "is_abstract": false,
+          "is_async": true,
+          "docstring": null,
+          "comments": [],
+          "return_type": "User",
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "internal",
+            "is_async": true,
+            "return_type": "User",
+            "is_exported": false
+          }
+        },
+        {
+          "name": "backoff",
+          "symbol_type": "function",
+          "scope": "global",
+          "range": {
+            "start": {
+              "line": 60,
+              "column": 4
+            },
+            "end": {
+              "line": 62,
+              "column": 5
+            }
+          },
+          "file_path": "Services.swift",
+          "parent_symbol": "Services.RemoteUserService",
+          "full_name": "Services.backoff",
+          "visibility": "private",
+          "is_static": true,
+          "is_abstract": false,
+          "is_async": false,
+          "docstring": null,
+          "comments": [],
+          "return_type": "TimeInterval",
+          "parameter_types": [],
+          "source_text": null,
+          "signature": null,
+          "metadata": {
+            "visibility": "private",
+            "modifiers": [
+              "static"
+            ],
+            "is_static": true,
+            "return_type": "TimeInterval",
+            "is_exported": false
+          }
+        }
+      ],
+      "relationships": [
+        {
+          "source_symbol": "Services",
+          "target_symbol": "Combine",
+          "relationship_type": "imports",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 1,
+              "column": 0
+            },
+            "end": {
+              "line": 1,
+              "column": 14
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Services",
+          "target_symbol": "Foundation.URL",
+          "relationship_type": "imports",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 2,
+              "column": 0
+            },
+            "end": {
+              "line": 2,
+              "column": 28
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {
+            "kind": "struct"
+          }
+        },
+        {
+          "source_symbol": "UserService",
+          "target_symbol": "AnyObject",
+          "relationship_type": "inheritance",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 4,
+              "column": 22
+            },
+            "end": {
+              "line": 4,
+              "column": 31
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "SessionStore",
+          "target_symbol": "ObservableObject",
+          "relationship_type": "implementation",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 13,
+              "column": 20
+            },
+            "end": {
+              "line": 13,
+              "column": 36
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "User_extension",
+          "target_symbol": "User",
+          "relationship_type": "inheritance",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 24,
+              "column": 0
+            },
+            "end": {
+              "line": 30,
+              "column": 1
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {
+            "extension": true
+          }
+        },
+        {
+          "source_symbol": "User",
+          "target_symbol": "CustomStringConvertible",
+          "relationship_type": "implementation",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 24,
+              "column": 16
+            },
+            "end": {
+              "line": 24,
+              "column": 39
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {
+            "via_extension": true
+          }
+        },
+        {
+          "source_symbol": "Array_extension",
+          "target_symbol": "Array",
+          "relationship_type": "inheritance",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 32,
+              "column": 0
+            },
+            "end": {
+              "line": 36,
+              "column": 1
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {
+            "extension": true
+          }
+        },
+        {
+          "source_symbol": "RemoteUserService",
+          "target_symbol": "UserService",
+          "relationship_type": "inheritance",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 49,
+              "column": 31
+            },
+            "end": {
+              "line": 49,
+              "column": 42
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "RemoteUserService",
+          "target_symbol": "Cache",
+          "relationship_type": "implementation",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 49,
+              "column": 44
+            },
+            "end": {
+              "line": 49,
+              "column": 49
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Services",
+          "target_symbol": "log",
+          "relationship_type": "calls",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 18,
+              "column": 8
+            },
+            "end": {
+              "line": 18,
+              "column": 49
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Services",
+          "target_symbol": "User",
+          "relationship_type": "aggregation",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 28,
+              "column": 15
+            },
+            "end": {
+              "line": 28,
+              "column": 56
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Services",
+          "target_symbol": "Clamped",
+          "relationship_type": "decorates",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 45,
+              "column": 4
+            },
+            "end": {
+              "line": 45,
+              "column": 44
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Services",
+          "target_symbol": "APIRequest",
+          "relationship_type": "aggregation",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 55,
+              "column": 22
+            },
+            "end": {
+              "line": 55,
+              "column": 54
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Services",
+          "target_symbol": "data",
+          "relationship_type": "calls",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 56,
+              "column": 34
+            },
+            "end": {
+              "line": 56,
+              "column": 73
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Services",
+          "target_symbol": "urlRequest",
+          "relationship_type": "calls",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 56,
+              "column": 52
+            },
+            "end": {
+              "line": 56,
+              "column": 72
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        },
+        {
+          "source_symbol": "Services",
+          "target_symbol": "decode",
+          "relationship_type": "calls",
+          "source_file": "Services.swift",
+          "target_file": null,
+          "source_range": {
+            "start": {
+              "line": 57,
+              "column": 15
+            },
+            "end": {
+              "line": 57,
+              "column": 62
+            }
+          },
+          "confidence": 1.0,
+          "weight": 1.0,
+          "is_direct": true,
+          "context": null,
+          "annotations": {}
+        }
+      ],
+      "imports": [],
+      "exports": [],
+      "dependencies": [],
+      "module_docstring": null,
+      "errors": [],
+      "warnings": []
+    }
+  }
+}

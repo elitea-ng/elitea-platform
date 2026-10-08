@@ -64,10 +64,107 @@ pub fn py_repr(text: &str) -> String {
     out
 }
 
+/// Python's `repr()` of a string, exactly: the quote rule of [`py_repr`],
+/// printable characters as they are, and every other character escaped as
+/// `\xNN`, `\uNNNN` or `\UNNNNNNNN` (`str.isprintable`).
+#[must_use]
+pub fn repr_text(text: &str) -> String {
+    let quote = if text.contains('\'') && !text.contains('"') {
+        '"'
+    } else {
+        '\''
+    };
+    let mut out = String::with_capacity(text.len() + 2);
+    out.push(quote);
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c == quote => {
+                out.push('\\');
+                out.push(c);
+            }
+            c if crate::pystr::is_printable(c) => out.push(c),
+            c => {
+                let code = u32::from(c);
+                let _ = if code < 0x100 {
+                    write!(out, "\\x{code:02x}")
+                } else if code < 0x1_0000 {
+                    write!(out, "\\u{code:04x}")
+                } else {
+                    write!(out, "\\U{code:08x}")
+                };
+            }
+        }
+    }
+    out.push(quote);
+    out
+}
+
+/// Python's `repr()` of the object `json.loads` gives for `value`: a dict
+/// as `{'k': v}`, a list as `[a, b]`, `True`, `False`, `None`, an int in
+/// decimal, a float as `repr(float)`.
+#[must_use]
+pub fn repr_value(value: &Value) -> String {
+    let mut out = String::new();
+    write_repr(&mut out, value);
+    out
+}
+
+fn write_repr(out: &mut String, value: &Value) {
+    match value {
+        Value::Null => out.push_str("None"),
+        Value::Bool(true) => out.push_str("True"),
+        Value::Bool(false) => out.push_str("False"),
+        Value::Number(number) if number.is_i64() || number.is_u64() => {
+            out.push_str(&number.to_string());
+        }
+        Value::Number(number) => match number.as_f64() {
+            Some(float) => out.push_str(&crate::pyjson::float_repr(float)),
+            None => out.push_str(&number.to_string()),
+        },
+        Value::String(text) => out.push_str(&repr_text(text)),
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                write_repr(out, item);
+            }
+            out.push(']');
+        }
+        Value::Object(map) => {
+            out.push('{');
+            for (index, (key, item)) in map.iter().enumerate() {
+                if index > 0 {
+                    out.push_str(", ");
+                }
+                out.push_str(&repr_text(key));
+                out.push_str(": ");
+                write_repr(out, item);
+            }
+            out.push('}');
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn repr_spells_python_objects() {
+        assert_eq!(
+            repr_value(&json!({"a": [1, 2.5, null, true], "b'": "x\u{200b}\n"})),
+            "{'a': [1, 2.5, None, True], \"b'\": 'x\\u200b\\n'}"
+        );
+        assert_eq!(repr_value(&json!(1e-7)), "1e-07");
+        assert_eq!(repr_text("é\u{7f}"), "'é\\x7f'");
+    }
 
     #[test]
     fn str_spells_python_scalars() {

@@ -470,7 +470,7 @@ async fn structured_pipeline_recovers_pending_continuation_without_restarting_no
     }
     graph.save(&original).await.unwrap();
     let (claim, control) =
-        crate::protocol::control::test_checkpoint_authorizer("execution/one", 3, evidence.digest());
+        crate::protocol::control::test_checkpoint_authorizer("execution-one", 3, evidence.digest());
     let authorization = claim
         .authorize(&control, evidence)
         .await

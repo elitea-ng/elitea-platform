@@ -7,7 +7,12 @@ How a Rust service calls the platform's model edge (`elitea-main` `/llm`,
 - the engines' model client: this crate, used by DeepWiki and Inventory.
 
 Both must call it alike, so that the edge, the budget gate and the spend
-analytics cannot tell them apart.
+analytics cannot tell them apart. The transport-agnostic half of the
+contract is one crate both build on, `libs/rust/llm-wire`: the routes, the
+header names and value rules, refusal codes and retry hints, the bounded SSE
+splitter, usage, reasoning and tool-call assembly, each with a lenient
+(engine) and a strict (worker) profile. Request bodies, transports, retries
+and the per-event state machines stay in each caller.
 
 The machine-readable half is `conformance/llm-caller/contract.json`. Both
 callers assert it:

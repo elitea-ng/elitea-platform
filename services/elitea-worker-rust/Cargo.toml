@@ -26,6 +26,11 @@ async-trait = "=0.1.92"
 base64 = "=0.23.1"
 bytes = "=1.12.1"
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde"] }
+# The /llm caller contract shared with the engines' model client (routes,
+# headers, refusal codes, the SSE splitter, chunk and tool-call readers).
+# It enables no serde_json feature: the worker's own `arbitrary_precision`
+# without `preserve_order` (its canonical hashes) stays what Cargo unifies.
+elitea-llm-wire = { path = "../../libs/rust/llm-wire" }
 futures-util = { version = "=0.3.34", optional = true, default-features = false, features = ["io"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"
