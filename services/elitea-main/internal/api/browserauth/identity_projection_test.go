@@ -241,3 +241,47 @@ func TestSignIdentityProjectionRefusesUnsignableValues(t *testing.T) {
 		})
 	}
 }
+
+func BenchmarkVerifyIdentityProjection(b *testing.B) {
+	resolver, err := NewTrustedProxyResolver(TrustedProxyConfig{
+		TrustedProxyCIDRs:        []string{"10.0.0.0/8"},
+		PublicOrigin:             "https://elitea.example.test",
+		IdentityProjectionSecret: identityProjectionTestSecret(),
+	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	header := http.Header{}
+	header.Set("X-Auth-Type", "user")
+	header.Set("X-Auth-ID", "7")
+	header.Set("X-Auth-User-ID", "7")
+	if err := resolver.SignIdentityProjection(header, http.MethodGet, "/api/v2/projects?limit=5"); err != nil {
+		b.Fatal(err)
+	}
+	request := projectedRequest(http.MethodGet, "/api/v2/projects?limit=5", header)
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := resolver.VerifyForwardedIdentityPeer(request); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// identityProjectionVerifyAllocBudget is the per-request allocation budget of
+// verification (measured: 12). It runs before the principal reload on every
+// forwarded request, so growth here is growth on every product call.
+const identityProjectionVerifyAllocBudget = 16
+
+func TestIdentityProjectionVerificationAllocationBudget(t *testing.T) {
+	resolver := newSigningTestResolver(t, identityProjectionTestSecret(), identityProjectionTestClock)
+	header := signedUserProjection(t, resolver, http.MethodGet, "/api/v2/projects?limit=5")
+	request := projectedRequest(http.MethodGet, "/api/v2/projects?limit=5", header)
+	allocations := testing.AllocsPerRun(200, func() {
+		if err := resolver.VerifyForwardedIdentityPeer(request); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if allocations > identityProjectionVerifyAllocBudget {
+		t.Fatalf("verification allocates %.0f times per request, budget %d", allocations, identityProjectionVerifyAllocBudget)
+	}
+}
