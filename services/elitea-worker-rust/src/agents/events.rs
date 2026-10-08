@@ -2096,7 +2096,10 @@ impl AgentEventProjector {
         ) {
             return Err(AgentEventProjectionError::invalid_state());
         }
-        if let Some(replay) = binding.llm_replay() {
+        // An LLM node's call already sent `agent_tool_start`, so it ends with
+        // `agent_tool_paused` like a direct agent's; a toolkit node's guard
+        // pauses before any call started and has nothing to end.
+        let paused_call = if let Some(replay) = binding.llm_replay() {
             let active = self
                 .active_tools
                 .get(binding.tool_call_id())
@@ -2112,9 +2115,13 @@ impl AgentEventProjector {
             {
                 return Err(AgentEventProjectionError::invalid_state());
             }
+            Some((binding.tool_call_id().to_owned(), active.clone()))
         } else if !self.active_tools.is_empty() {
             return Err(AgentEventProjectionError::invalid_state());
-        }
+        } else {
+            None
+        };
+        let interrupt_id = binding.interrupt_id.clone();
         let data = binding.data;
         let pending = json!({
             "type": "hitl",
@@ -2147,6 +2154,17 @@ impl AgentEventProjector {
             "edit_state_key": Value::Null,
         });
         let mut batch = ProjectedAgentEventBatch::new();
+        if let Some((call_id, active)) = paused_call {
+            self.push_tool_paused(
+                &mut batch,
+                &call_id,
+                &active,
+                PAUSE_AWAITING_APPROVAL,
+                &interrupt_id,
+                "sensitive_tool",
+                event.timestamp,
+            )?;
+        }
         batch.push(self.event(
             "agent_hitl_interrupt",
             &Value::String(data.message),
@@ -2260,7 +2278,8 @@ impl AgentEventProjector {
             .active_tools
             .get(binding.tool_call_id())
             .filter(|active| active.name == binding.tool_name())
-            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            .ok_or_else(AgentEventProjectionError::invalid_state)?
+            .clone();
         if !binding
             .llm_replay()
             .matches_pending_call(
@@ -2272,6 +2291,8 @@ impl AgentEventProjector {
         {
             return Err(AgentEventProjectionError::invalid_state());
         }
+        let call_id = binding.tool_call_id().to_owned();
+        let interrupt_id = binding.interrupt_id.clone();
         let data = binding.data;
         let message = data.message.clone();
         let pending = json!({
@@ -2304,6 +2325,15 @@ impl AgentEventProjector {
             "edit_state_key": Value::Null,
         });
         let mut batch = ProjectedAgentEventBatch::new();
+        self.push_tool_paused(
+            &mut batch,
+            &call_id,
+            &active,
+            PAUSE_AWAITING_INPUT,
+            &interrupt_id,
+            ASK_USER_GUARDRAIL_TYPE,
+            event.timestamp,
+        )?;
         batch.push(self.event(
             "agent_hitl_interrupt",
             &Value::String(message),
@@ -5420,41 +5450,81 @@ fn replace_nested_interrupt_identity(
     if !valid_tool_identity(interrupt_id) || !valid_sha256_label(call_digest) {
         return Err(AgentEventProjectionError::invalid_state());
     }
-    let mut replaced = ProjectedAgentEventBatch::new();
-    let mut count = 0_usize;
-    for mut event in batch {
-        if event.r#type != "agent_hitl_interrupt" || count != 0 {
-            return Err(AgentEventProjectionError::invalid_state());
+    let mut events: Vec<NodeEventV1> = batch.into_iter().collect();
+    // The child's batch is its interrupt card, optionally preceded by the
+    // `agent_tool_paused` frame (and its `partial_message`) that ends the
+    // call the card pauses. Both name the child's local interrupt id, so the
+    // paused frames are rewritten to the same public id as the card.
+    let mut interrupt = events
+        .pop()
+        .filter(|event| event.r#type == "agent_hitl_interrupt")
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    let paused_frames = match events.as_slice() {
+        [] => false,
+        [paused, partial]
+            if paused.r#type == TOOL_PAUSED_EVENT && partial.r#type == "partial_message" =>
+        {
+            true
         }
-        let mut metadata: Value = serde_json::from_slice(&event.response_metadata)
-            .map_err(|_| AgentEventProjectionError::invalid_state())?;
-        let object = metadata
-            .as_object_mut()
-            .ok_or_else(AgentEventProjectionError::invalid_state)?;
-        let direct = object
-            .get_mut("hitl_interrupt")
-            .ok_or_else(AgentEventProjectionError::invalid_state)?;
-        let direct_identity =
-            replace_pending_interrupt_identity(direct, interrupt_id, call_digest)?;
-        let pending = object
-            .get_mut("hitl_interrupts")
-            .and_then(Value::as_array_mut)
-            .filter(|pending| pending.len() == 1)
-            .and_then(|pending| pending.first_mut())
-            .ok_or_else(AgentEventProjectionError::invalid_state)?;
-        let list_identity = replace_pending_interrupt_identity(pending, interrupt_id, call_digest)?;
-        if direct_identity != list_identity {
-            return Err(AgentEventProjectionError::invalid_state());
-        }
-        event.response_metadata = serde_json::to_vec(&metadata)
-            .map_err(|_| AgentEventProjectionError::invalid_state())?;
-        encode_current_node_event_json(&event).map_err(AgentEventProjectionError::output)?;
-        replaced.push(event)?;
-        count += 1;
-    }
-    if count != 1 {
+        _ => return Err(AgentEventProjectionError::invalid_state()),
+    };
+    let mut metadata: Value = serde_json::from_slice(&interrupt.response_metadata)
+        .map_err(|_| AgentEventProjectionError::invalid_state())?;
+    let object = metadata
+        .as_object_mut()
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    let direct = object
+        .get_mut("hitl_interrupt")
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    let direct_identity = replace_pending_interrupt_identity(direct, interrupt_id, call_digest)?;
+    let pending = object
+        .get_mut("hitl_interrupts")
+        .and_then(Value::as_array_mut)
+        .filter(|pending| pending.len() == 1)
+        .and_then(|pending| pending.first_mut())
+        .ok_or_else(AgentEventProjectionError::invalid_state)?;
+    let list_identity = replace_pending_interrupt_identity(pending, interrupt_id, call_digest)?;
+    if direct_identity != list_identity {
         return Err(AgentEventProjectionError::invalid_state());
     }
+    interrupt.response_metadata =
+        serde_json::to_vec(&metadata).map_err(|_| AgentEventProjectionError::invalid_state())?;
+    encode_current_node_event_json(&interrupt).map_err(AgentEventProjectionError::output)?;
+
+    let mut replaced = ProjectedAgentEventBatch::new();
+    if paused_frames {
+        let previous = direct_identity.0.as_str();
+        let mut call_id = None;
+        for mut event in events {
+            let mut metadata: Value = serde_json::from_slice(&event.response_metadata)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?;
+            let entry = if event.r#type == TOOL_PAUSED_EVENT {
+                call_id = metadata
+                    .get("tool_run_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                Some(&mut metadata)
+            } else {
+                call_id.as_deref().and_then(|id| {
+                    metadata
+                        .get_mut("tool_calls")
+                        .and_then(Value::as_object_mut)
+                        .filter(|calls| calls.len() == 1)
+                        .and_then(|calls| calls.get_mut(id))
+                })
+            }
+            .and_then(|entry| entry.get_mut("pause"))
+            .and_then(|pause| pause.get_mut("interrupt_id"))
+            .filter(|id| id.as_str() == Some(previous))
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+            *entry = Value::String(interrupt_id.to_owned());
+            event.response_metadata = serde_json::to_vec(&metadata)
+                .map_err(|_| AgentEventProjectionError::invalid_state())?;
+            encode_current_node_event_json(&event).map_err(AgentEventProjectionError::output)?;
+            replaced.push(event)?;
+        }
+    }
+    replaced.push(interrupt)?;
     Ok(replaced)
 }
 

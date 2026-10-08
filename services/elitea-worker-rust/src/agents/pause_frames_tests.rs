@@ -9,6 +9,14 @@
 //! so a client kept the call spinning forever, elitea-main stored its trace row
 //! with no finish reason, and a client reading the documented detail object got
 //! a boolean.
+//!
+//! A pipeline LLM node's call that pauses (a sensitive tool or `ask_user`)
+//! ends the same way; `pipeline_tests.rs` (`assert_llm_node_call_paused`)
+//! proves it for a root node and for a nested pipeline, whose paused frame is
+//! rewritten to the public interrupt id with its card. A delegated MCP
+//! authorization pause deliberately sends no tool frame: it is answered by
+//! `mcp_authorization_required`, matching the Python worker, which records the
+//! call as `action_required` without emitting a tool event.
 
 use adk_rust::{Content, Event, FinishReason, Part, ToolConfirmationRequest};
 use chrono::{TimeZone, Utc};
