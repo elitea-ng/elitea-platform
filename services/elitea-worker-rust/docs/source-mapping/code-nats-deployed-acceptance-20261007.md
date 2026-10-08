@@ -366,3 +366,49 @@ The runtime watch is `b24dcde54c1cb918982ede0121a42b59a2dbfbedc5119322ce4aa2a420
 The removal receipt is `98a6e3559a296a98150de16e9f900268247c0e7b432c8213d6ed83051d2766a3`.
 This case proves original execution survival across broker loss and reconnect.
 It observes no redelivery and does not close queued delivery, full F5, Code, or worker acceptance.
+
+## Retained Worker-loss redelivery evidence, 2026-10-08
+
+A later read checks the original chat851 command across both retained Worker logs.
+Verified `agent_delivery_started` spans independently bind execution, generation, command, stream, and sequence28.
+The original Worker receives delivery1. Its successor receives delivery2 and records `retired`.
+An exact Main outbox lookup matches the original prepared, actual, and published signed-envelope digests.
+Chat851 retains its accepted original Code result, owner recovery, settlement, and cleanup evidence.
+
+The supplemental receipt is `b4f03c602255827c32f4b45c4e8b1d2bc05b158bffbaa430431fa79b6c1500be`.
+Its reader source is `590b76792cd7fc5c38f1a3b4cd71d08bb49d1f0480fcd1aed4f3fd7a83e89f42`.
+The reader checks complete current service and process guards before and after its bounded reads.
+It retains finite matching events. Raw logs, credentials, and signed-envelope bytes remain absent from the receipt.
+All original F3 and chat855 receipts remain unchanged.
+
+This supplement proves redelivery after Worker loss. It provides no broker-only redelivery evidence.
+Chats855 and856 retain their separate broker-loss boundaries.
+This supplement does not close queued delivery, full F5, Code, or worker acceptance.
+
+## Queued broker-loss case and interrupted final read, 2026-10-08
+
+Chat856 uses one normal Send of saved application147/version178.
+Root stops the known idle Worker before admission. No command consumption, claim, visit, Code job, or checkpoint precedes broker loss.
+The isolated broker receives SIGKILL and restarts with its original store and configuration.
+Its original sequence33 and705-byte signed command remain unchanged while the Worker stays stopped.
+The broker restoration receipt is `f55f1daf427190c1912e3424fc85259a1e6efd837bbdd85c9d58cb33e6d0ec2a`.
+
+The first watch expires before Worker restart. Its failed result remains unchanged and earns no runtime credit.
+A separately reviewed continuation references the original baseline and validates the same unconsumed command and stopped process.
+Its capture starts before the same Worker restarts. No new Send or broker fault occurs.
+The start receipt is `66de36041f114e77ab23e23c112ffed844de4ee0da3994ad40b55747e0335a32`.
+
+The original result is `2` once and survives normal browser reload.
+One intent, output, committed settlement, two completed jobs, and four matching-definition checkpoints remain recorded.
+The durable readback is `6ec7910576b804eb8fbf7ba7666ebe67f95a87acddba2e7972c7a2e666640ee6`.
+Both captured runtimes pass all16 checks and durable binding checks, without missing event or runtime inspections.
+The completed watch is `eb14f9b93556f658df81d5d3a304682ee57c8431c2ff2ef20e0233271c06ae09`.
+
+The later removal read refuses at `main_identity`, before runtime removal queries.
+Current public readback finds candidate Main stopped with exit137 and `OOMKilled=false`.
+It also finds the Worker stopped later with exit0. Supervisor, NATS, Web, and PostgreSQL remain running.
+Physical removal, final queue drain, and the complete queued acceptance receipt remain unverified.
+The source guard stays unchanged. No final verifier runs or historical receipt changes.
+The user authorizes a fresh isolated stack while preserving the stopped cohort, databases, spools, and evidence.
+
+This partial case does not close queued delivery, full F5, Code, or worker acceptance.
