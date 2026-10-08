@@ -42,7 +42,7 @@ for tool in helm yq; do
   }
 done
 
-GATEWAY_RENDER_POSTURE=(--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted)
+GATEWAY_RENDER_POSTURE=(--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.ingressFrom[0].podSelector.matchLabels.render-only=gateway --set networkPolicies.main.noExternalIngress=false)
 STANDALONE=(-f "$CHART/values-standalone.yaml")
 
 # The identity floor the strip middleware must delete (lower case). It is the

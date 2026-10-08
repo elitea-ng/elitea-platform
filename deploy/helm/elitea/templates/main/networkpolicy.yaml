@@ -1,0 +1,71 @@
+{{- if and .Values.main.enabled .Values.networkPolicies.enabled }}
+{{- $np := .Values.networkPolicies }}
+{{- $worker := .Values.worker.enabled }}
+{{- $edge := and $worker .Values.worker.platformEdge.enabled }}
+{{- $deepwiki := and .Values.deepwiki.enabled (not .Values.deepwiki.callbackViaPlatformEdge) }}
+{{- $inventory := .Values.inventory.enabled }}
+{{- $runtimePeers := and .Values.main.runtime.enabled $worker }}
+{{- $httpPeers := or $edge $deepwiki $inventory $np.main.ingressFrom $np.main.extraIngressFrom $np.probeFrom }}
+# Ingress to the elitea-main pods. Only the sources listed here may open a
+# connection; every other in-cluster source is refused.
+#
+#   8080 (HTTP)  the platform edge, the provider pods that call back directly,
+#                networkPolicies.main.ingressFrom / extraIngressFrom (the
+#                gateway or ingress controller) and networkPolicies.probeFrom.
+#   runtime      the worker pods only, on the control / output / content
+#                listeners, when the runtime plane is composed.
+#
+# Kubelet probes are not subject to the policy on the CNIs this chart is tested
+# with; networkPolicies.probeFrom is for those that apply it to them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "elitea-main.fullname" . }}-netpol
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "elitea-main.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "elitea-main.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  {{- if or $httpPeers $runtimePeers }}
+  ingress:
+  {{- end }}
+    {{- if $httpPeers }}
+    - ports:
+        - port: 8080
+          protocol: TCP
+      from:
+        {{- if $edge }}
+        {{- include "elitea.netpol.edgePeer" . | nindent 8 }}
+        {{- end }}
+        {{- if $deepwiki }}
+        {{- include "elitea.netpol.providerPeer" (dict "ctx" . "provider" "deepwiki") | nindent 8 }}
+        {{- end }}
+        {{- if $inventory }}
+        {{- include "elitea.netpol.providerPeer" (dict "ctx" . "provider" "inventory") | nindent 8 }}
+        {{- end }}
+        {{- with $np.main.ingressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with $np.main.extraIngressFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- with $np.probeFrom }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    {{- end }}
+    {{- if $runtimePeers }}
+    - ports:
+        - port: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.controlAddress }}
+          protocol: TCP
+        - port: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.outputAddress }}
+          protocol: TCP
+        - port: {{ include "elitea-main.runtimePort" .Values.main.runtime.listeners.contentAddress }}
+          protocol: TCP
+      from:
+        {{- include "elitea.netpol.workerPeer" . | nindent 8 }}
+    {{- end }}
+{{- end }}

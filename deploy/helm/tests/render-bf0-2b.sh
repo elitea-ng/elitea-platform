@@ -16,7 +16,7 @@ set -euo pipefail
 # operator states its two postures. Every render below therefore supplies them:
 # they are render-only values (.invalid is reserved by RFC 2606), and a chart
 # that rendered without them would be the defect that refusal exists to stop.
-GATEWAY_RENDER_POSTURE="--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted"
+GATEWAY_RENDER_POSTURE="--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true"
 
 # deploy/helm/tests -> deploy. The chart and ArgoCD paths below are relative to
 # it, so this must follow the file if it ever moves again.
@@ -45,7 +45,7 @@ REPO_ROOT="$(cd "$DIR/.." && pwd)"
 # its values live under `llmGateway`.
 GATEWAY_RENDER_VALUES=(
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
-  --set-string llmGateway.egressPosture=public-unrestricted
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 )
 HELM="${HELM:-helm}"
 PASS=0
@@ -222,6 +222,8 @@ params = {p["name"]: p.get("value", "") for p in helm.get("parameters", [])}
 operator = {
     "llmGateway.env.GATEWAY_SELF_LLM_ORIGINS": "https://render-only.example.invalid/llm/v1",
     "llmGateway.egressPosture": "public-unrestricted",
+    # The gateway peer admitted to elitea-main:8080 (networkPolicies).
+    "networkPolicies.main.ingressFrom[0].namespaceSelector.matchLabels.kubernetes\\.io/metadata\\.name": "gateway-system",
 }
 for name in operator:
     assert name in params, (

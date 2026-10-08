@@ -39,13 +39,12 @@ data:
             keyFile: /run/edge-tls/tls.key
     http:
       routers:
-        # The execution-events SSE stream. It needs its own router because it
-        # is the one route here that accepts NO credential a client can
-        # present: production_runtime.go composes it with PrincipalValidator +
-        # ForwardedIdentityVerifier only, so the PAT that admitted the turn
-        # cannot read the turn's own stream. It is reachable exclusively
-        # through a auth edge that authenticates the caller and
-        # projects verified identity headers.
+        # The execution-events SSE stream. It has its own router because it
+        # runs the auth edge: runtime-auth authenticates the caller's
+        # credential and projects a signed identity (X-Auth-Signature), which
+        # production_runtime.go accepts alongside a bearer or session cookie it
+        # validates itself. strip-caller-auth-context runs first, so only the
+        # edge's own projection reaches elitea-main.
         #
         # Scoped to this exact path rather than applied to the catch-all: every
         # other route through this edge authenticates the worker's bearer

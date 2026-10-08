@@ -45,12 +45,12 @@ NS=elitea
   --api-versions monitoring.coreos.com/v1 > "$TMP/nats-base-prom.yaml"
 "$HELM" template elitea "$DIR/helm/elitea" -n "$NS" \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
-  --set-string llmGateway.egressPosture=public-unrestricted > "$TMP/elitea.yaml"
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea.yaml"
 # The standalone profile: the runtime plane on, so the command bus's
 # identities (elitea-main-runtime, elitea-worker) render too.
 "$HELM" template elitea "$DIR/helm/elitea" -n "$NS" -f "$DIR/helm/elitea/values-standalone.yaml" --set worker.enabled=true \
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 \
-  --set-string llmGateway.egressPosture=public-unrestricted > "$TMP/elitea-runtime.yaml"
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true > "$TMP/elitea-runtime.yaml"
 
 # Schema validation of the NATS renders (R9). The template job in helm-lint.yml
 # runs kubeconform on the charts it can template without network; these two
@@ -93,7 +93,7 @@ refuse() {
 }
 EL=(elitea "$DIR/helm/elitea" -n "$NS"
     --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1
-    --set-string llmGateway.egressPosture=public-unrestricted)
+    --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
 NA=(elitea-nats "$DIR/helm/nats" -n "$NS" -f "$DIR/helm/nats/values-scale1.yaml")
 refuse "nats: verify_and_map off"             "verify_and_map must be true"  "${NA[@]}" --set nats.config.nats.tls.merge.verify_and_map=false
 refuse "nats: TLS off"                        "tls.enabled is false"         "${NA[@]}" --set nats.config.nats.tls.enabled=false

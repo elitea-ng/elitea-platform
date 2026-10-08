@@ -30,7 +30,7 @@ CHART="deploy/helm/elitea"
 # The chart's LLM gateway refuses to render until an operator states its two
 # postures, so every render below supplies them. Render-only values (.invalid is
 # reserved by RFC 2606).
-GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1"
+GATEWAY_POSTURES="--set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1"
 
 # A complete, correct Inventory install. Every refusal case below is this minus
 # exactly one thing, so a case can never pass because of a second omission.
