@@ -513,7 +513,7 @@ pub async fn extract_file(
         source_toolkit,
         ..
     } = *input;
-    let chunks = chunk::chunks(text);
+    let chunks = chunk::chunks(path, text);
     let code = is_code_like(path);
     let semaphore = Arc::new(tokio::sync::Semaphore::new(tuning.parallel_chunks.max(1)));
     let entity_calls = chunks.iter().map(|chunk| {

@@ -67,3 +67,23 @@ pub fn parser_for(language: &str) -> Option<Box<dyn LanguageParser>> {
         _ => None,
     }
 }
+
+/// The tree-sitter grammar this crate parses `language` with (`path` picks
+/// TSX over TypeScript), for a caller that needs only the syntax tree, such
+/// as a syntax-aware chunker. Kotlin and Swift are regex ports and have
+/// none.
+#[must_use]
+pub fn grammar_for(language: &str, path: &str) -> Option<tree_sitter::Language> {
+    Some(match language {
+        "cpp" => tree_sitter_cpp::LANGUAGE.into(),
+        "csharp" => tree_sitter_c_sharp::LANGUAGE.into(),
+        "go" => tree_sitter_go::LANGUAGE.into(),
+        "java" => tree_sitter_java::LANGUAGE.into(),
+        "javascript" => tree_sitter_javascript::LANGUAGE.into(),
+        "python" => tree_sitter_python::LANGUAGE.into(),
+        "rust" => tree_sitter_rust::LANGUAGE.into(),
+        "typescript" if typescript::ast::is_tsx(path) => tree_sitter_typescript::LANGUAGE_TSX.into(),
+        "typescript" => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        _ => return None,
+    })
+}

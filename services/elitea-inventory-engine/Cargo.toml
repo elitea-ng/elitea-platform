@@ -28,6 +28,8 @@ futures-util = { version = "=0.3.34", default-features = false, features = ["std
 indexmap = { version = "=2.14.2", features = ["serde"] }
 # The wall-clock stamps graph metadata carries (embeddings_generated_at).
 jiff = "=0.2.38"
+# Repairing a model's malformed JSON answer.
+jsonrepair = { version = "=0.1.0", default-features = false, features = ["serde"] }
 # Entity ids are Python's md5 prefix; file hashes its sha256.
 md-5 = "=0.10.6"
 sha2 = "=0.10.9"
@@ -38,6 +40,8 @@ serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["preserve_order", "float_roundtrip"] }
 # The graph store (src/store.rs); the same stack the DeepWiki engine uses.
 sqlx = { version = "=0.8.6", default-features = false, features = ["json", "postgres", "runtime-tokio", "tls-rustls-aws-lc-rs"] }
+# Chunking a file for the model (by syntax where a grammar exists).
+text-splitter = { version = "=0.33.0", features = ["code"] }
 thiserror = "=2.0.21"
 tokio = { version = "=1.53.2", features = ["macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "=0.1.44"

@@ -22,6 +22,13 @@
 //!   proportional to edge weight, a vertex without edges spreads its rank
 //!   evenly over all vertices. PRPACK solves the system directly; here it is
 //!   iterated to 1e-15, which agrees to better than 1e-12.
+//!
+//! WHY NOT A GRAPH CRATE. Checked against the igraph goldens (2026-10-08):
+//! `rustworkx-core` 0.18 has no `PageRank` and only unweighted betweenness;
+//! `petgraph` 0.8's `page_rank` is unweighted; `graphrs` 0.12 collapses
+//! parallel edges in betweenness (networkx's numbers: `s` = 3.5, not
+//! igraph's 10/3) and its weighted `PageRank` on an undirected multigraph
+//! returns 1/42 for every vertex. None reproduces the measures Python ran.
 
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;

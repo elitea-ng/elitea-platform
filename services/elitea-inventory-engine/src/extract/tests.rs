@@ -145,7 +145,7 @@ async fn citations_past_the_first_chunk_are_absolute() {
     );
     let first = "first paragraph words\n".repeat(30);
     let text = format!("{first}\n\nSECOND\n{}", "more words here\n".repeat(30));
-    let start = chunk::chunks(&text)
+    let start = chunk::chunks("a.md", &text)
         .into_iter()
         .find(|c| c.text.contains("SECOND"))
         .map(|c| c.start_line)
