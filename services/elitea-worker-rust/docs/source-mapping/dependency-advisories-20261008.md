@@ -27,7 +27,8 @@ with, and proves one existing security property of the SQL toolkit.
 | `services/elitea-scheduler/go.mod:3` | `go 1.25.0` → `go 1.25.13` |
 | `services/elitea-subapp-host/go.mod:3` | `go 1.25.0` → `go 1.25.13` |
 | `services/elitea-llm-gateway/go.mod:3` | `go 1.26.5` → `go 1.26.6` |
-| `services/elitea-main/tests/buildcontext/toolchain_floor_test.go:37-38` | Floors `stdlibFloorGo125`, `stdlibFloorGo126` and the gate test |
+| `services/elitea-main/tests/buildcontext/toolchain_floor_test.go:36-37,82` | Floors `stdlibFloorGo125`, `stdlibFloorGo126` and the gate test (versions compared with the standard library's `go/version`) |
+| `scripts/ci/check-gateway-toolchain.sh` (section 4) | Reads `stdlibFloorGo126` from the Go test and fails when the gateway's `go` directive is below it. ci-gateway runs this script; ci-go's paths do not cover the gateway. |
 | `services/elitea-llm-gateway/Containerfile:5`, `deploy/docker-compose.standalone-full.yml:506` | Comments no longer name 1.25.8 |
 | `services/elitea-worker-rust/Cargo.lock:676,1420` | `chacha20` 0.10.1 → 0.10.2, `h2` 0.4.15 → 0.4.16 (version and checksum only) |
 | `services/elitea-worker-rust/src/toolkits/families/sql/client.rs:30-34,244` | `MYSQL_TLS_MODE` constant (`VerifyIdentity`), used by `mysql_options` |
@@ -90,13 +91,13 @@ The local toolchain is go1.26.5, so each module was scanned with `GOTOOLCHAIN` s
 
 | Suite | Result |
 | --- | --- |
-| `go test -race ./tests/buildcontext/` (elitea-main) | 3 passed: replace gate, floor gate, version parser |
+| `go test -race ./tests/buildcontext/` (elitea-main) | 2 passed: replace gate, floor gate |
 | `go test ./...`: elitea-main | 13,037 passed, 0 failed, 1,987 skipped |
 | `go test ./...`: elitea-scheduler | 140 passed, 0 failed, 15 skipped |
 | `go test ./...`: elitea-subapp-host | 257 passed, 0 failed, 11 skipped |
 | `go test ./...`: elitea-llm-gateway (`GOWORK=off`) | 1,628 passed, 0 failed, 9 skipped |
 | `go vet ./...` on all four modules | clean |
-| `bash scripts/ci/check-gateway-toolchain.sh` | passes (`go.mod needs at least go 1.26.6`) |
+| `bash scripts/ci/check-gateway-toolchain.sh` | passes (`the standard-library security floor is go 1.26.6`); with the gateway's go.mod mutated to `go 1.26.5` it fails: `go.mod needs go 1.26.5, below the standard-library security floor go 1.26.6` |
 | `cargo fmt --all -- --check` | clean |
 | `cargo clippy --locked --all-targets --all-features -- -D warnings` | clean |
 | `cargo test --locked --all-features toolkits::sql_tests` | 14 passed, 0 failed |
@@ -110,6 +111,10 @@ The local toolchain is go1.26.5, so each module was scanned with `GOTOOLCHAIN` s
 **TDD evidence.**
 - `TestEveryShippedGoBuildIsAtOrAboveTheStdlibSecurityFloor` was written first and failed for all five entries
   (`go.work declares go 1.25.8, below the standard-library security floor 1.25.13`, and so on).
+- After the review rewrite onto `go/version`, the gate was mutated again:
+  - main's go.mod set to `go 1.25.12` failed;
+  - the gateway pinned to `golang:1.26.5-trixie` failed (`pins golang 1.26.5, below the security floor 1.26.6`);
+  - a `FROM --platform=$BUILDPLATFORM golang:1.25-trixie` builder was accepted.
 - For the MySQL guard, `MYSQL_TLS_MODE` was mutated to `MySqlSslMode::Preferred`.
   `mysql_without_tls_is_refused_before_any_authentication_byte` then failed with `client sent 123 bytes`, which is
   the HandshakeResponse. It was restored to `VerifyIdentity`.
@@ -154,7 +159,7 @@ Not applicable: no durable state, schema, checkpoint, claim or spool format chan
 **Go standard library.**
 - Threats: seven reachable advisories in TLS, HTTP, URL, ASN.1, XML and html/template handling.
 - Mechanism: the `go` directive floors (`go.work:1`, each `go.mod:3`). Their gate is
-  `services/elitea-main/tests/buildcontext/toolchain_floor_test.go:83`. The gate fails when any shipped module,
+  `services/elitea-main/tests/buildcontext/toolchain_floor_test.go:82`, plus section 4 of `scripts/ci/check-gateway-toolchain.sh` for gateway-only changes. The gate fails when any shipped module,
   `go.work`, an exact builder pin or a `toolchain` line falls below `stdlibFloorGo125`/`stdlibFloorGo126`, or when a
   builder leaves the floor's series.
 - Proof: the test above, the fail-closed container run, and govulncheck after (0 reachable).
@@ -239,5 +244,5 @@ Web live-label detail, unrelated to these images.
 4. **RUSTSEC-2023-0071** remains in `cargo deny` output until `sqlx-mysql` drops `rsa` or `rsa` ships a constant-time
    fix.
 5. **Audits in CI.** Neither govulncheck nor `cargo deny` runs in CI, and CI was not changed (user decision). The Go
-   floor is enforced by the `go test` gate above. The Rust advisory state is enforced only by this document and the
+   floor is enforced by the `go test` gate above (ci-go) and by `check-gateway-toolchain.sh` (ci-gateway). The Rust advisory state is enforced only by this document and the
    image scans.

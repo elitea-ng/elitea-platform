@@ -1,10 +1,9 @@
 package buildcontext
 
 import (
-	"fmt"
+	"go/version"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -76,7 +75,7 @@ var toolchainFloors = []struct {
 
 var (
 	goDirective  = regexp.MustCompile(`(?m)^go\s+(\S+)\s*$`)
-	golangImage  = regexp.MustCompile(`(?m)^\s*FROM\s+golang:([0-9][0-9.]*)(?:-\S*)?(?:\s|$)`)
+	golangImage  = regexp.MustCompile(`(?m)^\s*FROM\s+(?:--\S+\s+)*golang:([0-9][0-9.]*)(?:-\S*)?(?:\s|$)`)
 	toolchainKey = regexp.MustCompile(`(?m)^toolchain\s+(\S+)\s*$`)
 )
 
@@ -85,7 +84,7 @@ func TestEveryShippedGoBuildIsAtOrAboveTheStdlibSecurityFloor(t *testing.T) {
 
 	for _, mod := range toolchainFloors {
 		t.Run(mod.name, func(t *testing.T) {
-			floor := mustParseGoVersion(t, mod.floor)
+			floor := "go" + mod.floor
 			body := readFile(t, filepath.Join(root, mod.goFile))
 
 			directives := goDirective.FindAllStringSubmatch(body, -1)
@@ -94,11 +93,11 @@ func TestEveryShippedGoBuildIsAtOrAboveTheStdlibSecurityFloor(t *testing.T) {
 					"A comparison against nothing passes, so this is a failure and not a skip.",
 					len(directives), mod.goFile)
 			}
-			declared, err := parseGoVersion(directives[0][1])
-			if err != nil {
-				t.Fatalf("%s: %v", mod.goFile, err)
+			declared := "go" + directives[0][1]
+			if !version.IsValid(declared) {
+				t.Fatalf("%s: `go %s` is not a Go version", mod.goFile, directives[0][1])
 			}
-			if declared.less(floor) {
+			if version.Compare(declared, floor) < 0 {
 				t.Errorf("%s declares go %s, below the standard-library security floor %s.\n"+
 					"A builder image older than the floor would then compile it with a vulnerable standard library.\n"+
 					"Run `go mod edit -go=%s` (or `go work edit -go=%s`).",
@@ -106,9 +105,8 @@ func TestEveryShippedGoBuildIsAtOrAboveTheStdlibSecurityFloor(t *testing.T) {
 			}
 			// A `toolchain` line below the floor would name a vulnerable toolchain
 			// for GOTOOLCHAIN=auto to select.
-			if match := toolchainKey.FindStringSubmatch(body); match != nil {
-				named, err := parseGoVersion(strings.TrimPrefix(match[1], "go"))
-				if err != nil || named.less(floor) {
+			if match := toolchainKey.FindStringSubmatch(body); match != nil && match[1] != "default" {
+				if !version.IsValid(match[1]) || version.Compare(match[1], floor) < 0 {
 					t.Errorf("%s names toolchain %s, below the security floor %s", mod.goFile, match[1], mod.floor)
 				}
 			}
@@ -121,90 +119,19 @@ func TestEveryShippedGoBuildIsAtOrAboveTheStdlibSecurityFloor(t *testing.T) {
 				t.Fatalf("read %d `FROM golang:<version>` builders from %s, want exactly 1",
 					len(images), mod.containerfile)
 			}
-			image, err := parseGoVersion(images[0][1])
-			if err != nil {
-				t.Fatalf("%s: %v", mod.containerfile, err)
+			image := "go" + images[0][1]
+			if !version.IsValid(image) {
+				t.Fatalf("%s: golang:%s does not name a Go version", mod.containerfile, images[0][1])
 			}
-			if image.major != floor.major || image.minor != floor.minor {
-				t.Errorf("%s builds with golang %s, outside the %d.%d series of its floor %s",
-					mod.containerfile, images[0][1], floor.major, floor.minor, mod.floor)
+			if version.Lang(image) != version.Lang(floor) {
+				t.Errorf("%s builds with golang %s, outside the %s series of its floor %s",
+					mod.containerfile, images[0][1], strings.TrimPrefix(version.Lang(floor), "go"), mod.floor)
 			}
 			// A series tag supplies the newest patch and the `go` directive
 			// enforces the floor. An exact patch pin must itself meet it.
-			if image.hasPatch && image.less(floor) {
+			if image != version.Lang(image) && version.Compare(image, floor) < 0 {
 				t.Errorf("%s pins golang %s, below the security floor %s", mod.containerfile, images[0][1], mod.floor)
 			}
 		})
-	}
-}
-
-type goVersion struct {
-	major, minor, patch int
-	hasPatch            bool
-}
-
-func (v goVersion) less(other goVersion) bool {
-	if v.major != other.major {
-		return v.major < other.major
-	}
-	if v.minor != other.minor {
-		return v.minor < other.minor
-	}
-	return v.patch < other.patch
-}
-
-// parseGoVersion reads `1.25` or `1.25.13`. A pre-release such as `1.25rc1`
-// is refused: it is never at or above a release floor.
-func parseGoVersion(text string) (goVersion, error) {
-	parts := strings.Split(text, ".")
-	if len(parts) < 2 || len(parts) > 3 {
-		return goVersion{}, fmt.Errorf("go version %q is not <major>.<minor>[.<patch>]", text)
-	}
-	numbers := make([]int, len(parts))
-	for i, part := range parts {
-		n, err := strconv.Atoi(part)
-		if err != nil || n < 0 {
-			return goVersion{}, fmt.Errorf("go version %q is not <major>.<minor>[.<patch>]", text)
-		}
-		numbers[i] = n
-	}
-	version := goVersion{major: numbers[0], minor: numbers[1]}
-	if len(numbers) == 3 {
-		version.patch, version.hasPatch = numbers[2], true
-	}
-	return version, nil
-}
-
-func mustParseGoVersion(t *testing.T, text string) goVersion {
-	t.Helper()
-	version, err := parseGoVersion(text)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return version
-}
-
-func TestParseGoVersionReadsSeriesAndPatchAndRefusesPreReleases(t *testing.T) {
-	floor := mustParseGoVersion(t, stdlibFloorGo125)
-	for text, wantBelowFloor := range map[string]bool{
-		"1.25.12": true,
-		"1.25.8":  true,
-		"1.25":    true, // a series with no patch is 1.25.0 as a floor
-		"1.25.13": false,
-		"1.25.14": false,
-		"1.26.0":  false,
-	} {
-		version, err := parseGoVersion(text)
-		if err != nil {
-			t.Fatalf("parseGoVersion(%q): %v", text, err)
-		}
-		if got := version.less(floor); got != wantBelowFloor {
-			t.Errorf("%s below %s = %v, want %v", text, stdlibFloorGo125, got, wantBelowFloor)
-		}
-	}
-	for _, text := range []string{"1.25rc1", "1", "1.25.13.1", "", "go1.25.13", "1.-1.0"} {
-		if _, err := parseGoVersion(text); err == nil {
-			t.Errorf("parseGoVersion(%q) succeeded, want an error", text)
-		}
 	}
 }
