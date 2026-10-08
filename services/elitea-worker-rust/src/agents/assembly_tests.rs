@@ -1001,6 +1001,26 @@ fn a_direct_agent_may_have_no_instructions_but_a_pipeline_may_not() {
     );
 }
 
+/// A pipeline's `instructions` carry the graph YAML, so the profile bound must
+/// equal the compiler's YAML bound. A lower profile bound refused pipelines that
+/// Main admits and the compiler accepts, with a generic "input is invalid".
+#[test]
+fn a_pipeline_profile_admits_yaml_up_to_the_compiler_bound() {
+    let mut pipeline = ordinary_request(AgentExecutionKind::Application);
+    set_application_agent_type(&mut pipeline, "pipeline");
+    set_application_instructions(&mut pipeline, &"x".repeat(100 * 1_024));
+    OrdinaryNoToolProfile::validate_pipeline_shell(&pipeline, false)
+        .expect("a 100 KiB pipeline is within the compiler bound");
+
+    set_application_instructions(&mut pipeline, &"x".repeat(512 * 1_024 + 1));
+    assert_eq!(
+        OrdinaryNoToolProfile::validate_pipeline_shell(&pipeline, false)
+            .expect_err("a pipeline above the compiler bound is refused")
+            .code(),
+        NativeAgentAssemblyErrorCode::InvalidInput
+    );
+}
+
 fn application_version_mut(request: &mut AgentExecutionRequest) -> &mut Map<String, Value> {
     request
         .payload
@@ -1556,6 +1576,10 @@ fn large_instructions_survive_agent_assembly_and_variable_rendering() {
     assert_eq!(nested.instructions(), profile.instructions());
     let mut pipeline_version = version.clone();
     pipeline_version.insert("agent_type".to_owned(), json!("pipeline"));
+    pipeline_version.insert(
+        "instructions".to_owned(),
+        json!("x".repeat(super::graph::compiler::MAX_PIPELINE_YAML_BYTES + 1)),
+    );
     assert!(
         OrdinaryNoToolProfile::from_nested_pipeline_version(&pipeline_version, &profile).is_err()
     );
