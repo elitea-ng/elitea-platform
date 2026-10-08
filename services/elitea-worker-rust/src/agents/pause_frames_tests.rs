@@ -259,3 +259,96 @@ pub(super) fn sensitive_pause_frames() -> (Value, Value) {
         only(&frames, "agent_hitl_interrupt").clone(),
     )
 }
+
+/// The pending interrupt travels TWICE in one frame (`hitl_interrupt` and
+/// `hitl_interrupts[0]`, which elitea-main requires to be equal), and an
+/// `ask_user` pending object carries its questions twice more (`questions`
+/// and `tool_args`). A request at `AskUserRequest`'s own 16 KiB bound used to
+/// fit the 60 KiB frame with the object sent once; sent twice it did not, the
+/// interrupt failed to encode and the turn failed instead of asking.
+#[test]
+fn a_clarifying_question_at_the_request_bound_still_pauses() {
+    let question = |index: usize, description: &str| {
+        json!({
+            "question": format!("Question {index}: {}", "q".repeat(400)),
+            "header": format!("Header {index}"),
+            "options": (0..8).map(|option| json!({
+                "label": format!("Option {index}.{option}"),
+                "description": description,
+            })).collect::<Vec<_>>(),
+        })
+    };
+    // The largest uniform description AskUserRequest still admits.
+    let args = (1..=1_000)
+        .rev()
+        .map(|length| {
+            let description = "d".repeat(length);
+            json!({"questions": (0..4).map(|index| question(index, &description)).collect::<Vec<_>>()})
+        })
+        .find(|args| AskUserRequest::from_arguments(args).is_ok())
+        .expect("an admitted ask_user request");
+    let request = AskUserRequest::from_arguments(&args).expect("admitted");
+    assert!(
+        encode_ask_user_request(&request).expect("encoded").len() > 15 * 1_024,
+        "the fixture must sit at the request bound"
+    );
+
+    let mut projector = AgentEventProjector::new(AgentEventProjectionContext::fixture(json!({})))
+        .expect("projector");
+    let frames = paused_frames(&mut projector, ASK_USER_TOOL_NAME, &args, true);
+    assert_paused_call(
+        &frames,
+        "awaiting_input",
+        "clarifying_question",
+        ASK_USER_TOOL_NAME,
+    );
+    let card = &only(&frames, "agent_hitl_interrupt")["response_metadata"];
+    // The questions are the card's controls: they must arrive whole.
+    assert_eq!(
+        card["hitl_interrupt"]["questions"],
+        request.questions_value()
+    );
+}
+
+/// A sensitive call's masked arguments were admitted up to
+/// `MAX_TOOL_EVENT_VALUE_BYTES` (40 KiB) and paused for approval with them
+/// sent once; sent twice they overflow the frame. The card keeps every
+/// identity field and shows the arguments bounded, flagged as truncated —
+/// the full arguments already reached the client on `agent_tool_start`.
+#[test]
+fn a_sensitive_tool_pause_with_large_arguments_still_pauses() {
+    let mut projector = AgentEventProjector::with_sensitive_tools(
+        AgentEventProjectionContext::fixture(json!({})),
+        sensitive_catalog(),
+    )
+    .expect("projector");
+    let args = json!({"branch": "b".repeat(36 * 1_024)});
+    let frames = paused_frames(&mut projector, "delete_branch", &args, false);
+    assert_paused_call(
+        &frames,
+        "awaiting_approval",
+        "sensitive_tool",
+        "delete_branch",
+    );
+    let detail = &only(&frames, "agent_hitl_interrupt")["response_metadata"]["hitl_interrupt"];
+    assert_eq!(detail["tool_args_truncated"], true, "{detail}");
+    let shown = detail["tool_args"]["branch"]
+        .as_str()
+        .expect("bounded branch");
+    assert!(shown.len() < 8 * 1_024, "{} bytes shown", shown.len());
+    assert!(shown.starts_with("bbbb"));
+    // The paused call itself still carries the real arguments.
+    assert_eq!(
+        only(&frames, "agent_tool_paused")["response_metadata"]["tool_inputs"],
+        args
+    );
+}
+
+/// A small card is sent exactly as built: no truncation flag.
+#[test]
+fn a_small_sensitive_card_is_not_marked_truncated() {
+    let (_, card) = sensitive_pause_frames();
+    let detail = &card["response_metadata"]["hitl_interrupt"];
+    assert!(detail.get("tool_args_truncated").is_none(), "{detail}");
+    assert_eq!(detail["tool_args"], json!({"branch": "old"}));
+}

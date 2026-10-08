@@ -1780,13 +1780,7 @@ impl AgentEventProjector {
             "sensitive_tool",
             event.timestamp,
         )?;
-        batch.push(self.event(
-            "agent_hitl_interrupt",
-            &Value::String(message),
-            None,
-            &metadata,
-            event.timestamp,
-        )?)?;
+        batch.push(self.tool_interrupt_event(message, metadata, event.timestamp)?)?;
         self.state = ProjectionState::Paused;
         Ok(batch)
     }
@@ -1872,13 +1866,7 @@ impl AgentEventProjector {
             ASK_USER_GUARDRAIL_TYPE,
             event.timestamp,
         )?;
-        batch.push(self.event(
-            "agent_hitl_interrupt",
-            &Value::String(message),
-            None,
-            &metadata,
-            event.timestamp,
-        )?)?;
+        batch.push(self.tool_interrupt_event(message, metadata, event.timestamp)?)?;
         self.state = ProjectionState::Paused;
         Ok(batch)
     }
@@ -2165,13 +2153,7 @@ impl AgentEventProjector {
                 event.timestamp,
             )?;
         }
-        batch.push(self.event(
-            "agent_hitl_interrupt",
-            &Value::String(data.message),
-            None,
-            &metadata,
-            event.timestamp,
-        )?)?;
+        batch.push(self.tool_interrupt_event(data.message, metadata, event.timestamp)?)?;
         self.state = ProjectionState::Paused;
         Ok(batch)
     }
@@ -2334,13 +2316,7 @@ impl AgentEventProjector {
             ASK_USER_GUARDRAIL_TYPE,
             event.timestamp,
         )?;
-        batch.push(self.event(
-            "agent_hitl_interrupt",
-            &Value::String(message),
-            None,
-            &metadata,
-            event.timestamp,
-        )?)?;
+        batch.push(self.tool_interrupt_event(message, metadata, event.timestamp)?)?;
         self.state = ProjectionState::Paused;
         Ok(batch)
     }
@@ -3078,6 +3054,82 @@ impl AgentEventProjector {
         self.event("agent_tool_end", &Value::Null, None, entry, occurred_at)
             .is_ok()
             && self.tool_partial_event(id, entry, occurred_at).is_ok()
+    }
+
+    /// The `agent_hitl_interrupt` card of a paused TOOL call, bounded to fit
+    /// one frame.
+    ///
+    /// The pending object travels twice — `hitl_interrupt` and
+    /// `hitl_interrupts[0]`, which elitea-main requires to be equal
+    /// (`agent_start.go`) — and an `ask_user` object carries its questions
+    /// twice more (`questions` and `tool_args`). Arguments admitted up to
+    /// `MAX_TOOL_EVENT_VALUE_BYTES`, or a request at `AskUserRequest`'s bound,
+    /// then overflow the frame and the pause would fail instead of asking.
+    /// When the full card does not fit with `CARD_HEADROOM_BYTES` to spare
+    /// (a nested pipeline overlays its hierarchy afterwards), `tool_args` is
+    /// shown with its long strings cut, then emptied, in both copies alike,
+    /// and the object says so with `tool_args_truncated: true`. Nothing reads
+    /// the card's `tool_args` back: the paused call's own frame keeps the
+    /// real arguments, the decision binds `interrupt_id`/`call_digest`, and
+    /// these cards offer no `edit`.
+    fn tool_interrupt_event(
+        &self,
+        message: String,
+        mut metadata: Value,
+        occurred_at: DateTime<Utc>,
+    ) -> Result<NodeEventV1, AgentEventProjectionError> {
+        const CARD_HEADROOM_BYTES: usize = 4 * 1_024;
+        let content = Value::String(message);
+        let original = metadata
+            .get("hitl_interrupt")
+            .and_then(|pending| pending.get("tool_args"))
+            .cloned()
+            .ok_or_else(AgentEventProjectionError::invalid_state)?;
+        for cap in [None, Some(4_096), Some(1_024), Some(256), Some(64), Some(0)] {
+            if let Some(cap) = cap {
+                let shown = if cap == 0 {
+                    json!({})
+                } else {
+                    truncate_string_leaves(&original, cap)
+                };
+                let object = metadata
+                    .as_object_mut()
+                    .ok_or_else(AgentEventProjectionError::invalid_state)?;
+                let mut pending = object
+                    .get("hitl_interrupt")
+                    .cloned()
+                    .ok_or_else(AgentEventProjectionError::invalid_state)?;
+                let fields = pending
+                    .as_object_mut()
+                    .ok_or_else(AgentEventProjectionError::invalid_state)?;
+                fields.insert("tool_args".to_owned(), shown);
+                fields.insert("tool_args_truncated".to_owned(), Value::Bool(true));
+                object.insert("hitl_interrupts".to_owned(), json!([pending.clone()]));
+                object.insert("hitl_interrupt".to_owned(), pending);
+            }
+            match self.event(
+                "agent_hitl_interrupt",
+                &content,
+                None,
+                &metadata,
+                occurred_at,
+            ) {
+                Ok(event)
+                    if encode_current_node_event_json(&event).is_ok_and(|encoded| {
+                        encoded.len() + CARD_HEADROOM_BYTES <= MAX_CURRENT_NODE_EVENT_JSON_BYTES
+                    }) =>
+                {
+                    return Ok(event);
+                }
+                Ok(_) => {}
+                Err(error) if error.code() == AgentEventProjectionErrorCode::ResourceExhausted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(AgentEventProjectionError {
+            code: AgentEventProjectionErrorCode::ResourceExhausted,
+            protocol: None,
+        })
     }
 
     /// End a call that PAUSED for the user rather than finishing (client
@@ -5715,6 +5767,33 @@ fn agent_path_tier_value(tier: &AgentPathTier) -> Value {
         value["sibling_ordinal"] = json!(sibling_ordinal);
     }
     value
+}
+
+/// `value` with every string longer than `cap` bytes cut at a character
+/// boundary and marked with a trailing ellipsis; structure and keys are kept.
+fn truncate_string_leaves(value: &Value, cap: usize) -> Value {
+    match value {
+        Value::String(text) if text.len() > cap => {
+            let mut end = cap;
+            while !text.is_char_boundary(end) {
+                end -= 1;
+            }
+            Value::String(format!("{}\u{2026}", &text[..end]))
+        }
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| truncate_string_leaves(value, cap))
+                .collect(),
+        ),
+        Value::Object(values) => Value::Object(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), truncate_string_leaves(value, cap)))
+                .collect(),
+        ),
+        value => value.clone(),
+    }
 }
 
 fn tool_entry(
