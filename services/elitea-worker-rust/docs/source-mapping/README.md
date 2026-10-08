@@ -428,3 +428,4 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Toolkit request recovery](toolkit-request-recovery.md) records browser recovery before execution ID receipt and one-call evidence.
 - [Deferred MCP elicitation](external-mcp-elicitation-deferred.md) records the later client approval option and its authority boundary.
 - [Pipeline size bounds and HTTP snapshot scope](pipeline-size-bounds-http-snapshot-20261008.md) records one 512 KiB pipeline bound across Main and Worker, the non-HTTP snapshot scope, browser evidence and follow-ups.
+- [Numeric node ids and readable pipeline limits](pipeline-numeric-ids-readable-limits-20261008.md) records numeric-id support in Worker and Web, the Main save-time bound, typed readable limit refusals, browser evidence and follow-ups.
