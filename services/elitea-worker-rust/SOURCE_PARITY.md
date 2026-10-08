@@ -490,3 +490,10 @@ The separate [chat850 mapping](docs/source-mapping/code-pending-stop-owner-recov
 The fresh-spool replacement settles the same run under claim2/epoch2, without user Code or downstream execution.
 Original runtime removal, canonical cancellation, independent acknowledgement drain, and normal reloaded History pass.
 The live canvas correction and remaining service-loss and Kubernetes proofs stay separate.
+
+The [chat851 mapping](docs/source-mapping/code-live-owner-recovery-20261008.md) closes live Worker and Supervisor loss for the original JavaScript job.
+The same runtime returns count2 after both independently verified live cuts.
+Main grants checkpoint recovery at claim2/epoch2. The original result projects once before the next empty-source node fails safely.
+Both original runtimes are removed. NATS drains, and normal reloaded chat retains the same error code and support reference.
+
+Preparation outcomes, debug replacement, Main publication, NATS restart, Kubernetes, and the live canvas image remain open.

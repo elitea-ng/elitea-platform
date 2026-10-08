@@ -164,7 +164,15 @@ One canonical cancellation, one settlement, original runtime removal, and indepe
 Normal live chat, reloaded History, and Restore Test retain the same cancelled run.
 The root acceptance digest is `56984a80275c3d3b1be7f0f2f55baa5bef5c6b4169ae84c9f6aad07e9e80f77c`.
 The idle store now retains72 terminal jobs,72 dispatches, and151 checkpoints.
-Live owner loss and preparation outcomes, Main publication loss, NATS restart, and Kubernetes remain separate runtime groups.
+
+Later chat851 closes [live Worker and Supervisor recovery](code-live-owner-recovery-20261008.md) for the same original JavaScript runtime.
+Its typed result2 survives both independently verified live cuts. Main grants checkpoint recovery at claim2/epoch2.
+The next empty-source node fails safely, without another Code job or sentinel.
+One settlement, both runtime removals, NATS drain, and normal live/reloaded support reference pass.
+The root acceptance digest is `320c26ce098c1ba52137a0beeb2f5640b0b4a66f1901977ebd5aa5d3b7969f01`.
+The idle store now retains74 terminal jobs,74 dispatches, and157 checkpoints.
+
+Preparation outcomes and debug replacement, Main publication loss, NATS restart, and Kubernetes remain separate runtime groups.
 
 Supported application-list denial and outer artifact RBAC refusal later pass their finite cases.
 Their frozen root receipt is `6b20be7632be1bffca3de94806b16c586de0daba5968f88acf13c0ea812140b9`.
@@ -179,10 +187,11 @@ These requirements do not create new load or HA gates for Code.
 The later closure audit verifies 45 source and receipt pins without runtime actions.
 Its checklist digest is `4c6a93ab083535e6920af90d0334c4bc5a26a09095562bc81449a8123ed12eb5`.
 Its source and receipt ledger digest is `cd7c03a77d1407ed1053d29374fde17540fdfd76a6e8ef89ffcfddc7f6f862b1`.
-Preparation Stop and pending cancellation across Worker loss remain the first boundary.
-After that boundary, four runtime groups remain:
+Chat850 closes preparation Stop and pending cancellation across Worker loss.
+Chat851 closes live Worker and Supervisor recovery for the original JavaScript job.
+Four runtime groups remain:
 
-1. Verify live Worker and Supervisor recovery, preparation fault outcomes, and applicable debug reconciliation.
+1. Verify preparation fault outcomes and applicable debug replacement reconciliation.
 2. Verify Main recovery during publication of the original successful compilation.
 3. Verify queued and in-flight NATS recovery with the original broker storage.
 4. Verify current hybrid Kubernetes execution, cache, refusals, Stop, recovery, and physical cleanup.

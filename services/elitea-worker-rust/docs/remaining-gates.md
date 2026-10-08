@@ -1032,5 +1032,12 @@ Preparation Stop, preparation owner loss, the remaining service-loss cases, and 
 The published Web reload correction passes build, strict local Alpine scan, exact deployment, and normal author/selection browser acceptance.
 The browser receipt is `9406b43e2e008c791f2487476d2699097287773473936b8fcde6b5830e43de5f`.
 Chat845 misses the original preparation Stop window and receives no preparation-Stop or Worker-recovery credit.
-The [finite checklist](source-mapping/code-nats-deployed-acceptance-20261007.md) retains five remaining runtime groups and their UI requirements.
+
+Later chat850 closes pending preparation Stop across Worker loss, including original runtime removal and reloaded terminal History.
+The [chat851 mapping](source-mapping/code-live-owner-recovery-20261008.md) closes live Worker and Supervisor loss for the original JavaScript job.
+The same runtime returns count2. Main grants checkpoint recovery at claim2/epoch2, then the next empty-source node fails safely.
+One settlement, both runtime removals, NATS drain, and the same live/reloaded support reference pass.
+
+The [finite checklist](source-mapping/code-nats-deployed-acceptance-20261007.md) retains four runtime groups and the separate live canvas image requirement.
+Preparation outcomes and debug replacement remain open within the first group. Main publication, NATS restart, and Kubernetes remain open.
 Complete Code, graph gates 5a–5e, later worker gates, and release remain open. Workspaces remain deferred.

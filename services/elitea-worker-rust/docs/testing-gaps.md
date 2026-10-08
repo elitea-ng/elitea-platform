@@ -129,7 +129,10 @@ The [live canvas terminal correction](source-mapping/code-live-canvas-terminal-2
 Node26 CI, its shipping image, and deployed browser verification remain open.
 Later [chat850](source-mapping/code-pending-stop-owner-recovery-20261008.md) closes pending preparation Stop across Worker loss.
 The replacement settles the original run without user Code or downstream dispatch. Runtime removal and reloaded terminal History pass.
-Distinct preparation failure messages, live owner loss, Main publication, NATS restart, and Kubernetes remain open.
+
+The later [chat851 mapping](source-mapping/code-live-owner-recovery-20261008.md) closes live Worker and Supervisor loss for the same original JavaScript runtime.
+Original typed result2, checkpoint claim2/epoch2, one settlement, runtime removal, NATS drain, and live/reloaded support reference pass.
+Distinct preparation failure messages, debug replacement, Main publication, NATS restart, and Kubernetes remain open.
 
 Later preparation fixtures 839 and 844 complete normally after controller refusals before Stop or Worker loss.
 They do not close preparation cancellation or owner recovery.
