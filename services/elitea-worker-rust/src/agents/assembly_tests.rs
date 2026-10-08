@@ -1418,7 +1418,7 @@ impl CapturedOutput {
     }
 }
 
-struct CapturedWriter {
+pub(super) struct CapturedWriter {
     bytes: Arc<Mutex<Vec<u8>>>,
 }
 
