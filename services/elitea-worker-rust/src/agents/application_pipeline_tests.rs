@@ -1225,9 +1225,13 @@ impl super::graph::PipelineApplicationResolver for RecursiveReviewResolver {
 }
 
 fn recursive_review_harness() -> Harness {
+    saved_child_harness(RECURSIVE_REVIEW_ROOT, REVIEW_PIPELINE)
+}
+
+fn saved_child_harness(root_yaml: &str, child_yaml: &str) -> Harness {
     use super::pipeline::composition::{PipelineCheckpointCatalog, PipelineCheckpointRevision};
-    let child = PipelineDefinition::from_yaml(REVIEW_PIPELINE).unwrap();
-    let root = PipelineDefinition::from_yaml(RECURSIVE_REVIEW_ROOT).unwrap();
+    let child = PipelineDefinition::from_yaml(child_yaml).unwrap();
+    let root = PipelineDefinition::from_yaml(root_yaml).unwrap();
     let catalog = PipelineCheckpointCatalog {
         root: Some(PipelineCheckpointRevision {
             application_id: 31,
@@ -1249,7 +1253,56 @@ fn recursive_review_harness() -> Harness {
         Some(Arc::new(RecursiveReviewResolver { child })),
     )
     .with_checkpoint_catalog(catalog);
-    harness_with_runtimes(RECURSIVE_REVIEW_ROOT, TOOL_NAME, runtime)
+    harness_with_runtimes(root_yaml, TOOL_NAME, runtime)
+}
+
+/// The parent maps no child variable, so it reads only the child's projected
+/// `elitea_response`. Both child branches end the child through `END`.
+const RESPONSE_ONLY_ROOT: &str = r"
+state: {input: str, messages: list, reply: str}
+entry_point: delegate
+nodes:
+  - id: delegate
+    type: agent
+    tool: review-child
+    input_mapping: {task: {type: variable, value: input}}
+    output: [reply]
+    transition: END
+";
+
+const TWO_TERMINAL_BRANCH_CHILD: &str = r#"
+state: {input: str, messages: list, verdict: str}
+entry_point: pick
+nodes:
+  - id: pick
+    type: router
+    condition: "{{ input }}"
+    routes: [left, right]
+    default_output: right
+    input: [input]
+  - id: left
+    type: state_modifier
+    template: "LEFT"
+    output: [verdict]
+    transition: END
+  - id: right
+    type: state_modifier
+    template: "RIGHT"
+    output: [verdict]
+    transition: END
+"#;
+
+#[tokio::test(flavor = "current_thread")]
+async fn a_parent_receives_the_result_of_a_saved_child_whose_branches_both_end() {
+    for (task, expected) in [("left", "LEFT"), ("right", "RIGHT")] {
+        let harness = saved_child_harness(RESPONSE_ONLY_ROOT, TWO_TERMINAL_BRANCH_CHILD);
+        let result = harness
+            .tool
+            .execute(context(), json!({"task": task}))
+            .await
+            .expect("the parent pipeline must run");
+        assert_eq!(result, json!({"response": expected}));
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]

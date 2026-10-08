@@ -9,15 +9,16 @@
 #[path = "node_recovery_definition.rs"]
 mod recovery_definition;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
 use super::code::CodeNodeDefinition;
 use super::code_runtime::{CodeNode, CodeSandboxRuntime};
 use adk_rust::graph::{
-    Channel, Checkpoint, Checkpointer, CompiledGraph, END, GraphAgent, GraphAgentBuilder,
-    GraphError, Node, NodeContext, NodeOutput, Reducer, START, State, StateGraph, StateSchema,
+    Channel, Checkpoint, Checkpointer, CompiledGraph, END, Edge, EdgeTarget, GraphAgent,
+    GraphAgentBuilder, GraphError, Node, NodeContext, NodeOutput, Reducer, START, State,
+    StateGraph, StateSchema,
 };
 use adk_rust::{Event, InvocationContext, Part};
 use async_trait::async_trait;
@@ -497,6 +498,54 @@ where
 
 fn terminal_target<'a>(target: &'a str, terminal: &'a str) -> &'a str {
     if target == END { terminal } else { target }
+}
+
+/// Keep transitions that meet at one node exclusive.
+///
+/// A stored pipeline runs one node at a time and a node has at most one
+/// transition, so of several transitions into one node only the one on the
+/// taken branch arrives. `StateGraph::compile` turns a node reached by two or
+/// more direct edges into a wait-for-all join that would wait for the branches
+/// not taken and end the run without it. Each such transition becomes a
+/// single-route conditional edge, which ADK never joins. Parallel and Map nodes
+/// join their own branches inside one node and are unaffected.
+fn exclusive_transitions(mut graph: StateGraph) -> StateGraph {
+    let mut arrivals = HashMap::<String, usize>::new();
+    for edge in &graph.edges {
+        match edge {
+            Edge::Direct {
+                target: EdgeTarget::Node(target),
+                ..
+            } => *arrivals.entry(target.clone()).or_default() += 1,
+            Edge::Entry { targets } => {
+                for target in targets {
+                    *arrivals.entry(target.clone()).or_default() += 1;
+                }
+            }
+            Edge::Direct { .. } | Edge::Conditional { .. } => {}
+        }
+    }
+    for edge in &mut graph.edges {
+        if let Edge::Direct {
+            source,
+            target: EdgeTarget::Node(target),
+        } = edge
+            && arrivals
+                .get(target.as_str())
+                .is_some_and(|count| *count > 1)
+        {
+            let route = target.clone();
+            *edge = Edge::Conditional {
+                source: std::mem::take(source),
+                router: Arc::new(move |_: &State| route.clone()),
+                targets: HashMap::from([(
+                    target.clone(),
+                    EdgeTarget::Node(std::mem::take(target)),
+                )]),
+            };
+        }
+    }
+    graph
 }
 
 #[derive(Clone)]
@@ -1209,14 +1258,13 @@ impl PipelineDefinition {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let mut graph = builder
-            .into_subgraph()?
-            .add_edge(SUBGRAPH_RESULT_NODE, END)
-            .compile()
-            .map_err(PipelineConfigurationError::Graph)?
-            .with_checkpointer_arc(checkpointer)
-            .with_recursion_limit(PIPELINE_RECURSION_LIMIT)
-            .with_max_concurrency(1);
+        let mut graph =
+            exclusive_transitions(builder.into_subgraph()?.add_edge(SUBGRAPH_RESULT_NODE, END))
+                .compile()
+                .map_err(PipelineConfigurationError::Graph)?
+                .with_checkpointer_arc(checkpointer)
+                .with_recursion_limit(PIPELINE_RECURSION_LIMIT)
+                .with_max_concurrency(1);
         let before_interrupts: Vec<&str> =
             self.interrupt_before.iter().map(String::as_str).collect();
         if !before_interrupts.is_empty() {

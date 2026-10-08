@@ -33,6 +33,8 @@ mod decision;
 mod direct_tool;
 #[cfg(test)]
 mod direct_tool_tests;
+#[cfg(test)]
+mod fan_in_tests;
 mod hitl;
 #[cfg(test)]
 mod hitl_tests;
