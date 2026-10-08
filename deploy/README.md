@@ -1297,7 +1297,8 @@ stray space or tab **is** malformed.
 Rows written under a different key, or under no key, do not become readable
 when the key changes. A deployment that ran without a key runs the script
 below with `--to-key` and `--apply` first, then starts `elitea-main` with that
-key. Convert them with
+key. `elitea-main` checks this at start: with a key set, any project key still
+stored in the clear stops the start and names this script. Convert them with
 [`scripts/rewrap-centry-vault.py`](scripts/rewrap-centry-vault.py), on a copy
 first. It rewraps the project key and never rewrites the secret values.
 

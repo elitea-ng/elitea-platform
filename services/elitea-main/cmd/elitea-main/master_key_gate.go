@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
 )
@@ -49,4 +54,34 @@ func requireVaultMasterKey(getenv func(string) string) (warning string, err erro
 	return fmt.Sprintf("%s=true and no %s: every project vault key is stored UNWRAPPED, "+
 		"so anyone who can read the database can open every project secret. Development use only",
 		v2secrets.AllowUnwrappedEnvVar, v2secrets.MasterKeyEnvVar), nil
+}
+
+// rowQuerier is the one pool method refuseUnwrappedVaultKeys needs.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// refuseUnwrappedVaultKeys runs at start-up when SECRETS_MASTER_KEY is set. A
+// project key stored in the clear (the 32 raw or 44 encoded bytes a keyless
+// deployment wrote) cannot be opened once a master key is set, so starting
+// would turn every secret read into a failure. Refusing here names the one-time
+// rewrap instead. A wrapped key is a Fernet token, far longer than 44 bytes.
+// A database without the table (nothing stored yet) passes.
+func refuseUnwrappedVaultKeys(ctx context.Context, pool rowQuerier) error {
+	var unwrapped int64
+	err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM centry.secrets_key WHERE length(data) IN (32, 44)`).Scan(&unwrapped)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && (pgErr.Code == "42P01" || pgErr.Code == "3F000") {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("check stored project vault keys: %w", err)
+	}
+	if unwrapped > 0 {
+		return fmt.Errorf("%s is set but %d project vault key(s) are stored unwrapped and cannot be opened with it; "+
+			"run deploy/scripts/rewrap-centry-vault.py --to-key <key> --apply against this database first "+
+			"(on a copy, then for real), then start elitea-main", v2secrets.MasterKeyEnvVar, unwrapped)
+	}
+	return nil
 }

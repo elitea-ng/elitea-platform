@@ -259,6 +259,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return err
 	}
 	defer pool.Close()
+	if os.Getenv(v2secrets.MasterKeyEnvVar) != "" {
+		if err := refuseUnwrappedVaultKeys(ctx, pool); err != nil {
+			return err
+		}
+	}
 
 	// The `centry.audit_events` writer.
 	//
