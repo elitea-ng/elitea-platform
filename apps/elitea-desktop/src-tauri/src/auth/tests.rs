@@ -9,7 +9,7 @@ use serde_json::json;
 
 use super::*;
 use crate::store::MemoryStore;
-use crate::testutil::{MockServer, Req, Res, serve};
+use crate::testutil::{MockServer, Req, Res, serve, serve_dropping};
 
 type Handler = dyn Fn(&Req, &HashMap<String, String>) -> Option<Res> + Send + Sync;
 
@@ -244,19 +244,40 @@ async fn full_sign_in_uses_pkce_state_and_the_loopback_redirect_and_stores_the_r
 }
 
 #[tokio::test]
-async fn a_callback_with_the_wrong_state_is_rejected_and_stores_nothing() {
+async fn a_callback_with_the_wrong_state_is_ignored_and_stores_nothing() {
     let server = deployment(Box::new(|_, _| None)).await;
     let issuer = server.origin.clone();
-    let h = harness(move |_, _| Some(format!("code=the-code&state=attacker-chosen&iss={issuer}")));
+    let mut h =
+        harness(move |_, _| Some(format!("code=the-code&state=attacker-chosen&iss={issuer}")));
+    h.service = AuthService::new(AuthConfig {
+        store: h.keychain.clone(),
+        files: SettingsFiles::new(h.dir.clone()),
+        tokens: TokenEndpoint::new("0.1.0").unwrap(),
+        opener: h.browser.clone(),
+        build_client_id: None,
+        runtime_client_id: None,
+    })
+    .with_deadline(Duration::from_millis(300));
     h.service.connect(&server.origin).await.unwrap();
+    // The foreign callback no longer aborts the attempt: it just times out.
     let err = h.service.sign_in().await.unwrap_err();
-    assert!(matches!(err, HostError::SignInRejected), "{err:?}");
+    assert!(matches!(err, HostError::SignInAborted), "{err:?}");
     assert!(h.keychain.raw().is_none());
     assert!(!h.service.state().unwrap().signed_in);
     assert!(
         server.seen().iter().all(|r| !r.path.ends_with("/token")),
         "no code may be exchanged"
     );
+}
+
+#[test]
+fn the_platform_name_is_linux_on_linux() {
+    #[cfg(target_os = "linux")]
+    assert_eq!(platform(), "linux");
+    #[cfg(target_os = "macos")]
+    assert_eq!(platform(), "macos");
+    #[cfg(target_os = "windows")]
+    assert_eq!(platform(), "windows");
 }
 
 #[tokio::test]
@@ -449,4 +470,132 @@ async fn a_session_for_another_deployment_does_not_count_as_signed_in() {
     // Choosing another deployment ended the old session.
     assert!(!h.service.state().unwrap().signed_in);
     assert!(h.keychain.raw().is_none());
+}
+
+/// A deployment whose token endpoint loses the first `lost` answers (the
+/// request arrives and is processed, the response never does), and which
+/// replays a rotation to the same refresh token like the real server.
+async fn lossy_deployment(lost: usize) -> MockServer {
+    let issued = Arc::new(AtomicUsize::new(0));
+    serve_dropping(Some(("/api/v2/auth/native/token", lost)), move |req| {
+        let origin = format!("http://{}", req.headers["host"]);
+        if req.path == "/.well-known/elitea-client" {
+            return Res::json(
+                200,
+                &json!({
+                    "server_version": "1.60", "client_contract": "1.0",
+                    "deployment_kind": "self_hosted", "display_name": "Acme",
+                    "brand_pack_url": format!("{origin}/api/v2/branding/pack.json"),
+                    "native_auth": {
+                        "issuer": origin,
+                        "authorization_endpoint": format!("{origin}/api/v2/auth/native/authorize"),
+                        "token_endpoint": format!("{origin}/api/v2/auth/native/token"),
+                        "revocation_endpoint": format!("{origin}/api/v2/auth/native/revoke"),
+                        "code_challenge_methods_supported": ["S256"]
+                    },
+                    "client_policy": {},
+                }),
+            );
+        }
+        if req.path == "/api/v2/auth/native/token" {
+            let n = issued.fetch_add(1, Ordering::SeqCst);
+            return Res::json(200, &tokens(&format!("rotated-{n}")));
+        }
+        Res::json(404, &json!({"error": "not_found"}))
+    })
+    .await
+}
+
+fn seed(h: &Harness, origin: &str, refresh: &str) {
+    save_session(
+        h.keychain.as_ref(),
+        &StoredSession {
+            origin: origin.into(),
+            client_id: "desktop".into(),
+            device_id: "dev-1".into(),
+            refresh_token: refresh.into(),
+        },
+    )
+    .unwrap();
+    let files = SettingsFiles::new(h.dir.clone());
+    let mut settings = files.settings().unwrap();
+    settings.origin = Some(origin.into());
+    files.save_settings(&settings).unwrap();
+}
+
+fn token_posts(server: &MockServer) -> Vec<HashMap<String, String>> {
+    server
+        .seen()
+        .iter()
+        .filter(|r| r.path == "/api/v2/auth/native/token")
+        .map(Req::form)
+        .collect()
+}
+
+#[tokio::test]
+async fn a_lost_refresh_answer_is_retried_at_once_with_the_same_refresh_token() {
+    let server = lossy_deployment(1).await;
+    let h = harness(|_, _| None);
+    seed(&h, &server.origin, "old-refresh");
+
+    assert_eq!(h.service.refresh().await.unwrap(), RefreshResult::Refreshed);
+
+    let posts = token_posts(&server);
+    assert_eq!(posts.len(), 2, "one lost, one immediate retry");
+    assert!(posts.iter().all(|f| f["refresh_token"] == "old-refresh"));
+    assert!(h.keychain.raw().unwrap().contains("rotated-1"));
+}
+
+#[tokio::test]
+async fn two_lost_answers_keep_the_old_token_for_a_later_attempt() {
+    let server = lossy_deployment(2).await;
+    let h = harness(|_, _| None);
+    seed(&h, &server.origin, "old-refresh");
+
+    assert_eq!(
+        h.service.refresh().await.unwrap(),
+        RefreshResult::Unavailable
+    );
+    assert!(h.keychain.raw().unwrap().contains("old-refresh"));
+}
+
+#[tokio::test]
+async fn a_keychain_write_failure_after_rotation_never_reuses_the_spent_token() {
+    let refreshes = Arc::new(AtomicUsize::new(0));
+    let (h, server) = signed_in(refreshes).await;
+    h.keychain
+        .fail_saves
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(h.service.refresh().await.unwrap(), RefreshResult::Refreshed);
+    // The keychain still holds the spent token; memory holds the live one.
+    assert!(h.keychain.raw().unwrap().contains("refresh-1"));
+
+    h.keychain
+        .fail_saves
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(h.service.refresh().await.unwrap(), RefreshResult::Refreshed);
+
+    let refresh_tokens: Vec<String> = token_posts(&server)
+        .into_iter()
+        .filter(|f| f["grant_type"] == "refresh_token")
+        .map(|f| f["refresh_token"].clone())
+        .collect();
+    assert_eq!(refresh_tokens, ["refresh-1", "refresh-2"]);
+    assert!(h.keychain.raw().unwrap().contains("refresh-3"));
+}
+
+#[tokio::test]
+async fn a_426_from_the_token_endpoint_is_reported_as_upgrade_required() {
+    let server = deployment(Box::new(|req, _| {
+        (req.path == "/api/v2/auth/native/token")
+            .then(|| Res::json(426, &json!({"error": "upgrade_required"})))
+    }))
+    .await;
+    let h = harness(|_, _| None);
+    seed(&h, &server.origin, "r");
+    assert_eq!(
+        h.service.refresh().await.unwrap(),
+        RefreshResult::UpgradeRequired
+    );
+    assert!(h.keychain.raw().is_some(), "the session is kept");
 }

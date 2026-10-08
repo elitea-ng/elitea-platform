@@ -57,6 +57,16 @@ pub async fn serve<F>(handler: F) -> MockServer
 where
     F: Fn(&Req) -> Res + Send + Sync + 'static,
 {
+    serve_dropping(None, handler).await
+}
+
+/// Like [`serve`], but the first `n` requests to `path` are read, logged and
+/// then dropped without an answer: the "request arrived, response lost" case.
+pub async fn serve_dropping<F>(drop_first: Option<(&'static str, usize)>, handler: F) -> MockServer
+where
+    F: Fn(&Req) -> Res + Send + Sync + 'static,
+{
+    let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
         .expect("bind");
@@ -68,13 +78,20 @@ where
             let Ok((mut stream, _)) = listener.accept().await else {
                 return;
             };
-            let (handler, log) = (handler.clone(), log.clone());
+            let (handler, log, dropped) = (handler.clone(), log.clone(), dropped.clone());
             tokio::spawn(async move {
                 let Some(req) = read_request(&mut stream).await else {
                     return;
                 };
                 let res = handler(&req);
+                let lose = drop_first.is_some_and(|(path, n)| {
+                    req.path == path
+                        && dropped.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < n
+                });
                 log.lock().expect("lock").push(req);
+                if lose {
+                    return;
+                }
                 let mut out = format!(
                     "HTTP/1.1 {} X\r\nContent-Length: {}\r\nConnection: close\r\n",
                     res.status,

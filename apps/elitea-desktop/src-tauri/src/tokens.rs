@@ -15,6 +15,12 @@ use serde_json::Value;
 /// `X-Client-Version` on every request: the deployment's 426 gate reads it.
 pub const CLIENT_VERSION_HEADER: &str = "X-Client-Version";
 
+/// How long one request to the deployment may take. Deliberately well under the
+/// server's refresh re-delivery window (30 s, `nativeauth.DefaultRedeliveryWindow`):
+/// a refresh whose answer was lost must be retried while the server will still
+/// replay it, or the retry reads as token reuse and revokes the whole family.
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Clone, Deserialize)]
 pub struct TokenSet {
     pub access_token: String,
@@ -72,9 +78,13 @@ pub struct TokenEndpoint {
 
 impl TokenEndpoint {
     pub fn new(client_version: &str) -> Result<Self, reqwest::Error> {
+        Self::with_timeout(client_version, REQUEST_TIMEOUT)
+    }
+
+    pub fn with_timeout(client_version: &str, timeout: Duration) -> Result<Self, reqwest::Error> {
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(30))
+            .timeout(timeout)
             .user_agent(format!("elitea-desktop/{client_version}"))
             .build()?;
         Ok(Self {
@@ -311,6 +321,29 @@ mod tests {
         assert_eq!(form["grant_type"], "refresh_token");
         assert_eq!(form["refresh_token"], "old-refresh");
         assert_eq!(form["client_version"], "0.1.0");
+    }
+
+    #[test]
+    fn the_request_timeout_leaves_room_for_a_retry_inside_the_redelivery_window() {
+        // The server replays a lost rotation for 30 s; a timeout plus one immediate
+        // retry must fit inside it.
+        assert!(REQUEST_TIMEOUT * 2 < Duration::from_secs(30));
+    }
+
+    #[tokio::test]
+    async fn a_stalled_server_ends_in_a_network_outcome_at_the_timeout() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            // Accept and never answer.
+            let _held = listener.accept().await;
+            tokio::time::sleep(Duration::from_secs(30)).await;
+        });
+        let endpoint = TokenEndpoint::with_timeout("0.1.0", Duration::from_millis(200)).unwrap();
+        let outcome = endpoint
+            .refresh(&format!("http://127.0.0.1:{port}/token"), "r", "desktop")
+            .await;
+        assert!(matches!(outcome, TokenOutcome::Network));
     }
 
     #[tokio::test]

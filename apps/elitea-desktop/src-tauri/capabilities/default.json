@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "IPC for the bundled UI window only. No remote origin is listed, so remote content gets no IPC at all.",
+  "description": "IPC for the bundled UI window only. No remote origin is listed, so remote content gets no IPC at all. The HTTP plugin's scope is NOT here: it is granted at runtime for the connected deployment's origin only (see http_scope.rs).",
   "windows": ["main"],
   "permissions": [
     "allow-host-state",
@@ -12,12 +12,8 @@
     "allow-host-sign-out",
     "allow-host-wipe",
     {
-      "identifier": "http:default",
-      "allow": [
-        { "url": "https://*" },
-        { "url": "http://localhost:*" },
-        { "url": "http://127.0.0.1:*" }
-      ]
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
     }
   ]
 }

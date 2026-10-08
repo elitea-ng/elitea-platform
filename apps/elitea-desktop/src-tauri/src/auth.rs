@@ -73,6 +73,9 @@ pub enum RefreshResult {
     Ended,
     /// Network down or server busy: keep the session, try again later.
     Unavailable,
+    /// 426: this build is older than the deployment's minimum.
+    #[serde(rename = "upgrade_required")]
+    UpgradeRequired,
 }
 
 struct Cached {
@@ -88,6 +91,10 @@ pub struct AuthService {
     build_client_id: Option<&'static str>,
     runtime_client_id: Option<String>,
     cached: Mutex<Option<Cached>>,
+    /// A rotated session the keychain refused to take. The server already
+    /// consumed the old refresh token, so THIS is the only live one: it is
+    /// kept in memory and written again before the next use.
+    unsaved: Mutex<Option<StoredSession>>,
     /// Serialises refreshes: refresh tokens rotate, so two at once would burn the family.
     refresh_gate: Mutex<()>,
     sign_in_deadline: Duration,
@@ -112,6 +119,7 @@ impl AuthService {
             build_client_id: config.build_client_id,
             runtime_client_id: config.runtime_client_id,
             cached: Mutex::new(None),
+            unsaved: Mutex::new(None),
             refresh_gate: Mutex::new(()),
             sign_in_deadline: SIGN_IN_DEADLINE,
         }
@@ -212,7 +220,9 @@ impl AuthService {
         )?;
         self.opener.open(&url)?;
 
-        let params = listener.wait_for_callback(self.sign_in_deadline).await?;
+        let params = listener
+            .wait_for_callback(self.sign_in_deadline, &state)
+            .await?;
         let code = verify_callback(&params, &state, &auth.issuer)?;
 
         let outcome = self
@@ -250,15 +260,22 @@ impl AuthService {
         } else {
             tokens.device_id.clone()
         };
-        save_session(
-            self.store.as_ref(),
-            &StoredSession {
-                origin: origin.to_owned(),
-                client_id: client_id.to_owned(),
-                device_id,
-                refresh_token: tokens.refresh_token.clone(),
-            },
-        )?;
+        let session = StoredSession {
+            origin: origin.to_owned(),
+            client_id: client_id.to_owned(),
+            device_id,
+            refresh_token: tokens.refresh_token.clone(),
+        };
+        if let Err(error) = save_session(self.store.as_ref(), &session) {
+            if previous.is_none() {
+                return Err(error);
+            }
+            // A rotation succeeded but the keychain write failed: the old
+            // token is spent. Keep the new one in memory and write it later.
+            *self.unsaved.lock().await = Some(session);
+        } else {
+            *self.unsaved.lock().await = None;
+        }
         if let Some(policy) = &tokens.client_policy {
             self.files.save_policy(policy)?;
         }
@@ -281,6 +298,7 @@ impl AuthService {
             RefreshResult::Refreshed => Ok(self.cached_token().await),
             RefreshResult::Ended => Ok(None),
             RefreshResult::Unavailable => Err(HostError::Unavailable),
+            RefreshResult::UpgradeRequired => Err(HostError::UpgradeRequired),
         }
     }
 
@@ -311,7 +329,7 @@ impl AuthService {
             }
         }
         let settings = self.files.settings()?;
-        let Some(session) = load_session(self.store.as_ref())? else {
+        let Some(session) = self.current_session().await? else {
             return Ok(RefreshResult::Ended);
         };
         if settings.origin.as_deref() != Some(session.origin.as_str()) {
@@ -327,15 +345,14 @@ impl AuthService {
         };
         let auth = document.native_auth()?;
 
-        match self
-            .tokens
-            .refresh(
-                &auth.token_endpoint,
-                &session.refresh_token,
-                &session.client_id,
-            )
-            .await
-        {
+        let mut outcome = self.exchange_refresh(&auth.token_endpoint, &session).await;
+        if matches!(outcome, TokenOutcome::Network | TokenOutcome::Failed) {
+            // The request may have arrived with only the answer lost. The server
+            // replays a rotation for a short window to the SAME refresh token, so
+            // retry once now, inside the gate, rather than on a later 401.
+            outcome = self.exchange_refresh(&auth.token_endpoint, &session).await;
+        }
+        match outcome {
             TokenOutcome::Ok(tokens) => {
                 self.adopt(&session.origin, &session.client_id, tokens, Some(&session))
                     .await?;
@@ -348,19 +365,39 @@ impl AuthService {
                 self.wipe().await?;
                 Ok(RefreshResult::Ended)
             }
-            TokenOutcome::UpgradeRequired => Err(HostError::UpgradeRequired),
-            // Nothing was consumed, or the response was lost: keep the token and retry later.
+            TokenOutcome::UpgradeRequired => Ok(RefreshResult::UpgradeRequired),
+            // Nothing was consumed, or the response was lost twice: keep the token and retry later.
             TokenOutcome::Unavailable | TokenOutcome::Network | TokenOutcome::Failed => {
                 Ok(RefreshResult::Unavailable)
             }
         }
     }
 
+    async fn exchange_refresh(&self, endpoint: &str, session: &StoredSession) -> TokenOutcome {
+        self.tokens
+            .refresh(endpoint, &session.refresh_token, &session.client_id)
+            .await
+    }
+
+    /// The live session: an in-memory rotation the keychain has not taken yet
+    /// (written again here), else the keychain's.
+    async fn current_session(&self) -> Result<Option<StoredSession>, HostError> {
+        let mut unsaved = self.unsaved.lock().await;
+        if let Some(session) = unsaved.clone() {
+            if save_session(self.store.as_ref(), &session).is_ok() {
+                *unsaved = None;
+            }
+            return Ok(Some(session));
+        }
+        drop(unsaved);
+        load_session(self.store.as_ref())
+    }
+
     // ---- sign out ------------------------------------------------------
 
     /// Revoke the device session on the server (best effort), then forget it.
     pub async fn sign_out(&self) -> Result<(), HostError> {
-        if let Some(session) = load_session(self.store.as_ref())?
+        if let Some(session) = self.current_session().await?
             && let Ok(origin) = Url::parse(&session.origin)
             && let Ok(document) = discovery::fetch_discovery(self.tokens.http(), &origin).await
             && let Ok(auth) = document.native_auth()
@@ -380,6 +417,7 @@ impl AuthService {
     /// The connected deployment is kept so the person only has to sign in again.
     pub async fn wipe(&self) -> Result<(), HostError> {
         *self.cached.lock().await = None;
+        *self.unsaved.lock().await = None;
         self.store.clear()?;
         self.files.clear_policy()
     }
@@ -476,6 +514,7 @@ fn platform() -> &'static str {
     match std::env::consts::OS {
         "macos" => "macos",
         "windows" => "windows",
+        "linux" => "linux",
         _ => "other",
     }
 }

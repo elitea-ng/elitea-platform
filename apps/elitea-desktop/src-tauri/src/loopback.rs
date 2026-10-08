@@ -6,9 +6,12 @@
 //!
 //! - binds to the IPv4 loopback address only (never `0.0.0.0`), on a port the
 //!   OS picks, so nothing off this machine can reach it;
-//! - answers only `GET /callback`, ignores anything else (a favicon request,
-//!   a port scanner) without ending the wait, and stops after the first valid
-//!   callback or the deadline;
+//! - answers only `GET /callback` carrying THIS attempt's `state`; anything
+//!   else (a favicon request, a port scanner, a web page probing 127.0.0.1, a
+//!   callback with the wrong state) is answered and ignored without ending the
+//!   wait, which stops after the first matching callback or the deadline;
+//! - serves each connection in its own task, so a connection that stalls
+//!   cannot hold up the real callback;
 //! - rejects a callback that repeats a parameter, so a code cannot be smuggled
 //!   past the `state` check by shadowing;
 //! - reads at most [`MAX_REQUEST_BYTES`] before giving up on a connection, and
@@ -26,7 +29,7 @@ use crate::error::HostError;
 
 pub const CALLBACK_PATH: &str = "/callback";
 const MAX_REQUEST_BYTES: usize = 8 * 1024;
-const READ_TIMEOUT: Duration = Duration::from_secs(5);
+const READ_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The query parameters of a valid callback.
 pub type CallbackParams = HashMap<String, String>;
@@ -56,17 +59,30 @@ impl LoopbackListener {
         format!("http://127.0.0.1:{}{CALLBACK_PATH}", self.port)
     }
 
-    /// Wait for the first valid callback. Consumes the listener: one attempt,
-    /// one port, closed on return.
-    pub async fn wait_for_callback(self, deadline: Duration) -> Result<CallbackParams, HostError> {
+    /// Wait for the first callback whose `state` equals `expected_state`.
+    /// Consumes the listener: one attempt, one port, closed on return.
+    pub async fn wait_for_callback(
+        self,
+        deadline: Duration,
+        expected_state: &str,
+    ) -> Result<CallbackParams, HostError> {
         let end = Instant::now() + deadline;
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let expected: std::sync::Arc<str> = expected_state.into();
         loop {
-            let (stream, _) = timeout_at(end, self.listener.accept())
-                .await
-                .map_err(|_| HostError::SignInAborted)?
-                .map_err(|e| HostError::Internal(format!("sign-in listener failed: {e}")))?;
-            if let Some(params) = serve_connection(stream).await {
-                return Ok(params);
+            tokio::select! {
+                accepted = timeout_at(end, self.listener.accept()) => {
+                    let (stream, _) = accepted
+                        .map_err(|_| HostError::SignInAborted)?
+                        .map_err(|e| HostError::Internal(format!("sign-in listener failed: {e}")))?;
+                    let (tx, expected) = (tx.clone(), expected.clone());
+                    tokio::spawn(async move {
+                        if let Some(params) = serve_connection(stream, &expected).await {
+                            let _ = tx.send(params);
+                        }
+                    });
+                }
+                Some(params) = rx.recv() => return Ok(params),
             }
         }
     }
@@ -77,15 +93,23 @@ const PAGE: &str = "<!doctype html><meta charset=utf-8><title>Elitea</title>\
 <p>Return to the Elitea desktop app to continue.</p></body>";
 
 /// Read one request, answer it, and return the callback parameters when it
-/// was a valid `GET /callback`.
-async fn serve_connection(mut stream: TcpStream) -> Option<CallbackParams> {
+/// was a valid `GET /callback` for this attempt's `state`.
+async fn serve_connection(mut stream: TcpStream, expected_state: &str) -> Option<CallbackParams> {
     let line = timeout(READ_TIMEOUT, read_request_line(&mut stream))
         .await
         .ok()??;
     match parse_request_line(&line) {
-        Some(params) => {
+        Some(params)
+            if params
+                .get("state")
+                .is_some_and(|got| crate::pkce::constant_time_eq(got, expected_state)) =>
+        {
             respond(&mut stream, "200 OK", PAGE).await;
             Some(params)
+        }
+        Some(_) => {
+            respond(&mut stream, "400 Bad Request", "").await;
+            None
         }
         None => {
             respond(&mut stream, "404 Not Found", "").await;
@@ -234,7 +258,7 @@ mod tests {
             .unwrap();
         assert_ne!(port, 0);
 
-        let waiter = tokio::spawn(listener.wait_for_callback(Duration::from_secs(10)));
+        let waiter = tokio::spawn(listener.wait_for_callback(Duration::from_secs(10), "the-state"));
         // Noise first: a favicon fetch must neither end the wait nor be answered with the page.
         assert!(get(port, "/favicon.ico").await.starts_with("HTTP/1.1 404"));
         let ok = get(port, "/callback?code=the-code&state=the-state").await;
@@ -246,10 +270,57 @@ mod tests {
         assert_eq!(params["state"], "the-state");
     }
 
+    fn port_of(listener: &LoopbackListener) -> u16 {
+        listener.port
+    }
+
+    #[tokio::test]
+    async fn a_callback_with_the_wrong_state_does_not_end_the_wait() {
+        let listener = LoopbackListener::bind().await.unwrap();
+        let port = port_of(&listener);
+        let waiter = tokio::spawn(listener.wait_for_callback(Duration::from_secs(10), "right"));
+        // A web page probing the port with a well-formed but foreign callback.
+        assert!(
+            get(port, "/callback?code=x&state=wrong")
+                .await
+                .starts_with("HTTP/1.1 400")
+        );
+        assert!(
+            get(port, "/callback?code=x")
+                .await
+                .starts_with("HTTP/1.1 400")
+        );
+        assert!(!waiter.is_finished(), "a probe must not abort sign-in");
+        assert!(
+            get(port, "/callback?code=real&state=right")
+                .await
+                .starts_with("HTTP/1.1 200")
+        );
+        assert_eq!(waiter.await.unwrap().unwrap()["code"], "real");
+    }
+
+    #[tokio::test]
+    async fn a_stalled_connection_does_not_delay_the_real_callback() {
+        let listener = LoopbackListener::bind().await.unwrap();
+        let port = port_of(&listener);
+        let waiter = tokio::spawn(listener.wait_for_callback(Duration::from_secs(10), "right"));
+        // Connects and says nothing, holding its slot until the read timeout.
+        let _stalled = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+            .await
+            .unwrap();
+        let started = Instant::now();
+        let ok = get(port, "/callback?code=real&state=right").await;
+        assert!(ok.starts_with("HTTP/1.1 200"));
+        assert!(started.elapsed() < READ_TIMEOUT, "served behind the stall");
+        assert_eq!(waiter.await.unwrap().unwrap()["code"], "real");
+    }
+
     #[tokio::test]
     async fn gives_up_at_the_deadline() {
         let listener = LoopbackListener::bind().await.unwrap();
-        let result = listener.wait_for_callback(Duration::from_millis(100)).await;
+        let result = listener
+            .wait_for_callback(Duration::from_millis(100), "s")
+            .await;
         assert!(matches!(result, Err(HostError::SignInAborted)));
     }
 
@@ -264,7 +335,9 @@ mod tests {
             .trim_end_matches("/callback")
             .parse()
             .unwrap();
-        let _ = listener.wait_for_callback(Duration::from_millis(50)).await;
+        let _ = listener
+            .wait_for_callback(Duration::from_millis(50), "s")
+            .await;
         assert!(
             TcpStream::connect((Ipv4Addr::LOCALHOST, port))
                 .await

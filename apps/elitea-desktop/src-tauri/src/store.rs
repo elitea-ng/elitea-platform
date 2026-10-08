@@ -100,6 +100,7 @@ impl SecretStore for KeyringStore {
 #[derive(Default)]
 pub struct MemoryStore {
     slot: std::sync::Mutex<Option<String>>,
+    pub fail_saves: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(test)]
@@ -116,6 +117,9 @@ impl SecretStore for MemoryStore {
     }
 
     fn save(&self, secret: &str) -> Result<(), HostError> {
+        if self.fail_saves.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(HostError::Keychain("locked".into()));
+        }
         *self.slot.lock().expect("lock") = Some(secret.to_owned());
         Ok(())
     }

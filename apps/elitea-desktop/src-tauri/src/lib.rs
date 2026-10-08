@@ -9,6 +9,7 @@ mod auth;
 mod commands;
 mod discovery;
 mod error;
+mod http_scope;
 mod loopback;
 mod pkce;
 mod settings;
@@ -54,7 +55,18 @@ impl BrowserOpener for SystemBrowser {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let result = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // First, so a second launch exits before it can touch the keychain: two
+    // processes would race the rotating refresh token.
+    #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+    }));
+    let result = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
         .setup(|app| {
@@ -68,9 +80,10 @@ pub fn run() {
                 build_client_id: BUILD_CLIENT_ID,
                 runtime_client_id: std::env::var("ELITEA_DESKTOP_CLIENT_ID").ok(),
             });
-            app.manage(AppState {
-                auth: Arc::new(auth),
-            });
+            let auth = Arc::new(auth);
+            let stored_origin = auth.state().ok().and_then(|s| s.origin);
+            http_scope::grant_stored(app.handle(), stored_origin.as_deref());
+            app.manage(AppState { auth });
             window::create_main_window(app.handle())?;
             Ok(())
         })
