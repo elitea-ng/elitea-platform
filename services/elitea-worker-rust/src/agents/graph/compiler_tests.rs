@@ -346,6 +346,37 @@ fn result_policy_prefers_terminal_data_then_ai_messages_then_declared_state() {
     );
 }
 
+/// An untouched empty default is not an answer; a traced empty write is.
+#[test]
+fn static_fallback_skips_empty_collections_but_a_traced_empty_write_shows() {
+    let policy = PipelineResultPolicy {
+        terminal_data_keys: vec!["rows".to_owned()],
+        fallback_data_keys: vec!["summary".to_owned()],
+    };
+    let mut state = HashMap::from([
+        ("rows".to_owned(), json!([])),
+        ("summary".to_owned(), json!({})),
+        (
+            "messages".to_owned(),
+            json!([{"role": "assistant", "content": "model answer"}]),
+        ),
+    ]);
+    assert_eq!(
+        select_pipeline_result(&state, &policy).as_deref(),
+        Some("model answer")
+    );
+    state.insert("messages".to_owned(), json!([]));
+    assert_eq!(select_pipeline_result(&state, &policy), None);
+    state.insert(
+        super::pipeline_result::PIPELINE_RESULT_TRACE_STATE_KEY.to_owned(),
+        json!({"node": "join", "keys": ["rows"], "messages": false}),
+    );
+    assert_eq!(
+        select_pipeline_result(&state, &policy).as_deref(),
+        Some("```json\n[]\n```")
+    );
+}
+
 #[test]
 fn the_runtime_trace_selects_the_last_writer_before_the_static_chain() {
     let policy = PipelineResultPolicy {

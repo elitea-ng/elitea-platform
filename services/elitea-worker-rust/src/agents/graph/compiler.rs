@@ -1826,10 +1826,16 @@ pub(super) fn select_pipeline_result(
         .map(RenderedResult::into_bounded_text)
 }
 
+/// The static fallback has no proof that a node ran, so an empty collection
+/// is an untouched default rather than an answer.
 fn select_last_state_value(state: &State, keys: &[String]) -> Option<RenderedResult> {
     keys.iter()
         .rev()
         .filter_map(|key| state.get(key))
+        .filter(|value| {
+            !value.as_array().is_some_and(Vec::is_empty)
+                && !value.as_object().is_some_and(serde_json::Map::is_empty)
+        })
         .filter_map(render_state_value)
         .find(|content| !content.is_blank())
 }
