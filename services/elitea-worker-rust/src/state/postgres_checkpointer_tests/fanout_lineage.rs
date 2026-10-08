@@ -4,7 +4,7 @@
 //! The children it restores must be the children the occurrence froze, so a
 //! completed child never runs again and a paused child resumes from its own
 //! checkpoint.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::*;
 use crate::agents::graph::map_reduce::{
@@ -952,4 +952,200 @@ async fn a_superseded_claim_cannot_overwrite_the_later_claims_completed_children
         stale_latest, 0,
         "a child's latest checkpoint is not claim B's completed one"
     );
+}
+
+async fn scoped_claim(
+    database: &IsolatedPostgres,
+    tenant: &str,
+    resource_project: i32,
+    definition: [u8; 32],
+) -> Arc<PostgresCheckpointer> {
+    Arc::new(
+        PostgresCheckpointer::activate(
+            database.pool.clone(),
+            CheckpointWriterAuthority::new(
+                tenant.to_owned(),
+                resource_project,
+                resource_project,
+                APPLICATION_CAPABILITY_ID,
+                definition,
+                ROOT.to_owned(),
+                "execution-1".to_owned(),
+                1,
+                format!("claim-{tenant}-{resource_project}-{}", definition[0]),
+                1,
+                1,
+                1_700_000_001_000_000,
+                "workload-1".to_owned(),
+                "producer-1".to_owned(),
+                [0x61; 32],
+            )
+            .expect("valid scoped checkpoint writer"),
+            CheckpointLimits::default(),
+            Arc::new(TestStateWriterLease::current()),
+        )
+        .await
+        .expect("activate a scoped root writer"),
+    )
+}
+
+fn frozen_threads(checkpoint: &Checkpoint) -> Vec<String> {
+    serde_json::from_value(
+        checkpoint.metadata["elitea.graph.parallel.occurrence.v2"]["child_threads"].clone(),
+    )
+    .expect("frozen child threads")
+}
+
+/// A frozen origin is only an execution identity. Tenant, projects, capability
+/// and definition digest always come from the restoring claim's own authority,
+/// so the same origin can never address another scope's children.
+#[tokio::test]
+async fn frozen_child_identity_cannot_be_reused_across_tenant_project_or_definition() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_test_schema(&database.pool).await;
+    let owner = scoped_claim(&database, "tenant-1", 1, DEFINITION).await;
+    let other_definition = scoped_claim(&database, "tenant-1", 1, [0x52; 32]).await;
+    let other_tenant = scoped_claim(&database, "tenant-2", 1, DEFINITION).await;
+    let other_project = scoped_claim(&database, "tenant-1", 2, DEFINITION).await;
+    let definition = four_branches();
+    let activation = ParallelActivation {
+        root_thread_id: ROOT.to_owned(),
+        node_id: definition.id().to_owned(),
+        step: 4,
+        config_digest: definition.config_digest(),
+    };
+    let branch = &definition.branches()[0];
+    let origin = owner
+        .child_origin(&activation)
+        .expect("owner execution origin");
+    let mut threads = BTreeSet::new();
+    for scope in [&owner, &other_definition, &other_tenant, &other_project] {
+        threads.insert(
+            scope
+                .branch_thread_id(&activation, branch, 0, &[0x42; 32], &origin)
+                .expect("derive under the same frozen origin"),
+        );
+    }
+    assert_eq!(threads.len(), 4, "a frozen origin addressed another scope");
+
+    // The other definition cannot see the owner's occurrence and freezes its own.
+    let runs = Arc::new(BranchRuns::new(&["done_a", "done_b", "ask", "late"]));
+    let context = parallel_context(original_state());
+    DurableParallelNode::new(definition.clone(), parallel_runtime(&owner, &runs))
+        .execute(&context)
+        .await
+        .expect("owner pauses on the ask branch");
+    DurableParallelNode::new(definition, parallel_runtime(&other_definition, &runs))
+        .execute(&context)
+        .await
+        .expect("the other definition pauses on its own ask branch");
+    assert_eq!(
+        runs.work("done_a"),
+        2,
+        "a completed child leaked across definitions"
+    );
+    let owned = frozen_threads(&owner.load(ROOT).await.unwrap().expect("owner occurrence"));
+    let foreign = frozen_threads(
+        &other_definition
+            .load(ROOT)
+            .await
+            .unwrap()
+            .expect("other definition occurrence"),
+    );
+    assert!(owned.iter().all(|thread| !foreign.contains(thread)));
+}
+
+/// The fan-out runtime writes no log line. If one is ever added, it must not
+/// carry business input, child thread ids, execution ids or checkpoint ids.
+#[tokio::test]
+async fn fanout_restore_and_lease_loss_log_no_payload_or_identity() {
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone, Default)]
+    struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Captured {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .map_err(|_| std::io::Error::other("capture lock"))?
+                .extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    impl<'a> MakeWriter<'a> for Captured {
+        type Writer = Self;
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL fan-out lineage test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_test_schema(&database.pool).await;
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::TRACE)
+        .with_ansi(false)
+        .with_writer(captured.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+
+    const MARKER: &str = "fanout-private-input-7f3a";
+    let context = parallel_context(HashMap::from([("input".to_owned(), json!(MARKER))]));
+    let runs = Arc::new(BranchRuns::new(&["done_a", "done_b", "ask", "late"]));
+    let definition = four_branches();
+    let first = claim(
+        &database,
+        "execution-1",
+        1,
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await;
+    DurableParallelNode::new(definition.clone(), parallel_runtime(&first, &runs))
+        .execute(&context)
+        .await
+        .expect("pause under execution 1");
+    let lease = Arc::new(TestStateWriterLease::current());
+    let second = claim(&database, "execution-2", 2, Arc::clone(&lease)).await;
+    DurableParallelNode::new(definition.clone(), parallel_runtime(&second, &runs))
+        .execute(&context)
+        .await
+        .expect("restore under execution 2");
+    lease.revoke();
+    let stopped = DurableParallelNode::new(definition, parallel_runtime(&second, &runs))
+        .execute(&context)
+        .await;
+    assert!(stopped.is_err(), "a revoked lease cannot restore");
+
+    // A superseded claim is fenced even for reads; inspect through a later claim.
+    let reader = claim(
+        &database,
+        "execution-3",
+        3,
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await;
+    let root = reader.load(ROOT).await.unwrap().expect("root occurrence");
+    let mut forbidden = vec![
+        MARKER.to_owned(),
+        "execution-1".to_owned(),
+        "execution-2".to_owned(),
+        root.checkpoint_id.clone(),
+    ];
+    forbidden.extend(frozen_threads(&root));
+    let text = String::from_utf8(captured.0.lock().expect("capture lock").clone())
+        .expect("captured UTF-8");
+    for value in forbidden {
+        assert!(!text.contains(&value), "a log line exposed {value}");
+    }
 }
