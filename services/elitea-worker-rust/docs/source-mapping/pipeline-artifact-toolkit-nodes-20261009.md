@@ -38,27 +38,28 @@ Main froze the scope correctly. The defect was in the Worker.
 | `services/elitea-worker-rust/src/agents/pipeline.rs:2116-2118,2230-2235` | A frozen and admitted toolkit with no materialized toolset is refused as `UnsupportedCapability` (`unserved_direct_toolkit`), not as an out-of-scope input. |
 | `services/elitea-worker-rust/src/agents/pipeline_artifact_tests.rs` (new) | Assembly, run and refusal proofs on the reported YAML and the real stored toolkit row. |
 | `services/elitea-worker-rust/src/agents/graph/node_recovery_artifact_tests.rs` (new) | The real artifact `create_file` tool behind the node-recovery journal. |
-| `services/elitea-main/internal/application/toolkitcatalogue/capability.go:123-127` | Comment updated: the artifact family materialises on the root pipeline too. |
+| `services/elitea-main/internal/application/toolkitcatalogue/capability.go:123-128` | Comment updated: the artifact family materialises on the root pipeline too; nested positions refuse a direct node at assembly, and an LLM node there finds the tools unavailable at run time. |
 | `services/elitea-worker-rust/docs/source-mapping/configuration-toolsets.md` | The artifact row records the new position and the remaining gaps. |
 
 ## Tests
 
-Written first and failing on `main` (`1ab920dde`). The two assembly tests failed with the exact production message
-"a pipeline direct tool node references a tool outside its frozen scope". The refusal test got `InvalidInput`
-instead of `UnsupportedCapability`.
+The first three were written first and failed on `main` (`1ab920dde`). The two assembly tests failed with the
+exact production message "a pipeline direct tool node references a tool outside its frozen scope". The refusal
+test got `InvalidInput` instead of `UnsupportedCapability`. The saved-child test was added after code review.
 
 | Test | Proves |
 |---|---|
 | `pipeline_artifact_tests.rs:138` `artifact_direct_toolkit_nodes_assemble_against_the_attached_toolkit` | The reported YAML assembles against Main's frozen row: `selected_tools` lists the SDK catalogue including unserved names, plus `available_tools`, `embedding_model` and `pgvector_configuration`. Nothing reaches the platform at assembly. |
 | `pipeline_artifact_tests.rs:149` `artifact_list_node_runs_under_the_claim_and_projects_its_listing` | A `list_files` node runs to completion and makes exactly one call, on `/runtime-context/artifacts/list`. The listing reaches the browser output. |
 | `pipeline_artifact_tests.rs:186` `an_unserved_artifact_toolkit_is_refused_as_unsupported_not_out_of_scope` | Without a claim-bound platform the refusal is `UnsupportedCapability`, names the direct tool node, and never says "outside its frozen scope". |
+| `pipeline_artifact_tests.rs:208` `a_saved_child_pipelines_artifact_node_is_refused_as_unsupported` | The production-reachable unserved position (a saved child pipeline) refuses its artifact direct node as `UnsupportedCapability` at root assembly. On `main` this was `InvalidInput`, "outside its frozen scope". |
 | `node_recovery_artifact_tests.rs:141` `artifact_write_runs_once_and_its_committed_result_is_replayed` | `create_file` is `!is_read_only()` and runs behind the fenced `Started` journal. One write; a lost step checkpoint replays the committed result with no second write. |
 | `node_recovery_artifact_tests.rs:175` `a_started_artifact_write_without_a_result_is_never_written_again` | Crash between `Started` and the result: re-entry shows the reconciliation card twice, with 0 writes. |
 | `node_recovery_artifact_tests.rs:196` `a_text_write_result_is_not_coerced_into_a_dict_output` | The reported `dict` declaration produces a typed `state_projection` failure after one write. Re-entry reconciles and does not write again. |
 
 Counts (local, `cargo test --offline --locked --all-targets --all-features`):
-- Worker lib: 1743 passed, 0 failed, 71 ignored. The ignored set is the same DB-, Docker- and Kubernetes-gated tests as on `main`.
-- Every other Worker target passed.
+- Worker lib: 1744 passed, 0 failed, 71 ignored. The ignored set is the same DB-, Docker- and Kubernetes-gated tests as on `main`.
+- All Worker targets: 1839 passed, 0 failed, 71 ignored.
 - `cargo clippy --locked --all-targets --all-features -- -D warnings` and `cargo fmt --check` are clean.
 - DB-gated real-PostgreSQL journal proofs `state::postgres_checkpointer_tests::direct_tool_journal` (`--ignored`, throwaway pgvector 0.8.1/PG18 container): 6 passed. They cover crash after `Started`, process replacement, second-claim takeover and replay. The journal is family-agnostic, and the artifact write reaches it because `create_file` is effectful.
 
@@ -150,7 +151,8 @@ unsaved changes" although the attachment is already persisted.
    `src/agents/pipeline.rs:1955`) and in **nested agents** (`src/agents/application_tools.rs:3197`). The borrowed
    `&ClaimBoundRuntimeContextAuthority` must become a shared `Arc` through about ten signatures in `pipeline.rs`,
    `pipeline/composition.rs` and `application_tools.rs`. Until then those positions refuse a direct node with a
-   typed `unsupported_capability`.
+   typed `unsupported_capability`. An LLM node in those positions still finds the artifact tools unavailable
+   only when it runs (`LlmExecutionError::Unavailable`), not at assembly.
 2. The materializer's `agent_toolkit_skipped` warning comes from the `elitea_agent_runtime` crate, which the
    deployed `ELITEA_RUST_LOG` filter does not show. Surface it so a skipped family is visible in Worker logs.
 3. Web: the false "unsaved changes" prompt after a toolkit attachment (see above).

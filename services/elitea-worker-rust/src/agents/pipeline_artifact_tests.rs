@@ -200,3 +200,34 @@ async fn an_unserved_artifact_toolkit_is_refused_as_unsupported_not_out_of_scope
     assert!(!message.contains("outside its frozen scope"), "{message}");
     assert_direct_tool_node_message(&error);
 }
+
+/// The production-reachable unserved position: a saved child pipeline still
+/// materializes without the claim, so its artifact direct node is refused as
+/// unsupported before anything runs, never as out of scope.
+#[tokio::test]
+async fn a_saved_child_pipelines_artifact_node_is_refused_as_unsupported() {
+    let child = artifact_pipeline_request(ARTIFACT_LIST_PIPELINE)
+        .payload
+        .application["version_details"]
+        .clone();
+    let (platform, model_facade, _, _) = pipeline_runtime(&child, Vec::new());
+    let assembler = PipelineNativeAgentAssembler::with_state(
+        Arc::new(InMemorySessionService::new()),
+        Arc::new(MemoryCheckpointer::new()),
+    )
+    .with_runtime_clients(platform, model_facade);
+    let request = agent_pipeline_request("release-agent", "pipeline");
+    let Err(error) = assembler.assemble(authorized(&request)).await else {
+        panic!("a saved child pipeline bound an artifact toolkit without the claim");
+    };
+    assert_eq!(
+        error.code(),
+        super::super::runtime::NativeAgentAssemblyErrorCode::UnsupportedCapability,
+        "{error}"
+    );
+    assert!(
+        !error.to_string().contains("outside its frozen scope"),
+        "{error}"
+    );
+    assert_direct_tool_node_message(&error);
+}

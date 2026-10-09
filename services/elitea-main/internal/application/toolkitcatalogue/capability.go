@@ -124,7 +124,8 @@ var pythonVerifiedImportKeys = []string{
 // execution claim is in scope (the ordinary agent path and a root pipeline's
 // direct and LLM nodes), because its authority is that claim rather than a
 // credential in the frozen snapshot. A saved child pipeline or nested agent
-// still skips it, and a direct node there is refused as unsupported.
+// still skips it: a direct node there is refused as unsupported at assembly,
+// and an LLM node there finds the tools unavailable when it runs.
 //
 // `aha` is NOT here although the family is complete in that tree: no dispatch
 // reaches it, so the worker skips an `aha` toolkit like any unsupported type.
