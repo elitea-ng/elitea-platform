@@ -1,4 +1,15 @@
-use super::*;
+//! Instruction authority (moved to elitea-agent-runtime) composed with the
+//! worker's internal tools, Postgres sessions and durable compaction.
+
+use std::sync::Arc;
+
+use adk_rust::agent::LlmAgentBuilder;
+use adk_rust::futures::StreamExt as _;
+use adk_rust::{Content, Event};
+use async_trait::async_trait;
+use serde_json::{Value, json};
+
+use super::instruction_authority::*;
 use adk_rust::session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
 use adk_rust::{Llm, LlmRequest, LlmResponse, LlmResponseStream, Part};
 use std::sync::Mutex;

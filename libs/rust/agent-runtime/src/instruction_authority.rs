@@ -1,65 +1,72 @@
 //! Immutable instruction snapshots live in session state, outside transcript compaction.
+#![allow(
+    clippy::implicit_hasher,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    reason = "moved verbatim from the worker, where these items were crate-private"
+)]
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use adk_rust::agent::LlmAgentBuilder;
-use adk_rust::futures::StreamExt as _;
-use adk_rust::tool::BasicToolset;
-use adk_rust::{
+use adk_agent::LlmAgentBuilder;
+use adk_core::{
     AdkError, Agent, Content, Event, EventStream, InvocationContext, ReadonlyContext, Tool,
     ToolContext, Toolset,
 };
+use adk_tool::BasicToolset;
 use async_trait::async_trait;
+use futures::StreamExt as _;
 use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::request::AgentExecutionRequest;
-use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
+use crate::assembly_error::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 
-const STATE_PREFIX: &str = "elitea.instructions.v1:";
-pub(crate) const TOOLSET_NAME: &str = "elitea_instructions";
+pub const STATE_PREFIX: &str = "elitea.instructions.v1:";
+pub const TOOLSET_NAME: &str = "elitea_instructions";
 const MAX_SOURCES: usize = 128;
 const MAX_CONTENT_BYTES: usize = 256 * 1024;
 const MAX_TOTAL_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-struct Snapshot {
-    id: String,
-    revision: String,
-    source_scope: String,
-    name: String,
-    description: String,
-    content: String,
-    kind: String,
-    skill_id: Value,
-    icon_meta: Value,
+pub struct Snapshot {
+    pub id: String,
+    pub revision: String,
+    pub source_scope: String,
+    pub name: String,
+    pub description: String,
+    pub content: String,
+    pub kind: String,
+    pub skill_id: Value,
+    pub icon_meta: Value,
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct InstructionPlan {
-    catalog: BTreeMap<String, Snapshot>,
-    active: BTreeSet<String>,
-    run_id: String,
-    resume: bool,
-    allow_new_scope_on_resume: bool,
-    pipeline_node: bool,
+pub struct InstructionPlan {
+    pub catalog: BTreeMap<String, Snapshot>,
+    pub active: BTreeSet<String>,
+    pub run_id: String,
+    pub resume: bool,
+    pub allow_new_scope_on_resume: bool,
+    pub pipeline_node: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-struct InstructionState {
-    schema: u32,
-    scope: String,
-    activated_run_id: String,
-    catalog: BTreeMap<String, Snapshot>,
-    active: BTreeSet<String>,
+pub struct InstructionState {
+    pub schema: u32,
+    pub scope: String,
+    pub activated_run_id: String,
+    pub catalog: BTreeMap<String, Snapshot>,
+    pub active: BTreeSet<String>,
 }
 
 impl InstructionPlan {
-    pub(crate) fn admit(request: &AgentExecutionRequest) -> Result<Self, NativeAgentAssemblyError> {
+    pub fn admit(request: &AgentExecutionRequest) -> Result<Self, NativeAgentAssemblyError> {
         let mut plan = Self {
             run_id: request.binding.request_immutable_version.clone(),
             resume: request.payload.should_continue || request.payload.hitl_resume,
@@ -95,7 +102,7 @@ impl InstructionPlan {
         Ok(plan)
     }
 
-    pub(crate) fn nested(
+    pub fn nested(
         version: &serde_json::Map<String, Value>,
         fallback: &Self,
     ) -> Result<Self, NativeAgentAssemblyError> {
@@ -118,7 +125,7 @@ impl InstructionPlan {
         Ok(plan)
     }
 
-    fn add_project_context(
+    pub fn add_project_context(
         &mut self,
         context: &super::request::ProjectContextSnapshot,
     ) -> Result<(), NativeAgentAssemblyError> {
@@ -143,7 +150,7 @@ impl InstructionPlan {
         self.validate_bounds()
     }
 
-    fn add_skills(&mut self, skills: &[Value]) -> Result<(), NativeAgentAssemblyError> {
+    pub fn add_skills(&mut self, skills: &[Value]) -> Result<(), NativeAgentAssemblyError> {
         for skill in skills {
             let object = skill.as_object().ok_or_else(invalid)?;
             let content = object
@@ -204,7 +211,7 @@ impl InstructionPlan {
         self.validate_bounds()
     }
 
-    fn resolve_skill(&self, value: &Value) -> Result<String, NativeAgentAssemblyError> {
+    pub fn resolve_skill(&self, value: &Value) -> Result<String, NativeAgentAssemblyError> {
         if let Some(id) = value.get("id").and_then(Value::as_str) {
             return self
                 .catalog
@@ -237,18 +244,18 @@ impl InstructionPlan {
         Ok(())
     }
 
-    pub(crate) const fn inherits_pipeline_parent(&self) -> bool {
+    pub const fn inherits_pipeline_parent(&self) -> bool {
         !self.allow_new_scope_on_resume
     }
 
-    pub(crate) fn for_pipeline_node(&self) -> Self {
+    pub fn for_pipeline_node(&self) -> Self {
         let mut plan = self.clone();
         plan.allow_new_scope_on_resume = true;
         plan.pipeline_node = true;
         plan
     }
 
-    pub(crate) fn public_active(&self) -> Vec<Value> {
+    pub fn public_active(&self) -> Vec<Value> {
         self.catalog
             .values()
             .filter(|source| source.kind == "skill" && self.active.contains(&source.id))
@@ -256,11 +263,11 @@ impl InstructionPlan {
             .collect()
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.catalog.is_empty()
     }
 
-    pub(crate) fn toolsets(&self) -> Vec<Arc<dyn Toolset>> {
+    pub fn toolsets(&self) -> Vec<Arc<dyn Toolset>> {
         if self.is_empty() && !self.resume {
             return Vec::new();
         }
@@ -276,7 +283,7 @@ impl InstructionPlan {
         vec![Arc::new(BasicToolset::new(TOOLSET_NAME, tools))]
     }
 
-    pub(crate) fn bind_builder(&self, builder: LlmAgentBuilder) -> LlmAgentBuilder {
+    pub fn bind_builder(&self, builder: LlmAgentBuilder) -> LlmAgentBuilder {
         if self.run_id.is_empty() {
             return builder;
         }
@@ -289,7 +296,7 @@ impl InstructionPlan {
                         .and_then(|state| state.get(&state_key(&instruction_scope(ctx.as_ref()))))
                         .is_none()
                 {
-                    return Ok(adk_rust::callbacks::BeforeModelResult::Continue(request));
+                    return Ok(adk_core::callbacks::BeforeModelResult::Continue(request));
                 }
                 let state = read_state(ctx.as_ref())?;
                 let text = state.render();
@@ -298,12 +305,12 @@ impl InstructionPlan {
                         .contents
                         .insert(0, Content::new("system").with_text(text));
                 }
-                Ok(adk_rust::callbacks::BeforeModelResult::Continue(request))
+                Ok(adk_core::callbacks::BeforeModelResult::Continue(request))
             })
         }))
     }
 
-    pub(crate) fn wrap(&self, inner: Arc<dyn Agent>) -> Arc<dyn Agent> {
+    pub fn wrap(&self, inner: Arc<dyn Agent>) -> Arc<dyn Agent> {
         if self.run_id.is_empty() {
             return inner;
         }
@@ -313,7 +320,11 @@ impl InstructionPlan {
         })
     }
 
-    fn start(&self, stored: Option<Value>, scope: String) -> adk_rust::Result<InstructionState> {
+    pub fn start(
+        &self,
+        stored: Option<Value>,
+        scope: String,
+    ) -> adk_core::Result<InstructionState> {
         if let Some(stored) = stored {
             let state: InstructionState = serde_json::from_value(stored).map_err(|_| corrupt())?;
             state.validate(&scope)?;
@@ -337,7 +348,7 @@ impl Snapshot {
     fn public(&self) -> Value {
         json!({"skill_id":self.skill_id,"name":self.name,"icon_meta":self.icon_meta,"id":self.id,"revision":self.revision})
     }
-    fn validate(&self) -> adk_rust::Result<()> {
+    pub fn validate(&self) -> adk_core::Result<()> {
         if self.id.is_empty()
             || self.id.len() > 256
             || self.name.is_empty()
@@ -362,7 +373,7 @@ impl Snapshot {
 }
 
 impl InstructionState {
-    fn validate(&self, scope: &str) -> adk_rust::Result<()> {
+    pub fn validate(&self, scope: &str) -> adk_core::Result<()> {
         if self.schema != 1
             || self.scope != scope
             || self.activated_run_id.is_empty()
@@ -387,7 +398,7 @@ impl InstructionState {
         Ok(())
     }
 
-    fn render(&self) -> String {
+    pub fn render(&self) -> String {
         let mut text = String::new();
         for source in self.catalog.values() {
             if self.active.contains(&source.id) {
@@ -430,7 +441,7 @@ impl Agent for InstructionAgent {
     fn sub_agents(&self) -> &[Arc<dyn Agent>] {
         self.inner.sub_agents()
     }
-    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_rust::Result<EventStream> {
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> adk_core::Result<EventStream> {
         let scope = instruction_scope(ctx.as_ref());
         let key = state_key(&scope);
         let stored = ctx.session().state().get(&key);
@@ -480,7 +491,7 @@ impl Agent for InstructionAgent {
 // ADK dispatches a model's tool batch before publishing its result events.
 // Each instruction tool therefore starts from the same active set. Merge at
 // the publication boundary, after Runner persisted the preceding event.
-fn merge_activation_delta(value: &mut Value, previous: Option<Value>) -> adk_rust::Result<()> {
+pub fn merge_activation_delta(value: &mut Value, previous: Option<Value>) -> adk_core::Result<()> {
     let Some(previous) = previous else {
         return Err(corrupt());
     };
@@ -525,7 +536,7 @@ impl Tool for InstructionTool {
             json!({"type":"object","properties":{},"additionalProperties":false})
         })
     }
-    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> adk_rust::Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> adk_core::Result<Value> {
         let scope = instruction_scope(ctx.as_ref());
         let value = ctx
             .session()
@@ -585,7 +596,7 @@ fn instruction_scope(ctx: &dyn ReadonlyContext) -> String {
 fn state_key(scope: &str) -> String {
     format!("{STATE_PREFIX}{}", content_digest(scope))
 }
-fn read_state(ctx: &dyn ReadonlyContext) -> adk_rust::Result<InstructionState> {
+fn read_state(ctx: &dyn ReadonlyContext) -> adk_core::Result<InstructionState> {
     let scope = instruction_scope(ctx);
     let value = ctx
         .state()
@@ -599,12 +610,12 @@ fn pipeline_scope(session_id: &str) -> String {
     format!("{session_id}:__pipeline")
 }
 
-pub(super) fn inherited_pipeline_state(
+pub fn inherited_pipeline_state(
     parent: &dyn InvocationContext,
     session_id: &str,
     agent_name: &str,
     inherit_root: bool,
-) -> adk_rust::Result<std::collections::HashMap<String, Value>> {
+) -> adk_core::Result<std::collections::HashMap<String, Value>> {
     let owner_scope = pipeline_scope(session_id);
     let own_scope = format!("{session_id}:{agent_name}");
     let parent_scope = instruction_scope(parent);
@@ -639,8 +650,8 @@ pub(super) fn inherited_pipeline_state(
     Ok(result)
 }
 
-pub(super) fn state_for_child(
-    parent: &dyn adk_rust::State,
+pub fn state_for_child(
+    parent: &dyn adk_core::State,
     session_id: &str,
     agent_name: &str,
 ) -> std::collections::HashMap<String, Value> {
@@ -652,9 +663,7 @@ pub(super) fn state_for_child(
         })
 }
 
-pub(crate) fn public_active_delta(
-    delta: &std::collections::HashMap<String, Value>,
-) -> Option<Vec<Value>> {
+pub fn public_active_delta(delta: &std::collections::HashMap<String, Value>) -> Option<Vec<Value>> {
     if !valid_state_delta(delta) {
         return None;
     }
@@ -672,7 +681,7 @@ pub(crate) fn public_active_delta(
     Some(active.into_values().collect())
 }
 
-pub(crate) fn valid_state_delta(delta: &std::collections::HashMap<String, Value>) -> bool {
+pub fn valid_state_delta(delta: &std::collections::HashMap<String, Value>) -> bool {
     !delta.is_empty()
         && delta.iter().all(|(key, value)| {
             let Ok(state) = serde_json::from_value::<InstructionState>(value.clone()) else {
@@ -681,7 +690,7 @@ pub(crate) fn valid_state_delta(delta: &std::collections::HashMap<String, Value>
             key == &state_key(&state.scope) && state.validate(&state.scope).is_ok()
         })
 }
-pub(super) fn content_digest(content: &str) -> String {
+pub fn content_digest(content: &str) -> String {
     let mut result = String::with_capacity(64);
     for byte in digest::digest(&digest::SHA256, content.as_bytes()).as_ref() {
         let _ = write!(result, "{byte:02x}");
@@ -691,8 +700,8 @@ pub(super) fn content_digest(content: &str) -> String {
 
 fn corrupt() -> AdkError {
     AdkError::new(
-        adk_rust::ErrorComponent::Agent,
-        adk_rust::ErrorCategory::InvalidInput,
+        adk_core::ErrorComponent::Agent,
+        adk_core::ErrorCategory::InvalidInput,
         "agent.instructions.invalid_state",
         "the authoritative instruction state is invalid",
     )
@@ -703,7 +712,3 @@ fn invalid() -> NativeAgentAssemblyError {
         "the frozen instruction snapshot is invalid",
     )
 }
-
-#[cfg(test)]
-#[path = "instruction_authority_tests.rs"]
-mod tests;

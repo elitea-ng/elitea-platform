@@ -34,6 +34,9 @@ toolkit-sql = ["dep:sqlx"]
 adk-agent = { version = "~2.2.0", default-features = false }
 adk-core = { version = "~2.2.0", default-features = false }
 adk-graph = { version = "~2.2.0", default-features = false }
+# `context-compaction`: `context_management` builds the runner's compaction
+# config.
+adk-runner = { version = "~2.2.0", default-features = false, features = ["context-compaction"] }
 adk-session = { version = "~2.2.0", default-features = false }
 # `http-transport`: the Streamable HTTP MCP client both hosts use. It links
 # reqwest 0.13, whose default rustls provider is aws-lc-rs (EXTRACTION.md,
@@ -80,9 +83,6 @@ tracing = "0.1.44"
 zeroize = "1.9.0"
 
 [dev-dependencies]
-# Patched (libs/rust/vendor): `patched_adk` proves this workspace builds the
-# patched runner and agent, not the registry ones.
-adk-runner = { version = "~2.2.0", default-features = false, features = ["context-compaction"] }
 tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
 
 [lints]

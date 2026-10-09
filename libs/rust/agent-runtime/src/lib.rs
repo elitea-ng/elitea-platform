@@ -15,7 +15,12 @@
 //! * [`platform`] — what the runtime writes to the platform
 //!   ([`host::PlatformWriter`]);
 //! * [`request`], [`context_summary`] — the execution request vocabulary and
-//!   the typed continuation notes context compaction writes.
+//!   the typed continuation notes context compaction writes;
+//! * [`assembly_error`], [`instruction_authority`], [`context_budget`],
+//!   [`context_status`], [`context_management`] — the shared assembly
+//!   vocabulary: the native assembly error, skill and project-context
+//!   instruction authority, the request context budget and its status, and
+//!   the compaction plan.
 //!
 //! The move from `services/elitea-worker-rust` is staged; `EXTRACTION.md`
 //! holds the dependency map and the remaining stages. The worker re-exports
@@ -34,11 +39,29 @@
     )
 )]
 
+pub mod assembly_error;
 pub mod canonical;
+pub mod context_budget;
+pub mod context_management;
+pub mod context_status;
 pub mod context_summary;
 pub mod graph;
 pub mod host;
+pub mod instruction_authority;
 pub mod platform;
 pub mod request;
 pub mod tool_namespacing;
 pub mod toolkits;
+
+/// Compiles only against the patched adk 2.2.0 crates in `libs/rust/vendor`
+/// (the registry releases have neither builder), so a workspace or host that
+/// forgot the `[patch.crates-io]` lines fails here, not at run time.
+#[cfg(test)]
+mod patched_adk {
+    #[test]
+    fn the_runtime_builds_the_patched_agent_and_runner() {
+        let _agent = adk_agent::LlmAgentBuilder::new("probe").retain_prepared_history(true);
+        let _refresh: fn(adk_runner::Runner, bool) -> adk_runner::Runner =
+            adk_runner::Runner::with_session_event_refresh;
+    }
+}

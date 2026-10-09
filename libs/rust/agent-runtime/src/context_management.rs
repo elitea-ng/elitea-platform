@@ -43,16 +43,23 @@
 //!   budget. When the untouchable tail alone exceeds `max_context_tokens` the
 //!   Runner logs a warning and proceeds with the full, uncompacted history —
 //!   today's behavior, never a truncated one.
+#![allow(
+    clippy::implicit_hasher,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    reason = "moved verbatim from the worker, where these items were crate-private"
+)]
 
 use std::sync::Arc;
 
+use adk_agent::LlmEventSummarizer;
+use adk_core::{AdkError, BaseEventsSummarizer, Content, Event, Llm, Part};
 use adk_runner::compaction::{CompactionConfig, CompactionStrategy, estimate_event_tokens};
-use adk_rust::agent::LlmEventSummarizer;
-use adk_rust::{AdkError, BaseEventsSummarizer, Content, Event, Llm, Part};
 use async_trait::async_trait;
 use serde_json::{Map, Value};
 
-use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
+use crate::assembly_error::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 
 /// The prefix the current SDK puts in front of a rolled-up conversation.
 const SUMMARY_PREFIX: &str = "Here is a summary of the conversation to date:";
@@ -89,7 +96,7 @@ const DEFAULT_SUMMARY_INSTRUCTIONS: &str =
 
 /// Context behavior admitted before claim-scoped credentials are redeemed.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum ContextManagementPlan {
+pub enum ContextManagementPlan {
     /// No compaction or context editing is requested for this invocation.
     ///
     /// This also covers a conversation whose master switch is on but whose
@@ -103,11 +110,11 @@ pub(crate) enum ContextManagementPlan {
 
 /// The frozen settings that drive one summarization pass.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ContextCompactionPlan {
-    pub(super) max_context_tokens: u64,
-    pub(super) preserve_recent_messages: usize,
-    pub(super) preserve_system_messages: bool,
-    pub(super) summary_instructions: String,
+pub struct ContextCompactionPlan {
+    pub max_context_tokens: u64,
+    pub preserve_recent_messages: usize,
+    pub preserve_system_messages: bool,
+    pub summary_instructions: String,
 }
 
 impl ContextManagementPlan {
@@ -122,7 +129,7 @@ impl ContextManagementPlan {
     /// or out-of-range setting, and
     /// [`NativeAgentAssemblyErrorCode::UnsupportedCapability`] for a strategy
     /// this runtime has no primitive for.
-    pub(crate) fn admit_current(
+    pub fn admit_current(
         settings: &Map<String, Value>,
         conversation_id: Option<&str>,
     ) -> Result<Self, NativeAgentAssemblyError> {
@@ -197,7 +204,7 @@ impl ContextManagementPlan {
     ///
     /// Returns [`NativeAgentAssemblyErrorCode::UnsupportedCapability`] when an
     /// active plan has no model to summarize with.
-    pub(crate) fn prepare_runner_composition(
+    pub fn prepare_runner_composition(
         self,
         summarization_model: Option<Arc<dyn Llm>>,
     ) -> Result<Option<CompactionConfig>, NativeAgentAssemblyError> {
@@ -226,10 +233,7 @@ impl ContextCompactionPlan {
     /// gets the transcript appended in a `<messages>` block.
     /// Build the strategy this plan drives. The Runner composition and the
     /// behavioral tests share this one seam.
-    pub(super) fn strategy(
-        &self,
-        summarizer: Arc<dyn BaseEventsSummarizer>,
-    ) -> EliteaContextCompaction {
+    pub fn strategy(&self, summarizer: Arc<dyn BaseEventsSummarizer>) -> EliteaContextCompaction {
         EliteaContextCompaction {
             summarizer,
             preserve_recent_messages: self.preserve_recent_messages,
@@ -237,7 +241,7 @@ impl ContextCompactionPlan {
         }
     }
 
-    pub(super) fn prompt_template(&self) -> String {
+    pub fn prompt_template(&self) -> String {
         if self.summary_instructions.contains(SDK_HISTORY_PLACEHOLDER) {
             return self
                 .summary_instructions
@@ -268,7 +272,7 @@ impl ContextCompactionPlan {
 ///    fit, so only the events beyond the budget are summarized.
 /// 5. The summarized head is replaced by a single summary event carrying the
 ///    SDK's `Here is a summary of the conversation to date:` prefix.
-pub(super) struct EliteaContextCompaction {
+pub struct EliteaContextCompaction {
     summarizer: Arc<dyn BaseEventsSummarizer>,
     preserve_recent_messages: usize,
     preserve_system_messages: bool,

@@ -1028,6 +1028,7 @@ dependencies = [
  "adk-agent",
  "adk-core",
  "adk-graph",
+ "adk-runner",
  "adk-session",
  "adk-tool",
  "async-stream",

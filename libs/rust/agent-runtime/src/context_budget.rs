@@ -1,32 +1,39 @@
 //! Combined request budget, independent of cumulative usage and output caps.
+#![allow(
+    clippy::implicit_hasher,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    reason = "moved verbatim from the worker, where these items were crate-private"
+)]
 
-use adk_rust::{AdkError, Content, ErrorCategory, ErrorComponent, Event, LlmRequest};
+use adk_core::{AdkError, Content, ErrorCategory, ErrorComponent, Event, LlmRequest};
 use serde_json::{Map, Value};
 
 use super::request::ModelContextLimits;
-use super::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
+use crate::assembly_error::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 
 const BALANCED_TOKENS: u32 = 272_000;
 const AUTO_OUTPUT_FLOOR: u32 = 1_024;
 
 /// The compaction boundary consumes measurements of the actual provider body.
 /// Implementations must not dispatch, consume a model turn, or change completion state.
-pub(crate) trait ModelRequestBudget: Send + Sync {
-    fn measure(&self, request: &LlmRequest) -> adk_rust::Result<RequestContextUsage>;
+pub trait ModelRequestBudget: Send + Sync {
+    fn measure(&self, request: &LlmRequest) -> adk_core::Result<RequestContextUsage>;
 }
 
 /// Request occupancy, independent of cumulative usage and without request content.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RequestContextUsage {
-    pub(crate) budget: RequestContextBudget,
-    pub(crate) estimated_input: u64,
-    pub(crate) request_bytes: usize,
-    pub(crate) request_byte_limit: usize,
+pub struct RequestContextUsage {
+    pub budget: RequestContextBudget,
+    pub estimated_input: u64,
+    pub request_bytes: usize,
+    pub request_byte_limit: usize,
 }
 
 impl RequestContextUsage {
     /// Refuse an unusable model checkpoint before it can authorize recovery.
-    pub(crate) fn check(self) -> adk_rust::Result<()> {
+    pub fn check(self) -> adk_core::Result<()> {
         tracing::debug!(
             estimated_input = self.estimated_input,
             output_reservation = self.budget.output_reservation,
@@ -54,12 +61,12 @@ impl RequestContextUsage {
         ))
     }
 
-    pub(crate) fn needs_compaction(self) -> bool {
+    pub fn needs_compaction(self) -> bool {
         self.estimated_input >= self.budget.compaction_trigger()
             || self.request_bytes > self.request_byte_limit
     }
 
-    pub(crate) fn fits(self) -> bool {
+    pub fn fits(self) -> bool {
         self.estimated_input <= u64::from(self.budget.input_limit)
             && self.request_bytes <= self.request_byte_limit
     }
@@ -73,18 +80,18 @@ enum BudgetSelection {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RequestContextBudget {
-    pub(crate) auto_output: bool,
-    pub(crate) total_tokens: u32,
-    pub(crate) output_reservation: u32,
-    pub(crate) margin_tokens: u32,
-    pub(crate) input_limit: u32,
-    pub(crate) limits: ModelContextLimits,
+pub struct RequestContextBudget {
+    pub auto_output: bool,
+    pub total_tokens: u32,
+    pub output_reservation: u32,
+    pub margin_tokens: u32,
+    pub input_limit: u32,
+    pub limits: ModelContextLimits,
     selection: BudgetSelection,
 }
 
 impl RequestContextBudget {
-    pub(super) fn mode(self) -> &'static str {
+    pub fn mode(self) -> &'static str {
         match self.selection {
             BudgetSelection::Balanced => "balanced",
             BudgetSelection::Full => "full",
@@ -93,19 +100,19 @@ impl RequestContextBudget {
     }
 
     /// Trigger before exhausting usable input; output and margin are already reserved.
-    pub(crate) fn compaction_trigger(self) -> u64 {
+    pub fn compaction_trigger(self) -> u64 {
         (u64::from(self.input_limit) * 90).div_ceil(100)
     }
 
-    pub(crate) fn compaction_target(self) -> u64 {
+    pub fn compaction_target(self) -> u64 {
         u64::from(self.input_limit) * 15 / 100
     }
 
-    pub(crate) fn measure_provider_request(
+    pub fn measure_provider_request(
         self,
         encoded: &[u8],
         request_byte_limit: usize,
-    ) -> adk_rust::Result<RequestContextUsage> {
+    ) -> adk_core::Result<RequestContextUsage> {
         Ok(RequestContextUsage {
             budget: self,
             estimated_input: estimate_provider_request(encoded)?,
@@ -114,7 +121,7 @@ impl RequestContextBudget {
         })
     }
 
-    pub(crate) fn resolve(
+    pub fn resolve(
         limits: Option<ModelContextLimits>,
         settings: &Map<String, Value>,
         selected_output: Option<u32>,
@@ -146,7 +153,7 @@ impl RequestContextBudget {
         Self::admit(limits, selection, selected_output).map(Some)
     }
 
-    pub(crate) fn for_model(
+    pub fn for_model(
         self,
         limits: ModelContextLimits,
         selected_output: Option<u32>,
@@ -206,7 +213,7 @@ impl RequestContextBudget {
     /// Auto can use the remaining combined window, up to the model maximum.
     /// Keep one token in an overfull measurement; admission rejects that body
     /// after compaction has had the opportunity to replace its history.
-    pub(crate) fn auto_output_limit(self, encoded: &[u8]) -> adk_rust::Result<u32> {
+    pub fn auto_output_limit(self, encoded: &[u8]) -> adk_core::Result<u32> {
         let input = estimate_provider_request(encoded)?;
         u32::try_from(
             u64::from(self.total_tokens.saturating_sub(self.margin_tokens))
@@ -219,7 +226,7 @@ impl RequestContextBudget {
     /// Check the completed provider document, including static instructions,
     /// tool declarations, and protocol framing. ADK supplies the byte heuristic.
     /// This is an estimate, not a provider tokenizer or a billing measurement.
-    pub(crate) fn check_provider_request(&self, encoded: &[u8]) -> adk_rust::Result<()> {
+    pub fn check_provider_request(&self, encoded: &[u8]) -> adk_core::Result<()> {
         let estimated_input = estimate_provider_request(encoded)?;
         tracing::debug!(
             estimated_input,
@@ -238,11 +245,11 @@ impl RequestContextBudget {
     }
 }
 
-fn estimate_provider_request(encoded: &[u8]) -> adk_rust::Result<u64> {
+fn estimate_provider_request(encoded: &[u8]) -> adk_core::Result<u64> {
     let text = std::str::from_utf8(encoded).map_err(|_| budget_error())?;
     let mut event = Event::new("context-budget-estimate");
     event.set_content(Content::new("user").with_text(text));
-    Ok(adk_rust::intra_compaction::estimate_tokens(&[event], 4)
+    Ok(adk_core::intra_compaction::estimate_tokens(&[event], 4)
         + u64::from(!encoded.len().is_multiple_of(4)))
 }
 
@@ -267,7 +274,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    pub(crate) fn limits(window: u32, output: u32) -> ModelContextLimits {
+    pub fn limits(window: u32, output: u32) -> ModelContextLimits {
         ModelContextLimits {
             context_window_tokens: window,
             max_output_tokens: output,

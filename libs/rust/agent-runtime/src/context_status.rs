@@ -1,16 +1,23 @@
 //! Public context occupancy: estimates and budget arithmetic, never model content.
+#![allow(
+    clippy::implicit_hasher,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::return_self_not_must_use,
+    reason = "moved verbatim from the worker, where these items were crate-private"
+)]
 
-use adk_rust::{AdkError, Event};
+use adk_core::{AdkError, Event};
 use serde::{Deserialize, Serialize};
 
 use super::context_budget::RequestContextUsage;
 
-pub(super) const METADATA_KEY: &str = "elitea.context.status.v1";
+pub const METADATA_KEY: &str = "elitea.context.status.v1";
 const MAX_ENCODED_BYTES: usize = 1024;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum ContextPhase {
+pub enum ContextPhase {
     Measured,
     Compacting,
     Compacted,
@@ -25,9 +32,9 @@ struct ProviderUsage {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ModelContextStatus {
+pub struct ModelContextStatus {
     version: u8,
-    pub(super) phase: ContextPhase,
+    pub phase: ContextPhase,
     budget_mode: String,
     total_tokens: u32,
     usable_input_tokens: u32,
@@ -43,7 +50,7 @@ pub(super) struct ModelContextStatus {
 }
 
 impl ModelContextStatus {
-    pub(super) fn new(phase: ContextPhase, usage: RequestContextUsage) -> Self {
+    pub fn new(phase: ContextPhase, usage: RequestContextUsage) -> Self {
         Self {
             version: 1,
             phase,
@@ -60,7 +67,7 @@ impl ModelContextStatus {
         }
     }
 
-    pub(super) fn with_provider_usage(mut self, usage: &adk_rust::UsageMetadata) -> Option<Self> {
+    pub fn with_provider_usage(mut self, usage: &adk_core::UsageMetadata) -> Option<Self> {
         let input_tokens = u32::try_from(usage.prompt_token_count).ok()?;
         let output_tokens = u32::try_from(usage.candidates_token_count).ok()?;
         if input_tokens.checked_add(output_tokens)?
@@ -75,7 +82,7 @@ impl ModelContextStatus {
         Some(self)
     }
 
-    pub(super) fn event(&self) -> adk_rust::Result<Event> {
+    pub fn event(&self) -> adk_core::Result<Event> {
         self.validate()?;
         let mut event = Event::new("model-context-status");
         // This is progress, not a model result or another transcript message.
@@ -88,7 +95,7 @@ impl ModelContextStatus {
         Ok(event)
     }
 
-    pub(super) fn from_event(event: &Event) -> adk_rust::Result<Option<Self>> {
+    pub fn from_event(event: &Event) -> adk_core::Result<Option<Self>> {
         let Some(encoded) = event.provider_metadata.get(METADATA_KEY) else {
             return Ok(None);
         };
@@ -105,7 +112,7 @@ impl ModelContextStatus {
         Ok(Some(status))
     }
 
-    fn validate(&self) -> adk_rust::Result<()> {
+    fn validate(&self) -> adk_core::Result<()> {
         let input = u64::from(self.usable_input_tokens);
         if self.version != 1
             || self.provider_usage.is_some_and(|usage| {
@@ -137,10 +144,10 @@ fn invalid_status() -> AdkError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::context_budget::RequestContextBudget;
-    use crate::agents::request::ModelContextLimits;
+    use crate::context_budget::RequestContextBudget;
+    use crate::request::ModelContextLimits;
 
-    pub(super) fn status() -> ModelContextStatus {
+    pub fn status() -> ModelContextStatus {
         let budget = RequestContextBudget::resolve(
             Some(ModelContextLimits {
                 context_window_tokens: 400_000,
@@ -167,7 +174,7 @@ mod tests {
 
     #[test]
     fn provider_counts_are_scoped_numeric_metadata_not_an_admission_estimate() {
-        let usage = adk_rust::UsageMetadata {
+        let usage = adk_core::UsageMetadata {
             prompt_token_count: 150_000,
             candidates_token_count: 8_000,
             total_token_count: 158_000,
@@ -212,7 +219,7 @@ mod tests {
         malformed.usable_input_tokens = malformed.total_tokens;
         assert!(malformed.event().is_err());
         let mut event = status().event().unwrap();
-        event.set_content(adk_rust::Content::new("model").with_text("PRIVATE_CONTENT"));
+        event.set_content(adk_core::Content::new("model").with_text("PRIVATE_CONTENT"));
         assert!(ModelContextStatus::from_event(&event).is_err());
         let mut event = status().event().unwrap();
         let encoded = event.provider_metadata.get_mut(METADATA_KEY).unwrap();

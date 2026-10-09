@@ -248,6 +248,7 @@ pub struct DelegatedAuthorizationRequirement {
 /// its nested metadata is written with sorted members whatever
 /// `serde_json/preserve_order` a build unifies: byte-identical to the
 /// worker's historical encoding, where the map was already sorted.
+#[allow(clippy::ref_option, reason = "serde `serialize_with` passes the field by reference")]
 fn serialize_sorted_metadata<S: serde::Serializer>(
     value: &Option<Value>,
     serializer: S,

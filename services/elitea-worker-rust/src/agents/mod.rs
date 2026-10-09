@@ -6,15 +6,15 @@ pub(crate) mod assembly;
 pub(crate) mod attachment_context;
 pub(crate) mod attachment_tools;
 pub(crate) mod attachments;
-pub(crate) mod context_budget;
+pub(crate) use elitea_agent_runtime::context_budget;
 mod context_compaction;
-pub(crate) mod context_management;
-mod context_status;
+pub(crate) use elitea_agent_runtime::context_management;
+use elitea_agent_runtime::context_status;
 pub(crate) use elitea_agent_runtime::context_summary;
 pub(crate) mod direct_hitl;
 pub(crate) mod events;
 pub mod graph;
-pub(crate) mod instruction_authority;
+pub(crate) use elitea_agent_runtime::instruction_authority;
 pub(crate) mod internal_tools;
 mod model_checkpoint;
 mod model_scope;
@@ -45,6 +45,8 @@ mod context_management_tests;
 mod direct_hitl_tests;
 #[cfg(test)]
 mod events_tests;
+#[cfg(test)]
+mod instruction_authority_tests;
 #[cfg(test)]
 mod native_runtime_tests;
 #[cfg(test)]
