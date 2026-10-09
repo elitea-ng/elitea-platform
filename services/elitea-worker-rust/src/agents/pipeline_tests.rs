@@ -4145,10 +4145,12 @@ async fn mcp_node_discovers_and_executes_one_read_without_a_model_turn() {
         .into_iter()
         .map(|event| current(&event)["content"].clone())
         .collect::<Vec<_>>();
+    // A dict result is shown as fenced pretty JSON, not compact text.
     assert!(
         browser_content
             .iter()
-            .any(|content| content == "{\"release\":\"1.2\",\"risk\":\"low\"}"),
+            .any(|content| content
+                == "```json\n{\n  \"release\": \"1.2\",\n  \"risk\": \"low\"\n}\n```"),
         "unexpected MCP completion: {browser_content:?}"
     );
     let checkpoint = checkpointer
@@ -4904,4 +4906,95 @@ async fn direct_mcp_setup_failure_preserves_configuration_category_without_model
     );
     assert!(!error.retryable());
     assert_eq!(connections.load(Ordering::Acquire), 0);
+}
+
+const LIMIT_SENTINEL: &str = "SENTINELPRIVATEPAYLOAD";
+
+fn pipeline_profile_refusal(instructions: &str) -> super::runtime::NativeAgentAssemblyError {
+    let mut request = pipeline_request();
+    request
+        .payload
+        .application
+        .get_mut("version_details")
+        .and_then(Value::as_object_mut)
+        .expect("application version fixture")
+        .insert("instructions".to_owned(), json!(instructions));
+    match PipelineExecutionProfile::validate(&request, false) {
+        Ok(_) => panic!("the pipeline was admitted"),
+        Err(error) => error,
+    }
+}
+
+/// Bound refusals name the limit in the Worker's log and map to the registered
+/// agent-settings message instead of the generic resource or input texts.
+#[test]
+fn pipeline_size_and_count_refusals_map_to_the_agent_settings_limit_without_content() {
+    let small =
+        "entry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    transition: END\n";
+    let oversized_document = format!("{small}# {LIMIT_SENTINEL}{}\n", "p".repeat(512 * 1024 + 1));
+    let mut too_many_nodes = String::from("entry_point: n0\nnodes:\n");
+    for n in 0..129 {
+        std::fmt::Write::write_fmt(
+            &mut too_many_nodes,
+            format_args!(
+                "  - id: n{n}\n    type: state_modifier\n    template: {LIMIT_SENTINEL}\n    transition: END\n"
+            ),
+        )
+        .expect("write to string");
+    }
+    let oversized_node = format!(
+        "entry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    template: {}\n    transition: END\n",
+        LIMIT_SENTINEL.repeat(70 * 1024 / LIMIT_SENTINEL.len() + 1)
+    );
+    for (name, instructions, cause) in [
+        (
+            "profile bound",
+            oversized_document,
+            Some(("graph.pipeline.yaml_bytes_exceeded", "yaml_bytes")),
+        ),
+        (
+            "node count",
+            too_many_nodes,
+            Some(("graph.pipeline.node_count_exceeded", "node_count")),
+        ),
+        (
+            "node bound",
+            oversized_node,
+            Some((
+                "graph.pipeline.node_limit_exceeded",
+                "nodes[].state_modifier",
+            )),
+        ),
+    ] {
+        let error = pipeline_profile_refusal(&instructions);
+        assert_eq!(
+            error.code(),
+            NativeAgentAssemblyErrorCode::AgentSettingsLimit,
+            "{name}"
+        );
+        assert!(!error.retryable(), "{name}");
+        assert_eq!(
+            error.cause().map(|cause| (cause.code(), cause.detail())),
+            cause.map(|(code, detail)| (code, Some(detail))),
+            "{name}"
+        );
+        for rendered in [error.to_string(), format!("{error:?}")] {
+            assert!(!rendered.contains(LIMIT_SENTINEL), "{name}: {rendered}");
+        }
+    }
+}
+
+/// A value that cannot be an identifier has no registered readable message, so
+/// the wire code stays generic while the Worker's own log carries the field.
+#[test]
+fn pipeline_identifier_refusals_stay_invalid_input_with_a_field_cause() {
+    let error = pipeline_profile_refusal(
+        "entry_point: 9007199254740993\nnodes:\n  - id: a\n    type: state_modifier\n    transition: END\n",
+    );
+    assert_eq!(error.code(), NativeAgentAssemblyErrorCode::InvalidInput);
+    assert!(!error.retryable());
+    let cause = error.cause().expect("identifier refusal carries a cause");
+    assert_eq!(cause.code(), "graph.pipeline.invalid_identifier");
+    assert_eq!(cause.detail(), Some("entry_point"));
+    assert!(!format!("{error:?} {error} {cause:?}").contains("9007199254740993"));
 }

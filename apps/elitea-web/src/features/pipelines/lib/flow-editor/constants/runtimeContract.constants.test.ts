@@ -70,8 +70,8 @@ describe('CompilerAdmittedNodeTypes mirrors parse_pipeline_node (worker compiler
 });
 
 describe('ReservedStateKeys mirrors reserved_user_state_key (worker compiler.rs:1456)', () => {
-  it('holds the 25 recorded reserved keys, each citing the compiler line that reserves it', () => {
-    expect(ReservedStateKeys).toHaveLength(25);
+  it('holds the 26 recorded reserved keys, each citing the compiler line that reserves it', () => {
+    expect(ReservedStateKeys).toHaveLength(26);
     for (const entry of ReservedStateKeys) {
       expect(entry.key.length).toBeGreaterThan(0);
       expect(entry.citation).toMatch(/^compiler\.rs:\d+/);
@@ -88,6 +88,10 @@ describe('ReservedStateKeys mirrors reserved_user_state_key (worker compiler.rs:
     ]) {
       expect(isReservedStateKey(key)).toBe(true);
     }
+  });
+
+  it('reserves the pipeline result trace channel (worker compiler.rs:2320)', () => {
+    expect(isReservedStateKey('__elitea_pipeline_result_trace_v1')).toBe(true);
   });
 
   it('reserves the ordinary-looking names that would otherwise pass the character rule', () => {

@@ -41,19 +41,92 @@ const MAX_IDENTITY_BYTES: usize = 512;
 /// before the compiler-owned reset node executes.
 pub(crate) struct PrinterContinuation;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
 enum PipelineMcpAuthorizationAction {
     Authorize,
     Skip,
 }
 
-/// Current authorization continuation inferred from Main's claim-fetched
-/// token/decline collections. The public request identity has already been
-/// consumed by Main; Rust binds the decision to the latest durable graph card,
-/// exact server URL and checkpoint before rebuilding the graph.
+impl PipelineMcpAuthorizationAction {
+    const fn wire_name(self) -> &'static str {
+        match self {
+            Self::Authorize => "authorize",
+            Self::Skip => "skip",
+        }
+    }
+}
+
+const MCP_AUTH_GUARDRAIL_TYPE: &str = "mcp_auth";
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPipelineMcpAuthorizationDecision {
+    interrupt_id: String,
+    tool_call_id: String,
+    guardrail_type: String,
+    action: PipelineMcpAuthorizationAction,
+    #[serde(default)]
+    value: String,
+}
+
+/// The browser card Main consumed for this authorization decision. It is
+/// joined to the persisted pause so a foreign or replayed card cannot resume
+/// a different call.
+struct PipelineMcpAuthorizationCard {
+    interrupt_id: String,
+    tool_call_id: String,
+    action: PipelineMcpAuthorizationAction,
+}
+
+impl PipelineMcpAuthorizationCard {
+    /// Main's authorization continuation (`continue.go`): a HITL resume with
+    /// exactly one `mcp_auth` decision whose action is echoed in `hitl_action`.
+    fn from_payload(payload: &AgentExecutionPayload) -> Result<Self, PipelineResumeError> {
+        if !payload.hitl_resume || payload.hitl_decisions.len() != 1 {
+            return Err(PipelineResumeError::invalid());
+        }
+        let raw = serde_json::from_value::<RawPipelineMcpAuthorizationDecision>(
+            payload.hitl_decisions[0].clone(),
+        )
+        .map_err(|_| PipelineResumeError::invalid())?;
+        if raw.guardrail_type != MCP_AUTH_GUARDRAIL_TYPE
+            || !raw.value.is_empty()
+            || !valid_identity(&raw.interrupt_id)
+            || !valid_identity(&raw.tool_call_id)
+            || payload.hitl_action.as_deref() != Some(raw.action.wire_name())
+            || payload.hitl_value.as_deref() != Some("")
+        {
+            return Err(PipelineResumeError::invalid());
+        }
+        Ok(Self {
+            interrupt_id: raw.interrupt_id,
+            tool_call_id: raw.tool_call_id,
+            action: raw.action,
+        })
+    }
+}
+
+/// True when Main's decision set is exactly one MCP authorization card. Only
+/// then may the decision belong to a pipeline-owned MCP authorization pause
+/// instead of a nested Application's confirmation.
+fn is_single_mcp_authorization_decision(payload: &AgentExecutionPayload) -> bool {
+    payload.hitl_decisions.len() == 1
+        && payload.hitl_decisions[0]
+            .get("guardrail_type")
+            .and_then(Value::as_str)
+            == Some(MCP_AUTH_GUARDRAIL_TYPE)
+}
+
+/// Current authorization continuation for a pipeline-owned MCP pause. Main
+/// supplies the claim-fetched token/decline collections and, on the current
+/// wire, the consumed card identity; Rust binds the decision to the latest
+/// durable graph card, exact server URL and checkpoint before rebuilding the
+/// graph.
 pub(crate) struct PipelineMcpAuthorizationContinuation {
     action: PipelineMcpAuthorizationAction,
     server_urls: BTreeSet<String>,
+    card: Option<PipelineMcpAuthorizationCard>,
 }
 
 impl PipelineMcpAuthorizationContinuation {
@@ -61,10 +134,6 @@ impl PipelineMcpAuthorizationContinuation {
         payload: &AgentExecutionPayload,
     ) -> Result<Self, PipelineResumeError> {
         if !payload.should_continue
-            || payload.hitl_resume
-            || payload.hitl_action.is_some()
-            || payload.hitl_value.is_some()
-            || !payload.hitl_decisions.is_empty()
             || payload.checkpoint_id.is_some()
             || payload.auto_approve_sensitive_actions
         {
@@ -72,26 +141,45 @@ impl PipelineMcpAuthorizationContinuation {
                 PipelineResumeErrorCode::UnsupportedCapability,
             ));
         }
-        let (action, server_urls) = if !payload.mcp_tokens.is_empty() {
-            (
-                PipelineMcpAuthorizationAction::Authorize,
-                payload.mcp_tokens.keys().cloned().collect::<BTreeSet<_>>(),
-            )
-        } else if !payload.user_declined_mcp_servers.is_empty() {
-            (
-                PipelineMcpAuthorizationAction::Skip,
-                payload
-                    .user_declined_mcp_servers
-                    .iter()
-                    .map(declined_server_url)
-                    .collect::<Option<BTreeSet<_>>>()
-                    .ok_or_else(PipelineResumeError::invalid)?
-                    .into_iter()
-                    .map(ToOwned::to_owned)
-                    .collect(),
-            )
+        let card = if payload.hitl_resume
+            || payload.hitl_action.is_some()
+            || payload.hitl_value.is_some()
+            || !payload.hitl_decisions.is_empty()
+        {
+            Some(PipelineMcpAuthorizationCard::from_payload(payload)?)
         } else {
-            return Err(PipelineResumeError::invalid());
+            None
+        };
+        let has_tokens = !payload.mcp_tokens.is_empty();
+        let has_declines = !payload.user_declined_mcp_servers.is_empty();
+        let action = match card.as_ref().map(|card| card.action) {
+            // The card names the action, so the credential collections must
+            // agree with it exactly (the direct-agent authority rule).
+            Some(action @ PipelineMcpAuthorizationAction::Authorize)
+                if has_tokens && !has_declines =>
+            {
+                action
+            }
+            Some(action @ PipelineMcpAuthorizationAction::Skip) if has_declines && !has_tokens => {
+                action
+            }
+            None if has_tokens => PipelineMcpAuthorizationAction::Authorize,
+            None if has_declines => PipelineMcpAuthorizationAction::Skip,
+            _ => return Err(PipelineResumeError::invalid()),
+        };
+        let server_urls = match action {
+            PipelineMcpAuthorizationAction::Authorize => {
+                payload.mcp_tokens.keys().cloned().collect::<BTreeSet<_>>()
+            }
+            PipelineMcpAuthorizationAction::Skip => payload
+                .user_declined_mcp_servers
+                .iter()
+                .map(declined_server_url)
+                .collect::<Option<BTreeSet<_>>>()
+                .ok_or_else(PipelineResumeError::invalid)?
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
         };
         if server_urls.is_empty()
             || server_urls
@@ -103,6 +191,7 @@ impl PipelineMcpAuthorizationContinuation {
         Ok(Self {
             action,
             server_urls,
+            card,
         })
     }
 
@@ -124,6 +213,12 @@ impl PipelineMcpAuthorizationContinuation {
         let binding =
             pipeline_mcp_auth_event_binding(&events[interrupt_index], root_agent_name, thread_id)
                 .map_err(|_| PipelineResumeError::corrupt())?;
+        if self.card.as_ref().is_some_and(|card| {
+            card.interrupt_id != binding.interrupt_id()
+                || card.tool_call_id != binding.tool_call_id()
+        }) {
+            return Err(PipelineResumeError::stale());
+        }
         let requirement = delegated_requirement(&binding)?;
         if self
             .server_urls
@@ -177,24 +272,9 @@ impl PipelineMcpAuthorizationContinuation {
                 .collect(),
             });
         }
-        if checkpoint
-            .state
-            .get(DIRECT_TOOL_RESUME_STATE_KEY)
-            .is_some_and(|value| value != &json!({}))
-        {
-            return Err(PipelineResumeError::stale());
-        }
-        validate_nested_checkpoints(
-            checkpointer,
-            binding.nested_checkpoints(),
-            binding.node_name(),
-            DIRECT_TOOL_RESUME_STATE_KEY,
-        )
-        .await?;
-        let action = match self.action {
-            PipelineMcpAuthorizationAction::Authorize => "authorize",
-            PipelineMcpAuthorizationAction::Skip => "skip",
-        };
+        validate_direct_tool_authorization_frontier(checkpointer, &checkpoint.state, &binding)
+            .await?;
+        let action = self.action.wire_name();
         Ok(PipelineResume {
             root_hitl_resume: false,
             state: [(
@@ -212,6 +292,57 @@ impl PipelineMcpAuthorizationContinuation {
             .collect(),
         })
     }
+}
+
+/// No direct-tool decision may be pending at a direct MCP authorization
+/// pause, except the sensitive approval the same call already consumed: a
+/// sensitive tool behind delegated authorization raises this card only after
+/// that approval.
+async fn validate_direct_tool_authorization_frontier(
+    checkpointer: &dyn Checkpointer,
+    root_state: &State,
+    binding: &PipelineMcpAuthEventBinding,
+) -> Result<(), PipelineResumeError> {
+    let consumed_approval = sensitive_tool_resume_entry(
+        binding.definition_digest(),
+        binding.tool_call_id(),
+        binding.argument_digest(),
+        PipelineHitlAction::Approve,
+        "",
+    );
+    let leaf_at_root = binding.nested_checkpoints().is_empty();
+    if !resume_state_is_clear(
+        root_state.get(DIRECT_TOOL_RESUME_STATE_KEY),
+        leaf_at_root.then_some((binding.node_name(), &consumed_approval)),
+    ) {
+        return Err(PipelineResumeError::stale());
+    }
+    validate_nested_checkpoints(
+        checkpointer,
+        binding.nested_checkpoints(),
+        binding.node_name(),
+        DIRECT_TOOL_RESUME_STATE_KEY,
+        Some(&consumed_approval),
+    )
+    .await
+}
+
+/// The direct-tool resume entry of one sensitive-tool decision. Shared so the
+/// authorization pause recognises exactly the approval this module wrote.
+fn sensitive_tool_resume_entry(
+    definition_digest: &str,
+    tool_call_id: &str,
+    argument_digest: &str,
+    action: PipelineHitlAction,
+    value: &str,
+) -> Value {
+    json!({
+        "definition_digest": definition_digest,
+        "tool_call_id": tool_call_id,
+        "argument_digest": argument_digest,
+        "action": action.wire_name(),
+        "value": value,
+    })
 }
 
 fn delegated_requirement(
@@ -429,6 +560,10 @@ pub(crate) enum PipelineContinuationDecision {
     Sensitive {
         application: DirectHitlDecisionSet,
         tool: Option<PipelineToolDecision>,
+        /// Main sends one wire shape for every MCP authorization card; only
+        /// the latest durable event tells whether the card belongs to a nested
+        /// Application or to a pipeline-owned MCP pause.
+        authorization: Option<Box<PipelineMcpAuthorizationContinuation>>,
     },
 }
 
@@ -462,7 +597,18 @@ impl PipelineContinuationDecision {
                 && !application.has_delegated_authorization_actions())
             .then(|| PipelineToolDecision::from_payload(payload))
             .transpose()?;
-            Ok(Self::Sensitive { application, tool })
+            // Not fatal here: the same decision may belong to a nested
+            // Application, whose own parser above is authoritative. A pipeline
+            // MCP pause without a valid card resolves as a stale decision.
+            let authorization = is_single_mcp_authorization_decision(payload)
+                .then(|| PipelineMcpAuthorizationContinuation::from_payload(payload).ok())
+                .flatten()
+                .map(Box::new);
+            Ok(Self::Sensitive {
+                application,
+                tool,
+                authorization,
+            })
         }
     }
 
@@ -478,7 +624,11 @@ impl PipelineContinuationDecision {
                 .resolve(session, checkpointer, root_agent_name, thread_id)
                 .await
                 .map(ResolvedPipelineContinuation::graph),
-            Self::Sensitive { application, tool } => {
+            Self::Sensitive {
+                application,
+                tool,
+                authorization,
+            } => {
                 let events = session.events().all();
                 let interrupt = events.last().ok_or_else(PipelineResumeError::stale)?;
                 if let Ok(binding) =
@@ -536,7 +686,15 @@ impl PipelineContinuationDecision {
                         decisions,
                     ));
                 }
-                tool.ok_or_else(PipelineResumeError::corrupt)?
+                if let Some(authorization) = authorization {
+                    return authorization
+                        .resolve(session, checkpointer, root_agent_name, thread_id)
+                        .await
+                        .map(ResolvedPipelineContinuation::graph);
+                }
+                // A decision that matches neither an Application pause nor a
+                // direct Toolkit card does not belong to the current pause.
+                tool.ok_or_else(PipelineResumeError::stale)?
                     .resolve(session, checkpointer, root_agent_name, thread_id)
                     .await
                     .map(ResolvedPipelineContinuation::graph)
@@ -779,6 +937,7 @@ impl PipelineToolDecision {
             binding.nested_checkpoints(),
             binding.node_name(),
             DIRECT_TOOL_RESUME_STATE_KEY,
+            None,
         )
         .await?;
         Ok(PipelineResume {
@@ -786,13 +945,13 @@ impl PipelineToolDecision {
             state: [(
                 DIRECT_TOOL_RESUME_STATE_KEY.to_owned(),
                 json!({
-                    binding.node_name(): {
-                        "definition_digest": binding.definition_digest(),
-                        "tool_call_id": binding.tool_call_id(),
-                        "argument_digest": binding.argument_digest(),
-                        "action": self.action.wire_name(),
-                        "value": self.value,
-                    }
+                    binding.node_name(): sensitive_tool_resume_entry(
+                        binding.definition_digest(),
+                        binding.tool_call_id(),
+                        binding.argument_digest(),
+                        self.action,
+                        &self.value,
+                    )
                 }),
             )]
             .into_iter()
@@ -935,6 +1094,7 @@ impl PipelineHitlDecision {
             binding.nested_checkpoints(),
             binding.node_name(),
             HITL_RESUME_STATE_KEY,
+            None,
         )
         .await?;
         let value = if self.action == PipelineHitlAction::Edit {
@@ -973,6 +1133,11 @@ impl PipelineResume {
             root_hitl_resume: false,
             state: State::new(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn state(&self) -> &State {
+        &self.state
     }
 
     pub(super) fn terminal_decision(&self) -> Option<(&str, super::hitl::HitlAction)> {
@@ -1090,33 +1255,54 @@ fn direct_hitl_resume_error(error: &DirectHitlError) -> PipelineResumeError {
     }
 }
 
+/// `leaf_consumed` is the only entry the leaf checkpoint may still hold for
+/// `leaf_pending_node` (see [`resume_state_is_clear`]).
 async fn validate_nested_checkpoints(
     checkpointer: &dyn Checkpointer,
     nested: &[crate::agents::events::NestedPipelineCheckpoint],
     leaf_pending_node: &str,
     resume_state_key: &str,
+    leaf_consumed: Option<&Value>,
 ) -> Result<(), PipelineResumeError> {
     for (index, nested_checkpoint) in nested.iter().enumerate() {
-        let pending_node = nested
-            .get(index + 1)
-            .map_or(leaf_pending_node, |checkpoint| checkpoint.node_name());
+        let next = nested.get(index + 1);
+        let pending_node = next.map_or(leaf_pending_node, |checkpoint| checkpoint.node_name());
         let checkpoint = checkpointer
             .load(nested_checkpoint.thread_id())
             .await
             .map_err(|_| PipelineResumeError::dependency())?
             .ok_or_else(PipelineResumeError::stale)?;
+        let consumed = leaf_consumed
+            .filter(|_| next.is_none())
+            .map(|entry| (leaf_pending_node, entry));
         if checkpoint.thread_id != nested_checkpoint.thread_id()
             || checkpoint.checkpoint_id != nested_checkpoint.checkpoint_id()
             || checkpoint.pending_nodes.as_slice() != [pending_node]
-            || checkpoint
-                .state
-                .get(resume_state_key)
-                .is_some_and(|value| value != &json!({}))
+            || !resume_state_is_clear(checkpoint.state.get(resume_state_key), consumed)
         {
             return Err(PipelineResumeError::stale());
         }
     }
     Ok(())
+}
+
+/// True when a resume map holds no pending decision.
+///
+/// `consumed` names the one `(node, entry)` that may remain: an interrupted
+/// node's own state updates are never checkpointed, so a direct tool that was
+/// approved and then raised an authorization card still carries the approval
+/// it consumed.
+fn resume_state_is_clear(value: Option<&Value>, consumed: Option<(&str, &Value)>) -> bool {
+    match value {
+        None => true,
+        Some(Value::Object(entries)) => {
+            entries.is_empty()
+                || consumed.is_some_and(|(node, entry)| {
+                    entries.len() == 1 && entries.get(node) == Some(entry)
+                })
+        }
+        Some(_) => false,
+    }
 }
 
 fn valid_identity(value: &str) -> bool {
@@ -1194,3 +1380,44 @@ impl fmt::Display for PipelineResumeError {
 }
 
 impl std::error::Error for PipelineResumeError {}
+
+#[cfg(test)]
+mod predecessor_tests {
+    use serde_json::json;
+
+    use super::resume_state_is_clear;
+
+    #[test]
+    fn only_the_exact_consumed_approval_of_the_leaf_node_may_remain() {
+        let approval =
+            json!({"tool_call_id": "pipeline:lookup:0", "action": "approve", "value": ""});
+        let consumed = Some(("lookup", &approval));
+        assert!(resume_state_is_clear(None, None));
+        assert!(resume_state_is_clear(Some(&json!({})), None));
+        assert!(resume_state_is_clear(
+            Some(&json!({"lookup": approval})),
+            consumed
+        ));
+        // Without an allowed predecessor any pending entry is a stale pause.
+        assert!(!resume_state_is_clear(
+            Some(&json!({"lookup": approval})),
+            None
+        ));
+        // A different node, a different decision or an extra entry is refused.
+        assert!(!resume_state_is_clear(
+            Some(&json!({"other": approval})),
+            consumed
+        ));
+        let rejected =
+            json!({"tool_call_id": "pipeline:lookup:0", "action": "reject", "value": ""});
+        assert!(!resume_state_is_clear(
+            Some(&json!({"lookup": rejected})),
+            consumed
+        ));
+        assert!(!resume_state_is_clear(
+            Some(&json!({"lookup": approval, "other": approval})),
+            consumed
+        ));
+        assert!(!resume_state_is_clear(Some(&json!([])), consumed));
+    }
+}

@@ -433,11 +433,14 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Toolkit request recovery](toolkit-request-recovery.md) records browser recovery before execution ID receipt and one-call evidence.
 - [Deferred MCP elicitation](external-mcp-elicitation-deferred.md) records the later client approval option and its authority boundary.
 - [Pipeline size bounds and HTTP snapshot scope](pipeline-size-bounds-http-snapshot-20261008.md) records one 512 KiB pipeline bound across Main and Worker, the non-HTTP snapshot scope, browser evidence and follow-ups.
+- [Pipeline MCP authorization continuation](pipeline-mcp-authorization-continuation-20261008.md) records Skip/Authorize on a direct pipeline MCP node from Main's HITL wire shape, the sensitive-approval-then-authorization sequence, browser evidence and follow-ups.
 - [Graph fan-out child lineage](graph-fanout-child-lineage-20261008.md) records frozen Parallel/Map child identity across executions, lease-loss control stops and event-driven cancellation (Point 5 C1).
 - [Container build local crate freshness](container-build-local-crate-freshness-20261008.md) records why Rust image builds recompile local crates under a locked shared target cache, the two-worktree build proof and the gate test.
 - [Point 5 V2 contracts and designs](graph-point5-v2-contracts-20261008.md) links the fan-out V2 runtime design, the per-interrupt decision contract and schemas, the Map V1 rewrite, and the HTTP and database action designs.
+- [Pipeline terminal result](pipeline-terminal-result-20261008.md) records the runtime last-writer trace that selects a pipeline answer, its rendering, bounds, tests and browser evidence.
 - [Governance body bounds](governance-body-bounds-20261008.md) records the 256 KiB governance body limit, 413 refusal, strict decode, and 8 KiB routing CEL cap.
 - [Go module advisories](go-module-advisories-20261008.md) records the cel-go and klauspost/compress fixes, the deferred x/crypto fix (Go 1.26), and the guard against linking x/crypto/ssh and openpgp.
 - [Admin Guardrails tool-map rows](admin-guardrails-tool-map-rows-20261009.md) records the Web fix that keeps added Guardrails toolkit rows, its page-level tests and browser evidence.
 - [Per-interrupt decision ledger (Track M2)](execution-interrupts-ledger-20261008.md) records the execution interrupt ledger, its public decision API behind a default-off flag, the real-PostgreSQL race and authorization proofs, the reviews, and the deployed rehearsal evidence.
 - [Conversation pin concurrency](conversation-pin-concurrency-20261009.md) records the Pin/Unpin/Delete lock-order fix for the intermittent 40P01 pin 500, the forced and stress PostgreSQL tests, browser evidence and recovery rows.
+- [Numeric node ids and readable pipeline limits](pipeline-numeric-ids-readable-limits-20261008.md) records numeric-id support in Worker and Web, the Main save-time bound, typed readable limit refusals, browser evidence and follow-ups.

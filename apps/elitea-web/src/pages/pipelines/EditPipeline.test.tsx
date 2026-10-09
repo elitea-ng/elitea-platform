@@ -384,12 +384,32 @@ describe('EditPipeline', () => {
     const saveButton = await screen.findByTestId('pipeline-save-button');
     server.use(
       http.put('*/elitea_core/version/prompt_lib/:projectId/:applicationId/:versionId', () =>
-        HttpResponse.json({ error: 'boom' }, { status: 500 }),
+        new HttpResponse(null, { status: 500 }),
       ),
     );
     await user.click(saveButton);
 
     expect(await screen.findByText('Failed to save your changes.')).toBeInTheDocument();
+  });
+
+  it('shows the server\'s own readable refusal when a pipeline save is refused for exceeding the size or node limits', async () => {
+    server.use(getGetApplicationMockHandler(detail()));
+    renderPipelinesRoute(<EditPipeline />, '/pipelines/all/42', {
+      projectId: '9',
+    });
+    const user = userEvent.setup();
+
+    const saveButton = await screen.findByTestId('pipeline-save-button');
+    const refusal = 'The pipeline has more than 128 nodes. Split it into smaller pipelines before saving.';
+    server.use(
+      http.put('*/elitea_core/version/prompt_lib/:projectId/:applicationId/:versionId', () =>
+        HttpResponse.json({ error: refusal }, { status: 400 }),
+      ),
+    );
+    await user.click(saveButton);
+
+    expect(await screen.findByText(refusal)).toBeInTheDocument();
+    expect(screen.queryByText('Failed to save your changes.')).not.toBeInTheDocument();
   });
 
   /*
