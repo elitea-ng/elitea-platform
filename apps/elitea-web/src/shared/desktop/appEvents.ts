@@ -24,6 +24,8 @@ export interface AppPlatform {
 /** One `app://command` payload. `open_folder` is never sent: Open Folder… runs host-side and sends `workspace_opened`. */
 export type AppCommand =
   | { id: 'new_thread' | 'settings' | 'command_palette' | 'toggle_sidebar' | 'toggle_changes' | 'back' | 'forward'; args?: undefined }
+  /** Help › Run Diagnostics…: open the Doctor. Sent live, never queued for `ready`. */
+  | { id: 'run_diagnostics'; args?: undefined }
   | { id: 'workspace_opened'; args: { workspace_id: string } }
   | { id: 'workspace_open_failed'; args: { message: string } }
   /** Absolute paths of files (not folders) dropped on the window. */

@@ -38,6 +38,8 @@ const ZOOM_IN: &str = "zoom_in";
 const ZOOM_OUT: &str = "zoom_out";
 const ZOOM_RESET: &str = "zoom_reset";
 const HELP: &str = "help";
+/// Help ▸ Run Diagnostics…: the UI opens the Doctor (`run_diagnostics`).
+const RUN_DIAGNOSTICS: &str = "run_diagnostics";
 
 const ZOOM_STEPS: &[f64] = &[0.5, 0.67, 0.75, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
 
@@ -170,9 +172,21 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         .item(&PredefinedMenuItem::maximize(app, Some("Zoom"))?)
         .build()?;
 
-    let mut help = SubmenuBuilder::with_id(app, tauri::menu::HELP_SUBMENU_ID, "Help").item(
-        &MenuItem::with_id(app, HELP, "Elitea Help", true, None::<&str>)?,
-    );
+    let mut help = SubmenuBuilder::with_id(app, tauri::menu::HELP_SUBMENU_ID, "Help")
+        .item(&MenuItem::with_id(
+            app,
+            HELP,
+            "Elitea Help",
+            true,
+            None::<&str>,
+        )?)
+        .item(&MenuItem::with_id(
+            app,
+            RUN_DIAGNOSTICS,
+            "Run Diagnostics…",
+            true,
+            None::<&str>,
+        )?);
     if !cfg!(target_os = "macos") {
         help = help.item(&separator()?).item(&about);
     }
@@ -221,6 +235,10 @@ pub fn on_event(app: &AppHandle, event: &MenuEvent) {
         }
         ZOOM_IN | ZOOM_OUT | ZOOM_RESET => zoom(app, id),
         HELP => open_help(app),
+        RUN_DIAGNOSTICS => {
+            app_events::show_main(app);
+            app_events::emit_live(app, RUN_DIAGNOSTICS);
+        }
         _ => {}
     }
 }

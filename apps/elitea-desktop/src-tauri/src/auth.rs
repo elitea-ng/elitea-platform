@@ -527,6 +527,25 @@ impl AuthService {
         delivered
     }
 
+    /// The Doctor's deployment check: discovery answers and validates; the
+    /// deployment's display name.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::connect`]'s discovery fetch.
+    pub async fn probe_deployment(&self, origin: &str) -> Result<String, HostError> {
+        let origin = discovery::normalize_origin(origin)?;
+        let document = discovery::fetch_discovery(self.tokens.http(), &origin).await?;
+        document.native_auth()?;
+        Ok(document.display_name)
+    }
+
+    /// How many sign-outs still wait to reach the server.
+    #[must_use]
+    pub fn pending_revoke_count(&self) -> usize {
+        load_pending(self.pending_revokes.as_ref()).map_or(0, |list| list.len())
+    }
+
     /// Take a delivered revoke out of the waiting list.
     async fn forget_pending(&self, delivered: &PendingRevoke) {
         let _gate = self.pending_gate.lock().await;

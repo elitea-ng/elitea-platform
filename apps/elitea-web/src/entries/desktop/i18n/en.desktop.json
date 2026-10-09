@@ -142,5 +142,19 @@
   "workspace.history.interrupted": "This turn did not finish: the app closed while it ran.",
   "workspace.history.loading": "Loading earlier messages",
   "workspace.history.truncated": "Part of this turn was too long to keep on this computer.",
-  "workspace.localWork.openThread": "Open in Local work"
+  "workspace.localWork.openThread": "Open in Local work",
+  "desktop.doctor.attention": "Something needs attention.",
+  "desktop.doctor.checks": "Diagnostics",
+  "desktop.doctor.close": "Close",
+  "desktop.doctor.fix": "Fix",
+  "desktop.doctor.intro": "What Elitea keeps on this computer and needs from your deployment. A repair runs only when you click Fix.",
+  "desktop.doctor.noHost": "Diagnostics run in the desktop app.",
+  "desktop.doctor.pageTitle": "Troubleshoot",
+  "desktop.doctor.run": "Run Diagnostics",
+  "desktop.doctor.runAgain": "Run again",
+  "desktop.doctor.running": "Running diagnostics",
+  "desktop.doctor.status.fail": "Problem",
+  "desktop.doctor.status.ok": "OK",
+  "desktop.doctor.status.warn": "Warning",
+  "desktop.doctor.title": "Diagnostics"
 }

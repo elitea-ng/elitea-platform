@@ -794,6 +794,34 @@ fn prune_thread(
     Ok(dropped)
 }
 
+/// The Doctor's look at an existing database: it opens read-only (never
+/// following a symlink), passes `PRAGMA integrity_check`; its schema version.
+///
+/// # Errors
+///
+/// What SQLite said, for a person.
+pub fn integrity(path: &Path) -> Result<i64, String> {
+    // The folder canonical, so no-follow refuses a symlinked FILE only
+    // (macOS's `/var` is a symlink higher up).
+    let path = match (path.parent(), path.file_name()) {
+        (Some(dir), Some(name)) => fs::canonicalize(dir).map_err(|e| e.to_string())?.join(name),
+        _ => path.to_owned(),
+    };
+    let conn = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+    )
+    .map_err(|e| e.to_string())?;
+    let verdict: String = conn
+        .query_row("PRAGMA integrity_check", [], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    if verdict != "ok" {
+        return Err(verdict);
+    }
+    conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(|e| e.to_string())
+}
+
 fn migrate(conn: &Connection) -> Result<(), HostError> {
     let version: i64 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))

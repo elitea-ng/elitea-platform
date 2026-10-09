@@ -13,8 +13,10 @@ import { CssBaseline, ThemeProvider, createTheme } from '@mui/material';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { tauriAppIpc } from '@/shared/desktop/appEvents';
 import { installContextMenuGuard } from '@/shared/desktop/contextMenu';
 import { createHostLogger, hostLog, installDiagnostics } from '@/shared/desktop/diagnostics';
+import { createDoctorIpc } from '@/shared/desktop/doctorIpc';
 import { createHostBridge, tauriInvoke } from '@/shared/desktop/hostBridge';
 
 import { DesktopShell } from './DesktopShell';
@@ -30,6 +32,8 @@ registerDesktopCatalogue();
 
 const invoke = tauriInvoke();
 const bridge = invoke === undefined ? undefined : createHostBridge(invoke);
+const doctor = invoke === undefined ? undefined : createDoctorIpc(invoke);
+const appIpc = tauriAppIpc();
 // First, so an error anywhere after this reaches the host's log file (README, "Logs").
 if (invoke !== undefined) {
   installDiagnostics(createHostLogger(invoke));
@@ -43,7 +47,7 @@ function renderShell(root: HTMLElement): void {
     <StrictMode>
       <ThemeProvider theme={createTheme()}>
         <CssBaseline />
-        <DesktopShell bridge={bridge} />
+        <DesktopShell bridge={bridge} doctor={doctor} appIpc={appIpc} />
       </ThemeProvider>
     </StrictMode>,
   );

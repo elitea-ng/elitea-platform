@@ -11,3 +11,5 @@ export { useDesktopLayout, CHANGES_WIDTH } from './model/desktopLayout.store';
 export type { SessionActions } from './model/desktopLayout.store';
 export { modKey } from './ui/shortcutLabel';
 export { AppIpcProvider, useAppIpc } from './model/appIpcContext';
+export { DoctorPanel } from './ui/DoctorPanel';
+export type { DoctorPanelProps } from './ui/DoctorPanel';

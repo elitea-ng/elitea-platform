@@ -29,6 +29,8 @@ fn main() {
             "open_path",
             "app_platform",
             "app_ready",
+            "doctor_run",
+            "doctor_fix",
         ]),
     ))
     .expect("tauri build configuration is valid");

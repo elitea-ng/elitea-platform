@@ -125,6 +125,39 @@ impl WorkspaceStore {
         self.with(|| Ok(self.read()?.into_iter().find(|w| w.id == id)))
     }
 
+    /// `workspaces.json` (the Doctor checks and moves it).
+    #[must_use]
+    pub fn file_path(&self) -> PathBuf {
+        self.dir.join(FILE)
+    }
+
+    /// Every workspace as stored, without `is_git` (the Doctor's view).
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be read or does not parse.
+    pub fn all(&self) -> Result<Vec<Workspace>, HostError> {
+        self.with(|| self.read())
+    }
+
+    /// Forget every workspace whose folder is gone or unreadable (the
+    /// Doctor's repair); the names forgotten. Their host data goes too.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be read or written.
+    pub fn drop_unreachable(&self) -> Result<Vec<String>, HostError> {
+        let gone: Vec<Workspace> = self
+            .all()?
+            .into_iter()
+            .filter(|w| fs::read_dir(&w.path).is_err())
+            .collect();
+        for workspace in &gone {
+            self.remove(&workspace.id)?;
+        }
+        Ok(gone.into_iter().map(|w| w.name).collect())
+    }
+
     /// Add a folder (or return the workspace it already is).
     ///
     /// # Errors

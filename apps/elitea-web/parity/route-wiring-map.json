@@ -3,8 +3,8 @@
   "generated": "phase-0",
   "total": 92,
   "byStatus": {
-    "unreviewed": 25,
-    "wired": 66,
+    "unreviewed": 24,
+    "wired": 67,
     "parity-dead-code": 1
   },
   "byDomain": {
@@ -856,13 +856,13 @@
       "routeNum": null,
       "specUrl": null,
       "docstringTarget": null,
-      "component": null,
-      "bodyShape": "inline",
-      "targetPath": null,
-      "targetSpecifier": null,
-      "targetExport": null,
+      "component": "SettingsTab",
+      "bodyShape": "renders-page",
+      "targetPath": "src/pages/workspace/desktopEntry.tsx",
+      "targetSpecifier": "@/pages/workspace/desktopEntry",
+      "targetExport": "TroubleshootEntry",
       "requiredProps": [],
-      "status": "unreviewed",
+      "status": "wired",
       "rendersRouteShell": false,
       "note": "",
       "curated": false

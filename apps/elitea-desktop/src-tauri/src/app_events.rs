@@ -92,6 +92,15 @@ pub fn emit(app: &AppHandle, id: &'static str, args: Option<Value>) {
     }
 }
 
+/// Send now, never queued: an interactive request (Help ▸ Run
+/// Diagnostics…) whoever listens — the connect screen does not call
+/// `app_ready`, and a request replayed later would surprise.
+pub fn emit_live(app: &AppHandle, id: &'static str) {
+    if let Err(error) = app.emit_to("main", APP_COMMAND_EVENT, AppCommand { id, args: None }) {
+        log::warn!("could not deliver an app command: {error}");
+    }
+}
+
 /// The page subscribed to `app://command`: the commands sent before it
 /// did, oldest first; later ones arrive as events.
 #[tauri::command]

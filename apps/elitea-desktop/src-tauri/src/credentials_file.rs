@@ -22,10 +22,10 @@
 //! lost the mode) is narrowed to `0600` and read, with a warning: nobody else
 //! could have written it. A file that is a symlink, is not a regular file,
 //! belongs to another user, or is WRITABLE by group or others is never read
-//! (an error, and a warning in the log): its contents may not be ours. It
-//! must not wedge sign-in either, so a save or clear UNLINKS that entry (the
-//! link itself, never its target) and writes a fresh file, with a warning.
-//! Its contents are never logged.
+//! and never written over (an error naming Help ▸ Run Diagnostics…, and a
+//! warning in the log): its contents may not be ours, and it may not be ours
+//! to replace. The Doctor (`doctor.rs`) offers to move it aside, after which
+//! sign-in works again. Its contents are never logged.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -48,7 +48,10 @@ pub struct CredentialsFile {
 
 fn refuse(path: &Path, why: &str) -> HostError {
     log::warn!("refusing the credentials file {}: {why}", path.display());
-    HostError::Credentials(format!("{} {why}", path.display()))
+    HostError::Credentials(format!(
+        "{} {why}; open Help › Run Diagnostics… to repair it",
+        path.display()
+    ))
 }
 
 fn io_error(what: &str, error: &std::io::Error) -> HostError {
@@ -143,28 +146,14 @@ impl CredentialsFile {
     /// Run `change` on the slots; when it reports a change, write the result
     /// through. The cache is only updated once the write succeeded.
     ///
-    /// `replace_untrusted`: a save or clear starts over from an empty file when
-    /// the current one cannot be trusted (see the module docs), so sign-in
-    /// recovers; a load keeps refusing it.
-    fn update<T>(
-        &self,
-        replace_untrusted: bool,
-        change: impl FnOnce(&mut Slots) -> (T, bool),
-    ) -> Result<T, HostError> {
+    fn update<T>(&self, change: impl FnOnce(&mut Slots) -> (T, bool)) -> Result<T, HostError> {
         let mut cache = self
             .cache
             .lock()
             .map_err(|_| HostError::Internal("credentials lock poisoned".into()))?;
         let mut slots = match cache.as_ref() {
             Some(slots) => slots.clone(),
-            None => match self.read() {
-                Ok(slots) => slots,
-                Err(ReadError::Untrusted(_)) if replace_untrusted => {
-                    self.unlink_untrusted()?;
-                    Slots::new()
-                }
-                Err(ReadError::Untrusted(e) | ReadError::Io(e)) => return Err(e),
-            },
+            None => self.read()?,
         };
         let (value, changed) = change(&mut slots);
         if changed {
@@ -174,30 +163,28 @@ impl CredentialsFile {
         Ok(value)
     }
 
-    /// Remove the entry at the file's path without reading or following it
-    /// (`remove_file` unlinks a symlink itself, never its target).
-    fn unlink_untrusted(&self) -> Result<(), HostError> {
-        let path = self.path();
-        log::warn!(
-            "replacing the untrusted credentials file {} with a fresh one",
-            path.display()
-        );
-        match fs::remove_file(&path) {
-            Ok(()) => sync_dir(&self.dir),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(io_error(
-                "could not remove the untrusted credentials file",
-                &e,
-            )),
-        }
+    /// Read the file again on next use (the Doctor moved or repaired it).
+    pub fn forget_cache(&self) {
+        *self
+            .cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
 }
 
 /// Why the file could not be read: `Untrusted` is a file whose contents may
-/// not be ours (a save or clear replaces it), `Io` anything else.
+/// not be ours (the Doctor moves it aside), `Io` anything else.
 enum ReadError {
     Untrusted(HostError),
     Io(HostError),
+}
+
+impl From<ReadError> for HostError {
+    fn from(error: ReadError) -> Self {
+        match error {
+            ReadError::Untrusted(e) | ReadError::Io(e) => e,
+        }
+    }
 }
 
 /// The ownership and mode rules (module docs) on an open descriptor: a file
@@ -241,7 +228,7 @@ fn trust_open_file(path: &Path, file: &fs::File) -> Result<(), ReadError> {
     Ok(())
 }
 
-fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
+pub(crate) fn open_no_follow(path: &Path) -> std::io::Result<fs::File> {
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -317,11 +304,11 @@ pub struct FileSlot {
 impl SecretStore for FileSlot {
     fn load(&self) -> Result<Option<String>, HostError> {
         self.file
-            .update(false, |slots| (slots.get(self.name).cloned(), false))
+            .update(|slots| (slots.get(self.name).cloned(), false))
     }
 
     fn save(&self, secret: &str) -> Result<(), HostError> {
-        self.file.update(true, |slots| {
+        self.file.update(|slots| {
             let changed = slots.get(self.name).map(String::as_str) != Some(secret);
             slots.insert(self.name.to_owned(), secret.to_owned());
             ((), changed)
@@ -330,7 +317,7 @@ impl SecretStore for FileSlot {
 
     fn clear(&self) -> Result<(), HostError> {
         self.file
-            .update(true, |slots| ((), slots.remove(self.name).is_some()))
+            .update(|slots| ((), slots.remove(self.name).is_some()))
     }
 }
 
@@ -465,57 +452,40 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn a_file_others_can_write_is_never_read_but_sign_in_replaces_it() {
+    fn a_file_others_can_write_is_never_read_nor_written_over() {
         use std::os::unix::fs::PermissionsExt as _;
         let (_root, file) = file();
         file.slot("device-session").save("planted?").unwrap();
         fs::set_permissions(file.path(), fs::Permissions::from_mode(0o666)).unwrap();
+        let before = fs::read_to_string(file.path()).unwrap();
         let launch = CredentialsFile::new(file.dir.clone());
         let err = launch.slot("device-session").load().unwrap_err();
         assert!(err.to_string().contains("writable by other users"), "{err}");
-        // Sign-in recovers: the save starts from an empty file.
-        launch.slot("device-session").save("fresh").unwrap();
-        let mode = fs::metadata(file.path()).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
-        let next = CredentialsFile::new(file.dir.clone());
-        assert_eq!(
-            next.slot("device-session").load().unwrap().as_deref(),
-            Some("fresh")
-        );
+        // Sign-in and sign-out point to the Doctor rather than overwrite it.
+        let err = launch.slot("device-session").save("fresh").unwrap_err();
+        assert!(err.to_string().contains("Run Diagnostics"), "{err}");
+        assert!(launch.slot("device-session").clear().is_err());
+        assert_eq!(fs::read_to_string(file.path()).unwrap(), before);
     }
 
     #[cfg(unix)]
     #[test]
-    fn a_clear_removes_an_untrusted_file() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let (_root, file) = file();
-        file.slot("device-session").save("s").unwrap();
-        fs::set_permissions(file.path(), fs::Permissions::from_mode(0o620)).unwrap();
-        let launch = CredentialsFile::new(file.dir.clone());
-        launch.slot("device-session").clear().unwrap();
-        assert!(!file.path().exists());
-        assert_eq!(launch.slot("device-session").load().unwrap(), None);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_save_replaces_a_symlink_without_touching_its_target() {
+    fn a_save_never_replaces_a_symlink_or_touches_its_target() {
         let (root, file) = file();
         fs::create_dir_all(&file.dir).unwrap();
         let target = root.path().join("elsewhere.json");
         fs::write(&target, r#"{"device-session":"planted"}"#).unwrap();
         std::os::unix::fs::symlink(&target, file.path()).unwrap();
-        file.slot("device-session").save("mine").unwrap();
-        let meta = fs::symlink_metadata(file.path()).unwrap();
-        assert!(meta.is_file(), "the link was replaced by a regular file");
+        assert!(file.slot("device-session").save("mine").is_err());
+        assert!(
+            fs::symlink_metadata(file.path())
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
         assert_eq!(
             fs::read_to_string(&target).unwrap(),
             r#"{"device-session":"planted"}"#
-        );
-        let next = CredentialsFile::new(file.dir.clone());
-        assert_eq!(
-            next.slot("device-session").load().unwrap().as_deref(),
-            Some("mine")
         );
     }
 }

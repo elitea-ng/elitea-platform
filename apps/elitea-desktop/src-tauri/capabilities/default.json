@@ -29,6 +29,8 @@
     "allow-open-path",
     "allow-app-platform",
     "allow-app-ready",
+    "allow-doctor-run",
+    "allow-doctor-fix",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-start-dragging",

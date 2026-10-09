@@ -149,9 +149,10 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   briefly world-readable file). A file of yours that group or others can only
   read (a backup restore that lost the mode) is narrowed to `0600` with a
   warning. A file that is a symlink, not a regular file, owned by another
-  user, or group/world-writable is never read or followed (logged); the next
-  sign-in or sign-out unlinks that entry (never its target) and writes a fresh
-  file, so it cannot wedge sign-in. Sign-out and wipe delete it once no pending
+  user, or group/world-writable is never read, followed or written over
+  (logged); sign-in then says to open **Help › Run Diagnostics…**, whose
+  repair moves that entry aside (`credentials.json.broken-<time>`, never a
+  symlink's target) so you can sign in again. Sign-out and wipe delete it once no pending
   revoke is left. The trade-off, honestly: it is protected by file
   permissions and disk encryption (FileVault, BitLocker, LUKS), not by
   per-application keychain ACLs, so any process running as you can read it —
@@ -191,6 +192,26 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   process: an origin connected earlier stays reachable until the app
   restarts. The bearer token is still attached only to the current origin
   (checked in the webview's HTTP core and SSE client).
+
+### Diagnostics
+
+**Help › Run Diagnostics…** (any screen, signed in or not) and **Settings ›
+Troubleshoot** open the Doctor (`src-tauri/src/doctor.rs`). It checks the
+stored sign-in (`credentials.json`: regular file, yours, `0600`, parses), the
+settings, data and logs folders (`0700`, yours, writable), the thread history
+(opens, `PRAGMA integrity_check`, schema version), `workspaces.json` (parses;
+every folder still there), the deployment (reachable, discovery valid), the
+session (a refresh works), the client policy's `local_work.allowed` (and how
+an administrator turns it on) and the sign-outs still waiting to reach the
+server. Each problem it can repair has a **Fix** button: restrict a file to
+`0600` / a folder to `0700` when it is yours, move a damaged, foreign or
+symlinked file aside to `<name>.broken-<time>` (the entry itself, never a
+link's target) so the app starts afresh, drop vanished folders from the
+workspace list, retry the waiting sign-outs. Nothing is repaired without
+the click; every repair is logged (paths and modes, never contents). At
+launch the app runs the file checks and, when one fails, shows a small
+"Something needs attention — Run Diagnostics" notice instead of failing
+silently.
 
 ### Upgrading from a keychain build
 

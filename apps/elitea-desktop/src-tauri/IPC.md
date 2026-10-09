@@ -216,7 +216,23 @@ the same account sees it again, and another account does not);
 | `app_platform` | — | `AppPlatform` (below). Never rejects. |
 | `reveal_path` | `{workspace_id, path}` | `null` — shows the file or folder in Finder / the file manager. |
 | `open_path` | `{workspace_id, path}` | `null` — opens it with its default app. |
+| `doctor_run` | `{scope?: "local"}` | `Check[]` — the Doctor's checks (README, "Diagnostics"); `"local"` checks this computer's files only (no network: what the launch notice uses). Never rejects. |
+| `doctor_fix` | `{fix_id}` | `{message}` — applies the repair a check named in `fix_id`, then the UI runs the checks again. Rejects with the reason when the repair fails or `fix_id` is unknown. |
 | `app_ready` | — | `AppCommand[]` — the page now listens to `app://command` (call it once the listener is live); the commands the host sent before that, oldest first. Never rejects. |
+
+```ts
+type Check = {
+  id: string;            // credentials, dir.config, dir.data, dir.logs, history, workspaces,
+                         // deployment, session, local_work, pending_revokes
+  title: string;
+  status: "ok" | "warn" | "fail";
+  message: string;       // for a person; never a secret
+  fix_id?: string;       // credentials.tighten | credentials.move_aside | dir.tighten.{config,data,logs}
+                         // | history.tighten | history.move_aside | workspaces.drop_missing
+                         // | workspaces.move_aside | revokes.retry
+  fix_label?: string;
+};
+```
 
 ```ts
 type AppPlatform = {
@@ -267,6 +283,7 @@ type AppCommand = { id: string; args?: object };
 | `workspace_opened` | `{workspace_id: string}` | A folder became (or already was) a workspace through File ▸ Open Folder… (⌘O), a drop on the window, or a drop on the dock icon / "Open With" in Finder. One event per folder; the workspace is already in `workspace_list`, so the UI selects it. |
 | `workspace_open_failed` | `{message: string}` | One of those folders could not be opened (the first failure; a message for a person). |
 | `files_dropped` | `{paths: string[]}` | Files (not folders) were dropped on the window: their **absolute** paths, in drop order. The host does nothing else with them; a path inside a workspace can be made relative against `Workspace.path` (e.g. for `mentions`). |
+| `run_diagnostics` | — | Help ▸ Run Diagnostics…: open the Doctor. Sent live, never queued (the connect screen listens without `app_ready`). |
 | `focus_turn` | `{workspace_id: string, turn_id: string}` | Reserved: show this turn. Not sent yet — the notification plugin has no click callback on desktop, so clicking a notification only activates the app. |
 
 **Open Folder… is host-side**: the menu item runs the native folder picker

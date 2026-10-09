@@ -1,8 +1,11 @@
-import { Alert, Box, Button, CircularProgress, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Stack, TextField, Typography } from '@mui/material';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 
+import type { AppIpc } from '@/shared/desktop/appEvents';
+import { needsAttention, type DoctorIpc } from '@/shared/desktop/doctorIpc';
 import type { HostBridge, HostDeployment, HostState } from '@/shared/desktop/hostBridge';
 import { t } from '@/shared/i18n';
+import { DoctorPanel } from '@/widgets/desktop-shell';
 
 import { launchApp } from './launchApp';
 
@@ -52,7 +55,101 @@ function AppHost({ bridge, state }: { bridge: HostBridge; state: HostState }) {
   );
 }
 
-export function DesktopShell({ bridge }: { bridge: HostBridge | undefined }) {
+export interface DesktopShellProps {
+  bridge: HostBridge | undefined;
+  /** The host's Doctor; without it there is no diagnostics notice or dialog. */
+  doctor?: DoctorIpc | undefined;
+  /** `app://command`, for Help › Run Diagnostics… (listened to live; `ready` is the app's). */
+  appIpc?: AppIpc | undefined;
+}
+
+/**
+ * The launch notice and the Help › Run Diagnostics… dialog, over every
+ * screen: signed in or not (a sign-in the stored file blocks is exactly
+ * when it is needed).
+ */
+function useDiagnostics(doctor: DoctorIpc | undefined, appIpc: AppIpc | undefined) {
+  const [open, setOpen] = useState(false);
+  const [attention, setAttention] = useState(false);
+  useEffect(() => {
+    if (doctor === undefined) return;
+    // This computer's files only: no network before the person chose a deployment.
+    doctor
+      .run('local')
+      .then((checks) => setAttention(needsAttention(checks)))
+      .catch(() => undefined);
+  }, [doctor]);
+  useEffect(() => {
+    if (appIpc === undefined || doctor === undefined) return undefined;
+    let off: (() => void) | undefined;
+    let disposed = false;
+    appIpc
+      .onCommand((command) => {
+        if (command.id === 'run_diagnostics') setOpen(true);
+      })
+      .then((unsubscribe) => {
+        if (disposed) unsubscribe();
+        else off = unsubscribe;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      off?.();
+    };
+  }, [appIpc, doctor]);
+  const show = (): void => {
+    setAttention(false);
+    setOpen(true);
+  };
+  const element =
+    doctor === undefined ? null : (
+      <>
+        {attention && (
+          <Alert
+            severity="warning"
+            sx={{ position: 'fixed', right: 16, bottom: 16, zIndex: (theme) => theme.zIndex.snackbar, maxWidth: 420 }}
+            action={<Button onClick={show}>{t('desktop.doctor.run', 'Run Diagnostics')}</Button>}
+            onClose={() => setAttention(false)}
+          >
+            {t('desktop.doctor.attention', 'Something needs attention.')}
+          </Alert>
+        )}
+        <Dialog open={open} onClose={() => setOpen(false)} fullWidth maxWidth="sm" aria-labelledby="doctor-title">
+          <DialogTitle id="doctor-title">{t('desktop.doctor.title', 'Diagnostics')}</DialogTitle>
+          <DialogContent>{open && <DoctorPanel ipc={doctor} />}</DialogContent>
+          <DialogActions>
+            <Button onClick={() => setOpen(false)}>{t('desktop.doctor.close', 'Close')}</Button>
+          </DialogActions>
+        </Dialog>
+      </>
+    );
+  return { element, show: doctor === undefined ? undefined : show };
+}
+
+export function DesktopShell({ bridge, doctor, appIpc }: DesktopShellProps) {
+  const diagnostics = useDiagnostics(doctor, appIpc);
+  const shell = <ShellScreens bridge={bridge} onDiagnose={diagnostics.show} />;
+  return (
+    <>
+      {shell}
+      {diagnostics.element}
+    </>
+  );
+}
+
+/** An error, with the way to the Doctor (a stored file can be what blocks sign-in). */
+function ErrorAlert({ text, onDiagnose }: { text: string; onDiagnose: (() => void) | undefined }) {
+  return (
+    <Alert
+      severity="error"
+      action={onDiagnose === undefined ? undefined : <Button color="inherit" size="small" onClick={onDiagnose}>{t('desktop.doctor.run', 'Run Diagnostics')}</Button>}
+    >
+      {text}
+    </Alert>
+  );
+}
+
+function ShellScreens({ bridge, onDiagnose }: { bridge: HostBridge | undefined; onDiagnose: (() => void) | undefined }) {
   const [phase, setPhase] = useState<Phase>(bridge === undefined ? { kind: 'no-host' } : { kind: 'loading' });
   const [url, setUrl] = useState('');
   /** The attempt the person cancelled: its rejection is not an error to show. */
@@ -123,7 +220,7 @@ export function DesktopShell({ bridge }: { bridge: HostBridge | undefined }) {
               slotProps={{ htmlInput: { inputMode: 'url', autoCapitalize: 'none', spellCheck: false } }}
               required
             />
-            {phase.error !== undefined && <Alert severity="error">{phase.error}</Alert>}
+            {phase.error !== undefined && <ErrorAlert text={phase.error} onDiagnose={onDiagnose} />}
             <Button type="submit" variant="contained">Continue</Button>
           </Stack>
         </Box>
@@ -137,7 +234,7 @@ export function DesktopShell({ bridge }: { bridge: HostBridge | undefined }) {
       <Stack spacing={2} sx={{ width: '100%' }}>
         <Typography component="h1" sx={HEADING}>{deployment.displayName}</Typography>
         <Typography color="text.secondary">{deployment.origin}</Typography>
-        {phase.kind === 'confirm' && phase.error !== undefined && <Alert severity="error">{phase.error}</Alert>}
+        {phase.kind === 'confirm' && phase.error !== undefined && <ErrorAlert text={phase.error} onDiagnose={onDiagnose} />}
         {phase.kind === 'signing-in' ? (
           <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
             <CircularProgress size={20} />

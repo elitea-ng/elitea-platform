@@ -19,6 +19,7 @@ import { Navigate } from '@tanstack/react-router';
 
 const WorkspacesPage = /* @__PURE__ */ lazy(() => import('./WorkspacesPage'));
 const WorkspaceSessionPage = /* @__PURE__ */ lazy(() => import('./WorkspaceSessionPage'));
+const TroubleshootPage = /* @__PURE__ */ lazy(() => import('./TroubleshootPage'));
 
 function NotAvailable(): React.JSX.Element {
   return <Navigate to="/chat" replace />;
@@ -38,6 +39,16 @@ export function WorkspaceSessionEntry(): React.JSX.Element {
   return (
     <Suspense fallback={null}>
       <WorkspaceSessionPage />
+    </Suspense>
+  );
+}
+
+/** Settings › Troubleshoot (the Doctor); nothing outside `desktop` (an unknown settings tab renders empty). */
+export function TroubleshootEntry(): React.JSX.Element | null {
+  if (import.meta.env.MODE !== 'desktop') return null;
+  return (
+    <Suspense fallback={null}>
+      <TroubleshootPage />
     </Suspense>
   );
 }

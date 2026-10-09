@@ -12,6 +12,7 @@ mod commands;
 mod credentials_file;
 mod d0;
 mod discovery;
+mod doctor;
 mod error;
 mod history;
 mod http_scope;
@@ -159,7 +160,18 @@ pub fn run() {
                     None
                 }
             };
-            let workspaces = Arc::new(WorkspaceStore::new(data_dir));
+            let workspaces = Arc::new(WorkspaceStore::new(data_dir.clone()));
+            app.manage(Arc::new(doctor::Doctor {
+                local: doctor::LocalDoctor {
+                    config_dir: config_dir.clone(),
+                    data_dir,
+                    log_dir: app.path().app_log_dir().ok(),
+                    credentials: credentials.clone(),
+                    workspaces: workspaces.clone(),
+                    history_open: history.is_some(),
+                },
+                auth: auth.clone(),
+            }));
             let agents = AgentHost::new(HostDeps {
                 credentials: Arc::new(AuthCredentials(auth.clone())),
                 client_version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -209,6 +221,8 @@ pub fn run() {
             local_commands::open_path,
             platform::app_platform,
             app_events::app_ready,
+            doctor::doctor_run,
+            doctor::doctor_fix,
         ])
         .build(tauri::generate_context!());
     let app = match built {
