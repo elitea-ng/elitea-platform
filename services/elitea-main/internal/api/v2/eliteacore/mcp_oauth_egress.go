@@ -37,6 +37,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/egress"
 )
 
 // MCPAuthorizationEgressGuard is the SSRF guard of the MCP authorization
@@ -104,6 +106,10 @@ func (h *Handler) guardedMCPAuthorizationClient() *http.Client {
 		transport.DialContext = h.mcpAuthorizationGuard.DialContext
 		// A TLS dial must use the guarded TCP dial too.
 		transport.DialTLSContext = nil
+		// A proxy would make the guard check and dial the proxy's address
+		// instead of the identity provider's.
+		transport.Proxy = nil
+		transport.MaxResponseHeaderBytes = egress.MaxResponseHeaderBytes
 		client := *base
 		client.Transport = transport
 		h.guardedClient = &client

@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -406,5 +407,56 @@ func TestRedeliverRefusesAnUnknownDeliveryID(t *testing.T) {
 	_, err := d.Redeliver(context.Background(), "proj-1", "wh-1", "does-not-exist")
 	if err != ErrDeliveryNotFound {
 		t.Errorf("err = %v, want ErrDeliveryNotFound", err)
+	}
+}
+
+// TestDispatcherDoesNotFollowRedirects proves a delivery never follows a 3xx:
+// the signed body is not re-sent to the Location, and the 3xx is logged as a
+// failed delivery after one attempt, since retrying cannot change it.
+func TestDispatcherDoesNotFollowRedirects(t *testing.T) {
+	var followed atomic.Int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		followed.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer elsewhere.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/collect", http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+
+	host, port, err := net.SplitHostPort(redirector.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("split test server address: %v", err)
+	}
+	private, err := ParseDestinationAllowlist([]string{"127.0.0.0/8"})
+	if err != nil {
+		t.Fatalf("parse allowlist: %v", err)
+	}
+	guard := NewDestinationGuardWithResolver(private, fakeIPResolver{ips: map[string][]net.IPAddr{
+		"receiver.example": {{IP: net.ParseIP(host)}},
+	}})
+	deliveries := &mockDeliveryRepository{}
+	repo := &mockWebhookRepo{webhooks: []Webhook{{
+		ID: "wh-1", ProjectID: "proj-1", URL: "http://receiver.example:" + port + "/hook",
+		Events: []string{"conversation.created"}, Secret: "s", Active: true,
+	}}}
+	d := NewDispatcher(repo, deliveries, WithGuard(guard))
+
+	d.HandleDomainEvent(context.Background(), "proj-1", "conversation.created", map[string]any{})
+	waitFor(t, func() bool { return deliveries.count() == 1 })
+
+	logged := deliveries.snapshotCreated()[0]
+	if followed.Load() != 0 {
+		t.Fatalf("the redirect target received %d deliveries, want 0", followed.Load())
+	}
+	if logged.Status != DeliveryStatusFailed {
+		t.Errorf("status = %s, want failed", logged.Status)
+	}
+	if logged.ResponseCode == nil || *logged.ResponseCode != http.StatusTemporaryRedirect {
+		t.Errorf("response code = %v, want 307", logged.ResponseCode)
+	}
+	if logged.Attempts != 1 {
+		t.Errorf("attempts = %d, want 1 (a redirect answers the same way every time)", logged.Attempts)
 	}
 }

@@ -205,6 +205,10 @@ func NewDispatcher(repo Repository, deliveries DeliveryRepository, opts ...Dispa
 		deliveries: deliveries,
 		client: &http.Client{
 			Timeout: deliveryTimeout,
+			// A delivery is never redirected: following a 307/308 would
+			// re-send the signed body to a Location the tenant never
+			// registered. The 3xx is logged as a failed delivery.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
 	for _, opt := range opts {
@@ -292,11 +296,14 @@ func (d *Dispatcher) deliverAndLog(ctx context.Context, wh Webhook, eventType st
 }
 
 // attempt sends body to wh.URL, retrying up to maxDeliveryAttempts times with
-// deliveryBackoff between attempts, and reports the outcome. A 2xx or 3xx
-// response is success; any other status, or a transport error (DNS, refused
+// deliveryBackoff between attempts, and reports the outcome. A 2xx response
+// is success; any other status, or a transport error (DNS, refused
 // connection, timeout), counts as a failed attempt and is retried.
 //
-// A destination the configured DestinationGuard refuses is the ONE exception
+// A 3xx is not followed (the signed body must not reach an unregistered
+// Location) and fails at once, since it answers the same way every time.
+//
+// A destination the configured DestinationGuard refuses is the other exception
 // to "retried": refusing 127.0.0.1 (or 169.254.169.254, or a name that now
 // resolves into a private range) does not change between one attempt and the
 // next the way a destination's own 500 or a transient timeout might, so
@@ -327,7 +334,9 @@ func (d *Dispatcher) attempt(ctx context.Context, wh Webhook, eventType string, 
 			}
 			outcome.LastError = err.Error()
 			outcome.ResponseCode = nil
-		} else if code >= 200 && code < 400 {
+		} else if code >= 200 && code < 300 {
+			// 2xx only: redirects are not followed, so a 3xx means the
+			// payload never reached a receiver that accepted it.
 			outcome.Status = DeliveryStatusSuccess
 			outcome.ResponseCode = &code
 			outcome.LastError = ""
@@ -335,6 +344,12 @@ func (d *Dispatcher) attempt(ctx context.Context, wh Webhook, eventType string, 
 		} else {
 			outcome.ResponseCode = &code
 			outcome.LastError = fmt.Sprintf("destination responded %d", code)
+			if code >= 300 && code < 400 {
+				// A redirect is not followed and answers the same way on
+				// every attempt, so it is terminal like a refusal.
+				outcome.Status = DeliveryStatusFailed
+				return outcome
+			}
 		}
 		if i < maxDeliveryAttempts-1 {
 			select {

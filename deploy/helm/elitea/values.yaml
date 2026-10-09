@@ -1459,19 +1459,22 @@ main:
     # call. EMPTY IS FAIL-CLOSED: every private, loopback and link-local
     # address is refused, before the request and again at dial time. Name a
     # private identity provider here (egresslib grammar: hosts, `*.` wildcards,
-    # CIDR blocks). Link-local and multicast stay refused whatever it says.
-    # The two proxies use THIS list, not ELITEA_MCP_EGRESS_ALLOWLIST below.
+    # CIDR blocks; CGNAT 100.64.0.0/10 and 198.18.0.0/15 count as private).
+    # Link-local, multicast, reserved and cloud-metadata addresses stay
+    # refused whatever it says. No proxy is used. The two proxies use THIS list, not ELITEA_MCP_EGRESS_ALLOWLIST below.
     ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST: ""
 
     # --- Outbound MCP requests made by Main (Load Tools, metadata reads) ---
     #
     # Main dials a tenant-chosen MCP URL, and the issuer URLs that server's
     # metadata names, with its own network identity. Every dial resolves the
-    # host and refuses loopback, private-network, link-local (cloud metadata)
-    # and multicast addresses. Same grammar and split as
+    # host and refuses loopback, private-network (including CGNAT), link-local
+    # (cloud metadata), multicast and reserved addresses, and never uses a
+    # proxy (internal/infra/egress). Same grammar and split as
     # ELITEA_WEBHOOK_EGRESS_ALLOWLIST: an entry that names a private range or
     # host (for example `10.0.0.0/8`) lets tenants reach private MCP servers;
-    # link-local and multicast stay refused whatever this says. Unset refuses
+    # link-local, multicast, reserved and cloud-metadata addresses stay
+    # refused whatever this says. Unset refuses
     # every private destination. The OAuth and DCR proxies are governed by
     # ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST above.
     ELITEA_MCP_EGRESS_ALLOWLIST: ""
