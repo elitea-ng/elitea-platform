@@ -30,7 +30,10 @@
 //! Deletions follow the checkpoint's ignore rules as in git. A restore
 //! never writes through a symlink: one the turn put where the checkpoint
 //! had a file or a directory is removed and the file or directory
-//! recreated.
+//! recreated. Sessions of one folder share `objects/`: creating, pruning
+//! and restoring hold an exclusive lock on the folder's store, and every
+//! file there is written to a temporary name and renamed (a manifest is
+//! synced to disk first).
 //!
 //! Restores write through a [`Workspace`] without `path_deny` (it is the
 //! person's undo, not the agent's write), so they are still confined to the
@@ -45,6 +48,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
+use std::fs::File;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -230,6 +235,28 @@ impl<'a> CheckpointIgnores<'a> {
     }
 }
 
+/// Write `bytes` to `target` all at once: a temporary file beside it
+/// (synced to disk when `sync`), then renamed over it.
+fn write_atomically(target: &Path, bytes: &[u8], sync: bool) -> std::io::Result<()> {
+    let mut name = target.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(
+        ".{}-{}.tmp",
+        std::process::id(),
+        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
+    let temp = target.with_file_name(name);
+    let written = File::create(&temp)
+        .and_then(|mut file| {
+            file.write_all(bytes)?;
+            if sync { file.sync_all() } else { Ok(()) }
+        })
+        .and_then(|()| std::fs::rename(&temp, target));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    written
+}
+
 /// The checkpoints of one session in one workspace.
 #[derive(Debug)]
 pub enum Checkpoints {
@@ -294,6 +321,7 @@ impl Checkpoints {
         let key = hex(&key.finalize()[..8]);
         let base = data_dir.join("checkpoints").join(key);
         Ok(Self::Copy(CopyCheckpoints {
+            lock: base.join("lock"),
             objects: base.join("objects"),
             manifests: base.join("sessions").join(session),
             restorer,
@@ -853,6 +881,8 @@ struct Manifest {
 /// Checkpoints as copies in the host's data directory.
 #[derive(Debug)]
 pub struct CopyCheckpoints {
+    /// The folder's store lock (shared by its sessions).
+    lock: PathBuf,
     objects: PathBuf,
     manifests: PathBuf,
     restorer: Workspace,
@@ -897,8 +927,26 @@ impl CopyCheckpoints {
             .map_err(|_| ToolError::new(ErrorCode::Io, format!("checkpoint {seq} is unreadable")))
     }
 
+    /// Hold the folder's store exclusively: no other session's prune runs
+    /// while this one stores contents its manifest does not name yet.
+    fn lock(&self) -> ToolResult<File> {
+        let io = |error: std::io::Error| ToolError::io("cannot lock the checkpoint store", &error);
+        if let Some(base) = self.lock.parent() {
+            std::fs::create_dir_all(base).map_err(io)?;
+        }
+        let file = File::options()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&self.lock)
+            .map_err(io)?;
+        file.lock().map_err(io)?;
+        Ok(file)
+    }
+
     fn create(&self, label: &str) -> ToolResult<CheckpointInfo> {
         let io = |error: std::io::Error| ToolError::io("cannot store the checkpoint", &error);
+        let _lock = self.lock()?;
         std::fs::create_dir_all(&self.objects).map_err(io)?;
         std::fs::create_dir_all(&self.manifests).map_err(io)?;
         let files = walk_files(self.restorer.root());
@@ -937,12 +985,7 @@ impl CopyCheckpoints {
             let sha = hex(&read.stamp.sha256);
             let object = self.objects.join(&sha);
             if !object.exists() {
-                let temp = self
-                    .objects
-                    .join(format!("{sha}.tmp{}", std::process::id()));
-                std::fs::write(&temp, &read.bytes)
-                    .and_then(|()| std::fs::rename(&temp, &object))
-                    .map_err(io)?;
+                write_atomically(&object, &read.bytes, false).map_err(io)?;
             }
             manifest.files.insert(
                 path.display_string(),
@@ -954,11 +997,7 @@ impl CopyCheckpoints {
         }
         let bytes = serde_json::to_vec(&manifest)
             .map_err(|_| ToolError::new(ErrorCode::Io, "cannot encode the checkpoint"))?;
-        let target = self.manifest_path(manifest.seq);
-        let temp = target.with_extension("json.tmp");
-        std::fs::write(&temp, bytes)
-            .and_then(|()| std::fs::rename(&temp, &target))
-            .map_err(io)?;
+        write_atomically(&self.manifest_path(manifest.seq), &bytes, true).map_err(io)?;
         self.prune();
         Ok(CheckpointInfo {
             seq: manifest.seq,
@@ -969,7 +1008,8 @@ impl CopyCheckpoints {
     }
 
     /// As [`GitCheckpoints::prune`], then remove stored contents no
-    /// manifest of any session of this workspace refers to.
+    /// manifest of any session of this workspace refers to, and temporary
+    /// files a crash left. Called with the store locked.
     fn prune(&self) {
         let Ok(all) = self.list() else { return };
         let cutoff = now_unix().saturating_sub(self.limits.max_age.as_secs());
@@ -1009,7 +1049,10 @@ impl CopyCheckpoints {
             .flatten()
         {
             let name = object.file_name().to_string_lossy().into_owned();
-            if name.len() == 64 && !referenced.contains(&name) {
+            let temporary = Path::new(&name)
+                .extension()
+                .is_some_and(|extension| extension == "tmp");
+            if (name.len() == 64 && !referenced.contains(&name)) || temporary {
                 let _ = std::fs::remove_file(object.path());
             }
         }
@@ -1065,6 +1108,7 @@ impl CopyCheckpoints {
     }
 
     fn restore(&self, seq: u64, only: Option<&WsPath>) -> ToolResult<RestoreReport> {
+        let _lock = self.lock()?;
         let manifest = self.read_manifest(seq)?;
         let in_scope = |path: &str| only.is_none_or(|only| only.display_string() == path);
         // Not in the checkpoint, but ignored by its rules: it was not
@@ -1580,6 +1624,61 @@ mod tests {
         );
         assert_eq!(read(root, "b.txt").as_deref(), Some("b\n"));
         assert_eq!(read(root, "lib/b.txt").as_deref(), Some("lib b\n"));
+    }
+
+    /// Sessions of one folder share `objects/`: one's prune never removes
+    /// what another's create is storing.
+    #[test]
+    fn concurrent_copy_checkpoints_never_lose_contents() {
+        let dir = tempfile::tempdir().expect("dir");
+        let root = dir.path().to_path_buf();
+        for file in 0..40 {
+            std::fs::write(root.join(format!("f{file}.txt")), "seed\n").expect("seed");
+        }
+        let data = tempfile::tempdir().expect("data");
+        let limits = CheckpointLimits {
+            keep: 1,
+            ..CheckpointLimits::default()
+        };
+        let threads: Vec<_> = ["a", "b", "c"]
+            .into_iter()
+            .map(|session| {
+                let (root, data) = (root.clone(), data.path().to_path_buf());
+                std::thread::spawn(move || {
+                    let workspace = Workspace::open(&root, &[]).expect("workspace");
+                    let checkpoints = Checkpoints::open(&workspace, session, &data)
+                        .expect("open")
+                        .with_limits(limits);
+                    for turn in 0..40 {
+                        for file in 0..40 {
+                            let _ = std::fs::write(
+                                root.join(format!("f{file}.txt")),
+                                format!("{session} {turn} {file}\n"),
+                            );
+                        }
+                        let info = checkpoints.create("turn").expect("create");
+                        let Checkpoints::Copy(copy) = &checkpoints else {
+                            panic!("a plain folder has copy checkpoints");
+                        };
+                        let manifest = copy.read_manifest(info.seq).expect("manifest");
+                        let missing = manifest
+                            .files
+                            .values()
+                            .filter(|file| !copy.objects.join(&file.sha256).exists())
+                            .count();
+                        assert_eq!(missing, 0, "{session} turn {turn}: contents pruned");
+                    }
+                    checkpoints
+                })
+            })
+            .collect();
+        for thread in threads {
+            let checkpoints = thread.join().expect("thread");
+            let last = checkpoints.list().expect("list").last().expect("one").seq;
+            checkpoints
+                .restore(last)
+                .expect("every content of the kept checkpoint is still stored");
+        }
     }
 
     fn walk_count(base: &Path, name: &str) -> usize {
