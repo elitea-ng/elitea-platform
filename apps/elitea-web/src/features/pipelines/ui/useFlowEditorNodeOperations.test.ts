@@ -42,12 +42,12 @@ describe('useFlowEditorNodeOperations', () => {
 
     const created = result.current.onNodeCreateAtPosition(PipelineNodeTypes.Agent, { x: 10, y: 20 });
 
-    expect(created.type).toBe(PipelineNodeTypes.Agent);
-    expect(created.position).toEqual({ x: 10, y: 20 });
-    expect(created.selected).toBe(true);
+    expect(created?.type).toBe(PipelineNodeTypes.Agent);
+    expect(created?.position).toEqual({ x: 10, y: 20 });
+    expect(created?.selected).toBe(true);
     const setDoc = setYamlJsonObject.mock.calls[0]?.[0] as { entry_point?: string; nodes?: readonly { id: string; type: string }[] };
-    expect(setDoc.entry_point).toBe(created.id);
-    expect(setDoc.nodes?.some(node => node.id === created.id && node.type === PipelineNodeTypes.Agent)).toBe(true);
+    expect(setDoc.entry_point).toBe(created?.id);
+    expect(setDoc.nodes?.some(node => node.id === created?.id && node.type === PipelineNodeTypes.Agent)).toBe(true);
     expect(setFlowNodes).toHaveBeenCalled();
   });
 
@@ -71,8 +71,8 @@ describe('useFlowEditorNodeOperations', () => {
 
     const created = result.current.onNodeCreateAtPosition(PipelineNodeTypes.Condition, { x: 0, y: 0 });
 
-    expect(created.data?.['label']).toBe('Condition');
-    expect(created.data?.['condition']).toEqual({ condition_input: [], condition_definition: '', conditional_outputs: [], default_output: '' });
+    expect(created?.data?.['label']).toBe('Condition');
+    expect(created?.data?.['condition']).toEqual({ condition_input: [], condition_definition: '', conditional_outputs: [], default_output: '' });
     expect(setYamlJsonObject).not.toHaveBeenCalled();
   });
 
@@ -121,7 +121,7 @@ describe('useFlowEditorNodeOperations', () => {
     const created = result.current.onAddNode(PipelineNodeTypes.Agent);
 
     // (800/2 - 230 - 0)/1 = 170, (600/2 - 200 - 0)/1 = 100 — FlowEditorHelpers.calculatePositionForNewNode's own formula, no existing nodes to dodge.
-    expect(created.position).toEqual({ x: 170, y: 100 });
+    expect(created?.position).toEqual({ x: 170, y: 100 });
   });
 
   it('onAddNode pans the viewport onto a card that the End-node stacking rule pushed below the fold', () => {
@@ -152,7 +152,7 @@ describe('useFlowEditorNodeOperations', () => {
       vi.advanceTimersByTime(NewNodeRevealHelpers.NEW_NODE_REVEAL_DELAY_MS);
     });
 
-    expect(created.position).toEqual({ x: 170, y: 200 });
+    expect(created?.position).toEqual({ x: 170, y: 200 });
     // Centre of the new card (460 wide x 460 tall), at the CURRENT zoom —
     // not a fitView, which would rescale a canvas the user may have zoomed.
     expect(setCenter).toHaveBeenCalledWith(400, 430, { zoom: 1 });
@@ -216,6 +216,84 @@ describe('useFlowEditorNodeOperations', () => {
     });
 
     expect(setCenter).not.toHaveBeenCalled();
+  });
+
+  describe('when the document write is refused (setYamlJsonObject returns false)', () => {
+    function renderWith(setYamlJsonObject: () => boolean | void, setFlowNodes = vi.fn(), setCenter = vi.fn()) {
+      return renderHook(() =>
+        useFlowEditorNodeOperations({
+          flowNodes: [],
+          setFlowNodes,
+          setFlowEdges: vi.fn(),
+          setYamlJsonObject,
+          yamlJsonObjectRef: { current: {} },
+          getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+          setCenter,
+          getZoom: () => 1,
+          editorRef: { current: null },
+          editorWidth: 800,
+          editorHeight: 600,
+        }),
+      );
+    }
+
+    it('onNodeCreateAtPosition returns undefined and adds no canvas node', () => {
+      const setFlowNodes = vi.fn();
+      const { result } = renderWith(() => false, setFlowNodes);
+
+      expect(result.current.onNodeCreateAtPosition(PipelineNodeTypes.Agent, { x: 10, y: 20 })).toBeUndefined();
+      expect(setFlowNodes).not.toHaveBeenCalled();
+    });
+
+    it('onAddNode returns undefined and never reveals a node that was not created', () => {
+      vi.useFakeTimers();
+      const setFlowNodes = vi.fn();
+      const setCenter = vi.fn();
+      // An End node at the centre stacks the new card below the fold, so a created node WOULD be revealed (see the reveal test above).
+      const { result } = renderHook(() =>
+        useFlowEditorNodeOperations({
+          flowNodes: [makeNode('END', PipelineNodeTypes.End, 170, 100)],
+          setFlowNodes,
+          setFlowEdges: vi.fn(),
+          setYamlJsonObject: () => false,
+          yamlJsonObjectRef: { current: {} },
+          getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+          setCenter,
+          getZoom: () => 1,
+          editorRef: { current: null },
+          editorWidth: 800,
+          editorHeight: 600,
+        }),
+      );
+
+      expect(result.current.onAddNode(PipelineNodeTypes.Agent)).toBeUndefined();
+      act(() => {
+        vi.advanceTimersByTime(NewNodeRevealHelpers.NEW_NODE_REVEAL_DELAY_MS);
+      });
+
+      expect(setFlowNodes).not.toHaveBeenCalled();
+      expect(setCenter).not.toHaveBeenCalled();
+    });
+
+    it('a setter that reports true (or nothing at all) still adds the node', () => {
+      for (const setter of [() => true, () => undefined]) {
+        const setFlowNodes = vi.fn();
+        const { result } = renderWith(setter, setFlowNodes);
+
+        expect(result.current.onNodeCreateAtPosition(PipelineNodeTypes.Agent, { x: 0, y: 0 })?.type).toBe(PipelineNodeTypes.Agent);
+        expect(setFlowNodes).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it('a Condition node is canvas-only (no document write), so a refusing setter is never consulted and it is still added', () => {
+      const setYamlJsonObject = vi.fn(() => false);
+      const setFlowNodes = vi.fn();
+      const { result } = renderWith(setYamlJsonObject, setFlowNodes);
+
+      expect(result.current.onNodeCreateAtPosition(PipelineNodeTypes.Condition, { x: 0, y: 0 })).toBeDefined();
+      expect(setYamlJsonObject).not.toHaveBeenCalled();
+      expect(setFlowNodes).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('calculateLayoutNodes re-parses the YAML into the canvas via setFlowNodes/setFlowEdges updaters', () => {

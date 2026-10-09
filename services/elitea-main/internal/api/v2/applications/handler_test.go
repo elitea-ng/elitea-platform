@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -110,6 +111,15 @@ func (m *mockRepo) UpdateVersion(_ context.Context, _, _, _ string, v applicatio
 	}
 	m.versions[0].Name = v.Name
 	return m.versions[0], nil
+}
+
+func (m *mockRepo) UpdateWithVersion(ctx context.Context, req applications.UpdateRequest, versionID string, v applications.Version) (applications.Application, applications.Version, error) {
+	app, err := m.Update(ctx, req)
+	if err != nil {
+		return applications.Application{}, applications.Version{}, err
+	}
+	ver, err := m.UpdateVersion(ctx, req.ProjectID, req.ApplicationID, versionID, v)
+	return app, ver, err
 }
 
 func (m *mockRepo) DeleteVersion(_ context.Context, _, _, _ string) error {
@@ -279,6 +289,58 @@ type recordingRepo struct {
 func (m *recordingRepo) UpdateVersion(_ context.Context, _, _, _ string, v applications.Version) (applications.Version, error) {
 	m.lastUpdate = v
 	return applications.Version{ID: "7", Name: v.Name}, nil
+}
+
+func (m *recordingRepo) UpdateWithVersion(_ context.Context, _ applications.UpdateRequest, _ string, v applications.Version) (applications.Application, applications.Version, error) {
+	m.lastUpdate = v
+	return applications.Application{ID: "1"}, applications.Version{ID: "7", Name: v.Name}, nil
+}
+
+// versionFailRepo lists the version so the handler's own checks pass, then
+// fails the combined write the way the repository does.
+type versionFailRepo struct {
+	mockRepo
+	writeErr error
+}
+
+func (m *versionFailRepo) UpdateVersion(context.Context, string, string, string, applications.Version) (applications.Version, error) {
+	return applications.Version{}, m.writeErr
+}
+
+func (m *versionFailRepo) UpdateWithVersion(context.Context, applications.UpdateRequest, string, applications.Version) (applications.Application, applications.Version, error) {
+	return applications.Application{}, applications.Version{}, m.writeErr
+}
+
+// A failed nested version write must answer its own status, never 201: the
+// repository rolls the application update back with it.
+func TestUpdate_VersionWriteErrorIsNotCreated(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"not found", apierr.NotFound("version not found"), http.StatusNotFound},
+		{"internal", errors.New("boom"), http.StatusInternalServerError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &versionFailRepo{
+				mockRepo: mockRepo{
+					apps:     []applications.Application{{ID: "1", Name: "Original"}},
+					versions: []applications.Version{{ID: "7", Name: "v1"}},
+				},
+				writeErr: tc.err,
+			}
+			body := `{"name":"Renamed","version":{"id":"7","application_id":"1","instructions":"x"}}`
+			req := httptest.NewRequest("PUT", "/api/v2/projects/1/applications/1", bytes.NewReader([]byte(body)))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			setupRouter(repo).ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body: %s", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
 }
 
 func setupVersionRouter(repo applications.Repository) *chi.Mux {

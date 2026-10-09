@@ -12,6 +12,9 @@ type Repository interface {
 	ListVersions(ctx context.Context, projectID, applicationID string) ([]Version, error)
 	CreateVersion(ctx context.Context, projectID, applicationID string, v Version) (Version, error)
 	UpdateVersion(ctx context.Context, projectID, applicationID, versionID string, v Version) (Version, error)
+	// UpdateWithVersion writes the application fields and one version in a single
+	// transaction; any error rolls back both.
+	UpdateWithVersion(ctx context.Context, req UpdateRequest, versionID string, v Version) (Application, Version, error)
 	DeleteVersion(ctx context.Context, projectID, applicationID, versionID string) error
 	SetDefaultVersion(ctx context.Context, projectID, applicationID, versionID string) error
 	BatchReplaceVersion(ctx context.Context, projectID, oldVersionID, newVersionID string, deleteOld bool) error
