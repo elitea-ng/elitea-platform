@@ -28,6 +28,7 @@
           "bucket",
           "llm_model",
           "embedding_model",
+          "reasoning_effort",
           "sources"
         ],
         "parameters": {
@@ -75,6 +76,12 @@
             "json_schema_extra": {
               "hidden": true
             }
+          },
+          "reasoning_effort": {
+            "type": "String",
+            "required": false,
+            "description": "Reasoning effort for model calls: none, low, medium or high (empty keeps the model's default). Use none for reasoning models such as Qwen3 to avoid long thinking. A caller-supplied llm_settings.reasoning_effort overrides it.",
+            "default": ""
           }
         }
       },

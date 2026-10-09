@@ -43,9 +43,9 @@ type Settings struct {
 	Namespace                  string
 	InvocationRetentionSeconds int
 
-	TLSCertFile    string
-	TLSKeyFile     string
-	TLSCAFile      string
+	TLSCertFile string
+	TLSKeyFile  string
+	TLSCAFile   string
 	// CallbackCAFile is the bundle trusted on the CALLBACK hop — the
 	// artifact uploads to `llm_settings.api_base` — when that hop is TLS
 	// through platform-edge (ADR-0027), whose certificate the runtime CA

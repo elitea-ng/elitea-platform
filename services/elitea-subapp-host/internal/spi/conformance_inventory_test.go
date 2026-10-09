@@ -194,6 +194,26 @@ func TestTheInventoryApplicationWalksTheWholeSuite(t *testing.T) {
 			encoded, _ := json.Marshal(tool)
 			return string(encoded)
 		}
+		// legacy-v2 adds one optional toolkit parameter, reasoning_effort;
+		// everything else in toolkit_config must be what legacy-v1 has.
+		configWithoutReasoningEffort := func(raw json.RawMessage) string {
+			var config map[string]any
+			_ = json.Unmarshal(raw, &config)
+			if parameters, ok := config["parameters"].(map[string]any); ok {
+				delete(parameters, "reasoning_effort")
+			}
+			if order, ok := config["fields_order"].([]any); ok {
+				kept := order[:0]
+				for _, field := range order {
+					if field != "reasoning_effort" {
+						kept = append(kept, field)
+					}
+				}
+				config["fields_order"] = kept
+			}
+			encoded, _ := json.Marshal(config)
+			return string(encoded)
+		}
 		v1, v2 := read("legacy-v1"), read(DescriptorRevision)
 		if len(v1) != len(v2) {
 			t.Fatalf("legacy-v2 has %d toolkits, legacy-v1 has %d", len(v2), len(v1))
@@ -201,8 +221,8 @@ func TestTheInventoryApplicationWalksTheWholeSuite(t *testing.T) {
 		added := map[string]bool{"import_graph": true, "export_graph": true}
 		seen := 0
 		for i := range v1 {
-			if v1[i].Name != v2[i].Name || !bytes.Equal(v1[i].Config, v2[i].Config) {
-				t.Fatalf("toolkit %d: name or toolkit_config changed", i)
+			if v1[i].Name != v2[i].Name || configWithoutReasoningEffort(v1[i].Config) != configWithoutReasoningEffort(v2[i].Config) {
+				t.Fatalf("toolkit %d: name or toolkit_config changed beyond the reasoning_effort parameter", i)
 			}
 			var kept []json.RawMessage
 			for _, raw := range v2[i].ProvidedTools {

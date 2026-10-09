@@ -18,7 +18,7 @@ it "runs automatically after a successful ingestion", which no engine has
 ever done. The new text says what is true.
 
 Generated rather than hand-edited, so the diff against legacy-v1 is exactly
-these changes. The host's conformance test diffs the two revisions and fails
+these changes, plus one optional toolkit parameter, `reasoning_effort`. The host's conformance test diffs the two revisions and fails
 on any other difference.
 
     python tools/build_inventory_descriptor_v2.py            rewrite v2 and the served copy
@@ -120,6 +120,12 @@ NEW_TOOLS = [
     ),
 ]
 
+REASONING_EFFORT_DESCRIPTION = (
+    "Reasoning effort for model calls: none, low, medium or high (empty keeps the "
+    "model's default). Use none for reasoning models such as Qwen3 to avoid long "
+    "thinking. A caller-supplied llm_settings.reasoning_effort overrides it."
+)
+
 #: The new tools go after the last maintenance tool, in this order.
 INSERT_AFTER = "smart_normalize_types"
 
@@ -140,6 +146,12 @@ def build() -> str:
                 continue
             expanded.append(tool)
         toolkit["provided_tools"] = expanded
+        config = toolkit["toolkit_config"]
+        order = config["fields_order"]
+        order.insert(order.index("embedding_model") + 1, "reasoning_effort")
+        config["parameters"]["reasoning_effort"] = _arg(
+            "String", False, REASONING_EFFORT_DESCRIPTION, ""
+        )
     if inserted != 1:
         raise SystemExit(f"{INSERT_AFTER} found {inserted} times in legacy-v1; expected once")
     return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
