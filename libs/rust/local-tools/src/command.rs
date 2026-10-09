@@ -8,7 +8,15 @@
 //! [`CommandShape::Compound`]: it runs under `/bin/sh -c`, no allow rule or
 //! remembered choice approves it (it is always asked), and deny rules are
 //! checked against every segment the analysis can find in it, including
-//! the inner command of `sh -c '…'`, `env …`, `sudo …` and `xargs …`.
+//! the inner command of `sh -c '…'`, `env …` (`env -S '…'` included),
+//! `sudo …` and `xargs …`.
+//!
+//! **Deny rules are advisory, not a security boundary.** They catch a
+//! model naming a program it should not, in the ways this analysis can
+//! see; they cannot see a program started by a script, a Makefile, a build
+//! tool, an interpreter (`python -c`), a renamed copy, or a string a shell
+//! assembles at run time. What actually bounds a command is the OS sandbox
+//! ([`crate::sandbox`]) and the person's approval.
 
 use std::path::{Path, PathBuf};
 
@@ -231,7 +239,58 @@ fn unwrap_argv(argv: Vec<String>, depth: usize) -> Vec<Vec<String>> {
         if let Some(script) = script {
             out.extend(analyse_at(script, depth + 1).segments());
         }
+    } else if depth < MAX_DEPTH
+        && program == "env"
+        && let Some(split) = env_split(&argv)
+    {
+        // `env -S 'cmd args'` splits its argument into the command line.
+        out.extend(analyse_at(&split, depth + 1).segments());
+        out.extend(unwrap_wrapper(&argv, depth));
     } else if depth < MAX_DEPTH && WRAPPERS.contains(&program.as_str()) {
+        out.extend(unwrap_wrapper(&argv, depth));
+    }
+    out.insert(0, argv);
+    out
+}
+
+/// The command line `env -S` / `--split-string` builds: the split string
+/// followed by the words after it.
+fn env_split(argv: &[String]) -> Option<String> {
+    let mut words = argv.iter().skip(1);
+    while let Some(word) = words.next() {
+        let value = if let Some(value) = word.strip_prefix("--split-string=") {
+            value.to_owned()
+        } else if word == "--split-string" {
+            words.next()?.clone()
+        } else if word.starts_with('-') && !word.starts_with("--") && word.contains('S') {
+            let after = &word[word.find('S')? + 1..];
+            if after.is_empty() {
+                words.next()?.clone()
+            } else {
+                after.to_owned()
+            }
+        } else {
+            continue;
+        };
+        let rest: Vec<String> = words
+            .map(|word| {
+                shlex::try_quote(word).map_or_else(|_| word.clone(), std::borrow::Cow::into_owned)
+            })
+            .collect();
+        return Some(
+            std::iter::once(value)
+                .chain(rest)
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+    }
+    None
+}
+
+/// Every candidate command a wrapper may run (see [`unwrap_argv`]).
+fn unwrap_wrapper(argv: &[String], depth: usize) -> Vec<Vec<String>> {
+    let mut out = Vec::new();
+    {
         // Wrapper options may take values (`sudo -u root`, `timeout 5s`), so
         // the wrapped command could start at any later word: every suffix
         // that starts at a non-option word is a candidate. Suffixes that
@@ -250,7 +309,6 @@ fn unwrap_argv(argv: Vec<String>, depth: usize) -> Vec<Vec<String>> {
             }
         }
     }
-    out.insert(0, argv);
     out
 }
 

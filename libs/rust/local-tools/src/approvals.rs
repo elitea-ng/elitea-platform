@@ -840,6 +840,27 @@ mod tests {
         );
     }
 
+    /// L1: `env -S` splits its argument into a command line; the deny
+    /// rules see the command inside.
+    #[test]
+    fn env_split_strings_are_unwrapped_for_deny_rules() {
+        let (_dir, engine) = engine_with(policy(), Vec::new());
+        for command in [
+            "env -S 'rm -rf build'",
+            "env -S'rm -rf build'",
+            "env -iS 'rm -rf build'",
+            "env --split-string='rm -rf build'",
+            "env --split-string 'FOO=1 rm -rf build'",
+            "/usr/bin/env -S 'git push origin' main",
+        ] {
+            assert_eq!(
+                verdict(&engine, &shell(command)),
+                (Verdict::Deny, Source::Policy),
+                "{command}"
+            );
+        }
+    }
+
     #[test]
     fn a_policy_allow_list_admits_only_its_commands_and_still_asks() {
         let allow_list = LocalWorkPolicy {

@@ -51,7 +51,12 @@ pub struct LocalWorkPolicy {
     /// [`crate::command::CommandPattern`]). A ceiling, not an approval:
     /// an admissible command is still asked unless another rule allows it.
     pub command_allow: Vec<String>,
-    /// Commands that never run.
+    /// Commands refused when the model names them (in any segment of a
+    /// compound command, and inside `sh -c`, `env`, `sudo` and other
+    /// wrappers). **Advisory, not a security boundary:** a program started
+    /// by a script, a build tool or an interpreter is not seen; the sandbox
+    /// and the approval are what confine a command (see
+    /// [`crate::command`]).
     pub command_deny: Vec<String>,
     /// Paths no local tool reads or writes (globs, see
     /// [`crate::workspace::Workspace::open`]).
