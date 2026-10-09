@@ -336,10 +336,13 @@ impl PipelineNodeEventSender {
             .await
     }
 
+    /// Close a saved child's card with the child's own result: the text it
+    /// returned to the parent, already bounded by the child's result node.
     pub(crate) async fn send_application_end_scoped(
         &self,
         tool_name: &str,
         call_id: &str,
+        response: &str,
         scope: Option<&PipelineNodeEventScope>,
     ) -> adk_rust::Result<()> {
         let mut event = Event::new("pipeline_application_completed");
@@ -348,7 +351,7 @@ impl PipelineNodeEventSender {
             parts: vec![Part::FunctionResponse {
                 function_response: FunctionResponseData::new(
                     tool_name,
-                    json!({"response":"Pipeline completed."}),
+                    json!({"response": response}),
                 ),
                 id: Some(call_id.to_owned()),
                 annotations: None,

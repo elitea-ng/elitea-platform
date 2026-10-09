@@ -500,6 +500,10 @@ func (r *ApplicationsRepo) Create(ctx context.Context, req applications.CreateRe
 }
 
 func (r *ApplicationsRepo) Update(ctx context.Context, req applications.UpdateRequest) (applications.Application, error) {
+	return r.updateApplication(ctx, r.pool, req)
+}
+
+func (r *ApplicationsRepo) updateApplication(ctx context.Context, q querier, req applications.UpdateRequest) (applications.Application, error) {
 	s, err := tenantSchema(req.ProjectID)
 	if err != nil {
 		return applications.Application{}, err
@@ -536,7 +540,7 @@ func (r *ApplicationsRepo) Update(ctx context.Context, req applications.UpdateRe
 	args = append(args, req.ApplicationID)
 	query := fmt.Sprintf(`UPDATE %s.applications SET %s WHERE id = $%d RETURNING `+applicationColumns,
 		s, strings.Join(setClauses, ", "), len(args))
-	app, err := scanApplication(r.pool.QueryRow(ctx, query, args...), req.ProjectID)
+	app, err := scanApplication(q.QueryRow(ctx, query, args...), req.ProjectID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return applications.Application{}, apierr.NotFound("application not found")
@@ -776,6 +780,34 @@ func insertVersion(ctx context.Context, q querier, s, applicationID string, v ap
 }
 
 func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applicationID, versionID string, v applications.Version) (applications.Version, error) {
+	return r.updateVersion(ctx, r.pool, projectID, applicationID, versionID, v)
+}
+
+// UpdateWithVersion writes the application fields and the nested version in
+// one transaction: a refusal or failure of either write rolls back both, so a
+// request that answers an error changes nothing.
+func (r *ApplicationsRepo) UpdateWithVersion(ctx context.Context, req applications.UpdateRequest, versionID string, v applications.Version) (applications.Application, applications.Version, error) {
+	project, err := parseProjectID(req.ProjectID)
+	if err != nil {
+		return applications.Application{}, applications.Version{}, err
+	}
+	var app applications.Application
+	var ver applications.Version
+	err = tenant.NewExecutor(r.pool).WithinTx(ctx, tenant.Project{ID: project}, pgx.TxOptions{}, func(ctx context.Context, tx pgx.Tx) error {
+		var err error
+		if app, err = r.updateApplication(ctx, tx, req); err != nil {
+			return err
+		}
+		ver, err = r.updateVersion(ctx, tx, req.ProjectID, req.ApplicationID, versionID, v)
+		return err
+	})
+	if err != nil {
+		return applications.Application{}, applications.Version{}, err
+	}
+	return app, ver, nil
+}
+
+func (r *ApplicationsRepo) updateVersion(ctx context.Context, q querier, projectID, applicationID, versionID string, v applications.Version) (applications.Version, error) {
 	s, err := tenantSchema(projectID)
 	if err != nil {
 		return applications.Version{}, err
@@ -787,11 +819,11 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 		return applications.Version{}, err
 	}
 	if v.Present.Instructions || v.Instructions != "" {
-		if err := r.checkPipelineInstructions(ctx, s, applicationID, versionID, v); err != nil {
+		if err := checkPipelineInstructions(ctx, q, s, applicationID, versionID, v); err != nil {
 			return applications.Version{}, err
 		}
 	} else if v.AgentType == pipelineAgentType {
-		if err := r.checkStoredPipelineInstructions(ctx, s, applicationID, versionID); err != nil {
+		if err := checkStoredPipelineInstructions(ctx, q, s, applicationID, versionID); err != nil {
 			return applications.Version{}, err
 		}
 	}
@@ -900,7 +932,7 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 		SELECT `+versionColumns+` FROM v JOIN %s.applications a ON a.id = v.application_id`,
 		s, strings.Join(setClauses, ", "), len(args)-1, len(args), s, s)
 
-	ver, err := scanVersion(r.pool.QueryRow(ctx, query, args...))
+	ver, err := scanVersion(q.QueryRow(ctx, query, args...))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return applications.Version{}, apierr.NotFound("version not found")
@@ -919,14 +951,14 @@ func (r *ApplicationsRepo) UpdateVersion(ctx context.Context, projectID, applica
 // database; the stored type is read only when the text is over a bound and the
 // request does not name one, so an ordinary agent save costs no extra query. An
 // over-bound text for a version that does not exist is a 404, not a guess.
-func (r *ApplicationsRepo) checkPipelineInstructions(ctx context.Context, schema, applicationID, versionID string, v applications.Version) error {
+func checkPipelineInstructions(ctx context.Context, q querier, schema, applicationID, versionID string, v applications.Version) error {
 	refusal := pipelinelimits.Check(v.Instructions)
 	if refusal == nil {
 		return nil
 	}
 	agentType := v.AgentType
 	if agentType == "" {
-		err := r.pool.QueryRow(ctx, fmt.Sprintf(
+		err := q.QueryRow(ctx, fmt.Sprintf(
 			`SELECT COALESCE(agent_type, '') FROM %s.application_versions WHERE application_id = $1 AND id = $2`, schema),
 			applicationID, versionID).Scan(&agentType)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -946,10 +978,10 @@ func (r *ApplicationsRepo) checkPipelineInstructions(ctx context.Context, schema
 // stores when a request turns it into a pipeline without sending new ones, so
 // a type change cannot store an over-bound pipeline. Only the length crosses
 // the wire for an over-size text; an in-bound text is read to count its nodes.
-func (r *ApplicationsRepo) checkStoredPipelineInstructions(ctx context.Context, schema, applicationID, versionID string) error {
+func checkStoredPipelineInstructions(ctx context.Context, q querier, schema, applicationID, versionID string) error {
 	var size int
 	var instructions string
-	err := r.pool.QueryRow(ctx, fmt.Sprintf(
+	err := q.QueryRow(ctx, fmt.Sprintf(
 		`SELECT octet_length(COALESCE(instructions, '')),
 		        CASE WHEN octet_length(COALESCE(instructions, '')) <= $3 THEN COALESCE(instructions, '') ELSE '' END
 		   FROM %s.application_versions WHERE application_id = $1 AND id = $2`, schema),

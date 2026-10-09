@@ -273,7 +273,7 @@ func TestHandlerPostgres_PipelineLimitsOnApplicationUpdate(t *testing.T) {
 		"version": map[string]any{"application_id": appID, "id": versionID, "instructions": overBytesLimit()},
 	})
 	requireLimitRefusal(t, "application update", recorder.Code, recorder.Body.String(), "512 KiB")
-	// The refusal comes before any write, so the application fields did not change either.
+	// The refusal rolls the whole request back, so the application fields did not change either.
 	recorder, _ = do(t, f.router, http.MethodPut, "/application/prompt_lib/1/"+appID, map[string]any{
 		"name":    "au-renamed",
 		"version": map[string]any{"application_id": appID, "id": versionID, "instructions": overBytesLimit()},
@@ -288,6 +288,29 @@ func TestHandlerPostgres_PipelineLimitsOnApplicationUpdate(t *testing.T) {
 	})
 	if recorder.Code != http.StatusCreated {
 		t.Errorf("in-bound application update: %d %s", recorder.Code, truncateForLog(recorder.Body.String()))
+	}
+}
+
+// A version write that only the database refuses (a NUL byte is not storable in
+// text) fails after the application update succeeded in the same request. Both
+// writes share one transaction, so the rename is rolled back and the request
+// answers the failure, not a 201.
+func TestHandlerPostgres_ApplicationUpdateRollsBackWhenVersionWriteFails(t *testing.T) {
+	f := newLimitsFixture(t)
+	appID, versionID := f.createPipeline(t, "rb", "pipeline")
+
+	recorder, _ := do(t, f.router, http.MethodPut, "/application/prompt_lib/1/"+appID, map[string]any{
+		"name":    "rb-renamed",
+		"version": map[string]any{"application_id": appID, "id": versionID, "instructions": "nodes:\x00"},
+	})
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", recorder.Code, truncateForLog(recorder.Body.String()))
+	}
+	if n := f.count(t, `SELECT count(*) FROM p_1.applications WHERE name = 'rb-renamed'`); n != 0 {
+		t.Error("a failed version write left the application renamed")
+	}
+	if n := f.count(t, `SELECT count(*) FROM p_1.applications WHERE name = 'rb'`); n != 1 {
+		t.Error("the application lost its original name")
 	}
 }
 
