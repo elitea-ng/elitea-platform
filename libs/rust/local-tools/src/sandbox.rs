@@ -718,7 +718,7 @@ pub mod seatbelt {
 /// Landlock can keep sub-paths of a writable root read-only and hide paths.
 ///
 /// The argument builder is plain data, so it is tested on every OS; only
-/// [`usable`] runs anything (Linux).
+/// `usable` runs anything (Linux).
 pub mod bubblewrap {
     use std::path::{Path, PathBuf};
 
