@@ -140,16 +140,53 @@ Recovery-guarantee rows for what this touches (Main × admission):
 
 ## Real-browser evidence
 
-**Not yet collected.** Deploying a rebuilt `elitea-main` image to the local rehearsal stack needs the user's
-approval, which this run did not have. The positive check to run is: Admin → Governance → routing rule, type
-a predicate, press Validate CEL (expect `valid`), paste a predicate longer than 8 KiB (expect the
-"CEL expression is too long" message beside the field), save a normal rule, reload, and confirm the rule is
-listed unchanged. This is recorded as an open item in the PR.
+Collected 2026-10-09 in the desktop app's built-in browser against a fresh local rehearsal stack. Real backend,
+no response mocks.
+
+- **Stack:** compose project `elitea-govbb`, built from `deploy/docker-compose.standalone-full.yml` and
+  `docker-compose.standalone-rust-agent.yml` via `deploy/scripts/standalone-stack.sh` (`build elitea-main`,
+  `certs`, `up`, `seed`). Browser host `http://govbb.localhost:18170`, own subnet `10.231.70.0/24`.
+- **Images:**
+  - `elitea-main`: `ghcr.io/elitea-ng/elitea-main:govbb-20261009`, image
+    `sha256:311add35bb3c1851ce937c7b17e71632d28d8f18e32b5cd66cf2e01b42c3202c`, built from branch commit
+    `12c1984b` (this PR merged with `main` at `85cabcc8`).
+  - Every other service reuses the locally built `dtfx-20261008` images unchanged, for example `elitea-web`
+    `sha256:241e61287dc23e38cfa8c0cdd23ada154c64534f349424b017e35f93a12fe2b5`.
+- **Actor:** the seeded test administrator `e2e-admin@autotest.local`, signed in through the stack's OIDC mock.
+- Admin → LLM Governance → New entry → type **CEL routing rule**:
+  1. Typed `provider == "openai" && budget_used < 0.9`, pressed **Validate CEL**: `POST .../validate-cel` → 200,
+     and the page shows "The expression compiles."
+  2. Replaced it with a valid 8,214-byte predicate (`provider == "a…"`), pressed **Validate CEL**: 200, and the
+     page shows "CEL expression is too long: 8214 bytes, limit 8192" beside the field. The expression is not
+     echoed.
+  3. With name `govbb-route` and target `openai / gpt-4o / 1`, pressed **Save**: `POST .../governance` → 400, the
+     dialog stays open showing the same message, and no row is written.
+  4. Restored the short predicate and pressed **Save**: 200; the list shows `govbb-route` (`routing_rule`,
+     all projects, enabled).
+  5. **Reload** of `/admin/app/governance`: the row is still listed. The list API returns id
+     `c36e9d2e-ee35-413a-b120-782087abbab0` with the same predicate and target.
+- Same-origin requests with the signed-in session, against the same stack:
+  - a 307,226-byte validate-cel body → **413** `{"error":"request body too large"}`;
+  - an unknown top-level field (`enabeld`) on create → **400** `invalid request body`;
+  - a second JSON value after the first → **400**.
+
+  The list afterwards still holds only `global` and `govbb-route`.
+- **Gateway:** on its next 30-second refresh, `elitea-llm-gateway` logged
+  `governance definitions loaded … routing_rules:1 … rejected:0`, so the rule accepted under the cap also
+  compiles on the enforcement side.
+- **Logs:** `elitea-main` logged no error for these requests, and no CEL text (no run of the padding character
+  appears in its logs).
 
 ## Fixtures
 
-All fixtures are in-process: `httptest` requests through the real chi routes against the `fakeQuerier` seam
-(`governance_test.go:84`). No UI or database fixtures were created.
+Unit-test fixtures are in-process: `httptest` requests through the real chi routes against the `fakeQuerier` seam
+(`governance_test.go:84`).
+
+On the browser stack:
+- users, RBAC and the `global` budget-alert row came from `standalone-stack.sh seed`, which writes to the
+  database;
+- the `govbb-route` rule was created through the UI;
+- the over-limit and strict-decode requests were sent from the signed-in page as same-origin requests.
 
 ## Follow-ups
 
