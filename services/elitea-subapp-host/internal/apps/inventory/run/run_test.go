@@ -49,6 +49,14 @@ func (f *fakeArtifacts) Download(_ context.Context, bucket, key string) ([]byte,
 	return data, nil
 }
 
+func (f *fakeArtifacts) DownloadUpTo(ctx context.Context, bucket, key string, limit int) ([]byte, error) {
+	data, err := f.Download(ctx, bucket, key)
+	if err == nil && len(data) > limit {
+		return nil, fmt.Errorf("%w: %s/%s", artifacts.ErrTooLarge, bucket, key)
+	}
+	return data, err
+}
+
 func (f *fakeArtifacts) Upload(_ context.Context, bucket, name string, data []byte) error {
 	if err := f.fail[name]; err != nil {
 		return err

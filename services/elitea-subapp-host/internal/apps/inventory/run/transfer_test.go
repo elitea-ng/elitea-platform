@@ -54,6 +54,28 @@ func TestImportDefaultsToTheBucketsGraphJSON(t *testing.T) {
 	}
 }
 
+// A real export is larger than the general 32 MiB artifact read bound (an
+// embedding per entity: 43 MB for a 50-file repository, measured), and the
+// tools must still round-trip it; past MaxGraphImportBytes is refused.
+func TestImportReadsAGraphLargerThanAnArtifactRead(t *testing.T) {
+	h := importHarness(t)
+	big := `{"nodes": [{"id": "x", "pad": "` + strings.Repeat("0", 40<<20) + `"}]}`
+	h.uploads.objects["graphs/graph.json"] = []byte(big)
+	if _, err := h.invoke("inventory", "inventory", run.ImportTool, read(map[string]any{"llm_settings": llmSettings()})); err != nil {
+		t.Fatalf("a 40 MiB graph was refused: %v", err)
+	}
+	params, _ := h.lastArgs["params"].(map[string]any)
+	if document, _ := params[run.GraphDocumentParam].(string); len(document) != len(big) {
+		t.Fatalf("the engine received %d bytes, not the bucket's %d", len(document), len(big))
+	}
+
+	h.uploads.objects["graphs/graph.json"] = make([]byte, run.MaxGraphImportBytes+1)
+	if _, err := h.invoke("inventory", "inventory", run.ImportTool, read(map[string]any{"llm_settings": llmSettings()})); err == nil ||
+		!strings.Contains(err.Error(), "import-graph command") {
+		t.Fatalf("an over-limit graph was not refused with the command's name: %v", err)
+	}
+}
+
 func TestImportRefusalsNameTheirCause(t *testing.T) {
 	for _, testCase := range []struct {
 		name     string

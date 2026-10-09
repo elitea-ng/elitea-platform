@@ -741,11 +741,12 @@ pub async fn run(
         toolkit_type: source.kind.name().to_owned(),
         branch: Some(source.active_branch()),
     };
-    if options.full_rebuild {
-        store::delete(pool, key)
-            .await
-            .map_err(|e| store_error(&e))?;
-    }
+    // `full_rebuild` does NOT delete the graph here: a rebuild that fails or
+    // is stopped must leave the previous graph readable, as every other
+    // failed run does. run_started starts from an empty graph instead, and
+    // the commit replaces the graph and every source's state in one
+    // transaction (source_store::complete_rebuild). MEASURED: deleting up
+    // front, a rebuild stopped 45 s in left the toolkit with no graph at all.
     source_store::start(pool, key, &status)
         .await
         .map_err(|e| store_error(&e))?;
@@ -813,14 +814,19 @@ async fn run_started(
         source.kind.name(),
         source.name
     ));
-    let graph = store::load(pool, key)
-        .await
-        .map_err(|e| store_error(&e))?
-        .map(|(graph, _)| graph)
-        .unwrap_or_default();
-    let previous = source_store::document_versions(pool, key, &source.name)
-        .await
-        .map_err(|e| store_error(&e))?;
+    let (graph, previous) = if options.full_rebuild {
+        (Graph::default(), BTreeMap::new())
+    } else {
+        let graph = store::load(pool, key)
+            .await
+            .map_err(|e| store_error(&e))?
+            .map(|(graph, _)| graph)
+            .unwrap_or_default();
+        let previous = source_store::document_versions(pool, key, &source.name)
+            .await
+            .map_err(|e| store_error(&e))?;
+        (graph, previous)
+    };
 
     let (_scratch, cloned) = clone(settings, &repo_config, key, source, context).await?;
 
@@ -861,19 +867,19 @@ async fn run_started(
         relations: i64::try_from(outcome.relations_added).unwrap_or(i64::MAX),
         documents: i64::try_from(outcome.documents_processed).unwrap_or(i64::MAX),
     };
-    source_store::complete(
-        pool,
-        key,
-        &graph,
-        &Completion {
-            toolkit_id: &source.status_key(),
-            source_name: &source.name,
-            documents: &outcome.documents,
-            counts,
-            commit_sha: Some(cloned.identity.commit()),
-        },
-    )
-    .await
+    let toolkit_id = source.status_key();
+    let completion = Completion {
+        toolkit_id: &toolkit_id,
+        source_name: &source.name,
+        documents: &outcome.documents,
+        counts,
+        commit_sha: Some(cloned.identity.commit()),
+    };
+    if options.full_rebuild {
+        source_store::complete_rebuild(pool, key, &graph, &completion).await
+    } else {
+        source_store::complete(pool, key, &graph, &completion).await
+    }
     .map_err(|e| store_error(&e))?;
     context.thinking(format!(
         "[complete] {} files read, {} unchanged, {} removed",

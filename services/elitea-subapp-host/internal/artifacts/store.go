@@ -134,6 +134,18 @@ func (c *HTTPClient) List(ctx context.Context, bucket, prefix string) ([]Object,
 // its own, because escaping the whole key would turn its slashes into %2F
 // and address an object that does not exist.
 func (c *HTTPClient) Download(ctx context.Context, bucket, key string) ([]byte, error) {
+	return c.DownloadUpTo(ctx, bucket, key, maxReadBytes)
+}
+
+// DownloadUpTo is Download with the caller's own bound, for the one reader
+// whose objects are legitimately larger than a manifest: an Inventory
+// graph.json carries an embedding per entity (a 50-file repository with
+// 2560-dimension embeddings exported to 43 MB, measured). Over limit is
+// ErrTooLarge, never a short read.
+func (c *HTTPClient) DownloadUpTo(ctx context.Context, bucket, key string, limit int) ([]byte, error) {
+	if limit <= 0 {
+		limit = maxReadBytes
+	}
 	segments := strings.Split(key, "/")
 	for i, segment := range segments {
 		segments[i] = url.PathEscape(segment)
@@ -157,12 +169,12 @@ func (c *HTTPClient) Download(ctx context.Context, bucket, key string) ([]byte, 
 		return nil, fmt.Errorf("failed to download artifact: HTTP %d — %s",
 			response.StatusCode, clip(string(text), 200))
 	}
-	data, err := io.ReadAll(io.LimitReader(response.Body, maxReadBytes+1))
+	data, err := io.ReadAll(io.LimitReader(response.Body, int64(limit)+1))
 	if err != nil {
 		return nil, err
 	}
-	if len(data) > maxReadBytes {
-		return nil, fmt.Errorf("%w: %s/%s is over %d bytes", ErrTooLarge, bucket, key, maxReadBytes)
+	if len(data) > limit {
+		return nil, fmt.Errorf("%w: %s/%s is over %d bytes", ErrTooLarge, bucket, key, limit)
 	}
 	return data, nil
 }

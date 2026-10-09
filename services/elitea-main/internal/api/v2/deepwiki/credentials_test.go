@@ -463,7 +463,7 @@ func TestAToolLevelLLMSettingsIsLiftedNotMerged(t *testing.T) {
 	minter := &recordingMinter{}
 	body := `{"configuration":{"parameters":{"code_toolkit":42,"llm_model":"gpt-4o"}},` +
 		`"parameters":{"question":"What does it do?",` +
-		`"llm_settings":{"max_tokens":4096,"model_name":"gpt-4o",` +
+		`"llm_settings":{"max_tokens":4096,"reasoning_effort":"none","model_name":"gpt-4o",` +
 		`"api_base":"https://attacker.example","api_key":"stolen","organization":"999"}}}`
 
 	rewritten, grant, err := rewriter(t, minter).Rewrite(
@@ -497,6 +497,9 @@ func TestAToolLevelLLMSettingsIsLiftedNotMerged(t *testing.T) {
 	}
 	if settings["max_tokens"] != float64(4096) {
 		t.Fatalf("max_tokens was not carried: %v", settings)
+	}
+	if settings["reasoning_effort"] != "none" {
+		t.Fatalf("reasoning_effort was not carried: %v", settings)
 	}
 	if settings["model_name"] != "gpt-4o" {
 		t.Fatalf("model_name %v", settings["model_name"])

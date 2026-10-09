@@ -21,6 +21,7 @@ package run
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -40,15 +41,23 @@ const (
 	// DefaultGraphArtifact is the key the Python engine wrote its graph to.
 	DefaultGraphArtifact = "graph.json"
 	// MaxGraphImportBytes is the largest document import_graph reads. It is
-	// the artifact read bound; the engine socket and the engine's own body
-	// limit are both above it. A larger graph goes through the engine's
-	// `import-graph` command.
-	MaxGraphImportBytes = artifacts.MaxDownloadBytes
+	// above the general artifact read bound (artifacts.MaxDownloadBytes,
+	// 32 MiB) on purpose: export_graph writes every entity's embedding, and
+	// a 50-file repository embedded at 2560 dimensions exported to 43 MB —
+	// so at 32 MiB the tools could not round-trip the smallest real graph.
+	// A larger graph goes through the engine's `import-graph` command.
+	MaxGraphImportBytes = 64 << 20
+	// maxGraphImportEncoded bounds the document as it travels: JSON-escaped
+	// once more inside the invoke body, which the engine sidecar caps at
+	// 96 MiB (elitea_inventory_engine::MAX_INVOKE_BYTES). Escaping a pretty
+	// graph adds about a tenth; the check keeps a pathological one (all
+	// quotes) a clear refusal here rather than a socket error there.
+	maxGraphImportEncoded = 88 << 20
 )
 
 // graphReader is the half of artifacts.Store an import needs.
 type graphReader interface {
-	Download(ctx context.Context, bucket, key string) ([]byte, error)
+	DownloadUpTo(ctx context.Context, bucket, key string, limit int) ([]byte, error)
 }
 
 // GraphArtifactName is the bucket key import_graph reads: `artifact_name`,
@@ -103,7 +112,7 @@ func (r *Runner) ResolveGraphDocument(ctx context.Context, params Params, tc *sp
 	if err := tc.Thinking(ctx, fmt.Sprintf("Reading %s from bucket %s", name, bucket)); err != nil {
 		return "", err
 	}
-	data, err := reader.Download(ctx, bucket, name)
+	data, err := reader.DownloadUpTo(ctx, bucket, name, MaxGraphImportBytes)
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(err, spi.ErrCancelled):
 		return "", err
@@ -122,6 +131,11 @@ func (r *Runner) ResolveGraphDocument(ctx context.Context, params Params, tc *sp
 		return "", spi.Failf(spi.KindValue,
 			"%s in bucket %s is over %d MiB; import it with the engine's import-graph command",
 			name, bucket, MaxGraphImportBytes>>20)
+	}
+	if encoded, err := json.Marshal(string(data)); err != nil || len(encoded) > maxGraphImportEncoded {
+		return "", spi.Failf(spi.KindValue,
+			"%s in bucket %s is too large to send to the engine; import it with the engine's import-graph command",
+			name, bucket)
 	}
 	return string(data), nil
 }

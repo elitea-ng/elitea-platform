@@ -69,7 +69,13 @@ const CallbackExecutionPrefix = "callback-"
 // ToolSettingsCarried are the keys of a TOOL-level llm_settings block a facade
 // carries into its own: tuning, never transport. Everything else in that block
 // is dropped with it.
-var ToolSettingsCarried = []string{"max_tokens", "temperature"}
+//
+// reasoning_effort is tuning too, and the engines' model client already
+// reads it (libs/rust/model-client settings.rs): without it a reasoning model
+// (Qwen3 on vLLM, measured) thinks for thousands of tokens per extraction
+// call and an ingestion of a 50-file repository outlives the gateway's
+// timeout. `none` turns thinking off where the gateway passes it through.
+var ToolSettingsCarried = []string{"max_tokens", "temperature", "reasoning_effort"}
 
 // LiftToolLLMSettings removes a client's llm_settings from the TOOL-level
 // `parameters` and lifts its tuning keys into the facade's block.

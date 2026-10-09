@@ -75,6 +75,12 @@ SELECT j.resource_project_id,
                'agent.execute.application.v1',
                'agent.execute.adhoc.v1'
            ) THEN 'user'
+           -- A toolkit tool run (test_tool, a remote toolkit call, a provider's
+           -- source-tool callback) is created only on a user's request, as
+           -- that user: its worker builds the SDK client from this token
+           -- before it runs the tool, so without this arm every such run
+           -- failed AUTHORIZATION_FAILED ("Execution authorization failed.").
+           WHEN j.capability_id = 'toolkit.call_tool.v1' THEN 'user'
        END AS initiator,
        -- The claimed AGENT execution's own conversation
        -- (chat_conversations.uuid). COALESCE, not a required column: an index
@@ -119,6 +125,8 @@ WHERE c.claim_id = $1
           )
           AND a.execution_id IS NOT NULL
       )
+      OR
+      j.capability_id = 'toolkit.call_tool.v1'
   )`+capabilityFilter,
 		claim.ClaimID,
 		claim.ExecutionID,

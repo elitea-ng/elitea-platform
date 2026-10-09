@@ -38,6 +38,8 @@ func TestPostgresRuntimeContextRequiresExactActiveClaimSessionAndFence(t *testin
 			"'agent.execute.application.v1'",
 			"'agent.execute.adhoc.v1'",
 			"a.execution_id IS NOT NULL",
+			// A toolkit tool run redeems its user's client token too (test_tool).
+			"WHEN j.capability_id = 'toolkit.call_tool.v1' THEN 'user'",
 		} {
 			require.Contains(t, query, predicate)
 		}

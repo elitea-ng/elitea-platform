@@ -195,17 +195,55 @@ pub async fn complete(
     graph: &Graph,
     completion: &Completion<'_>,
 ) -> Result<i64> {
+    commit_run(pool, key, graph, completion, false).await
+}
+
+/// [`complete`] for a `full_rebuild`: the graph is this one source's alone,
+/// so every OTHER source's file hashes and status row go in the same
+/// transaction. Until it commits, the previous graph stays readable.
+///
+/// # Errors
+///
+/// See [`super::save`].
+pub async fn complete_rebuild(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    completion: &Completion<'_>,
+) -> Result<i64> {
+    commit_run(pool, key, graph, completion, true).await
+}
+
+async fn commit_run(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    completion: &Completion<'_>,
+    rebuild: bool,
+) -> Result<i64> {
     let mut transaction = pool.begin().await?;
     let revision = write_graph(&mut transaction, key, graph).await?;
     sqlx::query(
         "DELETE FROM inventory_graph.documents
-          WHERE project_id = $1 AND application_id = $2 AND source_name = $3",
+          WHERE project_id = $1 AND application_id = $2 AND ($4 OR source_name = $3)",
     )
     .bind(key.project_id)
     .bind(key.application_id)
     .bind(completion.source_name)
+    .bind(rebuild)
     .execute(&mut *transaction)
     .await?;
+    if rebuild {
+        sqlx::query(
+            "DELETE FROM inventory_graph.sources
+              WHERE project_id = $1 AND application_id = $2 AND toolkit_id <> $3",
+        )
+        .bind(key.project_id)
+        .bind(key.application_id)
+        .bind(completion.toolkit_id)
+        .execute(&mut *transaction)
+        .await?;
+    }
     let mut keys = Vec::with_capacity(completion.documents.len());
     let mut versions = Vec::with_capacity(completion.documents.len());
     let mut mimes = Vec::with_capacity(completion.documents.len());

@@ -488,6 +488,87 @@ async fn a_source_is_cloned_ingested_and_re_ingested_incrementally() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+// A `full_rebuild` that fails (here: its clone is refused) leaves the
+// previous graph readable, as every other failed run does; one that
+// completes replaces the graph and every source's state together. MEASURED
+// on the standalone stack: deleting the graph up front, a rebuild stopped
+// 45 s in left the toolkit with no graph at all.
+#[cfg(feature = "loopback-git-http")]
+#[tokio::test]
+async fn a_failed_full_rebuild_keeps_the_previous_graph() {
+    let Some(pool) = database("rebuild").await else {
+        return;
+    };
+    let root = scratch("rebuild");
+    repository(&root);
+    let port = serve(&root).await;
+    let key = GraphKey::new(1, 10).expect("key");
+    let allowed = settings(&root.join("jobs"), "127.0.0.1");
+    let (context, _lines, _) = context();
+    ingest::run(
+        &pool,
+        key,
+        &loopback_source(port),
+        &allowed,
+        &ingest::RunOptions::default(),
+        &context,
+    )
+    .await
+    .expect("the first run");
+    let rebuild = ingest::RunOptions {
+        full_rebuild: true,
+        ..ingest::RunOptions::default()
+    };
+
+    ingest::run(
+        &pool,
+        key,
+        &loopback_source(port),
+        &settings(&root.join("jobs"), "github.com"),
+        &rebuild,
+        &context,
+    )
+    .await
+    .expect_err("refused");
+    let (graph, revision) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("the previous graph survived the failed rebuild");
+    assert_eq!(
+        (file_names(&graph), revision),
+        (vec!["README.md".to_owned(), "app.py".to_owned()], 1)
+    );
+    assert_eq!(
+        sources::document_versions(&pool, key, "repo")
+            .await
+            .expect("hashes")
+            .len(),
+        2,
+        "the previous file hashes survived too"
+    );
+
+    let replaced = ingest::run(
+        &pool,
+        key,
+        &loopback_source(port),
+        &allowed,
+        &rebuild,
+        &context,
+    )
+    .await
+    .expect("the rebuild");
+    assert_eq!((replaced.documents_processed, replaced.unchanged), (2, 0));
+    let (graph, revision) = store::load(&pool, key)
+        .await
+        .expect("load")
+        .expect("a graph");
+    assert_eq!(
+        (file_names(&graph), revision),
+        (vec!["README.md".to_owned(), "app.py".to_owned()], 2)
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[cfg(feature = "loopback-git-http")]
 #[tokio::test]
 async fn a_refused_clone_is_recorded_and_commits_nothing() {
