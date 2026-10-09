@@ -17,6 +17,13 @@ describe('SplitOutNode authored YAML', () => {
     expect(usePipelineYamlStore.getState().yamlCode).toBe(yaml);
     expect(currentExtensionDocument().nodes?.find((node) => node.id === 'extension')).not.toHaveProperty('retain');
   });
+  it('explains the output envelope and offers no groups limit', async () => {
+    const screen = renderExtensionCard(SplitOutNode, authoredExtensionYaml(splitNodeYaml));
+    expect(await screen.findByText(/Each output row is \{parent_index, position, data\}/u)).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByText('Processing limits'));
+    expect(screen.getByLabelText('values')).toBeInTheDocument();
+    expect(screen.queryByLabelText('groups')).toBeNull();
+  });
   it('changes missing-list behavior and retains state, unknown defaults and exactly the authored nodes', async () => {
     const screen = renderExtensionCard(SplitOutNode, authoredExtensionYaml(splitNodeYaml));
     const before = currentExtensionDocument();

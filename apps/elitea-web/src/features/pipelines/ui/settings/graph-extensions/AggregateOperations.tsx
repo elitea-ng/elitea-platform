@@ -14,11 +14,12 @@ interface AggregateOperationsProps {
   readonly disabled: boolean;
   readonly change: (rows: readonly unknown[]) => void;
 }
+const INTEGER_OPERATIONS: ReadonlySet<string> = new Set(['sum_int', 'min_int', 'max_int']);
 function changedOperation(row: ExtensionRecord, operation: string): ExtensionRecord {
   const next: Record<string, unknown> = { ...row, operation };
   delete next['field']; delete next['retain']; delete next['merge_lists'];
   if (operation === 'collect_rows') next['retain'] = { mode: 'all' };
-  else if (operation !== 'count_rows') next['field'] = { path: '', missing: 'error', null: 'keep' };
+  else if (operation !== 'count_rows') next['field'] = { path: '', missing: 'error', null: INTEGER_OPERATIONS.has(operation) ? 'error' : 'keep' };
   if (operation === 'collect') next['merge_lists'] = false;
   return next;
 }
@@ -32,6 +33,7 @@ interface AggregateOperationRowProps {
 function AggregateOperationRow({ row, index, disabled, change, remove }: AggregateOperationRowProps): ReactNode {
   const operation = extensionText(row['operation']);
   const field = extensionRecord(row['field']);
+  const integer = INTEGER_OPERATIONS.has(operation);
   const numbered = { index: index + 1 };
   return <Stack spacing={1}>
     <ExtensionChoice label={t('pipelines.graphExtensions.operation', 'Operation {{index}}', numbered)} value={operation}
@@ -45,10 +47,10 @@ function AggregateOperationRow({ row, index, disabled, change, remove }: Aggrega
         value={extensionText(field['missing']) || 'error'} choices={['error', 'null', 'skip']} disabled={disabled}
         change={(missing) => change({ ...row, field: { ...field, missing } })} />
       <ExtensionChoice label={t('pipelines.graphExtensions.operationNull', 'Null value {{index}}', numbered)}
-        value={extensionText(field['null']) || 'keep'} choices={['keep', 'error', 'skip']} disabled={disabled}
+        value={extensionText(field['null']) || (integer ? 'error' : 'keep')} choices={integer ? ['error', 'skip'] : ['keep', 'error', 'skip']} disabled={disabled}
         change={(value) => change({ ...row, field: { ...field, null: value } })} />
     </>}
-    {operation === 'collect_rows' && <SplitRetentionFields value={row['retain']} defaultMode="all" disabled={disabled}
+    {operation === 'collect_rows' && <SplitRetentionFields value={row['retain']} defaultMode="all" choices={['all', 'only', 'except']} disabled={disabled}
       change={(retain) => change({ ...row, retain })} />}
     {operation === 'collect' && <FormControlLabel label={t('pipelines.graphExtensions.mergeLists', 'Flatten collected lists {{index}}', numbered)}
       control={<BaseCheckbox className="nodrag nopan" disabled={disabled} checked={row['merge_lists'] === true}

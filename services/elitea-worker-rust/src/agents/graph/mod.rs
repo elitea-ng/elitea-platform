@@ -26,6 +26,9 @@ mod code_runtime;
 pub(crate) mod code_trace;
 mod code_workspace;
 pub(crate) use code_remote::CodeRuntimeFactory;
+mod aggregate;
+#[cfg(test)]
+mod aggregate_tests;
 mod code_state;
 #[cfg(test)]
 mod code_state_tests;
@@ -38,6 +41,9 @@ mod compiler_identifier_tests;
 mod compiler_limit_tests;
 #[cfg(test)]
 mod compiler_tests;
+mod data_shaping;
+#[cfg(test)]
+mod data_shaping_tests;
 mod decision;
 mod direct_tool;
 #[cfg(test)]
@@ -87,6 +93,18 @@ pub(crate) mod resume;
 use elitea_agent_runtime::graph::router;
 #[cfg(test)]
 mod routing_tests;
+#[cfg(feature = "graph-shaping-bench")]
+#[doc(hidden)]
+pub mod shaping_bench;
+#[cfg(test)]
+mod shaping_compiler_tests;
+#[cfg(test)]
+mod shaping_pg_tests;
+#[cfg(test)]
+mod shaping_property_tests;
+mod split_out;
+#[cfg(test)]
+mod split_out_tests;
 use elitea_agent_runtime::graph::state_modifier;
 pub(crate) mod static_pause;
 #[cfg(test)]

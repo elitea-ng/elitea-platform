@@ -438,6 +438,7 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Graph fan-out child lineage](graph-fanout-child-lineage-20261008.md) records frozen Parallel/Map child identity across executions, lease-loss control stops and event-driven cancellation (Point 5 C1).
 - [Container build local crate freshness](container-build-local-crate-freshness-20261008.md) records why Rust image builds recompile local crates under a locked shared target cache, the two-worktree build proof and the gate test.
 - [Point 5 V2 contracts and designs](graph-point5-v2-contracts-20261008.md) links the fan-out V2 runtime design, the per-interrupt decision contract and schemas, the Map V1 rewrite, and the HTTP and database action designs.
+- [Graph shaping SplitOut and Aggregate](graph-shaping-split-out-aggregate-20261008.md) records the Gate 5c first-tier nodes, budgets, replay proof and rehearsal browser evidence.
 - [Pipeline terminal result](pipeline-terminal-result-20261008.md) records the runtime last-writer trace that selects a pipeline answer, its rendering, bounds, tests and browser evidence.
 - [Governance body bounds](governance-body-bounds-20261008.md) records the 256 KiB governance body limit, 413 refusal, strict decode, and 8 KiB routing CEL cap.
 - [Go module advisories](go-module-advisories-20261008.md) records the cel-go and klauspost/compress fixes, the deferred x/crypto fix (Go 1.26), and the guard against linking x/crypto/ssh and openpgp.

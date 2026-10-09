@@ -147,6 +147,51 @@ nodes:
     );
 }
 
+#[cfg(feature = "graph-extensions-rehearsal")]
+#[tokio::test]
+async fn a_pipeline_ending_in_aggregate_shows_the_regrouped_rows() {
+    let text = run_pure(
+        r"
+state:
+  input: str
+  orders: {type: list, value: []}
+  lines: {type: list, value: []}
+  orders_out: {type: list, value: []}
+entry_point: parse
+nodes:
+  - id: parse
+    type: state_modifier
+    input: [input]
+    output: [orders]
+    template: '{{ input }}'
+    transition: split
+  - id: split
+    type: split_out
+    source: orders
+    output: [lines]
+    split: {mode: rows_field, path: /items}
+    destination: items
+    retain: {mode: all}
+    transition: join
+  - id: join
+    type: aggregate
+    source: lines
+    output: [orders_out]
+    layout: split_out
+    regroup: parent
+    operations:
+      - {operation: collect, field: {path: /items/qty}, output: items}
+    transition: END
+",
+        r#"[{"id":"A","items":[{"qty":1},{"qty":2}]}]"#,
+    )
+    .await;
+    assert_eq!(
+        text,
+        "```json\n[\n  {\n    \"id\": \"A\",\n    \"items\": [\n      1,\n      2\n    ]\n  }\n]\n```"
+    );
+}
+
 #[tokio::test]
 async fn router_branch_that_ran_wins_over_a_later_declared_stale_default() {
     let text = run_pure(ROUTER_PIPELINE, "go").await;

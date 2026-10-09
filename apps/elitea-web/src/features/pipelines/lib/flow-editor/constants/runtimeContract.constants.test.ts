@@ -31,7 +31,7 @@ describe('NODE_ID_PATTERN mirrors valid_graph_id (worker yaml.rs:362)', () => {
   });
 
   it('the END the seeded route defaults use is the literal the runtime compares against', () => {
-    // `compiler.rs:484` / `router.rs:331` / `hitl.rs:464` all compare
+    // `compiler.rs:807` / `router.rs:331` / `hitl.rs:464` all compare
     // `target != "END"` byte for byte, and `nodeDefaults.constants.ts` seeds
     // every route default from `PipelineNodeTypes.End`.
     expect(PipelineNodeTypes.End).toBe('END');
@@ -39,7 +39,7 @@ describe('NODE_ID_PATTERN mirrors valid_graph_id (worker yaml.rs:362)', () => {
   });
 });
 
-describe('CompilerAdmittedNodeTypes mirrors parse_pipeline_node (worker compiler.rs:1236)', () => {
+describe('CompilerAdmittedNodeTypes mirrors parse_pipeline_node (worker compiler.rs:2320)', () => {
   it('holds exactly the eleven parsed types the compiler has an arm for', () => {
     expect([...CompilerAdmittedNodeTypes].sort()).toEqual(
       ['agent', 'code', 'decision', 'hitl', 'llm', 'mcp', 'parallel', 'printer', 'router', 'state_modifier', 'toolkit'].sort(),
@@ -69,7 +69,7 @@ describe('CompilerAdmittedNodeTypes mirrors parse_pipeline_node (worker compiler
   });
 });
 
-describe('ReservedStateKeys mirrors reserved_user_state_key (worker compiler.rs:1456)', () => {
+describe('ReservedStateKeys mirrors reserved_user_state_key (worker compiler.rs:2666)', () => {
   it('holds the 26 recorded reserved keys, each citing the compiler line that reserves it', () => {
     expect(ReservedStateKeys).toHaveLength(26);
     for (const entry of ReservedStateKeys) {
@@ -90,7 +90,7 @@ describe('ReservedStateKeys mirrors reserved_user_state_key (worker compiler.rs:
     }
   });
 
-  it('reserves the pipeline result trace channel (worker compiler.rs:2320)', () => {
+  it('reserves the pipeline result trace channel (worker compiler.rs:2674)', () => {
     expect(isReservedStateKey('__elitea_pipeline_result_trace_v1')).toBe(true);
   });
 
@@ -100,7 +100,7 @@ describe('ReservedStateKeys mirrors reserved_user_state_key (worker compiler.rs:
     }
   });
 
-  it('does NOT reserve input/messages — builtin_state_key (compiler.rs:1436) is a wider, different set', () => {
+  it('does NOT reserve input/messages — builtin_state_key (compiler.rs:2646) is a wider, different set', () => {
     // These two are exactly the `DefaultState` keys the editor seeds into
     // every pipeline. Reserving them here would make every new pipeline
     // unauthorable.

@@ -8,8 +8,10 @@ export interface ExtensionSettingsProps {
 }
 export const SHAPING_LIMITS = {
   input_items: 10_000, output_items: 10_000, groups: 1_000,
-  bytes: 512 * 1024, depth: 32, values: 100_000,
+  bytes: 512 * 1024, depth: 32, values: 32_768,
 } as const;
+/** `groups` exists on aggregate only; split_out refuses it as an unknown key. */
+export const shapingLimitKeys = (type: unknown): readonly string[] => Object.keys(SHAPING_LIMITS).filter((key) => key !== 'groups' || type === 'aggregate');
 export const AGGREGATE_OPERATIONS = [
   'count_rows', 'collect_rows', 'collect', 'sum_int', 'min_int', 'max_int', 'first', 'last',
 ] as const;
