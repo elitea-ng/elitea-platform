@@ -83,7 +83,7 @@ What we deliberately do not port:
 | Worker × tool error | F (typed) + C record | `direct_tool.rs:574-592` | `effectful_tool_failure_stops_with_its_error_and_is_not_called_again` |
 | Worker × result not journaled after the call | F (typed) + C record | `direct_tool.rs` `dispatch` (`completed` flag) | `effect_whose_result_cannot_be_recorded_is_reported_and_never_repeated` |
 | Worker × block / skip | F (stop with message) | `direct_tool.rs:514`, `:719` | `blocked_effectful_sensitive_tool_stops_the_whole_pipeline_under_node_recovery`, `skipped_effectful_authorization_stops_the_whole_pipeline_under_node_recovery` |
-| PostgreSQL × journal append and takeover | Fenced | `StateWriterLease` and writer activation in `postgres_checkpointer/node_attempts.rs`, `postgres_checkpointer.rs` `activate` | `src/state/postgres_checkpointer_tests/direct_tool_journal.rs` (5 DB-gated tests: process replacement, crash after Started, second-claim takeover, pause/block rows, replay) |
+| PostgreSQL × journal append and takeover | Fenced | `StateWriterLease`, root-writer share lock and writer activation in `postgres_checkpointer/node_attempts.rs` and `postgres_checkpointer.rs` `activate_under_root` | `src/state/postgres_checkpointer_tests/direct_tool_journal.rs` (6 DB-gated tests: process replacement, crash after Started, second-claim takeover, superseded claim refused for an unopened activation, pause/block rows, replay) |
 
 ## Gaps
 
@@ -107,13 +107,11 @@ What we deliberately do not port:
 5. **Missing writer is detected at run time.** The authority is attached after assembly
    (`src/agents/session.rs:1606`). With the flag off, upstream nodes run before the effectful node
    refuses. The committed runtime configs enable the flag.
-6. **Root-writer fencing of new journal threads.** Journal threads are fenced per thread: an older claim can
-   never take over a thread a newer claim owns, and a newer claim always takes over and reads the durable
-   `Started`, so no effect is dispatched twice. However, opening a journal thread does not re-check that the
-   run's root writer is still this claim. A superseded claim whose in-process lease has not yet been revoked can
-   therefore start one effect in an activation nobody has opened yet. It is recorded durably and is never
-   repeated by the newer claim. The fix is to verify the root writer inside the journal-thread activation
-   transaction (defence in depth; Main's lease revocation is the primary guard).
+6. **Root-writer fencing (fixed).** A node journal thread now opens only while this claim still owns the
+   run: `PostgresCheckpointer::activate_under_root` share-locks the root writer row in the same transaction as
+   the journal-thread activation. A superseded claim is refused even while its in-process lease is still
+   current (`superseded_claim_cannot_start_an_effect_in_an_unopened_activation`). Application child threads
+   (`postgres_checkpointer/application_children.rs`) still use the unfenced `activate`, which is a follow-up.
 7. **LLM-node receipts.** Pipeline LLM nodes admit effectful sensitive tools without an effect
    receipt (`src/agents/graph/llm.rs:1326-1470`). They should move to the same journal so the two
    node kinds share one guarantee (Gate 6, `docs/remaining-gates.md:60`).

@@ -308,6 +308,49 @@ async fn second_claim_takeover_fences_the_old_writer_and_keeps_the_started_effec
 
 #[tokio::test]
 #[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
+async fn superseded_claim_cannot_start_an_effect_in_an_unopened_activation() {
+    let database = database().await;
+    let claim_a = checkpointer(
+        database.pool.clone(),
+        1,
+        &Arc::new(TestStateWriterLease::current()),
+    )
+    .await;
+    let (node_a, calls_a) = journaled_node(claim_a.clone(), None, false);
+    // Claim B takes the run over before A reaches this node. A's in-process lease is
+    // still current, so only the root writer row in PostgreSQL can refuse it.
+    let claim_b = checkpointer(
+        database.pool.clone(),
+        2,
+        &Arc::new(TestStateWriterLease::current()),
+    )
+    .await;
+
+    let activation = node_activation(&context(direct_tool_state()));
+    let Err(fenced) = claim_a
+        .open(&activation, &NodeRecoveryPolicy::default())
+        .await
+    else {
+        panic!("a superseded claim opened a new node journal");
+    };
+    assert!(
+        fenced.to_string().contains("writer_not_current"),
+        "{fenced}"
+    );
+    assert!(node_a.execute(&context(direct_tool_state())).await.is_err());
+    assert_eq!(calls_a.load(Ordering::SeqCst), 0);
+    assert_eq!(journal_writers(&database.pool).await, 0);
+
+    // The current owner opens the same activation and runs the effect exactly once.
+    let (node_b, calls_b) = journaled_node(claim_b, None, false);
+    let output = node_b.execute(&context(direct_tool_state())).await.unwrap();
+    assert!(!recovery_card(&output));
+    assert_eq!(calls_b.load(Ordering::SeqCst), 1);
+    assert_eq!(calls_a.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+#[ignore = "requires isolated PostgreSQL database creation through ELITEA_TEST_DATABASE_URL"]
 async fn pause_and_block_leave_no_postgres_journal_rows() {
     let database = database().await;
     for (action, comment) in [("reject", None), ("block_with_comment", Some("no"))] {

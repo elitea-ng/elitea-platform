@@ -337,12 +337,73 @@ impl PostgresCheckpointer {
         limits: CheckpointLimits,
         state_writer_lease: Arc<dyn StateWriterLease>,
     ) -> Result<Self, PostgresCheckpointError> {
+        Self::activate_fenced(pool, authority, limits, state_writer_lease, None).await
+    }
+
+    /// Activate a thread owned by this claim's run only while the claim still holds
+    /// the run's root writer. The root row is share-locked in the same transaction,
+    /// so a newer claim's takeover of the run waits for this activation to commit and
+    /// then supersedes it; a claim that was already superseded is refused here even
+    /// while its in-process lease is still current.
+    pub(crate) async fn activate_under_root(
+        pool: PgPool,
+        authority: CheckpointWriterAuthority,
+        root_thread_id: &str,
+        limits: CheckpointLimits,
+        state_writer_lease: Arc<dyn StateWriterLease>,
+    ) -> Result<Self, PostgresCheckpointError> {
+        Self::activate_fenced(
+            pool,
+            authority,
+            limits,
+            state_writer_lease,
+            Some(root_thread_id),
+        )
+        .await
+    }
+
+    async fn activate_fenced(
+        pool: PgPool,
+        authority: CheckpointWriterAuthority,
+        limits: CheckpointLimits,
+        state_writer_lease: Arc<dyn StateWriterLease>,
+        root_thread_id: Option<&str>,
+    ) -> Result<Self, PostgresCheckpointError> {
         authority.validate()?;
         let limits = limits.validate()?;
         state_writer_lease
             .ensure_current()
             .map_err(|_| PostgresCheckpointError::WriterNotCurrent)?;
         let mut transaction = pool.begin().await.map_err(storage_error)?;
+        if let Some(root_thread_id) = root_thread_id {
+            let root_writer = sqlx::query_scalar::<_, String>(
+                r"
+SELECT writer_claim_id
+FROM elitea_runtime.agent_graph_checkpoint_writers
+WHERE tenant_id = $1
+  AND resource_project_id = $2
+  AND projection_project_id = $3
+  AND capability_id = $4
+  AND checkpoint_family = $5
+  AND definition_digest = $6
+  AND thread_id = $7
+FOR SHARE
+                ",
+            )
+            .bind(&authority.tenant_id)
+            .bind(authority.resource_project_id)
+            .bind(authority.projection_project_id)
+            .bind(authority.capability_id)
+            .bind(CHECKPOINT_FAMILY)
+            .bind(authority.definition_digest.as_slice())
+            .bind(root_thread_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(storage_error)?;
+            if root_writer.as_deref() != Some(authority.claim_id.as_str()) {
+                return Err(PostgresCheckpointError::WriterNotCurrent);
+            }
+        }
         let activated = sqlx::query_scalar::<_, String>(
             r"
 INSERT INTO elitea_runtime.agent_graph_checkpoint_writers AS writer (

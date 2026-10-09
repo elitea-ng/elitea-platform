@@ -56,9 +56,11 @@ impl NodeRecoveryFactory for PostgresCheckpointer {
         let mut activation_id = [0; 32];
         activation_id.copy_from_slice(hash.finish().as_ref());
         let thread_id = format!("n1:{}", URL_SAFE_NO_PAD.encode(activation_id));
-        let child = Self::activate(
+        // A journal may start an effect, so it opens only while this claim still owns the run.
+        let child = Self::activate_under_root(
             self.pool.clone(),
             authority.for_thread(thread_id.clone())?,
+            &authority.thread_id,
             self.limits,
             Arc::clone(&self.state_writer_lease),
         )
