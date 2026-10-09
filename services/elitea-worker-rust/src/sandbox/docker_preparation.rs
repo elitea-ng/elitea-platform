@@ -72,6 +72,15 @@ impl DockerSupervisor {
         Ok(self)
     }
 
+    /// Lookups hold a permit of their own, so saturated execution never fails one.
+    pub(crate) fn admit_frozen_lookup(
+        &self,
+    ) -> Result<tokio::sync::SemaphorePermit<'_>, SupervisorError> {
+        self.lookup_capacity
+            .try_acquire()
+            .map_err(|_| SupervisorError::Busy)
+    }
+
     /// Read an exact frozen Cargo profile without reserving a job or runtime.
     /// # Errors
     /// Rejects expired authority, recorded work, invalid profiles, and uncertain storage.
@@ -99,10 +108,7 @@ impl DockerSupervisor {
         {
             return Err(SupervisorError::Invalid);
         }
-        let _permit = self
-            .capacity
-            .try_acquire()
-            .map_err(|_| SupervisorError::Busy)?;
+        let _permit = self.admit_frozen_lookup()?;
         // Existing work must reconcile its original preparer and immutable root.
         match self.ledger.read(authorization.scope()).await {
             Err(LedgerError::Missing) => {}

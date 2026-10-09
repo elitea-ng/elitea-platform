@@ -1,6 +1,6 @@
 //! Keep the Code frontier pending until frozen dependencies are published and terminal.
-use crate::agents::graph::code_timing;
 use super::{CodeRuntimeProfile, RemoteCodeRuntime, failed, observation_deadline, uncertain};
+use crate::agents::graph::code_timing;
 use crate::{
     agents::graph::{
         code::CodeLanguage,
@@ -200,26 +200,29 @@ impl RemoteCodeRuntime {
             recorded_code,
             root,
             |root| async {
-                let lookup = self.control.lookup_sandbox_dependencies(
-                    client,
-                    &self.authority,
-                    &activation,
-                    &job,
-                    root,
-                );
-                let selected = tokio::time::timeout(
-                    Duration::from_secs(config.timeout_seconds.into()),
-                    lookup,
-                )
-                .await
-                .map_err(|_| CodePreparationFailure::Unconfirmed)?
-                .map_err(|error| {
-                    if retryable(&error) {
-                        CodePreparationFailure::Unconfirmed
-                    } else {
-                        CodePreparationFailure::Failed
-                    }
-                })?;
+                // A busy or briefly unavailable lookup waits for the same absolute
+                // deadline as fresh preparation. It never falls through to prepare.
+                let deadline = observation_deadline(config.timeout_seconds);
+                let selected = retry_frozen_lookup(deadline, || async {
+                    let lookup = self.control.lookup_sandbox_dependencies(
+                        client,
+                        &self.authority,
+                        &activation,
+                        &job,
+                        root,
+                    );
+                    tokio::time::timeout(Duration::from_secs(config.timeout_seconds.into()), lookup)
+                        .await
+                        .map_err(|_| LookupAttempt::Final(CodePreparationFailure::Unconfirmed))?
+                        .map_err(|error| {
+                            if retryable(&error) {
+                                LookupAttempt::Retry
+                            } else {
+                                LookupAttempt::Final(CodePreparationFailure::Failed)
+                            }
+                        })
+                })
+                .await?;
                 if selected
                     .as_ref()
                     .is_some_and(|bundle| !job.matches_bundle(bundle))
@@ -345,7 +348,8 @@ impl RemoteCodeRuntime {
                     }
                     if wait {
                         tokio::time::sleep_until(
-                            (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL).min(deadline),
+                            (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL)
+                                .min(deadline),
                         )
                         .await;
                     }
@@ -490,6 +494,36 @@ fn native_acquisition<'a>(
         CodeLanguage::Python => Err(failed(
             "Native dependency acquisition requires its language adapter.",
         )),
+    }
+}
+
+enum LookupAttempt {
+    Retry,
+    Final(CodePreparationFailure),
+}
+
+/// Retry retryable frozen-lookup errors at the reconcile cadence until `deadline`.
+async fn retry_frozen_lookup<T, Op, Fut>(
+    deadline: tokio::time::Instant,
+    mut attempt: Op,
+) -> Result<T, CodePreparationFailure>
+where
+    Op: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, LookupAttempt>>,
+{
+    loop {
+        match attempt().await {
+            Ok(value) => return Ok(value),
+            Err(LookupAttempt::Final(failure)) => return Err(failure),
+            Err(LookupAttempt::Retry) => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(CodePreparationFailure::Unconfirmed);
+        }
+        tokio::time::sleep_until(
+            (tokio::time::Instant::now() + code_timing::CODE_RECONCILE_INTERVAL).min(deadline),
+        )
+        .await;
     }
 }
 
@@ -794,5 +828,73 @@ mod frozen_preparation_flow_tests {
                 assert_eq!(preparations.get(), 0, "{recorded_owner}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod frozen_lookup_retry_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[tokio::test(start_paused = true)]
+    async fn frozen_flow_retries_busy_lookup_until_hit() {
+        let lookups = Cell::new(0);
+        let preparations = Cell::new(0);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let started = tokio::time::Instant::now();
+        let result = resolve_preparation_bundle(
+            false,
+            false,
+            Some(&"c".repeat(64)),
+            |_| async {
+                retry_frozen_lookup(deadline, || async {
+                    lookups.set(lookups.get() + 1);
+                    if lookups.get() < 3 {
+                        Err(LookupAttempt::Retry)
+                    } else {
+                        Ok(Some(
+                            crate::sandbox::preparation::frozen_lookup_tests::fixture().1,
+                        ))
+                    }
+                })
+                .await
+            },
+            || async {
+                preparations.set(preparations.get() + 1);
+                Err(CodePreparationFailure::Failed)
+            },
+        )
+        .await;
+        assert!(result.is_ok());
+        assert_eq!((lookups.get(), preparations.get()), (3, 0));
+        assert_eq!(started.elapsed(), code_timing::CODE_RECONCILE_INTERVAL * 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn frozen_lookup_busy_until_deadline_is_unconfirmed_and_bounded() {
+        let lookups = Cell::new(0_usize);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let result: Result<(), _> = retry_frozen_lookup(deadline, || async {
+            lookups.set(lookups.get() + 1);
+            Err(LookupAttempt::Retry)
+        })
+        .await;
+        assert_eq!(result.err(), Some(CodePreparationFailure::Unconfirmed));
+        assert!(tokio::time::Instant::now() >= deadline);
+        // 1 s cadence: at most one attempt per second until the deadline.
+        assert!(lookups.get() <= 11, "{}", lookups.get());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn frozen_lookup_terminal_error_is_not_retried() {
+        let lookups = Cell::new(0);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        let result: Result<(), _> = retry_frozen_lookup(deadline, || async {
+            lookups.set(lookups.get() + 1);
+            Err(LookupAttempt::Final(CodePreparationFailure::Failed))
+        })
+        .await;
+        assert_eq!(result.err(), Some(CodePreparationFailure::Failed));
+        assert_eq!(lookups.get(), 1);
     }
 }

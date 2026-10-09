@@ -1702,3 +1702,32 @@ async fn preparation_bundle_persistence_error_retains_original_runtime_for_recon
     assert_eq!(state.cleanups, 0);
     assert!(state.present && state.running);
 }
+
+#[tokio::test]
+async fn frozen_lookup_succeeds_while_execution_capacity_is_exhausted() {
+    let pool = PgPoolOptions::new()
+        .connect_lazy("postgres://fixture@127.0.0.1:1/fixture")
+        .unwrap();
+    let request = job();
+    let supervisor = DockerSupervisor::new(
+        JobLedger::new(pool),
+        Runtime::new(&request, true),
+        OWNER.into(),
+        1,
+    )
+    .unwrap();
+    let _execution = supervisor.capacity.try_acquire().unwrap();
+    assert!(supervisor.capacity.try_acquire().is_err());
+    // A saturated execution slot does not refuse the metadata lookup...
+    let mut held = Vec::new();
+    for _ in 0..super::super::FROZEN_LOOKUP_CONCURRENCY {
+        held.push(supervisor.admit_frozen_lookup().unwrap());
+    }
+    // ...and lookups remain bounded by their own limit.
+    assert!(matches!(
+        supervisor.admit_frozen_lookup(),
+        Err(SupervisorError::Busy)
+    ));
+    held.pop();
+    assert!(supervisor.admit_frozen_lookup().is_ok());
+}

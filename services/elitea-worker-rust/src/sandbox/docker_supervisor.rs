@@ -36,6 +36,10 @@ const READINESS_SECONDS: i64 = 60;
 // Largest admitted preparation timeout (3600) plus worker recovery allowance (90).
 const MAX_HYDRATION_AGE_SECONDS: i64 = 3690;
 
+/// Bound on concurrent frozen Cargo metadata lookups. A lookup is one read-only
+/// GET of an immutable root, so it never competes with execution capacity.
+pub(crate) const FROZEN_LOOKUP_CONCURRENCY: usize = 16;
+
 pub struct DockerSupervisor {
     ledger: JobLedger,
     runtime: Box<dyn CodeJobRuntime>,
@@ -43,6 +47,7 @@ pub struct DockerSupervisor {
     capacity: Semaphore,
     concurrency: usize,
     stop_capacity: Semaphore,
+    lookup_capacity: Semaphore,
     admission_policy: Option<(String, Vec<Language>)>,
     preparation_policy: Option<String>,
     preparation_languages: Vec<Language>,
@@ -150,6 +155,7 @@ impl DockerSupervisor {
             capacity: Semaphore::new(concurrency),
             concurrency,
             stop_capacity: Semaphore::new(concurrency.min(16)),
+            lookup_capacity: Semaphore::new(FROZEN_LOOKUP_CONCURRENCY),
             admission_policy: None,
             preparation_policy: None,
             preparation_languages: vec![Language::Python],
