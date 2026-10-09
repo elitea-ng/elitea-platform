@@ -294,7 +294,7 @@ func TestHandlerPostgres_PipelineLimitsOnApplicationUpdate(t *testing.T) {
 // A version write that only the database refuses (a NUL byte is not storable in
 // text) fails after the application update succeeded in the same request. Both
 // writes share one transaction, so the rename is rolled back and the request
-// answers the failure, not a 201.
+// answers a client error, not a 201.
 func TestHandlerPostgres_ApplicationUpdateRollsBackWhenVersionWriteFails(t *testing.T) {
 	f := newLimitsFixture(t)
 	appID, versionID := f.createPipeline(t, "rb", "pipeline")
@@ -303,8 +303,11 @@ func TestHandlerPostgres_ApplicationUpdateRollsBackWhenVersionWriteFails(t *test
 		"name":    "rb-renamed",
 		"version": map[string]any{"application_id": appID, "id": versionID, "instructions": "nodes:\x00"},
 	})
-	if recorder.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500; body=%s", recorder.Code, truncateForLog(recorder.Body.String()))
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body=%s", recorder.Code, truncateForLog(recorder.Body.String()))
+	}
+	if !strings.Contains(recorder.Body.String(), "cannot be stored") {
+		t.Errorf("the refusal does not say why: %s", truncateForLog(recorder.Body.String()))
 	}
 	if n := f.count(t, `SELECT count(*) FROM p_1.applications WHERE name = 'rb-renamed'`); n != 0 {
 		t.Error("a failed version write left the application renamed")

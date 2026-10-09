@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/foldervisibility"
@@ -417,6 +418,10 @@ func scanApplication(row rowScanner, projectID string) (applications.Application
 }
 
 func (r *ApplicationsRepo) Get(ctx context.Context, projectID, applicationID string) (applications.Application, error) {
+	return getApplication(ctx, r.pool, projectID, applicationID)
+}
+
+func getApplication(ctx context.Context, q querier, projectID, applicationID string) (applications.Application, error) {
 	s, err := tenantSchema(projectID)
 	if err != nil {
 		return applications.Application{}, err
@@ -425,7 +430,7 @@ func (r *ApplicationsRepo) Get(ctx context.Context, projectID, applicationID str
 		return applications.Application{}, apierr.NotFound("application not found")
 	}
 	query := fmt.Sprintf(`SELECT `+applicationColumns+` FROM %s.applications WHERE id = $1`, s)
-	app, err := scanApplication(r.pool.QueryRow(ctx, query, applicationID), projectID)
+	app, err := scanApplication(q.QueryRow(ctx, query, applicationID), projectID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return applications.Application{}, apierr.NotFound("application not found")
@@ -528,7 +533,7 @@ func (r *ApplicationsRepo) updateApplication(ctx context.Context, q querier, req
 		appendSet("icon", *req.Icon)
 	}
 	if len(setClauses) == 0 {
-		return r.Get(ctx, req.ProjectID, req.ApplicationID)
+		return getApplication(ctx, q, req.ProjectID, req.ApplicationID)
 	}
 	// Stamped in the SAME statement as the edit, never as a second write: a
 	// timestamp that can fail on its own is a timestamp that is sometimes
@@ -936,6 +941,11 @@ func (r *ApplicationsRepo) updateVersion(ctx context.Context, q querier, project
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return applications.Version{}, apierr.NotFound("version not found")
+		}
+		// Text PostgreSQL cannot store (a NUL byte) is the client's input, not a server fault.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "22021" {
+			return applications.Version{}, apierr.BadRequest("the version contains a character that cannot be stored")
 		}
 		return applications.Version{}, fmt.Errorf("applications: update version: %w", err)
 	}

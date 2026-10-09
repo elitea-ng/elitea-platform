@@ -112,7 +112,9 @@ export function SubAgentAccordion({
                           // eslint-disable-next-line elitea/ad-hoc-radius — inline code border radius
                           borderRadius: 0.5,
                           cursor: 'pointer',
-                          overflow: 'hidden',
+                          // A saved child's result can be large: the preview scrolls instead of growing the card.
+                          maxHeight: '20rem',
+                          overflow: 'auto',
                           textOverflow: 'ellipsis',
                         }}
                       >
