@@ -12,6 +12,7 @@ import (
 	applicationskillsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/applicationskills"
 	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	deepwikiapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	indexingapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indexing"
 	indextypesapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/indextypes"
 	inventoryapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/inventory"
@@ -237,6 +238,9 @@ func mountReviewedAPIRoutes(r chi.Router, cfg RouterConfig) {
 	if cfg.CurrentLocalTurns != nil {
 		r.Method(http.MethodPost, localturnsapi.StartPath, cfg.CurrentLocalTurns)
 		r.Method(http.MethodPost, localturnsapi.CommitPath, cfg.CurrentLocalTurns)
+	}
+	if cfg.CurrentResolvedVersion != nil {
+		r.Method(http.MethodGet, desktopopsapi.ResolvedVersionPath, cfg.CurrentResolvedVersion)
 	}
 	// One handler, two verbs, two permissions. They are registered separately
 	// because the route resolves a different permission per verb — polling is a

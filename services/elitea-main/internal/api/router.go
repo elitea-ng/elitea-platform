@@ -508,6 +508,10 @@ type RouterConfig struct {
 	// 1.5). Composed in cmd/elitea-main wherever a database is configured;
 	// it needs no runtime, because no worker runs a local turn.
 	CurrentLocalTurns http.Handler
+	// CurrentResolvedVersion serves resolveApplicationVersion (ADR-0029
+	// decision 5a, client contract 1.6). Composed in cmd/elitea-main wherever
+	// a database is configured; it answers 501 where no agent plane is.
+	CurrentResolvedVersion http.Handler
 	// CurrentApplicationTask serves the legacy application_task path (issue
 	// 254 P2): GET polls the run bound to a response message, DELETE stops
 	// it through the SAME use case CurrentAgentCancel runs.

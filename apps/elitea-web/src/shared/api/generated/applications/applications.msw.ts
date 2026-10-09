@@ -89,6 +89,7 @@ import type {
   PublishSuccessResponse,
   PublishValidationResult,
   RecommendationsResponse,
+  ResolvedApplicationVersion,
   TrendingAuthor,
   UnpublishResponse,
   UploadedIconsList,
@@ -1110,6 +1111,97 @@ export const getGetEvalScorecardResponseMock = (
     key: faker.string.alpha({ length: { min: 10, max: 20 } }),
     reason: faker.string.alpha({ length: { min: 10, max: 20 } }),
   })),
+  ...overrideResponse,
+});
+
+export const getResolveApplicationVersionResponseMock = (
+  overrideResponse: Partial<Extract<ResolvedApplicationVersion, object>> = {},
+): ResolvedApplicationVersion => ({
+  schema_version: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  project_id: faker.number.int(),
+  application_id: faker.number.int(),
+  version_id: faker.number.int(),
+  definition_sha256: faker.string.alpha({ length: { min: 10, max: 20 } }),
+  version_details: {
+    instructions: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    agent_type: faker.helpers.arrayElement([
+      faker.string.alpha({ length: { min: 10, max: 20 } }),
+      undefined,
+    ]),
+    tools: Array.from(
+      { length: faker.number.int({ min: 1, max: 10 }) },
+      (_, i) => i + 1,
+    ).map(() => ({
+      kind: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      type: faker.string.alpha({ length: { min: 10, max: 20 } }),
+      id: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([faker.number.int(), null]),
+        undefined,
+      ]),
+      name: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      toolkit_name: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      description: faker.helpers.arrayElement([
+        faker.helpers.arrayElement([
+          faker.string.alpha({ length: { min: 10, max: 20 } }),
+          null,
+        ]),
+        undefined,
+      ]),
+      agent_type: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      application_id: faker.helpers.arrayElement([
+        faker.number.int(),
+        undefined,
+      ]),
+      application_version_id: faker.helpers.arrayElement([
+        faker.number.int(),
+        undefined,
+      ]),
+      nested_skill_registry: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => ({})),
+        undefined,
+      ]),
+      server_name: faker.helpers.arrayElement([
+        faker.string.alpha({ length: { min: 10, max: 20 } }),
+        undefined,
+      ]),
+      selected_tools: faker.helpers.arrayElement([
+        Array.from(
+          { length: faker.number.int({ min: 1, max: 10 }) },
+          (_, i) => i + 1,
+        ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
+        undefined,
+      ]),
+      toolkit_ref: faker.helpers.arrayElement([
+        {
+          toolkit_id: faker.number.int(),
+          project_id: faker.number.int(),
+          ref: faker.helpers.fromRegExp("^tkr1_[0-9a-f]{32}$"),
+        },
+        undefined,
+      ]),
+    })),
+  },
   ...overrideResponse,
 });
 
@@ -6525,6 +6617,32 @@ export const getGetEvalScorecardMockHandler = (
   );
 };
 
+export const getResolveApplicationVersionMockHandler = (
+  overrideResponse?:
+    | ResolvedApplicationVersion
+    | ((
+        info: Parameters<Parameters<typeof http.get>[1]>[0],
+      ) => Promise<ResolvedApplicationVersion> | ResolvedApplicationVersion),
+  options?: RequestHandlerOptions,
+) => {
+  return http.get(
+    "*/elitea_core/resolved_version/prompt_lib/:projectId/:applicationId/:versionId",
+    async (info: Parameters<Parameters<typeof http.get>[1]>[0]) => {
+      await delay(0);
+
+      return HttpResponse.json(
+        overrideResponse !== undefined
+          ? typeof overrideResponse === "function"
+            ? await overrideResponse(info)
+            : overrideResponse
+          : getResolveApplicationVersionResponseMock(),
+        { status: 200 },
+      );
+    },
+    options,
+  );
+};
+
 export const getPredictLLMMockHandler = (
   overrideResponse?:
     | PredictLLMResponse
@@ -8163,6 +8281,7 @@ export const getApplicationsMock = () => [
   getGetEvalRunMockHandler(),
   getCancelEvalRunMockHandler(),
   getGetEvalScorecardMockHandler(),
+  getResolveApplicationVersionMockHandler(),
   getPredictLLMMockHandler(),
   getGenerateApplicationDraftMockHandler(),
   getListApplicationsMockHandler(),

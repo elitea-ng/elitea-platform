@@ -718,7 +718,10 @@ describe('GREEN — a handwritten entry with operationId:null is legal', () => {
 // 309 -> 311 (client contract 1.5, ADR-0029 decision 5c): startLocalTurn and
 // commitLocalTurn, the desktop local turn operations. No browser caller (a
 // browser session is refused), so the manifest count is unchanged.
-const GENERATED_OPERATION_COUNT = 311;
+// 311 -> 312 (client contract 1.6, ADR-0029 decision 5a):
+// resolveApplicationVersion, the desktop's resolved agent definition. The web
+// app does not call it, so the manifest count is unchanged.
+const GENERATED_OPERATION_COUNT = 312;
 /*
  * 189 -> 191. The canvas mermaid quick-fix added two entries: the blocking
  * `predict_llm` sender (`chatMessages.generateContentBlocking`) and the

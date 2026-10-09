@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.5",
+  "client_contract": "1.6",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -6562,6 +6562,366 @@
           },
           "headers": {
             "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "GET /elitea_core/resolved_version/prompt_lib/{project_id}/{application_id}/{version_id}": {
+      "operation_id": "resolveApplicationVersion",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:application_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:version_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "application_id",
+                "definition_sha256",
+                "project_id",
+                "schema_version",
+                "version_details",
+                "version_id"
+              ],
+              "properties": {
+                "application_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "definition_sha256": {
+                  "type": "string"
+                },
+                "project_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "schema_version": {
+                  "type": "string"
+                },
+                "version_details": {
+                  "type": "object",
+                  "required": [
+                    "tools"
+                  ],
+                  "properties": {
+                    "agent_type": {
+                      "type": "string"
+                    },
+                    "instructions": {
+                      "type": "string"
+                    },
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "type"
+                        ],
+                        "properties": {
+                          "agent_type": {
+                            "type": "string"
+                          },
+                          "application_id": {
+                            "type": "integer",
+                            "format": "int64"
+                          },
+                          "application_version_id": {
+                            "type": "integer",
+                            "format": "int64"
+                          },
+                          "description": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "id": {
+                            "type": "integer",
+                            "format": "int64",
+                            "nullable": true
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "nested_skill_registry": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "open": true
+                            }
+                          },
+                          "selected_tools": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "server_name": {
+                            "type": "string"
+                          },
+                          "toolkit_name": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "toolkit_ref": {
+                            "type": "object",
+                            "required": [
+                              "project_id",
+                              "ref",
+                              "toolkit_id"
+                            ],
+                            "properties": {
+                              "project_id": {
+                                "type": "integer",
+                                "format": "int64"
+                              },
+                              "ref": {
+                                "type": "string",
+                                "pattern": "^tkr1_[0-9a-f]{32}$"
+                              },
+                              "toolkit_id": {
+                                "type": "integer",
+                                "format": "int64"
+                              }
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "open": true
+                },
+                "version_id": {
+                  "type": "integer",
+                  "format": "int64"
+                }
+              }
+            }
+          },
+          "headers": {
+            "etag": {
+              "type": "string"
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "501": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
               "type": "string"
             }
           }
