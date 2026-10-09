@@ -6,7 +6,7 @@
  * no-caller class: every part correct, nothing joined to anything).
  */
 import { createMemoryHistory, createRouter, RouterProvider } from '@tanstack/react-router';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppProviders } from '@/app/providers/AppProviders';
@@ -57,17 +57,29 @@ afterEach(() => {
 });
 
 describe('the Workspaces route in the real app shell', () => {
-  it('desktop build: the nav shows a Workspaces row, /workspaces renders the page, and a folder opens its session route', async () => {
+  it('desktop build: the workspace-first frame lists the folder, opens its thread route, and keeps every Elitea page one click away', async () => {
     vi.stubEnv('MODE', 'desktop');
     const router = mountAt('/workspaces');
 
     expect(await screen.findByTestId('workspaces-page')).toBeInTheDocument();
     expect(router.state.location.pathname).toBe('/workspaces');
-    expect(screen.getByRole('heading', { name: 'Workspaces' })).toBeInTheDocument();
-    expect(await screen.findByText('/tmp/proj')).toBeInTheDocument();
-    // The sidebar row: reachable by navigation, not only by typing the URL.
-    const navLink = screen.getAllByRole('link', { name: /Workspaces/ }).find((link) => link.getAttribute('href') === '/workspaces');
-    expect(navLink).toBeDefined();
+    expect(await screen.findByRole('heading', { name: 'Workspaces' })).toBeInTheDocument();
+    // The frame replaced the web sidebar: folders first, Elitea features below.
+    const sidebar = await screen.findByTestId('desktop-sidebar');
+    const folder = await within(sidebar).findByTestId('shell-folder');
+    expect(within(folder).getByText('proj')).toBeInTheDocument();
+    // Rows follow the web nav's permission filter (this user has none): the ungated ones show.
+    expect(within(sidebar).getByTestId('shell-elitea-applications')).toBeInTheDocument();
+    expect(within(sidebar).getByTestId('shell-elitea-catalog')).toBeInTheDocument();
+    expect(within(sidebar).queryByTestId('shell-elitea-chat')).toBeNull();
+
+    fireEvent.click(within(folder).getByRole('button', { name: 'New thread' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/w1'));
+
+    fireEvent.click(within(within(sidebar).getByTestId('shell-elitea-catalog')).getByRole('button'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/elitea-catalog'));
+    // Off the folders, the way back is in the title row.
+    expect(await screen.findByRole('button', { name: 'Folders' })).toBeInTheDocument();
   });
 
   it('desktop build: /workspaces/$id reaches the session page', async () => {

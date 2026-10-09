@@ -16,6 +16,15 @@ export type { ProjectChoice } from './ui/WorkspaceList';
 export { WorkspaceIpcProvider, useWorkspaceIpc } from './model/ipcContext';
 export { useWorkspaceTurn } from './model/useWorkspaceTurn';
 export { describeWorkspaceError } from './model/describeWorkspaceError';
+export {
+  forgetThreads,
+  readLastLocation,
+  readThreads,
+  recordThread,
+  threadsQueryKey,
+  writeLastLocation,
+} from './model/threads';
+export type { LastLocation, WorkspaceThread } from './model/threads';
 export type { WorkspaceTurn } from './model/useWorkspaceTurn';
 export { SuggestionMenu } from './ui/SuggestionMenu';
 export type { SuggestionItem } from './ui/SuggestionMenu';
