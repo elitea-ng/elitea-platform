@@ -55,13 +55,34 @@ They are verified here on merged `main`. The first batch is recorded in
 - **`cargo deny`:** only the accepted RUSTSEC-2023-0071.
 - **`npm audit --omit=dev`:** 2 low findings (katex/mermaid), unchanged.
 
-**Not run:**
-- the 25 secured-NATS permission tests, which need a native `nats-server` and the rendered configuration;
-- the Azure and GCS conformance suites;
-- llm-gateway on go1.26.6;
-- clippy and rustdoc.
+**Closed afterwards: secured NATS and llm-gateway.** These ran on `1ab920dde`, the same commit.
+- **Environment:** a `golang:1.26.9-bookworm` Linux container, as CI does, with:
+  - `nats-server` v2.12.0 copied out of the `nats:2.12.0` image;
+  - natscli v0.4.0, pinned by SHA-256 in `scripts/nats/ci-secure-test-env.sh`;
+  - configuration rendered by `scripts/nats/render-secure-conf.sh`;
+  - a plaintext JetStream server and PostgreSQL 18 (pgvector);
+  - `ELITEA_REQUIRE_NATS_SECURE_TEST=1` and `ELITEA_REQUIRE_DECLARED_SKIPS=1`.
 
-The secured-NATS tests are the ones that cover #1176's NATS permission changes.
+| Package | Result |
+|---|---|
+| `libs/go/natsconn` | 5 passed |
+| `libs/go/natsconn/natstest`, including HA route identity | 9 passed |
+| `elitea-main/cmd/elitea-main` | 275 passed |
+| `elitea-main/internal/transport/commandbus` | 53 passed |
+| `elitea-main/internal/api/v2/canvaspresence`, including the NATS restart test | 37 passed |
+| `elitea-main/internal/runtimecomposition` | 602 passed |
+| `elitea-main/internal/infra/natsbus` | 17 passed |
+| `elitea-scheduler/internal/budgetwriteback` | 69 passed |
+| `services/elitea-llm-gateway` (`GOWORK=off`, go1.26.9) | `vet` clean. `test`: 28 packages, 1,632 passed, 0 failed, 6 skipped. The skips are PostgreSQL-only tests, which the gateway CI job does not provision either. `internal/infra/nats` ran secured: 63 passed. |
+
+- **Secured-NATS result:** every previously skipped secured-NATS test ran, with 0 failures. These are the tests that cover
+  #1176's NATS permission changes.
+
+**Still not run:**
+- **`tests/system` `TestIndexV2PreflightShippedBinary`:** the index-v2 cutover test. It needs a Docker CLI inside the
+  container, or a native macOS `nats-server`, plus the `postgres:16-trixie` image. CI runs it.
+- **Azure and GCS conformance.**
+- **clippy and rustdoc.**
 
 ## Real-browser evidence
 
