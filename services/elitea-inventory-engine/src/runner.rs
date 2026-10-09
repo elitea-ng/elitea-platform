@@ -7,7 +7,7 @@
 //!   progress, for a stack that proves the host → socket → composition →
 //!   upload path with no repository and no model.
 //!
-//! The native engine (ADR-0027 P3) is the third arm when it lands.
+//! * [`Runner::Native`] — the engine itself (`crate::native`).
 
 use crate::fixture::{self, FixtureGraph};
 use crate::tools;
@@ -98,6 +98,7 @@ impl FixtureRunner {
 pub enum Runner {
     Unavailable,
     Fixture(FixtureRunner),
+    Native(crate::native::NativeRunner),
 }
 
 impl Runner {
@@ -107,6 +108,7 @@ impl Runner {
         match self {
             Self::Unavailable => "unavailable",
             Self::Fixture(_) => "fixture",
+            Self::Native(_) => "native",
         }
     }
 }
@@ -136,6 +138,7 @@ impl elitea_engine_sidecar::Engine for Runner {
                 ),
             )),
             Self::Fixture(runner) => runner.run(tool, &arguments, context).await,
+            Self::Native(runner) => runner.run(tool, &arguments, context).await,
         }
     }
 }

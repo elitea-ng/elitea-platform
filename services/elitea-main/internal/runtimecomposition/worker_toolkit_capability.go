@@ -37,8 +37,9 @@ var ErrWorkerToolkitCapabilityInvalid = errors.New(
 //     environment that installs the image's own extras. Its gate is
 //     services/elitea-worker-python/tests/unit/test_toolkit_capability_snapshot.py,
 //     which runs in the job that installs exactly those extras.
-//   - the Rust file records the toolkit families services/elitea-worker-rust/
-//     src/toolkits/materialize.rs and direct_runtime.rs materialize. Its gate is
+//   - the Rust file records the toolkit families libs/rust/agent-runtime/src/
+//     toolkits/materialize.rs and the worker's src/toolkits/direct_runtime.rs
+//     materialize. Its gate is
 //     TestRustCapabilitySnapshotMatchesTheRustSource, which reads both files.
 //
 //go:embed current_python_worker_toolkit_capability_snapshot.json
@@ -73,7 +74,7 @@ type rustWorkerToolkitCapabilityDocument struct {
 	// it serves fewer than the SDK declares (ADR-0027: github, sharepoint
 	// and artifact are partial). A type without an entry serves every tool
 	// the SDK declares. Its gate is the worker's SDK conformance test
-	// (services/elitea-worker-rust/src/toolkits/sdk_conformance.rs), which
+	// (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs), which
 	// builds each family and compares the names it actually serves.
 	SupportedTools map[string][]string `json:"supported_tools,omitempty"`
 }

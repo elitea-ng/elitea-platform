@@ -212,7 +212,9 @@ mod tests {
             "go" => ("a.go", format!("package a\nfunc m() {{ {calls} }}\n")),
             "java" => ("A.java", format!("class A {{ void m() {{ {calls}; }} }}\n")),
             "javascript" => ("a.js", format!("function m() {{ {calls}; }}\n")),
+            "kotlin" => ("a.kt", format!("fun m() {{ {calls} }}\n")),
             "rust" => ("a.rs", format!("fn m() {{ {calls}; }}\n")),
+            "swift" => ("a.swift", format!("func m() {{ {calls} }}\n")),
             "typescript" => ("a.ts", format!("function m(): void {{ {calls}; }}\n")),
             _ => unreachable!("no crafted file for {language}"),
         }
@@ -239,13 +241,15 @@ mod tests {
             .unwrap_or_default()
     }
 
-    const LANGUAGES: [&str; 7] = [
+    const LANGUAGES: [&str; 9] = [
         "cpp",
         "csharp",
         "go",
         "java",
         "javascript",
+        "kotlin",
         "rust",
+        "swift",
         "typescript",
     ];
 
@@ -274,7 +278,9 @@ mod tests {
             ("go", 2),
             ("java", 2),
             ("javascript", 2),
+            ("kotlin", 3),
             ("rust", 2),
+            ("swift", 4),
             ("typescript", 2),
         ];
         let failed: Vec<String> = per_call

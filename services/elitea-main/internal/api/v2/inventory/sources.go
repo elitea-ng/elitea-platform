@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -52,6 +53,14 @@ const (
 // The other eight read the graph ingestion already built and touch no
 // credential, so they forward unrewritten.
 var ExpandingTools = []string{"run_ingestion", "delta_update", "remove_source_entities"}
+
+// GrantTools name no source but call the model: `investigate` is an agent
+// over the graph that the engine answers with the toolkit's LLM, so it gets
+// the callback block (a minted bearer, the gateway and the model) and
+// nothing else. Without it the engine has no way to reach a model, which
+// is why the Python investigate never answered (its admin client was gone
+// and nothing replaced it).
+var GrantTools = []string{"investigate"}
 
 // SourceKinds is what this facade knows how to project, by toolkit type. The
 // descriptor admits four (github, ado_repos, gitlab, bitbucket); two are
@@ -176,7 +185,11 @@ func (s *Sources) invoke(forward material.Forwarder, logger *slog.Logger) http.H
 	return material.Invocation{
 		Provider: "Inventory",
 		Rewrite:  s.Rewrite,
-		Forward:  forward,
+		// The grant-only tools get the callback block alone, as DeepWiki's
+		// `wiki_query` does.
+		RewriteFor: material.ForTools(
+			material.CallbackOnly("inventory", s.Minter, s.CallbackBase, s.Lifetime), GrantTools...),
+		Forward: forward,
 		Path: func(r *http.Request) string {
 			return spi.InvokePath(
 				chi.URLParam(r, "toolkit_name"), chi.URLParam(r, "tool_name"))
@@ -184,6 +197,6 @@ func (s *Sources) invoke(forward material.Forwarder, logger *slog.Logger) http.H
 		Minter: s.Minter,
 		Status: sourcesError,
 		Logger: logger,
-		Tools:  ExpandingTools,
+		Tools:  slices.Concat(ExpandingTools, GrantTools),
 	}.Handler()
 }

@@ -4,10 +4,12 @@
 
 use super::{GraphKey, Result, write_graph};
 use crate::graph::Graph;
+use elitea_content_source::Acl;
 use serde_json::{Map, Value, json};
 use sqlx::Row;
 use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgPool, Postgres};
+use sqlx::types::Json;
 use std::collections::BTreeMap;
 
 /// What one source's status row says.
@@ -104,18 +106,28 @@ pub async fn fail(pool: &PgPool, key: GraphKey, toolkit_id: &str, error: &str) -
     Ok(())
 }
 
-/// The content hash of every file the source's last completed run read.
+/// What the store keeps of one document of a source (ADR-0028): its
+/// version, media type and readers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentState {
+    pub version: String,
+    pub mime: String,
+    pub acl: Acl,
+}
+
+/// The version of every document the source's last completed run read,
+/// by key.
 ///
 /// # Errors
 ///
 /// [`StoreError::Database`](super::StoreError::Database).
-pub async fn file_hashes(
+pub async fn document_versions(
     pool: &PgPool,
     key: GraphKey,
     source_name: &str,
 ) -> Result<BTreeMap<String, String>> {
     let rows = sqlx::query(
-        "SELECT file_path, content_hash FROM inventory_graph.source_files
+        "SELECT document_key, version FROM inventory_graph.documents
           WHERE project_id = $1 AND application_id = $2 AND source_name = $3",
     )
     .bind(key.project_id)
@@ -124,7 +136,37 @@ pub async fn file_hashes(
     .fetch_all(pool)
     .await?;
     rows.into_iter()
-        .map(|row| Ok((row.try_get("file_path")?, row.try_get("content_hash")?)))
+        .map(|row| Ok((row.try_get("document_key")?, row.try_get("version")?)))
+        .collect()
+}
+
+/// Every restricted document of a graph: `(source name, key, acl)`. A read
+/// filters what a caller sees by these; a graph with none needs no filter.
+///
+/// # Errors
+///
+/// [`StoreError::Database`](super::StoreError::Database).
+pub async fn restricted_documents(
+    pool: &PgPool,
+    key: GraphKey,
+) -> Result<Vec<(String, String, Acl)>> {
+    let rows = sqlx::query(
+        "SELECT source_name, document_key, acl FROM inventory_graph.documents
+          WHERE project_id = $1 AND application_id = $2 AND acl ->> 'scope' = 'restricted'",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let acl: Json<Acl> = row.try_get("acl")?;
+            Ok((
+                row.try_get("source_name")?,
+                row.try_get("document_key")?,
+                acl.0,
+            ))
+        })
         .collect()
 }
 
@@ -133,8 +175,8 @@ pub async fn file_hashes(
 pub struct Completion<'a> {
     pub toolkit_id: &'a str,
     pub source_name: &'a str,
-    /// Every file the source now has, with its hash.
-    pub hashes: &'a BTreeMap<String, String>,
+    /// Every document the source now has.
+    pub documents: &'a BTreeMap<String, DocumentState>,
     pub counts: RunCounts,
     pub commit_sha: Option<&'a str>,
 }
@@ -156,7 +198,7 @@ pub async fn complete(
     let mut transaction = pool.begin().await?;
     let revision = write_graph(&mut transaction, key, graph).await?;
     sqlx::query(
-        "DELETE FROM inventory_graph.source_files
+        "DELETE FROM inventory_graph.documents
           WHERE project_id = $1 AND application_id = $2 AND source_name = $3",
     )
     .bind(key.project_id)
@@ -164,21 +206,29 @@ pub async fn complete(
     .bind(completion.source_name)
     .execute(&mut *transaction)
     .await?;
-    let (paths, hashes): (Vec<&str>, Vec<&str>) = completion
-        .hashes
-        .iter()
-        .map(|(path, hash)| (path.as_str(), hash.as_str()))
-        .unzip();
+    let mut keys = Vec::with_capacity(completion.documents.len());
+    let mut versions = Vec::with_capacity(completion.documents.len());
+    let mut mimes = Vec::with_capacity(completion.documents.len());
+    let mut acls = Vec::with_capacity(completion.documents.len());
+    for (document, state) in completion.documents {
+        keys.push(document.as_str());
+        versions.push(state.version.as_str());
+        mimes.push(state.mime.as_str());
+        acls.push(Json(&state.acl));
+    }
     sqlx::query(
-        "INSERT INTO inventory_graph.source_files
-             (project_id, application_id, source_name, file_path, content_hash)
-         SELECT $1, $2, $3, path, hash FROM unnest($4::text[], $5::text[]) AS f(path, hash)",
+        "INSERT INTO inventory_graph.documents
+             (project_id, application_id, source_name, document_key, version, mime, acl)
+         SELECT $1, $2, $3, k, v, m, a
+           FROM unnest($4::text[], $5::text[], $6::text[], $7::jsonb[]) AS d(k, v, m, a)",
     )
     .bind(key.project_id)
     .bind(key.application_id)
     .bind(completion.source_name)
-    .bind(&paths)
-    .bind(&hashes)
+    .bind(&keys)
+    .bind(&versions)
+    .bind(&mimes)
+    .bind(&acls)
     .execute(&mut *transaction)
     .await?;
     sqlx::query(
@@ -195,6 +245,43 @@ pub async fn complete(
     .bind(completion.counts.relations)
     .bind(completion.counts.documents)
     .bind(completion.commit_sha)
+    .execute(&mut *transaction)
+    .await?;
+    transaction.commit().await?;
+    Ok(revision)
+}
+
+/// Commit a source's removal in ONE transaction: the graph without it, and
+/// its status row and file hashes gone. Returns the graph's revision.
+///
+/// # Errors
+///
+/// See [`super::save`].
+pub async fn remove(
+    pool: &PgPool,
+    key: GraphKey,
+    graph: &Graph,
+    toolkit_id: &str,
+    source_name: &str,
+) -> Result<i64> {
+    let mut transaction = pool.begin().await?;
+    let revision = write_graph(&mut transaction, key, graph).await?;
+    sqlx::query(
+        "DELETE FROM inventory_graph.documents
+          WHERE project_id = $1 AND application_id = $2 AND source_name = $3",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .bind(source_name)
+    .execute(&mut *transaction)
+    .await?;
+    sqlx::query(
+        "DELETE FROM inventory_graph.sources
+          WHERE project_id = $1 AND application_id = $2 AND toolkit_id = $3",
+    )
+    .bind(key.project_id)
+    .bind(key.application_id)
+    .bind(toolkit_id)
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;

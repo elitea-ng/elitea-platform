@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-host-refresh"
+description = "Enables the host_refresh command without any pre-configured scope."
+commands.allow = ["host_refresh"]
+
+[[permission]]
+identifier = "deny-host-refresh"
+description = "Denies the host_refresh command without any pre-configured scope."
+commands.deny = ["host_refresh"]
