@@ -21,6 +21,12 @@ import { modKey, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import type { SessionCommands } from './useSessionCommands';
 
+/** Links in the thread read as quiet app links, not underlined web ones. */
+const linkSx = (theme: Theme) => ({
+  '& a': { ...theme.typography.labelSmall, color: theme.vars.palette.primary.main, textDecoration: 'none' },
+  '& a:hover': { textDecoration: 'underline' },
+});
+
 export const COLUMN = { width: '100%', maxWidth: '46rem', marginX: 'auto', paddingX: 3, boxSizing: 'border-box' } as const;
 
 function HelpNotice({ onClose }: { onClose: () => void }): React.JSX.Element {
@@ -63,7 +69,7 @@ function YourPrompt({ text }: { text: string }): React.JSX.Element {
         paddingX: 1.5,
         paddingY: 1,
         borderRadius: theme.vars.shape.radiusMd,
-        background: theme.vars.palette.background.secondary,
+        background: theme.vars.palette.background.userInputBackground,
       })}
     >
       <Typography variant="bodyMedium" sx={{ whiteSpace: 'pre-wrap' }}>
@@ -75,14 +81,14 @@ function YourPrompt({ text }: { text: string }): React.JSX.Element {
 
 export function FolderTitle({ workspace }: { workspace: Workspace }): React.JSX.Element {
   return (
-    <Box sx={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-      <Typography component="h1" variant="labelMedium" sx={{ margin: 0, whiteSpace: 'nowrap' }}>
+    <Box sx={{ minWidth: 0, flexShrink: 1, display: 'flex', alignItems: 'baseline', gap: 1 }}>
+      <Typography component="h1" variant="labelMedium" sx={{ margin: 0, whiteSpace: 'nowrap', flexShrink: 0 }}>
         {workspace.name}
       </Typography>
       <Typography
         variant="bodySmall"
         title={workspace.path}
-        sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl', textAlign: 'left' })}
+        sx={(theme: Theme) => ({ minWidth: '3rem', color: theme.vars.palette.text.metrics, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })}
       >
         {workspace.path}
       </Typography>
@@ -90,6 +96,7 @@ export function FolderTitle({ workspace }: { workspace: Workspace }): React.JSX.
   );
 }
 
+/** Opens the changes panel when it is hidden; the dot says it has something to show. */
 export function PanelToggle({ count }: { count: number }): React.JSX.Element {
   const open = useDesktopLayout((state) => state.changesOpen);
   const label = open ? t('workspace.panel.hide', 'Hide panel') : t('workspace.panel.show', 'Show changes');
@@ -117,9 +124,11 @@ export function ThreadIntro({ workspace, conversationId, title }: { workspace: W
           : t('workspace.thread.earlierHint', 'Earlier messages of this thread are in the conversation.')}
       </Typography>
       {!isNew && (
-        <Link to="/chat/$conversationId" params={{ conversationId }}>
-          {t('workspace.openInChat', 'Open in chat')}
-        </Link>
+        <Box sx={linkSx}>
+          <Link to="/chat/$conversationId" params={{ conversationId }}>
+            {t('workspace.openInChat', 'Open in chat')}
+          </Link>
+        </Box>
       )}
     </Box>
   );
@@ -141,9 +150,11 @@ export function Exchanges({ turn, prompts }: { turn: WorkspaceTurn; prompts: rea
         </Box>
       ))}
       {done !== undefined && (
-        <Link to="/chat/$conversationId" params={{ conversationId: done.conversationId }}>
-          {t('workspace.openInChat', 'Open in chat')}
-        </Link>
+        <Box sx={linkSx}>
+          <Link to="/chat/$conversationId" params={{ conversationId: done.conversationId }}>
+            {t('workspace.openInChat', 'Open in chat')}
+          </Link>
+        </Box>
       )}
     </>
   );

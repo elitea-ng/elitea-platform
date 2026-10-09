@@ -169,7 +169,7 @@ export function TurnTranscript({ view, busy, onCancel }: TurnTranscriptProps): R
     <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {view.items.map((item) =>
         item.type === 'text' ? (
-          <Typography key={item.key} variant="bodyMedium" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
+          <Typography key={item.key} variant="bodyMedium" sx={(theme: Theme) => ({ whiteSpace: 'pre-wrap', lineHeight: 1.6, color: theme.vars.palette.text.primary })}>
             {item.text}
           </Typography>
         ) : (

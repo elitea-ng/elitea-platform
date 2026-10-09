@@ -149,7 +149,9 @@ export function SessionPanel({ ipc, appIpc, workspaceId, changesTurnId, undoRequ
           background: theme.vars.palette.background.default,
         })}
       >
-        <TitleBarSpacer logo={false}
+        <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
+        <TitleBarSpacer
+          logo={false}
           trailing={
             <Tooltip title={t('workspace.panel.hide', 'Hide panel')}>
               <IconButton size="small" aria-label={t('workspace.panel.hide', 'Hide panel')} onClick={() => useDesktopLayout.getState().setChangesOpen(false)}>
@@ -162,7 +164,8 @@ export function SessionPanel({ ipc, appIpc, workspaceId, changesTurnId, undoRequ
             {t('workspace.panel.changes', 'Changes')}
           </Typography>
         </TitleBarSpacer>
-        <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1.5, paddingBottom: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        </Box>
+        <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1.5, paddingY: 1.5, display: 'flex', flexDirection: 'column', gap: 2 }}>
           {changesTurnId === null ? (
             <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
               {t('workspace.panel.noChanges', 'No changes yet. The files the agent changes in this thread show up here.')}

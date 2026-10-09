@@ -29,11 +29,22 @@ registerDesktopCatalogue();
 const invoke = tauriInvoke();
 const bridge = invoke === undefined ? undefined : createHostBridge(invoke);
 
-createRoot(container).render(
-  <StrictMode>
-    <ThemeProvider theme={createTheme()}>
-      <CssBaseline />
-      <DesktopShell bridge={bridge} />
-    </ThemeProvider>
-  </StrictMode>,
-);
+function renderShell(root: HTMLElement): void {
+  createRoot(root).render(
+    <StrictMode>
+      <ThemeProvider theme={createTheme()}>
+        <CssBaseline />
+        <DesktopShell bridge={bridge} />
+      </ThemeProvider>
+    </StrictMode>,
+  );
+}
+
+// DEV ONLY: `/?harness` shows the signed-in shell with a fake host and canned
+// data (`devHarness.tsx`). `import.meta.env.DEV` is false in every build, so
+// the branch and the harness's chunk are dropped from it.
+if (import.meta.env.DEV && bridge === undefined && new URLSearchParams(window.location.search).has('harness')) {
+  void import('./devHarness').then(({ mountDesktopHarness }) => mountDesktopHarness(container));
+} else {
+  renderShell(container);
+}

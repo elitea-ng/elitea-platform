@@ -70,7 +70,8 @@ function HeaderSelect({ label, value, disabled = false, open, onOpenChange, onCh
         maxWidth,
         borderRadius: theme.vars.shape.radiusSm,
         paddingLeft: 1,
-        typography: 'labelSmall',
+        ...theme.typography.labelSmall,
+        flexShrink: 0,
         color: theme.vars.palette.text.secondary,
         '&:hover': { background: theme.vars.palette.background.button.drawerMenu.hover },
       })}
