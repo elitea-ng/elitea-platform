@@ -76,7 +76,7 @@ export const RemoteToolkitCallResult = zod
       .optional(),
   })
   .describe(
-    "A remote tool call's answer. `error` is a machine code on a refusal. NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:557 (`writeOutcome`) and :640 (`writeRunError`).",
+    "A remote tool call's answer. `error` is a machine code on a refusal. NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:595 (`writeOutcome`) and :678 (`writeRunError`).",
   );
 
 export type RemoteToolkitCallResult = zod.input<typeof RemoteToolkitCallResult>;

@@ -3391,7 +3391,7 @@ components:
     LocalTurnStartRequest:
       type: object
       description: >-
-        Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:91
+        Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:90
         (`startBody`). One JSON value of at most 512 KiB.
       required: [question_id, user_input]
       properties:
@@ -3416,7 +3416,7 @@ components:
       description: >-
         The turn's recalled personal memory, the value a cloud turn's
         admission appends to its instructions. NOTE(W2):
-        internal/api/v2/localturns/route.go:191.
+        internal/api/v2/localturns/route.go:190.
       required: [text, count, memory_ids]
       properties:
         text:
@@ -3431,7 +3431,7 @@ components:
     LocalTurnStarted:
       type: object
       description: >-
-        Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:159
+        Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:158
         (`start`).
       required: [execution_id, question_id, response_message_id, conversation_uuid, participant_id, expires_at, created, memory_recall]
       properties:
@@ -3461,7 +3461,7 @@ components:
       type: object
       description: >-
         One approval or question the desktop resolved during the turn.
-        NOTE(W2): internal/application/localturn/localturn.go:182
+        NOTE(W2): internal/application/localturn/localturn.go:183
         (`HITLExchange`).
       required: [interrupt_id, kind, prompt, decision]
       properties:
@@ -3498,7 +3498,7 @@ components:
         What the client reports it did on the device. Stored on the answer as
         `local_work` with at most 50 commands and 200 paths (cut to 300 and
         400 bytes) plus the reported totals. NOTE(W2):
-        internal/application/localturn/localturn.go:198 (`LocalWorkReport`).
+        internal/application/localturn/localturn.go:199 (`LocalWorkReport`).
       properties:
         sandbox_mode:
           type: string
@@ -3518,7 +3518,7 @@ components:
     LocalTurnCommitRequest:
       type: object
       description: >-
-        Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:97
+        Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:96
         (`commitBody`). One JSON value of at most 8 MiB.
       required: [user_message, assistant_message]
       properties:
@@ -3561,7 +3561,7 @@ components:
               `currentAgentToolCallToRow`), which keeps only the keys it maps.
           x-elitea-passthrough: >-
             NOTE(W2): a map keyed by the runtime's run id, read as
-            json.RawMessage (internal/api/v2/localturns/route.go:106) and
+            json.RawMessage (internal/api/v2/localturns/route.go:105) and
             decoded by internal/infra/db/repos/agent_trace.go:371
             (`decodeOrderedCurrentAgentToolCalls`).
         thinking_steps:
@@ -3576,7 +3576,7 @@ components:
             additionalProperties: true
             x-elitea-passthrough: >-
               NOTE(W2): one runtime thinking step, read as json.RawMessage
-              (internal/api/v2/localturns/route.go:107) and stored by
+              (internal/api/v2/localturns/route.go:106) and stored by
               internal/infra/db/repos/agent_trace.go:779
               (`currentAgentThinkingStepToRow`), which keeps only the keys it maps.
         hitl_exchanges:
@@ -3589,7 +3589,7 @@ components:
     LocalTurnCommitted:
       type: object
       description: >-
-        Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:199
+        Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:198
         (`commit`).
       required: [execution_id, conversation_uuid, question_message_id, response_message_id, memories_used, committed_at, created]
       properties:
@@ -3664,7 +3664,7 @@ components:
         NOTE(W2): the saved version after the shared admission freeze, the
         object the worker's runtime-context route serves minus credentials;
         its keys follow the version-details projection
-        (internal/infra/storage/client_application_version.go:210,
+        (internal/infra/storage/client_application_version.go:217,
         `ProjectClientApplicationVersion`).
       required: [tools]
       properties:
@@ -3773,7 +3773,7 @@ components:
         credentials and a model are never accepted (unknown fields are
         refused): a toolkit that calls a model uses the running version's
         `llm_settings`, resolved against the project's model catalogue. NOTE(W2):
-        internal/api/v2/desktopops/remote_toolkit.go:177
+        internal/api/v2/desktopops/remote_toolkit.go:190
         (`remoteToolkitBody`).
       required: [execution_id, application_id, version_id, toolkit_ref, tool_name]
       properties:
@@ -3801,7 +3801,7 @@ components:
           additionalProperties: true
           x-elitea-passthrough: >-
             NOTE(W2): the tool's own arguments, validated by the tool
-            (internal/api/v2/desktopops/remote_toolkit.go:177).
+            (internal/api/v2/desktopops/remote_toolkit.go:190).
         confirmation:
           $ref: '#/components/schemas/RemoteToolkitCallConfirmation'
         request_id:
@@ -3815,8 +3815,8 @@ components:
       type: object
       description: >-
         A remote tool call's answer. `error` is a machine code on a refusal.
-        NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:557
-        (`writeOutcome`) and :640 (`writeRunError`).
+        NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:595
+        (`writeOutcome`) and :678 (`writeRunError`).
       required: [ok]
       properties:
         ok: { type: boolean }
@@ -3831,7 +3831,7 @@ components:
           nullable: true
           x-elitea-passthrough: >-
             NOTE(W2): what the tool returned, any JSON value
-            (internal/api/v2/desktopops/remote_toolkit.go:573).
+            (internal/api/v2/desktopops/remote_toolkit.go:611).
         truncated:
           type: boolean
           description: The result was too large to return; it is omitted, never cut.
@@ -3855,13 +3855,13 @@ components:
               additionalProperties: true
               x-elitea-passthrough: >-
                 NOTE(W2): the arguments to send again after authorising
-                (internal/api/v2/desktopops/remote_toolkit.go:589).
+                (internal/api/v2/desktopops/remote_toolkit.go:627).
     DesktopOperationError:
       type: object
       description: >-
         A refused desktop operation (resolveApplicationVersion,
         executeRemoteToolkitTool). `error` is a machine code. NOTE(W2):
-        internal/api/v2/desktopops/resolved_version.go:86 (`serve`).
+        internal/api/v2/desktopops/resolved_version.go:118 (`serve`).
       required: [error]
       properties:
         error: { type: string }

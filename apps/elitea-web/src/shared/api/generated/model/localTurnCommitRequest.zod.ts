@@ -90,7 +90,7 @@ export const LocalTurnCommitRequest = zod
     local_work: LocalTurnWorkReport.optional(),
   })
   .describe(
-    "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:97 (`commitBody`). One JSON value of at most 8 MiB.",
+    "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:96 (`commitBody`). One JSON value of at most 8 MiB.",
   );
 
 export type LocalTurnCommitRequest = zod.input<typeof LocalTurnCommitRequest>;

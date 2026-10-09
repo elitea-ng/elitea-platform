@@ -818,13 +818,17 @@ export const getExecuteRemoteToolkitToolUrl = (
  * gives that toolkit of that version. A model turn (no agent) can call
  * no toolkit. A tool the guardrails mark sensitive answers 409
  * `confirmation_required` with `hitl_interrupt` (the chat HITL shape,
- * `guardrail_type: sensitive_tool`) until the call carries
- * `confirmation`; the desktop asks the user as a cloud turn would pause.
+ * `guardrail_type: sensitive_tool`) until the call carries a
+ * `confirmation` echoing that interrupt's `interrupt_id`, which approves
+ * this call only (these arguments, this tool, this turn) and only once;
+ * the desktop asks the user as a cloud turn would pause.
  * Every call that names a tool is audited (caller, project, toolkit,
  * tool, turn, confirmation, outcome, a SHA-256 of the arguments).
  *
- * RATE. At most 60 calls a minute per caller on each server replica;
- * past that, 429 `rate_limited` with Retry-After.
+ * RATE. At most 60 admitted runs a minute per caller on each server
+ * replica; past that, 429 `rate_limited` with Retry-After. Only a call
+ * that admits a new run counts: a refused or invalid call, and a retry
+ * whose Idempotency-Key already admitted its run, cost nothing.
  *
  * BOUNDS. The body is at most 1 MiB and `arguments` one JSON object
  * within the input-entry bound. The call waits at most 60 seconds;

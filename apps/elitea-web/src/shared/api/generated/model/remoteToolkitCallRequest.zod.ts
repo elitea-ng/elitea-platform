@@ -94,7 +94,7 @@ export const RemoteToolkitCallRequest = zod
       ),
   })
   .describe(
-    "One remote tool call, inside one live local turn. Settings, credentials and a model are never accepted (unknown fields are refused): a toolkit that calls a model uses the running version's `llm_settings`, resolved against the project's model catalogue. NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:177 (`remoteToolkitBody`).",
+    "One remote tool call, inside one live local turn. Settings, credentials and a model are never accepted (unknown fields are refused): a toolkit that calls a model uses the running version's `llm_settings`, resolved against the project's model catalogue. NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:190 (`remoteToolkitBody`).",
   );
 
 export type RemoteToolkitCallRequest = zod.input<

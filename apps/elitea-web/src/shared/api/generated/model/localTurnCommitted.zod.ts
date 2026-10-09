@@ -62,7 +62,7 @@ export const LocalTurnCommitted = zod
       ),
   })
   .describe(
-    "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:199 (`commit`).",
+    "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:198 (`commit`).",
   );
 
 export type LocalTurnCommitted = zod.input<typeof LocalTurnCommitted>;

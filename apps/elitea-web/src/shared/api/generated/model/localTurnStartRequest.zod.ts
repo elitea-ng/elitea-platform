@@ -62,7 +62,7 @@ export const LocalTurnStartRequest = zod
       ),
   })
   .describe(
-    "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:91 (`startBody`). One JSON value of at most 512 KiB.",
+    "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:90 (`startBody`). One JSON value of at most 512 KiB.",
   );
 
 export type LocalTurnStartRequest = zod.input<typeof LocalTurnStartRequest>;

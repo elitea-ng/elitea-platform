@@ -47,7 +47,7 @@ export const DesktopOperationError = zod
     message: zod.string().optional(),
   })
   .describe(
-    "A refused desktop operation (resolveApplicationVersion, executeRemoteToolkitTool). `error` is a machine code. NOTE(W2): internal/api/v2/desktopops/resolved_version.go:86 (`serve`).",
+    "A refused desktop operation (resolveApplicationVersion, executeRemoteToolkitTool). `error` is a machine code. NOTE(W2): internal/api/v2/desktopops/resolved_version.go:118 (`serve`).",
   );
 
 export type DesktopOperationError = zod.input<typeof DesktopOperationError>;
