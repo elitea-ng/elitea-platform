@@ -45,6 +45,8 @@ pub enum ReducerFailure {
 }
 
 impl ReducerFailure {
+    /// The stable, data-free code a refused node fails with.
+    #[must_use]
     pub const fn code(self) -> &'static str {
         match self {
             Self::TypeMismatch => "graph.state.reducer_type_mismatch",
@@ -66,6 +68,8 @@ impl StateReducer {
         }
     }
 
+    /// The YAML name, also folded into the definition digest.
+    #[must_use]
     pub const fn tag(self) -> &'static str {
         match self {
             Self::Append => "append",
@@ -75,6 +79,7 @@ impl StateReducer {
     }
 
     /// The only normalized state type this reducer accepts.
+    #[must_use]
     pub const fn state_type(self) -> &'static str {
         match self {
             Self::Append => "list",
@@ -164,6 +169,7 @@ impl StateReducer {
 
     /// The ADK channel reducer. The guard has already refused every update this
     /// would refuse, so a refusal here keeps the current value and is logged.
+    #[must_use]
     pub fn channel_reducer(self, channel: &str) -> Reducer {
         let channel = channel.to_owned();
         Reducer::Custom(Arc::new(move |current, update| {

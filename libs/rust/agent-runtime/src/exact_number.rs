@@ -3,9 +3,9 @@
 //! The functions take the number's text, never a parsed `f64`. Under the
 //! worker's `serde_json` `arbitrary_precision` that text is the lexical input
 //! (`Number::as_str`); without it, `Number`'s `Display` is the exact text of
-//! the value serde_json holds. Either way `2.0` and `1e2` are the integers 2
+//! the value `serde_json` holds. Either way `2.0` and `1e2` are the integers 2
 //! and 100, `2.5` is not an integer, and nothing is coerced through `f64`.
-//! Nothing here depends on either serde_json feature (see `canonical`).
+//! Nothing here depends on either `serde_json` feature (see `canonical`).
 
 /// An i64 or u64 magnitude has at most 20 decimal digits; `10^20` fits `u128`.
 pub const MAX_INTEGER_DIGITS: u64 = 20;
@@ -31,6 +31,11 @@ pub enum NumberFault {
 }
 
 /// Normalizes JSON number text without floating point.
+///
+/// # Errors
+///
+/// [`NumberFault::Unsupported`] for text that is not a JSON number or whose
+/// exponent no `i64` holds.
 pub fn decimal(text: &str) -> Result<Decimal, NumberFault> {
     const UNSUPPORTED: NumberFault = NumberFault::Unsupported;
     let (negative, unsigned) = match text.strip_prefix('-') {
@@ -107,13 +112,24 @@ fn exact_integer(text: &str) -> Result<(bool, u128), NumberFault> {
 }
 
 /// The exact `i64` of number text: `2.0` and `1e2` qualify, `2.5` does not.
+///
+/// # Errors
+///
+/// [`NumberFault::NotInteger`] for a fraction, [`NumberFault::Overflow`]
+/// outside `i64`, [`NumberFault::Unsupported`] as for [`decimal`].
 pub fn exact_i64(text: &str) -> Result<i64, NumberFault> {
     let (negative, magnitude) = exact_integer(text)?;
     let signed = i128::try_from(magnitude).map_err(|_| NumberFault::Overflow)?;
     i64::try_from(if negative { -signed } else { signed }).map_err(|_| NumberFault::Overflow)
 }
 
-/// The exact `u64` of number text; a negative value is [`NumberFault::NotInteger`].
+/// The exact `u64` of number text.
+///
+/// # Errors
+///
+/// [`NumberFault::NotInteger`] for a fraction or a negative value,
+/// [`NumberFault::Overflow`] outside `u64`, [`NumberFault::Unsupported`] as
+/// for [`decimal`].
 pub fn exact_u64(text: &str) -> Result<u64, NumberFault> {
     match exact_integer(text)? {
         (true, _) => Err(NumberFault::NotInteger),
