@@ -20,10 +20,13 @@ use super::direct_tool::{
 use super::{EliteaGraphAgent, compiler::PipelineDefinition};
 use crate::agents::events::{pipeline_mcp_auth_event_binding, pipeline_tool_event_binding};
 use crate::agents::graph::resume::{
-    PipelineContinuationDecision, PipelineMcpAuthorizationContinuation, PipelineResumeErrorCode,
+    PipelineContinuationDecision, PipelineMcpAuthorizationContinuation, PipelineResume,
+    PipelineResumeErrorCode,
 };
 use crate::agents::request::{AgentExecutionPayload, NextInputSuggestionPolicy, UserInput};
-use crate::agents::runtime::NativeAgentInvocation;
+use crate::agents::runtime::{
+    NativeAgentInvocation, PipelineNativeStart, pipeline_continuation_start,
+};
 use crate::toolkits::{
     SensitiveToolPolicy, ToolAdmissionPolicy, delegated_authorization_error_fixture,
 };
@@ -1168,6 +1171,348 @@ fn mcp_resume_payload(server_url: &str, action: &str, thread: &str) -> AgentExec
             .push(json!({"server_url": server_url}));
     }
     payload
+}
+
+/// The exact continuation Main sends for an MCP authorization card
+/// (`continue.go`, `CurrentContinuationAuthorization`): a HITL resume with one
+/// `mcp_auth` decision, plus the claim-fetched token or object-form decline.
+fn mcp_wire_resume_payload(
+    interrupt_id: &str,
+    tool_call_id: &str,
+    server_url: &str,
+    action: &str,
+    thread: &str,
+) -> AgentExecutionPayload {
+    let mut payload = tool_resume_payload(interrupt_id, tool_call_id, action, "", thread);
+    payload.hitl_decisions = vec![json!({
+        "interrupt_id": interrupt_id,
+        "tool_call_id": tool_call_id,
+        "guardrail_type": "mcp_auth",
+        "action": action,
+    })];
+    if action == "authorize" {
+        payload.mcp_tokens.insert(
+            server_url.to_owned(),
+            json!({"access_token": "runtime-secret"}),
+        );
+    } else {
+        payload.user_declined_mcp_servers.push(json!({
+            "server_url": server_url,
+            "actual_server_url": server_url,
+            "tool_name": "search_records",
+            "toolkit_type": "mcp",
+        }));
+    }
+    payload
+}
+
+/// Admit `payload` through the production pipeline routing and resolve the
+/// selected continuation exactly as `session.rs::resolve_pipeline_start` does.
+async fn resolve_routed_continuation(
+    payload: &AgentExecutionPayload,
+    session: &dyn adk_rust::session::Session,
+    checkpointer: &dyn Checkpointer,
+    root: &str,
+    thread: &str,
+) -> Result<PipelineResume, PipelineResumeErrorCode> {
+    match pipeline_continuation_start(payload)
+        .unwrap_or_else(|error| panic!("routing refused the continuation: {error:?}"))
+    {
+        PipelineNativeStart::Hitl(decision) => decision
+            .resolve(session, checkpointer, root, thread)
+            .await
+            .map(|resolved| {
+                let (resume, application) = resolved.into_parts();
+                assert!(application.is_none(), "no Application decision expected");
+                resume
+            })
+            .map_err(|error| error.code()),
+        PipelineNativeStart::McpAuthorization(continuation) => continuation
+            .resolve(session, checkpointer, root, thread)
+            .await
+            .map_err(|error| error.code()),
+        _ => panic!("unexpected pipeline continuation route"),
+    }
+}
+
+async fn persisted_session(
+    sessions: &InMemorySessionService,
+    thread: &str,
+) -> Box<dyn adk_rust::session::Session> {
+    sessions
+        .get(GetRequest {
+            app_name: "elitea".to_owned(),
+            user_id: "user-1".to_owned(),
+            session_id: thread.to_owned(),
+            num_recent_events: None,
+            after: None,
+        })
+        .await
+        .expect("persisted pipeline session")
+}
+
+fn direct_resume_entry(resume: &PipelineResume, node: &str) -> Value {
+    resume
+        .state()
+        .get(DIRECT_TOOL_RESUME_STATE_KEY)
+        .and_then(|value| value.get(node))
+        .cloned()
+        .unwrap_or_else(|| panic!("direct-tool resume entry for {node}"))
+}
+
+/// Main's real MCP authorization wire shape must resume a direct MCP node's
+/// persisted pause for both Skip and Authorize, and a foreign or stale card
+/// identity must be refused.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One ordered pause, refusal, resume and terminal-state proof.
+async fn main_wire_mcp_authorization_resumes_direct_pipeline_node_through_routing() {
+    const ROOT: &str = "pipeline-root";
+    for action in ["skip", "authorize"] {
+        let thread = format!("mcp-wire-{action}-thread");
+        let definition = PipelineDefinition::from_yaml(
+            &sensitive_pipeline_definition_yaml().replace("type: toolkit", "type: mcp"),
+        )
+        .expect("direct MCP pipeline");
+        let authorized = Arc::new(AtomicBool::new(false));
+        let resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(FixtureResolver {
+            alias: "Customer Support".to_owned(),
+            tool: Arc::new(AuthorizationFixtureTool {
+                authorized: Arc::clone(&authorized),
+                toolkit_type: "mcp",
+            }),
+            sensitive: None,
+        });
+        let checkpointer = Arc::new(MemoryCheckpointer::new());
+        let sessions = sensitive_pipeline_session(&thread).await;
+        let graph = definition
+            .compile_with_runtime(
+                ROOT,
+                checkpointer.clone(),
+                None,
+                &PipelineNodeRuntimes::new(None, Some(Arc::clone(&resolver)), None),
+            )
+            .expect("MCP graph");
+        let events = run_direct_graph(graph, sessions.clone(), &thread, "lookup").await;
+        let binding = pipeline_mcp_auth_event_binding(&events[0], ROOT, &thread)
+            .expect("checkpoint-bound MCP authorization");
+        let session = persisted_session(&sessions, &thread).await;
+
+        for (interrupt_id, tool_call_id) in [
+            ("mcp_auth_g1:foreign", binding.tool_call_id()),
+            (binding.interrupt_id(), "pipeline:lookup:99"),
+        ] {
+            let refused = resolve_routed_continuation(
+                &mcp_wire_resume_payload(
+                    interrupt_id,
+                    tool_call_id,
+                    binding.server_url(),
+                    action,
+                    &thread,
+                ),
+                session.as_ref(),
+                checkpointer.as_ref(),
+                ROOT,
+                &thread,
+            )
+            .await;
+            assert_eq!(
+                refused.err(),
+                Some(PipelineResumeErrorCode::StaleDecision),
+                "{action}: a foreign card identity must be stale"
+            );
+        }
+
+        let resume = resolve_routed_continuation(
+            &mcp_wire_resume_payload(
+                binding.interrupt_id(),
+                binding.tool_call_id(),
+                binding.server_url(),
+                action,
+                &thread,
+            ),
+            session.as_ref(),
+            checkpointer.as_ref(),
+            ROOT,
+            &thread,
+        )
+        .await
+        .unwrap_or_else(|code| panic!("{action}: Main's wire continuation was refused: {code:?}"));
+        let entry = direct_resume_entry(&resume, "lookup");
+        assert_eq!(entry["action"], json!(action));
+        assert_eq!(entry["tool_call_id"], json!(binding.tool_call_id()));
+
+        authorized.store(action == "authorize", Ordering::Release);
+        let resumed = definition
+            .compile_with_runtime(
+                ROOT,
+                checkpointer.clone(),
+                Some(resume),
+                &PipelineNodeRuntimes::new(None, Some(resolver), None),
+            )
+            .expect("resumed MCP graph");
+        let completed = run_direct_graph(resumed, sessions, &thread, "continue").await;
+        assert_eq!(completed.len(), 1);
+        assert!(
+            !completed[0]
+                .provider_metadata
+                .contains_key(adk_rust::graph::interrupt::INTERRUPT_METADATA_KEY)
+        );
+        let checkpoint = checkpointer
+            .load(&thread)
+            .await
+            .expect("load terminal checkpoint")
+            .expect("terminal checkpoint");
+        assert!(checkpoint.pending_nodes.is_empty());
+        if action == "authorize" {
+            assert_eq!(
+                checkpoint.state.get("report"),
+                Some(&json!({"authorized": true}))
+            );
+        } else {
+            assert_eq!(checkpoint.state.get("report"), Some(&Value::Null));
+        }
+    }
+}
+
+#[test]
+fn main_wire_mcp_authorization_refuses_action_and_credential_disagreement() {
+    const SERVER: &str = "https://mcp.example.invalid/v1/mcp";
+    let mut skip_with_token =
+        mcp_wire_resume_payload("mcp_auth_g1:card", "pipeline:auth:0", SERVER, "skip", "t");
+    skip_with_token
+        .mcp_tokens
+        .insert(SERVER.to_owned(), json!({"access_token": "runtime-secret"}));
+    let mut authorize_with_decline = mcp_wire_resume_payload(
+        "mcp_auth_g1:card",
+        "pipeline:auth:0",
+        SERVER,
+        "authorize",
+        "t",
+    );
+    authorize_with_decline
+        .user_declined_mcp_servers
+        .push(json!({"server_url": SERVER}));
+    let mut echo_mismatch =
+        mcp_wire_resume_payload("mcp_auth_g1:card", "pipeline:auth:0", SERVER, "skip", "t");
+    echo_mismatch.hitl_action = Some("authorize".to_owned());
+    for payload in [skip_with_token, authorize_with_decline, echo_mismatch] {
+        let Err(error) = PipelineMcpAuthorizationContinuation::from_payload(&payload) else {
+            panic!("a disagreeing authorization continuation must be refused");
+        };
+        assert_eq!(error.code(), PipelineResumeErrorCode::InvalidInput);
+    }
+}
+
+/// A tool that is both a configured sensitive action and behind delegated
+/// authorization: approving the sensitive card reaches the authorization
+/// card, and Main's Skip/Authorize for that second card must still resume.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // One ordered pause, refusal, resume and terminal-state proof.
+async fn sensitive_approval_then_mcp_authorization_on_same_direct_node() {
+    const ROOT: &str = "pipeline-root";
+    for action in ["skip", "authorize"] {
+        let thread = format!("sensitive-then-mcp-{action}-thread");
+        let definition = PipelineDefinition::from_yaml(
+            &sensitive_pipeline_definition_yaml().replace("type: toolkit", "type: mcp"),
+        )
+        .expect("direct MCP pipeline");
+        let policy_config = json!({
+            "toolkit_security": {
+                "sensitive_tools": {"mcp": ["search_records"]},
+                "sensitive_action_company_name": "Example Corp"
+            }
+        });
+        let policy = ToolAdmissionPolicy::from_runtime_config(
+            policy_config.as_object().expect("runtime policy"),
+        )
+        .expect("sensitive policy")
+        .sensitive_tool("mcp", "Customer Support", "search_records")
+        .expect("sensitive action");
+        let authorized = Arc::new(AtomicBool::new(false));
+        let resolver: Arc<dyn PipelineDirectToolResolver> = Arc::new(FixtureResolver {
+            alias: "Customer Support".to_owned(),
+            tool: Arc::new(AuthorizationFixtureTool {
+                authorized: Arc::clone(&authorized),
+                toolkit_type: "mcp",
+            }),
+            sensitive: Some(policy),
+        });
+        let runtimes = PipelineNodeRuntimes::new(None, Some(Arc::clone(&resolver)), None);
+        let checkpointer = Arc::new(MemoryCheckpointer::new());
+        let sessions = sensitive_pipeline_session(&thread).await;
+        let graph = definition
+            .compile_with_runtime(ROOT, checkpointer.clone(), None, &runtimes)
+            .expect("sensitive MCP graph");
+        let events = run_direct_graph(graph, sessions.clone(), &thread, "lookup").await;
+        let sensitive =
+            pipeline_tool_event_binding(&events[0], ROOT, &thread).expect("sensitive card first");
+        let session = persisted_session(&sessions, &thread).await;
+        let approval = resolve_routed_continuation(
+            &tool_resume_payload(
+                sensitive.interrupt_id(),
+                sensitive.tool_call_id(),
+                "approve",
+                "",
+                &thread,
+            ),
+            session.as_ref(),
+            checkpointer.as_ref(),
+            ROOT,
+            &thread,
+        )
+        .await
+        .expect("sensitive approval");
+        let approved = definition
+            .compile_with_runtime(ROOT, checkpointer.clone(), Some(approval), &runtimes)
+            .expect("approved graph");
+        let events = run_direct_graph(approved, sessions.clone(), &thread, "continue").await;
+        let auth = pipeline_mcp_auth_event_binding(&events[0], ROOT, &thread)
+            .expect("authorization card after approval");
+        let session = persisted_session(&sessions, &thread).await;
+        let resume = resolve_routed_continuation(
+            &mcp_wire_resume_payload(
+                auth.interrupt_id(),
+                auth.tool_call_id(),
+                auth.server_url(),
+                action,
+                &thread,
+            ),
+            session.as_ref(),
+            checkpointer.as_ref(),
+            ROOT,
+            &thread,
+        )
+        .await
+        .unwrap_or_else(|code| panic!("{action} after approval was refused: {code:?}"));
+        assert_eq!(
+            direct_resume_entry(&resume, "lookup")["action"],
+            json!(action)
+        );
+        authorized.store(action == "authorize", Ordering::Release);
+        let resumed = definition
+            .compile_with_runtime(ROOT, checkpointer.clone(), Some(resume), &runtimes)
+            .expect("resumed graph");
+        let completed = run_direct_graph(resumed, sessions, &thread, "continue").await;
+        assert_eq!(completed.len(), 1);
+        assert!(
+            !completed[0]
+                .provider_metadata
+                .contains_key(adk_rust::graph::interrupt::INTERRUPT_METADATA_KEY),
+            "{action}: the node must not pause again after its decisions"
+        );
+        let checkpoint = checkpointer
+            .load(&thread)
+            .await
+            .expect("load terminal checkpoint")
+            .expect("terminal checkpoint");
+        assert!(checkpoint.pending_nodes.is_empty());
+        let expected_report = if action == "authorize" {
+            json!({"authorized": true})
+        } else {
+            Value::Null
+        };
+        assert_eq!(checkpoint.state.get("report"), Some(&expected_report));
+    }
 }
 
 #[tokio::test]
