@@ -890,7 +890,14 @@ services:
       OIDC_ISSUER_URL: "http://oidc.localhost:${E2E_OIDC_PORT:-9400}"
       OIDC_CLIENT_ID: "elitea-standalone-client"
       OIDC_CLIENT_SECRET: "elitea-standalone-secret"
-      OIDC_REDIRECT_URI: "http://localhost:${STANDALONE_PORT:-8084}/auth/oidc/callback"
+      # The host the browser signs in on. Cookies are scoped by host, never by
+      # port, so two stacks both browsed on `localhost:<port>` write the same
+      # `elitea_session` and each sign-in evicts the other's session (the
+      # other Main logs `session_unknown`). A second stack sets
+      # STANDALONE_HOST=<name>.localhost and is browsed on that host; the
+      # callback must be on the same host. standalone-stack.sh refuses any value
+      # but localhost or <label>.localhost; plain `docker compose` does not check.
+      OIDC_REDIRECT_URI: "http://${STANDALONE_HOST:-localhost}:${STANDALONE_PORT:-8084}/auth/oidc/callback"
       COOKIE_SECURE: "false"
       # First-login administrator grant (v2auth.InitialGlobalAdminsFromEnv,
       # cmd/elitea-main/main.go). deploy/runtime/auth.form.yml's
