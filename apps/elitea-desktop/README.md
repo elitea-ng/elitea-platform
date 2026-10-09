@@ -61,9 +61,13 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
   withholds secrets is refused locally.
 - The CSP allows scripts from `self` only. The webview reaches the deployment
   through the HTTP plugin (a Rust-side request, so no CORS change is needed on
-  the deployment). That plugin's scope is `https://*` plus loopback `http`
-  because the deployment is chosen at run time. Tightening it to the connected
-  origin is a follow-up (a host-side proxy command).
+  the deployment). `capabilities/default.json` grants that plugin no URL at
+  all; `src-tauri/src/http_scope.rs` adds a runtime capability scoped to the
+  connected deployment's origin (at launch for the stored one, and on every
+  connect). Runtime capabilities cannot be removed, so scopes accumulate per
+  process: an origin connected earlier stays reachable until the app
+  restarts. The bearer token is still attached only to the current origin
+  (checked in the webview's HTTP core and SSE client).
 
 ## Develop
 
