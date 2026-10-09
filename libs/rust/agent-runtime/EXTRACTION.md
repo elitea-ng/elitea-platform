@@ -10,10 +10,14 @@ stage lands on `main` on its own and leaves both
 
 ## How the move works
 
-- A module moves with `git mv` into `src/`, its crate-private visibility
-  (`pub(crate)`, `pub(super)`) becomes `pub`, and `adk_rust::` paths become
-  the unpatched crates they re-export (`adk_core`, `adk_graph`,
-  `adk_session`).
+- A module moves with `git mv` into `src/` with its tests, and `adk_rust::`
+  paths become the crates they re-export (`adk_core`, `adk_graph`,
+  `adk_session`). It keeps its crate-private visibility (`pub(crate)`,
+  `pub(super)`): only what the worker's production code calls becomes
+  `pub` (found with the compiler), and a suite that must stay in the worker
+  because it composes the module with worker code reaches it through
+  fixtures behind the `test-support` feature, never through widened
+  internals.
 - The worker re-exports it at the old path
   (`use elitea_agent_runtime::graph::printer;` in `agents/graph/mod.rs`), so
   `super::printer::…` and `crate::agents::graph::yaml::…` call sites do not
@@ -178,17 +182,19 @@ worker's `[patch.crates-io]` points there; `libs/rust/Cargo.toml` applies
 the same patch for `adk-agent` and `adk-runner` (not `adk-sandbox`: only
 the worker's `sandbox-supervisor` links it, and Cargo warns on an unused
 patch). The runtime depends on both patched crates, `cargo tree -i` shows
-the vendor path in both workspaces, and `patched_adk` (in `lib.rs`)
-compiles only against the patched builders. A desktop host must carry the
-same two lines.
+the vendor path in both workspaces, and two `const _` items in `lib.rs`
+name the patched-only builders in every build, so a host without the patch
+fails to compile (`vendor/README.md`). A desktop host must carry the same
+two lines.
 
 **Shared vocabulary (stage 2).** `request`, `context_summary`,
 `assembly_error` (`NativeAgentAssemblyError` + code), `instruction_authority`,
 `context_budget`, `context_status`, `context_management`: 2.8k lines. The
-worker re-exports each at its old path. `instruction_authority`'s suite
-stays in the worker (it composes the authority with internal tools,
-Postgres sessions and durable compaction), so the `InstructionPlan`
-internals it drives are public.
+worker re-exports each at its old path. `instruction_authority`'s unit tests
+moved with it; the suites that compose the authority with internal tools,
+Postgres sessions and durable compaction stay in the worker and build a
+plan through `test-support` fixtures (`InstructionPlan::fixture`,
+`sources_for_test`, `render_for_test`), so its internals stay private.
 
 **Toolkits (stage 3).** 62.4k lines in 129 files: every family (the
 `artifact` family too, see below), `mcp`, `mcp_error`, `mcp_tool_cache`,
@@ -208,22 +214,26 @@ internals it drives are public.
   worker; without it a `sql` toolkit is skipped as unsupported.
 - Digests: `delegated_auth`'s persisted requirement encoding writes its
   nested metadata sorted (`serialize_sorted_metadata`, pinned with and
-  without `preserve_order`; byte-identical to the worker's output). The
+  without `preserve_order`; byte-identical to the worker's output), and
+  `authorization_tool_name` hashes the canonical encoding of its identity
+  (it hashed `json!(..).to_string()`, which followed `preserve_order`). The
   `direct_execution` and `mcp_tool_cache` sites flagged above are byte-length
   bounds, which member order cannot change: no change needed.
-- `host::CodeSandbox` (submit/cancel a `CodeJob`) joins the interface for
-  stage 6; nothing calls it yet, so it has no cloud adapter.
+- `host::CodeSandbox` (submit/cancel a `CodeJob`) is defined for stage 6;
+  nothing calls it yet, so it has no cloud adapter and `Host` does not
+  carry one (a host would only stub it).
+- The per-family behaviour suites (`toolkits/*_tests.rs`) and
+  `sdk_conformance` (+ exemptions) moved here, so the families keep the
+  visibility they had in the worker. The gate `include_str!`s elitea-main's
+  toolkit schema snapshots; `ci-deepwiki-engine.yml` (which runs this
+  crate's tests) triggers on both files.
 
 **Still in the worker, by design or for a later stage:**
 
 - `direct_request` and `direct_runtime` (gRPC input parsing): stage 4.
-- The per-family behaviour suites (`toolkits/*_tests.rs`, 25.9k lines) and
-  `sdk_conformance` (+ exemptions): the gate `include_str!`s elitea-main's
-  toolkit schema snapshots, which a libs/rust-only checkout (the image
-  build, the libs CI path filter) does not watch. The suites reach the
-  families through the re-export and `test-support` fixtures; the
-  source-scanning ones read the moved files at their new paths. Moving
-  them needs the snapshots vendored or the libs CI filter widened.
+- `artifact_tests` (it composes the family with `ClaimPlatformWriter` and
+  the runtime-context transport) and the SDK gate's `artifact` check, which
+  it reaches through `test-support`.
 - `openapi_pipeline_tests` (the pipeline half of the OpenAPI expiry suite;
   it needs the worker's graph): its fixtures are
   `families::openapi::tools::test_support`.
