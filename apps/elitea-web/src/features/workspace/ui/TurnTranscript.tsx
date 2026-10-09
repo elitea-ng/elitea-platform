@@ -10,6 +10,7 @@ import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import Collapse from '@mui/material/Collapse';
 import type { Theme } from '@mui/material/styles';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import { t } from '@/shared/i18n';
@@ -105,7 +106,18 @@ export function TurnTranscript({ view, busy, onCancel }: TurnTranscriptProps): R
       {view.error !== undefined && (
         <Alert severity="error">{view.error.message}</Alert>
       )}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+        {view.projectInstructions !== undefined && view.projectInstructions.length > 0 && (
+          <Tooltip title={view.projectInstructions.join(', ')}>
+            <Chip
+              size="small"
+              variant="outlined"
+              data-testid="agents-md-applied"
+              label={t('workspace.agentsMdApplied', 'AGENTS.md applied')}
+              aria-description={view.projectInstructions.join(', ')}
+            />
+          </Tooltip>
+        )}
         {showStatus && view.phase !== null && (
           <Typography variant="bodySmall" component="output" data-testid="turn-status">
             {phaseLabel(view.phase)}

@@ -12,11 +12,12 @@ import type {
   TurnStarted,
   TurnStatus,
   Workspace,
+  WorkspaceFile,
   WorkspaceIpc,
 } from './workspaceIpc';
 import { WorkspaceIpcError } from './workspaceIpc';
 
-type FailableCommand = 'remove' | 'bindProject' | 'startTurn' | 'cancelTurn' | 'turnStatus' | 'respondApproval' | 'turnChanges' | 'restore';
+type FailableCommand = 'remove' | 'bindProject' | 'files' | 'startTurn' | 'cancelTurn' | 'turnStatus' | 'respondApproval' | 'turnChanges' | 'restore';
 
 export interface FakeWorkspaceIpc extends WorkspaceIpc {
   /** Deliver an event to every subscriber. */
@@ -26,6 +27,7 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     cancelled: string[];
     approvals: { requestId: string; decision: ApprovalDecision }[];
     restores: { turnId: string; path?: string }[];
+    fileQueries: { workspaceId: string; query: string; limit?: number }[];
   };
   setChanges(turnId: string, changes: TurnChanges): void;
   /** What `agent_turn_status` answers for `turnId` (default: running). */
@@ -39,6 +41,8 @@ export interface FakeOptions {
   workspaces?: Workspace[];
   /** What `workspace_open` hands back (the folder the user "picked"). */
   nextOpen?: Workspace | null;
+  /** Every workspace's files for `workspace_files`; the fake answers the ones whose path contains the query. */
+  files?: WorkspaceFile[];
 }
 
 export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspaceIpc {
@@ -46,7 +50,7 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const handlers = new Set<AgentEventHandler>();
   const changes = new Map<string, TurnChanges>();
   const statuses = new Map<string, TurnStatus>();
-  const calls: FakeWorkspaceIpc['calls'] = { started: [], cancelled: [], approvals: [], restores: [] };
+  const calls: FakeWorkspaceIpc['calls'] = { started: [], cancelled: [], approvals: [], restores: [], fileQueries: [] };
   let turnCounter = 0;
   const failures = new Map<FailableCommand, WorkspaceIpcError>();
   const failure = (command: FailableCommand): Promise<never> | undefined => {
@@ -77,6 +81,14 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       if (failed !== undefined) return failed;
       workspaces = workspaces.map((w) => (w.id === id ? { ...w, project_id: projectId } : w));
       return Promise.resolve();
+    },
+    files(workspaceId, query, limit) {
+      calls.fileQueries.push(limit === undefined ? { workspaceId, query } : { workspaceId, query, limit });
+      const failed = failure('files');
+      if (failed !== undefined) return failed;
+      const needle = query.toLowerCase();
+      const found = (options.files ?? []).filter((file) => file.path.toLowerCase().includes(needle));
+      return Promise.resolve(found.slice(0, limit ?? 50));
     },
     startTurn(request): Promise<TurnStarted> {
       calls.started.push(request);

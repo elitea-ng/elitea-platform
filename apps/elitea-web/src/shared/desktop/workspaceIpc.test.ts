@@ -14,6 +14,8 @@ describe('createWorkspaceIpc', () => {
     await ipc.list();
     await ipc.remove('w1');
     await ipc.bindProject('w1', 7);
+    await ipc.files('w1', 'main');
+    await ipc.files('w1', '', 10);
     await ipc.startTurn({
       workspace_id: 'w1',
       project_id: 7,
@@ -22,6 +24,7 @@ describe('createWorkspaceIpc', () => {
       version_id: 9,
       prompt: 'hi',
       plan_mode: true,
+      mentions: ['src/main.rs', 'docs/'],
     });
     await ipc.cancelTurn('t1');
     await ipc.turnStatus('t1');
@@ -35,7 +38,12 @@ describe('createWorkspaceIpc', () => {
       ['workspace_list'],
       ['workspace_remove', { id: 'w1' }],
       ['workspace_bind_project', { id: 'w1', project_id: 7 }],
-      ['agent_turn_start', { workspace_id: 'w1', project_id: 7, conversation_id: 'c1', application_id: 3, version_id: 9, prompt: 'hi', plan_mode: true }],
+      ['workspace_files', { workspace_id: 'w1', query: 'main' }],
+      ['workspace_files', { workspace_id: 'w1', query: '', limit: 10 }],
+      [
+        'agent_turn_start',
+        { workspace_id: 'w1', project_id: 7, conversation_id: 'c1', application_id: 3, version_id: 9, prompt: 'hi', plan_mode: true, mentions: ['src/main.rs', 'docs/'] },
+      ],
       ['agent_turn_cancel', { turn_id: 't1' }],
       ['agent_turn_status', { turn_id: 't1' }],
       ['approval_respond', { request_id: 'r1', decision: 'allow_always' }],

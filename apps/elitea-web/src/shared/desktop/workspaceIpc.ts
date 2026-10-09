@@ -25,6 +25,15 @@ export interface TurnStartRequest {
   version_id: number;
   prompt: string;
   plan_mode: boolean;
+  /** Workspace-relative paths the person referenced with "@" (a folder ends with `/`); the host checks them and lists them under the prompt. */
+  mentions: string[];
+}
+
+/** One match of `workspace_files` (the "@" picker). */
+export interface WorkspaceFile {
+  /** Workspace-relative, without a trailing `/`. */
+  path: string;
+  kind: 'file' | 'dir';
 }
 
 export interface TurnStarted {
@@ -81,7 +90,7 @@ export interface TurnStatus {
 }
 
 export type AgentEvent =
-  | (EventBase & { kind: 'status'; payload: { phase: TurnPhase; message?: string } })
+  | (EventBase & { kind: 'status'; payload: { phase: TurnPhase; message?: string; project_instructions?: string[] } })
   | (EventBase & { kind: 'text_delta'; payload: { text: string } })
   | (EventBase & { kind: 'tool_call'; payload: { call_id: string; tool: string; args_summary: string; remote: boolean } })
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
@@ -122,6 +131,8 @@ export interface WorkspaceIpc {
   list(): Promise<Workspace[]>;
   remove(id: string): Promise<void>;
   bindProject(id: string, projectId: number): Promise<void>;
+  /** The "@" picker: the workspace's files and folders matching `query`, best first. */
+  files(workspaceId: string, query: string, limit?: number): Promise<WorkspaceFile[]>;
   startTurn(request: TurnStartRequest): Promise<TurnStarted>;
   cancelTurn(turnId: string): Promise<void>;
   /** Where a turn is, for a UI that may have missed its `done` event (events are not replayed). */
@@ -156,6 +167,8 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
     list: () => invoke<Workspace[]>('workspace_list'),
     remove: (id) => invoke<void>('workspace_remove', { id }),
     bindProject: (id, projectId) => invoke<void>('workspace_bind_project', { id, project_id: projectId }),
+    files: (workspaceId, query, limit) =>
+      invoke<WorkspaceFile[]>('workspace_files', limit === undefined ? { workspace_id: workspaceId, query } : { workspace_id: workspaceId, query, limit }),
     startTurn: (request) => invoke<TurnStarted>('agent_turn_start', { ...request }),
     cancelTurn: (turnId) => invoke<void>('agent_turn_cancel', { turn_id: turnId }),
     turnStatus: (turnId) => invoke<TurnStatus>('agent_turn_status', { turn_id: turnId }),

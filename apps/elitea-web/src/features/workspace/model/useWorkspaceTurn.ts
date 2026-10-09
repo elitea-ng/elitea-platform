@@ -32,6 +32,8 @@ export interface WorkspaceTurn {
   start(request: TurnStartRequest): Promise<boolean>;
   cancel(): Promise<void>;
   answer(requestId: string, decision: ApprovalDecision): Promise<void>;
+  /** Forget the shown turn (the transcript only; nothing on the host changes). Ignored while a turn runs. */
+  clear(): void;
 }
 
 const RESYNC_MS = 15_000;
@@ -139,5 +141,11 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
 
   const busy = starting || unfinished;
 
-  return { view, turnId, busy, startError, start, cancel, answer };
+  const clear = useCallback(() => {
+    if (busy) return;
+    setStartError(null);
+    dispatch({ type: 'reset' });
+  }, [busy]);
+
+  return { view, turnId, busy, startError, start, cancel, answer, clear };
 }

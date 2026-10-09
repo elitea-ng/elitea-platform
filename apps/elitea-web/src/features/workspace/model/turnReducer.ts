@@ -37,6 +37,8 @@ export interface TurnView {
   approvals: ApprovalRequestPayload[];
   error?: { code: string; message: string };
   done?: TurnDone;
+  /** The AGENTS.md files the host applied to this turn (from `status` `running`). */
+  projectInstructions?: string[];
 }
 
 interface TurnRecord {
@@ -72,6 +74,7 @@ function onStatus(view: TurnView, event: EventOf<'status'>): TurnView {
   const next: TurnView = { ...view, phase: event.payload.phase };
   if (event.payload.message !== undefined) next.message = event.payload.message;
   else delete next.message;
+  if (event.payload.project_instructions !== undefined) next.projectInstructions = event.payload.project_instructions;
   if (isTerminalPhase(event.payload.phase)) next.approvals = [];
   return next;
 }

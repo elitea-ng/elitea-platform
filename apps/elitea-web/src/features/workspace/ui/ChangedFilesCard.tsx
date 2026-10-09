@@ -39,6 +39,8 @@ function failureText(error: unknown, fallback: string): string {
 export interface ChangedFilesCardProps {
   ipc: WorkspaceIpc;
   turnId: string;
+  /** Bumped to ask for the "Undo turn" confirmation from outside (the composer's `/undo`). */
+  undoRequest?: number;
 }
 
 const changesKey = (turnId: string) => ['workspace', 'turn-changes', turnId] as const;
@@ -91,9 +93,23 @@ function FileRow({ file, busy, onRevert }: { file: ChangedFile; busy: boolean; o
   );
 }
 
-export function ChangedFilesCard({ ipc, turnId }: ChangedFilesCardProps): React.JSX.Element | null {
+/**
+ * The undo confirmation's open state; a new `request` value opens it once
+ * (adjusted during render, not in an effect).
+ */
+function useConfirmation(request: number): [boolean, (open: boolean) => void] {
+  const [open, setOpen] = useState(false);
+  const [seen, setSeen] = useState(request);
+  if (request !== seen) {
+    setSeen(request);
+    setOpen(true);
+  }
+  return [open, setOpen];
+}
+
+export function ChangedFilesCard({ ipc, turnId, undoRequest = 0 }: ChangedFilesCardProps): React.JSX.Element | null {
   const queryClient = useQueryClient();
-  const [confirmingUndo, setConfirmingUndo] = useState(false);
+  const [confirmingUndo, setConfirmingUndo] = useConfirmation(undoRequest);
   const changes = useQuery({ queryKey: changesKey(turnId), queryFn: () => ipc.turnChanges(turnId) });
   const restore = useMutation({
     mutationFn: (path: string | undefined) => ipc.restore(turnId, path),

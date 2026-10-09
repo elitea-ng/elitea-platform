@@ -14,6 +14,7 @@ const REQUEST: TurnStartRequest = {
   version_id: 3,
   prompt: 'do it',
   plan_mode: false,
+  mentions: [],
 };
 
 const ev = (seq: number, e: Omit<AgentEvent, 'turn_id' | 'seq'>): AgentEvent => ({ turn_id: 'turn-1', seq, ...e }) as AgentEvent;
@@ -49,6 +50,27 @@ describe('useWorkspaceTurn', () => {
       ipc.emit(ev(4, { kind: 'status', payload: { phase: 'done' } }));
     });
     expect(result.current.busy).toBe(false);
+  });
+
+  it('clears the shown turn only once it is over, and keeps the AGENTS.md list of the running status', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    await act(() => result.current.start(REQUEST));
+    act(() => {
+      ipc.emit(ev(1, { kind: 'status', payload: { phase: 'running', project_instructions: ['AGENTS.md'] } }));
+      ipc.emit(ev(2, { kind: 'text_delta', payload: { text: 'working' } }));
+      ipc.emit(ev(3, { kind: 'status', payload: { phase: 'committing' } }));
+    });
+    expect(result.current.view.projectInstructions).toEqual(['AGENTS.md']);
+    act(() => result.current.clear());
+    expect(result.current.turnId).toBe('turn-1');
+    act(() => {
+      ipc.emit(ev(4, { kind: 'done', payload: { committed: true, conversation_id: 'c1', message_ids: [], changed_files: 0 } }));
+    });
+    act(() => result.current.clear());
+    expect(result.current.turnId).toBeNull();
+    expect(result.current.view.items).toEqual([]);
   });
 
   it('stays busy after an error event until the host says done (the failed turn is still committing)', async () => {
