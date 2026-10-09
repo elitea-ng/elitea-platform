@@ -832,7 +832,9 @@ pub mod bubblewrap {
     fn push(args: &mut Vec<String>, words: &[&str], path: &Path) {
         args.extend(words.iter().map(|word| (*word).to_owned()));
         let text = path.display().to_string();
-        let repeat = words.first().is_some_and(|flag| flag.ends_with("bind"));
+        let repeat = words
+            .first()
+            .is_some_and(|flag| flag.ends_with("bind") || flag.ends_with("bind-try"));
         args.push(text.clone());
         if repeat {
             args.push(text);
@@ -895,8 +897,11 @@ pub mod bubblewrap {
             }
         }
         if request.mode != SandboxMode::ReadOnly {
+            // `-try`: a protected path that does not exist (`commondir`,
+            // `modules/`, `info/` in a fresh repository) or a `.git` gone
+            // since the walk would otherwise stop bwrap from starting.
             for path in masks.git.iter().chain(&request.protected) {
-                push(&mut out, &["--ro-bind"], path);
+                push(&mut out, &["--ro-bind-try"], path);
             }
         }
         out.push("--".to_owned());
@@ -1261,9 +1266,9 @@ mod tests {
         let joined = args.join(" ");
         let text = |path: &Path| path.display().to_string();
         assert!(joined.starts_with("--die-with-parent --unshare-pid --unshare-net --ro-bind / /"));
-        assert!(joined.contains(&format!("--ro-bind {0} {0}", text(&ws.join(".git")))));
+        assert!(joined.contains(&format!("--ro-bind-try {0} {0}", text(&ws.join(".git")))));
         assert!(joined.contains(&format!(
-            "--ro-bind {0} {0}",
+            "--ro-bind-try {0} {0}",
             text(&ws.join("vendor/lib/.GIT"))
         )));
         assert!(joined.contains(&format!(
@@ -1281,7 +1286,7 @@ mod tests {
             "the temporary directory is bound over the mask"
         );
         let git = joined
-            .find(&format!("--ro-bind {0} {0}", text(&ws.join(".git"))))
+            .find(&format!("--ro-bind-try {0} {0}", text(&ws.join(".git"))))
             .expect("git");
         let ws_bind = joined
             .find(&format!("--bind {0} {0}", text(&ws)))
@@ -1302,6 +1307,34 @@ mod tests {
         };
         let read_only = super::bubblewrap::args(&read_only, &masks, &[]).join(" ");
         assert!(!read_only.contains(&format!("--bind {0} {0}", text(&ws))));
+    }
+
+    /// Protected paths that do not exist (a fresh repository has no
+    /// `commondir`, `modules/` or `info/`) are bound with `--ro-bind-try`:
+    /// a plain `--ro-bind` of a missing source stops bwrap from starting.
+    #[test]
+    fn bubblewrap_binds_missing_protected_paths_with_try() {
+        let missing = PathBuf::from("/nonexistent/repo/.git/commondir");
+        let request = SandboxRequest {
+            writable_roots: vec![PathBuf::from("/nonexistent/repo/.git")],
+            protected: vec![missing.clone()],
+            ..SandboxRequest::new(SandboxMode::WorkspaceWrite, false)
+        };
+        let masks = super::bubblewrap::Masks::default();
+        let args = super::bubblewrap::args(&request, &masks, &["git".to_owned()]);
+        let text = missing.display().to_string();
+        let at = args
+            .iter()
+            .position(|arg| *arg == text)
+            .expect("the protected path is bound");
+        assert_eq!(args[at - 1], "--ro-bind-try");
+        assert_eq!(args[at + 1], text);
+        assert!(
+            !args
+                .windows(2)
+                .any(|pair| pair[0] == "--ro-bind" && pair[1] == text),
+            "never a plain --ro-bind of a path that may be missing"
+        );
     }
 
     /// H3: Landlock alone is partial and is refused unless the host opts in.
