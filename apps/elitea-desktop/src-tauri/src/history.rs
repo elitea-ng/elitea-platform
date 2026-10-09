@@ -9,7 +9,13 @@
 //!
 //! Events are recorded HOST-side as they are emitted ([`TurnTap`]), so the
 //! history survives a webview reload or crash. Consecutive `text_delta`
-//! events are stored as one row (the reducer merges them the same way).
+//! events are stored as one row (the reducer merges them the same way),
+//! numbered by the last delta it holds. The run is merged in memory and
+//! written when the next non-text event arrives, when the turn's tap is
+//! dropped, before a history read, and otherwise every
+//! [`TEXT_FLUSH_INTERVAL`] or [`TEXT_FLUSH_BYTES`] — not once per delta (a
+//! long answer would rewrite its whole text thousands of times). A crash
+//! loses at most that much of the answer's tail.
 //!
 //! Every row is keyed by the deployment origin, the signed-in user id, the
 //! workspace id and the conversation id: another account or another
@@ -44,9 +50,11 @@
 //!         kind TEXT, payload TEXT /* JSON */, PRIMARY KEY (turn_id, seq))
 //! ```
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags, params};
 use serde::Serialize;
@@ -73,6 +81,10 @@ pub const MAX_TURNS_PER_THREAD: usize = 200;
 /// What a thread's turns may take in all (events and changes); the oldest
 /// turns go first.
 pub const MAX_THREAD_BYTES: i64 = 32 * 1024 * 1024;
+/// A text run's merged deltas are written at least this often...
+pub const TEXT_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+/// ...or once this many bytes of it are unwritten.
+pub const TEXT_FLUSH_BYTES: usize = 16 * 1024;
 
 const SCHEMA: &str = "
 CREATE TABLE turns (
@@ -250,9 +262,24 @@ fn inspect(path: &Path) -> Result<(), HostError> {
     Ok(())
 }
 
+/// The `text_delta` run a turn is extending, merged in memory.
+struct TextRun {
+    /// The seq its stored row has, once written.
+    stored_seq: Option<u64>,
+    /// The last delta it holds (the row's seq once written).
+    last_seq: u64,
+    text: String,
+    /// Bytes of `text` not written yet.
+    unwritten: usize,
+    written_at: Instant,
+}
+
 pub struct HistoryStore {
     path: PathBuf,
     conn: Mutex<Connection>,
+    /// Each recording turn's open text run (by turn id). Locked before
+    /// `conn`, never after.
+    texts: Mutex<HashMap<String, TextRun>>,
 }
 
 impl HistoryStore {
@@ -295,6 +322,7 @@ impl HistoryStore {
         Ok(Self {
             path,
             conn: Mutex::new(conn),
+            texts: Mutex::new(HashMap::new()),
         })
     }
 
@@ -394,6 +422,77 @@ impl HistoryStore {
         })
     }
 
+    fn texts(&self) -> std::sync::MutexGuard<'_, HashMap<String, TextRun>> {
+        self.texts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Extend the turn's open text run with one delta; written when it is
+    /// due (see the module docs).
+    fn append_text(&self, turn_id: &str, seq: u64, delta: &str) -> Result<(), HostError> {
+        let mut texts = self.texts();
+        let run = texts.entry(turn_id.to_owned()).or_insert_with(|| TextRun {
+            stored_seq: None,
+            last_seq: seq,
+            text: String::new(),
+            unwritten: 0,
+            written_at: Instant::now(),
+        });
+        run.text.push_str(delta);
+        run.last_seq = seq;
+        run.unwritten += delta.len();
+        if run.unwritten >= TEXT_FLUSH_BYTES || run.written_at.elapsed() >= TEXT_FLUSH_INTERVAL {
+            self.write_text(turn_id, run)?;
+        }
+        Ok(())
+    }
+
+    /// Write a run's text as its one row (inserted the first time, then
+    /// replaced and renumbered to the last delta it holds).
+    fn write_text(&self, turn_id: &str, run: &mut TextRun) -> Result<(), HostError> {
+        if run.stored_seq == Some(run.last_seq) && run.unwritten == 0 {
+            return Ok(());
+        }
+        match run.stored_seq {
+            None => {
+                let payload = serde_json::json!({ "text": run.text }).to_string();
+                self.insert_event(turn_id, run.last_seq, "text_delta", &payload)?;
+            }
+            Some(from) => {
+                self.replace_text(turn_id, from, run.last_seq, &run.text, run.unwritten)?;
+            }
+        }
+        run.stored_seq = Some(run.last_seq);
+        run.unwritten = 0;
+        run.written_at = Instant::now();
+        Ok(())
+    }
+
+    /// The turn's text run ended (a non-text event, a cap, the tap went
+    /// away): write what is left of it and forget it.
+    fn end_text(&self, turn_id: &str) -> Result<(), HostError> {
+        let mut texts = self.texts();
+        match texts.remove(turn_id) {
+            Some(mut run) => self.write_text(turn_id, &mut run),
+            None => Ok(()),
+        }
+    }
+
+    /// Drop the turn's text run unwritten (its recording gave up).
+    fn forget_text(&self, turn_id: &str) {
+        self.texts().remove(turn_id);
+    }
+
+    /// Write every open text run, so a read sees the text so far.
+    fn flush_texts(&self) -> Result<(), HostError> {
+        let mut texts = self.texts();
+        for (turn_id, run) in texts.iter_mut() {
+            self.write_text(turn_id, run)?;
+        }
+        Ok(())
+    }
+
     fn mark_truncated(&self, turn_id: &str) -> Result<(), HostError> {
         self.with("could not record a turn event", |conn| {
             conn.execute(
@@ -487,6 +586,10 @@ impl HistoryStore {
         workspace_id: &str,
         conversation: &str,
     ) -> Result<Vec<StoredTurn>, HostError> {
+        // A running turn's text so far, not just what the last flush wrote.
+        if let Err(error) = self.flush_texts() {
+            log::warn!("the thread history could not write a running turn's text: {error}");
+        }
         self.with("could not read the thread history", |conn| {
             let mut turns: Vec<StoredTurn> = {
                 let mut statement = conn.prepare(
@@ -611,8 +714,6 @@ struct Recording {
     turn: NewTurn,
     bytes: usize,
     capped: bool,
-    /// The stored text row being extended: its seq and its text so far.
-    text: Option<(u64, String)>,
 }
 
 /// The `agent://event` emitter of one turn: forwards every event to the
@@ -665,7 +766,6 @@ impl TurnTap {
             turn,
             bytes: 0,
             capped: false,
-            text: None,
         }));
         for event in &buffered {
             self.record(store, &mut state, event);
@@ -685,6 +785,7 @@ impl TurnTap {
             return;
         };
         if let Err(error) = store.set_changes(&recording.turn.turn_id, changes) {
+            store.forget_text(&recording.turn.turn_id);
             Self::give_up(&mut state, &error);
         }
     }
@@ -705,31 +806,20 @@ impl TurnTap {
                 Self::cap(store, recording)
             } else {
                 recording.bytes += delta.len();
-                match &mut recording.text {
-                    Some((seq, text)) => {
-                        text.push_str(delta);
-                        let from = *seq;
-                        *seq = event.seq;
-                        store.replace_text(&turn_id, from, event.seq, text, delta.len())
-                    }
-                    None => {
-                        recording.text = Some((event.seq, delta.to_owned()));
-                        let payload = serde_json::json!({ "text": delta }).to_string();
-                        store.insert_event(&turn_id, event.seq, event.kind, &payload)
-                    }
-                }
+                store.append_text(&turn_id, event.seq, delta)
             }
         } else {
-            recording.text = None;
             let payload = bounded(event.payload.clone()).to_string();
-            if !essential
-                && (recording.capped || recording.bytes + payload.len() > MAX_TURN_EVENT_BYTES)
-            {
-                Self::cap(store, recording)
-            } else {
-                recording.bytes += payload.len();
-                store.insert_event(&turn_id, event.seq, event.kind, &payload)
-            }
+            store.end_text(&turn_id).and_then(|()| {
+                if !essential
+                    && (recording.capped || recording.bytes + payload.len() > MAX_TURN_EVENT_BYTES)
+                {
+                    Self::cap(store, recording)
+                } else {
+                    recording.bytes += payload.len();
+                    store.insert_event(&turn_id, event.seq, event.kind, &payload)
+                }
+            })
         };
         let result = result.and_then(|()| {
             if event.kind == "done" {
@@ -740,6 +830,7 @@ impl TurnTap {
             Ok(())
         });
         if let Err(error) = result {
+            store.forget_text(&turn_id);
             Self::give_up(state, &error);
         }
     }
@@ -749,8 +840,21 @@ impl TurnTap {
             return Ok(());
         }
         recording.capped = true;
-        recording.text = None;
+        store.end_text(&recording.turn.turn_id)?;
         store.mark_truncated(&recording.turn.turn_id)
+    }
+}
+
+impl Drop for TurnTap {
+    /// The turn's tap goes away (it ended, or the app is quitting): the text
+    /// run it was extending is written, so an interrupted turn keeps it.
+    fn drop(&mut self) {
+        let Some(store) = &self.store else { return };
+        if let TapState::Recording(recording) = &*self.state()
+            && let Err(error) = store.end_text(&recording.turn.turn_id)
+        {
+            log::warn!("the thread history could not write a turn's last text: {error}");
+        }
     }
 }
 
@@ -904,6 +1008,92 @@ mod tests {
         assert!(summary.len() <= MAX_EVENT_STRING + 3, "{}", summary.len());
         // The UUID finds the same thread.
         assert_eq!(store.thread(&owner(1), "w1", "uuid-42").unwrap().len(), 1);
+    }
+
+    fn total_changes(store: &HistoryStore) -> i64 {
+        store
+            .with("count", |conn| {
+                conn.query_row("SELECT total_changes()", [], |row| row.get(0))
+            })
+            .unwrap()
+    }
+
+    fn stored_text(store: &HistoryStore, turn_id: &str) -> Option<(i64, String)> {
+        store
+            .with("text", |conn| {
+                conn.query_row(
+                    "SELECT seq, payload FROM events WHERE turn_id = ?1 AND kind = 'text_delta'",
+                    params![turn_id],
+                    |row| Ok((row.get(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn a_long_answer_is_not_rewritten_once_per_delta() {
+        let (_root, store) = store();
+        let tap = TurnTap::new(Arc::new(VecEmitter::default()), Some(store.clone()));
+        tap.activate(new_turn(owner(1), "t1", "42"));
+        let before = total_changes(&store);
+        // 5,000 one-byte deltas: well under the size threshold, and a test
+        // runs them in far less than the interval.
+        for seq in 0..5_000 {
+            tap.emit(event("t1", seq, "text_delta", json!({"text": "x"})));
+        }
+        tap.emit(event("t1", 5_000, "done", json!({"committed": true})));
+        let writes = total_changes(&store) - before;
+        // One text row + its bytes, the done row + its bytes, finish_turn.
+        // Per-delta writes would be ~10,000.
+        assert!(writes < 20, "{writes} row writes for 5,000 deltas");
+        let turn = &store.thread(&owner(1), "w1", "42").unwrap()[0];
+        assert_eq!(turn.events.len(), 2);
+        assert_eq!(turn.events[0].seq, 4_999, "numbered by its last delta");
+        assert_eq!(
+            turn.events[0].payload["text"].as_str().unwrap().len(),
+            5_000
+        );
+    }
+
+    #[test]
+    fn a_text_run_is_written_past_the_size_threshold_before_its_turn_moves_on() {
+        let (_root, store) = store();
+        let tap = TurnTap::new(Arc::new(VecEmitter::default()), Some(store.clone()));
+        tap.activate(new_turn(owner(1), "t1", "42"));
+        tap.emit(event("t1", 0, "text_delta", json!({"text": "a"})));
+        assert_eq!(stored_text(&store, "t1"), None, "merged in memory first");
+        let chunk = "b".repeat(TEXT_FLUSH_BYTES);
+        tap.emit(event("t1", 1, "text_delta", json!({"text": chunk})));
+        let (seq, payload) = stored_text(&store, "t1").expect("written past the threshold");
+        assert_eq!(seq, 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&payload).unwrap()["text"]
+                .as_str()
+                .unwrap()
+                .len(),
+            TEXT_FLUSH_BYTES + 1
+        );
+    }
+
+    #[test]
+    fn a_read_and_a_dropped_tap_see_the_unwritten_text() {
+        let (_root, store) = store();
+        let tap = TurnTap::new(Arc::new(VecEmitter::default()), Some(store.clone()));
+        tap.activate(new_turn(owner(1), "t1", "42"));
+        tap.emit(event("t1", 0, "text_delta", json!({"text": "Hel"})));
+        // The page reopens the thread while the turn runs.
+        let turns = store.thread(&owner(1), "w1", "42").unwrap();
+        assert_eq!(turns[0].events[0].payload["text"], "Hel");
+        tap.emit(event("t1", 1, "text_delta", json!({"text": "lo"})));
+        // The app quits mid-answer.
+        drop(tap);
+        let again = HistoryStore::open(store.path().parent().unwrap()).unwrap();
+        let turns = again.thread(&owner(1), "w1", "42").unwrap();
+        assert_eq!(turns[0].events.len(), 1);
+        assert_eq!(turns[0].events[0].seq, 1);
+        assert_eq!(turns[0].events[0].payload["text"], "Hello");
+        assert_eq!(turns[0].state, "interrupted");
     }
 
     #[test]
