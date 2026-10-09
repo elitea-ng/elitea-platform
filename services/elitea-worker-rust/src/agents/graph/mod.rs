@@ -114,9 +114,7 @@ mod state_reducer_compiler_tests;
 mod state_reducer_digest_tests;
 #[cfg(test)]
 mod state_reducer_pg_tests;
-mod state_reducers;
-#[cfg(test)]
-mod state_reducers_tests;
+pub(crate) use elitea_agent_runtime::graph::state_reducers;
 pub(crate) mod static_pause;
 #[cfg(test)]
 mod static_pause_tests;

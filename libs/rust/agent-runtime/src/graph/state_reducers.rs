@@ -8,28 +8,25 @@
 //! coerce through `f64`.
 
 use std::collections::BTreeMap;
+use std::io;
 use std::sync::Arc;
 
-use adk_rust::graph::{GraphError, Node, NodeContext, NodeOutput, Reducer, StateSchema};
+use adk_graph::{GraphError, Node, NodeContext, NodeOutput, Reducer, StateSchema};
 use async_trait::async_trait;
-use ring::digest;
 use serde_json::{Number, Value};
 
-use super::compiler::digest_field;
-use super::data_shaping::{ShapingCode, exact_i64, json_len_within};
+use crate::exact_number::{NumberFault, exact_i64};
 
 /// Most elements an `append` channel holds.
-pub(super) const MAX_APPEND_ELEMENTS: usize = 10_000;
+pub const MAX_APPEND_ELEMENTS: usize = 10_000;
 /// Most top-level keys a `merge` channel holds.
-pub(super) const MAX_MERGE_KEYS: usize = 1_000;
+pub const MAX_MERGE_KEYS: usize = 1_000;
 /// Most serialized bytes an `append` or `merge` channel holds.
-pub(super) const MAX_REDUCED_BYTES: usize = 512 * 1024;
-
-const REDUCER_DIGEST_DOMAIN: &[u8] = b"elitea.graph.pipeline.state-reducers.v1\0";
+pub const MAX_REDUCED_BYTES: usize = 512 * 1024;
 
 /// A non-overwrite reducer. Overwrite is the absence of one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum StateReducer {
+pub enum StateReducer {
     Append,
     SumInt,
     Merge,
@@ -37,18 +34,18 @@ pub(super) enum StateReducer {
 
 /// The reducer name is not one of the closed set.
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct UnknownReducer;
+pub struct UnknownReducer;
 
 /// Why a typed update was refused. Names no value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ReducerFailure {
+pub enum ReducerFailure {
     TypeMismatch,
     Limit,
     Overflow,
 }
 
 impl ReducerFailure {
-    pub(super) const fn code(self) -> &'static str {
+    pub const fn code(self) -> &'static str {
         match self {
             Self::TypeMismatch => "graph.state.reducer_type_mismatch",
             Self::Limit => "graph.state.reducer_limit",
@@ -59,7 +56,7 @@ impl ReducerFailure {
 
 impl StateReducer {
     /// `Ok(None)` is the explicit default, `overwrite`.
-    pub(super) fn parse(name: &str) -> Result<Option<Self>, UnknownReducer> {
+    pub fn parse(name: &str) -> Result<Option<Self>, UnknownReducer> {
         match name {
             "overwrite" => Ok(None),
             "append" => Ok(Some(Self::Append)),
@@ -69,7 +66,7 @@ impl StateReducer {
         }
     }
 
-    pub(super) const fn tag(self) -> &'static str {
+    pub const fn tag(self) -> &'static str {
         match self {
             Self::Append => "append",
             Self::SumInt => "sum_int",
@@ -78,7 +75,7 @@ impl StateReducer {
     }
 
     /// The only normalized state type this reducer accepts.
-    pub(super) const fn state_type(self) -> &'static str {
+    pub const fn state_type(self) -> &'static str {
         match self {
             Self::Append => "list",
             Self::SumInt => "int",
@@ -87,11 +84,7 @@ impl StateReducer {
     }
 
     /// The value `current` becomes after `update`, or why the update is refused.
-    pub(super) fn reduce_checked(
-        self,
-        current: &Value,
-        update: &Value,
-    ) -> Result<Value, ReducerFailure> {
+    pub fn reduce_checked(self, current: &Value, update: &Value) -> Result<Value, ReducerFailure> {
         let reduced = match (self, current, update) {
             (Self::Append, Value::Array(current), Value::Array(update)) => {
                 if current.len().saturating_add(update.len()) > MAX_APPEND_ELEMENTS {
@@ -125,11 +118,7 @@ impl StateReducer {
 
     /// The guard's verdict, identical to [`Self::reduce_checked`], without
     /// building an `append` result: element counts and serialized sizes only.
-    pub(super) fn check_update(
-        self,
-        current: &Value,
-        update: &Value,
-    ) -> Result<(), ReducerFailure> {
+    pub fn check_update(self, current: &Value, update: &Value) -> Result<(), ReducerFailure> {
         let (Self::Append, Value::Array(held), Value::Array(added)) = (self, current, update)
         else {
             return self.reduce_checked(current, update).map(|_| ());
@@ -154,7 +143,7 @@ impl StateReducer {
     }
 
     /// Whether this reducer's channel may hold `value`, e.g. a declared default.
-    pub(super) fn check_held(self, value: &Value) -> Result<(), ReducerFailure> {
+    pub fn check_held(self, value: &Value) -> Result<(), ReducerFailure> {
         let within_bytes = || {
             json_len_within(value, MAX_REDUCED_BYTES)
                 .map(|_| ())
@@ -175,7 +164,7 @@ impl StateReducer {
 
     /// The ADK channel reducer. The guard has already refused every update this
     /// would refuse, so a refusal here keeps the current value and is logged.
-    pub(super) fn channel_reducer(self, channel: &str) -> Reducer {
+    pub fn channel_reducer(self, channel: &str) -> Reducer {
         let channel = channel.to_owned();
         Reducer::Custom(Arc::new(move |current, update| {
             match self.reduce_checked(&current, &update) {
@@ -194,30 +183,40 @@ impl StateReducer {
     }
 }
 
+/// The number's exact `i64`. `Display` is the exact text with and without
+/// `arbitrary_precision`, so no value passes through `f64`.
 fn integer(number: &Number) -> Result<i64, ReducerFailure> {
-    exact_i64(number).map_err(|code| match code {
-        ShapingCode::IntegerOverflow => ReducerFailure::Overflow,
-        _ => ReducerFailure::TypeMismatch,
+    exact_i64(&number.to_string()).map_err(|fault| match fault {
+        NumberFault::Overflow => ReducerFailure::Overflow,
+        NumberFault::Unsupported | NumberFault::NotInteger => ReducerFailure::TypeMismatch,
     })
 }
 
-/// Folds the typed reducers into a definition digest. Callers fold only when
-/// at least one exists, so overwrite-only definitions keep their digest.
-pub(super) fn reducers_digest(
-    base: [u8; 32],
-    reducers: &BTreeMap<String, StateReducer>,
-) -> [u8; 32] {
-    let mut context = digest::Context::new(&digest::SHA256);
-    context.update(REDUCER_DIGEST_DOMAIN);
-    context.update(&base);
-    context.update(&(reducers.len() as u64).to_be_bytes());
-    for (key, reducer) in reducers {
-        digest_field(&mut context, key.as_bytes());
-        digest_field(&mut context, reducer.tag().as_bytes());
+/// The serialized JSON length of `value`, or `None` once it passes `cap`
+/// bytes. Length does not depend on member order, so `preserve_order` cannot
+/// change it.
+fn json_len_within(value: &Value, cap: usize) -> Option<usize> {
+    let mut writer = CappedLen { remaining: cap };
+    serde_json::to_writer(&mut writer, value).ok()?;
+    Some(cap - writer.remaining)
+}
+
+struct CappedLen {
+    remaining: usize,
+}
+
+impl io::Write for CappedLen {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.remaining = self
+            .remaining
+            .checked_sub(bytes.len())
+            .ok_or_else(|| io::Error::other("typed state value exceeds its byte bound"))?;
+        Ok(bytes.len())
     }
-    let mut output = [0_u8; 32];
-    output.copy_from_slice(context.finish().as_ref());
-    output
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Refuses a node's typed state update before ADK applies it.
@@ -225,13 +224,13 @@ pub(super) fn reducers_digest(
 /// Pipelines run one node per super-step (`max_concurrency(1)`), so the
 /// state the node read is the state its update reduces onto. An interrupted
 /// node's updates are dropped by ADK and are not checked.
-pub(super) struct ReducerGuard<N> {
+pub struct ReducerGuard<N> {
     inner: N,
     reducers: Arc<BTreeMap<String, StateReducer>>,
 }
 
 impl<N> ReducerGuard<N> {
-    pub(super) const fn new(inner: N, reducers: Arc<BTreeMap<String, StateReducer>>) -> Self {
+    pub const fn new(inner: N, reducers: Arc<BTreeMap<String, StateReducer>>) -> Self {
         Self { inner, reducers }
     }
 }
@@ -249,7 +248,7 @@ where
         self.inner.description()
     }
 
-    fn capabilities(&self) -> adk_rust::AgentCapabilities {
+    fn capabilities(&self) -> adk_core::AgentCapabilities {
         self.inner.capabilities()
     }
 
@@ -288,3 +287,7 @@ where
         Ok(output)
     }
 }
+
+#[cfg(test)]
+#[path = "state_reducers_tests.rs"]
+mod tests;

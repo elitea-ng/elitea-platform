@@ -34,5 +34,6 @@ pub mod router;
 pub mod state_modifier;
 #[cfg(test)]
 mod state_modifier_tests;
+pub mod state_reducers;
 pub mod turn_checkpointer;
 pub mod yaml;

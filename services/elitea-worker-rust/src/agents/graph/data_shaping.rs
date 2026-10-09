@@ -5,6 +5,7 @@
 //! error or log text carries data values, pointer text or state values.
 
 use elitea_agent_runtime::bounded_yaml::{self, BoundedYamlError};
+use elitea_agent_runtime::exact_number::{self, NumberFault};
 use elitea_agent_runtime::graph::PIPELINE_YAML_BUDGET;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -24,8 +25,6 @@ pub(super) const MAX_NAME_BYTES: usize = 256;
 pub(super) const MAX_SELECTIONS: usize = 64;
 
 const LIMIT_CEILINGS: [u64; 6] = [10_000, 10_000, 1_000, 524_288, 32, 32_768];
-// An i64 or u64 magnitude has at most 20 decimal digits; 10^20 fits u128.
-const MAX_INTEGER_DIGITS: u64 = 20;
 
 /// Configuration failure, surfaced as `graph.pipeline.invalid_configuration`.
 #[derive(Debug, Error)]
@@ -486,106 +485,30 @@ pub(super) fn envelope_row(parent_index: u64, position: u64, data: Map<String, V
 
 // ---------------------------------------------------------------- numbers
 
-/// Exact decimal `(-1)^negative * digits * 10^exponent`. `digits` has no
-/// leading or trailing zeros; zero is `(false, "", 0)`, so the form is unique.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct Decimal {
-    pub(super) negative: bool,
-    pub(super) digits: String,
-    pub(super) exponent: i64,
+/// Exact decimal form of a JSON number; owned by `elitea_agent_runtime::exact_number`.
+pub(super) use elitea_agent_runtime::exact_number::Decimal;
+
+/// The shaping code for an exact-number fault.
+const fn number_code(fault: NumberFault) -> ShapingCode {
+    match fault {
+        NumberFault::Unsupported => ShapingCode::UnsupportedNumber,
+        NumberFault::NotInteger => ShapingCode::TypeMismatch,
+        NumberFault::Overflow => ShapingCode::IntegerOverflow,
+    }
 }
 
 /// Normalizes the lexical JSON number text without floating point.
 pub(super) fn decimal(number: &Number) -> Result<Decimal, ShapingCode> {
-    const UNSUPPORTED: ShapingCode = ShapingCode::UnsupportedNumber;
-    let text = number.as_str();
-    let (negative, unsigned) = match text.strip_prefix('-') {
-        Some(rest) => (true, rest),
-        None => (false, text),
-    };
-    let (mantissa, exponent) = match unsigned.find(['e', 'E']) {
-        Some(at) => (
-            unsigned.get(..at).ok_or(UNSUPPORTED)?,
-            unsigned.get(at + 1..).ok_or(UNSUPPORTED)?,
-        ),
-        None => (unsigned, "0"),
-    };
-    let (integer, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
-    let is_digits = |part: &str| part.bytes().all(|byte| byte.is_ascii_digit());
-    let exponent_digits = exponent.strip_prefix(['+', '-']).unwrap_or(exponent);
-    if integer.is_empty()
-        || !is_digits(integer)
-        || !is_digits(fraction)
-        || exponent_digits.is_empty()
-        || !is_digits(exponent_digits)
-    {
-        return Err(UNSUPPORTED);
-    }
-    let exponent = exponent.parse::<i64>().map_err(|_| UNSUPPORTED)?;
-    let all = integer.chars().chain(fraction.chars()).collect::<String>();
-    let significant = all.trim_start_matches('0');
-    let digits = significant.trim_end_matches('0');
-    if digits.is_empty() {
-        return Ok(Decimal {
-            negative: false,
-            digits: String::new(),
-            exponent: 0,
-        });
-    }
-    let fraction_len = i64::try_from(fraction.len()).map_err(|_| UNSUPPORTED)?;
-    let trailing = i64::try_from(significant.len() - digits.len()).map_err(|_| UNSUPPORTED)?;
-    let exponent = exponent
-        .checked_sub(fraction_len)
-        .and_then(|value| value.checked_add(trailing))
-        .ok_or(UNSUPPORTED)?;
-    Ok(Decimal {
-        negative,
-        digits: digits.to_owned(),
-        exponent,
-    })
+    exact_number::decimal(number.as_str()).map_err(number_code)
 }
 
-/// The exact integer magnitude; fractional is `type_mismatch`, more than 20
-/// digits is `integer_overflow`.
-fn exact_integer(number: &Number) -> Result<(bool, u128), ShapingCode> {
-    let decimal = decimal(number)?;
-    if decimal.exponent < 0 {
-        return Err(ShapingCode::TypeMismatch);
-    }
-    let exponent = decimal.exponent.unsigned_abs();
-    let length = u64::try_from(decimal.digits.len()).map_err(|_| ShapingCode::IntegerOverflow)?;
-    if length
-        .checked_add(exponent)
-        .is_none_or(|total| total > MAX_INTEGER_DIGITS)
-    {
-        return Err(ShapingCode::IntegerOverflow);
-    }
-    let mut magnitude = 0_u128;
-    for byte in decimal.digits.bytes() {
-        magnitude = magnitude
-            .checked_mul(10)
-            .and_then(|value| value.checked_add(u128::from(byte - b'0')))
-            .ok_or(ShapingCode::IntegerOverflow)?;
-    }
-    for _ in 0..exponent {
-        magnitude = magnitude
-            .checked_mul(10)
-            .ok_or(ShapingCode::IntegerOverflow)?;
-    }
-    Ok((decimal.negative, magnitude))
-}
-
+/// Fractional is `type_mismatch`, more than 20 digits or out of range is `integer_overflow`.
 pub(super) fn exact_i64(number: &Number) -> Result<i64, ShapingCode> {
-    let (negative, magnitude) = exact_integer(number)?;
-    let signed = i128::try_from(magnitude).map_err(|_| ShapingCode::IntegerOverflow)?;
-    i64::try_from(if negative { -signed } else { signed }).map_err(|_| ShapingCode::IntegerOverflow)
+    exact_number::exact_i64(number.as_str()).map_err(number_code)
 }
 
 pub(super) fn exact_u64(number: &Number) -> Result<u64, ShapingCode> {
-    match exact_integer(number)? {
-        (true, _) => Err(ShapingCode::TypeMismatch),
-        (false, magnitude) => u64::try_from(magnitude).map_err(|_| ShapingCode::IntegerOverflow),
-    }
+    exact_number::exact_u64(number.as_str()).map_err(number_code)
 }
 
 // ---------------------------------------------------------------- canonical keys
@@ -945,13 +868,6 @@ impl Budget {
         }
         Ok(used + (available - writer.remaining))
     }
-}
-
-/// The serialized JSON length of `value`, or `None` once it passes `cap` bytes.
-pub(super) fn json_len_within(value: &Value, cap: usize) -> Option<usize> {
-    let mut writer = CappedWriter { remaining: cap };
-    serde_json::to_writer(&mut writer, value).ok()?;
-    Some(cap - writer.remaining)
 }
 
 struct CappedWriter {

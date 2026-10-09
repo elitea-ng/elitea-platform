@@ -1,14 +1,9 @@
 //! Every row of the typed reducer table, its bounds and the ADK closure.
 
-use std::collections::BTreeMap;
-
-use adk_rust::graph::{Channel, StateSchema};
+use adk_graph::{Channel, StateSchema};
 use serde_json::{Value, json};
 
-use super::state_reducers::{
-    MAX_APPEND_ELEMENTS, MAX_MERGE_KEYS, MAX_REDUCED_BYTES, ReducerFailure, StateReducer,
-    reducers_digest,
-};
+use super::{MAX_APPEND_ELEMENTS, MAX_MERGE_KEYS, MAX_REDUCED_BYTES, ReducerFailure, StateReducer};
 
 fn number(text: &str) -> Value {
     serde_json::from_str(text).expect("number fixture")
@@ -155,11 +150,15 @@ fn sum_int_overflows_at_i64_bounds_with_checked_arithmetic() {
         StateReducer::SumInt.reduce_checked(&json!(0), &json!(u64::MAX)),
         Err(ReducerFailure::Overflow)
     );
-    // An exponent no integer can carry is not an exact i64 value at all.
-    assert_eq!(
-        StateReducer::SumInt.reduce_checked(&json!(0), &number("1e99999999999999999999")),
-        Err(ReducerFailure::TypeMismatch)
-    );
+    // An exponent no integer can carry is not an exact i64 value at all. Only
+    // an `arbitrary_precision` build (the worker) can hold that value; without
+    // it serde_json refuses it at parse time (`exact_number` tests the text).
+    if let Ok(huge) = serde_json::from_str::<Value>("1e99999999999999999999") {
+        assert_eq!(
+            StateReducer::SumInt.reduce_checked(&json!(0), &huge),
+            Err(ReducerFailure::TypeMismatch)
+        );
+    }
 }
 
 #[test]
@@ -316,7 +315,7 @@ fn the_adk_channel_reducer_repeats_the_reduction_and_never_panics() {
             Channel::new(name).with_reducer(reducer.channel_reducer(name)),
         );
     }
-    let mut state = adk_rust::graph::State::new();
+    let mut state = adk_graph::State::new();
     state.insert("findings".to_owned(), json!(["a"]));
     state.insert("total".to_owned(), json!(i64::MAX));
     state.insert("seen".to_owned(), json!({"a": 1}));
@@ -331,33 +330,9 @@ fn the_adk_channel_reducer_repeats_the_reduction_and_never_panics() {
     assert_eq!(state["findings"], json!(["a", "b"]));
 }
 
-#[test]
-fn the_reducer_digest_is_order_independent_and_tag_sensitive() {
-    let base = [7_u8; 32];
-    let one = BTreeMap::from([
-        ("a".to_owned(), StateReducer::Append),
-        ("b".to_owned(), StateReducer::Merge),
-    ]);
-    let mut two = BTreeMap::new();
-    two.insert("b".to_owned(), StateReducer::Merge);
-    two.insert("a".to_owned(), StateReducer::Append);
-    assert_eq!(reducers_digest(base, &one), reducers_digest(base, &two));
-    assert_ne!(reducers_digest(base, &one), base);
-    let changed = BTreeMap::from([
-        ("a".to_owned(), StateReducer::Append),
-        ("b".to_owned(), StateReducer::Append),
-    ]);
-    assert_ne!(reducers_digest(base, &one), reducers_digest(base, &changed));
-    let renamed = BTreeMap::from([
-        ("a".to_owned(), StateReducer::Append),
-        ("c".to_owned(), StateReducer::Merge),
-    ]);
-    assert_ne!(reducers_digest(base, &one), reducers_digest(base, &renamed));
-}
-
 /// Opt-in budget: one typed update at the bounds costs the guard check plus the
 /// channel reduction, each O(result bytes). Run with
-/// `cargo test --release --lib state_reducers_tests::typed_update_budget -- --ignored --nocapture`.
+/// `cargo test --release -p elitea-agent-runtime --lib typed_update_budget -- --ignored --nocapture`.
 #[test]
 #[ignore = "timing budget, run manually and record in the source mapping"]
 fn typed_update_budget_at_the_bounds() {

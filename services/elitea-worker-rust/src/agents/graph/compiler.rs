@@ -59,7 +59,7 @@ use super::split_out::{SplitOutNode, SplitOutNodeDefinition};
 use super::state_modifier::{
     StateModifierConfigurationError, StateModifierNode, StateModifierNodeDefinition,
 };
-use super::state_reducers::{ReducerGuard, StateReducer, reducers_digest};
+use super::state_reducers::{ReducerGuard, StateReducer};
 use super::static_pause::{StaticPauseCatalog, StaticResumeCheckpointer};
 use super::yaml::{
     MAX_NODE_ID_BYTES, ParallelConfigurationError, ParallelNodeDefinition, valid_graph_id,
@@ -3015,9 +3015,30 @@ fn definition_digest(
     output
 }
 
-pub(super) fn digest_field(context: &mut digest::Context, value: &[u8]) {
+fn digest_field(context: &mut digest::Context, value: &[u8]) {
     context.update(&(value.len() as u64).to_be_bytes());
     context.update(value);
+}
+
+const REDUCER_DIGEST_DOMAIN: &[u8] = b"elitea.graph.pipeline.state-reducers.v1\0";
+
+/// Folds the typed reducers into a definition digest. Callers fold only when
+/// at least one exists, so overwrite-only definitions keep their digest.
+pub(super) fn reducers_digest(
+    base: [u8; 32],
+    reducers: &BTreeMap<String, StateReducer>,
+) -> [u8; 32] {
+    let mut context = digest::Context::new(&digest::SHA256);
+    context.update(REDUCER_DIGEST_DOMAIN);
+    context.update(&base);
+    context.update(&(reducers.len() as u64).to_be_bytes());
+    for (key, reducer) in reducers {
+        digest_field(&mut context, key.as_bytes());
+        digest_field(&mut context, reducer.tag().as_bytes());
+    }
+    let mut output = [0_u8; 32];
+    output.copy_from_slice(context.finish().as_ref());
+    output
 }
 
 /// The bound a stored pipeline exceeded. Names the limit, never a value.

@@ -4,7 +4,10 @@
 //! `origin/main` compiler (58abb650c). A changed value would orphan every
 //! existing checkpoint lineage, so these are fixed bytes, not recomputed.
 
-use super::compiler::PipelineDefinition;
+use std::collections::BTreeMap;
+
+use super::compiler::{PipelineDefinition, reducers_digest};
+use super::state_reducers::StateReducer;
 
 const LOOP: &str = r#"
 state:
@@ -116,4 +119,28 @@ fn explicit_overwrite_keeps_the_golden_digest_and_typed_reducers_change_it() {
     assert_ne!(digests[0], digests[1]);
     assert_ne!(digests[1], digests[2]);
     assert_eq!(hex(&append), digests[0], "the fold is deterministic");
+}
+
+#[test]
+fn the_reducer_digest_is_order_independent_and_tag_sensitive() {
+    let base = [7_u8; 32];
+    let one = BTreeMap::from([
+        ("a".to_owned(), StateReducer::Append),
+        ("b".to_owned(), StateReducer::Merge),
+    ]);
+    let mut two = BTreeMap::new();
+    two.insert("b".to_owned(), StateReducer::Merge);
+    two.insert("a".to_owned(), StateReducer::Append);
+    assert_eq!(reducers_digest(base, &one), reducers_digest(base, &two));
+    assert_ne!(reducers_digest(base, &one), base);
+    let changed = BTreeMap::from([
+        ("a".to_owned(), StateReducer::Append),
+        ("b".to_owned(), StateReducer::Append),
+    ]);
+    assert_ne!(reducers_digest(base, &one), reducers_digest(base, &changed));
+    let renamed = BTreeMap::from([
+        ("a".to_owned(), StateReducer::Append),
+        ("c".to_owned(), StateReducer::Merge),
+    ]);
+    assert_ne!(reducers_digest(base, &one), reducers_digest(base, &renamed));
 }
