@@ -89,7 +89,7 @@ func newOriginalCodeFixture(t *testing.T) originalCodeFixture {
 }
 func originalCodeAccessRows(a codeAccess) []scriptedRow {
 	row := scriptedRow{values: []any{a.tenant, a.project, a.projection, a.actor, a.response, a.inputBundle, a.peer, a.attempt, a.epoch, a.desired, a.mode, bytes.Clone(a.input), bytes.Clone(a.digest), a.now, a.lease, a.deadline}}
-	return []scriptedRow{row}
+	return []scriptedRow{row, row}
 }
 func originalCodeRepo(t *testing.T, s *recoveryTxStore, f originalCodeFixture) *CodeIntentRepository {
 	t.Helper()

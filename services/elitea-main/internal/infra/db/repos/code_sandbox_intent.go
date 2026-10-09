@@ -102,12 +102,11 @@ func (r *CodeIntentRepository) lockAccessIdentity(ctx context.Context, tx sqlExe
 	}
 	var a codeAccess
 	var err error
-	// One execution: the SERIALIZABLE snapshot returns the same row again, so a
-	// repeat only re-transfers the request bytes. The fence re-check that
-	// matters is the second lockAccess at the end of each With*Intent transaction.
-	err = tx.QueryRow(ctx, codeAccessSQL, claim.ClaimID, claim.ExecutionID, int64(claim.Generation), peer, claim.FenceToken, desired).Scan(&a.tenant, &a.project, &a.projection, &a.actor, &a.response, &a.inputBundle, &a.peer, &a.attempt, &a.epoch, &a.desired, &a.mode, &a.input, &a.digest, &a.now, &a.lease, &a.deadline)
-	if err != nil {
-		return codeAccess{}, storage.ErrContentUnauthorized
+	for i := 0; i < 2; i++ {
+		err = tx.QueryRow(ctx, codeAccessSQL, claim.ClaimID, claim.ExecutionID, int64(claim.Generation), peer, claim.FenceToken, desired).Scan(&a.tenant, &a.project, &a.projection, &a.actor, &a.response, &a.inputBundle, &a.peer, &a.attempt, &a.epoch, &a.desired, &a.mode, &a.input, &a.digest, &a.now, &a.lease, &a.deadline)
+		if err != nil {
+			return codeAccess{}, storage.ErrContentUnauthorized
+		}
 	}
 	a.actorID, err = strconv.ParseInt(a.actor, 10, 64)
 	if err != nil || a.actorID <= 0 || a.actorID > math.MaxInt32 || strconv.FormatInt(a.actorID, 10) != a.actor || a.project <= 0 || a.project > math.MaxInt32 || a.projection <= 0 || a.projection > math.MaxInt32 || a.peer != peer || a.inputBundle == "" || len(a.input) == 0 || len(a.digest) != 32 || !bytes.Equal(codeIntentDigestBytes(code.Digest(a.input)), a.digest) || a.attempt == 0 || a.epoch == 0 {
