@@ -164,10 +164,14 @@ if [ -n "$engine_command" ] && [ "$engine_command" != "null" ] && [ "$engine_com
 else
   note "engine command: image ENTRYPOINT"
 fi
-if printf '%s' "$manifest" | grep -q 'python'; then
-  fail "the render still mentions python; the Python engine is gone"
+# A here-string, not `printf | grep -q`: under pipefail grep's early exit on a
+# match kills printf with SIGPIPE and the pipeline reads as "no match".
+inventory_objects="$(printf '%s' "$manifest" | yq eval-all \
+  'select(.metadata.name != null and (.metadata.name | test("inventory"))) | ... comments=""' -)"
+if grep -qi 'python' <<<"$inventory_objects"; then
+  fail "the Inventory objects still mention python; the Python engine is gone: $(grep -i -m3 python <<<"$inventory_objects")"
 else
-  note "no python anywhere in the render"
+  note "no python in the Inventory objects"
 fi
 for probe in livenessProbe readinessProbe; do
   probe_cmd="$(select_one Deployment elitea-inventory "$manifest" \
