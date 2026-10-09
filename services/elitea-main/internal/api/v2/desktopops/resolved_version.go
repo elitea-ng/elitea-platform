@@ -9,13 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"math"
 	"net/http"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
@@ -30,7 +30,7 @@ const (
 	// gate on (router.go, requireProjectContextView). The resolved version
 	// includes the frozen project context only for a caller who holds it.
 	ProjectContextViewPermission = "models.project_context.view"
-	mode                      = auth.PermissionModeDefault
+	mode                         = auth.PermissionModeDefault
 )
 
 var ErrInvalidRoute = errors.New("invalid desktop operation route dependencies")
@@ -75,7 +75,7 @@ func gate(authConfig apimw.AuthConfig, permissions auth.PermissionResolver, perm
 		permissions, mode,
 		func(request *http.Request) (string, bool) {
 			projectID := chi.URLParam(request, "projectID")
-			_, valid := positiveID(projectID)
+			_, valid := desktopwire.PositiveID(projectID)
 			return projectID, valid
 		},
 		permission,
@@ -108,25 +108,25 @@ func (h *resolvedVersionHandler) mayViewProjectContext(request *http.Request, us
 }
 
 func (h *resolvedVersionHandler) serve(writer http.ResponseWriter, request *http.Request) {
-	projectID, okProject := positiveID(chi.URLParam(request, "projectID"))
-	applicationID, okApplication := positiveID(chi.URLParam(request, "applicationID"))
-	versionID, okVersion := positiveID(chi.URLParam(request, "versionID"))
+	projectID, okProject := desktopwire.PositiveID(chi.URLParam(request, "projectID"))
+	applicationID, okApplication := desktopwire.PositiveID(chi.URLParam(request, "applicationID"))
+	versionID, okVersion := desktopwire.PositiveID(chi.URLParam(request, "versionID"))
 	if !okProject || !okApplication || !okVersion {
-		writeError(writer, http.StatusBadRequest, "invalid_resolved_version_request", "Invalid project, application or version id.")
+		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_resolved_version_request", "Invalid project, application or version id.")
 		return
 	}
 	user, ok := auth.UserFromContext(request.Context())
 	if !ok {
-		writeError(writer, http.StatusUnauthorized, "unauthorized", "authentication required")
+		desktopwire.WriteError(writer, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
 	actor, ok := user.OwningUserID()
 	if !ok {
-		writeError(writer, http.StatusUnauthorized, "unauthorized", "authentication required")
+		desktopwire.WriteError(writer, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
 	if h.useCase == nil {
-		writeError(writer, http.StatusNotImplemented, "resolved_version_unavailable",
+		desktopwire.WriteError(writer, http.StatusNotImplemented, "resolved_version_unavailable",
 			"This deployment does not run cloud agents, so it cannot resolve a version for execution.")
 		return
 	}
@@ -134,21 +134,21 @@ func (h *resolvedVersionHandler) serve(writer http.ResponseWriter, request *http
 	if err != nil {
 		switch {
 		case errors.Is(err, storage.ErrContentNotFound):
-			writeError(writer, http.StatusNotFound, "application_version_not_found",
+			desktopwire.WriteError(writer, http.StatusNotFound, "application_version_not_found",
 				"The application version was not found in this project.")
 		case errors.Is(err, storage.ErrClientApplicationVersionUnresolvable):
-			writeError(writer, http.StatusUnprocessableEntity, "application_version_unresolvable",
+			desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "application_version_unresolvable",
 				"This version cannot be resolved for execution: a cloud run of it would be refused too. "+
 					"Check its model and the credentials its toolkits use.")
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-			writeError(writer, http.StatusServiceUnavailable, "resolved_version_unavailable",
+			desktopwire.WriteError(writer, http.StatusServiceUnavailable, "resolved_version_unavailable",
 				"The version could not be resolved in time. Retry.")
 		default:
 			if !errors.Is(err, storage.ErrContentUnavailable) {
 				slog.ErrorContext(request.Context(), "resolved application version failed", "err", err)
 			}
 			writer.Header().Set("Retry-After", "1")
-			writeError(writer, http.StatusServiceUnavailable, "resolved_version_unavailable",
+			desktopwire.WriteError(writer, http.StatusServiceUnavailable, "resolved_version_unavailable",
 				"The version cannot be resolved right now. Retry.")
 		}
 		return
@@ -159,13 +159,13 @@ func (h *resolvedVersionHandler) serve(writer http.ResponseWriter, request *http
 	if !h.mayViewProjectContext(request, user, projectID) {
 		resolved, err = resolved.WithoutProjectContext()
 		if err != nil {
-			writeError(writer, http.StatusInternalServerError, "resolved_version_failed", "The version could not be encoded.")
+			desktopwire.WriteError(writer, http.StatusInternalServerError, "resolved_version_failed", "The version could not be encoded.")
 			return
 		}
 	}
 	encoded, err := json.Marshal(resolved)
 	if err != nil {
-		writeError(writer, http.StatusInternalServerError, "resolved_version_failed", "The version could not be encoded.")
+		desktopwire.WriteError(writer, http.StatusInternalServerError, "resolved_version_failed", "The version could not be encoded.")
 		return
 	}
 	writer.Header().Set("Content-Type", "application/json")
@@ -174,20 +174,4 @@ func (h *resolvedVersionHandler) serve(writer http.ResponseWriter, request *http
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
 	writer.WriteHeader(http.StatusOK)
 	_, _ = writer.Write(encoded)
-}
-
-func positiveID(raw string) (int64, bool) {
-	id, err := strconv.ParseInt(raw, 10, 64)
-	return id, err == nil && id > 0 && id <= math.MaxInt32 && strconv.FormatInt(id, 10) == raw
-}
-
-func writeError(writer http.ResponseWriter, status int, code, message string) {
-	writeJSON(writer, status, map[string]string{"error": code, "message": message})
-}
-
-func writeJSON(writer http.ResponseWriter, status int, value any) {
-	writer.Header().Set("Content-Type", "application/json")
-	writer.Header().Set("Cache-Control", "no-store")
-	writer.WriteHeader(status)
-	_ = json.NewEncoder(writer).Encode(value)
 }

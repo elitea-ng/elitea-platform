@@ -1385,17 +1385,11 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	// materializer at all.
 	var clientApplicationVersions *storage.ClientApplicationVersionService
 	if config.AgentExecutionDispatchEnabled {
-		clientApplicationVersions, err = storage.NewClientApplicationVersionService(agentNestedVersions, agentFreezer)
+		clientApplicationVersions, err = composeClientApplicationVersions(
+			dependencies.AdmissionPool, agentNestedVersions, agentFreezer)
 		if err != nil {
 			return nil, fmt.Errorf("construct client application version service: %w", err)
 		}
-		// The remote toolkit call (5b) refuses blocked and flags sensitive
-		// tools from the same guardrails source the freeze reads.
-		clientGuardrails, guardrailsErr := platformconfig.NewGuardrailPolicyAdapter(dependencies.AdmissionPool)
-		if guardrailsErr != nil {
-			return nil, fmt.Errorf("construct client application version guardrails: %w", guardrailsErr)
-		}
-		clientApplicationVersions.WithGuardrails(clientGuardrails)
 	}
 	if nestedApplicationVersions != nil && codeSources != nil {
 		nestedApplicationVersions.WithFrozenSavedChildVersionCapture(codeSources)

@@ -9,16 +9,15 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"math"
 	"mime"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/localturn"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 )
@@ -63,7 +62,7 @@ func NewRoute(useCase UseCase, authConfig apimw.AuthConfig, permissions auth.Per
 			permissions, Mode,
 			func(request *http.Request) (string, bool) {
 				projectID := chi.URLParam(request, "projectID")
-				_, valid := positiveID(projectID)
+				_, valid := desktopwire.PositiveID(projectID)
 				return projectID, valid
 			},
 			Permission,
@@ -115,16 +114,16 @@ type commitBody struct {
 func caller(writer http.ResponseWriter, request *http.Request) (auth.User, int64, bool) {
 	user, ok := auth.UserFromContext(request.Context())
 	if !ok {
-		writeError(writer, http.StatusUnauthorized, "unauthorized", "authentication required")
+		desktopwire.WriteError(writer, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return auth.User{}, 0, false
 	}
 	actor, ok := user.OwningUserID()
 	if !ok {
-		writeError(writer, http.StatusUnauthorized, "unauthorized", "authentication required")
+		desktopwire.WriteError(writer, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return auth.User{}, 0, false
 	}
 	if user.TokenID == "" || !strings.EqualFold(user.AuthType, "token") {
-		writeError(writer, http.StatusForbidden, "local_turn_requires_token",
+		desktopwire.WriteError(writer, http.StatusForbidden, "local_turn_requires_token",
 			"Local turns need a native app token or a personal access token.")
 		return auth.User{}, 0, false
 	}
@@ -134,7 +133,7 @@ func caller(writer http.ResponseWriter, request *http.Request) (auth.User, int64
 func decodeBody(writer http.ResponseWriter, request *http.Request, limit int64, into any) bool {
 	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
-		writeError(writer, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
+		desktopwire.WriteError(writer, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
 		return false
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, limit)
@@ -142,24 +141,24 @@ func decodeBody(writer http.ResponseWriter, request *http.Request, limit int64, 
 	if err := decoder.Decode(into); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeError(writer, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
+			desktopwire.WriteError(writer, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
 			return false
 		}
-		writeError(writer, http.StatusBadRequest, "invalid_local_turn", "Invalid local turn request")
+		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_local_turn", "Invalid local turn request")
 		return false
 	}
 	var extra json.RawMessage
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		writeError(writer, http.StatusBadRequest, "invalid_local_turn", "Invalid local turn request")
+		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_local_turn", "Invalid local turn request")
 		return false
 	}
 	return true
 }
 
 func (h *handler) start(writer http.ResponseWriter, request *http.Request) {
-	projectID, ok := positiveID(chi.URLParam(request, "projectID"))
+	projectID, ok := desktopwire.PositiveID(chi.URLParam(request, "projectID"))
 	if !ok {
-		writeError(writer, http.StatusBadRequest, "invalid_local_turn", "Invalid local turn request")
+		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_local_turn", "Invalid local turn request")
 		return
 	}
 	user, actor, ok := caller(writer, request)
@@ -180,7 +179,7 @@ func (h *handler) start(writer http.ResponseWriter, request *http.Request) {
 		writeUseCaseError(request.Context(), writer, "start", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
+	desktopwire.WriteJSON(writer, http.StatusOK, map[string]any{
 		"execution_id":        outcome.ExecutionID,
 		"question_id":         outcome.QuestionID,
 		"response_message_id": outcome.ResponseMessageID,
@@ -197,9 +196,9 @@ func (h *handler) start(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
-	projectID, ok := positiveID(chi.URLParam(request, "projectID"))
+	projectID, ok := desktopwire.PositiveID(chi.URLParam(request, "projectID"))
 	if !ok {
-		writeError(writer, http.StatusBadRequest, "invalid_local_turn", "Invalid local turn request")
+		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_local_turn", "Invalid local turn request")
 		return
 	}
 	user, actor, ok := caller(writer, request)
@@ -228,7 +227,7 @@ func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
 		writeUseCaseError(request.Context(), writer, "commit", err)
 		return
 	}
-	writeJSON(writer, http.StatusOK, map[string]any{
+	desktopwire.WriteJSON(writer, http.StatusOK, map[string]any{
 		"execution_id":        turn.ExecutionID,
 		"conversation_uuid":   turn.ConversationUUID,
 		"question_message_id": turn.QuestionMessageID,
@@ -242,47 +241,31 @@ func (h *handler) commit(writer http.ResponseWriter, request *http.Request) {
 func writeUseCaseError(ctx context.Context, writer http.ResponseWriter, operation string, err error) {
 	switch {
 	case errors.Is(err, localturn.ErrInvalid):
-		writeError(writer, http.StatusBadRequest, "invalid_local_turn", "Invalid local turn request")
+		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_local_turn", "Invalid local turn request")
 	case errors.Is(err, localturn.ErrLocalWorkDisabled):
-		writeError(writer, http.StatusForbidden, "local_work_disabled",
+		desktopwire.WriteError(writer, http.StatusForbidden, "local_work_disabled",
 			"Local work is turned off for this deployment (native client policy local_work.allowed).")
 	case errors.Is(err, localturn.ErrNotFound):
-		writeError(writer, http.StatusNotFound, "local_turn_not_found",
+		desktopwire.WriteError(writer, http.StatusNotFound, "local_turn_not_found",
 			"The conversation or the local turn was not found for this caller.")
 	case errors.Is(err, localturn.ErrParticipant):
-		writeError(writer, http.StatusUnprocessableEntity, "local_turn_participant",
+		desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "local_turn_participant",
 			"The answering participant is not an agent or model participant of this conversation.")
 	case errors.Is(err, localturn.ErrConflict):
-		writeError(writer, http.StatusConflict, "local_turn_conflict",
+		desktopwire.WriteError(writer, http.StatusConflict, "local_turn_conflict",
 			"The question id is already used by another turn.")
 	case errors.Is(err, localturn.ErrAlreadyCommitted):
-		writeError(writer, http.StatusConflict, "local_turn_already_committed",
+		desktopwire.WriteError(writer, http.StatusConflict, "local_turn_already_committed",
 			"This local turn is already committed.")
 	case errors.Is(err, localturn.ErrExpired):
-		writeError(writer, http.StatusGone, "local_turn_expired",
+		desktopwire.WriteError(writer, http.StatusGone, "local_turn_expired",
 			"This local turn passed its deadline. Start a new turn with a new question id.")
 	case errors.Is(err, localturn.ErrUnavailable):
 		writer.Header().Set("Retry-After", "1")
-		writeError(writer, http.StatusServiceUnavailable, "local_turn_unavailable",
+		desktopwire.WriteError(writer, http.StatusServiceUnavailable, "local_turn_unavailable",
 			"The local turn cannot be served right now. Retry with the same body.")
 	default:
 		slog.ErrorContext(ctx, "local turn failed", "operation", operation, "err", err)
-		writeError(writer, http.StatusInternalServerError, "local_turn_failed", "The local turn could not be recorded.")
+		desktopwire.WriteError(writer, http.StatusInternalServerError, "local_turn_failed", "The local turn could not be recorded.")
 	}
-}
-
-func positiveID(raw string) (int64, bool) {
-	id, err := strconv.ParseInt(raw, 10, 64)
-	return id, err == nil && id > 0 && id <= math.MaxInt32 && strconv.FormatInt(id, 10) == raw
-}
-
-func writeError(writer http.ResponseWriter, status int, code, message string) {
-	writeJSON(writer, status, map[string]string{"error": code, "message": message})
-}
-
-func writeJSON(writer http.ResponseWriter, status int, value any) {
-	writer.Header().Set("Content-Type", "application/json")
-	writer.Header().Set("Cache-Control", "no-store")
-	writer.WriteHeader(status)
-	_ = json.NewEncoder(writer).Encode(value)
 }

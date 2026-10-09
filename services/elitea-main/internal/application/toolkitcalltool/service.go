@@ -77,7 +77,7 @@ type RunRequest struct {
 }
 
 func (r RunRequest) Validate() error {
-	if r.IdempotencyKey != "" && !validRequestKey(r.IdempotencyKey) {
+	if r.IdempotencyKey != "" && !ValidRequestKey(r.IdempotencyKey) {
 		return ErrInvalidToolRun
 	}
 	if len(r.RequestID) > 128 || !utf8.ValidString(r.RequestID) || strings.ContainsAny(r.RequestID, "\x00\r\n") || r.RequestID != strings.TrimSpace(r.RequestID) {

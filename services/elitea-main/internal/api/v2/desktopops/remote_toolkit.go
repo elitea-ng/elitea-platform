@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopwire"
 	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/localturn"
@@ -214,29 +215,29 @@ type remoteCall struct {
 
 func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.Request) {
 	started := h.now()
-	projectID, okProject := positiveID(chi.URLParam(request, "projectID"))
-	toolkitID, okToolkit := positiveID(chi.URLParam(request, "toolkitID"))
+	projectID, okProject := desktopwire.PositiveID(chi.URLParam(request, "projectID"))
+	toolkitID, okToolkit := desktopwire.PositiveID(chi.URLParam(request, "toolkitID"))
 	if !okProject || !okToolkit {
-		writeError(writer, http.StatusBadRequest, "invalid_remote_toolkit_call", "Invalid project or toolkit id.")
+		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_remote_toolkit_call", "Invalid project or toolkit id.")
 		return
 	}
 	user, ok := auth.UserFromContext(request.Context())
 	if !ok {
-		writeError(writer, http.StatusUnauthorized, "unauthorized", "authentication required")
+		desktopwire.WriteError(writer, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
 	actor, ok := user.OwningUserID()
 	if !ok {
-		writeError(writer, http.StatusUnauthorized, "unauthorized", "authentication required")
+		desktopwire.WriteError(writer, http.StatusUnauthorized, "unauthorized", "authentication required")
 		return
 	}
 	if user.TokenID == "" || !strings.EqualFold(user.AuthType, "token") {
-		writeError(writer, http.StatusForbidden, remoteToolkitRequiresToken,
+		desktopwire.WriteError(writer, http.StatusForbidden, remoteToolkitRequiresToken,
 			"Remote toolkit calls need a native app token or a personal access token.")
 		return
 	}
 	if h.useCase == nil || h.authorizer == nil || h.turns == nil || h.confirmations == nil {
-		writeError(writer, http.StatusNotImplemented, "remote_toolkit_unavailable",
+		desktopwire.WriteError(writer, http.StatusNotImplemented, "remote_toolkit_unavailable",
 			"This deployment runs no cloud worker that can execute toolkit tools.")
 		return
 	}
@@ -245,8 +246,8 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 	// key would admit and run the write a second time. With the key, a retry
 	// joins the run the first attempt admitted (the admission is idempotent
 	// on it, scoped to this actor and toolkit) and never starts another.
-	if !validIdempotencyKey(request.Header.Get("Idempotency-Key")) {
-		writeError(writer, http.StatusBadRequest, "idempotency_key_required",
+	if !toolkitcalltoolapp.ValidRequestKey(request.Header.Get("Idempotency-Key")) {
+		desktopwire.WriteError(writer, http.StatusBadRequest, "idempotency_key_required",
 			"A remote toolkit call needs an Idempotency-Key header (1 to 128 letters, digits, '-' or '_'), "+
 				"unique per intended call and repeated on every retry of it.")
 		return
@@ -287,7 +288,7 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		!positiveInt32(body.ApplicationID) || !positiveInt32(body.VersionID) ||
 		!validToolkitRef(body.ToolkitRef) || !confirmationOK {
 		call.outcome = "invalid"
-		writeError(writer, http.StatusBadRequest, "invalid_remote_toolkit_call",
+		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_remote_toolkit_call",
 			"Invalid remote toolkit call: execution_id, application_id, version_id, toolkit_ref and tool_name are "+
 				"required, arguments must be one JSON object within the size bound, and a confirmation must be "+
 				"approved with an RFC 3339 approved_at and the interrupt_id of the call it approves.")
@@ -363,7 +364,7 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 	if blocked, retry := h.limiter.Blocked(limitKey); blocked {
 		call.outcome = "rate_limited"
 		writer.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
-		writeError(writer, http.StatusTooManyRequests, "rate_limited",
+		desktopwire.WriteError(writer, http.StatusTooManyRequests, "rate_limited",
 			"Too many remote toolkit calls from this caller. Retry after the interval in Retry-After.")
 		return
 	}
@@ -404,20 +405,6 @@ func (h *remoteToolkitHandler) validConfirmation(confirmation *remoteToolkitConf
 
 func positiveInt32(id int64) bool { return id > 0 && id <= math.MaxInt32 }
 
-// validIdempotencyKey is the admission's request-key shape
-// (toolkitcalltool.validRequestKey).
-func validIdempotencyKey(key string) bool {
-	if key == "" || len(key) > 128 {
-		return false
-	}
-	for _, ch := range key {
-		if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') && ch != '-' && ch != '_' {
-			return false
-		}
-	}
-	return true
-}
-
 func validToolkitRef(ref string) bool {
 	if len(ref) != len(storage.ClientToolkitRefPrefix)+32 || !strings.HasPrefix(ref, storage.ClientToolkitRefPrefix) {
 		return false
@@ -457,7 +444,7 @@ func writeConfirmationRequired(writer http.ResponseWriter, toolkitID int64, tool
 		"toolkit_type":      grant.ToolkitType,
 		"tool_args":         nil,
 	}
-	writeJSON(writer, http.StatusConflict, map[string]any{
+	desktopwire.WriteJSON(writer, http.StatusConflict, map[string]any{
 		"ok": false, "error": "confirmation_required", "toolkit_id": toolkitID,
 		"message": grant.Sensitive.PolicyMessage, "hitl_interrupt": interrupt,
 	})
@@ -466,22 +453,22 @@ func writeConfirmationRequired(writer http.ResponseWriter, toolkitID int64, tool
 func writeLiveTurnError(ctx context.Context, writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, localturn.ErrLocalWorkDisabled):
-		writeError(writer, http.StatusForbidden, "local_work_disabled",
+		desktopwire.WriteError(writer, http.StatusForbidden, "local_work_disabled",
 			"Local work is turned off for this deployment (native client policy local_work.allowed).")
 	case errors.Is(err, localturn.ErrNotFound), errors.Is(err, localturn.ErrInvalid):
-		writeError(writer, http.StatusNotFound, "local_turn_not_found",
+		desktopwire.WriteError(writer, http.StatusNotFound, "local_turn_not_found",
 			"The local turn was not found for this caller in this project.")
 	case errors.Is(err, localturn.ErrAlreadyCommitted):
-		writeError(writer, http.StatusConflict, "local_turn_already_committed",
+		desktopwire.WriteError(writer, http.StatusConflict, "local_turn_already_committed",
 			"This local turn is already committed; a remote toolkit call needs a running turn.")
 	case errors.Is(err, localturn.ErrExpired):
-		writeError(writer, http.StatusGone, "local_turn_expired", "This local turn passed its deadline.")
+		desktopwire.WriteError(writer, http.StatusGone, "local_turn_expired", "This local turn passed its deadline.")
 	default:
 		if !errors.Is(err, localturn.ErrUnavailable) {
 			slog.ErrorContext(ctx, "remote toolkit call: local turn check failed", "err", err)
 		}
 		writer.Header().Set("Retry-After", "1")
-		writeError(writer, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now",
+		desktopwire.WriteError(writer, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now",
 			"The local turn cannot be checked right now. Retry.")
 	}
 }
@@ -489,25 +476,25 @@ func writeLiveTurnError(ctx context.Context, writer http.ResponseWriter, err err
 func writeAuthorizationError(ctx context.Context, writer http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, storage.ErrRemoteToolNotInAgent):
-		writeError(writer, http.StatusForbidden, "tool_not_in_agent",
+		desktopwire.WriteError(writer, http.StatusForbidden, "tool_not_in_agent",
 			"This tool is not one the running agent may call: its toolkit is not attached to the version, "+
 				"the tool is not selected, or the version is not the turn's agent or one it nests.")
 	case errors.Is(err, storage.ErrRemoteToolBlocked):
-		writeError(writer, http.StatusForbidden, "tool_blocked", "This toolkit or tool is blocked by the platform guardrails.")
+		desktopwire.WriteError(writer, http.StatusForbidden, "tool_blocked", "This toolkit or tool is blocked by the platform guardrails.")
 	case errors.Is(err, storage.ErrRemoteToolkitRefMismatch):
-		writeError(writer, http.StatusForbidden, "toolkit_ref_mismatch",
+		desktopwire.WriteError(writer, http.StatusForbidden, "toolkit_ref_mismatch",
 			"toolkit_ref is not the reference resolveApplicationVersion gives this toolkit of this version.")
 	case errors.Is(err, storage.ErrClientApplicationVersionUnresolvable):
-		writeError(writer, http.StatusUnprocessableEntity, "application_version_unresolvable",
+		desktopwire.WriteError(writer, http.StatusUnprocessableEntity, "application_version_unresolvable",
 			"This version cannot be resolved for execution: a cloud run of it would be refused too.")
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		writeError(writer, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now", "The call was cancelled.")
+		desktopwire.WriteError(writer, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now", "The call was cancelled.")
 	default:
 		if !errors.Is(err, storage.ErrContentUnavailable) {
 			slog.ErrorContext(ctx, "remote toolkit call: authorization failed", "err", err)
 		}
 		writer.Header().Set("Retry-After", "1")
-		writeError(writer, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now",
+		desktopwire.WriteError(writer, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now",
 			"The agent version cannot be resolved right now. Retry.")
 	}
 }
@@ -581,7 +568,7 @@ func (r *statusRecorder) Write(body []byte) (int, error) {
 func decodeRemoteToolkitBody(writer http.ResponseWriter, request *http.Request) (remoteToolkitBody, bool) {
 	mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
 	if err != nil || mediaType != "application/json" {
-		writeError(writer, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
+		desktopwire.WriteError(writer, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
 		return remoteToolkitBody{}, false
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, toolkitrun.MaxRequestBodyBytes)
@@ -591,15 +578,15 @@ func decodeRemoteToolkitBody(writer http.ResponseWriter, request *http.Request) 
 	if err := decoder.Decode(&body); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeError(writer, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
+			desktopwire.WriteError(writer, http.StatusRequestEntityTooLarge, "request_too_large", "request body too large")
 			return remoteToolkitBody{}, false
 		}
-		writeError(writer, http.StatusBadRequest, "invalid_remote_toolkit_call", "Invalid remote toolkit call.")
+		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_remote_toolkit_call", "Invalid remote toolkit call.")
 		return remoteToolkitBody{}, false
 	}
 	var extra json.RawMessage
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		writeError(writer, http.StatusBadRequest, "invalid_remote_toolkit_call", "Invalid remote toolkit call.")
+		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_remote_toolkit_call", "Invalid remote toolkit call.")
 		return remoteToolkitBody{}, false
 	}
 	return body, true
@@ -625,13 +612,13 @@ func (h *remoteToolkitHandler) writeOutcome(writer http.ResponseWriter, toolkitI
 		} else {
 			body["result"] = outcome.ResultJSON
 		}
-		writeJSON(writer, http.StatusOK, body)
+		desktopwire.WriteJSON(writer, http.StatusOK, body)
 	case toolkitcalltoolapp.RunStatusToolError:
 		// The run reached the tool and the tool raised: the answer the agent
 		// loop needs, not a transport failure.
 		body["status"] = "tool_error"
 		body["error"] = outcome.ErrorMessage
-		writeJSON(writer, http.StatusOK, body)
+		desktopwire.WriteJSON(writer, http.StatusOK, body)
 	case toolkitcalltoolapp.RunStatusAuthorizationRequired:
 		body["error"] = "mcp_authorization_required"
 		body["message"] = outcome.ErrorMessage
@@ -639,23 +626,23 @@ func (h *remoteToolkitHandler) writeOutcome(writer http.ResponseWriter, toolkitI
 		if outcome.AuthorizationRetry != nil {
 			body["authorization_retry"] = outcome.AuthorizationRetry
 		}
-		writeJSON(writer, http.StatusConflict, body)
+		desktopwire.WriteJSON(writer, http.StatusConflict, body)
 	case toolkitcalltoolapp.RunStatusUnsupportedToolkit, toolkitcalltoolapp.RunStatusUnknownTool:
 		body["error"] = "remote_tool_unsupported"
 		body["reason"] = string(outcome.Status)
 		body["message"] = outcome.ErrorMessage
-		writeJSON(writer, http.StatusUnprocessableEntity, body)
+		desktopwire.WriteJSON(writer, http.StatusUnprocessableEntity, body)
 	default:
 		switch outcome.FailureCode {
 		case "RUNTIME_ERROR_CODE_V1_UNSUPPORTED_CAPABILITY", "RUNTIME_ERROR_CODE_V1_AUTHORIZATION_FAILED":
 			body["error"] = "remote_tool_unsupported"
 			body["reason"] = "worker_refused"
 			body["message"] = h.workerRefusalSentence(outcome.ToolName)
-			writeJSON(writer, http.StatusUnprocessableEntity, body)
+			desktopwire.WriteJSON(writer, http.StatusUnprocessableEntity, body)
 		default:
 			body["error"] = "remote_toolkit_failed"
 			body["message"] = outcome.ErrorMessage
-			writeJSON(writer, http.StatusBadGateway, body)
+			desktopwire.WriteJSON(writer, http.StatusBadGateway, body)
 		}
 	}
 }
@@ -694,41 +681,41 @@ func (h *remoteToolkitHandler) writeRunError(ctx context.Context, writer http.Re
 	case errors.As(err, &pending) && pending.Replayed:
 		// A retry of a key whose run another attempt admitted and is still
 		// running: nothing was started again.
-		writeJSON(writer, http.StatusConflict, map[string]any{
+		desktopwire.WriteJSON(writer, http.StatusConflict, map[string]any{
 			"ok": false, "error": "remote_toolkit_in_progress", "task_id": pending.ExecutionID, "toolkit_id": toolkitID,
 			"message": "The call with this Idempotency-Key is still running. Retry later with the same key and body; " +
 				"the retry answers its result once it finishes. It never runs the tool again.",
 		})
 	case errors.As(err, &pending):
-		writeJSON(writer, http.StatusGatewayTimeout, map[string]any{
+		desktopwire.WriteJSON(writer, http.StatusGatewayTimeout, map[string]any{
 			"ok": false, "error": "remote_toolkit_timeout", "task_id": pending.ExecutionID, "toolkit_id": toolkitID,
 			"message": "The tool did not finish within the bounded wait and is still running. Replay this request " +
 				"with the SAME Idempotency-Key and body to receive its result; a new key would run the tool again.",
 		})
 	case errors.Is(err, toolkitcalltoolapp.ErrToolkitNotVisible):
-		writeError(writer, http.StatusNotFound, "toolkit_not_found", "The toolkit was not found in this project.")
+		desktopwire.WriteError(writer, http.StatusNotFound, "toolkit_not_found", "The toolkit was not found in this project.")
 	case errors.Is(err, executionapp.ErrIdempotencyConflict):
-		writeError(writer, http.StatusConflict, "idempotency_conflict",
+		desktopwire.WriteError(writer, http.StatusConflict, "idempotency_conflict",
 			"This request key already belongs to a different tool input.")
 	case errors.Is(err, toolkitcalltoolapp.ErrUnsupportedToolkitType):
 		// The pre-admission verdict (the worker capability snapshot): nothing
 		// was written and nothing ran.
-		writeJSON(writer, http.StatusUnprocessableEntity, map[string]any{
+		desktopwire.WriteJSON(writer, http.StatusUnprocessableEntity, map[string]any{
 			"ok": false, "error": "remote_tool_unsupported", "reason": "unsupported_toolkit", "toolkit_id": toolkitID,
 			"message": toolkitcalltoolapp.UnsupportedToolkitTypeSentence(err),
 		})
 	case errors.Is(err, toolkitcalltoolapp.ErrInvalidToolRun),
 		errors.Is(err, toolkitcalltoolapp.ErrInvalidAuthoritativeToolRunInput):
-		writeError(writer, http.StatusBadRequest, "invalid_remote_toolkit_call", "Invalid remote toolkit call.")
+		desktopwire.WriteError(writer, http.StatusBadRequest, "invalid_remote_toolkit_call", "Invalid remote toolkit call.")
 	case errors.Is(err, toolkitcalltoolapp.ErrToolkitSettingsResolutionUnavailable),
 		errors.Is(err, storage.ErrContentUnavailable):
 		writer.Header().Set("Retry-After", "1")
-		writeError(writer, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now",
+		desktopwire.WriteError(writer, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now",
 			"The toolkit's settings could not be resolved right now. Retry.")
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		writeError(writer, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now", "The call was cancelled.")
+		desktopwire.WriteError(writer, http.StatusServiceUnavailable, "remote_toolkit_unavailable_now", "The call was cancelled.")
 	default:
 		slog.ErrorContext(ctx, "remote toolkit call failed", "err", err)
-		writeError(writer, http.StatusInternalServerError, "remote_toolkit_failed", "The remote toolkit call failed.")
+		desktopwire.WriteError(writer, http.StatusInternalServerError, "remote_toolkit_failed", "The remote toolkit call failed.")
 	}
 }
