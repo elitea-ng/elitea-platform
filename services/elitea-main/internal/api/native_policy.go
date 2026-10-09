@@ -35,5 +35,7 @@ func (d nativePolicyDiscovery) PublicPolicy(ctx context.Context) (v2discovery.Pu
 		NotificationPreview:      policy.NotificationPreview,
 		AllowNotificationActions: policy.AllowNotificationActions,
 		AllowSystemSurfaces:      policy.AllowSystemSurfaces,
+
+		LocalWorkAllowed: policy.LocalWork.Allowed,
 	}, minimums, nil
 }

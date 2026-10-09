@@ -1,5 +1,5 @@
 {
-  "client_contract": "1.4",
+  "client_contract": "1.6",
   "operations": {
     "DELETE /auth/native/devices/{device_id}": {
       "operation_id": "revokeNativeDevice",
@@ -1494,6 +1494,7 @@
                     "allow_share_in",
                     "allow_share_out",
                     "allow_system_surfaces",
+                    "local_work_allowed",
                     "min_client_version",
                     "notification_preview",
                     "offline_enabled",
@@ -1513,6 +1514,9 @@
                       "type": "boolean"
                     },
                     "allow_system_surfaces": {
+                      "type": "boolean"
+                    },
+                    "local_work_allowed": {
                       "type": "boolean"
                     },
                     "min_client_version": {
@@ -6564,6 +6568,380 @@
         }
       }
     },
+    "GET /elitea_core/resolved_version/prompt_lib/{project_id}/{application_id}/{version_id}": {
+      "operation_id": "resolveApplicationVersion",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:application_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:version_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "application_id",
+                "definition_sha256",
+                "project_context_withheld",
+                "project_id",
+                "schema_version",
+                "version_details",
+                "version_id",
+                "withheld_secrets"
+              ],
+              "properties": {
+                "application_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "definition_sha256": {
+                  "type": "string"
+                },
+                "project_context_withheld": {
+                  "type": "boolean"
+                },
+                "project_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "schema_version": {
+                  "type": "string"
+                },
+                "version_details": {
+                  "type": "object",
+                  "required": [
+                    "tools"
+                  ],
+                  "properties": {
+                    "agent_type": {
+                      "type": "string"
+                    },
+                    "instructions": {
+                      "type": "string"
+                    },
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "kind",
+                          "type"
+                        ],
+                        "properties": {
+                          "agent_type": {
+                            "type": "string"
+                          },
+                          "all_tools": {
+                            "type": "boolean"
+                          },
+                          "application_id": {
+                            "type": "integer",
+                            "format": "int64"
+                          },
+                          "application_version_id": {
+                            "type": "integer",
+                            "format": "int64"
+                          },
+                          "description": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "id": {
+                            "type": "integer",
+                            "format": "int64",
+                            "nullable": true
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "nested_skill_registry": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "open": true
+                            }
+                          },
+                          "selected_tools": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "server_name": {
+                            "type": "string"
+                          },
+                          "toolkit_name": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "toolkit_ref": {
+                            "type": "object",
+                            "required": [
+                              "project_id",
+                              "ref",
+                              "toolkit_id"
+                            ],
+                            "properties": {
+                              "project_id": {
+                                "type": "integer",
+                                "format": "int64"
+                              },
+                              "ref": {
+                                "type": "string",
+                                "pattern": "^tkr1_[0-9a-f]{32}$"
+                              },
+                              "toolkit_id": {
+                                "type": "integer",
+                                "format": "int64"
+                              }
+                            }
+                          },
+                          "type": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "open": true
+                },
+                "version_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "withheld_secrets": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "headers": {
+            "etag": {
+              "type": "string"
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "501": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
     "GET /elitea_core/toolkit_available_tools/prompt_lib/{project_id}/{toolkit_id}": {
       "operation_id": "listToolkitAvailableTools",
       "parameters": {
@@ -8528,6 +8906,7 @@
                     "allow_share_out",
                     "allow_system_surfaces",
                     "idle_lock_seconds",
+                    "local_work",
                     "min_client_version",
                     "notification_preview",
                     "offline_attachments",
@@ -8557,6 +8936,66 @@
                     "idle_lock_seconds": {
                       "type": "integer",
                       "format": "int64"
+                    },
+                    "local_work": {
+                      "type": "object",
+                      "required": [
+                        "allowed",
+                        "cloud_sync",
+                        "command_allow",
+                        "command_deny",
+                        "local_index",
+                        "local_mcp",
+                        "max_sandbox_mode",
+                        "memory_write",
+                        "network",
+                        "path_deny",
+                        "shell"
+                      ],
+                      "properties": {
+                        "allowed": {
+                          "type": "boolean"
+                        },
+                        "cloud_sync": {
+                          "type": "boolean"
+                        },
+                        "command_allow": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "command_deny": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "local_index": {
+                          "type": "boolean"
+                        },
+                        "local_mcp": {
+                          "type": "boolean"
+                        },
+                        "max_sandbox_mode": {
+                          "type": "string"
+                        },
+                        "memory_write": {
+                          "type": "boolean"
+                        },
+                        "network": {
+                          "type": "boolean"
+                        },
+                        "path_deny": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "shell": {
+                          "type": "boolean"
+                        }
+                      }
                     },
                     "min_client_version": {
                       "type": "string"
@@ -9836,6 +10275,779 @@
         }
       }
     },
+    "POST /elitea_core/local_turn/prompt_lib/{project_id}/{conversation_id}": {
+      "operation_id": "startLocalTurn",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:conversation_id": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "question_id",
+              "user_input"
+            ],
+            "properties": {
+              "participant_id": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "question_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "user_input": {
+                "type": "string",
+                "min_length": 1
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "conversation_uuid",
+                "created",
+                "execution_id",
+                "expires_at",
+                "memory_recall",
+                "participant_id",
+                "question_id",
+                "response_message_id"
+              ],
+              "properties": {
+                "conversation_uuid": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "created": {
+                  "type": "boolean"
+                },
+                "execution_id": {
+                  "type": "string"
+                },
+                "expires_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "memory_recall": {
+                  "type": "object",
+                  "required": [
+                    "count",
+                    "memory_ids",
+                    "text"
+                  ],
+                  "properties": {
+                    "count": {
+                      "type": "integer"
+                    },
+                    "memory_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "text": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "participant_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "question_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "response_message_id": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "410": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "413": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "415": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "POST /elitea_core/local_turn_commit/prompt_lib/{project_id}/{execution_id}": {
+      "operation_id": "commitLocalTurn",
+      "parameters": {
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:execution_id": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{32}$"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "assistant_message",
+              "user_message"
+            ],
+            "properties": {
+              "assistant_message": {
+                "type": "object",
+                "required": [
+                  "content"
+                ],
+                "properties": {
+                  "content": {
+                    "type": "string"
+                  },
+                  "error": {
+                    "type": "string"
+                  },
+                  "is_error": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "hitl_exchanges": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "decision",
+                    "interrupt_id",
+                    "kind",
+                    "prompt"
+                  ],
+                  "properties": {
+                    "decision": {
+                      "type": "string"
+                    },
+                    "interrupt_id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "prompt": {
+                      "type": "string"
+                    },
+                    "tool_run_id": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "max_items": 64
+              },
+              "local_work": {
+                "type": "object",
+                "properties": {
+                  "commands": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "command"
+                      ],
+                      "properties": {
+                        "command": {
+                          "type": "string"
+                        },
+                        "exit_code": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "max_items": 500
+                  },
+                  "enforcement": {
+                    "type": "string"
+                  },
+                  "paths_touched": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "max_items": 2000
+                  },
+                  "sandbox_mode": {
+                    "type": "string"
+                  }
+                }
+              },
+              "thinking_steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "open": true
+                },
+                "max_items": 512
+              },
+              "tool_calls": {
+                "type": "object",
+                "open": true
+              },
+              "user_message": {
+                "type": "object",
+                "required": [
+                  "content"
+                ],
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "min_length": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "committed_at",
+                "conversation_uuid",
+                "created",
+                "execution_id",
+                "memories_used",
+                "question_message_id",
+                "response_message_id"
+              ],
+              "properties": {
+                "committed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "conversation_uuid": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "created": {
+                  "type": "boolean"
+                },
+                "execution_id": {
+                  "type": "string"
+                },
+                "memories_used": {
+                  "type": "integer"
+                },
+                "question_message_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "response_message_id": {
+                  "type": "string",
+                  "format": "uuid"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "410": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "413": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "415": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "POST /elitea_core/message_feedback/prompt_lib/{project_id}/{message_id}": {
       "operation_id": "setMessageFeedback",
       "parameters": {
@@ -11023,6 +12235,1144 @@
           "headers": {
             "retry-after": {
               "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "POST /elitea_core/remote_toolkit_call/prompt_lib/{project_id}/{toolkit_id}": {
+      "operation_id": "executeRemoteToolkitTool",
+      "parameters": {
+        "header:idempotency-key": {
+          "required": true,
+          "schema": {
+            "type": "string",
+            "min_length": 1,
+            "max_length": 128,
+            "pattern": "^[A-Za-z0-9_-]+$"
+          }
+        },
+        "header:x-client-version": {
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:project_id": {
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        },
+        "path:toolkit_id": {
+          "required": true,
+          "schema": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "request_body": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "type": "object",
+            "required": [
+              "application_id",
+              "execution_id",
+              "tool_name",
+              "toolkit_ref",
+              "version_id"
+            ],
+            "properties": {
+              "application_id": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              },
+              "arguments": {
+                "type": "object",
+                "open": true
+              },
+              "confirmation": {
+                "type": "object",
+                "required": [
+                  "approved",
+                  "approved_at",
+                  "interrupt_id"
+                ],
+                "properties": {
+                  "approved": {
+                    "type": "boolean"
+                  },
+                  "approved_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "interrupt_id": {
+                    "type": "string",
+                    "pattern": "^hitl_[0-9a-f]{32}$"
+                  }
+                }
+              },
+              "execution_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
+              },
+              "mcp_authorization_reference": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string",
+                "max_length": 128
+              },
+              "tool_name": {
+                "type": "string",
+                "min_length": 1
+              },
+              "toolkit_ref": {
+                "type": "string",
+                "pattern": "^tkr1_[0-9a-f]{32}$"
+              },
+              "version_id": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      },
+      "responses": {
+        "200": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "ok"
+              ],
+              "properties": {
+                "authorization_required": {
+                  "type": "object",
+                  "properties": {
+                    "resource_metadata": {
+                      "type": "object",
+                      "nullable": true,
+                      "open": true
+                    },
+                    "resource_metadata_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "server_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_run_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "www_authenticate": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "authorization_retry": {
+                  "type": "object",
+                  "properties": {
+                    "tool_name": {
+                      "type": "string"
+                    },
+                    "tool_params": {
+                      "type": "object",
+                      "open": true
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "hitl_interrupt": {
+                  "type": "object",
+                  "properties": {
+                    "action_label": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "available_actions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "guardrail_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "interrupt_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "parent_agent_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "policy_message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "questions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "object",
+                        "open": true
+                      }
+                    },
+                    "tool_args": {
+                      "nullable": true
+                    },
+                    "tool_call_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "message": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "result": {
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "tool_name": {
+                  "type": "string"
+                },
+                "toolkit_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "toolkit_type": {
+                  "type": "string"
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "400": {
+          "content": {
+            "application/json": {
+              "one_of": [
+                {
+                  "type": "object",
+                  "required": [
+                    "error",
+                    "error_description"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "error_description": {
+                      "type": "string"
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "error"
+                  ],
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "401": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "403": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "404": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "409": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "ok"
+              ],
+              "properties": {
+                "authorization_required": {
+                  "type": "object",
+                  "properties": {
+                    "resource_metadata": {
+                      "type": "object",
+                      "nullable": true,
+                      "open": true
+                    },
+                    "resource_metadata_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "server_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_run_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "www_authenticate": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "authorization_retry": {
+                  "type": "object",
+                  "properties": {
+                    "tool_name": {
+                      "type": "string"
+                    },
+                    "tool_params": {
+                      "type": "object",
+                      "open": true
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "hitl_interrupt": {
+                  "type": "object",
+                  "properties": {
+                    "action_label": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "available_actions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "guardrail_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "interrupt_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "parent_agent_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "policy_message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "questions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "object",
+                        "open": true
+                      }
+                    },
+                    "tool_args": {
+                      "nullable": true
+                    },
+                    "tool_call_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "message": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "result": {
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "tool_name": {
+                  "type": "string"
+                },
+                "toolkit_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "toolkit_type": {
+                  "type": "string"
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "410": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "413": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "415": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "422": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "ok"
+              ],
+              "properties": {
+                "authorization_required": {
+                  "type": "object",
+                  "properties": {
+                    "resource_metadata": {
+                      "type": "object",
+                      "nullable": true,
+                      "open": true
+                    },
+                    "resource_metadata_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "server_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_run_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "www_authenticate": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "authorization_retry": {
+                  "type": "object",
+                  "properties": {
+                    "tool_name": {
+                      "type": "string"
+                    },
+                    "tool_params": {
+                      "type": "object",
+                      "open": true
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "hitl_interrupt": {
+                  "type": "object",
+                  "properties": {
+                    "action_label": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "available_actions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "guardrail_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "interrupt_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "parent_agent_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "policy_message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "questions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "object",
+                        "open": true
+                      }
+                    },
+                    "tool_args": {
+                      "nullable": true
+                    },
+                    "tool_call_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "message": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "result": {
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "tool_name": {
+                  "type": "string"
+                },
+                "toolkit_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "toolkit_type": {
+                  "type": "string"
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "426": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error",
+                "min_client_version"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "error_description": {
+                  "type": "string"
+                },
+                "min_client_version": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "429": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "string"
+            }
+          }
+        },
+        "500": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "501": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "502": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "ok"
+              ],
+              "properties": {
+                "authorization_required": {
+                  "type": "object",
+                  "properties": {
+                    "resource_metadata": {
+                      "type": "object",
+                      "nullable": true,
+                      "open": true
+                    },
+                    "resource_metadata_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "server_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_run_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "www_authenticate": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "authorization_retry": {
+                  "type": "object",
+                  "properties": {
+                    "tool_name": {
+                      "type": "string"
+                    },
+                    "tool_params": {
+                      "type": "object",
+                      "open": true
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "hitl_interrupt": {
+                  "type": "object",
+                  "properties": {
+                    "action_label": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "available_actions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "guardrail_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "interrupt_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "parent_agent_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "policy_message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "questions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "object",
+                        "open": true
+                      }
+                    },
+                    "tool_args": {
+                      "nullable": true
+                    },
+                    "tool_call_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "message": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "result": {
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "tool_name": {
+                  "type": "string"
+                },
+                "toolkit_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "toolkit_type": {
+                  "type": "string"
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "503": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
+              "type": "string"
+            }
+          }
+        },
+        "504": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "ok"
+              ],
+              "properties": {
+                "authorization_required": {
+                  "type": "object",
+                  "properties": {
+                    "resource_metadata": {
+                      "type": "object",
+                      "nullable": true,
+                      "open": true
+                    },
+                    "resource_metadata_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "server_url": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_run_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "www_authenticate": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "authorization_retry": {
+                  "type": "object",
+                  "properties": {
+                    "tool_name": {
+                      "type": "string"
+                    },
+                    "tool_params": {
+                      "type": "object",
+                      "open": true
+                    }
+                  }
+                },
+                "error": {
+                  "type": "string"
+                },
+                "hitl_interrupt": {
+                  "type": "object",
+                  "properties": {
+                    "action_label": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "available_actions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "guardrail_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "interrupt_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "parent_agent_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "policy_message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "questions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "object",
+                        "open": true
+                      }
+                    },
+                    "tool_args": {
+                      "nullable": true
+                    },
+                    "tool_call_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
+                "message": {
+                  "type": "string"
+                },
+                "ok": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "result": {
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string"
+                },
+                "task_id": {
+                  "type": "string"
+                },
+                "tool_name": {
+                  "type": "string"
+                },
+                "toolkit_id": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "toolkit_type": {
+                  "type": "string"
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              }
             }
           }
         }
