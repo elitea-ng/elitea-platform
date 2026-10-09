@@ -9,9 +9,9 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 #[path = "node_recovery_codec.rs"]
-pub(crate) mod codec;
+pub mod codec;
 
-pub(crate) const MAX_NODE_ATTEMPTS: u16 = 16;
+pub const MAX_NODE_ATTEMPTS: u16 = 16;
 const MAX_BACKOFF_MS: u64 = 300_000;
 const MAX_ELAPSED_MS: u64 = 3_600_000;
 const MAX_OPERATOR_ACTIONS: usize = 16;
@@ -19,7 +19,7 @@ const MAX_OPERATOR_ACTIONS: usize = 16;
 /// Safe categories contain no provider messages or business payloads.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum NodeFailureClass {
+pub enum NodeFailureClass {
     DependencyUnavailable,
     RateLimited,
     AttemptTimeout,
@@ -70,7 +70,7 @@ impl NodeFailureClass {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, Ord, PartialEq, PartialOrd)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum RetryCondition {
+pub enum RetryCondition {
     DependencyUnavailable,
     RateLimited,
     AttemptTimeout,
@@ -80,7 +80,7 @@ pub(crate) enum RetryCondition {
 /// The effect owner supplies these facts from admitted capabilities or receipts.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum ReplaySafety {
+pub enum ReplaySafety {
     NoExternalEffect,
     IdempotentEffectNotCommitted {
         #[serde(with = "codec::hex_id")]
@@ -108,20 +108,21 @@ impl ReplaySafety {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct NodeFailure {
-    pub(crate) class: NodeFailureClass,
-    pub(crate) replay: ReplaySafety,
+pub struct NodeFailure {
+    pub class: NodeFailureClass,
+    pub replay: ReplaySafety,
 }
 
 impl NodeFailure {
-    pub(crate) const fn new(class: NodeFailureClass, replay: ReplaySafety) -> Self {
+    #[must_use]
+    pub const fn new(class: NodeFailureClass, replay: ReplaySafety) -> Self {
         Self { class, replay }
     }
 }
 
 #[derive(Clone, Copy, Default, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum NodeRetryMode {
+pub enum NodeRetryMode {
     #[default]
     Automatic,
     Operator,
@@ -134,22 +135,22 @@ pub(crate) enum NodeRetryMode {
     clippy::struct_excessive_bools,
     reason = "Preserve the existing explicit persisted state and authority fields."
 )]
-pub(crate) struct ErrorRouteContract {
-    pub(crate) dedicated_typed_error_input: bool,
-    pub(crate) requires_success_output: bool,
-    pub(crate) reexecutes_failed_operation: bool,
-    pub(crate) explicitly_handles_denial: bool,
+pub struct ErrorRouteContract {
+    pub dedicated_typed_error_input: bool,
+    pub requires_success_output: bool,
+    pub reexecutes_failed_operation: bool,
+    pub explicitly_handles_denial: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct NodeErrorRoute {
+pub struct NodeErrorRoute {
     identity: [u8; 32],
     classes: BTreeSet<NodeFailureClass>,
 }
 
 impl NodeErrorRoute {
-    pub(crate) fn admit(
+    pub fn admit(
         identity: [u8; 32],
         classes: BTreeSet<NodeFailureClass>,
         contract: ErrorRouteContract,
@@ -170,10 +171,10 @@ impl NodeErrorRoute {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct NodeBackoff {
-    pub(crate) initial_ms: u64,
-    pub(crate) maximum_ms: u64,
-    pub(crate) multiplier: u16,
+pub struct NodeBackoff {
+    pub initial_ms: u64,
+    pub maximum_ms: u64,
+    pub multiplier: u16,
 }
 
 impl NodeBackoff {
@@ -197,7 +198,7 @@ impl NodeBackoff {
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct NodeRecoveryPolicy {
+pub struct NodeRecoveryPolicy {
     max_attempts: u16,
     #[serde(default)]
     retry_mode: NodeRetryMode,
@@ -221,7 +222,7 @@ impl Default for NodeRecoveryPolicy {
 }
 
 impl NodeRecoveryPolicy {
-    pub(crate) fn admit(
+    pub fn admit(
         max_attempts: u16,
         retry_on: BTreeSet<RetryCondition>,
         backoff: Option<NodeBackoff>,
@@ -249,10 +250,7 @@ impl NodeRecoveryPolicy {
         })
     }
 
-    pub(crate) fn with_retry_mode(
-        mut self,
-        mode: NodeRetryMode,
-    ) -> Result<Self, NodeRecoveryError> {
+    pub fn with_retry_mode(mut self, mode: NodeRetryMode) -> Result<Self, NodeRecoveryError> {
         if mode == NodeRetryMode::Operator && self.max_attempts == 1 {
             return Err(NodeRecoveryError::InvalidPolicy);
         }
@@ -273,7 +271,7 @@ impl NodeRecoveryPolicy {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum StopReason {
+pub enum StopReason {
     ControlDecision,
     NotRetryable,
     RetryDisabled,
@@ -286,16 +284,16 @@ pub(crate) enum StopReason {
 /// Only a typed error route receives this value. It has no successful output.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct FailedNodeOutput {
-    pub(crate) activation_id: [u8; 32],
-    pub(crate) attempt: u16,
-    pub(crate) class: NodeFailureClass,
-    pub(crate) reason: StopReason,
+pub struct FailedNodeOutput {
+    pub activation_id: [u8; 32],
+    pub attempt: u16,
+    pub class: NodeFailureClass,
+    pub reason: StopReason,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) enum RecoveryDecision {
+pub enum RecoveryDecision {
     Stop(StopReason),
     RetryAt {
         not_before_ms: u64,
@@ -313,7 +311,7 @@ pub(crate) enum RecoveryDecision {
 }
 
 /// Decide after one recorded failure. Never parse a display string into policy.
-pub(crate) fn plan_after_failure(
+pub fn plan_after_failure(
     policy: &NodeRecoveryPolicy,
     activation_id: [u8; 32],
     attempts_started: u16,
@@ -418,7 +416,7 @@ pub(crate) fn plan_after_failure(
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) enum AttemptOutcome {
+pub enum AttemptOutcome {
     Running,
     Failed {
         failure: NodeFailure,
@@ -431,16 +429,16 @@ pub(crate) enum AttemptOutcome {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct NodeAttemptRecord {
-    pub(crate) attempt: u16,
-    pub(crate) started_ms: u64,
-    pub(crate) finished_ms: Option<u64>,
-    pub(crate) outcome: AttemptOutcome,
+pub struct NodeAttemptRecord {
+    pub attempt: u16,
+    pub started_ms: u64,
+    pub finished_ms: Option<u64>,
+    pub outcome: AttemptOutcome,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) enum NodeAttemptPhase {
+pub enum NodeAttemptPhase {
     Ready,
     Running,
     Failed(RecoveryDecision),
@@ -456,23 +454,23 @@ pub(crate) enum NodeAttemptPhase {
 /// Main must authenticate and authorize this command before calling the helper.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OperatorRetryRequest {
-    pub(crate) request_id: [u8; 32],
-    pub(crate) activation_id: [u8; 32],
-    pub(crate) expected_revision: u64,
+pub struct OperatorRetryRequest {
+    pub request_id: [u8; 32],
+    pub activation_id: [u8; 32],
+    pub expected_revision: u64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct OperatorRetryAudit {
-    pub(crate) request: OperatorRetryRequest,
-    pub(crate) requested_ms: u64,
+pub struct OperatorRetryAudit {
+    pub request: OperatorRetryRequest,
+    pub requested_ms: u64,
 }
 
 /// A replacement value must commit under the existing claim-fenced writer lock.
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct NodeAttemptLedger {
+pub struct NodeAttemptLedger {
     activation_id: [u8; 32],
     policy: NodeRecoveryPolicy,
     revision: u64,
@@ -485,7 +483,7 @@ pub(crate) struct NodeAttemptLedger {
 impl NodeAttemptLedger {
     /// Preserve the ambiguous failure. Only authenticated owner evidence may
     /// append this transition. Reconciliation itself never starts another attempt.
-    pub(crate) fn reconcile_verified_no_effect(
+    pub fn reconcile_verified_no_effect(
         &self,
         request: OperatorRetryRequest,
         owner_effect_id: [u8; 32],
@@ -557,7 +555,7 @@ impl NodeAttemptLedger {
 
     /// The original recorded outcome remains immutable. The proof event can
     /// change replay eligibility only for its exact original failed attempt.
-    pub(crate) fn effective_failure(&self) -> Result<NodeFailure, NodeRecoveryError> {
+    pub fn effective_failure(&self) -> Result<NodeFailure, NodeRecoveryError> {
         let last = self
             .history
             .last()
@@ -573,7 +571,7 @@ impl NodeAttemptLedger {
     }
     /// Preserve the original failed attempt. The caller must authenticate the
     /// owning receipt and project it through the original node contract first.
-    pub(crate) fn resume_owner_result(
+    pub fn resume_owner_result(
         &self,
         request: OperatorRetryRequest,
         owner_effect_id: [u8; 32],
@@ -630,7 +628,7 @@ impl NodeAttemptLedger {
         Ok(next)
     }
 
-    pub(crate) fn new(
+    pub fn new(
         activation_id: [u8; 32],
         policy: NodeRecoveryPolicy,
     ) -> Result<Self, NodeRecoveryError> {
@@ -648,26 +646,31 @@ impl NodeAttemptLedger {
         })
     }
 
-    pub(crate) const fn logical_activation(&self) -> [u8; 32] {
+    #[must_use]
+    pub const fn logical_activation(&self) -> [u8; 32] {
         self.activation_id
     }
 
-    pub(crate) const fn phase(&self) -> NodeAttemptPhase {
+    #[must_use]
+    pub const fn phase(&self) -> NodeAttemptPhase {
         self.phase
     }
-    pub(crate) const fn revision(&self) -> u64 {
+    #[must_use]
+    pub const fn revision(&self) -> u64 {
         self.revision
     }
-    pub(crate) fn history(&self) -> &[NodeAttemptRecord] {
+    #[must_use]
+    pub fn history(&self) -> &[NodeAttemptRecord] {
         &self.history
     }
-    #[cfg(test)]
-    pub(crate) fn operator_audit(&self) -> &[OperatorRetryAudit] {
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn operator_audit(&self) -> &[OperatorRetryAudit] {
         &self.operator_audit
     }
 
     /// A late wake consumes no new attempt and preserves the original record.
-    pub(crate) fn expire_wait(&self, now_ms: u64) -> Result<Option<Self>, NodeRecoveryError> {
+    pub fn expire_wait(&self, now_ms: u64) -> Result<Option<Self>, NodeRecoveryError> {
         if !matches!(
             self.phase,
             NodeAttemptPhase::Failed(
@@ -713,7 +716,7 @@ impl NodeAttemptLedger {
     }
 
     /// Persist the returned Started record before invoking the exact activation.
-    pub(crate) fn start_attempt(&self, now_ms: u64) -> Result<Self, NodeRecoveryError> {
+    pub fn start_attempt(&self, now_ms: u64) -> Result<Self, NodeRecoveryError> {
         let next_attempt = self
             .attempts_started()?
             .checked_add(1)
@@ -755,7 +758,7 @@ impl NodeAttemptLedger {
     }
 
     /// Persist the failure and exact retry time before waiting or routing.
-    pub(crate) fn record_failure(
+    pub fn record_failure(
         &self,
         failure: NodeFailure,
         now_ms: u64,
@@ -788,7 +791,7 @@ impl NodeAttemptLedger {
     }
 
     /// The caller must validate the complete node result before this transition.
-    pub(crate) fn record_success(
+    pub fn record_success(
         &self,
         receipt_id: [u8; 32],
         now_ms: u64,
@@ -811,8 +814,8 @@ impl NodeAttemptLedger {
     }
 
     /// Reconstruct a crashed Started attempt from the effect owner's evidence.
-    #[cfg(test)]
-    pub(crate) fn recover_interrupted(
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn recover_interrupted(
         &self,
         replay: ReplaySafety,
         now_ms: u64,
@@ -827,7 +830,7 @@ impl NodeAttemptLedger {
     }
 
     /// Persist a current cancellation or lease loss before any further dispatch.
-    pub(crate) fn record_control_stop(
+    pub fn record_control_stop(
         &self,
         class: NodeFailureClass,
         now_ms: u64,
@@ -863,7 +866,7 @@ impl NodeAttemptLedger {
     }
 
     /// Preserve the consumed budget. The caller must authorize and audit its actor.
-    pub(crate) fn operator_retry(
+    pub fn operator_retry(
         &self,
         request: OperatorRetryRequest,
         now_ms: u64,
@@ -1044,7 +1047,7 @@ impl NodeAttemptLedger {
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub(crate) enum NodeRecoveryError {
+pub enum NodeRecoveryError {
     InvalidPolicy,
     InvalidErrorRoute,
     InvalidHistory,

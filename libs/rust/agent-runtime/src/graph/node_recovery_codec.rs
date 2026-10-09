@@ -8,14 +8,14 @@ use super::{
     OperatorRetryRequest,
 };
 
-pub(crate) const MAX_RECOVERY_EVENTS: usize = 64;
-pub(crate) const MAX_NODE_RECOVERY_BYTES: usize = 128 * 1024;
+pub const MAX_RECOVERY_EVENTS: usize = 64;
+pub const MAX_NODE_RECOVERY_BYTES: usize = 128 * 1024;
 const SCHEMA: &str = "elitea.pipeline.node-recovery.v1";
 const SCHEMA_V2: &str = "elitea.pipeline.node-recovery.v2";
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum NodeRecoveryEvent {
+pub enum NodeRecoveryEvent {
     Start {
         now_ms: u64,
     },
@@ -61,7 +61,7 @@ struct StoredLedger {
     ledger: NodeAttemptLedger,
 }
 
-pub(crate) fn encode(ledger: &NodeAttemptLedger) -> Result<Value, NodeRecoveryError> {
+pub fn encode(ledger: &NodeAttemptLedger) -> Result<Value, NodeRecoveryError> {
     validate(ledger)?;
     let value = serde_json::to_value(StoredLedger {
         schema: if ledger
@@ -87,7 +87,7 @@ pub(crate) fn encode(ledger: &NodeAttemptLedger) -> Result<Value, NodeRecoveryEr
     Ok(value)
 }
 
-pub(crate) fn decode(
+pub fn decode(
     value: &Value,
     expected_activation: [u8; 32],
     expected_policy: &NodeRecoveryPolicy,
@@ -195,7 +195,7 @@ fn apply_event(
 }
 
 /// Restore a receipt's immutable revision without trusting serialized history.
-pub(crate) fn at_revision(
+pub fn at_revision(
     ledger: &NodeAttemptLedger,
     revision: u64,
 ) -> Result<NodeAttemptLedger, NodeRecoveryError> {
@@ -214,7 +214,7 @@ pub(crate) fn at_revision(
     }
 }
 
-pub(crate) fn is_owner_result_replay(
+pub fn is_owner_result_replay(
     ledger: &NodeAttemptLedger,
     request: OperatorRetryRequest,
     owner_effect_id: [u8; 32],
@@ -228,7 +228,7 @@ pub(crate) fn is_owner_result_replay(
             if *prior==request && *effect==owner_effect_id && *owner==owner_receipt_sha256 && *result==result_receipt_id),
     )
 }
-pub(crate) fn is_no_effect_replay(
+pub fn is_no_effect_replay(
     ledger: &NodeAttemptLedger,
     request: OperatorRetryRequest,
     owner_effect_id: [u8; 32],
@@ -243,7 +243,7 @@ pub(crate) fn is_no_effect_replay(
     )
 }
 
-pub(crate) fn before_operator_request(
+pub fn before_operator_request(
     ledger: &NodeAttemptLedger,
     request: OperatorRetryRequest,
 ) -> Result<Option<NodeAttemptLedger>, NodeRecoveryError> {
@@ -259,7 +259,7 @@ pub(crate) fn before_operator_request(
     Ok(None)
 }
 
-pub(crate) fn require_successor(
+pub fn require_successor(
     parent: &NodeAttemptLedger,
     next: &NodeAttemptLedger,
 ) -> Result<(), NodeRecoveryError> {
@@ -283,7 +283,7 @@ pub(crate) fn require_successor(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::graph::node_recovery::{
+    use crate::graph::node_recovery::{
         NodeAttemptPhase, NodeBackoff, ReplaySafety, RetryCondition,
     };
     use std::collections::BTreeSet;
@@ -371,12 +371,9 @@ mod tests {
 }
 
 /// Strict public identity form. No uppercase, short, or zero identities.
-pub(crate) mod hex_id {
+pub mod hex_id {
     use serde::{Deserialize, Deserializer, Serializer};
-    pub(crate) fn serialize<S: Serializer>(
-        value: &[u8; 32],
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer>(value: &[u8; 32], serializer: S) -> Result<S::Ok, S::Error> {
         use std::fmt::Write;
         let mut text = String::with_capacity(64);
         for byte in value {
@@ -384,9 +381,7 @@ pub(crate) mod hex_id {
         }
         serializer.serialize_str(&text)
     }
-    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<[u8; 32], D::Error> {
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<[u8; 32], D::Error> {
         let text = String::deserialize(deserializer)?;
         if text.len() != 64
             || !text

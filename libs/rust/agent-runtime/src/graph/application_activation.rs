@@ -2,8 +2,8 @@
 
 use std::sync::{Arc, Mutex};
 
-use adk_rust::graph::checkpoint::RetentionPolicy;
-use adk_rust::graph::{Checkpoint, Checkpointer, GraphError};
+use adk_graph::checkpoint::RetentionPolicy;
+use adk_graph::{Checkpoint, Checkpointer, GraphError};
 use async_trait::async_trait;
 use ring::digest;
 use serde::{Deserialize, Serialize};
@@ -30,20 +30,20 @@ impl ApplicationActivation {
 }
 
 /// Every node owns its own overlay. The inner adapter retains authority and fencing.
-pub(super) struct ApplicationActivationCheckpointer {
+pub struct ApplicationActivationCheckpointer {
     inner: Arc<dyn Checkpointer>,
     active: Arc<Mutex<Option<ApplicationActivation>>>,
 }
 
 impl ApplicationActivationCheckpointer {
-    pub(super) fn new(inner: Arc<dyn Checkpointer>) -> Self {
+    pub fn new(inner: Arc<dyn Checkpointer>) -> Self {
         Self {
             inner,
             active: Arc::new(Mutex::new(None)),
         }
     }
 
-    pub(super) fn enter(
+    pub fn enter(
         &self,
         parent_thread: &str,
         node_name: &str,
@@ -59,9 +59,7 @@ impl ApplicationActivationCheckpointer {
         {
             return Err(activation_error());
         }
-        let input = serde_json::to_vec(inputs).map_err(|_| activation_error())?;
-        let mut input_digest = [0; 32];
-        input_digest.copy_from_slice(digest::digest(&digest::SHA256, &input).as_ref());
+        let input_digest = input_digest(inputs)?;
         let activation = ApplicationActivation {
             schema: ACTIVATION_SCHEMA.to_owned(),
             parent_thread: parent_thread.to_owned(),
@@ -129,7 +127,16 @@ impl ApplicationActivationCheckpointer {
     }
 }
 
-pub(super) struct ApplicationActivationGuard {
+/// SHA-256 of the node's inputs in their canonical (sorted-member) encoding,
+/// so the digest is the same whatever `serde_json`'s features are.
+fn input_digest(inputs: &Value) -> Result<[u8; 32], GraphError> {
+    let input = crate::canonical::to_vec(inputs).map_err(|_| activation_error())?;
+    let mut input_digest = [0; 32];
+    input_digest.copy_from_slice(digest::digest(&digest::SHA256, &input).as_ref());
+    Ok(input_digest)
+}
+
+pub struct ApplicationActivationGuard {
     active: Arc<Mutex<Option<ApplicationActivation>>>,
 }
 
@@ -215,8 +222,32 @@ fn activation_error() -> GraphError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use adk_rust::graph::{MemoryCheckpointer, State};
+    use adk_graph::{MemoryCheckpointer, State};
     use serde_json::json;
+
+    /// The input digest binds a child activation to its inputs; it must not
+    /// depend on `serde_json`'s `preserve_order` (ADR-0029 decision 2). The pin
+    /// is the pre-move worker value.
+    #[test]
+    fn input_digest_is_independent_of_map_order() {
+        let unordered: Value =
+            serde_json::from_str(r#"{"task":"one","context":{"z":1,"a":[{"y":2,"x":3}]}}"#)
+                .expect("fixture");
+        let reordered: Value =
+            serde_json::from_str(r#"{"context":{"a":[{"x":3,"y":2}],"z":1},"task":"one"}"#)
+                .expect("fixture");
+        let digest = input_digest(&unordered).expect("digest");
+        assert_eq!(digest, input_digest(&reordered).expect("digest"));
+        let hex = digest.iter().fold(String::new(), |mut hex, byte| {
+            use std::fmt::Write as _;
+            write!(hex, "{byte:02x}").expect("write to a String");
+            hex
+        });
+        assert_eq!(
+            hex,
+            "a016bd2a1351e57ffa58603da9809e476392dbd1a3300828b141f6ebe724d5c5"
+        );
+    }
 
     #[tokio::test]
     async fn completed_old_visits_are_hidden_and_current_receipts_are_reused() {

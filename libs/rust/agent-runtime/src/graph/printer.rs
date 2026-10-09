@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use adk_rust::graph::{GraphError, Node, NodeContext, NodeOutput, State};
+use adk_graph::{GraphError, Node, NodeContext, NodeOutput, State};
 use async_trait::async_trait;
 use ring::digest;
 use serde::{Deserialize, Serialize};
@@ -19,14 +19,13 @@ use super::yaml::{valid_graph_id, valid_output_key};
 const MAX_NODE_YAML_BYTES: usize = 64 * 1024;
 const MAX_MAPPING_VALUE_BYTES: usize = 8 * 1024;
 const MAX_FINAL_MESSAGE_BYTES: usize = 4 * 1024;
-pub(super) const MAX_PRINTER_OUTPUT_BYTES: usize = 8 * 1024;
+pub const MAX_PRINTER_OUTPUT_BYTES: usize = 8 * 1024;
 const CONFIG_DIGEST_DOMAIN: &[u8] = b"elitea.graph.printer.config.v1\0";
-pub(crate) const PRINTER_COMPLETED_STATE: &str = "PRINTER_COMPLETED";
-pub(crate) const PRINTER_OUTPUT_STATE_KEY: &str = "printer_output";
-pub(crate) const PRINTER_PAUSE_METADATA_KEY: &str = "elitea.pipeline.printer_pause";
-pub(crate) const PRINTER_PAUSE_SCHEMA: &str = "elitea.pipeline.printer-pause.v1";
-pub(crate) const DEFAULT_FINAL_MESSAGE: &str =
-    "How to proceed? To resume the pipeline - type anything...";
+pub const PRINTER_COMPLETED_STATE: &str = "PRINTER_COMPLETED";
+pub const PRINTER_OUTPUT_STATE_KEY: &str = "printer_output";
+pub const PRINTER_PAUSE_METADATA_KEY: &str = "elitea.pipeline.printer_pause";
+pub const PRINTER_PAUSE_SCHEMA: &str = "elitea.pipeline.printer-pause.v1";
+pub const DEFAULT_FINAL_MESSAGE: &str = "How to proceed? To resume the pipeline - type anything...";
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -52,7 +51,7 @@ struct RawPrinterInputMapping {
 }
 
 #[derive(Clone)]
-pub(super) enum PrinterInputMapping {
+pub enum PrinterInputMapping {
     Fixed(Value),
     Variable(String),
     Template(String),
@@ -60,7 +59,7 @@ pub(super) enum PrinterInputMapping {
 
 /// Strict, authority-free definition for one Printer checkpoint.
 #[derive(Clone)]
-pub(super) struct PrinterNodeDefinition {
+pub struct PrinterNodeDefinition {
     id: String,
     mapping: PrinterInputMapping,
     final_message: String,
@@ -68,7 +67,7 @@ pub(super) struct PrinterNodeDefinition {
 }
 
 impl PrinterNodeDefinition {
-    pub(super) fn from_yaml(yaml: &str) -> Result<Self, PrinterConfigurationError> {
+    pub fn from_yaml(yaml: &str) -> Result<Self, PrinterConfigurationError> {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(PrinterConfigurationError::ResourceExhausted);
         }
@@ -162,34 +161,44 @@ impl PrinterNodeDefinition {
         })
     }
 
-    pub(super) fn id(&self) -> &str {
+    #[must_use]
+    pub fn id(&self) -> &str {
         &self.id
     }
 
-    pub(super) fn mapping(&self) -> &PrinterInputMapping {
+    #[must_use]
+    pub fn mapping(&self) -> &PrinterInputMapping {
         &self.mapping
     }
 
-    pub(super) fn final_message(&self) -> &str {
+    #[must_use]
+    pub fn final_message(&self) -> &str {
         &self.final_message
     }
 
-    pub(super) fn transition(&self) -> &str {
+    #[must_use]
+    pub fn transition(&self) -> &str {
         &self.transition
     }
 
-    pub(super) fn reset_node_id(&self) -> String {
+    #[must_use]
+    pub fn reset_node_id(&self) -> String {
         format!("{}_reset", self.id)
     }
 
-    pub(super) fn config_digest(&self) -> [u8; 32] {
+    #[must_use]
+    pub fn config_digest(&self) -> [u8; 32] {
         let mut context = digest::Context::new(&digest::SHA256);
         context.update(CONFIG_DIGEST_DOMAIN);
         digest_field(&mut context, self.id.as_bytes());
         match &self.mapping {
             PrinterInputMapping::Fixed(value) => {
                 digest_field(&mut context, b"fixed");
-                digest_field(&mut context, &serde_json::to_vec(value).unwrap_or_default());
+                // Sorted members whatever serde_json's features are (crate::canonical).
+                digest_field(
+                    &mut context,
+                    &crate::canonical::to_vec(value).unwrap_or_default(),
+                );
             }
             PrinterInputMapping::Variable(value) => {
                 digest_field(&mut context, b"variable");
@@ -209,16 +218,17 @@ impl PrinterNodeDefinition {
 /// Public metadata accompanying one native static Printer interruption.
 #[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct PrinterPauseMetadata {
-    pub(crate) schema: String,
-    pub(crate) node_name: String,
-    pub(crate) reset_node_name: String,
-    pub(crate) definition_digest: String,
-    pub(crate) node_digest: String,
+pub struct PrinterPauseMetadata {
+    pub schema: String,
+    pub node_name: String,
+    pub reset_node_name: String,
+    pub definition_digest: String,
+    pub node_digest: String,
 }
 
 impl PrinterPauseMetadata {
-    pub(crate) fn validate(&self) -> bool {
+    #[must_use]
+    pub fn validate(&self) -> bool {
         self.schema == PRINTER_PAUSE_SCHEMA
             && valid_graph_id(&self.node_name)
             && self.reset_node_name == format!("{}_reset", self.node_name)
@@ -229,12 +239,12 @@ impl PrinterPauseMetadata {
 
 /// Immutable catalog used to enrich only compiler-owned Printer interruptions.
 #[derive(Clone, Default)]
-pub(crate) struct PrinterPauseCatalog {
+pub struct PrinterPauseCatalog {
     entries: BTreeMap<String, PrinterPauseMetadata>,
 }
 
 impl PrinterPauseCatalog {
-    pub(super) fn from_definition(
+    pub fn from_definition(
         definition_digest: [u8; 32],
         nodes: impl Iterator<Item = PrinterNodeDefinition>,
     ) -> Self {
@@ -254,27 +264,31 @@ impl PrinterPauseCatalog {
         Self { entries }
     }
 
-    pub(crate) fn get(&self, node: &str) -> Option<&PrinterPauseMetadata> {
+    #[must_use]
+    pub fn get(&self, node: &str) -> Option<&PrinterPauseMetadata> {
         self.entries.get(node)
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    pub(crate) fn contains_exact(&self, metadata: &PrinterPauseMetadata) -> bool {
+    #[must_use]
+    pub fn contains_exact(&self, metadata: &PrinterPauseMetadata) -> bool {
         self.entries
             .get(&metadata.node_name)
             .is_some_and(|expected| expected == metadata)
     }
 }
 
-pub(super) struct PrinterNode {
+pub struct PrinterNode {
     definition: PrinterNodeDefinition,
 }
 
 impl PrinterNode {
-    pub(super) const fn new(definition: PrinterNodeDefinition) -> Self {
+    #[must_use]
+    pub const fn new(definition: PrinterNodeDefinition) -> Self {
         Self { definition }
     }
 }
@@ -311,12 +325,13 @@ impl Node for PrinterNode {
     }
 }
 
-pub(super) struct PrinterResetNode {
+pub struct PrinterResetNode {
     id: String,
 }
 
 impl PrinterResetNode {
-    pub(super) const fn new(id: String) -> Self {
+    #[must_use]
+    pub const fn new(id: String) -> Self {
         Self { id }
     }
 }
@@ -359,7 +374,9 @@ fn pythonish_value(value: &Value) -> Result<String, PrinterExecutionError> {
         Value::Bool(true) => "True".to_owned(),
         Value::Bool(false) => "False".to_owned(),
         Value::String(value) => value.clone(),
-        value => serde_json::to_string(value).map_err(|_| PrinterExecutionError::InvalidOutput)?,
+        value => {
+            crate::canonical::to_string(value).map_err(|_| PrinterExecutionError::InvalidOutput)?
+        }
     })
 }
 
@@ -468,7 +485,7 @@ fn valid_sha256_label(value: &str) -> bool {
 }
 
 #[derive(Debug, Error)]
-pub(super) enum PrinterConfigurationError {
+pub enum PrinterConfigurationError {
     #[error("malformed Printer YAML")]
     MalformedYaml {
         #[source]
@@ -494,7 +511,7 @@ impl From<PrinterExecutionError> for PrinterConfigurationError {
 }
 
 #[derive(Clone, Copy, Debug, Error)]
-pub(super) enum PrinterExecutionError {
+pub enum PrinterExecutionError {
     #[error("the Printer output is malformed")]
     InvalidOutput,
     #[error("the Printer output exceeds its resource bound")]
@@ -507,5 +524,38 @@ impl PrinterExecutionError {
             Self::InvalidOutput => "graph.printer.invalid_output",
             Self::ResourceExhausted => "graph.printer.resource_exhausted",
         }
+    }
+}
+
+/// Order-explicit digests and rendering (ADR-0029 decision 2). The pinned
+/// values are what the worker produced before the move, when `serde_json` was
+/// always built without `preserve_order`; `--features test-preserve-order`
+/// runs the same assertions with it.
+#[cfg(test)]
+mod order_tests {
+    use serde_json::Value;
+
+    use super::{PrinterNodeDefinition, hex, pythonish_value};
+
+    // Members deliberately out of order at two depths.
+    const UNORDERED_FIXED: &str = "id: show\ntype: printer\ninput_mapping:\n  printer:\n    type: fixed\n    value: {zeta: {b: 2, a: [1, {y: true, x: null}]}, alpha: one}\ntransition: END\n";
+
+    #[test]
+    fn fixed_mapping_digest_is_independent_of_map_order() {
+        let definition = PrinterNodeDefinition::from_yaml(UNORDERED_FIXED).expect("definition");
+        assert_eq!(
+            hex(&definition.config_digest()),
+            "31533601b5e9a1cb3317b833bba661da58277da4e1a9b1a35c959be03a0666fd"
+        );
+    }
+
+    #[test]
+    fn rendered_objects_list_members_in_key_order() {
+        let value: Value =
+            serde_json::from_str(r#"{"zeta":{"b":2,"a":1},"alpha":"one"}"#).expect("fixture");
+        assert_eq!(
+            pythonish_value(&value).expect("render"),
+            r#"{"alpha":"one","zeta":{"a":1,"b":2}}"#
+        );
     }
 }

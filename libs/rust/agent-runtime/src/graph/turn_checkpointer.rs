@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use adk_rust::graph::checkpoint::RetentionPolicy;
-use adk_rust::graph::{Checkpoint, Checkpointer, GraphError};
+use adk_graph::checkpoint::RetentionPolicy;
+use adk_graph::{Checkpoint, Checkpointer, GraphError};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
@@ -11,14 +11,14 @@ const EXECUTION_KEY: &str = "elitea.pipeline.execution.v1";
 
 /// Keep stored checkpoints intact. Fresh turns cannot load an older execution.
 /// Explicit continuations still use the checkpoint validated by resume admission.
-pub(crate) struct TurnCheckpointer {
+pub struct TurnCheckpointer {
     inner: Arc<dyn Checkpointer>,
     execution: Value,
     resume: bool,
 }
 
 impl TurnCheckpointer {
-    pub(crate) fn new(
+    pub fn new(
         inner: Arc<dyn Checkpointer>,
         execution_id: &str,
         generation: u64,
@@ -67,7 +67,7 @@ impl Checkpointer for TurnCheckpointer {
 
 #[cfg(test)]
 mod tests {
-    use adk_rust::graph::{MemoryCheckpointer, State};
+    use adk_graph::{MemoryCheckpointer, State};
 
     use super::*;
 

@@ -7,7 +7,7 @@ use std::fmt;
     dead_code,
     reason = "Retain required protocol foundations without enabling deferred execution paths."
 )]
-pub(crate) enum HttpActionError {
+pub enum HttpActionError {
     InvalidInput,
     ResourceExhausted,
     Authentication,

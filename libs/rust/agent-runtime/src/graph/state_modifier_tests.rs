@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use adk_rust::graph::{ExecutionConfig, Node, NodeContext};
+use adk_graph::{ExecutionConfig, Node, NodeContext};
 use serde_json::{Value, json};
 
 use super::state_modifier::{StateModifierNode, StateModifierNodeDefinition};
