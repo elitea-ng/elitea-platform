@@ -4906,5 +4906,21 @@
   "pipelines.graphExtensions.aggregateFlatDescription": "Group list rows and calculate explicit results. Each result row holds the group fields and the operation results side by side.",
   "pipelines.graphExtensions.regroup": "Regroup",
   "pipelines.graphExtensions.regroupHelp": "Parent rebuilds each split parent row from the split_out envelopes.",
-  "pipelines.graphExtensions.splitOut.envelopeHelp": "Each output row is {parent_index, position, data}. data holds the retained fields and the item."
+  "pipelines.graphExtensions.splitOut.envelopeHelp": "Each output row is {parent_index, position, data}. data holds the retained fields and the item.",
+  "workspace.agentsMdApplied": "AGENTS.md applied",
+  "workspace.command.agent": "Choose the agent",
+  "workspace.command.clear": "Clear the transcript on this screen",
+  "workspace.command.help": "List these commands",
+  "workspace.command.mention": "Reference a file or folder of this workspace",
+  "workspace.command.new": "Start a new conversation",
+  "workspace.command.plan": "Turn plan mode on or off",
+  "workspace.command.undo": "Undo the files the last turn changed",
+  "workspace.composer.commands": "Commands",
+  "workspace.composer.files": "Files in this folder",
+  "workspace.composer.placeholder": "What should the agent do? Type @ to add a file, / for commands",
+  "workspace.noAgents.body": "A session runs one of the bound project’s agents. Create an agent in this project, or bind this folder to a project that has agents.",
+  "workspace.noAgents.create": "Create an agent",
+  "workspace.noAgents.otherProject": "Use another project",
+  "workspace.noAgents.title": "This project has no agents",
+  "workspace.undoNothing": "The last turn here changed no files."
 }

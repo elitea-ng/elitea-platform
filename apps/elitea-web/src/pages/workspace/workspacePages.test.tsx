@@ -20,6 +20,8 @@ import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 
 import { server } from '../../test/setup';
+import { useSelectedProjectStore } from '@/widgets/app-shell';
+
 import { useAgentSelection, type AgentSelection } from './useAgentSelection';
 import { useSendPrompt } from './useSendPrompt';
 import WorkspaceSessionPage from './WorkspaceSessionPage';
@@ -37,8 +39,9 @@ function mount(ipc: FakeWorkspaceIpc, path: string): (workspaceId: string) => Pr
   const list = createRoute({ getParentRoute: () => rootRoute, path: '/workspaces', component: WorkspacesPage });
   const session = createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: WorkspaceSessionPage });
   const chat = createRoute({ getParentRoute: () => rootRoute, path: '/chat/$conversationId', component: () => <p>chat page</p> });
+  const createAgent = createRoute({ getParentRoute: () => rootRoute, path: '/agents/create', component: () => <p>agent editor</p> });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([list, session, chat]),
+    routeTree: rootRoute.addChildren([list, session, chat, createAgent]),
     history: createMemoryHistory({ initialEntries: [path] }),
   });
   render(
@@ -188,7 +191,7 @@ describe('WorkspaceSessionPage', () => {
     await user.click(await screen.findByRole('option', { name: 'Coder' }));
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
 
-    await user.type(screen.getByLabelText('What should the agent do?'), 'fix the build');
+    await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
     await user.click(screen.getByRole('switch', { name: 'Plan mode (no changes)' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
     await user.click(screen.getByRole('button', { name: 'Send' }));
@@ -202,6 +205,7 @@ describe('WorkspaceSessionPage', () => {
       version_id: 9,
       prompt: 'fix the build',
       plan_mode: true,
+      mentions: [],
     });
 
     const at = (seq: number) => ({ turn_id: 'turn-1', seq });
@@ -238,12 +242,12 @@ describe('WorkspaceSessionPage', () => {
     await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
     await user.click(await screen.findByRole('option', { name: 'Coder' }));
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
-    await user.type(screen.getByLabelText('What should the agent do?'), 'fix the build');
+    await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
     expect(await screen.findByText('Local work is turned off by your organisation’s policy.')).toBeInTheDocument();
     expect(ipc.calls.started).toHaveLength(1);
-    expect(screen.getByLabelText('What should the agent do?')).toHaveValue('fix the build');
+    expect(screen.getByTestId('chat-message-input')).toHaveValue('fix the build');
     expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled();
   });
 
@@ -264,7 +268,7 @@ describe('WorkspaceSessionPage', () => {
     await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
     await user.click(await screen.findByRole('option', { name: 'Coder' }));
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
-    await user.type(screen.getByLabelText('What should the agent do?'), 'fix the build');
+    await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
     await user.click(screen.getByRole('button', { name: 'Send' }));
     expect(await screen.findByText(/An agent is still working in this folder/)).toBeInTheDocument();
 
@@ -284,7 +288,7 @@ describe('WorkspaceSessionPage', () => {
     await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
     await user.click(await screen.findByRole('option', { name: 'Coder' }));
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
-    await user.type(screen.getByLabelText('What should the agent do?'), 'go');
+    await user.type(screen.getByTestId('chat-message-input'), 'go');
     await user.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
     ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'text_delta', payload: { text: 'working in app' } });
@@ -295,7 +299,6 @@ describe('WorkspaceSessionPage', () => {
     expect(await screen.findByText('/Users/me/code/lib')).toBeInTheDocument();
     expect(screen.queryByText('working in app')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
-    expect(screen.getByRole('combobox', { name: 'Agent' })).not.toHaveTextContent('Coder');
     // One listener: the old session's was removed with it.
     await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
   });
@@ -309,7 +312,7 @@ describe('WorkspaceSessionPage', () => {
     await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
     await user.click(await screen.findByRole('option', { name: 'Coder' }));
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
-    await user.type(screen.getByLabelText('What should the agent do?'), 'go');
+    await user.type(screen.getByTestId('chat-message-input'), 'go');
     await user.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
 
@@ -329,6 +332,7 @@ describe('WorkspaceSessionPage', () => {
         // An existing conversation: the send reaches the host without creating one.
         conversationId: '77',
         loading: false,
+        empty: false,
         selectAgent: () => undefined,
         selectVersion: () => undefined,
         selectConversation: (id) => {
@@ -346,6 +350,7 @@ describe('WorkspaceSessionPage', () => {
         start: () => Promise.resolve(started),
         cancel: () => Promise.resolve(),
         answer: () => Promise.resolve(),
+        clear: () => undefined,
       };
     }
 
@@ -357,7 +362,7 @@ describe('WorkspaceSessionPage', () => {
       });
       let sent = false;
       await act(async () => {
-        sent = await result.current.send('fix the build', false);
+        sent = await result.current.send('fix the build', false, []);
       });
       return { sent, picks };
     }
@@ -397,7 +402,7 @@ describe('WorkspaceSessionPage', () => {
       let outcomes: boolean[] = [];
       await act(async () => {
         const { send } = result.current.prompt;
-        outcomes = await Promise.all([send('fix the build', false), send('fix the build', false)]);
+        outcomes = await Promise.all([send('fix the build', false, []), send('fix the build', false, [])]);
       });
       expect(outcomes).toEqual([true, false]);
       expect(created).toBe(1);
@@ -407,7 +412,7 @@ describe('WorkspaceSessionPage', () => {
 
   it('starts a new conversation when the agent or the version changes', async () => {
     serveProject();
-    const { result } = renderHook(() => useAgentSelection(42), { wrapper: ({ children }) => <AppProviders>{children}</AppProviders> });
+    const { result } = renderHook(() => useAgentSelection('w1', 42), { wrapper: ({ children }) => <AppProviders>{children}</AppProviders> });
     act(() => result.current.selectAgent('5'));
     await waitFor(() => expect(result.current.versionId).toBe('9'));
 
@@ -418,5 +423,244 @@ describe('WorkspaceSessionPage', () => {
     act(() => result.current.selectConversation('77'));
     act(() => result.current.selectAgent('5'));
     expect(result.current.conversationId).toBe('');
+  });
+
+  describe('start experience', () => {
+    function serveAgents(rows: { id: string; name: string }[]): void {
+      server.use(
+        http.get(`${BASE}/elitea_core/applications/prompt_lib/42`, () =>
+          HttpResponse.json({
+            rows: rows.map((row) => ({ ...row, tags: [], created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', owner_id: '1', is_forked: false, meta: null, has_interrupt: false })),
+            total: rows.length,
+          }),
+        ),
+        http.get(`${BASE}/elitea_core/application/prompt_lib/42/:id`, ({ params }) =>
+          HttpResponse.json({
+            id: String(params['id']),
+            name: rows.find((row) => row.id === params['id'])?.name ?? '',
+            description: '',
+            icon: '',
+            owner_id: '1',
+            created_at: '2026-01-01T00:00:00Z',
+            versions: [
+              { id: `${String(params['id'])}1`, name: 'base', status: 'published', agent_type: 'openai', created_at: '2026-01-01T00:00:00Z' },
+              { id: `${String(params['id'])}2`, name: 'v2', status: 'published', agent_type: 'openai', created_at: '2026-01-01T00:00:00Z' },
+            ],
+          }),
+        ),
+        http.get(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => HttpResponse.json({ rows: [], total: 0 })),
+      );
+    }
+
+    afterEach(() => {
+      window.localStorage.clear();
+    });
+
+    it('explains an empty project and offers to create an agent there or bind another project', async () => {
+      serveAgents([]);
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = userEvent.setup();
+      mount(ipc, '/workspaces/w1');
+
+      const empty = await screen.findByTestId('workspace-no-agents');
+      expect(within(empty).getByText('This project has no agents')).toBeInTheDocument();
+      expect(screen.queryByRole('combobox', { name: 'Agent' })).toBeNull();
+      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project' })).toHaveTextContent('Marketing'));
+
+      await user.click(within(empty).getByRole('button', { name: 'Use another project' }));
+      await user.click(await screen.findByRole('option', { name: 'Public' }));
+      await waitFor(async () => expect((await ipc.list())[0]?.project_id).toBe(1));
+    });
+
+    it('creates the agent in the bound project, without creating anything itself', async () => {
+      serveAgents([]);
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = userEvent.setup();
+      mount(ipc, '/workspaces/w1');
+
+      const empty = await screen.findByTestId('workspace-no-agents');
+      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Project' })).toHaveTextContent('Marketing'));
+      await user.click(within(empty).getByRole('button', { name: 'Create an agent' }));
+      expect(await screen.findByText('agent editor')).toBeInTheDocument();
+      expect(useSelectedProjectStore.getState().project).toEqual({ id: '42', name: 'Marketing' });
+      expect(ipc.calls.started).toEqual([]);
+    });
+
+    it('preselects the first agent, then the agent and version last used in this workspace', async () => {
+      serveAgents([
+        { id: '5', name: 'Coder' },
+        { id: '6', name: 'Reviewer' },
+      ]);
+      const first = renderHook(() => useAgentSelection('w1', 42), { wrapper: ({ children }) => <AppProviders>{children}</AppProviders> });
+      await waitFor(() => expect(first.result.current.versionId).toBe('51'));
+      expect(first.result.current.agentId).toBe('5');
+      act(() => first.result.current.selectAgent('6'));
+      await waitFor(() => expect(first.result.current.versionId).toBe('61'));
+      act(() => first.result.current.selectVersion('62'));
+      await waitFor(() => expect(window.localStorage.getItem('el.desktop.workspace.w1.agent')).toContain('"versionId":"62"'));
+      first.unmount();
+
+      const again = renderHook(() => useAgentSelection('w1', 42), { wrapper: ({ children }) => <AppProviders>{children}</AppProviders> });
+      await waitFor(() => expect(again.result.current.versionId).toBe('62'));
+      expect(again.result.current.agentId).toBe('6');
+      again.unmount();
+      // Another workspace keeps its own default.
+      const other = renderHook(() => useAgentSelection('w2', 42), { wrapper: ({ children }) => <AppProviders>{children}</AppProviders> });
+      await waitFor(() => expect(other.result.current.versionId).toBe('51'));
+    });
+  });
+
+  describe('composer', () => {
+    const FILES = [
+      { path: 'src', kind: 'dir' as const },
+      { path: 'src/main.rs', kind: 'file' as const },
+      { path: 'README.md', kind: 'file' as const },
+    ];
+
+    async function ready(ipc: FakeWorkspaceIpc): Promise<ReturnType<typeof userEvent.setup>> {
+      serveProject();
+      const user = userEvent.setup();
+      mount(ipc, '/workspaces/w1');
+      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+      return user;
+    }
+
+    it('looks up "@" on the host, inserts the picked path and sends it as a mention', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }], files: FILES });
+      const user = await ready(ipc);
+      const input = screen.getByTestId('chat-message-input');
+
+      await user.type(input, 'look at @mai');
+      const menu = await screen.findByTestId('workspace-file-menu');
+      expect(within(menu).getByRole('option', { name: 'src/main.rs' })).toBeInTheDocument();
+      expect(ipc.calls.fileQueries.at(-1)).toEqual({ workspaceId: 'w1', query: 'mai', limit: 50 });
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(input).toHaveValue('look at @src/main.rs '));
+      expect(screen.queryByTestId('workspace-file-menu')).toBeNull();
+
+      // A folder, picked with the mouse, keeps its "/".
+      await user.type(input, 'and @sr');
+      await user.click(await screen.findByRole('option', { name: 'src/' }));
+      await waitFor(() => expect(input).toHaveValue('look at @src/main.rs and @src/ '));
+
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.mentions).toEqual(['src/main.rs', 'src/']);
+      expect(ipc.calls.started[0]?.prompt).toBe('look at @src/main.rs and @src/ ');
+      await waitFor(() => expect(input).toHaveValue(''));
+    });
+
+    it('moves through the "@" menu with the arrows, closes on Esc, and drops a deleted reference', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }], files: FILES });
+      const user = await ready(ipc);
+      const input = screen.getByTestId('chat-message-input');
+
+      await user.type(input, '@');
+      const menu = await screen.findByTestId('workspace-file-menu');
+      expect(within(menu).getAllByRole('option')).toHaveLength(3);
+      await user.keyboard('{ArrowDown}{ArrowDown}');
+      expect(within(menu).getByRole('option', { name: 'README.md' })).toHaveAttribute('aria-selected', 'true');
+      await user.keyboard('{ArrowUp}{Enter}');
+      await waitFor(() => expect(input).toHaveValue('@src/main.rs '));
+
+      await user.type(input, '@READ');
+      await screen.findByTestId('workspace-file-menu');
+      await user.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByTestId('workspace-file-menu')).toBeNull());
+
+      // The picked reference is edited away before sending: no mention goes out.
+      await user.clear(input);
+      await user.type(input, 'just text');
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.mentions).toEqual([]);
+    });
+
+    it('Shift+Enter breaks the line and Enter sends', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      const input = screen.getByTestId('chat-message-input');
+      await user.type(input, 'one{Shift>}{Enter}{/Shift}two');
+      expect(input).toHaveValue('one\ntwo');
+      expect(ipc.calls.started).toHaveLength(0);
+      await user.keyboard('{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.prompt).toBe('one\ntwo');
+    });
+
+    it('runs the "/" commands: plan, help, agent, new, clear and undo', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      ipc.setChanges('turn-1', { files: [{ path: 'a.txt', status: 'modified', added: 1, removed: 1, diff: '' }] });
+      const user = await ready(ipc);
+      const input = screen.getByTestId('chat-message-input');
+
+      await user.type(input, '/');
+      const menu = await screen.findByTestId('workspace-command-menu');
+      expect(within(menu).getAllByRole('option').map((o) => o.getAttribute('aria-label'))).toEqual(['/new', '/plan', '/undo', '/agent', '/clear', '/help']);
+      await user.type(input, 'pl{Enter}');
+      expect(screen.getByRole('switch', { name: 'Plan mode (no changes)' })).toBeChecked();
+      await waitFor(() => expect(input).toHaveValue(''));
+
+      await user.type(input, '/help{Enter}');
+      expect(within(await screen.findByTestId('workspace-help')).getByText('/undo')).toBeInTheDocument();
+
+      await user.type(input, '/agent{Enter}');
+      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Agent' })).toHaveFocus());
+
+      // Nothing to undo yet.
+      await user.click(input);
+      await user.type(input, '/undo{Enter}');
+      expect(await screen.findByText('The last turn here changed no files.')).toBeInTheDocument();
+
+      // A turn that changed a file: /undo asks the same confirmation as the card's button.
+      await user.type(input, 'go{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      expect(ipc.calls.started[0]?.plan_mode).toBe(true);
+      ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running' } });
+      ipc.emit({ turn_id: 'turn-1', seq: 2, kind: 'text_delta', payload: { text: 'changed a.txt' } });
+      ipc.emit({ turn_id: 'turn-1', seq: 3, kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 1 } });
+      expect(await screen.findByText('a.txt')).toBeInTheDocument();
+      await user.type(input, '/undo{Enter}');
+      const dialog = await screen.findByRole('dialog', { name: 'Undo this turn?' });
+      await user.click(within(dialog).getByRole('button', { name: 'Undo turn' }));
+      await waitFor(() => expect(ipc.calls.restores).toEqual([{ turnId: 'turn-1' }]));
+
+      await user.type(input, '/clear{Enter}');
+      await waitFor(() => expect(screen.queryByText('changed a.txt')).toBeNull());
+      expect(screen.queryByText('a.txt')).toBeNull();
+
+      // /new: the next send starts a new conversation again.
+      let created = 0;
+      server.use(
+        http.post(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => {
+          created += 1;
+          return HttpResponse.json({ id: 78, name: 'again' });
+        }),
+        http.post(`${BASE}/elitea_core/participants/prompt_lib/42/78`, () => HttpResponse.json([])),
+      );
+      await user.type(input, '/new{Enter}');
+      await user.type(input, 'again{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
+      expect(created).toBe(1);
+      expect(ipc.calls.started[1]?.conversation_id).toBe('78');
+    });
+
+    it('does not open the command menu for a "/" inside the text', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      await user.type(screen.getByTestId('chat-message-input'), 'fix src/');
+      expect(screen.queryByTestId('workspace-command-menu')).toBeNull();
+    });
+
+    it('shows when the turn applied AGENTS.md', async () => {
+      const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+      const user = await ready(ipc);
+      await user.type(screen.getByTestId('chat-message-input'), 'go{Enter}');
+      await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+      ipc.emit({ turn_id: 'turn-1', seq: 1, kind: 'status', payload: { phase: 'running', project_instructions: ['AGENTS.md', 'apps/web/AGENTS.md'] } });
+      const chip = await screen.findByTestId('agents-md-applied');
+      expect(chip).toHaveTextContent('AGENTS.md applied');
+      expect(chip).toHaveAttribute('aria-description', 'AGENTS.md, apps/web/AGENTS.md');
+    });
   });
 });

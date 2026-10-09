@@ -5,60 +5,96 @@
  *
  * Agent and version selection reuse the app's own application queries (the
  * same generated hooks the agents page uses); the chat composer's version bar
- * is tied to the chat form, so plain selects stand in for it here.
+ * is tied to the chat form, so plain selects stand in for it here. The
+ * composer itself is the chat page's input, with "@" files and "/" commands
+ * (`WorkspaceComposer`).
  */
-import { useState, type SubmitEvent } from 'react';
-
-import { Link, useParams } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
+import { Link, useNavigate, useParams } from '@tanstack/react-router';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import FormControlLabel from '@mui/material/FormControlLabel';
-import Switch from '@mui/material/Switch';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
-import { ApprovalDialog, ChangedFilesCard, TurnTranscript, useWorkspaceIpc, useWorkspaceTurn } from '@/features/workspace';
+import {
+  ApprovalDialog,
+  ChangedFilesCard,
+  composer,
+  describeWorkspaceError,
+  TurnTranscript,
+  useWorkspaceIpc,
+  useWorkspaceTurn,
+} from '@/features/workspace';
 import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
+import { useSelectedProject } from '@/widgets/app-shell';
 
 import { AgentPickers } from './AgentPickers';
 import { useAgentSelection } from './useAgentSelection';
+import { useBindableProjects } from './useBindableProjects';
 import { useSendPrompt } from './useSendPrompt';
+import { useSessionCommands } from './useSessionCommands';
+import { WorkspaceComposer } from './WorkspaceComposer';
 
-function Composer({ canSend, onSend }: { canSend: boolean; onSend: (prompt: string, planMode: boolean) => Promise<boolean> }): React.JSX.Element {
-  const [prompt, setPrompt] = useState('');
-  const [planMode, setPlanMode] = useState(false);
-  const submit = (event: SubmitEvent<HTMLFormElement>): void => {
-    event.preventDefault();
-    void onSend(prompt, planMode).then((sent) => {
-      if (sent) setPrompt('');
-    });
-  };
+const LIST_KEY = ['workspace', 'list'] as const;
+
+function HelpNotice({ onClose }: { onClose: () => void }): React.JSX.Element {
   return (
-    <Box component="form" onSubmit={submit} sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <TextField multiline minRows={3} label={t('workspace.prompt', 'What should the agent do?')} value={prompt} onChange={(e) => setPrompt(e.target.value)} />
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-        <FormControlLabel
-          control={<Switch checked={planMode} onChange={(e) => setPlanMode(e.target.checked)} />}
-          label={t('workspace.planMode', 'Plan mode (no changes)')}
-        />
-        <Button type="submit" variant="contained" disabled={!canSend || prompt.trim() === ''} sx={{ marginLeft: 'auto' }}>
-          {t('workspace.send', 'Send')}
-        </Button>
+    <Alert severity="info" onClose={onClose} data-testid="workspace-help">
+      <Box component="ul" sx={{ margin: 0, paddingLeft: 2 }}>
+        {composer.workspaceCommands().map((command) => (
+          <li key={command.id}>
+            <Typography component="span" variant="labelMedium">
+              {command.name}
+            </Typography>
+            {` — ${command.description}`}
+          </li>
+        ))}
+        <li>
+          <Typography component="span" variant="labelMedium">
+            @
+          </Typography>
+          {` — ${t('workspace.command.mention', 'Reference a file or folder of this workspace')}`}
+        </li>
       </Box>
-    </Box>
+    </Alert>
   );
 }
 
+/** The message to show: the turn's refusal, else the send's failure, else a failed re-bind. */
+function firstError(startError: string | null, sendError: string | null, rebindError: unknown): string | null {
+  if (startError !== null) return startError;
+  if (sendError !== null) return sendError;
+  return rebindError === null || rebindError === undefined ? null : describeWorkspaceError(rebindError);
+}
+
 function BoundSession({ ipc, workspace, projectId }: { ipc: WorkspaceIpc; workspace: Workspace; projectId: number }): React.JSX.Element {
-  const selection = useAgentSelection(projectId);
+  const selection = useAgentSelection(workspace.id, projectId);
   const turn = useWorkspaceTurn(ipc);
   const { canSend, sendError, send } = useSendPrompt(workspace, projectId, selection, turn);
+  const projects = useBindableProjects();
+  const { selectProject } = useSelectedProject();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [pendingApproval, ...waiting] = turn.view.approvals;
   const done = turn.view.done;
+  const undoTurnId = done !== undefined && done.changedFiles > 0 ? turn.turnId : null;
+  const commands = useSessionCommands(selection, turn, undoTurnId !== null);
+
+  // Re-binding re-keys the session (see `Session`): the new project's agents, a fresh turn.
+  const rebind = useMutation({
+    mutationFn: (next: number) => ipc.bindProject(workspace.id, next),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: LIST_KEY }),
+  });
+
+  const createAgent = (): void => {
+    // The agent editor creates in the app's selected project: make it the bound one first.
+    const bound = projects.find((p) => p.id === projectId);
+    if (bound !== undefined) selectProject(String(bound.id), bound.name);
+    void navigate({ to: '/agents/create' });
+  };
+
+  const error = firstError(turn.startError, sendError, rebind.error);
 
   return (
     <Box data-testid="workspace-session" sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -68,16 +104,40 @@ function BoundSession({ ipc, workspace, projectId }: { ipc: WorkspaceIpc; worksp
         </Typography>
         <Typography variant="bodySmall">{workspace.path}</Typography>
       </Box>
-      <AgentPickers selection={selection} />
+      <AgentPickers
+        selection={selection}
+        projectId={projectId}
+        projects={projects}
+        busy={turn.busy || rebind.isPending}
+        onChangeProject={(next) => rebind.mutate(next)}
+        onCreateAgent={createAgent}
+        agentRef={commands.agentRef}
+      />
       <TurnTranscript view={turn.view} busy={turn.busy} onCancel={() => void turn.cancel()} />
-      {(turn.startError ?? sendError) !== null && <Alert severity="error">{turn.startError ?? sendError}</Alert>}
-      {done !== undefined && turn.turnId !== null && done.changedFiles > 0 && <ChangedFilesCard ipc={ipc} turnId={turn.turnId} />}
+      {error !== null && <Alert severity="error">{error}</Alert>}
+      {undoTurnId !== null && <ChangedFilesCard ipc={ipc} turnId={undoTurnId} undoRequest={commands.undoRequest} />}
       {done?.committed === true && (
         <Link to="/chat/$conversationId" params={{ conversationId: done.conversationId }}>
           {t('workspace.openInChat', 'Open in chat')}
         </Link>
       )}
-      <Composer canSend={canSend} onSend={send} />
+      {commands.notice === 'help' && <HelpNotice onClose={commands.closeNotice} />}
+      {commands.notice === 'nothingToUndo' && (
+        <Alert severity="info" onClose={commands.closeNotice}>
+          {t('workspace.undoNothing', 'The last turn here changed no files.')}
+        </Alert>
+      )}
+      <WorkspaceComposer
+        ipc={ipc}
+        workspaceId={workspace.id}
+        canSend={canSend}
+        busy={turn.busy}
+        planMode={commands.planMode}
+        onPlanModeChange={commands.setPlanMode}
+        onSend={(prompt, mentions) => send(prompt, commands.planMode, mentions)}
+        onStop={() => void turn.cancel()}
+        onCommand={commands.run}
+      />
       <ApprovalDialog request={pendingApproval} queued={waiting.length} onRespond={(id, decision) => void turn.answer(id, decision)} />
     </Box>
   );
