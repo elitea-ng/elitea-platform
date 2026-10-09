@@ -34,7 +34,20 @@ absolute citations, kept text facts, and relations that are actually extracted.
 `graph.golden.json`, which the Python graph itself wrote (frozen;
 see `PROVENANCE.md`). The module docs list the Python behaviours deliberately not
 carried over: stale indices, edge provenance lost on save, type
-normalisation inside the store.
+normalisation inside the store, and relation provenance by last writer: an
+edge two sources (or two files) found carries `provenance`, the list of its
+`{source_toolkit, discovered_in_file}` contributions, so removing one source
+or re-reading one file withdraws only that contribution and the edge goes
+when none is left. Python kept the last writer's `source_toolkit` only, and
+removing an overlapping source deleted relations the other still said. An
+edge with one contribution has no `provenance`, so single-source graphs and
+the goldens are unchanged, and a Python `graph.json` loads as is.
+`full_rebuild` is scoped to the source `run_ingestion` names: it forgets
+what that source said (citations, entities only it cited, its relation
+contributions, its document records) and reads every document again; other
+sources keep their entities, relations, documents and status. Python deleted
+the whole `graph.json`. As before, nothing is committed until the run
+completes, so a failed or stopped rebuild leaves the previous graph.
 
 `src/store.rs` keeps each graph as rows in the `inventory_graph` schema
 (`migrations/`), addressed by project and toolkit id, instead of one

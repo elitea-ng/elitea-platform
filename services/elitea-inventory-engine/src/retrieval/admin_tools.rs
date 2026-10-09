@@ -60,10 +60,11 @@
 //!   entities shared with another source went too, with their edges — and
 //!   left `sources_status.json` and the checkpoint claiming the source):
 //!   for the source `toolkit_id` names, (1) drop that source's citations
-//!   from every entity, (2) drop the relations that source contributed
-//!   (an edge's `source_toolkit`), (3) delete the entities that HAD
-//!   citations and are left with none (an entity never cited stays), with
-//!   every edge touching them — `Graph::remove_file` per file of the
+//!   from every entity, (2) withdraw that source's contribution from
+//!   every relation (`graph::relation_provenance`; a relation another
+//!   source also found stays, with that source's provenance), (3) delete
+//!   the entities that HAD citations and are left with none (an entity
+//!   never cited stays), with every edge touching them — `Graph::remove_file` per file of the
 //!   source, widened to every relation of the source — (4) delete its
 //!   `source_files` and `sources` rows, then (5) bump the graph revision
 //!   so cached views reload — one transaction. The answer keeps Python's

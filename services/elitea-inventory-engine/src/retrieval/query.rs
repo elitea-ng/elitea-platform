@@ -930,7 +930,14 @@ pub fn stats(view: &GraphView) -> Map<String, Value> {
         if let Some(kind) = data.get("relation_type") {
             bump(&mut relation_types, py_display(kind));
         }
-        if let Some(source) = data.get("source_toolkit").filter(|v| py_truthy(v)) {
+        // An edge two sources found counts for each, as the source status
+        // and `Graph::source_counts` count it.
+        let contributors = crate::graph::relation_sources(data);
+        if contributors.len() > 1 {
+            for source in contributors.into_iter().filter(|s| !s.is_empty()) {
+                bump(&mut relations_by_source, source);
+            }
+        } else if let Some(source) = data.get("source_toolkit").filter(|v| py_truthy(v)) {
             bump(&mut relations_by_source, py_display(source));
         }
     }
@@ -1410,6 +1417,35 @@ mod tests {
 
     fn view(document: &Value) -> GraphView {
         GraphView::new(Graph::from_node_link(document).unwrap_or_default(), 1)
+    }
+
+    #[test]
+    fn a_relation_two_sources_found_counts_for_each() {
+        let view = view(&json!({
+            "nodes": [{"id": "a"}, {"id": "b"}],
+            "links": [
+                {"source": "a", "target": "b", "relation_type": "calls",
+                 "source_toolkit": "mirror", "discovered_in_file": "a.py",
+                 "provenance": [
+                     {"source_toolkit": "repo", "discovered_in_file": "a.py"},
+                     {"source_toolkit": "mirror", "discovered_in_file": "a.py"},
+                 ]},
+                {"source": "b", "target": "a", "relation_type": "uses",
+                 "source_toolkit": "mirror"},
+            ],
+        }));
+        let stats = stats(&view);
+        assert_eq!(stats["edge_count"], json!(2));
+        assert_eq!(
+            stats["relations_by_source"],
+            json!({"mirror": 2, "repo": 1})
+        );
+        for source in ["repo", "mirror"] {
+            assert_eq!(
+                stats["relations_by_source"][source],
+                json!(view.graph.source_counts(source).1)
+            );
+        }
     }
 
     #[test]

@@ -204,8 +204,9 @@ impl NativeRunner {
         }
     }
 
-    /// `remove_source_entities`: the source's citations, its edges and the
-    /// entities only it cited go; its status and file hashes too. Under the
+    /// `remove_source_entities`: the source's citations, its contribution
+    /// to every edge (an edge only it found goes) and the entities only it
+    /// cited go; its status and file hashes too. Under the
     /// ingestion lease, so it cannot interleave with a run.
     ///
     /// The Python handler matched the toolkit id against citations that

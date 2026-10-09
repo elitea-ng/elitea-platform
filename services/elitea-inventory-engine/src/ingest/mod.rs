@@ -438,7 +438,9 @@ pub struct RunOptions {
     pub model: Option<ModelOptions>,
     /// Entity embeddings, when the toolkit configures a model for them.
     pub embeddings: Option<elitea_model_client::embeddings::EmbeddingClient>,
-    /// `full_rebuild`: start from an empty graph (every source of it).
+    /// `full_rebuild`: re-read every document of THIS source, after
+    /// forgetting everything it said ([`Graph::remove_source`]); the other
+    /// sources of the graph are untouched.
     pub full_rebuild: bool,
 }
 
@@ -750,12 +752,15 @@ pub async fn run(
         toolkit_type: source.kind.name().to_owned(),
         branch: Some(source.active_branch()),
     };
-    // `full_rebuild` does NOT delete the graph here: a rebuild that fails or
-    // is stopped must leave the previous graph readable, as every other
-    // failed run does. run_started starts from an empty graph instead, and
-    // the commit replaces the graph and every source's state in one
-    // transaction (source_store::complete_rebuild). MEASURED: deleting up
-    // front, a rebuild stopped 45 s in left the toolkit with no graph at all.
+    // `full_rebuild` does NOT delete anything here: a rebuild that fails
+    // or is stopped must leave the previous graph readable, as every other
+    // failed run does. run_started removes the source's contributions from
+    // the loaded graph in memory instead, and the commit replaces the graph
+    // and the source's state in one transaction. MEASURED: deleting up
+    // front, a rebuild stopped 45 s in left the toolkit with no graph at
+    // all. The rebuild is scoped to the source run_ingestion names: Python
+    // deleted the whole graph.json, every other source's entities,
+    // relations and state with it.
     source_store::start(pool, key, &status)
         .await
         .map_err(|e| store_error(&e))?;
@@ -823,25 +828,27 @@ async fn run_started(
         source.kind.name(),
         source.name
     ));
-    let (graph, previous) = if options.full_rebuild {
-        (Graph::default(), BTreeMap::new())
+    let mut graph = store::load(pool, key)
+        .await
+        .map_err(|e| store_error(&e))?
+        .map(|(graph, _)| graph)
+        .unwrap_or_default();
+    let previous = if options.full_rebuild {
+        // Forget what this source said (its citations, the entities only it
+        // cited, its contribution to every relation) and read every document
+        // again. Nothing is committed until the run completes.
+        graph.remove_source(&source.name);
+        BTreeMap::new()
     } else {
-        let graph = store::load(pool, key)
+        source_store::document_versions(pool, key, &source.name)
             .await
             .map_err(|e| store_error(&e))?
-            .map(|(graph, _)| graph)
-            .unwrap_or_default();
-        let previous = source_store::document_versions(pool, key, &source.name)
-            .await
-            .map_err(|e| store_error(&e))?;
-        (graph, previous)
     };
 
     let (_scratch, cloned) = clone(settings, &repo_config, key, source, context).await?;
 
     let tree = cloned.path.clone();
     let checkout = GitSource::new(&tree);
-    let mut graph = graph;
     let (outcome, to_read) = prepare(&mut graph, source, &checkout, &previous, context).await?;
     let source_for_tree = source.clone();
     let context_for_tree = context.clone();
@@ -888,12 +895,11 @@ async fn run_started(
         counts,
         commit_sha: Some(cloned.identity.commit()),
     };
-    if options.full_rebuild {
-        source_store::complete_rebuild(pool, key, &graph, &completion).await
-    } else {
-        source_store::complete(pool, key, &graph, &completion).await
-    }
-    .map_err(|e| store_error(&e))?;
+    // A rebuild commits as any run does: the graph, and this source's
+    // documents (all replaced) and status.
+    source_store::complete(pool, key, &graph, &completion)
+        .await
+        .map_err(|e| store_error(&e))?;
     context.thinking(format!(
         "[complete] {} files read, {} unchanged, {} removed",
         outcome.documents_processed, outcome.unchanged, outcome.removed_files

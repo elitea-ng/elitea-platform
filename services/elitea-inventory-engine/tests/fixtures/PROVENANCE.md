@@ -36,3 +36,13 @@ requirements at that commit, including igraph/networkx for the communities
 goldens). Copy the regenerated JSON back over the frozen files and review the
 diff: a changed golden means the Rust port must change or the difference must be
 documented as a deliberate deviation.
+
+Deliberate deviation without a golden change: `graph.golden.json` has no
+relation two sources contributed, so the `provenance` edge attribute (the
+Rust graph's list of an overlapping relation's `{source_toolkit,
+discovered_in_file}` contributions; see `src/graph.rs`) never appears in it.
+Python had no such attribute: its edge kept the last writer's
+`source_toolkit` only.
+
+Also without a golden: `full_rebuild` rebuilds only the source it names
+(Python deleted the whole graph, every other source's data with it).
