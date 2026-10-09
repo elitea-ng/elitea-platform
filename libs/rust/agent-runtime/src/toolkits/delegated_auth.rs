@@ -28,7 +28,7 @@ const MAX_TOOLKIT_IDENTITY_BYTES: usize = 1_024;
 
 /// Stable private ADK error code used to carry the current `mcp_auth` control
 /// signal through policy wrappers without exposing a provider error body.
-pub const DELEGATED_AUTHORIZATION_ERROR_CODE: &str = "mcp.authorization_required";
+pub(crate) const DELEGATED_AUTHORIZATION_ERROR_CODE: &str = "mcp.authorization_required";
 pub const DELEGATED_AUTHORIZATION_METADATA_KEY: &str = "elitea.delegated-authorization.v1";
 pub const DELEGATED_AUTHORIZATION_SCOPE_KEY: &str = "elitea.delegated-authorization-scope.v1";
 
@@ -52,7 +52,7 @@ struct DelegatedToolIdentity {
 }
 
 impl DelegatedAuthorizationCatalog {
-    pub fn insert_discovery_requirement(
+    pub(crate) fn insert_discovery_requirement(
         &mut self,
         requirement: DelegatedAuthorizationRequirement,
     ) -> Result<(), ()> {
@@ -355,7 +355,7 @@ impl DelegatedAuthorizationRequirement {
                 == discovery::configured_metadata(other.resource_metadata.as_ref())
     }
 
-    pub fn with_toolkit_id(mut self, id: Option<u64>) -> Self {
+    pub(crate) fn with_toolkit_id(mut self, id: Option<u64>) -> Self {
         if let Some(id) = id
             && let Some(metadata) = self
                 .resource_metadata
@@ -506,7 +506,7 @@ pub fn decode_declined_authorization_scope(
     .then_some(requirements)
 }
 
-pub fn preserve_delegated_authorization_error(error: &AdkError) -> Option<AdkError> {
+pub(super) fn preserve_delegated_authorization_error(error: &AdkError) -> Option<AdkError> {
     let requirement = delegated_authorization_requirement(error)?;
     if error.component != ErrorComponent::Auth
         || error.category != ErrorCategory::Unauthorized
@@ -517,7 +517,9 @@ pub fn preserve_delegated_authorization_error(error: &AdkError) -> Option<AdkErr
     Some(delegated_authorization_error(&requirement))
 }
 
-pub fn delegated_authorization_error(requirement: &DelegatedAuthorizationRequirement) -> AdkError {
+pub(crate) fn delegated_authorization_error(
+    requirement: &DelegatedAuthorizationRequirement,
+) -> AdkError {
     let metadata = serde_json::to_value(requirement).unwrap_or(serde_json::Value::Null);
     let mut details = ErrorDetails::default();
     details

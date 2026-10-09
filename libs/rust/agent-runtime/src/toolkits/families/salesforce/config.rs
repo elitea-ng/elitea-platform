@@ -14,19 +14,19 @@ const MAX_SELECTED_TOOLS: usize = 1_024;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SalesforceConfigErrorCode {
+pub(crate) enum SalesforceConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable, data-free failure for one materialized Salesforce configuration.
-pub struct SalesforceConfigError {
+pub(crate) struct SalesforceConfigError {
     code: SalesforceConfigErrorCode,
 }
 
 impl SalesforceConfigError {
     #[must_use]
-    pub const fn code(&self) -> SalesforceConfigErrorCode {
+    pub(crate) const fn code(&self) -> SalesforceConfigErrorCode {
         self.code
     }
 }
@@ -60,7 +60,7 @@ impl std::error::Error for SalesforceConfigError {}
 /// Main resolves the nested configuration only for the admitted command. The
 /// credential is non-cloneable and non-debuggable; the owning client creates
 /// the bearer token lazily at the first real tool invocation.
-pub struct SalesforceToolkitConfig {
+pub(crate) struct SalesforceToolkitConfig {
     origin: Url,
     client_id: Zeroizing<String>,
     client_secret: Zeroizing<String>,
@@ -69,7 +69,7 @@ pub struct SalesforceToolkitConfig {
 }
 
 impl SalesforceToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, SalesforceConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, SalesforceConfigError> {
         let configuration = settings
             .get("salesforce_configuration")
             .and_then(Value::as_object)
@@ -106,34 +106,34 @@ impl SalesforceToolkitConfig {
         })
     }
 
-    pub const fn origin(&self) -> &Url {
+    pub(super) const fn origin(&self) -> &Url {
         &self.origin
     }
 
-    pub fn client_id(&self) -> &str {
+    pub(super) fn client_id(&self) -> &str {
         &self.client_id
     }
 
-    pub fn client_secret(&self) -> &str {
+    pub(super) fn client_secret(&self) -> &str {
         &self.client_secret
     }
 
-    pub fn api_version(&self) -> &str {
+    pub(super) fn api_version(&self) -> &str {
         &self.api_version
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_origin(&self) -> &Url {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_origin(&self) -> &Url {
         self.origin()
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_api_version(&self) -> &str {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_api_version(&self) -> &str {
         self.api_version()
     }
 }

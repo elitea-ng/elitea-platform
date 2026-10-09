@@ -15,7 +15,7 @@ const MAX_TOOL_NAME_BYTES: usize = 1_024;
 
 /// Stable authentication selector for safe control flow and diagnostics.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GitHubAuthKind {
+pub(crate) enum GitHubAuthKind {
     Anonymous,
     Token,
     Basic,
@@ -27,7 +27,7 @@ pub enum GitHubAuthKind {
 /// Configuration values can include passwords, tokens, private keys and
 /// private Enterprise hosts. Debug and display intentionally expose neither a
 /// field path nor a source value.
-pub struct GitHubToolkitConfigError {
+pub(crate) struct GitHubToolkitConfigError {
     message: &'static str,
 }
 
@@ -53,7 +53,7 @@ impl std::error::Error for GitHubToolkitConfigError {}
 /// storage uses `Zeroizing`; HTTP authorization headers are created only for a
 /// concrete request. The unavoidable TLS/client copies are bounded by process
 /// lifetime and are never logged or persisted by this family.
-pub struct GitHubToolkitConfig {
+pub(crate) struct GitHubToolkitConfig {
     base_url: Url,
     repository: Box<str>,
     active_branch: Box<str>,
@@ -62,7 +62,7 @@ pub struct GitHubToolkitConfig {
     auth: GitHubAuth,
 }
 
-pub enum GitHubAuth {
+pub(super) enum GitHubAuth {
     Anonymous,
     Token(Zeroizing<String>),
     Basic {
@@ -78,7 +78,7 @@ pub enum GitHubAuth {
 impl GitHubToolkitConfig {
     /// Parse the exact materialized settings shape produced by Main for the
     /// current SDK GitHub toolkit.
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, GitHubToolkitConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, GitHubToolkitConfigError> {
         let configuration = settings
             .get("github_configuration")
             .and_then(Value::as_object)
@@ -109,7 +109,7 @@ impl GitHubToolkitConfig {
     }
 
     #[must_use]
-    pub const fn auth_kind(&self) -> GitHubAuthKind {
+    pub(crate) const fn auth_kind(&self) -> GitHubAuthKind {
         match &self.auth {
             GitHubAuth::Anonymous => GitHubAuthKind::Anonymous,
             GitHubAuth::Token(_) => GitHubAuthKind::Token,
@@ -119,51 +119,51 @@ impl GitHubToolkitConfig {
     }
 
     #[must_use]
-    pub fn base_url(&self) -> &Url {
+    pub(crate) fn base_url(&self) -> &Url {
         &self.base_url
     }
 
     #[must_use]
-    pub fn repository(&self) -> &str {
+    pub(crate) fn repository(&self) -> &str {
         &self.repository
     }
 
     #[must_use]
-    pub fn active_branch(&self) -> &str {
+    pub(crate) fn active_branch(&self) -> &str {
         &self.active_branch
     }
 
     #[must_use]
-    pub fn base_branch(&self) -> &str {
+    pub(crate) fn base_branch(&self) -> &str {
         &self.base_branch
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 
-    pub const fn auth(&self) -> &GitHubAuth {
+    pub(super) const fn auth(&self) -> &GitHubAuth {
         &self.auth
     }
 }
 
 impl GitHubAuth {
-    pub fn token(&self) -> Option<&str> {
+    pub(super) fn token(&self) -> Option<&str> {
         match self {
             Self::Token(value) => Some(value),
             Self::Anonymous | Self::Basic { .. } | Self::App { .. } => None,
         }
     }
 
-    pub fn basic(&self) -> Option<(&str, &str)> {
+    pub(super) fn basic(&self) -> Option<(&str, &str)> {
         match self {
             Self::Basic { username, password } => Some((username, password)),
             Self::Anonymous | Self::Token(_) | Self::App { .. } => None,
         }
     }
 
-    pub fn app(&self) -> Option<(&str, &str)> {
+    pub(super) fn app(&self) -> Option<(&str, &str)> {
         match self {
             Self::App {
                 app_id,

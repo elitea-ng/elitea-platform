@@ -11,19 +11,19 @@ const MAX_SELECTED_TOOLS: usize = 1_024;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReportPortalConfigErrorCode {
+pub(crate) enum ReportPortalConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable configuration failure that retains no `ReportPortal` authority data.
-pub struct ReportPortalConfigError {
+pub(crate) struct ReportPortalConfigError {
     code: ReportPortalConfigErrorCode,
 }
 
 impl ReportPortalConfigError {
     #[must_use]
-    pub const fn code(&self) -> ReportPortalConfigErrorCode {
+    pub(crate) const fn code(&self) -> ReportPortalConfigErrorCode {
         self.code
     }
 }
@@ -56,7 +56,7 @@ impl std::error::Error for ReportPortalConfigError {}
 ///
 /// The endpoint is an exact HTTPS origin. The API key is non-cloneable,
 /// non-debuggable, and zeroized when the owning toolset is dropped.
-pub struct ReportPortalToolkitConfig {
+pub(crate) struct ReportPortalToolkitConfig {
     endpoint: Url,
     project: Box<str>,
     api_key: Zeroizing<String>,
@@ -64,7 +64,7 @@ pub struct ReportPortalToolkitConfig {
 }
 
 impl ReportPortalToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, ReportPortalConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, ReportPortalConfigError> {
         let configuration = settings
             .get("report_portal_configuration")
             .and_then(Value::as_object)
@@ -85,20 +85,20 @@ impl ReportPortalToolkitConfig {
         })
     }
 
-    pub const fn endpoint(&self) -> &Url {
+    pub(super) const fn endpoint(&self) -> &Url {
         &self.endpoint
     }
 
-    pub fn project(&self) -> &str {
+    pub(super) fn project(&self) -> &str {
         &self.project
     }
 
-    pub fn api_key(&self) -> &str {
+    pub(super) fn api_key(&self) -> &str {
         &self.api_key
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

@@ -28,7 +28,7 @@ const USER_AGENT: &str = "elitea-worker-rust/0.1";
 const JSON_CONTENT_TYPE: &str = "application/json";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ElasticClientErrorCode {
+pub(crate) enum ElasticClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -43,18 +43,18 @@ pub enum ElasticClientErrorCode {
 
 /// One stable Elasticsearch failure without cluster, key, index, query, or
 /// provider body data.
-pub struct ElasticClientError {
+pub(crate) struct ElasticClientError {
     code: ElasticClientErrorCode,
 }
 
 impl ElasticClientError {
     #[must_use]
-    pub const fn code(&self) -> ElasticClientErrorCode {
+    pub(crate) const fn code(&self) -> ElasticClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         matches!(
             self.code,
             ElasticClientErrorCode::RateLimited
@@ -63,7 +63,7 @@ impl ElasticClientError {
         )
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             ElasticClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -123,8 +123,8 @@ impl ElasticClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: ElasticClientErrorCode) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(code: ElasticClientErrorCode) -> Self {
         Self { code }
     }
 }
@@ -162,19 +162,19 @@ impl fmt::Display for ElasticClientError {
 impl std::error::Error for ElasticClientError {}
 
 #[async_trait]
-pub trait ElasticApi: Send + Sync {
+pub(in crate::toolkits) trait ElasticApi: Send + Sync {
     async fn search(&self, index: &str, query: &Value) -> Result<Value, ElasticClientError>;
 }
 
-pub struct ElasticHttpResponse {
+pub(in crate::toolkits) struct ElasticHttpResponse {
     status: StatusCode,
     content_type: Option<Box<str>>,
     body: Vec<u8>,
 }
 
 impl ElasticHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture(
         status: StatusCode,
         content_type: Option<&str>,
         body: impl Into<Vec<u8>>,
@@ -188,7 +188,7 @@ impl ElasticHttpResponse {
 }
 
 #[async_trait]
-pub trait ElasticTransport: Send + Sync {
+pub(in crate::toolkits) trait ElasticTransport: Send + Sync {
     async fn execute(&self, request: Request) -> Result<ElasticHttpResponse, ElasticClientError>;
 }
 
@@ -243,13 +243,13 @@ impl ElasticTransport for ReqwestElasticTransport {
 }
 
 /// Invocation-owned, fixed-origin Elasticsearch Search API client.
-pub struct ElasticClient {
+pub(crate) struct ElasticClient {
     config: ElasticToolkitConfig,
     transport: Arc<dyn ElasticTransport>,
 }
 
 impl ElasticClient {
-    pub fn new(config: ElasticToolkitConfig) -> Result<Self, ElasticClientError> {
+    pub(crate) fn new(config: ElasticToolkitConfig) -> Result<Self, ElasticClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .no_proxy()
@@ -268,8 +268,8 @@ impl ElasticClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn with_transport(
         config: ElasticToolkitConfig,
         transport: Arc<dyn ElasticTransport>,
     ) -> Self {
@@ -334,8 +334,12 @@ impl ElasticClient {
         Ok(value)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_request(&self, index: &str, query: &Value) -> Result<Request, ElasticClientError> {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_request(
+        &self,
+        index: &str,
+        query: &Value,
+    ) -> Result<Request, ElasticClientError> {
         self.request(index, query)
     }
 }
@@ -347,7 +351,7 @@ impl ElasticApi for ElasticClient {
     }
 }
 
-pub fn validate_index(index: &str) -> Result<(), ElasticClientError> {
+pub(in crate::toolkits) fn validate_index(index: &str) -> Result<(), ElasticClientError> {
     if index.is_empty() || index.len() > MAX_INDEX_BYTES {
         return Err(if index.len() > MAX_INDEX_BYTES {
             resource_exhausted()
@@ -367,7 +371,7 @@ pub fn validate_index(index: &str) -> Result<(), ElasticClientError> {
     Ok(())
 }
 
-pub fn validate_query(query: &Value) -> Result<(), ElasticClientError> {
+pub(in crate::toolkits) fn validate_query(query: &Value) -> Result<(), ElasticClientError> {
     let object = query.as_object().ok_or_else(invalid_input)?;
     let body = serde_json::to_vec(query).map_err(|_| invalid_input())?;
     if body.len() > MAX_QUERY_BYTES {

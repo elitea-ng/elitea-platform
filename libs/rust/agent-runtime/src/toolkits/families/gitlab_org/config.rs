@@ -14,19 +14,19 @@ const MAX_SELECTED_TOOLS: usize = 1_024;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GitLabOrgConfigErrorCode {
+pub(crate) enum GitLabOrgConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable failure that retains no GitLab URL, repository, or credential data.
-pub struct GitLabOrgConfigError {
+pub(crate) struct GitLabOrgConfigError {
     code: GitLabOrgConfigErrorCode,
 }
 
 impl GitLabOrgConfigError {
     #[must_use]
-    pub const fn code(&self) -> GitLabOrgConfigErrorCode {
+    pub(crate) const fn code(&self) -> GitLabOrgConfigErrorCode {
         self.code
     }
 }
@@ -56,7 +56,7 @@ impl fmt::Display for GitLabOrgConfigError {
 impl std::error::Error for GitLabOrgConfigError {}
 
 /// One invocation-scoped GitLab origin, secret, repository allowlist and branch.
-pub struct GitLabOrgToolkitConfig {
+pub(crate) struct GitLabOrgToolkitConfig {
     base_url: Url,
     private_token: Zeroizing<String>,
     repositories: Vec<Box<str>>,
@@ -65,7 +65,7 @@ pub struct GitLabOrgToolkitConfig {
 }
 
 impl GitLabOrgToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, GitLabOrgConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, GitLabOrgConfigError> {
         let configuration = settings
             .get("gitlab_configuration")
             .and_then(Value::as_object)
@@ -97,24 +97,24 @@ impl GitLabOrgToolkitConfig {
         })
     }
 
-    pub const fn base_url(&self) -> &Url {
+    pub(super) const fn base_url(&self) -> &Url {
         &self.base_url
     }
 
-    pub fn private_token(&self) -> &str {
+    pub(super) fn private_token(&self) -> &str {
         &self.private_token
     }
 
-    pub fn repositories(&self) -> &[Box<str>] {
+    pub(super) fn repositories(&self) -> &[Box<str>] {
         &self.repositories
     }
 
-    pub fn branch(&self) -> &str {
+    pub(super) fn branch(&self) -> &str {
         &self.branch
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

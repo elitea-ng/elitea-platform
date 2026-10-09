@@ -27,12 +27,12 @@ const MAX_PAGES: usize = 64;
 const MAX_DRIVES: usize = 64;
 const MAX_FOLDER_REQUESTS: usize = 512;
 const MAX_LIST_ITEMS: usize = 1_000;
-pub const MAX_FILES: usize = 1_000;
-pub const MAX_ONENOTE_PAGES: usize = 100;
+pub(in crate::toolkits) const MAX_FILES: usize = 1_000;
+pub(in crate::toolkits) const MAX_ONENOTE_PAGES: usize = 100;
 const USER_AGENT_VALUE: &str = "elitea-worker-rust/0.1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SharePointClientErrorCode {
+pub(crate) enum SharePointClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -45,18 +45,18 @@ pub enum SharePointClientErrorCode {
     ResourceExhausted,
 }
 
-pub struct SharePointClientError {
+pub(crate) struct SharePointClientError {
     code: SharePointClientErrorCode,
 }
 
 impl SharePointClientError {
     #[must_use]
-    pub const fn code(&self) -> SharePointClientErrorCode {
+    pub(crate) const fn code(&self) -> SharePointClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         matches!(
             self.code,
             SharePointClientErrorCode::RateLimited
@@ -65,7 +65,7 @@ impl SharePointClientError {
         )
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             SharePointClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -125,8 +125,8 @@ impl SharePointClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: SharePointClientErrorCode) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(code: SharePointClientErrorCode) -> Self {
         Self { code }
     }
 }
@@ -168,16 +168,16 @@ impl fmt::Display for SharePointClientError {
 impl std::error::Error for SharePointClientError {}
 
 #[derive(Clone)]
-pub struct SharePointFileListOptions {
-    pub folder_name: Option<String>,
-    pub form_name: Option<String>,
-    pub limit: usize,
-    pub include_patterns: Vec<String>,
-    pub skip_patterns: Vec<String>,
+pub(in crate::toolkits) struct SharePointFileListOptions {
+    pub(in crate::toolkits) folder_name: Option<String>,
+    pub(in crate::toolkits) form_name: Option<String>,
+    pub(in crate::toolkits) limit: usize,
+    pub(in crate::toolkits) include_patterns: Vec<String>,
+    pub(in crate::toolkits) skip_patterns: Vec<String>,
 }
 
 #[async_trait]
-pub trait SharePointApi: Send + Sync {
+pub(in crate::toolkits) trait SharePointApi: Send + Sync {
     fn authorization(&self) -> &DelegatedAuthorizationRequirement;
 
     async fn read_list(
@@ -210,14 +210,14 @@ pub trait SharePointApi: Send + Sync {
     -> Result<Value, SharePointClientError>;
 }
 
-pub struct SharePointHttpResponse {
-    pub status: StatusCode,
-    pub content_type: Option<Box<str>>,
-    pub body: Vec<u8>,
+pub(in crate::toolkits) struct SharePointHttpResponse {
+    pub(in crate::toolkits) status: StatusCode,
+    pub(in crate::toolkits) content_type: Option<Box<str>>,
+    pub(in crate::toolkits) body: Vec<u8>,
 }
 
 #[async_trait]
-pub trait SharePointTransport: Send + Sync {
+pub(in crate::toolkits) trait SharePointTransport: Send + Sync {
     async fn execute(
         &self,
         request: Request,
@@ -277,7 +277,7 @@ impl SharePointTransport for ReqwestSharePointTransport {
     }
 }
 
-pub struct SharePointClient {
+pub(crate) struct SharePointClient {
     config: SharePointClientConfig,
     transport: Arc<dyn SharePointTransport>,
     site_id: tokio::sync::OnceCell<String>,
@@ -285,7 +285,7 @@ pub struct SharePointClient {
 }
 
 impl SharePointClient {
-    pub fn new(config: SharePointClientConfig) -> Result<Self, SharePointClientError> {
+    pub(crate) fn new(config: SharePointClientConfig) -> Result<Self, SharePointClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -304,8 +304,8 @@ impl SharePointClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn with_transport(
         config: SharePointClientConfig,
         transport: Arc<dyn SharePointTransport>,
     ) -> Self {
@@ -1125,7 +1125,9 @@ fn strip_path_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
     (path.as_bytes().get(prefix.len()) == Some(&b'/')).then(|| &path[boundary..])
 }
 
-pub fn normalize_patterns(values: Option<&[String]>) -> Result<Vec<String>, SharePointClientError> {
+pub(in crate::toolkits) fn normalize_patterns(
+    values: Option<&[String]>,
+) -> Result<Vec<String>, SharePointClientError> {
     let Some(values) = values else {
         return Ok(Vec::new());
     };

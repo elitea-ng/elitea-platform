@@ -264,12 +264,12 @@ impl RemoteMcpConfig {
     }
 
     #[must_use]
-    pub fn toolkit_name(&self) -> &str {
+    pub(crate) fn toolkit_name(&self) -> &str {
         &self.toolkit_name
     }
 
     #[must_use]
-    pub fn toolkit_type(&self) -> &str {
+    pub(crate) fn toolkit_type(&self) -> &str {
         &self.toolkit_type
     }
 
@@ -279,17 +279,17 @@ impl RemoteMcpConfig {
     }
 
     #[must_use]
-    pub const fn timeout(&self) -> Duration {
+    pub(crate) const fn timeout(&self) -> Duration {
         self.timeout
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[String] {
+    pub(crate) fn selected_tools(&self) -> &[String] {
         &self.selected_tools
     }
 
     #[must_use]
-    pub fn excluded_tools(&self) -> &[String] {
+    pub(crate) fn excluded_tools(&self) -> &[String] {
         &self.excluded_tools
     }
 
@@ -338,19 +338,19 @@ impl RemoteMcpConfig {
     }
 
     #[must_use]
-    pub const fn tool_list_ttl(&self) -> Option<Duration> {
+    pub(crate) const fn tool_list_ttl(&self) -> Option<Duration> {
         self.tool_list_ttl
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn request_headers_for_test(
+    #[cfg(test)]
+    pub(crate) fn request_headers_for_test(
         &self,
     ) -> Result<reqwest_mcp::header::HeaderMap, McpMaterializationError> {
         self.request_headers()
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn parse_for_test(
+    #[cfg(test)]
+    pub(crate) fn parse_for_test(
         reference: &FrozenToolReference<'_>,
         mcp_tokens: &Map<String, Value>,
     ) -> Result<Self, McpMaterializationError> {
@@ -359,9 +359,9 @@ impl RemoteMcpConfig {
 
     /// Points a parsed config at a plain-HTTP test server. Production
     /// parsing refuses anything but HTTPS.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     #[must_use]
-    pub fn with_endpoint_for_test(mut self, endpoint: &str) -> Self {
+    pub(crate) fn with_endpoint_for_test(mut self, endpoint: &str) -> Self {
         endpoint.clone_into(&mut self.endpoint);
         self
     }
@@ -394,10 +394,10 @@ pub trait McpConnector: Send + Sync {
 
 /// One established MCP connection.
 pub struct McpSession {
-    pub toolset: Arc<dyn Toolset>,
+    pub(crate) toolset: Arc<dyn Toolset>,
     /// Whether this connection may serve a cached listing: its toolset must
     /// list lazily on the session when a cached tool is first called.
-    pub reuses_listings: bool,
+    pub(crate) reuses_listings: bool,
 }
 
 /// `true` when the headers carry a non-blank `Authorization` value.
@@ -462,7 +462,7 @@ impl McpConnector for AdkHttpMcpConnector {
 /// (static headers and the bearer) as defaults, no automatic replay, and
 /// redirects limited to the frozen endpoint's origin. Factored out so tests
 /// exercise exactly what `connect_session` builds.
-pub fn session_client_builder(
+pub(crate) fn session_client_builder(
     config: &RemoteMcpConfig,
 ) -> Result<reqwest_mcp::ClientBuilder, McpMaterializationError> {
     let origin = reqwest_mcp::Url::parse(config.endpoint()).map_err(|_| invalid_configuration())?;
@@ -483,7 +483,9 @@ pub fn session_client_builder(
 /// keeps the frozen endpoint's scheme, host and port. The claim-bound
 /// authority is the origin, so a same-origin hop (`/mcp` -> `/mcp/`) keeps it
 /// and any other hop (a login page, another host) is refused.
-pub fn same_origin_redirect_policy(origin: reqwest_mcp::Url) -> reqwest_mcp::redirect::Policy {
+pub(crate) fn same_origin_redirect_policy(
+    origin: reqwest_mcp::Url,
+) -> reqwest_mcp::redirect::Policy {
     reqwest_mcp::redirect::Policy::custom(move |attempt| {
         if redirect_allowed(&origin, attempt.url(), attempt.previous().len()) {
             attempt.follow()
@@ -494,7 +496,7 @@ pub fn same_origin_redirect_policy(origin: reqwest_mcp::Url) -> reqwest_mcp::red
 }
 
 /// `previous` counts the requests already sent, the original included.
-pub fn redirect_allowed(
+pub(crate) fn redirect_allowed(
     origin: &reqwest_mcp::Url,
     next: &reqwest_mcp::Url,
     previous: usize,
@@ -525,7 +527,7 @@ fn retired_sse_failure(endpoint: &str, error: &(dyn std::error::Error + 'static)
     false
 }
 
-pub fn names_sse_endpoint(endpoint: &str) -> bool {
+pub(crate) fn names_sse_endpoint(endpoint: &str) -> bool {
     reqwest_mcp::Url::parse(endpoint).is_ok_and(|url| {
         url.path()
             .trim_end_matches('/')
@@ -534,8 +536,8 @@ pub fn names_sse_endpoint(endpoint: &str) -> bool {
     })
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn retired_sse_failure_for_test(
+#[cfg(test)]
+pub(crate) fn retired_sse_failure_for_test(
     endpoint: &str,
     error: &(dyn std::error::Error + 'static),
 ) -> bool {
@@ -547,7 +549,7 @@ pub fn retired_sse_failure_for_test(
 /// Discovery happens during the authorized assembly phase, matching the
 /// current SDK's materialization timing. No server error text, URL, schema or
 /// argument value is copied into an assembly error.
-pub async fn materialize_mcp_toolsets(
+pub(crate) async fn materialize_mcp_toolsets(
     snapshot: &AdmittedToolSnapshot<'_>,
     connector: &dyn McpConnector,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -559,7 +561,7 @@ pub async fn materialize_mcp_toolsets(
 ///
 /// Tokens are applied only when their canonical server URL exactly matches the
 /// frozen endpoint. They are never retained in tool metadata or errors.
-pub async fn materialize_mcp_toolsets_with_tokens(
+pub(crate) async fn materialize_mcp_toolsets_with_tokens(
     snapshot: &AdmittedToolSnapshot<'_>,
     connector: &dyn McpConnector,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -735,13 +737,13 @@ async fn discover_tools(
     Ok((tools, pending))
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn tool_list_cache_for_test() -> &'static McpToolListCache {
+#[cfg(test)]
+pub(crate) fn tool_list_cache_for_test() -> &'static McpToolListCache {
     &TOOL_LIST_CACHE
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn tool_list_key_for_test(
+#[cfg(test)]
+pub(crate) fn tool_list_key_for_test(
     config: &RemoteMcpConfig,
 ) -> Result<McpToolListKey, McpMaterializationError> {
     config.tool_list_key()
@@ -1286,7 +1288,7 @@ fn resource_metadata_url(challenge: &str, endpoint: &str) -> Option<String> {
         .map(|url| url.to_string())
 }
 
-pub fn authorization_resource_metadata(
+pub(super) fn authorization_resource_metadata(
     metadata: &AuthorizationMetadata,
     endpoint: &str,
     requested_scopes: &[String],

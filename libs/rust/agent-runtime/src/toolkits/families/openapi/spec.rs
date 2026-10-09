@@ -19,19 +19,19 @@ const MAX_URL_BYTES: usize = 8 * 1024;
 const MAX_RESPONSE_COLLECTION_DEPTH: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenApiSpecErrorCode {
+pub(crate) enum OpenApiSpecErrorCode {
     InvalidSpecification,
     ResourceExhausted,
     UnsupportedSource,
 }
 
-pub struct OpenApiSpecError {
+pub(crate) struct OpenApiSpecError {
     code: OpenApiSpecErrorCode,
 }
 
 impl OpenApiSpecError {
     #[must_use]
-    pub const fn code(&self) -> OpenApiSpecErrorCode {
+    pub(crate) const fn code(&self) -> OpenApiSpecErrorCode {
         self.code
     }
 }
@@ -63,13 +63,13 @@ impl fmt::Display for OpenApiSpecError {
 
 impl std::error::Error for OpenApiSpecError {}
 
-pub struct ParsedOpenApiSpec {
-    pub base_url: Url,
-    pub operations: Vec<OpenApiOperation>,
+pub(crate) struct ParsedOpenApiSpec {
+    pub(crate) base_url: Url,
+    pub(crate) operations: Vec<OpenApiOperation>,
 }
 
 #[derive(Clone)]
-pub struct OpenApiOperation {
+pub(crate) struct OpenApiOperation {
     name: Box<str>,
     method: Method,
     path: Box<str>,
@@ -82,53 +82,53 @@ pub struct OpenApiOperation {
 
 impl OpenApiOperation {
     #[must_use]
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     #[must_use]
-    pub fn method(&self) -> &Method {
+    pub(crate) fn method(&self) -> &Method {
         &self.method
     }
 
     #[must_use]
-    pub fn path(&self) -> &str {
+    pub(crate) fn path(&self) -> &str {
         &self.path
     }
 
     #[must_use]
-    pub fn description(&self) -> &str {
+    pub(crate) fn description(&self) -> &str {
         &self.description
     }
 
     #[must_use]
-    pub fn parameters(&self) -> &[OpenApiParameter] {
+    pub(crate) fn parameters(&self) -> &[OpenApiParameter] {
         &self.parameters
     }
 
     #[must_use]
-    pub const fn body(&self) -> Option<&OpenApiRequestBody> {
+    pub(crate) const fn body(&self) -> Option<&OpenApiRequestBody> {
         self.body.as_ref()
     }
 
     #[must_use]
-    pub fn parameters_schema(&self) -> Value {
+    pub(crate) fn parameters_schema(&self) -> Value {
         self.schema.clone()
     }
 
     #[must_use]
-    pub fn response_collection_paths(&self) -> &[Vec<String>] {
+    pub(crate) fn response_collection_paths(&self) -> &[Vec<String>] {
         &self.response_collection_paths
     }
 
     #[must_use]
-    pub fn is_read_only(&self) -> bool {
+    pub(crate) fn is_read_only(&self) -> bool {
         matches!(*self.method(), Method::GET | Method::HEAD | Method::OPTIONS)
     }
 }
 
 #[derive(Clone)]
-pub struct OpenApiParameter {
+pub(crate) struct OpenApiParameter {
     name: Box<str>,
     location: OpenApiParameterLocation,
     required: bool,
@@ -141,48 +141,48 @@ pub struct OpenApiParameter {
 
 impl OpenApiParameter {
     #[must_use]
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 
     #[must_use]
-    pub const fn location(&self) -> OpenApiParameterLocation {
+    pub(crate) const fn location(&self) -> OpenApiParameterLocation {
         self.location
     }
 
     #[must_use]
-    pub const fn required(&self) -> bool {
+    pub(crate) const fn required(&self) -> bool {
         self.required
     }
 
     #[must_use]
-    pub fn style(&self) -> &str {
+    pub(crate) fn style(&self) -> &str {
         &self.style
     }
 
     #[must_use]
-    pub const fn explode(&self) -> bool {
+    pub(crate) const fn explode(&self) -> bool {
         self.explode
     }
 
     #[must_use]
-    pub const fn allow_reserved(&self) -> bool {
+    pub(crate) const fn allow_reserved(&self) -> bool {
         self.allow_reserved
     }
 
     #[must_use]
-    pub fn schema(&self) -> &Value {
+    pub(crate) fn schema(&self) -> &Value {
         &self.schema
     }
 
     #[must_use]
-    pub fn description(&self) -> Option<&str> {
+    pub(crate) fn description(&self) -> Option<&str> {
         self.description.as_deref()
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub enum OpenApiParameterLocation {
+pub(crate) enum OpenApiParameterLocation {
     Path,
     Query,
     Header,
@@ -190,18 +190,18 @@ pub enum OpenApiParameterLocation {
 }
 
 #[derive(Clone)]
-pub struct OpenApiRequestBody {
+pub(crate) struct OpenApiRequestBody {
     required: bool,
 }
 
 impl OpenApiRequestBody {
     #[must_use]
-    pub const fn required(&self) -> bool {
+    pub(crate) const fn required(&self) -> bool {
         self.required
     }
 }
 
-pub fn parse_operations(
+pub(crate) fn parse_operations(
     source: &Value,
     base_override: Option<&str>,
     selected_tools: &[String],
@@ -287,7 +287,7 @@ pub fn parse_operations(
     })
 }
 
-pub fn parse_source(source: &Value) -> Result<Value, OpenApiSpecError> {
+pub(super) fn parse_source(source: &Value) -> Result<Value, OpenApiSpecError> {
     match source {
         Value::Object(_) => Ok(source.clone()),
         Value::String(raw) => {

@@ -70,7 +70,7 @@ const QUERY_SEARCH_DOCUMENTS: &str = r"query SearchDocuments($query: String!, $s
 }";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AhaClientErrorCode {
+pub(crate) enum AhaClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -86,23 +86,23 @@ pub enum AhaClientErrorCode {
 }
 
 /// Stable provider failure without origin, path, payload, body, or credential.
-pub struct AhaClientError {
+pub(crate) struct AhaClientError {
     code: AhaClientErrorCode,
     retryable: bool,
 }
 
 impl AhaClientError {
     #[must_use]
-    pub const fn code(&self) -> AhaClientErrorCode {
+    pub(crate) const fn code(&self) -> AhaClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             AhaClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -172,8 +172,8 @@ impl AhaClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: AhaClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(code: AhaClientErrorCode, retryable: bool) -> Self {
         Self { code, retryable }
     }
 }
@@ -214,19 +214,19 @@ impl fmt::Display for AhaClientError {
 impl std::error::Error for AhaClientError {}
 
 #[derive(Clone, Copy)]
-pub struct ReadOptions<'a> {
-    pub output_format: OutputFormat,
-    pub fields: &'a [Box<str>],
+pub(in crate::toolkits) struct ReadOptions<'a> {
+    pub(in crate::toolkits) output_format: OutputFormat,
+    pub(in crate::toolkits) fields: &'a [Box<str>],
 }
 
 #[derive(Clone, Copy)]
-pub struct PageOptions {
-    pub per_page: usize,
-    pub max_records: usize,
+pub(in crate::toolkits) struct PageOptions {
+    pub(in crate::toolkits) per_page: usize,
+    pub(in crate::toolkits) max_records: usize,
 }
 
 #[allow(clippy::large_enum_variant)]
-pub enum AhaOperation<'a> {
+pub(in crate::toolkits) enum AhaOperation<'a> {
     GetFeature {
         reference: &'a str,
         read: ReadOptions<'a>,
@@ -398,19 +398,19 @@ pub enum AhaOperation<'a> {
 }
 
 #[async_trait]
-pub trait AhaApi: Send + Sync {
+pub(in crate::toolkits) trait AhaApi: Send + Sync {
     async fn execute(&self, operation: AhaOperation<'_>) -> Result<Value, AhaClientError>;
 }
 
-pub struct AhaHttpResponse {
+pub(in crate::toolkits) struct AhaHttpResponse {
     status: StatusCode,
     body: Option<Value>,
     json_content_type: bool,
 }
 
 impl AhaHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture(status: StatusCode, body: Option<Value>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture(status: StatusCode, body: Option<Value>) -> Self {
         Self {
             status,
             body,
@@ -418,8 +418,8 @@ impl AhaHttpResponse {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn non_json_fixture(status: StatusCode) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn non_json_fixture(status: StatusCode) -> Self {
         Self {
             status,
             body: None,
@@ -429,7 +429,7 @@ impl AhaHttpResponse {
 }
 
 #[async_trait]
-pub trait AhaTransport: Send + Sync {
+pub(in crate::toolkits) trait AhaTransport: Send + Sync {
     async fn execute(
         &self,
         request: Request,
@@ -502,7 +502,7 @@ impl AhaTransport for ReqwestAhaTransport {
     }
 }
 
-pub struct AhaClient {
+pub(in crate::toolkits) struct AhaClient {
     base_url: Url,
     api_key: Zeroizing<String>,
     request_client: reqwest::Client,
@@ -511,7 +511,7 @@ pub struct AhaClient {
 }
 
 impl AhaClient {
-    pub fn new(
+    pub(in crate::toolkits) fn new(
         config: &AhaToolkitConfig,
         artifacts: Arc<AhaArtifactResolver>,
     ) -> Result<Self, AhaClientError> {
@@ -525,8 +525,8 @@ impl AhaClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn with_transport(
         config: &AhaToolkitConfig,
         transport: Arc<dyn AhaTransport>,
         artifacts: Arc<AhaArtifactResolver>,

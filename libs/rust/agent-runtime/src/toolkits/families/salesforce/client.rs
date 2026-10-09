@@ -35,7 +35,7 @@ const JSON_CONTENT_TYPE: &str = "application/json";
 const FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SalesforceClientErrorCode {
+pub(crate) enum SalesforceClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -50,23 +50,23 @@ pub enum SalesforceClientErrorCode {
 }
 
 /// One stable Salesforce failure without credentials, provider data, or URLs.
-pub struct SalesforceClientError {
+pub(crate) struct SalesforceClientError {
     code: SalesforceClientErrorCode,
     retryable: bool,
 }
 
 impl SalesforceClientError {
     #[must_use]
-    pub const fn code(&self) -> SalesforceClientErrorCode {
+    pub(crate) const fn code(&self) -> SalesforceClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             SalesforceClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -131,8 +131,11 @@ impl SalesforceClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: SalesforceClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(
+        code: SalesforceClientErrorCode,
+        retryable: bool,
+    ) -> Self {
         Self { code, retryable }
     }
 }
@@ -174,7 +177,7 @@ impl fmt::Display for SalesforceClientError {
 impl std::error::Error for SalesforceClientError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SalesforceMethod {
+pub(crate) enum SalesforceMethod {
     Get,
     Post,
     Patch,
@@ -182,7 +185,7 @@ pub enum SalesforceMethod {
 }
 
 impl SalesforceMethod {
-    pub fn parse(value: &str) -> Result<Self, SalesforceClientError> {
+    pub(crate) fn parse(value: &str) -> Result<Self, SalesforceClientError> {
         match value {
             "GET" => Ok(Self::Get),
             "POST" => Ok(Self::Post),
@@ -216,7 +219,7 @@ impl SalesforceMethod {
 }
 
 #[async_trait]
-pub trait SalesforceApi: Send + Sync {
+pub(in crate::toolkits) trait SalesforceApi: Send + Sync {
     async fn create_case(
         &self,
         subject: &str,
@@ -262,7 +265,7 @@ pub trait SalesforceApi: Send + Sync {
 }
 
 #[derive(Clone, Copy)]
-pub enum SalesforceRequestKind<'a> {
+pub(in crate::toolkits) enum SalesforceRequestKind<'a> {
     CreateCase {
         subject: &'a str,
         description: &'a str,
@@ -308,7 +311,7 @@ impl SalesforceRequestKind<'_> {
     }
 }
 
-pub struct SalesforceHttpResponse {
+pub(in crate::toolkits) struct SalesforceHttpResponse {
     status: StatusCode,
     body: Option<Value>,
     body_was_empty: bool,
@@ -316,8 +319,8 @@ pub struct SalesforceHttpResponse {
 }
 
 impl SalesforceHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(status: StatusCode, body: Option<Value>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(status: StatusCode, body: Option<Value>) -> Self {
         Self {
             status,
             body_was_empty: body.is_none(),
@@ -328,7 +331,7 @@ impl SalesforceHttpResponse {
 }
 
 #[async_trait]
-pub trait SalesforceTransport: Send + Sync {
+pub(in crate::toolkits) trait SalesforceTransport: Send + Sync {
     async fn execute(
         &self,
         request: Request,
@@ -403,14 +406,14 @@ struct TokenState {
 }
 
 /// One invocation-scoped Salesforce client, token cache, and HTTP pool.
-pub struct SalesforceClient {
+pub(crate) struct SalesforceClient {
     config: SalesforceToolkitConfig,
     transport: Arc<dyn SalesforceTransport>,
     token: Mutex<TokenState>,
 }
 
 impl SalesforceClient {
-    pub fn new(config: SalesforceToolkitConfig) -> Result<Self, SalesforceClientError> {
+    pub(crate) fn new(config: SalesforceToolkitConfig) -> Result<Self, SalesforceClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -442,21 +445,21 @@ impl SalesforceClient {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn with_transport(
         config: SalesforceToolkitConfig,
         transport: Arc<dyn SalesforceTransport>,
     ) -> Self {
         Self::with_transport_inner(config, transport)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_auth_request(&self) -> Result<Request, SalesforceClientError> {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_auth_request(&self) -> Result<Request, SalesforceClientError> {
         self.build_auth_request()
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_request(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_request(
         &self,
         kind: SalesforceRequestKind<'_>,
         token: &str,
@@ -1175,7 +1178,10 @@ const fn unknown_outcome() -> SalesforceClientError {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_map_resource_status(status: StatusCode, effect: bool) -> SalesforceClientError {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_map_resource_status(
+    status: StatusCode,
+    effect: bool,
+) -> SalesforceClientError {
     map_resource_status(status, effect)
 }

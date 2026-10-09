@@ -30,7 +30,7 @@ use zeroize::Zeroizing;
 
 /// The code of an MCP failure whose message is safe for the model.
 /// `invocation::sanitize_tool_error` keeps the message of this code only.
-pub const MCP_TOOL_ERROR_RESULT_CODE: &str = "mcp.tool.error_result";
+pub(crate) const MCP_TOOL_ERROR_RESULT_CODE: &str = "mcp.tool.error_result";
 
 /// The most characters of server text that reach the model.
 const MAX_DETAIL_CHARS: usize = 1_000;
@@ -69,14 +69,14 @@ static PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
 
 /// The values one MCP toolkit must never echo to the model.
 #[derive(Default)]
-pub struct McpErrorRedaction {
+pub(crate) struct McpErrorRedaction {
     values: Vec<Zeroizing<String>>,
 }
 
 impl McpErrorRedaction {
     /// `secrets` are the toolkit's credential values. `endpoint` is the
     /// configured server URL; the URL and its host are both redacted.
-    pub fn new<'a>(secrets: impl IntoIterator<Item = &'a str>, endpoint: &str) -> Self {
+    pub(crate) fn new<'a>(secrets: impl IntoIterator<Item = &'a str>, endpoint: &str) -> Self {
         let mut values: Vec<Zeroizing<String>> = secrets
             .into_iter()
             .flat_map(|secret| {
@@ -124,7 +124,7 @@ impl McpErrorRedaction {
 ///
 /// `tool_name` is the remote tool's own name, which the ADK puts in its
 /// messages. The returned error never carries the ADK message verbatim.
-pub fn model_visible_mcp_error(
+pub(crate) fn model_visible_mcp_error(
     error: &AdkError,
     tool_name: &str,
     redaction: &McpErrorRedaction,
@@ -265,7 +265,7 @@ fn bounded_detail(text: &str, redaction: &McpErrorRedaction) -> Option<String> {
 }
 
 /// True when `error` is an MCP failure that `model_visible_mcp_error` built.
-pub fn is_model_visible_mcp_error(error: &AdkError) -> bool {
+pub(crate) fn is_model_visible_mcp_error(error: &AdkError) -> bool {
     error.component == ErrorComponent::Tool && error.code == MCP_TOOL_ERROR_RESULT_CODE
 }
 

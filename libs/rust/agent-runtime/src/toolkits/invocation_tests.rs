@@ -4,10 +4,10 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use adk_rust::tool::SimpleToolContext;
-use adk_rust::{
+use adk_core::{
     AdkError, ErrorCategory, ErrorComponent, ReadonlyContext, RetryHint, Tool, ToolContext, Toolset,
 };
+use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::sync::Notify;
@@ -355,7 +355,7 @@ impl Tool for FixtureTool {
         &self,
         context: Arc<dyn ToolContext>,
         arguments: Value,
-    ) -> adk_rust::Result<Value> {
+    ) -> adk_core::Result<Value> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.arguments
             .lock()
@@ -405,7 +405,7 @@ impl Tool for DelegatedAuthorizationTool {
         &self,
         _context: Arc<dyn ToolContext>,
         _arguments: Value,
-    ) -> adk_rust::Result<Value> {
+    ) -> adk_core::Result<Value> {
         Err(delegated_authorization_error_fixture("sharepoint"))
     }
 }
@@ -432,7 +432,7 @@ impl Tool for PendingTool {
         &self,
         _context: Arc<dyn ToolContext>,
         _arguments: Value,
-    ) -> adk_rust::Result<Value> {
+    ) -> adk_core::Result<Value> {
         let _guard = ExecutionGuard(Arc::clone(&self.dropped));
         self.started.notify_one();
         pending::<()>().await;

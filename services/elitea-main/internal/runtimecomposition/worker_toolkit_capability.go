@@ -73,7 +73,7 @@ type rustWorkerToolkitCapabilityDocument struct {
 	// it serves fewer than the SDK declares (ADR-0027: github, sharepoint
 	// and artifact are partial). A type without an entry serves every tool
 	// the SDK declares. Its gate is the worker's SDK conformance test
-	// (services/elitea-worker-rust/src/toolkits/sdk_conformance.rs), which
+	// (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs), which
 	// builds each family and compares the names it actually serves.
 	SupportedTools map[string][]string `json:"supported_tools,omitempty"`
 }

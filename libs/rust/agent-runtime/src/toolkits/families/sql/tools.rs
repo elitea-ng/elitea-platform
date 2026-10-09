@@ -16,20 +16,20 @@ use super::lexer::{MAX_SQL_BYTES, SqlLexError, admit_one_statement};
 const MAX_DESCRIPTION_BYTES: usize = 2_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SqlToolsetErrorCode {
+pub(crate) enum SqlToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
     InvalidDefinition,
 }
 
-pub struct SqlToolsetError {
+pub(crate) struct SqlToolsetError {
     code: SqlToolsetErrorCode,
 }
 
 impl SqlToolsetError {
     #[must_use]
-    pub const fn code(&self) -> SqlToolsetErrorCode {
+    pub(crate) const fn code(&self) -> SqlToolsetErrorCode {
         self.code
     }
 }
@@ -85,7 +85,7 @@ impl From<MaterializedToolsetError> for SqlToolsetError {
 
 /// Build the complete capability-disabled two-tool SQL family.
 #[allow(clippy::needless_pass_by_value)] // Consumes one invocation's credential authority.
-pub fn build_sql_toolset(
+pub(crate) fn build_sql_toolset(
     toolkit_name: &str,
     config: SqlToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -309,8 +309,8 @@ fn invalid_arguments() -> AdkError {
     )
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     dialect: super::config::SqlDialect,
@@ -320,8 +320,8 @@ pub fn test_build_with_api(
     build_with_api(toolkit_name, selected, dialect, policy, client)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_catalog() -> Vec<(&'static str, &'static str)> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_catalog() -> Vec<(&'static str, &'static str)> {
     SqlToolKind::ALL
         .into_iter()
         .map(|kind| (kind.name(), kind.group()))

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use adk_rust::tool::SimpleToolContext;
-use adk_rust::{ReadonlyContext, ToolContext, Toolset};
+use adk_core::{ReadonlyContext, ToolContext, Toolset};
+use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderName};
 use reqwest::{Method, Request, StatusCode};

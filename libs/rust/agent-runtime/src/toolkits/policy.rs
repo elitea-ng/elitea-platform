@@ -85,7 +85,6 @@ pub struct ToolAdmissionPolicy {
 pub struct SensitiveToolPolicy {
     toolkit_type: Box<str>,
     toolkit_name: Box<str>,
-    toolkit_label: Box<str>,
     action_name: Box<str>,
     policy_message: Box<str>,
 }
@@ -99,11 +98,6 @@ impl SensitiveToolPolicy {
     #[must_use]
     pub const fn toolkit_name(&self) -> &str {
         &self.toolkit_name
-    }
-
-    #[must_use]
-    pub const fn toolkit_label(&self) -> &str {
-        &self.toolkit_label
     }
 
     #[must_use]
@@ -275,7 +269,6 @@ impl ToolAdmissionPolicy {
         Some(SensitiveToolPolicy {
             toolkit_type: toolkit_type.trim().into(),
             toolkit_name: toolkit_name.trim().into(),
-            toolkit_label: toolkit_label.into(),
             action_name: action_name.into(),
             policy_message: policy_message.into(),
         })

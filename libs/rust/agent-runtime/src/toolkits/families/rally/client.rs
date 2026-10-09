@@ -30,7 +30,7 @@ const JSON_CONTENT_TYPE: &str = "application/json";
 const ZSESSIONID: HeaderName = HeaderName::from_static("zsessionid");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RallyClientErrorCode {
+pub(crate) enum RallyClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -45,23 +45,23 @@ pub enum RallyClientErrorCode {
 }
 
 /// Stable Rally failure without provider bodies, queries, URLs or credentials.
-pub struct RallyClientError {
+pub(crate) struct RallyClientError {
     code: RallyClientErrorCode,
     retryable: bool,
 }
 
 impl RallyClientError {
     #[must_use]
-    pub const fn code(&self) -> RallyClientErrorCode {
+    pub(crate) const fn code(&self) -> RallyClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             RallyClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -126,8 +126,11 @@ impl RallyClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture_for_test(code: RallyClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture_for_test(
+        code: RallyClientErrorCode,
+        retryable: bool,
+    ) -> Self {
         Self { code, retryable }
     }
 }
@@ -169,7 +172,7 @@ impl fmt::Display for RallyClientError {
 impl std::error::Error for RallyClientError {}
 
 #[async_trait]
-pub trait RallyApi: Send + Sync {
+pub(in crate::toolkits) trait RallyApi: Send + Sync {
     async fn get_types(&self) -> Result<Value, RallyClientError>;
     async fn get_entities(
         &self,
@@ -194,15 +197,15 @@ pub trait RallyApi: Send + Sync {
     ) -> Result<Value, RallyClientError>;
 }
 
-pub struct RallyHttpResponse {
+pub(in crate::toolkits) struct RallyHttpResponse {
     status: StatusCode,
     body: Option<Value>,
     json_content_type: bool,
 }
 
 impl RallyHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(status: StatusCode, body: Option<Value>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(status: StatusCode, body: Option<Value>) -> Self {
         Self {
             status,
             body,
@@ -212,7 +215,7 @@ impl RallyHttpResponse {
 }
 
 #[async_trait]
-pub trait RallyTransport: Send + Sync {
+pub(in crate::toolkits) trait RallyTransport: Send + Sync {
     async fn execute(
         &self,
         request: Request,
@@ -286,7 +289,7 @@ struct ContextRefs {
 }
 
 /// One lazy, invocation-scoped Rally WSAPI client.
-pub struct RallyClient {
+pub(crate) struct RallyClient {
     config: RallyToolkitConfig,
     transport: Arc<dyn RallyTransport>,
     security_token: Mutex<Option<Zeroizing<String>>>,
@@ -294,7 +297,7 @@ pub struct RallyClient {
 }
 
 impl RallyClient {
-    pub fn new(config: RallyToolkitConfig) -> Result<Self, RallyClientError> {
+    pub(crate) fn new(config: RallyToolkitConfig) -> Result<Self, RallyClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -324,8 +327,11 @@ impl RallyClient {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(config: RallyToolkitConfig, transport: Arc<dyn RallyTransport>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn with_transport(
+        config: RallyToolkitConfig,
+        transport: Arc<dyn RallyTransport>,
+    ) -> Self {
         Self::with_transport_inner(config, transport)
     }
 
@@ -854,7 +860,7 @@ fn equality_query(field: &str, value: &str) -> Result<String, RallyClientError> 
     Ok(format!(r#"{field} = "{value}""#))
 }
 
-pub fn normalized_entity_type(value: &str) -> Result<String, RallyClientError> {
+pub(in crate::toolkits) fn normalized_entity_type(value: &str) -> Result<String, RallyClientError> {
     let value = match value {
         "Story" | "UserStory" | "User Story" => "HierarchicalRequirement",
         value => value,

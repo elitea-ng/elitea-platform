@@ -19,7 +19,7 @@ const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 /// Stable family-toolset construction failure category.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SonarToolsetErrorCode {
+pub(crate) enum SonarToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -28,13 +28,13 @@ pub enum SonarToolsetErrorCode {
 }
 
 /// Safe construction error for the complete Sonar read-only family.
-pub struct SonarToolsetError {
+pub(crate) struct SonarToolsetError {
     code: SonarToolsetErrorCode,
 }
 
 impl SonarToolsetError {
     #[must_use]
-    pub const fn code(&self) -> SonarToolsetErrorCode {
+    pub(crate) const fn code(&self) -> SonarToolsetErrorCode {
         self.code
     }
 }
@@ -103,7 +103,7 @@ impl From<MaterializedToolsetError> for SonarToolsetError {
 ///
 /// Empty selection means the one current public SDK tool. Deployment policy is
 /// still applied to the concrete native ADK action.
-pub fn build_sonar_read_only_toolset(
+pub(crate) fn build_sonar_read_only_toolset(
     toolkit_name: &str,
     config: SonarToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -249,8 +249,8 @@ fn invalid_arguments() -> AdkError {
     )
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,

@@ -20,7 +20,7 @@ const MAX_LIST_ITEMS: usize = 4_096;
 const MAX_DESCRIPTION_BYTES: usize = 3_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PostmanToolsetErrorCode {
+pub(crate) enum PostmanToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -28,13 +28,13 @@ pub enum PostmanToolsetErrorCode {
     InvalidDefinition,
 }
 
-pub struct PostmanToolsetError {
+pub(crate) struct PostmanToolsetError {
     code: PostmanToolsetErrorCode,
 }
 
 impl PostmanToolsetError {
     #[must_use]
-    pub const fn code(&self) -> PostmanToolsetErrorCode {
+    pub(crate) const fn code(&self) -> PostmanToolsetErrorCode {
         self.code
     }
 }
@@ -103,7 +103,7 @@ impl From<MaterializedToolsetError> for PostmanToolsetError {
 
 /// Build the complete capability-disabled 31-tool Postman family.
 #[allow(clippy::needless_pass_by_value)]
-pub fn build_postman_toolset(
+pub(crate) fn build_postman_toolset(
     toolkit_name: &str,
     config: PostmanToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -148,8 +148,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "postman", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,
@@ -158,8 +158,8 @@ pub fn test_build_with_api(
     build_with_api(toolkit_name, selected, policy, client)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_catalog() -> Vec<(&'static str, &'static str)> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_catalog() -> Vec<(&'static str, &'static str)> {
     PostmanToolKind::ALL
         .into_iter()
         .map(|kind| (kind.name(), kind.group()))

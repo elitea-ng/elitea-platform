@@ -12,19 +12,19 @@ use serde_json::{Map, Value, json};
 
 use super::client::{GitHubClientError, invalid_response, resource_exhausted};
 
-pub const MAX_PULL_REQUESTS: usize = 100;
-pub const MAX_PULL_REQUEST_FILES: usize = 300;
-pub const PULL_REQUEST_FILES_PER_PAGE: usize = 100;
-pub const MAX_PULL_REQUEST_OUTPUT_CHARS: usize = 200_000;
-pub const MAX_PULL_REQUEST_BODY_BYTES: usize = 128 * 1_024;
-pub const MAX_PULL_REQUEST_PATCH_BYTES: usize = 64 * 1_024;
+pub(super) const MAX_PULL_REQUESTS: usize = 100;
+pub(super) const MAX_PULL_REQUEST_FILES: usize = 300;
+pub(super) const PULL_REQUEST_FILES_PER_PAGE: usize = 100;
+pub(super) const MAX_PULL_REQUEST_OUTPUT_CHARS: usize = 200_000;
+pub(super) const MAX_PULL_REQUEST_BODY_BYTES: usize = 128 * 1_024;
+pub(super) const MAX_PULL_REQUEST_PATCH_BYTES: usize = 64 * 1_024;
 
 const MAX_TITLE_BYTES: usize = 16 * 1_024;
 const MAX_METADATA_BYTES: usize = 4 * 1_024;
 const MAX_URL_BYTES: usize = 4 * 1_024;
 const MAX_DETAIL_ITEMS: usize = 10;
 
-pub fn project_pull_request_list(
+pub(super) fn project_pull_request_list(
     value: &Value,
     max_count: usize,
 ) -> Result<Value, GitHubClientError> {
@@ -42,7 +42,7 @@ pub fn project_pull_request_list(
     bounded_output(Value::Array(projected))
 }
 
-pub fn project_pull_request_detail(
+pub(super) fn project_pull_request_detail(
     pull: &Value,
     comments: &Value,
     commits: &Value,
@@ -85,7 +85,7 @@ pub fn project_pull_request_detail(
     bounded_output(Value::Object(projected))
 }
 
-pub fn pull_request_file_count(
+pub(super) fn pull_request_file_count(
     value: &Value,
     expected_number: u64,
 ) -> Result<usize, GitHubClientError> {
@@ -104,7 +104,7 @@ pub fn pull_request_file_count(
     Ok(count)
 }
 
-pub fn append_pull_request_file_page(
+pub(super) fn append_pull_request_file_page(
     value: &Value,
     files: &mut Vec<Value>,
 ) -> Result<(), GitHubClientError> {
@@ -120,7 +120,7 @@ pub fn append_pull_request_file_page(
     Ok(())
 }
 
-pub fn finish_pull_request_files(
+pub(super) fn finish_pull_request_files(
     files: Vec<Value>,
     expected_count: usize,
 ) -> Result<Value, GitHubClientError> {
@@ -314,16 +314,16 @@ fn bounded_output(value: Value) -> Result<Value, GitHubClientError> {
     Ok(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_pull_request_list(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_pull_request_list(
     value: &Value,
     max_count: usize,
 ) -> Result<Value, GitHubClientError> {
     project_pull_request_list(value, max_count)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_pull_request_detail(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_pull_request_detail(
     pull: &Value,
     comments: &Value,
     commits: &Value,
@@ -332,8 +332,8 @@ pub fn test_project_pull_request_detail(
     project_pull_request_detail(pull, comments, commits, expected_number)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_pull_request_files(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_pull_request_files(
     pull: &Value,
     pages: &[Value],
     expected_number: u64,

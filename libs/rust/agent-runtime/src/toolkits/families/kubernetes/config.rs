@@ -11,19 +11,19 @@ const MAX_SELECTED_TOOLS: usize = 16;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum KubernetesConfigErrorCode {
+pub(crate) enum KubernetesConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable configuration failure without cluster authority or credential data.
-pub struct KubernetesConfigError {
+pub(crate) struct KubernetesConfigError {
     code: KubernetesConfigErrorCode,
 }
 
 impl KubernetesConfigError {
     #[must_use]
-    pub const fn code(&self) -> KubernetesConfigErrorCode {
+    pub(crate) const fn code(&self) -> KubernetesConfigErrorCode {
         self.code
     }
 }
@@ -56,14 +56,14 @@ impl std::error::Error for KubernetesConfigError {}
 ///
 /// Main seals only `token`. Rust requires the exact HTTPS origin and token in
 /// the accepted execution instead of reading ambient kubeconfig state.
-pub struct KubernetesToolkitConfig {
+pub(crate) struct KubernetesToolkitConfig {
     cluster_url: Box<str>,
     token: Zeroizing<String>,
     selected_tools: Vec<Box<str>>,
 }
 
 impl KubernetesToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, KubernetesConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, KubernetesConfigError> {
         let cluster_url = parse_cluster_url(settings.get("url"))?;
         let token = required_token(settings.get("token"))?;
         Ok(Self {
@@ -73,16 +73,16 @@ impl KubernetesToolkitConfig {
         })
     }
 
-    pub fn cluster_url(&self) -> &str {
+    pub(super) fn cluster_url(&self) -> &str {
         &self.cluster_url
     }
 
-    pub fn token(&self) -> &str {
+    pub(super) fn token(&self) -> &str {
         &self.token
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

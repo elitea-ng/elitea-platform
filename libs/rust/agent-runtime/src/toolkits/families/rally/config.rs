@@ -13,19 +13,19 @@ const MAX_SELECTED_TOOLS: usize = 1_024;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RallyConfigErrorCode {
+pub(crate) enum RallyConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable configuration failure that never carries credentials or origins.
-pub struct RallyConfigError {
+pub(crate) struct RallyConfigError {
     code: RallyConfigErrorCode,
 }
 
 impl RallyConfigError {
     #[must_use]
-    pub const fn code(&self) -> RallyConfigErrorCode {
+    pub(crate) const fn code(&self) -> RallyConfigErrorCode {
         self.code
     }
 }
@@ -68,7 +68,7 @@ enum RallyCredential {
 /// instance replace an earlier instance's endpoint and credentials. This type
 /// is intentionally non-`Clone` and non-`Debug`; each materialized toolset owns
 /// exactly one credential and origin.
-pub struct RallyToolkitConfig {
+pub(crate) struct RallyToolkitConfig {
     origin: Url,
     credential: RallyCredential,
     workspace: Option<Box<str>>,
@@ -77,7 +77,7 @@ pub struct RallyToolkitConfig {
 }
 
 impl RallyToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, RallyConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, RallyConfigError> {
         let configuration = settings
             .get("rally_configuration")
             .and_then(Value::as_object)
@@ -113,39 +113,39 @@ impl RallyToolkitConfig {
         })
     }
 
-    pub fn origin(&self) -> &Url {
+    pub(super) fn origin(&self) -> &Url {
         &self.origin
     }
 
-    pub fn api_key(&self) -> Option<&str> {
+    pub(super) fn api_key(&self) -> Option<&str> {
         match &self.credential {
             RallyCredential::ApiKey(value) => Some(value),
             RallyCredential::Basic { .. } => None,
         }
     }
 
-    pub fn basic(&self) -> Option<(&str, &str)> {
+    pub(super) fn basic(&self) -> Option<(&str, &str)> {
         match &self.credential {
             RallyCredential::ApiKey(_) => None,
             RallyCredential::Basic { username, password } => Some((username, password)),
         }
     }
 
-    pub fn workspace(&self) -> Option<&str> {
+    pub(super) fn workspace(&self) -> Option<&str> {
         self.workspace.as_deref()
     }
 
-    pub fn project(&self) -> Option<&str> {
+    pub(super) fn project(&self) -> Option<&str> {
         self.project.as_deref()
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_origin(&self) -> &Url {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_origin(&self) -> &Url {
         self.origin()
     }
 }

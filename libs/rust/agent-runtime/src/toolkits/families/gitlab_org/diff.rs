@@ -5,7 +5,7 @@ const MAX_CHANGES: usize = 100;
 const MAX_PATH_BYTES: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DiffErrorCode {
+pub(in crate::toolkits) enum DiffErrorCode {
     InvalidShape,
     InvalidIndex,
     ResourceExhausted,
@@ -26,7 +26,7 @@ struct DiffRow<'a> {
     position: Option<Position<'a>>,
 }
 
-pub fn format_changes(
+pub(super) fn format_changes(
     merge_request: &Value,
     changes_response: &Value,
 ) -> Result<String, DiffErrorCode> {
@@ -68,7 +68,7 @@ pub fn format_changes(
     Ok(output)
 }
 
-pub fn discussion_position(
+pub(super) fn discussion_position(
     merge_request: &Value,
     changes_response: &Value,
     file_path: &str,
@@ -287,16 +287,16 @@ fn required_string<'a>(value: &'a Value, name: &str) -> Result<&'a str, DiffErro
         .ok_or(DiffErrorCode::InvalidShape)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_format_changes(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_format_changes(
     merge_request: &Value,
     changes_response: &Value,
 ) -> Result<String, DiffErrorCode> {
     format_changes(merge_request, changes_response)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_discussion_position(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_discussion_position(
     merge_request: &Value,
     changes_response: &Value,
     file_path: &str,

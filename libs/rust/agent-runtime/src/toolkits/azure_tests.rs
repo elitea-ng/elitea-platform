@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use adk_rust::tool::SimpleToolContext;
-use adk_rust::{ReadonlyContext, Toolset};
+use adk_core::{ReadonlyContext, Toolset};
+use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
 use reqwest::StatusCode;
 use serde_json::{Map, Value, json};

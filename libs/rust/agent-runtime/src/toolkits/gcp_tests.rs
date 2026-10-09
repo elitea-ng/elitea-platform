@@ -4,8 +4,8 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
-use adk_rust::tool::SimpleToolContext;
-use adk_rust::{ReadonlyContext, Toolset};
+use adk_core::{ReadonlyContext, Toolset};
+use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

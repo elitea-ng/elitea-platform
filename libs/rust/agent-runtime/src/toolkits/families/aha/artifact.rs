@@ -1,7 +1,7 @@
 use std::fmt;
 use std::pin::Pin;
 use std::sync::Arc;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 use std::sync::Mutex;
 
 use async_trait::async_trait;
@@ -12,7 +12,7 @@ use tokio::io::{AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio_stream::{Stream, StreamExt as _};
 
 /// Aha documents files strictly below 300 MB and requires upload within 40s.
-pub const MAX_ARTIFACT_BYTES: u64 = 300_000_000 - 1;
+pub(super) const MAX_ARTIFACT_BYTES: u64 = 300_000_000 - 1;
 const MAX_ARTIFACT_PATH_BYTES: usize = 2_048;
 const MAX_BUCKET_BYTES: usize = 128;
 const MAX_FILENAME_BYTES: usize = 255;
@@ -22,7 +22,7 @@ const MAX_CLAIMS: usize = 128;
 const MAX_SOURCE_CHUNK_BYTES: usize = 1_024 * 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AhaArtifactErrorCode {
+pub(crate) enum AhaArtifactErrorCode {
     InvalidInput,
     Authorization,
     NotFound,
@@ -33,17 +33,17 @@ pub enum AhaArtifactErrorCode {
 }
 
 /// Stable artifact-plane failure without path, grant, URL, or file data.
-pub struct AhaArtifactError {
+pub(crate) struct AhaArtifactError {
     code: AhaArtifactErrorCode,
 }
 
 impl AhaArtifactError {
     #[must_use]
-    pub const fn code(&self) -> AhaArtifactErrorCode {
+    pub(crate) const fn code(&self) -> AhaArtifactErrorCode {
         self.code
     }
 
-    pub const fn fixture(code: AhaArtifactErrorCode) -> Self {
+    pub(in crate::toolkits) const fn fixture(code: AhaArtifactErrorCode) -> Self {
         Self { code }
     }
 }
@@ -200,7 +200,7 @@ trait ArtifactClaimSource: Send + Sync {
 /// Resolution uses a private auto-cleaned spool so length and digest are
 /// verified before Aha sees any effect request. Production activation also
 /// requires a shared disk and concurrent-spool budget outside this family.
-pub struct AhaArtifactResolver {
+pub(in crate::toolkits) struct AhaArtifactResolver {
     claims: Vec<AhaArtifactClaim>,
     source: Arc<dyn ArtifactClaimSource>,
 }
@@ -224,7 +224,7 @@ impl AhaArtifactResolver {
         Ok(Self { claims, source })
     }
 
-    pub async fn multipart(
+    pub(super) async fn multipart(
         &self,
         requested_path: &str,
         filename_override: Option<&str>,
@@ -251,8 +251,8 @@ impl AhaArtifactResolver {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub struct AhaArtifactFixture {
+#[cfg(test)]
+pub(in crate::toolkits) struct AhaArtifactFixture {
     path: Box<str>,
     opaque_reference: Box<str>,
     filename: Box<str>,
@@ -264,9 +264,9 @@ pub struct AhaArtifactFixture {
     chunks: Vec<Result<Bytes, AhaArtifactErrorCode>>,
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 impl AhaArtifactFixture {
-    pub fn new(path: &str, filename: &str, bytes: Bytes) -> Self {
+    pub(in crate::toolkits) fn new(path: &str, filename: &str, bytes: Bytes) -> Self {
         let digest = ring::digest::digest(&SHA256, &bytes);
         let mut sha256 = [0_u8; 32];
         sha256.copy_from_slice(digest.as_ref());
@@ -283,28 +283,28 @@ impl AhaArtifactFixture {
         }
     }
 
-    pub fn declared_length(mut self, byte_length: u64) -> Self {
+    pub(in crate::toolkits) fn declared_length(mut self, byte_length: u64) -> Self {
         self.byte_length = byte_length;
         self
     }
 
-    pub fn expected_digest(mut self, sha256: [u8; 32]) -> Self {
+    pub(in crate::toolkits) fn expected_digest(mut self, sha256: [u8; 32]) -> Self {
         self.sha256 = sha256;
         self
     }
 
-    pub fn returned_version(mut self, version: &str) -> Self {
+    pub(in crate::toolkits) fn returned_version(mut self, version: &str) -> Self {
         self.returned_version = version.into();
         self
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 struct FixtureSource {
     streams: Mutex<Vec<(Box<str>, Option<GrantedArtifactStream>)>>,
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 #[async_trait]
 impl ArtifactClaimSource for FixtureSource {
     async fn open(
@@ -320,9 +320,11 @@ impl ArtifactClaimSource for FixtureSource {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 impl AhaArtifactResolver {
-    pub fn fixture(fixtures: Vec<AhaArtifactFixture>) -> Result<Self, AhaArtifactError> {
+    pub(in crate::toolkits) fn fixture(
+        fixtures: Vec<AhaArtifactFixture>,
+    ) -> Result<Self, AhaArtifactError> {
         let mut claims = Vec::with_capacity(fixtures.len());
         let mut streams = Vec::with_capacity(fixtures.len());
         for (index, fixture) in fixtures.into_iter().enumerate() {

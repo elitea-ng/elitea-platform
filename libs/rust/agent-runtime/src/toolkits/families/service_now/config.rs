@@ -28,19 +28,19 @@ const DEFAULT_RESPONSE_FIELDS: [&str; 10] = [
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ServiceNowConfigErrorCode {
+pub(crate) enum ServiceNowConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable, data-free failure for one materialized `ServiceNow` configuration.
-pub struct ServiceNowConfigError {
+pub(crate) struct ServiceNowConfigError {
     code: ServiceNowConfigErrorCode,
 }
 
 impl ServiceNowConfigError {
     #[must_use]
-    pub const fn code(&self) -> ServiceNowConfigErrorCode {
+    pub(crate) const fn code(&self) -> ServiceNowConfigErrorCode {
         self.code
     }
 }
@@ -74,7 +74,7 @@ impl std::error::Error for ServiceNowConfigError {}
 /// Main resolves the nested configuration into the admitted command. The
 /// credentials are deliberately non-cloneable and non-debuggable, and one
 /// materialized toolkit owns one HTTP connection pool.
-pub struct ServiceNowToolkitConfig {
+pub(crate) struct ServiceNowToolkitConfig {
     origin: Url,
     username: Zeroizing<String>,
     password: Zeroizing<String>,
@@ -83,7 +83,7 @@ pub struct ServiceNowToolkitConfig {
 }
 
 impl ServiceNowToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, ServiceNowConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, ServiceNowConfigError> {
         let configuration = settings
             .get("servicenow_configuration")
             .and_then(Value::as_object)
@@ -113,29 +113,29 @@ impl ServiceNowToolkitConfig {
         })
     }
 
-    pub const fn origin(&self) -> &Url {
+    pub(super) const fn origin(&self) -> &Url {
         &self.origin
     }
 
-    pub fn username(&self) -> &str {
+    pub(super) fn username(&self) -> &str {
         &self.username
     }
 
-    pub fn password(&self) -> &str {
+    pub(super) fn password(&self) -> &str {
         &self.password
     }
 
-    pub fn response_fields(&self) -> &[Box<str>] {
+    pub(super) fn response_fields(&self) -> &[Box<str>] {
         &self.response_fields
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_response_fields(&self) -> &[Box<str>] {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_response_fields(&self) -> &[Box<str>] {
         self.response_fields()
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

@@ -55,7 +55,7 @@ ORDER BY table_name, ordinal_position
 const MYSQL_SESSION_MODE_QUERY: &str = "SELECT @@SESSION.sql_mode";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SqlClientErrorCode {
+pub(crate) enum SqlClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -70,23 +70,23 @@ pub enum SqlClientErrorCode {
 }
 
 /// Stable provider failure without host, database, statement, row, or secret.
-pub struct SqlClientError {
+pub(crate) struct SqlClientError {
     code: SqlClientErrorCode,
     retryable: bool,
 }
 
 impl SqlClientError {
     #[must_use]
-    pub const fn code(&self) -> SqlClientErrorCode {
+    pub(crate) const fn code(&self) -> SqlClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             SqlClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -151,8 +151,8 @@ impl SqlClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: SqlClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(code: SqlClientErrorCode, retryable: bool) -> Self {
         Self { code, retryable }
     }
 }
@@ -190,18 +190,18 @@ impl fmt::Display for SqlClientError {
 impl std::error::Error for SqlClientError {}
 
 #[async_trait]
-pub trait SqlApi: Send + Sync {
+pub(in crate::toolkits) trait SqlApi: Send + Sync {
     async fn execute_sql(&self, sql: &str) -> Result<Value, SqlClientError>;
     async fn list_tables_and_columns(&self) -> Result<Value, SqlClientError>;
 }
 
-pub struct SqlClient {
+pub(crate) struct SqlClient {
     config: SqlToolkitConfig,
 }
 
 impl SqlClient {
     #[must_use]
-    pub const fn new(config: SqlToolkitConfig) -> Self {
+    pub(crate) const fn new(config: SqlToolkitConfig) -> Self {
         Self { config }
     }
 
@@ -761,22 +761,24 @@ const fn unknown_outcome() -> SqlClientError {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_map_project_read_error(error: ProjectErrorCode) -> SqlClientError {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_map_project_read_error(error: ProjectErrorCode) -> SqlClientError {
     map_project_read_error(error)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub struct SqlConnectionProfile {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub database: String,
-    pub tls: &'static str,
+#[cfg(test)]
+pub(in crate::toolkits) struct SqlConnectionProfile {
+    pub(in crate::toolkits) host: String,
+    pub(in crate::toolkits) port: u16,
+    pub(in crate::toolkits) username: String,
+    pub(in crate::toolkits) database: String,
+    pub(in crate::toolkits) tls: &'static str,
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_connection_profile(config: SqlToolkitConfig) -> SqlConnectionProfile {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_connection_profile(
+    config: SqlToolkitConfig,
+) -> SqlConnectionProfile {
     let client = SqlClient::new(config);
     match client.config.dialect() {
         SqlDialect::Postgres => {
@@ -810,18 +812,22 @@ pub fn test_connection_profile(config: SqlToolkitConfig) -> SqlConnectionProfile
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub const fn test_schema_queries() -> (&'static str, &'static str) {
+#[cfg(test)]
+pub(in crate::toolkits) const fn test_schema_queries() -> (&'static str, &'static str) {
     (POSTGRES_SCHEMA_SQL, MYSQL_SCHEMA_SQL)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_validate_mysql_session_mode(mode: &str) -> Result<(), SqlClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_validate_mysql_session_mode(
+    mode: &str,
+) -> Result<(), SqlClientError> {
     validate_mysql_session_mode(mode)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_schema_projection(rows: &[(String, String, String)]) -> Result<Value, SqlClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_schema_projection(
+    rows: &[(String, String, String)],
+) -> Result<Value, SqlClientError> {
     let mut builder = SchemaBuilder::new();
     for (table, column, column_type) in rows {
         builder.push(table, column, column_type)?;

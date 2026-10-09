@@ -33,7 +33,7 @@ const USER_AGENT_VALUE: &str = "elitea-worker-rust/0.1";
 const JSON_CONTENT_TYPE: &str = "application/json";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum KubernetesClientErrorCode {
+pub(crate) enum KubernetesClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -48,23 +48,23 @@ pub enum KubernetesClientErrorCode {
 }
 
 /// Stable Kubernetes failure without origin, token, path, headers, or body data.
-pub struct KubernetesClientError {
+pub(crate) struct KubernetesClientError {
     code: KubernetesClientErrorCode,
     retryable: bool,
 }
 
 impl KubernetesClientError {
     #[must_use]
-    pub const fn code(&self) -> KubernetesClientErrorCode {
+    pub(crate) const fn code(&self) -> KubernetesClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             KubernetesClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -129,8 +129,11 @@ impl KubernetesClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: KubernetesClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(
+        code: KubernetesClientErrorCode,
+        retryable: bool,
+    ) -> Self {
         Self { code, retryable }
     }
 }
@@ -172,7 +175,7 @@ impl fmt::Display for KubernetesClientError {
 impl std::error::Error for KubernetesClientError {}
 
 #[async_trait]
-pub trait KubernetesApi: Send + Sync {
+pub(in crate::toolkits) trait KubernetesApi: Send + Sync {
     async fn execute(
         &self,
         method: &str,
@@ -184,14 +187,14 @@ pub trait KubernetesApi: Send + Sync {
     async fn healthcheck(&self) -> Value;
 }
 
-pub struct KubernetesHttpResponse {
+pub(in crate::toolkits) struct KubernetesHttpResponse {
     status: StatusCode,
     body: Vec<u8>,
 }
 
 impl KubernetesHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture(status: StatusCode, body: impl Into<Vec<u8>>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture(status: StatusCode, body: impl Into<Vec<u8>>) -> Self {
         Self {
             status,
             body: body.into(),
@@ -200,7 +203,7 @@ impl KubernetesHttpResponse {
 }
 
 #[async_trait]
-pub trait KubernetesTransport: Send + Sync {
+pub(in crate::toolkits) trait KubernetesTransport: Send + Sync {
     async fn execute(
         &self,
         request: Request,
@@ -256,13 +259,13 @@ impl KubernetesTransport for ReqwestKubernetesTransport {
 }
 
 /// Invocation-owned Kubernetes Bearer client and exact cluster origin.
-pub struct KubernetesClient {
+pub(crate) struct KubernetesClient {
     config: KubernetesToolkitConfig,
     transport: Arc<dyn KubernetesTransport>,
 }
 
 impl KubernetesClient {
-    pub fn new(config: KubernetesToolkitConfig) -> Result<Self, KubernetesClientError> {
+    pub(crate) fn new(config: KubernetesToolkitConfig) -> Result<Self, KubernetesClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .no_proxy()
@@ -281,8 +284,8 @@ impl KubernetesClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn with_transport(
         config: KubernetesToolkitConfig,
         transport: Arc<dyn KubernetesTransport>,
     ) -> Self {
@@ -393,8 +396,8 @@ impl KubernetesClient {
         Ok(())
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_request(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_request(
         &self,
         method: &str,
         suburl: &str,
@@ -508,7 +511,7 @@ fn header_size(headers: &reqwest::header::HeaderMap) -> usize {
     })
 }
 
-pub fn parse_method(method: &str) -> Result<Method, KubernetesClientError> {
+pub(in crate::toolkits) fn parse_method(method: &str) -> Result<Method, KubernetesClientError> {
     let method = method.trim();
     if method.is_empty() || method.len() > 32 || !method.bytes().all(is_http_token_byte) {
         return Err(invalid_input());
@@ -541,7 +544,10 @@ fn is_effect(method: &Method) -> bool {
     !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
-pub fn validate_suburl(cluster_url: &str, suburl: &str) -> Result<Url, KubernetesClientError> {
+pub(in crate::toolkits) fn validate_suburl(
+    cluster_url: &str,
+    suburl: &str,
+) -> Result<Url, KubernetesClientError> {
     if suburl.is_empty()
         || suburl.len() > MAX_SUBURL_BYTES
         || !suburl.starts_with('/')

@@ -3,31 +3,31 @@ use std::fmt;
 
 use serde_json::{Map, Value};
 
-pub const MAX_OUTPUT_BYTES: usize = 512 * 1_024;
+pub(super) const MAX_OUTPUT_BYTES: usize = 512 * 1_024;
 const MAX_FIELDS: usize = 128;
 const MAX_FIELD_NAME_BYTES: usize = 256;
 const MAX_TABLE_CELLS: usize = 16_384;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OutputFormat {
+pub(in crate::toolkits) enum OutputFormat {
     Json,
     Csv,
     Markdown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum FormatErrorCode {
+pub(super) enum FormatErrorCode {
     InvalidInput,
     ResourceExhausted,
 }
 
-pub struct FormatError {
+pub(super) struct FormatError {
     code: FormatErrorCode,
 }
 
 impl FormatError {
     #[must_use]
-    pub const fn code(&self) -> FormatErrorCode {
+    pub(super) const fn code(&self) -> FormatErrorCode {
         self.code
     }
 }
@@ -53,7 +53,7 @@ impl fmt::Display for FormatError {
 impl std::error::Error for FormatError {}
 
 impl OutputFormat {
-    pub fn parse(value: Option<&str>) -> Result<Self, FormatError> {
+    pub(super) fn parse(value: Option<&str>) -> Result<Self, FormatError> {
         match value.unwrap_or("json").trim().to_ascii_lowercase().as_str() {
             "json" => Ok(Self::Json),
             "csv" => Ok(Self::Csv),
@@ -63,7 +63,7 @@ impl OutputFormat {
     }
 }
 
-pub fn parse_fields(value: Option<&Value>) -> Result<Vec<Box<str>>, FormatError> {
+pub(super) fn parse_fields(value: Option<&Value>) -> Result<Vec<Box<str>>, FormatError> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };
@@ -98,7 +98,7 @@ pub fn parse_fields(value: Option<&Value>) -> Result<Vec<Box<str>>, FormatError>
     Ok(fields)
 }
 
-pub fn project_record(record: &Value, fields: &[Box<str>]) -> Value {
+pub(super) fn project_record(record: &Value, fields: &[Box<str>]) -> Value {
     if fields.is_empty() {
         return record.clone();
     }
@@ -116,14 +116,14 @@ pub fn project_record(record: &Value, fields: &[Box<str>]) -> Value {
     Value::Object(projected)
 }
 
-pub fn project_records(records: &[Value], fields: &[Box<str>]) -> Vec<Value> {
+pub(super) fn project_records(records: &[Value], fields: &[Box<str>]) -> Vec<Value> {
     records
         .iter()
         .map(|record| project_record(record, fields))
         .collect()
 }
 
-pub fn render(
+pub(super) fn render(
     data: Value,
     format: OutputFormat,
     empty_message: Option<String>,
@@ -286,7 +286,7 @@ fn push_bounded(output: &mut String, value: &str) -> Result<(), FormatError> {
     Ok(())
 }
 
-pub fn bounded(value: Value) -> Result<Value, FormatError> {
+pub(super) fn bounded(value: Value) -> Result<Value, FormatError> {
     if serde_json::to_vec(&value)
         .map_err(|_| invalid_input())?
         .len()

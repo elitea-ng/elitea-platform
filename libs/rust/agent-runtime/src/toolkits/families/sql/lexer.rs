@@ -1,10 +1,10 @@
 use super::config::SqlDialect;
 
-pub const MAX_SQL_BYTES: usize = 64 * 1_024;
+pub(crate) const MAX_SQL_BYTES: usize = 64 * 1_024;
 const MAX_DOLLAR_TAG_BYTES: usize = 63;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SqlLexError {
+pub(crate) enum SqlLexError {
     Invalid,
     ResourceExhausted,
     MultipleStatements,
@@ -12,13 +12,13 @@ pub enum SqlLexError {
 }
 
 /// A validated single statement. The original bytes are retained unchanged.
-pub struct AdmittedSql<'a> {
+pub(crate) struct AdmittedSql<'a> {
     sql: &'a str,
 }
 
 impl<'a> AdmittedSql<'a> {
     #[must_use]
-    pub const fn as_str(&self) -> &'a str {
+    pub(crate) const fn as_str(&self) -> &'a str {
         self.sql
     }
 }
@@ -29,7 +29,10 @@ impl<'a> AdmittedSql<'a> {
 /// statement classification. A single terminal semicolon is allowed. Explicit
 /// transaction/session control is rejected because the driver owns the
 /// transaction and closes the connection after each operation.
-pub fn admit_one_statement(sql: &str, dialect: SqlDialect) -> Result<AdmittedSql<'_>, SqlLexError> {
+pub(crate) fn admit_one_statement(
+    sql: &str,
+    dialect: SqlDialect,
+) -> Result<AdmittedSql<'_>, SqlLexError> {
     if sql.len() > MAX_SQL_BYTES {
         return Err(SqlLexError::ResourceExhausted);
     }

@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use adk_rust::tool::{BasicToolset, SimpleToolContext};
-use adk_rust::{ErrorCategory, ErrorComponent, ReadonlyContext, Tool, ToolContext, Toolset};
+use adk_core::{ErrorCategory, ErrorComponent, ReadonlyContext, Tool, ToolContext, Toolset};
+use adk_tool::{BasicToolset, SimpleToolContext};
 use async_trait::async_trait;
 use rmcp::transport::auth::AuthorizationMetadata;
 use serde_json::{Map, Value, json};
@@ -368,7 +368,7 @@ impl Tool for FixtureTool {
         &self,
         _context: Arc<dyn ToolContext>,
         _arguments: Value,
-    ) -> adk_rust::Result<Value> {
+    ) -> adk_core::Result<Value> {
         self.calls.fetch_add(1, Ordering::AcqRel);
         Ok(self.result.clone())
     }
@@ -821,8 +821,8 @@ impl Tool for ErrorResultTool {
         &self,
         _context: Arc<dyn ToolContext>,
         _args: Value,
-    ) -> adk_rust::Result<Value> {
-        Err(adk_rust::AdkError::tool(self.message.clone()))
+    ) -> adk_core::Result<Value> {
+        Err(adk_core::AdkError::tool(self.message.clone()))
     }
 }
 
@@ -880,7 +880,7 @@ impl Toolset for CountingToolset {
         "counting_mcp"
     }
 
-    async fn tools(&self, _ctx: Arc<dyn ReadonlyContext>) -> adk_rust::Result<Vec<Arc<dyn Tool>>> {
+    async fn tools(&self, _ctx: Arc<dyn ReadonlyContext>) -> adk_core::Result<Vec<Arc<dyn Tool>>> {
         self.lists.fetch_add(1, Ordering::AcqRel);
         Ok(self.tools.clone())
     }
@@ -1286,7 +1286,7 @@ impl Tool for OversizedDescriptionTool {
         &self,
         _context: Arc<dyn ToolContext>,
         _arguments: Value,
-    ) -> adk_rust::Result<Value> {
+    ) -> adk_core::Result<Value> {
         Ok(json!({}))
     }
 }

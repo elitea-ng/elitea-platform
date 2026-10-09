@@ -24,21 +24,19 @@
 //! `sdk_conformance_exemptions.json` with its reason; an exemption that no
 //! longer matches anything fails too, so the list cannot rot.
 
-#![cfg(test)]
-
-use adk_rust::Tool;
+use adk_core::Tool;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 const SNAPSHOT: &str = include_str!(
-    "../../../elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
+    "../../../../../services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
 );
 const EXEMPTIONS: &str = include_str!("sdk_conformance_exemptions.json");
 /// What elitea-main is told this worker serves: per type, and per TOOL for a
 /// family that serves fewer tools than its SDK type declares.
 const CAPABILITY: &str = include_str!(
-    "../../../elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
+    "../../../../../services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
 );
 
 /// The stored toolkit type of an SDK type: the Kubernetes family is stored
@@ -167,7 +165,7 @@ fn required(schema: &Value) -> BTreeSet<String> {
 
 /// Every tool name the SDK type declares, for a family test that selects
 /// tools by name: select them all and let the family keep what it serves.
-pub(crate) fn sdk_tool_names(sdk_type: &str) -> Vec<String> {
+pub fn sdk_tool_names(sdk_type: &str) -> Vec<String> {
     snapshot()
         .get(sdk_type)
         .unwrap_or_else(|| panic!("the SDK snapshot has no toolkit type {sdk_type:?}"))
@@ -178,7 +176,7 @@ pub(crate) fn sdk_tool_names(sdk_type: &str) -> Vec<String> {
 
 /// The violations of one family against the SDK type `sdk_type`, as
 /// `sdk_type/tool/rule` keys.
-pub(crate) fn violations(sdk_type: &str, tools: &[Arc<dyn Tool>]) -> BTreeSet<String> {
+pub fn violations(sdk_type: &str, tools: &[Arc<dyn Tool>]) -> BTreeSet<String> {
     let sdk = snapshot()
         .get(sdk_type)
         .unwrap_or_else(|| panic!("the SDK snapshot has no toolkit type {sdk_type:?}"));
@@ -218,7 +216,7 @@ pub(crate) fn violations(sdk_type: &str, tools: &[Arc<dyn Tool>]) -> BTreeSet<St
 /// Assert that `tools` — EVERY tool the family serves, unfiltered — keep the
 /// SDK contract of `sdk_type`, apart from the family's listed exemptions,
 /// and that each of those exemptions still matches something.
-pub(crate) fn assert_sdk_conformance(sdk_type: &str, tools: &[Arc<dyn Tool>]) {
+pub fn assert_sdk_conformance(sdk_type: &str, tools: &[Arc<dyn Tool>]) {
     assert!(!tools.is_empty(), "{sdk_type}: no tools to check");
     let found = violations(sdk_type, tools);
     let prefix = format!("{sdk_type}/");

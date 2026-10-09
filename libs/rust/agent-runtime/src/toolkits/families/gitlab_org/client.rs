@@ -38,7 +38,7 @@ const MAX_COMMITS: usize = 1_000;
 const USER_AGENT: &str = "elitea-worker-rust/0.1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GitLabOrgClientErrorCode {
+pub(crate) enum GitLabOrgClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -54,23 +54,23 @@ pub enum GitLabOrgClientErrorCode {
 }
 
 /// Stable provider failure without origin, repository, path, body, or token.
-pub struct GitLabOrgClientError {
+pub(crate) struct GitLabOrgClientError {
     code: GitLabOrgClientErrorCode,
     retryable: bool,
 }
 
 impl GitLabOrgClientError {
     #[must_use]
-    pub const fn code(&self) -> GitLabOrgClientErrorCode {
+    pub(crate) const fn code(&self) -> GitLabOrgClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             GitLabOrgClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -140,8 +140,11 @@ impl GitLabOrgClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: GitLabOrgClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(
+        code: GitLabOrgClientErrorCode,
+        retryable: bool,
+    ) -> Self {
         Self { code, retryable }
     }
 }
@@ -183,7 +186,7 @@ impl fmt::Display for GitLabOrgClientError {
 
 impl std::error::Error for GitLabOrgClientError {}
 
-pub enum GitLabOrgOperation<'a> {
+pub(in crate::toolkits) enum GitLabOrgOperation<'a> {
     CreateBranch {
         branch_name: &'a str,
         repository: Option<&'a str>,
@@ -278,14 +281,14 @@ pub enum GitLabOrgOperation<'a> {
 }
 
 #[async_trait]
-pub trait GitLabOrgApi: Send + Sync {
+pub(in crate::toolkits) trait GitLabOrgApi: Send + Sync {
     async fn execute(
         &self,
         operation: GitLabOrgOperation<'_>,
     ) -> Result<Value, GitLabOrgClientError>;
 }
 
-pub struct GitLabOrgHttpResponse {
+pub(in crate::toolkits) struct GitLabOrgHttpResponse {
     status: StatusCode,
     body: Option<Value>,
     json_content_type: bool,
@@ -293,8 +296,12 @@ pub struct GitLabOrgHttpResponse {
 }
 
 impl GitLabOrgHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture(status: StatusCode, body: Option<Value>, next_page: Option<&str>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture(
+        status: StatusCode,
+        body: Option<Value>,
+        next_page: Option<&str>,
+    ) -> Self {
         Self {
             status,
             body,
@@ -303,8 +310,8 @@ impl GitLabOrgHttpResponse {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn non_json_fixture(status: StatusCode) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn non_json_fixture(status: StatusCode) -> Self {
         Self {
             status,
             body: None,
@@ -315,7 +322,7 @@ impl GitLabOrgHttpResponse {
 }
 
 #[async_trait]
-pub trait GitLabOrgTransport: Send + Sync {
+pub(in crate::toolkits) trait GitLabOrgTransport: Send + Sync {
     async fn execute(
         &self,
         request: Request,
@@ -387,7 +394,7 @@ impl GitLabOrgTransport for ReqwestGitLabOrgTransport {
 }
 
 /// One claim-scoped GitLab client with invocation-local active-branch state.
-pub struct GitLabOrgClient {
+pub(crate) struct GitLabOrgClient {
     config: GitLabOrgToolkitConfig,
     transport: Arc<dyn GitLabOrgTransport>,
     operation_gate: Mutex<()>,
@@ -395,7 +402,7 @@ pub struct GitLabOrgClient {
 }
 
 impl GitLabOrgClient {
-    pub fn new(config: GitLabOrgToolkitConfig) -> Result<Self, GitLabOrgClientError> {
+    pub(crate) fn new(config: GitLabOrgToolkitConfig) -> Result<Self, GitLabOrgClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -416,8 +423,11 @@ impl GitLabOrgClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture(config: GitLabOrgToolkitConfig, transport: Arc<dyn GitLabOrgTransport>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture(
+        config: GitLabOrgToolkitConfig,
+        transport: Arc<dyn GitLabOrgTransport>,
+    ) -> Self {
         let active_branch = Mutex::new(config.branch().into());
         Self {
             config,
@@ -1132,20 +1142,23 @@ const fn unknown_outcome() -> GitLabOrgClientError {
     error(GitLabOrgClientErrorCode::UnknownOutcome, false)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_map_http_status(status: StatusCode, effect: bool) -> GitLabOrgClientError {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_map_http_status(
+    status: StatusCode,
+    effect: bool,
+) -> GitLabOrgClientError {
     map_http_status(status, effect).expect_err("non-success status must fail")
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_parse_next_page(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_parse_next_page(
     value: Option<&HeaderValue>,
 ) -> Result<Option<Box<str>>, GitLabOrgClientError> {
     parse_next_page(value, false)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_validate_effect_status(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_validate_effect_status(
     method: &Method,
     status: StatusCode,
 ) -> Result<(), GitLabOrgClientError> {

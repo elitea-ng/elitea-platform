@@ -1,25 +1,33 @@
-pub mod aha;
+pub(crate) mod aha;
+// Public only to the worker's composition suites (`test-support`).
+#[cfg(any(test, feature = "test-support"))]
 pub mod artifact;
-pub mod azure;
-pub mod azure_search;
-pub mod elastic;
-pub mod gcp;
-pub mod github;
-pub mod gitlab_org;
-pub mod google_places;
-pub mod keycloak;
-pub mod kubernetes;
+#[cfg(not(any(test, feature = "test-support")))]
+pub(crate) mod artifact;
+pub(crate) mod azure;
+pub(crate) mod azure_search;
+pub(crate) mod elastic;
+pub(crate) mod gcp;
+pub(crate) mod github;
+pub(crate) mod gitlab_org;
+pub(crate) mod google_places;
+pub(crate) mod keycloak;
+pub(crate) mod kubernetes;
+// Public only to the worker's composition suites (`test-support`).
+#[cfg(any(test, feature = "test-support"))]
 pub mod openapi;
-pub mod postman;
-pub mod rally;
-pub mod report_portal;
-pub mod salesforce;
-pub mod service_now;
-pub mod sharepoint;
-pub mod slack;
-pub mod sonar;
+#[cfg(not(any(test, feature = "test-support")))]
+pub(crate) mod openapi;
+pub(crate) mod postman;
+pub(crate) mod rally;
+pub(crate) mod report_portal;
+pub(crate) mod salesforce;
+pub(crate) mod service_now;
+pub(crate) mod sharepoint;
+pub(crate) mod slack;
+pub(crate) mod sonar;
 #[cfg(feature = "toolkit-sql")]
-pub mod sql;
-pub mod yagmail;
-pub mod zephyr;
-pub mod zephyr_squad;
+pub(crate) mod sql;
+pub(crate) mod yagmail;
+pub(crate) mod zephyr;
+pub(crate) mod zephyr_squad;

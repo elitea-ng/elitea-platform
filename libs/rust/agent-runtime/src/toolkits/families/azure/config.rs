@@ -10,19 +10,19 @@ const MAX_SELECTED_TOOLS: usize = 16;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AzureConfigErrorCode {
+pub(crate) enum AzureConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable configuration failure without tenant, subscription, client, or secret data.
-pub struct AzureConfigError {
+pub(crate) struct AzureConfigError {
     code: AzureConfigErrorCode,
 }
 
 impl AzureConfigError {
     #[must_use]
-    pub const fn code(&self) -> AzureConfigErrorCode {
+    pub(crate) const fn code(&self) -> AzureConfigErrorCode {
         self.code
     }
 }
@@ -55,7 +55,7 @@ impl std::error::Error for AzureConfigError {}
 ///
 /// Main marks only `client_secret` as secret and redeems it for the accepted
 /// execution. The secret is deliberately non-cloneable and non-debuggable.
-pub struct AzureToolkitConfig {
+pub(crate) struct AzureToolkitConfig {
     subscription_id: Box<str>,
     tenant_id: Box<str>,
     client_id: Box<str>,
@@ -64,7 +64,7 @@ pub struct AzureToolkitConfig {
 }
 
 impl AzureToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, AzureConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, AzureConfigError> {
         let subscription_id = required_uuid(settings, "subscription_id")?;
         let client_id = required_uuid(settings, "client_id")?;
         let tenant_id = required_tenant(settings)?;
@@ -78,24 +78,24 @@ impl AzureToolkitConfig {
         })
     }
 
-    pub fn subscription_id(&self) -> &str {
+    pub(super) fn subscription_id(&self) -> &str {
         &self.subscription_id
     }
 
-    pub fn tenant_id(&self) -> &str {
+    pub(super) fn tenant_id(&self) -> &str {
         &self.tenant_id
     }
 
-    pub fn client_id(&self) -> &str {
+    pub(super) fn client_id(&self) -> &str {
         &self.client_id
     }
 
-    pub fn client_secret(&self) -> &str {
+    pub(super) fn client_secret(&self) -> &str {
         &self.client_secret
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

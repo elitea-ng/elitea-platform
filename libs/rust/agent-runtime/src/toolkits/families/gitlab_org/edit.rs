@@ -9,7 +9,7 @@ const EDITABLE_EXTENSIONS: &[&str] = &[
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum EditErrorCode {
+pub(in crate::toolkits) enum EditErrorCode {
     InvalidMarkers,
     UnsupportedFile,
     Ambiguous,
@@ -25,7 +25,11 @@ enum Section {
     New,
 }
 
-pub fn apply_update(file_path: &str, content: &str, query: &str) -> Result<String, EditErrorCode> {
+pub(super) fn apply_update(
+    file_path: &str,
+    content: &str,
+    query: &str,
+) -> Result<String, EditErrorCode> {
     if query.len() > MAX_EDIT_QUERY_BYTES || content.len() > MAX_FILE_BYTES {
         return Err(EditErrorCode::ResourceExhausted);
     }
@@ -224,8 +228,8 @@ fn line_ranges(content: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_apply_update(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_apply_update(
     file_path: &str,
     content: &str,
     query: &str,

@@ -11,10 +11,10 @@ use http_body_util::{BodyExt, Full};
 use serde_json::{Map, Value, json};
 use tonic::body::Body;
 
+use super::ToolAdmissionPolicy;
 use super::families::artifact::ArtifactToolAuthority;
 use super::families::artifact::config::{ArtifactConfigErrorCode, ArtifactToolkitConfig};
 use super::families::artifact::tools::build_artifact_toolset;
-use super::policy::ToolAdmissionPolicy;
 use crate::protocol::control::test_runtime_context_authority;
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::platform_writer::ClaimPlatformWriter;

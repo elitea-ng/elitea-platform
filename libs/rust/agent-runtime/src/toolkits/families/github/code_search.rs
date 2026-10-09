@@ -9,10 +9,10 @@ use serde_json::{Map, Value, json};
 
 use super::client::{GitHubClientError, invalid_input, invalid_response, resource_exhausted};
 
-pub const MAX_CODE_SEARCH_ITEMS: usize = 100;
-pub const MAX_CODE_SEARCH_QUERY_BYTES: usize = 4 * 1_024;
-pub const MAX_CODE_SEARCH_RESPONSE_BYTES: usize = 2 * 1_024 * 1_024;
-pub const MAX_CODE_SEARCH_WINDOW: usize = 1_000;
+pub(super) const MAX_CODE_SEARCH_ITEMS: usize = 100;
+pub(super) const MAX_CODE_SEARCH_QUERY_BYTES: usize = 4 * 1_024;
+pub(super) const MAX_CODE_SEARCH_RESPONSE_BYTES: usize = 2 * 1_024 * 1_024;
+pub(super) const MAX_CODE_SEARCH_WINDOW: usize = 1_000;
 
 const MAX_OUTPUT_CHARS: usize = 200_000;
 const MAX_NAME_BYTES: usize = 1_024;
@@ -24,7 +24,10 @@ const MAX_MATCH_TEXT_BYTES: usize = 4 * 1_024;
 const MAX_TEXT_MATCHES: usize = 32;
 const MAX_MATCHES_PER_FRAGMENT: usize = 64;
 
-pub fn scope_code_search_query(query: &str, repository: &str) -> Result<String, GitHubClientError> {
+pub(super) fn scope_code_search_query(
+    query: &str,
+    repository: &str,
+) -> Result<String, GitHubClientError> {
     if query.trim().is_empty()
         || query.len() > MAX_CODE_SEARCH_QUERY_BYTES
         || query.chars().any(char::is_control)
@@ -46,7 +49,10 @@ pub fn scope_code_search_query(query: &str, repository: &str) -> Result<String, 
     Ok(scoped)
 }
 
-pub fn validate_code_search_window(page: usize, per_page: usize) -> Result<(), GitHubClientError> {
+pub(super) fn validate_code_search_window(
+    page: usize,
+    per_page: usize,
+) -> Result<(), GitHubClientError> {
     if page == 0 || !(1..=MAX_CODE_SEARCH_ITEMS).contains(&per_page) {
         return Err(invalid_input());
     }
@@ -61,7 +67,7 @@ pub fn validate_code_search_window(page: usize, per_page: usize) -> Result<(), G
     Ok(())
 }
 
-pub fn project_code_search(
+pub(super) fn project_code_search(
     value: &Value,
     page: usize,
     per_page: usize,
@@ -276,16 +282,16 @@ fn bounded_output(value: Value) -> Result<Value, GitHubClientError> {
     Ok(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_scope_code_search_query(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_scope_code_search_query(
     query: &str,
     repository: &str,
 ) -> Result<String, GitHubClientError> {
     scope_code_search_query(query, repository)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_code_search(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_code_search(
     value: &Value,
     page: usize,
     per_page: usize,

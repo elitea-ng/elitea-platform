@@ -32,7 +32,7 @@ const FORM_CONTENT_TYPE: &str = "application/x-www-form-urlencoded";
 const JSON_CONTENT_TYPE: &str = "application/json";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum KeycloakClientErrorCode {
+pub(crate) enum KeycloakClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -47,23 +47,23 @@ pub enum KeycloakClientErrorCode {
 }
 
 /// Stable Keycloak failure without authority, realm, identifiers, bodies, or credentials.
-pub struct KeycloakClientError {
+pub(crate) struct KeycloakClientError {
     code: KeycloakClientErrorCode,
     retryable: bool,
 }
 
 impl KeycloakClientError {
     #[must_use]
-    pub const fn code(&self) -> KeycloakClientErrorCode {
+    pub(crate) const fn code(&self) -> KeycloakClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             KeycloakClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -128,8 +128,11 @@ impl KeycloakClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: KeycloakClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(
+        code: KeycloakClientErrorCode,
+        retryable: bool,
+    ) -> Self {
         Self { code, retryable }
     }
 }
@@ -171,7 +174,7 @@ impl fmt::Display for KeycloakClientError {
 impl std::error::Error for KeycloakClientError {}
 
 #[async_trait]
-pub trait KeycloakApi: Send + Sync {
+pub(in crate::toolkits) trait KeycloakApi: Send + Sync {
     async fn execute(
         &self,
         method: &str,
@@ -180,14 +183,14 @@ pub trait KeycloakApi: Send + Sync {
     ) -> Result<Value, KeycloakClientError>;
 }
 
-pub struct KeycloakHttpResponse {
+pub(in crate::toolkits) struct KeycloakHttpResponse {
     status: StatusCode,
     body: Vec<u8>,
 }
 
 impl KeycloakHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture(status: StatusCode, body: impl Into<Vec<u8>>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture(status: StatusCode, body: impl Into<Vec<u8>>) -> Self {
         Self {
             status,
             body: body.into(),
@@ -196,7 +199,7 @@ impl KeycloakHttpResponse {
 }
 
 #[async_trait]
-pub trait KeycloakTransport: Send + Sync {
+pub(in crate::toolkits) trait KeycloakTransport: Send + Sync {
     async fn execute(
         &self,
         request: Request,
@@ -252,13 +255,13 @@ impl KeycloakTransport for ReqwestKeycloakTransport {
 }
 
 /// Invocation-owned Keycloak service-account client and fixed realm authority.
-pub struct KeycloakClient {
+pub(crate) struct KeycloakClient {
     config: KeycloakToolkitConfig,
     transport: Arc<dyn KeycloakTransport>,
 }
 
 impl KeycloakClient {
-    pub fn new(config: KeycloakToolkitConfig) -> Result<Self, KeycloakClientError> {
+    pub(crate) fn new(config: KeycloakToolkitConfig) -> Result<Self, KeycloakClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -276,8 +279,8 @@ impl KeycloakClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn with_transport(
         config: KeycloakToolkitConfig,
         transport: Arc<dyn KeycloakTransport>,
     ) -> Self {
@@ -425,13 +428,13 @@ impl KeycloakClient {
         Ok(result)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_token_request(&self) -> Result<Request, KeycloakClientError> {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_token_request(&self) -> Result<Request, KeycloakClientError> {
         self.token_request()
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_admin_request(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_admin_request(
         &self,
         method: &str,
         relative_url: &str,
@@ -489,7 +492,7 @@ fn bearer_header(token: &str) -> Result<HeaderValue, KeycloakClientError> {
     HeaderValue::from_str(&value).map_err(|_| invalid_response())
 }
 
-pub fn parse_method(method: &str) -> Result<Method, KeycloakClientError> {
+pub(in crate::toolkits) fn parse_method(method: &str) -> Result<Method, KeycloakClientError> {
     let method = method.trim();
     if method.is_empty() || method.len() > 32 || !method.bytes().all(is_http_token_byte) {
         return Err(invalid_input());
@@ -522,7 +525,9 @@ fn is_effect(method: &Method) -> bool {
     !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
-pub fn validate_relative_url(relative_url: &str) -> Result<(), KeycloakClientError> {
+pub(in crate::toolkits) fn validate_relative_url(
+    relative_url: &str,
+) -> Result<(), KeycloakClientError> {
     if relative_url.is_empty()
         || relative_url.len() > MAX_RELATIVE_URL_BYTES
         || !relative_url.starts_with('/')
@@ -730,7 +735,10 @@ const fn unknown_outcome() -> KeycloakClientError {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_map_admin_status(status: StatusCode, effect: bool) -> KeycloakClientError {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_map_admin_status(
+    status: StatusCode,
+    effect: bool,
+) -> KeycloakClientError {
     map_admin_status(status, effect)
 }

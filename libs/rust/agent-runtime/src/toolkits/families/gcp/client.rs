@@ -51,7 +51,7 @@ const EMPTY_SUCCESS: &str =
     "Success: The request has been fulfilled and resulted in a new resource being created.";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GcpClientErrorCode {
+pub(crate) enum GcpClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -66,23 +66,23 @@ pub enum GcpClientErrorCode {
 }
 
 /// Stable GCP failure without account, key, scope, URL, argument, or provider data.
-pub struct GcpClientError {
+pub(crate) struct GcpClientError {
     code: GcpClientErrorCode,
     retryable: bool,
 }
 
 impl GcpClientError {
     #[must_use]
-    pub const fn code(&self) -> GcpClientErrorCode {
+    pub(crate) const fn code(&self) -> GcpClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             GcpClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -147,8 +147,8 @@ impl GcpClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: GcpClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(code: GcpClientErrorCode, retryable: bool) -> Self {
         Self { code, retryable }
     }
 }
@@ -188,7 +188,7 @@ impl fmt::Display for GcpClientError {
 impl std::error::Error for GcpClientError {}
 
 #[async_trait]
-pub trait GcpApi: Send + Sync {
+pub(in crate::toolkits) trait GcpApi: Send + Sync {
     async fn execute(
         &self,
         method: &str,
@@ -198,14 +198,14 @@ pub trait GcpApi: Send + Sync {
     ) -> Result<Value, GcpClientError>;
 }
 
-pub struct GcpHttpResponse {
+pub(in crate::toolkits) struct GcpHttpResponse {
     status: StatusCode,
     body: Vec<u8>,
 }
 
 impl GcpHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture(status: StatusCode, body: impl Into<Vec<u8>>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture(status: StatusCode, body: impl Into<Vec<u8>>) -> Self {
         Self {
             status,
             body: body.into(),
@@ -214,7 +214,7 @@ impl GcpHttpResponse {
 }
 
 #[async_trait]
-pub trait GcpTransport: Send + Sync {
+pub(in crate::toolkits) trait GcpTransport: Send + Sync {
     async fn execute(
         &self,
         request: Request,
@@ -270,13 +270,13 @@ impl GcpTransport for ReqwestGcpTransport {
 }
 
 /// Invocation-owned Google service-account signer and bounded REST client.
-pub struct GcpClient {
+pub(crate) struct GcpClient {
     config: GcpToolkitConfig,
     transport: Arc<dyn GcpTransport>,
 }
 
 impl GcpClient {
-    pub fn new(config: GcpToolkitConfig) -> Result<Self, GcpClientError> {
+    pub(crate) fn new(config: GcpToolkitConfig) -> Result<Self, GcpClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .no_proxy()
@@ -295,8 +295,11 @@ impl GcpClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(config: GcpToolkitConfig, transport: Arc<dyn GcpTransport>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn with_transport(
+        config: GcpToolkitConfig,
+        transport: Arc<dyn GcpTransport>,
+    ) -> Self {
         Self { config, transport }
     }
 
@@ -395,8 +398,8 @@ impl GcpClient {
         project_success(&response.body, effect)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_token_request(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_token_request(
         &self,
         scopes: &[String],
         now: SystemTime,
@@ -404,8 +407,8 @@ impl GcpClient {
         self.token_request(scopes, now)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_api_request(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_api_request(
         method: &str,
         url: &str,
         optional_args: &Map<String, Value>,
@@ -545,7 +548,9 @@ fn prepare_api_request(
     Ok(request)
 }
 
-pub fn validate_optional_args(optional_args: &Map<String, Value>) -> Result<(), GcpClientError> {
+pub(in crate::toolkits) fn validate_optional_args(
+    optional_args: &Map<String, Value>,
+) -> Result<(), GcpClientError> {
     reject_unknown_options(optional_args)?;
     if optional_args.contains_key("json") && optional_args.contains_key("data") {
         return Err(invalid_input());
@@ -596,7 +601,7 @@ fn request_with_body(
     Ok(request)
 }
 
-pub fn validate_scopes(scopes: &[String]) -> Result<(), GcpClientError> {
+pub(in crate::toolkits) fn validate_scopes(scopes: &[String]) -> Result<(), GcpClientError> {
     if scopes.is_empty() || scopes.len() > MAX_SCOPES {
         return Err(if scopes.len() > MAX_SCOPES {
             resource_exhausted()
@@ -788,7 +793,7 @@ fn bearer_header(token: &str) -> Result<HeaderValue, GcpClientError> {
     HeaderValue::from_str(&value).map_err(|_| invalid_response())
 }
 
-pub fn parse_method(method: &str) -> Result<Method, GcpClientError> {
+pub(in crate::toolkits) fn parse_method(method: &str) -> Result<Method, GcpClientError> {
     let method = method.trim();
     if method.is_empty() || method.len() > 32 || !method.bytes().all(is_http_token_byte) {
         return Err(invalid_input());
@@ -821,7 +826,7 @@ fn is_effect(method: &Method) -> bool {
     !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
-pub fn validate_api_url(value: &str) -> Result<Url, GcpClientError> {
+pub(in crate::toolkits) fn validate_api_url(value: &str) -> Result<Url, GcpClientError> {
     if value.is_empty()
         || value.len() > MAX_API_URL_BYTES
         || value.bytes().any(|byte| byte.is_ascii_control())

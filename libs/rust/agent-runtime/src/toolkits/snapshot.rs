@@ -225,7 +225,7 @@ impl FrozenToolReference<'_> {
 
     /// Main owns automatic built-in identities; they have no toolkit row.
     #[must_use]
-    pub fn is_internal_builder(&self) -> bool {
+    pub(crate) fn is_internal_builder(&self) -> bool {
         self.tool_id().is_none() && internal_builder_name(self.tool_type()).is_some()
     }
 
@@ -302,7 +302,6 @@ pub struct FrozenApplicationReference<'a> {
     agent_type: &'a str,
     application_id: u64,
     application_version_id: u64,
-    participant_id: Option<u64>,
     project_id: Option<u64>,
 }
 
@@ -461,7 +460,6 @@ fn parse_stored_application_reference<'a>(
         agent_type,
         application_id,
         application_version_id,
-        participant_id: None,
         project_id: None,
     })
 }
@@ -492,7 +490,8 @@ fn parse_adhoc_application_reference(
     {
         return Err(invalid_input());
     }
-    let participant_id = positive_integer(tool.get("participant_id")).ok_or_else(invalid_input)?;
+    // Required and validated, but not carried: nothing reads it.
+    positive_integer(tool.get("participant_id")).ok_or_else(invalid_input)?;
     let project_id = positive_integer(tool.get("project_id")).ok_or_else(invalid_input)?;
     let application_id =
         positive_integer(settings.get("application_id")).ok_or_else(invalid_input)?;
@@ -505,7 +504,6 @@ fn parse_adhoc_application_reference(
         agent_type,
         application_id,
         application_version_id,
-        participant_id: Some(participant_id),
         project_id: Some(project_id),
     })
 }

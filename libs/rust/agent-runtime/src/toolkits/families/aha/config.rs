@@ -10,19 +10,19 @@ const MAX_SELECTED_TOOLS: usize = 1_024;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AhaConfigErrorCode {
+pub(crate) enum AhaConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable configuration failure that retains no origin or credential data.
-pub struct AhaConfigError {
+pub(crate) struct AhaConfigError {
     code: AhaConfigErrorCode,
 }
 
 impl AhaConfigError {
     #[must_use]
-    pub const fn code(&self) -> AhaConfigErrorCode {
+    pub(crate) const fn code(&self) -> AhaConfigErrorCode {
         self.code
     }
 }
@@ -50,14 +50,14 @@ impl fmt::Display for AhaConfigError {
 impl std::error::Error for AhaConfigError {}
 
 /// Invocation-scoped authority for one exact Aha origin.
-pub struct AhaToolkitConfig {
+pub(crate) struct AhaToolkitConfig {
     base_url: Url,
     api_key: Zeroizing<String>,
     selected_tools: Vec<Box<str>>,
 }
 
 impl AhaToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, AhaConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, AhaConfigError> {
         let configuration = settings
             .get("aha_configuration")
             .and_then(Value::as_object)
@@ -74,16 +74,16 @@ impl AhaToolkitConfig {
         })
     }
 
-    pub const fn base_url(&self) -> &Url {
+    pub(super) const fn base_url(&self) -> &Url {
         &self.base_url
     }
 
-    pub fn api_key(&self) -> &str {
+    pub(super) fn api_key(&self) -> &str {
         &self.api_key
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

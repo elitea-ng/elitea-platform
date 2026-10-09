@@ -47,7 +47,7 @@ const FORM_COMPONENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'~');
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AzureClientErrorCode {
+pub(crate) enum AzureClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -62,23 +62,23 @@ pub enum AzureClientErrorCode {
 }
 
 /// Stable Azure failure without tenant, subscription, URL, headers, bodies, or credentials.
-pub struct AzureClientError {
+pub(crate) struct AzureClientError {
     code: AzureClientErrorCode,
     retryable: bool,
 }
 
 impl AzureClientError {
     #[must_use]
-    pub const fn code(&self) -> AzureClientErrorCode {
+    pub(crate) const fn code(&self) -> AzureClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             AzureClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -159,8 +159,8 @@ impl AzureClientError {
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: AzureClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(code: AzureClientErrorCode, retryable: bool) -> Self {
         Self { code, retryable }
     }
 }
@@ -202,7 +202,7 @@ impl fmt::Display for AzureClientError {
 impl std::error::Error for AzureClientError {}
 
 #[async_trait]
-pub trait AzureApi: Send + Sync {
+pub(in crate::toolkits) trait AzureApi: Send + Sync {
     async fn execute(
         &self,
         method: &str,
@@ -213,14 +213,14 @@ pub trait AzureApi: Send + Sync {
     async fn healthcheck(&self) -> Value;
 }
 
-pub struct AzureHttpResponse {
+pub(in crate::toolkits) struct AzureHttpResponse {
     status: StatusCode,
     body: Vec<u8>,
 }
 
 impl AzureHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture(status: StatusCode, body: impl Into<Vec<u8>>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture(status: StatusCode, body: impl Into<Vec<u8>>) -> Self {
         Self {
             status,
             body: body.into(),
@@ -228,7 +228,7 @@ impl AzureHttpResponse {
     }
 }
 
-pub enum AzureRequestBody {
+pub(in crate::toolkits) enum AzureRequestBody {
     Empty,
     Bytes(Vec<u8>),
     Multipart {
@@ -237,15 +237,15 @@ pub enum AzureRequestBody {
     },
 }
 
-pub struct InlineFile {
-    pub field: String,
-    pub filename: String,
-    pub content: Vec<u8>,
-    pub content_type: Option<String>,
-    pub headers: HeaderMap,
+pub(in crate::toolkits) struct InlineFile {
+    pub(in crate::toolkits) field: String,
+    pub(in crate::toolkits) filename: String,
+    pub(in crate::toolkits) content: Vec<u8>,
+    pub(in crate::toolkits) content_type: Option<String>,
+    pub(in crate::toolkits) headers: HeaderMap,
 }
 
-pub struct AzureRequest {
+pub(in crate::toolkits) struct AzureRequest {
     method: Method,
     url: Url,
     headers: HeaderMap,
@@ -253,29 +253,29 @@ pub struct AzureRequest {
 }
 
 impl AzureRequest {
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn method(&self) -> &Method {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn method(&self) -> &Method {
         &self.method
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn url(&self) -> &Url {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn url(&self) -> &Url {
         &self.url
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn headers(&self) -> &HeaderMap {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn headers(&self) -> &HeaderMap {
         &self.headers
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn body(&self) -> &AzureRequestBody {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn body(&self) -> &AzureRequestBody {
         &self.body
     }
 }
 
 #[async_trait]
-pub trait AzureTransport: Send + Sync {
+pub(in crate::toolkits) trait AzureTransport: Send + Sync {
     async fn execute(
         &self,
         request: AzureRequest,
@@ -356,13 +356,13 @@ impl AzureTransport for ReqwestAzureTransport {
 }
 
 /// Invocation-owned Microsoft Entra credential and fixed ARM subscription authority.
-pub struct AzureClient {
+pub(crate) struct AzureClient {
     config: AzureToolkitConfig,
     transport: Arc<dyn AzureTransport>,
 }
 
 impl AzureClient {
-    pub fn new(config: AzureToolkitConfig) -> Result<Self, AzureClientError> {
+    pub(crate) fn new(config: AzureToolkitConfig) -> Result<Self, AzureClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .no_proxy()
@@ -381,8 +381,11 @@ impl AzureClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(config: AzureToolkitConfig, transport: Arc<dyn AzureTransport>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn with_transport(
+        config: AzureToolkitConfig,
+        transport: Arc<dyn AzureTransport>,
+    ) -> Self {
         Self { config, transport }
     }
 
@@ -516,13 +519,13 @@ impl AzureClient {
         )
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_token_request(&self) -> Result<AzureRequest, AzureClientError> {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_token_request(&self) -> Result<AzureRequest, AzureClientError> {
         self.token_request()
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_arm_request(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_arm_request(
         &self,
         method: &str,
         url: &str,
@@ -904,7 +907,7 @@ fn bearer_header(token: &str) -> Result<HeaderValue, AzureClientError> {
     HeaderValue::from_str(&value).map_err(|_| invalid_response())
 }
 
-pub fn parse_method(method: &str) -> Result<Method, AzureClientError> {
+pub(in crate::toolkits) fn parse_method(method: &str) -> Result<Method, AzureClientError> {
     let method = method.trim();
     if method.is_empty() || method.len() > 32 || !method.bytes().all(is_http_token_byte) {
         return Err(invalid_input());
@@ -937,7 +940,10 @@ fn is_effect(method: &Method) -> bool {
     !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
 }
 
-pub fn validate_arm_url(raw: &str, subscription_id: &str) -> Result<Url, AzureClientError> {
+pub(in crate::toolkits) fn validate_arm_url(
+    raw: &str,
+    subscription_id: &str,
+) -> Result<Url, AzureClientError> {
     if raw.is_empty()
         || raw.len() > MAX_URL_BYTES
         || raw

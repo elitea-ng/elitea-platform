@@ -43,13 +43,13 @@ impl SearchQuery {
     }
 }
 
-pub struct ResponseSelection {
+pub(super) struct ResponseSelection {
     query: SearchQuery,
     limit: usize,
 }
 
 impl ResponseSelection {
-    pub fn parse(arguments: &Map<String, Value>) -> Result<Option<Self>, ()> {
+    pub(super) fn parse(arguments: &Map<String, Value>) -> Result<Option<Self>, ()> {
         let search = match arguments.get("response_search") {
             None | Some(Value::Null) => None,
             Some(Value::String(value))
@@ -84,7 +84,7 @@ impl ResponseSelection {
         }))
     }
 
-    pub fn apply(&self, content: &str, preferred_paths: &[Vec<String>]) -> String {
+    pub(super) fn apply(&self, content: &str, preferred_paths: &[Vec<String>]) -> String {
         serde_json::from_str(content).map_or_else(
             |_| self.select_text(content),
             |parsed| self.select_json(&parsed, preferred_paths),

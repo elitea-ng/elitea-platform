@@ -12,14 +12,14 @@ const MAX_SELECTED_TOOLS: usize = 1_024;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SqlDialect {
+pub(crate) enum SqlDialect {
     Postgres,
     MySql,
 }
 
 impl SqlDialect {
     #[must_use]
-    pub const fn default_port(self) -> u16 {
+    pub(crate) const fn default_port(self) -> u16 {
         match self {
             Self::Postgres => 5432,
             Self::MySql => 3306,
@@ -28,19 +28,19 @@ impl SqlDialect {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SqlConfigErrorCode {
+pub(crate) enum SqlConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable configuration failure that retains no endpoint or credential data.
-pub struct SqlConfigError {
+pub(crate) struct SqlConfigError {
     code: SqlConfigErrorCode,
 }
 
 impl SqlConfigError {
     #[must_use]
-    pub const fn code(&self) -> SqlConfigErrorCode {
+    pub(crate) const fn code(&self) -> SqlConfigErrorCode {
         self.code
     }
 }
@@ -71,7 +71,7 @@ impl std::error::Error for SqlConfigError {}
 ///
 /// The password is intentionally neither cloneable nor debug-printable. No
 /// connection is opened while this value or the ADK tool definitions are built.
-pub struct SqlToolkitConfig {
+pub(crate) struct SqlToolkitConfig {
     dialect: SqlDialect,
     host: Box<str>,
     port: u16,
@@ -82,7 +82,7 @@ pub struct SqlToolkitConfig {
 }
 
 impl SqlToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, SqlConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, SqlConfigError> {
         let dialect = match settings.get("dialect") {
             None | Some(Value::Null) => SqlDialect::Postgres,
             Some(Value::String(value)) if value == "postgres" => SqlDialect::Postgres,
@@ -115,37 +115,37 @@ impl SqlToolkitConfig {
     }
 
     #[must_use]
-    pub const fn dialect(&self) -> SqlDialect {
+    pub(crate) const fn dialect(&self) -> SqlDialect {
         self.dialect
     }
 
     #[must_use]
-    pub fn host(&self) -> &str {
+    pub(super) fn host(&self) -> &str {
         &self.host
     }
 
     #[must_use]
-    pub const fn port(&self) -> u16 {
+    pub(super) const fn port(&self) -> u16 {
         self.port
     }
 
     #[must_use]
-    pub fn username(&self) -> &str {
+    pub(super) fn username(&self) -> &str {
         &self.username
     }
 
     #[must_use]
-    pub fn password(&self) -> &str {
+    pub(super) fn password(&self) -> &str {
         &self.password
     }
 
     #[must_use]
-    pub fn database(&self) -> &str {
+    pub(super) fn database(&self) -> &str {
         &self.database
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

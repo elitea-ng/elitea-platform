@@ -17,19 +17,19 @@ const MAX_SELECTED_TOOLS: usize = 16;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GcpConfigErrorCode {
+pub(crate) enum GcpConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable configuration failure without service-account identity or key data.
-pub struct GcpConfigError {
+pub(crate) struct GcpConfigError {
     code: GcpConfigErrorCode,
 }
 
 impl GcpConfigError {
     #[must_use]
-    pub const fn code(&self) -> GcpConfigErrorCode {
+    pub(crate) const fn code(&self) -> GcpConfigErrorCode {
         self.code
     }
 }
@@ -61,7 +61,7 @@ impl std::error::Error for GcpConfigError {}
 /// Main seals the complete `api_key` JSON string. Rust extracts only the fields
 /// required for the official JWT bearer grant and retains the DER key in a
 /// non-cloneable, non-debuggable zeroizing buffer.
-pub struct GcpToolkitConfig {
+pub(crate) struct GcpToolkitConfig {
     client_email: Box<str>,
     private_key_id: Option<Box<str>>,
     private_key_der: Zeroizing<Vec<u8>>,
@@ -69,7 +69,7 @@ pub struct GcpToolkitConfig {
 }
 
 impl GcpToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, GcpConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, GcpConfigError> {
         let raw = settings
             .get("api_key")
             .and_then(Value::as_str)
@@ -104,20 +104,20 @@ impl GcpToolkitConfig {
         })
     }
 
-    pub fn client_email(&self) -> &str {
+    pub(super) fn client_email(&self) -> &str {
         &self.client_email
     }
 
-    pub fn private_key_id(&self) -> Option<&str> {
+    pub(super) fn private_key_id(&self) -> Option<&str> {
         self.private_key_id.as_deref()
     }
 
-    pub fn private_key_der(&self) -> &[u8] {
+    pub(super) fn private_key_der(&self) -> &[u8] {
         &self.private_key_der
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

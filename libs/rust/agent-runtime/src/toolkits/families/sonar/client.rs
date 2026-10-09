@@ -83,7 +83,7 @@ const ALLOWED_QUERY_KEYS: &[&str] = &[
 
 /// Stable, secret-free Sonar request and provider failure categories.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SonarClientErrorCode {
+pub(crate) enum SonarClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -98,18 +98,18 @@ pub enum SonarClientErrorCode {
 
 /// One bounded Sonar failure that retains no URL, token, project, query, body,
 /// or upstream error text.
-pub struct SonarClientError {
+pub(crate) struct SonarClientError {
     code: SonarClientErrorCode,
 }
 
 impl SonarClientError {
     #[must_use]
-    pub const fn code(&self) -> SonarClientErrorCode {
+    pub(crate) const fn code(&self) -> SonarClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         matches!(
             self.code,
             SonarClientErrorCode::RateLimited
@@ -118,7 +118,7 @@ impl SonarClientError {
         )
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             SonarClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -213,7 +213,7 @@ impl std::error::Error for SonarClientError {}
 
 /// The complete read operation exposed by the current SDK Sonar family.
 #[async_trait]
-pub trait SonarApi: Send + Sync {
+pub(in crate::toolkits) trait SonarApi: Send + Sync {
     async fn get_sonar_data(
         &self,
         relative_url: &str,
@@ -222,7 +222,7 @@ pub trait SonarApi: Send + Sync {
 }
 
 #[async_trait]
-pub trait SonarTransport: Send + Sync {
+pub(in crate::toolkits) trait SonarTransport: Send + Sync {
     async fn execute_json(&self, request: Request) -> Result<Value, SonarClientError>;
 }
 
@@ -277,13 +277,13 @@ impl SonarTransport for ReqwestSonarTransport {
 }
 
 /// One invocation-scoped Sonar client and HTTP connection pool.
-pub struct SonarClient {
+pub(crate) struct SonarClient {
     config: SonarToolkitConfig,
     transport: Arc<dyn SonarTransport>,
 }
 
 impl SonarClient {
-    pub fn new(config: SonarToolkitConfig) -> Result<Self, SonarClientError> {
+    pub(crate) fn new(config: SonarToolkitConfig) -> Result<Self, SonarClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -581,16 +581,16 @@ const fn dependency_unavailable() -> SonarClientError {
     error(SonarClientErrorCode::DependencyUnavailable)
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 impl SonarClient {
-    pub fn test_with_transport(
+    pub(in crate::toolkits) fn test_with_transport(
         config: SonarToolkitConfig,
         transport: Arc<dyn SonarTransport>,
     ) -> Self {
         Self { config, transport }
     }
 
-    pub fn test_request(
+    pub(in crate::toolkits) fn test_request(
         &self,
         relative_url: &str,
         params: Option<&str>,
@@ -600,7 +600,7 @@ impl SonarClient {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_http_status(status: StatusCode) -> Result<(), SonarClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_http_status(status: StatusCode) -> Result<(), SonarClientError> {
     map_http_status(status)
 }

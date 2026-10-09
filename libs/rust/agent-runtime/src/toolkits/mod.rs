@@ -15,19 +15,22 @@
 //! compiled only with the `toolkit-sql` feature; without it a `sql` toolkit
 //! is skipped as unsupported, like any family a runtime cannot serve.
 //!
-//! The worker re-exports this module at its old path (`crate::toolkits`) and
-//! keeps the per-family behaviour suites, the SDK conformance gate and the
-//! two modules that still parse the gRPC input (`direct_request`,
-//! `direct_runtime`).
-#![allow(dead_code)]
-// Materialization remains capability-gated.
-// Only the `test-support` fixtures (never in a production build) panic or
-// expose a bare `len`, so these fire in some feature sets and not others.
-#![allow(clippy::missing_panics_doc, clippy::len_without_is_empty)]
+//! The per-family behaviour suites and the SDK conformance gate
+//! (`sdk_conformance`, test-only, which reads elitea-main's toolkit schema snapshots)
+//! live here, beside the code they test, so the families keep the
+//! crate-private visibility they had in the worker. The worker re-exports
+//! this module at its old path (`crate::toolkits`) and keeps the two modules
+//! that still parse the gRPC input (`direct_request`, `direct_runtime`) and
+//! the suites that compose a family with worker transport (`artifact`,
+//! `openapi` in a pipeline); `families`, `families::artifact` and
+//! `families::openapi` are public only under `test-support` for those.
+
+// The test fixtures (`test-support`, never in a production build) panic, so
+// this fires in some feature sets and targets and not others.
+#![allow(clippy::missing_panics_doc)]
 #![expect(
     clippy::missing_errors_doc,
     clippy::must_use_candidate,
-    clippy::return_self_not_must_use,
     clippy::new_without_default,
     clippy::result_unit_err,
     reason = "moved verbatim from the worker, where these items were crate-private; \
@@ -35,17 +38,82 @@
               follow when the module's public API is reviewed"
 )]
 
-pub mod delegated_auth;
+pub(crate) mod delegated_auth;
 pub mod direct_execution;
+// Public only to the worker's composition suites (`test-support`).
+#[cfg(any(test, feature = "test-support"))]
 pub mod families;
-pub mod invocation;
-pub mod materialize;
-pub mod mcp;
-pub mod mcp_error;
-pub mod mcp_tool_cache;
-pub mod policy;
+#[cfg(not(any(test, feature = "test-support")))]
+pub(crate) mod families;
+pub(crate) mod invocation;
+pub(crate) mod materialize;
+pub(crate) mod mcp;
+pub(crate) mod mcp_error;
+pub(crate) mod mcp_tool_cache;
+pub(crate) mod policy;
 pub mod snapshot;
 pub mod tool_binding;
+
+#[cfg(test)]
+mod aha_tests;
+#[cfg(test)]
+mod azure_search_tests;
+#[cfg(test)]
+mod azure_tests;
+#[cfg(test)]
+mod direct_execution_tests;
+#[cfg(test)]
+mod elastic_tests;
+#[cfg(test)]
+mod gcp_tests;
+#[cfg(test)]
+mod github_tests;
+#[cfg(test)]
+mod gitlab_org_tests;
+#[cfg(test)]
+mod google_places_tests;
+#[cfg(test)]
+mod invocation_tests;
+#[cfg(test)]
+mod keycloak_tests;
+#[cfg(test)]
+mod kubernetes_tests;
+#[cfg(test)]
+mod mcp_tests;
+#[cfg(test)]
+mod openapi_tests;
+#[cfg(test)]
+mod policy_tests;
+#[cfg(test)]
+mod postman_tests;
+#[cfg(test)]
+mod rally_tests;
+#[cfg(test)]
+mod report_portal_tests;
+#[cfg(test)]
+mod salesforce_tests;
+/// The SDK schema gate (ADR-0027 decision 8). Test-only: the worker's
+/// artifact suite (`test-support`) asserts the same contract.
+#[cfg(any(test, feature = "test-support"))]
+pub mod sdk_conformance;
+#[cfg(test)]
+mod service_now_tests;
+#[cfg(test)]
+mod sharepoint_tests;
+#[cfg(test)]
+mod slack_tests;
+#[cfg(test)]
+mod snapshot_tests;
+#[cfg(test)]
+mod sonar_tests;
+#[cfg(all(test, feature = "toolkit-sql"))]
+mod sql_tests;
+#[cfg(test)]
+mod yagmail_tests;
+#[cfg(test)]
+mod zephyr_squad_tests;
+#[cfg(test)]
+mod zephyr_tests;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use delegated_auth::delegated_authorization_error_fixture;

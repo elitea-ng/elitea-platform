@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use adk_rust::tool::SimpleToolContext;
-use adk_rust::{ReadonlyContext, ToolContext, Toolset};
+use adk_core::{ReadonlyContext, ToolContext, Toolset};
+use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
 use bytes::Bytes;
 use reqwest::header::{AUTHORIZATION, CONTENT_LENGTH, CONTENT_TYPE};

@@ -10,19 +10,19 @@ const MAX_SELECTED_TOOLS: usize = 1_024;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SlackConfigErrorCode {
+pub(crate) enum SlackConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable, data-free failure for one materialized Slack configuration.
-pub struct SlackConfigError {
+pub(crate) struct SlackConfigError {
     code: SlackConfigErrorCode,
 }
 
 impl SlackConfigError {
     #[must_use]
-    pub const fn code(&self) -> SlackConfigErrorCode {
+    pub(crate) const fn code(&self) -> SlackConfigErrorCode {
         self.code
     }
 }
@@ -56,14 +56,14 @@ impl std::error::Error for SlackConfigError {}
 /// Main resolves the nested configuration only for the admitted command. The
 /// token is non-cloneable and non-debuggable, and no process environment or
 /// alternate Slack origin participates in authority.
-pub struct SlackToolkitConfig {
+pub(crate) struct SlackToolkitConfig {
     token: Zeroizing<String>,
     default_channel_id: Option<Box<str>>,
     selected_tools: Vec<Box<str>>,
 }
 
 impl SlackToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, SlackConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, SlackConfigError> {
         let configuration = settings
             .get("slack_configuration")
             .and_then(Value::as_object)
@@ -89,21 +89,21 @@ impl SlackToolkitConfig {
         })
     }
 
-    pub fn token(&self) -> &str {
+    pub(super) fn token(&self) -> &str {
         &self.token
     }
 
-    pub fn default_channel_id(&self) -> Option<&str> {
+    pub(super) fn default_channel_id(&self) -> Option<&str> {
         self.default_channel_id.as_deref()
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_default_channel_id(&self) -> Option<&str> {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_default_channel_id(&self) -> Option<&str> {
         self.default_channel_id()
     }
 }

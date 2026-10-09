@@ -21,7 +21,7 @@ const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 /// A stable family-toolset construction failure category.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GooglePlacesToolsetErrorCode {
+pub(crate) enum GooglePlacesToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -30,13 +30,13 @@ pub enum GooglePlacesToolsetErrorCode {
 }
 
 /// Safe construction error for the complete Google Places read-only family.
-pub struct GooglePlacesToolsetError {
+pub(crate) struct GooglePlacesToolsetError {
     code: GooglePlacesToolsetErrorCode,
 }
 
 impl GooglePlacesToolsetError {
     #[must_use]
-    pub const fn code(&self) -> GooglePlacesToolsetErrorCode {
+    pub(crate) const fn code(&self) -> GooglePlacesToolsetErrorCode {
         self.code
     }
 }
@@ -107,7 +107,7 @@ impl From<MaterializedToolsetError> for GooglePlacesToolsetError {
 ///
 /// Empty selection has the current SDK meaning of both public tools. Concrete
 /// deployment policy is still applied to every native ADK action.
-pub fn build_google_places_read_only_toolset(
+pub(crate) fn build_google_places_read_only_toolset(
     toolkit_name: &str,
     config: GooglePlacesToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -342,8 +342,8 @@ fn invalid_arguments() -> AdkError {
     )
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,

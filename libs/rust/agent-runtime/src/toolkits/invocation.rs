@@ -21,7 +21,7 @@ const MAX_TOOL_JSON_STRING_BYTES: usize = 64 * 1_024;
 
 /// Stable, data-free failure categories for one materialized toolset.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum MaterializedToolsetErrorCode {
+pub(crate) enum MaterializedToolsetErrorCode {
     InvalidDefinition,
     ResourceExhausted,
 }
@@ -30,13 +30,13 @@ pub enum MaterializedToolsetErrorCode {
 ///
 /// Tool schemas and descriptions can contain provider or customer metadata.
 /// Diagnostics therefore expose only a stable category and safe message.
-pub struct MaterializedToolsetError {
+pub(crate) struct MaterializedToolsetError {
     code: MaterializedToolsetErrorCode,
 }
 
 impl MaterializedToolsetError {
     #[must_use]
-    pub const fn code(&self) -> MaterializedToolsetErrorCode {
+    pub(crate) const fn code(&self) -> MaterializedToolsetErrorCode {
         self.code
     }
 }
@@ -76,7 +76,7 @@ impl std::error::Error for MaterializedToolsetError {}
 /// families remain responsible for configuration validation, claim-scoped
 /// credential redemption, connection checks, family-specific result bounds,
 /// and mapping their business operations into those tools.
-pub fn admit_materialized_toolset(
+pub(crate) fn admit_materialized_toolset(
     toolset_name: &str,
     toolkit_type: &str,
     policy: &Arc<ToolAdmissionPolicy>,

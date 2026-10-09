@@ -25,7 +25,7 @@ const MAX_SELECTED_FIELD_BYTES: usize = 512;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AzureSearchToolsetErrorCode {
+pub(crate) enum AzureSearchToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -34,13 +34,13 @@ pub enum AzureSearchToolsetErrorCode {
 }
 
 /// Safe construction failure for the complete Azure Search read family.
-pub struct AzureSearchToolsetError {
+pub(crate) struct AzureSearchToolsetError {
     code: AzureSearchToolsetErrorCode,
 }
 
 impl AzureSearchToolsetError {
     #[must_use]
-    pub const fn code(&self) -> AzureSearchToolsetErrorCode {
+    pub(crate) const fn code(&self) -> AzureSearchToolsetErrorCode {
         self.code
     }
 }
@@ -112,7 +112,7 @@ impl From<MaterializedToolsetError> for AzureSearchToolsetError {
 /// Both tools retain their current SDK `read` classification. A trusted
 /// deployment may independently classify any concrete tool as sensitive; the
 /// shared durable HITL wrapper, rather than this family, owns that interrupt.
-pub fn build_azure_search_read_only_toolset(
+pub(crate) fn build_azure_search_read_only_toolset(
     toolkit_name: &str,
     config: AzureSearchToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -436,8 +436,8 @@ fn invalid_arguments() -> AdkError {
     )
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,

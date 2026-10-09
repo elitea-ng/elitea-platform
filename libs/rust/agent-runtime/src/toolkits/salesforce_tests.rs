@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use adk_rust::tool::SimpleToolContext;
-use adk_rust::{ReadonlyContext, Tool, ToolContext, Toolset};
+use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
+use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Method, Request, StatusCode};
@@ -151,9 +151,6 @@ fn malformed_origins_versions_credentials_and_bounds_fail_closed() {
 
 #[derive(Clone)]
 struct CapturedRequest {
-    method: Method,
-    url: String,
-    body: Vec<u8>,
     authorization: Option<String>,
     effect: bool,
 }
@@ -186,10 +183,6 @@ impl SalesforceTransport for FixtureTransport {
         request: Request,
         effect: bool,
     ) -> Result<SalesforceHttpResponse, SalesforceClientError> {
-        let body = request
-            .body()
-            .and_then(reqwest::Body::as_bytes)
-            .map_or_else(Vec::new, ToOwned::to_owned);
         let authorization = request
             .headers()
             .get(AUTHORIZATION)
@@ -199,9 +192,6 @@ impl SalesforceTransport for FixtureTransport {
             .lock()
             .expect("Salesforce request fixture lock")
             .push(CapturedRequest {
-                method: request.method().clone(),
-                url: request.url().to_string(),
-                body,
                 authorization,
                 effect,
             });

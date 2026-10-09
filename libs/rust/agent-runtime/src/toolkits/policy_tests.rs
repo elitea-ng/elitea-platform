@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 
 use super::policy::{ToolAdmissionDecision, ToolAdmissionPolicy, ToolAdmissionPolicyErrorCode};
 use super::snapshot::FrozenToolSnapshot;
-use crate::agents::request::{
+use crate::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
     NextInputSuggestionPolicy, UserInput,
 };
@@ -173,7 +173,6 @@ fn runtime_admin_dictionary_drives_blocked_and_sensitive_membership() {
     let by_type = policy
         .sensitive_tool("github", "Source Control", "github:create-file")
         .expect("toolkit type match");
-    assert_eq!(by_type.toolkit_label(), "Source Control");
     assert_eq!(by_type.action_name(), "Source Control.github:create-file");
     assert_eq!(
         by_type.policy_message(),

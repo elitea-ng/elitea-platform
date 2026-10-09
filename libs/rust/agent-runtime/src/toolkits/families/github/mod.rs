@@ -8,11 +8,11 @@
 
 #![allow(dead_code)] // Production tool assembly remains capability-gated.
 
-pub mod client;
-pub mod code_search;
-pub mod commits;
-pub mod config;
-pub mod projects;
-pub mod pull_requests;
-pub mod tools;
-pub mod workflow_runs;
+pub(in crate::toolkits) mod client;
+pub(in crate::toolkits) mod code_search;
+pub(in crate::toolkits) mod commits;
+pub(in crate::toolkits) mod config;
+pub(in crate::toolkits) mod projects;
+pub(in crate::toolkits) mod pull_requests;
+pub(in crate::toolkits) mod tools;
+pub(in crate::toolkits) mod workflow_runs;

@@ -11,10 +11,10 @@ use serde_json::{Map, Value, json};
 
 use super::client::{GitHubClientError, invalid_response, resource_exhausted};
 
-pub const MAX_COMMITS: usize = 100;
-pub const MAX_COMMIT_FILES: usize = 300;
-pub const COMMIT_FILES_PER_PAGE: usize = 100;
-pub const MAX_COMPARE_FILES: usize = 299;
+pub(super) const MAX_COMMITS: usize = 100;
+pub(super) const MAX_COMMIT_FILES: usize = 300;
+pub(super) const COMMIT_FILES_PER_PAGE: usize = 100;
+pub(super) const MAX_COMPARE_FILES: usize = 299;
 
 const MAX_OUTPUT_CHARS: usize = 200_000;
 const MAX_MESSAGE_BYTES: usize = 128 * 1_024;
@@ -22,7 +22,10 @@ const MAX_PATCH_BYTES: usize = 64 * 1_024;
 const MAX_METADATA_BYTES: usize = 4 * 1_024;
 const MAX_URL_BYTES: usize = 4 * 1_024;
 
-pub fn project_commit_list(value: &Value, max_count: usize) -> Result<Value, GitHubClientError> {
+pub(super) fn project_commit_list(
+    value: &Value,
+    max_count: usize,
+) -> Result<Value, GitHubClientError> {
     if max_count == 0 || max_count > MAX_COMMITS {
         return Err(resource_exhausted());
     }
@@ -37,12 +40,12 @@ pub fn project_commit_list(value: &Value, max_count: usize) -> Result<Value, Git
     bounded_output(Value::Array(projected))
 }
 
-pub fn commit_response_sha(value: &Value) -> Result<String, GitHubClientError> {
+pub(super) fn commit_response_sha(value: &Value) -> Result<String, GitHubClientError> {
     let commit = value.as_object().ok_or_else(invalid_response)?;
     response_sha(commit).map(ToOwned::to_owned)
 }
 
-pub fn append_commit_file_page(
+pub(super) fn append_commit_file_page(
     value: &Value,
     expected_sha: &str,
     files: &mut Vec<Value>,
@@ -66,7 +69,7 @@ pub fn append_commit_file_page(
     Ok(page.len())
 }
 
-pub fn finish_commit_changes(
+pub(super) fn finish_commit_changes(
     first_page: &Value,
     files: &[Value],
 ) -> Result<Value, GitHubClientError> {
@@ -87,7 +90,7 @@ pub fn finish_commit_changes(
     }))
 }
 
-pub fn project_commit_comparison(value: &Value) -> Result<Value, GitHubClientError> {
+pub(super) fn project_commit_comparison(value: &Value) -> Result<Value, GitHubClientError> {
     let comparison = value.as_object().ok_or_else(invalid_response)?;
     let status = required_text(comparison, "status", MAX_METADATA_BYTES)?;
     if !matches!(status, "ahead" | "behind" | "identical" | "diverged") {
@@ -343,16 +346,18 @@ fn bounded_output(value: Value) -> Result<Value, GitHubClientError> {
     Ok(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_commit_list(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_commit_list(
     value: &Value,
     max_count: usize,
 ) -> Result<Value, GitHubClientError> {
     project_commit_list(value, max_count)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_commit_changes(pages: &[Value]) -> Result<Value, GitHubClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_commit_changes(
+    pages: &[Value],
+) -> Result<Value, GitHubClientError> {
     let first = pages.first().ok_or_else(invalid_response)?;
     let expected_sha = commit_response_sha(first)?;
     let mut files = Vec::new();
@@ -362,7 +367,9 @@ pub fn test_project_commit_changes(pages: &[Value]) -> Result<Value, GitHubClien
     finish_commit_changes(first, &files)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_commit_comparison(value: &Value) -> Result<Value, GitHubClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_commit_comparison(
+    value: &Value,
+) -> Result<Value, GitHubClientError> {
     project_commit_comparison(value)
 }

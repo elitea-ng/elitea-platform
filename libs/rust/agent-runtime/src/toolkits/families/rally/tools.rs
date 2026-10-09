@@ -34,7 +34,7 @@ const MAX_ARGUMENT_BYTES: usize = 256 * 1_024;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RallyToolsetErrorCode {
+pub(crate) enum RallyToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -43,13 +43,13 @@ pub enum RallyToolsetErrorCode {
 }
 
 /// Stable construction failure for the complete Rally family.
-pub struct RallyToolsetError {
+pub(crate) struct RallyToolsetError {
     code: RallyToolsetErrorCode,
 }
 
 impl RallyToolsetError {
     #[must_use]
-    pub const fn code(&self) -> RallyToolsetErrorCode {
+    pub(crate) const fn code(&self) -> RallyToolsetErrorCode {
         self.code
     }
 }
@@ -118,7 +118,7 @@ impl From<MaterializedToolsetError> for RallyToolsetError {
 ///
 /// Read/write groups guide model selection only. Trusted sensitivity policy
 /// and the future exact-interrupt wrapper independently decide approval.
-pub fn build_rally_toolset(
+pub(crate) fn build_rally_toolset(
     toolkit_name: &str,
     config: RallyToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -174,8 +174,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "rally", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,

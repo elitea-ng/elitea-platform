@@ -8,12 +8,12 @@ const MAX_TREE_DEPTH: usize = 64;
 const MAX_TREE_ITEMS: usize = 4_096;
 
 #[derive(Clone, Copy)]
-pub enum TreeKind {
+pub(super) enum TreeKind {
     Folder,
     Request,
 }
 
-pub fn resolve_indices(
+pub(super) fn resolve_indices(
     collection: &Map<String, Value>,
     path: &str,
     kind: TreeKind,
@@ -63,7 +63,7 @@ pub fn resolve_indices(
     Ok(None)
 }
 
-pub fn item_at<'a>(
+pub(super) fn item_at<'a>(
     collection: &'a Map<String, Value>,
     indexes: &[usize],
 ) -> Result<&'a Value, PostmanClientError> {
@@ -90,7 +90,7 @@ fn item_at_slice<'a>(
     item_at_slice(children, rest)
 }
 
-pub fn remove_at(
+pub(super) fn remove_at(
     collection: &mut Map<String, Value>,
     indexes: &[usize],
 ) -> Result<Value, PostmanClientError> {
@@ -120,7 +120,7 @@ fn remove_from_slice(
     remove_from_slice(children, rest)
 }
 
-pub fn append_at(
+pub(super) fn append_at(
     collection: &mut Map<String, Value>,
     parent: Option<&[usize]>,
     value: Value,
@@ -168,7 +168,7 @@ fn item_mut_at_slice<'a>(
     item_mut_at_slice(children, rest)
 }
 
-pub fn strip_ids(value: &mut Value) -> Result<(), PostmanClientError> {
+pub(super) fn strip_ids(value: &mut Value) -> Result<(), PostmanClientError> {
     let root = value.as_object_mut().ok_or_else(invalid_response)?;
     let is_collection = root.contains_key("collection") || root.contains_key("info");
     let collection_or_item = if root.contains_key("collection") {

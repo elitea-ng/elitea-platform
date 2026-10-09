@@ -30,15 +30,15 @@ use tokio::sync::OnceCell;
 use tokio::time::Instant;
 
 /// Upper bound on distinct cached listings held by one worker process.
-pub const MAX_CACHED_LISTINGS: usize = 512;
+pub(crate) const MAX_CACHED_LISTINGS: usize = 512;
 /// A listing larger than this is never cached: it is listed on every run.
-pub const MAX_CACHED_LISTING_BYTES: usize = 1_024 * 1_024;
+pub(crate) const MAX_CACHED_LISTING_BYTES: usize = 1_024 * 1_024;
 /// Upper bound on the size of every cached listing together.
-pub const MAX_CACHED_TOTAL_BYTES: usize = 64 * 1_024 * 1_024;
+pub(crate) const MAX_CACHED_TOTAL_BYTES: usize = 64 * 1_024 * 1_024;
 
 /// What a listing contributed to a tool, independent of the session it came from.
 #[derive(Clone, Debug, PartialEq)]
-pub struct McpToolDescriptor {
+pub(crate) struct McpToolDescriptor {
     name: String,
     description: String,
     parameters_schema: Option<Value>,
@@ -49,7 +49,7 @@ pub struct McpToolDescriptor {
 }
 
 impl McpToolDescriptor {
-    pub fn from_tool(tool: &dyn Tool) -> Self {
+    pub(crate) fn from_tool(tool: &dyn Tool) -> Self {
         Self {
             name: tool.name().to_owned(),
             description: tool.description().to_owned(),
@@ -77,14 +77,14 @@ impl McpToolDescriptor {
 }
 
 /// The tools of one live session, listed at most once and only on demand.
-pub struct LiveMcpTools {
+pub(crate) struct LiveMcpTools {
     toolset: Arc<dyn Toolset>,
     timeout: Duration,
     tools: OnceCell<HashMap<String, Arc<dyn Tool>>>,
 }
 
 impl LiveMcpTools {
-    pub fn new(toolset: Arc<dyn Toolset>, timeout: Duration) -> Self {
+    pub(crate) fn new(toolset: Arc<dyn Toolset>, timeout: Duration) -> Self {
         Self {
             toolset,
             timeout,
@@ -118,13 +118,13 @@ impl LiveMcpTools {
 }
 
 /// A tool rebuilt from a cached descriptor and bound to the current session.
-pub struct CachedMcpTool {
+pub(crate) struct CachedMcpTool {
     descriptor: McpToolDescriptor,
     live: Arc<LiveMcpTools>,
 }
 
 impl CachedMcpTool {
-    pub fn new(descriptor: McpToolDescriptor, live: Arc<LiveMcpTools>) -> Self {
+    pub(crate) fn new(descriptor: McpToolDescriptor, live: Arc<LiveMcpTools>) -> Self {
         Self { descriptor, live }
     }
 }
@@ -174,11 +174,11 @@ impl Tool for CachedMcpTool {
 
 /// Opaque digest identifying who a listing is valid for.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct McpToolListKey([u8; 32]);
+pub(crate) struct McpToolListKey([u8; 32]);
 
 impl McpToolListKey {
     /// Length-prefix every field so no two field lists share a digest input.
-    pub fn from_fields(fields: &[&[u8]]) -> Self {
+    pub(crate) fn from_fields(fields: &[&[u8]]) -> Self {
         let mut context = ring::digest::Context::new(&ring::digest::SHA256);
         for field in fields {
             context.update(&(field.len() as u64).to_be_bytes());
@@ -224,13 +224,17 @@ impl CacheEntries {
 }
 
 #[derive(Default)]
-pub struct McpToolListCache {
+pub(crate) struct McpToolListCache {
     entries: Mutex<CacheEntries>,
 }
 
 impl McpToolListCache {
     /// The listing for `key`, unless it expired at or before `now`.
-    pub fn get(&self, key: &McpToolListKey, now: Instant) -> Option<Arc<[McpToolDescriptor]>> {
+    pub(crate) fn get(
+        &self,
+        key: &McpToolListKey,
+        now: Instant,
+    ) -> Option<Arc<[McpToolDescriptor]>> {
         let mut entries = self.entries.lock().ok()?;
         match entries.listings.get(key) {
             Some(listing) if listing.expires > now => Some(Arc::clone(&listing.descriptors)),
@@ -246,7 +250,7 @@ impl McpToolListCache {
     /// [`MAX_CACHED_LISTING_BYTES`] is not cached (and returns `false`); room
     /// for one that fits is made by dropping expired listings, then the
     /// earliest-expiring ones, until both the count and byte bounds hold.
-    pub fn insert(
+    pub(crate) fn insert(
         &self,
         key: McpToolListKey,
         descriptors: Vec<McpToolDescriptor>,
@@ -288,29 +292,29 @@ impl McpToolListCache {
         true
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
         self.entries
             .lock()
             .map_or(0, |entries| entries.listings.len())
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn retained_bytes(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn retained_bytes(&self) -> usize {
         self.entries.lock().map_or(0, |entries| entries.bytes)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn contains(&self, key: &McpToolListKey) -> bool {
+    #[cfg(test)]
+    pub(crate) fn contains(&self, key: &McpToolListKey) -> bool {
         self.entries
             .lock()
             .is_ok_and(|entries| entries.listings.contains_key(key))
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 impl McpToolDescriptor {
-    pub fn fixture(name: &str, description: &str) -> Self {
+    pub(crate) fn fixture(name: &str, description: &str) -> Self {
         Self {
             name: name.to_owned(),
             description: description.to_owned(),

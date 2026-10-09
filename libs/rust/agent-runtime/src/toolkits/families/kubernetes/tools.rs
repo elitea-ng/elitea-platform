@@ -25,7 +25,7 @@ const MAX_OPTION_DEPTH: usize = 32;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum KubernetesToolsetErrorCode {
+pub(crate) enum KubernetesToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -34,13 +34,13 @@ pub enum KubernetesToolsetErrorCode {
 }
 
 /// Safe construction failure for the complete two-tool Kubernetes family.
-pub struct KubernetesToolsetError {
+pub(crate) struct KubernetesToolsetError {
     code: KubernetesToolsetErrorCode,
 }
 
 impl KubernetesToolsetError {
     #[must_use]
-    pub const fn code(&self) -> KubernetesToolsetErrorCode {
+    pub(crate) const fn code(&self) -> KubernetesToolsetErrorCode {
         self.code
     }
 }
@@ -112,7 +112,7 @@ impl From<MaterializedToolsetError> for KubernetesToolsetError {
 /// The generic operation can read, create, update, delete, or invoke action
 /// subresources. Its `execute` group is metadata only; sensitivity and effect
 /// ownership remain independent admission responsibilities.
-pub fn build_kubernetes_toolset(
+pub(crate) fn build_kubernetes_toolset(
     toolkit_name: &str,
     config: KubernetesToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -163,8 +163,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "kubernetes", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     cluster_url: &str,
     selected: &[String],
@@ -182,8 +182,8 @@ pub fn test_build_with_api(
     build_with_api(toolkit_name, cluster_url, selected, policy, client)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub const fn test_catalog() -> [(&'static str, &'static str); 2] {
+#[cfg(test)]
+pub(in crate::toolkits) const fn test_catalog() -> [(&'static str, &'static str); 2] {
     [(EXECUTE, "execute"), (HEALTHCHECK, "read")]
 }
 
@@ -493,8 +493,8 @@ fn resource_exhausted() -> AdkError {
     )
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_parse_object(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_parse_object(
     value: Option<&Value>,
     max_serialized_bytes: usize,
 ) -> adk_core::Result<Option<Map<String, Value>>> {

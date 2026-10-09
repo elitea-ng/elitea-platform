@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use adk_rust::tool::SimpleToolContext;
-use adk_rust::{ReadonlyContext, Tool, ToolContext, Toolset};
+use adk_core::{ReadonlyContext, Tool, ToolContext, Toolset};
+use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use reqwest::{Method, Request, StatusCode};
@@ -105,7 +105,6 @@ fn malformed_credentials_channels_and_bounds_fail_closed() {
 
 #[derive(Clone)]
 struct CapturedRequest {
-    method: Method,
     path: String,
     query: Vec<(String, String)>,
     body: Option<Value>,
@@ -166,7 +165,6 @@ impl SlackTransport for FixtureTransport {
             .lock()
             .expect("Slack request fixture lock")
             .push(CapturedRequest {
-                method: request.method().clone(),
                 path: request.url().path().to_owned(),
                 query: request
                     .url()

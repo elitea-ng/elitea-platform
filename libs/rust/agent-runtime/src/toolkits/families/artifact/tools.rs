@@ -37,7 +37,7 @@ const DEFAULT_LIST_LIMIT: i32 = 200;
 
 /// Stable family-toolset construction failure category.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ArtifactToolsetErrorCode {
+pub(crate) enum ArtifactToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     InvalidDefinition,
@@ -49,7 +49,7 @@ pub struct ArtifactToolsetError {
 
 impl ArtifactToolsetError {
     #[must_use]
-    pub const fn code(&self) -> ArtifactToolsetErrorCode {
+    pub(crate) const fn code(&self) -> ArtifactToolsetErrorCode {
         self.code
     }
 }

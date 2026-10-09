@@ -20,7 +20,7 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const POOL_IDLE_TIMEOUT: Duration = Duration::from_mins(1);
 const MAX_IDLE_PER_HOST: usize = 8;
 const MAX_IDENTIFIER_BYTES: usize = 1_024;
-pub const MAX_PAGE_NUMBER: u64 = 10_000;
+pub(in crate::toolkits) const MAX_PAGE_NUMBER: u64 = 10_000;
 const MAX_RESPONSE_BYTES: usize = 2 * 1_024 * 1_024;
 const MAX_OUTPUT_BYTES: usize = 512 * 1_024;
 const MAX_PDF_SOURCE_BYTES: usize = 383 * 1_024;
@@ -31,13 +31,13 @@ const HTML_CONTENT_TYPE: &str = "text/html";
 const PDF_CONTENT_TYPE: &str = "application/pdf";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReportFormat {
+pub(in crate::toolkits) enum ReportFormat {
     Html,
     Pdf,
 }
 
 impl ReportFormat {
-    pub const fn as_str(self) -> &'static str {
+    pub(in crate::toolkits) const fn as_str(self) -> &'static str {
         match self {
             Self::Html => "html",
             Self::Pdf => "pdf",
@@ -46,7 +46,7 @@ impl ReportFormat {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReportPortalClientErrorCode {
+pub(crate) enum ReportPortalClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -60,18 +60,18 @@ pub enum ReportPortalClientErrorCode {
 }
 
 /// Stable `ReportPortal` failure without endpoint, project, token, path, or body.
-pub struct ReportPortalClientError {
+pub(crate) struct ReportPortalClientError {
     code: ReportPortalClientErrorCode,
 }
 
 impl ReportPortalClientError {
     #[must_use]
-    pub const fn code(&self) -> ReportPortalClientErrorCode {
+    pub(crate) const fn code(&self) -> ReportPortalClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         matches!(
             self.code,
             ReportPortalClientErrorCode::RateLimited
@@ -80,7 +80,7 @@ impl ReportPortalClientError {
         )
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             ReportPortalClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -140,8 +140,8 @@ impl ReportPortalClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: ReportPortalClientErrorCode) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(code: ReportPortalClientErrorCode) -> Self {
         Self { code }
     }
 }
@@ -181,7 +181,7 @@ impl fmt::Display for ReportPortalClientError {
 impl std::error::Error for ReportPortalClientError {}
 
 #[async_trait]
-pub trait ReportPortalApi: Send + Sync {
+pub(in crate::toolkits) trait ReportPortalApi: Send + Sync {
     async fn get_extended_launch_data_as_raw(
         &self,
         launch_id: &str,
@@ -211,7 +211,7 @@ pub trait ReportPortalApi: Send + Sync {
     ) -> Result<Value, ReportPortalClientError>;
 }
 
-pub struct ReportPortalHttpResponse {
+pub(in crate::toolkits) struct ReportPortalHttpResponse {
     status: StatusCode,
     content_type: Option<Box<str>>,
     attachment: bool,
@@ -219,8 +219,8 @@ pub struct ReportPortalHttpResponse {
 }
 
 impl ReportPortalHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture(
         status: StatusCode,
         content_type: Option<&str>,
         content_disposition: Option<&str>,
@@ -236,7 +236,7 @@ impl ReportPortalHttpResponse {
 }
 
 #[async_trait]
-pub trait ReportPortalTransport: Send + Sync {
+pub(in crate::toolkits) trait ReportPortalTransport: Send + Sync {
     async fn execute(
         &self,
         request: Request,
@@ -299,7 +299,7 @@ impl ReportPortalTransport for ReqwestReportPortalTransport {
 }
 
 #[derive(Clone, Copy)]
-pub enum ReportPortalRequestKind<'a> {
+pub(in crate::toolkits) enum ReportPortalRequestKind<'a> {
     RawExport {
         launch_id: &'a str,
         format: ReportFormat,
@@ -333,13 +333,13 @@ pub enum ReportPortalRequestKind<'a> {
 }
 
 /// One invocation-scoped `ReportPortal` client and connection pool.
-pub struct ReportPortalClient {
+pub(crate) struct ReportPortalClient {
     config: ReportPortalToolkitConfig,
     transport: Arc<dyn ReportPortalTransport>,
 }
 
 impl ReportPortalClient {
-    pub fn new(config: ReportPortalToolkitConfig) -> Result<Self, ReportPortalClientError> {
+    pub(crate) fn new(config: ReportPortalToolkitConfig) -> Result<Self, ReportPortalClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -357,8 +357,8 @@ impl ReportPortalClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture(
         config: ReportPortalToolkitConfig,
         transport: Arc<dyn ReportPortalTransport>,
     ) -> Self {
@@ -502,8 +502,8 @@ impl ReportPortalClient {
         bound_output(value)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_request(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_request(
         &self,
         kind: ReportPortalRequestKind<'_>,
     ) -> Result<Request, ReportPortalClientError> {
@@ -963,7 +963,9 @@ const fn resource_exhausted() -> ReportPortalClientError {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_http_status(status: StatusCode) -> Result<(), ReportPortalClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_http_status(
+    status: StatusCode,
+) -> Result<(), ReportPortalClientError> {
     map_http_status(status)
 }

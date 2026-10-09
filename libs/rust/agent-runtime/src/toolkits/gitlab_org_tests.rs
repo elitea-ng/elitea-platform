@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use adk_rust::tool::SimpleToolContext;
-use adk_rust::{ReadonlyContext, ToolContext, Toolset};
+use adk_core::{ReadonlyContext, ToolContext, Toolset};
+use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -295,15 +295,6 @@ impl FixtureTransport {
         Self {
             requests: Mutex::new(Vec::new()),
             responses: Mutex::new(responses.into_iter().map(Ok).collect()),
-        }
-    }
-
-    fn with_results(
-        responses: impl IntoIterator<Item = Result<GitLabOrgHttpResponse, GitLabOrgClientError>>,
-    ) -> Self {
-        Self {
-            requests: Mutex::new(Vec::new()),
-            responses: Mutex::new(responses.into_iter().collect()),
         }
     }
 

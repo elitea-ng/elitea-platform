@@ -37,7 +37,7 @@ const MAX_JSON_FIELDS: usize = 256;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ZephyrSquadToolsetErrorCode {
+pub(crate) enum ZephyrSquadToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -46,13 +46,13 @@ pub enum ZephyrSquadToolsetErrorCode {
 }
 
 /// Stable construction failure for the complete Zephyr Squad family.
-pub struct ZephyrSquadToolsetError {
+pub(crate) struct ZephyrSquadToolsetError {
     code: ZephyrSquadToolsetErrorCode,
 }
 
 impl ZephyrSquadToolsetError {
     #[must_use]
-    pub const fn code(&self) -> ZephyrSquadToolsetErrorCode {
+    pub(crate) const fn code(&self) -> ZephyrSquadToolsetErrorCode {
         self.code
     }
 }
@@ -123,7 +123,7 @@ impl From<MaterializedToolsetError> for ZephyrSquadToolsetError {
 ///
 /// Read/write/delete groups guide selection only. Trusted sensitivity policy
 /// and the future exact-interrupt effect owner independently decide approval.
-pub fn build_zephyr_squad_toolset(
+pub(crate) fn build_zephyr_squad_toolset(
     toolkit_name: &str,
     config: ZephyrSquadToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -171,8 +171,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "zephyr_squad", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,

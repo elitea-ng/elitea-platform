@@ -20,7 +20,7 @@ use super::{
 
 /// Add local auth tools and suppress protected declarations at the model edge.
 /// Caller validates and applies continuation decisions before this function.
-pub type AuthorizationModelBinding = (Arc<dyn Llm>, Vec<Arc<dyn Toolset>>);
+pub(crate) type AuthorizationModelBinding = (Arc<dyn Llm>, Vec<Arc<dyn Toolset>>);
 
 pub fn bind_authorization_model_tools(
     model: Arc<dyn Llm>,

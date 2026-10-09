@@ -35,7 +35,7 @@ const USER_AGENT: &str = "elitea-worker-rust/0.1";
 
 /// Stable, secret-free Google Maps provider failure categories.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GooglePlacesClientErrorCode {
+pub(crate) enum GooglePlacesClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -50,18 +50,18 @@ pub enum GooglePlacesClientErrorCode {
 
 /// A bounded provider or request failure that never retains a URL, API key,
 /// query, response body, or upstream message.
-pub struct GooglePlacesClientError {
+pub(crate) struct GooglePlacesClientError {
     code: GooglePlacesClientErrorCode,
 }
 
 impl GooglePlacesClientError {
     #[must_use]
-    pub const fn code(&self) -> GooglePlacesClientErrorCode {
+    pub(crate) const fn code(&self) -> GooglePlacesClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         matches!(
             self.code,
             GooglePlacesClientErrorCode::RateLimited
@@ -70,7 +70,7 @@ impl GooglePlacesClientError {
         )
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             GooglePlacesClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -167,7 +167,7 @@ impl std::error::Error for GooglePlacesClientError {}
 
 /// The two complete read operations exposed by the current SDK family.
 #[async_trait]
-pub trait GooglePlacesApi: Send + Sync {
+pub(in crate::toolkits) trait GooglePlacesApi: Send + Sync {
     async fn places(&self, query: &str) -> Result<Value, GooglePlacesClientError>;
 
     async fn find_near(
@@ -179,13 +179,13 @@ pub trait GooglePlacesApi: Send + Sync {
 }
 
 #[derive(Clone, Copy)]
-pub enum GooglePlacesRequestKind {
+pub(in crate::toolkits) enum GooglePlacesRequestKind {
     SearchText,
     Geocode,
 }
 
 #[async_trait]
-pub trait GooglePlacesTransport: Send + Sync {
+pub(in crate::toolkits) trait GooglePlacesTransport: Send + Sync {
     async fn execute_json(&self, request: Request) -> Result<Value, GooglePlacesClientError>;
 }
 
@@ -240,13 +240,13 @@ impl GooglePlacesTransport for ReqwestGooglePlacesTransport {
 }
 
 /// One invocation-scoped, pooled Google Maps client.
-pub struct GooglePlacesClient {
+pub(crate) struct GooglePlacesClient {
     config: GooglePlacesToolkitConfig,
     transport: Arc<dyn GooglePlacesTransport>,
 }
 
 impl GooglePlacesClient {
-    pub fn new(config: GooglePlacesToolkitConfig) -> Result<Self, GooglePlacesClientError> {
+    pub(crate) fn new(config: GooglePlacesToolkitConfig) -> Result<Self, GooglePlacesClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -651,16 +651,16 @@ const fn dependency_unavailable() -> GooglePlacesClientError {
     error(GooglePlacesClientErrorCode::DependencyUnavailable)
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 impl GooglePlacesClient {
-    pub fn test_with_transport(
+    pub(in crate::toolkits) fn test_with_transport(
         config: GooglePlacesToolkitConfig,
         transport: Arc<dyn GooglePlacesTransport>,
     ) -> Self {
         Self { config, transport }
     }
 
-    pub fn test_request(
+    pub(in crate::toolkits) fn test_request(
         &self,
         kind: GooglePlacesRequestKind,
         value: &str,
@@ -675,14 +675,16 @@ impl GooglePlacesClient {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_provider_payload(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_provider_payload(
     response: Value,
 ) -> Result<Map<String, Value>, GooglePlacesClientError> {
     legacy_provider_payload(response)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_http_status(status: StatusCode) -> Result<(), GooglePlacesClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_http_status(
+    status: StatusCode,
+) -> Result<(), GooglePlacesClientError> {
     map_http_status(status)
 }

@@ -18,7 +18,7 @@ const MAX_ARGUMENT_BYTES: usize = 256 * 1_024;
 const MAX_DESCRIPTION_BYTES: usize = 2_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AhaToolsetErrorCode {
+pub(crate) enum AhaToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -26,13 +26,13 @@ pub enum AhaToolsetErrorCode {
     InvalidDefinition,
 }
 
-pub struct AhaToolsetError {
+pub(crate) struct AhaToolsetError {
     code: AhaToolsetErrorCode,
 }
 
 impl AhaToolsetError {
     #[must_use]
-    pub const fn code(&self) -> AhaToolsetErrorCode {
+    pub(crate) const fn code(&self) -> AhaToolsetErrorCode {
         self.code
     }
 }
@@ -97,7 +97,7 @@ impl From<MaterializedToolsetError> for AhaToolsetError {
 
 /// Build the complete capability-disabled 33-tool Aha family.
 #[allow(clippy::needless_pass_by_value)] // Consumes the invocation's credential authority.
-pub fn build_aha_toolset(
+pub(crate) fn build_aha_toolset(
     toolkit_name: &str,
     config: AhaToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -141,8 +141,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "aha", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,
@@ -151,8 +151,8 @@ pub fn test_build_with_api(
     build_with_api(toolkit_name, selected, policy, client)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_catalog() -> Vec<(&'static str, &'static str)> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_catalog() -> Vec<(&'static str, &'static str)> {
     AhaToolKind::ALL
         .into_iter()
         .map(|kind| (kind.name(), kind.group()))

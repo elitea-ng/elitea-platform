@@ -86,7 +86,7 @@ const RESERVED_NAME_ENCODE_SET: &AsciiSet = &COMPONENT_ENCODE_SET
     .remove(b';');
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenApiClientErrorCode {
+pub(crate) enum OpenApiClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -99,18 +99,18 @@ pub enum OpenApiClientErrorCode {
     ResourceExhausted,
 }
 
-pub struct OpenApiClientError {
+pub(crate) struct OpenApiClientError {
     code: OpenApiClientErrorCode,
 }
 
 impl OpenApiClientError {
     #[must_use]
-    pub const fn code(&self) -> OpenApiClientErrorCode {
+    pub(crate) const fn code(&self) -> OpenApiClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         matches!(
             self.code,
             OpenApiClientErrorCode::RateLimited
@@ -119,7 +119,7 @@ impl OpenApiClientError {
         )
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             OpenApiClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -215,7 +215,7 @@ impl fmt::Display for OpenApiClientError {
 impl std::error::Error for OpenApiClientError {}
 
 #[async_trait]
-pub trait OpenApiApi: Send + Sync {
+pub(in crate::toolkits) trait OpenApiApi: Send + Sync {
     fn authorization(&self) -> Option<&DelegatedAuthorizationRequirement>;
 
     async fn execute(
@@ -226,7 +226,7 @@ pub trait OpenApiApi: Send + Sync {
 }
 
 #[async_trait]
-pub trait OpenApiTransport: Send + Sync {
+pub(in crate::toolkits) trait OpenApiTransport: Send + Sync {
     async fn execute(&self, request: OpenApiRequest)
     -> Result<OpenApiResponse, OpenApiClientError>;
 
@@ -236,24 +236,31 @@ pub trait OpenApiTransport: Send + Sync {
     ) -> Result<OpenApiAccessToken, OpenApiClientError>;
 }
 
-pub struct OpenApiRequest {
+pub(in crate::toolkits) struct OpenApiRequest {
     request: HttpRequest<Full<Bytes>>,
+    #[cfg_attr(
+        not(test),
+        allow(dead_code, reason = "a copy of the sent body for the test transports")
+    )]
     body: Bytes,
 }
 
 impl OpenApiRequest {
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
-    pub fn uri(&self) -> &Uri {
+    pub(in crate::toolkits) fn uri(&self) -> &Uri {
         self.request.uri()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
-    pub fn headers(&self) -> &HeaderMap {
+    pub(in crate::toolkits) fn headers(&self) -> &HeaderMap {
         self.request.headers()
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub fn body(&self) -> &[u8] {
+    pub(in crate::toolkits) fn body(&self) -> &[u8] {
         &self.body
     }
 
@@ -262,14 +269,14 @@ impl OpenApiRequest {
     }
 }
 
-pub struct OpenApiResponse {
-    pub status: StatusCode,
-    pub body: Vec<u8>,
+pub(in crate::toolkits) struct OpenApiResponse {
+    pub(in crate::toolkits) status: StatusCode,
+    pub(in crate::toolkits) body: Vec<u8>,
 }
 
-pub struct OpenApiAccessToken {
-    pub value: Zeroizing<String>,
-    pub expires_in: Duration,
+pub(in crate::toolkits) struct OpenApiAccessToken {
+    pub(in crate::toolkits) value: Zeroizing<String>,
+    pub(in crate::toolkits) expires_in: Duration,
 }
 
 struct CachedOpenApiAccessToken {
@@ -363,14 +370,14 @@ fn build_http_client() -> Result<OpenApiHttpClient, OpenApiClientError> {
     Ok(builder.build(https))
 }
 
-pub struct OpenApiClient {
+pub(crate) struct OpenApiClient {
     config: OpenApiClientConfig,
     transport: Arc<dyn OpenApiTransport>,
     access_token: tokio::sync::Mutex<Option<CachedOpenApiAccessToken>>,
 }
 
 impl OpenApiClient {
-    pub fn new(config: OpenApiClientConfig) -> Result<Self, OpenApiClientError> {
+    pub(crate) fn new(config: OpenApiClientConfig) -> Result<Self, OpenApiClientError> {
         if matches!(
             config.auth,
             OpenApiAuth::Delegated {
@@ -401,7 +408,7 @@ impl OpenApiClient {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(
+    pub(in crate::toolkits) fn with_transport(
         config: OpenApiClientConfig,
         transport: Arc<dyn OpenApiTransport>,
     ) -> Self {
@@ -668,7 +675,7 @@ async fn apply_auth(
     }
 }
 
-pub fn oauth_token_lifetime(value: Option<&Value>) -> Duration {
+pub(in crate::toolkits) fn oauth_token_lifetime(value: Option<&Value>) -> Duration {
     let seconds = value.and_then(|value| match value {
         Value::Number(value) => value.as_f64(),
         Value::String(value) => value.parse::<f64>().ok(),

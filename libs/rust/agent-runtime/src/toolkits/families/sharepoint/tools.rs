@@ -24,7 +24,7 @@ const MAX_DESCRIPTION_BYTES: usize = 1_000;
 const MAX_SELECT_FIELDS: usize = 128;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SharePointToolsetErrorCode {
+pub(crate) enum SharePointToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedCapability,
@@ -33,13 +33,13 @@ pub enum SharePointToolsetErrorCode {
     InvalidDefinition,
 }
 
-pub struct SharePointToolsetError {
+pub(crate) struct SharePointToolsetError {
     code: SharePointToolsetErrorCode,
 }
 
 impl SharePointToolsetError {
     #[must_use]
-    pub const fn code(&self) -> SharePointToolsetErrorCode {
+    pub(crate) const fn code(&self) -> SharePointToolsetErrorCode {
         self.code
     }
 }
@@ -112,9 +112,9 @@ impl From<MaterializedToolsetError> for SharePointToolsetError {
     }
 }
 
-pub struct MaterializedSharePointToolset {
-    pub toolset: BasicToolset,
-    pub delegated_authorization: DelegatedAuthorizationCatalog,
+pub(crate) struct MaterializedSharePointToolset {
+    pub(crate) toolset: BasicToolset,
+    pub(crate) delegated_authorization: DelegatedAuthorizationCatalog,
 }
 
 /// Build the explicitly selected, artifact-free `SharePoint` Graph read core.
@@ -123,7 +123,7 @@ pub struct MaterializedSharePointToolset {
 /// this family is partial. A mixed saved selection exposes only its explicitly
 /// selected supported reads. Content, indexing, and effect operations remain
 /// unavailable until their separate authorities exist.
-pub fn build_sharepoint_toolset(
+pub(crate) fn build_sharepoint_toolset(
     toolkit_name: &str,
     config: SharePointToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -172,8 +172,8 @@ pub fn build_sharepoint_toolset(
     })
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     site_url: &str,
     selected: &[String],

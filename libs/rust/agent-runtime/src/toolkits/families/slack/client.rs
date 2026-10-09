@@ -30,7 +30,7 @@ const MAX_MEMBER_LOOKUPS_IN_FLIGHT: usize = 8;
 const USER_AGENT_VALUE: &str = "elitea-worker-rust/0.1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SlackClientErrorCode {
+pub(crate) enum SlackClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -46,23 +46,23 @@ pub enum SlackClientErrorCode {
 
 /// One stable Slack failure without credentials, message data, URLs, or
 /// provider response text.
-pub struct SlackClientError {
+pub(crate) struct SlackClientError {
     code: SlackClientErrorCode,
     retryable: bool,
 }
 
 impl SlackClientError {
     #[must_use]
-    pub const fn code(&self) -> SlackClientErrorCode {
+    pub(crate) const fn code(&self) -> SlackClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             SlackClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -127,8 +127,8 @@ impl SlackClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: SlackClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(code: SlackClientErrorCode, retryable: bool) -> Self {
         Self { code, retryable }
     }
 }
@@ -170,7 +170,7 @@ impl fmt::Display for SlackClientError {
 impl std::error::Error for SlackClientError {}
 
 #[async_trait]
-pub trait SlackApi: Send + Sync {
+pub(in crate::toolkits) trait SlackApi: Send + Sync {
     async fn send_message(
         &self,
         channel_id: &str,
@@ -204,7 +204,7 @@ pub trait SlackApi: Send + Sync {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SlackOperation {
+pub(in crate::toolkits) enum SlackOperation {
     SendMessage,
     ReadMessages,
     CreateChannel,
@@ -245,20 +245,20 @@ impl SlackOperation {
     }
 }
 
-pub struct SlackHttpResponse {
+pub(in crate::toolkits) struct SlackHttpResponse {
     status: StatusCode,
     body: Value,
 }
 
 impl SlackHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(status: StatusCode, body: Value) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(status: StatusCode, body: Value) -> Self {
         Self { status, body }
     }
 }
 
 #[async_trait]
-pub trait SlackTransport: Send + Sync {
+pub(in crate::toolkits) trait SlackTransport: Send + Sync {
     async fn execute(
         &self,
         request: Request,
@@ -324,13 +324,13 @@ impl SlackTransport for ReqwestSlackTransport {
 }
 
 /// One invocation-scoped Slack token, API authority, and HTTP pool.
-pub struct SlackClient {
+pub(crate) struct SlackClient {
     config: SlackToolkitConfig,
     transport: Arc<dyn SlackTransport>,
 }
 
 impl SlackClient {
-    pub fn new(config: SlackToolkitConfig) -> Result<Self, SlackClientError> {
+    pub(crate) fn new(config: SlackToolkitConfig) -> Result<Self, SlackClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -379,13 +379,16 @@ impl SlackClient {
             .ok_or_else(invalid_input)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(config: SlackToolkitConfig, transport: Arc<dyn SlackTransport>) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn with_transport(
+        config: SlackToolkitConfig,
+        transport: Arc<dyn SlackTransport>,
+    ) -> Self {
         Self { config, transport }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_request(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_request(
         &self,
         operation: SlackOperation,
         parameters: &Map<String, Value>,
@@ -393,8 +396,8 @@ impl SlackClient {
         self.request(operation, parameters)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_configured_channel<'a>(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_configured_channel<'a>(
         &'a self,
         supplied: Option<&'a str>,
     ) -> Result<&'a str, SlackClientError> {
@@ -891,12 +894,18 @@ const fn unknown_outcome() -> SlackClientError {
     error(SlackClientErrorCode::UnknownOutcome, false)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_map_http_status(status: StatusCode, effect: bool) -> SlackClientError {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_map_http_status(
+    status: StatusCode,
+    effect: bool,
+) -> SlackClientError {
     map_http_status(status, effect).expect_err("non-success status must fail")
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_map_slack_error(provider_code: Option<&str>, effect: bool) -> SlackClientError {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_map_slack_error(
+    provider_code: Option<&str>,
+    effect: bool,
+) -> SlackClientError {
     map_slack_error(provider_code, effect)
 }

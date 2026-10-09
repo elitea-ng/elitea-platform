@@ -11,7 +11,7 @@ const MAX_TOOL_NAME_BYTES: usize = 64;
 
 /// A stable, data-free configuration failure category.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GooglePlacesConfigErrorCode {
+pub(crate) enum GooglePlacesConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
@@ -22,13 +22,13 @@ pub enum GooglePlacesConfigErrorCode {
 /// long-lived public value. Places API (New) carries it in a sensitive request
 /// header. Geocoding still requires a bounded query parameter; redirects are
 /// disabled and diagnostics never retain the resulting URL.
-pub struct GooglePlacesConfigError {
+pub(crate) struct GooglePlacesConfigError {
     code: GooglePlacesConfigErrorCode,
 }
 
 impl GooglePlacesConfigError {
     #[must_use]
-    pub const fn code(&self) -> GooglePlacesConfigErrorCode {
+    pub(crate) const fn code(&self) -> GooglePlacesConfigErrorCode {
         self.code
     }
 }
@@ -61,7 +61,7 @@ impl std::error::Error for GooglePlacesConfigError {}
 ///
 /// This value is intentionally neither `Clone` nor `Debug`. One invocation
 /// shares one client/pool and drops this secret owner when its toolset ends.
-pub struct GooglePlacesToolkitConfig {
+pub(crate) struct GooglePlacesToolkitConfig {
     api_key: Zeroizing<String>,
     results_count: usize,
     selected_tools: Vec<Box<str>>,
@@ -70,7 +70,7 @@ pub struct GooglePlacesToolkitConfig {
 impl GooglePlacesToolkitConfig {
     /// Parse the exact materialized settings shape produced for the current SDK
     /// Google Places toolkit, with explicit resource bounds.
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, GooglePlacesConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, GooglePlacesConfigError> {
         let configuration = settings
             .get("google_places_configuration")
             .and_then(Value::as_object)
@@ -103,16 +103,16 @@ impl GooglePlacesToolkitConfig {
     }
 
     #[must_use]
-    pub const fn results_count(&self) -> usize {
+    pub(crate) const fn results_count(&self) -> usize {
         self.results_count
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 
-    pub fn api_key(&self) -> &str {
+    pub(super) fn api_key(&self) -> &str {
         &self.api_key
     }
 }

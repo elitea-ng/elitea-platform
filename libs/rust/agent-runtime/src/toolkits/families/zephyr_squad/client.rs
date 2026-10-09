@@ -30,7 +30,7 @@ const JWT_LIFETIME_SECONDS: u64 = 300;
 const ZAPI_ACCESS_KEY: HeaderName = HeaderName::from_static("zapiaccesskey");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ZephyrSquadClientErrorCode {
+pub(crate) enum ZephyrSquadClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -46,23 +46,23 @@ pub enum ZephyrSquadClientErrorCode {
 }
 
 /// Stable failure without JWTs, credentials, paths, payloads or provider text.
-pub struct ZephyrSquadClientError {
+pub(crate) struct ZephyrSquadClientError {
     code: ZephyrSquadClientErrorCode,
     retryable: bool,
 }
 
 impl ZephyrSquadClientError {
     #[must_use]
-    pub const fn code(&self) -> ZephyrSquadClientErrorCode {
+    pub(crate) const fn code(&self) -> ZephyrSquadClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             ZephyrSquadClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -132,8 +132,11 @@ impl ZephyrSquadClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: ZephyrSquadClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(
+        code: ZephyrSquadClientErrorCode,
+        retryable: bool,
+    ) -> Self {
         Self { code, retryable }
     }
 }
@@ -178,7 +181,7 @@ impl fmt::Display for ZephyrSquadClientError {
 impl std::error::Error for ZephyrSquadClientError {}
 
 #[async_trait]
-pub trait ZephyrSquadApi: Send + Sync {
+pub(in crate::toolkits) trait ZephyrSquadApi: Send + Sync {
     async fn get_test_step(
         &self,
         issue_id: u64,
@@ -238,20 +241,20 @@ pub trait ZephyrSquadApi: Send + Sync {
     ) -> Result<Value, ZephyrSquadClientError>;
 }
 
-pub struct ZephyrSquadHttpResponse {
+pub(in crate::toolkits) struct ZephyrSquadHttpResponse {
     status: StatusCode,
     value: Value,
 }
 
 impl ZephyrSquadHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(status: StatusCode, value: Value) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(status: StatusCode, value: Value) -> Self {
         Self { status, value }
     }
 }
 
 #[async_trait]
-pub trait ZephyrSquadTransport: Send + Sync {
+pub(in crate::toolkits) trait ZephyrSquadTransport: Send + Sync {
     async fn execute(
         &self,
         request: Request,
@@ -330,14 +333,16 @@ impl ZephyrSquadClock for SystemClock {
     }
 }
 
-pub struct ZephyrSquadClient {
+pub(in crate::toolkits) struct ZephyrSquadClient {
     config: ZephyrSquadToolkitConfig,
     transport: Arc<dyn ZephyrSquadTransport>,
     clock: Arc<dyn ZephyrSquadClock>,
 }
 
 impl ZephyrSquadClient {
-    pub fn new(config: ZephyrSquadToolkitConfig) -> Result<Self, ZephyrSquadClientError> {
+    pub(in crate::toolkits) fn new(
+        config: ZephyrSquadToolkitConfig,
+    ) -> Result<Self, ZephyrSquadClientError> {
         let http = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
@@ -367,8 +372,8 @@ impl ZephyrSquadClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture(
         config: ZephyrSquadToolkitConfig,
         transport: Arc<dyn ZephyrSquadTransport>,
         epoch_seconds: u64,

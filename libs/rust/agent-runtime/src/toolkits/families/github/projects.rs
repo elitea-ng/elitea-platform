@@ -12,8 +12,8 @@ use super::client::{
     GitHubClientError, GitHubClientErrorCode, error, invalid_response, resource_exhausted,
 };
 
-pub const MAX_PROJECT_ITEMS: usize = 100;
-pub const MAX_PROJECT_RESPONSE_BYTES: usize = 4 * 1_024 * 1_024;
+pub(super) const MAX_PROJECT_ITEMS: usize = 100;
+pub(super) const MAX_PROJECT_RESPONSE_BYTES: usize = 4 * 1_024 * 1_024;
 const MAX_PROJECT_OUTPUT_CHARS: usize = 200_000;
 const MAX_PROJECT_FIELDS: usize = 30;
 const MAX_FIELD_VALUES: usize = 30;
@@ -87,7 +87,7 @@ query EliteaProjectItems(
 }
 ";
 
-pub fn project_query_payload(
+pub(super) fn project_query_payload(
     owner: &str,
     repository: &str,
     project_number: u32,
@@ -104,7 +104,7 @@ pub fn project_query_payload(
     })
 }
 
-pub fn project_project_issues(
+pub(super) fn project_project_issues(
     response: &Value,
     requested_items: usize,
 ) -> Result<Value, GitHubClientError> {
@@ -399,16 +399,16 @@ fn bounded_output(output: Value) -> Result<Value, GitHubClientError> {
     Ok(output)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_project_issues(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_project_issues(
     response: &Value,
     requested_items: usize,
 ) -> Result<Value, GitHubClientError> {
     project_project_issues(response, requested_items)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_query_payload(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_query_payload(
     owner: &str,
     repository: &str,
     project_number: u32,

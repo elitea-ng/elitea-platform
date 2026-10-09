@@ -21,12 +21,12 @@ use zeroize::{Zeroize, Zeroizing};
 
 use super::config::{SMTP_PORT, YagmailToolkitConfig};
 
-pub const MAX_MAILBOX_BYTES: usize = 254;
-pub const MAX_MESSAGE_CHARS: usize = 12_288;
-pub const MAX_MESSAGE_BYTES: usize = 48 * 1_024;
-pub const MAX_SUBJECT_CHARS: usize = 249;
-pub const MAX_SUBJECT_BYTES: usize = 998;
-pub const MAX_CC_RECIPIENTS: usize = 100;
+pub(in crate::toolkits) const MAX_MAILBOX_BYTES: usize = 254;
+pub(in crate::toolkits) const MAX_MESSAGE_CHARS: usize = 12_288;
+pub(in crate::toolkits) const MAX_MESSAGE_BYTES: usize = 48 * 1_024;
+pub(in crate::toolkits) const MAX_SUBJECT_CHARS: usize = 249;
+pub(in crate::toolkits) const MAX_SUBJECT_BYTES: usize = 998;
+pub(in crate::toolkits) const MAX_CC_RECIPIENTS: usize = 100;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_MIME_BYTES: usize = 512 * 1_024;
@@ -41,7 +41,7 @@ const CLIENT_IDENTITY: &str = "[127.0.0.1]";
 const LOWER_HEX: &[u8; 16] = b"0123456789abcdef";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum YagmailClientErrorCode {
+pub(crate) enum YagmailClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -55,23 +55,23 @@ pub enum YagmailClientErrorCode {
 }
 
 /// Bounded SMTP failure without host, mailbox, password, or server text.
-pub struct YagmailClientError {
+pub(crate) struct YagmailClientError {
     code: YagmailClientErrorCode,
     retryable: bool,
 }
 
 impl YagmailClientError {
     #[must_use]
-    pub const fn code(&self) -> YagmailClientErrorCode {
+    pub(crate) const fn code(&self) -> YagmailClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             YagmailClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -131,8 +131,11 @@ impl YagmailClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: YagmailClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(
+        code: YagmailClientErrorCode,
+        retryable: bool,
+    ) -> Self {
         Self { code, retryable }
     }
 }
@@ -175,7 +178,7 @@ impl fmt::Display for YagmailClientError {
 impl std::error::Error for YagmailClientError {}
 
 #[async_trait]
-pub trait YagmailApi: Send + Sync {
+pub(in crate::toolkits) trait YagmailApi: Send + Sync {
     async fn send_gmail_message(
         &self,
         effect_id: &str,
@@ -187,20 +190,20 @@ pub trait YagmailApi: Send + Sync {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SmtpChannelErrorCode {
+pub(in crate::toolkits) enum SmtpChannelErrorCode {
     Timeout,
     Unavailable,
     InvalidResponse,
     ResourceExhausted,
 }
 
-pub struct SmtpChannelError {
+pub(in crate::toolkits) struct SmtpChannelError {
     code: SmtpChannelErrorCode,
 }
 
 impl SmtpChannelError {
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: SmtpChannelErrorCode) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(code: SmtpChannelErrorCode) -> Self {
         Self { code }
     }
 }
@@ -215,13 +218,13 @@ impl fmt::Debug for SmtpChannelError {
 }
 
 #[async_trait]
-pub trait SmtpChannel: Send {
+pub(in crate::toolkits) trait SmtpChannel: Send {
     async fn write_all(&mut self, bytes: &[u8]) -> Result<(), SmtpChannelError>;
     async fn read_line(&mut self, limit: usize) -> Result<Vec<u8>, SmtpChannelError>;
 }
 
 #[async_trait]
-pub trait SmtpConnector: Send + Sync {
+pub(in crate::toolkits) trait SmtpConnector: Send + Sync {
     async fn connect(
         &self,
         host: &str,
@@ -321,21 +324,21 @@ impl SmtpChannel for RustlsSmtpChannel {
     }
 }
 
-pub struct YagmailClient {
+pub(crate) struct YagmailClient {
     config: YagmailToolkitConfig,
     connector: Arc<dyn SmtpConnector>,
 }
 
 impl YagmailClient {
-    pub fn new(config: YagmailToolkitConfig) -> Result<Self, YagmailClientError> {
+    pub(crate) fn new(config: YagmailToolkitConfig) -> Result<Self, YagmailClientError> {
         Ok(Self {
             config,
             connector: Arc::new(RustlsSmtpConnector::new()?),
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn with_connector(
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn with_connector(
         config: YagmailToolkitConfig,
         connector: Arc<dyn SmtpConnector>,
     ) -> Self {
@@ -791,7 +794,7 @@ fn map_after_dispatch(error: YagmailClientError, dispatched: bool) -> YagmailCli
     if dispatched { unknown_outcome() } else { error }
 }
 
-pub fn validate_message(
+pub(in crate::toolkits) fn validate_message(
     receiver: &str,
     message: &str,
     subject: &str,
@@ -827,7 +830,7 @@ fn validate_multiline_text(value: &str) -> Result<(), YagmailClientError> {
     Ok(())
 }
 
-pub fn validate_mailbox(value: &str) -> Result<(), YagmailClientError> {
+pub(in crate::toolkits) fn validate_mailbox(value: &str) -> Result<(), YagmailClientError> {
     if value.is_empty() {
         return Err(invalid_input());
     }

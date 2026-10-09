@@ -22,7 +22,7 @@ const MAX_DESCRIPTION_BYTES: usize = 1_000;
 const SUBSCRIPTION_ID_EXAMPLE: &str = "00000000-0000-0000-0000-000000000000";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AzureToolsetErrorCode {
+pub(crate) enum AzureToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -31,13 +31,13 @@ pub enum AzureToolsetErrorCode {
 }
 
 /// Safe construction failure for the complete two-tool Azure family.
-pub struct AzureToolsetError {
+pub(crate) struct AzureToolsetError {
     code: AzureToolsetErrorCode,
 }
 
 impl AzureToolsetError {
     #[must_use]
-    pub const fn code(&self) -> AzureToolsetErrorCode {
+    pub(crate) const fn code(&self) -> AzureToolsetErrorCode {
         self.code
     }
 }
@@ -107,7 +107,7 @@ impl From<MaterializedToolsetError> for AzureToolsetError {
 /// `execute` can perform reads, writes, deletes, and action endpoints. Its
 /// source `execute` group is metadata only; sensitivity and effect ownership
 /// remain independent admission responsibilities.
-pub fn build_azure_toolset(
+pub(crate) fn build_azure_toolset(
     toolkit_name: &str,
     config: AzureToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -158,8 +158,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "azure", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     subscription_id: &str,
     selected: &[String],
@@ -177,8 +177,8 @@ pub fn test_build_with_api(
     build_with_api(toolkit_name, subscription_id, selected, policy, client)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub const fn test_catalog() -> [(&'static str, &'static str); 2] {
+#[cfg(test)]
+pub(in crate::toolkits) const fn test_catalog() -> [(&'static str, &'static str); 2] {
     [(EXECUTE, "execute"), (HEALTHCHECK, "read")]
 }
 
@@ -475,13 +475,15 @@ fn resource_exhausted() -> AdkError {
     )
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_parse_optional_args(value: Option<&Value>) -> adk_core::Result<Map<String, Value>> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_parse_optional_args(
+    value: Option<&Value>,
+) -> adk_core::Result<Map<String, Value>> {
     parse_optional_args(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_validate_arm_url(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_validate_arm_url(
     value: &str,
     subscription_id: &str,
 ) -> Result<reqwest::Url, AzureClientError> {

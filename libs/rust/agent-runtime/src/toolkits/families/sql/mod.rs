@@ -6,8 +6,8 @@
 
 #![allow(dead_code)] // The complete family remains capability-gated.
 
-pub mod client;
-pub mod config;
-pub mod lexer;
-pub mod project;
-pub mod tools;
+pub(in crate::toolkits) mod client;
+pub(in crate::toolkits) mod config;
+pub(in crate::toolkits) mod lexer;
+pub(in crate::toolkits) mod project;
+pub(in crate::toolkits) mod tools;

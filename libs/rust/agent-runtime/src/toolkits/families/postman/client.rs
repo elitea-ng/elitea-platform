@@ -36,7 +36,7 @@ const API_KEY_HEADER: HeaderName = HeaderName::from_static("x-api-key");
 type DynamicQueryPairs = Vec<(String, String)>;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PostmanClientErrorCode {
+pub(crate) enum PostmanClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -52,23 +52,23 @@ pub enum PostmanClientErrorCode {
 }
 
 /// Stable provider failure without origin, path, payload, body, or credential.
-pub struct PostmanClientError {
+pub(crate) struct PostmanClientError {
     code: PostmanClientErrorCode,
     retryable: bool,
 }
 
 impl PostmanClientError {
     #[must_use]
-    pub const fn code(&self) -> PostmanClientErrorCode {
+    pub(crate) const fn code(&self) -> PostmanClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             PostmanClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -138,8 +138,11 @@ impl PostmanClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: PostmanClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(
+        code: PostmanClientErrorCode,
+        retryable: bool,
+    ) -> Self {
         Self { code, retryable }
     }
 }
@@ -182,7 +185,7 @@ impl fmt::Display for PostmanClientError {
 impl std::error::Error for PostmanClientError {}
 
 #[derive(Clone)]
-pub enum PostmanOperation {
+pub(in crate::toolkits) enum PostmanOperation {
     GetCollections,
     GetCollection {
         collection_id: Option<String>,
@@ -312,16 +315,16 @@ pub enum PostmanOperation {
 }
 
 #[async_trait]
-pub trait PostmanApi: Send + Sync {
+pub(in crate::toolkits) trait PostmanApi: Send + Sync {
     async fn execute(&self, operation: PostmanOperation) -> Result<Value, PostmanClientError>;
 }
 
-pub struct DynamicRequest {
-    pub method: Method,
-    pub url: Url,
-    pub headers: Vec<(HeaderName, HeaderValue)>,
-    pub query: Vec<(String, String)>,
-    pub body: Option<Vec<u8>>,
+pub(in crate::toolkits) struct DynamicRequest {
+    pub(in crate::toolkits) method: Method,
+    pub(in crate::toolkits) url: Url,
+    pub(in crate::toolkits) headers: Vec<(HeaderName, HeaderValue)>,
+    pub(in crate::toolkits) query: Vec<(String, String)>,
+    pub(in crate::toolkits) body: Option<Vec<u8>>,
 }
 
 struct PreparedDynamicRequest {
@@ -330,25 +333,25 @@ struct PreparedDynamicRequest {
     safe_url: String,
 }
 
-pub struct DynamicResponse {
-    pub status: StatusCode,
-    pub reason: Box<str>,
-    pub headers: Map<String, Value>,
-    pub body: Value,
-    pub size_bytes: usize,
+pub(in crate::toolkits) struct DynamicResponse {
+    pub(in crate::toolkits) status: StatusCode,
+    pub(in crate::toolkits) reason: Box<str>,
+    pub(in crate::toolkits) headers: Map<String, Value>,
+    pub(in crate::toolkits) body: Value,
+    pub(in crate::toolkits) size_bytes: usize,
 }
 
 /// Separate downstream authority. Production has deliberately no constructor
 /// or injection point until the platform can issue a claim-bound egress grant.
 #[async_trait]
-pub trait DynamicEgressAuthority: Send + Sync {
+pub(in crate::toolkits) trait DynamicEgressAuthority: Send + Sync {
     async fn dispatch(
         &self,
         request: DynamicRequest,
     ) -> Result<DynamicResponse, PostmanClientError>;
 }
 
-pub struct PostmanClient {
+pub(crate) struct PostmanClient {
     management: ManagementAuthority,
     dynamic: DynamicExecution,
     mutation_gate: Mutex<()>,
@@ -378,20 +381,20 @@ struct ManagementJsonCall<'a> {
     allow_empty: bool,
 }
 
-pub struct ManagementHttpResponse {
-    pub status: StatusCode,
-    pub body: Vec<u8>,
+pub(in crate::toolkits) struct ManagementHttpResponse {
+    pub(in crate::toolkits) status: StatusCode,
+    pub(in crate::toolkits) body: Vec<u8>,
 }
 
 #[derive(Clone, Copy)]
-pub enum ManagementTransportError {
+pub(in crate::toolkits) enum ManagementTransportError {
     Timeout,
     Connect,
     Response,
 }
 
 #[async_trait]
-pub trait ManagementTransport: Send + Sync {
+pub(in crate::toolkits) trait ManagementTransport: Send + Sync {
     async fn send(
         &self,
         request: reqwest::Request,
@@ -426,7 +429,7 @@ impl ManagementTransport for ReqwestManagementTransport {
 }
 
 impl PostmanClient {
-    pub fn new(config: PostmanToolkitConfig) -> Result<Self, PostmanClientError> {
+    pub(crate) fn new(config: PostmanToolkitConfig) -> Result<Self, PostmanClientError> {
         let config = config.into_client_parts();
         let http = reqwest::Client::builder()
             .https_only(true)
@@ -456,8 +459,8 @@ impl PostmanClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture_with_dynamic_authority(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture_with_dynamic_authority(
         config: PostmanToolkitConfig,
         authority: Arc<dyn DynamicEgressAuthority>,
     ) -> Result<Self, PostmanClientError> {
@@ -466,8 +469,8 @@ impl PostmanClient {
         Ok(client)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture_with_management_transport(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture_with_management_transport(
         config: PostmanToolkitConfig,
         transport: Arc<dyn ManagementTransport>,
     ) -> Result<Self, PostmanClientError> {
@@ -476,8 +479,8 @@ impl PostmanClient {
         Ok(client)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture_with_management_and_dynamic(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture_with_management_and_dynamic(
         config: PostmanToolkitConfig,
         transport: Arc<dyn ManagementTransport>,
         authority: Arc<dyn DynamicEgressAuthority>,
@@ -690,7 +693,7 @@ impl PostmanClient {
     }
 }
 
-pub fn collection_data(value: &Value) -> Result<&Map<String, Value>, PostmanClientError> {
+pub(super) fn collection_data(value: &Value) -> Result<&Map<String, Value>, PostmanClientError> {
     value
         .get("collection")
         .and_then(Value::as_object)
@@ -704,7 +707,9 @@ fn collection_data_mut(value: &mut Value) -> Result<&mut Map<String, Value>, Pos
         .ok_or_else(invalid_response)
 }
 
-pub fn collection_items(value: &Map<String, Value>) -> Result<&Vec<Value>, PostmanClientError> {
+pub(super) fn collection_items(
+    value: &Map<String, Value>,
+) -> Result<&Vec<Value>, PostmanClientError> {
     value
         .get("item")
         .and_then(Value::as_array)
@@ -728,12 +733,12 @@ fn path_parts(path: &str) -> Vec<&str> {
 }
 
 #[derive(Clone, Copy)]
-pub enum ItemKind {
+pub(super) enum ItemKind {
     Folder,
     Request,
 }
 
-pub fn resolve_item<'a>(
+pub(super) fn resolve_item<'a>(
     collection: &'a Map<String, Value>,
     path: &str,
     kind: ItemKind,
@@ -1164,7 +1169,7 @@ fn redact_request_node(value: &mut Value, context: RedactionContext) {
     }
 }
 
-pub fn sanitize_url(raw: &str) -> Result<String, PostmanClientError> {
+pub(super) fn sanitize_url(raw: &str) -> Result<String, PostmanClientError> {
     let Ok(url) = Url::parse(raw) else {
         return Ok(if raw.contains("{{") {
             "<templated-url>".to_owned()
@@ -2933,8 +2938,8 @@ impl ManagementAuthority {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_management_request(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_management_request(
     config: PostmanToolkitConfig,
     method: Method,
     segments: &[&str],
@@ -2946,18 +2951,18 @@ pub fn test_management_request(
         .build_request(method, segments, query, body)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_map_status(status: StatusCode, effect: bool) -> PostmanClientError {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_map_status(status: StatusCode, effect: bool) -> PostmanClientError {
     map_status(status, effect)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_redact_request(value: Value) -> Value {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_redact_request(value: Value) -> Value {
     redact_sensitive_fields(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_expand_variables(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_expand_variables(
     input: &str,
     values: &[(&str, &str)],
 ) -> Result<String, PostmanClientError> {
@@ -2968,15 +2973,15 @@ pub fn test_expand_variables(
     expand_variables(input, &values)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub struct DynamicPartsFixture {
-    pub headers: Vec<(String, String)>,
-    pub query: Vec<(String, String)>,
-    pub body: Option<Vec<u8>>,
+#[cfg(test)]
+pub(in crate::toolkits) struct DynamicPartsFixture {
+    pub(in crate::toolkits) headers: Vec<(String, String)>,
+    pub(in crate::toolkits) query: Vec<(String, String)>,
+    pub(in crate::toolkits) body: Option<Vec<u8>>,
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_dynamic_parts(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_dynamic_parts(
     auth: Option<&Value>,
     body: Option<&Value>,
     stored_headers: &[(&str, &str)],
@@ -3009,8 +3014,10 @@ pub fn test_dynamic_parts(
     })
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_dynamic_header_value(value_bytes: usize) -> Result<(), PostmanClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_dynamic_header_value(
+    value_bytes: usize,
+) -> Result<(), PostmanClientError> {
     let mut headers = Vec::new();
     insert_dynamic_header(&mut headers, "x-test", &"v".repeat(value_bytes))
 }
@@ -3150,7 +3157,7 @@ const fn invalid_configuration() -> PostmanClientError {
     }
 }
 
-pub const fn invalid_input() -> PostmanClientError {
+pub(super) const fn invalid_input() -> PostmanClientError {
     PostmanClientError {
         code: PostmanClientErrorCode::InvalidInput,
         retryable: false,
@@ -3178,7 +3185,7 @@ const fn not_found() -> PostmanClientError {
     }
 }
 
-pub const fn conflict() -> PostmanClientError {
+pub(super) const fn conflict() -> PostmanClientError {
     PostmanClientError {
         code: PostmanClientErrorCode::Conflict,
         retryable: false,
@@ -3206,14 +3213,14 @@ const fn dependency_unavailable(retryable: bool) -> PostmanClientError {
     }
 }
 
-pub const fn invalid_response() -> PostmanClientError {
+pub(super) const fn invalid_response() -> PostmanClientError {
     PostmanClientError {
         code: PostmanClientErrorCode::InvalidResponse,
         retryable: false,
     }
 }
 
-pub const fn resource_exhausted() -> PostmanClientError {
+pub(super) const fn resource_exhausted() -> PostmanClientError {
     PostmanClientError {
         code: PostmanClientErrorCode::ResourceExhausted,
         retryable: false,

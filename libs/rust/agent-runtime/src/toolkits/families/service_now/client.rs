@@ -34,7 +34,7 @@ const JSON_CONTENT_TYPE: &str = "application/json";
 const INCIDENT_PATH: &str = "api/now/table/incident";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ServiceNowClientErrorCode {
+pub(crate) enum ServiceNowClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -48,23 +48,23 @@ pub enum ServiceNowClientErrorCode {
 }
 
 /// One bounded `ServiceNow` failure without provider text or credentials.
-pub struct ServiceNowClientError {
+pub(crate) struct ServiceNowClientError {
     code: ServiceNowClientErrorCode,
     retryable: bool,
 }
 
 impl ServiceNowClientError {
     #[must_use]
-    pub const fn code(&self) -> ServiceNowClientErrorCode {
+    pub(crate) const fn code(&self) -> ServiceNowClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             ServiceNowClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -124,8 +124,11 @@ impl ServiceNowClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: ServiceNowClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(
+        code: ServiceNowClientErrorCode,
+        retryable: bool,
+    ) -> Self {
         Self { code, retryable }
     }
 }
@@ -164,7 +167,7 @@ impl fmt::Display for ServiceNowClientError {
 impl std::error::Error for ServiceNowClientError {}
 
 #[async_trait]
-pub trait ServiceNowApi: Send + Sync {
+pub(in crate::toolkits) trait ServiceNowApi: Send + Sync {
     async fn get_incidents(
         &self,
         filters: &Map<String, Value>,
@@ -184,7 +187,7 @@ pub trait ServiceNowApi: Send + Sync {
 }
 
 #[derive(Clone, Copy)]
-pub enum ServiceNowRequestKind<'a> {
+pub(in crate::toolkits) enum ServiceNowRequestKind<'a> {
     GetIncidents {
         filters: &'a Map<String, Value>,
         limit: usize,
@@ -202,7 +205,7 @@ pub enum ServiceNowRequestKind<'a> {
 }
 
 #[async_trait]
-pub trait ServiceNowTransport: Send + Sync {
+pub(in crate::toolkits) trait ServiceNowTransport: Send + Sync {
     async fn execute_json(
         &self,
         request: Request,
@@ -268,13 +271,13 @@ impl ServiceNowTransport for ReqwestServiceNowTransport {
 }
 
 /// One invocation-scoped `ServiceNow` client and connection pool.
-pub struct ServiceNowClient {
+pub(crate) struct ServiceNowClient {
     config: ServiceNowToolkitConfig,
     transport: Arc<dyn ServiceNowTransport>,
 }
 
 impl ServiceNowClient {
-    pub fn new(config: ServiceNowToolkitConfig) -> Result<Self, ServiceNowClientError> {
+    pub(crate) fn new(config: ServiceNowToolkitConfig) -> Result<Self, ServiceNowClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -292,16 +295,16 @@ impl ServiceNowClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn with_transport(
         config: ServiceNowToolkitConfig,
         transport: Arc<dyn ServiceNowTransport>,
     ) -> Self {
         Self { config, transport }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_request(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_request(
         &self,
         kind: ServiceNowRequestKind<'_>,
     ) -> Result<Request, ServiceNowClientError> {
@@ -688,8 +691,8 @@ fn map_http_status(
     })
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_http_status(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_http_status(
     actual: StatusCode,
     expected: StatusCode,
     retryable_transport: bool,

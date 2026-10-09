@@ -19,7 +19,7 @@ const MAX_PATH_BYTES: usize = 1_024;
 const MAX_TEXT_BYTES: usize = 256 * 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GitLabOrgToolsetErrorCode {
+pub(crate) enum GitLabOrgToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -27,13 +27,13 @@ pub enum GitLabOrgToolsetErrorCode {
     InvalidDefinition,
 }
 
-pub struct GitLabOrgToolsetError {
+pub(crate) struct GitLabOrgToolsetError {
     code: GitLabOrgToolsetErrorCode,
 }
 
 impl GitLabOrgToolsetError {
     #[must_use]
-    pub const fn code(&self) -> GitLabOrgToolsetErrorCode {
+    pub(crate) const fn code(&self) -> GitLabOrgToolsetErrorCode {
         self.code
     }
 }
@@ -105,7 +105,7 @@ impl From<MaterializedToolsetError> for GitLabOrgToolsetError {
 /// Read/write/delete groups are model-selection cues only. Trusted sensitivity
 /// policy is independent, and remote effects remain unavailable to production
 /// activation until durable exact-interrupt ownership and receipts exist.
-pub fn build_gitlab_org_toolset(
+pub(crate) fn build_gitlab_org_toolset(
     toolkit_name: &str,
     config: GitLabOrgToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -153,8 +153,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "gitlab_org", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,
@@ -1090,8 +1090,8 @@ fn resource_exhausted_arguments() -> AdkError {
     )
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_catalog() -> Vec<(&'static str, &'static str)> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_catalog() -> Vec<(&'static str, &'static str)> {
     GitLabOrgToolKind::ALL
         .iter()
         .map(|kind| (kind.name(), kind.group()))

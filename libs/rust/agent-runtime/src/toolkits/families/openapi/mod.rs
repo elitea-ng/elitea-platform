@@ -1,6 +1,6 @@
-pub mod client;
-pub mod config;
+pub(crate) mod client;
+pub(crate) mod config;
 pub mod response_selection;
-pub mod source;
-pub mod spec;
+pub(crate) mod source;
+pub(crate) mod spec;
 pub mod tools;

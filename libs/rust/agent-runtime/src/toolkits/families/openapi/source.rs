@@ -8,13 +8,13 @@ const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 const MAX_URL_BYTES: usize = 8 * 1024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SourceError {
+pub(crate) enum SourceError {
     Invalid,
     Unavailable,
     TooLarge,
 }
 
-pub async fn load(settings: &Map<String, Value>) -> Result<Option<Value>, SourceError> {
+pub(crate) async fn load(settings: &Map<String, Value>) -> Result<Option<Value>, SourceError> {
     let source = settings
         .get("spec")
         .or_else(|| settings.get("schema_settings"))

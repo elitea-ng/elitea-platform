@@ -5,28 +5,28 @@ use std::net::Ipv4Addr;
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
-pub const DEFAULT_SMTP_HOST: &str = "smtp.gmail.com";
-pub const SMTP_PORT: u16 = 465;
+pub(in crate::toolkits) const DEFAULT_SMTP_HOST: &str = "smtp.gmail.com";
+pub(in crate::toolkits) const SMTP_PORT: u16 = 465;
 const MAX_HOST_BYTES: usize = 253;
 const MAX_USERNAME_BYTES: usize = 320;
-pub const MAX_PASSWORD_BYTES: usize = 8 * 1_024;
+pub(in crate::toolkits) const MAX_PASSWORD_BYTES: usize = 8 * 1_024;
 const MAX_SELECTED_TOOLS: usize = 16;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum YagmailConfigErrorCode {
+pub(crate) enum YagmailConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable configuration failure that never carries SMTP authority or secrets.
-pub struct YagmailConfigError {
+pub(crate) struct YagmailConfigError {
     code: YagmailConfigErrorCode,
 }
 
 impl YagmailConfigError {
     #[must_use]
-    pub const fn code(&self) -> YagmailConfigErrorCode {
+    pub(crate) const fn code(&self) -> YagmailConfigErrorCode {
         self.code
     }
 }
@@ -59,7 +59,7 @@ impl std::error::Error for YagmailConfigError {}
 ///
 /// Main marks `password` as the only inline secret and redeems it only for the
 /// accepted claim. This value is deliberately non-cloneable and non-debuggable.
-pub struct YagmailToolkitConfig {
+pub(crate) struct YagmailToolkitConfig {
     host: Box<str>,
     username: Box<str>,
     password: Zeroizing<String>,
@@ -67,7 +67,7 @@ pub struct YagmailToolkitConfig {
 }
 
 impl YagmailToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, YagmailConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, YagmailConfigError> {
         let host = optional_host(settings)?;
         let username =
             normalize_username(required_text(settings, "username", MAX_USERNAME_BYTES)?)?;
@@ -80,20 +80,20 @@ impl YagmailToolkitConfig {
         })
     }
 
-    pub fn host(&self) -> &str {
+    pub(super) fn host(&self) -> &str {
         &self.host
     }
 
-    pub fn username(&self) -> &str {
+    pub(super) fn username(&self) -> &str {
         &self.username
     }
 
-    pub fn password(&self) -> &str {
+    pub(super) fn password(&self) -> &str {
         &self.password
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

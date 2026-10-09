@@ -3,7 +3,7 @@ use serde_json::{Map, Value, json};
 use super::snapshot::{
     FrozenToolKind, FrozenToolReference, FrozenToolSnapshot, FrozenToolSnapshotErrorCode,
 };
-use crate::agents::request::{
+use crate::request::{
     AgentExecutionKind, AgentExecutionPayload, AgentExecutionRequest, AgentInputBinding,
     NextInputSuggestionPolicy, UserInput,
 };

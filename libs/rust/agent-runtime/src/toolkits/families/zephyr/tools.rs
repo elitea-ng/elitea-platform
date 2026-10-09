@@ -27,7 +27,7 @@ const MAX_STEPS_PER_BATCH: usize = 100;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ZephyrToolsetErrorCode {
+pub(crate) enum ZephyrToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -36,13 +36,13 @@ pub enum ZephyrToolsetErrorCode {
 }
 
 /// Stable construction failure for the complete legacy Zephyr family.
-pub struct ZephyrToolsetError {
+pub(crate) struct ZephyrToolsetError {
     code: ZephyrToolsetErrorCode,
 }
 
 impl ZephyrToolsetError {
     #[must_use]
-    pub const fn code(&self) -> ZephyrToolsetErrorCode {
+    pub(crate) const fn code(&self) -> ZephyrToolsetErrorCode {
         self.code
     }
 }
@@ -113,7 +113,7 @@ impl From<MaterializedToolsetError> for ZephyrToolsetError {
 ///
 /// Read/write grouping is model metadata only. The three effects remain closed
 /// until the exact-interrupt HITL and durable effect owner are composed.
-pub fn build_zephyr_toolset(
+pub(crate) fn build_zephyr_toolset(
     toolkit_name: &str,
     config: ZephyrToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -161,8 +161,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "zephyr", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,
@@ -184,8 +184,8 @@ fn validate_selected_strings(selected: &[String]) -> Result<(), ZephyrToolsetErr
     Ok(())
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub const fn test_catalog() -> [(&'static str, &'static str); 4] {
+#[cfg(test)]
+pub(in crate::toolkits) const fn test_catalog() -> [(&'static str, &'static str); 4] {
     [
         (GET_TEST_CASE_STEPS, "read"),
         (ADD_NEW_TEST_CASE_STEP, "write"),

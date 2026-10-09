@@ -19,7 +19,7 @@ use super::spec::OpenApiOperation;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenApiToolsetErrorCode {
+pub(crate) enum OpenApiToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedCapability,
@@ -27,13 +27,13 @@ pub enum OpenApiToolsetErrorCode {
     InvalidDefinition,
 }
 
-pub struct OpenApiToolsetError {
+pub(crate) struct OpenApiToolsetError {
     code: OpenApiToolsetErrorCode,
 }
 
 impl OpenApiToolsetError {
     #[must_use]
-    pub const fn code(&self) -> OpenApiToolsetErrorCode {
+    pub(crate) const fn code(&self) -> OpenApiToolsetErrorCode {
         self.code
     }
 }
@@ -103,9 +103,9 @@ impl From<MaterializedToolsetError> for OpenApiToolsetError {
     }
 }
 
-pub struct MaterializedOpenApiToolset {
-    pub toolset: BasicToolset,
-    pub delegated_authorization: DelegatedAuthorizationCatalog,
+pub(crate) struct MaterializedOpenApiToolset {
+    pub(crate) toolset: BasicToolset,
+    pub(crate) delegated_authorization: DelegatedAuthorizationCatalog,
 }
 
 /// Build one dynamic `OpenAPI` tool per selected operation.
@@ -113,7 +113,7 @@ pub struct MaterializedOpenApiToolset {
 /// A missing delegated token materializes schema-complete guarded tools. The
 /// normal ADK confirmation path therefore pauses the original model call; the
 /// claim-fetched exact-base-URL token rebuild replaces those tools on resume.
-pub fn build_openapi_toolset(
+pub(crate) fn build_openapi_toolset(
     toolkit_name: &str,
     config: OpenApiToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,

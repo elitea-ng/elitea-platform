@@ -25,7 +25,7 @@ const MAX_DESCRIPTION_BYTES: usize = 1_000;
 const INCIDENT_FIELD_GUIDANCE: &str = "category, description, short_description, impact, incident_state, urgency, or assignment_group";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ServiceNowToolsetErrorCode {
+pub(crate) enum ServiceNowToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -34,13 +34,13 @@ pub enum ServiceNowToolsetErrorCode {
 }
 
 /// Safe construction failure for the complete `ServiceNow` incident family.
-pub struct ServiceNowToolsetError {
+pub(crate) struct ServiceNowToolsetError {
     code: ServiceNowToolsetErrorCode,
 }
 
 impl ServiceNowToolsetError {
     #[must_use]
-    pub const fn code(&self) -> ServiceNowToolsetErrorCode {
+    pub(crate) const fn code(&self) -> ServiceNowToolsetErrorCode {
         self.code
     }
 }
@@ -112,7 +112,7 @@ impl From<MaterializedToolsetError> for ServiceNowToolsetError {
 /// The SDK's `read`/`write` groups remain ordinary operation metadata. A
 /// trusted deployment may independently require durable human approval for
 /// any of these tools; the shared guardrail, not this family, owns that pause.
-pub fn build_service_now_toolset(
+pub(crate) fn build_service_now_toolset(
     toolkit_name: &str,
     config: ServiceNowToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -165,8 +165,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "service_now", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,

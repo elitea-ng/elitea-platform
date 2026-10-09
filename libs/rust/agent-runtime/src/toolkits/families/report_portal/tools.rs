@@ -28,7 +28,7 @@ const MAX_ARGUMENT_BYTES: usize = 8 * 1_024;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ReportPortalToolsetErrorCode {
+pub(crate) enum ReportPortalToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -37,13 +37,13 @@ pub enum ReportPortalToolsetErrorCode {
 }
 
 /// Stable construction failure for the complete `ReportPortal` read family.
-pub struct ReportPortalToolsetError {
+pub(crate) struct ReportPortalToolsetError {
     code: ReportPortalToolsetErrorCode,
 }
 
 impl ReportPortalToolsetError {
     #[must_use]
-    pub const fn code(&self) -> ReportPortalToolsetErrorCode {
+    pub(crate) const fn code(&self) -> ReportPortalToolsetErrorCode {
         self.code
     }
 }
@@ -114,7 +114,7 @@ impl From<MaterializedToolsetError> for ReportPortalToolsetError {
 ///
 /// Empty selection means the complete source-order catalog. Read grouping is
 /// model metadata only; the shared immutable policy still controls admission.
-pub fn build_report_portal_toolset(
+pub(crate) fn build_report_portal_toolset(
     toolkit_name: &str,
     config: ReportPortalToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -162,8 +162,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "report_portal", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,

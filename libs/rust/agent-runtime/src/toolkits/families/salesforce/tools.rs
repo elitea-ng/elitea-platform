@@ -27,7 +27,7 @@ const MAX_ARGUMENT_DEPTH: usize = 64;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SalesforceToolsetErrorCode {
+pub(crate) enum SalesforceToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -36,13 +36,13 @@ pub enum SalesforceToolsetErrorCode {
 }
 
 /// Stable construction failure for the complete Salesforce family.
-pub struct SalesforceToolsetError {
+pub(crate) struct SalesforceToolsetError {
     code: SalesforceToolsetErrorCode,
 }
 
 impl SalesforceToolsetError {
     #[must_use]
-    pub const fn code(&self) -> SalesforceToolsetErrorCode {
+    pub(crate) const fn code(&self) -> SalesforceToolsetErrorCode {
         self.code
     }
 }
@@ -114,7 +114,7 @@ impl From<MaterializedToolsetError> for SalesforceToolsetError {
 /// Operation grouping is model metadata, not authorization. Production
 /// assembly must apply the shared exact-interrupt guard and retain dispatched
 /// effect ownership through a known or explicitly unknown provider outcome.
-pub fn build_salesforce_toolset(
+pub(crate) fn build_salesforce_toolset(
     toolkit_name: &str,
     config: SalesforceToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -168,8 +168,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "salesforce", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,

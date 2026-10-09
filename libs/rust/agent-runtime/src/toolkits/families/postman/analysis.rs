@@ -9,7 +9,7 @@ use super::client::{
 
 const MAX_ANALYSIS_ITEMS: usize = 4_096;
 
-pub fn analyze(
+pub(in crate::toolkits) fn analyze(
     response: &Value,
     configured_collection_id: &str,
     scope: &str,

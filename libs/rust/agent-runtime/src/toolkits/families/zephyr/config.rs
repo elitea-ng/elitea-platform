@@ -12,19 +12,19 @@ const MAX_SELECTED_TOOLS: usize = 16;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ZephyrConfigErrorCode {
+pub(crate) enum ZephyrConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable configuration failure without authority or credential data.
-pub struct ZephyrConfigError {
+pub(crate) struct ZephyrConfigError {
     code: ZephyrConfigErrorCode,
 }
 
 impl ZephyrConfigError {
     #[must_use]
-    pub const fn code(&self) -> ZephyrConfigErrorCode {
+    pub(crate) const fn code(&self) -> ZephyrConfigErrorCode {
         self.code
     }
 }
@@ -59,7 +59,7 @@ impl std::error::Error for ZephyrConfigError {}
 /// it does not reference the separately registered and incompatible Zephyr
 /// Scale configuration model. The password remains zeroizing and no process
 /// environment fallback is permitted.
-pub struct ZephyrToolkitConfig {
+pub(crate) struct ZephyrToolkitConfig {
     base_url: Url,
     username: Box<str>,
     password: Zeroizing<String>,
@@ -67,7 +67,7 @@ pub struct ZephyrToolkitConfig {
 }
 
 impl ZephyrToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, ZephyrConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, ZephyrConfigError> {
         let base_url = settings
             .get("base_url")
             .and_then(Value::as_str)
@@ -86,20 +86,20 @@ impl ZephyrToolkitConfig {
         })
     }
 
-    pub const fn base_url(&self) -> &Url {
+    pub(super) const fn base_url(&self) -> &Url {
         &self.base_url
     }
 
-    pub fn username(&self) -> &str {
+    pub(super) fn username(&self) -> &str {
         &self.username
     }
 
-    pub fn password(&self) -> &str {
+    pub(super) fn password(&self) -> &str {
         self.password.as_str()
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use adk_rust::tool::SimpleToolContext;
-use adk_rust::{ReadonlyContext, Toolset};
+use adk_core::{ReadonlyContext, Toolset};
+use adk_tool::SimpleToolContext;
 use async_trait::async_trait;
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
 use reqwest::{Method, Request, StatusCode};

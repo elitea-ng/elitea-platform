@@ -12,19 +12,19 @@ const MAX_SELECTED_TOOLS: usize = 1_024;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AzureSearchConfigErrorCode {
+pub(crate) enum AzureSearchConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable, data-free failure for claim-materialized Azure Search settings.
-pub struct AzureSearchConfigError {
+pub(crate) struct AzureSearchConfigError {
     code: AzureSearchConfigErrorCode,
 }
 
 impl AzureSearchConfigError {
     #[must_use]
-    pub const fn code(&self) -> AzureSearchConfigErrorCode {
+    pub(crate) const fn code(&self) -> AzureSearchConfigErrorCode {
         self.code
     }
 }
@@ -57,7 +57,7 @@ impl std::error::Error for AzureSearchConfigError {}
 ///
 /// Main resolves the nested configuration into the admitted command. The key
 /// remains non-cloneable and non-debuggable; one toolset owns one HTTP pool.
-pub struct AzureSearchToolkitConfig {
+pub(crate) struct AzureSearchToolkitConfig {
     endpoint: Url,
     api_key: Zeroizing<String>,
     index_name: Box<str>,
@@ -65,7 +65,7 @@ pub struct AzureSearchToolkitConfig {
 }
 
 impl AzureSearchToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, AzureSearchConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, AzureSearchConfigError> {
         let configuration = settings
             .get("azure_search_configuration")
             .and_then(Value::as_object)
@@ -93,20 +93,20 @@ impl AzureSearchToolkitConfig {
         })
     }
 
-    pub const fn endpoint(&self) -> &Url {
+    pub(super) const fn endpoint(&self) -> &Url {
         &self.endpoint
     }
 
-    pub fn api_key(&self) -> &str {
+    pub(super) fn api_key(&self) -> &str {
         &self.api_key
     }
 
-    pub fn index_name(&self) -> &str {
+    pub(super) fn index_name(&self) -> &str {
         &self.index_name
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

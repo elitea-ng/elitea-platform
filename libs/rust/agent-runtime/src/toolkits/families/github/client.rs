@@ -69,7 +69,7 @@ const USER_AGENT: &str = "elitea-worker-rust/0.1";
 
 /// Stable, data-free failure categories for GitHub transport and response use.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GitHubClientErrorCode {
+pub(crate) enum GitHubClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     UnsupportedAuthentication,
@@ -87,18 +87,18 @@ pub enum GitHubClientErrorCode {
 ///
 /// Upstream bodies, URLs, repositories and credential material are never
 /// retained as error sources or rendered through Debug/Display.
-pub struct GitHubClientError {
+pub(crate) struct GitHubClientError {
     code: GitHubClientErrorCode,
 }
 
 impl GitHubClientError {
     #[must_use]
-    pub const fn code(&self) -> GitHubClientErrorCode {
+    pub(crate) const fn code(&self) -> GitHubClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         matches!(
             self.code,
             GitHubClientErrorCode::RateLimited
@@ -107,7 +107,7 @@ impl GitHubClientError {
         )
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             GitHubClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -210,7 +210,7 @@ impl std::error::Error for GitHubClientError {}
 
 /// Operations used by the first ordinary read-only GitHub tool subset.
 #[async_trait]
-pub trait GitHubApi: Send + Sync {
+pub(crate) trait GitHubApi: Send + Sync {
     async fn get_authenticated_user(&self) -> Result<Value, GitHubClientError>;
 
     async fn list_branches(&self, max_count: usize) -> Result<Value, GitHubClientError>;
@@ -290,29 +290,29 @@ pub trait GitHubApi: Send + Sync {
 
 /// Selects one of the two immutable branches admitted with the toolkit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GitHubFileScope {
+pub(in crate::toolkits) enum GitHubFileScope {
     BaseBranch,
     ActiveBranch,
 }
 
 /// Validated, bounded query for the current commit-list tool.
-pub struct GitHubCommitQuery {
-    pub repository: Option<String>,
-    pub reference: Option<String>,
-    pub path: Option<String>,
-    pub since: Option<String>,
-    pub until: Option<String>,
-    pub author: Option<String>,
-    pub max_count: usize,
+pub(in crate::toolkits) struct GitHubCommitQuery {
+    pub(in crate::toolkits) repository: Option<String>,
+    pub(in crate::toolkits) reference: Option<String>,
+    pub(in crate::toolkits) path: Option<String>,
+    pub(in crate::toolkits) since: Option<String>,
+    pub(in crate::toolkits) until: Option<String>,
+    pub(in crate::toolkits) author: Option<String>,
+    pub(in crate::toolkits) max_count: usize,
 }
 
 /// Validated, bounded query for one GitHub code-search provider page.
-pub struct GitHubCodeSearchQuery {
-    pub query: String,
-    pub sort: Option<String>,
-    pub order: Option<String>,
-    pub per_page: usize,
-    pub page: usize,
+pub(in crate::toolkits) struct GitHubCodeSearchQuery {
+    pub(in crate::toolkits) query: String,
+    pub(in crate::toolkits) sort: Option<String>,
+    pub(in crate::toolkits) order: Option<String>,
+    pub(in crate::toolkits) per_page: usize,
+    pub(in crate::toolkits) page: usize,
 }
 
 /// One invocation-scoped, pooled and origin-bound GitHub client.
@@ -321,13 +321,13 @@ pub struct GitHubCodeSearchQuery {
 /// never placed in a process-global credential registry. Redirects are
 /// disabled and request paths are appended to the admitted base URL, so tool
 /// arguments cannot select another origin.
-pub struct GitHubClient {
+pub(crate) struct GitHubClient {
     http: reqwest::Client,
     config: GitHubToolkitConfig,
 }
 
 impl GitHubClient {
-    pub fn new(config: GitHubToolkitConfig) -> Result<Self, GitHubClientError> {
+    pub(crate) fn new(config: GitHubToolkitConfig) -> Result<Self, GitHubClientError> {
         if config.auth_kind() == GitHubAuthKind::App {
             let (_, key) = config.auth().app().ok_or_else(invalid_configuration)?;
             let _ = parse_rsa_key(key)?;
@@ -350,7 +350,7 @@ impl GitHubClient {
     /// Anonymous configuration remains a validation-only success, matching the
     /// current SDK. Token/basic credentials use `/user`; GitHub App credentials
     /// use `/app` and deliberately do not require an installation.
-    pub async fn probe(&self) -> Result<(), GitHubClientError> {
+    pub(crate) async fn probe(&self) -> Result<(), GitHubClientError> {
         if self.config.auth_kind() == GitHubAuthKind::Anonymous {
             return Ok(());
         }
@@ -1004,7 +1004,7 @@ impl GitHubApi for GitHubClient {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GitHubRequestKind {
+pub(in crate::toolkits) enum GitHubRequestKind {
     Probe,
     AuthenticatedUser,
     Repository,
@@ -1405,7 +1405,7 @@ fn bounded_issue_output(value: Value) -> Result<Value, GitHubClientError> {
     Ok(value)
 }
 
-pub fn validate_repository(value: &str) -> Result<(&str, &str), GitHubClientError> {
+pub(super) fn validate_repository(value: &str) -> Result<(&str, &str), GitHubClientError> {
     let (owner, repository) = value.split_once('/').ok_or_else(invalid_configuration)?;
     if repository.contains('/')
         || !valid_repository_segment(owner)
@@ -1630,7 +1630,7 @@ fn secret_header(prefix: &str, secret: &str) -> Result<HeaderValue, GitHubClient
     HeaderValue::from_str(&value).map_err(|_| invalid_configuration())
 }
 
-pub const fn error(code: GitHubClientErrorCode) -> GitHubClientError {
+pub(super) const fn error(code: GitHubClientErrorCode) -> GitHubClientError {
     GitHubClientError { code }
 }
 
@@ -1642,7 +1642,7 @@ const fn invalid_configuration() -> GitHubClientError {
     error(GitHubClientErrorCode::InvalidConfiguration)
 }
 
-pub const fn invalid_input() -> GitHubClientError {
+pub(super) const fn invalid_input() -> GitHubClientError {
     error(GitHubClientErrorCode::InvalidInput)
 }
 
@@ -1650,17 +1650,17 @@ const fn unsupported_authentication() -> GitHubClientError {
     error(GitHubClientErrorCode::UnsupportedAuthentication)
 }
 
-pub const fn invalid_response() -> GitHubClientError {
+pub(super) const fn invalid_response() -> GitHubClientError {
     error(GitHubClientErrorCode::InvalidResponse)
 }
 
-pub const fn resource_exhausted() -> GitHubClientError {
+pub(super) const fn resource_exhausted() -> GitHubClientError {
     error(GitHubClientErrorCode::ResourceExhausted)
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 impl GitHubClient {
-    pub fn test_request(
+    pub(in crate::toolkits) fn test_request(
         &self,
         kind: GitHubRequestKind,
         path: &[&str],
@@ -1670,7 +1670,7 @@ impl GitHubClient {
         self.build_request_at(kind, path, query, REQUEST_TIMEOUT, now)
     }
 
-    pub fn test_graphql_request(
+    pub(in crate::toolkits) fn test_graphql_request(
         &self,
         payload: &Value,
         now: SystemTime,
@@ -1679,55 +1679,72 @@ impl GitHubClient {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_user(value: &Value) -> Result<Value, GitHubClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_user(value: &Value) -> Result<Value, GitHubClientError> {
     project_authenticated_user(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_branches(value: &Value, max_count: usize) -> Result<Value, GitHubClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_branches(
+    value: &Value,
+    max_count: usize,
+) -> Result<Value, GitHubClientError> {
     project_branches(value, max_count)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_text_file(value: &Value) -> Result<String, GitHubClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_text_file(
+    value: &Value,
+) -> Result<String, GitHubClientError> {
     project_text_file(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_validate_file_path(value: &str) -> Result<(), GitHubClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_validate_file_path(value: &str) -> Result<(), GitHubClientError> {
     validate_file_path(value).map(|_| ())
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_tree_files(value: &Value, directory: &str) -> Result<Value, GitHubClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_tree_files(
+    value: &Value,
+    directory: &str,
+) -> Result<Value, GitHubClientError> {
     project_tree_files(value, directory)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_tree_sha(value: &Value) -> Result<String, GitHubClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_tree_sha(
+    value: &Value,
+) -> Result<String, GitHubClientError> {
     project_tree_sha(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_issue_detail(value: &Value) -> Result<Value, GitHubClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_issue_detail(
+    value: &Value,
+) -> Result<Value, GitHubClientError> {
     project_issue_detail(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_issue_list(value: &Value) -> Result<Value, GitHubClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_issue_list(
+    value: &Value,
+) -> Result<Value, GitHubClientError> {
     project_issue_list(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_issue_search(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_issue_search(
     value: &Value,
     max_count: usize,
 ) -> Result<Value, GitHubClientError> {
     project_issue_search(value, max_count)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_map_status(status: StatusCode, headers: &HeaderMap) -> Result<(), GitHubClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_map_status(
+    status: StatusCode,
+    headers: &HeaderMap,
+) -> Result<(), GitHubClientError> {
     map_status(status, headers)
 }

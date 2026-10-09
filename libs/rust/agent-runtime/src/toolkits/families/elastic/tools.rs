@@ -21,7 +21,7 @@ const MAX_QUERY_SCHEMA_CHARS: usize = MAX_QUERY_STRING_BYTES / 4;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ElasticToolsetErrorCode {
+pub(crate) enum ElasticToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -30,13 +30,13 @@ pub enum ElasticToolsetErrorCode {
 }
 
 /// Safe construction failure for the complete Elasticsearch read family.
-pub struct ElasticToolsetError {
+pub(crate) struct ElasticToolsetError {
     code: ElasticToolsetErrorCode,
 }
 
 impl ElasticToolsetError {
     #[must_use]
-    pub const fn code(&self) -> ElasticToolsetErrorCode {
+    pub(crate) const fn code(&self) -> ElasticToolsetErrorCode {
         self.code
     }
 }
@@ -104,7 +104,7 @@ impl From<MaterializedToolsetError> for ElasticToolsetError {
 }
 
 /// Build the complete capability-disabled Elasticsearch read toolset.
-pub fn build_elastic_toolset(
+pub(crate) fn build_elastic_toolset(
     toolkit_name: &str,
     config: ElasticToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -146,8 +146,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "elastic", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,
@@ -161,8 +161,8 @@ pub fn test_build_with_api(
     build_with_api(toolkit_name, selected, policy, client)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub const fn test_catalog() -> [(&'static str, &'static str); 1] {
+#[cfg(test)]
+pub(in crate::toolkits) const fn test_catalog() -> [(&'static str, &'static str); 1] {
     [(SEARCH_ELASTIC_INDEX, "read")]
 }
 

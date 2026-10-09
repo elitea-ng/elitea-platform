@@ -131,7 +131,7 @@ async fn fetch_metadata(url: &str) -> Option<Value> {
     serde_json::from_slice(&body).ok()
 }
 
-pub fn configured_metadata(metadata: Option<&Value>) -> Option<Value> {
+pub(super) fn configured_metadata(metadata: Option<&Value>) -> Option<Value> {
     metadata.map(|metadata| {
         let mut metadata = metadata.clone();
         if let Some(object) = metadata.as_object_mut()
@@ -143,7 +143,7 @@ pub fn configured_metadata(metadata: Option<&Value>) -> Option<Value> {
     })
 }
 
-pub fn valid_configured_metadata(metadata: &Map<String, Value>) -> bool {
+pub(super) fn valid_configured_metadata(metadata: &Map<String, Value>) -> bool {
     for field in ["resource_name", "configuration_uuid", "toolkit_id"] {
         if metadata
             .get(field)

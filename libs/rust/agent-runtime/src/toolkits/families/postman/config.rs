@@ -15,19 +15,19 @@ const MAX_ENVIRONMENT_DEPTH: usize = 32;
 const MAX_ENVIRONMENT_STRING_BYTES: usize = 64 * 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PostmanConfigErrorCode {
+pub(crate) enum PostmanConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable configuration failure that retains no origin or credential data.
-pub struct PostmanConfigError {
+pub(crate) struct PostmanConfigError {
     code: PostmanConfigErrorCode,
 }
 
 impl PostmanConfigError {
     #[must_use]
-    pub const fn code(&self) -> PostmanConfigErrorCode {
+    pub(crate) const fn code(&self) -> PostmanConfigErrorCode {
         self.code
     }
 }
@@ -57,7 +57,7 @@ impl fmt::Display for PostmanConfigError {
 impl std::error::Error for PostmanConfigError {}
 
 /// Invocation-scoped Postman authority and collection defaults.
-pub struct PostmanToolkitConfig {
+pub(crate) struct PostmanToolkitConfig {
     base_url: Url,
     workspace_id: Box<str>,
     api_key: Zeroizing<String>,
@@ -67,7 +67,7 @@ pub struct PostmanToolkitConfig {
 }
 
 impl PostmanToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, PostmanConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, PostmanConfigError> {
         let configuration = settings
             .get("postman_configuration")
             .and_then(Value::as_object)
@@ -95,11 +95,11 @@ impl PostmanToolkitConfig {
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 
-    pub fn into_client_parts(self) -> PostmanClientConfig {
+    pub(super) fn into_client_parts(self) -> PostmanClientConfig {
         PostmanClientConfig {
             base_url: self.base_url,
             workspace_id: self.workspace_id,
@@ -112,16 +112,16 @@ impl PostmanToolkitConfig {
 
 /// Secret-bearing request-execution settings stay serialized and zeroized.
 /// They are parsed only after a separate downstream egress grant is present.
-pub struct DynamicExecutionProfile {
-    pub canonical_json: Zeroizing<String>,
+pub(super) struct DynamicExecutionProfile {
+    pub(super) canonical_json: Zeroizing<String>,
 }
 
-pub struct PostmanClientConfig {
-    pub base_url: Url,
-    pub workspace_id: Box<str>,
-    pub api_key: Zeroizing<String>,
-    pub collection_id: Box<str>,
-    pub dynamic_profile: DynamicExecutionProfile,
+pub(super) struct PostmanClientConfig {
+    pub(super) base_url: Url,
+    pub(super) workspace_id: Box<str>,
+    pub(super) api_key: Zeroizing<String>,
+    pub(super) collection_id: Box<str>,
+    pub(super) dynamic_profile: DynamicExecutionProfile,
 }
 
 fn parse_base_url(value: &str) -> Result<Url, PostmanConfigError> {

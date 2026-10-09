@@ -10,15 +10,15 @@ use serde_json::{Map, Value, json};
 
 use super::client::{GitHubClientError, invalid_response, resource_exhausted};
 
-pub const MAX_WORKFLOW_JOBS: usize = 100;
-pub const MAX_WORKFLOW_JOBS_RESPONSE_BYTES: usize = 2 * 1_024 * 1_024;
+pub(super) const MAX_WORKFLOW_JOBS: usize = 100;
+pub(super) const MAX_WORKFLOW_JOBS_RESPONSE_BYTES: usize = 2 * 1_024 * 1_024;
 
 const MAX_OUTPUT_CHARS: usize = 200_000;
 const MAX_NAME_BYTES: usize = 16 * 1_024;
 const MAX_METADATA_BYTES: usize = 4 * 1_024;
 const MAX_URL_BYTES: usize = 4 * 1_024;
 
-pub fn project_workflow_status(
+pub(super) fn project_workflow_status(
     run: &Value,
     jobs: &Value,
     expected_run_id: u64,
@@ -168,8 +168,8 @@ fn bounded_output(value: Value) -> Result<Value, GitHubClientError> {
     Ok(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_project_workflow_status(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_project_workflow_status(
     run: &Value,
     jobs: &Value,
     expected_run_id: u64,

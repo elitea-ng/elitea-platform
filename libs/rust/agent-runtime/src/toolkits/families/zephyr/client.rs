@@ -27,7 +27,7 @@ const JSON_CONTENT_TYPE: &str = "application/json";
 const USER_AGENT_VALUE: &str = "elitea-worker-rust/0.1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ZephyrClientErrorCode {
+pub(crate) enum ZephyrClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -44,28 +44,28 @@ pub enum ZephyrClientErrorCode {
 
 /// Stable failure without origin, credentials, identifiers, request bodies, or
 /// provider diagnostics.
-pub struct ZephyrClientError {
+pub(crate) struct ZephyrClientError {
     code: ZephyrClientErrorCode,
     retryable: bool,
 }
 
 impl ZephyrClientError {
     #[must_use]
-    pub const fn code(&self) -> ZephyrClientErrorCode {
+    pub(crate) const fn code(&self) -> ZephyrClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         self.retryable
     }
 
     #[must_use]
-    pub const fn after_confirmed_effect() -> Self {
+    pub(crate) const fn after_confirmed_effect() -> Self {
         unknown_outcome()
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             ZephyrClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -135,8 +135,8 @@ impl ZephyrClientError {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub const fn fixture(code: ZephyrClientErrorCode, retryable: bool) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) const fn fixture(code: ZephyrClientErrorCode, retryable: bool) -> Self {
         Self { code, retryable }
     }
 }
@@ -179,14 +179,14 @@ impl fmt::Display for ZephyrClientError {
 impl std::error::Error for ZephyrClientError {}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ZephyrStep {
-    pub step: Box<str>,
-    pub data: Box<str>,
-    pub result: Box<str>,
+pub(in crate::toolkits) struct ZephyrStep {
+    pub(in crate::toolkits) step: Box<str>,
+    pub(in crate::toolkits) data: Box<str>,
+    pub(in crate::toolkits) result: Box<str>,
 }
 
 impl ZephyrStep {
-    pub fn new(step: &str, data: &str, result: &str) -> Self {
+    pub(in crate::toolkits) fn new(step: &str, data: &str, result: &str) -> Self {
         Self {
             step: step.into(),
             data: data.into(),
@@ -196,7 +196,7 @@ impl ZephyrStep {
 }
 
 #[async_trait]
-pub trait ZephyrApi: Send + Sync {
+pub(in crate::toolkits) trait ZephyrApi: Send + Sync {
     async fn get_test_case_steps(
         &self,
         issue_id: u64,
@@ -211,15 +211,19 @@ pub trait ZephyrApi: Send + Sync {
     ) -> Result<Value, ZephyrClientError>;
 }
 
-pub struct ZephyrHttpResponse {
+pub(in crate::toolkits) struct ZephyrHttpResponse {
     status: StatusCode,
     content_type: Option<Box<str>>,
     body: Vec<u8>,
 }
 
 impl ZephyrHttpResponse {
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fixture(status: StatusCode, content_type: Option<&str>, body: &[u8]) -> Self {
+    #[cfg(test)]
+    pub(in crate::toolkits) fn fixture(
+        status: StatusCode,
+        content_type: Option<&str>,
+        body: &[u8],
+    ) -> Self {
         Self {
             status,
             content_type: content_type.map(Into::into),
@@ -229,7 +233,7 @@ impl ZephyrHttpResponse {
 }
 
 #[async_trait]
-pub trait ZephyrTransport: Send + Sync {
+pub(in crate::toolkits) trait ZephyrTransport: Send + Sync {
     async fn execute(&self, request: Request) -> Result<ZephyrHttpResponse, ZephyrClientError>;
 }
 
@@ -282,13 +286,13 @@ impl ZephyrTransport for ReqwestZephyrTransport {
 }
 
 /// Invocation-owned Basic-auth client for one exact legacy Zephyr ZAPI base.
-pub struct ZephyrClient {
+pub(crate) struct ZephyrClient {
     config: ZephyrToolkitConfig,
     transport: Arc<dyn ZephyrTransport>,
 }
 
 impl ZephyrClient {
-    pub fn new(config: ZephyrToolkitConfig) -> Result<Self, ZephyrClientError> {
+    pub(crate) fn new(config: ZephyrToolkitConfig) -> Result<Self, ZephyrClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .no_proxy()
@@ -307,8 +311,8 @@ impl ZephyrClient {
         })
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn with_transport(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn with_transport(
         config: ZephyrToolkitConfig,
         transport: Arc<dyn ZephyrTransport>,
     ) -> Self {
@@ -385,8 +389,8 @@ impl ZephyrClient {
         Ok(response)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn test_request(
+    #[cfg(test)]
+    pub(in crate::toolkits) fn test_request(
         &self,
         method: Method,
         issue_id: u64,

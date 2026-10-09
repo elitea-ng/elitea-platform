@@ -14,19 +14,19 @@ const MAX_SELECTED_TOOLS: usize = 16;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum KeycloakConfigErrorCode {
+pub(crate) enum KeycloakConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable configuration failure without origin, realm, client, or secret data.
-pub struct KeycloakConfigError {
+pub(crate) struct KeycloakConfigError {
     code: KeycloakConfigErrorCode,
 }
 
 impl KeycloakConfigError {
     #[must_use]
-    pub const fn code(&self) -> KeycloakConfigErrorCode {
+    pub(crate) const fn code(&self) -> KeycloakConfigErrorCode {
         self.code
     }
 }
@@ -59,7 +59,7 @@ impl std::error::Error for KeycloakConfigError {}
 ///
 /// Main marks only `client_secret` as secret and redeems it for the accepted
 /// execution. The value is deliberately non-cloneable and non-debuggable.
-pub struct KeycloakToolkitConfig {
+pub(crate) struct KeycloakToolkitConfig {
     base_url: Box<str>,
     realm: Box<str>,
     client_id: Box<str>,
@@ -68,7 +68,7 @@ pub struct KeycloakToolkitConfig {
 }
 
 impl KeycloakToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, KeycloakConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, KeycloakConfigError> {
         let base_url = parse_base_url(required_text(settings, "base_url", MAX_BASE_URL_BYTES)?)?;
         let realm = required_text(settings, "realm", MAX_REALM_BYTES)?;
         let client_id = required_text(settings, "client_id", MAX_CLIENT_ID_BYTES)?;
@@ -82,24 +82,24 @@ impl KeycloakToolkitConfig {
         })
     }
 
-    pub fn base_url(&self) -> &str {
+    pub(super) fn base_url(&self) -> &str {
         &self.base_url
     }
 
-    pub fn realm(&self) -> &str {
+    pub(super) fn realm(&self) -> &str {
         &self.realm
     }
 
-    pub fn client_id(&self) -> &str {
+    pub(super) fn client_id(&self) -> &str {
         &self.client_id
     }
 
-    pub fn client_secret(&self) -> &str {
+    pub(super) fn client_secret(&self) -> &str {
         &self.client_secret
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

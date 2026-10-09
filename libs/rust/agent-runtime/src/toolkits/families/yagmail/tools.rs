@@ -22,7 +22,7 @@ const MAX_ARGUMENT_DEPTH: usize = 8;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum YagmailToolsetErrorCode {
+pub(crate) enum YagmailToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -31,13 +31,13 @@ pub enum YagmailToolsetErrorCode {
 }
 
 /// Safe construction failure for the complete one-tool Yagmail family.
-pub struct YagmailToolsetError {
+pub(crate) struct YagmailToolsetError {
     code: YagmailToolsetErrorCode,
 }
 
 impl YagmailToolsetError {
     #[must_use]
-    pub const fn code(&self) -> YagmailToolsetErrorCode {
+    pub(crate) const fn code(&self) -> YagmailToolsetErrorCode {
         self.code
     }
 }
@@ -108,7 +108,7 @@ impl From<MaterializedToolsetError> for YagmailToolsetError {
 ///
 /// The SDK's `write` group remains ordinary operation metadata. Independent
 /// policy may still require approval for this send effect.
-pub fn build_yagmail_toolset(
+pub(crate) fn build_yagmail_toolset(
     toolkit_name: &str,
     config: YagmailToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -150,8 +150,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "yagmail", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,

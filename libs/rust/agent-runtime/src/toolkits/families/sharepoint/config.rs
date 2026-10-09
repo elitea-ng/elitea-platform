@@ -15,19 +15,19 @@ const MAX_SCOPES: usize = 128;
 const MAX_SELECTED_TOOLS: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SharePointConfigErrorCode {
+pub(crate) enum SharePointConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedCapability,
 }
 
-pub struct SharePointConfigError {
+pub(crate) struct SharePointConfigError {
     code: SharePointConfigErrorCode,
 }
 
 impl SharePointConfigError {
     #[must_use]
-    pub const fn code(&self) -> SharePointConfigErrorCode {
+    pub(crate) const fn code(&self) -> SharePointConfigErrorCode {
         self.code
     }
 }
@@ -59,7 +59,7 @@ impl fmt::Display for SharePointConfigError {
 
 impl std::error::Error for SharePointConfigError {}
 
-pub struct SharePointToolkitConfig {
+pub(crate) struct SharePointToolkitConfig {
     site_url: Url,
     site_hostname: Box<str>,
     site_path: Box<str>,
@@ -69,7 +69,7 @@ pub struct SharePointToolkitConfig {
 }
 
 impl SharePointToolkitConfig {
-    pub fn parse(
+    pub(crate) fn parse(
         toolkit_name: &str,
         settings: &Map<String, Value>,
         delegated_tokens: &Map<String, Value>,
@@ -149,31 +149,31 @@ impl SharePointToolkitConfig {
     }
 
     #[must_use]
-    pub fn site_url(&self) -> &Url {
+    pub(crate) fn site_url(&self) -> &Url {
         &self.site_url
     }
 
-    pub fn with_toolkit_id(mut self, id: Option<u64>) -> Self {
+    pub(crate) fn with_toolkit_id(mut self, id: Option<u64>) -> Self {
         self.authorization = self.authorization.with_toolkit_id(id);
         self
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 
     #[must_use]
-    pub fn authorization(&self) -> &DelegatedAuthorizationRequirement {
+    pub(crate) fn authorization(&self) -> &DelegatedAuthorizationRequirement {
         &self.authorization
     }
 
     #[must_use]
-    pub fn requires_authorization(&self) -> bool {
+    pub(crate) fn requires_authorization(&self) -> bool {
         self.access_token.is_none()
     }
 
-    pub fn into_client_parts(self) -> Result<SharePointClientConfig, SharePointConfigError> {
+    pub(crate) fn into_client_parts(self) -> Result<SharePointClientConfig, SharePointConfigError> {
         let access_token = self.access_token.ok_or_else(invalid_configuration)?;
         Ok(SharePointClientConfig {
             site_hostname: self.site_hostname,
@@ -184,11 +184,11 @@ impl SharePointToolkitConfig {
     }
 }
 
-pub struct SharePointClientConfig {
-    pub site_hostname: Box<str>,
-    pub site_path: Box<str>,
-    pub access_token: Zeroizing<String>,
-    pub authorization: DelegatedAuthorizationRequirement,
+pub(crate) struct SharePointClientConfig {
+    pub(super) site_hostname: Box<str>,
+    pub(super) site_path: Box<str>,
+    pub(super) access_token: Zeroizing<String>,
+    pub(super) authorization: DelegatedAuthorizationRequirement,
 }
 
 fn resolve_site_url(value: &str, site_path: Option<&str>) -> Result<Url, SharePointConfigError> {

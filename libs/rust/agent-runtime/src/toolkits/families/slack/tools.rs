@@ -31,7 +31,7 @@ const MAX_ARGUMENT_BYTES: usize = 256 * 1_024;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SlackToolsetErrorCode {
+pub(crate) enum SlackToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -40,13 +40,13 @@ pub enum SlackToolsetErrorCode {
 }
 
 /// Stable construction failure for the complete Slack family.
-pub struct SlackToolsetError {
+pub(crate) struct SlackToolsetError {
     code: SlackToolsetErrorCode,
 }
 
 impl SlackToolsetError {
     #[must_use]
-    pub const fn code(&self) -> SlackToolsetErrorCode {
+    pub(crate) const fn code(&self) -> SlackToolsetErrorCode {
         self.code
     }
 }
@@ -116,7 +116,7 @@ impl From<MaterializedToolsetError> for SlackToolsetError {
 /// Read/write grouping describes effects to the model; it never grants
 /// authority. The shared policy and future exact-interrupt wrapper decide
 /// whether each admitted invocation requires human approval.
-pub fn build_slack_toolset(
+pub(crate) fn build_slack_toolset(
     toolkit_name: &str,
     config: SlackToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -171,8 +171,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "slack", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,

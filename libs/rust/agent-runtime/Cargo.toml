@@ -84,6 +84,8 @@ zeroize = "1.9.0"
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
+# The invocation suite captures the spans a toolkit call emits.
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["fmt", "std"] }
 
 [lints]
 workspace = true

@@ -33,7 +33,7 @@ const MAX_SELECTED_FIELDS_TOTAL_BYTES: usize = 32 * 1_024;
 const USER_AGENT: &str = "elitea-worker-rust/0.1";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum AzureSearchClientErrorCode {
+pub(crate) enum AzureSearchClientErrorCode {
     InvalidConfiguration,
     InvalidInput,
     Authentication,
@@ -47,18 +47,18 @@ pub enum AzureSearchClientErrorCode {
 }
 
 /// One bounded Azure Search failure without provider text or authority data.
-pub struct AzureSearchClientError {
+pub(crate) struct AzureSearchClientError {
     code: AzureSearchClientErrorCode,
 }
 
 impl AzureSearchClientError {
     #[must_use]
-    pub const fn code(&self) -> AzureSearchClientErrorCode {
+    pub(crate) const fn code(&self) -> AzureSearchClientErrorCode {
         self.code
     }
 
     #[must_use]
-    pub const fn retryable(&self) -> bool {
+    pub(crate) const fn retryable(&self) -> bool {
         matches!(
             self.code,
             AzureSearchClientErrorCode::RateLimited
@@ -67,7 +67,7 @@ impl AzureSearchClientError {
         )
     }
 
-    pub fn into_adk(self) -> AdkError {
+    pub(crate) fn into_adk(self) -> AdkError {
         let (category, code, message) = match self.code {
             AzureSearchClientErrorCode::InvalidConfiguration => (
                 ErrorCategory::InvalidInput,
@@ -163,7 +163,7 @@ impl fmt::Display for AzureSearchClientError {
 impl std::error::Error for AzureSearchClientError {}
 
 #[async_trait]
-pub trait AzureSearchApi: Send + Sync {
+pub(in crate::toolkits) trait AzureSearchApi: Send + Sync {
     async fn text_search(
         &self,
         search_text: &str,
@@ -180,7 +180,7 @@ pub trait AzureSearchApi: Send + Sync {
 }
 
 #[derive(Clone, Copy)]
-pub enum AzureSearchRequestKind<'a> {
+pub(in crate::toolkits) enum AzureSearchRequestKind<'a> {
     TextSearch {
         search_text: &'a str,
         limit: usize,
@@ -194,7 +194,7 @@ pub enum AzureSearchRequestKind<'a> {
 }
 
 #[async_trait]
-pub trait AzureSearchTransport: Send + Sync {
+pub(in crate::toolkits) trait AzureSearchTransport: Send + Sync {
     async fn execute_json(&self, request: Request) -> Result<Value, AzureSearchClientError>;
 }
 
@@ -249,13 +249,13 @@ impl AzureSearchTransport for ReqwestAzureSearchTransport {
 }
 
 /// One invocation-scoped Azure Search client and connection pool.
-pub struct AzureSearchClient {
+pub(crate) struct AzureSearchClient {
     config: AzureSearchToolkitConfig,
     transport: Arc<dyn AzureSearchTransport>,
 }
 
 impl AzureSearchClient {
-    pub fn new(config: AzureSearchToolkitConfig) -> Result<Self, AzureSearchClientError> {
+    pub(crate) fn new(config: AzureSearchToolkitConfig) -> Result<Self, AzureSearchClientError> {
         let http = reqwest::Client::builder()
             .https_only(true)
             .redirect(reqwest::redirect::Policy::none())
@@ -620,16 +620,16 @@ const fn resource_exhausted() -> AzureSearchClientError {
     error(AzureSearchClientErrorCode::ResourceExhausted)
 }
 
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(test)]
 impl AzureSearchClient {
-    pub fn test_with_transport(
+    pub(in crate::toolkits) fn test_with_transport(
         config: AzureSearchToolkitConfig,
         transport: Arc<dyn AzureSearchTransport>,
     ) -> Self {
         Self { config, transport }
     }
 
-    pub fn test_request(
+    pub(in crate::toolkits) fn test_request(
         &self,
         kind: AzureSearchRequestKind<'_>,
     ) -> Result<Request, AzureSearchClientError> {
@@ -637,7 +637,9 @@ impl AzureSearchClient {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_http_status(status: StatusCode) -> Result<(), AzureSearchClientError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_http_status(
+    status: StatusCode,
+) -> Result<(), AzureSearchClientError> {
     map_http_status(status)
 }

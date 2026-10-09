@@ -11,19 +11,19 @@ const MAX_SELECTED_TOOLS: usize = 1_024;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SonarConfigErrorCode {
+pub(crate) enum SonarConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable, data-free failure for claim-materialized Sonar settings.
-pub struct SonarConfigError {
+pub(crate) struct SonarConfigError {
     code: SonarConfigErrorCode,
 }
 
 impl SonarConfigError {
     #[must_use]
-    pub const fn code(&self) -> SonarConfigErrorCode {
+    pub(crate) const fn code(&self) -> SonarConfigErrorCode {
         self.code
     }
 }
@@ -56,7 +56,7 @@ impl std::error::Error for SonarConfigError {}
 ///
 /// The token is intentionally neither cloneable nor debug-printable. The URL
 /// and project are operational identifiers, but errors still omit both.
-pub struct SonarToolkitConfig {
+pub(crate) struct SonarToolkitConfig {
     base_url: Url,
     token: Zeroizing<String>,
     project: Box<str>,
@@ -64,7 +64,7 @@ pub struct SonarToolkitConfig {
 }
 
 impl SonarToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, SonarConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, SonarConfigError> {
         let configuration = settings
             .get("sonar_configuration")
             .and_then(Value::as_object)
@@ -92,20 +92,20 @@ impl SonarToolkitConfig {
         })
     }
 
-    pub const fn base_url(&self) -> &Url {
+    pub(super) const fn base_url(&self) -> &Url {
         &self.base_url
     }
 
-    pub fn token(&self) -> &str {
+    pub(super) fn token(&self) -> &str {
         &self.token
     }
 
-    pub fn project(&self) -> &str {
+    pub(super) fn project(&self) -> &str {
         &self.project
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

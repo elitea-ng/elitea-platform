@@ -47,12 +47,12 @@ const REGEX_SIZE_LIMIT: usize = 2 * 1_024 * 1_024;
 const REGEX_DFA_SIZE_LIMIT: usize = 2 * 1_024 * 1_024;
 
 /// Safe failure returned while constructing the first GitHub tool subset.
-pub struct GitHubToolsetError {
+pub(crate) struct GitHubToolsetError {
     code: GitHubToolsetErrorCode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GitHubToolsetErrorCode {
+pub(crate) enum GitHubToolsetErrorCode {
     InvalidConfiguration,
     UnsupportedSelection,
     Client,
@@ -61,7 +61,7 @@ pub enum GitHubToolsetErrorCode {
 
 impl GitHubToolsetError {
     #[must_use]
-    pub const fn code(&self) -> GitHubToolsetErrorCode {
+    pub(crate) const fn code(&self) -> GitHubToolsetErrorCode {
         self.code
     }
 }
@@ -124,7 +124,7 @@ impl From<MaterializedToolsetError> for GitHubToolsetError {
 /// until the full family is ported. A mixed explicit selection keeps only the
 /// implemented ordinary reads. This permits a restored SDK toolkit to retain
 /// its read capability without exposing an unimplemented effect.
-pub fn build_github_read_only_toolset(
+pub(crate) fn build_github_read_only_toolset(
     toolkit_name: &str,
     config: GitHubToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -1713,8 +1713,8 @@ fn invalid_arguments() -> AdkError {
 }
 
 /// The names of `names` this family serves (the SDK gate selects them).
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_supported_names(names: &[String]) -> Vec<String> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_supported_names(names: &[String]) -> Vec<String> {
     names
         .iter()
         .filter(|name| is_supported_read(name))
@@ -1722,8 +1722,8 @@ pub fn test_supported_names(names: &[String]) -> Vec<String> {
         .collect()
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     repository: &str,
     selected: &[String],

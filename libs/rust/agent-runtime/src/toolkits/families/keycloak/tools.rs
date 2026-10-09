@@ -22,7 +22,7 @@ const MAX_PARAMETER_DEPTH: usize = 32;
 const MAX_DESCRIPTION_BYTES: usize = 1_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum KeycloakToolsetErrorCode {
+pub(crate) enum KeycloakToolsetErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedSelection,
@@ -31,13 +31,13 @@ pub enum KeycloakToolsetErrorCode {
 }
 
 /// Safe construction failure for the complete one-tool Keycloak family.
-pub struct KeycloakToolsetError {
+pub(crate) struct KeycloakToolsetError {
     code: KeycloakToolsetErrorCode,
 }
 
 impl KeycloakToolsetError {
     #[must_use]
-    pub const fn code(&self) -> KeycloakToolsetErrorCode {
+    pub(crate) const fn code(&self) -> KeycloakToolsetErrorCode {
         self.code
     }
 }
@@ -109,7 +109,7 @@ impl From<MaterializedToolsetError> for KeycloakToolsetError {
 /// `execute` can perform reads, writes, deletes, and action endpoints. Its
 /// source `execute` group is metadata only; sensitivity and effect ownership
 /// remain independent admission responsibilities.
-pub fn build_keycloak_toolset(
+pub(crate) fn build_keycloak_toolset(
     toolkit_name: &str,
     config: KeycloakToolkitConfig,
     policy: &Arc<ToolAdmissionPolicy>,
@@ -151,8 +151,8 @@ fn build_with_api(
     admit_materialized_toolset(toolkit_name, "keycloak", policy, tools).map_err(Into::into)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_build_with_api(
+#[cfg(test)]
+pub(in crate::toolkits) fn test_build_with_api(
     toolkit_name: &str,
     selected: &[String],
     policy: &Arc<ToolAdmissionPolicy>,
@@ -166,8 +166,8 @@ pub fn test_build_with_api(
     build_with_api(toolkit_name, selected, policy, client)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub const fn test_catalog() -> [(&'static str, &'static str); 1] {
+#[cfg(test)]
+pub(in crate::toolkits) const fn test_catalog() -> [(&'static str, &'static str); 1] {
     [(EXECUTE, "execute")]
 }
 
@@ -364,7 +364,9 @@ fn resource_exhausted() -> AdkError {
     )
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_parse_params(value: Option<&Value>) -> adk_core::Result<Map<String, Value>> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_parse_params(
+    value: Option<&Value>,
+) -> adk_core::Result<Map<String, Value>> {
     parse_params(value)
 }

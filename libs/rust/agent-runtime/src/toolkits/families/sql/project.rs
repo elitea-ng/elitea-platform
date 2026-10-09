@@ -10,32 +10,32 @@ use sqlx::postgres::{
 use sqlx::types::{BigDecimal, Uuid};
 use sqlx::{Column, Row, TypeInfo, ValueRef};
 
-pub const MAX_COLUMNS: usize = 64;
-pub const MAX_COLUMN_NAME_BYTES: usize = 256;
-pub const MAX_CELL_BYTES: usize = 64 * 1_024;
-pub const MAX_BINARY_BYTES: usize = 48 * 1_024 - 64;
-pub const MAX_JSON_NODES: usize = 16_384;
-pub const MAX_JSON_DEPTH: usize = 32;
+pub(crate) const MAX_COLUMNS: usize = 64;
+pub(crate) const MAX_COLUMN_NAME_BYTES: usize = 256;
+pub(crate) const MAX_CELL_BYTES: usize = 64 * 1_024;
+pub(crate) const MAX_BINARY_BYTES: usize = 48 * 1_024 - 64;
+pub(crate) const MAX_JSON_NODES: usize = 16_384;
+pub(crate) const MAX_JSON_DEPTH: usize = 32;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProjectErrorCode {
+pub(crate) enum ProjectErrorCode {
     InvalidResponse,
     ResourceExhausted,
     UnsupportedType,
 }
 
-pub struct ProjectError {
+pub(crate) struct ProjectError {
     code: ProjectErrorCode,
 }
 
 impl ProjectError {
     #[must_use]
-    pub const fn code(&self) -> ProjectErrorCode {
+    pub(crate) const fn code(&self) -> ProjectErrorCode {
         self.code
     }
 }
 
-pub fn project_pg_row(row: &PgRow) -> Result<Map<String, Value>, ProjectError> {
+pub(crate) fn project_pg_row(row: &PgRow) -> Result<Map<String, Value>, ProjectError> {
     validate_columns(row.columns())?;
     let mut output = Map::with_capacity(row.len());
     for (index, column) in row.columns().iter().enumerate() {
@@ -53,7 +53,7 @@ pub fn project_pg_row(row: &PgRow) -> Result<Map<String, Value>, ProjectError> {
     Ok(output)
 }
 
-pub fn project_mysql_row(row: &MySqlRow) -> Result<Map<String, Value>, ProjectError> {
+pub(crate) fn project_mysql_row(row: &MySqlRow) -> Result<Map<String, Value>, ProjectError> {
     validate_columns(row.columns())?;
     let mut output = Map::with_capacity(row.len());
     for (index, column) in row.columns().iter().enumerate() {
@@ -71,7 +71,7 @@ pub fn project_mysql_row(row: &MySqlRow) -> Result<Map<String, Value>, ProjectEr
     Ok(output)
 }
 
-pub fn validate_pg_columns<C: Column>(columns: &[C]) -> Result<(), ProjectError> {
+pub(crate) fn validate_pg_columns<C: Column>(columns: &[C]) -> Result<(), ProjectError> {
     validate_columns(columns)?;
     if columns
         .iter()
@@ -82,7 +82,7 @@ pub fn validate_pg_columns<C: Column>(columns: &[C]) -> Result<(), ProjectError>
     Ok(())
 }
 
-pub fn validate_mysql_columns<C: Column>(columns: &[C]) -> Result<(), ProjectError> {
+pub(crate) fn validate_mysql_columns<C: Column>(columns: &[C]) -> Result<(), ProjectError> {
     validate_columns(columns)?;
     if columns
         .iter()
@@ -491,23 +491,23 @@ const fn unsupported_type() -> ProjectError {
     }
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_bounded_json(value: Value) -> Result<Value, ProjectError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_bounded_json(value: Value) -> Result<Value, ProjectError> {
     bounded_json(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_binary_value(value: Vec<u8>) -> Result<Value, ProjectError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_binary_value(value: Vec<u8>) -> Result<Value, ProjectError> {
     binary_value(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_float_value(value: f64) -> Value {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_float_value(value: f64) -> Value {
     float_value(value)
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_supported_types() -> (Vec<&'static str>, Vec<&'static str>) {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_supported_types() -> (Vec<&'static str>, Vec<&'static str>) {
     let postgres = [
         "BOOL",
         "BYTEA",
@@ -541,8 +541,8 @@ pub fn test_supported_types() -> (Vec<&'static str>, Vec<&'static str>) {
     (postgres.to_vec(), mysql.to_vec())
 }
 
-#[cfg(any(test, feature = "test-support"))]
-pub fn test_validate_column_names(names: &[&str]) -> Result<(), ProjectError> {
+#[cfg(test)]
+pub(in crate::toolkits) fn test_validate_column_names(names: &[&str]) -> Result<(), ProjectError> {
     if names.len() > MAX_COLUMNS {
         return Err(resource_exhausted());
     }

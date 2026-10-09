@@ -35,6 +35,10 @@ on:
       - "libs/rust/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
+      # The agent runtime's SDK schema gate reads both
+      # (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs).
+      - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
+      - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"
@@ -48,6 +52,10 @@ on:
       - "libs/rust/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
+      # The agent runtime's SDK schema gate reads both
+      # (libs/rust/agent-runtime/src/toolkits/sdk_conformance.rs).
+      - "services/elitea-main/internal/runtimecomposition/current_toolkit_schema_snapshot.json"
+      - "services/elitea-main/internal/runtimecomposition/current_rust_worker_toolkit_capability_snapshot.json"
       - "services/elitea-subapp-host/internal/engine/**"
       - "services/elitea-subapp-host/internal/apps/deepwiki/**"
       - "conformance/provider/fixtures/deepwiki/**"

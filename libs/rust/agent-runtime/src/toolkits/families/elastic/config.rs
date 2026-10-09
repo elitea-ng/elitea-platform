@@ -11,19 +11,19 @@ const MAX_SELECTED_TOOLS: usize = 16;
 const MAX_TOOL_NAME_BYTES: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ElasticConfigErrorCode {
+pub(crate) enum ElasticConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
 }
 
 /// Stable configuration failure without cluster or credential data.
-pub struct ElasticConfigError {
+pub(crate) struct ElasticConfigError {
     code: ElasticConfigErrorCode,
 }
 
 impl ElasticConfigError {
     #[must_use]
-    pub const fn code(&self) -> ElasticConfigErrorCode {
+    pub(crate) const fn code(&self) -> ElasticConfigErrorCode {
         self.code
     }
 }
@@ -53,14 +53,14 @@ impl fmt::Display for ElasticConfigError {
 impl std::error::Error for ElasticConfigError {}
 
 /// One invocation-scoped Elasticsearch authority and optional encoded API key.
-pub struct ElasticToolkitConfig {
+pub(crate) struct ElasticToolkitConfig {
     base_url: Url,
     api_key: Option<Zeroizing<String>>,
     selected_tools: Vec<Box<str>>,
 }
 
 impl ElasticToolkitConfig {
-    pub fn parse(settings: &Map<String, Value>) -> Result<Self, ElasticConfigError> {
+    pub(crate) fn parse(settings: &Map<String, Value>) -> Result<Self, ElasticConfigError> {
         let base_url = settings
             .get("url")
             .and_then(Value::as_str)
@@ -74,16 +74,16 @@ impl ElasticToolkitConfig {
         })
     }
 
-    pub const fn base_url(&self) -> &Url {
+    pub(super) const fn base_url(&self) -> &Url {
         &self.base_url
     }
 
-    pub fn api_key(&self) -> Option<&str> {
+    pub(super) fn api_key(&self) -> Option<&str> {
         self.api_key.as_deref().map(String::as_str)
     }
 
     #[must_use]
-    pub fn selected_tools(&self) -> &[Box<str>] {
+    pub(crate) fn selected_tools(&self) -> &[Box<str>] {
         &self.selected_tools
     }
 }

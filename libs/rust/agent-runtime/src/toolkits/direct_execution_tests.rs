@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use adk_rust::tool::BasicToolset;
-use adk_rust::{Tool, ToolContext, Toolset};
+use adk_core::{Tool, ToolContext, Toolset};
+use adk_tool::BasicToolset;
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
@@ -308,7 +308,7 @@ impl Tool for FixtureTool {
         &self,
         context: Arc<dyn ToolContext>,
         arguments: Value,
-    ) -> adk_rust::Result<Value> {
+    ) -> adk_core::Result<Value> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.arguments
             .lock()
@@ -344,7 +344,7 @@ impl Tool for AuthorizationTool {
         &self,
         _context: Arc<dyn ToolContext>,
         _arguments: Value,
-    ) -> adk_rust::Result<Value> {
+    ) -> adk_core::Result<Value> {
         Err(delegated_authorization_error_fixture("sharepoint"))
     }
 }
@@ -412,10 +412,10 @@ impl Tool for OutcomeTool {
         &self,
         _context: Arc<dyn ToolContext>,
         _arguments: Value,
-    ) -> adk_rust::Result<Value> {
+    ) -> adk_core::Result<Value> {
         self.0.clone().map_err(|()| {
-            adk_rust::AdkError::unavailable(
-                adk_rust::error::ErrorComponent::Tool,
+            adk_core::AdkError::unavailable(
+                adk_core::error::ErrorComponent::Tool,
                 "test.failure",
                 "protected-provider-detail",
             )

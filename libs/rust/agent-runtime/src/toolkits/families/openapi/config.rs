@@ -18,19 +18,19 @@ const MAX_ADDITIONAL_HEADERS: usize = 128;
 const MAX_HEADER_VALUE_BYTES: usize = 16 * 1_024;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum OpenApiConfigErrorCode {
+pub(crate) enum OpenApiConfigErrorCode {
     InvalidConfiguration,
     ResourceExhausted,
     UnsupportedCapability,
 }
 
-pub struct OpenApiConfigError {
+pub(crate) struct OpenApiConfigError {
     code: OpenApiConfigErrorCode,
 }
 
 impl OpenApiConfigError {
     #[must_use]
-    pub const fn code(&self) -> OpenApiConfigErrorCode {
+    pub(crate) const fn code(&self) -> OpenApiConfigErrorCode {
         self.code
     }
 }
@@ -62,7 +62,7 @@ impl fmt::Display for OpenApiConfigError {
 
 impl std::error::Error for OpenApiConfigError {}
 
-pub struct OpenApiToolkitConfig {
+pub(crate) struct OpenApiToolkitConfig {
     base_url: Url,
     operations: Vec<OpenApiOperation>,
     auth: OpenApiAuth,
@@ -70,7 +70,7 @@ pub struct OpenApiToolkitConfig {
 }
 
 impl OpenApiToolkitConfig {
-    pub fn parse(
+    pub(crate) fn parse(
         toolkit_name: &str,
         settings: &Map<String, Value>,
         delegated_tokens: &Map<String, Value>,
@@ -83,7 +83,7 @@ impl OpenApiToolkitConfig {
         Self::parse_with_spec(toolkit_name, settings, delegated_tokens, spec)
     }
 
-    pub fn parse_with_spec(
+    pub(crate) fn parse_with_spec(
         toolkit_name: &str,
         settings: &Map<String, Value>,
         delegated_tokens: &Map<String, Value>,
@@ -120,21 +120,21 @@ impl OpenApiToolkitConfig {
     }
 
     #[must_use]
-    pub fn base_url(&self) -> &Url {
+    pub(crate) fn base_url(&self) -> &Url {
         &self.base_url
     }
 
     #[must_use]
-    pub fn operations(&self) -> &[OpenApiOperation] {
+    pub(crate) fn operations(&self) -> &[OpenApiOperation] {
         &self.operations
     }
 
     #[must_use]
-    pub fn auth(&self) -> &OpenApiAuth {
+    pub(crate) fn auth(&self) -> &OpenApiAuth {
         &self.auth
     }
 
-    pub fn into_client_parts(self) -> OpenApiClientConfig {
+    pub(crate) fn into_client_parts(self) -> OpenApiClientConfig {
         OpenApiClientConfig {
             base_url: self.base_url,
             auth: self.auth,
@@ -142,7 +142,7 @@ impl OpenApiToolkitConfig {
         }
     }
 
-    pub fn with_toolkit_id(mut self, id: Option<u64>) -> Self {
+    pub(crate) fn with_toolkit_id(mut self, id: Option<u64>) -> Self {
         if let OpenApiAuth::Delegated { requirement, .. } = &mut self.auth {
             *requirement = requirement.clone().with_toolkit_id(id);
         }
@@ -150,7 +150,7 @@ impl OpenApiToolkitConfig {
     }
 }
 
-pub enum OpenApiAuth {
+pub(crate) enum OpenApiAuth {
     Anonymous,
     Header {
         name: HeaderName,
@@ -171,7 +171,7 @@ pub enum OpenApiAuth {
 
 impl OpenApiAuth {
     #[must_use]
-    pub fn delegated_requirement(&self) -> Option<&DelegatedAuthorizationRequirement> {
+    pub(crate) fn delegated_requirement(&self) -> Option<&DelegatedAuthorizationRequirement> {
         match self {
             Self::Delegated {
                 access_token: None,
@@ -188,10 +188,10 @@ impl OpenApiAuth {
     }
 }
 
-pub struct OpenApiClientConfig {
-    pub base_url: Url,
-    pub auth: OpenApiAuth,
-    pub additional_headers: HeaderMap,
+pub(crate) struct OpenApiClientConfig {
+    pub(super) base_url: Url,
+    pub(super) auth: OpenApiAuth,
+    pub(super) additional_headers: HeaderMap,
 }
 
 fn parse_additional_headers(
