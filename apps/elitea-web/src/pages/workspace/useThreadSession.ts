@@ -19,7 +19,7 @@ import {
   type WorkspaceCommandId,
   type WorkspaceTurn,
 } from '@/features/workspace';
-import type { ApprovalDecision, Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { ApprovalDecision, ChangedFile, Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { useSelectedProject } from '@/widgets/app-shell';
 import { useDesktopLayout } from '@/widgets/desktop-shell';
 
@@ -28,6 +28,7 @@ import { useAgentSelection, type AgentSelection } from './useAgentSelection';
 import { useBindableProjects } from './useBindableProjects';
 import { useSendPrompt, type SendPrompt } from './useSendPrompt';
 import { useSessionCommands, type SessionCommands } from './useSessionCommands';
+import { useThreadHistory, type ThreadHistory } from './useThreadHistory';
 
 const LIST_KEY = ['workspace', 'list'] as const;
 
@@ -80,6 +81,33 @@ function useShellRegistration(workspaceId: string, newThread: () => void, run: (
   }, [workspaceId]);
 }
 
+/** One turn's changes in the panel: live (the host still keeps it: diff from disk, undo) or as recorded when it ended (`files`). */
+export interface ChangeSet {
+  turnId: string;
+  /** The prompt that started the turn. */
+  label: string;
+  /** Set for a turn the host no longer keeps: shown as recorded, without undo. */
+  files?: ChangedFile[];
+}
+
+/** Every turn of the thread that changed files, newest first. */
+function changeSetsOf(history: ThreadHistory, shown: ReadonlySet<string>, turn: WorkspaceTurn, prompts: readonly string[]): ChangeSet[] {
+  const sets: ChangeSet[] = [];
+  if (history.kind === 'local') {
+    for (const stored of history.turns) {
+      if (shown.has(stored.turn_id)) continue;
+      const files = stored.changes ?? [];
+      if (files.length === 0) continue;
+      sets.push(stored.live ? { turnId: stored.turn_id, label: stored.prompt } : { turnId: stored.turn_id, label: stored.prompt, files });
+    }
+  }
+  const session = [...turn.earlier, ...(turn.turnId === null ? [] : [{ turnId: turn.turnId, view: turn.view }])];
+  session.forEach((entry, index) => {
+    if ((entry.view.done?.changedFiles ?? 0) > 0) sets.push({ turnId: entry.turnId, label: prompts[index] ?? '' });
+  });
+  return sets.reverse();
+}
+
 export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' | 'send'> {
   raw: AgentSelection;
   selection: AgentSelection;
@@ -90,6 +118,11 @@ export interface ThreadSession extends Pick<SendPrompt, 'canSend' | 'sendError' 
   decided: readonly DecidedApproval[];
   answer: (requestId: string, decision: ApprovalDecision) => void;
   undoTurnId: string | null;
+  /** The thread's earlier turns (recorded here, or the server's messages). */
+  history: ThreadHistory;
+  /** The recorded turns already on screen as session turns (an adopted running one): not repeated as history. */
+  shown: ReadonlySet<string>;
+  changeSets: ChangeSet[];
   projects: ReturnType<typeof useBindableProjects>;
   rebind: UseMutationResult<void, Error, number>;
   createAgent: () => void;
@@ -104,6 +137,23 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
   const [decided, setDecided] = useState<DecidedApproval[]>([]);
   const projects = useFolderProject(projectId);
   const { selectProject } = useSelectedProject();
+
+  // The thread's history as it was when this session opened it: the session's
+  // own turns (and the URL catching up with a new thread) never re-read it.
+  const [opened] = useState(conversationId);
+  const history = useThreadHistory(ipc, workspace.id, projectId, opened);
+  // A turn still running from an earlier visit is taken over (once): its
+  // live events, Stop and `done` land here.
+  const [adopted, setAdopted] = useState<string | null>(null);
+  if (adopted === null && history.kind === 'local' && turn.turnId === null) {
+    const running = history.turns.find((stored) => stored.state === 'running');
+    if (running !== undefined) {
+      setAdopted(running.turn_id);
+      setPrompts([running.prompt]);
+      turn.adopt(running.turn_id, running.events);
+    }
+  }
+  const shown = new Set([...turn.earlier.map((entry) => entry.turnId), ...(turn.turnId === null ? [] : [turn.turnId])]);
 
   // The URL's thread is the conversation (adjusted during render, once per mount).
   const [applied, setApplied] = useState(false);
@@ -124,6 +174,8 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
   };
   const { canSend, sendError, send } = useSendPrompt(workspace, projectId, raw, turn, onStarted);
   const done = turn.view.done;
+  const changeSets = changeSetsOf(history, shown, turn, prompts);
+  // `/undo` acts on the last turn, as before: only when it changed files.
   const undoTurnId = done !== undefined && done.changedFiles > 0 ? turn.turnId : null;
   const commands = useSessionCommands(selection, turn, undoTurnId !== null);
 
@@ -155,5 +207,24 @@ export function useThreadSession({ ipc, workspace, projectId, conversationId, on
     void turn.answer(requestId, decision);
   };
 
-  return { raw, selection, turn, commands, run, prompts, decided, answer, undoTurnId, projects, rebind, createAgent, canSend, sendError, send };
+  return {
+    raw,
+    selection,
+    turn,
+    commands,
+    run,
+    prompts,
+    decided,
+    answer,
+    undoTurnId,
+    history,
+    shown,
+    changeSets,
+    projects,
+    rebind,
+    createAgent,
+    canSend,
+    sendError,
+    send,
+  };
 }

@@ -16,7 +16,7 @@ import type { Application } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
-import type { Workspace } from '@/shared/desktop/workspaceIpc';
+import type { AgentEvent, StoredTurn, Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 
 import { server } from '../../test/setup';
@@ -232,6 +232,114 @@ describe('WorkspaceSessionPage', () => {
     expect(chatLink).toHaveAttribute('href', '/chat/77');
   });
 
+  function recorded(turnId: string, overrides: Partial<StoredTurn> = {}): StoredTurn {
+    const at = (seq: number) => ({ turn_id: turnId, seq });
+    const events: AgentEvent[] = [
+      { ...at(0), kind: 'status', payload: { phase: 'running' } },
+      { ...at(2), kind: 'text_delta', payload: { text: `Answer of ${turnId}` } },
+      { ...at(3), kind: 'tool_call', payload: { call_id: 'c1', tool: 'write_file', args_summary: 'notes.txt', remote: false } },
+      { ...at(4), kind: 'tool_result', payload: { call_id: 'c1', ok: true, summary: 'written', truncated: false } },
+      { ...at(5), kind: 'status', payload: { phase: 'done' } },
+      { ...at(6), kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 1 } },
+    ];
+    return {
+      turn_id: turnId,
+      conversation_id: '77',
+      conversation_uuid: null,
+      prompt: `Prompt of ${turnId}`,
+      mentions: [],
+      started_at: 1,
+      finished_at: 2,
+      events,
+      changes: [{ path: `${turnId}.txt`, status: 'added', added: 1, removed: 0, diff: '+hi' }],
+      events_truncated: false,
+      state: 'done',
+      live: false,
+      ...overrides,
+    };
+  }
+
+  it('reopens a thread with every turn recorded on this computer, and every turn\'s changes in the panel', async () => {
+    serveProject();
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    ipc.setHistory('w1', '77', [recorded('t1'), recorded('t2', { live: true, state: 'interrupted', events: recorded('t2').events.slice(0, 2) })]);
+    ipc.setChanges('t2', { files: [{ path: 't2-live.txt', status: 'modified', added: 2, removed: 1, diff: '' }] });
+    mount(ipc, '/workspaces/w1?conversation=77');
+
+    const transcript = await screen.findByTestId('session-transcript');
+    expect(await within(transcript).findByText('Prompt of t1')).toBeInTheDocument();
+    expect(within(transcript).getByText('Answer of t1')).toBeInTheDocument();
+    expect(within(transcript).getByText('Prompt of t2')).toBeInTheDocument();
+    expect(screen.getAllByTestId('history-turn')).toHaveLength(2);
+    expect(screen.getAllByTestId('tool-row')).toHaveLength(1);
+    expect(screen.getByText(/did not finish/)).toBeInTheDocument();
+    expect(screen.queryByText(/Earlier messages of this thread/)).toBeNull();
+    expect(screen.getByRole('link', { name: 'Open in chat' })).toHaveAttribute('href', '/chat/77');
+
+    // The panel: the live turn from the host (with undo), the older one as recorded (without).
+    const sets = await screen.findAllByTestId('panel-turn-changes');
+    expect(sets).toHaveLength(2);
+    expect(await within(sets[0] as HTMLElement).findByText('t2-live.txt')).toBeInTheDocument();
+    expect(within(sets[0] as HTMLElement).getByRole('button', { name: 'Undo turn' })).toBeInTheDocument();
+    expect(within(sets[0] as HTMLElement).getByText('Prompt of t2')).toBeInTheDocument();
+    expect(within(sets[1] as HTMLElement).getByText('t1.txt')).toBeInTheDocument();
+    expect(within(sets[1] as HTMLElement).queryByRole('button', { name: 'Undo turn' })).toBeNull();
+  });
+
+  it('takes over a turn still running from an earlier visit', async () => {
+    serveProject();
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    ipc.setHistory('w1', '77', [recorded('t9', { state: 'running', live: true, finished_at: null, events: recorded('t9').events.slice(0, 2) })]);
+    mount(ipc, '/workspaces/w1?conversation=77');
+
+    expect(await screen.findByText('Answer of t9')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    expect(screen.queryAllByTestId('history-turn')).toHaveLength(0);
+    // A live event the record already holds is not shown twice; a new one appends.
+    ipc.emit({ turn_id: 't9', seq: 2, kind: 'text_delta', payload: { text: 'Answer of t9' } });
+    ipc.emit({ turn_id: 't9', seq: 3, kind: 'text_delta', payload: { text: ', and more' } });
+    expect(await screen.findByText('Answer of t9, and more')).toBeInTheDocument();
+    ipc.emit({ turn_id: 't9', seq: 4, kind: 'done', payload: { committed: true, conversation_id: '77', message_ids: [], changed_files: 0 } });
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull());
+    expect(screen.getByText('Prompt of t9')).toBeInTheDocument();
+  });
+
+  it('shows the conversation\'s messages from the server when this computer recorded none', async () => {
+    serveProject();
+    server.use(
+      http.get(`${BASE}/elitea_core/messages/prompt_lib/42/77`, () =>
+        HttpResponse.json({
+          items: [
+            { id: 'm2', uid: 'u2', conversation_id: '77', role: 'assistant', content: 'The **answer** from the web' },
+            { id: 'm1', uid: 'u1', conversation_id: '77', role: 'user', content: 'A question asked on the web' },
+          ],
+          total: 2,
+          page: 1,
+          page_size: 100,
+          total_pages: 1,
+        }),
+      ),
+    );
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    mount(ipc, '/workspaces/w1?conversation=77');
+
+    const question = await screen.findByText('A question asked on the web');
+    const answer = await screen.findByTestId('history-answer');
+    expect(within(answer).getByText('answer').tagName).toBe('STRONG');
+    // Reading order: the question first.
+    expect(question.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText(/Earlier messages of this thread/)).toBeNull();
+  });
+
+  it('points to the chat when neither this computer nor the server can say what came before', async () => {
+    serveProject();
+    server.use(http.get(`${BASE}/elitea_core/messages/prompt_lib/42/77`, () => HttpResponse.json({ error: 'boom' }, { status: 500 })));
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    ipc.failNext('threadHistory', 'not_signed_in', 'Sign in');
+    mount(ipc, '/workspaces/w1?conversation=77');
+    expect(await screen.findByText(/Earlier messages of this thread are in the conversation/)).toBeInTheDocument();
+  });
+
   it('keeps the prompt when the host refuses the start', async () => {
     serveProject();
     const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
@@ -352,6 +460,7 @@ describe('WorkspaceSessionPage', () => {
         cancel: () => Promise.resolve(),
         answer: () => Promise.resolve(),
         clear: () => undefined,
+        adopt: () => undefined,
       };
     }
 

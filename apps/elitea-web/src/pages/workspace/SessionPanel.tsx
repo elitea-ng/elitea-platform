@@ -1,6 +1,7 @@
 /**
- * The thread's right-hand panel (toggle ⌘⌥\, resizable): what the last turn
- * changed — diff, per-file revert, undo, Reveal in Finder / Open — and the
+ * The thread's right-hand panel (toggle ⌘⌥\, resizable): what the thread's
+ * turns changed, newest first — diff, Reveal in Finder / Open, and for a
+ * turn the host still keeps per-file revert and undo — and the
  * approvals of this thread (the one being asked is a modal dialog; the panel
  * shows the queue behind it and what was decided).
  */
@@ -22,6 +23,8 @@ import type { ApprovalDecision, ApprovalRequestPayload, WorkspaceIpc } from '@/s
 import { t } from '@/shared/i18n';
 import { CHANGES_WIDTH, TitleBarSpacer, useDesktopLayout } from '@/widgets/desktop-shell';
 
+import type { ChangeSet } from './useThreadSession';
+
 export interface DecidedApproval {
   requestId: string;
   title: string;
@@ -32,8 +35,10 @@ export interface SessionPanelProps {
   ipc: WorkspaceIpc;
   appIpc: AppIpc | undefined;
   workspaceId: string;
-  /** The turn whose changes are shown (`null`: nothing changed yet). */
-  changesTurnId: string | null;
+  /** Every turn of the thread that changed files, newest first. */
+  changeSets: readonly ChangeSet[];
+  /** The turn `/undo` asks to undo (the last one, when it changed files). */
+  undoTurnId: string | null;
   undoRequest: number;
   waiting: readonly ApprovalRequestPayload[];
   decided: readonly DecidedApproval[];
@@ -131,7 +136,20 @@ function PathActions({ appIpc, workspaceId, path }: { appIpc: AppIpc; workspaceI
   );
 }
 
-export function SessionPanel({ ipc, appIpc, workspaceId, changesTurnId, undoRequest, waiting, decided }: SessionPanelProps): React.JSX.Element {
+function TurnLabel({ text }: { text: string }): React.JSX.Element {
+  return (
+    <Typography
+      variant="labelSmall"
+      component="h3"
+      title={text}
+      sx={(theme: Theme) => ({ margin: 0, color: theme.vars.palette.text.secondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' })}
+    >
+      {text}
+    </Typography>
+  );
+}
+
+export function SessionPanel({ ipc, appIpc, workspaceId, changeSets, undoTurnId, undoRequest, waiting, decided }: SessionPanelProps): React.JSX.Element {
   const width = useDesktopLayout((state) => state.changesWidth);
   return (
     <>
@@ -166,18 +184,24 @@ export function SessionPanel({ ipc, appIpc, workspaceId, changesTurnId, undoRequ
         </TitleBarSpacer>
         </Box>
         <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1.5, paddingY: 1.5, display: 'flex', flexDirection: 'column', gap: 2 }}>
-          {changesTurnId === null ? (
+          {changeSets.length === 0 ? (
             <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
               {t('workspace.panel.noChanges', 'No changes yet. The files the agent changes in this thread show up here.')}
             </Typography>
           ) : (
-            <ChangedFilesCard
-              ipc={ipc}
-              turnId={changesTurnId}
-              undoRequest={undoRequest}
-              variant="panel"
-              fileActions={appIpc === undefined ? undefined : (file) => <PathActions appIpc={appIpc} workspaceId={workspaceId} path={file.path} />}
-            />
+            changeSets.map((set) => (
+              <Box key={set.turnId} component="section" data-testid="panel-turn-changes" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                {changeSets.length > 1 && set.label !== '' && <TurnLabel text={set.label} />}
+                <ChangedFilesCard
+                  ipc={ipc}
+                  turnId={set.turnId}
+                  files={set.files}
+                  undoRequest={set.turnId === undoTurnId ? undoRequest : 0}
+                  variant="panel"
+                  fileActions={appIpc === undefined ? undefined : (file) => <PathActions appIpc={appIpc} workspaceId={workspaceId} path={file.path} />}
+                />
+              </Box>
+            ))
           )}
           {(waiting.length > 0 || decided.length > 0) && (
             <Box component="section" sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }} data-testid="panel-approvals">

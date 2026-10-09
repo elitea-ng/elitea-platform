@@ -25,18 +25,63 @@ import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
 import { ApprovalDialog, readThreads, useWorkspaceIpc } from '@/features/workspace';
-import type { WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import type { Workspace, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { ShowSidebarButton, TitleBarSpacer, useAppIpc, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { AgentPickers, NoAgents } from './AgentPickers';
-import { COLUMN, Exchanges, firstError, FolderTitle, PanelToggle, SessionNotices, ThreadIntro } from './sessionParts';
+import { COLUMN, EarlierTurns, Exchanges, firstError, FolderTitle, OpenInChat, PanelToggle, SessionNotices, ThreadIntro } from './sessionParts';
 import { SessionPanel } from './SessionPanel';
 import { UnboundFolder } from './UnboundFolder';
-import { useThreadSession, type ThreadSessionInput } from './useThreadSession';
+import { useStickToBottom } from './useStickToBottom';
+import { useThreadSession, type ThreadSession, type ThreadSessionInput } from './useThreadSession';
 import { WorkspaceComposer } from './WorkspaceComposer';
 
 const LIST_KEY = ['workspace', 'list'] as const;
+
+interface HeaderProps {
+  session: ThreadSession;
+  workspace: Workspace;
+  projectId: number;
+  conversationId: string;
+  busy: boolean;
+  projectMenuOpen: boolean;
+  onProjectMenuOpenChange: (open: boolean) => void;
+}
+
+/** The folder, its project and agent, "Open in chat" for a started thread, and the panel toggle. */
+function SessionHeader({ session, workspace, projectId, conversationId, busy, projectMenuOpen, onProjectMenuOpenChange }: HeaderProps): React.JSX.Element {
+  const changesOpen = useDesktopLayout((state) => state.changesOpen);
+  const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
+  const attention = session.turn.view.approvals.length + (session.undoTurnId === null ? 0 : 1);
+  return (
+    <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
+      <TitleBarSpacer
+        leading={!sidebarOpen}
+        logo={false}
+        trailing={
+          <>
+            {conversationId !== '' && <OpenInChat conversationId={conversationId} />}
+            {!changesOpen && <PanelToggle count={attention} />}
+          </>
+        }
+      >
+        <ShowSidebarButton />
+        <FolderTitle workspace={workspace} />
+        <AgentPickers
+          selection={session.selection}
+          projectId={projectId}
+          projects={session.projects}
+          busy={busy}
+          onChangeProject={(next) => session.rebind.mutate(next)}
+          projectMenuOpen={projectMenuOpen}
+          onProjectMenuOpenChange={onProjectMenuOpenChange}
+          agentRef={session.commands.agentRef}
+        />
+      </TitleBarSpacer>
+    </Box>
+  );
+}
 
 function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const { ipc, workspace, projectId, conversationId } = props;
@@ -45,41 +90,43 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const appIpc = useAppIpc();
   const changesOpen = useDesktopLayout((state) => state.changesOpen);
-  const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
   const [pendingApproval, ...waiting] = turn.view.approvals;
   const busy = turn.busy || session.rebind.isPending;
-  const attention = turn.view.approvals.length + (session.undoTurnId === null ? 0 : 1);
   const started = turn.turnId !== null || turn.earlier.length > 0;
+  // The intro stands in for a thread with nothing to show: new, or its history unreadable.
+  const nothingEarlier = session.history.kind === 'none' || session.history.kind === 'unavailable';
+  const { scrollRef, contentRef } = useStickToBottom<HTMLDivElement, HTMLDivElement>();
 
   return (
-    <Box data-testid="workspace-session" sx={{ display: 'flex', height: '100%', minHeight: 0 }}>
+    // Pinned to the frame's scroll box (which is `position: relative`): the
+    // transcript scrolls in its own column and the composer stays below it.
+    <Box data-testid="workspace-session" sx={{ position: 'absolute', inset: 0, display: 'flex', minHeight: 0 }}>
       <Box sx={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <Box sx={(theme: Theme) => ({ borderBottom: `1px solid ${theme.vars.palette.divider}` })}>
-          <TitleBarSpacer leading={!sidebarOpen} logo={false} trailing={changesOpen ? undefined : <PanelToggle count={attention} />}>
-            <ShowSidebarButton />
-            <FolderTitle workspace={workspace} />
-            <AgentPickers
-              selection={session.selection}
-              projectId={projectId}
-              projects={session.projects}
-              busy={busy}
-              onChangeProject={(next) => session.rebind.mutate(next)}
-              projectMenuOpen={projectMenuOpen}
-              onProjectMenuOpenChange={setProjectMenuOpen}
-              agentRef={commands.agentRef}
-            />
-          </TitleBarSpacer>
-        </Box>
-        <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-          <Box sx={{ ...COLUMN, paddingY: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <SessionHeader
+          session={session}
+          workspace={workspace}
+          projectId={projectId}
+          conversationId={conversationId}
+          busy={busy}
+          projectMenuOpen={projectMenuOpen}
+          onProjectMenuOpenChange={setProjectMenuOpen}
+        />
+        <Box ref={scrollRef} data-testid="session-transcript" sx={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <Box ref={contentRef} sx={{ ...COLUMN, paddingY: 3, display: 'flex', flexDirection: 'column', gap: 2 }}>
             {raw.empty && <NoAgents busy={busy} onCreate={session.createAgent} onOtherProject={() => setProjectMenuOpen(true)} />}
-            {!raw.empty && !started && (
-              <ThreadIntro workspace={workspace} conversationId={conversationId} title={readThreads(workspace.id).find((x) => x.id === conversationId)?.title} />
+            {!raw.empty && !started && nothingEarlier && (
+              <ThreadIntro
+                workspace={workspace}
+                conversationId={conversationId}
+                unavailable={session.history.kind === 'unavailable'}
+                title={readThreads(workspace.id).find((x) => x.id === conversationId)?.title}
+              />
             )}
+            <EarlierTurns history={session.history} shown={session.shown} />
             <Exchanges turn={turn} prompts={session.prompts} />
           </Box>
         </Box>
-        <Box sx={{ ...COLUMN, paddingBottom: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <Box sx={{ ...COLUMN, flexShrink: 0, paddingTop: 1, paddingBottom: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
           <SessionNotices error={firstError(turn.startError, session.sendError, session.rebind.error)} commands={commands} />
           <WorkspaceComposer
             ipc={ipc}
@@ -99,7 +146,8 @@ function BoundSession(props: ThreadSessionInput): React.JSX.Element {
           ipc={ipc}
           appIpc={appIpc}
           workspaceId={workspace.id}
-          changesTurnId={session.undoTurnId}
+          changeSets={session.changeSets}
+          undoTurnId={session.undoTurnId}
           undoRequest={commands.undoRequest}
           waiting={turn.view.approvals}
           decided={session.decided}

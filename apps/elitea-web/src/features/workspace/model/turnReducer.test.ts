@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 
-import { activeView, initialTurnsState, turnReducer, type TurnAction, type TurnsState } from './turnReducer';
+import { activeView, earlierViews, initialTurnsState, replayView, turnReducer, type TurnAction, type TurnsState } from './turnReducer';
 
 const T = 'turn-1';
 const run = (events: AgentEvent[], from: TurnsState = turnReducer(initialTurnsState, { type: 'begin', turnId: T })): TurnsState =>
@@ -119,5 +119,25 @@ describe('turnReducer', () => {
 
   it('reset forgets everything', () => {
     expect(turnReducer(run([text(1, 'a')]), { type: 'reset' })).toEqual(initialTurnsState);
+  });
+
+  it('replays a recorded turn exactly as the live stream folded it, with nothing left to answer', () => {
+    const events = [status(0, 'running'), text(3, 'Hello'), call(4, 'c1'), approval(5, 'r1'), result(6, 'c1'), text(7, ' there')];
+    const live = activeView(run(events));
+    const replayed = replayView([...events].reverse());
+    expect(replayed.items).toEqual(live.items);
+    expect(live.approvals).toHaveLength(1);
+    expect(replayed.approvals).toEqual([]);
+  });
+
+  it('adopts a running turn from its record and ignores live events the record already holds', () => {
+    // The record merged deltas 2..3 into one row numbered 3.
+    const adopted = turnReducer(initialTurnsState, { type: 'adopt', turnId: T, events: [status(1, 'running'), text(3, 'Hel lo')] });
+    expect(adopted.activeTurnId).toBe(T);
+    expect(earlierViews(adopted)).toEqual([]);
+    const after = run([text(2, 'lo'), text(3, 'lo'), text(4, '!'), status(5, 'done')], adopted);
+    const view = activeView(after);
+    expect(view.items).toEqual([{ type: 'text', key: 't3', text: 'Hel lo!' }]);
+    expect(view.phase).toBe('done');
   });
 });

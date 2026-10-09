@@ -15,9 +15,9 @@ export { WorkspaceList } from './ui/WorkspaceList';
 export type { ProjectChoice } from './ui/WorkspaceList';
 export { WorkspaceIpcProvider, useWorkspaceIpc } from './model/ipcContext';
 export { useWorkspaceTurn } from './model/useWorkspaceTurn';
+export { replayView } from './model/turnReducer';
 export { describeWorkspaceError } from './model/describeWorkspaceError';
 export {
-  forgetThreads,
   readLastLocation,
   readThreads,
   recordThread,

@@ -97,4 +97,23 @@ describe('ChangedFilesCard', () => {
     // The host's own words (they name the reason), not the generic failure.
     expect(await screen.findByText('This turn ran without a checkpoint (too many files), so its changes cannot be undone here.')).toBeInTheDocument();
   });
+
+  it('shows a recorded turn read-only, without asking the host or offering undo', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    ipc.failNext('turnChanges', 'turn_unknown', 'not kept');
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    renderWithTheme(
+      <QueryClientProvider client={client}>
+        <ChangedFilesCard ipc={ipc} turnId="old" files={[{ path: 'src/a.ts', status: 'modified', added: 1, removed: 1, diff: DIFF }]} undoRequest={1} />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText('src/a.ts')).toBeInTheDocument();
+    expect(screen.getByText('1 files, +1 -1')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Undo turn' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Revert/ })).toBeNull();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Show diff' })).toBeInTheDocument();
+    // The failure queued for turn_changes was never consumed: the host was not asked.
+    await expect(ipc.turnChanges('old')).rejects.toMatchObject({ code: 'turn_unknown' });
+  });
 });

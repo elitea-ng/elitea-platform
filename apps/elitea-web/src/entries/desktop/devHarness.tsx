@@ -139,6 +139,33 @@ export function mountDesktopHarness(container: HTMLElement): void {
     history: createMemoryHistory({ initialEntries: [params.get('at') ?? '/workspaces'] }),
   });
 
+  if (params.has('threads')) {
+    // Thread 72 reopens with a turn recorded on "this computer" (thread_history).
+    const at = (seq: number) => ({ turn_id: 'recorded-1', seq });
+    ipc.setHistory('w1', '72', [
+      {
+        turn_id: 'recorded-1',
+        conversation_id: '72',
+        conversation_uuid: null,
+        prompt: 'Give me a quick overview of @README.md',
+        mentions: ['README.md'],
+        started_at: 1,
+        finished_at: 2,
+        events: [
+          { ...at(0), kind: 'status', payload: { phase: 'running' } },
+          { ...at(1), kind: 'tool_call', payload: { call_id: 'c1', tool: 'read_file', args_summary: 'README.md', remote: false } },
+          { ...at(2), kind: 'tool_result', payload: { call_id: 'c1', ok: true, summary: '# Elitea platform', truncated: false } },
+          { ...at(3), kind: 'text_delta', payload: { text: 'The repository is a **Go monorepo** with the desktop app in `apps/elitea-desktop`.' } },
+          { ...at(4), kind: 'status', payload: { phase: 'done' } },
+          { ...at(5), kind: 'done', payload: { committed: true, conversation_id: '72', message_ids: [], changed_files: 1 } },
+        ],
+        changes: [{ path: 'docs/notes.md', status: 'added', added: 2, removed: 0, diff: '@@ -0,0 +1,2 @@\n+# Notes\n+Overview.' }],
+        events_truncated: false,
+        state: 'done',
+        live: false,
+      },
+    ]);
+  }
   const turnId = (): string => `turn-${String(ipc.calls.started.length)}`;
   ipc.setChanges('turn-1', {
     files: [

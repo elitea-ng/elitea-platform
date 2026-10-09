@@ -13,7 +13,7 @@
  */
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
-import { toWorkspaceIpcError, type ApprovalDecision, type TurnDonePayload, type TurnStartRequest, type WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import { toWorkspaceIpcError, type AgentEvent, type ApprovalDecision, type TurnDonePayload, type TurnStartRequest, type WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 
 import { describeWorkspaceError } from './describeWorkspaceError';
 import { activeView, earlierViews, initialTurnsState, turnReducer, type TurnView } from './turnReducer';
@@ -36,6 +36,8 @@ export interface WorkspaceTurn {
   answer(requestId: string, decision: ApprovalDecision): Promise<void>;
   /** Forget the shown turn (the transcript only; nothing on the host changes). Ignored while a turn runs. */
   clear(): void;
+  /** Take over a turn still running from an earlier visit (its recorded events), so its live events, Stop and `done` land here. */
+  adopt(turnId: string, events: readonly AgentEvent[]): void;
 }
 
 const RESYNC_MS = 15_000;
@@ -150,5 +152,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
     dispatch({ type: 'reset' });
   }, [busy]);
 
-  return { view, turnId, earlier, busy, startError, start, cancel, answer, clear };
+  const adopt = useCallback((adopted: string, events: readonly AgentEvent[]) => dispatch({ type: 'adopt', turnId: adopted, events }), []);
+
+  return { view, turnId, earlier, busy, startError, start, cancel, answer, clear, adopt };
 }

@@ -45,6 +45,12 @@ interface TurnRecord {
   events: AgentEvent[];
   resolved: string[];
   view: TurnView;
+  /**
+   * An adopted turn's events came from the history, where consecutive text
+   * deltas are one row numbered by the LAST of them: a live event at or
+   * below this seq is already in it.
+   */
+  floor?: number;
 }
 
 export interface TurnsState {
@@ -58,6 +64,8 @@ export type TurnAction =
   | { type: 'begin'; turnId: string }
   | { type: 'event'; event: AgentEvent }
   | { type: 'approval-resolved'; turnId: string; requestId: string }
+  /** A turn still running that this session did not start (the thread was reopened): its recorded events, then live ones. */
+  | { type: 'adopt'; turnId: string; events: readonly AgentEvent[] }
   | { type: 'reset' };
 
 export const initialTurnsState: TurnsState = { activeTurnId: null, turns: {}, begun: [] };
@@ -146,8 +154,24 @@ function withoutResolved(view: TurnView, requestId: string): TurnView {
   return { ...view, approvals: view.approvals.filter((a) => a.request_id !== requestId) };
 }
 
+function sortedUnique(events: readonly AgentEvent[]): AgentEvent[] {
+  const bySeq = new Map<number, AgentEvent>();
+  for (const event of events) if (!bySeq.has(event.seq)) bySeq.set(event.seq, event);
+  return [...bySeq.values()].sort((a, b) => a.seq - b.seq);
+}
+
+/**
+ * The view of a recorded turn (`thread_history`): its events folded exactly
+ * as live ones. Nothing in it waits for an answer any more, so it carries
+ * no approvals.
+ */
+export function replayView(events: readonly AgentEvent[]): TurnView {
+  return { ...fold(sortedUnique(events), []), approvals: [] };
+}
+
 function reduceEvent(state: TurnsState, event: AgentEvent): TurnsState {
   const record = state.turns[event.turn_id] ?? { events: [], resolved: [], view: EMPTY_VIEW };
+  if (record.floor !== undefined && event.seq <= record.floor) return state;
   const last = record.events[record.events.length - 1];
   let next: TurnRecord;
   if (last === undefined || event.seq > last.seq) {
@@ -171,6 +195,16 @@ export function turnReducer(state: TurnsState, action: TurnAction): TurnsState {
       };
     case 'reset':
       return initialTurnsState;
+    case 'adopt': {
+      const events = sortedUnique(action.events);
+      const floor = events[events.length - 1]?.seq ?? -1;
+      const record: TurnRecord = { events, resolved: [], view: fold(events, []), floor };
+      return {
+        activeTurnId: action.turnId,
+        turns: { ...state.turns, [action.turnId]: record },
+        begun: state.begun.includes(action.turnId) ? state.begun : [...state.begun, action.turnId],
+      };
+    }
     case 'event':
       return reduceEvent(state, action.event);
     case 'approval-resolved': {

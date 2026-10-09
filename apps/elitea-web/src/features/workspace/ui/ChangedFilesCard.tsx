@@ -2,6 +2,9 @@
  * What the turn changed on disk, after `done`: per-file status and +/- counts,
  * an expandable diff, "Undo turn" (confirmed) and a per-file "Revert".
  *
+ * With `files`, a turn the host no longer keeps (an earlier visit, a
+ * restart): its changes as recorded when it ended, read-only — no undo.
+ *
  * Restoring is the host's job (`checkpoint_restore`); this card only asks, and
  * then re-reads `turn_changes` so what it shows is what is on disk now.
  */
@@ -45,6 +48,8 @@ export interface ChangedFilesCardProps {
   variant?: 'card' | 'panel';
   /** Extra per-file actions (the desktop's "Reveal in Finder" / "Open"). */
   fileActions?: ((file: ChangedFile) => ReactNode) | undefined;
+  /** The turn's changes as recorded (`thread_history`): shown read-only, `turn_changes` is not asked. */
+  files?: readonly ChangedFile[] | undefined;
 }
 
 const changesKey = (turnId: string) => ['workspace', 'turn-changes', turnId] as const;
@@ -65,7 +70,8 @@ function statusLabel(status: ChangedFile['status']): string {
 interface FileRowProps {
   file: ChangedFile;
   busy: boolean;
-  onRevert: () => void;
+  /** `undefined`: read-only (a recorded turn). */
+  onRevert: (() => void) | undefined;
   stacked: boolean;
   fileActions: ((file: ChangedFile) => ReactNode) | undefined;
 }
@@ -95,9 +101,11 @@ function FileRow({ file, busy, onRevert, stacked, fileActions }: FileRowProps): 
           {open ? t('workspace.changes.hideDiff', 'Hide diff') : t('workspace.changes.showDiff', 'Show diff')}
         </Button>
       )}
-      <Button size="small" color="warning" disabled={busy} onClick={onRevert} aria-label={t('workspace.changes.revertFile', 'Revert {{path}}', { path: file.path })}>
-        {t('workspace.changes.revert', 'Revert')}
-      </Button>
+      {onRevert !== undefined && (
+        <Button size="small" color="warning" disabled={busy} onClick={onRevert} aria-label={t('workspace.changes.revertFile', 'Revert {{path}}', { path: file.path })}>
+          {t('workspace.changes.revert', 'Revert')}
+        </Button>
+      )}
     </Box>
   );
   const counts = (
@@ -150,22 +158,60 @@ function useConfirmation(request: number): [boolean, (open: boolean) => void] {
   return [open, setOpen];
 }
 
-export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileActions }: ChangedFilesCardProps): React.JSX.Element | null {
+interface ChangesSource {
+  isPending: boolean;
+  isError: boolean;
+  error: unknown;
+  files: readonly ChangedFile[];
+}
+
+/** The host's live `turn_changes`, or the recorded list as it is. */
+function useChanges(ipc: WorkspaceIpc, turnId: string, recorded: readonly ChangedFile[] | undefined): ChangesSource {
+  const live = useQuery({ queryKey: changesKey(turnId), queryFn: () => ipc.turnChanges(turnId), enabled: recorded === undefined });
+  if (recorded !== undefined) return { isPending: false, isError: false, error: null, files: recorded };
+  return { isPending: live.isPending, isError: live.isError, error: live.error, files: live.data?.files ?? [] };
+}
+
+interface SummaryProps {
+  files: readonly ChangedFile[];
+  stacked: boolean;
+  /** `undefined`: read-only, no "Undo turn". */
+  onUndo: (() => void) | undefined;
+  undoDisabled: boolean;
+}
+
+function Summary({ files, stacked, onUndo, undoDisabled }: SummaryProps): React.JSX.Element {
+  const added = files.reduce((sum, file) => sum + file.added, 0);
+  const removed = files.reduce((sum, file) => sum + file.removed, 0);
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+      <CardTitle hidden={stacked} />
+      <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
+        {t('workspace.changes.summary', '{{files}} files, +{{added}} -{{removed}}', { files: files.length, added, removed })}
+      </Typography>
+      {onUndo !== undefined && (
+        <Button size="small" color="warning" variant="outlined" sx={{ marginLeft: 'auto' }} disabled={undoDisabled} onClick={onUndo}>
+          {t('workspace.changes.undo', 'Undo turn')}
+        </Button>
+      )}
+    </Box>
+  );
+}
+
+export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileActions, files: recorded }: ChangedFilesCardProps): React.JSX.Element | null {
   const stacked = variant === 'panel';
+  const readOnly = recorded !== undefined;
   const queryClient = useQueryClient();
   const [confirmingUndo, setConfirmingUndo] = useConfirmation(undoRequest);
-  const changes = useQuery({ queryKey: changesKey(turnId), queryFn: () => ipc.turnChanges(turnId) });
+  const changes = useChanges(ipc, turnId, recorded);
   const restore = useMutation({
     mutationFn: (path: string | undefined) => ipc.restore(turnId, path),
     onSettled: () => queryClient.invalidateQueries({ queryKey: changesKey(turnId) }),
   });
 
   if (changes.isPending) return null;
-  const files = changes.data?.files ?? [];
+  const { files } = changes;
   if (!changes.isError && files.length === 0 && !restore.isSuccess) return null;
-
-  const added = files.reduce((sum, file) => sum + file.added, 0);
-  const removed = files.reduce((sum, file) => sum + file.removed, 0);
 
   return (
     <Box
@@ -174,22 +220,12 @@ export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileAc
       aria-label={t('workspace.changes.title', 'Changed files')}
       sx={frameSx(stacked)}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        <CardTitle hidden={stacked} />
-        <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
-          {t('workspace.changes.summary', '{{files}} files, +{{added}} -{{removed}}', { files: files.length, added, removed })}
-        </Typography>
-        <Button
-          size="small"
-          color="warning"
-          variant="outlined"
-          sx={{ marginLeft: 'auto' }}
-          disabled={restore.isPending || files.length === 0}
-          onClick={() => setConfirmingUndo(true)}
-        >
-          {t('workspace.changes.undo', 'Undo turn')}
-        </Button>
-      </Box>
+      <Summary
+        files={files}
+        stacked={stacked}
+        onUndo={readOnly ? undefined : () => setConfirmingUndo(true)}
+        undoDisabled={restore.isPending || files.length === 0}
+      />
       {changes.isError && <Alert severity="error">{failureText(changes.error, t('workspace.changes.loadFailed', 'The changes could not be read.'))}</Alert>}
       {restore.isError && <Alert severity="error">{failureText(restore.error, t('workspace.changes.restoreFailed', 'The files could not be restored.'))}</Alert>}
       {restore.isSuccess && (
@@ -205,11 +241,11 @@ export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileAc
             busy={restore.isPending}
             stacked={stacked}
             fileActions={fileActions}
-            onRevert={() => restore.mutate(file.path)}
+            onRevert={readOnly ? undefined : () => restore.mutate(file.path)}
           />
         ))}
       </Box>
-      <Dialog open={confirmingUndo} onClose={() => setConfirmingUndo(false)} aria-labelledby="undo-turn-title">
+      <Dialog open={confirmingUndo && !readOnly} onClose={() => setConfirmingUndo(false)} aria-labelledby="undo-turn-title">
         <DialogTitle id="undo-turn-title">{t('workspace.changes.undoTitle', 'Undo this turn?')}</DialogTitle>
         <DialogContent>
           <DialogContentText>

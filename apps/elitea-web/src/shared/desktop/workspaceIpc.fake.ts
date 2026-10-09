@@ -90,7 +90,7 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       const failed = failure('remove');
       if (failed !== undefined) return failed;
       workspaces = workspaces.filter((w) => w.id !== id);
-      for (const key of [...history.keys()]) if (key.startsWith(`${id}\u0000`)) history.delete(key);
+      for (const key of history.keys()) if (key.startsWith(`${id}\u0000`)) history.delete(key);
       return Promise.resolve();
     },
     bindProject(id, projectId) {
