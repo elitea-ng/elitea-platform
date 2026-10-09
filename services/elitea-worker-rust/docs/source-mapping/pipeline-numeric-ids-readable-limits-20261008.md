@@ -211,6 +211,46 @@ candidate stack (`localhost:18094`), which was not touched:
 #1140; 126's and 72's large YAML were written to the database earlier because they are too large to type). Every run,
 save and reload went through the browser; no response was mocked.
 
+### Post-merge re-check (2026-10-09)
+
+The branch was merged with `main` four times (#1165 assembly-error move into `elitea-agent-runtime`, #1166, #1143,
+#1160 Rust build-cache fix, #1147, #1145). The same browser cases were repeated on the isolated stack with images
+built **from the merged branch, without cherry-picks**:
+
+| Role | Image | Source |
+|---|---|---|
+| Main | `elitea-main:merged-cee2ede3-p5ids-20261009` `sha256:cea4a2d15563…5364` | `cee2ede3` (branch head after #1145) |
+| Worker | `elitea-worker-rust:merged-6dc77cad-p5ids-20261009` `sha256:91f8be76cfc1…15b4` | `6dc77cad`, with the #1160 Containerfile and sources touched before the build; Worker content identical at `cee2ede3` |
+| Web | `elitea-web:merged-3952695531-p5ids-20261009` `sha256:cfd6abf6dab7…2e2f` | `3952695531`; Web content identical at `cee2ede3` |
+
+**Binary checks before the swap** (`docker create` + `docker cp` + `grep -a`, never run). They guard against the
+shared BuildKit `/cargo-target` cache shipping another worktree's binary:
+- Main contains `PIPELINE_INSTRUCTIONS_TOO_LARGE`, `pipeline exceeds a size bound`, `size limit. Reduce the YAML
+  before saving`, `local_turn_executions` (#1166), `CEL expression is too long` (#1147) and `cel-go@v0.30.0` (#1145).
+- Worker contains `numeric_identifier_count`, `graph.pipeline.invalid_identifier`, `graph.pipeline.node_limit_exceeded`
+  and `elitea_agent_runtime::toolkits` (#1165); all four are absent from the pre-merge `c53ab7d5` Worker.
+- The Web bundle contains the `pipelineNodeIdentifiers-*.js` chunk.
+- The pre-merge evidence above was also binary-verified: that Worker contained `numeric_identifier_count`, and its live
+  log emitted it.
+
+**Schema.** The merged Main migration set is a strict superset of the candidate lineage. It adds shared 0154–0156
+(nullable column, `CREATE TABLE IF NOT EXISTS`, permission rows) and tenant 0147–0148 (`CREATE INDEX IF NOT EXISTS`).
+All 217 ledger rows of the cloned databases matched by name and checksum. The five new migrations were applied with
+the merged image's own `elitea-migrate -all-tenants`; a pre-migration dump was kept. No hand edits.
+
+| Case | Pipeline (version) | Chat / execution | Result after reload |
+|---|---|---|---|
+| A | 153 (179) | 872 / `52fdab9b…` | Renders `1`, `END`; Flow→Yaml→Flow→Yaml text byte-identical; `numeric-id-ok`; Worker `numeric_identifier_count=2` |
+| B, new pipeline typed in the editor (`1→2→3`) | 161 (187) | 873 / `f08571ca…` | Stored text equals typed text; nodes `1`, `2`, `3`, `END`, edges `1→2`, `2→3`, `3→END`; `merged-chain-ok`; Worker `numeric_identifier_count=6` |
+| C, save of the 8,000,358-byte version | 126 (133) | — | `PUT` 400, banner "The pipeline definition exceeds the 512 KiB size limit. Reduce the YAML before saving."; database unchanged |
+| D, run of the 8 MB version | 126 (133) | 874 | 422, chat shows the same readable limit text |
+| D2, LLM node over its 64 KiB cap | 72 (79) | 875 / `044bd48a…` | Agent-settings input-limit message; Worker `error_code="native_agent.input_limit" cause_code="graph.pipeline.node_limit_exceeded" cause_detail="nodes[].llm"` |
+
+Unrelated observations:
+- The pipeline Name field keeps 32 characters (existing behaviour).
+- The stack's RustFS was OOM-killed once under host memory pressure and was restarted from its own volume before the
+  Main swap.
+
 ## Open limits and follow-ups
 
 1. **Catalog wiring for `graph.pipeline.invalid_identifier`.** Id-shape refusals still show "The execution input is
