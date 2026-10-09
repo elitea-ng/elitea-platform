@@ -61,7 +61,7 @@ Detailed ledgers:
 
 - `customer-workflow-migration-20260923.md` maps customer workflow requirements, reuse candidates, and separate acceptance plans.
 
-- [Main egress guard hardening](egress-guard-hardening-20261008.md) records the hardened Main SSRF guard, its callers, recovery rows, and browser refusal evidence.
+- [Main egress guard hardening](egress-guard-hardening-20261008.md) records the hardened Main SSRF guard, its callers, operator upgrade notes (CGNAT, webhook redirects, no proxy), recovery rows, and browser refusal evidence.
 
 - `../testing-gaps.md` records accepted progression decisions, verification debt, observed warnings, and separate implementation gaps.
 - `../remaining-gates.md` records the continuation order after the latest main sync.

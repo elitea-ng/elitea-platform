@@ -43,6 +43,59 @@ destination in Main:
   scheme and never returns a proxy. A caller holding the concrete `*http.Transport` cannot bypass the policy.
 - **Refusals** carry at most the host. They never echo userinfo, path or query.
 
+## Upgrade notes for operators
+
+Three behaviour changes can reach a running deployment after upgrading past #1149. None is configured from the
+Admin UI: the Admin **Egress Allowlist** governs only the LLM gateway's provider endpoints. Main's outbound paths
+are configured in the chart or the Main config.
+
+| Outbound path | Setting |
+|---|---|
+| Webhook delivery | `ELITEA_WEBHOOK_EGRESS_ALLOWLIST` (Main environment) |
+| MCP Load Tools and metadata reads | `ELITEA_MCP_EGRESS_ALLOWLIST` (`deploy/helm/elitea/values.yaml`) |
+| MCP OAuth and DCR proxies | `ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST` (`deploy/helm/elitea/values.yaml`) |
+| Code workspace GitHub reader | `egress_allowlist` in the Code workspace config (exact `host:port` entries) |
+
+### CGNAT and benchmarking addresses are now private
+
+**What changed.** `100.64.0.0/10` (CGNAT) and `198.18.0.0/15` (benchmarking) used to be treated as public. They are
+now private, like RFC 1918. Tailscale, some EKS custom-networking setups and some lab networks use these ranges.
+
+**Who is affected.** A deployment whose webhook receiver, MCP server, identity provider or GitHub Enterprise host
+resolves into one of these ranges, and whose allowlist for that path is empty or names only public hosts. If the
+allowlist already names any private range (for example `10.0.0.0/8`), nothing changes: private egress is already
+declared for that path.
+
+**Symptom.** Creating the webhook, loading MCP tools or reading the repository fails with
+`does not resolve to a permitted destination (loopback, private-network, link-local, multicast and reserved
+addresses are refused)`. Webhooks that already exist fail at delivery with the same refusal.
+
+**Fix.**
+1. Add the narrowest block that covers the target to the setting for that path: for example `100.100.4.0/24`, or
+   the whole `100.64.0.0/10` for Tailscale. For the Code workspace reader, add the server's address as an extra
+   exact `IP:port` entry. A host name alone does not declare private egress, because the decision is made on
+   resolved addresses.
+2. Restart Main. These settings are read at startup.
+
+**Know before you add the entry.** A private entry currently switches private egress on for the whole path: once
+any private block is named, every private class (RFC 1918, loopback, ULA, CGNAT, benchmarking) is permitted for
+that path, not only the named block. So add it only for paths that need it, and keep Main's network policy
+default-deny. Metadata endpoints, link-local, multicast and reserved addresses stay refused whatever the entry
+says. Narrowing a private entry to its own block is listed under follow-ups.
+
+### Webhooks no longer follow redirects
+
+A receiver that answers 3xx (for example an `http://` URL that redirects to `https://`, or a trailing-slash
+redirect) used to be followed and counted as delivered. Delivery now fails after one attempt. **Fix:** register
+the receiver at its final URL.
+
+### No outbound proxy on these paths
+
+Main ignores `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` for the four paths above, and dials the destination
+directly. The shipped charts set no proxy, so they are not affected. A site where every outbound connection
+**must** go through a forward proxy cannot reach public webhook receivers or MCP servers from Main until guarded
+proxy support exists (listed under follow-ups).
+
 ## Business behavior and what was not ported
 
 The webhook, MCP and Code workspace behaviours that users see are unchanged for permitted public destinations:
@@ -338,5 +391,12 @@ The `.claude/rules/security.md` checklist:
   lists only "loopback, private, link-local or multicast". Updating it requires regenerating the API, so it is
   left for a contract pass.
 - **SIIT `::ffff:0:0:0/96`** (IPv4-translated) could join `forbiddenBlocks` in a later pass.
+- **Per-entry private egress.** Today a private allowlist entry switches private egress on for the whole path
+  (`declaresPrivateEgress`, `internal/infra/egress/classify.go`). Permitting only the addresses inside the named
+  blocks would let an operator open a Tailscale range without also opening RFC 1918 and loopback.
+- **Guarded forward proxy.** An explicit proxy setting for sites that require one. The guard must still check the
+  real destination before the proxy connects to it.
+- **Admin-authored allowlists for Main.** The LLM gateway already combines a chart floor with Admin-authored
+  entries, applied without a restart. Main's four egress allowlists are chart-only and need a restart.
 - **Toolchain:** go1.26.5 → go1.26.6 clears all 7 standard-library advisories. That change belongs to the parallel
   Go-module and toolchain sessions.
