@@ -623,19 +623,20 @@ fn parse_headers(value: Option<&Value>) -> Result<HeaderMap, AzureClientError> {
 }
 
 fn is_reserved_header(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "authorization"
-            | "host"
-            | "content-length"
-            | "transfer-encoding"
-            | "connection"
-            | "proxy-authorization"
-            | "proxy-authenticate"
-            | "te"
-            | "trailer"
-            | "upgrade"
-    )
+    crate::toolkits::is_reserved_platform_header(name)
+        || matches!(
+            name.to_ascii_lowercase().as_str(),
+            "authorization"
+                | "host"
+                | "content-length"
+                | "transfer-encoding"
+                | "connection"
+                | "proxy-authorization"
+                | "proxy-authenticate"
+                | "te"
+                | "trailer"
+                | "upgrade"
+        )
 }
 
 fn append_query(url: &mut Url, value: Option<&Value>) -> Result<(), AzureClientError> {

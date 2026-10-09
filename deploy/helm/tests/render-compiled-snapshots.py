@@ -201,6 +201,7 @@ class Helm(unittest.TestCase):
                 '-f', str(filename), '--namespace', 'platform',
                 '--set', 'llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1',
                 '--set', 'llmGateway.egressPosture=public-unrestricted',
+                '--set', 'networkPolicies.main.noExternalIngress=true',
             ], env=SAFE_ENV, capture_output=True, text=True, timeout=30)
         return result
 

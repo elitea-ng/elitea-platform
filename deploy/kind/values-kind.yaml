@@ -179,3 +179,9 @@ deepwiki:
       memory: 256Mi
     limits:
       memory: 2Gi
+
+# The kind stack reaches elitea-main by kubectl port-forward (kind-stack.sh), so
+# no pod outside the chart needs to open a connection to it.
+networkPolicies:
+  main:
+    noExternalIngress: true

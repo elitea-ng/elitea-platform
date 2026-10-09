@@ -24,7 +24,7 @@ use serde_json::{Map, Value};
 use tokio::time::Instant;
 use zeroize::Zeroizing;
 
-use super::config::{OpenApiAuth, OpenApiClientConfig};
+use super::config::{OpenApiAuth, OpenApiClientConfig, restricted_header};
 use super::response_selection::ResponseSelection;
 use super::spec::{OpenApiOperation, OpenApiParameter, OpenApiParameterLocation};
 use crate::toolkits::DelegatedAuthorizationRequirement;
@@ -920,20 +920,6 @@ fn insert_sensitive_header(
     value.set_sensitive(true);
     headers.insert(name, value);
     Ok(())
-}
-
-fn restricted_header(name: &HeaderName) -> bool {
-    matches!(
-        name.as_str(),
-        "authorization"
-            | "proxy-authorization"
-            | "host"
-            | "content-length"
-            | "transfer-encoding"
-            | "connection"
-            | "cookie"
-            | "set-cookie"
-    )
 }
 
 async fn bounded_body(

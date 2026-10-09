@@ -450,3 +450,4 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Numeric node ids and readable pipeline limits](pipeline-numeric-ids-readable-limits-20261008.md) records numeric-id support in Worker and Web, the Main save-time bound, typed readable limit refusals, browser evidence and follow-ups.
 - [Numeric normalization log test flake](numeric-normalization-log-test-flake-20261009.md) records the child-process log capture that makes the #1158 counts-only log test deterministic, with baseline and 20-run evidence.
 - [Bounded YAML expansion, OpenAPI reference budget and path segments](untrusted-input-bounds-20261008.md) records the parse-time YAML budget, the OpenAPI `$ref` and response-walk budget, per-segment path validation, measurements and recovery rows.
+- [Edge identity propagation](edge-identity-propagation-20261008.md) records the signed edge identity projection, edge strip and NetworkPolicy hardening, its tests and recovery rows.

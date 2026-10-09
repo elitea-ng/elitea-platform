@@ -30,7 +30,7 @@ set -euo pipefail
 # RFC 2606). The render is narrowed to elitea-main so that "the HTTPRoute"
 # below means one document.
 ONLY_MAIN="--set web.enabled=false --set scheduler.enabled=false --set llmGateway.enabled=false --set otelCollector.enabled=false --set worker.enabled=false"
-GATEWAY_RENDER_POSTURE="--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted"
+GATEWAY_RENDER_POSTURE="--set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://render-only.example.invalid/llm/v1 --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.ingressFrom[0].podSelector.matchLabels.render-only=gateway"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 CHART="$REPO/deploy/helm/elitea"

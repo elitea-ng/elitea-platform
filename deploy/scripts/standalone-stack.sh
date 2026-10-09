@@ -1497,13 +1497,17 @@ SQL
     # Each assertion in this subcommand holds exactly one accepting arm, so the
     # accepting arms are the assertions. One site sits inside a loop and makes
     # one assertion per listener, so the listener list adds its extra rounds.
-    # The list is declared here, and counted here, so the two cannot disagree.
-    # Read scripts/lib/assertion-floor.sh.
+    # The edge identity probes hold two sites inside a loop over their targets,
+    # so that list adds two assertions per extra target. Both lists are
+    # declared here, and counted here, so the lists and the floor cannot
+    # disagree. Read scripts/lib/assertion-floor.sh.
     RUNTIME_LISTENERS=("control 9443" "output 9444" "content 9445")
+    IDENTITY_PROBE_TARGETS=("https://elitea-platform-edge/api/v2/social/author"
+                            "http://elitea-main:8080/api/v2/social/author")
     ASSERTION_SITE_PATTERN='(^|[^[:alnum:]_])ok[[:space:]]+"'
     ASSERTION_SITE_RANGE='/^  check)$/,/^    ;;$/'
     ASSERTION_SITES="$(derive_assertion_floor "$0" "$ASSERTION_SITE_PATTERN" "$ASSERTION_SITE_RANGE")"
-    EXPECTED_ASSERTIONS=$(( ASSERTION_SITES + ${#RUNTIME_LISTENERS[@]} - 1 ))
+    EXPECTED_ASSERTIONS=$(( ASSERTION_SITES + ${#RUNTIME_LISTENERS[@]} - 1 + 2 * (${#IDENTITY_PROBE_TARGETS[@]} - 1) ))
     ALLOW_SKIPS=0
     for check_arg in "${@:2}"; do
       case "$check_arg" in
@@ -1846,6 +1850,52 @@ sys.stdout.write(reply)
       *"Verify return code: 0"*) ok "platform-edge TLS verifies against the runtime CA" ;;
       *) fail "platform-edge did not present a runtime-CA certificate for elitea-platform-edge" ;;
     esac
+
+    # ── Edge identity projection, from inside the network ───────────────────
+    # elitea-main accepts X-Auth-* only with EdgeAuth's signature over the
+    # identity, method and request URI. These probes run where the worker
+    # runs: through the platform edge, and straight at elitea-main:8080, which
+    # compose cannot make unreachable. Each unsigned projection must be refused,
+    # and the same request with a real PAT must still answer as the PAT's own
+    # user — so a down edge or an unmounted route cannot pass for a refusal.
+    echo "→ edge identity projection (inside the network):"
+    if [ -z "${spoof_jwt:-}" ] || [ -z "${spoof_other:-}" ]; then
+      for target in "${IDENTITY_PROBE_TARGETS[@]}"; do
+        skip "no PAT and second user to contrast the ${target%%/api/*} probes against (run: $0 seed-runtime)"
+        skip "no PAT to show a real credential still works at ${target%%/api/*} (run: $0 seed-runtime)"
+      done
+    else
+      identity_probe() {
+        $ENGINE run --rm --network "$NETWORK" -v "${RUNTIME_CERTS}:/m:ro" --user 0:0 \
+          --entrypoint python3 ghcr.io/eliteaai/elitea-mock-llm:standalone -c "
+import ssl, sys, urllib.error, urllib.request
+context = ssl.create_default_context(cafile='/m/runtime-ca.crt')
+headers = dict(item.split(': ', 1) for item in sys.argv[2:])
+request = urllib.request.Request(sys.argv[1], headers=headers)
+try:
+    response = urllib.request.urlopen(request, context=context, timeout=15)
+    print(response.status, response.read().decode()[:400])
+except urllib.error.HTTPError as error:
+    print(error.code)
+except Exception as error:
+    print('ERR', type(error).__name__)
+" "$@" 2>&1 || true
+      }
+      for target in "${IDENTITY_PROBE_TARGETS[@]}"; do
+        out="$(identity_probe "$target" 'X-Auth-Type: user' "X-Auth-ID: ${spoof_other}" \
+                 "X-Auth-User-ID: ${spoof_other}" 'X-Auth-Signature: v1.0.AAAA')"
+        case "$out" in
+          401*|403*) ok "unsigned projection refused at ${target%%/api/*} (HTTP ${out%% *})" ;;
+          *) fail "unsigned projection at ${target%%/api/*} answered '${out%% *}', want 401/403" ;;
+        esac
+        out="$(identity_probe "$target" "Authorization: Bearer ${spoof_jwt}" \
+                 'X-Auth-Type: user' "X-Auth-ID: ${spoof_other}")"
+        case "$out" in
+          200*"\"id\":\"${spoof_user}\""*) ok "a real PAT at ${target%%/api/*} still answers as its own user" ;;
+          *) fail "PAT at ${target%%/api/*} did not answer as user ${spoof_user}: '${out:0:80}'" ;;
+        esac
+      done
+    fi
 
     echo "→ execution actor PATs:"
     # Without an active PAT the worker's claim dies at actor_pat_issuance, long

@@ -509,16 +509,19 @@ fn api_request_builder_encodes_query_headers_json_and_form_without_auth_override
     assert!(form.contains("tag=x"));
     assert!(form.contains("tag=y"));
 
-    let forbidden = json!({"headers":{"Authorization":"other"}});
-    assert!(
-        GcpClient::test_api_request(
-            "GET",
-            API_URL,
-            forbidden.as_object().expect("forbidden headers"),
-            "token",
-        )
-        .is_err()
-    );
+    for name in ["Authorization", "X-Auth-Signature", "X-Elitea-Project-Id"] {
+        let forbidden = json!({"headers":{name:"other"}});
+        assert!(
+            GcpClient::test_api_request(
+                "GET",
+                API_URL,
+                forbidden.as_object().expect("forbidden headers"),
+                "token",
+            )
+            .is_err(),
+            "{name}"
+        );
+    }
 }
 
 #[tokio::test]
