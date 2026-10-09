@@ -269,12 +269,24 @@ func TestFeedbackAuthorizationMatrix(t *testing.T) {
 // project role. With the real resolver the default-mode permission gate still
 // asks for a project grant (as on every default-mode route), so the HTTP check
 // uses a resolver that grants and the SQL decision is what is under test.
-func TestFeedbackPlatformAdministratorReadsTheProjectsRows(t *testing.T) {
+// A platform super_admin with no role in the project passes the membership
+// gate and the SQL, but the default-mode RBAC gate refuses them, as on every
+// other default-mode route. The SQL half is proven with a grant-all resolver.
+func TestFeedbackPlatformAdministratorPassesTheSQLButNotTheDefaultModeGate(t *testing.T) {
 	pool := newCurrentFeedbackPostgresPool(t)
 	prepareFeedbackListDatabase(t, pool)
 	seedFeedbackRow(t, pool, 42, 7, "seven", "2026-01-01 00:00:00")
 	seedFeedbackRow(t, pool, 48, 8, "eight", "2026-01-02 00:00:00")
 	seedFeedbackRow(t, pool, 42, nil, "legacy-of-42", "2026-01-03 00:00:00")
+
+	production := feedbackRealRBACRouter(pool)
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		if r := feedbackDo(production, method, "50", "/api/v2/social/feedbacks/default/7",
+			`{"description":"by admin","rating":1}`); r.Code != http.StatusForbidden {
+			t.Fatalf("real RBAC %s for an administrator without a project role: %d %s", method, r.Code, r.Body)
+		}
+	}
+
 	router := feedbackRouter(pool, handler.WithPermissionResolver(feedbackGrantAll{}))
 
 	body := feedbackList(t, router, "50", "/api/v2/social/feedbacks/default/7")
