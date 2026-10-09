@@ -26,6 +26,7 @@ use crate::files;
 use crate::git::{capped, check_revision};
 use crate::ledger::ReadLedger;
 use crate::policy::{LocalWorkPolicy, SandboxMode};
+use crate::sandbox::credential_paths;
 use crate::shell::{self, CommandSpec, ShellConfig};
 use crate::workspace::{Intent, Workspace, WsPath};
 
@@ -282,6 +283,50 @@ struct GitArgs {
 fn parse<T: for<'de> Deserialize<'de>>(args: Value) -> ToolResult<T> {
     serde_json::from_value(args)
         .map_err(|error| ToolError::invalid(format!("bad arguments: {error}")))
+}
+
+/// Pathspecs that keep `path_deny` matches and the person's credentials
+/// (when the workspace holds them, as a dotfiles repository does) out of
+/// `git diff`, case-insensitively.
+fn diff_exclusions(workspace: &Workspace) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut exclude = |glob: String| {
+        out.push(format!(":(exclude,icase,glob){glob}"));
+        out.push(format!(":(exclude,icase,glob){glob}/**"));
+    };
+    for pattern in workspace.deny_patterns() {
+        let trimmed = pattern.trim().trim_start_matches("./");
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.contains('/') {
+            exclude(trimmed.trim_start_matches('/').to_owned());
+        } else {
+            exclude(format!("**/{trimmed}"));
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+        for credential in credential_paths(std::path::Path::new(&home)) {
+            if let Ok(relative) = credential.strip_prefix(workspace.root()) {
+                let relative = relative.to_string_lossy();
+                let escaped: String = relative
+                    .chars()
+                    .flat_map(|c| {
+                        let special = matches!(c, '*' | '?' | '[' | ']' | '\\');
+                        let star = c == '*' && relative.ends_with('*');
+                        (if special && !star {
+                            vec!['\\', c]
+                        } else {
+                            vec![c]
+                        })
+                        .into_iter()
+                    })
+                    .collect();
+                exclude(escaped);
+            }
+        }
+    }
+    out
 }
 
 impl LocalSession {
@@ -708,10 +753,22 @@ impl LocalSession {
                 diff
             }
         };
+        let literal = tool != "git_diff";
         if matches!(tool, "git_log" | "git_diff") {
             command_line.extend(args.revision.clone());
             command_line.push("--".into());
-            command_line.extend(paths);
+            if literal {
+                command_line.extend(paths);
+            } else {
+                // git_diff prints contents: path_deny and the credential
+                // list are excluded with pathspec magic, so the paths the
+                // model gave are spelled literally.
+                if paths.is_empty() {
+                    command_line.push(":(literal).".into());
+                }
+                command_line.extend(paths.iter().map(|path| format!(":(literal){path}")));
+                command_line.extend(diff_exclusions(&self.workspace));
+            }
         }
         let reads_worktree = matches!(tool, "git_status" | "git_diff");
         let output = self
@@ -725,7 +782,7 @@ impl LocalSession {
                 };
                 let root = this.workspace.root();
                 let words: Vec<&str> = command_line.iter().map(String::as_str).collect();
-                let git = repo.git(root);
+                let git = repo.git(root).literal(literal);
                 if reads_worktree {
                     git.worktree().run(&words)
                 } else {
