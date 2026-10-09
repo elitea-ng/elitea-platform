@@ -30,6 +30,8 @@ shlex = "2.0.1"
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["io-util", "macros", "process", "rt", "sync", "time"] }
 tracing = "0.1.44"
+# Path comparisons the way APFS makes them (NFC/NFD-insensitive).
+unicode-normalization = "0.1.25"
 
 # Every file operation walks the workspace from a directory descriptor with
 # O_NOFOLLOW (openat/mkdirat/renameat), so a symlink swapped in mid-call

@@ -35,7 +35,7 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::git::{Git, toplevel};
-use crate::workspace::{PROTECTED_DIR, Workspace, WsPath};
+use crate::workspace::{Workspace, WsPath, is_protected_name};
 
 /// The ref namespace checkpoints live under.
 pub const REF_PREFIX: &str = "refs/elitea/checkpoints";
@@ -459,7 +459,7 @@ fn walk_files(root: &Path) -> Vec<WsPath> {
         .hidden(false)
         .require_git(false)
         .follow_links(false)
-        .filter_entry(|entry| entry.file_name() != PROTECTED_DIR)
+        .filter_entry(|entry| !entry.file_name().to_str().is_some_and(is_protected_name))
         .build();
     for entry in walker.flatten() {
         if !entry.file_type().is_some_and(|kind| kind.is_file()) {

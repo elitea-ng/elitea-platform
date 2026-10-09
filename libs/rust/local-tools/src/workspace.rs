@@ -32,10 +32,11 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use globset::{Glob, GlobSet, GlobSetBuilder};
+use globset::{GlobBuilder, GlobSet, GlobSetBuilder};
 use rustix::fs::{AtFlags, FileType, Mode, OFlags};
 use rustix::io::Errno;
 use sha2::{Digest, Sha256};
+use unicode_normalization::UnicodeNormalization;
 
 use crate::error::{ErrorCode, ToolError, ToolResult};
 
@@ -44,8 +45,44 @@ use crate::error::{ErrorCode, ToolError, ToolResult};
 const MAX_SYMLINK_HOPS: usize = 32;
 
 /// The directory name no agent write may touch, at any depth: git's own
-/// state (hooks and config there run code).
+/// state (hooks and config there run code). Compared with
+/// [`is_protected_name`], never with `==`.
 pub const PROTECTED_DIR: &str = ".git";
+
+/// Whether file systems that matter here treat `name` as [`PROTECTED_DIR`].
+///
+/// APFS (the macOS default) and NTFS are case-insensitive, APFS is also
+/// normalisation-insensitive, and HFS+ ignores some zero-width code points
+/// (the git CVE-2014-9390 family): `.GIT`, `.Git` and `.g\u{200c}it` all
+/// name the same directory there. Lowercasing everywhere costs nothing on a
+/// case-sensitive file system (no agent needs to write a `.GIT`).
+#[must_use]
+pub fn is_protected_name(name: &str) -> bool {
+    let folded: String = name
+        .nfc()
+        .filter(|c| !is_hfs_ignorable(*c))
+        .flat_map(char::to_lowercase)
+        .collect();
+    folded == PROTECTED_DIR
+}
+
+/// Code points HFS+ drops when comparing names (git's `is_hfs_dotgit` list).
+const fn is_hfs_ignorable(c: char) -> bool {
+    matches!(
+        c,
+        '\u{200c}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{206a}'..='\u{206f}' | '\u{feff}'
+    )
+}
+
+/// Whether this OS's default file system compares names case-insensitively
+/// (path globs follow it).
+pub(crate) const CASE_INSENSITIVE_FS: bool = cfg!(any(target_os = "macos", target_os = "windows"));
+
+/// `text` in NFC: how path rules compare names, so an NFD spelling (what
+/// macOS keyboards and older HFS+ produce) matches an NFC pattern.
+pub(crate) fn nfc(text: &str) -> String {
+    text.nfc().collect()
+}
 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -231,6 +268,8 @@ impl Workspace {
     /// A pattern without a `/` matches a name at any depth (`*.pem`,
     /// `.env`); one with a `/` matches from the root (`secrets/**`). A
     /// pattern that matches a directory denies everything under it.
+    /// Patterns and paths compare in Unicode NFC, and without regard to case
+    /// on macOS and Windows, whose file systems do the same.
     ///
     /// # Errors
     ///
@@ -259,7 +298,8 @@ impl Workspace {
         }
         let mut builder = GlobSetBuilder::new();
         for pattern in path_deny {
-            let trimmed = pattern.trim().trim_start_matches("./");
+            let normalised = nfc(pattern);
+            let trimmed = normalised.trim().trim_start_matches("./");
             if trimmed.is_empty() {
                 continue;
             }
@@ -269,9 +309,12 @@ impl Workspace {
                 format!("**/{trimmed}")
             };
             for candidate in [anchored.as_str(), trimmed] {
-                let glob = Glob::new(candidate).map_err(|_| {
-                    ToolError::invalid(format!("path_deny pattern `{pattern}` is not a glob"))
-                })?;
+                let glob = GlobBuilder::new(candidate)
+                    .case_insensitive(CASE_INSENSITIVE_FS)
+                    .build()
+                    .map_err(|_| {
+                        ToolError::invalid(format!("path_deny pattern `{pattern}` is not a glob"))
+                    })?;
                 builder.add(glob);
             }
         }
@@ -340,11 +383,11 @@ impl Workspace {
     #[must_use]
     pub fn denied_by(&self, path: &WsPath, intent: Intent) -> Option<String> {
         let components = path.components();
-        if intent == Intent::Write && components.iter().any(|c| c == PROTECTED_DIR) {
+        if intent == Intent::Write && components.iter().any(|c| is_protected_name(c)) {
             return Some(format!("{PROTECTED_DIR} (protected)"));
         }
         (1..=components.len()).find_map(|end| {
-            let prefix = components[..end].join("/");
+            let prefix = nfc(&components[..end].join("/"));
             self.deny
                 .is_match(&prefix)
                 .then(|| format!("path_deny ({prefix})"))
@@ -783,6 +826,53 @@ mod tests {
         );
         let path = WsPath::from_relative(std::path::Path::new(".git/config")).expect("path");
         assert_eq!(code(ws.write(&path, b"x", None)), ErrorCode::Denied);
+    }
+
+    /// APFS (the macOS default) is case-insensitive and normalisation-
+    /// insensitive, and HFS+ ignored some zero-width code points: every
+    /// spelling the file system treats as `.git` is protected.
+    #[test]
+    fn git_directories_are_protected_under_every_spelling() {
+        let (_root, _outside, ws) = workspace(&[]);
+        for spelling in [
+            ".GIT/hooks/pre-commit",
+            ".Git/config",
+            "sub/.gIt/config",
+            ".g\u{200c}it/config",
+            ".git\u{feff}/config",
+        ] {
+            assert_eq!(
+                code(ws.resolve(spelling, Intent::Write)),
+                ErrorCode::Denied,
+                "{spelling}"
+            );
+        }
+        assert!(
+            ws.resolve(".github/workflows/ci.yml", Intent::Write)
+                .is_ok()
+        );
+        assert!(ws.resolve(".gitignore", Intent::Write).is_ok());
+    }
+
+    #[test]
+    fn deny_globs_ignore_case_on_macos_and_unicode_normalisation_everywhere() {
+        let (_root, _outside, ws) = workspace(&[".env", "secrets/**", "caf\u{e9}.txt"]);
+        assert_eq!(
+            code(ws.resolve("cafe\u{301}.txt", Intent::Read)),
+            ErrorCode::Denied,
+            "an NFD spelling of an NFC pattern"
+        );
+        if cfg!(target_os = "macos") {
+            assert_eq!(code(ws.resolve(".ENV", Intent::Read)), ErrorCode::Denied);
+            assert_eq!(
+                code(ws.resolve("Secrets/key", Intent::Read)),
+                ErrorCode::Denied
+            );
+            assert_eq!(
+                code(ws.resolve("deep/.Env", Intent::Write)),
+                ErrorCode::Denied
+            );
+        }
     }
 
     #[test]

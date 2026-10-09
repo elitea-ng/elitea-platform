@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::ledger::ReadLedger;
 use crate::patch;
-use crate::workspace::{EntryKind, Intent, PROTECTED_DIR, ReadFile, Workspace, WsPath};
+use crate::workspace::{EntryKind, Intent, ReadFile, Workspace, WsPath, is_protected_name};
 
 /// The largest file the text tools read or write.
 pub const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -327,7 +327,7 @@ fn walker(
         .follow_links(false)
         .max_depth(depth)
         .sort_by_file_name(Ord::cmp)
-        .filter_entry(|entry| entry.file_name() != PROTECTED_DIR);
+        .filter_entry(|entry| !entry.file_name().to_str().is_some_and(is_protected_name));
     if let Some(glob) = glob {
         let mut overrides = ignore::overrides::OverrideBuilder::new(workspace.root());
         overrides
