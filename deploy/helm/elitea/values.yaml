@@ -1477,6 +1477,14 @@ main:
     # refused whatever this says. Unset refuses
     # every private destination. The OAuth and DCR proxies are governed by
     # ELITEA_MCP_OAUTH_EGRESS_ALLOWLIST above.
+    #
+    # UPGRADE NOTE (applies to all three Main egress allowlists): CGNAT
+    # 100.64.0.0/10 (for example Tailscale) and 198.18.0.0/15 used to count as
+    # public and are now private. A target in those ranges needs its block
+    # named here, and Main restarted. Naming any private block permits every
+    # private class for that path, so name it only where needed. See
+    # services/elitea-worker-rust/docs/source-mapping/egress-guard-hardening-20261008.md
+    # ("Upgrade notes for operators").
     ELITEA_MCP_EGRESS_ALLOWLIST: ""
     # The origin the Inventory provider calls back to for artifacts and models.
     # EMPTY DISABLES SOURCE EXPANSION rather than failing the boot: the eight
