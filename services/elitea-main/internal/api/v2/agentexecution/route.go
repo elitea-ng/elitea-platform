@@ -607,6 +607,12 @@ func writeStartError(writer http.ResponseWriter, err error) {
 			"message":   "The previous agent response is still being finalized. Please retry shortly.",
 			"retryable": true,
 		})
+	case errors.Is(err, agentexecutionapp.ErrLocalWorkThread):
+		writeJSON(writer, http.StatusConflict, map[string]any{
+			"error":     "local_work_thread",
+			"message":   "This thread works on files on a computer. Continue it in the Elitea desktop app.",
+			"retryable": false,
+		})
 	case errors.Is(err, agentexecutionapp.ErrCurrentAgentHITLAlreadyResolved):
 		writeJSON(writer, http.StatusConflict, map[string]any{
 			"error":     "agent_hitl_already_resolved",

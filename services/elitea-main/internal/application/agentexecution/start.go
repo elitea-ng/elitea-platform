@@ -25,6 +25,11 @@ var (
 	ErrInvalidCurrentAgentStart                = errors.New("invalid current agent start")
 	ErrUnsupportedCurrentAgentStart            = errors.New("current agent start is not supported by the admitted parity slice")
 	ErrCurrentAgentRegenerationStillFinalizing = errors.New("current agent response is still being finalized")
+	// ErrLocalWorkThread refuses a server-side send, regenerate or continue in
+	// a conversation the desktop's Local work owns (source `local_work`): its
+	// turns run against a folder on the person's computer, which a cloud run
+	// cannot see. The route answers 409 `local_work_thread`.
+	ErrLocalWorkThread = errors.New("conversation is a desktop Local work thread")
 )
 
 // CurrentApplicationTurn is the immutable current-chat side of one durable

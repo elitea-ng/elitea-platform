@@ -2204,3 +2204,35 @@ func TestUpdate_EchoedStoredNameIsNotValidated(t *testing.T) {
 		t.Fatalf("changed invalid name: status = %d, want 400", w.Code)
 	}
 }
+
+// The desktop's Local work marks the conversation it creates with
+// LocalWorkSource; the create route hands that source to the repository as
+// sent, together with the folder name the desktop puts in meta.
+func TestCreate_CarriesTheLocalWorkSource(t *testing.T) {
+	var seen conversations.Conversation
+	repo := &mockRepo{
+		createFn: func(_ context.Context, projectID string, conv conversations.Conversation) (conversations.Conversation, error) {
+			seen = conv
+			conv.ID = "1"
+			conv.ProjectID = projectID
+			return conv, nil
+		},
+	}
+	router := newRouter(conversations.NewHandler(repo))
+
+	req := httptest.NewRequest(http.MethodPost, "/projects/proj-1/conversations/",
+		bytes.NewReader([]byte(`{"name":"c","is_private":true,"source":"local_work","meta":{"local_work":{"folder_name":"api"}}}`)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	if seen.Source != conversations.LocalWorkSource {
+		t.Errorf("the repository was asked to store source %q, want %q", seen.Source, conversations.LocalWorkSource)
+	}
+	if lw, _ := seen.Meta["local_work"].(map[string]any); lw["folder_name"] != "api" {
+		t.Errorf("meta.local_work=%v, want the folder name kept", seen.Meta["local_work"])
+	}
+}

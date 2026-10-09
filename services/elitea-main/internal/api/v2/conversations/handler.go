@@ -483,6 +483,12 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		filters += fmt.Sprintf(" AND c.source = $%d", argIdx)
 		args = append(args, source)
 		argIdx++
+	} else {
+		// Local work threads are listed only when asked for by name
+		// (`source=local_work`): the web cannot continue them, so an
+		// unfiltered listing — the chat list, the run history — leaves them
+		// out. In the SQL, not after it, so `total` and the pages agree.
+		filters += " AND c.source IS DISTINCT FROM '" + LocalWorkSource + "'"
 	}
 
 	// Filter by entity_meta_id + entity_name via conversation.meta->'single_participant'
@@ -783,6 +789,9 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		if created.Source == EditorTestSource {
 			payload["source"] = EditorTestSource
 			payload["is_hidden"] = true
+		}
+		if created.Source == LocalWorkSource {
+			payload["source"] = LocalWorkSource
 		}
 		h.events.Emit(r.Context(), projectID, "conversation.created", payload)
 	}
