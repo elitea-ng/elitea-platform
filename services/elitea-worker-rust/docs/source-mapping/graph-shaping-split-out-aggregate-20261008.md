@@ -81,6 +81,16 @@ Shaping suites, 86 tests (Worker, `src/agents/graph/`):
 | `shaping_compiler_tests.rs` | 11 | gate on and off, channel validation, compiled pipelines, log capture, alias amplification, digest |
 | `shaping_property_tests.rs` | 10 | P1–P7 at 2,000 seeded cases each, plus 3 adversarial cases |
 | `shaping_pg_tests.rs` | 2 | PostgreSQL 18 process replacement |
+| `pipeline_result_graph_tests.rs` | +1 | a pipeline ending at `aggregate` shows the regrouped rows (rehearsal feature) |
+
+After merging `main` with #1158 and #1161 (2026-10-09):
+- Graph suite with the rehearsal feature: 459 passed, 0 failed (`cargo test --offline --features graph-extensions-rehearsal --lib agents::graph::`).
+- Clippy with all targets and features: clean. Format: clean.
+- `compiler_identifier_tests::numeric_normalization_is_logged_as_counts_only` (from #1158) fails about one run in two
+  under the parallel suite and passes alone. It also failed 1 of 6 runs on a clean `origin/main` checkout, so it is a
+  pre-existing flake and not caused by this branch.
+- The new aggregate result test was mutation-checked. With aggregate nodes removed from the result trace, it fails
+  and shows the raw split lines.
 
 Notes on the counts:
 - `production_builds_refuse_shaping_yaml` runs only without the feature (`cargo test --locked`).
@@ -230,8 +240,10 @@ the seeded test user `e2e-chat@autotest.local`. The YAML was entered in the edit
 **Findings during the browser pass:**
 - **Fixed in this PR:** the Aggregate help text still described the old separate group and value objects. It now
   uses `aggregateFlatDescription`, commit `d3a67246`. A test fails on the old text.
-- **Not in scope:** a terminal list of objects renders as "Pipeline completed." because `select_pipeline_result`
-  treats arrays as content blocks. The rehearsal used a final `state_modifier` that renders `orders_out` as text.
+- **Fixed on `main` by #1161:** a terminal list of objects rendered as "Pipeline completed." because
+  `select_pipeline_result` treated arrays as content blocks, so the rehearsal used a final `state_modifier` that renders
+  `orders_out` as text. With #1161 merged, a pipeline that ends at `aggregate` shows the regrouped rows as fenced JSON;
+  `a_pipeline_ending_in_aggregate_shows_the_regrouped_rows` (`pipeline_result_graph_tests.rs`) proves it.
 - **Not in scope:** the editor Test chat does not persist across reload; the persistent chat does.
 - **Environment:** several localhost stacks in one browser profile overwrite each other's session cookie. Use a
   dedicated `*.localhost` host per stack.
