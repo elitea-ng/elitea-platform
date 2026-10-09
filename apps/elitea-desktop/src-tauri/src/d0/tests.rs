@@ -147,14 +147,17 @@ fn platform(details: Value, withheld: &'static [&'static str]) -> impl Fn(&Req) 
         if path == "/api/v2/elitea_core/conversation/prompt_lib/1/42" {
             return Res::json(
                 200,
-                &json!({"id": 42, "participants": [
+                &json!({"id": 42, "uuid": "99999999-2222-4333-8444-555555555555", "participants": [
                     {"id": 70, "entity_name": "user", "entity_meta": {"id": 1}},
                     {"id": 77, "entity_name": "application", "entity_meta": {"id": 5, "project_id": 1},
                      "entity_settings": {"version_id": 9}}
                 ]}),
             );
         }
-        if path == "/api/v2/elitea_core/local_turn/prompt_lib/1/42" {
+        // The route takes the conversation UUID only (the server's validStart).
+        if path
+            == "/api/v2/elitea_core/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        {
             let body: Value = serde_json::from_str(&req.body).unwrap_or_default();
             return Res::json(
                 200,
@@ -434,8 +437,12 @@ async fn one_local_turn_runs_end_to_end_and_commits() {
         "hello\n"
     );
 
-    // Start: the conversation's agent participant answers.
-    let start = &seen(&h.server, "/local_turn/prompt_lib/1/42")[0];
+    // Start: the conversation's agent participant answers, addressed by the
+    // conversation UUID although the UI passed the numeric id 42.
+    let start = &seen(
+        &h.server,
+        "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555",
+    )[0];
     let start_body: Value = serde_json::from_str(&start.body).unwrap();
     assert_eq!(start_body["participant_id"], 77);
     assert_eq!(start_body["user_input"], "Write notes and file a bug");
@@ -582,7 +589,11 @@ async fn refused(
         error.code.as_str()
     );
     assert!(
-        seen(&h.server, "/local_turn/prompt_lib/1/42").is_empty(),
+        seen(
+            &h.server,
+            "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+        )
+        .is_empty(),
         "a refused turn opens no execution"
     );
     (error.code, h)
@@ -928,7 +939,10 @@ async fn referenced_files_are_listed_under_the_prompt_never_inlined() {
     until_done(&h.emitter).await;
     let expected =
         "Write notes and file a bug\n\nFiles the user referenced:\n- src/main.rs\n- src/";
-    let start = &seen(&h.server, "/local_turn/prompt_lib/1/42")[0];
+    let start = &seen(
+        &h.server,
+        "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555",
+    )[0];
     let start_body: Value = serde_json::from_str(&start.body).unwrap();
     assert_eq!(start_body["user_input"], expected);
     let commit = &seen(
@@ -1126,7 +1140,11 @@ async fn a_workspace_removed_or_rebound_while_a_turn_prepares_is_not_used() {
         };
         assert_eq!(error.code, expected);
         assert!(
-            seen(&h.server, "/local_turn/prompt_lib/1/42").is_empty(),
+            seen(
+                &h.server,
+                "/local_turn/prompt_lib/1/99999999-2222-4333-8444-555555555555"
+            )
+            .is_empty(),
             "no execution was opened for a workspace that changed"
         );
     }

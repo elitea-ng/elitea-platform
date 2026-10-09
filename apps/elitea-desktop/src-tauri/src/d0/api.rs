@@ -333,12 +333,15 @@ impl PlatformApi {
         .into_ok()
     }
 
-    /// The conversation's participant that answers with this agent version.
+    /// The conversation's participant that answers with this agent version,
+    /// and the conversation's UUID (the local turn route takes only that,
+    /// while the UI may hold the numeric id).
     ///
     /// # Errors
     ///
-    /// The conversation cannot be read, or holds no participant for the
-    /// agent (`agent_not_in_conversation`) or runs another version of it
+    /// The conversation cannot be read, has no UUID
+    /// (`conversation_without_uuid`), or holds no participant for the agent
+    /// (`agent_not_in_conversation`) or runs another version of it
     /// (`agent_version_mismatch`).
     pub async fn answering_participant(
         &self,
@@ -346,7 +349,7 @@ impl PlatformApi {
         conversation_id: &str,
         application_id: i64,
         version_id: i64,
-    ) -> Result<i64, ApiError> {
+    ) -> Result<AnsweringParticipant, ApiError> {
         let detail: Value = self
             .send(
                 Method::GET,
@@ -359,7 +362,12 @@ impl PlatformApi {
             )
             .await?
             .into_ok()?;
-        participant_for(&detail, application_id, version_id)
+        let conversation_uuid = conversation_uuid(&detail)?;
+        let id = participant_for(&detail, application_id, version_id)?;
+        Ok(AnsweringParticipant {
+            id,
+            conversation_uuid,
+        })
     }
 
     /// # Errors
@@ -456,6 +464,28 @@ fn path_segment(value: &str) -> Result<String, ApiError> {
 /// one answers on whichever version is asked for. A participant pinned to
 /// the requested version wins over an unpinned one; only when every entry of
 /// the agent is pinned to another version is the turn refused.
+/// Who answers a local turn, and in which conversation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnsweringParticipant {
+    pub id: i64,
+    /// Lowercase canonical form, the only one the local turn route accepts.
+    pub conversation_uuid: String,
+}
+
+fn conversation_uuid(detail: &Value) -> Result<String, ApiError> {
+    detail
+        .get("uuid")
+        .and_then(Value::as_str)
+        .and_then(|raw| uuid::Uuid::parse_str(raw).ok())
+        .map(|parsed| parsed.hyphenated().to_string())
+        .ok_or_else(|| {
+            ApiError::local(
+                "conversation_without_uuid",
+                "the platform did not return this conversation's UUID",
+            )
+        })
+}
+
 fn participant_for(detail: &Value, application_id: i64, version_id: i64) -> Result<i64, ApiError> {
     let participants = detail
         .get("participants")
@@ -527,6 +557,25 @@ fn participant_for(detail: &Value, application_id: i64, version_id: i64) -> Resu
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_conversation_uuid_comes_from_the_detail_in_canonical_form() {
+        let detail = json!({"id": 42, "uuid": "9F1C2B3A-1111-4222-8333-444455556666"});
+        assert_eq!(
+            conversation_uuid(&detail).unwrap(),
+            "9f1c2b3a-1111-4222-8333-444455556666"
+        );
+        for missing in [
+            json!({"id": 42}),
+            json!({"uuid": null}),
+            json!({"uuid": "42"}),
+        ] {
+            assert_eq!(
+                conversation_uuid(&missing).unwrap_err().code,
+                "conversation_without_uuid"
+            );
+        }
+    }
 
     #[test]
     fn the_answering_participant_is_the_agent_on_the_requested_version() {

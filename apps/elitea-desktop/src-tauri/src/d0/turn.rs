@@ -701,7 +701,7 @@ impl AgentHost {
         let local_names: Vec<&str> = TOOLS.iter().map(|tool| tool.name).collect();
         let admitted = definition::admit(&resolved, &local_names)
             .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?;
-        let participant_id = api
+        let answering = api
             .answering_participant(
                 request.project_id,
                 &conversation,
@@ -726,11 +726,11 @@ impl AgentHost {
         let started = api
             .start_turn(
                 request.project_id,
-                &conversation,
+                &answering.conversation_uuid,
                 &json!({
                     "question_id": question_id,
                     "user_input": request.prompt,
-                    "participant_id": participant_id,
+                    "participant_id": answering.id,
                 }),
             )
             .await;
