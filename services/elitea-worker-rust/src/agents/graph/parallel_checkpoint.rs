@@ -43,10 +43,7 @@ pub(super) struct FrozenOccurrence {
     pub(super) blocked: Option<ParallelBlocked>,
 }
 
-/// Parent rows one visit of an activation may append: its frozen occurrence
-/// plus exactly one of join, pause, typed denial or accepted decision set.
-/// Pause cards ride on the pause row; per-card HITL never writes the parent.
-pub(crate) const MAX_PARENT_ROWS_PER_VISIT: usize = 2;
+pub(crate) use elitea_agent_runtime::graph::fanout_budget::MAX_PARENT_ROWS_PER_VISIT;
 
 /// One node visit's parent-write accounting, owned by the wrapper.
 struct ParentVisit {

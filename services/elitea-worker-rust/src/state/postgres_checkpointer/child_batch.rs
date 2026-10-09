@@ -15,11 +15,14 @@ use super::{
     begin_transaction, note_round_trip, persist_scoped, storage_error,
 };
 
-/// Writers one activation may open: 16 Parallel branches, each a branch root
-/// plus at most 128 admitted application threads.
-pub(crate) const MAX_BATCHED_WRITERS: usize = 16 * 129;
-/// Latest rows one read may return: the largest fan-out (Map items).
-pub(crate) const MAX_BATCHED_READS: usize = 64;
+use elitea_agent_runtime::graph::fanout_budget::{
+    MAX_CHILD_THREADS, MAX_FANOUT_CHILDREN, MAX_PARALLEL_BRANCHES,
+};
+
+/// Writers one activation may open: every Parallel branch with all its threads.
+pub(crate) const MAX_BATCHED_WRITERS: usize = MAX_PARALLEL_BRANCHES * MAX_CHILD_THREADS;
+/// Latest rows one read may return: the largest fan-out.
+pub(crate) const MAX_BATCHED_READS: usize = MAX_FANOUT_CHILDREN;
 
 impl PostgresCheckpointer {
     /// Activate every child writer in one transaction, in request order.

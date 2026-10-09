@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Wired by Gate 5b (Wave 2); nothing calls this yet.
-
 //! Maps an ADK model-call failure to the platform's node failure class.
 //!
 //! Only the typed [`ErrorCategory`] decides the class. The error message is
@@ -9,20 +7,21 @@
 //! re-run would repeat output the user may already have seen. A cancellation
 //! is a control stop in both phases and is never reclassified.
 
-use adk_rust::{AdkError, ErrorCategory};
+use adk_core::{AdkError, ErrorCategory};
 
 use super::node_recovery::NodeFailureClass;
 
 /// Where in the model call the failure happened.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum LlmOutputPhase {
+pub enum LlmOutputPhase {
     BeforeFirstOutput,
     AfterOutputStarted,
 }
 
 impl LlmOutputPhase {
     /// `pre_output` is true while no model output has been produced yet.
-    pub(crate) const fn from_pre_output(pre_output: bool) -> Self {
+    #[must_use]
+    pub const fn from_pre_output(pre_output: bool) -> Self {
         if pre_output {
             Self::BeforeFirstOutput
         } else {
@@ -32,15 +31,14 @@ impl LlmOutputPhase {
 }
 
 /// Classify a model-call failure by its ADK category and output phase.
-pub(crate) const fn classify_llm_failure(
-    category: ErrorCategory,
-    pre_output: bool,
-) -> NodeFailureClass {
+#[must_use]
+pub const fn classify_llm_failure(category: ErrorCategory, pre_output: bool) -> NodeFailureClass {
     classify_in_phase(category, LlmOutputPhase::from_pre_output(pre_output))
 }
 
 /// Classify an ADK error. Reads the category only, never the message.
-pub(crate) fn classify_adk_error(error: &AdkError, pre_output: bool) -> NodeFailureClass {
+#[must_use]
+pub fn classify_adk_error(error: &AdkError, pre_output: bool) -> NodeFailureClass {
     classify_llm_failure(error.category, pre_output)
 }
 
@@ -78,7 +76,7 @@ const fn classify_in_phase(category: ErrorCategory, phase: LlmOutputPhase) -> No
 mod tests {
     use std::collections::BTreeSet;
 
-    use adk_rust::ErrorComponent;
+    use adk_core::ErrorComponent;
 
     use super::super::node_recovery::{
         NodeBackoff, NodeFailure, NodeRecoveryPolicy, RecoveryDecision, ReplaySafety,

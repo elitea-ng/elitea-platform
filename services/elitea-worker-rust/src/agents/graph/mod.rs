@@ -51,13 +51,11 @@ mod direct_tool_tests;
 #[cfg(test)]
 mod fan_in_tests;
 pub(crate) mod fanout_control;
-mod fanout_progress;
-pub(crate) mod fanout_trace;
 use elitea_agent_runtime::graph::hitl;
+pub(crate) use elitea_agent_runtime::graph::{fanout_budget, fanout_trace};
 #[cfg(test)]
 mod hitl_tests;
 mod llm;
-mod llm_failure;
 #[cfg(test)]
 mod llm_tests;
 pub(crate) mod map_authority;

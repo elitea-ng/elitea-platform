@@ -8,7 +8,7 @@
 use tracing::Span;
 
 #[derive(Clone, Copy)]
-pub(crate) enum FanoutKind {
+pub enum FanoutKind {
     Parallel,
     Map,
 }
@@ -24,7 +24,7 @@ impl FanoutKind {
 
 /// How a child starts in this visit.
 #[derive(Clone, Copy)]
-pub(crate) enum ChildStart {
+pub enum ChildStart {
     /// No checkpoint yet: the child runs from its frozen input.
     Fresh,
     /// A terminal or paused receipt replays without running the child.
@@ -44,7 +44,7 @@ impl ChildStart {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum ChildOutcome {
+pub enum ChildOutcome {
     Completed,
     Paused,
     Blocked,
@@ -67,7 +67,7 @@ impl ChildOutcome {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum ActivationOutcome {
+pub enum ActivationOutcome {
     Joined,
     Paused,
     Blocked,
@@ -89,7 +89,7 @@ impl ActivationOutcome {
     }
 }
 
-pub(crate) fn activation_span(
+pub fn activation_span(
     kind: FanoutKind,
     node: &str,
     step: usize,
@@ -114,15 +114,15 @@ pub(crate) fn activation_span(
 }
 
 /// Record the child count once a plan that sizes it at run time is frozen.
-pub(crate) fn activation_children(span: &Span, children: usize) {
+pub fn activation_children(span: &Span, children: usize) {
     span.record("children", children);
 }
 
-pub(crate) fn activation_started(span: &Span) {
+pub fn activation_started(span: &Span) {
     tracing::info!(parent: span, "Fan-out started");
 }
 
-pub(crate) fn activation_finished(span: &Span, outcome: ActivationOutcome) {
+pub fn activation_finished(span: &Span, outcome: ActivationOutcome) {
     let label = outcome.label();
     span.record("outcome", label);
     match outcome {
@@ -141,7 +141,7 @@ pub(crate) fn activation_finished(span: &Span, outcome: ActivationOutcome) {
     }
 }
 
-pub(crate) fn child_span(kind: FanoutKind, node: &str, ordinal: usize) -> Span {
+pub fn child_span(kind: FanoutKind, node: &str, ordinal: usize) -> Span {
     tracing::info_span!(
         "graph.fanout.child",
         kind = kind.label(),
@@ -152,7 +152,7 @@ pub(crate) fn child_span(kind: FanoutKind, node: &str, ordinal: usize) -> Span {
     )
 }
 
-pub(crate) fn child_admitted(span: &Span, start: ChildStart) {
+pub fn child_admitted(span: &Span, start: ChildStart) {
     let label = start.label();
     span.record("start", label);
     match start {
@@ -163,7 +163,7 @@ pub(crate) fn child_admitted(span: &Span, start: ChildStart) {
     }
 }
 
-pub(crate) fn child_finished(span: &Span, outcome: ChildOutcome) {
+pub fn child_finished(span: &Span, outcome: ChildOutcome) {
     span.record("outcome", outcome.label());
     let label = outcome.label();
     match outcome {

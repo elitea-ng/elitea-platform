@@ -15,7 +15,7 @@ use crate::agents::graph::{
     ParallelBranchOutcome, ParallelBranchPause, ParallelBranchRuntime, ParallelBranchTerminal,
     ParallelCheckpointAppender, ParallelChildCheckpointerFactory, ParallelChildRequest,
     ParallelDecision, ParallelNodeDefinition, ParallelOccurrenceCheckpointer, ParallelPauseCard,
-    PreparedParallelActivation, PreparedParallelBranch,
+    PreparedParallelActivation, PreparedParallelBranch, fanout_budget,
 };
 use adk_rust::graph::{
     CompiledGraph, FunctionNode, GraphError, Node, NodeContext, interrupt::Interrupt,
@@ -26,11 +26,10 @@ use tokio::sync::Mutex as AsyncMutex;
 
 const DEFINITION: [u8; 32] = [0x52; 32];
 const RESUME_KEY: &str = "__elitea_hitl_resume_v1";
-const PER_CHILD_P99_BUDGET: Duration = Duration::from_millis(30);
-const RESTORE_64_P95_BUDGET: Duration = Duration::from_millis(500);
-const PREPARE_TRANSACTIONS_BUDGET: u64 = 2;
-/// A fresh instant child: the ADK start probe and its terminal save.
-const TRANSACTIONS_PER_CHILD_BUDGET: u64 = 2;
+const PER_CHILD_P99_BUDGET: Duration = fanout_budget::CHILD_OVERHEAD_P99;
+const RESTORE_64_P95_BUDGET: Duration = fanout_budget::RESTORE_MAX_CHILDREN_P95;
+const PREPARE_TRANSACTIONS_BUDGET: u64 = fanout_budget::MAX_PREPARE_TRANSACTIONS;
+const TRANSACTIONS_PER_CHILD_BUDGET: u64 = fanout_budget::MAX_CHILD_TRANSACTIONS;
 /// Parent transactions per completed first visit: ADK's two empty start
 /// probes of a new root, freeze read and append, batched preparation (2), join
 /// head probe and append.

@@ -11,8 +11,6 @@
 //! the clock is injected so the owner can drive it from `select!` with
 //! `sleep_until(next_flush_at())` and tests stay deterministic.
 
-#![allow(dead_code)] // Wired by the Wave 2 FanoutRunner; the aggregated browser frame sits behind the V2 flag.
-
 use std::fmt;
 use std::time::Duration;
 
@@ -20,15 +18,15 @@ use thiserror::Error;
 use tokio::time::Instant;
 
 /// Longest a buffered delta waits before it is flushed.
-pub(crate) const FANOUT_PROGRESS_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
+pub const FANOUT_PROGRESS_FLUSH_INTERVAL: Duration = Duration::from_millis(250);
 /// Largest total delta payload of one aggregated frame (and of the buffer).
-pub(crate) const FANOUT_PROGRESS_FLUSH_BYTES: usize = 64 * 1024;
+pub const FANOUT_PROGRESS_FLUSH_BYTES: usize = 64 * 1024;
 /// Largest member count (the Map item cap; Parallel allows 16).
-pub(crate) const FANOUT_PROGRESS_MAX_MEMBERS: usize = 64;
+pub const FANOUT_PROGRESS_MAX_MEMBERS: usize = super::fanout_budget::MAX_FANOUT_CHILDREN;
 
 /// Typed coalescer failure with a stable machine code.
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FanoutProgressError {
+pub enum FanoutProgressError {
     #[error("fan-out progress member count {members} is outside the supported range")]
     InvalidMemberCount { members: usize },
     #[error("fan-out progress member {ordinal} is outside 0..{members}")]
@@ -36,7 +34,8 @@ pub(crate) enum FanoutProgressError {
 }
 
 impl FanoutProgressError {
-    pub(crate) fn code(&self) -> &'static str {
+    #[must_use]
+    pub fn code(&self) -> &'static str {
         match self {
             Self::InvalidMemberCount { .. } => "graph.fanout.progress_invalid_member_count",
             Self::InvalidMember { .. } => "graph.fanout.progress_invalid_member",
@@ -46,7 +45,7 @@ impl FanoutProgressError {
 
 /// Child lifecycle transitions that are forwarded immediately.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FanoutLifecycle {
+pub enum FanoutLifecycle {
     Started,
     Completed,
     Paused,
@@ -56,7 +55,7 @@ pub(crate) enum FanoutLifecycle {
 
 /// Frame handed to the owner for emission.
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) enum FanoutProgressFrame {
+pub enum FanoutProgressFrame {
     /// One entry per member with data, ordered by ordinal; each member's
     /// buffered deltas are concatenated losslessly.
     Progress { deltas: Vec<(usize, String)> },
@@ -88,7 +87,7 @@ impl fmt::Debug for FanoutProgressFrame {
     }
 }
 
-pub(crate) struct FanoutProgressCoalescer {
+pub struct FanoutProgressCoalescer {
     buffers: Vec<String>,
     buffered_bytes: usize,
     /// When the first byte of the current window was buffered.
@@ -114,7 +113,7 @@ impl fmt::Debug for FanoutProgressCoalescer {
 }
 
 impl FanoutProgressCoalescer {
-    pub(crate) fn new(members: usize) -> Result<Self, FanoutProgressError> {
+    pub fn new(members: usize) -> Result<Self, FanoutProgressError> {
         if members == 0 || members > FANOUT_PROGRESS_MAX_MEMBERS {
             return Err(FanoutProgressError::InvalidMemberCount { members });
         }
@@ -128,7 +127,7 @@ impl FanoutProgressCoalescer {
     /// Buffer a delta. Returns the frames that became due because the byte
     /// bound was reached (usually none). Oversized deltas are split only at
     /// char boundaries, so no byte is lost or duplicated.
-    pub(crate) fn push_delta(
+    pub fn push_delta(
         &mut self,
         ordinal: usize,
         delta: &str,
@@ -158,7 +157,7 @@ impl FanoutProgressCoalescer {
     }
 
     /// Emit a lifecycle frame immediately, preceded by any buffered deltas.
-    pub(crate) fn lifecycle(
+    pub fn lifecycle(
         &mut self,
         ordinal: usize,
         event: FanoutLifecycle,
@@ -170,13 +169,14 @@ impl FanoutProgressCoalescer {
     }
 
     /// Instant at which buffered data must be flushed; `None` when empty.
-    pub(crate) fn next_flush_at(&self) -> Option<Instant> {
+    #[must_use]
+    pub fn next_flush_at(&self) -> Option<Instant> {
         self.window_start
             .map(|start| start + FANOUT_PROGRESS_FLUSH_INTERVAL)
     }
 
     /// Flush when the window has expired.
-    pub(crate) fn poll(&mut self, now: Instant) -> Option<FanoutProgressFrame> {
+    pub fn poll(&mut self, now: Instant) -> Option<FanoutProgressFrame> {
         match self.next_flush_at() {
             Some(due) if now >= due => self.flush(),
             _ => None,
@@ -184,7 +184,7 @@ impl FanoutProgressCoalescer {
     }
 
     /// Flush the remainder (join or cancel).
-    pub(crate) fn finish(&mut self) -> Option<FanoutProgressFrame> {
+    pub fn finish(&mut self) -> Option<FanoutProgressFrame> {
         self.flush()
     }
 

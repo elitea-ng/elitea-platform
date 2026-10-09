@@ -24,6 +24,7 @@ pub(crate) use checkpoint::{MapItemExecution, MapOccurrenceCheckpointer};
 use checkpoint::{MapItemReceipt, MapReceiptCheckpointer};
 
 pub(crate) const MAX_ITEMS: usize = 64;
+const _: () = assert!(MAX_ITEMS == super::fanout_budget::MAX_FANOUT_CHILDREN);
 pub(crate) const MAX_CONCURRENCY: usize = 8;
 pub(crate) const MAX_ITEM_BYTES: usize = 512 * 1024;
 pub(crate) const MAX_PLAN_BYTES: usize = 2 * 1024 * 1024;
