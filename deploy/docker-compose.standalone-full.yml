@@ -492,8 +492,9 @@ services:
   #            opt-out explicitly with LLM_BUDGET_REQUIRE_ENFORCEMENT below
   #            (issue #304): without it, the gateway refuses to start as soon as
   #            somebody authors a budget row in this database.
-  #   Vault  — SECRETS_MASTER_KEY is optional as long as seeded credentials carry
-  #            a literal api_key rather than a {{secret.NAME}} reference.
+  #   Vault  — SECRETS_MASTER_KEY is required, as for elitea-main, unless
+  #            ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true; this local stack sets
+  #            that opt-out below because its seed stores project keys unwrapped.
   #   PG     — pgxpool.New only parses the DSN, never dials, so an unreachable
   #            database degrades (empty /v1/models) rather than failing boot.
   # GATEWAY_IDENTITY_SECRET is the one hard requirement: startupIdentityCheck
@@ -514,6 +515,10 @@ services:
       # Keep the gateway and Main on one vault-key source. Empty preserves the
       # unwrapped E2E seed; a restored deployment can supply its existing key.
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY-}"
+      # The gateway refuses to start without the key unless a local stack opts
+      # out explicitly, the same rule as elitea-main. A supplied key is used
+      # either way.
+      ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "${ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS-true}"
       # MUST match elitea-main's value below: it keys the HMAC over the
       # X-Elitea-Project-Id / X-Elitea-User-Id / X-Elitea-Tenant-Id headers that
       # elitea-main signs and the gateway verifies.

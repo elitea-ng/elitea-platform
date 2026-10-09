@@ -2710,10 +2710,9 @@ llmGateway:
   # secrets: sensitive env vars sourced from Kubernetes Secrets (rendered as
   # valueFrom.secretKeyRef in deployment.yaml), NOT plaintext in the env map above.
   # Each entry maps the ENV VAR NAME the binary reads → the Secret name + key.
-  # `optional: true` lets the pod start when the Secret is absent (e.g. local/dev,
-  # or SECRETS_MASTER_KEY unset → provider credentials are stored in the database
-  # UNWRAPPED, see that entry below); set false to make the Secret mandatory in
-  # production.
+  # `optional: true` lets the pod start when the Secret is absent; set false to
+  # make the Secret mandatory. SECRETS_MASTER_KEY is the exception: the chart
+  # decides its `optional` itself (see that entry below).
   #
   # Provision the referenced Secret out-of-band (kubectl create secret / external-
   # secrets operator / sealed-secrets), e.g.:
@@ -2742,28 +2741,18 @@ llmGateway:
     SECRETS_MASTER_KEY:
       secretName: elitea-llm-gateway-secrets
       key: secrets-master-key
-      # optional: true, and this is a DECISION rather than an oversight.
+      # REQUIRED. The gateway refuses to start without the key, the same rule
+      # elitea-main enforces: both open the same centry.secrets_key rows, and
+      # without it every project's provider credentials sit in the database
+      # behind project keys stored in the clear. elitea-main reads this same
+      # reference by default, so the two carry one value.
       #
-      # WHAT UNSETTING IT ACTUALLY DOES, in an operator's terms: every project's
-      # provider credentials are written to the database with no master-key
-      # wrapping. internal/account/vault.go:34 stores the project key
-      # unwrapped. The previous wording here — "Fernet vault degraded
-      # single-level mode" — described the mechanism and not the consequence,
-      # and it was read twice during audits as a performance or feature note.
-      #
-      # WHY IT STAYS OPTIONAL. The database is trusted infrastructure in this
-      # deployment's threat model, so unwrapped project keys inside it are
-      # accepted. The precedent for the other choice is right above:
-      # GATEWAY_IDENTITY_SECRET was made non-optional as a deliberate breaking
-      # change (#11) because an empty value there lets ANY caller pick ANY
-      # tenant's credentials — a different class of failure, reachable from
-      # outside the database.
-      #
-      # Recorded here so the next audit finds the decision rather than
-      # rediscovering the condition. Revisit it if the database stops being
-      # trusted infrastructure — a managed service with an operator who is not
-      # the tenant, or a backup that leaves the trust boundary.
-      optional: true
+      # The chart renders the reference as `optional: false` and refuses a
+      # values set with no reference at all, or the key as a plain env value.
+      # For a throwaway local install only, set
+      # env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "true": the reference becomes
+      # optional, the gateway starts without the key and logs a warning. An
+      # `optional` field here is ignored; that opt-out alone decides.
     # GATEWAY_HOP_SECRET keys the hop marker (issue #164), the anti-circular-
     # routing mechanism. It is DEDICATED key material: never GATEWAY_IDENTITY_
     # SECRET and never derived from it, so marker rotation stays independent of

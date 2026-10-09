@@ -38,6 +38,17 @@
   and which Go source reads it.
 */}}
 {{- include "elitea-llm-gateway.validateGuards" . -}}
+{{- /*
+  SECRETS_MASTER_KEY: the gateway refuses to start without it (see
+  elitea-llm-gateway.masterKeyRef). The entry is replaced by the checked
+  reference, or dropped when there is none and the development opt-out is set.
+*/ -}}
+{{- $masterKeyRef := include "elitea-llm-gateway.masterKeyRef" . }}
+{{- if $masterKeyRef }}
+{{- $secrets = merge (omit $secrets "SECRETS_MASTER_KEY") (dict "SECRETS_MASTER_KEY" (fromJson $masterKeyRef)) }}
+{{- else }}
+{{- $secrets = omit $secrets "SECRETS_MASTER_KEY" }}
+{{- end }}
 {{/*
   Migration ordering, checked and recorded here rather than added.
 

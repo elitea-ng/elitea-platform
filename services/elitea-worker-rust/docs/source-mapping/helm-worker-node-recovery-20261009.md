@@ -64,7 +64,7 @@ is one line in `values.yaml`, plus one assertion in the new test, once ranks 3 a
 | Path | Change |
 | --- | --- |
 | `deploy/helm/elitea/templates/worker/configmap-runtime.yaml:57-77` | Refuses a non-boolean `agentNodeRecovery` or `agentModelCheckpointRecovery` (one `kindIs "bool"` loop over both recovery switches, `:62-66`), with the message "worker.runtime.<key> must be true or false". The Python refusal is kept. `agent_node_recovery: true` is still written only when set: absent is the Worker's serde default `false` (`services/elitea-worker-rust/src/config.rs:101-102`). This also keeps the default `runtime.json` byte-identical for both implementations, which `render-worker.sh` requires. |
-| `deploy/helm/elitea/values.yaml:3711-3724` | Documents the model-resume coupling, why the default is `false`, compose parity, the material, and the boolean-only rule. The value is unchanged (`false`). |
+| `deploy/helm/elitea/values.yaml:3700-3713` | Documents the model-resume coupling, why the default is `false`, compose parity, the material, and the boolean-only rule. The value is unchanged (`false`). |
 | `deploy/helm/tests/render-worker-node-recovery.sh` (new) | 12 assertions, with a derived floor (`scripts/lib/assertion-floor.sh`). |
 | `Taskfile.yml` | New `helm:worker-node-recovery`, run by `helm:lint` after `helm:main-master-key`. `.github/workflows` is unchanged. |
 | `services/elitea-worker-rust/docs/recovery-guarantees.md` | D1 (key, guard, test, coupling), note 2, the Worker × P09 row, and backlog rank 1 (G-WORKER-01 closed; defaults still gated by ranks 3 and 4). |
@@ -104,6 +104,7 @@ Full Helm run after the change:
 | --- | --- |
 | `helm lint` on `deploy/helm/{elitea,nats,nats-bootstrap}` | 3/3 pass |
 | All 20 `deploy/helm/tests/render-*.sh` + `render-compiled-snapshots.py` | 21/21 pass |
+| After merging `main` at `2b55242fd` (adds `render-gateway-master-key.sh`): all 21 `render-*.sh` + `render-compiled-snapshots.py`, `helm lint` on 3 charts | 22/22 pass, 3/3 lint |
 | `render-worker.sh` | 8/8 |
 | `render-worker-sandbox.sh` | pass |
 | `render-nats-security.sh` | 264 assertions, 0 failed |
@@ -138,7 +139,7 @@ Security-review categories (`rules/security.md`):
 
 | Component × phase | Before | After | Enforcing code | Proof |
 | --- | --- | --- | --- | --- |
-| Worker (Kubernetes, stock Helm) × P02, P03, P09-P12 | F (D1) | **F, unchanged by decision.** Recovery stays closed until ranks 3 and 4 pass. | `values.yaml:3724`, `configmap-runtime.yaml:62-77` | `render-worker-node-recovery.sh` "rust, default" |
+| Worker (Kubernetes, stock Helm) × P02, P03, P09-P12 | F (D1) | **F, unchanged by decision.** Recovery stays closed until ranks 3 and 4 pass. | `values.yaml:3713`, `configmap-runtime.yaml:62-77` | `render-worker-node-recovery.sh` "rust, default" |
 | Worker (Kubernetes, `agentNodeRecovery=true`) × P02, P03, P09-P12 | could be enabled, but `"false"` also enabled it | R (container restart, spool kept) / F on pod replacement (D2). Only an explicit boolean `true` enables it. | same | "rust, true" plus the 3 refusal cases |
 | Worker (compose) × same phases | R/F as recorded | unchanged | `deploy/runtime/worker-runtime.rust.json:21` | — |
 
