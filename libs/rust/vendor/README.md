@@ -78,6 +78,16 @@ desktop host must do the same (a library cannot carry a patch for its
 consumers). Keep the exact version (`=2.2.0`) in every manifest that patches
 them; `cargo tree -i adk-agent` must show the path source, never the registry.
 
+**The compile-time guard.** `elitea-agent-runtime` names both patched-only
+builders (`LlmAgentBuilder::retain_prepared_history`,
+`Runner::with_session_event_refresh`) in two `const _` items in `src/lib.rs`
+that are part of every build, not a test. A host that depends on the runtime
+but forgets the `[patch.crates-io]` lines resolves the registry 2.2.0 crates,
+which have neither function, so its build fails with "no function or
+associated item named ..." in `elitea-agent-runtime` rather than running the
+unpatched agent loop. Keep those constants when the patches change; remove
+them only with the patches.
+
 These packages preserve the published ADK 2.2.0 dependency graph.
 History extensions change `adk-agent/src/llm_agent.rs` and `adk-runner/src/runner.rs`.
 The optional sandbox supervisor extension changes `adk-sandbox/src/workspace/docker.rs` and adds

@@ -53,16 +53,13 @@ pub mod request;
 pub mod tool_namespacing;
 pub mod toolkits;
 
-/// Compiles only against the patched adk 2.2.0 crates in `libs/rust/vendor`
-/// (the registry releases have neither builder), so a workspace or host that
-/// forgot the `[patch.crates-io]` lines fails here, not at run time.
-#[cfg(test)]
-mod patched_adk {
-    #[test]
-    fn the_runtime_builds_the_patched_agent_and_runner() {
-        let agent = adk_agent::LlmAgentBuilder::new("probe").retain_prepared_history(true);
-        let refresh: fn(adk_runner::Runner, bool) -> adk_runner::Runner =
-            adk_runner::Runner::with_session_event_refresh;
-        std::hint::black_box((agent, refresh));
-    }
-}
+/// The patched-adk guard. The two builders below exist only in the patched
+/// adk 2.2.0 crates in `libs/rust/vendor` (the registry releases have
+/// neither), and these constants are compiled into every build of this crate,
+/// not only its tests. So a workspace or host that links the runtime without
+/// the `[patch.crates-io]` lines fails to COMPILE here instead of running the
+/// agent loop unpatched (`libs/rust/vendor/README.md`).
+const _: fn(adk_agent::LlmAgentBuilder, bool) -> adk_agent::LlmAgentBuilder =
+    adk_agent::LlmAgentBuilder::retain_prepared_history;
+const _: fn(adk_runner::Runner, bool) -> adk_runner::Runner =
+    adk_runner::Runner::with_session_event_refresh;
