@@ -115,6 +115,17 @@ describe('WorkspacesPage', () => {
     expect(await screen.findByText('No folders yet')).toBeInTheDocument();
     expect(await ipc.list()).toEqual([]);
   });
+
+  it('says why a folder with a running turn cannot be removed', async () => {
+    const ipc = createFakeWorkspaceIpc({ workspaces: [FOLDER] });
+    ipc.failNext('remove', 'workspace_busy', 'A turn is already running in this workspace.');
+    const user = userEvent.setup();
+    mount(ipc, '/workspaces');
+
+    await user.click(await screen.findByRole('button', { name: 'Remove app' }));
+    expect(await screen.findByText(/An agent is still working in this folder/)).toBeInTheDocument();
+    expect(await ipc.list()).toHaveLength(1);
+  });
 });
 
 describe('WorkspaceSessionPage', () => {

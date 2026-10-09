@@ -11,4 +11,5 @@ export { WorkspaceList } from './ui/WorkspaceList';
 export type { ProjectChoice } from './ui/WorkspaceList';
 export { WorkspaceIpcProvider, useWorkspaceIpc } from './model/ipcContext';
 export { useWorkspaceTurn } from './model/useWorkspaceTurn';
+export { describeWorkspaceError } from './model/describeWorkspaceError';
 export type { WorkspaceTurn } from './model/useWorkspaceTurn';

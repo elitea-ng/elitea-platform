@@ -4895,5 +4895,11 @@
   "workspace.tool.running": "Running",
   "workspace.tool.succeeded": "Succeeded",
   "workspace.tool.truncated": "(output truncated)",
-  "workspace.version": "Version"
+  "workspace.version": "Version",
+  "workspace.error.agentNotInConversation": "This agent is not part of the selected conversation. Start a new conversation, or pick one with this agent.",
+  "workspace.error.busy": "An agent is still working in this folder. Wait for it to finish, or stop it, and try again.",
+  "workspace.error.localWorkDisabled": "Local work is turned off by your organisation’s policy.",
+  "workspace.error.notSignedIn": "Sign in again to run agents on this computer.",
+  "workspace.error.turnExpired": "This turn is too old to review or undo: only the most recent turns of a folder are kept.",
+  "workspace.error.versionMismatch": "The selected conversation runs another version of this agent. Start a new conversation, or pick that version."
 }

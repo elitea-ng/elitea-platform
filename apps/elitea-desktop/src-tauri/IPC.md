@@ -8,8 +8,21 @@ MCP OAuth token.
 
 Call commands with `invoke(name, args)`. **Argument keys are snake_case,
 exactly as written below** (the local-work commands are declared with
-`rename_all = "snake_case"`). A failed command rejects with one string, a
-message written for a person.
+`rename_all = "snake_case"`).
+
+Errors: a failed connection / sign-in command (`host_*`) rejects with one
+string, a message written for a person. A failed workspace or turn command
+(everything from **Workspaces** on) rejects with an object
+
+```ts
+type IpcError = { code: string; message: string };
+```
+
+`code` is a stable machine code the UI branches on (`workspace_busy`,
+`agent_version_mismatch`, `turn_expired`, `storage`, …; the refusal codes
+are listed under `agent_turn_start`), `message` is written for a person.
+The web client (`shared/desktop/workspaceIpc.ts`) turns it into a
+`WorkspaceIpcError`.
 
 ## Connection and sign-in (`src/commands.rs`)
 
@@ -51,8 +64,8 @@ inside the folder.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode}` | `{turn_id, execution_id}` |
-| `agent_turn_cancel` | `{turn_id}` | `null` (rejects for an unknown turn) |
-| `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects when the question is no longer open) |
+| `agent_turn_cancel` | `{turn_id}` | `null` (rejects `turn_unknown` for an unknown turn) |
+| `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[]}` |
 | `checkpoint_restore` | `{turn_id, path?: string}` | `{restored: string[]}` |
 
@@ -62,7 +75,7 @@ the background and reports through events. `conversation_id` is the
 conversation's numeric id or its UUID. The conversation must hold the agent
 as a participant on `version_id`. A refusal rejects the call **and** is sent
 as an `error` event plus a `status` `error` event of a fresh `turn_id`.
-Refusal codes (in the `error` event): `local_work_disabled`,
+Refusal codes (the rejection's `code` and the `error` event's): `local_work_disabled`,
 `secrets_withheld` ("this agent needs secrets; run it in the cloud"),
 `pipeline_unsupported`, `nested_agents_unsupported`,
 `platform_mcp_unsupported`, `unknown_tool_kind`, `toolkit_ref_missing`,

@@ -22,11 +22,19 @@ import DialogTitle from '@mui/material/DialogTitle';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
-import type { ChangedFile, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
+import { toWorkspaceIpcError, type ChangedFile, type WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { DiffView } from '@/shared/ui/DiffView';
 
+import { describeWorkspaceError } from '../model/describeWorkspaceError';
 import { parseUnifiedDiff } from '../model/unifiedDiff';
+
+/** The host's codes a person can act on get their own words; anything else the generic `fallback`. */
+const ACTIONABLE = new Set(['workspace_busy', 'turn_expired']);
+
+function failureText(error: unknown, fallback: string): string {
+  return ACTIONABLE.has(toWorkspaceIpcError(error).code) ? describeWorkspaceError(error) : fallback;
+}
 
 export interface ChangedFilesCardProps {
   ipc: WorkspaceIpc;
@@ -126,8 +134,8 @@ export function ChangedFilesCard({ ipc, turnId }: ChangedFilesCardProps): React.
           {t('workspace.changes.undo', 'Undo turn')}
         </Button>
       </Box>
-      {changes.isError && <Alert severity="error">{t('workspace.changes.loadFailed', 'The changes could not be read.')}</Alert>}
-      {restore.isError && <Alert severity="error">{t('workspace.changes.restoreFailed', 'The files could not be restored.')}</Alert>}
+      {changes.isError && <Alert severity="error">{failureText(changes.error, t('workspace.changes.loadFailed', 'The changes could not be read.'))}</Alert>}
+      {restore.isError && <Alert severity="error">{failureText(restore.error, t('workspace.changes.restoreFailed', 'The files could not be restored.'))}</Alert>}
       {restore.isSuccess && (
         <Alert severity="success">
           {t('workspace.changes.restored', 'Restored {{n}} files.', { n: restore.data.restored.length })}

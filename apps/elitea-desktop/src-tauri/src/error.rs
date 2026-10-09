@@ -42,9 +42,6 @@ pub enum HostError {
     Browser,
     #[error("an unexpected error occurred: {0}")]
     Internal(String),
-    /// A local-work refusal or failure, its message written for a person.
-    #[error("{0}")]
-    Agent(String),
 }
 
 impl Serialize for HostError {

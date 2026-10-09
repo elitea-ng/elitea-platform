@@ -80,6 +80,32 @@ export type AgentEvent =
 
 export type AgentEventHandler = (event: AgentEvent) => void;
 
+/**
+ * A rejected workspace / turn command. The host rejects with `{code, message}`
+ * (`IpcError` in `src-tauri/src/local_commands.rs`): `code` is what the UI
+ * branches on (`workspace_busy`, `agent_version_mismatch`, …), `message` is
+ * written for a person. Anything else the seam throws gets code `unknown`.
+ */
+export class WorkspaceIpcError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'WorkspaceIpcError';
+    this.code = code;
+  }
+}
+
+export function toWorkspaceIpcError(error: unknown): WorkspaceIpcError {
+  if (error instanceof WorkspaceIpcError) return error;
+  if (typeof error === 'object' && error !== null) {
+    const { code, message } = error as { code?: unknown; message?: unknown };
+    if (typeof code === 'string' && typeof message === 'string') return new WorkspaceIpcError(code, message);
+  }
+  if (typeof error === 'string') return new WorkspaceIpcError('unknown', error);
+  return new WorkspaceIpcError('unknown', error instanceof Error ? error.message : 'Something went wrong.');
+}
+
 export interface WorkspaceIpc {
   open(): Promise<Workspace | null>;
   list(): Promise<Workspace[]>;
@@ -107,7 +133,11 @@ interface TauriEnvelope {
 /** The event-plugin half of the seam: register a callback, get back an unsubscribe. */
 export type ListenFn = (channel: string, handler: (payload: unknown) => void) => Promise<() => void>;
 
-export function createWorkspaceIpc(invoke: HostInvoke, listen: ListenFn): WorkspaceIpc {
+export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): WorkspaceIpc {
+  const invoke = <T>(command: string, args?: Record<string, unknown>): Promise<T> =>
+    (args === undefined ? hostInvoke<T>(command) : hostInvoke<T>(command, args)).catch((error: unknown) => {
+      throw toWorkspaceIpcError(error);
+    });
   return {
     open: () => invoke<Workspace | null>('workspace_open'),
     list: () => invoke<Workspace[]>('workspace_list'),

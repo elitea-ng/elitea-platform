@@ -13,8 +13,8 @@ import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
 import Typography from '@mui/material/Typography';
 
-import { WorkspaceList, useWorkspaceIpc } from '@/features/workspace';
-import type { Workspace } from '@/shared/desktop/workspaceIpc';
+import { WorkspaceList, describeWorkspaceError, useWorkspaceIpc } from '@/features/workspace';
+import { toWorkspaceIpcError, type Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
 
@@ -59,7 +59,13 @@ export default function WorkspacesPage(): React.JSX.Element {
           {t('workspace.openFolder', 'Open folder')}
         </Button>
       </Box>
-      {failed && <Alert severity="error">{t('workspace.failed', 'That did not work. Try again.')}</Alert>}
+      {failed && (
+        <Alert severity="error">
+          {remove.isError && toWorkspaceIpcError(remove.error).code === 'workspace_busy'
+            ? describeWorkspaceError(remove.error)
+            : t('workspace.failed', 'That did not work. Try again.')}
+        </Alert>
+      )}
       {list.isPending && <CircularProgress aria-label={t('workspace.loading', 'Loading workspaces')} />}
       {!list.isPending && workspaces.length === 0 && (
         <NoResultsMessage

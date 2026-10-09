@@ -3,9 +3,8 @@
  */
 import { useState } from 'react';
 
-import type { WorkspaceTurn } from '@/features/workspace';
+import { describeWorkspaceError, type WorkspaceTurn } from '@/features/workspace';
 import type { Workspace } from '@/shared/desktop/workspaceIpc';
-import { t } from '@/shared/i18n';
 
 import type { AgentSelection } from './useAgentSelection';
 import { useEnsureConversation } from './useEnsureConversation';
@@ -47,7 +46,7 @@ export function useSendPrompt(workspace: Workspace, projectId: number, selection
       });
       return true;
     } catch (error) {
-      setSendError(error instanceof Error ? error.message : t('workspace.failed', 'That did not work. Try again.'));
+      setSendError(describeWorkspaceError(error));
       return false;
     }
   };

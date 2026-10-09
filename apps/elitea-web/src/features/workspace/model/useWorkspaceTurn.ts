@@ -9,6 +9,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 
 import type { ApprovalDecision, TurnStartRequest, WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 
+import { describeWorkspaceError } from './describeWorkspaceError';
 import { activeView, initialTurnsState, isTerminalPhase, turnReducer, type TurnView } from './turnReducer';
 
 export interface WorkspaceTurn {
@@ -20,11 +21,6 @@ export interface WorkspaceTurn {
   start(request: TurnStartRequest): Promise<void>;
   cancel(): Promise<void>;
   answer(requestId: string, decision: ApprovalDecision): Promise<void>;
-}
-
-function describe(error: unknown): string {
-  if (typeof error === 'string') return error;
-  return error instanceof Error ? error.message : 'Something went wrong.';
 }
 
 export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
@@ -59,7 +55,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
         const started = await ipc.startTurn(request);
         dispatch({ type: 'begin', turnId: started.turn_id });
       } catch (error) {
-        setStartError(describe(error));
+        setStartError(describeWorkspaceError(error));
       } finally {
         setStarting(false);
       }
@@ -72,7 +68,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
     try {
       await ipc.cancelTurn(turnId);
     } catch (error) {
-      setStartError(describe(error));
+      setStartError(describeWorkspaceError(error));
     }
   }, [ipc, turnId]);
 
@@ -84,7 +80,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
       try {
         await ipc.respondApproval(requestId, decision);
       } catch (error) {
-        setStartError(describe(error));
+        setStartError(describeWorkspaceError(error));
       }
     },
     [ipc, turnId],

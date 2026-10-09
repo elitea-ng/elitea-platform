@@ -13,6 +13,9 @@ import type {
   Workspace,
   WorkspaceIpc,
 } from './workspaceIpc';
+import { WorkspaceIpcError } from './workspaceIpc';
+
+type FailableCommand = 'remove' | 'startTurn' | 'cancelTurn' | 'respondApproval' | 'turnChanges' | 'restore';
 
 export interface FakeWorkspaceIpc extends WorkspaceIpc {
   /** Deliver an event to every subscriber. */
@@ -24,6 +27,8 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     restores: { turnId: string; path?: string }[];
   };
   setChanges(turnId: string, changes: TurnChanges): void;
+  /** Make the next call of `command` reject the way the host does: `{code, message}` as a `WorkspaceIpcError`. */
+  failNext(command: FailableCommand, code: string, message: string): void;
   subscriberCount(): number;
 }
 
@@ -39,6 +44,13 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   const changes = new Map<string, TurnChanges>();
   const calls: FakeWorkspaceIpc['calls'] = { started: [], cancelled: [], approvals: [], restores: [] };
   let turnCounter = 0;
+  const failures = new Map<FailableCommand, WorkspaceIpcError>();
+  const failure = (command: FailableCommand): Promise<never> | undefined => {
+    const error = failures.get(command);
+    if (error === undefined) return undefined;
+    failures.delete(command);
+    return Promise.reject(error);
+  };
 
   return {
     calls,
@@ -51,6 +63,8 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       return Promise.resolve([...workspaces]);
     },
     remove(id) {
+      const failed = failure('remove');
+      if (failed !== undefined) return failed;
       workspaces = workspaces.filter((w) => w.id !== id);
       return Promise.resolve();
     },
@@ -60,22 +74,32 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
     },
     startTurn(request): Promise<TurnStarted> {
       calls.started.push(request);
+      const failed = failure('startTurn');
+      if (failed !== undefined) return failed;
       turnCounter += 1;
       return Promise.resolve({ turn_id: `turn-${String(turnCounter)}`, execution_id: `exec-${String(turnCounter)}` });
     },
     cancelTurn(turnId) {
       calls.cancelled.push(turnId);
+      const failed = failure('cancelTurn');
+      if (failed !== undefined) return failed;
       return Promise.resolve();
     },
     respondApproval(requestId, decision) {
       calls.approvals.push({ requestId, decision });
+      const failed = failure('respondApproval');
+      if (failed !== undefined) return failed;
       return Promise.resolve();
     },
     turnChanges(turnId) {
+      const failed = failure('turnChanges');
+      if (failed !== undefined) return failed;
       return Promise.resolve(changes.get(turnId) ?? { files: [] });
     },
     restore(turnId, path) {
       calls.restores.push(path === undefined ? { turnId } : { turnId, path });
+      const failed = failure('restore');
+      if (failed !== undefined) return failed;
       const files = changes.get(turnId)?.files ?? [];
       return Promise.resolve({ restored: path === undefined ? files.map((f) => f.path) : [path] });
     },
@@ -91,6 +115,9 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
     },
     setChanges(turnId, value) {
       changes.set(turnId, value);
+    },
+    failNext(command, code, message) {
+      failures.set(command, new WorkspaceIpcError(code, message));
     },
     subscriberCount: () => handlers.size,
   };

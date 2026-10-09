@@ -3,6 +3,9 @@
 //! Like `commands.rs`, every command is named in `build.rs` and allowed in
 //! `capabilities/default.json` for the main window only. Argument keys are
 //! snake_case, exactly as IPC.md lists them. Nothing here returns a token.
+//!
+//! A failed command here rejects with [`IpcError`], `{code, message}`: the
+//! UI branches on the machine code and shows the message.
 
 use std::sync::Arc;
 
@@ -26,9 +29,38 @@ pub struct LocalState {
     pub agents: Arc<AgentHost>,
 }
 
-impl From<TurnError> for HostError {
+/// A local-work command's failure as the webview receives it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct IpcError {
+    pub code: String,
+    pub message: String,
+}
+
+impl IpcError {
+    fn new(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: code.to_owned(),
+            message: message.into(),
+        }
+    }
+}
+
+impl From<TurnError> for IpcError {
     fn from(error: TurnError) -> Self {
-        Self::Agent(error.message)
+        Self {
+            code: error.code,
+            message: error.message,
+        }
+    }
+}
+
+impl From<HostError> for IpcError {
+    fn from(error: HostError) -> Self {
+        let code = match error {
+            HostError::Storage(_) => "storage",
+            _ => "internal",
+        };
+        Self::new(code, error.to_string())
     }
 }
 
@@ -100,7 +132,7 @@ impl EventEmitter for MainWindowEvents {
 pub async fn workspace_open(
     app: AppHandle,
     state: State<'_, LocalState>,
-) -> Result<Option<Workspace>, HostError> {
+) -> Result<Option<Workspace>, IpcError> {
     use tauri_plugin_dialog::DialogExt as _;
     let (sender, receiver) = tokio::sync::oneshot::channel();
     app.dialog().file().pick_folder(move |picked| {
@@ -111,19 +143,19 @@ pub async fn workspace_open(
     };
     let path = picked
         .into_path()
-        .map_err(|_| HostError::Storage("the dialog did not return a local folder".into()))?;
-    state.workspaces.add(&path).map(Some)
+        .map_err(|_| IpcError::new("storage", "the dialog did not return a local folder"))?;
+    Ok(state.workspaces.add(&path).map(Some)?)
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn workspace_list(state: State<'_, LocalState>) -> Result<Vec<Workspace>, HostError> {
-    state.workspaces.list()
+pub fn workspace_list(state: State<'_, LocalState>) -> Result<Vec<Workspace>, IpcError> {
+    Ok(state.workspaces.list()?)
 }
 
 /// Refused (`workspace_busy`) while a turn runs in the workspace; also
 /// drops the agent host's session and turns of it.
 #[tauri::command(rename_all = "snake_case")]
-pub fn workspace_remove(state: State<'_, LocalState>, id: String) -> Result<(), HostError> {
+pub fn workspace_remove(state: State<'_, LocalState>, id: String) -> Result<(), IpcError> {
     Ok(state.agents.remove_workspace(&id)?)
 }
 
@@ -132,8 +164,8 @@ pub fn workspace_bind_project(
     state: State<'_, LocalState>,
     id: String,
     project_id: i64,
-) -> Result<Workspace, HostError> {
-    state.workspaces.bind_project(&id, project_id)
+) -> Result<Workspace, IpcError> {
+    Ok(state.workspaces.bind_project(&id, project_id)?)
 }
 
 #[allow(clippy::too_many_arguments)] // the IPC contract's argument list
@@ -147,7 +179,7 @@ pub async fn agent_turn_start(
     version_id: i64,
     prompt: String,
     plan_mode: bool,
-) -> Result<TurnStarted, HostError> {
+) -> Result<TurnStarted, IpcError> {
     Ok(state
         .agents
         .start(TurnRequest {
@@ -163,12 +195,13 @@ pub async fn agent_turn_start(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub fn agent_turn_cancel(state: State<'_, LocalState>, turn_id: String) -> Result<(), HostError> {
+pub fn agent_turn_cancel(state: State<'_, LocalState>, turn_id: String) -> Result<(), IpcError> {
     if state.agents.cancel(&turn_id) {
         Ok(())
     } else {
-        Err(HostError::Agent(
-            "That turn is not known to this app.".into(),
+        Err(IpcError::new(
+            "turn_unknown",
+            "That turn is not known to this app.",
         ))
     }
 }
@@ -178,15 +211,19 @@ pub fn approval_respond(
     state: State<'_, LocalState>,
     request_id: String,
     decision: String,
-) -> Result<(), HostError> {
+) -> Result<(), IpcError> {
     let decision = UiDecision::parse(&decision).ok_or_else(|| {
-        HostError::Agent("decision must be allow_once, allow_always or deny".into())
+        IpcError::new(
+            "invalid_request",
+            "decision must be allow_once, allow_always or deny",
+        )
     })?;
     if state.agents.respond(&request_id, decision) {
         Ok(())
     } else {
-        Err(HostError::Agent(
-            "That question is no longer open (the turn ended or it was answered).".into(),
+        Err(IpcError::new(
+            "approval_closed",
+            "That question is no longer open (the turn ended or it was answered).",
         ))
     }
 }
@@ -200,7 +237,7 @@ pub struct TurnChanges {
 pub fn turn_changes(
     state: State<'_, LocalState>,
     turn_id: String,
-) -> Result<TurnChanges, HostError> {
+) -> Result<TurnChanges, IpcError> {
     Ok(TurnChanges {
         files: state.agents.changes(&turn_id)?,
     })
@@ -216,8 +253,32 @@ pub fn checkpoint_restore(
     state: State<'_, LocalState>,
     turn_id: String,
     path: Option<String>,
-) -> Result<Restored, HostError> {
+) -> Result<Restored, IpcError> {
     Ok(Restored {
         restored: state.agents.restore(&turn_id, path.as_deref())?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_refusal_reaches_the_webview_with_its_code() {
+        let error: IpcError = TurnError {
+            code: "workspace_busy".into(),
+            message: "A turn is already running in this workspace.".into(),
+        }
+        .into();
+        assert_eq!(
+            serde_json::to_value(&error).unwrap(),
+            serde_json::json!({
+                "code": "workspace_busy",
+                "message": "A turn is already running in this workspace."
+            })
+        );
+        let storage: IpcError = HostError::Storage("disk full".into()).into();
+        assert_eq!(storage.code, "storage");
+        assert!(storage.message.contains("disk full"));
+    }
 }

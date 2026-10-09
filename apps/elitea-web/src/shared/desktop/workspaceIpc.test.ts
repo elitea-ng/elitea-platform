@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createWorkspaceIpc, tauriWorkspaceIpc, type AgentEvent, type ListenFn } from './workspaceIpc';
+import { createWorkspaceIpc, tauriWorkspaceIpc, WorkspaceIpcError, type AgentEvent, type ListenFn } from './workspaceIpc';
 import { createFakeWorkspaceIpc } from './workspaceIpc.fake';
 
 const noListen: ListenFn = () => Promise.resolve(() => undefined);
@@ -41,6 +41,17 @@ describe('createWorkspaceIpc', () => {
       ['checkpoint_restore', { turn_id: 't1' }],
       ['checkpoint_restore', { turn_id: 't1', path: 'a/b.txt' }],
     ]);
+  });
+
+  it("rejects with the host's {code, message} as a WorkspaceIpcError", async () => {
+    const invoke = vi.fn().mockRejectedValueOnce({ code: 'workspace_busy', message: 'A turn is already running in this workspace.' });
+    const ipc = createWorkspaceIpc(invoke, noListen);
+    const error: unknown = await ipc.remove('w1').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WorkspaceIpcError);
+    expect(error).toMatchObject({ code: 'workspace_busy', message: 'A turn is already running in this workspace.' });
+
+    invoke.mockRejectedValueOnce('a plain host string');
+    await expect(ipc.list()).rejects.toMatchObject({ code: 'unknown', message: 'a plain host string' });
   });
 
   it('subscribes to agent://event and hands each payload to the handler', async () => {
@@ -105,6 +116,10 @@ describe('createFakeWorkspaceIpc', () => {
     ipc.setChanges('t', { files: [{ path: 'f', status: 'added', added: 1, removed: 0, diff: '' }] });
     expect(await ipc.restore('t')).toEqual({ restored: ['f'] });
     expect(ipc.calls.restores).toEqual([{ turnId: 't' }]);
+
+    ipc.failNext('restore', 'workspace_busy', 'busy');
+    await expect(ipc.restore('t')).rejects.toMatchObject({ code: 'workspace_busy' });
+    expect(await ipc.restore('t')).toEqual({ restored: ['f'] });
   });
 
   it('delivers emitted events to subscribers until they unsubscribe', async () => {
