@@ -5671,7 +5671,7 @@ mod tests {
             "pipeline:override_call:0",
             "elitea_agent_31_v_41",
         );
-        let mut child = Event::with_id(&format!("{call_event_id}-child"), child_invocation);
+        let mut child = Event::with_id(format!("{call_event_id}-child"), child_invocation);
         child.branch = format!("{APPLICATION_BRANCH_ROOT}.application_1");
         child.llm_response.content = Some(Content::new("model").with_text("child turn"));
         child.provider_metadata.insert(
@@ -5708,7 +5708,9 @@ mod tests {
             NativeAgentAssemblyErrorCode::InvalidConfiguration
         );
         assert_eq!(
-            error.cause().map(|cause| cause.code()),
+            error
+                .cause()
+                .map(super::super::runtime::NativeAgentAssemblyCause::code),
             Some(AMBIGUOUS_CHILD_INVOCATION_CODE)
         );
     }
