@@ -342,6 +342,26 @@ func referencingDeletes() []referencingDelete {
 
 	return []referencingDelete{
 
+		// The per-interrupt HITL ledger (shared/0157): audit, then cards (they
+		// reference the job and the consuming claim), then the per-response row.
+		{
+			table: "elitea_runtime.execution_interrupt_audit",
+			statement: `DELETE FROM elitea_runtime.execution_interrupt_audit
+WHERE (root_response_id, interrupt_key) IN (
+    SELECT card.root_response_id, card.interrupt_key FROM elitea_runtime.execution_interrupts AS card
+    WHERE card.project_id = $1 OR (card.execution_id, card.generation) IN (` + jobsOfProject + `))`,
+		},
+		{
+			table: "elitea_runtime.execution_interrupts",
+			statement: `DELETE FROM elitea_runtime.execution_interrupts
+WHERE project_id = $1 OR (execution_id, generation) IN (` + jobsOfProject + `)`,
+		},
+		{
+			table: "elitea_runtime.execution_interrupt_responses",
+			statement: `DELETE FROM elitea_runtime.execution_interrupt_responses
+WHERE project_id = $1`,
+		},
+
 		// Remove recovery and immutable Code children before their execution owner.
 		{
 			table: "elitea_runtime.node_recovery_audit",

@@ -46,6 +46,8 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Dependency advisories 2026-10-08](dependency-advisories-20261008.md) raises the Go standard-library floor to go1.25.13/go1.26.6, updates h2 and chacha20, and proves the MySQL TLS guard that keeps the rsa (RUSTSEC-2023-0071) path unreachable.
+
 - [Recovery guarantees inventory](recovery-guarantees-inventory-20261008.md) records the platform recovery matrix baseline, evidence ruling and ranked gap backlog.
 
 - [Sandbox phase deadlines](sandbox-phase-deadlines-20261002.md) separates durable readiness and execution clocks and records rolling compatibility and Docker/Kubernetes browser acceptance.
@@ -435,3 +437,5 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Governance body bounds](governance-body-bounds-20261008.md) records the 256 KiB governance body limit, 413 refusal, strict decode, and 8 KiB routing CEL cap.
 - [Go module advisories](go-module-advisories-20261008.md) records the cel-go and klauspost/compress fixes, the deferred x/crypto fix (Go 1.26), and the guard against linking x/crypto/ssh and openpgp.
 - [Admin Guardrails tool-map rows](admin-guardrails-tool-map-rows-20261009.md) records the Web fix that keeps added Guardrails toolkit rows, its page-level tests and browser evidence.
+- [Per-interrupt decision ledger (Track M2)](execution-interrupts-ledger-20261008.md) records the execution interrupt ledger, its public decision API behind a default-off flag, the real-PostgreSQL race and authorization proofs, the reviews, and the deployed rehearsal evidence.
+- [Conversation pin concurrency](conversation-pin-concurrency-20261009.md) records the Pin/Unpin/Delete lock-order fix for the intermittent 40P01 pin 500, the forced and stress PostgreSQL tests, browser evidence and recovery rows.
