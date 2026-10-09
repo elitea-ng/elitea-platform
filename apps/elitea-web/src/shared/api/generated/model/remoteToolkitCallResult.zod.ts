@@ -40,6 +40,7 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { ClientFrameHitlInterruptDetail } from "./clientFrameHitlInterruptDetail.zod";
 import { ClientFrameMcpAuthorizationRequest } from "./clientFrameMcpAuthorizationRequest.zod";
 
 export const RemoteToolkitCallResult = zod
@@ -66,6 +67,7 @@ export const RemoteToolkitCallResult = zod
         "On a 422: `unsupported_toolkit`, `unknown_tool` or `worker_refused`.",
       ),
     authorization_required: ClientFrameMcpAuthorizationRequest.optional(),
+    hitl_interrupt: ClientFrameHitlInterruptDetail.optional(),
     authorization_retry: zod
       .object({
         tool_name: zod.string().optional(),
@@ -74,7 +76,7 @@ export const RemoteToolkitCallResult = zod
       .optional(),
   })
   .describe(
-    "A remote tool call's answer. `error` is a machine code on a refusal. NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:180 (`writeOutcome`) and :263 (`writeRunError`).",
+    "A remote tool call's answer. `error` is a machine code on a refusal. NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:529 (`writeOutcome`) and :612 (`writeRunError`).",
   );
 
 export type RemoteToolkitCallResult = zod.input<typeof RemoteToolkitCallResult>;

@@ -324,3 +324,66 @@ func localTurnWriteError(step string, err error) error {
 	}
 	return fmt.Errorf("local turn: %s: %w", step, err)
 }
+
+var _ localturn.BindingStore = (*LocalTurnsRepo)(nil)
+
+// ReadLocalTurnBinding answers a started turn's state and the agent version
+// its answering participant is mapped to (the version a cloud turn of that
+// participant would run: ResolveCurrentApplicationTurn reads the same
+// entity_meta.id and mapping entity_settings.version_id). A model (dummy)
+// participant, or an agent of another project (a public catalogue agent),
+// answers 0/0: the remote toolkit call serves only this project's agents.
+func (r *LocalTurnsRepo) ReadLocalTurnBinding(
+	ctx context.Context, projectID, actorUserID int64, executionID string,
+) (localturn.StoredBinding, error) {
+	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
+	if err != nil {
+		return localturn.StoredBinding{}, localturn.ErrInvalid
+	}
+	var (
+		binding      localturn.StoredBinding
+		conversation string
+		participant  int64
+	)
+	err = r.pool.QueryRow(ctx, `
+SELECT conversation_uuid::text, target_participant_id,
+       committed_at IS NOT NULL, expires_at <= clock_timestamp()
+FROM elitea_runtime.local_turn_executions
+WHERE execution_id = $1 AND project_id = $2 AND actor_id = $3`,
+		executionID, projectID, strconv.FormatInt(actorUserID, 10)).
+		Scan(&conversation, &participant, &binding.Committed, &binding.Expired)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return localturn.StoredBinding{}, localturn.ErrNotFound
+	}
+	if err != nil {
+		return localturn.StoredBinding{}, fmt.Errorf("local turn: read binding: %w", err)
+	}
+	var applicationID, versionID, applicationProject *int64
+	err = r.pool.QueryRow(ctx, fmt.Sprintf(`
+SELECT CASE WHEN participant.entity_meta ->> 'id' ~ '^[1-9][0-9]{0,9}$'
+            THEN (participant.entity_meta ->> 'id')::bigint END,
+       CASE WHEN participant.entity_meta ->> 'project_id' ~ '^[1-9][0-9]{0,9}$'
+            THEN (participant.entity_meta ->> 'project_id')::bigint END,
+       CASE WHEN mapping.entity_settings ->> 'version_id' ~ '^[1-9][0-9]{0,9}$'
+            THEN (mapping.entity_settings ->> 'version_id')::bigint END
+FROM %[1]s.chat_conversations AS conversation
+JOIN %[1]s.chat_participant_mapping AS mapping
+  ON mapping.conversation_id = conversation.id AND mapping.participant_id = $2
+JOIN %[1]s.chat_participants AS participant
+  ON participant.id = mapping.participant_id AND participant.entity_name = 'application'
+WHERE conversation.uuid = $1::uuid
+LIMIT 1`, schema), conversation, participant).Scan(&applicationID, &applicationProject, &versionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return binding, nil // the model participant: no agent version
+	}
+	if err != nil {
+		return localturn.StoredBinding{}, fmt.Errorf("local turn: read participant binding: %w", err)
+	}
+	// The project must be stated and equal, as the cloud admission requires
+	// (agent_start.go compares entity_meta.project_id): an id alone could name
+	// a catalogue agent that shares its number with one of this project's.
+	if applicationID != nil && versionID != nil && applicationProject != nil && *applicationProject == projectID {
+		binding.ApplicationID, binding.VersionID = *applicationID, *versionID
+	}
+	return binding, nil
+}

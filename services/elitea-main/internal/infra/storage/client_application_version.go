@@ -33,7 +33,7 @@ const (
 	// clientApplicationVersionDigestDomain separates this digest from every
 	// other SHA-256 in the platform, the worker's definition digest included.
 	clientApplicationVersionDigestDomain = "elitea.client.resolved-application-version.v1\x00"
-	clientToolkitRefDomain               = "elitea.client.toolkit-ref.v1\x00"
+	clientToolkitRefDomain               = "elitea.client.toolkit-ref.v2\x00"
 
 	// The tool kinds a resolved definition carries.
 	ClientToolKindRemoteToolkit = "remote_toolkit"
@@ -80,6 +80,8 @@ type ClientApplicationVersion struct {
 type ClientApplicationVersionService struct {
 	versions CurrentApplicationVersionSource
 	freezer  agentexecutionapp.CurrentApplicationVersionFreezer
+	// guardrails serves AuthorizeRemoteTool only (WithGuardrails).
+	guardrails ClientGuardrailResolver
 }
 
 func NewClientApplicationVersionService(
@@ -134,7 +136,8 @@ func (service *ClientApplicationVersionService) Resolve(
 		}
 		return ClientApplicationVersion{}, ErrContentUnavailable
 	}
-	projected, err := ProjectClientApplicationVersion(projectID, frozen)
+	identity := ClientVersionIdentity{ProjectID: projectID, ApplicationID: int64(applicationID), VersionID: int64(versionID)}
+	projected, err := ProjectClientApplicationVersion(identity, frozen)
 	clearContentBytes(frozen)
 	if err != nil {
 		return ClientApplicationVersion{}, ErrClientApplicationVersionUnresolvable
@@ -157,8 +160,8 @@ func (service *ClientApplicationVersionService) Resolve(
 // a future toolkit schema adds to `settings` or `meta` is withheld by
 // construction. Outside the tools, every `{{secret.*}}` reference is replaced
 // and the frozen-configuration marker is dropped wherever it appears.
-func ProjectClientApplicationVersion(projectID int64, frozen json.RawMessage) (json.RawMessage, error) {
-	if projectID <= 0 || projectID > math.MaxInt32 || len(frozen) == 0 ||
+func ProjectClientApplicationVersion(identity ClientVersionIdentity, frozen json.RawMessage) (json.RawMessage, error) {
+	if !identity.valid() || len(frozen) == 0 ||
 		len(frozen) > maxRuntimeApplicationVersionResponseBytes*8 {
 		return nil, errors.New("frozen application version is invalid")
 	}
@@ -178,7 +181,7 @@ func ProjectClientApplicationVersion(projectID int64, frozen json.RawMessage) (j
 		if !ok {
 			return nil, errors.New("a frozen tool is not an object")
 		}
-		projectedTool, ok := projectClientTool(projectID, tool)
+		projectedTool, ok := projectClientTool(identity, tool)
 		if !ok {
 			return nil, errors.New("a frozen tool could not be projected")
 		}
@@ -193,13 +196,34 @@ func ProjectClientApplicationVersion(projectID int64, frozen json.RawMessage) (j
 	return encoded, nil
 }
 
-// ClientToolkitRef is the stable opaque reference of one saved toolkit in one
-// project. It is derived, not stored: the same toolkit always has the same
-// reference, and the reference names nothing the identities beside it do not.
-func ClientToolkitRef(projectID, toolkitID int64, toolkitType string) string {
-	var identities [16]byte
-	binary.BigEndian.PutUint64(identities[0:8], uint64(projectID))
-	binary.BigEndian.PutUint64(identities[8:16], uint64(toolkitID))
+// ClientVersionIdentity names one agent version in one project.
+type ClientVersionIdentity struct {
+	ProjectID     int64
+	ApplicationID int64
+	VersionID     int64
+}
+
+func (identity ClientVersionIdentity) valid() bool {
+	for _, id := range []int64{identity.ProjectID, identity.ApplicationID, identity.VersionID} {
+		if id <= 0 || id > math.MaxInt32 {
+			return false
+		}
+	}
+	return true
+}
+
+// ClientToolkitRef is the stable opaque reference of one saved toolkit AS
+// ATTACHED TO one agent version in one project. It is derived, not stored: the
+// same attachment always has the same reference. It is not a secret and grants
+// nothing; executeRemoteToolkitTool recomputes it from the version the call
+// names and refuses a mismatch, so a reference copied from another version,
+// project or toolkit type cannot be replayed against this one.
+func ClientToolkitRef(identity ClientVersionIdentity, toolkitID int64, toolkitType string) string {
+	var identities [32]byte
+	binary.BigEndian.PutUint64(identities[0:8], uint64(identity.ProjectID))
+	binary.BigEndian.PutUint64(identities[8:16], uint64(identity.ApplicationID))
+	binary.BigEndian.PutUint64(identities[16:24], uint64(identity.VersionID))
+	binary.BigEndian.PutUint64(identities[24:32], uint64(toolkitID))
 	digest := sha256.New()
 	_, _ = digest.Write([]byte(clientToolkitRefDomain))
 	_, _ = digest.Write(identities[:])
@@ -207,7 +231,7 @@ func ClientToolkitRef(projectID, toolkitID int64, toolkitType string) string {
 	return ClientToolkitRefPrefix + hex.EncodeToString(digest.Sum(nil)[:16])
 }
 
-func projectClientTool(projectID int64, tool map[string]any) (map[string]any, bool) {
+func projectClientTool(identity ClientVersionIdentity, tool map[string]any) (map[string]any, bool) {
 	toolType, ok := tool["type"].(string)
 	if !ok || toolType == "" {
 		return nil, false
@@ -273,8 +297,8 @@ func projectClientTool(projectID int64, tool map[string]any) (map[string]any, bo
 	projected["selected_tools"] = selected
 	projected["toolkit_ref"] = map[string]any{
 		"toolkit_id": toolkitID,
-		"project_id": projectID,
-		"ref":        ClientToolkitRef(projectID, toolkitID, toolType),
+		"project_id": identity.ProjectID,
+		"ref":        ClientToolkitRef(identity, toolkitID, toolType),
 	}
 	return projected, true
 }

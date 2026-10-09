@@ -68,6 +68,9 @@ type RunRequest struct {
 	LLMModel                  string
 	MCPAuthorizationReference string
 	LLMSettings               json.RawMessage
+	// SensitiveApproval travels to the worker in the runtime context. Nil means
+	// no approval: a worker refuses a tool the policy marks sensitive.
+	SensitiveApproval *SensitiveActionApproval
 }
 
 func (r RunRequest) Validate() error {
@@ -95,6 +98,9 @@ func (r RunRequest) Validate() error {
 	if !validModelSettings(r.LLMSettings) {
 		return ErrInvalidToolRun
 	}
+	if !r.SensitiveApproval.valid() {
+		return ErrInvalidToolRun
+	}
 	if len(r.Arguments) > MaxToolArgumentsBytes {
 		return ErrInvalidToolRun
 	}
@@ -107,6 +113,7 @@ func (r RunRequest) Validate() error {
 func (r RunRequest) Clone() RunRequest {
 	r.Arguments = append(json.RawMessage(nil), r.Arguments...)
 	r.LLMSettings = append(json.RawMessage(nil), r.LLMSettings...)
+	r.SensitiveApproval = r.SensitiveApproval.clone()
 	return r
 }
 

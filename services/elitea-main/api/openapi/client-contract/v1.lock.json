@@ -12259,12 +12259,41 @@
           "application/json": {
             "type": "object",
             "required": [
-              "tool_name"
+              "application_id",
+              "execution_id",
+              "tool_name",
+              "toolkit_ref",
+              "version_id"
             ],
             "properties": {
+              "application_id": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
+              },
               "arguments": {
                 "type": "object",
                 "open": true
+              },
+              "confirmation": {
+                "type": "object",
+                "required": [
+                  "approved",
+                  "approved_at"
+                ],
+                "properties": {
+                  "approved": {
+                    "type": "boolean"
+                  },
+                  "approved_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "execution_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
               },
               "llm_model": {
                 "type": "string"
@@ -12283,6 +12312,15 @@
               "tool_name": {
                 "type": "string",
                 "min_length": 1
+              },
+              "toolkit_ref": {
+                "type": "string",
+                "pattern": "^tkr1_[0-9a-f]{32}$"
+              },
+              "version_id": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 1
               }
             }
           }
@@ -12350,6 +12388,66 @@
                 },
                 "error": {
                   "type": "string"
+                },
+                "hitl_interrupt": {
+                  "type": "object",
+                  "properties": {
+                    "action_label": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "available_actions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "guardrail_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "interrupt_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "parent_agent_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "policy_message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "questions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "object",
+                        "open": true
+                      }
+                    },
+                    "tool_args": {
+                      "nullable": true
+                    },
+                    "tool_call_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
                 },
                 "message": {
                   "type": "string"
@@ -12536,6 +12634,66 @@
                 "error": {
                   "type": "string"
                 },
+                "hitl_interrupt": {
+                  "type": "object",
+                  "properties": {
+                    "action_label": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "available_actions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "guardrail_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "interrupt_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "parent_agent_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "policy_message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "questions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "object",
+                        "open": true
+                      }
+                    },
+                    "tool_args": {
+                      "nullable": true
+                    },
+                    "tool_call_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
                 "message": {
                   "type": "string"
                 },
@@ -12566,6 +12724,24 @@
                 },
                 "truncated": {
                   "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "410": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
                 }
               }
             }
@@ -12669,6 +12845,66 @@
                 "error": {
                   "type": "string"
                 },
+                "hitl_interrupt": {
+                  "type": "object",
+                  "properties": {
+                    "action_label": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "available_actions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "guardrail_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "interrupt_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "parent_agent_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "policy_message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "questions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "object",
+                        "open": true
+                      }
+                    },
+                    "tool_args": {
+                      "nullable": true
+                    },
+                    "tool_call_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
+                },
                 "message": {
                   "type": "string"
                 },
@@ -12727,6 +12963,29 @@
           },
           "headers": {
             "x-min-client-version": {
+              "type": "string"
+            }
+          }
+        },
+        "429": {
+          "content": {
+            "application/json": {
+              "type": "object",
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "headers": {
+            "retry-after": {
               "type": "string"
             }
           }
@@ -12825,6 +13084,66 @@
                 },
                 "error": {
                   "type": "string"
+                },
+                "hitl_interrupt": {
+                  "type": "object",
+                  "properties": {
+                    "action_label": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "available_actions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "guardrail_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "interrupt_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "parent_agent_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "policy_message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "questions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "object",
+                        "open": true
+                      }
+                    },
+                    "tool_args": {
+                      "nullable": true
+                    },
+                    "tool_call_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
                 },
                 "message": {
                   "type": "string"
@@ -12945,6 +13264,66 @@
                 },
                 "error": {
                   "type": "string"
+                },
+                "hitl_interrupt": {
+                  "type": "object",
+                  "properties": {
+                    "action_label": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "available_actions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "guardrail_type": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "interrupt_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "parent_agent_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "policy_message": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "questions": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "object",
+                        "open": true
+                      }
+                    },
+                    "tool_args": {
+                      "nullable": true
+                    },
+                    "tool_call_id": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "tool_name": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "toolkit_name": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "open": true
                 },
                 "message": {
                   "type": "string"

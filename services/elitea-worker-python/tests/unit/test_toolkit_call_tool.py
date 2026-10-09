@@ -92,10 +92,15 @@ def _binding(entry_id: str, byte: bytes) -> ToolkitCallToolInputBinding:
     )
 
 
+_NO_POLICY: dict[str, Any] = {"blocked_toolkits": [], "blocked_tools": {}, "sensitive_tools": {}}
+
+
 def _request(
     *,
     arguments: dict[str, Any] | None = None,
     tool_name: str = "get_issue",
+    toolkit_security: dict[str, Any] | None = _NO_POLICY,
+    approval: dict[str, Any] | None = None,
 ) -> ToolkitCallToolRequest:
     return ToolkitCallToolRequest(
         toolkit_type="github",
@@ -113,6 +118,8 @@ def _request(
             value={"issue": 7} if arguments is None else arguments,
         ),
         runtime_config={"metadata": {"tool_name": tool_name}},
+        toolkit_security=toolkit_security,
+        sensitive_action_approval=approval,
     )
 
 
@@ -360,6 +367,7 @@ def test_no_setting_no_argument_and_no_result_reaches_the_bus_command() -> None:
             ),
             arguments=request.arguments,
             runtime_config=request.runtime_config,
+            toolkit_security=request.toolkit_security,
         )
         await _run(sdk, request)
 
@@ -654,3 +662,86 @@ def test_an_unreadable_registry_does_not_refuse_the_run(
     )
 
     assert sdk_adapter_module.unsupported_toolkit_type_reason("github") == ""
+
+
+# toolkit_security is enforced by the worker itself (defence in depth): the
+# Rust worker refuses a blocked and a sensitive tool on this path, and so does
+# this one, whoever produced the command.
+
+
+def test_a_blocked_toolkit_or_tool_never_reaches_the_sdk() -> None:
+    async def run() -> None:
+        for policy in (
+            {"blocked_toolkits": ["GitHub"], "blocked_tools": {}, "sensitive_tools": {}},
+            {"blocked_toolkits": [], "blocked_tools": {"github": ["GetIssue"]}, "sensitive_tools": {}},
+        ):
+            sdk = _FakeSdk({"success": True, "result": {}, "tool_name": "get_issue"})
+            with pytest.raises(UnsupportedCapability):
+                # A routing prefix does not dodge the block.
+                await _run(sdk, _request(tool_name="github___get_issue", toolkit_security=policy))
+            assert sdk.calls == []
+
+    asyncio.run(run())
+
+
+def test_a_sensitive_tool_runs_only_with_an_approval() -> None:
+    policy = {"blocked_toolkits": [], "blocked_tools": {}, "sensitive_tools": {"*": ["get_issue"]}}
+
+    async def run() -> None:
+        sdk = _FakeSdk({"success": True, "result": {}, "tool_name": "get_issue"})
+        with pytest.raises(UnsupportedCapability):
+            await _run(sdk, _request(toolkit_security=policy))
+        assert sdk.calls == []
+
+        with pytest.raises(InvalidInput):
+            await _run(sdk, _request(toolkit_security=policy, approval={"source": "whoever"}))
+        with pytest.raises(InvalidInput):
+            await _run(sdk, _request(toolkit_security=policy, approval={"source": "user_confirmation"}))
+        assert sdk.calls == []
+
+        await _run(
+            sdk,
+            _request(
+                toolkit_security=policy,
+                approval={"source": "user_confirmation", "approved_at": "2026-10-08T12:00:00Z"},
+            ),
+        )
+        # test_tool's configuration test keeps running sensitive tools.
+        await _run(sdk, _request(toolkit_security=policy, approval={"source": "configuration_test"}))
+        assert len(sdk.calls) == 2
+
+    asyncio.run(run())
+
+
+def test_a_run_without_a_policy_is_refused_rather_than_run_unguarded() -> None:
+    async def run() -> None:
+        sdk = _FakeSdk({"success": True, "result": {}, "tool_name": "get_issue"})
+        with pytest.raises(UnsupportedCapability):
+            await _run(sdk, _request(toolkit_security=None))
+        assert sdk.calls == []
+
+    asyncio.run(run())
+
+
+def test_request_from_carries_the_runtime_context_policy() -> None:
+    command = toolkit_pb2.ToolkitCallToolCommandV1(
+        toolkit_type="github",
+        settings_entry_id="settings",
+        tool_name="get_issue",
+        arguments_entry_id="arguments",
+        toolkit_id="17",
+        toolkit_version="3",
+    )
+    policy = {"blocked_toolkits": [], "blocked_tools": {}, "sensitive_tools": {"github": ["get_issue"]}}
+    approval = {"source": "user_confirmation", "approved_at": "2026-10-08T12:00:00Z"}
+    request = request_from(
+        command,
+        input_bundle_id="bundle-1",
+        input_bundle_digest=b"b" * 32,
+        settings=ResolvedToolkitCallToolInput(binding=_binding("settings", b"s"), value={}),
+        arguments=ResolvedToolkitCallToolInput(binding=_binding("arguments", b"a"), value={}),
+        runtime_config={},
+        runtime_context={"toolkit_security": policy, "sensitive_action_approval": approval},
+    )
+    assert request.toolkit_security == policy
+    assert request.sensitive_action_approval == approval

@@ -40,13 +40,47 @@
  * OpenAPI spec version: 2.0.0
  */
 import * as zod from "zod";
+import { RemoteToolkitCallConfirmation } from "./remoteToolkitCallConfirmation.zod";
+
+export const remoteToolkitCallRequestExecutionIdRegExp = new RegExp(
+  "^[0-9a-f]{32}$",
+);
+
+export const remoteToolkitCallRequestToolkitRefRegExp = new RegExp(
+  "^tkr1_[0-9a-f]{32}$",
+);
 
 export const remoteToolkitCallRequestRequestIdMax = 128;
 
 export const RemoteToolkitCallRequest = zod
   .object({
+    execution_id: zod
+      .string()
+      .regex(remoteToolkitCallRequestExecutionIdRegExp)
+      .describe(
+        "The live local turn (startLocalTurn's `execution_id`) this call belongs to.",
+      ),
+    application_id: zod
+      .int()
+      .min(1)
+      .describe(
+        "The agent the desktop is running in that turn (the turn's agent, or a nested agent it reaches).",
+      ),
+    version_id: zod
+      .int()
+      .min(1)
+      .describe(
+        "That agent's version, as resolveApplicationVersion resolved it.",
+      ),
+    toolkit_ref: zod
+      .string()
+      .regex(remoteToolkitCallRequestToolkitRefRegExp)
+      .describe(
+        "The toolkit's `toolkit_ref.ref` from resolveApplicationVersion of that version.",
+      ),
     tool_name: zod.string().min(1),
     arguments: zod.record(zod.string(), zod.unknown()).optional(),
+    confirmation: RemoteToolkitCallConfirmation.optional(),
     request_id: zod
       .string()
       .max(remoteToolkitCallRequestRequestIdMax)
@@ -65,7 +99,7 @@ export const RemoteToolkitCallRequest = zod
     llm_settings: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(
-    "One remote tool call. Settings and credentials are never accepted. NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:85 (`remoteToolkitBody`).",
+    "One remote tool call, inside one live local turn. Settings and credentials are never accepted. NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:177 (`remoteToolkitBody`).",
   );
 
 export type RemoteToolkitCallRequest = zod.input<

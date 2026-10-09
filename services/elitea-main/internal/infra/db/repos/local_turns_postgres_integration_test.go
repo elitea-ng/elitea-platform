@@ -422,3 +422,85 @@ UPDATE p_1.personal_memory_entries SET created_at = now() - make_interval(mins =
 		t.Fatalf("turn N+1 recall = %+v, want the memory saved during turn N", second.Recall)
 	}
 }
+
+// ReadLocalTurnBinding names the agent version a remote toolkit call borrows
+// its authority from: the answering participant's application and mapped
+// version, only for the caller, and 0/0 for a model turn.
+func TestPostgresLocalTurnBindingNamesTheTurnsAgent(t *testing.T) {
+	pool := newMigratedPostgresIntegrationPool(t)
+	ctx := context.Background()
+	const user int64 = 4511
+	repo := NewLocalTurnsRepo(pool)
+
+	var conversationID int
+	var conversationUUID string
+	if err := pool.QueryRow(ctx, `
+INSERT INTO p_1.chat_conversations (uuid, name, author_id, source)
+VALUES (gen_random_uuid(), 'binding', $1, 'elitea')
+RETURNING id, uuid::text`, user).Scan(&conversationID, &conversationUUID); err != nil {
+		t.Fatalf("seed conversation: %v", err)
+	}
+	participants := map[string]int64{}
+	for _, participant := range []struct {
+		key, entity, meta, settings string
+	}{
+		{"user", "user", `{"id": 4511}`, `{}`},
+		{"agent", "application", `{"id": 5, "project_id": 1}`, `{"version_id": 6}`},
+		{"foreign", "application", `{"id": 5, "project_id": 2}`, `{"version_id": 6}`},
+		{"dummy", "dummy", `{}`, `{}`},
+	} {
+		var id int64
+		if err := pool.QueryRow(ctx, `
+INSERT INTO p_1.chat_participants (uuid, entity_name, entity_meta, meta)
+VALUES (gen_random_uuid(), $1, $2::jsonb, '{}'::json) RETURNING id`, participant.entity, participant.meta).Scan(&id); err != nil {
+			t.Fatalf("seed participant: %v", err)
+		}
+		if _, err := pool.Exec(ctx, `
+INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entity_settings) VALUES ($1, $2, $3::jsonb)`,
+			conversationID, id, participant.settings); err != nil {
+			t.Fatalf("map participant: %v", err)
+		}
+		participants[participant.key] = id
+	}
+
+	start := func(executionID, questionID string, participant int64) {
+		t.Helper()
+		if _, err := repo.StartLocalTurn(ctx, localturn.StartRecord{
+			ExecutionID: executionID, ProjectID: 1, ActorUserID: user, TokenID: "77",
+			ConversationUUID: conversationUUID, QuestionID: questionID,
+			ResponseMessageID: localturn.ResponseMessageID(questionID), ParticipantID: participant,
+			TTL: time.Hour,
+		}); err != nil {
+			t.Fatalf("start %s: %v", executionID, err)
+		}
+	}
+	agentTurn := strings.Repeat("1", 32)
+	foreignTurn := strings.Repeat("2", 32)
+	modelTurn := strings.Repeat("3", 32)
+	start(agentTurn, "11111111-1111-4111-8111-111111111111", participants["agent"])
+	start(foreignTurn, "22222222-2222-4222-8222-222222222222", participants["foreign"])
+	start(modelTurn, "33333333-3333-4333-8333-333333333333", 0)
+
+	binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, agentTurn)
+	if err != nil || binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 6}) {
+		t.Fatalf("agent turn binding = %+v, %v", binding, err)
+	}
+	for name, id := range map[string]string{"catalogue agent": foreignTurn, "model": modelTurn} {
+		binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, id)
+		if err != nil || binding != (localturn.StoredBinding{}) {
+			t.Fatalf("%s turn binding = %+v, %v; want no agent", name, binding, err)
+		}
+	}
+	if _, err := repo.ReadLocalTurnBinding(ctx, 1, user+1, agentTurn); !errors.Is(err, localturn.ErrNotFound) {
+		t.Fatalf("another caller's turn = %v, want ErrNotFound", err)
+	}
+	if _, err := repo.ReadLocalTurnBinding(ctx, 2, user, agentTurn); err == nil {
+		t.Fatal("the turn read from another project must not be found")
+	}
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.local_turn_executions SET committed_at = now() WHERE execution_id = $1`, agentTurn); err != nil {
+		t.Fatal(err)
+	}
+	if binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, agentTurn); err != nil || !binding.Committed {
+		t.Fatalf("committed binding = %+v, %v", binding, err)
+	}
+}

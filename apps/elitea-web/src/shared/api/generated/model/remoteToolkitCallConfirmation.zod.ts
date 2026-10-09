@@ -41,17 +41,24 @@
  */
 import * as zod from "zod";
 
-export const resolvedToolkitRefRefRegExp = new RegExp("^tkr1_[0-9a-f]{32}$");
-
-export const ResolvedToolkitRef = zod
+export const RemoteToolkitCallConfirmation = zod
   .object({
-    toolkit_id: zod.int(),
-    project_id: zod.int(),
-    ref: zod.string().regex(resolvedToolkitRefRefRegExp),
+    approved: zod
+      .boolean()
+      .describe("Must be true; a refused call is not sent."),
+    approved_at: zod.iso
+      .datetime({ offset: true })
+      .describe(
+        "When the user approved (RFC 3339); within the turn's 24 hours and not in the future.",
+      ),
   })
   .describe(
-    "The opaque reference of one saved toolkit as attached to this agent version in this project. `ref` is stable for that attachment, carries no credential and grants nothing: executeRemoteToolkitTool recomputes it from the version a call names and refuses a mismatch. NOTE(W2): internal/infra/storage/client_application_version.go:221 (`ClientToolkitRef`).",
+    "The user's approval of a sensitive tool call, after a 409 `confirmation_required`. It is recorded in the audit trail and passed to the worker as the call's only authority to run a sensitive tool.",
   );
 
-export type ResolvedToolkitRef = zod.input<typeof ResolvedToolkitRef>;
-export type ResolvedToolkitRefOutput = zod.output<typeof ResolvedToolkitRef>;
+export type RemoteToolkitCallConfirmation = zod.input<
+  typeof RemoteToolkitCallConfirmation
+>;
+export type RemoteToolkitCallConfirmationOutput = zod.output<
+  typeof RemoteToolkitCallConfirmation
+>;
