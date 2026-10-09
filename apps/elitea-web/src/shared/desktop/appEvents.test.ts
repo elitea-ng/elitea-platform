@@ -11,10 +11,14 @@ describe('createAppIpc', () => {
     await ipc.platform();
     await ipc.revealPath('w1', 'src/main.rs');
     await ipc.openPath('w1', '');
+    await ipc.setWindowTheme('dark');
+    await ipc.setWindowTheme(null);
     expect(invoke.mock.calls).toEqual([
       ['app_platform'],
       ['reveal_path', { workspace_id: 'w1', path: 'src/main.rs' }],
       ['open_path', { workspace_id: 'w1', path: '' }],
+      ['plugin:window|set_theme', { label: 'main', value: 'dark' }],
+      ['plugin:window|set_theme', { label: 'main', value: null }],
     ]);
   });
 

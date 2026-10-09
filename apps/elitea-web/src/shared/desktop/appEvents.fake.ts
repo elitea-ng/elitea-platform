@@ -3,7 +3,7 @@
  * side of `app://command` (a menu item, a drop), so a test can drive the
  * shell exactly.
  */
-import type { AppCommand, AppCommandHandler, AppIpc, AppPlatform } from './appEvents';
+import type { AppCommand, AppCommandHandler, AppIpc, AppPlatform, NativeWindowTheme } from './appEvents';
 import { BROWSER_PLATFORM } from './appEvents';
 import { WorkspaceIpcError } from './workspaceIpc';
 
@@ -12,6 +12,7 @@ export interface FakeAppIpc extends AppIpc {
   readonly calls: {
     revealed: { workspaceId: string; path: string }[];
     opened: { workspaceId: string; path: string }[];
+    themes: NativeWindowTheme[];
   };
   /** Make the next `revealPath` / `openPath` reject the way the host does. */
   failNext(command: 'revealPath' | 'openPath', code: string, message: string): void;
@@ -22,7 +23,7 @@ export const MACOS_PLATFORM: AppPlatform = { os: 'macos', titlebar_overlay: true
 
 export function createFakeAppIpc(platform: AppPlatform = BROWSER_PLATFORM): FakeAppIpc {
   const handlers = new Set<AppCommandHandler>();
-  const calls: FakeAppIpc['calls'] = { revealed: [], opened: [] };
+  const calls: FakeAppIpc['calls'] = { revealed: [], opened: [], themes: [] };
   const failures = new Map<'revealPath' | 'openPath', WorkspaceIpcError>();
   const settle = (command: 'revealPath' | 'openPath'): Promise<void> => {
     const error = failures.get(command);
@@ -40,6 +41,10 @@ export function createFakeAppIpc(platform: AppPlatform = BROWSER_PLATFORM): Fake
     openPath(workspaceId, path) {
       calls.opened.push({ workspaceId, path });
       return settle('openPath');
+    },
+    setWindowTheme(theme) {
+      calls.themes.push(theme);
+      return Promise.resolve();
     },
     onCommand(handler) {
       handlers.add(handler);

@@ -28,6 +28,7 @@ import { eliteaItems } from '../lib/eliteaSections';
 import { useDesktopLayout } from '../model/desktopLayout.store';
 import { useAppIpc } from '../model/appIpcContext';
 import { useHostIntegration } from '../model/useHostIntegration';
+import { useNativeWindowTheme } from '../model/useNativeWindowTheme';
 import { useRouteLogging } from '../model/useRouteLogging';
 import { useShellActions } from '../model/useShellActions';
 import { useShellLocation } from '../model/useShellLocation';
@@ -72,7 +73,9 @@ function ShellNotice(): React.JSX.Element {
 
 export function DesktopFrame({ children, permissions, projects, selectedProjectId, onSelectProject }: DesktopFrameProps): React.JSX.Element {
   const run = useShellActions();
-  useHostIntegration(run, useAppIpc());
+  const ipc = useAppIpc();
+  useHostIntegration(run, ipc);
+  useNativeWindowTheme(ipc);
   useRouteLogging();
   const location = useShellLocation();
   const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);

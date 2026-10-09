@@ -98,12 +98,13 @@ fn granted() -> Vec<String> {
 
 /// The webview may listen to host events (never emit them), and gets the
 /// two window permissions `data-tauri-drag-region` needs (drag;
-/// double-click to zoom), nothing else of the window or of the
+/// double-click to zoom) plus `set-theme` (the window's appearance follows
+/// the app's palette mode), nothing else of the window or of the
 /// Rust-driven plugins (notification, window-state): a page cannot post
 /// notifications, move the window or rewrite its saved state. Of the log
 /// plugin it gets the one write command, never a default set.
 #[test]
-fn the_webview_gets_only_the_drag_region_window_permissions() {
+fn the_webview_gets_only_the_window_and_log_permissions_it_needs() {
     let granted = granted();
     let core: Vec<&str> = granted
         .iter()
@@ -116,7 +117,8 @@ fn the_webview_gets_only_the_drag_region_window_permissions() {
             "core:event:allow-listen",
             "core:event:allow-unlisten",
             "core:window:allow-start-dragging",
-            "core:window:allow-internal-toggle-maximize"
+            "core:window:allow-internal-toggle-maximize",
+            "core:window:allow-set-theme"
         ]
     );
     let log: Vec<&str> = granted

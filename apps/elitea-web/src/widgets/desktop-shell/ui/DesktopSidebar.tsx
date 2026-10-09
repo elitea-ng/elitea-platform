@@ -51,6 +51,7 @@ import { computeIsSelectedProjectPublic } from '@/widgets/sidebar';
 
 import { eliteaItems, selectedEliteaItem, type EliteaItemValue } from '../lib/eliteaSections';
 import type { ShellAction } from '../lib/shellActions';
+import { SIDEBAR_TINT_OPACITY } from '../lib/sidebarTint';
 import { useDesktopLayout } from '../model/desktopLayout.store';
 import { WORKSPACE_LIST_KEY } from '../model/useShellActions';
 import type { ShellLocation } from '../model/useShellLocation';
@@ -317,16 +318,15 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
         borderRight: `1px solid ${theme.vars.palette.divider}`,
         position: 'relative',
         isolation: 'isolate',
-        // With the window's native material behind the page, the sidebar
-        // only tints it (a translucent layer of the secondary surface);
-        // otherwise it is that surface.
+        // Over the window's native material: a tint of the secondary surface strong
+        // enough for AA text on any backdrop (`lib/sidebarTint.ts`); else that surface.
         '&::before': {
           content: '""',
           position: 'absolute',
           inset: 0,
           zIndex: -1,
           background: theme.vars.palette.background.secondary,
-          opacity: vibrancy ? 0.55 : 1,
+          opacity: vibrancy ? SIDEBAR_TINT_OPACITY : 1,
         },
       })}
     >
