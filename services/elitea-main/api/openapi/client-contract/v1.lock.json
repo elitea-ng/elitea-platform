@@ -6654,6 +6654,9 @@
                           "agent_type": {
                             "type": "string"
                           },
+                          "all_tools": {
+                            "type": "boolean"
+                          },
                           "application_id": {
                             "type": "integer",
                             "format": "int64"

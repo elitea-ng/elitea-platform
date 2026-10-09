@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -139,6 +140,90 @@ func TestAuthorizeRemoteToolKeepsTheSavedSelectionWhenTheFreezeEmptiesIt(t *test
 	_, err := clientRemoteToolService(t, policy).AuthorizeRemoteTool(t.Context(),
 		clientRemoteToolRequest(func(r *RemoteToolAuthorization) { r.ToolName = "delete_repository" }))
 	require.ErrorIs(t, err, ErrRemoteToolNotInAgent)
+}
+
+// selectionService resolves version (1, 2) whose github toolkit (7) is saved
+// with savedSelection and whose settings resolve with frozenSettings'
+// selected_tools, under policy.
+func selectionService(t *testing.T, policy guardrails.Policy, savedSelection string, frozenSelection []any) *ClientApplicationVersionService {
+	t.Helper()
+	settings := clientCanarySettings()
+	if frozenSelection == nil {
+		delete(settings, "selected_tools")
+	} else {
+		settings["selected_tools"] = frozenSelection
+	}
+	freezer, err := agentexecutionapp.NewCurrentApplicationToolSnapshotService(
+		nestedVersionToolkitSettingsStub{result: settings}, nestedVersionToolkitNameStub{result: "gh"},
+		&nestedVersionModelCatalogStub{}, clientPolicyStub{policy: policy}, nestedVersionProjectContextStub{}, 1,
+	)
+	require.NoError(t, err)
+	const savedFixture = `"settings": {"selected_tools": ["read_file"]}`
+	require.Contains(t, clientVersionStoredDetails, savedFixture)
+	details := strings.Replace(clientVersionStoredDetails, savedFixture, `"settings": {"selected_tools": `+savedSelection+`}`, 1)
+	service, err := NewClientApplicationVersionService(clientVersionSource(details), freezer)
+	require.NoError(t, err)
+	return service.WithGuardrails(clientPolicyStub{policy: policy})
+}
+
+// resolvedGithubSelection answers toolkit 7's selected_tools and all_tools in
+// the desktop's resolved document.
+func resolvedGithubSelection(t *testing.T, service *ClientApplicationVersionService) ([]any, any) {
+	t.Helper()
+	document, err := service.Resolve(t.Context(), 90106, 11, 1, 2)
+	require.NoError(t, err)
+	var details struct {
+		Tools []map[string]any `json:"tools"`
+	}
+	require.NoError(t, json.Unmarshal(document.VersionDetails, &details))
+	for _, tool := range details.Tools {
+		if tool["kind"] == ClientToolKindRemoteToolkit && tool["id"] == float64(7) {
+			selected, _ := tool["selected_tools"].([]any)
+			return selected, tool["all_tools"]
+		}
+	}
+	t.Fatal("the resolved document has no toolkit 7")
+	return nil, nil
+}
+
+// The desktop's document and the remote call agree on a toolkit's selection:
+// both use the frozen selection, and a selection the freeze emptied reads as
+// no tool, never as "every tool"; a blocked tool is still refused as blocked.
+func TestRemoteToolSelectionIsTheResolvedDocumentsSelection(t *testing.T) {
+	t.Parallel()
+	authorize := func(service *ClientApplicationVersionService, tool string) error {
+		_, err := service.AuthorizeRemoteTool(t.Context(), clientRemoteToolRequest(func(r *RemoteToolAuthorization) { r.ToolName = tool }))
+		return err
+	}
+
+	// Every selected tool blocked: the freeze empties the list.
+	emptied := selectionService(t, guardrails.NewPolicy(guardrails.PolicyInput{BlockedTools: map[string][]string{"github": {"read_file"}}}),
+		`["read_file"]`, []any{"read_file"})
+	selected, allTools := resolvedGithubSelection(t, emptied)
+	require.Empty(t, selected)
+	require.Equal(t, false, allTools, "an emptied selection must not read as every tool")
+	require.ErrorIs(t, authorize(emptied, "read_file"), ErrRemoteToolBlocked)
+	require.ErrorIs(t, authorize(emptied, "delete_repository"), ErrRemoteToolNotInAgent)
+
+	// One of two selected tools blocked.
+	partial := selectionService(t, guardrails.NewPolicy(guardrails.PolicyInput{BlockedTools: map[string][]string{"github": {"create_file"}}}),
+		`["read_file", "create_file"]`, []any{"read_file", "create_file"})
+	selected, allTools = resolvedGithubSelection(t, partial)
+	require.Equal(t, []any{"read_file"}, selected)
+	require.Equal(t, false, allTools)
+	require.NoError(t, authorize(partial, "read_file"))
+	require.ErrorIs(t, authorize(partial, "create_file"), ErrRemoteToolBlocked)
+	require.ErrorIs(t, authorize(partial, "delete_repository"), ErrRemoteToolNotInAgent)
+
+	// Nothing selected by the author: every tool, as the SDK reads it, except
+	// what the guardrails block.
+	every := selectionService(t, guardrails.NewPolicy(guardrails.PolicyInput{BlockedTools: map[string][]string{"github": {"create_file"}}}),
+		`[]`, nil)
+	selected, allTools = resolvedGithubSelection(t, every)
+	require.Empty(t, selected)
+	require.Equal(t, true, allTools)
+	require.NoError(t, authorize(every, "delete_repository"))
+	require.ErrorIs(t, authorize(every, "create_file"), ErrRemoteToolBlocked)
 }
 
 func TestAuthorizeRemoteToolMarksASensitiveTool(t *testing.T) {

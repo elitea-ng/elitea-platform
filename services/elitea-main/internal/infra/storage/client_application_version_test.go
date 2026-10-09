@@ -230,22 +230,22 @@ func TestClientApplicationVersionErrorTaxonomy(t *testing.T) {
 func TestProjectClientApplicationVersionRefusesAToolItCannotName(t *testing.T) {
 	t.Parallel()
 	identity := ClientVersionIdentity{ProjectID: 1, ApplicationID: 2, VersionID: 3}
-	_, _, err := ProjectClientApplicationVersion(identity, json.RawMessage(`{"tools":[{"type":"github","settings":{}}]}`))
+	_, _, err := ProjectClientApplicationVersion(identity, json.RawMessage(`{"tools":[{"type":"github","settings":{}}]}`), nil)
 	require.Error(t, err, "a toolkit with no id has no reference to give")
-	_, _, err = ProjectClientApplicationVersion(identity, json.RawMessage(`{"tools":{}}`))
+	_, _, err = ProjectClientApplicationVersion(identity, json.RawMessage(`{"tools":{}}`), nil)
 	require.Error(t, err)
-	_, _, err = ProjectClientApplicationVersion(ClientVersionIdentity{}, json.RawMessage(`{"tools":[]}`))
+	_, _, err = ProjectClientApplicationVersion(ClientVersionIdentity{}, json.RawMessage(`{"tools":[]}`), nil)
 	require.Error(t, err)
 }
 
 func TestProjectClientApplicationVersionNamesEveryWithheldSecret(t *testing.T) {
 	t.Parallel()
 	_, withheld, err := ProjectClientApplicationVersion(ClientVersionIdentity{ProjectID: 1, ApplicationID: 2, VersionID: 3},
-		json.RawMessage(`{"tools":[],"instructions":"plain","meta":{"a/b":"{{ secret.x }}","list":["{{secret.y}}","ok"]}}`))
+		json.RawMessage(`{"tools":[],"instructions":"plain","meta":{"a/b":"{{ secret.x }}","list":["{{secret.y}}","ok"]}}`), nil)
 	require.NoError(t, err)
 	require.Equal(t, []string{"/meta/a~1b", "/meta/list/0"}, withheld)
 	_, withheld, err = ProjectClientApplicationVersion(ClientVersionIdentity{ProjectID: 1, ApplicationID: 2, VersionID: 3},
-		json.RawMessage(`{"tools":[]}`))
+		json.RawMessage(`{"tools":[]}`), nil)
 	require.NoError(t, err)
 	require.NotNil(t, withheld, "never null on the wire")
 	require.Empty(t, withheld)

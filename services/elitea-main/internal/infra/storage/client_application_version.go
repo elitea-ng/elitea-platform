@@ -162,7 +162,7 @@ func (service *ClientApplicationVersionService) Resolve(
 	if projectID <= 0 || projectID > math.MaxInt32 || actorID <= 0 || actorID > math.MaxInt32 {
 		return ClientApplicationVersion{}, ErrContentNotFound
 	}
-	_, frozen, err := freezeSavedApplicationVersion(
+	record, frozen, err := freezeSavedApplicationVersion(
 		ctx, service.versions, service.freezer, projectID, actorID, applicationID, versionID,
 	)
 	if err != nil {
@@ -181,7 +181,7 @@ func (service *ClientApplicationVersionService) Resolve(
 		return ClientApplicationVersion{}, ErrContentUnavailable
 	}
 	identity := ClientVersionIdentity{ProjectID: projectID, ApplicationID: int64(applicationID), VersionID: int64(versionID)}
-	projected, withheld, err := ProjectClientApplicationVersion(identity, frozen)
+	projected, withheld, err := ProjectClientApplicationVersion(identity, frozen, record.VersionDetails)
 	clearContentBytes(frozen)
 	if err != nil {
 		return ClientApplicationVersion{}, ErrClientApplicationVersionUnresolvable
@@ -206,11 +206,25 @@ func (service *ClientApplicationVersionService) Resolve(
 // construction. Outside the tools, every `{{secret.*}}` reference is replaced
 // and the frozen-configuration marker is dropped wherever it appears.
 //
+// saved is the SAVED version the freeze started from (nil means the frozen
+// one): a remote toolkit's selection is the frozen one, and saved tells a
+// selection the author left empty ("every tool", all_tools true) from one the
+// freeze emptied by removing every selected tool as blocked (no tool,
+// all_tools false). clientToolkitSelection is the rule, shared with
+// AuthorizeRemoteTool.
+//
 // It also answers the JSON Pointers of every replaced reference, sorted.
-func ProjectClientApplicationVersion(identity ClientVersionIdentity, frozen json.RawMessage) (json.RawMessage, []string, error) {
+func ProjectClientApplicationVersion(identity ClientVersionIdentity, frozen, saved json.RawMessage) (json.RawMessage, []string, error) {
 	if !identity.valid() || len(frozen) == 0 ||
 		len(frozen) > maxRuntimeApplicationVersionResponseBytes*8 {
 		return nil, nil, errors.New("frozen application version is invalid")
+	}
+	if len(saved) == 0 {
+		saved = frozen
+	}
+	savedSelections, err := clientToolkitSelections(saved)
+	if err != nil {
+		return nil, nil, errors.New("saved application version is not one JSON object")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(frozen))
 	decoder.UseNumber()
@@ -228,7 +242,7 @@ func ProjectClientApplicationVersion(identity ClientVersionIdentity, frozen json
 		if !ok {
 			return nil, nil, errors.New("a frozen tool is not an object")
 		}
-		projectedTool, ok := projectClientTool(identity, tool)
+		projectedTool, ok := projectClientTool(identity, tool, savedSelections)
 		if !ok {
 			return nil, nil, errors.New("a frozen tool could not be projected")
 		}
@@ -280,7 +294,7 @@ func ClientToolkitRef(identity ClientVersionIdentity, toolkitID int64, toolkitTy
 	return ClientToolkitRefPrefix + hex.EncodeToString(digest.Sum(nil)[:16])
 }
 
-func projectClientTool(identity ClientVersionIdentity, tool map[string]any) (map[string]any, bool) {
+func projectClientTool(identity ClientVersionIdentity, tool map[string]any, savedSelections map[int64][]string) (map[string]any, bool) {
 	toolType, ok := tool["type"].(string)
 	if !ok || toolType == "" {
 		return nil, false
@@ -333,17 +347,14 @@ func projectClientTool(identity ClientVersionIdentity, tool map[string]any) (map
 	}
 	projected := common(ClientToolKindRemoteToolkit)
 	projected["id"] = toolkitID
-	selected := []string{}
-	if settings, ok := tool["settings"].(map[string]any); ok {
-		if values, ok := settings["selected_tools"].([]any); ok {
-			for _, value := range values {
-				if name, ok := value.(string); ok && name != "" {
-					selected = append(selected, name)
-				}
-			}
-		}
+	frozenSelection := selectedToolNames(tool)
+	savedSelection, known := savedSelections[toolkitID]
+	if !known {
+		savedSelection = frozenSelection
 	}
+	selected, allTools := clientToolkitSelection(savedSelection, frozenSelection)
 	projected["selected_tools"] = selected
+	projected["all_tools"] = allTools
 	projected["toolkit_ref"] = map[string]any{
 		"toolkit_id": toolkitID,
 		"project_id": identity.ProjectID,
@@ -430,4 +441,50 @@ func clientApplicationVersionSHA256(projectID int64, applicationID, versionID ui
 	_, _ = digest.Write(identities[:])
 	_, _ = digest.Write(document)
 	return hex.EncodeToString(digest.Sum(nil))
+}
+
+// clientToolkitSelection is a remote toolkit's selection as the desktop reads
+// it and as AuthorizeRemoteTool admits a call: the FROZEN selection, which the
+// freeze has stripped of blocked names. allTools is true only when the author
+// selected nothing at all, which the SDK reads as every tool. A selection the
+// freeze EMPTIED (every selected tool blocked) is no tool: selected is empty
+// and allTools false, never read as "every tool".
+func clientToolkitSelection(saved, frozen []string) (selected []string, allTools bool) {
+	if len(frozen) > 0 {
+		return append([]string{}, frozen...), false
+	}
+	return []string{}, len(saved) == 0
+}
+
+// selectedToolNames reads one tool entry's settings.selected_tools.
+func selectedToolNames(tool map[string]any) []string {
+	var selected []string
+	if settings, ok := tool["settings"].(map[string]any); ok {
+		if values, ok := settings["selected_tools"].([]any); ok {
+			for _, value := range values {
+				if name, ok := value.(string); ok && name != "" {
+					selected = append(selected, name)
+				}
+			}
+		}
+	}
+	return selected
+}
+
+// clientToolkitSelections maps each toolkit id of a version document to its
+// selected_tools.
+func clientToolkitSelections(document json.RawMessage) (map[int64][]string, error) {
+	tools, err := decodeClientTools(document)
+	if err != nil {
+		return nil, err
+	}
+	selections := make(map[int64][]string, len(tools))
+	for _, tool := range tools {
+		if id, ok := positiveClientJSONInteger(tool["id"]); ok {
+			if _, seen := selections[id]; !seen {
+				selections[id] = selectedToolNames(tool)
+			}
+		}
+	}
+	return selections, nil
 }
