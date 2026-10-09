@@ -1370,6 +1370,35 @@ async fn main_wire_mcp_authorization_resumes_direct_pipeline_node_through_routin
     }
 }
 
+#[test]
+fn main_wire_mcp_authorization_refuses_action_and_credential_disagreement() {
+    const SERVER: &str = "https://mcp.example.invalid/v1/mcp";
+    let mut skip_with_token =
+        mcp_wire_resume_payload("mcp_auth_g1:card", "pipeline:auth:0", SERVER, "skip", "t");
+    skip_with_token
+        .mcp_tokens
+        .insert(SERVER.to_owned(), json!({"access_token": "runtime-secret"}));
+    let mut authorize_with_decline = mcp_wire_resume_payload(
+        "mcp_auth_g1:card",
+        "pipeline:auth:0",
+        SERVER,
+        "authorize",
+        "t",
+    );
+    authorize_with_decline
+        .user_declined_mcp_servers
+        .push(json!({"server_url": SERVER}));
+    let mut echo_mismatch =
+        mcp_wire_resume_payload("mcp_auth_g1:card", "pipeline:auth:0", SERVER, "skip", "t");
+    echo_mismatch.hitl_action = Some("authorize".to_owned());
+    for payload in [skip_with_token, authorize_with_decline, echo_mismatch] {
+        let Err(error) = PipelineMcpAuthorizationContinuation::from_payload(&payload) else {
+            panic!("a disagreeing authorization continuation must be refused");
+        };
+        assert_eq!(error.code(), PipelineResumeErrorCode::InvalidInput);
+    }
+}
+
 /// A tool that is both a configured sensitive action and behind delegated
 /// authorization: approving the sensitive card reaches the authorization
 /// card, and Main's Skip/Authorize for that second card must still resume.

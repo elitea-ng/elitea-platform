@@ -150,43 +150,36 @@ impl PipelineMcpAuthorizationContinuation {
         } else {
             None
         };
-        let authorize = match card.as_ref().map(|card| card.action) {
+        let has_tokens = !payload.mcp_tokens.is_empty();
+        let has_declines = !payload.user_declined_mcp_servers.is_empty();
+        let action = match card.as_ref().map(|card| card.action) {
             // The card names the action, so the credential collections must
             // agree with it exactly (the direct-agent authority rule).
-            Some(PipelineMcpAuthorizationAction::Authorize) => {
-                if payload.mcp_tokens.is_empty() || !payload.user_declined_mcp_servers.is_empty() {
-                    return Err(PipelineResumeError::invalid());
-                }
-                true
+            Some(action @ PipelineMcpAuthorizationAction::Authorize)
+                if has_tokens && !has_declines =>
+            {
+                action
             }
-            Some(PipelineMcpAuthorizationAction::Skip) => {
-                if !payload.mcp_tokens.is_empty() || payload.user_declined_mcp_servers.is_empty() {
-                    return Err(PipelineResumeError::invalid());
-                }
-                false
+            Some(action @ PipelineMcpAuthorizationAction::Skip) if has_declines && !has_tokens => {
+                action
             }
-            None if !payload.mcp_tokens.is_empty() => true,
-            None if !payload.user_declined_mcp_servers.is_empty() => false,
-            None => return Err(PipelineResumeError::invalid()),
+            None if has_tokens => PipelineMcpAuthorizationAction::Authorize,
+            None if has_declines => PipelineMcpAuthorizationAction::Skip,
+            _ => return Err(PipelineResumeError::invalid()),
         };
-        let (action, server_urls) = if authorize {
-            (
-                PipelineMcpAuthorizationAction::Authorize,
-                payload.mcp_tokens.keys().cloned().collect::<BTreeSet<_>>(),
-            )
-        } else {
-            (
-                PipelineMcpAuthorizationAction::Skip,
-                payload
-                    .user_declined_mcp_servers
-                    .iter()
-                    .map(declined_server_url)
-                    .collect::<Option<BTreeSet<_>>>()
-                    .ok_or_else(PipelineResumeError::invalid)?
-                    .into_iter()
-                    .map(ToOwned::to_owned)
-                    .collect(),
-            )
+        let server_urls = match action {
+            PipelineMcpAuthorizationAction::Authorize => {
+                payload.mcp_tokens.keys().cloned().collect::<BTreeSet<_>>()
+            }
+            PipelineMcpAuthorizationAction::Skip => payload
+                .user_declined_mcp_servers
+                .iter()
+                .map(declined_server_url)
+                .collect::<Option<BTreeSet<_>>>()
+                .ok_or_else(PipelineResumeError::invalid)?
+                .into_iter()
+                .map(ToOwned::to_owned)
+                .collect(),
         };
         if server_urls.is_empty()
             || server_urls
@@ -310,13 +303,13 @@ async fn validate_direct_tool_authorization_frontier(
     root_state: &State,
     binding: &PipelineMcpAuthEventBinding,
 ) -> Result<(), PipelineResumeError> {
-    let consumed_approval = json!({
-        "definition_digest": binding.definition_digest(),
-        "tool_call_id": binding.tool_call_id(),
-        "argument_digest": binding.argument_digest(),
-        "action": PipelineHitlAction::Approve.wire_name(),
-        "value": "",
-    });
+    let consumed_approval = sensitive_tool_resume_entry(
+        binding.definition_digest(),
+        binding.tool_call_id(),
+        binding.argument_digest(),
+        PipelineHitlAction::Approve,
+        "",
+    );
     let leaf_at_root = binding.nested_checkpoints().is_empty();
     if !resume_state_is_clear(
         root_state.get(DIRECT_TOOL_RESUME_STATE_KEY),
@@ -332,6 +325,24 @@ async fn validate_direct_tool_authorization_frontier(
         Some(&consumed_approval),
     )
     .await
+}
+
+/// The direct-tool resume entry of one sensitive-tool decision. Shared so the
+/// authorization pause recognises exactly the approval this module wrote.
+fn sensitive_tool_resume_entry(
+    definition_digest: &str,
+    tool_call_id: &str,
+    argument_digest: &str,
+    action: PipelineHitlAction,
+    value: &str,
+) -> Value {
+    json!({
+        "definition_digest": definition_digest,
+        "tool_call_id": tool_call_id,
+        "argument_digest": argument_digest,
+        "action": action.wire_name(),
+        "value": value,
+    })
 }
 
 fn delegated_requirement(
@@ -586,9 +597,13 @@ impl PipelineContinuationDecision {
                 && !application.has_delegated_authorization_actions())
             .then(|| PipelineToolDecision::from_payload(payload))
             .transpose()?;
+            // Not fatal here: the same decision may belong to a nested
+            // Application, whose own parser above is authoritative. A pipeline
+            // MCP pause without a valid card resolves as a stale decision.
             let authorization = is_single_mcp_authorization_decision(payload)
-                .then(|| PipelineMcpAuthorizationContinuation::from_payload(payload).map(Box::new))
-                .transpose()?;
+                .then(|| PipelineMcpAuthorizationContinuation::from_payload(payload).ok())
+                .flatten()
+                .map(Box::new);
             Ok(Self::Sensitive {
                 application,
                 tool,
@@ -930,13 +945,13 @@ impl PipelineToolDecision {
             state: [(
                 DIRECT_TOOL_RESUME_STATE_KEY.to_owned(),
                 json!({
-                    binding.node_name(): {
-                        "definition_digest": binding.definition_digest(),
-                        "tool_call_id": binding.tool_call_id(),
-                        "argument_digest": binding.argument_digest(),
-                        "action": self.action.wire_name(),
-                        "value": self.value,
-                    }
+                    binding.node_name(): sensitive_tool_resume_entry(
+                        binding.definition_digest(),
+                        binding.tool_call_id(),
+                        binding.argument_digest(),
+                        self.action,
+                        &self.value,
+                    )
                 }),
             )]
             .into_iter()
