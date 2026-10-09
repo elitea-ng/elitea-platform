@@ -14,7 +14,8 @@
  *    signal, and a second automatic retry here would run two streams for one
  *    principal against the server's per-principal admission cap;
  *  - a stream that ends, or a network failure, reconnects by itself after
- *    `retry` (default 3 s) with `Last-Event-ID`: `error` with `CONNECTING`;
+ *    `retry` (default 3 s, a server value floored at 1 s) with
+ *    `Last-Event-ID`: `error` with `CONNECTING`;
  *  - `open` fires when the response headers arrive.
  *
  * Differences by design: a 401 is answered by one token refresh and an
@@ -34,6 +35,8 @@ const OPEN = 1;
 const CLOSED = 2;
 
 const DEFAULT_RETRY_MS = 3000;
+/** Floor for a server-sent `retry:`; `retry: 0` would otherwise reconnect in a tight loop. */
+export const MIN_RETRY_MS = 1000;
 
 type Listener = (event: MessageEvent) => void;
 
@@ -170,7 +173,7 @@ export class FetchEventSource implements EventSourceLike {
       );
     }
     this.lastEventId = parser.lastEventId;
-    if (parser.retryMs !== null) this.retryMs = parser.retryMs;
+    if (parser.retryMs !== null) this.retryMs = Math.max(MIN_RETRY_MS, parser.retryMs);
   }
 
   private async run(): Promise<void> {

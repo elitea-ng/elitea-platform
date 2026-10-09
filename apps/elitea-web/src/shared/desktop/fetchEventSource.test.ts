@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FetchEventSource, type FetchEventSourceDeps } from './fetchEventSource';
+import { FetchEventSource, MIN_RETRY_MS, type FetchEventSourceDeps } from './fetchEventSource';
 
 const enc = new TextEncoder();
 
@@ -187,6 +187,21 @@ describe('FetchEventSource', () => {
     expect(transport.signOut).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(60);
     expect(es.readyState).toBe(FetchEventSource.OPEN);
+    es.close();
+  });
+
+  it('a server retry: 0 is floored, so a dropping stream never reconnects in a tight loop', async () => {
+    const first = stream();
+    const second = stream();
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(first.response).mockResolvedValueOnce(second.response);
+    const es = new FetchEventSource('https://h.example/s', setup(fetchMock).deps);
+    await vi.advanceTimersByTimeAsync(0);
+    first.send('retry: 0\n\n');
+    first.end();
+    await vi.advanceTimersByTimeAsync(MIN_RETRY_MS - 1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     es.close();
   });
 
