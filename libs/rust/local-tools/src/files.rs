@@ -214,60 +214,121 @@ pub(crate) struct PlannedChange {
     pub typed: WsPath,
     /// `None`: delete.
     pub content: Option<String>,
+    /// Permission bits to write with (a renamed file keeps its own, a
+    /// created file may name them); `None`: keep the existing or default.
+    pub mode: Option<u32>,
 }
 
 /// Parse a patch, resolve its paths and compute every result, before
-/// anything is written; also the paths the approval names.
+/// anything is written; also the paths the approval names. A rename is two
+/// changes: the new path created with the (patched) content and mode of the
+/// old one, and the old path deleted.
 pub(crate) fn plan_patch(
     workspace: &Workspace,
     ledger: &ReadLedger,
     text: &str,
 ) -> ToolResult<Vec<PlannedChange>> {
     let mut planned: Vec<PlannedChange> = Vec::new();
+    let push = |planned: &mut Vec<PlannedChange>, change: PlannedChange| {
+        if planned.iter().any(|done| done.path == change.path) {
+            return Err(ToolError::invalid(format!(
+                "the patch changes `{}` more than once; put all of its hunks in one section",
+                change.path
+            )));
+        }
+        planned.push(change);
+        Ok(())
+    };
     for file in patch::parse(text)? {
-        let path = workspace.resolve(file.target(), Intent::Write)?;
+        if file.is_rename() {
+            let (Some(old), Some(new)) = (&file.old_path, &file.new_path) else {
+                return Err(ToolError::invalid("a rename names both paths"));
+            };
+            let (old_typed, old_target, original) = existing(workspace, ledger, old)?;
+            let (new_typed, new_target) = absent(workspace, ledger, new)?;
+            let content = patch::apply(text_of(&original)?, &file)?.ok_or_else(|| {
+                ToolError::invalid(format!("the rename of `{old_typed}` deletes it"))
+            })?;
+            push(
+                &mut planned,
+                PlannedChange {
+                    path: new_target,
+                    typed: new_typed,
+                    content: Some(content),
+                    mode: Some(original.mode),
+                },
+            )?;
+            push(
+                &mut planned,
+                PlannedChange {
+                    path: old_target,
+                    typed: old_typed,
+                    content: None,
+                    mode: None,
+                },
+            )?;
+            continue;
+        }
         if let (Some(old), Some(new)) = (&file.old_path, &file.new_path)
             && old != new
         {
             return Err(ToolError::new(
                 ErrorCode::Unsupported,
-                "patches that rename files are not supported",
+                "a section names two different paths; a rename needs git's `rename from` / `rename to` lines",
             ));
         }
-        let now = check_fresh(workspace, ledger, &path)?;
-        let original = match (&now, file.is_create()) {
-            (Some(_), true) => {
-                return Err(ToolError::new(
-                    ErrorCode::Conflict,
-                    format!("`{path}` already exists"),
-                ));
-            }
-            (None, false) => {
-                return Err(ToolError::new(
-                    ErrorCode::NotFound,
-                    format!("`{path}` does not exist"),
-                ));
-            }
-            (Some(read), false) => text_of(read)?.to_owned(),
-            (None, true) => String::new(),
+        let (typed, target, content) = if file.is_create() {
+            let (typed, target) = absent(workspace, ledger, file.target())?;
+            (typed, target, patch::apply("", &file)?)
+        } else {
+            let (typed, target, read) = existing(workspace, ledger, file.target())?;
+            (typed, target, patch::apply(text_of(&read)?, &file)?)
         };
-        let target = match &now {
-            Some(read) => read.path.clone(),
-            None => workspace.final_target(&path)?,
-        };
-        workspace.check(&target, Intent::Write)?;
-        if planned.iter().any(|change| change.path == target) {
-            return Err(ToolError::invalid(format!(
-                "the patch changes `{target}` more than once; put all of its hunks in one section"
-            )));
-        }
-        planned.push(PlannedChange {
-            typed: path,
-            path: target,
-            content: patch::apply(&original, &file)?,
-        });
+        push(
+            &mut planned,
+            PlannedChange {
+                path: target,
+                typed,
+                content,
+                mode: file.created_mode(),
+            },
+        )?;
     }
     Ok(planned)
+}
+
+/// A file a patch changes: its typed path, where it lands, and what it
+/// holds now (read-before-write guard checked).
+fn existing(
+    workspace: &Workspace,
+    ledger: &ReadLedger,
+    argument: &str,
+) -> ToolResult<(WsPath, WsPath, ReadFile)> {
+    let path = workspace.resolve(argument, Intent::Write)?;
+    let read = check_fresh(workspace, ledger, &path)?
+        .ok_or_else(|| ToolError::new(ErrorCode::NotFound, format!("`{path}` does not exist")))?;
+    let target = read.path.clone();
+    workspace.check(&target, Intent::Write)?;
+    Ok((path, target, read))
+}
+
+/// A file a patch creates: its typed path and where it lands; it must not
+/// exist.
+fn absent(
+    workspace: &Workspace,
+    ledger: &ReadLedger,
+    argument: &str,
+) -> ToolResult<(WsPath, WsPath)> {
+    let path = workspace.resolve(argument, Intent::Write)?;
+    if current(workspace, &path)?.is_some() || check_fresh(workspace, ledger, &path)?.is_some() {
+        return Err(ToolError::new(
+            ErrorCode::Conflict,
+            format!("`{path}` already exists"),
+        ));
+    }
+    let target = workspace.final_target(&path)?;
+    workspace.check(&target, Intent::Write)?;
+    Ok((path, target))
 }
 
 /// `apply_patch`, after approval: every file or none. Each file is
@@ -288,9 +349,10 @@ pub(crate) fn apply_patch(
     let mut changed = Vec::new();
     for (index, change) in planned.iter().enumerate() {
         let applied = match &change.content {
-            Some(content) => {
-                write_and_record(workspace, ledger, &change.path, content.as_bytes()).map(|_| ())
-            }
+            Some(content) => workspace
+                .write(&change.path, content.as_bytes(), change.mode)
+                .and_then(|written| workspace.read(&written, MAX_FILE_BYTES))
+                .map(|read| ledger.record(&read.path, read.stamp)),
             None => workspace.remove_file(&change.path).map(|_| {
                 ledger.forget(&change.path);
             }),
@@ -711,6 +773,73 @@ mod tests {
                 .err()
                 .map(|error| error.code()),
             Some(ErrorCode::OutsideWorkspace)
+        );
+    }
+
+    /// git sections without `---`/`+++` apply: a pure rename keeps the
+    /// content and mode, empty files are created and deleted; an
+    /// executable new file is created executable.
+    #[test]
+    fn renames_and_empty_files_apply() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, ws, ledger) = setup(&[]);
+        seed(&dir, "old.sh", "#!/bin/sh\r\necho\n");
+        std::fs::set_permissions(
+            dir.path().join("old.sh"),
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .expect("chmod");
+        seed(&dir, "empty.txt", "");
+        seed(&dir, "taken.txt", "t\n");
+        read(&ws, &ledger, json!({ "path": "old.sh" })).expect("read");
+        read(&ws, &ledger, json!({ "path": "empty.txt" })).expect("read");
+        let onto_existing = "diff --git a/old.sh b/taken.txt\nsimilarity index 100%\nrename from old.sh\nrename to taken.txt\n";
+        assert_eq!(
+            plan_patch(&ws, &ledger, onto_existing)
+                .err()
+                .map(|error| error.code()),
+            Some(ErrorCode::Conflict)
+        );
+        let diff = "diff --git a/old.sh b/bin/new.sh\nsimilarity index 100%\nrename from old.sh\nrename to bin/new.sh\ndiff --git a/blank.txt b/blank.txt\nnew file mode 100644\nindex 0000000..e69de29\ndiff --git a/empty.txt b/empty.txt\ndeleted file mode 100644\nindex e69de29..0000000\ndiff --git a/run.sh b/run.sh\nnew file mode 100755\n--- /dev/null\n+++ b/run.sh\n@@ -0,0 +1 @@\n+#!/bin/sh\n";
+        let planned = plan_patch(&ws, &ledger, diff).expect("plan");
+        let result = apply_patch(&ws, &ledger, &planned).expect("apply");
+        assert_eq!(
+            result["changed"],
+            json!(["bin/new.sh", "old.sh", "blank.txt", "empty.txt", "run.sh"])
+        );
+        assert!(!dir.path().join("old.sh").exists());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("bin/new.sh")).expect("renamed"),
+            "#!/bin/sh\r\necho\n"
+        );
+        let mode = |name: &str| {
+            std::fs::metadata(dir.path().join(name))
+                .expect("meta")
+                .permissions()
+                .mode()
+                & 0o777
+        };
+        assert_eq!(mode("bin/new.sh"), 0o755);
+        assert_eq!(mode("run.sh"), 0o755);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("blank.txt")).expect("blank"),
+            ""
+        );
+        assert!(!dir.path().join("empty.txt").exists());
+        // A binary section refuses the whole patch: the text section next
+        // to it is not applied either.
+        seed(&dir, "t.txt", "a\n");
+        read(&ws, &ledger, json!({ "path": "t.txt" })).expect("read");
+        let mixed = "--- a/t.txt\n+++ b/t.txt\n@@ -1 +1 @@\n-a\n+b\ndiff --git a/x.png b/x.png\nBinary files a/x.png and b/x.png differ\n";
+        assert_eq!(
+            plan_patch(&ws, &ledger, mixed)
+                .err()
+                .map(|error| error.code()),
+            Some(ErrorCode::Unsupported)
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("t.txt")).expect("t"),
+            "a\n"
         );
     }
 
