@@ -161,11 +161,23 @@ def queued(ctx, params):
 
 
 def snapshot_publishing(ctx, params):
+    """The compiled snapshot is Publishing. With `after_compile` (the chat 852 cut) the compile job must also
+    hold its typed descriptor: the compiler has finished and the executable is being published to Main. The
+    Publishing row exists from the start of compilation, so without it the cut can land mid-compile."""
     if not _live_execution(ctx):
         return False, {'reason': 'execution not live'}
     snaps = ctx.collector.sql('agentstate', 'compiled_snapshots', exec_id=ctx.exec_id) or []
     pub = [s for s in snaps if s['state'] == 'publishing']
-    return bool(pub), {'snapshots': [{'state': s['state'], 'snapshot_key': s['snapshot_key']} for s in snaps]}
+    evidence = {'snapshots': [{'state': s['state'], 'snapshot_key': s['snapshot_key']} for s in snaps]}
+    if not pub or not params.get('after_compile'):
+        return bool(pub), evidence
+    keys = {s['compilation_job_key'] for s in pub}
+    compile_jobs = [j for j in _jobs(ctx) if j.get('job_key') in keys]
+    done = [j for j in compile_jobs if j.get('has_compiled_descriptor') and j.get('phase') == 'dispatched']
+    evidence['compile_jobs'] = [{'phase': j['phase'], 'descriptor': j.get('has_compiled_descriptor'),
+                                 'export_verified': j.get('compiled_export_verified'),
+                                 'lease_epoch': j['lease_epoch']} for j in compile_jobs]
+    return bool(done), evidence
 
 
 def claim_attempt_at_least(ctx, params):

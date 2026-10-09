@@ -200,7 +200,7 @@ class Stack:
             _copy_private(issued / f'elitea-sandbox-{name}.key', out / 'server.key')
             _write_private(out / 'database-url', db_url)
             config = {
-                'revision': 1, 'listen_address': f"0.0.0.0:{profile['port']}",
+                'revision': 1, 'purpose': 'execution', 'listen_address': f"0.0.0.0:{profile['port']}",
                 'owner': f'{self.project}-sandbox-{name}', 'audience': f'dns:elitea-sandbox-{name}',
                 'ca_path': f'{base}/client-ca.pem', 'certificate_path': f'{base}/server.pem',
                 'private_key_path': f'{base}/server.key',

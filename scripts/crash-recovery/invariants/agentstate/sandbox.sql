@@ -29,6 +29,8 @@ SELECT coalesce(json_agg(r ORDER BY r.dispatch_created_at), '[]'::json) FROM (
          j.preparation_bundle_json IS NOT NULL AS has_preparation_bundle, j.result_json IS NOT NULL AS has_result,
          j.code_recovery_receipt_json IS NOT NULL AS has_recovery_receipt, j.code_recovery_cleanup_at,
          j.code_recovery_cleanup_failure, j.runtime_cleanup_confirmed_at, j.compiled_purpose,
+         j.compiled_descriptor_json IS NOT NULL AS has_compiled_descriptor, j.compiled_export_verified,
+         j.compiled_export_lease_epoch,
          j.created_at AS job_created_at, j.updated_at AS job_updated_at
     FROM d LEFT JOIN elitea_runtime.sandbox_jobs j
       ON j.tenant_id = d.tenant_id AND j.project_id = d.project_id AND j.job_key = d.job_key
