@@ -13,12 +13,14 @@ name: Cancel runs of a merged PR
 # those same runs is still alive after a grace period — a run stuck on an
 # `always()` step or a wedged runner ignores a plain cancel.
 #
-# A run belongs to the pull request when its event is `pull_request` AND it
-# is either linked to this PR number, or — for a fork, where GitHub links no
-# PR — its head sha is one of this PR's commits. The branch name is only the
-# listing key, never the match: a release PR whose head is `main` must not
-# cancel the push runs (ci-*, publish.yml) a merge starts on `main`, and a
-# second open PR from the same branch must keep its checks.
+# A run belongs to the pull request when its event is `pull_request` and its
+# head sha is one of this PR's commits (plus the head repository, when it
+# still exists). The branch name is only the listing key, never the match: a
+# release PR whose head is `main` must not cancel the push runs (ci-*,
+# publish.yml) a merge starts on `main`. A run GitHub links to another PR and
+# not to this one is left alone, so a second open PR from the same branch
+# keeps its checks. Accepted limit: fork runs carry no PR link, so two open
+# PRs from the same fork branch at the same sha cannot be told apart.
 #
 # pull_request_target, not pull_request: a Dependabot or fork PR gets a
 # read-only GITHUB_TOKEN under pull_request, and cancelling needs
@@ -47,22 +49,29 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Cancel, then force-cancel, this pull request's unfinished runs
-        uses: actions/github-script@v9
+        # Pinned to the v9.0.0 commit: this job holds `actions: write` on
+        # every merged PR, fork PRs included, so a moved tag must not change
+        # the code it runs.
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           GRACE_SECONDS: "60"
         with:
           # Retries 5xx and secondary rate limits. A listing that failed must
-          # fail the job, never come back short and read as "nothing to cancel".
+          # fail the job, never come back short and read as "nothing to
+          # cancel". 409 ("already finished") is an answer, not a fault.
           retries: 3
+          retry-exempt-status-codes: 400,401,403,404,409,422
           script: |
             const { owner, repo } = context.repo;
             const pr = context.payload.pull_request;
-            const headRepo = pr.head.repo.full_name;
+            // head.repo is null when the fork was deleted; the sha match
+            // alone still identifies the PR's runs.
+            const headRepo = pr.head.repo?.full_name ?? null;
             const graceMs = Number(process.env.GRACE_SECONDS) * 1000;
+            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-            // Every sha this PR ever pointed at, for fork runs that carry no
-            // PR link. The endpoint caps at 250 commits; a PR that size has
-            // its older runs long finished.
+            // Every sha this PR ever pointed at. The endpoint caps at 250
+            // commits; a PR that size has its older runs long finished.
             const shas = new Set(
               (await github.paginate(github.rest.pulls.listCommits, {
                 owner, repo, pull_number: pr.number, per_page: 100,
@@ -70,28 +79,29 @@ jobs:
             );
 
             const belongsToPr = (run) =>
-              run.head_repository?.full_name === headRepo &&
-              (run.pull_requests.some((p) => p.number === pr.number) ||
-                (run.pull_requests.length === 0 && shas.has(run.head_sha)));
+              run.status !== 'completed' &&
+              shas.has(run.head_sha) &&
+              (headRepo === null || run.head_repository?.full_name === headRepo) &&
+              (run.pull_requests.length === 0 ||
+                run.pull_requests.some((p) => p.number === pr.number));
 
-            // The runs API filters on ONE status per call.
-            const runs = new Map();
-            for (const status of ['queued', 'requested', 'waiting', 'pending', 'in_progress']) {
-              const page = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-                owner, repo, branch: pr.head.ref, event: 'pull_request', status, per_page: 100,
-              });
-              for (const run of page.filter(belongsToPr)) runs.set(run.id, run);
-            }
+            // ONE listing with no status filter, keeping everything not
+            // completed. Listing per status misses a run that moves from one
+            // status to another between the calls.
+            const listed = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+              owner, repo, branch: pr.head.ref, event: 'pull_request', per_page: 100,
+            });
+            const runs = listed.filter(belongsToPr);
 
-            const label = `PR #${pr.number} (${headRepo}:${pr.head.ref})`;
-            if (runs.size === 0) {
+            const label = `PR #${pr.number} (${headRepo ?? 'deleted fork'}:${pr.head.ref})`;
+            if (runs.length === 0) {
               core.info(`${label}: no unfinished runs`);
               return;
             }
-            core.info(`${label}: ${runs.size} unfinished run(s)`);
-            for (const run of runs.values()) core.info(`  ${run.id} ${run.status} ${run.name}`);
+            core.info(`${label}: ${runs.length} unfinished run(s)`);
+            for (const run of runs) core.info(`  ${run.id} ${run.status} ${run.name}`);
 
-            // A 409 means the run already finished, which is the outcome we
+            // 409 means the run already finished, which is the outcome we
             // want. Anything else (403 missing scope, 404) is a real failure.
             const failures = [];
             const post = async (action, run) => {
@@ -100,23 +110,49 @@ jobs:
                   owner, repo, run_id: run.id,
                 });
                 core.info(`${action}: ${run.id} ${run.name}`);
+                return true;
               } catch (err) {
                 if (err.status === 409) {
                   core.info(`${action}: ${run.id} ${run.name} already finished`);
                 } else {
                   failures.push(`${action} of ${run.id} ${run.name}: ${err.status} ${err.message}`);
                 }
+                return false;
               }
             };
 
-            for (const run of runs.values()) await post('cancel', run);
+            // A run counts as still alive unless a status read says it has
+            // completed or no longer exists; an unreadable status is reported,
+            // and the run stays in line for the force-cancel.
+            const stillAlive = async (run) => {
+              try {
+                const { data } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: run.id });
+                return data.status !== 'completed';
+              } catch (err) {
+                if (err.status === 404) return false;
+                core.warning(`status of ${run.id} ${run.name}: ${err.status} ${err.message}`);
+                return true;
+              }
+            };
+
+            let pending = [];
+            for (const run of runs) {
+              if (await post('cancel', run)) pending.push(run);
+            }
 
             // Only the runs listed above are escalated: anything that appeared
             // since is not ours to force-cancel without a polite cancel first.
-            await new Promise((resolve) => setTimeout(resolve, graceMs));
-            for (const run of runs.values()) {
-              const { data } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: run.id });
-              if (data.status !== 'completed') await post('force-cancel', run);
+            // Poll so the job frees its own runner as soon as they stop.
+            const deadline = Date.now() + graceMs;
+            while (pending.length > 0 && Date.now() < deadline) {
+              await sleep(5000);
+              const alive = [];
+              for (const run of pending) {
+                if (await stillAlive(run)) alive.push(run);
+              }
+              pending = alive;
             }
+
+            for (const run of pending) await post('force-cancel', run);
 
             if (failures.length > 0) core.setFailed(failures.join('\n'));
