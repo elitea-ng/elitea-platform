@@ -67,12 +67,18 @@ export const ResolvedApplicationTool = zod
       .array(zod.string())
       .optional()
       .describe(
-        "A `remote_toolkit`'s tools the version selects; empty means all.",
+        "A `remote_toolkit`'s tools the version may call, after the guardrails removed blocked ones. Read it with `all_tools`: an empty list means every tool only when `all_tools` is true.",
+      ),
+    all_tools: zod
+      .boolean()
+      .optional()
+      .describe(
+        "A `remote_toolkit`'s: true when the author selected no tool, which means every tool of the toolkit (as in chat; the guardrails still block theirs). False with an empty `selected_tools` means the guardrails blocked every selected tool: the agent may call none. executeRemoteToolkitTool admits exactly this selection.",
       ),
     toolkit_ref: ResolvedToolkitRef.optional(),
   })
   .describe(
-    "One tool of a resolved version. `kind` is `remote_toolkit`, `application` or `platform_mcp`. NOTE(W2): internal/infra/storage/client_application_version.go:283 (`projectClientTool`).",
+    "One tool of a resolved version. `kind` is `remote_toolkit`, `application` or `platform_mcp`. NOTE(W2): internal/infra/storage/client_application_version.go:297 (`projectClientTool`).",
   );
 
 export type ResolvedApplicationTool = zod.input<typeof ResolvedApplicationTool>;

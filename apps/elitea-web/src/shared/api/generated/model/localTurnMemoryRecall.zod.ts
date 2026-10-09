@@ -54,7 +54,7 @@ export const LocalTurnMemoryRecall = zod
     memory_ids: zod.array(zod.string()),
   })
   .describe(
-    "The turn's recalled personal memory, the value a cloud turn's admission appends to its instructions. NOTE(W2): internal/api/v2/localturns/route.go:191.",
+    "The turn's recalled personal memory, the value a cloud turn's admission appends to its instructions. NOTE(W2): internal/api/v2/localturns/route.go:190.",
   );
 
 export type LocalTurnMemoryRecall = zod.input<typeof LocalTurnMemoryRecall>;

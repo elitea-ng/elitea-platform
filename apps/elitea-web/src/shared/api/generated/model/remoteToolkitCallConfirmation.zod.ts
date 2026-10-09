@@ -41,6 +41,10 @@
  */
 import * as zod from "zod";
 
+export const remoteToolkitCallConfirmationInterruptIdRegExp = new RegExp(
+  "^hitl_[0-9a-f]{32}$",
+);
+
 export const RemoteToolkitCallConfirmation = zod
   .object({
     approved: zod
@@ -49,11 +53,15 @@ export const RemoteToolkitCallConfirmation = zod
     approved_at: zod.iso
       .datetime({ offset: true })
       .describe(
-        "When the user approved (RFC 3339); within the turn's 24 hours and not in the future.",
+        "When the user approved (RFC 3339). At most 15 minutes old and at most 5 minutes in the future; an older approval answers 409 `confirmation_required` again.",
       ),
+    interrupt_id: zod
+      .string()
+      .regex(remoteToolkitCallConfirmationInterruptIdRegExp)
+      .describe("The `hitl_interrupt.interrupt_id` of the 409 this approves."),
   })
   .describe(
-    "The user's approval of a sensitive tool call, after a 409 `confirmation_required`. It is recorded in the audit trail and passed to the worker as the call's only authority to run a sensitive tool.",
+    "The user's approval of ONE sensitive tool call, after a 409 `confirmation_required`. It is bound to that call: `interrupt_id` must echo the `hitl_interrupt.interrupt_id` the 409 named, which the server derives from the turn, the toolkit, the agent version, the tool and the arguments and recomputes from the call it receives. It is used once: a repeat of the same request (the same Idempotency-Key) is the same call, any other request presenting it answers 409 `confirmation_required` again with the next interrupt id. It is recorded in the audit trail and passed to the worker as the call's only authority to run a sensitive tool.",
   );
 
 export type RemoteToolkitCallConfirmation = zod.input<

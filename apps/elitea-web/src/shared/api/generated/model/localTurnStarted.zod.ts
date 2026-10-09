@@ -70,7 +70,7 @@ export const LocalTurnStarted = zod
     memory_recall: LocalTurnMemoryRecall,
   })
   .describe(
-    "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:159 (`start`).",
+    "Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:158 (`start`).",
   );
 
 export type LocalTurnStarted = zod.input<typeof LocalTurnStarted>;

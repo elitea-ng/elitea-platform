@@ -69,7 +69,7 @@ export const LocalTurnHITLExchange = zod
       .describe("The user's answer or edit, at most 4 KiB."),
   })
   .describe(
-    "One approval or question the desktop resolved during the turn. NOTE(W2): internal/application/localturn/localturn.go:182 (`HITLExchange`).",
+    "One approval or question the desktop resolved during the turn. NOTE(W2): internal/application/localturn/localturn.go:183 (`HITLExchange`).",
   );
 
 export type LocalTurnHITLExchange = zod.input<typeof LocalTurnHITLExchange>;

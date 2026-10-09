@@ -70,7 +70,7 @@ export const LocalTurnWorkReport = zod
       .optional(),
   })
   .describe(
-    "What the client reports it did on the device. Stored on the answer as `local_work` with at most 50 commands and 200 paths (cut to 300 and 400 bytes) plus the reported totals. NOTE(W2): internal/application/localturn/localturn.go:198 (`LocalWorkReport`).",
+    "What the client reports it did on the device. Stored on the answer as `local_work` with at most 50 commands and 200 paths (cut to 300 and 400 bytes) plus the reported totals. NOTE(W2): internal/application/localturn/localturn.go:199 (`LocalWorkReport`).",
   );
 
 export type LocalTurnWorkReport = zod.input<typeof LocalTurnWorkReport>;

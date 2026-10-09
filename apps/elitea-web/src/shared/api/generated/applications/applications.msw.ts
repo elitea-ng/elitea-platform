@@ -1197,6 +1197,10 @@ export const getResolveApplicationVersionResponseMock = (
         ).map(() => faker.string.alpha({ length: { min: 10, max: 20 } })),
         undefined,
       ]),
+      all_tools: faker.helpers.arrayElement([
+        faker.datatype.boolean(),
+        undefined,
+      ]),
       toolkit_ref: faker.helpers.arrayElement([
         {
           toolkit_id: faker.number.int(),

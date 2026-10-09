@@ -50,7 +50,7 @@ export const ResolvedToolkitRef = zod
     ref: zod.string().regex(resolvedToolkitRefRefRegExp),
   })
   .describe(
-    "The opaque reference of one saved toolkit as attached to this agent version in this project. `ref` is stable for that attachment, carries no credential and grants nothing: executeRemoteToolkitTool recomputes it from the version a call names and refuses a mismatch. NOTE(W2): internal/infra/storage/client_application_version.go:270 (`ClientToolkitRef`).",
+    "The opaque reference of one saved toolkit as attached to this agent version in this project. `ref` is stable for that attachment, carries no credential and grants nothing: executeRemoteToolkitTool recomputes it from the version a call names and refuses a mismatch. NOTE(W2): internal/infra/storage/client_application_version.go:284 (`ClientToolkitRef`).",
   );
 
 export type ResolvedToolkitRef = zod.input<typeof ResolvedToolkitRef>;
