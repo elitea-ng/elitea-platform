@@ -53,9 +53,11 @@ use super::session::{
 use crate::protocol::control::ClaimBoundRuntimeContextAuthority;
 use crate::state::{CheckpointLimits, SessionLimits};
 use crate::toolkits::{
-    AdkHttpMcpConnector, AdmittedToolSnapshot, DelegatedAuthorizationCatalog, FrozenToolKind,
-    FrozenToolSnapshot, FrozenToolset, McpConnector, SensitiveToolPolicy, ToolAdmissionDecision,
-    ToolAdmissionPolicy, ToolBindingError, ToolBindingPlan, bind_frozen_toolsets, freeze_toolsets,
+    AdkHttpMcpConnector, AdmittedToolSnapshot, ArtifactToolAuthority,
+    DelegatedAuthorizationCatalog, FrozenToolKind, FrozenToolSnapshot, FrozenToolset, McpConnector,
+    SensitiveToolPolicy, ToolAdmissionDecision, ToolAdmissionPolicy, ToolBindingError,
+    ToolBindingPlan, bind_frozen_toolsets, freeze_toolsets,
+    materialize_configured_toolsets_with_artifact_authority,
     materialize_configured_toolsets_with_tokens_and_authorization,
     materialize_mcp_toolsets_with_tokens_and_authorization,
 };
@@ -63,6 +65,7 @@ use crate::transport::model_facade::{
     ModelAdapterKind, ModelFacade, ModelInvocation, ModelReasoningEffort,
 };
 use crate::transport::platform_client::PlatformClient;
+use crate::transport::platform_writer::ClaimPlatformWriter;
 use crate::transport::runtime_context::{ClaimScopedEliteaContext, SavedAgentFingerprint};
 
 pub(crate) mod composition;
@@ -447,7 +450,7 @@ impl PipelineNativeAgentAssembler {
         profile: &PipelineExecutionProfile,
         toolsets: AdmittedToolSnapshot<'_>,
         mcp_tokens: &Map<String, Value>,
-        runtime_context: &ClaimBoundRuntimeContextAuthority,
+        runtime_context: &Arc<ClaimBoundRuntimeContextAuthority>,
         tool_policy: &Arc<ToolAdmissionPolicy>,
         model_scopes: ModelScopeSessions,
         code: Option<Arc<dyn super::graph::CodeSandboxRuntime>>,
@@ -487,11 +490,22 @@ impl PipelineNativeAgentAssembler {
         tracing::Span::current().record("stage", "toolsets");
         let aliases = profile.definition().runtime_toolkit_aliases();
         let selected_snapshot = toolsets.retain_toolkit_names(&aliases);
+        // The claim is lent to the `artifact` family here as on the ordinary
+        // path (#906): its authority is the live claim, and a direct node or a
+        // model calls it mid-run, after assembly. Without it the family is
+        // skipped and every node on an attached artifact toolkit is refused.
+        let artifacts = self.platform.as_ref().map(|platform| {
+            ArtifactToolAuthority::new(Arc::new(ClaimPlatformWriter::new(
+                Arc::clone(platform),
+                Arc::clone(runtime_context),
+            )))
+        });
         let (mut materialized, mut delegated_authorization) =
-            materialize_configured_toolsets_with_tokens_and_authorization(
+            materialize_configured_toolsets_with_artifact_authority(
                 &selected_snapshot,
                 tool_policy,
                 mcp_tokens,
+                artifacts.as_ref(),
             )
             .await
             .map_err(tool_materialization_error)?;
@@ -1005,6 +1019,8 @@ impl PipelineNativeAgentAssembler {
             let admitted = assembly.admit_pipeline_with_policy(tool_policy.as_ref())?;
             let (profile, plan, toolsets, mcp_tokens, start, runtime_context, session, lease) =
                 admitted.into_parts();
+            // Shared, never duplicated: the artifact family keeps it past assembly.
+            let runtime_context = Arc::new(runtime_context);
             // Resolve the complete frozen tree before credentials or executable runtimes.
             let composition = if profile.definition().has_application_nodes() {
                 let platform = self
@@ -2097,7 +2113,9 @@ fn build_direct_tool_resolver(
         .collect::<BTreeSet<_>>();
     let mut tools = BTreeMap::new();
     for alias in aliases {
-        let toolset = toolsets.get(alias).ok_or_else(invalid_direct_tool_scope)?;
+        // Admission already bound the alias to exactly one frozen reference, so
+        // a missing toolset is a family this position cannot serve, not scope.
+        let toolset = toolsets.get(alias).ok_or_else(unserved_direct_toolkit)?;
         let available = toolset.tools();
         if available.len() > MAX_PIPELINE_MATERIALIZED_TOOLS {
             return Err(invalid_direct_tool_scope());
@@ -2206,6 +2224,13 @@ const fn invalid_direct_tool_scope() -> NativeAgentAssemblyError {
     NativeAgentAssemblyError::new(
         NativeAgentAssemblyErrorCode::InvalidInput,
         "a pipeline direct tool node references a tool outside its frozen scope",
+    )
+}
+
+const fn unserved_direct_toolkit() -> NativeAgentAssemblyError {
+    NativeAgentAssemblyError::new(
+        NativeAgentAssemblyErrorCode::UnsupportedCapability,
+        "a pipeline direct tool node selected a toolkit this runtime cannot serve in this position",
     )
 }
 
