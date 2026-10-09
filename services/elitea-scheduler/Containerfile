@@ -6,7 +6,7 @@
 # ../../libs/go/observability` to go.mod, which needs that directory reachable
 # from the build context; a context scoped to services/elitea-scheduler alone
 # cannot see it. Mirrors services/elitea-main/Containerfile's builder stage.
-FROM golang:1.25-trixie AS builder
+FROM golang:1.26-trixie AS builder
 WORKDIR /src
 COPY libs/go/observability ./libs/go/observability
 # The NATS client identity helper (#1076), the module's second local replace.

@@ -1,6 +1,6 @@
 module github.com/EliteaAI/elitea-platform/services/elitea-llm-gateway
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/EliteaAI/elitea-platform/libs/go/egresslib v0.0.0-00010101000000-000000000000
