@@ -267,3 +267,29 @@ async fn unsafe_repositories_and_denied_paths_are_refused() {
     let empty = commit(&denied, json!({ "message": "  " })).await;
     assert_eq!(empty["code"], "local_tools.invalid_argument");
 }
+
+/// A directory never stages what `path_deny` hides: committing `.` takes
+/// everything else and leaves `.env` (at any depth) untouched.
+#[tokio::test]
+async fn committing_a_directory_leaves_denied_files_out() {
+    let fixture = fixture("approve", |_| {});
+    std::fs::create_dir_all(fixture.root.join("sub")).expect("sub");
+    std::fs::write(fixture.root.join(".env"), "TOKEN=1\n").expect("env");
+    std::fs::write(fixture.root.join("sub/.env"), "TOKEN=2\n").expect("env");
+    std::fs::write(fixture.root.join("b.txt"), "b\n").expect("b");
+    std::fs::write(fixture.root.join("sub/c.txt"), "c\n").expect("c");
+    let result = commit(&fixture, json!({ "message": "all", "paths": ["."] })).await;
+    assert_eq!(result["status"], "ok", "{result}");
+    assert_eq!(
+        git(&fixture.root, &["show", "--name-only", "--format=", "HEAD"]),
+        "b.txt\nsub/c.txt"
+    );
+    assert_eq!(git(&fixture.root, &["diff", "--cached", "--name-only"]), "");
+    assert_eq!(
+        git(
+            &fixture.root,
+            &["status", "--porcelain", "--untracked-files=all"]
+        ),
+        "?? .env\n?? sub/.env"
+    );
+}
