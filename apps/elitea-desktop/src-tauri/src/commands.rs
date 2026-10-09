@@ -1,4 +1,6 @@
-//! The IPC surface: seven commands, nothing else.
+//! The connection and sign-in IPC surface: seven commands. The local-work
+//! commands (workspaces, the agent turn) are in `local_commands.rs`; the
+//! whole surface is listed in `IPC.md`.
 //!
 //! Each one is named in `build.rs` (so Tauri generates an `allow-*` permission
 //! for it) and in `capabilities/default.json` (so only the bundled window may

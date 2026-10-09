@@ -45,9 +45,16 @@ precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
 
 - The window loads **only bundled assets**. `on_navigation` refuses every other
   origin, so remote content never sits next to the IPC commands.
-- IPC is an explicit allowlist: seven `host_*` commands, granted by
+- IPC is an explicit allowlist: seven `host_*` commands plus the local-work
+  commands (workspaces and the D0 local agent turn), granted by
   `capabilities/default.json` to the `main` window only (no remote origin is
-  listed). No command returns the refresh token.
+  listed). No command returns the refresh token. The whole surface, with the
+  `agent://event` stream, is in `src-tauri/IPC.md`.
+- Local agent turns (`src-tauri/src/d0/`, the temporary D0 assembler) call
+  the connected deployment only, with the native access token: the resolved
+  definition, the local turn start/commit, the remote toolkit call and
+  `/llm`. No toolkit secret reaches the device; an agent whose definition
+  withholds secrets is refused locally.
 - The CSP allows scripts from `self` only. The webview reaches the deployment
   through the HTTP plugin (a Rust-side request, so no CORS change is needed on
   the deployment). That plugin's scope is `https://*` plus loopback `http`

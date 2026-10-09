@@ -11,6 +11,15 @@
     "allow-host-refresh",
     "allow-host-sign-out",
     "allow-host-wipe",
+    "allow-workspace-open",
+    "allow-workspace-list",
+    "allow-workspace-remove",
+    "allow-workspace-bind-project",
+    "allow-agent-turn-start",
+    "allow-agent-turn-cancel",
+    "allow-approval-respond",
+    "allow-turn-changes",
+    "allow-checkpoint-restore",
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "https://*" }, { "url": "http://*" }]

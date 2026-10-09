@@ -11,6 +11,15 @@ fn main() {
             "host_refresh",
             "host_sign_out",
             "host_wipe",
+            "workspace_open",
+            "workspace_list",
+            "workspace_remove",
+            "workspace_bind_project",
+            "agent_turn_start",
+            "agent_turn_cancel",
+            "approval_respond",
+            "turn_changes",
+            "checkpoint_restore",
         ]),
     ))
     .expect("tauri build configuration is valid");

@@ -7,15 +7,18 @@
 
 mod auth;
 mod commands;
+mod d0;
 mod discovery;
 mod error;
 mod http_scope;
+mod local_commands;
 mod loopback;
 mod pkce;
 mod settings;
 mod store;
 mod tokens;
 mod window;
+mod workspaces;
 
 #[cfg(test)]
 mod testutil;
@@ -27,10 +30,14 @@ use tauri_plugin_opener::OpenerExt as _;
 
 use crate::auth::{AuthConfig, AuthService, BrowserOpener};
 use crate::commands::AppState;
+use crate::d0::remote_tools::RetryPolicy;
+use crate::d0::turn::{AgentHost, HostDeps};
 use crate::error::HostError;
+use crate::local_commands::{AuthCredentials, LocalState, MainWindowEvents, StoredPolicy};
 use crate::settings::SettingsFiles;
 use crate::store::KeyringStore;
 use crate::tokens::TokenEndpoint;
+use crate::workspaces::WorkspaceStore;
 
 /// Keychain item identity. The service matches the bundle identifier.
 const KEYCHAIN_SERVICE: &str = "ai.elitea.desktop";
@@ -69,12 +76,14 @@ pub fn run() {
     let result = builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let config_dir = app.path().app_config_dir()?;
+            let data_dir = app.path().app_data_dir()?;
             let tokens = TokenEndpoint::new(env!("CARGO_PKG_VERSION"))?;
             let auth = AuthService::new(AuthConfig {
                 store: Arc::new(KeyringStore::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)?),
-                files: SettingsFiles::new(config_dir),
+                files: SettingsFiles::new(config_dir.clone()),
                 tokens,
                 opener: Arc::new(SystemBrowser(app.handle().clone())),
                 build_client_id: BUILD_CLIENT_ID,
@@ -83,6 +92,21 @@ pub fn run() {
             let auth = Arc::new(auth);
             let stored_origin = auth.state().ok().and_then(|s| s.origin);
             http_scope::grant_stored(app.handle(), stored_origin.as_deref());
+            // Local work (ADR-0029 D0): workspaces and the local agent turn.
+            let workspaces = Arc::new(WorkspaceStore::new(data_dir));
+            let agents = AgentHost::new(HostDeps {
+                credentials: Arc::new(AuthCredentials(auth.clone())),
+                client_version: env!("CARGO_PKG_VERSION").to_owned(),
+                policy: Arc::new(StoredPolicy(SettingsFiles::new(config_dir))),
+                workspaces: workspaces.clone(),
+                emitter: Arc::new(MainWindowEvents(app.handle().clone())),
+                retry: RetryPolicy::default(),
+            })
+            .map_err(|error| error.message)?;
+            app.manage(LocalState {
+                workspaces,
+                agents: Arc::new(agents),
+            });
             app.manage(AppState { auth });
             window::create_main_window(app.handle())?;
             Ok(())
@@ -95,6 +119,15 @@ pub fn run() {
             commands::host_refresh,
             commands::host_sign_out,
             commands::host_wipe,
+            local_commands::workspace_open,
+            local_commands::workspace_list,
+            local_commands::workspace_remove,
+            local_commands::workspace_bind_project,
+            local_commands::agent_turn_start,
+            local_commands::agent_turn_cancel,
+            local_commands::approval_respond,
+            local_commands::turn_changes,
+            local_commands::checkpoint_restore,
         ])
         .run(tauri::generate_context!());
     if let Err(error) = result {

@@ -1,0 +1,222 @@
+//! Workspaces: folders the person opened for local work (ADR-0029 decision
+//! 4), kept in the app data directory as `workspaces.json`.
+//!
+//! A workspace is its canonical path, a display name and the project it is
+//! bound to (a local turn runs in that project, decision 8). Nothing about a
+//! workspace is ever written inside the folder itself: per-workspace data
+//! (remembered approvals, copy checkpoints, the session's temporary
+//! directory) lives under `workspaces/<id>/` next to this file.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use serde::{Deserialize, Serialize};
+
+use crate::error::HostError;
+
+const FILE: &str = "workspaces.json";
+
+/// One workspace, as IPC returns it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Workspace {
+    pub id: String,
+    pub path: String,
+    pub name: String,
+    pub project_id: Option<i64>,
+    /// Computed when listed: the folder is inside a git work tree.
+    #[serde(default)]
+    pub is_git: bool,
+}
+
+pub struct WorkspaceStore {
+    dir: PathBuf,
+    lock: Mutex<()>,
+}
+
+fn io(error: &std::io::Error) -> HostError {
+    HostError::Storage(error.to_string())
+}
+
+fn in_git_tree(path: &Path) -> bool {
+    path.ancestors().any(|dir| dir.join(".git").exists())
+}
+
+impl WorkspaceStore {
+    #[must_use]
+    pub fn new(dir: PathBuf) -> Self {
+        Self {
+            dir,
+            lock: Mutex::new(()),
+        }
+    }
+
+    /// The directory a workspace's own host data lives in.
+    #[must_use]
+    pub fn data_dir(&self, id: &str) -> PathBuf {
+        self.dir.join("workspaces").join(id)
+    }
+
+    fn read(&self) -> Result<Vec<Workspace>, HostError> {
+        match fs::read_to_string(self.dir.join(FILE)) {
+            Ok(text) => Ok(serde_json::from_str(&text).unwrap_or_default()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(e) => Err(io(&e)),
+        }
+    }
+
+    fn write(&self, workspaces: &[Workspace]) -> Result<(), HostError> {
+        fs::create_dir_all(&self.dir).map_err(|e| io(&e))?;
+        let text = serde_json::to_string_pretty(workspaces)
+            .map_err(|e| HostError::Internal(e.to_string()))?;
+        let staging = self.dir.join(format!("{FILE}.tmp"));
+        fs::write(&staging, text).map_err(|e| io(&e))?;
+        fs::rename(&staging, self.dir.join(FILE)).map_err(|e| io(&e))
+    }
+
+    fn with<T>(&self, work: impl FnOnce() -> Result<T, HostError>) -> Result<T, HostError> {
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| HostError::Internal("workspace store poisoned".into()))?;
+        work()
+    }
+
+    /// Every workspace, with `is_git` computed now.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be read.
+    pub fn list(&self) -> Result<Vec<Workspace>, HostError> {
+        self.with(|| {
+            Ok(self
+                .read()?
+                .into_iter()
+                .map(|mut workspace| {
+                    workspace.is_git = in_git_tree(Path::new(&workspace.path));
+                    workspace
+                })
+                .collect())
+        })
+    }
+
+    /// # Errors
+    ///
+    /// The file cannot be read.
+    pub fn get(&self, id: &str) -> Result<Option<Workspace>, HostError> {
+        Ok(self.list()?.into_iter().find(|w| w.id == id))
+    }
+
+    /// Add a folder (or return the workspace it already is).
+    ///
+    /// # Errors
+    ///
+    /// The folder does not exist or is not a directory, or the file cannot
+    /// be written.
+    pub fn add(&self, folder: &Path) -> Result<Workspace, HostError> {
+        let canonical = folder
+            .canonicalize()
+            .map_err(|_| HostError::Storage("the folder does not exist".into()))?;
+        if !canonical.is_dir() {
+            return Err(HostError::Storage("not a folder".into()));
+        }
+        let path = canonical.to_string_lossy().into_owned();
+        let workspace = self.with(|| {
+            let mut all = self.read()?;
+            if let Some(existing) = all.iter().find(|w| w.path == path) {
+                return Ok(existing.clone());
+            }
+            let workspace = Workspace {
+                id: uuid::Uuid::new_v4().simple().to_string(),
+                name: canonical
+                    .file_name()
+                    .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned()),
+                path: path.clone(),
+                project_id: None,
+                is_git: false,
+            };
+            all.push(workspace.clone());
+            self.write(&all)?;
+            Ok(workspace)
+        })?;
+        Ok(Workspace {
+            is_git: in_git_tree(&canonical),
+            ..workspace
+        })
+    }
+
+    /// Forget a workspace (the folder itself is untouched) and its host data.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be written.
+    pub fn remove(&self, id: &str) -> Result<(), HostError> {
+        self.with(|| {
+            let mut all = self.read()?;
+            all.retain(|w| w.id != id);
+            self.write(&all)
+        })?;
+        // Ids are ours (32 hex characters); anything else names no directory.
+        let data = self.data_dir(id);
+        if !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric()) && data.exists() {
+            fs::remove_dir_all(data).map_err(|e| io(&e))?;
+        }
+        Ok(())
+    }
+
+    /// Bind a workspace to a project.
+    ///
+    /// # Errors
+    ///
+    /// No such workspace, or the file cannot be written.
+    pub fn bind_project(&self, id: &str, project_id: i64) -> Result<Workspace, HostError> {
+        let workspace = self.with(|| {
+            let mut all = self.read()?;
+            let workspace = all
+                .iter_mut()
+                .find(|w| w.id == id)
+                .ok_or_else(|| HostError::Storage("no such workspace".into()))?;
+            workspace.project_id = Some(project_id);
+            let updated = workspace.clone();
+            self.write(&all)?;
+            Ok(updated)
+        })?;
+        Ok(Workspace {
+            is_git: in_git_tree(Path::new(&workspace.path)),
+            ..workspace
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspaces_are_added_once_bound_and_removed() {
+        let app = tempfile::tempdir().unwrap();
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::create_dir(folder.path().join(".git")).unwrap();
+        let store = WorkspaceStore::new(app.path().to_owned());
+        assert!(store.list().unwrap().is_empty());
+        let added = store.add(folder.path()).unwrap();
+        assert!(added.is_git);
+        assert_eq!(added.project_id, None);
+        assert_eq!(
+            added.path,
+            folder.path().canonicalize().unwrap().to_string_lossy()
+        );
+        // The same folder again is the same workspace.
+        assert_eq!(store.add(folder.path()).unwrap().id, added.id);
+        let bound = store.bind_project(&added.id, 42).unwrap();
+        assert_eq!(bound.project_id, Some(42));
+        assert_eq!(store.get(&added.id).unwrap().unwrap().project_id, Some(42));
+        std::fs::create_dir_all(store.data_dir(&added.id)).unwrap();
+        store.remove(&added.id).unwrap();
+        assert!(store.list().unwrap().is_empty());
+        assert!(!store.data_dir(&added.id).exists());
+        assert!(folder.path().exists(), "the folder itself is never touched");
+        assert!(store.add(&folder.path().join("missing")).is_err());
+        assert!(store.bind_project("nope", 1).is_err());
+    }
+}
