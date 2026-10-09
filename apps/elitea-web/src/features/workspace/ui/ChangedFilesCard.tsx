@@ -5,7 +5,7 @@
  * Restoring is the host's job (`checkpoint_restore`); this card only asks, and
  * then re-reads `turn_changes` so what it shows is what is on disk now.
  */
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
@@ -41,6 +41,10 @@ export interface ChangedFilesCardProps {
   turnId: string;
   /** Bumped to ask for the "Undo turn" confirmation from outside (the composer's `/undo`). */
   undoRequest?: number;
+  /** `panel`: the desktop's changes side panel — no frame, rows stacked for a narrow column. */
+  variant?: 'card' | 'panel';
+  /** Extra per-file actions (the desktop's "Reveal in Finder" / "Open"). */
+  fileActions?: ((file: ChangedFile) => ReactNode) | undefined;
 }
 
 const changesKey = (turnId: string) => ['workspace', 'turn-changes', turnId] as const;
@@ -58,33 +62,72 @@ function statusLabel(status: ChangedFile['status']): string {
   }
 }
 
-function FileRow({ file, busy, onRevert }: { file: ChangedFile; busy: boolean; onRevert: () => void }): React.JSX.Element {
+interface FileRowProps {
+  file: ChangedFile;
+  busy: boolean;
+  onRevert: () => void;
+  stacked: boolean;
+  fileActions: ((file: ChangedFile) => ReactNode) | undefined;
+}
+
+/** The card's heading; the side panel has its own. */
+function CardTitle({ hidden }: { hidden: boolean }): React.JSX.Element | null {
+  return hidden ? null : <Typography variant="headingSmall">{t('workspace.changes.title', 'Changed files')}</Typography>;
+}
+
+/** A frame (card) or none (the side panel stacks rows on its own). */
+function frameSx(stacked: boolean) {
+  return (theme: Theme) =>
+    stacked
+      ? { display: 'flex', flexDirection: 'column', gap: 1 }
+      : { border: `1px solid ${theme.vars.palette.divider}`, borderRadius: theme.vars.shape.radiusMd, padding: 1.5 };
+}
+
+function FileRow({ file, busy, onRevert, stacked, fileActions }: FileRowProps): React.JSX.Element {
+  const actions = fileActions === undefined ? null : fileActions(file);
   const [open, setOpen] = useState(false);
   const diffId = `diff-${file.path}`;
+  const buttons = (
+    <Box sx={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 0.5 }}>
+      {actions}
+      {file.diff !== '' && (
+        <Button size="small" aria-expanded={open} aria-controls={diffId} onClick={() => setOpen((value) => !value)}>
+          {open ? t('workspace.changes.hideDiff', 'Hide diff') : t('workspace.changes.showDiff', 'Show diff')}
+        </Button>
+      )}
+      <Button size="small" color="warning" disabled={busy} onClick={onRevert} aria-label={t('workspace.changes.revertFile', 'Revert {{path}}', { path: file.path })}>
+        {t('workspace.changes.revert', 'Revert')}
+      </Button>
+    </Box>
+  );
+  const counts = (
+    <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary, flexShrink: 0 })}>
+      {`+${String(file.added)} -${String(file.removed)}`}
+    </Typography>
+  );
   return (
-    <Box component="li" data-testid="changed-file" sx={{ listStyle: 'none', paddingY: 0.5 }}>
+    <Box
+      component="li"
+      data-testid="changed-file"
+      sx={(theme: Theme) => ({ listStyle: 'none', paddingY: 0.5, borderBottom: stacked ? `1px solid ${theme.vars.palette.divider}` : undefined })}
+    >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
         <Chip size="small" variant="outlined" label={statusLabel(file.status)} />
-        <Typography variant="labelMedium" sx={{ wordBreak: 'break-all' }}>
+        <Typography variant="labelMedium" sx={{ wordBreak: 'break-all', flex: stacked ? 1 : undefined, minWidth: 0 }}>
           {file.path}
         </Typography>
-        <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
-          {`+${String(file.added)} -${String(file.removed)}`}
-        </Typography>
-        <Box sx={{ marginLeft: 'auto', display: 'flex', gap: 1 }}>
-          {file.diff !== '' && (
-            <Button size="small" aria-expanded={open} aria-controls={diffId} onClick={() => setOpen((value) => !value)}>
-              {open ? t('workspace.changes.hideDiff', 'Hide diff') : t('workspace.changes.showDiff', 'Show diff')}
-            </Button>
-          )}
-          <Button size="small" color="warning" disabled={busy} onClick={onRevert} aria-label={t('workspace.changes.revertFile', 'Revert {{path}}', { path: file.path })}>
-            {t('workspace.changes.revert', 'Revert')}
-          </Button>
-        </Box>
+        {!stacked && counts}
+        {!stacked && buttons}
       </Box>
+      {stacked && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {counts}
+          {buttons}
+        </Box>
+      )}
       {file.diff !== '' && (
         <Collapse in={open} unmountOnExit>
-          <Box id={diffId} sx={{ paddingTop: 1 }}>
+          <Box id={diffId} sx={{ paddingTop: 1, overflowX: 'auto' }}>
             <DiffView parts={parseUnifiedDiff(file.diff)} />
           </Box>
         </Collapse>
@@ -107,7 +150,8 @@ function useConfirmation(request: number): [boolean, (open: boolean) => void] {
   return [open, setOpen];
 }
 
-export function ChangedFilesCard({ ipc, turnId, undoRequest = 0 }: ChangedFilesCardProps): React.JSX.Element | null {
+export function ChangedFilesCard({ ipc, turnId, undoRequest = 0, variant, fileActions }: ChangedFilesCardProps): React.JSX.Element | null {
+  const stacked = variant === 'panel';
   const queryClient = useQueryClient();
   const [confirmingUndo, setConfirmingUndo] = useConfirmation(undoRequest);
   const changes = useQuery({ queryKey: changesKey(turnId), queryFn: () => ipc.turnChanges(turnId) });
@@ -128,14 +172,10 @@ export function ChangedFilesCard({ ipc, turnId, undoRequest = 0 }: ChangedFilesC
       data-testid="changed-files-card"
       component="section"
       aria-label={t('workspace.changes.title', 'Changed files')}
-      sx={(theme: Theme) => ({
-        border: `1px solid ${theme.vars.palette.divider}`,
-        borderRadius: theme.vars.shape.radiusMd,
-        padding: 1.5,
-      })}
+      sx={frameSx(stacked)}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-        <Typography variant="headingSmall">{t('workspace.changes.title', 'Changed files')}</Typography>
+        <CardTitle hidden={stacked} />
         <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
           {t('workspace.changes.summary', '{{files}} files, +{{added}} -{{removed}}', { files: files.length, added, removed })}
         </Typography>
@@ -159,7 +199,14 @@ export function ChangedFilesCard({ ipc, turnId, undoRequest = 0 }: ChangedFilesC
       )}
       <Box component="ul" sx={{ margin: 0, padding: 0 }}>
         {files.map((file) => (
-          <FileRow key={file.path} file={file} busy={restore.isPending} onRevert={() => restore.mutate(file.path)} />
+          <FileRow
+            key={file.path}
+            file={file}
+            busy={restore.isPending}
+            stacked={stacked}
+            fileActions={fileActions}
+            onRevert={() => restore.mutate(file.path)}
+          />
         ))}
       </Box>
       <Dialog open={confirmingUndo} onClose={() => setConfirmingUndo(false)} aria-labelledby="undo-turn-title">

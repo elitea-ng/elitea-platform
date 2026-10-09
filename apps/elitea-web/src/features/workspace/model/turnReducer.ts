@@ -50,6 +50,8 @@ interface TurnRecord {
 export interface TurnsState {
   activeTurnId: string | null;
   turns: Record<string, TurnRecord>;
+  /** The turns this session started, oldest first (the channel also carries other sessions' turns). */
+  begun: string[];
 }
 
 export type TurnAction =
@@ -58,7 +60,7 @@ export type TurnAction =
   | { type: 'approval-resolved'; turnId: string; requestId: string }
   | { type: 'reset' };
 
-export const initialTurnsState: TurnsState = { activeTurnId: null, turns: {} };
+export const initialTurnsState: TurnsState = { activeTurnId: null, turns: {}, begun: [] };
 
 const EMPTY_VIEW: TurnView = { phase: null, items: [], approvals: [] };
 
@@ -162,7 +164,11 @@ function reduceEvent(state: TurnsState, event: AgentEvent): TurnsState {
 export function turnReducer(state: TurnsState, action: TurnAction): TurnsState {
   switch (action.type) {
     case 'begin':
-      return { ...state, activeTurnId: action.turnId };
+      return {
+        ...state,
+        activeTurnId: action.turnId,
+        begun: state.begun.includes(action.turnId) ? state.begun : [...state.begun, action.turnId],
+      };
     case 'reset':
       return initialTurnsState;
     case 'event':
@@ -179,4 +185,11 @@ export function turnReducer(state: TurnsState, action: TurnAction): TurnsState {
 
 export function activeView(state: TurnsState): TurnView {
   return state.activeTurnId === null ? EMPTY_VIEW : (state.turns[state.activeTurnId]?.view ?? EMPTY_VIEW);
+}
+
+/** The turns this session started before the active one, oldest first: the thread's earlier exchanges. */
+export function earlierViews(state: TurnsState): { turnId: string; view: TurnView }[] {
+  return state.begun
+    .filter((turnId) => turnId !== state.activeTurnId)
+    .map((turnId) => ({ turnId, view: state.turns[turnId]?.view ?? EMPTY_VIEW }));
 }

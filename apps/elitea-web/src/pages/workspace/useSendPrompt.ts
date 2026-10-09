@@ -22,7 +22,18 @@ interface PendingConversation {
   id: string;
 }
 
-export function useSendPrompt(workspace: Workspace, projectId: number, selection: AgentSelection, turn: WorkspaceTurn): SendPrompt {
+function notifyStarted(onStarted: ((conversationId: string, prompt: string) => void) | undefined, conversationId: string, prompt: string): void {
+  if (onStarted !== undefined) onStarted(conversationId, prompt);
+}
+
+/** `onStarted`: the host started a turn in `conversationId` (new or continued) — the page makes it the open thread. */
+export function useSendPrompt(
+  workspace: Workspace,
+  projectId: number,
+  selection: AgentSelection,
+  turn: WorkspaceTurn,
+  onStarted?: (conversationId: string, prompt: string) => void,
+): SendPrompt {
   const ensureConversation = useEnsureConversation();
   const [sendError, setSendError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -67,6 +78,7 @@ export function useSendPrompt(workspace: Workspace, projectId: number, selection
       if (!started) return false;
       pending.current = null;
       selection.selectConversation(conversationId);
+      notifyStarted(onStarted, conversationId, prompt);
       return true;
     } catch (error) {
       setSendError(describeWorkspaceError(error));

@@ -1,6 +1,10 @@
 /**
- * Desktop-only `/workspaces`: the folders the user has opened, each bindable
- * to one project (whose agents the session view then offers).
+ * Desktop-only `/workspaces`: the start screen of the workspace-first window.
+ * Without folders it is "Open a folder to start" (the button, or a folder
+ * dropped on the window — the host handles the drop and opens it); with
+ * folders it lists them, each bindable to one project (whose agents its
+ * threads then offer). After sign-in the desktop opens the last thread
+ * instead (`routes/_shell/index.tsx`), so this is mostly the first run.
  */
 import { useMemo } from 'react';
 
@@ -11,12 +15,14 @@ import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import CircularProgress from '@mui/material/CircularProgress';
+import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
+import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 
 import { WorkspaceList, describeWorkspaceError, useWorkspaceIpc } from '@/features/workspace';
 import { toWorkspaceIpcError, type Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
-import { NoResultsMessage } from '@/shared/ui/NoResultsMessage';
+import { ShowSidebarButton, TitleBarSpacer, useDesktopLayout } from '@/widgets/desktop-shell';
 
 import { useBindableProjects } from './useBindableProjects';
 
@@ -38,6 +44,7 @@ export default function WorkspacesPage(): React.JSX.Element {
   });
 
   const workspaces = useMemo(() => list.data ?? [], [list.data]);
+  const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
 
   if (ipc === undefined) {
     return (
@@ -51,37 +58,71 @@ export default function WorkspacesPage(): React.JSX.Element {
   // A folder with a running turn can be neither removed nor re-bound (the host answers workspace_busy).
   const busyError = [remove.error, bind.error].find((error) => error !== null && toWorkspaceIpcError(error).code === 'workspace_busy');
 
+  const openButton = (
+    <Button variant="contained" disabled={open.isPending} onClick={() => open.mutate()} startIcon={<CreateNewFolderOutlinedIcon />}>
+      {t('workspace.openFolder', 'Open folder')}
+    </Button>
+  );
+
   return (
-    <Box data-testid="workspaces-page" sx={{ p: '1.5rem', display: 'flex', flexDirection: 'column', gap: 2 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-        <Typography component="h1" variant="headingMedium">
-          {t('workspace.title', 'Workspaces')}
-        </Typography>
-        <Button sx={{ marginLeft: 'auto' }} variant="contained" disabled={open.isPending} onClick={() => open.mutate()}>
-          {t('workspace.openFolder', 'Open folder')}
-        </Button>
+    <Box data-testid="workspaces-page" sx={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+      <TitleBarSpacer leading={!sidebarOpen} logo={false}>
+        <ShowSidebarButton />
+      </TitleBarSpacer>
+      <Box sx={{ width: '100%', maxWidth: '46rem', marginX: 'auto', paddingX: 3, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 2 }}>
+        {failed && (
+          <Alert severity="error">
+            {busyError === undefined ? t('workspace.failed', 'That did not work. Try again.') : describeWorkspaceError(busyError)}
+          </Alert>
+        )}
+        {list.isPending && <CircularProgress aria-label={t('workspace.loading', 'Loading workspaces')} />}
+        {!list.isPending && workspaces.length === 0 && (
+          <Box
+            data-testid="workspaces-empty"
+            sx={(theme: Theme) => ({
+              marginTop: '12vh',
+              paddingY: 6,
+              paddingX: 3,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 1.5,
+              textAlign: 'center',
+              border: `1px dashed ${theme.vars.palette.divider}`,
+              borderRadius: theme.vars.shape.radiusMd,
+            })}
+          >
+            <CreateNewFolderOutlinedIcon sx={(theme: Theme) => ({ width: '2.5rem', height: '2.5rem', color: theme.vars.palette.text.metrics })} />
+            <Typography component="h1" variant="headingMedium">
+              {t('workspace.start.title', 'Open a folder to start')}
+            </Typography>
+            <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary, maxWidth: '26rem' })}>
+              {t('workspace.start.body', 'An agent works on the files of a folder on this computer. You approve what it runs, and you can review and undo every change.')}
+            </Typography>
+            {openButton}
+            <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
+              {t('workspace.start.drop', 'Or drop a folder on this window.')}
+            </Typography>
+          </Box>
+        )}
+        {workspaces.length > 0 && (
+          <>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, paddingTop: 3 }}>
+              <Typography component="h1" variant="headingMedium">
+                {t('workspace.title', 'Workspaces')}
+              </Typography>
+              <Box sx={{ marginLeft: 'auto' }}>{openButton}</Box>
+            </Box>
+            <WorkspaceList
+              workspaces={workspaces}
+              projects={projects}
+              onSelect={(workspace) => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: workspace.id } })}
+              onRemove={(workspace) => remove.mutate(workspace)}
+              onBind={(workspace, projectId) => bind.mutate({ workspace, projectId })}
+            />
+          </>
+        )}
       </Box>
-      {failed && (
-        <Alert severity="error">
-          {busyError === undefined ? t('workspace.failed', 'That did not work. Try again.') : describeWorkspaceError(busyError)}
-        </Alert>
-      )}
-      {list.isPending && <CircularProgress aria-label={t('workspace.loading', 'Loading workspaces')} />}
-      {!list.isPending && workspaces.length === 0 && (
-        <NoResultsMessage
-          title={t('workspace.emptyTitle', 'No folders yet')}
-          description={t('workspace.empty', 'Open a folder to let an agent work on it.')}
-        />
-      )}
-      {workspaces.length > 0 && (
-        <WorkspaceList
-          workspaces={workspaces}
-          projects={projects}
-          onSelect={(workspace) => void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId: workspace.id } })}
-          onRemove={(workspace) => remove.mutate(workspace)}
-          onBind={(workspace, projectId) => bind.mutate({ workspace, projectId })}
-        />
-      )}
     </Box>
   );
 }

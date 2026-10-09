@@ -134,7 +134,7 @@ describe('WorkspacesPage', () => {
     mount(ipc, '/workspaces');
 
     await user.click(await screen.findByRole('button', { name: 'Remove app' }));
-    expect(await screen.findByText('No folders yet')).toBeInTheDocument();
+    expect(await screen.findByText('Open a folder to start')).toBeInTheDocument();
     expect(await ipc.list()).toEqual([]);
   });
 
@@ -345,6 +345,7 @@ describe('WorkspaceSessionPage', () => {
       return {
         view: { phase: null, items: [], approvals: [] },
         turnId: null,
+        earlier: [],
         busy: false,
         startError: null,
         start: () => Promise.resolve(started),
@@ -639,7 +640,10 @@ describe('WorkspaceSessionPage', () => {
         http.post(`${BASE}/elitea_core/participants/prompt_lib/42/78`, () => HttpResponse.json([])),
       );
       await user.type(input, '/new{Enter}');
-      await user.type(input, 'again{Enter}');
+      // A new thread is a fresh session (its own composer), with the agent last used here.
+      await waitFor(() => expect(screen.getByTestId('chat-message-input')).not.toBe(input));
+      await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+      await user.type(screen.getByTestId('chat-message-input'), 'again{Enter}');
       await waitFor(() => expect(ipc.calls.started).toHaveLength(2));
       expect(created).toBe(1);
       expect(ipc.calls.started[1]?.conversation_id).toBe('78');

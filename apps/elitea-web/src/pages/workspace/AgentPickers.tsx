@@ -1,21 +1,25 @@
 /**
- * The project, agent, version and conversation selectors of a workspace
- * session. The project is the folder's binding (changing it re-binds the
- * folder on the host); the agent list is the bound project's (see
- * `useAgentSelection`); the version list follows the chosen agent.
+ * The thread header's selectors: the folder's project (changing it re-binds
+ * the folder on the host), the agent (the bound project's, see
+ * `useAgentSelection`) and its version. Compact, borderless "value ▾"
+ * controls, the way a native app's toolbar shows them; each keeps its name
+ * for assistive technology.
  *
- * A project without agents gets an empty state instead of empty selects:
- * create an agent in it, or bind the folder to another project. Nothing is
- * created on the server from here.
+ * Which conversation the turn goes to is the THREAD, chosen in the sidebar;
+ * there is no conversation selector here.
+ *
+ * A project without agents gets `NoAgents` (rendered by the page in the
+ * thread body) instead of empty selects: create an agent in it, or bind the
+ * folder to another project. Nothing is created on the server from here.
  */
-import type { Ref } from 'react';
-import { useState } from 'react';
+import type { ReactNode, Ref } from 'react';
 
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import MenuItem from '@mui/material/MenuItem';
+import Select from '@mui/material/Select';
 import type { Theme } from '@mui/material/styles';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 
 import type { ProjectChoice } from '@/features/workspace';
@@ -30,51 +34,61 @@ export interface AgentPickersProps {
   /** A turn runs: the folder cannot move to another project now. */
   busy: boolean;
   onChangeProject: (projectId: number) => void;
-  onCreateAgent: () => void;
+  /** The project menu is opened from elsewhere too (`NoAgents`' "Use another project"). */
+  projectMenuOpen: boolean;
+  onProjectMenuOpenChange: (open: boolean) => void;
   /** The box holding the agent select (the composer's `/agent` focuses it). */
   agentRef?: Ref<HTMLDivElement>;
 }
 
-function ProjectPicker({
-  projectId,
-  projects,
-  busy,
-  open,
-  onOpenChange,
-  onChange,
-}: {
-  projectId: number;
-  projects: readonly ProjectChoice[];
-  busy: boolean;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onChange: (projectId: number) => void;
-}): React.JSX.Element {
-  const listed = projects.some((p) => p.id === projectId);
+interface HeaderSelectProps {
+  label: string;
+  value: string;
+  disabled?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  onChange: (value: string) => void;
+  children: ReactNode;
+  maxWidth: string;
+}
+
+function HeaderSelect({ label, value, disabled = false, open, onOpenChange, onChange, children, maxWidth }: HeaderSelectProps): React.JSX.Element {
+  const controlled = open === undefined || onOpenChange === undefined ? {} : { open, onOpen: () => onOpenChange(true), onClose: () => onOpenChange(false) };
   return (
-    <TextField
-      select
+    <Select
+      variant="standard"
+      disableUnderline
       size="small"
-      sx={{ minWidth: '12rem' }}
-      label={t('workspace.project', 'Project')}
-      value={listed ? projectId : ''}
-      disabled={busy}
-      onChange={(event) => {
-        const next = Number(event.target.value);
-        if (next !== projectId) onChange(next);
-      }}
-      slotProps={{ select: { open, onOpen: () => onOpenChange(true), onClose: () => onOpenChange(false) } }}
+      value={value}
+      disabled={disabled}
+      displayEmpty
+      onChange={(event) => onChange(String(event.target.value))}
+      IconComponent={ExpandMoreIcon}
+      inputProps={{ 'aria-label': label }}
+      {...controlled}
+      sx={(theme: Theme) => ({
+        maxWidth,
+        borderRadius: theme.vars.shape.radiusSm,
+        paddingLeft: 1,
+        typography: 'labelSmall',
+        color: theme.vars.palette.text.secondary,
+        '&:hover': { background: theme.vars.palette.background.button.drawerMenu.hover },
+      })}
     >
-      {projects.map((project) => (
-        <MenuItem key={project.id} value={project.id}>
-          {project.name}
-        </MenuItem>
-      ))}
-    </TextField>
+      {children}
+    </Select>
   );
 }
 
-function NoAgents({ onCreate, onOtherProject, busy }: { onCreate: () => void; onOtherProject: () => void; busy: boolean }): React.JSX.Element {
+function Separator(): React.JSX.Element {
+  return (
+    <Typography aria-hidden variant="bodySmall" component="span" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics })}>
+      /
+    </Typography>
+  );
+}
+
+export function NoAgents({ onCreate, onOtherProject, busy }: { onCreate: () => void; onOtherProject: () => void; busy: boolean }): React.JSX.Element {
   return (
     <Box
       data-testid="workspace-no-agents"
@@ -88,7 +102,7 @@ function NoAgents({ onCreate, onOtherProject, busy }: { onCreate: () => void; on
       })}
     >
       <Typography variant="headingSmall">{t('workspace.noAgents.title', 'This project has no agents')}</Typography>
-      <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary }}>
+      <Typography variant="bodySmall" sx={(theme: Theme) => ({ color: theme.vars.palette.text.secondary })}>
         {t(
           'workspace.noAgents.body',
           'A session runs one of the bound project’s agents. Create an agent in this project, or bind this folder to a project that has agents.',
@@ -106,71 +120,69 @@ function NoAgents({ onCreate, onOtherProject, busy }: { onCreate: () => void; on
   );
 }
 
-export function AgentPickers({ selection, projectId, projects, busy, onChangeProject, onCreateAgent, agentRef }: AgentPickersProps): React.JSX.Element {
-  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+export function AgentPickers({
+  selection,
+  projectId,
+  projects,
+  busy,
+  onChangeProject,
+  projectMenuOpen,
+  onProjectMenuOpenChange,
+  agentRef,
+}: AgentPickersProps): React.JSX.Element {
+  const listed = projects.some((p) => p.id === projectId);
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
-      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-        <ProjectPicker
-          projectId={projectId}
-          projects={projects}
-          busy={busy}
-          open={projectMenuOpen}
-          onOpenChange={setProjectMenuOpen}
-          onChange={onChangeProject}
-        />
-        {!selection.empty && (
-          <>
-            <Box ref={agentRef} sx={{ display: 'contents' }}>
-              <TextField
-                select
-                size="small"
-                sx={{ minWidth: '14rem' }}
-                label={t('workspace.agent', 'Agent')}
-                value={selection.agents.some((a) => a.id === selection.agentId) ? selection.agentId : ''}
-                onChange={(event) => selection.selectAgent(event.target.value)}
-              >
-                {selection.agents.map((agent) => (
-                  <MenuItem key={agent.id} value={agent.id}>
-                    {agent.name}
-                  </MenuItem>
-                ))}
-              </TextField>
-            </Box>
-            <TextField
-              select
-              size="small"
-              sx={{ minWidth: '10rem' }}
-              label={t('workspace.version', 'Version')}
-              value={selection.versions.some((v) => String(v.id) === selection.versionId) ? selection.versionId : ''}
-              disabled={selection.versions.length === 0}
-              onChange={(event) => selection.selectVersion(event.target.value)}
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+      <HeaderSelect
+        label={t('workspace.project', 'Project')}
+        value={listed ? String(projectId) : ''}
+        disabled={busy}
+        open={projectMenuOpen}
+        onOpenChange={onProjectMenuOpenChange}
+        maxWidth="12rem"
+        onChange={(value) => {
+          const next = Number(value);
+          if (next !== projectId) onChangeProject(next);
+        }}
+      >
+        {projects.map((project) => (
+          <MenuItem key={project.id} value={String(project.id)}>
+            {project.name}
+          </MenuItem>
+        ))}
+      </HeaderSelect>
+      {!selection.empty && (
+        <>
+          <Separator />
+          <Box ref={agentRef} sx={{ display: 'contents' }}>
+            <HeaderSelect
+              label={t('workspace.agent', 'Agent')}
+              value={selection.agents.some((a) => a.id === selection.agentId) ? selection.agentId : ''}
+              maxWidth="14rem"
+              onChange={(value) => selection.selectAgent(value)}
             >
-              {selection.versions.map((version) => (
-                <MenuItem key={version.id} value={String(version.id)}>
-                  {version.name}
+              {selection.agents.map((agent) => (
+                <MenuItem key={agent.id} value={agent.id}>
+                  {agent.name}
                 </MenuItem>
               ))}
-            </TextField>
-            <TextField
-              select
-              size="small"
-              sx={{ minWidth: '14rem' }}
-              label={t('workspace.conversation', 'Conversation')}
-              value={selection.conversationId}
-              onChange={(event) => selection.selectConversation(event.target.value)}
-            >
-              <MenuItem value="">{t('workspace.newConversation', 'New conversation')}</MenuItem>
-              {selection.conversations.map((conversation) => (
-                <MenuItem key={String(conversation.id)} value={String(conversation.id)}>
-                  {conversation.name !== '' ? conversation.name : String(conversation.id)}
-                </MenuItem>
-              ))}
-            </TextField>
-          </>
-        )}
-      </Box>
-      {selection.empty && <NoAgents busy={busy} onCreate={onCreateAgent} onOtherProject={() => setProjectMenuOpen(true)} />}
+            </HeaderSelect>
+          </Box>
+          <HeaderSelect
+            label={t('workspace.version', 'Version')}
+            value={selection.versions.some((v) => String(v.id) === selection.versionId) ? selection.versionId : ''}
+            disabled={selection.versions.length === 0}
+            maxWidth="9rem"
+            onChange={(value) => selection.selectVersion(value)}
+          >
+            {selection.versions.map((version) => (
+              <MenuItem key={version.id} value={String(version.id)}>
+                {version.name}
+              </MenuItem>
+            ))}
+          </HeaderSelect>
+        </>
+      )}
     </Box>
   );
 }

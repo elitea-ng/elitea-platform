@@ -4,10 +4,16 @@
  */
 import { useState } from 'react';
 
+import CheckIcon from '@mui/icons-material/Check';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import CloseIcon from '@mui/icons-material/Close';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import ButtonBase from '@mui/material/ButtonBase';
 import Chip from '@mui/material/Chip';
+import CircularProgress from '@mui/material/CircularProgress';
 import Collapse from '@mui/material/Collapse';
 import type { Theme } from '@mui/material/styles';
 import Tooltip from '@mui/material/Tooltip';
@@ -38,43 +44,110 @@ function phaseLabel(phase: NonNullable<TurnView['phase']>): string {
   }
 }
 
+function ToolStatus({ result }: { result: ToolItem['result'] }): React.JSX.Element {
+  if (result === undefined) {
+    return (
+      <Box component="output" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+        <CircularProgress size="0.75rem" />
+        <Typography variant="bodySmall" component="span">
+          {t('workspace.tool.running', 'Running')}
+        </Typography>
+      </Box>
+    );
+  }
+  return (
+    <Box
+      component="span"
+      sx={(theme: Theme) => ({
+        display: 'flex',
+        alignItems: 'center',
+        gap: 0.5,
+        color: result.ok ? theme.vars.palette.success.main : theme.vars.palette.error.main,
+        '& svg': { width: '0.875rem', height: '0.875rem' },
+      })}
+    >
+      {result.ok ? <CheckIcon /> : <CloseIcon />}
+      <Typography variant="bodySmall" component="span">
+        {result.ok ? t('workspace.tool.succeeded', 'Succeeded') : t('workspace.tool.failed', 'Failed')}
+      </Typography>
+    </Box>
+  );
+}
+
+/** One tool call as a single line ("▸ tool  args  ✓"); the result unfolds under it. */
 function ToolRow({ item }: { item: ToolItem }): React.JSX.Element {
   const [open, setOpen] = useState(false);
   const { result } = item;
   const resultId = `tool-result-${item.callId}`;
-  return (
-    <Box
-      data-testid="tool-row"
-      sx={(theme: Theme) => ({
-        border: `1px solid ${theme.vars.palette.divider}`,
-        borderRadius: theme.vars.shape.radiusMd,
-        padding: 1,
-      })}
-    >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-        <Chip
-          size="small"
-          label={item.remote ? t('workspace.tool.remote', 'Remote') : t('workspace.tool.local', 'Local')}
-          color={item.remote ? 'default' : 'primary'}
-          variant="outlined"
-        />
-        <Typography variant="labelMedium">{item.tool}</Typography>
-        <Typography variant="bodySmall" sx={{ color: (theme: Theme) => theme.vars.palette.text.secondary, wordBreak: 'break-all' }}>
-          {item.argsSummary}
-        </Typography>
-        {result === undefined ? (
-          <Typography variant="bodySmall" component="output">
-            {t('workspace.tool.running', 'Running')}
-          </Typography>
-        ) : (
-          <Button size="small" aria-expanded={open} aria-controls={resultId} onClick={() => setOpen((value) => !value)}>
-            {result.ok ? t('workspace.tool.succeeded', 'Succeeded') : t('workspace.tool.failed', 'Failed')}
-          </Button>
-        )}
+  const line = (
+    <>
+      <Box aria-hidden sx={{ display: 'flex', '& svg': { width: '1rem', height: '1rem' } }}>
+        {result === undefined ? <ChevronRightIcon sx={{ opacity: 0.4 }} /> : open ? <ExpandMoreIcon /> : <ChevronRightIcon />}
       </Box>
+      <Typography variant="labelSmall" component="span" sx={(theme: Theme) => ({ fontFamily: theme.typography.fontFamilyMono, flexShrink: 0 })}>
+        {item.tool}
+      </Typography>
+      <Typography
+        variant="bodySmall"
+        component="span"
+        sx={(theme: Theme) => ({
+          color: theme.vars.palette.text.secondary,
+          flex: 1,
+          minWidth: 0,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          textAlign: 'left',
+        })}
+      >
+        {item.argsSummary}
+      </Typography>
+      <Typography variant="bodySmall" component="span" sx={(theme: Theme) => ({ color: theme.vars.palette.text.metrics, flexShrink: 0 })}>
+        {item.remote ? t('workspace.tool.remote', 'Remote') : t('workspace.tool.local', 'Local')}
+      </Typography>
+      <ToolStatus result={result} />
+    </>
+  );
+  const lineSx = (theme: Theme) => ({
+    display: 'flex',
+    alignItems: 'center',
+    gap: 1,
+    width: '100%',
+    paddingX: 0.5,
+    paddingY: 0.25,
+    borderRadius: theme.vars.shape.radiusSm,
+  });
+  return (
+    <Box data-testid="tool-row">
+      {result === undefined ? (
+        <Box sx={lineSx}>{line}</Box>
+      ) : (
+        <ButtonBase
+          aria-expanded={open}
+          aria-controls={resultId}
+          onClick={() => setOpen((value) => !value)}
+          sx={(theme: Theme) => ({ ...lineSx(theme), '&:hover': { background: theme.vars.palette.background.button.drawerMenu.hover } })}
+        >
+          {line}
+        </ButtonBase>
+      )}
       {result !== undefined && (
         <Collapse in={open} unmountOnExit>
-          <Typography id={resultId} variant="bodySmall" component="pre" sx={{ whiteSpace: 'pre-wrap', margin: 0, paddingTop: 1 }}>
+          <Typography
+            id={resultId}
+            variant="bodySmall"
+            component="pre"
+            sx={(theme: Theme) => ({
+              whiteSpace: 'pre-wrap',
+              margin: 0,
+              marginLeft: 3,
+              marginTop: 0.5,
+              padding: 1,
+              fontFamily: theme.typography.fontFamilyMono,
+              borderLeft: `2px solid ${theme.vars.palette.divider}`,
+              color: theme.vars.palette.text.secondary,
+            })}
+          >
             {result.summary}
             {result.truncated && ` ${t('workspace.tool.truncated', '(output truncated)')}`}
           </Typography>
@@ -93,10 +166,10 @@ export interface TurnTranscriptProps {
 export function TurnTranscript({ view, busy, onCancel }: TurnTranscriptProps): React.JSX.Element {
   const showStatus = view.phase !== null;
   return (
-    <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+    <Box data-testid="turn-transcript" sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
       {view.items.map((item) =>
         item.type === 'text' ? (
-          <Typography key={item.key} variant="bodyMedium" sx={{ whiteSpace: 'pre-wrap' }}>
+          <Typography key={item.key} variant="bodyMedium" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.6 }}>
             {item.text}
           </Typography>
         ) : (

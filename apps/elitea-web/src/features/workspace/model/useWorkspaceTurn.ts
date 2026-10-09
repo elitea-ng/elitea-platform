@@ -11,16 +11,18 @@
  * `RESYNC_MS`, and when a cancel is answered with a code that says the turn
  * is past running; a `done` it learns of that way is folded in like the event.
  */
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 
 import { toWorkspaceIpcError, type ApprovalDecision, type TurnDonePayload, type TurnStartRequest, type WorkspaceIpc } from '@/shared/desktop/workspaceIpc';
 
 import { describeWorkspaceError } from './describeWorkspaceError';
-import { activeView, initialTurnsState, turnReducer, type TurnView } from './turnReducer';
+import { activeView, earlierViews, initialTurnsState, turnReducer, type TurnView } from './turnReducer';
 
 export interface WorkspaceTurn {
   view: TurnView;
   turnId: string | null;
+  /** The turns started here before the active one, oldest first (cleared with the transcript). */
+  earlier: { turnId: string; view: TurnView }[];
   /**
    * True from `start` until the host's `done` event. Not on `error` or a
    * terminal `status`: a failed run still commits after its `error`, and the
@@ -66,6 +68,7 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
 
   const view = activeView(state);
   const turnId = state.activeTurnId;
+  const earlier = useMemo(() => earlierViews(state), [state]);
 
   const start = useCallback(
     async (request: TurnStartRequest): Promise<boolean> => {
@@ -147,5 +150,5 @@ export function useWorkspaceTurn(ipc: WorkspaceIpc): WorkspaceTurn {
     dispatch({ type: 'reset' });
   }, [busy]);
 
-  return { view, turnId, busy, startError, start, cancel, answer, clear };
+  return { view, turnId, earlier, busy, startError, start, cancel, answer, clear };
 }
