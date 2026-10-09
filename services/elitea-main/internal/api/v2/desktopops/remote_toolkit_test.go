@@ -518,6 +518,51 @@ func TestRemoteToolkitRateLimitsEachCaller(t *testing.T) {
 	}
 }
 
+// Only a run the request admits is charged: a refused or invalid call and a
+// poll of a run its key already admitted cost nothing.
+func TestRemoteToolkitChargesOnlyAdmittedRuns(t *testing.T) {
+	runs := &fakeToolRuns{outcome: toolkitcalltoolapp.RunOutcome{Status: toolkitcalltoolapp.RunStatusOK, ResultJSON: `{}`}}
+	h, turns, authorizer, _ := remoteHandler(runs, "python")
+	h.limiter = failurelimit.New(1, time.Minute)
+	serve := func(body string) int {
+		return serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, body, desktopToken(), h.serve).Code
+	}
+	// Invalid, refused by the turn, refused by the agent: none charged.
+	if code := serve(remoteBody(`"arguments":{}`)); code != http.StatusBadRequest {
+		t.Fatalf("invalid: %d", code)
+	}
+	turns.err = localturn.ErrNotFound
+	if code := serve(remoteBody(`"tool_name":"t"`)); code != http.StatusNotFound {
+		t.Fatalf("no turn: %d", code)
+	}
+	turns.err = nil
+	authorizer.err = storage.ErrRemoteToolNotInAgent
+	if code := serve(remoteBody(`"tool_name":"t"`)); code != http.StatusForbidden {
+		t.Fatalf("not in agent: %d", code)
+	}
+	authorizer.err = nil
+	// Polls of an already admitted run, finished or still going: not charged.
+	runs.outcome.Replayed = true
+	for i := 0; i < 3; i++ {
+		if code := serve(remoteBody(`"tool_name":"t"`)); code != http.StatusOK {
+			t.Fatalf("replayed result %d: %d", i, code)
+		}
+	}
+	runs.err = &toolkitcalltoolapp.PendingRun{ExecutionID: "e1", Replayed: true}
+	if code := serve(remoteBody(`"tool_name":"t"`)); code != http.StatusConflict {
+		t.Fatalf("replayed pending: %d", code)
+	}
+	runs.err = nil
+	runs.outcome.Replayed = false
+	// The first admitted run is charged, and is the one the limit allows.
+	if code := serve(remoteBody(`"tool_name":"t"`)); code != http.StatusOK {
+		t.Fatalf("first admitted run: %d", code)
+	}
+	if code := serve(remoteBody(`"tool_name":"t"`)); code != http.StatusTooManyRequests {
+		t.Fatalf("second admitted run: %d, want 429", code)
+	}
+}
+
 // A write may be retried after a timeout: the key is required, and a retry
 // of a key whose run is still going answers 409 in progress, never a second
 // run.

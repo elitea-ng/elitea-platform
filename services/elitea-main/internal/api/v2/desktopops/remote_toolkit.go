@@ -240,15 +240,6 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 			"This deployment runs no cloud worker that can execute toolkit tools.")
 		return
 	}
-	limitKey := "actor:" + strconv.FormatInt(actor, 10)
-	if blocked, retry := h.limiter.Blocked(limitKey); blocked {
-		writer.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
-		writeError(writer, http.StatusTooManyRequests, "rate_limited",
-			"Too many remote toolkit calls from this caller. Retry after the interval in Retry-After.")
-		return
-	}
-	h.limiter.Fail(limitKey)
-
 	// REQUIRED, unlike test_tool's. A remote call may write, and a client
 	// that retries after a timeout or a dropped connection without the same
 	// key would admit and run the write a second time. With the key, a retry
@@ -365,7 +356,22 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		}
 	}
 
+	// RATE. Only a run this request ADMITS is charged, after every check
+	// above: a refused or invalid call, and a retry whose Idempotency-Key
+	// already admitted its run (a poll for the result), cost nothing.
+	limitKey := "actor:" + strconv.FormatInt(actor, 10)
+	if blocked, retry := h.limiter.Blocked(limitKey); blocked {
+		call.outcome = "rate_limited"
+		writer.Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(retry.Seconds()))))
+		writeError(writer, http.StatusTooManyRequests, "rate_limited",
+			"Too many remote toolkit calls from this caller. Retry after the interval in Retry-After.")
+		return
+	}
 	outcome, err := h.useCase.RunTool(request.Context(), runRequest)
+	var pending *toolkitcalltoolapp.PendingRun
+	if (err == nil && !outcome.Replayed) || (errors.As(err, &pending) && !pending.Replayed) {
+		h.limiter.Fail(limitKey)
+	}
 	if err != nil {
 		call.outcome = "run_error"
 		h.writeRunError(request.Context(), writer, toolkitID, err)
