@@ -1,0 +1,89 @@
+name: CI — local tools on macOS (Seatbelt)
+
+# ADR-0029 decision 4: the desktop's local tools run commands under the OS
+# sandbox, and macOS (Seatbelt, `sandbox-exec`) is the D1 platform. The
+# shared crates' job in ci-deepwiki-engine.yml runs every elitea-local-tools
+# test on Linux, where tests/seatbelt.rs compiles to nothing. This job runs
+# the crate on macOS so the Seatbelt profile is proven against the real
+# kernel: a write outside the workspace, a write into .git/hooks, and a
+# loopback connection must all be blocked.
+#
+# Cheap on purpose: one job, path-filtered to the crate and what it builds
+# on, the default feature set (no xberg), and the cargo cache read
+# everywhere but written on main only. ELITEA_REQUIRE_SEATBELT=1 turns the
+# tests' "sandbox-exec missing → skip" into a failure, and the last step
+# checks that the Seatbelt tests actually ran: a test binary that compiled
+# to zero tests would otherwise pass.
+
+on:
+  pull_request:
+    paths:
+      - "libs/rust/local-tools/**"
+      - "libs/rust/agent-runtime/**"
+      - "libs/rust/doc-extract/**"
+      - "libs/rust/content-source/**"
+      - "libs/rust/Cargo.lock"
+      - "libs/rust/Cargo.toml"
+      - "libs/rust/rust-toolchain.toml"
+      - ".github/workflows/ci-local-tools-macos.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "libs/rust/local-tools/**"
+      - "libs/rust/agent-runtime/**"
+      - "libs/rust/doc-extract/**"
+      - "libs/rust/content-source/**"
+      - "libs/rust/Cargo.lock"
+      - "libs/rust/Cargo.toml"
+      - "libs/rust/rust-toolchain.toml"
+      - ".github/workflows/ci-local-tools-macos.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  seatbelt:
+    name: Local tools — tests on macOS, Seatbelt enforced
+    runs-on: macos-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: libs/rust
+        # Explicit bash runs with -o pipefail, so `cargo test | tee` fails
+        # when cargo does.
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Show pinned toolchain
+        run: |
+          rustc --version
+          cargo --version
+          sw_vers
+
+      - name: Cache cargo registry and build artefacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          workspaces: libs/rust
+
+      - name: Run the crate's tests
+        env:
+          ELITEA_REQUIRE_SEATBELT: "1"
+        run: cargo test --locked -p elitea-local-tools --all-targets 2>&1 | tee "$RUNNER_TEMP/local-tools-test.log"
+
+      - name: The Seatbelt tests ran
+        run: |
+          ran=$(grep -cE '^test (workspace_write_confines|read_only_blocks|git_hooks_and_config|network_is_blocked)[a-z_]* \.\.\. ok$' "$RUNNER_TEMP/local-tools-test.log" || true)
+          echo "Seatbelt tests passed: $ran"
+          test "$ran" -eq 4
