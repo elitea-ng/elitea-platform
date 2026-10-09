@@ -41,15 +41,29 @@
  */
 import * as zod from "zod";
 
-export const CreateFeedbackResponse = zod
-  .object({
-    id: zod.int().describe("Id of the stored feedback row."),
-  })
-  .describe(
-    "201 body of the feedback POST (internal/api/v2/social/feedback.go, currentFeedbackCreateResponse).\n",
-  );
+export const listFeedbacksParamsLimitDefault = 50;
+export const listFeedbacksParamsLimitMax = 200;
 
-export type CreateFeedbackResponse = zod.input<typeof CreateFeedbackResponse>;
-export type CreateFeedbackResponseOutput = zod.output<
-  typeof CreateFeedbackResponse
->;
+export const listFeedbacksParamsOffsetDefault = 0;
+export const listFeedbacksParamsOffsetMin = 0;
+export const listFeedbacksParamsOffsetMax = 100000;
+
+export const listFeedbacksParamsSortByDefault = `id`;
+export const listFeedbacksParamsSortOrderDefault = `asc`;
+export const ListFeedbacksParams = zod.object({
+  limit: zod
+    .int()
+    .min(1)
+    .max(listFeedbacksParamsLimitMax)
+    .default(listFeedbacksParamsLimitDefault),
+  offset: zod
+    .int()
+    .min(listFeedbacksParamsOffsetMin)
+    .max(listFeedbacksParamsOffsetMax)
+    .default(listFeedbacksParamsOffsetDefault),
+  sort_by: zod.string().default(listFeedbacksParamsSortByDefault),
+  sort_order: zod.string().default(listFeedbacksParamsSortOrderDefault),
+});
+
+export type ListFeedbacksParams = zod.input<typeof ListFeedbacksParams>;
+export type ListFeedbacksParamsOutput = zod.output<typeof ListFeedbacksParams>;

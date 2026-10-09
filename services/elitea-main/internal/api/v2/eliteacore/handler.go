@@ -2791,36 +2791,6 @@ func (h *Handler) Recommendations(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"applications": items, "total": len(items)})
 }
 
-func (h *Handler) Feedbacks(w http.ResponseWriter, r *http.Request) {
-	projectID := chi.URLParam(r, "projectID")
-	s, schemaOK := tenantSchema(w, projectID)
-	if !schemaOK {
-		return
-	}
-	ctx := r.Context()
-
-	q := fmt.Sprintf(`SELECT id, entity_name, entity_id, user_id, rating, COALESCE(comment, ''), created_at FROM %s.social_feedbacks ORDER BY created_at DESC LIMIT 50`, s)
-	rows, err := h.pool.Query(ctx, q)
-	items := make([]map[string]any, 0)
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var id int
-			var entityName, entityID, userID, comment string
-			var rating int
-			var createdAt interface{}
-			if rows.Scan(&id, &entityName, &entityID, &userID, &rating, &comment, &createdAt) != nil {
-				continue
-			}
-			items = append(items, map[string]any{
-				"id": fmt.Sprintf("%d", id), "entity_name": entityName, "entity_id": entityID,
-				"user_id": userID, "rating": rating, "comment": comment,
-			})
-		}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items, "total": len(items)})
-}
-
 func (h *Handler) UpdateAttachmentStorage(w http.ResponseWriter, r *http.Request) {
 	projectID := chi.URLParam(r, "projectID")
 	versionID := chi.URLParam(r, "versionID")
