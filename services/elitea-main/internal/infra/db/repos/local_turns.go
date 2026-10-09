@@ -418,3 +418,74 @@ WHERE execution_id = $1 AND project_id = $2 AND actor_id = $3`,
 	}
 	return binding, nil
 }
+
+var _ localturn.ConfirmationLedger = (*LocalTurnsRepo)(nil)
+
+// NextConfirmationInterruptID answers the interrupt id the call's next
+// confirmation must carry: the one after every confirmation of the same call
+// this turn already consumed.
+func (r *LocalTurnsRepo) NextConfirmationInterruptID(ctx context.Context, executionID, callDigest string) (string, error) {
+	var consumed int
+	if err := r.pool.QueryRow(ctx, `
+SELECT count(*) FROM elitea_runtime.local_turn_confirmations
+WHERE execution_id = $1 AND call_digest = $2`, executionID, callDigest).Scan(&consumed); err != nil {
+		return "", fmt.Errorf("local turn: count confirmations: %w", err)
+	}
+	return localturn.ConfirmationInterruptID(callDigest, consumed), nil
+}
+
+// ConsumeConfirmation implements localturn.ConfirmationLedger. The turn's
+// row is locked for the decision, so two requests presenting the same id
+// cannot both consume it.
+func (r *LocalTurnsRepo) ConsumeConfirmation(ctx context.Context, claim localturn.ConfirmationClaim) (localturn.ConfirmationOutcome, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return localturn.ConfirmationOutcome{}, fmt.Errorf("local turn: begin confirmation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var locked string
+	err = tx.QueryRow(ctx, `
+SELECT execution_id FROM elitea_runtime.local_turn_executions WHERE execution_id = $1 FOR UPDATE`,
+		claim.ExecutionID).Scan(&locked)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return localturn.ConfirmationOutcome{}, localturn.ErrNotFound
+	}
+	if err != nil {
+		return localturn.ConfirmationOutcome{}, fmt.Errorf("local turn: lock for confirmation: %w", err)
+	}
+	var (
+		storedDigest, storedKey string
+		consumed                int
+	)
+	err = tx.QueryRow(ctx, `
+SELECT call_digest, idempotency_key FROM elitea_runtime.local_turn_confirmations
+WHERE execution_id = $1 AND interrupt_id = $2`, claim.ExecutionID, claim.InterruptID).Scan(&storedDigest, &storedKey)
+	switch {
+	case err == nil:
+		if storedDigest == claim.CallDigest && storedKey == claim.IdempotencyKey {
+			return localturn.ConfirmationOutcome{Accepted: true}, nil // the consuming request, retried
+		}
+	case !errors.Is(err, pgx.ErrNoRows):
+		return localturn.ConfirmationOutcome{}, fmt.Errorf("local turn: read confirmation: %w", err)
+	}
+	if err := tx.QueryRow(ctx, `
+SELECT count(*) FROM elitea_runtime.local_turn_confirmations
+WHERE execution_id = $1 AND call_digest = $2`, claim.ExecutionID, claim.CallDigest).Scan(&consumed); err != nil {
+		return localturn.ConfirmationOutcome{}, fmt.Errorf("local turn: count confirmations: %w", err)
+	}
+	next := localturn.ConfirmationInterruptID(claim.CallDigest, consumed)
+	if claim.InterruptID != next {
+		return localturn.ConfirmationOutcome{NextInterruptID: next}, nil
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO elitea_runtime.local_turn_confirmations
+    (execution_id, interrupt_id, call_digest, sequence, idempotency_key)
+VALUES ($1, $2, $3, $4, $5)`,
+		claim.ExecutionID, claim.InterruptID, claim.CallDigest, consumed, claim.IdempotencyKey); err != nil {
+		return localturn.ConfirmationOutcome{}, fmt.Errorf("local turn: consume confirmation: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return localturn.ConfirmationOutcome{}, fmt.Errorf("local turn: commit confirmation: %w", err)
+	}
+	return localturn.ConfirmationOutcome{Accepted: true}, nil
+}

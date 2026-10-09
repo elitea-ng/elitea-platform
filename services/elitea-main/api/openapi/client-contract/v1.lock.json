@@ -12294,7 +12294,8 @@
                 "type": "object",
                 "required": [
                   "approved",
-                  "approved_at"
+                  "approved_at",
+                  "interrupt_id"
                 ],
                 "properties": {
                   "approved": {
@@ -12303,6 +12304,10 @@
                   "approved_at": {
                     "type": "string",
                     "format": "date-time"
+                  },
+                  "interrupt_id": {
+                    "type": "string",
+                    "pattern": "^hitl_[0-9a-f]{32}$"
                   }
                 }
               },
