@@ -1,7 +1,8 @@
 # Pipeline create admission and readable runtime refusals
 
-Branch `fix/create-admission-readable-refusals`, 2026-10-09, from `main` `0def77b22`. Source: two findings of the
-post-merge browser pass on merged `main` `0def77b22` (stack `elitea-verify-0def77b2`).
+Branch `fix/create-admission-readable-refusals`, 2026-10-09. It started from `main` `0def77b22` and was replayed
+without conflicts onto the rewritten `main` `1ab920dde`: a single root commit that also contains #1174–#1178. Source:
+two findings of the post-merge browser pass on merged `main` `0def77b22` (stack `elitea-verify-0def77b2`).
 
 ## Findings
 
@@ -82,7 +83,7 @@ There is no runtime registry or configuration read. No deployment sets any of th
 | Main | Attached = frozen tools' `toolkit_name` + stored tools' `toolkit_name`/`name` (a guardrail-dropped toolkit counts as attached); no stored version or an undecodable list skips the toolkit check | `internal/application/agentexecution/http_action_snapshot.go:17`, `:36`, `:57` (`attachedToolkitNames`); `start.go:417` passes `target.SourceVersionDetails` |
 | Main | One typed-refusal accessor for the start path and the route | `limits.go:65` (`Refusal`); `internal/application/agentexecution/start.go:423`; `internal/api/v2/agentexecution/route.go:597` |
 | Main | Registered Worker text for a gated node type, exact match only | `internal/transport/runtimegrpc/output/server.go:1068`, `:1099` |
-| Worker | `PipelineConfigurationError::NodeTypeNotAvailable(PipelineGatedNodeType)` for gated `split_out`/`aggregate`; typed cause `graph.pipeline.node_type_not_available` + static detail | `src/agents/graph/compiler.rs:2361`, `:2467-2472`, `:2948`, `:2988`, `:3005`, `:3016`; `src/agents/runtime.rs:73` |
+| Worker | `PipelineConfigurationError::NodeTypeNotAvailable(PipelineGatedNodeType)` for gated `split_out`/`aggregate`; typed cause `graph.pipeline.node_type_not_available` + static detail | `src/agents/graph/compiler.rs:2380`, `:2486-2491`, `:2970`, `:3010`, `:3030`, `:3041`; `src/agents/runtime.rs:73` |
 | Worker | `RuntimeFailureKind::PipelineNodeTypeNotAvailable` → `UNSUPPORTED_CAPABILITY` + registered message | `src/execution/native_agent_lifecycle.rs:1453`; `src/protocol/output.rs:55`, `:741`, `:924`; `src/execution/toolkit_delivery_processor.rs` (`runtime_failure_code`) |
 | Web | The create page judges the document Save would store with the editor's own admission, disables Save, and renders an inline outlined alert with the editor gate's title and body | `src/pages/pipelines/CreatePipeline.tsx:230`, `:293`, `:364`, `:379`; `src/pages/pipelines/ui/CreatePipelineAdmissionAlert.tsx` |
 | Web | `useLivePipelineGraphAdmission(yamlCode?)` judges a caller-held document (no new barrel export; the slice stays at 20 symbols) | `src/features/pipelines/lib/livePipelineGraphAdmission.ts:123` |
@@ -96,12 +97,12 @@ are backfilled into `en.json`.
 
 | Component | Run | Result |
 |---|---|---|
-| Main | `go test -race` on `domain/pipelinelimits`, `application/httpaction`, `application/agentexecution`, `api/v2/agentexecution`, `api/v2/applications`, `api/v2/eliteacore`, `api/v2/mcp`, `infra/db/repos`, `api` against a throwaway PostgreSQL 18 (`pgvector/pgvector:0.8.1-pg18-trixie`) | all 9 packages ok. After the review fix: `pipelinelimits`, `agentexecution`, `api/v2/agentexecution`, `runtimegrpc/output`, `api/v2/applications` re-run with `-race`, ok (398 tests in those 5 packages) |
+| Main | `go test -race` on `domain/pipelinelimits`, `application/httpaction`, `application/agentexecution`, `api/v2/agentexecution`, `api/v2/applications`, `api/v2/eliteacore`, `api/v2/mcp`, `infra/db/repos`, `api` against a throwaway PostgreSQL 18 (`pgvector/pgvector:0.8.1-pg18-trixie`) | Before the replay: all 9 packages ok. After the review fix: `pipelinelimits`, `agentexecution`, `api/v2/agentexecution`, `runtimegrpc/output` and `api/v2/applications` re-run with `-race`, ok (398 tests in those 5 packages). After the replay onto `1ab920dde`: the same 9 packages plus `runtimegrpc/output`, ok — `api/v2/eliteacore` and `infra/db/repos` first hit the 10-minute default timeout during three concurrent image builds (`applications` took 370 s, against 44 s before). They passed on a quiet re-run with `-timeout 30m` (153 s and 230 s). |
 | Main | `go test -tags graph_extensions_rehearsal ./internal/domain/pipelinelimits/` | ok (rehearsal build admits shaping nodes) |
 | Main | `go vet`, `gofmt -l` on touched packages | clean |
-| Worker | `cargo test --offline --locked` | 1,627 passed, 0 failed, 10 ignored (pre-existing). PostgreSQL-only tests skipped: `ELITEA_TEST_DATABASE_URL` unset; this change has no PostgreSQL surface in the Worker. |
+| Worker | `cargo test --offline --locked` | 1,627 passed, 0 failed, 10 ignored (pre-existing) before the replay; 1,632 passed, 0 failed, 10 ignored after it (the 5 extra come from #1174). PostgreSQL-only tests skipped: `ELITEA_TEST_DATABASE_URL` unset; this change has no PostgreSQL surface in the Worker. |
 | Worker | `cargo clippy --offline --locked --all-targets --all-features -- -D warnings`; `cargo fmt --all -- --check` | clean (one `doc_markdown` nit fixed before commit) |
-| Web | vitest `features/pipelines`, `pages/pipelines`, `features/agents`, `shared/lib`, `processes/chat` | 460 files, 4,680 passed, 1 expected-fail (pre-existing), 1 failed: `PipelineTestChat.test.tsx` "displays the pipeline model before creating a test conversation". That file is untouched; the test passes in isolation (2 of 2 runs). It is a load-sensitive flake. |
+| Web | vitest `features/pipelines`, `pages/pipelines`, `features/agents`, `shared/lib`, `processes/chat` | 460 files, 4,680 passed, 1 expected-fail (pre-existing), 1 failed: `PipelineTestChat.test.tsx` "displays the pipeline model before creating a test conversation". After the replay, under three concurrent image builds: 4,677 passed and 4 failed, all in untouched files (`EditPipelineTriggersPanel`, `PipelineTestChat`, `PipelineTestChatIdle`, `conversationRailRefresh`), most of them 5 s timeouts. All 4 files pass in isolation (35/35). These are load-sensitive flakes. |
 | Web | `tsc --noEmit`; `oxlint --deny-warnings`; `scripts/check-budgets.mjs`; `scripts/i18n-backfill.mjs --check` | clean |
 
 New tests, and what they proved red first (each was run against the original code with the new code reverted):
@@ -198,7 +199,7 @@ and then fails.
 |---|---|---|---|
 | Main × admission (save, create and update) | **F**: typed 400 naming node and type; nothing stored | `pipelinelimits/limits.go:93,171`; existing callers (`repos/applications.go`, `applications/handler.go`, `eliteacore/handler.go`, `mcp/internal_applications_version.go`) | PostgreSQL handler tests; browser cases A, A2, E |
 | Main × admission (start) | **F**: typed 422 naming node and type, or node and toolkit with the fix (was a generic F from the Worker); nothing admitted | `limits.go:105,197`; `http_action_snapshot.go:36`; `start.go:423`; `route.go:597` | start and route tests; browser cases B, C |
-| Worker × admission (compile) | **F**: registered, data-free deployment message (was a generic F); unchanged **R** for admitted pipelines | `compiler.rs:2467`; `runtime.rs:73`; `native_agent_lifecycle.rs:1453`; `output.rs:741` | `a_gated_node_type_ends_as_the_registered_deployment_message`; Main `TestNodeTypeNotAvailableFailureAdmitsOnlyRegisteredMessage` (not reachable in the browser: Main refuses first on a matching build) |
+| Worker × admission (compile) | **F**: registered, data-free deployment message (was a generic F); unchanged **R** for admitted pipelines | `compiler.rs:2486`; `runtime.rs:73`; `native_agent_lifecycle.rs:1453`; `output.rs:741` | `a_gated_node_type_ends_as_the_registered_deployment_message`; Main `TestNodeTypeNotAvailableFailureAdmitsOnlyRegisteredMessage` (not reachable in the browser: Main refuses first on a matching build) |
 | Web/browser × create | No durable state; a refused create stores nothing; reload shows a clean draft | `CreatePipeline.tsx:230,364` | Web tests; browser case A with reload |
 | Sandbox supervisor, NATS, PostgreSQL, LLM gateway | Not touched: no Code node, bus, schema or model path changed | — | — |
 
@@ -309,6 +310,29 @@ image with `OIDC_REDIRECT_URI=http://admission.localhost:18420/auth/oidc/callbac
   the API can create one any more.
 - Pipeline 134 is an existing record of the restored dump.
 - No response was mocked. Only the stack's default model fixture was involved: no case calls a model.
+
+### Re-verification on the rewritten `main` (`1ab920dde`)
+
+After the replay, Main, Web and Worker were rebuilt from the replayed head `e5c53183d`. Unchanged services reused the
+`main-0def77b22-verify` images: between the two bases they differ only in Go dependency versions (llm-gateway,
+subapp-host), and the scheduler and the other services are unchanged.
+
+| Role | Image | Proof of base |
+|---|---|---|
+| Main | `elitea-main:admission-fix-r2` `sha256:54f218e56afb…83a8` | contains this branch's strings and #1175's vault-key refusal text |
+| Web | `elitea-web:admission-fix-r2` `sha256:b03234ff8dc4…40fd` | bundle contains `create-pipeline-admission` |
+| Worker | `elitea-worker-rust:admission-fix-r2` `sha256:b8e6a6309ee9…318d` | contains `graph.pipeline.node_type_not_available` and #1174's "the YAML document exceeds its expansion budget" |
+
+Setup: a fresh restore of the same dump; browser host `admission.localhost:18420`. Pipelines 161 and 162 here are new
+rows; the ids coincide with the first run because the restore was fresh.
+
+| Case | Result |
+|---|---|
+| A (create page, `split_out`) | The inline alert reads "Node split: type: "split_out" is not available on this deployment …"; Save is disabled; 0 create requests. |
+| A2 (direct create POST) | 400, node and type named. |
+| C (161 `r2-mcp-scope`, unattached `github_mcp`) | Chat 867: 422, `Node "fetch_issues" uses the "github_mcp" toolkit, which is not attached to this pipeline. Attach "github_mcp" under Tools → MCP, then run the pipeline again.` |
+| B (162 `r2-stored-split-out`; version 187 overwritten by SQL with the `split_out` graph) | The editor shows the gate; chat 868: 422, `Node "split" uses the "split_out" node type, which is not available on this deployment. …` |
+| D (162 version 187 restored by SQL to the valid Printer graph created through the API) | Chat 868 answers `r2 fixed: rebased ok`; after reload the answer is present and the refused start left no message. |
 
 The stack and the throwaway test PostgreSQL were torn down after the evidence was recorded.
 
