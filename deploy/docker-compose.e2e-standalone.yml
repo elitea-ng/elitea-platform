@@ -306,6 +306,9 @@ services:
       # writes when no master key is set. With the variable present the reader
       # takes the WRAPPED path instead (internal/infra/storage/
       # postgres_secret_vault.go) and refuses those rows as invalid keys.
+      # Main refuses to start without the key unless a throwaway stack opts
+      # out explicitly, which this one does.
+      ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "true"
       #
       # ── Egress for the toolkit credential probe ──────────────────────────
       # With the runtime composed, a stored TOOLKIT credential is really

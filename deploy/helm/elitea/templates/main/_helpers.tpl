@@ -1250,3 +1250,46 @@ identity sits at nats.tls.mountPath in the same pod.
 {{- $runtimeNats := (.Values.main.runtime | default dict).nats | default dict -}}
 {{- get $runtimeNats "mountPath" | default "/etc/elitea/runtime-nats-client" | trimSuffix "/" -}}
 {{- end }}
+
+{{/*
+elitea-main.masterKeyRef — the Secret reference SECRETS_MASTER_KEY is read from,
+as JSON, or "" when there is none and the development opt-out is set.
+
+elitea-main refuses to start without the key (cmd/elitea-main/
+master_key_gate.go): it stores every project vault key wrapped with it, and it
+will not store them in the clear. The chart therefore fails the RENDER when
+nothing would supply the key, rather than leaving the operator a pod that
+restarts with the reason in its log.
+
+Source, in order: an explicit main.secrets.SECRETS_MASTER_KEY; otherwise the
+reference the LLM gateway reads (llmGateway.secrets.SECRETS_MASTER_KEY).
+elitea-main and the gateway read the same centry.secrets_key rows, so they must
+carry the SAME value, and sharing the reference is how the chart keeps that
+true. The key is never accepted as a plaintext value: main.env lands in a
+ConfigMap.
+
+The development opt-out is main.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true.
+It does not remove the reference, only makes it optional, so an install that
+has the Secret still wraps its keys. The gateway's own `optional` is NOT
+inherited: the gateway tolerates a missing key, elitea-main does not.
+*/}}
+{{- define "elitea-main.masterKeyRef" -}}
+{{- $env := .Values.main.env | default dict -}}
+{{- if hasKey $env "SECRETS_MASTER_KEY" -}}
+{{- fail "main.env.SECRETS_MASTER_KEY is refused: main.env is rendered into a ConfigMap, and the vault master key must not be. Reference a Secret instead: main.secrets.SECRETS_MASTER_KEY.secretName / .key." -}}
+{{- end -}}
+{{- $secrets := .Values.main.secrets | default dict -}}
+{{- $ref := get $secrets "SECRETS_MASTER_KEY" -}}
+{{- if not (hasKey $secrets "SECRETS_MASTER_KEY") -}}
+{{- $ref = get (.Values.llmGateway.secrets | default dict) "SECRETS_MASTER_KEY" -}}
+{{- end -}}
+{{- $optOut := eq (toString (get $env "ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS")) "true" -}}
+{{- if $ref -}}
+{{- if or (not $ref.secretName) (not $ref.key) -}}
+{{- fail "main.secrets.SECRETS_MASTER_KEY (or, when unset, llmGateway.secrets.SECRETS_MASTER_KEY) needs both secretName and key." -}}
+{{- end -}}
+{{- toJson (dict "secretName" $ref.secretName "key" $ref.key "optional" $optOut) -}}
+{{- else if not $optOut -}}
+{{- fail "elitea-main has no SECRETS_MASTER_KEY source and refuses to start without one: it will not store project vault keys unwrapped. Set main.secrets.SECRETS_MASTER_KEY.secretName / .key (a Secret holding a base64url 32-byte Fernet key; the gateway must carry the same value), or, for a throwaway local install only, set main.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=\"true\"." -}}
+{{- end -}}
+{{- end }}

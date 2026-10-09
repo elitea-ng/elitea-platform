@@ -27,8 +27,8 @@ import (
 // 32 bytes = 256 bits. The token is the ONLY thing standing between an
 // anonymous caller and a conversation transcript, so the question it has to
 // answer is "can this be found by guessing", and the answer has to remain no
-// with no rate limiter in front of it (this repository has none — see
-// Handler.View's doc comment). A sequential id, a conversation uuid, or
+// without relying on request throttling (Unlock is bounded by admission.go,
+// but View is not). A sequential id, a conversation uuid, or
 // anything derived from the conversation would all fail that test: the first is
 // enumerable outright, and the last two are values that already travel through
 // logs, referrer headers and support tickets attached to the very conversation
@@ -47,9 +47,10 @@ const maxTokenLength = 128
 // can use a token they also stole, and an attacker with only the token wants to
 // guess the password online. 600_000 iterations of HMAC-SHA256 is OWASP's 2023
 // PBKDF2-SHA256 floor and costs on the order of a few hundred milliseconds per
-// attempt here, which is the point in BOTH directions: it is the bound on
-// online guessing that this repository has no rate limiter to provide, and it
-// is what makes a leaked table expensive rather than instant.
+// attempt here, which is the point in BOTH directions: it slows online
+// guessing and it makes a leaked table expensive rather than instant. Because
+// the cost lands on the server for every unlock request, Handler.Unlock caps
+// how many run at once and how many one client may start (admission.go).
 const pbkdf2Iterations = 600_000
 
 const pbkdf2KeyLength = 32

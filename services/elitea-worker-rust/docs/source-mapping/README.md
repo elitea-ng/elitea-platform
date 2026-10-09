@@ -449,4 +449,5 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Conversation pin concurrency](conversation-pin-concurrency-20261009.md) records the Pin/Unpin/Delete lock-order fix for the intermittent 40P01 pin 500, the forced and stress PostgreSQL tests, browser evidence and recovery rows.
 - [Numeric node ids and readable pipeline limits](pipeline-numeric-ids-readable-limits-20261008.md) records numeric-id support in Worker and Web, the Main save-time bound, typed readable limit refusals, browser evidence and follow-ups.
 - [Numeric normalization log test flake](numeric-normalization-log-test-flake-20261009.md) records the child-process log capture that makes the #1158 counts-only log test deterministic, with baseline and 20-run evidence.
+- [Access hardening](access-hardening-20261008.md) records project-scoped reads and pins, unlock admission, the mandatory vault master key and the Web CSP and sanitiser, with tests and follow-ups.
 - [Edge identity propagation](edge-identity-propagation-20261008.md) records the signed edge identity projection, edge strip and NetworkPolicy hardening, its tests and recovery rows.

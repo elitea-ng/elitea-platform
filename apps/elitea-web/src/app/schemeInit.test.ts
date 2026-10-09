@@ -8,7 +8,7 @@ import { COLOR_SCHEME_ATTRIBUTE, DEFAULT_COLOR_SCHEME, INIT_COLOR_SCHEME_PROPS }
 
 /**
  * The first-paint colour-scheme script (ADR-0024 WP3) exists in two places:
- * inline in `index.html` (the main SPA; nginx sets no script-src) and as the
+ * inline in `index.html` (the main SPA; nginx pins it by sha256 in script-src) and as the
  * file `entries/admin/public/assets/scheme-init.js` (the admin CSP hash-pins
  * exactly one inline script). This test (1) pins the two bodies equal, (2)
  * pins them to the three constants the runtime theme reads, and (3) RUNS the

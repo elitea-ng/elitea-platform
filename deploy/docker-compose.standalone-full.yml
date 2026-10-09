@@ -881,6 +881,9 @@ services:
       # Keep the gateway and Main on one vault-key source. Empty preserves the
       # unwrapped E2E seed; a restored deployment can supply its existing key.
       SECRETS_MASTER_KEY: "${SECRETS_MASTER_KEY-}"
+      # Main refuses to start without the key unless a local stack opts out
+      # explicitly. A supplied key is used either way.
+      ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "${ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS-true}"
       ELITEA_EVENTS_NATS_URL: "nats://nats:4222"
       ADMIN_UI_STATIC_DIR: "/data/admin_ui/static/dist"
       APPLICATION_SECRET_KEY: "changeme-standalone"
