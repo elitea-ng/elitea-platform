@@ -19,7 +19,7 @@
 //! extraction stage 7 can replace this module with the runtime's own
 //! assembly without touching the hosts' adapters.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -133,11 +133,51 @@ struct WorkspaceSession {
     session: Arc<LocalSession>,
     prompt: Arc<UiPrompt>,
     policy: LocalWorkPolicy,
-    busy: Mutex<bool>,
 }
+
+/// The workspaces something holds right now (a running turn, a restore, a
+/// removal), by workspace id. One set for the host, so it outlives the
+/// session rebuild a policy change causes.
+type BusySet = Arc<Mutex<HashSet<String>>>;
+
+/// A workspace held by one turn (or one restore or removal); released when
+/// dropped, so every exit path (a refusal, a panic, the end of the run)
+/// frees it.
+struct WorkspaceClaim {
+    busy: BusySet,
+    workspace_id: String,
+}
+
+impl WorkspaceClaim {
+    /// Check and take the workspace in one step, under the set's lock.
+    fn take(busy: &BusySet, workspace_id: &str, message: &str) -> Result<Self, TurnError> {
+        let mut held = busy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !held.insert(workspace_id.to_owned()) {
+            return Err(TurnError::new("workspace_busy", message));
+        }
+        Ok(Self {
+            busy: busy.clone(),
+            workspace_id: workspace_id.to_owned(),
+        })
+    }
+}
+
+impl Drop for WorkspaceClaim {
+    fn drop(&mut self) {
+        self.busy
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.workspace_id);
+    }
+}
+
+const TURN_RUNNING: &str = "A turn is already running in this workspace.";
 
 /// A turn, kept after it ends for `turn_changes` and `checkpoint_restore`.
 struct TurnEntry {
+    workspace_id: String,
     workspace: Arc<WorkspaceSession>,
     recorder: Arc<Recorder>,
     stop: LocalStop,
@@ -150,6 +190,7 @@ pub struct AgentHost {
     api: Arc<PlatformApi>,
     broker: Arc<ApprovalBroker>,
     sessions: Mutex<HashMap<String, Arc<WorkspaceSession>>>,
+    busy: BusySet,
     turns: Mutex<HashMap<String, Arc<TurnEntry>>>,
 }
 
@@ -195,6 +236,7 @@ impl AgentHost {
             api,
             broker: Arc::new(ApprovalBroker::default()),
             sessions: Mutex::new(HashMap::new()),
+            busy: BusySet::default(),
             turns: Mutex::new(HashMap::new()),
         })
     }
@@ -215,7 +257,9 @@ impl AgentHost {
         Ok(policy)
     }
 
-    /// The workspace's session, (re)opened when the policy changed.
+    /// The workspace's session, (re)opened when the policy changed. The
+    /// caller holds the workspace's [`WorkspaceClaim`], so no turn of it is
+    /// running on the session this may replace.
     fn session(
         &self,
         workspace_id: &str,
@@ -230,15 +274,6 @@ impl AgentHost {
             && &existing.policy == policy
         {
             return Ok(existing.clone());
-        }
-        if sessions
-            .get(workspace_id)
-            .is_some_and(|existing| existing.busy.lock().is_ok_and(|busy| *busy))
-        {
-            return Err(TurnError::new(
-                "workspace_busy",
-                "A turn is already running in this workspace.",
-            ));
         }
         let data_dir = self.deps.workspaces.data_dir(workspace_id);
         std::fs::create_dir_all(&data_dir).map_err(|e| {
@@ -265,7 +300,6 @@ impl AgentHost {
             session,
             prompt,
             policy: policy.clone(),
-            busy: Mutex::new(false),
         });
         sessions.insert(workspace_id.to_owned(), entry.clone());
         Ok(entry)
@@ -290,6 +324,7 @@ impl AgentHost {
                 };
                 let (guard, stop) = LocalExecutionGuard::new();
                 let entry = Arc::new(TurnEntry {
+                    workspace_id: request.workspace_id.clone(),
                     workspace: prepared.workspace.clone(),
                     recorder: Arc::new(Recorder::default()),
                     stop,
@@ -361,24 +396,14 @@ impl AgentHost {
                 request.version_id,
             )
             .await?;
+        // Checked and taken atomically, per workspace id, before the session
+        // may be rebuilt; released on every early return below.
+        let claim = WorkspaceClaim::take(&self.busy, &request.workspace_id, TURN_RUNNING)?;
         let workspace_session = self.session(
             &request.workspace_id,
             PathBuf::from(&workspace.path),
             &policy,
         )?;
-        {
-            let mut busy = workspace_session
-                .busy
-                .lock()
-                .map_err(|_| TurnError::new("internal", "workspace state poisoned"))?;
-            if *busy {
-                return Err(TurnError::new(
-                    "workspace_busy",
-                    "A turn is already running in this workspace.",
-                ));
-            }
-            *busy = true;
-        }
         events.status(Phase::Starting, None);
         let question_id = uuid::Uuid::new_v4().to_string();
         let started = self
@@ -393,13 +418,7 @@ impl AgentHost {
                 }),
             )
             .await;
-        let started = match started {
-            Ok(started) => started,
-            Err(error) => {
-                release(&workspace_session);
-                return Err(error.into());
-            }
-        };
+        let started = started?;
         Ok(Prepared {
             request: request.clone(),
             events: events.clone(),
@@ -407,6 +426,7 @@ impl AgentHost {
             admitted,
             started,
             policy,
+            claim,
         })
     }
 
@@ -423,6 +443,7 @@ impl AgentHost {
             admitted,
             started,
             policy,
+            claim,
         } = prepared;
         let recorder = entry.recorder.clone();
         workspace.prompt.bind(Some(TurnBinding {
@@ -451,7 +472,7 @@ impl AgentHost {
         let conversation_id = request.conversation_id.clone();
         let Some(result) = outcome else {
             let _ = sink.finish(RunOutcome::Stopped).await;
-            release(&workspace);
+            drop(claim);
             events.status(Phase::Cancelled, None);
             events.send(
                 "done",
@@ -499,7 +520,8 @@ impl AgentHost {
             .api
             .commit_turn(request.project_id, &started.execution_id, &body)
             .await;
-        release(&workspace);
+        // Free before `done`: the UI may send the next turn as soon as it sees it.
+        drop(claim);
         let changed_files = recorder.changes(session.workspace()).len();
         match committed {
             Ok(_) => {
@@ -733,12 +755,13 @@ impl AgentHost {
     /// An unknown or running turn, or a failed restore.
     pub fn restore(&self, turn_id: &str, path: Option<&str>) -> Result<Vec<String>, TurnError> {
         let entry = self.entry(turn_id)?;
-        if entry.workspace.busy.lock().is_ok_and(|busy| *busy) {
-            return Err(TurnError::new(
-                "workspace_busy",
-                "Wait for the running turn to end before undoing.",
-            ));
-        }
+        // The same per-workspace claim a turn takes: no turn starts while
+        // the restore writes, and none may be running when it begins.
+        let _claim = WorkspaceClaim::take(
+            &self.busy,
+            &entry.workspace_id,
+            "Wait for the running turn to end before undoing.",
+        )?;
         let Some(seq) = *entry
             .checkpoint
             .lock()
@@ -765,12 +788,7 @@ struct Prepared {
     admitted: Admitted,
     started: LocalTurnStarted,
     policy: LocalWorkPolicy,
-}
-
-fn release(workspace: &WorkspaceSession) {
-    if let Ok(mut busy) = workspace.busy.lock() {
-        *busy = false;
-    }
+    claim: WorkspaceClaim,
 }
 
 fn model_failure(text: &str) -> TurnError {

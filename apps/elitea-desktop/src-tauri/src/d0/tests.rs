@@ -4,7 +4,7 @@
 //! → commit; the refusals; event sequencing; changes and undo.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -39,11 +39,18 @@ impl Credentials for StaticCredentials {
     }
 }
 
-struct Policy(Option<Value>);
+/// The stored policy's `local_work`; a test may change it mid-way.
+struct Policy(std::sync::Mutex<Option<Value>>);
+
+impl Policy {
+    fn set(&self, local_work: Option<Value>) {
+        *self.0.lock().unwrap() = local_work;
+    }
+}
 
 impl PolicySource for Policy {
     fn local_work(&self) -> Option<Value> {
-        self.0.clone()
+        self.0.lock().unwrap().clone()
     }
 }
 
@@ -198,6 +205,7 @@ struct Harness {
     emitter: Arc<VecEmitter>,
     workspace_id: String,
     folder: tempfile::TempDir,
+    policy: Arc<Policy>,
     _app: tempfile::TempDir,
 }
 
@@ -208,11 +216,12 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
     let workspaces = Arc::new(WorkspaceStore::new(app.path().to_owned()));
     let workspace_id = workspaces.add(folder.path()).unwrap().id;
     let emitter = Arc::new(VecEmitter::default());
+    let policy = Arc::new(Policy(std::sync::Mutex::new(policy)));
     let host = Arc::new(
         AgentHost::new(HostDeps {
             credentials: Arc::new(StaticCredentials(server.origin.clone())),
             client_version: "0.1.0".into(),
-            policy: Arc::new(Policy(policy)),
+            policy: policy.clone(),
             workspaces,
             emitter: emitter.clone(),
             retry: RetryPolicy {
@@ -248,6 +257,7 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
         emitter,
         workspace_id,
         folder,
+        policy,
         _app: app,
     }
 }
@@ -273,6 +283,42 @@ async fn until_done(emitter: &VecEmitter) -> Vec<AgentEvent> {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     panic!("the turn did not finish: {:?}", emitter.kinds());
+}
+
+async fn until_done_of(emitter: &VecEmitter, turn_id: &str) {
+    for _ in 0..500 {
+        if emitter
+            .all()
+            .iter()
+            .any(|event| event.kind == "done" && event.turn_id == turn_id)
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("turn {turn_id} did not finish: {:?}", emitter.kinds());
+}
+
+/// The platform of [`platform`], with a model that stalls while `slow` is
+/// set (for at most five seconds).
+async fn stalling_platform(slow: Arc<AtomicBool>) -> MockServer {
+    let inner = platform(agent_details(), &[]);
+    serve(move |req: &Req| {
+        if req.path == "/llm/v1/chat/completions" {
+            // block_in_place: a plain blocking wait here starves the
+            // runtime's timer, and the test's own sleeps with it.
+            tokio::task::block_in_place(|| {
+                for _ in 0..250 {
+                    if !slow.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            });
+        }
+        inner(req)
+    })
+    .await
 }
 
 fn seen(server: &MockServer, path_end: &str) -> Vec<Req> {
@@ -585,6 +631,43 @@ async fn a_cancelled_turn_commits_nothing() {
     // The workspace is free again.
     let again = h.host.start(request(&h.workspace_id)).await;
     assert!(again.is_ok(), "{again:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_policy_change_does_not_let_an_undo_or_a_turn_past_a_running_turn() {
+    let slow = Arc::new(AtomicBool::new(false));
+    let server = stalling_platform(slow.clone()).await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let first = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h.emitter, &first.turn_id).await;
+    let notes = h.folder.path().join("notes.txt");
+    assert!(notes.exists());
+
+    // The policy changes, so the next turn runs on a rebuilt session.
+    h.policy.set(Some(
+        json!({"allowed": true, "shell": false, "max_sandbox_mode": "workspace-write"}),
+    ));
+    slow.store(true, Ordering::SeqCst);
+    let second = h.host.start(request(&h.workspace_id)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // The busy flag is the workspace's, not the old session's: undoing
+    // the first turn, or a third turn after one more policy change, waits.
+    let undo = h.host.restore(&first.turn_id, None).unwrap_err();
+    assert_eq!(undo.code, "workspace_busy");
+    assert!(
+        notes.exists(),
+        "nothing was restored under the running turn"
+    );
+    h.policy.set(allowed());
+    let third = h.host.start(request(&h.workspace_id)).await.unwrap_err();
+    assert_eq!(third.code, "workspace_busy");
+
+    assert!(h.host.cancel(&second.turn_id));
+    slow.store(false, Ordering::SeqCst);
+    until_done_of(&h.emitter, &second.turn_id).await;
+    assert_eq!(h.host.restore(&first.turn_id, None).unwrap(), ["notes.txt"]);
+    assert!(!notes.exists());
 }
 
 #[tokio::test]
