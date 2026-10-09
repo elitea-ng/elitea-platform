@@ -98,15 +98,9 @@ impl ParallelCheckpointAppender for PipelineGraphReceiptAuthority {
         if expected.is_some_and(|parent| parent.thread_id != candidate.thread_id) {
             return Err(receipt_error());
         }
-        // An immutable replay retains its original metadata and latest ordering.
-        if let Some(existing) = self.inner.load_by_id(&candidate.checkpoint_id).await? {
-            if serde_json::to_value(&existing).map_err(|_| receipt_error())?
-                != serde_json::to_value(candidate).map_err(|_| receipt_error())?
-            {
-                return Err(receipt_error());
-            }
-            return self.inner.append_after_head(expected, candidate).await;
-        }
+        // Exact replays arrive through `append_after` after the caller's probe.
+        // Here the store's exact-existing check under the writer lock refuses any
+        // different payload under an existing id, so no second probe is needed.
         // Receipts live in metadata. Only a receipt revision compares the
         // parent's whole frontier, so only that rare path reads the full row.
         let candidate = match expected {

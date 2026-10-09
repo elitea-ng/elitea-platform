@@ -1044,7 +1044,11 @@ impl DurableParallelNode {
                 Ok(ParallelNodeOutcome::Paused(_)) => ActivationOutcome::Paused,
                 Ok(ParallelNodeOutcome::Blocked(_)) => ActivationOutcome::Blocked,
                 Err(error) if is_lease_lost(error) => ActivationOutcome::LeaseLost,
-                Err(_) if self.stop_requested(context) => ActivationOutcome::Cancelled,
+                Err(GraphError::NodeExecutionFailed { message, .. })
+                    if message.starts_with("graph.parallel.cancelled") =>
+                {
+                    ActivationOutcome::Cancelled
+                }
                 Err(_) => ActivationOutcome::Failed,
             },
         );

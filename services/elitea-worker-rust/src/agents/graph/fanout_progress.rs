@@ -162,7 +162,6 @@ impl FanoutProgressCoalescer {
         &mut self,
         ordinal: usize,
         event: FanoutLifecycle,
-        _now: Instant,
     ) -> Result<Vec<FanoutProgressFrame>, FanoutProgressError> {
         self.check(ordinal)?;
         let mut frames: Vec<_> = self.flush().into_iter().collect();
@@ -295,7 +294,7 @@ mod tests {
                 .is_empty()
         );
         let frames = coalescer
-            .lifecycle(1, FanoutLifecycle::Completed, now)
+            .lifecycle(1, FanoutLifecycle::Completed)
             .expect("lifecycle");
         assert_eq!(
             frames,
@@ -312,7 +311,7 @@ mod tests {
         assert_eq!(coalescer.next_flush_at(), None);
         // With nothing buffered only the lifecycle frame is returned.
         let frames = coalescer
-            .lifecycle(0, FanoutLifecycle::Started, now)
+            .lifecycle(0, FanoutLifecycle::Started)
             .expect("lifecycle");
         assert_eq!(frames.len(), 1);
     }
@@ -396,11 +395,7 @@ mod tests {
             .push_delta(2, "x", now)
             .expect_err("unknown member");
         assert_eq!(err.code(), "graph.fanout.progress_invalid_member");
-        assert!(
-            coalescer
-                .lifecycle(2, FanoutLifecycle::Failed, now)
-                .is_err()
-        );
+        assert!(coalescer.lifecycle(2, FanoutLifecycle::Failed).is_err());
         assert_eq!(coalescer.buffered_bytes, 0);
         assert_eq!(coalescer.next_flush_at(), None);
     }

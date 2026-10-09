@@ -493,6 +493,120 @@ async fn batched_preparation_costs_two_transactions_and_refuses_a_superseded_cla
     );
 }
 
+/// The production factory: each branch is a family of its root thread plus its
+/// admitted application threads. All families activate in one transaction and
+/// only the branch roots' receipts are read.
+#[tokio::test]
+async fn application_families_prepare_in_two_transactions_and_keep_their_own_threads() {
+    let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
+        eprintln!("skipping PostgreSQL application family test: set {TEST_DATABASE_URL}");
+        return;
+    };
+    let database = IsolatedPostgres::create(&database_url).await;
+    install_test_schema(&database.pool).await;
+    let thread = "family-root";
+    let root = PostgresCheckpointer::activate(
+        database.pool.clone(),
+        authority(thread, "family-1", 1),
+        CheckpointLimits::default(),
+        Arc::new(TestStateWriterLease::current()),
+    )
+    .await
+    .expect("activate the root writer");
+    let family = root
+        .with_application_paths(&["n0".to_owned(), "n0/inner".to_owned(), "n1".to_owned()])
+        .await
+        .expect("admit the application family");
+    let counters = family.for_thread(thread).expect("root").io_counters();
+    let definition = definition(2, 2);
+    let activation = activation(thread, &definition);
+    let origin = family.child_origin(&activation).expect("origin");
+    let digests = [[1_u8; 32], [2_u8; 32]];
+    let requests = definition
+        .branches()
+        .iter()
+        .zip(&digests)
+        .enumerate()
+        .map(|(ordinal, (branch, input_digest))| ParallelChildRequest {
+            branch,
+            ordinal,
+            input_digest,
+        })
+        .collect::<Vec<_>>();
+    let before = counters.transactions();
+    let prepared = family
+        .prepare_children(&activation, &requests, &origin)
+        .await
+        .expect("prepare both families");
+    assert_eq!(
+        counters.transactions() - before,
+        PREPARE_TRANSACTIONS_BUDGET
+    );
+    let (first, second) = (&prepared[0].child, &prepared[1].child);
+    assert_eq!(
+        first.admitted_threads,
+        BTreeSet::from([
+            first.thread_id.clone(),
+            format!("{}/n0", first.thread_id),
+            format!("{}/n0/inner", first.thread_id),
+        ])
+    );
+    assert_eq!(
+        second.admitted_threads,
+        BTreeSet::from([second.thread_id.clone(), format!("{}/n1", second.thread_id)])
+    );
+    for (ordinal, child) in [first, second].into_iter().enumerate() {
+        assert_eq!(
+            child.thread_id,
+            family
+                .branch_thread_id(
+                    &activation,
+                    &definition.branches()[ordinal],
+                    ordinal,
+                    &digests[ordinal],
+                    &origin,
+                )
+                .expect("derived branch thread")
+        );
+    }
+
+    // A family writes only its own threads.
+    let nested = format!("{}/n0/inner", first.thread_id);
+    first
+        .checkpointer
+        .save(&Checkpoint::new(&nested, State::new(), 1, Vec::new()))
+        .await
+        .expect("nested thread of the first family");
+    let foreign = format!("{}/n0", second.thread_id);
+    assert!(
+        second
+            .checkpointer
+            .save(&Checkpoint::new(&foreign, State::new(), 1, Vec::new()))
+            .await
+            .is_err()
+    );
+    // The receipt of the second branch root lands on the second branch only;
+    // the first family's nested row is not a branch receipt.
+    let receipt = Checkpoint::new(&second.thread_id, input_state(), 1, Vec::new());
+    second
+        .checkpointer
+        .save(&receipt)
+        .await
+        .expect("branch receipt");
+    let again = family
+        .prepare_children(&activation, &requests, &origin)
+        .await
+        .expect("re-prepare");
+    assert!(again[0].latest.is_none());
+    assert_eq!(
+        again[1]
+            .latest
+            .as_ref()
+            .map(|latest| latest.checkpoint_id.clone()),
+        Some(receipt.checkpoint_id)
+    );
+}
+
 #[tokio::test]
 async fn concurrent_parent_appends_against_one_head_admit_exactly_one() {
     let Ok(database_url) = env::var(TEST_DATABASE_URL) else {
