@@ -148,8 +148,21 @@ elitea-inventory-engine export-graph --project-id 3 --application-id 42 --file g
 An import followed by an export gives the imported document back, except
 `_metadata.last_saved` (the export's time) and the order of ids inside
 `_indices` (node order; Python's was string-hash order). `tests/transfer.rs`
-holds both commands to two Python-written graphs. Neither is a socket tool:
-the Go host admits only the descriptor's tools.
+holds both commands to two Python-written graphs.
+
+Both are also socket tools (descriptor revision `legacy-v2`), so a toolkit
+owner runs them without cluster access:
+
+* `import_graph` — the Go host reads `artifact_name` (default `graph.json`)
+  from the toolkit's bucket (`bucket` / `toolkit_configuration_bucket`,
+  default `graphs`) and hands the text to the engine in `graph_document`;
+  `replace_ingestion_state` is the CLI flag. The host refuses a document over
+  32 MiB: import such a graph with the command. The sidecar reads an invoke
+  body up to `elitea_engine_sidecar::server::MAX_INVOKE_BYTES` (96 MiB).
+* `export_graph` — the engine returns `graph.json` as an artifact, and the
+  host uploads it to the toolkit's bucket (a `knowledge_graph` object).
+
+`tests/transfer_tools.rs` drives both over the socket.
 
 ## Settings
 

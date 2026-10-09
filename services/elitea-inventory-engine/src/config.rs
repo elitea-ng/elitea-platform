@@ -1,6 +1,6 @@
 //! Sidecar settings, strict-parsed from `ELITEA_INVENTORY_*` — the names the
-//! Python sidecar read (`elitea_inventory.config`), so a deployment switches
-//! engines without renaming anything.
+//! retired Python sidecar read, kept so a deployment switched engines without
+//! renaming anything (provenance: `tests/fixtures/PROVENANCE.md`).
 
 use crate::ingest::source::DEFAULT_SOURCE_TYPES;
 use elitea_repo_ingest::IngestSettings;

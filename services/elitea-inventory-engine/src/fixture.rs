@@ -1,22 +1,24 @@
 //! The canned knowledge graph the fixture runner replays.
 //!
-//! Inventory has had two fixture runners, and this is the third: the Go
-//! host's (`services/elitea-subapp-host/internal/apps/inventory/run/fixture.go`,
-//! the E2E stack) and the Python engine's (`elitea_inventory.fixture_graph`,
-//! the standalone-full stack's sidecar). All three answer from the SAME graph,
-//! `conformance/provider/fixtures/inventory/spi/graph.json`, and all three are
-//! held to the same golden answers in `.../inventory/{ingestion,retrieval}/`
-//! (`tests/conformance.rs` here).
+//! Inventory has two fixture runners: this one and the Go host's
+//! (`services/elitea-subapp-host/internal/apps/inventory/run/fixture.go`,
+//! the E2E stack). A third, the retired Python engine's
+//! (`elitea_inventory.fixture_graph`), is where these semantics came from
+//! (`tests/fixtures/PROVENANCE.md`). Both answer from the SAME graph,
+//! `conformance/provider/fixtures/inventory/spi/graph.json`, and both are
+//! held to the same golden answers in
+//! `.../inventory/{ingestion,retrieval,transfer}/` (`tests/conformance.rs`
+//! here, `fixture_parity_test.go` there).
 //!
-//! This module is a port of `fixture_graph.py`, handler for handler, with its
-//! Python semantics: `first_truthy` is Python truthiness, a reference in a
-//! message is `repr()`, a JSON answer is `json.dumps` byte for byte, and
-//! counts keep first-seen order (a Python dict).
+//! The handlers keep the Python semantics they were ported with:
+//! `first_truthy` is Python truthiness, a reference in a message is
+//! `repr()`, a JSON answer is `json.dumps` byte for byte, and counts keep
+//! first-seen order (a Python dict).
 //!
-//! The graph is packaged here (`fixtures/graph.json`, compiled in) the way
-//! the Python package carries its copy; `ELITEA_INVENTORY_FIXTURES` points at
-//! another directory shaped like the conformance one instead. A test asserts
-//! the packaged copy equals the conformance file.
+//! The graph is packaged here (`fixtures/graph.json`, compiled in);
+//! `ELITEA_INVENTORY_FIXTURES` points at another directory shaped like the
+//! conformance one instead. A test asserts the packaged copy equals the
+//! conformance file.
 //!
 //! WHAT IS CANNED IS ONLY WHAT THE ENGINE WOULD HAVE COMPUTED. Composition,
 //! the artifact hand-back and the upload are the host's.
@@ -845,6 +847,59 @@ fn rebuild_indices(graph: &FixtureGraph, params: &Map<String, Value>) -> Value {
     )
 }
 
+/// `import_graph`: checks the document the host read from the bucket and
+/// says plainly that nothing was stored — the fixture serves its canned
+/// graph, and a claimed import would be a success with nothing behind it.
+fn import_graph(_graph: &FixtureGraph, params: &Map<String, Value>) -> Value {
+    let name = params
+        .get("artifact_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("graph.json");
+    let document = params
+        .get("graph_document")
+        .and_then(Value::as_str)
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .filter(Value::is_object);
+    let Some(document) = document else {
+        return json!({
+            "success": false,
+            "error": "the graph document cannot be imported: it is not a JSON object",
+            "error_category": "invalid_input",
+        });
+    };
+    let count = |key: &str| document[key].as_array().map(Vec::len);
+    let entities = count("nodes").unwrap_or(0);
+    let relations = count("links").or_else(|| count("edges")).unwrap_or(0);
+    let model = document["_metadata"]["embeddings_model"]
+        .as_str()
+        .filter(|model| !model.is_empty());
+    answer(
+        params,
+        &json!({"stored": false, "entities": entities, "relations": relations, "embeddings_model": model}),
+        format!(
+            "Checked {name}: {entities} entities and {relations} relations. The fixture runner serves its canned graph, so nothing was imported."
+        ),
+    )
+}
+
+/// `export_graph`: the canned graph as `graph.json`, as the engine exports
+/// the stored one.
+fn export_graph(graph: &FixtureGraph, params: &Map<String, Value>) -> Value {
+    let document = graph_document(graph, &source_label_for(params));
+    let (entities, relations) = (graph.entities.len(), graph.relations.len());
+    let mut result = answer(
+        params,
+        &json!({"artifact": "graph.json", "entities": entities, "relations": relations}),
+        format!("Exported {entities} entities and {relations} relations to graph.json."),
+    );
+    result["artifacts"] = json!([
+        {"name": "graph.json", "type": "application/json", "data": dumps(&document)},
+    ]);
+    result
+}
+
 /// One canned answer.
 pub type Handler = fn(&FixtureGraph, &Map<String, Value>) -> Value;
 
@@ -886,6 +941,8 @@ pub fn handler(tool: &str) -> Option<Handler> {
         "get_sources_status" => get_sources_status,
         "normalize_types" | "smart_normalize_types" => normalize_types,
         "rebuild_indices" => rebuild_indices,
+        "import_graph" => import_graph,
+        "export_graph" => export_graph,
         _ => return None,
     };
     Some(handler)

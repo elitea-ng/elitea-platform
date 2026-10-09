@@ -20,7 +20,7 @@
 
 use axum::Router;
 use axum::body::{Body, Bytes};
-use axum::extract::{Path as UrlPath, State};
+use axum::extract::{DefaultBodyLimit, Path as UrlPath, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -95,6 +95,12 @@ impl<E> Shared<E> {
     }
 }
 
+/// The largest invoke body the sidecar reads. axum's default (2 MB) is below
+/// the host's own SPI cap (4 MiB), and Inventory's `import_graph` carries a
+/// graph document the host read from a bucket (up to 32 MiB, JSON-escaped
+/// once more in the body). The socket is the host's alone.
+pub const MAX_INVOKE_BYTES: usize = 96 << 20;
+
 /// The sidecar's routes over `engine`.
 pub fn router<E: Engine>(engine: E) -> Router {
     let shared = Arc::new(Shared {
@@ -106,6 +112,7 @@ pub fn router<E: Engine>(engine: E) -> Router {
         .route("/engine/invoke", post(invoke::<E>))
         .route("/engine/invocations/{invocation_id}/stop", post(stop::<E>))
         .fallback(|| async { detail(StatusCode::NOT_FOUND, "Not Found") })
+        .layer(DefaultBodyLimit::max(MAX_INVOKE_BYTES))
         .with_state(shared)
 }
 

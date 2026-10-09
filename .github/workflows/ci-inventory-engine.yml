@@ -12,7 +12,7 @@ name: CI — Inventory native engine
 #     migrations, save/load, tenancy). INVENTORY_REQUIRE_POSTGRES=1 turns
 #     their "no database → skip" into a failure;
 #   * the fixture runner against every Inventory golden
-#     (conformance/provider/fixtures/inventory — the files the Go and Python
+#     (conformance/provider/fixtures/inventory — the files the Go and Rust
 #     fixture runners are held to), the tool table against the descriptor
 #     the host serves, and the engine over a REAL Unix socket;
 #   * the release binary, and then the Go sub-application host's own tests

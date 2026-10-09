@@ -3,23 +3,24 @@ package run
 // The two-runner parity anchor.
 //
 // There are TWO fixture runners for Inventory: this one (Go, for the E2E
-// stack) and elitea_inventory.fixture_graph (Python, for the standalone-full
-// stack's engine sidecar). Nothing forces them to agree — they are separate
+// stack) and the Rust engine's (services/elitea-inventory-engine/src/
+// fixture.rs, for a stack that runs the engine sidecar). A Python runner was
+// a third until the Python engine was deleted (provenance:
+// services/elitea-inventory-engine/tests/fixtures/PROVENANCE.md). Nothing forces them to agree — they are separate
 // languages with no shared import — so conformance/provider/fixtures/inventory/
 // exists to make agreement a file both sides read and a test both sides run.
 //
 // This file is the Go half. It is `package run`, not `run_test`, because the
 // fixtures below are checked against the UNEXPORTED constants and handlers —
 // the ones a caller three files away cannot reach and therefore cannot get
-// wrong by importing something else. The Python half
-// (services/elitea-inventory/tests/unit/test_fixture_parity.py) reads the SAME
-// files and asserts the same shapes against elitea_inventory.fixture_graph.
+// wrong by importing something else. The Rust half
+// (services/elitea-inventory-engine/tests/conformance.rs) reads the SAME
+// files and asserts the same shapes against its fixture handlers.
 //
 // A change to the canned graph that touches only one language's copy fails
 // here or there, not silently: this test loads spi/graph.json and asserts
-// FixtureEntities/FixtureRelations/FixturePresets equal it; the Python test
-// loads its packaged copy and asserts it equals the same file (see that
-// package's README for why there are two copies of one JSON document).
+// FixtureEntities/FixtureRelations/FixturePresets equal it; the Rust test
+// asserts its compiled-in copy (src/fixtures/graph.json) holds the same data.
 import (
 	"encoding/json"
 	"os"
@@ -113,12 +114,14 @@ type toolFixture struct {
 
 // TestEveryIngestionAndRetrievalFixtureMatchesTheGoHandler is "the parity test
 // that loads every fixture file ... and asserts the mode answers each with the
-// same shape" for the Go side. The Python side runs the identical files
-// through elitea_inventory.fixture_graph (test_fixture_parity.py) and must
-// reach the same `expected` document.
+// same shape" for the Go side. The Rust side runs the identical files
+// through its fixture handlers (tests/conformance.rs) and must reach the
+// same `expected` document.
 func TestEveryIngestionAndRetrievalFixtureMatchesTheGoHandler(t *testing.T) {
 	files := listFixtureFiles(t, fixtureConformancePath("ingestion"))
 	files = append(files, listFixtureFiles(t, fixtureConformancePath("retrieval"))...)
+	// transfer/: import_graph and export_graph (descriptor legacy-v2).
+	files = append(files, listFixtureFiles(t, fixtureConformancePath("transfer"))...)
 	if len(files) == 0 {
 		t.Fatal("no ingestion/retrieval fixture files found")
 	}

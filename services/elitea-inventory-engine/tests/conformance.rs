@@ -72,7 +72,7 @@ fn ingestion_shape(result: &Value) -> Value {
 fn every_golden_answer_is_this_runners_answer() {
     let graph = FixtureGraph::parse(PACKAGED_GRAPH).unwrap_or_else(|e| panic!("{e}"));
     let mut checked = 0;
-    for kind in ["ingestion", "retrieval"] {
+    for kind in ["ingestion", "retrieval", "transfer"] {
         let mut files: Vec<PathBuf> = std::fs::read_dir(conformance(&[kind]))
             .unwrap_or_else(|e| panic!("{kind}: {e}"))
             .filter_map(Result::ok)
@@ -98,7 +98,7 @@ fn every_golden_answer_is_this_runners_answer() {
             checked += 1;
         }
     }
-    assert!(checked >= 9, "only {checked} golden files were checked");
+    assert!(checked >= 11, "only {checked} golden files were checked");
 }
 
 /// A JSON answer is Python's `json.dumps` byte for byte (", " and ": "

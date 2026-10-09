@@ -6,8 +6,8 @@
 //! `output_format` is exactly `"json"` — wrapped by [`answer`].
 //!
 //! The goldens (`tests/retrieval_tools.rs`) are what the REAL Python
-//! handlers answered over the same `graph.json`
-//! (`tests/fixtures/retrieval/generate.py`).
+//! handlers answered over the same `graph.json`, frozen when the Python
+//! engine was deleted (`tests/fixtures/PROVENANCE.md`).
 //!
 //! # Deviations from Python, each asserted by a test
 //!

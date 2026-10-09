@@ -16,10 +16,10 @@
  * It CANNOT prove anything about the real engine. The graph is a constant
  * (services/elitea-subapp-host/internal/apps/inventory/run/fixture.go); what
  * is real is everything around it. It also cannot prove these screens work on
- * the STANDALONE stack, which serves the thin Python fixture runner
- * (services/elitea-inventory/src/elitea_inventory/fixture_runner.py) and
- * answers an EMPTY graph — every data assertion in this directory would fail
- * there, correctly, and that is why there is no standalone project for them.
+ * the STANDALONE stack, which serves the Rust engine sidecar's fixture runner
+ * (services/elitea-inventory-engine/src/fixture.rs). That runner replays the
+ * same canned graph and the same conformance goldens, but no project runs
+ * these journeys against it (see playwright.config.ts).
  *
  * ## Why the assertions are shaped this way
  *

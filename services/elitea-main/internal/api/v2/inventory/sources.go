@@ -60,13 +60,15 @@ var ExpandingTools = []string{"run_ingestion", "delta_update", "remove_source_en
 // nothing else. Without it the engine has no way to reach a model, which
 // is why the Python investigate never answered (its admin client was gone
 // and nothing replaced it). `smart_normalize_types` maps entity types with
-// the same model, so it takes the same block.
+// the same model, so it takes the same block. `import_graph` and
+// `export_graph` call no model, but the host reads and writes the toolkit's
+// bucket with that bearer (the legacy graph.json in, the native graph out).
 //
 // investigate's grant is also RECORDED with the toolkit's source toolkits
 // (material.GrantRewriteFor): its agent calls their read-only tools through
 // test_tool with that bearer, and material.SourceToolGate admits those calls
 // with the chat-time execute permission rather than tool.patch.
-var GrantTools = []string{"investigate", "smart_normalize_types"}
+var GrantTools = []string{"investigate", "smart_normalize_types", "import_graph", "export_graph"}
 
 // SourceKinds is what this facade knows how to project, by toolkit type. The
 // descriptor admits four (github, ado_repos, gitlab, bitbucket); two are

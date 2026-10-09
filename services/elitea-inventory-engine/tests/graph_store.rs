@@ -1,8 +1,8 @@
 //! The graph against the Python engine's own, and through PostgreSQL.
 //!
-//! `fixtures/graph_store/ops.json` is replayed here and by `generate.py`
-//! against the Python `KnowledgeGraph`; `graph.golden.json` is what Python
-//! wrote. The PostgreSQL tests need `INVENTORY_TEST_DSN` (skipped without
+//! `fixtures/graph_store/ops.json` is replayed here, as its deleted
+//! generator replayed it against the Python `KnowledgeGraph`;
+//! `graph.golden.json` is what Python wrote (`fixtures/PROVENANCE.md`). The PostgreSQL tests need `INVENTORY_TEST_DSN` (skipped without
 //! it, FAILED with `INVENTORY_REQUIRE_POSTGRES=1`, as in CI):
 //!
 //! ```text

@@ -748,23 +748,29 @@ func TestInvestigateNamingAnUnknownToolkitMintsNothing(t *testing.T) {
 	}
 }
 
-// smart_normalize_types calls the toolkit's model too, so it gets the
-// callback block — and, calling no source tool, no recorded grant.
-func TestSmartNormalizeTypesGetsTheCallbackBlockWithoutARecord(t *testing.T) {
-	minter, grants := &recordingMinter{}, &recordingGrants{}
-	route, bodies := grantRoute(t, minter, grants, http.StatusOK)
-	response := post(route, "/api/v2/inventory/tools/42/inventory/smart_normalize_types/invoke",
-		`{"configuration":{"application_id":7},"parameters":{"dry_run":true,"llm_model":"gpt-x",`+
-			`"llm_settings":{"api_key":"sk-attacker"}}}`)
-	if response.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", response.Code, response.Body.String())
-	}
-	if len(*bodies) != 1 || !strings.Contains((*bodies)[0], "bearer-for-token-a") ||
-		!strings.Contains((*bodies)[0], "/llm/v1") || strings.Contains((*bodies)[0], "sk-attacker") {
-		t.Fatalf("smart_normalize_types did not get the facade's callback block: %v", *bodies)
-	}
-	if recorded := grants.snapshot(); len(recorded) != 0 {
-		t.Errorf("smart_normalize_types recorded a source grant: %v", recorded)
+// smart_normalize_types calls the toolkit's model too, and import_graph /
+// export_graph move graph.json through the toolkit's bucket with the same
+// bearer, so each gets the callback block — and, calling no source tool, no
+// recorded grant.
+func TestBearerToolsGetTheCallbackBlockWithoutARecord(t *testing.T) {
+	for _, tool := range []string{"smart_normalize_types", "import_graph", "export_graph"} {
+		t.Run(tool, func(t *testing.T) {
+			minter, grants := &recordingMinter{}, &recordingGrants{}
+			route, bodies := grantRoute(t, minter, grants, http.StatusOK)
+			response := post(route, "/api/v2/inventory/tools/42/inventory/"+tool+"/invoke",
+				`{"configuration":{"application_id":7},"parameters":{"dry_run":true,"llm_model":"gpt-x",`+
+					`"llm_settings":{"api_key":"sk-attacker"}}}`)
+			if response.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d: %s", response.Code, response.Body.String())
+			}
+			if len(*bodies) != 1 || !strings.Contains((*bodies)[0], "bearer-for-token-a") ||
+				!strings.Contains((*bodies)[0], "/llm/v1") || strings.Contains((*bodies)[0], "sk-attacker") {
+				t.Fatalf("%s did not get the facade's callback block: %v", tool, *bodies)
+			}
+			if recorded := grants.snapshot(); len(recorded) != 0 {
+				t.Errorf("%s recorded a source grant: %v", tool, recorded)
+			}
+		})
 	}
 }
 

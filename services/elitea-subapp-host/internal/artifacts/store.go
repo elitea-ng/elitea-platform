@@ -16,6 +16,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -69,7 +70,19 @@ const (
 	// maxReadBytes bounds one read. A manifest or a registry is kilobytes;
 	// anything of this size is not one, and reading it into memory to
 	// discover that is the failure mode worth avoiding.
-	maxReadBytes = 32 << 20
+	maxReadBytes = MaxDownloadBytes
+)
+
+// MaxDownloadBytes is the largest object Download returns. A larger one is
+// refused with ErrTooLarge, never returned cut short: half a JSON document
+// is not a shorter one.
+const MaxDownloadBytes = 32 << 20
+
+var (
+	// ErrNotFound is a Download of a key the bucket does not hold.
+	ErrNotFound = errors.New("artifact not found")
+	// ErrTooLarge is a Download of an object over MaxDownloadBytes.
+	ErrTooLarge = errors.New("artifact is too large to read")
 )
 
 // objectPage is one listing answer, in both shapes it arrives in: bare, and
@@ -137,14 +150,21 @@ func (c *HTTPClient) Download(ctx context.Context, bucket, key string) ([]byte, 
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("artifact not found: %s/%s", bucket, key)
+		return nil, fmt.Errorf("%w: %s/%s", ErrNotFound, bucket, key)
 	}
 	if response.StatusCode != http.StatusOK {
 		text, _ := io.ReadAll(io.LimitReader(response.Body, 512))
 		return nil, fmt.Errorf("failed to download artifact: HTTP %d — %s",
 			response.StatusCode, clip(string(text), 200))
 	}
-	return io.ReadAll(io.LimitReader(response.Body, maxReadBytes))
+	data, err := io.ReadAll(io.LimitReader(response.Body, maxReadBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxReadBytes {
+		return nil, fmt.Errorf("%w: %s/%s is over %d bytes", ErrTooLarge, bucket, key, maxReadBytes)
+	}
+	return data, nil
 }
 
 // deleteAnswer is the batch-delete response, in both shapes.

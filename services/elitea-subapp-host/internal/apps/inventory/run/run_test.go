@@ -19,6 +19,7 @@ import (
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/apps/inventory/run"
+	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/artifacts"
 	"github.com/EliteaAI/elitea-platform/services/elitea-subapp-host/internal/spi"
 )
 
@@ -29,6 +30,23 @@ type recordedUpload struct{ Bucket, Name, Data string }
 type fakeArtifacts struct {
 	uploads []recordedUpload
 	fail    map[string]error
+	// objects are what Download serves, keyed "bucket/key".
+	objects map[string][]byte
+}
+
+// seededGraph is the graph.json every harness bucket holds, as the Python
+// engine left it: what import_graph reads.
+const seededGraph = `{"directed": true, "multigraph": false, "graph": {}, "nodes": [{"id": "code:a"}, {"id": "code:b"}], "links": [{"source": "code:a", "target": "code:b"}]}`
+
+func (f *fakeArtifacts) Download(_ context.Context, bucket, key string) ([]byte, error) {
+	if err := f.fail["download:"+key]; err != nil {
+		return nil, err
+	}
+	data, ok := f.objects[bucket+"/"+key]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s/%s", artifacts.ErrNotFound, bucket, key)
+	}
+	return data, nil
 }
 
 func (f *fakeArtifacts) Upload(_ context.Context, bucket, name string, data []byte) error {
@@ -87,7 +105,7 @@ func TestTheVerifiedCallerReachesTheEngine(t *testing.T) {
 
 func newHarness(t *testing.T, tools map[string]run.Tool) *harness {
 	t.Helper()
-	uploads := &fakeArtifacts{fail: map[string]error{}}
+	uploads := &fakeArtifacts{fail: map[string]error{}, objects: map[string][]byte{"graphs/graph.json": []byte(seededGraph)}}
 	h := &harness{t: t, uploads: uploads}
 	wrapped := map[string]run.Tool{}
 	for name, tool := range tools {

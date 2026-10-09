@@ -11,8 +11,9 @@
 //! the ids of a name or a type (`_entity_index`, `_type_index`), the types
 //! of a layer (`LAYER_TYPE_MAPPING`), the toolkits of an entity, the
 //! components and bridging nodes of `find_bridging_nodes`. The port fixes one
-//! order for each and the goldens (`tests/fixtures/retrieval/generate.py`)
-//! run Python with insertion-ordered sets that follow it:
+//! order for each and the goldens (frozen; generator in
+//! `tests/fixtures/PROVENANCE.md`) ran Python with insertion-ordered sets
+//! that follow it:
 //!
 //! * the ids of a name or a type: node order;
 //! * the types of a layer: `LAYER_TYPE_MAPPING` source order, then node order

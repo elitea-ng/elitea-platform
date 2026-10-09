@@ -1,5 +1,5 @@
 //! `smart_normalize_types` against the Python handler's own run
-//! (`fixtures/smart_normalize/generate.py`): the prompt of every batch, the
+//! (frozen goldens, `fixtures/PROVENANCE.md`): the prompt of every batch, the
 //! structured-output tool, the mapping of a canned reply, the answer and
 //! the types the saved graph holds — then through the native runner over a
 //! socket, a mock gateway and PostgreSQL (needs `INVENTORY_TEST_DSN`).

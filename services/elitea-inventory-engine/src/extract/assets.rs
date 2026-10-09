@@ -1,5 +1,5 @@
 //! The Python engine's prompts and type tables (`assets/python_inventory.json`,
-//! generated from its source by `assets/generate.py`).
+//! frozen; its generator is recorded in `tests/fixtures/PROVENANCE.md`).
 
 use indexmap::IndexMap;
 use serde::Deserialize;

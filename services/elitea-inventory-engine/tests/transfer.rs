@@ -10,8 +10,8 @@ use serde_json::Value;
 use std::io::Write as _;
 use std::process::{Command, Output, Stdio};
 
-/// Written by the Python `KnowledgeGraph.dump_to_json` (see each fixture's
-/// generate.py): one from the graph-store replay, one with embeddings and
+/// Written by the Python `KnowledgeGraph.dump_to_json` (generators in
+/// `fixtures/PROVENANCE.md`): one from the graph-store replay, one with embeddings and
 /// community data.
 const PYTHON_DOCUMENTS: [(&str, &str); 2] = [
     (

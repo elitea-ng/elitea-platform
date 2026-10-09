@@ -1,0 +1,14 @@
+{
+  "_comment": "import_graph, JSON output form. graph_document is what the host read from the toolkit's bucket; the fixture runners check it and store nothing.",
+  "tool": "import_graph",
+  "params": {
+    "output_format": "json",
+    "graph_document": "{\"directed\": true, \"multigraph\": false, \"graph\": {}, \"nodes\": [{\"id\": \"code:a\"}, {\"id\": \"code:b\"}], \"links\": [{\"source\": \"code:a\", \"target\": \"code:b\", \"relation_type\": \"calls\"}], \"_metadata\": {\"embeddings_model\": \"text-embedding-3-small\"}}"
+  },
+  "expected": {
+    "stored": false,
+    "entities": 2,
+    "relations": 1,
+    "embeddings_model": "text-embedding-3-small"
+  }
+}

@@ -125,6 +125,15 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 	if err := tc.Thinking(ctx, "Starting "+call.Tool); err != nil {
 		return nil, err
 	}
+	if call.Tool == ImportTool {
+		// Overwritten on every call: the document is the bucket's, never
+		// the caller's (see transfer.go).
+		document, err := r.ResolveGraphDocument(ctx, params, tc)
+		if err != nil {
+			return nil, err
+		}
+		params[GraphDocumentParam] = document
+	}
 
 	arguments := ArgumentsFor(family, call.Tool, params, identity)
 	// The verified caller (ADR-0028 D3): the engine filters what a caller may

@@ -1,16 +1,17 @@
 //! Which tools the sidecar serves, per toolkit family.
 //!
-//! The legacy routing table, as `elitea_inventory.tools_table` wrote it down:
-//! the `inventory` family (ingestion, graph management, retrieval, presets,
-//! cache, status, maintenance) and the `inventory_search` family the agent
-//! surfaces call. The five tools the descriptor advertises and no
+//! The legacy plugin's routing table (provenance:
+//! `tests/fixtures/PROVENANCE.md`): the `inventory` family (ingestion, graph
+//! management, retrieval, presets, cache, status, maintenance, and — since
+//! descriptor revision `legacy-v2` — graph transfer) and the
+//! `inventory_search` family the agent surfaces call. The five tools the descriptor advertises and no
 //! implementation ever served (`delta_update` and four never-routed ones) are
 //! not here: the Go host refuses them before the socket (`DeferredTools` in
 //! `internal/apps/inventory/run`). `tests/descriptor.rs` holds this table to
 //! the descriptor the host serves.
 
 /// The `inventory` family.
-pub const INVENTORY_TOOLS: [&str; 27] = [
+pub const INVENTORY_TOOLS: [&str; 29] = [
     "run_ingestion",
     "remove_source_entities",
     "list_ingested_sources",
@@ -38,6 +39,8 @@ pub const INVENTORY_TOOLS: [&str; 27] = [
     "normalize_types",
     "rebuild_indices",
     "smart_normalize_types",
+    "import_graph",
+    "export_graph",
 ];
 
 /// The `inventory_search` family.

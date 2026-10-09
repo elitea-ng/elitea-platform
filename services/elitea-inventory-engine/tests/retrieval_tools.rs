@@ -1,8 +1,8 @@
 //! The graph-reading tools against the Python handlers: `graph.json` was
 //! built by the real `KnowledgeGraph`, and `goldens.json` holds what the
 //! real `tool_operations` handlers answered over it
-//! (`fixtures/retrieval/generate.py`, which documents the order and
-//! deviation patches it applied).
+//! (frozen; its generator, which documents the order and deviation
+//! patches it applied, is recorded in `fixtures/PROVENANCE.md`).
 
 use elitea_engine_core::pyjson::dumps;
 use elitea_inventory_engine::graph::Graph;

@@ -1,6 +1,7 @@
 //! Code files without a dedicated parser (`.sh`, `.rb`, `.lua`, C, …)
 //! against what the Python engine's real ingestion path made of them
-//! (`fixtures/code_like/generate.py` ran `_process_file_with_chunks`).
+//! (its deleted generator ran `_process_file_with_chunks`; see
+//! `fixtures/PROVENANCE.md`).
 //!
 //! Python's `run()` gave such a file its file node and the model stage
 //! (with the code fact prompt), and nothing from a parser. Its "hybrid

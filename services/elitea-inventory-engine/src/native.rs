@@ -3,7 +3,8 @@
 //!
 //! Every tool of both families: `run_ingestion` (clone, parsers, model,
 //! communities, embeddings — `crate::ingest`), the status tools,
-//! `remove_source_entities`, `smart_normalize_types` (a model maps the
+//! `remove_source_entities`, `import_graph` / `export_graph`
+//! (`crate::transfer`), `smart_normalize_types` (a model maps the
 //! graph's stray types onto the canonical set, written back to the store),
 //! `investigate` (`crate::investigate`), and the read tools
 //! (`crate::retrieval`). A tool the dispatch does not know is
@@ -158,6 +159,8 @@ impl NativeRunner {
             }
             "remove_source_entities" => self.remove_source(key, params).await,
             "smart_normalize_types" => self.smart_normalize(key, params, context).await,
+            "import_graph" => self.import_graph(key, params, context).await,
+            "export_graph" => self.export_graph(key, params, context).await,
             other => {
                 self.read(other, family, key, params, &caller_of(arguments))
                     .await
@@ -198,6 +201,91 @@ impl NativeRunner {
         Ok(crate::retrieval::answer(format!(
             "Removed {removed} entities from toolkit {toolkit_id}"
         )))
+    }
+
+    /// `import_graph`: the operator's `import-graph` as a tool. The Go
+    /// host read the document from the toolkit's bucket into
+    /// `graph_document` (it overwrites any caller value); the import is
+    /// [`crate::transfer::import_graph`], under the ingestion lease.
+    async fn import_graph(
+        &self,
+        key: GraphKey,
+        params: &Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        use crate::transfer::{self, TransferError};
+        let Some(text) = params.get("graph_document").and_then(Value::as_str) else {
+            return Err(invalid(
+                "import_graph needs the graph document the host reads from the toolkit's bucket; run the tool through the platform",
+            ));
+        };
+        let name = text_param(params, &["artifact_name"]).unwrap_or("graph.json");
+        context.thinking(format!("Importing {name}"));
+        context.checkpoint()?;
+        let replace = truthy(params.get("replace_ingestion_state"));
+        let report = transfer::import_graph(&self.pool, key, text, replace)
+            .await
+            .map_err(|error| match error {
+                TransferError::Document(_) => invalid(error.to_string()),
+                other => EngineError::new(ErrorType::Runtime, other.to_string()),
+            })?;
+        if json_format(params) {
+            return Ok(crate::retrieval::answer(elitea_engine_core::pyjson::dumps(
+                &json!({
+                    "stored": true,
+                    "entities": report.entities,
+                    "relations": report.relations,
+                    "revision": report.revision,
+                    "embeddings_model": report.embeddings_model,
+                }),
+            )));
+        }
+        Ok(crate::retrieval::answer(format!(
+            "Imported {} entities and {} relations from {name} (revision {}).{}",
+            report.entities,
+            report.relations,
+            report.revision,
+            report.embeddings_model.map_or_else(String::new, |model| format!(
+                " The graph was embedded with {model}: semantic search needs that embedding model configured."
+            ))
+        )))
+    }
+
+    /// `export_graph`: the stored graph as `graph.json`, returned as an
+    /// artifact the host uploads to the toolkit's bucket.
+    async fn export_graph(
+        &self,
+        key: GraphKey,
+        params: &Map<String, Value>,
+        context: &Context,
+    ) -> Result<Value, EngineError> {
+        use crate::transfer::{self, TransferError};
+        context.thinking("Exporting the stored graph");
+        let report = transfer::export_report(&self.pool, key, &crate::clock::now_iso())
+            .await
+            .map_err(|error| match error {
+                TransferError::NotFound { .. } => {
+                    EngineError::new(ErrorType::FileNotFound, error.to_string())
+                }
+                other => EngineError::new(ErrorType::Runtime, other.to_string()),
+            })?;
+        let result = if json_format(params) {
+            elitea_engine_core::pyjson::dumps(&json!({
+                "artifact": "graph.json",
+                "entities": report.entities,
+                "relations": report.relations,
+            }))
+        } else {
+            format!(
+                "Exported {} entities and {} relations to graph.json.",
+                report.entities, report.relations
+            )
+        };
+        Ok(json!({
+            "success": true,
+            "result": result,
+            "artifacts": [{"name": "graph.json", "type": "application/json", "data": report.document}],
+        }))
     }
 
     /// `smart_normalize_types` (`crate::retrieval::admin_tools`): the
@@ -953,7 +1041,9 @@ mod tests {
     use super::*;
 
     /// The tools `run` answers itself, before the read dispatch.
-    const RUN_TOOLS: [&str; 6] = [
+    const RUN_TOOLS: [&str; 8] = [
+        "import_graph",
+        "export_graph",
         "run_ingestion",
         "get_sources_status",
         "get_ingestion_status",

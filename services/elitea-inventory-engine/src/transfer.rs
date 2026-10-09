@@ -141,7 +141,7 @@ pub async fn import_graph(
                 .map(str::to_owned),
         }),
         Imported::HasIngestionState { sources, documents } => Err(TransferError::Refused(format!(
-            "project {}, toolkit {} already has native ingestion state ({sources} source(s), {documents} document version(s)); importing over it would leave versions and ACLs that do not describe the imported graph. Re-run with --replace-ingestion-state to delete that state with the old graph",
+            "project {}, toolkit {} already has native ingestion state ({sources} source(s), {documents} document version(s)); importing over it would leave versions and ACLs that do not describe the imported graph. Re-run with --replace-ingestion-state (the import_graph tool: replace_ingestion_state=true) to delete that state with the old graph",
             key.project_id, key.application_id
         ))),
     }
@@ -158,13 +158,40 @@ pub async fn export_graph(
     key: GraphKey,
     saved_at: &str,
 ) -> Result<String, TransferError> {
+    export_report(pool, key, saved_at)
+        .await
+        .map(|report| report.document)
+}
+
+/// What an export produced: the document and its counts.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExportReport {
+    pub document: String,
+    pub entities: usize,
+    pub relations: usize,
+}
+
+/// [`export_graph`] with the counts the `export_graph` tool reports.
+///
+/// # Errors
+///
+/// No graph is stored, or the store fails.
+pub async fn export_report(
+    pool: &PgPool,
+    key: GraphKey,
+    saved_at: &str,
+) -> Result<ExportReport, TransferError> {
     let (graph, _) = store::load(pool, key)
         .await?
         .ok_or(TransferError::NotFound {
             project_id: key.project_id,
             application_id: key.application_id,
         })?;
-    Ok(graph.to_json_text(saved_at))
+    Ok(ExportReport {
+        document: graph.to_json_text(saved_at),
+        entities: graph.node_count(),
+        relations: graph.edge_count(),
+    })
 }
 
 #[cfg(test)]
