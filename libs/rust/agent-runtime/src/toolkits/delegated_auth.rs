@@ -277,7 +277,11 @@ impl DelegatedAuthorizationRequirement {
             self.server_url,
             discovery::configured_metadata(self.resource_metadata.as_ref())
         ]);
-        let hash = ring::digest::digest(&ring::digest::SHA256, identity.to_string().as_bytes());
+        // Order-explicit: the name must not follow the metadata's member
+        // order under a unified `preserve_order` (ADR-0029 decision 2). A
+        // `Value` always encodes; the empty fallback is unreachable.
+        let identity = crate::canonical::to_string(&identity).unwrap_or_default();
+        let hash = ring::digest::digest(&ring::digest::SHA256, identity.as_bytes());
         let mut name = String::from("mcp_authorize_");
         for byte in &hash.as_ref()[..16] {
             let _ = write!(name, "{byte:02x}");
@@ -769,6 +773,33 @@ mod tests {
         );
         let decoded = decode_delegated_authorization_requirement(&encoded).unwrap();
         assert!(decoded.same_authority(&requirement));
+    }
+
+    /// The model-visible authorization tool name is a digest of the frozen
+    /// identity. It must not move with the metadata's member order (parse
+    /// order, or `configured_metadata`'s removal, which is a `swap_remove`
+    /// under `preserve_order`); `test-preserve-order` runs it with that
+    /// feature on. The pinned name is the worker's pre-move output.
+    #[test]
+    fn authorization_tool_name_is_order_explicit() {
+        let metadata: Value = serde_json::from_str(
+            r#"{"toolkit_id":"7","provided_settings":{"scopes":["read"],"mcp_client_id":"client"},"oauth_authorization_server":{"token_endpoint":"https://id.example.invalid/token","authorization_endpoint":"https://id.example.invalid/authorize"},"scopes_supported":["read"],"configuration_uuid":"cfg","authorization_servers":["https://id.example.invalid"],"resource_name":"Records"}"#,
+        )
+        .unwrap();
+        let requirement = DelegatedAuthorizationRequirement::new(
+            "Records".to_owned(),
+            "mcp".to_owned(),
+            "https://records.example.invalid/mcp".to_owned(),
+            None,
+            None,
+        )
+        .unwrap()
+        .with_resource_metadata(metadata)
+        .unwrap();
+        assert_eq!(
+            requirement.authorization_tool_name(),
+            "mcp_authorize_d2569f23d52138e99023daf0cb592474"
+        );
     }
 
     #[tokio::test]
