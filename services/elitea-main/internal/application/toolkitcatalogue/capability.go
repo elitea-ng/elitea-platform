@@ -121,10 +121,11 @@ var pythonVerifiedImportKeys = []string{
 // dispatched by direct comparison (`artifact`, `openapi`, `sharepoint`).
 //
 // `artifact` (#906) is the odd one: it materialises only where the live
-// execution claim is in scope (the ordinary agent path), because its authority
-// is that claim rather than a credential in the frozen snapshot. It is listed
-// as supported because that is the position a user's agent runs in; a pipeline
-// node still skips it, the way it skipped every artifact toolkit before.
+// execution claim is in scope (the ordinary agent path and a root pipeline's
+// direct and LLM nodes), because its authority is that claim rather than a
+// credential in the frozen snapshot. A saved child pipeline or nested agent
+// still skips it: a direct node there is refused as unsupported at assembly,
+// and an LLM node there finds the tools unavailable when it runs.
 //
 // `aha` is NOT here although the family is complete in that tree: no dispatch
 // reaches it, so the worker skips an `aha` toolkit like any unsupported type.
