@@ -94,7 +94,8 @@ Approvals needed before `up` can finish (set ELITEA_CRASH_K8S_PULLS_APPROVED=1 o
      exporter is OFF in values-nats-crash.yaml.
   3. A registry reachable from the kind nodes for the Supervisor @sha256 reference
      (set ELITEA_CRASH_SUPERVISOR_IMAGE=<registry>/<repo>@sha256:<digest>)
-  4. Calico images, only when ELITEA_CRASH_CNI=calico (KX-06, if kindnet does not enforce)
+  4. Calico images, only when ELITEA_CRASH_CNI=calico (KX-06 and the preparation resolver
+     NetworkPolicy, if kindnet does not enforce; run `kx.sh np-probe` first)
   5. Any third-party image from THIRD_PARTY_IMAGES missing from the local Docker store
 Also required, not network: builds of the three local images (max 2 concurrent Docker
 builds across sessions), and the compose crash stack stopped (16 GB Docker VM).
@@ -156,7 +157,7 @@ ensure_cluster() {
   kc label node "$WORKER_NODE" elitea.ai/crash-role=execution --overwrite
   kc taint node "$CP_NODE" node-role.kubernetes.io/control-plane:NoSchedule- 2>/dev/null || true
   if [ "${ELITEA_CRASH_CNI:-kindnet}" = "calico" ]; then
-    gate "Calico manifests and images (KX-06 NetworkPolicy enforcement); this script does not install it"
+    gate "Calico manifests and images (NetworkPolicy enforcement for KX-06 and for the Python preparation resolver policy elitea-python-preparation-network; kindnet may not enforce it); this script does not install it"
     die "recreate the cluster with disableDefaultCNI (see kind-config.yaml), install the approved Calico release by hand, then re-run"
   fi
 }
@@ -254,8 +255,16 @@ install_nats() {
 install_chart() {
   say "elitea chart (Worker rust, recovery on, Supervisor, Main x2)"
   local image="${ELITEA_CRASH_SUPERVISOR_IMAGE:?set ELITEA_CRASH_SUPERVISOR_IMAGE}"
+  # Operator-private overlay (real digests, profilesSha256, resolverCidrs); never commit it.
+  # values-crash.yaml carries zero-digest PLACEHOLDERS for the preparation and compiled profiles.
+  local local_values="${SCRIPT_DIR}/values-crash.local.yaml"
+  if [ -f "$local_values" ]; then note "overlay: ${local_values}"; else
+    local_values=""
+    note "WARNING: no values-crash.local.yaml; preparation/compiled digests, pins and resolverCidrs stay PLACEHOLDERS (those scenarios will fail closed)"
+  fi
   hm upgrade --install elitea "${REPO_ROOT}/deploy/helm/elitea" -n "$NS" \
     -f "${REPO_ROOT}/deploy/helm/elitea/values-standalone.yaml" -f "${SCRIPT_DIR}/values-crash.yaml" \
+    ${local_values:+-f "$local_values"} \
     --set "sandboxKubernetes.supervisor.image=${image}" \
     --wait --timeout 15m
   cmd_pin

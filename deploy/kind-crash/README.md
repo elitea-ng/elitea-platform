@@ -36,10 +36,18 @@ rendered against a live API. The design named minikube; the owner chose kind (v0
    enabled). The Prometheus exporter is off.
 3. A registry the kind nodes can reach for the Supervisor `@sha256` reference (chart refuses anything else,
    `templates/sandbox/supervisor.yaml:4`). Set `ELITEA_CRASH_SUPERVISOR_IMAGE`.
-4. Calico images, only if `kx.sh np-probe` shows kindnet does not enforce NetworkPolicy (KX-06). Config for it is
-   commented in `kind-config.yaml`.
+4. Calico images, only if `kx.sh np-probe` shows kindnet does not enforce NetworkPolicy (KX-06, and the preparation
+   resolver policy below, which is meaningless without enforcement). Needs the user's approval before
+   `ELITEA_CRASH_CNI=calico crash-stack.sh up`; the script's existing gate for it (`crash-stack.sh`, `gate "Calico ..."`)
+   stops with exit 3 until `ELITEA_CRASH_K8S_PULLS_APPROVED=1`, and now names the preparation policy. Config is
+   commented in `kind-config.yaml`; the script does not install Calico itself.
 5. Any third-party image in `THIRD_PARTY_IMAGES` not in the local Docker store.
-6. Three local builds (Main, Worker rust, gateway) from a branch containing #1160, with the binary-marker check; max
+6. Registry references (the chart and the process refuse a local image id): the Deno code-runner image (also the
+   preparation image), the Rust runtime image, and the content-staging init image. Not a new image, but each must be
+   pushed to a registry the nodes can reach.
+7. Egress from the cluster to the package registries (`pypi.org`, `files.pythonhosted.org`, `cdn.jsdelivr.net`,
+   `registry.npmjs.org`) for the preparation scenarios, plus DNS lookups to build `resolverCidrs`.
+8. Three local builds (Main, Worker rust, gateway) from a branch containing #1160, with the binary-marker check; max
    2 concurrent Docker builds. Destructive scenarios (KX-04, KX-08) need per-batch consent.
 
 ## Expectations: D1, D2, G-WORKER-01
@@ -68,8 +76,78 @@ first three; `up` stops before the chart if the rest are missing:
   `deploy/scripts/gen-runtime-certs.sh`, `gen-sandbox-certs.sh`, `gen-gateway-certs.sh`.
 - Issued by cert-manager from the chart (`elitea-*-nats-client-tls`, `elitea-main-gateway-client-tls`,
   `elitea-llm-gateway-server-tls`, `elitea-platform-edge-tls`).
-- Not handled here: a mock LLM for the gateway (`deploy/mock-llm`), the Supervisor profile JSON in `sandbox-material`,
-  and `worker.runtime.sandboxRuntimes` (empty). Code scenarios need all three.
+- Not handled here: a mock LLM for the gateway (`deploy/mock-llm`) and the Supervisor profile JSON in `sandbox-material`.
+  Code scenarios need both. `worker.runtime.sandboxRuntimes` is filled with placeholder digests (below).
+- `sandbox-material` flat keys for the new profiles (`deploy/runtime/sandbox-preparation-deployment.md:275-286`;
+  at most 32 files and 8 MiB): `deno.json`, `rust.json`, `preparation.json`, `preparation-server.pem|key`,
+  `preparation-content-client.pem|key`, `deno-content-client.pem|key`, `rust-content-client.pem|key`,
+  `content-ca.pem`, `rust-compiled-profiles.json`, plus the existing client CA, public command keyring, database URL and CA.
+  The Deno profile needs a `dependency_content` object (origin `https://elitea-main:9445`, staging root
+  `/run/elitea-sandbox-content/deno/private`) for hydration; the Rust profile needs one for compiled-executable transfer.
+- `elitea-runtime-material` and `elitea-worker-material` also carry `rust-compiled-profiles.json`; Main's also needs
+  `agent-checkpoint-connection` (`values.yaml:1873-1875`).
+
+## Python dependency preparation (profile feature 1)
+
+Mirrors `deploy/docker-compose.crash-preparation.yml`. The preparation backend reuses the Deno code-runner image
+(purpose `preparation`, no new image); `preparation.json` `image_digest`, its backend `image` suffix
+(`@sha256:<digest>`, `process.rs:204-209`), the Worker python entry and the Worker `preparation.image_digest` are one
+value. Start from `deploy/runtime/sandbox-preparation.kubernetes.example.json`; `backend.namespace` is
+`elitea-python-preparation`; omit `preparation_network` (`process.rs:200`).
+
+| `values-crash.yaml` key | Chart reference |
+|---|---|
+| `sandboxKubernetes.preparation.enabled/namespace/maxPods` | `values.yaml:3900-3903`; `preparation-boundary.yaml:3-7` (namespace not the release, execution, `kube-*` or `default`; maxPods 1-4096) |
+| `preparation.dnsNamespaceLabels/dnsPodLabels` | `values.yaml:3905-3908`; `preparation-boundary.yaml:8`. Values are kubeadm's CoreDNS labels |
+| `preparation.resolverCidrs` | `values.yaml:3911`; `preparation-boundary.yaml:9-17` (1-64 unique CIDRs, prefix >= 1) |
+| `supervisor.profiles` `{file: preparation.json, port: 9448, serviceName: elitea-sandbox-preparation}` | `values.yaml:3919`; `supervisor.yaml:9-19` (1-8 profiles, unique files/ports, `elitea-sandbox-` alias) |
+| `supervisor.contentStaging` (deno, preparation, rust) and `contentStagingInitImage` | `values.yaml:3928-3931`; `supervisor.yaml:21-32` (init image must be a registry `@sha256` ref) |
+| `main.runtime.sandboxAudiences` incl. `dns:elitea-sandbox-preparation` | `values.yaml:1845`; rendered as `ELITEA_RUNTIME_SANDBOX_AUDIENCES` (`main/_helpers.tpl:1188`) |
+| `worker.runtime.sandboxRuntimes[python].preparation` `{target, audience, image_digest, policy_revision, timeout_seconds}` | `values.yaml:3719`; `configmap-runtime.yaml:68-69`; same shape as `render-worker-sandbox.sh:20-25` |
+
+Network policy. The namespace gets `elitea-python-preparation-network`: ingress none, egress DNS pods UDP/TCP 53 and
+`resolverCidrs` TCP 443. A NetworkPolicy cannot match hostnames. The four registries sit on changing CDN ranges, so
+this profile cannot restrict to those hosts.
+
+- (a) Default: an operator-maintained `resolverCidrs` list, resolved on the day of the run from `pypi.org`,
+  `files.pythonhosted.org`, `cdn.jsdelivr.net`, `registry.npmjs.org`. These ranges drift; re-resolve before every run.
+  `values-crash.yaml` ships `203.0.113.0/24` (documentation range): it reaches nothing, so preparation fails closed
+  until the list is replaced.
+- (b) Rehearsal only, commented in `values-crash.yaml`: `0.0.0.0/1` + `128.0.0.0/1` (all IPv4 on TCP 443; the chart
+  rejects `/0`). It does not restrict to registries and also reaches node and pod networks on 443.
+
+Put real values in an untracked `values-crash.local.yaml` next to `values-crash.yaml`; `crash-stack.sh up` layers it
+last and warns when it is absent. Enforcement needs a CNI that implements NetworkPolicy: run `kx.sh np-probe`; if kindnet
+does not enforce, the preparation policy does nothing and KX-P09n is void. Calico pulls need the user's approval before
+`ELITEA_CRASH_CNI=calico crash-stack.sh up` (see Approvals 4). Image warm-up (`sandboxImageWarmup`, `imagePullPolicy:
+Never` on runtime pods, `sandbox-preparation-deployment.md`, warm-up paragraph) is not enabled here; each node needs the registry digest
+reference present before a job is admitted.
+
+## Compiled Rust snapshots (profile feature 2)
+
+Mirrors `deploy/docker-compose.crash-compiled.yml`.
+
+| `values-crash.yaml` key | Chart reference |
+|---|---|
+| `main.runtime.rustCompiledSnapshots` (enabled, `profilesSha256`, six quotas: 100 / 1073741824 / 10 / 268435456 / 300 / 3600) | `values.yaml:1876-1885`; `_compiled-snapshots.tpl:33-52` (exactly eight keys, tenant <= global, TTL maxima 300 and 86400; needs runtime, agent dispatch and sandbox audiences) |
+| `worker.runtime.sandboxRuntimes[rust].compiled_snapshot` `{profiles_file: /run/elitea-runtime/rust-compiled-profiles.json, profiles_sha256, dependency_bundle_sha256: ""}` | `_compiled-snapshots.tpl:54-67` (exactly one Rust worker profile, three fields, pin equals Main's) |
+| `supervisor.profiles` Rust entry `{purpose: execution, languages: [rust], dependencyContentEnabled: true, image_digest, policy_revision, compiled_snapshot: {profiles_file: /run/elitea-sandbox/rust-compiled-profiles.json, ...}}` | `_compiled-snapshots.tpl:70-86` (exactly one; image and policy must equal the Worker's) |
+| `main.runtime.codeOwnerRecovery.supervisors` adds the Rust audience | `_code-nodes.tpl:59` (audience must be in `sandboxAudiences`) |
+
+The manifest is produced by `scripts/crash-recovery/lib/compiled_manifest.py` (hand-measured empty-bundle profile for
+the locally built Rust runtime image, `dependency_bundle_sha256: ""`). Its exact bytes, not a re-serialization, go into
+the Main, Worker and Supervisor material Secrets under `rust-compiled-profiles.json`; its SHA-256 replaces every
+all-zero `profilesSha256` placeholder (three places: Main, Worker entry, Supervisor profile).
+
+Image reference. The Kubernetes backend requires `backend.image` to be a registry digest reference ending in
+`@<image_digest>` (`process.rs:204-209`). A local image id or a `kind load` tag does not qualify, so the Rust runtime
+image must be pushed to a registry first. That needs the user's approval, as does any registry pull.
+
+## Placeholders to replace
+
+All `0000...0000` digests and pins in `values-crash.yaml` (Deno/python, Rust, preparation, `profilesSha256` x3,
+Supervisor image, staging init image), `resolverCidrs`, and `CRASH_FILL_MAIN_WORKLOAD_IDENTITY`. A render with the
+placeholders succeeds because they are syntactically valid; they match nothing at runtime.
 
 ## How crashctl targets this
 
@@ -92,7 +170,7 @@ refuses while the compose project is up.
 `worker.runtime.agentModelCheckpointRecovery` 3710; `worker.runtime.agentNodeRecovery` 3714;
 `worker.runtime.sandboxRuntimes` 3719; `worker.nodeSelector` 3800; `otelCollector.enabled` ~3806;
 `sandboxKubernetes.enabled/executionNamespace/maxPods` 3894-3898; `sandboxKubernetes.supervisor.enabled/image/materialSecret/profiles`
-3912-3916. `main.runtime.codeOwnerRecovery.*` and `main.runtime.sandboxAudiences` are not in `values.yaml`; they are read by
+3912-3916. `main.runtime.sandboxAudiences` 1845 and `main.runtime.codeOwnerRecovery` 1849 are in `values.yaml`; the Code consumers are read by
 `templates/_code-nodes.tpl:17-125`. `helm template` of `values-standalone.yaml` + `values-crash.yaml` succeeded and the
 output was checked for: Main replicas 2, node selectors on Main, gateway, Worker, session Job and cron, Worker
 runtime.json with both recovery flags.

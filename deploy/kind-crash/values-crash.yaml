@@ -79,12 +79,32 @@ main:
     # marked CRASH_FILL are not known from the chart; see README "Unverified".
     sandboxAudiences:
       - dns:elitea-sandbox-deno
+      - dns:elitea-sandbox-rust
+      - dns:elitea-sandbox-preparation
     codeOwnerRecovery:
       enabled: true
       mainWorkloadIdentity: CRASH_FILL_MAIN_WORKLOAD_IDENTITY
       supervisors:
         - audience: dns:elitea-sandbox-deno
           httpsOrigin: https://elitea-sandbox-deno:9446
+        - audience: dns:elitea-sandbox-rust
+          httpsOrigin: https://elitea-sandbox-rust:9447
+    # Compiled Rust snapshots (scenario P11). The chart requires exactly these
+    # eight keys. profilesSha256 is the SHA-256 of the manifest bytes produced by
+    # scripts/crash-recovery/lib/compiled_manifest.py; the zero value below is a
+    # PLACEHOLDER (syntactically valid, matches no manifest). It must equal the
+    # pins in the Worker and Rust Supervisor entries below. See README.
+    rustCompiledSnapshots:
+      enabled: true
+      profilesSha256: "0000000000000000000000000000000000000000000000000000000000000000"
+      globalEntries: 100
+      globalBytes: 1073741824
+      tenantEntries: 10
+      tenantBytes: 268435456
+      # Maximum TTL (chart bound 300): a Publishing row must outlive a Main pod
+      # replacement for KX-P11.
+      publishingTtlSeconds: 300
+      readyTtlSeconds: 3600
 
 llmGateway:
   nodeSelector:
@@ -109,10 +129,40 @@ worker:
     # Code recovery on Kubernetes is EXPECTED-GAP F (G-WORKER-01) until fix F5
     # lands; set this to false then.
     agentNodeRecovery: true
-    # Fill after the Supervisor image is loaded: one entry per Code language.
-    # Fields: language, target, audience, image_digest, policy_revision,
-    # timeout_seconds. Example in deploy/helm/tests/render-worker-sandbox.sh.
-    sandboxRuntimes: []
+    # One entry per Code language. Fields: language, target, audience,
+    # image_digest, policy_revision, timeout_seconds. Every image_digest below is
+    # the PLACEHOLDER marker; replace with the digest of the image each backend
+    # runs (the registry reference in preparation.json / deno.json / rust.json
+    # must end in @sha256:<that digest>). Example:
+    # deploy/helm/tests/render-worker-sandbox.sh. Only python and rust are
+    # listed; add javascript/typescript the same way (same Deno target) if a
+    # scenario needs them.
+    sandboxRuntimes:
+      - language: python
+        target: elitea-sandbox-deno:9446
+        audience: dns:elitea-sandbox-deno
+        image_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000   # Deno code-runner image (PLACEHOLDER)
+        policy_revision: crash-deno-v1
+        timeout_seconds: 120
+        # Python dependency preparation. NO new image: the preparation backend
+        # reuses the Deno code-runner image, so image_digest is the SAME value
+        # as the python entry above (and as preparation.json image_digest).
+        preparation:
+          target: elitea-sandbox-preparation:9448
+          audience: dns:elitea-sandbox-preparation
+          image_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000   # SAME as the Deno digest (PLACEHOLDER)
+          policy_revision: crash-preparation-v1
+          timeout_seconds: 120
+      - language: rust
+        target: elitea-sandbox-rust:9447
+        audience: dns:elitea-sandbox-rust
+        image_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000   # Rust runtime image (PLACEHOLDER)
+        policy_revision: crash-rust-v1
+        timeout_seconds: 120
+        compiled_snapshot:
+          profiles_file: /run/elitea-runtime/rust-compiled-profiles.json
+          profiles_sha256: "0000000000000000000000000000000000000000000000000000000000000000"   # = main.runtime.rustCompiledSnapshots.profilesSha256
+          dependency_bundle_sha256: ""
   # Spool is an emptyDir (D2). A pod delete loses unacknowledged frames; a
   # container-only restart keeps them. Both are tested (KX-01 vs crictl restart).
 
@@ -129,10 +179,70 @@ sandboxKubernetes:
   enabled: true
   executionNamespace: elitea-sandbox
   maxPods: 16
+  # Python dependency preparation: a dedicated resolver namespace (Pod Security
+  # restricted, ingress none, egress DNS + resolverCidrs:443 only, ServiceAccount
+  # without token). Chart: templates/sandbox/preparation-boundary.yaml. The
+  # preparation backend runs the Deno code-runner image (purpose: preparation).
+  preparation:
+    enabled: true
+    namespace: elitea-python-preparation
+    maxPods: 4
+    # kind's CoreDNS (kubeadm default labels). Confirm with
+    # `kubectl -n kube-system get pods -l k8s-app=kube-dns`.
+    dnsNamespaceLabels:
+      kubernetes.io/metadata.name: kube-system
+    dnsPodLabels:
+      k8s-app: kube-dns
+    # !!! PLACEHOLDER. NetworkPolicy cannot match hostnames. The four hosts the
+    # preparer needs (pypi.org, files.pythonhosted.org, cdn.jsdelivr.net,
+    # registry.npmjs.org) sit on CDN ranges that change. Option (a), the
+    # default: an operator-maintained list of the CIDRs those hosts resolve to
+    # on the day of the run. The documentation range below reaches NOTHING, so
+    # a preparation scenario fails closed until the operator replaces it.
+    # The list drifts; re-resolve before each run (README).
+    resolverCidrs:
+      - 203.0.113.0/24
+    # Option (b), rehearsal only: all IPv4 egress on TCP 443, written as two
+    # halves because the chart rejects a /0. This is NOT a registry
+    # restriction. To use it, replace the list above with:
+    #   resolverCidrs:
+    #     - 0.0.0.0/1
+    #     - 128.0.0.0/1
+    # Note that it also reaches the node and pod networks on 443.
   supervisor:
     enabled: true
     image: "registry.invalid/elitea-sandbox-supervisor@sha256:0000000000000000000000000000000000000000000000000000000000000000"
     materialSecret: sandbox-material
+    # Three listeners. serviceName adds a certificate-matched DNS alias on the
+    # existing elitea-sandbox-supervisor Service. purpose/languages/
+    # dependencyContentEnabled/image_digest/policy_revision/compiled_snapshot are
+    # PUBLIC declarations the chart validates only for the compiled Rust profile;
+    # the private JSON in sandbox-material is what the process reads.
     profiles:
       - file: deno.json
         port: 9446
+        serviceName: elitea-sandbox-deno
+      - file: rust.json
+        port: 9447
+        serviceName: elitea-sandbox-rust
+        purpose: execution
+        languages: [rust]
+        dependencyContentEnabled: true
+        image_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000   # = Worker rust entry (PLACEHOLDER)
+        policy_revision: crash-rust-v1
+        compiled_snapshot:
+          profiles_file: /run/elitea-sandbox/rust-compiled-profiles.json
+          profiles_sha256: "0000000000000000000000000000000000000000000000000000000000000000"   # = main.runtime.rustCompiledSnapshots.profilesSha256
+          dependency_bundle_sha256: ""
+      - file: preparation.json
+        port: 9448
+        serviceName: elitea-sandbox-preparation
+    # One memory-backed staging volume per content client: deno (hydration),
+    # preparation (publication), rust (compiled executable transfer).
+    contentStaging:
+      - {name: deno, sizeMiB: 256}
+      - {name: preparation, sizeMiB: 256}
+      - {name: rust, sizeMiB: 256}
+    # PLACEHOLDER. Needs /bin/sh, mkdir, chmod, and a registry digest reference
+    # (chart refuses anything else); a registry pull, so it needs approval.
+    contentStagingInitImage: "registry.invalid/staging-init@sha256:0000000000000000000000000000000000000000000000000000000000000000"

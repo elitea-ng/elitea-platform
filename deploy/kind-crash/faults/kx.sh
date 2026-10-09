@@ -12,7 +12,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${HERE}/../../.." && pwd)"
 k() { kubectl --context "$CTX" -n "$NS" "$@"; }
 
-kx01() { k delete pod -l app.kubernetes.io/name=elitea-worker-python --grace-period=0 --force; }
+# component=worker, not name=elitea-worker-python: the platform edge shares that name label.
+kx01() { k delete pod -l app.kubernetes.io/component=worker --grace-period=0 --force; }
 kx03() { kubectl --context "$CTX" drain "$WORKER_NODE" --ignore-daemonsets --delete-emptydir-data --grace-period=30 --timeout=120s; }
 kx03_restore() { kubectl --context "$CTX" uncordon "$WORKER_NODE"; }
 kx04() { docker kill "$WORKER_NODE"; }
