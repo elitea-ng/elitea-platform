@@ -242,9 +242,19 @@ impl AuthService {
             .await;
         match outcome {
             TokenOutcome::Ok(tokens) => {
+                let refresh_token = tokens.refresh_token.clone();
                 let gate = self.refresh_gate.lock().await;
-                self.adopt(&origin_text, &client_id, tokens, None).await?;
+                let adopted = self.adopt(&origin_text, &client_id, tokens, None).await;
                 drop(gate);
+                if let Err(error) = adopted {
+                    // The keychain refused the new session, so nothing here can
+                    // use or revoke it later: end it on the server now (best
+                    // effort) rather than leave a live device session behind.
+                    self.tokens
+                        .revoke(&auth.revocation_endpoint, &refresh_token, &client_id)
+                        .await;
+                    return Err(error);
+                }
                 self.state()
             }
             other => Err(map_exchange_failure(&other, &client_id)),

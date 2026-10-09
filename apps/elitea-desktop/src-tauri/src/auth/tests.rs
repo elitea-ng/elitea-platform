@@ -662,3 +662,27 @@ async fn a_policy_file_that_cannot_be_written_does_not_fail_sign_in_or_refresh()
     assert_eq!(h.service.refresh().await.unwrap(), RefreshResult::Refreshed);
     assert!(h.keychain.raw().unwrap().contains("refresh-2"));
 }
+
+#[tokio::test]
+async fn a_keychain_failure_after_the_code_exchange_revokes_the_new_session() {
+    let challenge = Arc::new(std::sync::Mutex::new(String::new()));
+    let server = deployment(pkce_checking_deployment(challenge.clone(), Arc::default())).await;
+    let issuer = server.origin.clone();
+    let h = harness(move |q, url| {
+        *challenge.lock().unwrap() = q["code_challenge"].clone();
+        approve_with(issuer.clone())(q, url)
+    });
+    h.service.connect(&server.origin).await.unwrap();
+    h.keychain.fail_saves.store(true, Ordering::SeqCst);
+
+    let err = h.service.sign_in().await.unwrap_err();
+
+    assert!(matches!(err, HostError::Keychain(_)), "{err:?}");
+    let revoke = server
+        .seen()
+        .into_iter()
+        .find(|r| r.path == "/api/v2/auth/native/revoke")
+        .expect("the orphaned session is revoked");
+    assert_eq!(revoke.form()["token"], "refresh-1");
+    assert!(!h.service.state().unwrap().signed_in);
+}
