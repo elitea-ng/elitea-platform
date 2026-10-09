@@ -79,6 +79,81 @@ func TestRuntimeContextRejectsMissingPolicyAndCredentialMaterial(t *testing.T) {
 		}
 	}
 }
+func TestRuntimeContextCarriesAnApprovalOnlyWithTheGate(t *testing.T) {
+	const policy = `"toolkit_security":{"blocked_toolkits":[],"blocked_tools":{},"sensitive_tools":{}}`
+	for raw, want := range map[string]bool{
+		`{` + policy + `}`: true,
+		`{` + policy + `,"sensitive_gate":"enforce"}`: true,
+		`{` + policy + `,"sensitive_gate":"enforce","sensitive_action_approval":{"source":"user_confirmation","approved_at":"2026-10-08T12:00:00Z"}}`: true,
+		`{` + policy + `,"sensitive_action_approval":{"source":"user_confirmation","approved_at":"2026-10-08T12:00:00Z"}}`:                            false,
+		`{` + policy + `,"sensitive_gate":"enforce","sensitive_action_approval":{"source":"user_confirmation"}}`:                                      false,
+		`{` + policy + `,"sensitive_gate":"enforce","sensitive_action_approval":{"source":"configuration_test"}}`:                                     false,
+		`{` + policy + `,"sensitive_gate":"off"}`: false,
+	} {
+		if got := validRuntimeContext([]byte(raw)); got != want {
+			t.Errorf("validRuntimeContext(%s) = %v, want %v", raw, got, want)
+		}
+	}
+	approval := &SensitiveActionApproval{Source: ApprovalSourceUserConfirmation, ApprovedAt: "2026-10-08T12:00:00Z"}
+	if (RunRequest{ProjectID: 1, ActorUserID: 1, ToolkitID: 1, ToolName: "t", SensitiveApproval: approval}).Validate() == nil {
+		t.Fatal("an approval without the gate must not validate")
+	}
+	if (RunRequest{ProjectID: 1, ActorUserID: 1, ToolkitID: 1, ToolName: "t", EnforceSensitiveGate: true,
+		SensitiveApproval: &SensitiveActionApproval{Source: "anyone"}}).Validate() == nil {
+		t.Fatal("an unknown approval source must not validate")
+	}
+}
+
+// preDesktopRuntimeContext is RuntimeContext as it was before the desktop's
+// remote toolkit call (ADR-0029 decision 5b) added its keys.
+type preDesktopRuntimeContext struct {
+	LLMConfiguration  json.RawMessage           `json:"llm_configuration,omitempty"`
+	ToolkitSecurity   *guardrails.RuntimePolicy `json:"toolkit_security"`
+	LLMModel          string                    `json:"llm_model,omitempty"`
+	MCPTokenReference *MCPTokenReference        `json:"mcp_token_reference,omitempty"`
+}
+
+// A run that does not opt into the sensitive gate (test_tool, the MCP toolkit
+// run, the code platform, index start) produces the runtime context it
+// produced before the gate existed, byte for byte: a worker that refuses an
+// unknown key still accepts it during a rolling deploy, and its idempotency
+// identity does not move.
+func TestRuntimeContextIsUnchangedForRunsWithoutTheGate(t *testing.T) {
+	resolver, err := NewCurrentAuthoritativeInputResolver(contextToolkitReader{}, contextSettings{t}, contextGuardrails{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := RunRequest{RequestID: "pin", ProjectID: 7, ActorUserID: 42, ToolkitID: 19, ToolName: "list_issues",
+		Arguments: json.RawMessage(`{}`), LLMModel: "gpt-x", LLMSettings: json.RawMessage(`{"temperature":0.5}`)}
+	inputs, err := resolver.Resolve(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, _ := contextGuardrails{}.ResolveCurrentAgentGuardrails(context.Background())
+	runtimePolicy := policy.Runtime()
+	want, err := json.Marshal(preDesktopRuntimeContext{
+		ToolkitSecurity: &runtimePolicy, LLMModel: "gpt-x", LLMConfiguration: json.RawMessage(`{"temperature":0.5}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(inputs.RuntimeContext) != string(want) {
+		t.Fatalf("runtime context changed:\n got %s\nwant %s", inputs.RuntimeContext, want)
+	}
+
+	request.EnforceSensitiveGate = true
+	request.SensitiveApproval = &SensitiveActionApproval{Source: ApprovalSourceUserConfirmation, ApprovedAt: "2026-10-08T12:00:00Z"}
+	gated, err := resolver.Resolve(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var value RuntimeContext
+	if json.Unmarshal(gated.RuntimeContext, &value) != nil || value.SensitiveGate != SensitiveGateEnforce ||
+		value.SensitiveActionApproval == nil || !validRuntimeContext(gated.RuntimeContext) {
+		t.Fatalf("gated runtime context = %s", gated.RuntimeContext)
+	}
+}
+
 func TestContextSnapshotIsIndependentAndChangesIdempotency(t *testing.T) {
 	original := testInputs()
 	cloned := original.Clone()

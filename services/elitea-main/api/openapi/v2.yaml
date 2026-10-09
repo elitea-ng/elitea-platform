@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.4"
+  x-elitea-client-contract: "1.6"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -3388,6 +3388,485 @@ components:
             earlier admission with the same idempotency key (the same
             `execution_id` and `events_url` come back).
 
+    LocalTurnStartRequest:
+      type: object
+      description: >-
+        Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:90
+        (`startBody`). One JSON value of at most 512 KiB.
+      required: [question_id, user_input]
+      properties:
+        question_id:
+          type: string
+          format: uuid
+          description: >-
+            Client generated, lowercase canonical UUID; the idempotency key of
+            the start and the question message's uuid after the commit.
+        user_input:
+          type: string
+          minLength: 1
+          description: The user's message, at most 256 KiB; the recall is matched against it.
+        participant_id:
+          type: integer
+          format: int64
+          description: >-
+            The conversation's agent participant that answers. 0 or absent
+            means the conversation's model participant.
+    LocalTurnMemoryRecall:
+      type: object
+      description: >-
+        The turn's recalled personal memory, the value a cloud turn's
+        admission appends to its instructions. NOTE(W2):
+        internal/api/v2/localturns/route.go:190.
+      required: [text, count, memory_ids]
+      properties:
+        text:
+          type: string
+          description: The recall block, or empty when nothing is recalled.
+        count:
+          type: integer
+          description: How many memories the block holds; the commit stamps it as `memories_used`.
+        memory_ids:
+          type: array
+          items: { type: string }
+    LocalTurnStarted:
+      type: object
+      description: >-
+        Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:158
+        (`start`).
+      required: [execution_id, question_id, response_message_id, conversation_uuid, participant_id, expires_at, created, memory_recall]
+      properties:
+        execution_id:
+          type: string
+          description: 32 lowercase hex characters. Send it as `X-Elitea-Execution-Id` on the turn's `/llm` calls.
+        question_id: { type: string, format: uuid }
+        response_message_id:
+          type: string
+          format: uuid
+          description: The answer's message uuid after the commit.
+        conversation_uuid: { type: string, format: uuid }
+        participant_id:
+          type: integer
+          format: int64
+          description: The participant that answers (the model participant when the start named none).
+        expires_at:
+          type: string
+          format: date-time
+          description: The commit deadline (24 hours after the first start).
+        created:
+          type: boolean
+          description: False when this call replayed an earlier start with the same `question_id`.
+        memory_recall:
+          $ref: '#/components/schemas/LocalTurnMemoryRecall'
+    LocalTurnHITLExchange:
+      type: object
+      description: >-
+        One approval or question the desktop resolved during the turn.
+        NOTE(W2): internal/application/localturn/localturn.go:183
+        (`HITLExchange`).
+      required: [interrupt_id, kind, prompt, decision]
+      properties:
+        interrupt_id:
+          type: string
+          description: 1 to 128 printable ASCII characters without spaces.
+        kind:
+          type: string
+          description: For example `command_approval` or `question`; same character rule.
+        tool_run_id:
+          type: string
+          description: The tool step (`tool_calls` key) the exchange belongs to, when any.
+        prompt:
+          type: string
+          description: What the user was asked, at most 4 KiB.
+        decision:
+          type: string
+          description: For example `approve`, `reject`, `edit` or `answer`; same character rule.
+        value:
+          type: string
+          description: The user's answer or edit, at most 4 KiB.
+    LocalTurnCommand:
+      type: object
+      required: [command]
+      properties:
+        command:
+          type: string
+          description: The command line; stored cut to 300 bytes, control characters as spaces.
+        exit_code:
+          type: integer
+    LocalTurnWorkReport:
+      type: object
+      description: >-
+        What the client reports it did on the device. Stored on the answer as
+        `local_work` with at most 50 commands and 200 paths (cut to 300 and
+        400 bytes) plus the reported totals. NOTE(W2):
+        internal/application/localturn/localturn.go:199 (`LocalWorkReport`).
+      properties:
+        sandbox_mode:
+          type: string
+          description: The sandbox mode the turn used, `read-only`, `workspace-write` or `full-access`.
+        enforcement:
+          type: string
+          description: '`full`, `partial` or `none`: how far the device could enforce the sandbox.'
+        commands:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/LocalTurnCommand'
+        paths_touched:
+          type: array
+          maxItems: 2000
+          items: { type: string }
+    LocalTurnCommitRequest:
+      type: object
+      description: >-
+        Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:96
+        (`commitBody`). One JSON value of at most 8 MiB.
+      required: [user_message, assistant_message]
+      properties:
+        user_message:
+          type: object
+          required: [content]
+          properties:
+            content:
+              type: string
+              minLength: 1
+              description: The question as the user sent it, at most 256 KiB.
+        assistant_message:
+          type: object
+          required: [content]
+          properties:
+            content:
+              type: string
+              description: The final answer text, at most 1 MiB; may be empty for a failed turn.
+            is_error:
+              type: boolean
+              description: The turn failed; `error` says why.
+            error:
+              type: string
+              description: At most 4 KiB, only with `is_error`.
+        tool_calls:
+          type: object
+          description: >-
+            The turn's tool steps, keyed by run id (at most 512), in the shape
+            the runtime streams as `response_metadata.tool_calls`: `run_id`,
+            `tool_name`, `tool_inputs`, `tool_output`, `finish_reason`,
+            `error`, `timestamp_start`, `timestamp_finish`, `metadata`,
+            `tool_meta`. Stored as trace steps (listMessageTraces).
+          additionalProperties:
+            type: object
+            additionalProperties: true
+            x-elitea-passthrough: >-
+              NOTE(W2): one runtime tool-call entry, decoded and stored by the
+              same projection a worker's partial_message goes through
+              (internal/infra/db/repos/agent_trace.go:729
+              `currentAgentToolCallToRow`), which keeps only the keys it maps.
+          x-elitea-passthrough: >-
+            NOTE(W2): a map keyed by the runtime's run id, read as
+            json.RawMessage (internal/api/v2/localturns/route.go:105) and
+            decoded by internal/infra/db/repos/agent_trace.go:371
+            (`decodeOrderedCurrentAgentToolCalls`).
+        thinking_steps:
+          type: array
+          maxItems: 512
+          description: >-
+            The turn's model steps, in the shape the runtime streams as
+            `response_metadata.thinking_steps` (`type`, `text`, `thinking`,
+            `timestamp_start`, `timestamp_finish`, `message.response_metadata`).
+          items:
+            type: object
+            additionalProperties: true
+            x-elitea-passthrough: >-
+              NOTE(W2): one runtime thinking step, read as json.RawMessage
+              (internal/api/v2/localturns/route.go:106) and stored by
+              internal/infra/db/repos/agent_trace.go:779
+              (`currentAgentThinkingStepToRow`), which keeps only the keys it maps.
+        hitl_exchanges:
+          type: array
+          maxItems: 64
+          items:
+            $ref: '#/components/schemas/LocalTurnHITLExchange'
+        local_work:
+          $ref: '#/components/schemas/LocalTurnWorkReport'
+    LocalTurnCommitted:
+      type: object
+      description: >-
+        Client contract 1.5. NOTE(W2): internal/api/v2/localturns/route.go:198
+        (`commit`).
+      required: [execution_id, conversation_uuid, question_message_id, response_message_id, memories_used, committed_at, created]
+      properties:
+        execution_id: { type: string }
+        conversation_uuid: { type: string, format: uuid }
+        question_message_id:
+          type: string
+          format: uuid
+          description: The question message's uuid (the start's `question_id`).
+        response_message_id: { type: string, format: uuid }
+        memories_used:
+          type: integer
+          description: Stamped on the answer's metadata as `memories_used` when above 0.
+        committed_at: { type: string, format: date-time }
+        created:
+          type: boolean
+          description: False when this call replayed an earlier commit with the same body.
+    LocalTurnError:
+      type: object
+      description: >-
+        A refused local turn call. `error` is a machine code:
+        `invalid_local_turn`, `local_turn_requires_token`,
+        `local_work_disabled`, `local_turn_not_found`,
+        `local_turn_participant`, `local_turn_conflict`,
+        `local_turn_already_committed`, `local_turn_expired`,
+        `local_turn_unavailable`, `unsupported_media_type`,
+        `request_too_large`, `local_turn_failed`. NOTE(W2):
+        internal/api/v2/localturns/route.go:241 (`writeUseCaseError`).
+      required: [error]
+      properties:
+        error: { type: string }
+        message: { type: string }
+
+    ResolvedApplicationVersion:
+      type: object
+      description: >-
+        One version resolved for a desktop's local runtime (ADR-0029 decision
+        5a). NOTE(W2): internal/infra/storage/client_application_version.go:60
+        (`ClientApplicationVersion`).
+      required: [schema_version, project_id, application_id, version_id, version_details, definition_sha256, withheld_secrets, project_context_withheld]
+      properties:
+        schema_version:
+          type: string
+          description: '`elitea.client.resolved-application-version.v1`.'
+        project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        version_id: { type: integer, format: int64 }
+        definition_sha256:
+          type: string
+          description: SHA-256 (hex) of `version_details` and the three ids; also the ETag.
+        withheld_secrets:
+          type: array
+          items: { type: string }
+          description: >-
+            JSON Pointers (RFC 6901, into `version_details`) of every string
+            whose `{{secret.*}}` reference was replaced with
+            `[secret withheld]`; empty when none. A local run of this version
+            sees the placeholder, not the value: a client may run it in the
+            cloud instead.
+        project_context_withheld:
+          type: boolean
+          description: >-
+            True when the version's frozen `project_context` was removed
+            because the caller lacks `models.project_context.view` in the
+            project; a local run then lacks the context a cloud turn has.
+        version_details:
+          $ref: '#/components/schemas/ResolvedApplicationVersionDetails'
+    ResolvedApplicationVersionDetails:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): the saved version after the shared admission freeze, the
+        object the worker's runtime-context route serves minus credentials;
+        its keys follow the version-details projection
+        (internal/infra/storage/client_application_version.go:217,
+        `ProjectClientApplicationVersion`).
+      required: [tools]
+      properties:
+        instructions: { type: string }
+        agent_type: { type: string }
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResolvedApplicationTool'
+    ResolvedApplicationTool:
+      type: object
+      description: >-
+        One tool of a resolved version. `kind` is `remote_toolkit`,
+        `application` or `platform_mcp`. NOTE(W2):
+        internal/infra/storage/client_application_version.go:297
+        (`projectClientTool`).
+      required: [kind, type]
+      properties:
+        kind: { type: string }
+        type: { type: string }
+        id: { type: integer, format: int64, nullable: true }
+        name: { type: string, nullable: true }
+        toolkit_name: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        agent_type:
+          type: string
+          description: An `application` tool's agent type.
+        application_id: { type: integer, format: int64 }
+        application_version_id: { type: integer, format: int64 }
+        nested_skill_registry:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            x-elitea-passthrough: >-
+              NOTE(W2): one skill a nested agent carries, as the freeze recorded
+              it (internal/infra/storage/client_application_version.go:335).
+        server_name:
+          type: string
+          description: A `platform_mcp` tool's server.
+        selected_tools:
+          type: array
+          items: { type: string }
+          description: >-
+            A `remote_toolkit`'s tools the version may call, after the
+            guardrails removed blocked ones. Read it with `all_tools`: an empty
+            list means every tool only when `all_tools` is true.
+        all_tools:
+          type: boolean
+          description: >-
+            A `remote_toolkit`'s: true when the author selected no tool, which
+            means every tool of the toolkit (as in chat; the guardrails still
+            block theirs). False with an empty `selected_tools` means the
+            guardrails blocked every selected tool: the agent may call none.
+            executeRemoteToolkitTool admits exactly this selection.
+        toolkit_ref:
+          $ref: '#/components/schemas/ResolvedToolkitRef'
+    ResolvedToolkitRef:
+      type: object
+      description: >-
+        The opaque reference of one saved toolkit as attached to this agent
+        version in this project. `ref` is stable for that attachment, carries
+        no credential and grants nothing: executeRemoteToolkitTool recomputes
+        it from the version a call names and refuses a mismatch. NOTE(W2):
+        internal/infra/storage/client_application_version.go:284
+        (`ClientToolkitRef`).
+      required: [toolkit_id, project_id, ref]
+      properties:
+        toolkit_id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        ref: { type: string, pattern: '^tkr1_[0-9a-f]{32}$' }
+    RemoteToolkitCallConfirmation:
+      type: object
+      description: >-
+        The user's approval of ONE sensitive tool call, after a 409
+        `confirmation_required`. It is bound to that call: `interrupt_id` must
+        echo the `hitl_interrupt.interrupt_id` the 409 named, which the server
+        derives from the turn, the toolkit, the agent version, the tool and the
+        arguments and recomputes from the call it receives. It is used once: a
+        repeat of the same request (the same Idempotency-Key) is the same call,
+        any other request presenting it answers 409 `confirmation_required`
+        again with the next interrupt id. It is recorded in the audit trail and
+        passed to the worker as the call's only authority to run a sensitive
+        tool.
+      required: [approved, approved_at, interrupt_id]
+      properties:
+        approved:
+          type: boolean
+          description: Must be true; a refused call is not sent.
+        approved_at:
+          type: string
+          format: date-time
+          description: >-
+            When the user approved (RFC 3339). At most 15 minutes old and at
+            most 5 minutes in the future; an older approval answers 409
+            `confirmation_required` again.
+        interrupt_id:
+          type: string
+          pattern: '^hitl_[0-9a-f]{32}$'
+          description: The `hitl_interrupt.interrupt_id` of the 409 this approves.
+    RemoteToolkitCallRequest:
+      type: object
+      additionalProperties: false
+      description: >-
+        One remote tool call, inside one live local turn. Settings,
+        credentials and a model are never accepted (unknown fields are
+        refused): a toolkit that calls a model uses the running version's
+        `llm_settings`, resolved against the project's model catalogue. NOTE(W2):
+        internal/api/v2/desktopops/remote_toolkit.go:190
+        (`remoteToolkitBody`).
+      required: [execution_id, application_id, version_id, toolkit_ref, tool_name]
+      properties:
+        execution_id:
+          type: string
+          pattern: '^[0-9a-f]{32}$'
+          description: The live local turn (startLocalTurn's `execution_id`) this call belongs to.
+        application_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The agent the desktop is running in that turn (the turn's agent, or a nested agent it reaches).
+        version_id:
+          type: integer
+          format: int64
+          minimum: 1
+          description: That agent's version, as resolveApplicationVersion resolved it.
+        toolkit_ref:
+          type: string
+          pattern: '^tkr1_[0-9a-f]{32}$'
+          description: The toolkit's `toolkit_ref.ref` from resolveApplicationVersion of that version.
+        tool_name: { type: string, minLength: 1 }
+        arguments:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the tool's own arguments, validated by the tool
+            (internal/api/v2/desktopops/remote_toolkit.go:190).
+        confirmation:
+          $ref: '#/components/schemas/RemoteToolkitCallConfirmation'
+        request_id:
+          type: string
+          maxLength: 128
+          description: Makes a retry replay the same run, like Idempotency-Key.
+        mcp_authorization_reference:
+          type: string
+          description: The reference an MCP authorisation answered, for the retry after it.
+    RemoteToolkitCallResult:
+      type: object
+      description: >-
+        A remote tool call's answer. `error` is a machine code on a refusal.
+        NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:595
+        (`writeOutcome`) and :678 (`writeRunError`).
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        status:
+          type: string
+          description: '`ok` or `tool_error` on a 200.'
+        task_id: { type: string }
+        toolkit_id: { type: integer, format: int64 }
+        toolkit_type: { type: string }
+        tool_name: { type: string }
+        result:
+          nullable: true
+          x-elitea-passthrough: >-
+            NOTE(W2): what the tool returned, any JSON value
+            (internal/api/v2/desktopops/remote_toolkit.go:611).
+        truncated:
+          type: boolean
+          description: The result was too large to return; it is omitted, never cut.
+        error: { type: string }
+        message: { type: string }
+        reason:
+          type: string
+          description: >-
+            On a 422: `unsupported_toolkit`, `unknown_tool` or
+            `worker_refused`.
+        authorization_required:
+          $ref: '#/components/schemas/ClientFrameMcpAuthorizationRequest'
+        hitl_interrupt:
+          $ref: '#/components/schemas/ClientFrameHitlInterruptDetail'
+        authorization_retry:
+          type: object
+          properties:
+            tool_name: { type: string }
+            tool_params:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the arguments to send again after authorising
+                (internal/api/v2/desktopops/remote_toolkit.go:627).
+    DesktopOperationError:
+      type: object
+      description: >-
+        A refused desktop operation (resolveApplicationVersion,
+        executeRemoteToolkitTool). `error` is a machine code. NOTE(W2):
+        internal/api/v2/desktopops/resolved_version.go:118 (`serve`).
+      required: [error]
+      properties:
+        error: { type: string }
+        message: { type: string }
+
     ChatExecutionError:
       type: object
       description: >
@@ -3405,6 +3884,232 @@ components:
         error: { type: string }
         message: { type: string }
         retryable: { type: boolean }
+
+    # Wave 1 per-interrupt HITL API (libs/proto/contracts/fanout-interrupt-decisions-v1.md section 6;
+    # JSON schemas libs/jsonschema/runtime/v1/fanout-interrupt-*.schema.json).
+    # OpenAPI 3.0 cannot express the schemas' per-action `if/then` rules
+    # (value empty for approve/reject/authorize/skip, non-empty for the rest,
+    # credential_ref only with authorize); the server enforces them.
+    ExecutionInterruptDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, expected_revision, action, value]
+      properties:
+        request_id:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Idempotency key; the same id with the same bytes replays the recorded decision.
+        expected_revision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The `revision` of the card the caller is answering.
+        action:
+          type: string
+          enum: [approve, reject, edit, block_with_comment, answer, authorize, skip, continue]
+          # A plain string in Go: the generated `Continue` enum constant would
+          # collide with StaticPipelineLeafDecisionAction's and rename it. The
+          # hand-written route validates the action (domain.ParseDecisionRequest).
+          x-go-type: string
+        value:
+          type: string
+          maxLength: 8192
+          pattern: '^[^\x00-\x08\x0b\x0c\x0e-\x1f\x7f]*$'
+          description: >-
+            Empty for approve, reject, authorize and skip; non-empty for edit,
+            block_with_comment, answer and continue.
+        credential_ref:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{16,128}$'
+          description: Token-store reference; required with `authorize`, forbidden otherwise. Never a secret.
+
+    ExecutionInterruptDecisionResult:
+      type: object
+      additionalProperties: false
+      required: [schema, interrupt_key, state, revision, request_id, replay]
+      properties:
+        schema:
+          type: string
+          enum: [elitea.pipeline.fanout-interrupt-decision-result.v1]
+        interrupt_key:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        state:
+          type: string
+          enum: [DECIDED, CONSUMED]
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        request_id:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        replay:
+          type: boolean
+          description: True when the same request_id with the same bytes was already recorded.
+
+    ExecutionInterruptList:
+      type: object
+      additionalProperties: false
+      required: [schema, response_message_id, decision_revision, interrupts]
+      properties:
+        schema:
+          type: string
+          enum: [elitea.pipeline.fanout-interrupt-list.v1]
+        response_message_id:
+          type: string
+          format: uuid
+        decision_revision:
+          type: integer
+          format: int64
+          minimum: 0
+        interrupts:
+          type: array
+          maxItems: 16
+          items:
+            type: object
+            additionalProperties: false
+            required: [card, state, revision]
+            properties:
+              card:
+                $ref: '#/components/schemas/ExecutionInterruptCard'
+              state:
+                type: string
+                enum: [PENDING, DECIDED]
+              revision:
+                type: integer
+                format: int64
+                minimum: 1
+
+    ExecutionInterruptCard:
+      type: object
+      additionalProperties: false
+      description: >-
+        One per-interrupt card, served exactly as stored. Mirrors
+        elitea.pipeline.fanout-interrupt-card.v1
+        (libs/jsonschema/runtime/v1/fanout-interrupt-card.schema.json), which
+        also owns the cross-field rules this schema cannot express: the
+        hierarchy is null/null/[] or name/call_id/one or more tiers, a card
+        with fanout_v1 has a tier whose sibling_ordinal equals its ordinal,
+        and available_actions and display.guardrail_type match kind.
+      required: [schema, interrupt_key, interrupt_id, kind, available_actions, payload_sha256, display,
+                 parent_agent_name, parent_agent_call_id, parent_agent_path, fanout_v1]
+      properties:
+        schema:
+          type: string
+          enum: [elitea.pipeline.fanout-interrupt-card.v1]
+        interrupt_key:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          minLength: 64
+          maxLength: 64
+        interrupt_id:
+          type: string
+          description: Printable ASCII, 1 to 512 characters.
+          minLength: 1
+          maxLength: 512
+        kind:
+          type: string
+          x-go-type: string
+          enum: [tool_guard, hitl_node, ask_user, delegated_auth]
+        available_actions:
+          type: array
+          minItems: 1
+          maxItems: 4
+          uniqueItems: true
+          items:
+            type: string
+            x-go-type: string
+            enum: [approve, reject, edit, block_with_comment, answer, authorize, skip, continue]
+        payload_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          minLength: 64
+          maxLength: 64
+        display:
+          $ref: '#/components/schemas/ExecutionInterruptCardDisplay'
+        parent_agent_name:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 2048
+        parent_agent_call_id:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 512
+        parent_agent_path:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, call_id]
+            properties:
+              name: {type: string, minLength: 1, maxLength: 2048}
+              call_id: {type: string, minLength: 1, maxLength: 512}
+              sibling_ordinal: {type: integer, minimum: 1, maximum: 64}
+        fanout_v1:
+          type: object
+          nullable: true
+          additionalProperties: false
+          description: Fan-out member metadata (fanout-member.v1); null for a coordinator card.
+          required: [kind, node, activation, member, ordinal, total]
+          properties:
+            kind:
+              type: string
+              x-go-type: string
+              enum: [parallel, map]
+            node: {type: string, pattern: '^[A-Za-z0-9_.:-]{1,128}$', minLength: 1, maxLength: 128}
+            activation: {type: string, pattern: '^[0-9a-f]{16}$', minLength: 16, maxLength: 16}
+            member: {type: string, pattern: '^[A-Za-z0-9_.:-]{1,128}$', minLength: 1, maxLength: 128}
+            ordinal: {type: integer, minimum: 1, maximum: 64}
+            total: {type: integer, minimum: 1, maximum: 64}
+
+    ExecutionInterruptCardDisplay:
+      type: object
+      additionalProperties: false
+      maxProperties: 13
+      description: >-
+        Only fields today's card shows. Headers, tokens, resource metadata and
+        checkpoint ids are never in a card.
+      required: [message, guardrail_type]
+      properties:
+        message: {type: string, minLength: 1, maxLength: 8192}
+        guardrail_type:
+          type: string
+          x-go-type: string
+          enum: [sensitive_tool, pipeline_hitl, pipeline_static, clarifying_question, mcp_auth]
+        node_name: {type: string, minLength: 1, maxLength: 128}
+        tool_name: {type: string, minLength: 1, maxLength: 512}
+        toolkit_name: {type: string, minLength: 1, maxLength: 512}
+        toolkit_type: {type: string, minLength: 1, maxLength: 128}
+        action_label: {type: string, minLength: 1, maxLength: 512}
+        tool_call_id: {type: string, minLength: 1, maxLength: 512}
+        tool_args_json: {type: string, minLength: 1, maxLength: 16384}
+        policy_message: {type: string, minLength: 1, maxLength: 2048}
+        interaction_type: {type: string, minLength: 1, maxLength: 64}
+        edit_state_key: {type: string, minLength: 1, maxLength: 128}
+        server_url: {type: string, pattern: '^https://', minLength: 9, maxLength: 2048}
+
+    ExecutionInterruptError:
+      type: object
+      additionalProperties: false
+      required: [error, message, retryable]
+      properties:
+        error:
+          type: string
+          enum:
+            - agent_interrupt_already_resolved
+            - agent_interrupt_invalid_decision
+            - agent_interrupt_not_found
+        message:
+          type: string
+          minLength: 1
+          maxLength: 512
+        retryable:
+          type: boolean
+          description: Always false; none of these errors is retryable.
 
     Notification:
       type: object
@@ -10786,7 +11491,7 @@ components:
       description: >-
         The public subset of the native client policy (ADR-0025 decision 5);
         the full policy travels with every token response. NOTE(W2):
-        internal/api/v2/discovery/document.go:65 (`PublicPolicy`).
+        internal/api/v2/discovery/document.go:100 (`PublicPolicy`).
       required:
         - require_device_lock
         - offline_enabled
@@ -10797,6 +11502,7 @@ components:
         - notification_preview
         - allow_notification_actions
         - allow_system_surfaces
+        - local_work_allowed
       properties:
         require_device_lock:
           type: boolean
@@ -10846,6 +11552,12 @@ components:
             Client contract 1.3. Widgets, home-screen quick actions and other
             surfaces outside the app may show conversation and agent titles.
             False means counts only. Default false.
+        local_work_allowed:
+          type: boolean
+          description: >-
+            Client contract 1.5 (ADR-0029 decision 6). The token policy's
+            `local_work.allowed`: a desktop app may offer local work. The rest
+            of the `local_work` group travels only with a token. Default false.
     NativeOAuthError:
       type: object
       description: >-
@@ -10905,7 +11617,7 @@ components:
         fields are enforced by the client; the server refuses versions below
         `min_client_version` with 426. Adding a field is additive; renaming or
         removing one bumps `client_contract`. NOTE(W2):
-        internal/platformconfig/nativeclientpolicy.go:43 (`NativeClientPolicy`).
+        internal/platformconfig/nativeclientpolicy.go:219 (`NativeClientPolicy`).
       required:
         - require_device_lock
         - idle_lock_seconds
@@ -10920,6 +11632,7 @@ components:
         - notification_preview
         - allow_notification_actions
         - allow_system_surfaces
+        - local_work
       properties:
         require_device_lock:
           type: boolean
@@ -10985,6 +11698,74 @@ components:
             Client contract 1.3. Widgets, home-screen quick actions and other
             surfaces outside the app may show conversation and agent titles.
             False means counts only. Default false.
+        local_work:
+          $ref: '#/components/schemas/LocalWorkPolicy'
+    LocalWorkPolicy:
+      type: object
+      description: >-
+        Client contract 1.5 (ADR-0029 decision 6). What a desktop app may do
+        on the user's machine. The desktop enforces every field. The server
+        enforces only `allowed`: it refuses a local turn start while it is
+        false. A local turn's audit records what the client reports, which the
+        server cannot verify. NOTE(W2):
+        internal/platformconfig/nativeclientpolicy.go:110 (`LocalWorkPolicy`).
+      required:
+        - allowed
+        - shell
+        - max_sandbox_mode
+        - network
+        - command_allow
+        - command_deny
+        - path_deny
+        - local_mcp
+        - local_index
+        - cloud_sync
+        - memory_write
+      properties:
+        allowed:
+          type: boolean
+          description: Local work is permitted. Default false.
+        shell:
+          type: boolean
+          description: Local turns may run shell commands. Default true.
+        max_sandbox_mode:
+          type: string
+          description: >-
+            The widest sandbox mode a local command may use: `read-only`,
+            `workspace-write` (the default) or `full-access`. A user may always
+            choose a narrower one. Treat an unknown value as `read-only`.
+        network:
+          type: boolean
+          description: Sandboxed local commands may reach the network. Default false.
+        command_allow:
+          type: array
+          items: { type: string }
+          description: >-
+            Command patterns that run without asking the user. At most 200
+            patterns of at most 512 bytes. Applied before workspace and user
+            rules.
+        command_deny:
+          type: array
+          items: { type: string }
+          description: Command patterns that never run. A deny wins over an allow. Same bounds.
+        path_deny:
+          type: array
+          items: { type: string }
+          description: Path patterns local tools must not read or write. Same bounds.
+        local_mcp:
+          type: boolean
+          description: The user may configure local (stdio) MCP servers. Default false.
+        local_index:
+          type: boolean
+          description: The app may build a local index of a workspace. Default true.
+        cloud_sync:
+          type: boolean
+          description: A workspace folder may be synced to an artifact bucket. Default false.
+        memory_write:
+          type: boolean
+          description: >-
+            Local turns may save to the user's cloud memory. Recall is always
+            allowed. Default true.
     InvalidQueryParameterError:
       type: object
       description: >-
@@ -16320,6 +17101,559 @@ paths:
               schema:
                 $ref: '#/components/schemas/ChatExecutionError'
 
+  /elitea_core/local_turn/prompt_lib/{project_id}/{conversation_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: conversation_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The conversation's UUID, lowercase canonical.
+    post:
+      operationId: startLocalTurn
+      summary: Start an agent turn that runs on the caller's machine
+      description: |
+        Client contract 1.5 (ADR-0029 decision 5c). Opens the execution of
+        one desktop local turn in this conversation and answers its id and
+        the turn's memory recall. Nothing is written to the conversation
+        until commitLocalTurn.
+
+        WHO. Only a native access token or a personal access token; a browser
+        session answers 403 `local_turn_requires_token`. The caller needs
+        `models.chat.messages.create` in the project and must be a member
+        participant of the conversation.
+
+        POLICY. While the native client policy's `local_work.allowed` is
+        false the start answers 403 `local_work_disabled`.
+
+        THE EXECUTION. Send its `execution_id` as `X-Elitea-Execution-Id` on
+        every `/llm` call of the turn: the edge keeps it for this caller
+        while the turn is live, so usage is attributed to the turn. A turn
+        that is not committed by `expires_at` (24 hours) expires like an
+        abandoned cloud run; its commit then answers 410.
+
+        MEMORY RECALL. `memory_recall` is computed on every call, by the
+        resolver a cloud turn's admission uses, from the primary database.
+        Append `memory_recall.text`, when not empty, to the agent's
+        instructions after one blank line, as a cloud turn does. Never cache
+        or reuse it for another turn.
+
+        IDEMPOTENCY. `question_id` is the idempotency key: a retried start
+        with the same `question_id` answers the same execution with
+        `created: false` and a fresh recall. The same `question_id` in another
+        conversation, or for another participant, answers 409; after the
+        commit, 409 `local_turn_already_committed`.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocalTurnStartRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The turn's execution, new (`created` true) or replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnStarted'
+        '400':
+          description: >-
+            A malformed body or field (`invalid_local_turn`), or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/LocalTurnError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No project permission, a session caller
+            (`local_turn_requires_token`), or local work turned off by policy
+            (`local_work_disabled`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '404':
+          description: The conversation does not exist or the caller is not its participant (`local_turn_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '409':
+          description: '`local_turn_conflict` or `local_turn_already_committed`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '410':
+          description: The replayed turn passed its deadline (`local_turn_expired`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '413':
+          description: The body is larger than 512 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '422':
+          description: '`participant_id` is not an agent or model participant of the conversation (`local_turn_participant`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '500': { $ref: '#/components/responses/500' }
+        '503':
+          description: The policy or the memory recall could not be read (`local_turn_unavailable`); retry with the same body.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+
+  /elitea_core/local_turn_commit/prompt_lib/{project_id}/{execution_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: execution_id
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[0-9a-f]{32}$' }
+        description: The `execution_id` startLocalTurn answered.
+    post:
+      operationId: commitLocalTurn
+      summary: Record a finished local turn in the conversation
+      description: |
+        Client contract 1.5 (ADR-0029 decision 5c). Appends the turn to the
+        conversation through the same chat and trace tables a cloud turn
+        writes: the question (its message uuid is the start's `question_id`),
+        the answer (`response_message_id`), the tool and thinking steps
+        (listMessageTraces) and the resolved HITL exchanges. Both messages
+        carry `executed_by: desktop` in their metadata, and the answer carries
+        `memories_used` (the start's recall count), `hitl_exchanges`,
+        `resolved_hitl_interrupt_ids` and the bounded `local_work` report.
+        Other clients receive both messages in the conversation's
+        `changes_since` delta (listConversationMessages).
+
+        The audit trail records a summary of the commands and paths in
+        `local_work`. The server cannot verify what happened on the device:
+        the record is what the client reported. Longer entries are cut and
+        entries past the bounds are dropped; the totals keep the reported
+        counts.
+
+        IDEMPOTENCY. Keyed on the execution: a retried commit with the same
+        body answers 200 with `created: false`; a different body answers 409
+        `local_turn_already_committed`. Only the user who started the turn
+        may commit it (404 otherwise); a turn past its deadline answers 410.
+      tags: [chat, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LocalTurnCommitRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The turn is recorded (`created` true) or was already recorded with this body.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnCommitted'
+        '400':
+          description: >-
+            A malformed body or field (`invalid_local_turn`), or an
+            `X-Client-Version` that does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/LocalTurnError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No project permission, or a session caller (`local_turn_requires_token`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '404':
+          description: No such turn for this caller, or the caller left the conversation (`local_turn_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '409':
+          description: '`local_turn_already_committed`, or `local_turn_conflict` when a message id is already taken.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '410':
+          description: The turn passed its deadline (`local_turn_expired`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '413':
+          description: The body is larger than 8 MiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '422':
+          description: The answering participant left the conversation (`local_turn_participant`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocalTurnError'
+        '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/resolved_version/prompt_lib/{project_id}/{application_id}/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+        description: The agent or pipeline id.
+      - name: version_id
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+        description: The version id, which must belong to `application_id`.
+    get:
+      operationId: resolveApplicationVersion
+      summary: An agent or pipeline version resolved for execution, without secrets
+      description: |
+        Client contract 1.6 (ADR-0029 decision 5a). The version a desktop's
+        local runtime runs: instructions, `llm_settings` (model resolved),
+        `pipeline_settings`, variables, frozen skills, nested agent references
+        and tools. It is the projection the worker's private runtime-context
+        route serves, from the same freeze, with every credential removed.
+
+        TOOLS. Each entry has a `kind`. `remote_toolkit`: a saved toolkit, with
+        its `selected_tools` and a `toolkit_ref`; it carries no settings, so
+        run its tools with executeRemoteToolkitTool. `application`: a nested
+        agent; resolve it with this operation and its
+        `application_id`/`application_version_id`. `platform_mcp`: an internal
+        platform MCP server the version selects (`server_name`). No credential,
+        vault secret, `{{secret.*}}` reference or MCP OAuth material is ever in
+        the document; a secret reference outside the tools reads
+        `[secret withheld]`, and `withheld_secrets` names each such string by
+        JSON Pointer so the desktop can decide to run that agent in the cloud.
+
+        Memory recall is not part of the document: startLocalTurn answers it.
+
+        WHO. Any authenticated caller with `models.applications.version.details`
+        in the project, browser sessions included (it is a read). The frozen
+        `version_details.project_context` is included only for a caller who
+        also holds `models.project_context.view`; otherwise it is omitted and
+        `project_context_withheld` is true (the digest describes the document
+        served).
+
+        CACHING. `definition_sha256` (also the `ETag`) changes whenever the
+        resolved document does. The document is resolved on every call.
+      tags: [applications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The resolved version.
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolvedApplicationVersion'
+        '400':
+          description: >-
+            An id that is not a positive integer
+            (`invalid_resolved_version_request`), or an `X-Client-Version` that
+            does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/DesktopOperationError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No `models.applications.version.details` in the project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '404':
+          description: No such version of this application in the project (`application_version_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '422':
+          description: >-
+            The version cannot be resolved for execution
+            (`application_version_unresolvable`): a cloud run of it would be
+            refused too, for example a toolkit credential the caller cannot see
+            or a model missing from the project's catalogue.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: This deployment runs no cloud agents (`resolved_version_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '503':
+          description: A dependency could not be read (`resolved_version_unavailable`); retry.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+
+  /elitea_core/remote_toolkit_call/prompt_lib/{project_id}/{toolkit_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: toolkit_id
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+        description: The saved toolkit (a `remote_toolkit` tool's `toolkit_ref.toolkit_id`), or a project MCP server toolkit.
+    post:
+      operationId: executeRemoteToolkitTool
+      summary: Run one tool of one saved toolkit on a cloud worker
+      description: |
+        Client contract 1.6 (ADR-0029 decisions 3 and 5b). Runs ONE tool of
+        ONE saved toolkit in the caller's project on a cloud worker, through
+        the same `toolkit.call_tool.v1` path test_tool uses, and answers what
+        the tool returned. Write operations are allowed. The toolkit's
+        settings and credentials are resolved server-side from the saved row
+        under the caller's grants; the request never carries settings, and no
+        credential is ever returned. MCP OAuth references resolve
+        server-side; a tool that needs the user to authorise answers 409
+        `mcp_authorization_required` with the request in the fields a chat
+        stream's `mcp_authorization_required` frame carries.
+
+        WHO. Only a native access token or a personal access token; a browser
+        session answers 403 `remote_toolkit_requires_token`. The caller needs
+        `models.applications.tool.execute` in the project (admin, editor and
+        viewer hold it).
+
+        THE AUTHORITY OF A CHAT TURN. The call names a live local turn
+        (`execution_id`: started by this caller in this project, not
+        committed, not past its deadline, local work allowed) and the agent
+        version the desktop is running in it (`application_id`,
+        `version_id`): the turn's agent, or a nested agent that agent reaches
+        through its `application` tools. The server resolves that version with
+        the same freeze a cloud turn uses and runs the tool only when the
+        toolkit is one of the version's tools and `tool_name` is in its
+        `selected_tools` (empty means every tool, as in chat), the guardrails
+        block neither, and `toolkit_ref` is the one resolveApplicationVersion
+        gives that toolkit of that version. A model turn (no agent) can call
+        no toolkit. A tool the guardrails mark sensitive answers 409
+        `confirmation_required` with `hitl_interrupt` (the chat HITL shape,
+        `guardrail_type: sensitive_tool`) until the call carries a
+        `confirmation` echoing that interrupt's `interrupt_id`, which approves
+        this call only (these arguments, this tool, this turn) and only once;
+        the desktop asks the user as a cloud turn would pause.
+        Every call that names a tool is audited (caller, project, toolkit,
+        tool, turn, confirmation, outcome, a SHA-256 of the arguments).
+
+        RATE. At most 60 admitted runs a minute per caller on each server
+        replica; past that, 429 `rate_limited` with Retry-After. Only a call
+        that admits a new run counts: a refused or invalid call, and a retry
+        whose Idempotency-Key already admitted its run, cost nothing.
+
+        BOUNDS. The body is at most 1 MiB and `arguments` one JSON object
+        within the input-entry bound. The call waits at most 60 seconds;
+        past that it answers 504 with the still-running `task_id`.
+
+        IDEMPOTENCY. `Idempotency-Key` is REQUIRED (400
+        `idempotency_key_required` without it): one key per intended call,
+        repeated on every retry of it, scoped to the caller and the toolkit.
+        A retry with the same key and body never runs the tool again: it
+        answers the run's result once it has one, or 409
+        `remote_toolkit_in_progress` (with `task_id`) while the run the first
+        attempt admitted is still going. After a 504, replay with the SAME
+        key; a new key is a new call. The same key with a different body is
+        409 `idempotency_conflict`.
+
+        A TOOL THE WORKER CANNOT RUN answers 422 `remote_tool_unsupported`
+        with a reason, never a hang: a toolkit type or tool this deployment's
+        worker does not support is refused before anything runs, and a tool
+        the worker refuses (the Rust worker runs only read-only, non-sensitive
+        tools in this path) answers `reason: worker_refused`. A deployment
+        with no toolkit worker answers 501 `remote_toolkit_unavailable`.
+      tags: [toolkits, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128, pattern: '^[A-Za-z0-9_-]+$' }
+          description: One key per intended call, repeated on every retry; a retry never runs the tool twice.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemoteToolkitCallRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: >-
+            The run reached the tool: `ok` true with `result` (or `truncated`),
+            or `ok` false with `status: tool_error` and the tool's `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteToolkitCallResult'
+        '400':
+          description: >-
+            A malformed body, a missing `tool_name` or non-object `arguments`
+            (`invalid_remote_toolkit_call`), no valid `Idempotency-Key`
+            (`idempotency_key_required`), or an `X-Client-Version` that does
+            not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/DesktopOperationError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: >-
+            No `models.applications.tool.execute` in the project, a session
+            caller (`remote_toolkit_requires_token`), local work turned off
+            (`local_work_disabled`), a tool the running agent may not call
+            (`tool_not_in_agent`), a blocked toolkit or tool (`tool_blocked`),
+            or a `toolkit_ref` that does not name this toolkit of this version
+            (`toolkit_ref_mismatch`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '404':
+          description: >-
+            The toolkit is not visible in this project (`toolkit_not_found`),
+            or the turn is not this caller's in this project
+            (`local_turn_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '409':
+          description: >-
+            The tool needs the user to authorise (`mcp_authorization_required`,
+            with `authorization_required`), a sensitive tool needs the user's
+            confirmation (`confirmation_required`, with `hitl_interrupt`), the
+            turn is already committed (`local_turn_already_committed`), the
+            run this Idempotency-Key admitted is still going
+            (`remote_toolkit_in_progress`, with `task_id`), or the
+            Idempotency-Key belongs to another input (`idempotency_conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteToolkitCallResult'
+        '410':
+          description: The turn passed its deadline (`local_turn_expired`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '413':
+          description: The body is larger than 1 MiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '422':
+          description: >-
+            The worker cannot run this toolkit or tool
+            (`remote_tool_unsupported`, with `reason`), or the named version
+            cannot be resolved for execution (`application_version_unresolvable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteToolkitCallResult'
+        '429':
+          description: Too many calls from this caller (`rate_limited`); retry after Retry-After.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: This deployment runs no toolkit worker or no cloud agents (`remote_toolkit_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '502':
+          description: The worker failed the run (`remote_toolkit_failed`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteToolkitCallResult'
+        '503':
+          description: The turn, the version or the toolkit's settings could not be read right now (`remote_toolkit_unavailable_now`); retry.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '504':
+          description: >-
+            The bounded wait passed (`remote_toolkit_timeout`); the run
+            continues under `task_id`. Replay with the same Idempotency-Key and
+            body for its result.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteToolkitCallResult'
+
   /elitea_core/task/prompt_lib/{project_id}/{response_message_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
@@ -16392,6 +17726,118 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /elitea_core/task/prompt_lib/{project_id}/{response_message_id}/interrupts:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: response_message_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The running answer whose open interrupts are listed (its `uid`).
+    get:
+      operationId: listExecutionInterrupts
+      summary: List the open human-in-the-loop interrupts of a running answer
+      description: |
+        Wave 1 per-interrupt HITL API. Registered only when
+        `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true` (it requires
+        agent execution dispatch); otherwise the path answers 404.
+
+        Lists the PENDING and DECIDED (not yet consumed) interrupt cards of
+        one response, at most 16. `decision_revision` is the response-level
+        counter that advances with every recorded decision.
+
+        Permission `models.applications.task.get`. Ownership and project
+        membership are rechecked inside the read transaction, so a stale
+        permission snapshot cannot disclose another user's cards; a response
+        that is not the caller's, or does not exist, answers 404.
+      tags: [chat]
+      responses:
+        '200':
+          description: The open interrupts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionInterruptList'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: >-
+            `agent_interrupt_not_found`: the response does not exist or is not
+            the caller's.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionInterruptError'
+
+  /elitea_core/task/prompt_lib/{project_id}/{response_message_id}/interrupts/{interrupt_key}/decision:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: response_message_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The running answer that raised the interrupt (its `uid`).
+      - name: interrupt_key
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[0-9a-f]{64}$' }
+        description: The opaque `card.interrupt_key` from the list.
+    post:
+      operationId: decideExecutionInterrupt
+      summary: Record the decision for one interrupt
+      description: |
+        Wave 1 per-interrupt HITL API. Registered only when
+        `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true` (it requires
+        agent execution dispatch); otherwise the path answers 404.
+
+        Records one decision for one interrupt, idempotent on `request_id`:
+        the same id with the same bytes answers 200 with `replay: true`. Any
+        other conflict, including a stale `expected_revision` or an interrupt
+        that was already answered, is 409 `agent_interrupt_already_resolved`.
+        A decision whose action or value does not fit the card answers 400
+        `agent_interrupt_invalid_decision`. The canonical body is at most
+        8192 bytes and carries no secrets; delegated auth passes a
+        token-store reference in `credential_ref`.
+
+        Permission `models.chat.messages.create`. Ownership and project
+        membership are rechecked inside the write transaction.
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionInterruptDecisionRequest'
+      responses:
+        '200':
+          description: The decision was recorded, or the same request was replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionInterruptDecisionResult'
+        '400':
+          description: '`agent_interrupt_invalid_decision`: the body or the action/value pair is not valid for this interrupt.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionInterruptError'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: '`agent_interrupt_not_found`: no such interrupt for this caller.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionInterruptError'
+        '409':
+          description: >-
+            `agent_interrupt_already_resolved`: the interrupt was already
+            answered, or `expected_revision` is stale.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionInterruptError'
+
   /elitea_core/regenerate/prompt_lib/{project_id}/{message_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'

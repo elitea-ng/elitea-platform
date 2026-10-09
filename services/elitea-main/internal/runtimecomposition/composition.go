@@ -516,6 +516,7 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	var agentStart *agentexecutionapp.CurrentApplicationStartService
 	var nodeRecovery *recoveryapp.Service
 	var nodeRecoveryStore *repos.NodeRecoveryRepository
+	var executionInterrupts *repos.ExecutionInterruptRepository
 	recoveryOwners := &repos.RecoveryEffectOwners{HTTP: repos.NewHTTPActionRecoveryProofProvider()}
 	var originalCodeIntents *repos.CodeIntentRepository
 	codeSources, codeDefinitions, err := configureCodeSourceCapture(config, dependencies)
@@ -612,6 +613,12 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 		nodeRecovery, recoveryErr = recoveryapp.New(nodeRecoveryStore)
 		if recoveryErr != nil {
 			return nil, recoveryErr
+		}
+		if config.ExecutionInterruptsAPIEnabled {
+			executionInterrupts, recoveryErr = repos.NewExecutionInterruptRepository(dependencies.AdmissionPool)
+			if recoveryErr != nil {
+				return nil, fmt.Errorf("construct execution interrupt repository: %w", recoveryErr)
+			}
 		}
 		agentCancellation, cancelErr := repos.NewCurrentAgentCancelRepository(dependencies.AdmissionPool)
 		if cancelErr != nil {
@@ -1380,6 +1387,17 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 			return nil, fmt.Errorf("construct nested application version context: %w", err)
 		}
 	}
+	// The desktop's resolved definition (ADR-0029 decision 5a): the same
+	// reader and the same freezer instance as the nested child above, and no
+	// materializer at all.
+	var clientApplicationVersions *storage.ClientApplicationVersionService
+	if config.AgentExecutionDispatchEnabled {
+		clientApplicationVersions, err = composeClientApplicationVersions(
+			dependencies.AdmissionPool, agentNestedVersions, agentFreezer)
+		if err != nil {
+			return nil, fmt.Errorf("construct client application version service: %w", err)
+		}
+	}
 	if nestedApplicationVersions != nil && codeSources != nil {
 		nestedApplicationVersions.WithFrozenSavedChildVersionCapture(codeSources)
 	}
@@ -1998,6 +2016,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	if nodeRecovery != nil {
 		publicRoutes.NodeRecovery = nodeRecovery
 	}
+	if executionInterrupts != nil {
+		publicRoutes.ExecutionInterrupts = executionInterrupts
+	}
 	if agentCancel != nil {
 		publicRoutes.AgentCancel = agentCancel
 	}
@@ -2006,6 +2027,9 @@ func New(ctx context.Context, config Config, dependencies Dependencies) (*Runtim
 	}
 	if agentTaskStatus != nil {
 		publicRoutes.AgentTaskStatus = agentTaskStatus
+	}
+	if clientApplicationVersions != nil {
+		publicRoutes.ClientApplicationVersions = clientApplicationVersions
 	}
 
 	closeNATS = false

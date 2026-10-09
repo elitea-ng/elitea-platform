@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.runtime.http-action-rule.v1",
+  "title": "HTTP action rule",
+  "description": "Project-scoped rule authored by project admins (permission name is a Wave 2 proposal). The project id comes from the route, not the body.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "name",
+    "origin",
+    "path_template",
+    "method",
+    "query_names",
+    "configuration_id",
+    "toolkit",
+    "tool",
+    "enabled"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "elitea.runtime.http-action-rule.v1"
+    },
+    "name": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)*$"
+    },
+    "origin": {
+      "type": "string",
+      "maxLength": 262,
+      "minLength": 9,
+      "pattern": "^https://[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(:[0-9]{1,5})?$"
+    },
+    "path_template": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^(/([A-Za-z0-9._~-]+|\\{[a-z][a-z0-9_]{0,63}\\}))+$|^/$",
+      "not": {
+        "pattern": "(^|/)\\.{1,2}(/|$)"
+      }
+    },
+    "method": {
+      "enum": [
+        "GET",
+        "HEAD",
+        "OPTIONS",
+        "POST",
+        "PUT",
+        "PATCH",
+        "DELETE"
+      ]
+    },
+    "query_names": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9_.~-]{1,64}$"
+      }
+    },
+    "configuration_id": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 2147483647
+    },
+    "toolkit": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+    },
+    "tool": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_.:-]{1,128}$"
+    },
+    "output_bucket": {
+      "type": "string",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9._-]{1,128}$"
+    },
+    "enabled": {
+      "type": "boolean"
+    }
+  }
+}

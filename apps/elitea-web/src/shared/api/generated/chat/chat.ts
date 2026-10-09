@@ -75,6 +75,10 @@ import type {
   CreateSupportConversationBody,
   CreatedConversation,
   ErrorResponse,
+  ExecutionInterruptDecisionRequest,
+  ExecutionInterruptDecisionResult,
+  ExecutionInterruptError,
+  ExecutionInterruptList,
   ExportConversationParams,
   GetConversationParams,
   GetMessageTraceParams,
@@ -86,6 +90,11 @@ import type {
   ListMessageTracesParams,
   ListParticipantCandidatesParams,
   ListSupportConversationsParams,
+  LocalTurnCommitRequest,
+  LocalTurnCommitted,
+  LocalTurnError,
+  LocalTurnStartRequest,
+  LocalTurnStarted,
   MemoryEntry,
   MemoryEntryList,
   MemoryEntryWriteRequest,
@@ -5240,6 +5249,737 @@ export function useSendChatMessage<
   return withQueryKey(query, queryOptions.queryKey);
 }
 
+export type startLocalTurnResponse200 = {
+  data: LocalTurnStarted;
+  status: 200;
+};
+
+export type startLocalTurnResponse400 = {
+  data: LocalTurnError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type startLocalTurnResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type startLocalTurnResponse403 = {
+  data: LocalTurnError;
+  status: 403;
+};
+
+export type startLocalTurnResponse404 = {
+  data: LocalTurnError;
+  status: 404;
+};
+
+export type startLocalTurnResponse409 = {
+  data: LocalTurnError;
+  status: 409;
+};
+
+export type startLocalTurnResponse410 = {
+  data: LocalTurnError;
+  status: 410;
+};
+
+export type startLocalTurnResponse413 = {
+  data: LocalTurnError;
+  status: 413;
+};
+
+export type startLocalTurnResponse415 = {
+  data: LocalTurnError;
+  status: 415;
+};
+
+export type startLocalTurnResponse422 = {
+  data: LocalTurnError;
+  status: 422;
+};
+
+export type startLocalTurnResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type startLocalTurnResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type startLocalTurnResponse503 = {
+  data: LocalTurnError;
+  status: 503;
+};
+
+export type startLocalTurnResponseSuccess = startLocalTurnResponse200 & {
+  headers: Headers;
+};
+export type startLocalTurnResponseError = (
+  | startLocalTurnResponse400
+  | startLocalTurnResponse401
+  | startLocalTurnResponse403
+  | startLocalTurnResponse404
+  | startLocalTurnResponse409
+  | startLocalTurnResponse410
+  | startLocalTurnResponse413
+  | startLocalTurnResponse415
+  | startLocalTurnResponse422
+  | startLocalTurnResponse426
+  | startLocalTurnResponse500
+  | startLocalTurnResponse503
+) & {
+  headers: Headers;
+};
+
+export type startLocalTurnResponse =
+  startLocalTurnResponseSuccess | startLocalTurnResponseError;
+
+export const getStartLocalTurnUrl = (
+  projectId: string,
+  conversationId: string,
+) => {
+  return `/elitea_core/local_turn/prompt_lib/${projectId}/${conversationId}`;
+};
+
+/**
+ * Client contract 1.5 (ADR-0029 decision 5c). Opens the execution of
+ * one desktop local turn in this conversation and answers its id and
+ * the turn's memory recall. Nothing is written to the conversation
+ * until commitLocalTurn.
+ *
+ * WHO. Only a native access token or a personal access token; a browser
+ * session answers 403 `local_turn_requires_token`. The caller needs
+ * `models.chat.messages.create` in the project and must be a member
+ * participant of the conversation.
+ *
+ * POLICY. While the native client policy's `local_work.allowed` is
+ * false the start answers 403 `local_work_disabled`.
+ *
+ * THE EXECUTION. Send its `execution_id` as `X-Elitea-Execution-Id` on
+ * every `/llm` call of the turn: the edge keeps it for this caller
+ * while the turn is live, so usage is attributed to the turn. A turn
+ * that is not committed by `expires_at` (24 hours) expires like an
+ * abandoned cloud run; its commit then answers 410.
+ *
+ * MEMORY RECALL. `memory_recall` is computed on every call, by the
+ * resolver a cloud turn's admission uses, from the primary database.
+ * Append `memory_recall.text`, when not empty, to the agent's
+ * instructions after one blank line, as a cloud turn does. Never cache
+ * or reuse it for another turn.
+ *
+ * IDEMPOTENCY. `question_id` is the idempotency key: a retried start
+ * with the same `question_id` answers the same execution with
+ * `created: false` and a fresh recall. The same `question_id` in another
+ * conversation, or for another participant, answers 409; after the
+ * commit, 409 `local_turn_already_committed`.
+ * @summary Start an agent turn that runs on the caller's machine
+ */
+export const startLocalTurn = async (
+  projectId: string,
+  conversationId: string,
+  localTurnStartRequest: LocalTurnStartRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<startLocalTurnResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<startLocalTurnResponse>(
+    getStartLocalTurnUrl(projectId, conversationId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(localTurnStartRequest),
+    },
+  );
+};
+
+export const getStartLocalTurnQueryKey = (
+  projectId: string,
+  conversationId: string,
+  localTurnStartRequest?: LocalTurnStartRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/local_turn/prompt_lib/${projectId}/${conversationId}`,
+    localTurnStartRequest,
+  ] as const;
+};
+
+export const getStartLocalTurnQueryOptions = <
+  TData = Awaited<ReturnType<typeof startLocalTurn>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  localTurnStartRequest: LocalTurnStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof startLocalTurn>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getStartLocalTurnQueryKey(projectId, conversationId, localTurnStartRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof startLocalTurn>>> = ({
+    signal,
+  }) =>
+    startLocalTurn(projectId, conversationId, localTurnStartRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      conversationId !== null &&
+      conversationId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof startLocalTurn>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type StartLocalTurnQueryResult = NonNullable<
+  Awaited<ReturnType<typeof startLocalTurn>>
+>;
+export type StartLocalTurnQueryError =
+  | LocalTurnError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useStartLocalTurn<
+  TData = Awaited<ReturnType<typeof startLocalTurn>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  localTurnStartRequest: LocalTurnStartRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof startLocalTurn>>, TError, TData>
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof startLocalTurn>>,
+          TError,
+          Awaited<ReturnType<typeof startLocalTurn>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStartLocalTurn<
+  TData = Awaited<ReturnType<typeof startLocalTurn>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  localTurnStartRequest: LocalTurnStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof startLocalTurn>>, TError, TData>
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof startLocalTurn>>,
+          TError,
+          Awaited<ReturnType<typeof startLocalTurn>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useStartLocalTurn<
+  TData = Awaited<ReturnType<typeof startLocalTurn>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  localTurnStartRequest: LocalTurnStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof startLocalTurn>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Start an agent turn that runs on the caller's machine
+ */
+
+export function useStartLocalTurn<
+  TData = Awaited<ReturnType<typeof startLocalTurn>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  conversationId: string,
+  localTurnStartRequest: LocalTurnStartRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<Awaited<ReturnType<typeof startLocalTurn>>, TError, TData>
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getStartLocalTurnQueryOptions(
+    projectId,
+    conversationId,
+    localTurnStartRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type commitLocalTurnResponse200 = {
+  data: LocalTurnCommitted;
+  status: 200;
+};
+
+export type commitLocalTurnResponse400 = {
+  data: LocalTurnError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type commitLocalTurnResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type commitLocalTurnResponse403 = {
+  data: LocalTurnError;
+  status: 403;
+};
+
+export type commitLocalTurnResponse404 = {
+  data: LocalTurnError;
+  status: 404;
+};
+
+export type commitLocalTurnResponse409 = {
+  data: LocalTurnError;
+  status: 409;
+};
+
+export type commitLocalTurnResponse410 = {
+  data: LocalTurnError;
+  status: 410;
+};
+
+export type commitLocalTurnResponse413 = {
+  data: LocalTurnError;
+  status: 413;
+};
+
+export type commitLocalTurnResponse415 = {
+  data: LocalTurnError;
+  status: 415;
+};
+
+export type commitLocalTurnResponse422 = {
+  data: LocalTurnError;
+  status: 422;
+};
+
+export type commitLocalTurnResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type commitLocalTurnResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type commitLocalTurnResponseSuccess = commitLocalTurnResponse200 & {
+  headers: Headers;
+};
+export type commitLocalTurnResponseError = (
+  | commitLocalTurnResponse400
+  | commitLocalTurnResponse401
+  | commitLocalTurnResponse403
+  | commitLocalTurnResponse404
+  | commitLocalTurnResponse409
+  | commitLocalTurnResponse410
+  | commitLocalTurnResponse413
+  | commitLocalTurnResponse415
+  | commitLocalTurnResponse422
+  | commitLocalTurnResponse426
+  | commitLocalTurnResponse500
+) & {
+  headers: Headers;
+};
+
+export type commitLocalTurnResponse =
+  commitLocalTurnResponseSuccess | commitLocalTurnResponseError;
+
+export const getCommitLocalTurnUrl = (
+  projectId: string,
+  executionId: string,
+) => {
+  return `/elitea_core/local_turn_commit/prompt_lib/${projectId}/${executionId}`;
+};
+
+/**
+ * Client contract 1.5 (ADR-0029 decision 5c). Appends the turn to the
+ * conversation through the same chat and trace tables a cloud turn
+ * writes: the question (its message uuid is the start's `question_id`),
+ * the answer (`response_message_id`), the tool and thinking steps
+ * (listMessageTraces) and the resolved HITL exchanges. Both messages
+ * carry `executed_by: desktop` in their metadata, and the answer carries
+ * `memories_used` (the start's recall count), `hitl_exchanges`,
+ * `resolved_hitl_interrupt_ids` and the bounded `local_work` report.
+ * Other clients receive both messages in the conversation's
+ * `changes_since` delta (listConversationMessages).
+ *
+ * The audit trail records a summary of the commands and paths in
+ * `local_work`. The server cannot verify what happened on the device:
+ * the record is what the client reported. Longer entries are cut and
+ * entries past the bounds are dropped; the totals keep the reported
+ * counts.
+ *
+ * IDEMPOTENCY. Keyed on the execution: a retried commit with the same
+ * body answers 200 with `created: false`; a different body answers 409
+ * `local_turn_already_committed`. Only the user who started the turn
+ * may commit it (404 otherwise); a turn past its deadline answers 410.
+ * @summary Record a finished local turn in the conversation
+ */
+export const commitLocalTurn = async (
+  projectId: string,
+  executionId: string,
+  localTurnCommitRequest: LocalTurnCommitRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<commitLocalTurnResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<commitLocalTurnResponse>(
+    getCommitLocalTurnUrl(projectId, executionId),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(localTurnCommitRequest),
+    },
+  );
+};
+
+export const getCommitLocalTurnQueryKey = (
+  projectId: string,
+  executionId: string,
+  localTurnCommitRequest?: LocalTurnCommitRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/local_turn_commit/prompt_lib/${projectId}/${executionId}`,
+    localTurnCommitRequest,
+  ] as const;
+};
+
+export const getCommitLocalTurnQueryOptions = <
+  TData = Awaited<ReturnType<typeof commitLocalTurn>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnCommitRequest: LocalTurnCommitRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof commitLocalTurn>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getCommitLocalTurnQueryKey(projectId, executionId, localTurnCommitRequest);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof commitLocalTurn>>> = ({
+    signal,
+  }) =>
+    commitLocalTurn(projectId, executionId, localTurnCommitRequest, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      executionId !== null &&
+      executionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof commitLocalTurn>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type CommitLocalTurnQueryResult = NonNullable<
+  Awaited<ReturnType<typeof commitLocalTurn>>
+>;
+export type CommitLocalTurnQueryError =
+  | LocalTurnError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useCommitLocalTurn<
+  TData = Awaited<ReturnType<typeof commitLocalTurn>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnCommitRequest: LocalTurnCommitRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof commitLocalTurn>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof commitLocalTurn>>,
+          TError,
+          Awaited<ReturnType<typeof commitLocalTurn>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCommitLocalTurn<
+  TData = Awaited<ReturnType<typeof commitLocalTurn>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnCommitRequest: LocalTurnCommitRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof commitLocalTurn>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof commitLocalTurn>>,
+          TError,
+          Awaited<ReturnType<typeof commitLocalTurn>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useCommitLocalTurn<
+  TData = Awaited<ReturnType<typeof commitLocalTurn>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnCommitRequest: LocalTurnCommitRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof commitLocalTurn>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Record a finished local turn in the conversation
+ */
+
+export function useCommitLocalTurn<
+  TData = Awaited<ReturnType<typeof commitLocalTurn>>,
+  TError =
+    | LocalTurnError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  executionId: string,
+  localTurnCommitRequest: LocalTurnCommitRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof commitLocalTurn>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getCommitLocalTurnQueryOptions(
+    projectId,
+    executionId,
+    localTurnCommitRequest,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
 export type cancelChatExecutionResponse204 = {
   data: void;
   status: 204;
@@ -5520,6 +6260,571 @@ export function useCancelChatExecution<
   const queryOptions = getCancelChatExecutionQueryOptions(
     projectId,
     responseMessageId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type listExecutionInterruptsResponse200 = {
+  data: ExecutionInterruptList;
+  status: 200;
+};
+
+export type listExecutionInterruptsResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type listExecutionInterruptsResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type listExecutionInterruptsResponse404 = {
+  data: ExecutionInterruptError;
+  status: 404;
+};
+
+export type listExecutionInterruptsResponseSuccess =
+  listExecutionInterruptsResponse200 & {
+    headers: Headers;
+  };
+export type listExecutionInterruptsResponseError = (
+  | listExecutionInterruptsResponse401
+  | listExecutionInterruptsResponse403
+  | listExecutionInterruptsResponse404
+) & {
+  headers: Headers;
+};
+
+export type listExecutionInterruptsResponse =
+  listExecutionInterruptsResponseSuccess | listExecutionInterruptsResponseError;
+
+export const getListExecutionInterruptsUrl = (
+  projectId: string,
+  responseMessageId: string,
+) => {
+  return `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/interrupts`;
+};
+
+/**
+ * Wave 1 per-interrupt HITL API. Registered only when
+ * `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true` (it requires
+ * agent execution dispatch); otherwise the path answers 404.
+ *
+ * Lists the PENDING and DECIDED (not yet consumed) interrupt cards of
+ * one response, at most 16. `decision_revision` is the response-level
+ * counter that advances with every recorded decision.
+ *
+ * Permission `models.applications.task.get`. Ownership and project
+ * membership are rechecked inside the read transaction, so a stale
+ * permission snapshot cannot disclose another user's cards; a response
+ * that is not the caller's, or does not exist, answers 404.
+ * @summary List the open human-in-the-loop interrupts of a running answer
+ */
+export const listExecutionInterrupts = async (
+  projectId: string,
+  responseMessageId: string,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<listExecutionInterruptsResponse> => {
+  return eliteaFetch<listExecutionInterruptsResponse>(
+    getListExecutionInterruptsUrl(projectId, responseMessageId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListExecutionInterruptsQueryKey = (
+  projectId: string,
+  responseMessageId: string,
+) => {
+  return [
+    `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/interrupts`,
+  ] as const;
+};
+
+export const getListExecutionInterruptsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listExecutionInterrupts>>,
+  TError = N401Response | N403Response | ExecutionInterruptError,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionInterrupts>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getListExecutionInterruptsQueryKey(projectId, responseMessageId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listExecutionInterrupts>>
+  > = ({ signal }) =>
+    listExecutionInterrupts(projectId, responseMessageId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      responseMessageId !== null &&
+      responseMessageId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof listExecutionInterrupts>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListExecutionInterruptsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listExecutionInterrupts>>
+>;
+export type ListExecutionInterruptsQueryError =
+  N401Response | N403Response | ExecutionInterruptError;
+
+export function useListExecutionInterrupts<
+  TData = Awaited<ReturnType<typeof listExecutionInterrupts>>,
+  TError = N401Response | N403Response | ExecutionInterruptError,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionInterrupts>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExecutionInterrupts>>,
+          TError,
+          Awaited<ReturnType<typeof listExecutionInterrupts>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListExecutionInterrupts<
+  TData = Awaited<ReturnType<typeof listExecutionInterrupts>>,
+  TError = N401Response | N403Response | ExecutionInterruptError,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionInterrupts>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof listExecutionInterrupts>>,
+          TError,
+          Awaited<ReturnType<typeof listExecutionInterrupts>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useListExecutionInterrupts<
+  TData = Awaited<ReturnType<typeof listExecutionInterrupts>>,
+  TError = N401Response | N403Response | ExecutionInterruptError,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionInterrupts>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary List the open human-in-the-loop interrupts of a running answer
+ */
+
+export function useListExecutionInterrupts<
+  TData = Awaited<ReturnType<typeof listExecutionInterrupts>>,
+  TError = N401Response | N403Response | ExecutionInterruptError,
+>(
+  projectId: string,
+  responseMessageId: string,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof listExecutionInterrupts>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getListExecutionInterruptsQueryOptions(
+    projectId,
+    responseMessageId,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type decideExecutionInterruptResponse200 = {
+  data: ExecutionInterruptDecisionResult;
+  status: 200;
+};
+
+export type decideExecutionInterruptResponse400 = {
+  data: ExecutionInterruptError;
+  status: 400;
+};
+
+export type decideExecutionInterruptResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type decideExecutionInterruptResponse403 = {
+  data: N403Response;
+  status: 403;
+};
+
+export type decideExecutionInterruptResponse404 = {
+  data: ExecutionInterruptError;
+  status: 404;
+};
+
+export type decideExecutionInterruptResponse409 = {
+  data: ExecutionInterruptError;
+  status: 409;
+};
+
+export type decideExecutionInterruptResponseSuccess =
+  decideExecutionInterruptResponse200 & {
+    headers: Headers;
+  };
+export type decideExecutionInterruptResponseError = (
+  | decideExecutionInterruptResponse400
+  | decideExecutionInterruptResponse401
+  | decideExecutionInterruptResponse403
+  | decideExecutionInterruptResponse404
+  | decideExecutionInterruptResponse409
+) & {
+  headers: Headers;
+};
+
+export type decideExecutionInterruptResponse =
+  | decideExecutionInterruptResponseSuccess
+  | decideExecutionInterruptResponseError;
+
+export const getDecideExecutionInterruptUrl = (
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+) => {
+  return `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/interrupts/${interruptKey}/decision`;
+};
+
+/**
+ * Wave 1 per-interrupt HITL API. Registered only when
+ * `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true` (it requires
+ * agent execution dispatch); otherwise the path answers 404.
+ *
+ * Records one decision for one interrupt, idempotent on `request_id`:
+ * the same id with the same bytes answers 200 with `replay: true`. Any
+ * other conflict, including a stale `expected_revision` or an interrupt
+ * that was already answered, is 409 `agent_interrupt_already_resolved`.
+ * A decision whose action or value does not fit the card answers 400
+ * `agent_interrupt_invalid_decision`. The canonical body is at most
+ * 8192 bytes and carries no secrets; delegated auth passes a
+ * token-store reference in `credential_ref`.
+ *
+ * Permission `models.chat.messages.create`. Ownership and project
+ * membership are rechecked inside the write transaction.
+ * @summary Record the decision for one interrupt
+ */
+export const decideExecutionInterrupt = async (
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest: ExecutionInterruptDecisionRequest,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<decideExecutionInterruptResponse> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<
+      string | readonly string[] | undefined
+    >(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return eliteaFetch<decideExecutionInterruptResponse>(
+    getDecideExecutionInterruptUrl(projectId, responseMessageId, interruptKey),
+    {
+      ...options,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...getHeaders(options?.headers),
+      },
+      body: JSON.stringify(executionInterruptDecisionRequest),
+    },
+  );
+};
+
+export const getDecideExecutionInterruptQueryKey = (
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest?: ExecutionInterruptDecisionRequest,
+) => {
+  return [
+    "POST",
+    `/elitea_core/task/prompt_lib/${projectId}/${responseMessageId}/interrupts/${interruptKey}/decision`,
+    executionInterruptDecisionRequest,
+  ] as const;
+};
+
+export const getDecideExecutionInterruptQueryOptions = <
+  TData = Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+  TError = ExecutionInterruptError | N401Response | N403Response,
+>(
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest: ExecutionInterruptDecisionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getDecideExecutionInterruptQueryKey(
+      projectId,
+      responseMessageId,
+      interruptKey,
+      executionInterruptDecisionRequest,
+    );
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof decideExecutionInterrupt>>
+  > = ({ signal }) =>
+    decideExecutionInterrupt(
+      projectId,
+      responseMessageId,
+      interruptKey,
+      executionInterruptDecisionRequest,
+      { signal, ...requestOptions },
+    );
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      responseMessageId !== null &&
+      responseMessageId !== undefined &&
+      interruptKey !== null &&
+      interruptKey !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type DecideExecutionInterruptQueryResult = NonNullable<
+  Awaited<ReturnType<typeof decideExecutionInterrupt>>
+>;
+export type DecideExecutionInterruptQueryError =
+  ExecutionInterruptError | N401Response | N403Response;
+
+export function useDecideExecutionInterrupt<
+  TData = Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+  TError = ExecutionInterruptError | N401Response | N403Response,
+>(
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest: ExecutionInterruptDecisionRequest,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+          TError,
+          Awaited<ReturnType<typeof decideExecutionInterrupt>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDecideExecutionInterrupt<
+  TData = Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+  TError = ExecutionInterruptError | N401Response | N403Response,
+>(
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest: ExecutionInterruptDecisionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+          TError,
+          Awaited<ReturnType<typeof decideExecutionInterrupt>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useDecideExecutionInterrupt<
+  TData = Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+  TError = ExecutionInterruptError | N401Response | N403Response,
+>(
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest: ExecutionInterruptDecisionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary Record the decision for one interrupt
+ */
+
+export function useDecideExecutionInterrupt<
+  TData = Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+  TError = ExecutionInterruptError | N401Response | N403Response,
+>(
+  projectId: string,
+  responseMessageId: string,
+  interruptKey: string,
+  executionInterruptDecisionRequest: ExecutionInterruptDecisionRequest,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof decideExecutionInterrupt>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getDecideExecutionInterruptQueryOptions(
+    projectId,
+    responseMessageId,
+    interruptKey,
+    executionInterruptDecisionRequest,
     options,
   );
 

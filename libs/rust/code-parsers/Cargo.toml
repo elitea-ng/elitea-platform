@@ -1,6 +1,6 @@
 [package]
 name = "elitea-code-parsers"
-description = "tree-sitter language parsers producing symbols and relationships, transcribed from the Python engines' parsers."
+description = "tree-sitter language parsers producing symbols and relationships: the Python engines' parsers transcribed, plus Kotlin and Swift visitors that keep the Inventory regex parsers' output model."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -30,8 +30,12 @@ tree-sitter-cpp = { git = "https://github.com/tree-sitter/tree-sitter-cpp", rev 
 tree-sitter-go = "=0.25.0"
 tree-sitter-java = "=0.23.5"
 tree-sitter-javascript = "=0.25.0"
+# Kotlin and Swift: tree-sitter visitors that keep the output model of the
+# Inventory engine's former regex parsers (src/kotlin, src/swift).
+tree-sitter-kotlin-ng = "=1.1.0"
 tree-sitter-python = "=0.25.0"
 tree-sitter-rust = "=0.24.2"
+tree-sitter-swift = "=0.7.4"
 tree-sitter-typescript = "=0.23.2"
 
 [lints]

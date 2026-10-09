@@ -310,12 +310,31 @@ impl crate::agents::graph::ParallelCheckpointAppender for TestAuthority {
 }
 #[async_trait]
 impl ParallelChildCheckpointerFactory for TestAuthority {
+    fn child_origin(
+        &self,
+        _: &ParallelActivation,
+    ) -> Result<crate::agents::graph::ParallelChildOrigin, GraphError> {
+        Err(GraphError::CheckpointError("test does not mint".into()))
+    }
+
+    fn branch_thread_id(
+        &self,
+        _: &ParallelActivation,
+        _: &crate::agents::graph::ParallelBranchDefinition,
+        _: usize,
+        _: &[u8; 32],
+        _: &crate::agents::graph::ParallelChildOrigin,
+    ) -> Result<String, GraphError> {
+        Err(GraphError::CheckpointError("test does not mint".into()))
+    }
+
     async fn for_branch(
         &self,
         _: &ParallelActivation,
         _: &crate::agents::graph::ParallelBranchDefinition,
         _: usize,
         _: &[u8; 32],
+        _: &crate::agents::graph::ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, GraphError> {
         Err(GraphError::CheckpointError("test does not mint".into()))
     }

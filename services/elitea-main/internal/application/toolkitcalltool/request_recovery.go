@@ -12,7 +12,11 @@ type ResultRequestReader interface {
 	FindToolkitCallToolExecution(context.Context, string, string) (string, error)
 }
 
-func validRequestKey(key string) bool {
+// ValidRequestKey reports whether key has the admission's request-key shape:
+// 1 to 128 ASCII letters, digits, '-' or '_'. The routes that take an
+// Idempotency-Key for a tool run check it with this, so they cannot accept a
+// key the admission would refuse.
+func ValidRequestKey(key string) bool {
 	if len(key) == 0 || len(key) > 128 {
 		return false
 	}

@@ -218,12 +218,33 @@ impl ParallelCheckpointAppender for ApplicationCheckpointers {
 
 #[async_trait]
 impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
+    fn child_origin(
+        &self,
+        activation: &ParallelActivation,
+    ) -> Result<crate::agents::graph::ParallelChildOrigin, GraphError> {
+        self.for_thread(&activation.root_thread_id)?
+            .child_origin(activation)
+    }
+
+    fn branch_thread_id(
+        &self,
+        activation: &ParallelActivation,
+        branch: &ParallelBranchDefinition,
+        ordinal: usize,
+        input_digest: &[u8; 32],
+        origin: &crate::agents::graph::ParallelChildOrigin,
+    ) -> Result<String, GraphError> {
+        self.for_thread(&activation.root_thread_id)?
+            .branch_thread_id(activation, branch, ordinal, input_digest, origin)
+    }
+
     async fn for_branch(
         &self,
         activation: &ParallelActivation,
         branch: &ParallelBranchDefinition,
         ordinal: usize,
         input_digest: &[u8; 32],
+        origin: &crate::agents::graph::ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, GraphError> {
         let parent = self.for_thread(&activation.root_thread_id)?;
         let paths = self
@@ -232,7 +253,7 @@ impl ParallelChildCheckpointerFactory for ApplicationCheckpointers {
         // The compiler admits the branch identity and frozen definition first.
         // The parent adapter adds its opaque claim scope to the hashed lineage.
         let child = parent
-            .activate_parallel_branch(activation, branch, ordinal, input_digest)
+            .activate_parallel_branch(activation, branch, ordinal, input_digest, origin)
             .await?;
         let thread_id = child.scope.authority.thread_id.clone();
         let child = child.with_application_paths(paths).await?;
@@ -336,18 +357,36 @@ impl crate::agents::graph::MapChildCheckpointerFactory for ApplicationCheckpoint
             root_thread,
         )
     }
+    fn item_thread_id(
+        &self,
+        activation: &crate::agents::graph::MapActivation,
+        item: &crate::agents::graph::FrozenMapItem,
+        worker: &str,
+        origin: &crate::agents::graph::MapExecutionIdentity,
+    ) -> Result<String, GraphError> {
+        crate::agents::graph::MapChildCheckpointerFactory::item_thread_id(
+            self.for_thread(&activation.root_thread_id)?,
+            activation,
+            item,
+            worker,
+            origin,
+        )
+    }
     async fn for_item(
         &self,
         activation: &crate::agents::graph::MapActivation,
         item: &crate::agents::graph::FrozenMapItem,
         worker: &str,
         kind: crate::agents::graph::MapWorkerKind,
+        origin: &crate::agents::graph::MapExecutionIdentity,
     ) -> Result<crate::agents::graph::MapChildCheckpoint, GraphError> {
         let parent = self.for_thread(&activation.root_thread_id)?;
         let paths = self
             .branch_paths
             .for_map_worker(&activation.root_thread_id, worker, kind)?;
-        let child = parent.activate_map_item(activation, item, worker).await?;
+        let child = parent
+            .activate_map_item(activation, item, worker, origin)
+            .await?;
         let thread_id = child.scope.authority.thread_id.clone();
         let child = child.with_application_paths(paths).await?;
         let admitted_threads = child.threads.keys().cloned().collect();

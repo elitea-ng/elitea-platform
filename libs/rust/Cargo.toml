@@ -15,7 +15,7 @@
 # service builds against.
 [workspace]
 resolver = "3"
-members = ["code-parsers", "engine-core", "engine-sidecar", "graph-algos", "model-client", "pg-migrate", "repo-ingest"]
+members = ["adk-gateway", "agent-runtime", "code-parsers", "content-source", "conversation", "doc-extract", "engine-core", "engine-sidecar", "graph-algos", "llm-wire", "local-tools", "model-client", "pg-migrate", "repo-ingest"]
 # Vendored crates are path dependencies, never members: their own tests,
 # benches and dev-dependencies are not built or resolved (vendor/README.md).
 exclude = ["vendor"]
@@ -25,6 +25,16 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.95"
 publish = false
+
+# The patched adk 2.2.0 crates (vendor/README.md), applied here exactly as in
+# services/elitea-worker-rust/Cargo.toml so elitea-agent-runtime's own tests
+# run the agent loop the worker ships. Every host that links the runtime
+# carries the same lines. `vendor/adk-sandbox` is patched only where the
+# worker's `sandbox-supervisor` links it: nothing here does, and Cargo warns
+# on an unused patch.
+[patch.crates-io]
+adk-agent = { path = "vendor/adk-agent" }
+adk-runner = { path = "vendor/adk-runner" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

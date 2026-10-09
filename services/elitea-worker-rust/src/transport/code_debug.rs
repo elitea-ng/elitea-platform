@@ -106,7 +106,7 @@ mod tests {
     async fn binary_request_keeps_exact_bytes_and_original_claim_headers() {
         let fence = [5_u8; 32];
         let binding = RuntimeContextRedemptionBinding {
-            execution_id: "execution/one",
+            execution_id: "execution-one",
             generation: 3,
             claim_id: "claim-1",
             fence_token: &fence,
@@ -117,7 +117,7 @@ mod tests {
         let request = debug_request(&binding, "admit", bytes.clone()).unwrap();
         assert_eq!(
             request.uri().path(),
-            "/executions/execution%2Fone/generations/3/code-debug/admit"
+            "/executions/execution-one/generations/3/code-debug/admit"
         );
         assert_eq!(request.headers()["x-elitea-claim-id"], "claim-1");
         assert_eq!(request.headers()[CONTENT_LENGTH], bytes.len().to_string());

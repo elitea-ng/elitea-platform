@@ -36,15 +36,22 @@ apps/elitea-web/tools/lint-rules/fixtures/knip/bad/package.json  knip lint-rule 
 apps/elitea-web/tools/lint-rules/fixtures/knip/good/package.json knip lint-rule fixture, same reason
 conformance/provider/pyproject.toml              test harness: a pytest runner and an HTTP client, shipping in no image, run in CI against a container someone else built
 services/elitea-worker-python/pyproject.toml    frozen runtime capability profile (elitea-sdk.lock.json verifies 80 + 6 distributions at build and at start); pins move by regenerating the profile, never by a scanner — see .github/dependabot.yml
-services/elitea-worker-rust/vendor/adk-agent/Cargo.toml patched ADK source: worker Cargo.lock scans its dependency closure; upstream revision and local patches move together
-services/elitea-worker-rust/vendor/adk-runner/Cargo.toml patched ADK source: worker Cargo.lock scans its dependency closure; upstream revision and local patches move together
-services/elitea-worker-rust/vendor/adk-sandbox/Cargo.toml patched ADK source: worker Cargo.lock scans its dependency closure; upstream revision and local patches move together
+libs/rust/vendor/adk-agent/Cargo.toml patched ADK 2.2.0 source (libs/rust/vendor/README.md), patched into the worker and the libs/rust workspace: their Cargo.lock files scan its dependency closure; upstream revision and local patches move together
+libs/rust/vendor/adk-runner/Cargo.toml patched ADK 2.2.0 source (libs/rust/vendor/README.md), patched into the worker and the libs/rust workspace: their Cargo.lock files scan its dependency closure; upstream revision and local patches move together
+libs/rust/vendor/adk-sandbox/Cargo.toml patched ADK 2.2.0 source (libs/rust/vendor/README.md), patched into the worker only (its optional sandbox-supervisor feature; the libs/rust workspace does not link it): the worker Cargo.lock scans its dependency closure; upstream revision and local patches move together
 libs/rust/vendor/leiden-rs/Cargo.toml vendored leiden-rs 0.8.1, the crates.io archive minus its Cargo.lock, pinned by digest (libs/rust/vendor/README.md): each consuming service Cargo.lock scans its dependency closure; it moves by re-vendoring, never one pin at a time
+libs/rust/adk-gateway/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/agent-runtime/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/code-parsers/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/engine-core/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/engine-sidecar/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/graph-algos/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/llm-wire/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/local-tools/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/model-client/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/content-source/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/conversation/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
+libs/rust/doc-extract/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/pg-migrate/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 libs/rust/repo-ingest/Cargo.toml member of the libs/rust workspace: the /libs/rust entry updates the workspace root, whose Cargo.lock holds the dependencies of every member
 scripts/runtime/fixtures/code-data-processing/Cargo.toml locked acceptance fixture: package versions are test inputs; runner and worker scan shipping dependencies

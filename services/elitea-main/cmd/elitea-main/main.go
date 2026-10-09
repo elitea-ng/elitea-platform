@@ -35,6 +35,7 @@ import (
 	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
@@ -1650,6 +1651,13 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// as "configured" downstream, and both consumers decide on `!= nil`.
 	var toolkitToolRun toolkitrun.UseCase
 	var toolkitDiscovery discovery.UseCase
+	// The desktop's resolved definition (ADR-0029 decision 5a), assigned only
+	// under the same guard so an absent agent plane leaves a NIL interface.
+	var clientApplicationVersions desktopopsapi.ResolvedVersionUseCase
+	// The remote toolkit call's authorizer: the SAME service, under the same
+	// guard, so an absent agent plane leaves a NIL interface and the route
+	// answers 501.
+	var remoteToolAuthorizer desktopopsapi.RemoteToolAuthorizer
 	var mcpToolkitRun v2mcp.ToolkitRunUseCase
 	// The unattended pipeline entry points (issues 192, 193).
 	//
@@ -1659,6 +1667,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// for the tick and the settings routes to disagree on a dependency.
 	var pipelineTriggers *v2pipelinetriggers.Handler
 	var currentNodeRecovery http.Handler
+	var currentExecutionInterrupts http.Handler
 	var currentAgentCancel http.Handler
 	var currentApplicationTask http.Handler
 	var currentIndexCancel http.Handler
@@ -1805,6 +1814,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Index ingestion can remain disabled for that deployment.
 		toolkitDiscovery = publicRoutes.ToolkitDiscovery
 		toolkitToolRun = publicRoutes.ToolkitCallTool
+		if publicRoutes.ClientApplicationVersions != nil {
+			clientApplicationVersions = publicRoutes.ClientApplicationVersions
+			remoteToolAuthorizer = publicRoutes.ClientApplicationVersions
+		}
 		mcpToolkitRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.IndexStart != nil {
 			if publicRoutes.ToolkitCallTool != nil {
@@ -1892,6 +1905,12 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		}
 		if publicRoutes.NodeRecovery != nil {
 			currentNodeRecovery, err = agentexecutionapi.NewCurrentNodeRecoveryRoute(publicRoutes.NodeRecovery, apiGroupAuth, legacyrbac.NewPostgresResolver(pool))
+			if err != nil {
+				return err
+			}
+		}
+		if publicRoutes.ExecutionInterrupts != nil {
+			currentExecutionInterrupts, err = agentexecutionapi.NewCurrentExecutionInterruptRoute(publicRoutes.ExecutionInterrupts, apiGroupAuth, legacyrbac.NewPostgresResolver(pool))
 			if err != nil {
 				return err
 			}
@@ -2034,6 +2053,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// BF0.9c: compose the mTLS streaming reverse proxy to elitea-llm-gateway-svc.
 	// Gated on LLM_GATEWAY_URL so the proxy is only enabled in deployments where
 	// the gateway service is reachable.
+	// The ONE native policy reader, built here because the /llm edge's
+	// execution verifier needs it too: it stops attributing an uncommitted
+	// local turn the moment `local_work.allowed` is turned off.
+	nativePolicy := native.policy(pool)
 	var gatewayProxy http.Handler
 	var gatewayProjectResolver apimw.PersonalProjectResolver
 	if gwURL := os.Getenv("LLM_GATEWAY_URL"); gwURL != "" {
@@ -2047,7 +2070,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 			// The analytics reads decide active users and run spend from
 			// the inbound execution id, so the edge keeps it only for a live
 			// execution of the caller.
-			ExecutionVerifier: dbrepos.NewExecutionAttributionVerifier(pool),
+			ExecutionVerifier: dbrepos.NewExecutionAttributionVerifier(pool).WithLocalWorkPolicy(nativePolicy),
 		})
 		if gwErr != nil {
 			return fmt.Errorf("compose llm gateway proxy: %w", gwErr)
@@ -2303,6 +2326,23 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		return fmt.Errorf("load SCIM caller-address settings: %w", err)
 	}
 
+	// One native policy reader for the router (discovery, token responses,
+	// the 426 gate, the admin save's invalidation) AND the local turn start,
+	// so a save that turns local work off is seen by both at once.
+	currentLocalTurns, err := composeLocalTurns(pool, nativePolicy, auditRecorder, apiGroupAuth, logger)
+	if err != nil {
+		return fmt.Errorf("compose local turn routes: %w", err)
+	}
+	currentResolvedVersion, err := composeResolvedVersion(pool, clientApplicationVersions, apiGroupAuth)
+	if err != nil {
+		return fmt.Errorf("compose resolved version route: %w", err)
+	}
+	currentRemoteToolkit, err := composeRemoteToolkit(pool, toolkitToolRun, remoteToolAuthorizer, workerImplementation,
+		nativePolicy, auditRecorder, apiGroupAuth, logger)
+	if err != nil {
+		return fmt.Errorf("compose remote toolkit route: %w", err)
+	}
+
 	r := api.NewRouter(api.RouterConfig{
 		AdminUI:                      adminUICfg,
 		Pool:                         pool,
@@ -2311,7 +2351,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		PublicOrigin:                 publicOrigin,
 		NativeClients:                native.registry,
 		NativeStore:                  native.store,
-		NativePolicy:                 native.policy(pool),
+		NativePolicy:                 nativePolicy,
 		NativeAccess:                 native.validator,
 		NativeSecureCookies:          os.Getenv("COOKIE_SECURE") != "false",
 		Mailer:                       mailComposer,
@@ -2378,7 +2418,11 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SCIMAccessTokenTTL:         scimAccessTokenTTL,
 		SCIMClientAddresses:        scimClientAddresses,
 		CurrentAgentCancel:         currentAgentCancel,
+		CurrentLocalTurns:          currentLocalTurns,
+		CurrentResolvedVersion:     currentResolvedVersion,
+		CurrentRemoteToolkit:       currentRemoteToolkit,
 		CurrentNodeRecovery:        currentNodeRecovery,
+		CurrentExecutionInterrupts: currentExecutionInterrupts,
 		CurrentApplicationTask:     currentApplicationTask,
 		CurrentIndexCancel:         currentIndexCancel,
 		CurrentIndexMeta:           currentIndexMeta,

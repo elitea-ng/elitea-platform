@@ -50,9 +50,15 @@ WORKDIR /src/services/elitea-deepwiki-engine
 COPY libs/rust /src/libs/rust
 COPY services/elitea-deepwiki-engine ./
 
+# /cargo-target is shared with every other build on the host, and cargo judges
+# a path crate fresh by mtime, so a context older than another checkout's build
+# would ship that build's binary. Touching /src under the lock recompiles the
+# engine and its libs/rust crates from this context while registry crates stay
+# cached (see the worker's Containerfile).
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/cargo-target \
+    --mount=type=cache,target=/cargo-target,sharing=locked \
+    find /src -type f -exec touch {} + && \
     CARGO_TARGET_DIR=/cargo-target cargo auditable build --locked --release && \
     cp /cargo-target/release/elitea-deepwiki-engine /usr/local/bin/elitea-deepwiki-engine
 

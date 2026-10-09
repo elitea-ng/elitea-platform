@@ -1,0 +1,32 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "id": "b1",
+      "name": "Lonely",
+      "type": "class",
+      "layer": "code"
+    }
+  ],
+  "links": [],
+  "_indices": {
+    "entity_index": {
+      "lonely": [
+        "b1"
+      ]
+    },
+    "type_index": {
+      "class": [
+        "b1"
+      ]
+    },
+    "file_index": {},
+    "source_doc_index": {}
+  },
+  "_metadata": {
+    "last_saved": "2026-10-07T00:00:00",
+    "version": "2.1"
+  }
+}

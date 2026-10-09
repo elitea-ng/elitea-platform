@@ -100,16 +100,21 @@ func (r *CurrentSocialPinsRepository) Pin(ctx context.Context, projectID, entity
 		return err
 	}
 	visible, identity := access.Predicate(schema, "c", 5, chatauthority.Detail)
-	// FOR SHARE OF c: the pin holds the conversation row until it commits.
+	// FOR NO KEY UPDATE OF c: the pin holds the conversation row until it commits.
 	// A plain read let a concurrent Delete remove the row and run its pin
 	// DELETE (which cannot see an uncommitted pin) between this INSERT and
 	// the commit, leaving a pin for a conversation that no longer exists.
 	// With the lock, a Delete that got there first makes this SELECT skip
 	// the gone row (404), and one that comes second waits for the pin and
-	// then removes it.
+	// then removes it. The lock is exclusive among pins on purpose: the
+	// transaction later UPDATEs the row (stampConversationPin), and two pins
+	// each holding FOR SHARE then both upgrading deadlock (HTTP 500). NO KEY
+	// is enough because Delete takes FOR UPDATE, which conflicts with it.
+	// Pin, Unpin and Delete all lock the conversation row before the pin
+	// row, so they queue on the conversation instead of deadlocking.
 	query := fmt.Sprintf(`INSERT INTO centry.social_pins (entity, project_id, entity_id, user_id, created_at, updated_at)
 	 SELECT $1, $2, $3, $4, NOW(), NOW() FROM %s.chat_conversations c
-	 WHERE c.id=$3 AND %s FOR SHARE OF c`, schema, visible) + upsert
+	 WHERE c.id=$3 AND %s FOR NO KEY UPDATE OF c`, schema, visible) + upsert
 	return pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
 		var inserted bool
 		if err := tx.QueryRow(ctx, query, append([]any{entity, project, id, actor}, identity...)...).Scan(&inserted); errors.Is(err, pgx.ErrNoRows) {
@@ -173,8 +178,12 @@ func (r *CurrentSocialPinsRepository) Unpin(ctx context.Context, projectID, enti
 		return err
 	}
 	visible, identity := access.Predicate(schema, "c", 4, chatauthority.Detail)
+	// The DELETE runs only once `visible` has answered, so the conversation
+	// row is locked before the pin row, in Pin's and Delete's order (see Pin).
+	// Taking the pin row first deadlocked against a Delete or a Pin already
+	// holding the conversation.
 	query := fmt.Sprintf(`WITH visible AS (
-	 SELECT c.id FROM %s.chat_conversations c WHERE c.id=$3 AND %s
+	 SELECT c.id FROM %s.chat_conversations c WHERE c.id=$3 AND %s FOR NO KEY UPDATE OF c
 	), removed AS (
 	 DELETE FROM centry.social_pins WHERE entity=$1 AND project_id=$2 AND entity_id=$3
 	 AND EXISTS (SELECT 1 FROM visible) RETURNING id

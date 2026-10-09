@@ -16,6 +16,8 @@ import (
 	"strconv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 )
 
 // attributionSlackSQL is how far outside an execution's lifetime a call may
@@ -29,6 +31,32 @@ const attributionSlackSQL = `interval '5 minutes'`
 // elitea_runtime.execution_jobs.
 type ExecutionAttributionVerifier struct {
 	pool *pgxpool.Pool
+	// localWork is the native client policy. Without it no local turn is
+	// attributed: attributing is the optional outcome, so absence fails closed.
+	localWork LocalWorkPolicy
+}
+
+// LocalWorkPolicy is the native client policy (*nativepolicy.Service).
+type LocalWorkPolicy interface {
+	Policy(ctx context.Context) (platformconfig.NativeClientPolicy, error)
+}
+
+// WithLocalWorkPolicy makes the verifier attribute an uncommitted desktop
+// local turn only while the policy's local_work.allowed is true, so turning
+// local work off also stops turns already started. A policy that cannot be
+// read means the turn is not attributed; the /llm call itself is unaffected
+// (the edge drops an unverified id).
+func (v *ExecutionAttributionVerifier) WithLocalWorkPolicy(policy LocalWorkPolicy) *ExecutionAttributionVerifier {
+	v.localWork = policy
+	return v
+}
+
+func (v *ExecutionAttributionVerifier) localWorkAllowed(ctx context.Context) bool {
+	if v.localWork == nil {
+		return false
+	}
+	policy, err := v.localWork.Policy(ctx)
+	return err == nil && policy.LocalWork.Allowed
 }
 
 func NewExecutionAttributionVerifier(pool *pgxpool.Pool) *ExecutionAttributionVerifier {
@@ -43,7 +71,12 @@ func NewExecutionAttributionVerifier(pool *pgxpool.Pool) *ExecutionAttributionVe
 //   - is live: not settled, or settled less than attributionSlackSQL ago.
 //
 // Any generation qualifies: a retry runs under the same id and actor.
-func (v *ExecutionAttributionVerifier) VerifyExecution(ctx context.Context, projectID, userID, executionID string) (bool, error) {
+//
+// A desktop local turn must also be called with the credential family that
+// started it (tokenID: the native device session's anchor token, stable
+// across access-token rotation, or the PAT; nativeClientID). A runtime
+// execution is not: its worker calls with the actor's token, whichever it is.
+func (v *ExecutionAttributionVerifier) VerifyExecution(ctx context.Context, projectID, userID, tokenID, nativeClientID, executionID string) (bool, error) {
 	if v == nil || v.pool == nil {
 		return false, nil
 	}
@@ -51,6 +84,7 @@ func (v *ExecutionAttributionVerifier) VerifyExecution(ctx context.Context, proj
 	if err != nil || project < 1 || userID == "" || executionID == "" {
 		return false, nil
 	}
+	localAllowed := tokenID != "" && v.localWorkAllowed(ctx)
 	var ok bool
 	if err := v.pool.QueryRow(ctx, `
 SELECT EXISTS (
@@ -60,7 +94,23 @@ SELECT EXISTS (
       AND (j.resource_project_id = $2 OR j.projection_project_id = $2)
       AND j.actor_id = $3
       AND (j.settled_at IS NULL OR j.settled_at > now() - `+attributionSlackSQL+`)
-)`, executionID, project, userID).Scan(&ok); err != nil {
+) OR EXISTS (
+    -- A desktop local turn (ADR-0029 decision 5c, shared 0155): the same
+    -- rule. Live means not committed and not past its deadline, or
+    -- committed less than the slack ago.
+    SELECT 1
+    FROM elitea_runtime.local_turn_executions AS l
+    WHERE $4::boolean
+      AND l.execution_id = $1
+      AND l.project_id = $2
+      AND l.actor_id = $3
+      AND l.token_id = $5
+      AND l.native_client_id = $6
+      AND (
+          (l.committed_at IS NULL AND l.expires_at > now())
+          OR l.committed_at > now() - `+attributionSlackSQL+`
+      )
+)`, executionID, project, userID, localAllowed, tokenID, nativeClientID).Scan(&ok); err != nil {
 		return false, fmt.Errorf("verify execution attribution: %w", err)
 	}
 	return ok, nil

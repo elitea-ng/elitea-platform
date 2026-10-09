@@ -16,6 +16,7 @@ use adk_rust::graph::{
 use async_trait::async_trait;
 use serde_json::{Map, Value, json};
 
+use super::fanout_control::FanoutCancellation;
 use super::map_reduce::*;
 use super::parallel::ParallelCheckpointAppender;
 
@@ -27,7 +28,12 @@ struct Rows {
 #[derive(Default)]
 struct Store {
     rows: Mutex<Rows>,
+    /// The writer fence is lost: every save reports `checkpoint.writer_not_current`.
+    lease_lost: std::sync::atomic::AtomicBool,
 }
+
+const LEASE_LOST: &str =
+    "checkpoint.writer_not_current: the PostgreSQL checkpoint writer is no longer current";
 
 fn exact(checkpoint: &Checkpoint) -> Value {
     serde_json::to_value(checkpoint).unwrap()
@@ -65,6 +71,9 @@ impl ParallelCheckpointAppender for Store {
 #[async_trait]
 impl Checkpointer for Store {
     async fn save(&self, candidate: &Checkpoint) -> Result<String, GraphError> {
+        if self.lease_lost.load(Ordering::SeqCst) {
+            return Err(GraphError::CheckpointError(LEASE_LOST.to_owned()));
+        }
         let latest = self.load(&candidate.thread_id).await?;
         self.append_after(latest.as_ref(), candidate).await
     }
@@ -98,26 +107,44 @@ impl Checkpointer for Store {
     }
 }
 
+fn test_origin() -> MapExecutionIdentity {
+    MapExecutionIdentity {
+        execution_id: "test-execution".to_owned(),
+        generation: 1,
+    }
+}
+
 #[derive(Default)]
 struct Children {
     stores: Mutex<BTreeMap<String, Arc<Store>>>,
     foreign: bool,
     collide: bool,
+    /// The first admitted item's child writer has lost its fence.
+    lease_lost_first: bool,
 }
 #[async_trait]
 impl MapChildCheckpointerFactory for Children {
-    async fn for_item(
+    fn execution_identity(&self, root_thread: &str) -> Result<MapExecutionIdentity, GraphError> {
+        if root_thread != "root" {
+            return Err(GraphError::CheckpointError("scope".to_owned()));
+        }
+        Ok(MapExecutionIdentity {
+            execution_id: "test-execution".to_owned(),
+            generation: 1,
+        })
+    }
+    fn item_thread_id(
         &self,
         activation: &MapActivation,
         item: &FrozenMapItem,
         _worker: &str,
-        _kind: MapWorkerKind,
-    ) -> Result<MapChildCheckpoint, GraphError> {
+        _origin: &MapExecutionIdentity,
+    ) -> Result<String, GraphError> {
         if activation.root_thread_id != "root" {
             return Err(GraphError::CheckpointError("scope".to_owned()));
         }
         let label = item_identity(activation, item)?;
-        let thread = if self.foreign {
+        Ok(if self.foreign {
             "root".to_owned()
         } else if self.collide {
             "child".to_owned()
@@ -127,14 +154,24 @@ impl MapChildCheckpointerFactory for Children {
                 write!(&mut encoded, "{byte:02x}").unwrap();
             }
             encoded
-        };
-        let store = self
-            .stores
-            .lock()
-            .unwrap()
-            .entry(thread.clone())
-            .or_default()
-            .clone();
+        })
+    }
+    async fn for_item(
+        &self,
+        activation: &MapActivation,
+        item: &FrozenMapItem,
+        worker: &str,
+        _kind: MapWorkerKind,
+        origin: &MapExecutionIdentity,
+    ) -> Result<MapChildCheckpoint, GraphError> {
+        let thread = self.item_thread_id(activation, item, worker, origin)?;
+        let mut stores = self.stores.lock().unwrap();
+        let first = stores.is_empty();
+        let store = stores.entry(thread.clone()).or_default().clone();
+        drop(stores);
+        if self.lease_lost_first && first {
+            store.lease_lost.store(true, Ordering::SeqCst);
+        }
         Ok(MapChildCheckpoint {
             admitted_threads: std::collections::BTreeSet::from([thread.clone()]),
             thread_id: thread,
@@ -157,6 +194,10 @@ enum Mode {
     DeepInterrupt,
     DeepEvent,
     DeepRuntimeInput,
+    /// Every item announces itself, then pends forever.
+    Hold,
+    /// Items at or after this index announce themselves, then pend forever.
+    HoldFrom(usize),
 }
 struct Workers {
     calls: Arc<Mutex<Vec<usize>>>,
@@ -167,6 +208,7 @@ struct Workers {
     reject_pause: bool,
     invalid_candidate: bool,
     delayed_first: bool,
+    entered: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
 impl Workers {
     fn new(mode: Mode) -> Self {
@@ -179,6 +221,7 @@ impl Workers {
             reject_pause: false,
             invalid_candidate: false,
             delayed_first: false,
+            entered: None,
         }
     }
 }
@@ -189,6 +232,7 @@ struct Worker {
     peak: Arc<AtomicUsize>,
     mode: Mode,
     delayed_first: bool,
+    entered: Option<tokio::sync::mpsc::UnboundedSender<()>>,
 }
 struct ActiveItem<'a>(&'a AtomicUsize);
 impl Drop for ActiveItem<'_> {
@@ -208,6 +252,12 @@ impl Node for Worker {
         let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
         let active_item = ActiveItem(&self.active);
         self.peak.fetch_max(active, Ordering::SeqCst);
+        if matches!(self.mode, Mode::Hold) || matches!(self.mode, Mode::HoldFrom(n) if index >= n) {
+            if let Some(entered) = &self.entered {
+                let _ = entered.send(());
+            }
+            std::future::pending::<()>().await;
+        }
         let millis = if self.delayed_first {
             if index == 0 { 40 } else { 1 }
         } else {
@@ -283,6 +333,7 @@ impl MapWorkerGraphFactory for Workers {
             peak: self.peak.clone(),
             mode: self.mode,
             delayed_first: self.delayed_first,
+            entered: self.entered.clone(),
         };
         Ok(StateGraph::new(StateSchema::simple(&[
             "entity",
@@ -412,7 +463,9 @@ async fn eight_items_refill_four_slots_without_batch_barrier() {
     );
 }
 
-#[tokio::test]
+// Paused clock: the workers' `8 - index` ms sleeps then complete strictly by
+// duration, so "item 3 finishes first" no longer depends on CI scheduling.
+#[tokio::test(start_paused = true)]
 async fn reverse_completion_collects_original_order_and_preserves_structured_values() {
     let (node, _, _, workers) = setup(Workers::new(Mode::Normal), definition());
     let context = context(json!([{"x":1},["x",null],false,42]), false);
@@ -622,10 +675,18 @@ fn invalid_sources_and_resource_limits_fail_before_dispatch() {
         json!((0..65).collect::<Vec<_>>()),
         json!(["x".repeat(MAX_ITEM_BYTES)]),
     ] {
-        assert!(definition.freeze(&context(items, false), [9; 32]).is_err());
+        assert!(
+            definition
+                .freeze(&context(items, false), [9; 32], test_origin())
+                .is_err()
+        );
     }
     let items = Value::Array((0..5).map(|_| Value::String("x".repeat(450_000))).collect());
-    assert!(definition.freeze(&context(items, false), [9; 32]).is_err());
+    assert!(
+        definition
+            .freeze(&context(items, false), [9; 32], test_origin())
+            .is_err()
+    );
 }
 
 #[test]
@@ -659,23 +720,35 @@ fn collisions_reserved_controls_and_duplicate_channels_are_rejected() {
 fn duplicate_items_step_worker_and_sequence_binding_are_distinct() {
     let config = definition();
     let context = context(json!(["same", "same"]), false);
-    let plan = config.freeze(&context, [9; 32]).unwrap();
+    let plan = config.freeze(&context, [9; 32], test_origin()).unwrap();
     assert_ne!(
         item_identity(&plan.activation, &plan.items[0]).unwrap(),
         item_identity(&plan.activation, &plan.items[1]).unwrap()
     );
     let mut later = context;
     later.step = 1;
-    assert!(plan.activation != config.freeze(&later, [9; 32]).unwrap().activation);
-    assert!(plan.activation != config.freeze(&later, [8; 32]).unwrap().activation);
+    assert!(
+        plan.activation
+            != config
+                .freeze(&later, [9; 32], test_origin())
+                .unwrap()
+                .activation
+    );
+    assert!(
+        plan.activation
+            != config
+                .freeze(&later, [8; 32], test_origin())
+                .unwrap()
+                .activation
+    );
     let mut config = definition();
     config.broadcast = vec!["prefix".to_owned(), "kept".to_owned()];
-    let first = config.freeze(&later, [9; 32]).unwrap();
+    let first = config.freeze(&later, [9; 32], test_origin()).unwrap();
     config.broadcast.reverse();
     assert_ne!(
         first.activation.config_digest,
         config
-            .freeze(&later, [9; 32])
+            .freeze(&later, [9; 32], test_origin())
             .unwrap()
             .activation
             .config_digest
@@ -814,17 +887,29 @@ fn deep_value(depth: usize) -> Value {
 fn adversarial_compact_source_and_broadcast_values_fail_structure_guard() {
     for depth in [48, 60, 96, 512] {
         let source = context(Value::Array(vec![deep_value(depth)]), false);
-        assert!(definition().freeze(&source, [9; 32]).is_err());
+        assert!(
+            definition()
+                .freeze(&source, [9; 32], test_origin())
+                .is_err()
+        );
         let mut broadcast = context(json!([0]), false);
         broadcast
             .state
             .insert("prefix".to_owned(), deep_value(depth));
-        assert!(definition().freeze(&broadcast, [9; 32]).is_err());
+        assert!(
+            definition()
+                .freeze(&broadcast, [9; 32], test_origin())
+                .is_err()
+        );
     }
     let wide = Value::Array(vec![Value::Null; 32_769]);
     assert!(
         definition()
-            .freeze(&context(Value::Array(vec![wide]), false), [9; 32])
+            .freeze(
+                &context(Value::Array(vec![wide]), false),
+                [9; 32],
+                test_origin()
+            )
             .is_err()
     );
 }
@@ -909,4 +994,206 @@ async fn original_deadline_stops_and_drops_owned_effectfree_futures_without_repl
     assert!(calls <= 4);
     node.execute_outcome(&context).await.unwrap();
     assert_eq!(workers.calls.lock().unwrap().len(), calls);
+}
+
+#[tokio::test]
+async fn a_legacy_map_occurrence_without_frozen_child_identity_is_refused_by_type() {
+    let (node, store, children, workers) = setup(Workers::new(Mode::Normal), definition());
+    let context = context(json!([0, 1]), false);
+    let mut legacy = Checkpoint::new(
+        "root",
+        context.state.clone(),
+        context.step,
+        vec!["map_items".to_owned()],
+    );
+    legacy.metadata.insert(
+        "elitea.graph.map.occurrence.v1".to_owned(),
+        json!({"activation": {}, "items": []}),
+    );
+    store.save(&legacy).await.unwrap();
+    let error = node
+        .execute_outcome(&context)
+        .await
+        .err()
+        .expect("a legacy occurrence is refused");
+    assert!(
+        error
+            .to_string()
+            .contains("graph.map.unsupported_occurrence")
+    );
+    assert!(children.stores.lock().unwrap().is_empty());
+    assert!(workers.calls.lock().unwrap().is_empty());
+}
+
+fn stored_stop(store: &Store) -> Value {
+    let rows = store.rows.lock().unwrap();
+    let saved = rows
+        .latest
+        .get("root")
+        .and_then(|id| rows.by_id.get(id).cloned())
+        .expect("the frozen Map occurrence");
+    drop(rows);
+    saved.metadata["elitea.graph.map.occurrence.v2"]
+        .get("stop")
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+fn held_map(
+    concurrency: usize,
+) -> (
+    DurableMapNode,
+    Arc<Store>,
+    Arc<Workers>,
+    tokio::sync::mpsc::UnboundedReceiver<()>,
+) {
+    let (entered, entries) = tokio::sync::mpsc::unbounded_channel();
+    let mut workers = Workers::new(Mode::Hold);
+    workers.entered = Some(entered);
+    let mut definition = definition();
+    definition.max_concurrency = concurrency;
+    let (node, store, _, workers) = setup(workers, definition);
+    (node, store, workers, entries)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn latch_cancel_stops_pending_items_promptly_without_recording_a_stop() {
+    let (node, store, workers, mut entries) = held_map(2);
+    let latch = Arc::new(FanoutCancellation::new());
+    let node = node.with_cancellation(Arc::clone(&latch));
+    let run = tokio::spawn(async move {
+        node.execute_outcome(&context(json!([0, 1, 2, 3, 4, 5]), false))
+            .await
+    });
+    entries.recv().await.expect("first item entered");
+    entries.recv().await.expect("second item entered");
+
+    let fired = std::time::Instant::now();
+    latch.cancel();
+    let error = tokio::time::timeout(Duration::from_secs(5), run)
+        .await
+        .expect("the latch must stop the Map")
+        .expect("Map task")
+        .err()
+        .expect("cancelled Map is a control error");
+    let elapsed = fired.elapsed();
+    eprintln!("map_latch_cancel_latency: {elapsed:?}");
+
+    assert!(error.to_string().contains("graph.map.cancelled"), "{error}");
+    assert!(elapsed <= Duration::from_millis(100), "{elapsed:?}");
+    assert_eq!(workers.active.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        workers.calls.lock().unwrap().len(),
+        2,
+        "admitted after cancel"
+    );
+    assert!(stored_stop(&store).is_null(), "cancel was recorded durably");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deadline_stops_pending_items_at_the_deadline_and_is_still_recorded() {
+    let (node, store, workers, _entries) = held_map(2);
+    let started = std::time::Instant::now();
+    let node = node.with_deadline(tokio::time::Instant::now() + Duration::from_millis(50));
+    let outcome = tokio::time::timeout(
+        Duration::from_secs(5),
+        node.execute_outcome(&context(json!([0, 1, 2, 3]), false)),
+    )
+    .await
+    .expect("the deadline must stop the Map")
+    .expect("deadline is a recorded stop");
+    let elapsed = started.elapsed();
+    eprintln!("map_deadline_honored: {elapsed:?}");
+
+    assert!(matches!(
+        outcome,
+        MapNodeOutcome::Stopped(MapStop::DeadlineExceeded)
+    ));
+    assert!(elapsed >= Duration::from_millis(50), "{elapsed:?}");
+    assert!(elapsed <= Duration::from_millis(150), "{elapsed:?}");
+    assert_eq!(workers.active.load(Ordering::SeqCst), 0);
+    assert_eq!(stored_stop(&store), json!({"status": "deadline_exceeded"}));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lease_lost_item_is_a_control_stop_and_records_nothing() {
+    let store = Arc::new(Store::default());
+    let children = Arc::new(Children {
+        lease_lost_first: true,
+        ..Children::default()
+    });
+    let workers = Arc::new(Workers::new(Mode::Normal));
+    let mut definition = definition();
+    definition.max_concurrency = 1;
+    let node = DurableMapNode::new(
+        definition,
+        Arc::new(MapOccurrenceCheckpointer::new(store.clone())),
+        children,
+        workers.clone(),
+    )
+    .unwrap();
+    let error = node
+        .execute_outcome(&context(json!([0, 1, 2]), false))
+        .await
+        .err()
+        .expect("lease loss is a control error");
+
+    assert!(
+        matches!(&error, GraphError::CheckpointError(message) if message == LEASE_LOST),
+        "{error}"
+    );
+    assert_eq!(
+        *workers.calls.lock().unwrap(),
+        vec![0],
+        "admitted after lease loss"
+    );
+    assert!(stored_stop(&store).is_null(), "lease loss was recorded");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lease_lost_item_stops_its_admitted_siblings() {
+    let store = Arc::new(Store::default());
+    let children = Arc::new(Children {
+        lease_lost_first: true,
+        ..Children::default()
+    });
+    let (entered, mut entries) = tokio::sync::mpsc::unbounded_channel();
+    let mut workers = Workers::new(Mode::HoldFrom(1));
+    workers.entered = Some(entered);
+    let workers = Arc::new(workers);
+    let mut definition = definition();
+    definition.max_concurrency = 2;
+    let node = DurableMapNode::new(
+        definition,
+        Arc::new(MapOccurrenceCheckpointer::new(store.clone())),
+        children,
+        workers.clone(),
+    )
+    .unwrap();
+    let run = tokio::spawn(async move {
+        node.execute_outcome(&context(json!([0, 1, 2]), false))
+            .await
+    });
+    entries.recv().await.expect("the sibling item entered");
+    let error = tokio::time::timeout(Duration::from_secs(5), run)
+        .await
+        .expect("lease loss must stop the admitted sibling")
+        .expect("Map task")
+        .err()
+        .expect("lease loss is a control error");
+    assert!(
+        matches!(&error, GraphError::CheckpointError(message) if message == LEASE_LOST),
+        "{error}"
+    );
+    assert_eq!(
+        workers.active.load(Ordering::SeqCst),
+        0,
+        "a sibling kept running"
+    );
+    assert_eq!(
+        *workers.calls.lock().unwrap(),
+        vec![0, 1],
+        "admitted after lease loss"
+    );
+    assert!(stored_stop(&store).is_null(), "lease loss was recorded");
 }

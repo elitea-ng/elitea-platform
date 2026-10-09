@@ -28,6 +28,8 @@
  */
 import { useEffect, useRef } from 'react';
 
+import { getNativeTransport } from '../nativeTransport';
+
 /**
  * Handlers keyed by SSE event name (the `event:` field on the wire), e.g.
  * `notifications_notify`. The reserved names `open` and `error` work too —
@@ -110,9 +112,13 @@ export function useEventSource(url: string | null | undefined, handlers: EventSo
     if (!url) return undefined;
     // jsdom (the `node` vitest project) and any non-browser runtime ship no
     // EventSource; `./testing.ts` installs a double when a test needs one.
-    if (typeof EventSource === 'undefined') return undefined;
+    // A native client (desktop) authenticates with a bearer header, which the
+    // browser constructor cannot send, so it supplies a fetch-based stream
+    // with the same surface. No transport registered = the browser path below.
+    const nativeFactory = getNativeTransport()?.createEventSource;
+    if (nativeFactory === undefined && typeof EventSource === 'undefined') return undefined;
 
-    const source = new EventSource(url, { withCredentials: true });
+    const source = nativeFactory?.(url) ?? new EventSource(url, { withCredentials: true });
     // Split on the same separator the key was built with, and skip the
     // empty-string artefact an empty handler map would produce.
     const eventNames = eventNamesKey === '' ? [] : eventNamesKey.split('\u0000');

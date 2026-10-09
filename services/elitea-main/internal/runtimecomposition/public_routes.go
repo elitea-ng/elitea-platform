@@ -15,12 +15,17 @@ import (
 	executionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/execution"
 	discovery "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitdiscovery"
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 )
 
 type PublicRoutes struct {
-	NodeRecovery    agentexecutionapi.CurrentNodeRecoveryUseCase
-	Validation      http.Handler
-	ExecutionEvents http.Handler
+	NodeRecovery agentexecutionapi.CurrentNodeRecoveryUseCase
+	// ExecutionInterrupts is the per-interrupt HITL ledger. It is nil unless
+	// ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true (which itself
+	// requires agent execution dispatch), so the routes stay unregistered.
+	ExecutionInterrupts agentexecutionapi.ExecutionInterruptUseCase
+	Validation          http.Handler
+	ExecutionEvents     http.Handler
 	// IndexStart is composed only when the complete index control/data plane is
 	// enabled. Main binds it to the current route's existing authentication and
 	// project-RBAC middleware before mounting it.
@@ -65,6 +70,10 @@ type PublicRoutes struct {
 	// exposed only when the distributed Go schedule owner is enabled.
 	IndexScheduleUpdate indexingapi.CurrentIndexScheduleUpdater
 	IndexScheduleDelete indexingapi.CurrentIndexScheduleDeleter
+	// ClientApplicationVersions serves the desktop's resolved definition
+	// (ADR-0029 decision 5a). It is built from the agent plane's own freezer
+	// and nested-version reader, so it is nil exactly when that plane is.
+	ClientApplicationVersions *storage.ClientApplicationVersionService
 }
 
 // Durable PostgreSQL replay remains authoritative. The advisory waiter wakes
