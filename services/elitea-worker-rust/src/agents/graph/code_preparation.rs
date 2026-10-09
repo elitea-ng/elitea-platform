@@ -170,27 +170,16 @@ impl RemoteCodeRuntime {
             .map_err(|_| CodePreparationFailure::Failed)?;
         // Recorded preparation keeps its original runtime and publication lineage.
         // Only a fresh Cargo request can select the operator-pinned frozen root.
-        let recorded = self
+        let is_rust = invocation.language == CodeLanguage::Rust;
+        let compiled = super::compiled::compiled_activation(&invocation.activation);
+        // One round trip answers all identity probes (PREPARATION_IDENTITY_PROBES_BUDGET).
+        let probe = [activation, invocation.activation, compiled];
+        let found = self
             .journal
-            .contains_activation(&scope, &activation)
+            .contains_activations(&scope, if is_rust { &probe } else { &probe[..1] })
             .await
             .map_err(|_| CodePreparationFailure::Failed)?;
-        let recorded_code = if invocation.language == CodeLanguage::Rust && !recorded {
-            self.journal
-                .contains_activation(&scope, &invocation.activation)
-                .await
-                .map_err(|_| CodePreparationFailure::Failed)?
-                || self
-                    .journal
-                    .contains_activation(
-                        &scope,
-                        &super::compiled::compiled_activation(&invocation.activation),
-                    )
-                    .await
-                    .map_err(|_| CodePreparationFailure::Failed)?
-        } else {
-            false
-        };
+        let (recorded, recorded_code) = recorded_identities(is_rust, &found);
         let root = (invocation.language == CodeLanguage::Rust)
             .then(|| self.selected_compiled_profile(profile))
             .flatten()
@@ -525,6 +514,17 @@ where
         )
         .await;
     }
+}
+
+/// Identity probes per Rust preparation; all are answered by one query.
+#[cfg(test)]
+pub(super) const PREPARATION_IDENTITY_PROBES_BUDGET: usize = 1;
+
+/// `found` is [preparation, code, compiled] for Rust, or [preparation] otherwise.
+fn recorded_identities(is_rust: bool, found: &[bool]) -> (bool, bool) {
+    let recorded = found.first().copied().unwrap_or(false);
+    let recorded_code = is_rust && !recorded && found.iter().skip(1).any(|found| *found);
+    (recorded, recorded_code)
 }
 
 pub(super) fn retryable(error: &SandboxCallError) -> bool {
@@ -896,5 +896,27 @@ mod frozen_lookup_retry_tests {
         .await;
         assert_eq!(result.err(), Some(CodePreparationFailure::Failed));
         assert_eq!(lookups.get(), 1);
+    }
+
+    #[test]
+    fn identity_probe_fold_matches_sequential_probes() {
+        // The three sequential probes this replaced, as a reference model.
+        for bits in 0..8_u8 {
+            let [prep, code, compiled] = [bits & 1 != 0, bits & 2 != 0, bits & 4 != 0];
+            for is_rust in [true, false] {
+                let old_recorded = prep;
+                let old_code = is_rust && !prep && (code || compiled);
+                let found = if is_rust {
+                    vec![prep, code, compiled]
+                } else {
+                    vec![prep]
+                };
+                assert_eq!(
+                    recorded_identities(is_rust, &found),
+                    (old_recorded, old_code)
+                );
+            }
+        }
+        assert_eq!(PREPARATION_IDENTITY_PROBES_BUDGET, 1);
     }
 }
