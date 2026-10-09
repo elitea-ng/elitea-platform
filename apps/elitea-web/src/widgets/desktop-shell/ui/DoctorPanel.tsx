@@ -3,12 +3,13 @@
  * the host found and, when the host can repair it, a Fix button. Used by the
  * Help › Run Diagnostics… dialog (any screen, signed in or not) and by
  * Settings › Troubleshoot. A repair runs only on the click; the checks are
- * run again after it.
+ * run again after it. A repair that deletes what the app keeps (the host
+ * says what in `fix_confirm`) asks first, and runs only once confirmed.
  */
 import CheckCircleOutlined from '@mui/icons-material/CheckCircleOutlined';
 import ErrorOutlined from '@mui/icons-material/ErrorOutlined';
 import WarningAmberOutlined from '@mui/icons-material/WarningAmberOutlined';
-import { Alert, Box, Button, CircularProgress, Stack, Typography } from '@mui/material';
+import { Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogContentText, DialogTitle, Stack, Typography } from '@mui/material';
 import { useCallback, useEffect, useState } from 'react';
 
 import type { DoctorCheck, DoctorIpc, DoctorStatus } from '@/shared/desktop/doctorIpc';
@@ -29,6 +30,8 @@ export function DoctorPanel({ ipc }: DoctorPanelProps): React.JSX.Element {
   const [checks, setChecks] = useState<DoctorCheck[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<{ severity: 'success' | 'error'; text: string } | null>(null);
+  /** The repair waiting for the person's confirmation. */
+  const [confirming, setConfirming] = useState<DoctorCheck | null>(null);
 
   const runChecks = useCallback(async () => {
     setChecks(null);
@@ -39,11 +42,11 @@ export function DoctorPanel({ ipc }: DoctorPanelProps): React.JSX.Element {
     void runChecks();
   }, [runChecks]);
 
-  const repair = async (fixId: string): Promise<void> => {
+  const repair = async (fixId: string, confirmed = false): Promise<void> => {
     setBusy(fixId);
     setOutcome(null);
     try {
-      setOutcome({ severity: 'success', text: await ipc.fix(fixId) });
+      setOutcome({ severity: 'success', text: await ipc.fix(fixId, confirmed) });
     } catch (error) {
       setOutcome({ severity: 'error', text: toWorkspaceIpcError(error).message });
     } finally {
@@ -83,7 +86,7 @@ export function DoctorPanel({ ipc }: DoctorPanelProps): React.JSX.Element {
                   size="small"
                   variant="outlined"
                   disabled={busy !== null}
-                  onClick={() => void repair(check.fix_id ?? '')}
+                  onClick={() => (check.fix_confirm === undefined ? void repair(check.fix_id ?? '') : setConfirming(check))}
                   aria-label={`${t('desktop.doctor.fix', 'Fix')}: ${check.title}`}
                 >
                   {busy === check.fix_id ? <CircularProgress size={16} /> : (check.fix_label ?? t('desktop.doctor.fix', 'Fix'))}
@@ -93,6 +96,26 @@ export function DoctorPanel({ ipc }: DoctorPanelProps): React.JSX.Element {
           ))}
         </Stack>
       )}
+      <Dialog open={confirming !== null} onClose={() => setConfirming(null)} aria-labelledby="doctor-confirm-title">
+        <DialogTitle id="doctor-confirm-title">{confirming?.fix_label ?? t('desktop.doctor.fix', 'Fix')}</DialogTitle>
+        <DialogContent>
+          <DialogContentText>{confirming?.fix_confirm}</DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirming(null)}>{t('desktop.doctor.confirmCancel', 'Cancel')}</Button>
+          <Button
+            color="warning"
+            variant="contained"
+            onClick={() => {
+              const fixId = confirming?.fix_id;
+              setConfirming(null);
+              if (fixId !== undefined) void repair(fixId, true);
+            }}
+          >
+            {confirming?.fix_label ?? t('desktop.doctor.fix', 'Fix')}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Stack>
   );
 }

@@ -146,6 +146,7 @@
   "desktop.doctor.attention": "Something needs attention.",
   "desktop.doctor.checks": "Diagnostics",
   "desktop.doctor.close": "Close",
+  "desktop.doctor.confirmCancel": "Cancel",
   "desktop.doctor.fix": "Fix",
   "desktop.doctor.intro": "What Elitea keeps on this computer and needs from your deployment. A repair runs only when you click Fix.",
   "desktop.doctor.noHost": "Diagnostics run in the desktop app.",

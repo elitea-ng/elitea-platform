@@ -13,6 +13,13 @@
 //! `-wal` and `-shm` into one such directory, after its writer stopped and
 //! its connections closed, and a fresh history starts at once.
 //!
+//! A repair that deletes what the app keeps (`workspaces.drop_missing`)
+//! names what it deletes in `fix_confirm` and runs only with `confirm`.
+//! Repairs that end or change the session go through the app's own paths
+//! ([`DoctorHooks`]): a workspace leaves the list the way `workspace_remove`
+//! removes it, and moving the stored sign-in aside signs out locally the
+//! way `host_sign_out` does.
+//!
 //! Every repair is logged (paths and modes, never contents).
 
 use std::collections::BTreeMap;
@@ -27,7 +34,7 @@ use crate::auth::AuthService;
 use crate::credentials_file::{self, CredentialsFile};
 use crate::error::HostError;
 use crate::history::{self, HistoryStore};
-use crate::workspaces::WorkspaceStore;
+use crate::workspaces::{Workspace, WorkspaceStore};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -53,7 +60,28 @@ pub struct Check {
     pub fix_id: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix_label: Option<&'static str>,
+    /// What the repair deletes, for the person to confirm first; the repair
+    /// is refused without `confirm` when this is set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix_confirm: Option<String>,
 }
+
+/// What the Doctor's repairs need from the rest of the app.
+pub trait DoctorHooks: Send + Sync {
+    /// Remove one workspace the way `workspace_remove` does (refused while
+    /// a turn runs in it); the reason for a person when it is refused.
+    ///
+    /// # Errors
+    ///
+    /// The removal was refused or failed.
+    fn remove_workspace(&self, workspace_id: &str) -> Result<(), String>;
+    /// The session ended on this computer: forget every turn and tell the
+    /// webview, as a local sign-out does.
+    fn signed_out(&self);
+}
+
+/// The repairs that delete what the app keeps: refused without `confirm`.
+const CONFIRMED_FIXES: &[&str] = &["workspaces.drop_missing"];
 
 impl Check {
     fn new(id: &'static str, title: &'static str, status: Status, message: String) -> Self {
@@ -64,6 +92,7 @@ impl Check {
             message,
             fix_id: None,
             fix_label: None,
+            fix_confirm: None,
         }
     }
 
@@ -71,6 +100,68 @@ impl Check {
         self.fix_id = Some(fix_id);
         self.fix_label = Some(label);
         self
+    }
+
+    fn confirming(mut self, what: String) -> Self {
+        self.fix_confirm = Some(what);
+        self
+    }
+}
+
+/// Whether a workspace's folder can be used now, and if not, why.
+#[derive(Debug, PartialEq, Eq)]
+enum Reach {
+    Reachable,
+    /// Gone: its parent folder is there, the folder is not (and it is not
+    /// on a drive that is not connected). The only case the Doctor offers
+    /// to remove from the list.
+    Missing,
+    /// The OS refuses the app access (macOS privacy settings, permissions).
+    NoAccess,
+    /// Not reachable now, and maybe again later: why.
+    Unavailable(&'static str),
+}
+
+/// `/Volumes/<name>/…` whose `/Volumes/<name>` is not there: a drive that
+/// is not connected (macOS mounts every other drive there).
+fn on_unmounted_volume(path: &Path) -> bool {
+    let mut components = path.components();
+    let (Some(std::path::Component::RootDir), Some(volumes), Some(name)) =
+        (components.next(), components.next(), components.next())
+    else {
+        return false;
+    };
+    volumes.as_os_str() == "Volumes"
+        && fs::symlink_metadata(Path::new("/Volumes").join(name.as_os_str())).is_err()
+}
+
+fn reach(path: &Path) -> Reach {
+    let error = match fs::read_dir(path) {
+        Ok(_) => return Reach::Reachable,
+        Err(error) => error,
+    };
+    // EPERM is what macOS's privacy protection answers; EACCES the mode.
+    if error.kind() == std::io::ErrorKind::PermissionDenied || error.raw_os_error() == Some(1) {
+        return Reach::NoAccess;
+    }
+    if on_unmounted_volume(path) {
+        return Reach::Unavailable("drive not connected");
+    }
+    if error.kind() != std::io::ErrorKind::NotFound {
+        return Reach::Unavailable("cannot be read now");
+    }
+    match path.parent().map(fs::metadata) {
+        Some(Ok(parent)) if parent.is_dir() => Reach::Missing,
+        _ => Reach::Unavailable("the folder above it is not there either"),
+    }
+}
+
+/// How to let the app read a folder the OS keeps from it.
+fn grant_access_hint() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Allow Elitea in System Settings › Privacy & Security › Files and Folders (or Full Disk Access), then run the checks again."
+    } else {
+        "Check that your user may read them, then run the checks again."
     }
 }
 
@@ -184,6 +275,8 @@ fn move_aside(path: &Path) -> Result<Option<PathBuf>, HostError> {
 
 /// The checks and repairs on this computer's files (no network).
 pub struct LocalDoctor {
+    /// The app's own paths for what a repair ends or removes.
+    pub hooks: Arc<dyn DoctorHooks>,
     pub config_dir: PathBuf,
     pub data_dir: PathBuf,
     pub log_dir: Option<PathBuf>,
@@ -388,12 +481,16 @@ impl LocalDoctor {
                     .fix("workspaces.move_aside", MOVE_ASIDE);
             }
         };
-        let missing: Vec<String> = all
-            .iter()
-            .filter(|w| fs::read_dir(&w.path).is_err())
-            .map(|w| w.name.clone())
-            .collect();
-        if missing.is_empty() {
+        let (mut missing, mut no_access, mut unavailable) = (Vec::new(), Vec::new(), Vec::new());
+        for workspace in &all {
+            match reach(Path::new(&workspace.path)) {
+                Reach::Reachable => {}
+                Reach::Missing => missing.push(workspace.name.clone()),
+                Reach::NoAccess => no_access.push(workspace.name.clone()),
+                Reach::Unavailable(why) => unavailable.push(format!("{} ({why})", workspace.name)),
+            }
+        }
+        if missing.is_empty() && no_access.is_empty() && unavailable.is_empty() {
             return Check::new(
                 ID,
                 TITLE,
@@ -401,39 +498,68 @@ impl LocalDoctor {
                 format!("{} folder(s), all reachable.", all.len()),
             );
         }
-        Check::new(
-            ID,
-            TITLE,
-            Status::Warn,
-            format!(
-                "These folders are gone or unreadable: {}.",
+        let mut parts = Vec::new();
+        if !missing.is_empty() {
+            parts.push(format!(
+                "These folders no longer exist: {}.",
                 missing.join(", ")
-            ),
-        )
-        .fix("workspaces.drop_missing", "Remove them from the list")
+            ));
+        }
+        if !no_access.is_empty() {
+            parts.push(format!(
+                "Elitea is not allowed to read: {}. {}",
+                no_access.join(", "),
+                grant_access_hint()
+            ));
+        }
+        if !unavailable.is_empty() {
+            parts.push(format!(
+                "Unavailable now: {}. They stay in the list; connect the drive and run the checks again.",
+                unavailable.join(", ")
+            ));
+        }
+        let check = Check::new(ID, TITLE, Status::Warn, parts.join(" "));
+        if missing.is_empty() {
+            return check;
+        }
+        check
+            .fix("workspaces.drop_missing", "Remove them from the list")
+            .confirming(format!(
+                "Remove {} from the list? What Elitea keeps for them on this computer is deleted: \
+                 remembered approvals, undo checkpoints and their thread history here. \
+                 The folders themselves are not touched.",
+                missing.join(", ")
+            ))
     }
 
-    /// Apply one repair; what happened, for a person.
+    /// The workspaces whose folder is gone (see [`Reach::Missing`]).
+    fn missing_workspaces(&self) -> Result<Vec<Workspace>, HostError> {
+        Ok(self
+            .workspaces
+            .all()?
+            .into_iter()
+            .filter(|w| reach(Path::new(&w.path)) == Reach::Missing)
+            .collect())
+    }
+
+    /// Apply one repair; what happened, for a person. `confirm`: the
+    /// person confirmed what the repair's `fix_confirm` said it deletes.
     ///
     /// # Errors
     ///
-    /// An unknown repair, or the repair failed.
-    pub fn fix(&self, fix_id: &str) -> Result<String, HostError> {
+    /// An unknown repair, an unconfirmed one that deletes data, or the
+    /// repair failed.
+    pub fn fix(&self, fix_id: &str, confirm: bool) -> Result<String, HostError> {
+        if CONFIRMED_FIXES.contains(&fix_id) && !confirm {
+            return Err(HostError::Unsupported(
+                "this repair deletes what Elitea keeps for these folders; confirm it first".into(),
+            ));
+        }
         match fix_id {
             "credentials.tighten" => {
                 tighten_file(&self.credentials_path())?;
                 self.credentials.forget_cache();
                 Ok("The stored sign-in is now readable by you only.".into())
-            }
-            "credentials.move_aside" => {
-                let aside = move_aside(&self.credentials_path())?;
-                self.credentials.forget_cache();
-                Ok(match aside {
-                    Some(aside) => {
-                        format!("Moved to {}. Sign in again to continue.", aside.display())
-                    }
-                    None => "There was nothing to move.".into(),
-                })
             }
             "dir.tighten.config" => {
                 tighten_dir(&self.config_dir).map(|()| "Restricted to you.".into())
@@ -456,15 +582,22 @@ impl LocalDoctor {
             }
             "history.move_aside" => self.move_history_aside(),
             "workspaces.drop_missing" => {
-                let dropped = self.workspaces.drop_unreachable()?;
+                let (mut removed, mut kept) = (0, Vec::new());
+                for workspace in self.missing_workspaces()? {
+                    match self.hooks.remove_workspace(&workspace.id) {
+                        Ok(()) => removed += 1,
+                        Err(why) => kept.push(format!("{} ({why})", workspace.name)),
+                    }
+                }
                 log::info!(
-                    "diagnostics: removed {} unreachable workspace(s) from the list",
-                    dropped.len()
+                    "diagnostics: removed {removed} missing workspace(s) from the list, {} refused",
+                    kept.len()
                 );
-                Ok(format!(
-                    "Removed {} folder(s) from the list.",
-                    dropped.len()
-                ))
+                let mut message = format!("Removed {removed} folder(s) from the list.");
+                if !kept.is_empty() {
+                    message.push_str(&format!(" Not removed: {}.", kept.join(", ")));
+                }
+                Ok(message)
             }
             "workspaces.move_aside" => {
                 let aside = move_aside(&self.workspaces_path())?;
@@ -481,6 +614,14 @@ impl LocalDoctor {
 }
 
 impl LocalDoctor {
+    /// Move the stored sign-in aside and read the file again on next use;
+    /// where it went. The session ends with it: [`Doctor::fix`] signs out.
+    fn move_credentials_aside(&self) -> Result<Option<PathBuf>, HostError> {
+        let aside = move_aside(&self.credentials_path())?;
+        self.credentials.forget_cache();
+        Ok(aside)
+    }
+
     /// `history.move_aside`: the open store closes, moves its three files
     /// together and starts afresh; without one (refused at launch) the
     /// files are moved the same way and the next launch starts afresh.
@@ -678,8 +819,12 @@ impl Doctor {
 
     /// # Errors
     ///
-    /// An unknown repair, or the repair failed.
-    pub async fn fix(&self, fix_id: &str) -> Result<String, HostError> {
+    /// An unknown repair, an unconfirmed one that deletes data, or the
+    /// repair failed.
+    pub async fn fix(self: &Arc<Self>, fix_id: &str, confirm: bool) -> Result<String, HostError> {
+        if fix_id == "credentials.move_aside" {
+            return self.move_credentials_aside().await;
+        }
         if fix_id == "revokes.retry" {
             let waiting = self.auth.retry_pending_revokes().await;
             log::info!("diagnostics: retried the pending revokes, {waiting} still waiting");
@@ -691,7 +836,36 @@ impl Doctor {
                 )
             });
         }
-        self.local.fix(fix_id)
+        // File repairs, and a workspace removal that waits for the history's
+        // writer: off the async workers.
+        let doctor = self.clone();
+        let fix_id = fix_id.to_owned();
+        tokio::task::spawn_blocking(move || doctor.local.fix(&fix_id, confirm))
+            .await
+            .map_err(|e| HostError::Internal(format!("the repair stopped: {e}")))?
+    }
+
+    /// `credentials.move_aside`: the file moves aside, then the local
+    /// sign-out path runs as `host_sign_out` runs it — the cached token and
+    /// any unsaved rotated session are forgotten, the session epoch moves
+    /// on, every turn is forgotten and the webview is told. The moved file
+    /// is not trusted, so it is never read: its session is not revoked.
+    async fn move_credentials_aside(&self) -> Result<String, HostError> {
+        let aside = self.local.move_credentials_aside()?;
+        let Some(aside) = aside else {
+            return Ok("There was nothing to move.".into());
+        };
+        if let Err(error) = self.auth.wipe().await {
+            log::warn!("diagnostics: the local sign-out after moving the sign-in aside: {error}");
+        }
+        self.local.hooks.signed_out();
+        log::warn!("diagnostics: signed out locally after moving the stored sign-in aside");
+        Ok(format!(
+            "Moved to {}. You are signed out on this computer; sign in again to continue. \
+             The session in the moved file was not ended on the server (Elitea does not read a \
+             file it does not trust): end it from Settings › Devices on the web if you need to.",
+            aside.display()
+        ))
     }
 }
 
@@ -710,15 +884,18 @@ pub struct FixOutcome {
     pub message: String,
 }
 
-/// `doctor_fix`: apply the repair a check named.
+/// `doctor_fix`: apply the repair a check named; `confirm` once the person
+/// confirmed what a repair with `fix_confirm` deletes.
 #[tauri::command(rename_all = "snake_case")]
 pub async fn doctor_fix(
     doctor: tauri::State<'_, Arc<Doctor>>,
     fix_id: String,
+    confirm: Option<bool>,
 ) -> Result<FixOutcome, HostError> {
     log::info!("diagnostics: applying `{fix_id}`");
     doctor
-        .fix(&fix_id)
+        .inner()
+        .fix(&fix_id, confirm.unwrap_or(false))
         .await
         .map(|message| FixOutcome { message })
 }
@@ -727,9 +904,45 @@ pub async fn doctor_fix(
 mod tests {
     use super::*;
 
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// The app's side of the repairs: removes from the list as the agent
+    /// host would (refused for a "busy" id), counts sign-outs.
+    struct FakeHooks {
+        workspaces: Arc<WorkspaceStore>,
+        busy: Mutex<Vec<String>>,
+        removed: Mutex<Vec<String>>,
+        signed_out: AtomicUsize,
+    }
+
+    impl DoctorHooks for FakeHooks {
+        fn remove_workspace(&self, workspace_id: &str) -> Result<(), String> {
+            if self
+                .busy
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|id| id == workspace_id)
+            {
+                return Err("a turn is running in it".into());
+            }
+            self.workspaces
+                .remove(workspace_id)
+                .map_err(|e| e.to_string())?;
+            self.removed.lock().unwrap().push(workspace_id.to_owned());
+            Ok(())
+        }
+
+        fn signed_out(&self) {
+            self.signed_out.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
     struct Fixture {
         _root: tempfile::TempDir,
         doctor: LocalDoctor,
+        hooks: Arc<FakeHooks>,
     }
 
     fn fixture() -> Fixture {
@@ -740,9 +953,17 @@ mod tests {
         for dir in [&config_dir, &data_dir, &log_dir] {
             credentials_file::create_private_dir(dir).unwrap();
         }
+        let workspaces = Arc::new(WorkspaceStore::new(data_dir.clone()));
+        let hooks = Arc::new(FakeHooks {
+            workspaces: workspaces.clone(),
+            busy: Mutex::default(),
+            removed: Mutex::default(),
+            signed_out: AtomicUsize::new(0),
+        });
         let doctor = LocalDoctor {
+            hooks: hooks.clone(),
             credentials: CredentialsFile::new(config_dir.clone()),
-            workspaces: Arc::new(WorkspaceStore::new(data_dir.clone())),
+            workspaces,
             config_dir,
             data_dir,
             log_dir: Some(log_dir),
@@ -751,7 +972,33 @@ mod tests {
         Fixture {
             _root: root,
             doctor,
+            hooks,
         }
+    }
+
+    struct NoBrowser;
+
+    impl crate::auth::BrowserOpener for NoBrowser {
+        fn open(&self, _url: &str) -> Result<(), HostError> {
+            Err(HostError::Browser)
+        }
+    }
+
+    /// The whole Doctor over `local`, with a real auth service on its files.
+    fn whole(local: LocalDoctor) -> Arc<Doctor> {
+        let auth = AuthService::new(crate::auth::AuthConfig {
+            store: Arc::new(local.credentials.slot("device-session")),
+            pending_revokes: Arc::new(local.credentials.slot("pending-revoke")),
+            files: crate::settings::SettingsFiles::new(local.config_dir.clone()),
+            tokens: crate::tokens::TokenEndpoint::new("0.1.0").unwrap(),
+            opener: Arc::new(NoBrowser),
+            build_client_id: None,
+            runtime_client_id: None,
+        });
+        Arc::new(Doctor {
+            local,
+            auth: Arc::new(auth),
+        })
     }
 
     fn check<'a>(checks: &'a [Check], id: &str) -> &'a Check {
@@ -781,7 +1028,7 @@ mod tests {
         let c = check(&f.doctor.checks(), "credentials").clone();
         assert_eq!(c.status, Status::Warn);
         assert_eq!(c.fix_id, Some("credentials.tighten"));
-        f.doctor.fix("credentials.tighten").unwrap();
+        f.doctor.fix("credentials.tighten", false).unwrap();
         assert_eq!(
             fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o600
@@ -790,8 +1037,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn an_untrusted_credentials_file_is_moved_aside_and_sign_in_works_again() {
+    #[tokio::test]
+    async fn an_untrusted_credentials_file_is_moved_aside_and_sign_in_works_again() {
         use crate::store::SecretStore as _;
         use std::os::unix::fs::PermissionsExt as _;
         let f = fixture();
@@ -803,14 +1050,15 @@ mod tests {
         let launch = CredentialsFile::new(f.doctor.config_dir.clone());
         let error = launch.slot("device-session").save("new").unwrap_err();
         assert!(error.to_string().contains("Run Diagnostics"), "{error}");
-        let doctor = LocalDoctor {
+        let doctor = whole(LocalDoctor {
             credentials: launch.clone(),
             ..f.doctor
-        };
-        let c = check(&doctor.checks(), "credentials").clone();
+        });
+        let c = check(&doctor.local.checks(), "credentials").clone();
         assert_eq!(c.status, Status::Fail);
         assert_eq!(c.fix_id, Some("credentials.move_aside"));
-        doctor.fix("credentials.move_aside").unwrap();
+        doctor.fix("credentials.move_aside", false).await.unwrap();
+        let doctor = &doctor.local;
         // The original is kept aside, untouched; sign-in works.
         let aside = entries(&doctor.config_dir, "credentials.json.broken-");
         assert_eq!(aside.len(), 1);
@@ -826,8 +1074,8 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[test]
-    fn a_symlinked_credentials_file_is_moved_aside_never_followed() {
+    #[tokio::test]
+    async fn a_symlinked_credentials_file_is_moved_aside_never_followed() {
         let f = fixture();
         let target = f.doctor.config_dir.parent().unwrap().join("elsewhere");
         fs::write(&target, "{}").unwrap();
@@ -836,8 +1084,12 @@ mod tests {
             check(&f.doctor.checks(), "credentials").status,
             Status::Fail
         );
-        f.doctor.fix("credentials.move_aside").unwrap();
-        assert!(fs::symlink_metadata(f.doctor.credentials.path()).is_err());
+        let path = f.doctor.credentials.path();
+        whole(f.doctor)
+            .fix("credentials.move_aside", false)
+            .await
+            .unwrap();
+        assert!(fs::symlink_metadata(&path).is_err());
         assert_eq!(
             fs::read_to_string(&target).unwrap(),
             "{}",
@@ -872,7 +1124,7 @@ mod tests {
             (c.status, c.fix_id),
             (Status::Warn, Some("dir.tighten.logs"))
         );
-        f.doctor.fix("dir.tighten.logs").unwrap();
+        f.doctor.fix("dir.tighten.logs", false).unwrap();
         assert_eq!(
             fs::metadata(&logs).unwrap().permissions().mode() & 0o777,
             0o700
@@ -893,7 +1145,7 @@ mod tests {
             (Status::Fail, Some("history.move_aside")),
             "{c:?}"
         );
-        f.doctor.fix("history.move_aside").unwrap();
+        f.doctor.fix("history.move_aside", false).unwrap();
         assert!(!path.exists());
         assert_eq!(check(&f.doctor.checks(), "history").status, Status::Ok);
     }
@@ -931,7 +1183,7 @@ mod tests {
             history: Some(store.clone()),
             ..f.doctor
         };
-        let message = doctor.fix("history.move_aside").unwrap();
+        let message = doctor.fix("history.move_aside", false).unwrap();
         assert!(message.contains("new, empty history"), "{message}");
         let moved = entries(&doctor.data_dir, "threads.sqlite.broken-");
         assert_eq!(moved.len(), 1, "one directory: {moved:?}");
@@ -946,7 +1198,7 @@ mod tests {
         assert!(doctor.data_dir.join(history::FILE_NAME).is_file());
         assert_eq!(check(&doctor.checks(), "history").status, Status::Ok);
         // Again: a second directory, the first untouched.
-        doctor.fix("history.move_aside").unwrap();
+        doctor.fix("history.move_aside", false).unwrap();
         assert_eq!(entries(&doctor.data_dir, "threads.sqlite.broken-").len(), 2);
         assert!(aside.join(history::FILE_NAME).is_file());
     }
@@ -956,7 +1208,7 @@ mod tests {
         let f = fixture();
         for content in ["[{", "[{{"] {
             fs::write(f.doctor.workspaces.file_path(), content).unwrap();
-            f.doctor.fix("workspaces.move_aside").unwrap();
+            f.doctor.fix("workspaces.move_aside", false).unwrap();
         }
         let moved = entries(&f.doctor.data_dir, "workspaces.json.broken-");
         assert_eq!(moved.len(), 2, "{moved:?}");
@@ -971,21 +1223,148 @@ mod tests {
     }
 
     #[test]
-    fn missing_workspace_folders_are_dropped_on_request() {
+    fn missing_workspace_folders_are_removed_the_way_the_app_removes_them() {
         let f = fixture();
         let kept = tempfile::tempdir().unwrap();
         let gone = tempfile::tempdir().unwrap();
+        let busy_gone = tempfile::tempdir().unwrap();
         f.doctor.workspaces.add(kept.path()).unwrap();
-        f.doctor.workspaces.add(gone.path()).unwrap();
+        let gone_id = f.doctor.workspaces.add(gone.path()).unwrap().id;
+        let busy_id = f.doctor.workspaces.add(busy_gone.path()).unwrap().id;
+        fs::create_dir_all(f.doctor.workspaces.data_dir(&gone_id)).unwrap();
         drop(gone);
+        drop(busy_gone);
+        f.hooks.busy.lock().unwrap().push(busy_id.clone());
         let c = check(&f.doctor.checks(), "workspaces").clone();
         assert_eq!(
             (c.status, c.fix_id),
             (Status::Warn, Some("workspaces.drop_missing"))
         );
-        f.doctor.fix("workspaces.drop_missing").unwrap();
-        assert_eq!(f.doctor.workspaces.all().unwrap().len(), 1);
+        let confirm = c.fix_confirm.unwrap();
+        assert!(confirm.contains("thread history"), "{confirm}");
+        // Nothing is deleted before the person confirms.
+        assert!(f.doctor.fix("workspaces.drop_missing", false).is_err());
+        assert_eq!(f.doctor.workspaces.all().unwrap().len(), 3);
+        assert!(f.doctor.workspaces.data_dir(&gone_id).exists());
+        // Confirmed: through the app's removal, which refuses a busy one.
+        let message = f.doctor.fix("workspaces.drop_missing", true).unwrap();
+        assert_eq!(
+            *f.hooks.removed.lock().unwrap(),
+            std::slice::from_ref(&gone_id)
+        );
+        assert!(message.contains("Not removed"), "{message}");
+        assert_eq!(f.doctor.workspaces.all().unwrap().len(), 2);
+        assert!(!f.doctor.workspaces.data_dir(&gone_id).exists());
+        f.hooks.busy.lock().unwrap().clear();
+        f.doctor.fix("workspaces.drop_missing", true).unwrap();
         assert_eq!(check(&f.doctor.checks(), "workspaces").status, Status::Ok);
+    }
+
+    #[test]
+    fn a_folder_is_missing_only_when_its_parent_is_there() {
+        let root = tempfile::tempdir().unwrap();
+        let here = root.path().join("here");
+        fs::create_dir(&here).unwrap();
+        assert_eq!(reach(&here), Reach::Reachable);
+        assert_eq!(reach(&root.path().join("gone")), Reach::Missing);
+        assert!(matches!(
+            reach(&root.path().join("no/such/tree")),
+            Reach::Unavailable(_)
+        ));
+        let drive = format!(
+            "/Volumes/elitea-doctor-{:08x}/project",
+            rand::random::<u32>()
+        );
+        assert_eq!(
+            reach(Path::new(&drive)),
+            Reach::Unavailable("drive not connected")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_the_app_may_not_read_or_on_a_drive_not_connected_is_never_removed() {
+        use std::os::unix::fs::PermissionsExt as _;
+        if rustix::process::geteuid().is_root() {
+            return; // root reads a 000 folder anyway
+        }
+        let f = fixture();
+        let locked = tempfile::tempdir().unwrap();
+        let gone = tempfile::tempdir().unwrap();
+        let locked_id = f.doctor.workspaces.add(locked.path()).unwrap().id;
+        f.doctor.workspaces.add(gone.path()).unwrap();
+        fs::create_dir_all(f.doctor.workspaces.data_dir(&locked_id)).unwrap();
+        // A workspace on a drive that is not connected (written as stored).
+        let file = f.doctor.workspaces.file_path();
+        let mut stored: Vec<Value> =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        stored.push(serde_json::json!({
+            "id": "0123456789abcdef0123456789abcdef",
+            "path": format!("/Volumes/elitea-doctor-{:08x}/project", rand::random::<u32>()),
+            "name": "project", "project_id": null,
+        }));
+        fs::write(&file, serde_json::to_string(&stored).unwrap()).unwrap();
+        fs::set_permissions(locked.path(), fs::Permissions::from_mode(0o000)).unwrap();
+        drop(gone);
+
+        let c = check(&f.doctor.checks(), "workspaces").clone();
+        assert!(c.message.contains("not allowed to read"), "{}", c.message);
+        assert!(c.message.contains("drive not connected"), "{}", c.message);
+        if cfg!(target_os = "macos") {
+            assert!(c.message.contains("Privacy & Security"), "{}", c.message);
+        }
+        f.doctor.fix("workspaces.drop_missing", true).unwrap();
+        let left: Vec<String> = f
+            .doctor
+            .workspaces
+            .all()
+            .unwrap()
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        fs::set_permissions(locked.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(left.len(), 2, "only the gone one left the list: {left:?}");
+        assert!(left.contains(&locked_id));
+        assert!(
+            f.doctor.workspaces.data_dir(&locked_id).exists(),
+            "its data is kept"
+        );
+        // With only those left, there is nothing to repair.
+        let c = check(&f.doctor.checks(), "workspaces").clone();
+        assert_eq!(c.fix_id, None, "{c:?}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn moving_the_sign_in_aside_signs_out_on_this_computer() {
+        use crate::store::SecretStore as _;
+        use std::os::unix::fs::PermissionsExt as _;
+        let f = fixture();
+        f.doctor
+            .credentials
+            .slot("device-session")
+            .save("planted?")
+            .unwrap();
+        fs::set_permissions(
+            f.doctor.credentials.path(),
+            fs::Permissions::from_mode(0o666),
+        )
+        .unwrap();
+        let hooks = f.hooks.clone();
+        let doctor = whole(f.doctor);
+        let epoch = doctor.auth.session_epoch();
+        let message = doctor.fix("credentials.move_aside", false).await.unwrap();
+        // The local sign-out ran: a new session epoch, turns forgotten and
+        // the webview told, once.
+        assert!(doctor.auth.session_epoch() > epoch);
+        assert_eq!(hooks.signed_out.load(Ordering::SeqCst), 1);
+        assert!(!doctor.auth.state().unwrap().signed_in);
+        // The moved file is not read, so its session is not revoked: said.
+        assert!(message.contains("not ended on the server"), "{message}");
+        assert_eq!(doctor.auth.pending_revoke_count(), 0);
+        // Nothing to move: no sign-out.
+        doctor.fix("credentials.move_aside", false).await.unwrap();
+        assert_eq!(hooks.signed_out.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -997,7 +1376,7 @@ mod tests {
             (c.status, c.fix_id),
             (Status::Fail, Some("workspaces.move_aside"))
         );
-        f.doctor.fix("workspaces.move_aside").unwrap();
+        f.doctor.fix("workspaces.move_aside", false).unwrap();
         assert!(f.doctor.workspaces.all().unwrap().is_empty());
     }
 
@@ -1014,7 +1393,7 @@ mod tests {
 
     #[test]
     fn an_unknown_repair_is_refused() {
-        assert!(fixture().doctor.fix("rm -rf").is_err());
+        assert!(fixture().doctor.fix("rm -rf", false).is_err());
     }
 
     trait WriteAll {

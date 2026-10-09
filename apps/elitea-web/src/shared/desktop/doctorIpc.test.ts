@@ -5,15 +5,22 @@ import { WorkspaceIpcError } from './workspaceIpc';
 
 describe('createDoctorIpc', () => {
   it('maps to doctor_run / doctor_fix with snake_case arguments', async () => {
-    const invoke = vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce({ message: 'Done.' });
+    const invoke = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce({ message: 'Done.' })
+      .mockResolvedValueOnce({ message: 'Removed.' });
     const ipc = createDoctorIpc(invoke);
     await ipc.run();
     await ipc.run('local');
     expect(await ipc.fix('credentials.tighten')).toBe('Done.');
+    expect(await ipc.fix('workspaces.drop_missing', true)).toBe('Removed.');
     expect(invoke.mock.calls).toEqual([
       ['doctor_run', {}],
       ['doctor_run', { scope: 'local' }],
       ['doctor_fix', { fix_id: 'credentials.tighten' }],
+      ['doctor_fix', { fix_id: 'workspaces.drop_missing', confirm: true }],
     ]);
   });
 

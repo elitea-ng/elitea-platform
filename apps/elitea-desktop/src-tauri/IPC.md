@@ -229,7 +229,7 @@ the same account sees it again, and another account does not);
 | `reveal_path` | `{workspace_id, path}` | `null` — shows the file or folder in Finder / the file manager. |
 | `open_path` | `{workspace_id, path}` | `null` — opens it with its default app. |
 | `doctor_run` | `{scope?: "local"}` | `Check[]` — the Doctor's checks (README, "Diagnostics"); `"local"` checks this computer's files only (no network: what the launch notice uses). Never rejects. |
-| `doctor_fix` | `{fix_id}` | `{message}` — applies the repair a check named in `fix_id`, then the UI runs the checks again. Rejects with the reason when the repair fails or `fix_id` is unknown. |
+| `doctor_fix` | `{fix_id, confirm?: boolean}` | `{message}` — applies the repair a check named in `fix_id`, then the UI runs the checks again. A check with `fix_confirm` names what its repair deletes: the UI shows it and passes `confirm: true` only once the person confirmed; without it that repair is refused and nothing is deleted. Rejects with the reason when the repair fails or `fix_id` is unknown. |
 | `app_ready` | — | `AppCommand[]` — the page now listens to `app://command` (call it once the listener is live); the commands the host sent before that, oldest first. Never rejects. |
 
 ```ts
@@ -243,8 +243,25 @@ type Check = {
                          // | history.tighten | history.move_aside | workspaces.drop_missing
                          // | workspaces.move_aside | revokes.retry
   fix_label?: string;
+  fix_confirm?: string;  // what the repair deletes; ask before passing `confirm: true`
 };
 ```
+
+The repairs go through the app's own paths. `workspaces.drop_missing`
+removes each folder that is **gone** (its parent folder is there, it is not,
+and it is not on a `/Volumes/<drive>` that is not connected) exactly as
+`workspace_remove` does — refused while a turn runs in it (named in the
+message, left in the list), its remembered approvals, undo checkpoints, kept
+turns and thread history deleted — and only with `confirm`. A folder the OS
+will not let the app read (macOS privacy protection, permissions) is reported
+with how to allow it (System Settings › Privacy & Security › Files and
+Folders, or Full Disk Access) and one on a drive that is not connected as
+unavailable; neither is ever offered for removal. `credentials.move_aside`
+moves the file aside, then signs out on this computer as `host_sign_out`
+does (cached token and unsaved session forgotten, every turn cancelled and
+forgotten, the webview's data cleared and `signed_out` sent on
+`app://command`); the moved file is not trusted, so it is never read and its
+session is not revoked on the server (the message says so).
 
 ```ts
 type AppPlatform = {
@@ -296,6 +313,7 @@ type AppCommand = { id: string; args?: object };
 | `workspace_open_failed` | `{message: string}` | One of those folders could not be opened (the first failure; a message for a person). |
 | `files_dropped` | `{paths: string[]}` | Files (not folders) were dropped on the window: their **absolute** paths, in drop order. The host does nothing else with them; a path inside a workspace can be made relative against `Workspace.path` (e.g. for `mentions`). |
 | `run_diagnostics` | — | Help ▸ Run Diagnostics…: open the Doctor. Sent live, never queued (the connect screen listens without `app_ready`). |
+| `signed_out` | — | The session ended on this computer outside a sign-out the page asked for (the Doctor moved the stored sign-in aside): drop what the page shows of it (the desktop shell reloads to the connect screen). Sent live, never queued. |
 | `focus_turn` | `{workspace_id: string, turn_id: string}` | Reserved: show this turn. Not sent yet — the notification plugin has no click callback on desktop, so clicking a notification only activates the app. |
 
 **Open Folder… is host-side**: the menu item runs the native folder picker

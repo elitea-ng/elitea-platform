@@ -10,6 +10,9 @@ import { renderWithTheme } from '@/shared/ui/lib/testTheme';
 
 import { DesktopShell } from './DesktopShell';
 
+// The signed-in app itself is not under test here: a stand-in mounts nothing.
+vi.mock('./launchApp', () => ({ launchApp: vi.fn(() => Promise.resolve({ unmount: vi.fn() })) }));
+
 const STATE: HostState = {
   configured: true,
   origin: 'https://h.example',
@@ -125,6 +128,68 @@ describe('DesktopShell diagnostics', () => {
     await waitFor(() => expect(appIpc.subscriberCount()).toBe(1));
     act(() => appIpc.emit({ id: 'run_diagnostics' }));
     expect(await screen.findByRole('dialog', { name: 'Diagnostics' })).toBeInTheDocument();
+  });
+
+  it('asks before a repair that deletes data, and passes the confirmation only then', async () => {
+    const { bridge } = hostBridge();
+    const GONE: DoctorCheck = {
+      id: 'workspaces',
+      title: 'Workspaces',
+      status: 'warn',
+      message: 'These folders no longer exist: old-repo.',
+      fix_id: 'workspaces.drop_missing',
+      fix_label: 'Remove them from the list',
+      fix_confirm: 'Remove old-repo from the list? Its thread history here is deleted.',
+    };
+    const doctor = createFakeDoctorIpc([GONE], { 'workspaces.drop_missing': () => [OK] });
+    const appIpc = createFakeAppIpc();
+    const user = userEvent.setup();
+    renderWithTheme(<DesktopShell bridge={bridge} doctor={doctor} appIpc={appIpc} />);
+    await screen.findByRole('button', { name: 'Continue' });
+    await waitFor(() => expect(appIpc.subscriberCount()).toBe(1));
+    act(() => appIpc.emit({ id: 'run_diagnostics' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Diagnostics' });
+    const fix = await within(dialog).findByRole('button', { name: 'Fix: Workspaces' });
+
+    // Cancelled: nothing runs.
+    await user.click(fix);
+    let confirm = await screen.findByRole('dialog', { name: 'Remove them from the list' });
+    expect(within(confirm).getByText(/thread history here is deleted/)).toBeInTheDocument();
+    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Remove them from the list' })).not.toBeInTheDocument());
+    expect(doctor.calls.fixes).toEqual([]);
+    expect(doctor.calls.refused).toEqual([]);
+
+    // Confirmed: the repair runs, with the confirmation.
+    await user.click(await within(dialog).findByRole('button', { name: 'Fix: Workspaces' }));
+    confirm = await screen.findByRole('dialog', { name: 'Remove them from the list' });
+    await user.click(within(confirm).getByRole('button', { name: 'Remove them from the list' }));
+    expect(await within(dialog).findByText('Fixed.')).toBeInTheDocument();
+    expect(doctor.calls.fixes).toEqual(['workspaces.drop_missing']);
+    expect(doctor.calls.refused).toEqual([]);
+  });
+
+  it('a session the host ended on this computer resets the signed-in app', async () => {
+    const { bridge } = hostBridge();
+    vi.mocked(bridge.state).mockResolvedValue({ ...STATE, signedIn: true });
+    const appIpc = createFakeAppIpc();
+    const onSignedOut = vi.fn();
+    renderWithTheme(<DesktopShell bridge={bridge} appIpc={appIpc} onSignedOut={onSignedOut} />);
+    await waitFor(() => expect(appIpc.subscriberCount()).toBe(1));
+    act(() => appIpc.emit({ id: 'run_diagnostics' }));
+    expect(onSignedOut).not.toHaveBeenCalled();
+    act(() => appIpc.emit({ id: 'signed_out' }));
+    expect(onSignedOut).toHaveBeenCalledTimes(1);
+  });
+
+  it('a host sign-out on the connect screen changes nothing', async () => {
+    const { bridge } = hostBridge();
+    const appIpc = createFakeAppIpc();
+    const onSignedOut = vi.fn();
+    renderWithTheme(<DesktopShell bridge={bridge} appIpc={appIpc} onSignedOut={onSignedOut} />);
+    await screen.findByRole('button', { name: 'Continue' });
+    act(() => appIpc.emit({ id: 'signed_out' }));
+    expect(onSignedOut).not.toHaveBeenCalled();
   });
 
   it('offers the Doctor next to a sign-in the stored file blocked', async () => {

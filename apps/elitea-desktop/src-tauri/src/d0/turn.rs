@@ -1455,6 +1455,20 @@ impl AgentHost {
     }
 }
 
+/// The Doctor's repairs go through the host's own paths: a workspace leaves
+/// the list as `workspace_remove` removes it (refused while a turn runs in
+/// it; its session, kept turns and thread history go), and a local sign-out
+/// forgets every turn as `host_sign_out` does.
+impl crate::doctor::DoctorHooks for AgentHost {
+    fn remove_workspace(&self, workspace_id: &str) -> Result<(), String> {
+        Self::remove_workspace(self, workspace_id).map_err(|error| error.message)
+    }
+
+    fn signed_out(&self) {
+        self.forget_identity();
+    }
+}
+
 struct Prepared {
     /// The conversation as the UI named it (its id or UUID).
     conversation: String,

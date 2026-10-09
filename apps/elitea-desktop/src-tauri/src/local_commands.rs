@@ -37,6 +37,31 @@ pub struct LocalState {
     pub history: Option<Arc<crate::history::HistoryStore>>,
 }
 
+/// The Doctor's repairs through the app's own paths: the agent host's (see
+/// its `DoctorHooks`), and for a local sign-out also what `host_sign_out`
+/// does to the webview — its stored data cleared, and `signed_out` sent so
+/// the page drops the session it shows.
+pub struct AppDoctorHooks {
+    pub agents: Arc<AgentHost>,
+    pub app: AppHandle,
+}
+
+impl crate::doctor::DoctorHooks for AppDoctorHooks {
+    fn remove_workspace(&self, workspace_id: &str) -> Result<(), String> {
+        crate::doctor::DoctorHooks::remove_workspace(self.agents.as_ref(), workspace_id)
+    }
+
+    fn signed_out(&self) {
+        crate::doctor::DoctorHooks::signed_out(self.agents.as_ref());
+        if let Some(window) = self.app.get_webview_window("main")
+            && let Err(error) = window.clear_all_browsing_data()
+        {
+            log::warn!("could not clear the webview's data: {error}");
+        }
+        crate::app_events::emit_live(&self.app, "signed_out");
+    }
+}
+
 /// A local-work command's failure as the webview receives it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct IpcError {

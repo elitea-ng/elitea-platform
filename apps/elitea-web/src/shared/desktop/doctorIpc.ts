@@ -20,13 +20,15 @@ export interface DoctorCheck {
   /** The repair `fix` takes, when the host has one. */
   fix_id?: string;
   fix_label?: string;
+  /** What the repair deletes: ask the person first, then pass `confirm` (the host refuses it without). */
+  fix_confirm?: string;
 }
 
 export interface DoctorIpc {
   /** `local`: this computer's files only (no network) — what the launch notice uses. */
   run(scope?: 'local'): Promise<DoctorCheck[]>;
-  /** Apply one repair; what happened, for a person. */
-  fix(fixId: string): Promise<string>;
+  /** Apply one repair; what happened, for a person. `confirm`: the person confirmed the check's `fix_confirm`. */
+  fix(fixId: string, confirm?: boolean): Promise<string>;
 }
 
 export function createDoctorIpc(invoke: HostInvoke): DoctorIpc {
@@ -36,7 +38,8 @@ export function createDoctorIpc(invoke: HostInvoke): DoctorIpc {
     });
   return {
     run: (scope) => call<DoctorCheck[]>('doctor_run', scope === undefined ? {} : { scope }),
-    fix: (fixId) => call<{ message: string }>('doctor_fix', { fix_id: fixId }).then((outcome) => outcome.message),
+    fix: (fixId, confirm) =>
+      call<{ message: string }>('doctor_fix', confirm === true ? { fix_id: fixId, confirm: true } : { fix_id: fixId }).then((outcome) => outcome.message),
   };
 }
 

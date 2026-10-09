@@ -1423,3 +1423,54 @@ async fn removing_a_workspace_forgets_its_threads() {
             .is_empty()
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_doctor_removes_a_vanished_workspace_the_way_the_app_does() {
+    let slow = Arc::new(AtomicBool::new(false));
+    let h = harness(
+        stalling_platform(slow.clone()).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    let done = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h.emitter, &done.turn_id).await;
+    slow.store(true, Ordering::SeqCst);
+    let running = h.host.start(request(&h.workspace_id)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The folder vanishes while a turn runs in it.
+    std::fs::remove_dir_all(h.folder.path()).unwrap();
+    let workspaces = Arc::new(WorkspaceStore::new(h.app.path().to_owned()));
+    let doctor = crate::doctor::LocalDoctor {
+        hooks: h.host.clone(),
+        config_dir: h.app.path().join("config"),
+        data_dir: h.app.path().to_owned(),
+        log_dir: None,
+        credentials: crate::credentials_file::CredentialsFile::new(h.app.path().join("config")),
+        workspaces: workspaces.clone(),
+        history: None,
+    };
+    let message = doctor.fix("workspaces.drop_missing", true).unwrap();
+    assert!(message.contains("Not removed"), "{message}");
+    assert_eq!(workspaces.all().unwrap().len(), 1, "refused while it runs");
+    assert!(h.host.changes(&done.turn_id).is_ok());
+
+    h.host.cancel(&running.turn_id).unwrap();
+    slow.store(false, Ordering::SeqCst);
+    until_done_of(&h.emitter, &running.turn_id).await;
+    doctor.fix("workspaces.drop_missing", true).unwrap();
+    assert!(workspaces.all().unwrap().is_empty());
+    // As workspace_remove: its kept turns, its session and its thread
+    // history are gone too.
+    assert_eq!(
+        h.host.changes(&done.turn_id).unwrap_err().code,
+        "turn_unknown"
+    );
+    assert!(
+        h.host
+            .thread_history(&h.workspace_id, "42")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

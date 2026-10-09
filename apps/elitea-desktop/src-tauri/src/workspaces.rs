@@ -140,24 +140,6 @@ impl WorkspaceStore {
         self.with(|| self.read())
     }
 
-    /// Forget every workspace whose folder is gone or unreadable (the
-    /// Doctor's repair); the names forgotten. Their host data goes too.
-    ///
-    /// # Errors
-    ///
-    /// The file cannot be read or written.
-    pub fn drop_unreachable(&self) -> Result<Vec<String>, HostError> {
-        let gone: Vec<Workspace> = self
-            .all()?
-            .into_iter()
-            .filter(|w| fs::read_dir(&w.path).is_err())
-            .collect();
-        for workspace in &gone {
-            self.remove(&workspace.id)?;
-        }
-        Ok(gone.into_iter().map(|w| w.name).collect())
-    }
-
     /// Add a folder (or return the workspace it already is).
     ///
     /// # Errors

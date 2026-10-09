@@ -47,7 +47,9 @@ use crate::d0::remote_tools::RetryPolicy;
 use crate::d0::turn::{AgentHost, HostDeps};
 use crate::error::HostError;
 use crate::history::HistoryStore;
-use crate::local_commands::{AuthCredentials, LocalState, MainWindowEvents, StoredPolicy};
+use crate::local_commands::{
+    AppDoctorHooks, AuthCredentials, LocalState, MainWindowEvents, StoredPolicy,
+};
 use crate::settings::SettingsFiles;
 use crate::tokens::TokenEndpoint;
 use crate::workspaces::WorkspaceStore;
@@ -161,9 +163,25 @@ pub fn run() {
                 }
             };
             let workspaces = Arc::new(WorkspaceStore::new(data_dir.clone()));
+            let agents = Arc::new(
+                AgentHost::new(HostDeps {
+                    credentials: Arc::new(AuthCredentials(auth.clone())),
+                    client_version: env!("CARGO_PKG_VERSION").to_owned(),
+                    policy: Arc::new(StoredPolicy(SettingsFiles::new(config_dir.clone()))),
+                    workspaces: workspaces.clone(),
+                    emitter: Arc::new(MainWindowEvents(app.handle().clone())),
+                    retry: RetryPolicy::default(),
+                    history: history.clone(),
+                })
+                .map_err(|error| error.message)?,
+            );
             app.manage(Arc::new(doctor::Doctor {
                 local: doctor::LocalDoctor {
-                    config_dir: config_dir.clone(),
+                    hooks: Arc::new(AppDoctorHooks {
+                        agents: agents.clone(),
+                        app: app.handle().clone(),
+                    }),
+                    config_dir,
                     data_dir,
                     log_dir: app.path().app_log_dir().ok(),
                     credentials: credentials.clone(),
@@ -172,20 +190,10 @@ pub fn run() {
                 },
                 auth: auth.clone(),
             }));
-            let agents = AgentHost::new(HostDeps {
-                credentials: Arc::new(AuthCredentials(auth.clone())),
-                client_version: env!("CARGO_PKG_VERSION").to_owned(),
-                policy: Arc::new(StoredPolicy(SettingsFiles::new(config_dir))),
-                workspaces: workspaces.clone(),
-                emitter: Arc::new(MainWindowEvents(app.handle().clone())),
-                retry: RetryPolicy::default(),
-                history: history.clone(),
-            })
-            .map_err(|error| error.message)?;
             app.manage(LocalState {
                 workspaces,
                 history,
-                agents: Arc::new(agents),
+                agents,
             });
             app.manage(AppState { auth });
             app.manage(Arc::new(Attention::new(app.handle().clone())));

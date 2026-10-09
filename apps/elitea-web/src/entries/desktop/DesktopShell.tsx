@@ -59,8 +59,10 @@ export interface DesktopShellProps {
   bridge: HostBridge | undefined;
   /** The host's Doctor; without it there is no diagnostics notice or dialog. */
   doctor?: DoctorIpc | undefined;
-  /** `app://command`, for Help › Run Diagnostics… (listened to live; `ready` is the app's). */
+  /** `app://command`, for Help › Run Diagnostics… and `signed_out` (listened to live; `ready` is the app's). */
   appIpc?: AppIpc | undefined;
+  /** The host ended the session on this computer while the app ran (`signed_out`); default: reload to the connect screen. */
+  onSignedOut?: (() => void) | undefined;
 }
 
 /**
@@ -126,9 +128,39 @@ function useDiagnostics(doctor: DoctorIpc | undefined, appIpc: AppIpc | undefine
   return { element, show: doctor === undefined ? undefined : show };
 }
 
-export function DesktopShell({ bridge, doctor, appIpc }: DesktopShellProps) {
+/**
+ * The host's `signed_out` (the Doctor moved the stored sign-in aside): the
+ * host already forgot the session, so a signed-in app reloads — the same
+ * thorough reset as a sign-out — and lands on the connect screen.
+ */
+function useHostSignOut(appIpc: AppIpc | undefined, active: boolean, onSignedOut: () => void): void {
+  useEffect(() => {
+    if (appIpc === undefined || !active) return undefined;
+    let off: (() => void) | undefined;
+    let disposed = false;
+    appIpc
+      .onCommand((command) => {
+        if (command.id === 'signed_out') onSignedOut();
+      })
+      .then((unsubscribe) => {
+        if (disposed) unsubscribe();
+        else off = unsubscribe;
+      })
+      .catch(() => undefined);
+    return () => {
+      disposed = true;
+      off?.();
+    };
+  }, [appIpc, active, onSignedOut]);
+}
+
+const reloadPage = (): void => window.location.reload();
+
+export function DesktopShell({ bridge, doctor, appIpc, onSignedOut = reloadPage }: DesktopShellProps) {
   const diagnostics = useDiagnostics(doctor, appIpc);
-  const shell = <ShellScreens bridge={bridge} onDiagnose={diagnostics.show} />;
+  const [signedIn, setSignedIn] = useState(false);
+  useHostSignOut(appIpc, signedIn, onSignedOut);
+  const shell = <ShellScreens bridge={bridge} onDiagnose={diagnostics.show} onAppShown={setSignedIn} />;
   return (
     <>
       {shell}
@@ -149,8 +181,17 @@ function ErrorAlert({ text, onDiagnose }: { text: string; onDiagnose: (() => voi
   );
 }
 
-function ShellScreens({ bridge, onDiagnose }: { bridge: HostBridge | undefined; onDiagnose: (() => void) | undefined }) {
+interface ShellScreensProps {
+  bridge: HostBridge | undefined;
+  onDiagnose: (() => void) | undefined;
+  /** Whether the signed-in app is the screen now. */
+  onAppShown: (shown: boolean) => void;
+}
+
+function ShellScreens({ bridge, onDiagnose, onAppShown }: ShellScreensProps) {
   const [phase, setPhase] = useState<Phase>(bridge === undefined ? { kind: 'no-host' } : { kind: 'loading' });
+  const appShown = phase.kind === 'app';
+  useEffect(() => onAppShown(appShown), [appShown, onAppShown]);
   const [url, setUrl] = useState('');
   /** The attempt the person cancelled: its rejection is not an error to show. */
   const cancelled = useRef(false);
