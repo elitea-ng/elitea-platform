@@ -48,7 +48,7 @@ pub struct LocalWorkPolicy {
     /// Whether a command may use the network.
     pub network: bool,
     /// When non-empty, the only commands that may run (argv prefixes, see
-    /// [`crate::approvals::CommandPattern`]). A ceiling, not an approval:
+    /// [`crate::command::CommandPattern`]). A ceiling, not an approval:
     /// an admissible command is still asked unless another rule allows it.
     pub command_allow: Vec<String>,
     /// Commands that never run.

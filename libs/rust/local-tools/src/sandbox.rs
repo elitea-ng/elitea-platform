@@ -3,7 +3,7 @@
 //! | OS | Mechanism | Reported enforcement |
 //! |---|---|---|
 //! | macOS | Seatbelt: `/usr/bin/sandbox-exec -p <profile>` with a profile generated per command ([`seatbelt`]) | `full`: writes confined, network denied (loopback included) |
-//! | Linux | Landlock, applied by a re-executed helper ([`landlock`]) that the host binary dispatches to | `partial`: file system per the kernel's ABI; network denial covers TCP only (Landlock has no UDP or raw-socket rules); no seccomp yet |
+//! | Linux | Landlock, applied by a re-executed helper (`sandbox::landlock`, Linux builds only) that the host binary dispatches to | `partial`: file system per the kernel's ABI; network denial covers TCP only (Landlock has no UDP or raw-socket rules); no seccomp yet |
 //! | Windows | none (the crate does not build there yet; restricted tokens are phase D3) | `none` |
 //!
 //! Reads are never confined: a command sees what the person's account sees.
@@ -65,8 +65,8 @@ impl SandboxRequest {
 /// The host's sandbox settings.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct SandboxConfig {
-    /// Linux: the executable that dispatches [`landlock::HELPER_FLAG`] to
-    /// [`landlock::run_if_requested`] (normally the host binary itself).
+    /// Linux: the executable that dispatches `landlock::HELPER_FLAG` to
+    /// `landlock::run_if_requested` (normally the host binary itself).
     /// Without it, nothing is enforced on Linux.
     pub linux_helper: Option<PathBuf>,
     /// Run commands even when the requested confinement cannot be enforced
