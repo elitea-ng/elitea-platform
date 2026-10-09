@@ -152,6 +152,35 @@ timeout while a release image build saturated the machine. The rerun above had n
 - **Not shown in the browser:** a node writing several outputs. No node type on this stack writes several declared outputs without a sandbox or a real model. The graph test `several_written_outputs_render_as_one_object_in_declared_order` covers it.
 - **Environment note:** one message was lost during a short database timeout in Main ("context deadline exceeded" at 19:16:11Z, under load). The resend succeeded. This is unrelated to the change.
 
+### 7a. Retest after the main merges (2026-10-09)
+
+Until #1160, Worker image builds shared one `/cargo-target` cache across worktrees and could ship another checkout's
+binary. Every Worker image used for evidence was therefore checked by copying its binary out of a container
+(`docker create` + `docker cp`) and searching it with `grep -a`. A #1161 binary must contain the trace key
+`__elitea_pipeline_result_trace_v1` and must not contain the #1157 string `elitea.graph.split_out.config.v1`.
+
+| Image | Trace key | #1157 string | Result |
+|---|---|---|---|
+| `result-fix-e49837110bc8` (earlier evidence) | 1 | 0 | this branch |
+| `result-fix-3fb519060495` (earlier evidence) | 1 | 0 | this branch |
+| `retest-result-603ead1758b8` (`98bc3d4cfe5a`) | 1 | 0 | this branch |
+
+One retest build failed to compile with E0004 on `NativeAgentAssemblyErrorCode::AgentSettingsLimit`. That variant is
+in neither this branch nor `main`; the cached `agent-runtime` crate came from another worktree. The retest Worker was
+then built from `603ead17` (after the #1163/#1165 merges) with #1160's Containerfile change applied: the shared cache
+mount is locked, and every file under `/src` is touched before `cargo build`. Main is
+`elitea-main:retest-result-9edd36278187` (`4572620df3a4`, after the #1160 merge). Web is unchanged
+(`result-fix-8d6b08fcd2c4`); later Web commits only touch docs and a citation.
+
+| Chat | Input | Answer, same after reload | Execution |
+|---|---|---|---|
+| 5 "Result Records" | `[{"id":"C","qty":7},{"id":"D","qty":9}]` | a pretty JSON code block of both records | `2c4304c5…` |
+| 6 "Result Router" | `R`, then `L` | "RIGHT ran for R", then "LEFT ran for L" | `ed2959a6…`, `e7e01389…` |
+| 7 "Result LLM" | `Hello retest 1161` | "MOCK: Hello retest 1161" | `444cf2bc…` |
+
+A plain-text message to chat 5 (`retest 1161 records`, `611e4dfd…`) is answered with the same text. That is
+correct: the pipeline's only writer copies the input into `rows`.
+
 ## 8. Security
 
 | Threat | Mechanism | Proof |
