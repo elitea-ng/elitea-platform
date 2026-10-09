@@ -14,8 +14,10 @@
 compile_error!("elitea-local-tools supports macOS and Linux; Windows is ADR-0029 phase D3");
 
 pub mod approvals;
+pub mod checkpoint;
 pub mod command;
 pub mod error;
+pub mod git;
 pub mod ledger;
 pub mod patch;
 pub mod policy;
