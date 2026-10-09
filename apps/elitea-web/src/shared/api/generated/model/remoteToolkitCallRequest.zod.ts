@@ -92,14 +92,9 @@ export const RemoteToolkitCallRequest = zod
       .describe(
         "The reference an MCP authorisation answered, for the retry after it.",
       ),
-    llm_model: zod
-      .string()
-      .optional()
-      .describe("The model a toolkit that calls one should use."),
-    llm_settings: zod.record(zod.string(), zod.unknown()).optional(),
   })
   .describe(
-    "One remote tool call, inside one live local turn. Settings and credentials are never accepted. NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:177 (`remoteToolkitBody`).",
+    "One remote tool call, inside one live local turn. Settings, credentials and a model are never accepted (unknown fields are refused): a toolkit that calls a model uses the running version's `llm_settings`, resolved against the project's model catalogue. NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:177 (`remoteToolkitBody`).",
   );
 
 export type RemoteToolkitCallRequest = zod.input<

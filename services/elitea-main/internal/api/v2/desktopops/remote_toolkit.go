@@ -183,9 +183,11 @@ type remoteToolkitBody struct {
 	Arguments                 json.RawMessage            `json:"arguments"`
 	RequestID                 string                     `json:"request_id"`
 	MCPAuthorizationReference string                     `json:"mcp_authorization_reference"`
-	LLMModel                  string                     `json:"llm_model"`
-	LLMSettings               json.RawMessage            `json:"llm_settings"`
 	Confirmation              *remoteToolkitConfirmation `json:"confirmation"`
+	// No llm_model or llm_settings: a toolkit that calls a model uses the
+	// running version's (RemoteToolGrant), never a caller's choice. Unknown
+	// fields are refused (decodeRemoteToolkitBody), so a client that still
+	// sends them learns it at once.
 }
 
 // remoteCall is what one call's audit event records.
@@ -271,8 +273,6 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		ToolkitID:                 toolkitID,
 		ToolName:                  call.toolName,
 		Arguments:                 arguments,
-		LLMModel:                  body.LLMModel,
-		LLMSettings:               body.LLMSettings,
 		MCPAuthorizationReference: body.MCPAuthorizationReference,
 	}
 	confirmedAt, confirmationOK := h.validConfirmation(body.Confirmation)
@@ -305,6 +305,8 @@ func (h *remoteToolkitHandler) serve(writer http.ResponseWriter, request *http.R
 		return
 	}
 	call.toolkitType = grant.ToolkitType
+	runRequest.LLMModel = grant.LLMModel
+	runRequest.LLMSettings = append(json.RawMessage(nil), grant.LLMSettings...)
 	if grant.Sensitive != nil {
 		if body.Confirmation == nil {
 			call.outcome = "confirmation_required"
@@ -533,6 +535,7 @@ func decodeRemoteToolkitBody(writer http.ResponseWriter, request *http.Request) 
 	}
 	request.Body = http.MaxBytesReader(writer, request.Body, toolkitrun.MaxRequestBodyBytes)
 	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
 	var body remoteToolkitBody
 	if err := decoder.Decode(&body); err != nil {
 		var tooLarge *http.MaxBytesError

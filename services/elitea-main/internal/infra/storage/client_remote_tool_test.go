@@ -83,6 +83,8 @@ func TestAuthorizeRemoteToolHasExactlyTheTurnsAuthority(t *testing.T) {
 	require.Equal(t, "github", grant.ToolkitType)
 	require.Equal(t, "gh", grant.ToolkitName)
 	require.Nil(t, grant.Sensitive)
+	// The model is the version's, as the freeze resolved it.
+	require.NotEmpty(t, grant.LLMModel)
 
 	for name, mutate := range map[string]func(*RemoteToolAuthorization){
 		"a tool outside selected_tools": func(r *RemoteToolAuthorization) { r.ToolName = "create_file" },
@@ -155,4 +157,16 @@ func TestAuthorizeRemoteToolNeedsThePolicy(t *testing.T) {
 	require.NoError(t, err)
 	_, err = service.AuthorizeRemoteTool(t.Context(), clientRemoteToolRequest(nil))
 	require.ErrorIs(t, err, ErrContentUnavailable)
+}
+
+func TestFrozenRunModelKeepsOnlyTheRunsModelSettings(t *testing.T) {
+	t.Parallel()
+	model, settings := frozenRunModel(json.RawMessage(
+		`{"llm_settings":{"model_name":"gpt-x","model_project_id":1,"temperature":0.3,"max_tokens":512,` +
+			`"reasoning_effort":"low","openai_compatible":true,"max_tokens_auto":true}}`))
+	require.Equal(t, "gpt-x", model)
+	require.JSONEq(t, `{"temperature":0.3,"max_tokens":512,"reasoning_effort":"low"}`, string(settings))
+	model, settings = frozenRunModel(json.RawMessage(`{"llm_settings":{"model_name":"m","temperature":7}}`))
+	require.Equal(t, "m", model)
+	require.Nil(t, settings)
 }

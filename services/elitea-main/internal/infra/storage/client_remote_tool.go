@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"math"
+	"strings"
 
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
@@ -77,6 +78,12 @@ type RemoteToolGrant struct {
 	// Sensitive is set when the policy marks the tool sensitive: the call may
 	// run only with the caller's confirmation.
 	Sensitive *guardrails.SensitiveAction
+	// LLMModel and LLMSettings are the VERSION's model (resolved against the
+	// project's model catalogue by the freeze) and its temperature,
+	// max_tokens and reasoning_effort, for a toolkit that calls a model. The
+	// caller never chooses them.
+	LLMModel    string
+	LLMSettings json.RawMessage
 }
 
 // AuthorizeRemoteTool decides whether one remote toolkit call has the
@@ -180,6 +187,7 @@ func (service *ClientApplicationVersionService) AuthorizeRemoteTool(
 		return RemoteToolGrant{}, ErrRemoteToolNotInAgent
 	}
 	grant := RemoteToolGrant{ToolkitType: frozenTool.toolkitType, ToolkitName: frozenTool.toolkitName}
+	grant.LLMModel, grant.LLMSettings = frozenRunModel(frozen)
 	label := frozenTool.toolkitName
 	if label == "" {
 		label = frozenTool.toolkitType
@@ -353,4 +361,51 @@ func containsExact(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// frozenRunModel reads the frozen version's model and the model settings a
+// tool run accepts (toolkitcalltool's validModelSettings: temperature 0-2,
+// max_tokens -1..1048576, a known reasoning_effort). A value outside those
+// bounds is left out rather than failing the call.
+func frozenRunModel(frozen json.RawMessage) (string, json.RawMessage) {
+	var version struct {
+		LLMSettings map[string]json.RawMessage `json:"llm_settings"`
+	}
+	if json.Unmarshal(frozen, &version) != nil || version.LLMSettings == nil {
+		return "", nil
+	}
+	var model string
+	if raw, ok := version.LLMSettings["model_name"]; ok {
+		_ = json.Unmarshal(raw, &model)
+	}
+	model = strings.TrimSpace(model)
+	if len(model) > 256 || strings.ContainsAny(model, "\x00\r\n") {
+		model = ""
+	}
+	settings := map[string]any{}
+	var temperature float64
+	if raw, ok := version.LLMSettings["temperature"]; ok && json.Unmarshal(raw, &temperature) == nil &&
+		!math.IsNaN(temperature) && temperature >= 0 && temperature <= 2 {
+		settings["temperature"] = temperature
+	}
+	var maxTokens int64
+	if raw, ok := version.LLMSettings["max_tokens"]; ok && json.Unmarshal(raw, &maxTokens) == nil &&
+		maxTokens >= -1 && maxTokens <= 1048576 {
+		settings["max_tokens"] = maxTokens
+	}
+	var effort string
+	if raw, ok := version.LLMSettings["reasoning_effort"]; ok && json.Unmarshal(raw, &effort) == nil {
+		switch effort {
+		case "none", "minimal", "low", "medium", "high", "xhigh", "max":
+			settings["reasoning_effort"] = effort
+		}
+	}
+	if len(settings) == 0 {
+		return model, nil
+	}
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		return model, nil
+	}
+	return model, encoded
 }
