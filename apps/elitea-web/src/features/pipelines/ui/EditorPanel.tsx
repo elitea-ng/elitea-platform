@@ -234,8 +234,10 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
     (next, options) => {
       try {
         editPipelineYamlDocument(next, options);
+        return true;
       } catch (caught) {
         reportSerializationError(caught);
+        return false;
       }
     },
     [editPipelineYamlDocument, reportSerializationError],
@@ -313,9 +315,7 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
     [mode, onParseCodeToJson, serializeDocument, storeSetYamlCode, yamlJsonObject, yamlCode],
   );
 
-  const onAddNode = useCallback((type: PipelineNodeType) => {
-    flowEditorRef.current?.onAddNode(type);
-  }, []);
+  const onAddNode = useCallback((type: PipelineNodeType) => void flowEditorRef.current?.onAddNode(type), []);
 
   const onCopy = useCallback(() => {
     void handleCopy(yamlCode);

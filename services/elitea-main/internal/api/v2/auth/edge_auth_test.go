@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/browserauth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	v2auth "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/auth"
 	identity "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
@@ -217,17 +218,20 @@ func TestEdgeAuthAdditionalCredentialHeadersAreExplicitAndOrdered(t *testing.T) 
 	})
 }
 
+// SEC-12: this route is a credential check only. No mapper target is
+// registered, so a request for an identity projection is refused and no
+// response, accepted or refused, carries an X-Auth-* header.
 func TestEdgeAuthSuccessTargetContract(t *testing.T) {
 	tests := []struct {
 		name       string
 		path       string
 		wantStatus int
-		wantRPC    bool
 	}{
-		{name: "target omitted uses no-op mapper", path: "/auth", wantStatus: http.StatusOK},
-		{name: "rpc target emits auth headers", path: "/auth?target=rpc", wantStatus: http.StatusOK, wantRPC: true},
-		{name: "empty target is not registered", path: "/auth?target=", wantStatus: http.StatusForbidden},
-		{name: "unknown target is not registered", path: "/auth?target=unknown", wantStatus: http.StatusForbidden},
+		{name: "target omitted answers the credential check", path: "/auth", wantStatus: http.StatusOK},
+		{name: "rpc target is refused: no projection is offered", path: "/auth?target=rpc", wantStatus: http.StatusForbidden},
+		{name: "header target is refused", path: "/auth?target=header", wantStatus: http.StatusForbidden},
+		{name: "empty target is refused", path: "/auth?target=", wantStatus: http.StatusForbidden},
+		{name: "unknown target is refused", path: "/auth?target=unknown", wantStatus: http.StatusForbidden},
 	}
 
 	for _, test := range tests {
@@ -246,73 +250,114 @@ func TestEdgeAuthSuccessTargetContract(t *testing.T) {
 			} else {
 				requireAccessDenied(t, rec)
 			}
-			if got := rec.Header().Get("X-Auth-Type"); test.wantRPC && got != "token" {
-				t.Fatalf("X-Auth-Type = %q, want token", got)
-			} else if !test.wantRPC && got != "" {
-				t.Fatalf("X-Auth-Type = %q, want no auth headers", got)
+			requireNoIdentityProjection(t, rec)
+		})
+	}
+}
+
+// forgedIdentityHeaders is a caller-chosen identity projection, as a client
+// or a tenant-configured outbound request could send it.
+var forgedIdentityHeaders = map[string]string{
+	"X-Auth-Type":      "user",
+	"X-Auth-ID":        "1",
+	"X-Auth-User-ID":   "1",
+	"X-Auth-Reference": "-",
+	"X-Auth-Signature": "v1.9999999999.AAAA",
+}
+
+func requireNoIdentityProjection(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	for name := range rec.Header() {
+		if strings.HasPrefix(strings.ToLower(name), "x-auth-") {
+			t.Fatalf("response carries %s=%q; this route projects no identity", name, rec.Header().Get(name))
+		}
+	}
+}
+
+// SEC-12: identity headers a caller sends to the legacy route are neither
+// trusted nor reflected, with or without a credential and with any target.
+func TestEdgeAuthLegacyRouteIgnoresForgedIdentityHeaders(t *testing.T) {
+	validated := false
+	forward := v2auth.NewEdgeAuthHandler(tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
+		validated = true
+		if token != "signed-token" {
+			return identity.User{}, identity.ErrCredentialRejected
+		}
+		return validatedTokenUser(), nil
+	}))
+	for _, tc := range []struct {
+		name          string
+		path          string
+		authorization string
+		wantStatus    int
+	}{
+		{"forged headers alone", "/auth", "", http.StatusForbidden},
+		{"forged headers alone, rpc target", "/auth?target=rpc", "", http.StatusForbidden},
+		{"forged headers beside a rejected bearer", "/auth?target=rpc", "Bearer someone-else", http.StatusForbidden},
+		{"forged headers beside a valid bearer, rpc target", "/auth?target=rpc", "Bearer signed-token", http.StatusForbidden},
+		{"forged headers beside a valid bearer", "/auth", "Bearer signed-token", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			validated = false
+			req := newEdgeAuthRequest(tc.path)
+			for name, value := range forgedIdentityHeaders {
+				req.Header.Set(name, value)
+			}
+			if tc.authorization != "" {
+				req.Header.Set("Authorization", tc.authorization)
+			}
+			rec := httptest.NewRecorder()
+			forward.ServeHTTP(rec, req)
+			if tc.wantStatus == http.StatusOK {
+				requireOK(t, rec)
+			} else {
+				requireAccessDenied(t, rec)
+			}
+			requireNoIdentityProjection(t, rec)
+			if tc.authorization == "" && validated {
+				t.Fatal("forged identity headers reached the credential validator")
 			}
 		})
 	}
 }
 
-func TestEdgeAuthPreservesTokenRowAndOwningUserAcrossHeaders(t *testing.T) {
-	forward := v2auth.NewEdgeAuthHandler(tokenValidatorFunc(func(_ context.Context, token string) (identity.User, error) {
-		if token != "signed-token" {
-			t.Fatalf("validated token = %q", token)
-		}
-		// Token row 42 and user row 42 both exist in this scenario, but token
-		// row 42 deliberately belongs to user 7.
-		return identity.User{
-			ID:       "7",
-			TokenID:  "42",
-			UserID:   "7",
-			Email:    "owner@example.test",
-			AuthType: "token",
-		}, nil
-	}))
-	forwardReq := newEdgeAuthRequest("/auth?target=rpc")
-	forwardReq.Header.Set("Authorization", "Bearer signed-token")
-	forwardRec := httptest.NewRecorder()
-	forward.ServeHTTP(forwardRec, forwardReq)
-	requireOK(t, forwardRec)
-	if got := forwardRec.Header().Get("X-Auth-ID"); got != "42" {
-		t.Fatalf("X-Auth-ID = %q, want token row 42", got)
+// SEC-12: the unsigned projection this route used to emit is refused by
+// Main's auth middleware with the real forwarded-identity verifier, even from
+// a socket peer inside trusted_proxy_cidrs: the request is unauthenticated.
+func TestEdgeAuthLegacyProjectionShapeIsRefusedDownstream(t *testing.T) {
+	resolver, err := browserauth.NewTrustedProxyResolver(browserauth.TrustedProxyConfig{
+		TrustedProxyCIDRs:        []string{"10.0.0.0/8"},
+		PublicOrigin:             "https://elitea.example.test",
+		IdentityProjectionSecret: []byte(strings.Repeat("k", 32)),
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if got := forwardRec.Header().Get("X-Auth-User-ID"); got != "7" {
-		t.Fatalf("X-Auth-User-ID = %q, want owner 7", got)
-	}
-	if got := forwardRec.Header().Get("X-Auth-Reference"); got != "-" {
-		t.Fatalf("X-Auth-Reference = %q, want current-baseline token reference", got)
-	}
-
-	var downstream identity.User
+	reached := false
 	authMiddleware := middleware.Auth(middleware.AuthConfig{
-		ForwardedIdentityVerifier: forwardedIdentityVerifierFunc(func(*http.Request) error { return nil }),
+		ForwardedIdentityVerifier: resolver,
 		PrincipalValidator: principalValidatorFunc(func(_ context.Context, user identity.User) (identity.User, error) {
-			if user.ID != "42" || user.TokenID != "42" || user.UserID != "7" {
-				t.Fatalf("principal validator received %+v", user)
-			}
 			return user, nil
 		}),
-	})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var ok bool
-		downstream, ok = identity.UserFromContext(r.Context())
-		if !ok {
-			t.Fatal("missing downstream identity")
-		}
+	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reached = true
 		w.WriteHeader(http.StatusNoContent)
 	}))
-	downstreamReq := httptest.NewRequest(http.MethodGet, "/api/v2/configurations/7", nil)
-	for _, header := range []string{"X-Auth-Type", "X-Auth-ID", "X-Auth-User-ID", "X-Auth-Reference"} {
-		downstreamReq.Header.Set(header, forwardRec.Header().Get(header))
-	}
-	downstreamRec := httptest.NewRecorder()
-	authMiddleware.ServeHTTP(downstreamRec, downstreamReq)
-	if downstreamRec.Code != http.StatusNoContent {
-		t.Fatalf("downstream status = %d, body=%s", downstreamRec.Code, downstreamRec.Body.String())
-	}
-	if downstream.TokenID != "42" || downstream.UserID != "7" {
-		t.Fatalf("downstream identity = %+v", downstream)
+	for _, projection := range []map[string]string{
+		// The shape the route answered with for target=rpc.
+		{"X-Auth-Type": "token", "X-Auth-ID": "42", "X-Auth-User-ID": "7", "X-Auth-Reference": "-"},
+		forgedIdentityHeaders,
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v2/configurations/7", nil)
+		req.RemoteAddr = "10.1.2.3:41000"
+		for name, value := range projection {
+			req.Header.Set(name, value)
+		}
+		rec := httptest.NewRecorder()
+		authMiddleware.ServeHTTP(rec, req)
+		if rec.Code != http.StatusUnauthorized || reached {
+			t.Fatalf("unsigned projection %v: status=%d reached=%v, want 401 and no handler", projection, rec.Code, reached)
+		}
 	}
 }
 
