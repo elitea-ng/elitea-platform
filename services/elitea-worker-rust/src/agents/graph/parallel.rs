@@ -16,6 +16,7 @@ use ring::digest;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::fanout_control::{FanoutCancellation, is_lease_lost, latch_cancelled};
 use super::yaml::{ParallelBranchDefinition, ParallelNodeDefinition};
 
 #[path = "parallel_checkpoint.rs"]
@@ -44,7 +45,8 @@ const BRANCH_INPUT_DIGEST_DOMAIN: &[u8] = b"elitea.graph.parallel.branch-input.v
 ///
 /// The ADK step is restored unchanged while the node remains pending and moves
 /// forward before a later loop visit. The child checkpoint factory adds its
-/// opaque execution/generation/definition scope before deriving a child thread.
+/// opaque definition scope and the occurrence's frozen origin before deriving a
+/// child thread.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ParallelActivation {
@@ -83,6 +85,31 @@ impl ParallelActivation {
     }
 }
 
+/// The execution identity under which an occurrence first froze its children.
+/// Restores, continuations and reclaims reuse it; they never re-read their own.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ParallelChildOrigin {
+    pub(crate) execution_id: String,
+    pub(crate) generation: u64,
+}
+
+impl ParallelChildOrigin {
+    pub(super) fn validate(&self) -> Result<(), GraphError> {
+        if self.execution_id.is_empty()
+            || self.execution_id.len() > 256
+            || self.execution_id.chars().any(char::is_control)
+            || self.generation == 0
+        {
+            return Err(parallel_error(
+                "graph.parallel.corrupt_occurrence",
+                "the frozen child origin is invalid",
+            ));
+        }
+        Ok(())
+    }
+}
+
 /// A child-thread checkpointer minted from the current opaque graph authority.
 ///
 /// The thread ID is safe routing metadata. The checkpointer remains the sole
@@ -95,12 +122,31 @@ pub(crate) struct ParallelChildCheckpoint {
 
 #[async_trait]
 pub(crate) trait ParallelChildCheckpointerFactory: Send + Sync {
+    /// The current claim's identity, used only when an occurrence first freezes.
+    fn child_origin(
+        &self,
+        activation: &ParallelActivation,
+    ) -> Result<ParallelChildOrigin, GraphError>;
+
+    /// Pure derivation of a branch thread from a frozen origin. Activates nothing.
+    fn branch_thread_id(
+        &self,
+        activation: &ParallelActivation,
+        branch: &ParallelBranchDefinition,
+        ordinal: usize,
+        input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
+    ) -> Result<String, GraphError>;
+
+    /// Derive the thread from `origin`, then activate its writer under the
+    /// current claim authority.
     async fn for_branch(
         &self,
         activation: &ParallelActivation,
         branch: &ParallelBranchDefinition,
         ordinal: usize,
         input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, GraphError>;
 }
 
@@ -218,6 +264,8 @@ pub(crate) enum ParallelBranchOutcome {
     Blocked,
     Failed(String),
     Cancelled,
+    /// The writer fence was lost. A control stop, never a branch outcome.
+    LeaseLost(GraphError),
 }
 
 pub(crate) enum PreparedParallelActivation {
@@ -331,12 +379,22 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
     ) -> Result<PreparedParallelActivation, GraphError> {
         self.validate(definition)?;
         let inputs = self.project_inputs(activation, definition, &context.state)?;
-        let occurrence = self.parent.freeze(activation, context, inputs).await?;
+        let (origin, threads) = self.mint_lineage(activation, definition, &inputs)?;
+        let occurrence = self
+            .parent
+            .freeze(activation, context, inputs, origin, threads)
+            .await?;
         if let Some(blocked) = occurrence.blocked.clone() {
             return Ok(PreparedParallelActivation::Blocked(blocked));
         }
         let mut restored = self
-            .restore_branches(activation, definition, &occurrence.branches)
+            .restore_branches(
+                activation,
+                definition,
+                &occurrence.branches,
+                &occurrence.origin,
+                &occurrence.child_threads,
+            )
             .await?;
         self.prepare_resume(activation, &occurrence, &mut restored, context)
             .await?;
@@ -373,6 +431,16 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
             return ParallelBranchOutcome::Cancelled;
         }
         let result = self.invoke_inner(activation, branch, context).await;
+        // Lease loss outranks cancellation: the claim machinery must see it unchanged.
+        if let Err(error) = result {
+            return if is_lease_lost(&error) {
+                ParallelBranchOutcome::LeaseLost(error)
+            } else if is_cancelled(context) {
+                ParallelBranchOutcome::Cancelled
+            } else {
+                ParallelBranchOutcome::Failed(graph_error_code(&error).to_owned())
+            };
+        }
         if is_cancelled(context) {
             return ParallelBranchOutcome::Cancelled;
         }
@@ -383,6 +451,34 @@ impl ParallelBranchRuntime for AdkParallelBranchRuntime {
 }
 
 impl AdkParallelBranchRuntime {
+    /// Propose the lineage a brand-new occurrence freezes. An existing
+    /// occurrence keeps its own and ignores this.
+    fn mint_lineage(
+        &self,
+        activation: &ParallelActivation,
+        definition: &ParallelNodeDefinition,
+        inputs: &[FrozenBranchInput],
+    ) -> Result<(ParallelChildOrigin, Vec<String>), GraphError> {
+        let origin = self.checkpoints.child_origin(activation)?;
+        let mut threads = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let branch = definition.branches().get(input.ordinal).ok_or_else(|| {
+                parallel_error(
+                    "graph.parallel.corrupt_occurrence",
+                    "a frozen branch ordinal is invalid",
+                )
+            })?;
+            threads.push(self.checkpoints.branch_thread_id(
+                activation,
+                branch,
+                input.ordinal,
+                &input.input_digest,
+                &origin,
+            )?);
+        }
+        Ok((origin, threads))
+    }
+
     fn project_inputs(
         &self,
         activation: &mut ParallelActivation,
@@ -436,16 +532,19 @@ impl AdkParallelBranchRuntime {
         Ok(frozen)
     }
 
+    #[allow(clippy::too_many_lines)] // Keep child admission, frozen-identity and receipt replay checks together.
     async fn restore_branches(
         &self,
         activation: &ParallelActivation,
         definition: &ParallelNodeDefinition,
         inputs: &[FrozenBranchInput],
+        origin: &ParallelChildOrigin,
+        child_threads: &[String],
     ) -> Result<PreparedBranchSet, GraphError> {
         let mut prepared = Vec::with_capacity(inputs.len());
         let mut pauses = BTreeMap::new();
         let mut expected = Vec::new();
-        for input in inputs.iter().cloned() {
+        for (position, input) in inputs.iter().cloned().enumerate() {
             let branch = definition
                 .branches()
                 .get(input.ordinal)
@@ -458,8 +557,20 @@ impl AdkParallelBranchRuntime {
                 .clone();
             let child = self
                 .checkpoints
-                .for_branch(activation, &branch, input.ordinal, &input.input_digest)
+                .for_branch(
+                    activation,
+                    &branch,
+                    input.ordinal,
+                    &input.input_digest,
+                    origin,
+                )
                 .await?;
+            if child_threads.get(position) != Some(&child.thread_id) {
+                return Err(parallel_error(
+                    "graph.parallel.corrupt_occurrence",
+                    "a restored branch does not match its frozen identity",
+                ));
+            }
             if !child.admitted_threads.contains(&child.thread_id)
                 || child.admitted_threads.len() > 129
                 || child.admitted_threads.iter().any(|thread| {
@@ -730,6 +841,7 @@ pub(crate) struct DurableParallelNode {
     runtime: Arc<dyn ParallelBranchRuntime>,
     deadline: Option<tokio::time::Instant>,
     cleanup_timeout: Duration,
+    cancellation: Option<Arc<FanoutCancellation>>,
 }
 
 impl DurableParallelNode {
@@ -742,7 +854,19 @@ impl DurableParallelNode {
             runtime,
             deadline: None,
             cleanup_timeout: Duration::from_secs(5),
+            cancellation: None,
         }
+    }
+
+    /// Supply the owner's cancellation latch. The owner fires it; the node never polls.
+    pub(crate) fn with_cancellation(mut self, cancellation: Arc<FanoutCancellation>) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+
+    pub(crate) fn with_cleanup_timeout(mut self, cleanup_timeout: Duration) -> Self {
+        self.cleanup_timeout = cleanup_timeout;
+        self
     }
 
     /// Supply the deadline from root execution authority at assembly.
@@ -774,12 +898,19 @@ impl DurableParallelNode {
         self.collect_outcomes(&activation, ordered, context).await
     }
 
-    fn check_running(&self, context: &NodeContext) -> Result<(), GraphError> {
-        if is_cancelled(context)
+    fn stop_requested(&self, context: &NodeContext) -> bool {
+        is_cancelled(context)
+            || self
+                .cancellation
+                .as_deref()
+                .is_some_and(FanoutCancellation::is_cancelled)
             || self
                 .deadline
                 .is_some_and(|deadline| deadline <= tokio::time::Instant::now())
-        {
+    }
+
+    fn check_running(&self, context: &NodeContext) -> Result<(), GraphError> {
+        if self.stop_requested(context) {
             return Err(parallel_error(
                 "graph.parallel.cancelled",
                 "the parallel execution was cancelled",
@@ -788,6 +919,7 @@ impl DurableParallelNode {
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)] // Keep admission, stop and lease-loss ordering in one select loop.
     async fn drain_branches(
         &self,
         activation: &ParallelActivation,
@@ -812,63 +944,101 @@ impl DurableParallelNode {
         }
         let mut pending = prepared.into_iter();
         let mut inflight = FuturesUnordered::new();
-        for _ in 0..max_concurrency {
-            if let Some(branch) = pending.next() {
-                inflight.push(self.invoke_branch(activation.clone(), branch, &run_context));
+        let mut ordered = Vec::with_capacity(self.definition.branches().len());
+        let mut admission_open = true;
+        let mut stopping = false;
+        let mut cleanup_deadline = None;
+        let mut lease_error = None;
+        let latch = self.cancellation.as_deref();
+        if self.stop_requested(context) {
+            self.begin_stop(
+                &mut admission_open,
+                &mut stopping,
+                &mut cleanup_deadline,
+                &cancel_signal,
+            );
+        } else {
+            for _ in 0..max_concurrency {
+                if let Some(branch) = pending.next() {
+                    inflight.push(self.invoke_branch(activation.clone(), branch, &run_context));
+                }
             }
         }
 
-        let mut ordered = Vec::with_capacity(self.definition.branches().len());
-        let mut admission_open = true;
-        let mut cancelled = false;
-        let mut cleanup_deadline = None;
+        // The owner fires the latch and the deadline is absolute: nothing here polls.
         while !inflight.is_empty() {
-            if !cancelled
-                && (is_cancelled(context)
-                    || self
-                        .deadline
-                        .is_some_and(|deadline| tokio::time::Instant::now() >= deadline))
-            {
-                admission_open = false;
-                cancelled = true;
-                cancel_signal.store(true, Ordering::Release);
-                cleanup_deadline = Some(tokio::time::Instant::now() + self.cleanup_timeout);
-            }
             let outcome = tokio::select! {
                 biased;
-                () = tokio::time::sleep(Duration::from_millis(10)) => {
-                    let now = tokio::time::Instant::now();
-                    if cleanup_deadline.is_some_and(|deadline| now >= deadline) {
-                        return Err(parallel_error("graph.parallel.cancellation_cleanup_failed", "parallel cancellation cleanup exceeded its bound"));
-                    }
+                () = latch_cancelled(latch), if !stopping => {
+                    self.begin_stop(&mut admission_open, &mut stopping, &mut cleanup_deadline, &cancel_signal);
                     continue;
+                }
+                () = tokio::time::sleep_until(self.deadline.unwrap_or_else(tokio::time::Instant::now)),
+                    if !stopping && self.deadline.is_some() => {
+                    self.begin_stop(&mut admission_open, &mut stopping, &mut cleanup_deadline, &cancel_signal);
+                    continue;
+                }
+                () = tokio::time::sleep_until(cleanup_deadline.unwrap_or_else(tokio::time::Instant::now)),
+                    if stopping => {
+                    return Err(parallel_error("graph.parallel.cancellation_cleanup_failed", "parallel cancellation cleanup exceeded its bound"));
                 }
                 outcome = inflight.next() => outcome,
             };
-            let Some(outcome) = outcome else {
+            let Some((ordinal, branch, result)) = outcome else {
                 break;
             };
-            match &outcome.2 {
-                ParallelBranchOutcome::Completed(_) | ParallelBranchOutcome::Paused(_) => {}
+            let result = match result {
+                ParallelBranchOutcome::Completed(_) | ParallelBranchOutcome::Paused(_) => {
+                    Some(result)
+                }
                 ParallelBranchOutcome::Blocked | ParallelBranchOutcome::Failed(_) => {
                     admission_open = false;
+                    Some(result)
                 }
                 ParallelBranchOutcome::Cancelled => {
-                    admission_open = false;
-                    cancelled = true;
-                    cancel_signal.store(true, Ordering::Release);
-                    cleanup_deadline
-                        .get_or_insert_with(|| tokio::time::Instant::now() + self.cleanup_timeout);
+                    self.begin_stop(
+                        &mut admission_open,
+                        &mut stopping,
+                        &mut cleanup_deadline,
+                        &cancel_signal,
+                    );
+                    Some(result)
                 }
+                ParallelBranchOutcome::LeaseLost(error) => {
+                    lease_error.get_or_insert(error);
+                    self.begin_stop(
+                        &mut admission_open,
+                        &mut stopping,
+                        &mut cleanup_deadline,
+                        &cancel_signal,
+                    );
+                    None
+                }
+            };
+            if let Some(result) = result {
+                ordered.push((ordinal, branch, result));
             }
-            ordered.push(outcome);
-            if admission_open && let Some(branch) = pending.next() {
+            if !stopping && self.stop_requested(context) {
+                self.begin_stop(
+                    &mut admission_open,
+                    &mut stopping,
+                    &mut cleanup_deadline,
+                    &cancel_signal,
+                );
+            }
+            if admission_open
+                && !stopping
+                && let Some(branch) = pending.next()
+            {
                 inflight.push(self.invoke_branch(activation.clone(), branch, &run_context));
             }
         }
 
         ordered.sort_by_key(|(ordinal, _, _)| *ordinal);
-        if cancelled {
+        if let Some(error) = lease_error {
+            return Err(error);
+        }
+        if stopping {
             return Err(parallel_error(
                 "graph.parallel.cancelled",
                 "the parallel execution was cancelled",
@@ -876,6 +1046,22 @@ impl DurableParallelNode {
         }
         self.check_running(context)?;
         Ok(ordered)
+    }
+
+    /// Close admission, tell running children to stop and bound their cleanup.
+    fn begin_stop(
+        &self,
+        admission_open: &mut bool,
+        stopping: &mut bool,
+        cleanup_deadline: &mut Option<tokio::time::Instant>,
+        cancel_signal: &AtomicBool,
+    ) {
+        *admission_open = false;
+        if !*stopping {
+            *stopping = true;
+            cancel_signal.store(true, Ordering::Release);
+            *cleanup_deadline = Some(tokio::time::Instant::now() + self.cleanup_timeout);
+        }
     }
 
     async fn collect_outcomes(

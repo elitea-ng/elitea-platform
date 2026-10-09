@@ -153,17 +153,27 @@ impl MapChildCheckpointerFactory for BoundAuthority {
             generation: 1,
         })
     }
+    fn item_thread_id(
+        &self,
+        activation: &MapActivation,
+        item: &FrozenMapItem,
+        _worker: &str,
+        _origin: &MapExecutionIdentity,
+    ) -> Result<String, GraphError> {
+        if activation.root_thread_id != "root" {
+            return Err(map_error("invalid_child_scope"));
+        }
+        Ok(format!("map-test:{}:{}", activation.step, item.index))
+    }
     async fn for_item(
         &self,
         activation: &MapActivation,
         item: &FrozenMapItem,
         worker: &str,
         kind: MapWorkerKind,
+        origin: &MapExecutionIdentity,
     ) -> Result<MapChildCheckpoint, GraphError> {
-        if activation.root_thread_id != "root" {
-            return Err(map_error("invalid_child_scope"));
-        }
-        let thread_id = format!("map-test:{}:{}", activation.step, item.index);
+        let thread_id = self.item_thread_id(activation, item, worker, origin)?;
         self.0.minted.lock().unwrap().push(thread_id.clone());
         let mut admitted_threads = BTreeSet::from([thread_id.clone()]);
         if kind == MapWorkerKind::Application {

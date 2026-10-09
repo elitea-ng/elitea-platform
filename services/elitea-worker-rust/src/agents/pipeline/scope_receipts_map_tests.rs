@@ -119,12 +119,22 @@ impl ParallelCheckpointAppender for AtomicMemory {
 
 #[async_trait]
 impl MapChildCheckpointerFactory for AtomicMemory {
+    fn item_thread_id(
+        &self,
+        _: &MapActivation,
+        _: &FrozenMapItem,
+        _: &str,
+        _: &MapExecutionIdentity,
+    ) -> Result<String, GraphError> {
+        Err(receipt_error())
+    }
     async fn for_item(
         &self,
         _: &MapActivation,
         _: &FrozenMapItem,
         _: &str,
         _: MapWorkerKind,
+        _: &MapExecutionIdentity,
     ) -> Result<MapChildCheckpoint, GraphError> {
         self.child_calls.fetch_add(1, Ordering::SeqCst);
         Err(receipt_error())
@@ -377,7 +387,16 @@ async fn map_ordinary_save_and_child_factory_keep_the_same_underlying_authority(
     };
     assert!(
         wrapped
-            .for_item(&activation, &item, "child", MapWorkerKind::Application)
+            .for_item(
+                &activation,
+                &item,
+                "child",
+                MapWorkerKind::Application,
+                &MapExecutionIdentity {
+                    execution_id: "test-execution".to_owned(),
+                    generation: 1,
+                },
+            )
             .await
             .is_err()
     );
