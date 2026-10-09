@@ -21,7 +21,7 @@ test-preserve-order = ["serde_json/preserve_order", "serde_json/float_roundtrip"
 
 [dependencies]
 # Tilde, not caret: adk breaks its API between minors, and the worker pins
-# =2.2.0 with patches of its own (services/elitea-worker-rust/vendor). Only
+# =2.2.0 with patches of its own (libs/rust/vendor, patched into the worker and this workspace). Only
 # unpatched crates are named here: adk-core, adk-graph and adk-session.
 adk-core = { version = "~2.2.0", default-features = false }
 adk-graph = { version = "~2.2.0", default-features = false }

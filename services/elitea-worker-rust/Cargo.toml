@@ -107,8 +107,10 @@ codegen-units = 1
 panic = "abort"
 incremental = false
 
-# Pinned ADK 2.2.0 history-retention extensions. See vendor/README.md.
+# Pinned ADK 2.2.0 history-retention and sandbox extensions, shared with
+# every consumer of elitea-agent-runtime (ADR-0029 decision 2): the libs/rust
+# workspace applies the same patches. See ../../libs/rust/vendor/README.md.
 [patch.crates-io]
-adk-agent = { path = "vendor/adk-agent" }
-adk-runner = { path = "vendor/adk-runner" }
-adk-sandbox = { path = "vendor/adk-sandbox" }
+adk-agent = { path = "../../libs/rust/vendor/adk-agent" }
+adk-runner = { path = "../../libs/rust/vendor/adk-runner" }
+adk-sandbox = { path = "../../libs/rust/vendor/adk-sandbox" }
