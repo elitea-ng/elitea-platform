@@ -338,12 +338,16 @@ type SensitiveAction struct {
 // it sensitive under any of toolkitIdentifiers, and false otherwise.
 //
 // toolkitLabel is what the SDK calls the toolkit in the message (the instance
-// name, falling back to the type). The template's placeholders are the SDK's:
-// {company_name}, {tool_name}, {toolkit_name}, {toolkit_type},
-// {toolkit_label} and {action_name}. An unknown placeholder is left as it is,
-// where the SDK's str.format would fall back to the default template; the
-// admin form documents only the known ones.
-func (p Policy) SensitiveAction(toolName, toolkitLabel string, toolkitIdentifiers ...string) (SensitiveAction, bool) {
+// name, falling back to the type); toolkitType is the toolkit's TYPE. The
+// template's placeholders are the SDK's: {company_name}, {tool_name},
+// {toolkit_name}, {toolkit_type}, {toolkit_label} and {action_name}.
+// {toolkit_type} is the type (the label when the type is unknown), so an
+// operator's "approve {tool_name} on {toolkit_type}" names `github`, not the
+// instance; the SDK's get_sensitive_tool_policy currently fills it with the
+// label. An unknown placeholder is left as it is, where the SDK's str.format
+// would fall back to the default template; the admin form documents only the
+// known ones.
+func (p Policy) SensitiveAction(toolName, toolkitLabel, toolkitType string, toolkitIdentifiers ...string) (SensitiveAction, bool) {
 	matched, ok := p.SensitiveMatch(toolName, toolkitIdentifiers...)
 	if !ok {
 		return SensitiveAction{}, false
@@ -356,11 +360,15 @@ func (p Policy) SensitiveAction(toolName, toolkitLabel string, toolkitIdentifier
 		label = "this toolkit"
 	}
 	action := label + "." + toolName
+	kind := strings.TrimSpace(toolkitType)
+	if kind == "" {
+		kind = label
+	}
 	message := strings.NewReplacer(
 		"{company_name}", p.CompanyName(),
 		"{tool_name}", toolName,
 		"{toolkit_name}", label,
-		"{toolkit_type}", label,
+		"{toolkit_type}", kind,
 		"{toolkit_label}", label,
 		"{action_name}", action,
 	).Replace(p.MessageTemplate())

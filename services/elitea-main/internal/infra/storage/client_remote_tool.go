@@ -196,7 +196,7 @@ func (service *ClientApplicationVersionService) AuthorizeRemoteTool(
 	if label == "" {
 		label = frozenTool.toolkitType
 	}
-	if action, sensitive := policy.SensitiveAction(request.ToolName, label, frozenTool.toolkitType, frozenTool.toolkitName); sensitive {
+	if action, sensitive := policy.SensitiveAction(request.ToolName, label, frozenTool.toolkitType, frozenTool.toolkitType, frozenTool.toolkitName); sensitive {
 		grant.Sensitive = &action
 	}
 	return grant, nil
