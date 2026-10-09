@@ -225,6 +225,68 @@ fn failure_codes_are_stable_and_name_no_value() {
 }
 
 #[test]
+fn the_guard_check_agrees_with_the_reduction_at_every_bound() {
+    let filler = |bytes: usize| json!("x".repeat(bytes));
+    // `["a…","b…"]` costs both strings plus seven bytes of punctuation.
+    let half = (MAX_REDUCED_BYTES - 7) / 2;
+    let cases = [
+        (StateReducer::Append, json!([]), json!([])),
+        (StateReducer::Append, json!([1]), json!([])),
+        (StateReducer::Append, json!([]), json!([2])),
+        (StateReducer::Append, json!([1]), json!("scalar")),
+        (
+            StateReducer::Append,
+            json!([filler(half)]),
+            json!([filler(MAX_REDUCED_BYTES - 7 - half)]),
+        ),
+        (
+            StateReducer::Append,
+            json!([filler(half)]),
+            json!([filler(MAX_REDUCED_BYTES - 6 - half)]),
+        ),
+        (
+            StateReducer::Append,
+            json!([]),
+            json!([filler(MAX_REDUCED_BYTES - 4)]),
+        ),
+        (
+            StateReducer::Append,
+            json!([]),
+            json!([filler(MAX_REDUCED_BYTES - 3)]),
+        ),
+        (
+            StateReducer::Append,
+            Value::Array(vec![json!(0); MAX_APPEND_ELEMENTS]),
+            json!([1]),
+        ),
+        (StateReducer::SumInt, json!(i64::MAX), json!(1)),
+        (StateReducer::Merge, json!({"a": 1}), json!({"b": null})),
+    ];
+    for (reducer, current, update) in cases {
+        assert_eq!(
+            reducer.check_update(&current, &update),
+            reducer.reduce_checked(&current, &update).map(|_| ()),
+            "{reducer:?}"
+        );
+    }
+    // The two boundary rows straddle the byte limit exactly.
+    assert_eq!(
+        StateReducer::Append.check_update(
+            &json!([filler(half)]),
+            &json!([filler(MAX_REDUCED_BYTES - 7 - half)])
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        StateReducer::Append.check_update(
+            &json!([filler(half)]),
+            &json!([filler(MAX_REDUCED_BYTES - 6 - half)])
+        ),
+        Err(ReducerFailure::Limit)
+    );
+}
+
+#[test]
 fn bounds_check_a_value_the_reducer_would_hold() {
     assert_eq!(StateReducer::Append.check_held(&json!([1, 2])), Ok(()));
     assert_eq!(
@@ -291,4 +353,37 @@ fn the_reducer_digest_is_order_independent_and_tag_sensitive() {
         ("c".to_owned(), StateReducer::Merge),
     ]);
     assert_ne!(reducers_digest(base, &one), reducers_digest(base, &renamed));
+}
+
+/// Opt-in budget: one typed update at the bounds costs the guard check plus the
+/// channel reduction, each O(result bytes). Run with
+/// `cargo test --release --lib state_reducers_tests::typed_update_budget -- --ignored --nocapture`.
+#[test]
+#[ignore = "timing budget, run manually and record in the source mapping"]
+fn typed_update_budget_at_the_bounds() {
+    let element = json!("x".repeat(40));
+    let current = Value::Array(vec![element.clone(); MAX_APPEND_ELEMENTS - 1]);
+    let update = Value::Array(vec![element]);
+    let bytes = serde_json::to_vec(&current).expect("bytes").len();
+    assert!(bytes > 400 * 1024 && bytes < MAX_REDUCED_BYTES);
+    let rounds = 200_u32;
+    let started = std::time::Instant::now();
+    for _ in 0..rounds {
+        assert!(StateReducer::Append.check_update(&current, &update).is_ok());
+    }
+    let check = started.elapsed() / rounds;
+    let started = std::time::Instant::now();
+    for _ in 0..rounds {
+        assert!(
+            StateReducer::Append
+                .reduce_checked(&current, &update)
+                .is_ok()
+        );
+    }
+    let reduce = started.elapsed() / rounds;
+    println!(
+        "typed append at {bytes} bytes / {MAX_APPEND_ELEMENTS} elements: guard check {check:?}, channel reduction {reduce:?}"
+    );
+    // Generous in a debug build on a shared host; the release numbers are recorded in the source mapping.
+    assert!(check + reduce < std::time::Duration::from_millis(50));
 }

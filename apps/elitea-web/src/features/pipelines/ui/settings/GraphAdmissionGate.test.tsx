@@ -95,15 +95,13 @@ describe('GraphAdmissionGate', () => {
     expect(getByTestId('graph-admission-gate')).toHaveTextContent('LLM_1');
   });
 
-  it('keeps Save available and shows the YAML-only notice for a typed reducer', async () => {
+  it('blocks Save for a declared reducer on a production build', async () => {
     seedGraph({ ...ADMISSIBLE, state: { ...ADMISSIBLE.state, findings: { type: 'list', value: [], reducer: 'append' } } });
     const { getByTestId, queryByTestId } = renderWithTheme(<SaveFlagProbe />);
 
-    await waitFor(() => expect(getByTestId('can-save')).toHaveTextContent('true'));
-    expect(queryByTestId('graph-admission-gate')).not.toBeInTheDocument();
-    const notice = getByTestId('graph-admission-notice');
-    expect(notice).toHaveTextContent('state.findings');
-    expect(notice).toHaveTextContent('YAML');
+    await waitFor(() => expect(getByTestId('can-save')).toHaveTextContent('false'));
+    expect(getByTestId('graph-admission-gate')).toHaveTextContent('not available on this deployment');
+    expect(queryByTestId('graph-admission-notice')).not.toBeInTheDocument();
   });
 
   it('releases Save again once the graph is fixed', async () => {

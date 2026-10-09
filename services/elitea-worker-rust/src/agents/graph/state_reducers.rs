@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use ring::digest;
 use serde_json::{Number, Value};
 
+use super::compiler::digest_field;
 use super::data_shaping::{ShapingCode, exact_i64, json_len_within};
 
 /// Most elements an `append` channel holds.
@@ -122,6 +123,36 @@ impl StateReducer {
         Ok(reduced)
     }
 
+    /// The guard's verdict, identical to [`Self::reduce_checked`], without
+    /// building an `append` result: element counts and serialized sizes only.
+    pub(super) fn check_update(
+        self,
+        current: &Value,
+        update: &Value,
+    ) -> Result<(), ReducerFailure> {
+        let (Self::Append, Value::Array(held), Value::Array(added)) = (self, current, update)
+        else {
+            return self.reduce_checked(current, update).map(|_| ());
+        };
+        if held.len().saturating_add(added.len()) > MAX_APPEND_ELEMENTS {
+            return Err(ReducerFailure::Limit);
+        }
+        let held_bytes =
+            json_len_within(current, MAX_REDUCED_BYTES).ok_or(ReducerFailure::Limit)?;
+        let added_bytes =
+            json_len_within(update, MAX_REDUCED_BYTES).ok_or(ReducerFailure::Limit)?;
+        // `[a]` ++ `[b]` serializes as `[a,b]`: one comma replaces two brackets.
+        let total = match (held.is_empty(), added.is_empty()) {
+            (true, _) => added_bytes,
+            (_, true) => held_bytes,
+            _ => held_bytes + added_bytes - 1,
+        };
+        if total > MAX_REDUCED_BYTES {
+            return Err(ReducerFailure::Limit);
+        }
+        Ok(())
+    }
+
     /// Whether this reducer's channel may hold `value`, e.g. a declared default.
     pub(super) fn check_held(self, value: &Value) -> Result<(), ReducerFailure> {
         let within_bytes = || {
@@ -181,10 +212,8 @@ pub(super) fn reducers_digest(
     context.update(&base);
     context.update(&(reducers.len() as u64).to_be_bytes());
     for (key, reducer) in reducers {
-        for field in [key.as_bytes(), reducer.tag().as_bytes()] {
-            context.update(&(field.len() as u64).to_be_bytes());
-            context.update(field);
-        }
+        digest_field(&mut context, key.as_bytes());
+        digest_field(&mut context, reducer.tag().as_bytes());
     }
     let mut output = [0_u8; 32];
     output.copy_from_slice(context.finish().as_ref());
@@ -242,7 +271,7 @@ where
                 continue;
             };
             let current = context.state.get(channel).unwrap_or(&Value::Null);
-            if let Err(failure) = reducer.reduce_checked(current, update) {
+            if let Err(failure) = reducer.check_update(current, update) {
                 tracing::warn!(
                     node_id = self.inner.name(),
                     channel = %channel,

@@ -211,32 +211,24 @@ describe('state rules', () => {
     expect(pinned?.citation).toBe('compiler.rs:1391');
   });
 
-  it('state.reducer: warns, never refuses, so the YAML-only key is not silently dropped (compiler.rs:2774)', () => {
+  it('state.reducer: a production build refuses any declared reducer as a deployment limit (compiler.rs:2784)', () => {
     const issues = collectGraphAdmissionIssues(
       baseDocument({ state: { input: 'str', messages: 'list', summary: 'str', findings: { type: 'list', value: [], reducer: 'append' } } }),
     );
 
     expect(issues).toHaveLength(1);
-    const [notice] = issues;
-    expect(notice?.rule).toBe('state.reducer');
-    expect(notice?.severity).toBe('warning');
-    expect(notice?.field).toBe('state.findings');
-    expect(notice?.subject).toBe('append');
-    expect(notice?.message).toContain('YAML');
-    expect(notice?.citation).toBe('compiler.rs:2774');
-    expect(blockingIssues(issues)).toEqual([]);
-    expect(documentLevelIssues(issues)).toEqual(issues);
+    const [refusal] = issues;
+    expect(refusal?.rule).toBe('state.reducer');
+    expect(refusal?.severity).toBeUndefined();
+    expect(refusal?.field).toBe('state.findings');
+    expect(refusal?.message).toContain('not available on this deployment');
+    expect(refusal?.citation).toBe('compiler.rs:2784');
+    expect(blockingIssues(issues)).toEqual(issues);
   });
 
-  it('state.reducer: a bare type name or a descriptor without the key raises nothing', () => {
-    expect(ruleIds(baseDocument({ state: { input: 'str', messages: 'list', summary: 'str', findings: { type: 'list', value: [] } } }))).toEqual([]);
-  });
-
-  it('every rule except the reducer notice blocks a save', () => {
-    const issues = collectGraphAdmissionIssues(baseDocument({ state: { input: 'list', messages: 'list', summary: 'str', total: { type: 'int', reducer: 'sum_int' } } }));
-
-    expect(issues.map((issue) => issue.rule)).toEqual(['state.builtin-type', 'state.reducer']);
-    expect(blockingIssues(issues).map((issue) => issue.rule)).toEqual(['state.builtin-type']);
+  it('state.reducer: a bare type, a descriptor without the key, and `reducer: null` declare none', () => {
+    const state = { input: 'str', messages: 'list', summary: 'str', a: { type: 'list', value: [] }, b: { type: 'list', reducer: null } };
+    expect(ruleIds(baseDocument({ state: state as unknown as NonNullable<YamlPipelineDocument['state']> }))).toEqual([]);
   });
 });
 

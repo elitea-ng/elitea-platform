@@ -3015,7 +3015,7 @@ fn definition_digest(
     output
 }
 
-fn digest_field(context: &mut digest::Context, value: &[u8]) {
+pub(super) fn digest_field(context: &mut digest::Context, value: &[u8]) {
     context.update(&(value.len() as u64).to_be_bytes());
     context.update(value);
 }

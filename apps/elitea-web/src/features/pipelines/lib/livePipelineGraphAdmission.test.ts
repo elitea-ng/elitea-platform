@@ -47,11 +47,11 @@ describe('judgeLivePipelineGraph', () => {
     expect(verdict.hasGraph).toBe(true);
   });
 
-  it('admits a graph whose only issue is the YAML-only reducer notice', () => {
+  it('refuses a declared reducer on a production build', () => {
     const verdict = judgeLivePipelineGraph(ADMISSIBLE.replace('  summary: str\n', '  summary: str\n  findings: {type: list, value: [], reducer: append}\n'));
 
-    expect(verdict.isAdmissible).toBe(true);
-    expect(verdict.issues.map((issue) => [issue.rule, issue.severity])).toEqual([['state.reducer', 'warning']]);
+    expect(verdict.isAdmissible).toBe(false);
+    expect(verdict.issues.map((issue) => issue.rule)).toEqual(['state.reducer']);
   });
 
   it('refuses a graph the compiler would reject, and names the rule', () => {

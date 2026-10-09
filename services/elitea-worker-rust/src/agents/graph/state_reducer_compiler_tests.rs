@@ -199,18 +199,17 @@ nodes:
                 "{state}"
             );
         }
+        let oversized = format!(
+            "  v: {{type: list, value: [{}], reducer: append}}\n",
+            vec!["0"; super::super::state_reducers::MAX_APPEND_ELEMENTS + 1].join(",")
+        );
         for state in [
             "  v: {type: int, value: 18446744073709551615, reducer: sum_int}\n",
-            &format!(
-                "  v: {{type: list, value: [{}], reducer: append}}\n",
-                vec!["0"; super::super::state_reducers::MAX_APPEND_ELEMENTS + 1].join(",")
-            ),
+            oversized.as_str(),
         ] {
-            let refused = refusal(&single(state));
             assert!(
-                refused.contains("does not match its state type")
-                    || refused.contains("exceeds its reducer bounds"),
-                "{refused}"
+                refusal(&single(state)).contains("exceeds its reducer bounds"),
+                "{state}"
             );
         }
         assert!(
