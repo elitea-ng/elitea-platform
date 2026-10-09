@@ -77,12 +77,29 @@ pub fn from_str<T: DeserializeOwned>(
         depth: 0,
     };
     if let Err(source) = seed.deserialize(serde_yaml_ng::Deserializer::from_str(yaml)) {
-        return Err(meter.exceeded.get().map_or(
+        let limit = meter
+            .exceeded
+            .get()
+            .or_else(|| parser_expansion_guard(&source));
+        return Err(limit.map_or(
             BoundedYamlError::Malformed(source),
             BoundedYamlError::BudgetExceeded,
         ));
     }
     T::deserialize(serde_yaml_ng::Deserializer::from_str(yaml)).map_err(BoundedYamlError::Malformed)
+}
+
+/// The text `serde_yaml_ng` (0.10) gives its own alias-repetition guard.
+pub(crate) const PARSER_REPETITION_GUARD: &str = "repetition limit exceeded";
+
+/// `serde_yaml_ng` refuses alias replay past its own repetition limit, which can
+/// fire before the meter crosses a large node budget. It is the same refusal
+/// (too much expansion), so it is reported as the node budget rather than as a
+/// malformed document. The crate exposes no error kind, so its fixed text is
+/// matched; `bounded_yaml_tests` pins it. Its recursion guard (128) cannot fire
+/// first: every budget's depth is lower.
+fn parser_expansion_guard(source: &serde_yaml_ng::Error) -> Option<YamlBudgetLimit> {
+    (source.to_string() == PARSER_REPETITION_GUARD).then_some(YamlBudgetLimit::Nodes)
 }
 
 /// Like [`from_str`], for callers whose error type carries `serde_yaml_ng::Error`.

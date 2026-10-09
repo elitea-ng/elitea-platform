@@ -4925,6 +4925,64 @@ fn pipeline_profile_refusal(instructions: &str) -> super::runtime::NativeAgentAs
     }
 }
 
+/// A stored pipeline whose YAML aliases expand past the budget (post-merge
+/// browser pass, pipeline 164: a six-level `&a [l×8]` … `&f` chain used as a
+/// state value) is refused fast at the start path's profile stage with the
+/// typed expansion limit, so the person sees the agent-settings limit message
+/// instead of "The execution input is invalid.". Driven through the same
+/// `admit_pipeline_with_policy` entry the lifecycle calls.
+#[test]
+fn an_alias_expansion_bomb_is_refused_at_start_admission_with_the_named_limit() {
+    let mut chain = String::from("defs:\n");
+    let mut item = "l".to_owned();
+    for level in 0..6 {
+        let name = format!("x{level}");
+        std::fmt::Write::write_fmt(
+            &mut chain,
+            format_args!("  {name}: &{name} [{}]\n", [item.as_str(); 8].join(", ")),
+        )
+        .expect("write to string");
+        item = format!("*{name}");
+    }
+    let instructions = format!(
+        "{chain}state:\n  big:\n    type: list\n    value: {item}\nentry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    transition: END\n"
+    );
+    let mut request = pipeline_request();
+    request
+        .payload
+        .application
+        .get_mut("version_details")
+        .and_then(Value::as_object_mut)
+        .expect("application version fixture")
+        .insert("instructions".to_owned(), json!(instructions));
+    let started = std::time::Instant::now();
+    let error = admission_error(authorized(&request).admit_pipeline());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "the refusal must stay fast, took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(
+        error.code(),
+        NativeAgentAssemblyErrorCode::AgentSettingsLimit
+    );
+    assert_eq!(
+        error.cause().map(|cause| (cause.code(), cause.detail())),
+        Some((
+            "graph.pipeline.yaml_expansion_exceeded",
+            Some("yaml_expansion")
+        ))
+    );
+    assert!(!error.retryable());
+    let (_, message, retryable) = crate::protocol::output::runtime_error_policy(
+        crate::protocol::output::RuntimeFailureKind::ExecutionInputFieldLimit(
+            crate::protocol::InputLimitField::AgentSettings,
+        ),
+    );
+    assert!(message.contains("agent instructions or settings exceed a platform input limit"));
+    assert!(!retryable);
+}
+
 /// Bound refusals name the limit in the Worker's log and map to the registered
 /// agent-settings message instead of the generic resource or input texts.
 #[test]
