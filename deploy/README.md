@@ -1262,7 +1262,7 @@ export SECRETS_MASTER_KEY=$(python3 -c \
 
 The variable has three states. They are not equivalent:
 
-| State | What `elitea-main` does | What is stored |
+| State | What `elitea-main` and `elitea-llm-gateway` do | What is stored |
 |---|---|---|
 | Set, valid | Wraps each project vault key with the master key. | The key row is a Fernet token. |
 | **Not set** | **Refuses to start**, unless `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true` is set (throwaway local stacks only); then it starts and writes a **warning** to the log. | With the opt-out, the key row is the project key **in the clear**. Anyone who can read the database can open every project secret. |
@@ -1282,13 +1282,20 @@ stray space or tab **is** malformed.
   the table, and compose fails if you do not export it (#418).
 - `docker-compose.staging.yml` requires it from your shell, and compose fails
   if you do not export it.
+- The `elitea` chart gives the LLM gateway a required Secret reference
+  (`llmGateway.secrets.SECRETS_MASTER_KEY`, `optional: false`). The render
+  fails when there is no reference, and refuses the key as a plain
+  `llmGateway.env` value; `llmGateway.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`
+  makes the reference optional for a throwaway install
+  (`deploy/helm/tests/render-gateway-master-key.sh`).
 - The `elitea` chart gives `elitea-main` the Secret reference the LLM gateway
   reads (`llmGateway.secrets.SECRETS_MASTER_KEY`, by default Secret
   `elitea-llm-gateway-secrets`, key `secrets-master-key`), or
   `main.secrets.SECRETS_MASTER_KEY.secretName` / `.key` when set. That Secret
   must exist even with the gateway disabled. The render fails when there is no
   source, and refuses the key as a plain `main.env` value.
-- The E2E stack, `docker-compose.standalone-full.yml` and the kind stack set
+- The E2E stack, `docker-compose.standalone-full.yml` (for `elitea-main` and
+  the gateway) and the kind stack set
   `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true`. They seed unwrapped key rows, so
   they need no key.
 

@@ -131,3 +131,39 @@ these checks on every values file.
 {{- default "default" .Values.llmGateway.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{/*
+elitea-llm-gateway.masterKeyRef — the Secret reference SECRETS_MASTER_KEY is
+read from, as JSON, or "" when there is none and the development opt-out is set.
+
+The gateway refuses to start without the key (cmd/elitea-llm-gateway/
+master_key_gate.go), the same rule elitea-main enforces: it opens every
+project's provider credentials through project vault keys wrapped with it. The
+chart therefore fails the RENDER when nothing would supply the key, rather than
+leaving the operator a pod that restarts with the reason in its log.
+
+Source: llmGateway.secrets.SECRETS_MASTER_KEY, which elitea-main also reads by
+default (elitea-main.masterKeyRef), so the two services carry one value. The
+key is never accepted as a plaintext llmGateway.env value.
+
+The reference is required (optional: false). The development opt-out,
+llmGateway.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true, does not remove it,
+only makes it optional, so an install that has the Secret still reads wrapped
+keys. An `optional` field on the entry is ignored: the opt-out alone decides.
+*/}}
+{{- define "elitea-llm-gateway.masterKeyRef" -}}
+{{- $env := .Values.llmGateway.env | default dict -}}
+{{- if hasKey $env "SECRETS_MASTER_KEY" -}}
+{{- fail "llmGateway.env.SECRETS_MASTER_KEY is refused: the vault master key must not be rendered as a plain value. Reference a Secret instead: llmGateway.secrets.SECRETS_MASTER_KEY.secretName / .key." -}}
+{{- end -}}
+{{- $ref := get (.Values.llmGateway.secrets | default dict) "SECRETS_MASTER_KEY" -}}
+{{- $optOut := eq (toString (get $env "ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS")) "true" -}}
+{{- if $ref -}}
+{{- if or (not $ref.secretName) (not $ref.key) -}}
+{{- fail "llmGateway.secrets.SECRETS_MASTER_KEY needs both secretName and key." -}}
+{{- end -}}
+{{- toJson (dict "secretName" $ref.secretName "key" $ref.key "optional" $optOut) -}}
+{{- else if not $optOut -}}
+{{- fail "elitea-llm-gateway has no SECRETS_MASTER_KEY source and refuses to start without one: it will not read project vault keys unwrapped. Set llmGateway.secrets.SECRETS_MASTER_KEY.secretName / .key (a Secret holding a base64url 32-byte Fernet key; elitea-main must carry the same value), or, for a throwaway local install only, set llmGateway.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=\"true\"." -}}
+{{- end -}}
+{{- end }}
