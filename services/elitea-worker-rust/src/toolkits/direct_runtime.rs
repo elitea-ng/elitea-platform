@@ -117,11 +117,6 @@ impl Default for DirectToolkitRuntime {
 }
 
 impl DirectToolkitRuntime {
-    #[cfg(test)]
-    pub(crate) fn with_mcp_connector(mcp_connector: Arc<dyn McpConnector>) -> Self {
-        Self { mcp_connector }
-    }
-
     /// Materialize and execute exactly one read-only selected operation.
     ///
     /// No retry occurs here. command redelivery may repeat the provider read only

@@ -1,0 +1,39 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Elitea",
+  "version": "0.1.0",
+  "identifier": "ai.elitea.desktop",
+  "build": {
+    "frontendDist": "../../elitea-web/dist-desktop",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm --prefix ../elitea-web run build:desktop",
+    "beforeDevCommand": "npm --prefix ../elitea-web run dev -- --mode desktop --host localhost --port 5173"
+  },
+  "app": {
+    "windows": [],
+    "withGlobalTauri": false,
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data: blob: https:",
+        "font-src": "'self' data: https:",
+        "connect-src": "ipc: http://ipc.localhost",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "frame-ancestors": "'none'"
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "category": "DeveloperTool",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "macOS": {
+      "minimumSystemVersion": "12.0",
+      "hardenedRuntime": true
+    }
+  }
+}

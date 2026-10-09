@@ -214,7 +214,7 @@ func TestRustCapabilitySnapshotMatchesTheRustSource(t *testing.T) {
 
 	root := repositoryRoot(t)
 	source, err := os.ReadFile(filepath.Join(
-		root, "services", "elitea-worker-rust", "src", "toolkits", "materialize.rs",
+		root, "libs", "rust", "agent-runtime", "src", "toolkits", "materialize.rs",
 	))
 	if err != nil {
 		t.Fatalf("read materialize.rs: %v", err)

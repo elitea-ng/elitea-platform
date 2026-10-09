@@ -95,3 +95,7 @@ services/elitea-main/internal/infra/extract/testdata/*.pdf
 # gates read, so it is admitted here by exact path; the ceiling still applies
 # to every other YAML file.
 services/elitea-main/api/openapi/v2.yaml
+
+# Desktop client icons (ADR-0029): the brand mark rasterised by `tauri icon`
+# (apps/elitea-desktop/README.md). Small, regenerable, required by tauri-build.
+apps/elitea-desktop/src-tauri/icons/*

@@ -43,19 +43,11 @@ pub const DEFAULT_MAX_RETRIES: u32 = 2;
 pub const DEFAULT_MAX_TOKENS: u32 = 64_000;
 
 /// The longest execution id the `/llm` edge keeps (`maxExecutionIDLen` in
-/// elitea-main `internal/llmproxy`); a longer one is dropped there, so it is
-/// refused here, where the mistake is.
-pub const MAX_EXECUTION_ID_BYTES: usize = 128;
-
-/// Whether `id` passes the edge's shape rule: 1–128 bytes of ASCII letters,
-/// digits, `-`, `_` and `.`.
-#[must_use]
-pub fn valid_execution_id(id: &str) -> bool {
-    (1..=MAX_EXECUTION_ID_BYTES).contains(&id.len())
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
-}
+/// elitea-main `internal/llmproxy`), and the edge's shape rule for one
+/// (1–128 bytes of ASCII letters, digits, `-`, `_` and `.`). A longer or
+/// malformed id is dropped there, so it is refused here, where the mistake
+/// is.
+pub use elitea_llm_wire::headers::{MAX_EXECUTION_ID_BYTES, valid_execution_id};
 
 /// A reasoning model's effort, sent as `reasoning_effort` when set. The
 /// worker's values (`ModelReasoningEffort`): `none` turns reasoning off on a

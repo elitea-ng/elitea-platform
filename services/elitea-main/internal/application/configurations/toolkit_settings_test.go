@@ -296,7 +296,7 @@ func TestCurrentToolkitSettingsResolverKeepsSecretsSealedOutsideClaimMode(t *tes
 // optional: an anonymous API needs none, and the create form saves none unless
 // the user picks one, so this is the shape EVERY toolkit that form produces
 // arrives in. `merged_auth_settings`
-// (services/elitea-worker-rust/src/toolkits/families/openapi/config.rs) reads
+// (libs/rust/agent-runtime/src/toolkits/families/openapi/config.rs) reads
 // the field with `as_object()` and refuses anything else, which ended the whole
 // turn with `native_agent.invalid_configuration` while the settings beside it —
 // spec and selected_tools — were correct and untouched.
