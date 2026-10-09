@@ -471,7 +471,7 @@ var toolkitTypeSchemas = map[string]map[string]any{
 			//
 			//   - the native worker refuses one outright — parse_source returns
 			//     UnsupportedSource for a string starting http:// or https://
-			//     (services/elitea-worker-rust/src/toolkits/families/openapi/spec.rs);
+			//     (libs/rust/agent-runtime/src/toolkits/families/openapi/spec.rs);
 			//   - the SDK worker does not fetch either: _parse_openapi_spec
 			//     (elitea_sdk/tools/openapi/api_wrapper.py:513) only runs
 			//     json.loads then yaml.safe_load, and a bare URL parses to a

@@ -1,0 +1,817 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "id": "n1",
+      "name": "UserService",
+      "type": "class",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/user_service.py",
+          "line_start": 10,
+          "line_end": 80,
+          "source_toolkit": "code",
+          "doc_id": "code:src/user_service.py",
+          "content_hash": null
+        }
+      ],
+      "description": "Manages users and their sessions",
+      "signature": "class UserService(BaseService)",
+      "embedding": [
+        0.1,
+        0.9,
+        0.0,
+        0.1
+      ],
+      "community_id": "community_0"
+    },
+    {
+      "id": "n2",
+      "name": "BaseService",
+      "type": "class",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/base.py",
+          "line_start": 1,
+          "line_end": 40,
+          "source_toolkit": "code",
+          "doc_id": "code:src/base.py",
+          "content_hash": null
+        }
+      ],
+      "description": "Base class for services",
+      "embedding": [
+        0.2,
+        0.5,
+        0.1,
+        0.0
+      ],
+      "community_id": "community_0"
+    },
+    {
+      "id": "n3",
+      "name": "AuthService",
+      "type": "class",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/auth.py",
+          "line_start": 1,
+          "line_end": 90,
+          "source_toolkit": "code",
+          "doc_id": "code:src/auth.py",
+          "content_hash": null
+        }
+      ],
+      "description": "Authentication logic",
+      "embedding": [
+        0.9,
+        0.1,
+        0.0,
+        0.2
+      ],
+      "community_id": "community_0"
+    },
+    {
+      "id": "n4",
+      "name": "login",
+      "type": "function",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/auth.py",
+          "line_start": 5,
+          "line_end": 20,
+          "source_toolkit": "code",
+          "doc_id": "code:src/auth.py",
+          "content_hash": null
+        }
+      ],
+      "description": "Logs a user in",
+      "embedding": [
+        0.8,
+        0.3,
+        0.1,
+        0.0
+      ],
+      "community_id": "community_0"
+    },
+    {
+      "id": "n5",
+      "name": "hash_password",
+      "type": "function",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/crypto.py",
+          "line_start": 3,
+          "line_end": null,
+          "source_toolkit": "code",
+          "doc_id": "code:src/crypto.py",
+          "content_hash": null
+        }
+      ],
+      "embedding": [
+        0.7,
+        0.0,
+        0.3,
+        0.1
+      ],
+      "community_id": "community_0"
+    },
+    {
+      "id": "n6",
+      "name": "get_user",
+      "type": "method",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/user_service.py",
+          "line_start": 30,
+          "line_end": 45,
+          "source_toolkit": "code",
+          "doc_id": "code:src/user_service.py",
+          "content_hash": null
+        }
+      ],
+      "embedding": [
+        0.0,
+        0.8,
+        0.2,
+        0.0
+      ],
+      "community_id": "community_0"
+    },
+    {
+      "id": "n7",
+      "name": "UserRepository",
+      "type": "class",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/repo.py",
+          "line_start": 1,
+          "line_end": 200,
+          "source_toolkit": "code",
+          "doc_id": "code:src/repo.py",
+          "content_hash": null
+        }
+      ],
+      "description": "Stores users in the database and keeps a cache of the most recently read rows so repeated reads are cheap and consistent.",
+      "embedding": [
+        0.05,
+        0.7,
+        0.6,
+        0.0
+      ],
+      "community_id": "community_0"
+    },
+    {
+      "id": "n8",
+      "name": "db_url",
+      "type": "variable",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/config.py",
+          "line_start": 2,
+          "line_end": 2,
+          "source_toolkit": "code",
+          "doc_id": "code:src/config.py",
+          "content_hash": null
+        }
+      ],
+      "embedding": [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      "community_id": "community_0"
+    },
+    {
+      "id": "n9",
+      "name": "os",
+      "type": "import",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/auth.py",
+          "line_start": 1,
+          "line_end": 1,
+          "source_toolkit": "code",
+          "doc_id": "code:src/auth.py",
+          "content_hash": null
+        }
+      ],
+      "community_id": "community_0"
+    },
+    {
+      "id": "n10",
+      "name": "User Login",
+      "type": "feature",
+      "layer": "product",
+      "citations": [
+        {
+          "file_path": "docs/features.md",
+          "line_start": 1,
+          "line_end": 30,
+          "source_toolkit": "docs",
+          "doc_id": "docs:docs/features.md",
+          "content_hash": null
+        }
+      ],
+      "description": "Users sign in with a password",
+      "embedding": [
+        0.6,
+        0.6,
+        0.0,
+        0.3
+      ],
+      "community_id": "community_1"
+    },
+    {
+      "id": "n11",
+      "name": "Secure Passwords",
+      "type": "requirement",
+      "layer": "domain",
+      "citations": [
+        {
+          "file_path": "docs/req.md",
+          "line_start": 4,
+          "line_end": 9,
+          "source_toolkit": "docs",
+          "doc_id": "docs:docs/req.md",
+          "content_hash": null
+        }
+      ],
+      "embedding": [
+        0.5,
+        0.0,
+        0.0,
+        0.8
+      ],
+      "community_id": "community_1"
+    },
+    {
+      "id": "n12",
+      "name": "Login Story",
+      "type": "user_story",
+      "citations": [
+        {
+          "file_path": "docs/stories.md",
+          "line_start": null,
+          "line_end": null,
+          "source_toolkit": "docs",
+          "doc_id": "docs:docs/stories.md",
+          "content_hash": null
+        }
+      ],
+      "community_id": "community_1"
+    },
+    {
+      "id": "n13",
+      "name": "Auth Guide",
+      "type": "documentation",
+      "layer": "documentation",
+      "citations": [
+        {
+          "file_path": "docs/guide.md",
+          "line_start": 1,
+          "line_end": 99,
+          "source_toolkit": "docs",
+          "doc_id": "docs:docs/guide.md",
+          "content_hash": null
+        }
+      ],
+      "description": "How sign-in works",
+      "embedding": [
+        0.75,
+        0.25,
+        0.0,
+        0.25
+      ],
+      "community_id": "community_1"
+    },
+    {
+      "id": "n14",
+      "name": "Passwords are hashed",
+      "type": "fact",
+      "layer": "knowledge",
+      "citations": [
+        {
+          "file_path": "docs/req.md",
+          "line_start": 10,
+          "line_end": 10,
+          "source_toolkit": "docs",
+          "doc_id": "docs:docs/req.md",
+          "content_hash": null
+        }
+      ],
+      "embedding": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "community_id": "community_1"
+    },
+    {
+      "id": "n15",
+      "name": "login",
+      "type": "method",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/web/views.py",
+          "line_start": 12,
+          "line_end": 30,
+          "source_toolkit": "code",
+          "doc_id": "code:src/web/views.py",
+          "content_hash": null
+        }
+      ],
+      "description": "View that logs the user in",
+      "embedding": [
+        0.8,
+        0.3,
+        0.1,
+        0.0
+      ],
+      "community_id": "community_0"
+    },
+    {
+      "id": "n16",
+      "name": "utils",
+      "type": "module",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/utils.py",
+          "line_start": 1,
+          "line_end": 5,
+          "source_toolkit": "code",
+          "doc_id": "code:src/utils.py",
+          "content_hash": null
+        }
+      ],
+      "community_id": "community_2"
+    },
+    {
+      "id": "n17",
+      "name": "SessionStore",
+      "type": "class",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/session.py",
+          "line_start": 1,
+          "line_end": 50,
+          "source_toolkit": "code",
+          "doc_id": "code:src/session.py",
+          "content_hash": null
+        }
+      ],
+      "embedding": [
+        0.1,
+        0.6,
+        0.2,
+        0.123456
+      ],
+      "community_id": "community_0"
+    }
+  ],
+  "links": [
+    {
+      "relation_type": "extends",
+      "source": "n1",
+      "target": "n2"
+    },
+    {
+      "relation_type": "calls",
+      "source": "n1",
+      "target": "n3"
+    },
+    {
+      "relation_type": "contains",
+      "source": "n1",
+      "target": "n6"
+    },
+    {
+      "relation_type": "uses",
+      "source": "n1",
+      "target": "n17"
+    },
+    {
+      "relation_type": "extends",
+      "source": "n3",
+      "target": "n2"
+    },
+    {
+      "relation_type": "calls",
+      "source": "n3",
+      "target": "n4"
+    },
+    {
+      "relation_type": "imports",
+      "source": "n3",
+      "target": "n9"
+    },
+    {
+      "relation_type": "calls",
+      "source": "n4",
+      "target": "n5"
+    },
+    {
+      "relation_type": "imports",
+      "source": "n4",
+      "target": "n9"
+    },
+    {
+      "relation_type": "calls",
+      "source": "n5",
+      "target": "n4"
+    },
+    {
+      "relation_type": "calls",
+      "source": "n6",
+      "target": "n7"
+    },
+    {
+      "relation_type": "calls",
+      "source": "n6",
+      "target": "n4"
+    },
+    {
+      "relation_type": "imports",
+      "source": "n7",
+      "target": "n8"
+    },
+    {
+      "relation_type": "implements",
+      "source": "n10",
+      "target": "n11"
+    },
+    {
+      "relation_type": "related_to",
+      "source": "n11",
+      "target": "n3"
+    },
+    {
+      "relation_type": "related_to",
+      "source": "n11",
+      "target": "n17"
+    },
+    {
+      "relation_type": "related_to",
+      "source": "n12",
+      "target": "n10"
+    },
+    {
+      "relation_type": "documents",
+      "source": "n13",
+      "target": "n4"
+    },
+    {
+      "relation_type": "mentions",
+      "source": "n13",
+      "target": "n10"
+    },
+    {
+      "relation_type": "related_to",
+      "source": "n14",
+      "target": "n11"
+    },
+    {
+      "relation_type": "calls",
+      "source": "n15",
+      "target": "n4"
+    },
+    {
+      "relation_type": "extends",
+      "source": "n17",
+      "target": "n2"
+    }
+  ],
+  "_indices": {
+    "entity_index": {
+      "userservice": [
+        "n1"
+      ],
+      "baseservice": [
+        "n2"
+      ],
+      "authservice": [
+        "n3"
+      ],
+      "login": [
+        "n15",
+        "n4"
+      ],
+      "hash_password": [
+        "n5"
+      ],
+      "get_user": [
+        "n6"
+      ],
+      "userrepository": [
+        "n7"
+      ],
+      "db_url": [
+        "n8"
+      ],
+      "os": [
+        "n9"
+      ],
+      "user login": [
+        "n10"
+      ],
+      "secure passwords": [
+        "n11"
+      ],
+      "login story": [
+        "n12"
+      ],
+      "auth guide": [
+        "n13"
+      ],
+      "passwords are hashed": [
+        "n14"
+      ],
+      "utils": [
+        "n16"
+      ],
+      "sessionstore": [
+        "n17"
+      ]
+    },
+    "type_index": {
+      "class": [
+        "n1",
+        "n17",
+        "n2",
+        "n3",
+        "n7"
+      ],
+      "function": [
+        "n4",
+        "n5"
+      ],
+      "method": [
+        "n15",
+        "n6"
+      ],
+      "variable": [
+        "n8"
+      ],
+      "import": [
+        "n9"
+      ],
+      "feature": [
+        "n10"
+      ],
+      "requirement": [
+        "n11"
+      ],
+      "user_story": [
+        "n12"
+      ],
+      "documentation": [
+        "n13"
+      ],
+      "fact": [
+        "n14"
+      ],
+      "module": [
+        "n16"
+      ]
+    },
+    "file_index": {
+      "src/user_service.py": [
+        "n1",
+        "n6"
+      ],
+      "src/base.py": [
+        "n2"
+      ],
+      "src/auth.py": [
+        "n3",
+        "n4",
+        "n9"
+      ],
+      "src/crypto.py": [
+        "n5"
+      ],
+      "src/repo.py": [
+        "n7"
+      ],
+      "src/config.py": [
+        "n8"
+      ],
+      "docs/features.md": [
+        "n10"
+      ],
+      "docs/req.md": [
+        "n11",
+        "n14"
+      ],
+      "docs/stories.md": [
+        "n12"
+      ],
+      "docs/guide.md": [
+        "n13"
+      ],
+      "src/web/views.py": [
+        "n15"
+      ],
+      "src/utils.py": [
+        "n16"
+      ],
+      "src/session.py": [
+        "n17"
+      ]
+    },
+    "source_doc_index": {
+      "code:src/user_service.py": [
+        "n1",
+        "n6"
+      ],
+      "code:src/base.py": [
+        "n2"
+      ],
+      "code:src/auth.py": [
+        "n3",
+        "n4",
+        "n9"
+      ],
+      "code:src/crypto.py": [
+        "n5"
+      ],
+      "code:src/repo.py": [
+        "n7"
+      ],
+      "code:src/config.py": [
+        "n8"
+      ],
+      "docs:docs/features.md": [
+        "n10"
+      ],
+      "docs:docs/req.md": [
+        "n11",
+        "n14"
+      ],
+      "docs:docs/stories.md": [
+        "n12"
+      ],
+      "docs:docs/guide.md": [
+        "n13"
+      ],
+      "code:src/web/views.py": [
+        "n15"
+      ],
+      "code:src/utils.py": [
+        "n16"
+      ],
+      "code:src/session.py": [
+        "n17"
+      ]
+    }
+  },
+  "_metadata": {
+    "embeddings_model": "text-embed-x",
+    "embeddings_dimension": 4,
+    "community_data": {
+      "algorithm": "leiden",
+      "resolution": 1.0,
+      "modularity": 0.41235,
+      "num_communities": 4,
+      "communities": {
+        "community_0": {
+          "members": [
+            "n1",
+            "n2",
+            "n3",
+            "n4",
+            "n5",
+            "n6",
+            "n7",
+            "n8",
+            "n9",
+            "n15",
+            "n17"
+          ],
+          "centroids": [
+            {
+              "id": "n1",
+              "name": "UserService",
+              "type": "class",
+              "score": 1.0
+            },
+            {
+              "id": "n3",
+              "name": "AuthService",
+              "type": "class",
+              "score": 0.81235
+            },
+            {
+              "id": "n4",
+              "name": "login",
+              "type": "function",
+              "score": 0.5
+            },
+            {
+              "id": "n2",
+              "name": "BaseService",
+              "type": "class",
+              "score": 0.4999
+            }
+          ],
+          "stats": {
+            "size": 11,
+            "density": 0.18181,
+            "cohesion": 0.75,
+            "internal_edges": 14
+          },
+          "label": "User services",
+          "summary": "Code that manages users and signs them in.",
+          "dominant_types": [
+            "class",
+            "function",
+            "method",
+            "variable"
+          ],
+          "dominant_layers": [
+            "code"
+          ],
+          "micro_clusters": null
+        },
+        "community_1": {
+          "members": [
+            "n10",
+            "n11",
+            "n12",
+            "n13",
+            "n14"
+          ],
+          "centroids": [
+            {
+              "id": "n10",
+              "name": "User Login",
+              "type": "feature",
+              "score": 1.0
+            }
+          ],
+          "stats": {
+            "size": 5,
+            "density": 0.25,
+            "cohesion": 0.5,
+            "internal_edges": 4
+          },
+          "label": "Login docs",
+          "summary": null,
+          "dominant_types": [
+            "feature"
+          ],
+          "dominant_layers": [
+            "product",
+            "documentation"
+          ],
+          "micro_clusters": {
+            "micro_0": {
+              "label": "Passwords",
+              "members": [
+                "n11",
+                "n14"
+              ]
+            },
+            "micro_1": {
+              "members": [
+                "n10"
+              ]
+            }
+          }
+        },
+        "community_2": {
+          "members": [
+            "n16"
+          ],
+          "centroids": []
+        },
+        "community_3": {
+          "members": [],
+          "stats": {
+            "size": 5
+          },
+          "label": "Empty",
+          "centroids": []
+        }
+      }
+    },
+    "last_saved": "2026-10-07T00:00:00",
+    "version": "2.1"
+  }
+}

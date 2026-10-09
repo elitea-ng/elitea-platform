@@ -25,7 +25,7 @@ package toolkits
 // Production offers none, and neither runtime reads one: the Go discoverer
 // speaks streamable HTTP only (`internal/mcpregistry/discover.go`), and the
 // native worker builds the same transport unconditionally
-// (`services/elitea-worker-rust/src/toolkits/mcp.rs`). A transport selector
+// (`libs/rust/agent-runtime/src/toolkits/mcp.rs`). A transport selector
 // would be a control that nothing honours, which is the exact fault
 // `mcpregistry.Resolve` records for `ssl_verify`.
 //

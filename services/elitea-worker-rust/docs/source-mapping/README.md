@@ -46,6 +46,8 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [Recovery guarantees inventory](recovery-guarantees-inventory-20261008.md) records the platform recovery matrix baseline, evidence ruling and ranked gap backlog.
+
 - [Sandbox phase deadlines](sandbox-phase-deadlines-20261002.md) separates durable readiness and execution clocks and records rolling compatibility and Docker/Kubernetes browser acceptance.
 
 - [Main integration and PR 883 release preparation](main-integration-20261001.md) records conflict resolution, migration identities, fresh CI repairs, and preserved Point 5 work.

@@ -1741,8 +1741,8 @@ async fn direct_saved_agent_node_streams_one_exact_pipeline_hierarchy() {
     assert_eq!(
         paths.lock().expect("runtime paths").as_slice(),
         [
-            "/executions/execution%2Fone/generations/2/runtime-context/elitea-client-token",
-            "/executions/execution%2Fone/generations/2/runtime-context/applications/3/versions/4"
+            "/executions/execution-one/generations/2/runtime-context/elitea-client-token",
+            "/executions/execution-one/generations/2/runtime-context/applications/3/versions/4"
         ]
     );
 }
@@ -2521,8 +2521,8 @@ async fn saved_pipeline_participant_loads_exact_version_and_runs_as_child_subgra
     assert_eq!(
         paths.lock().expect("runtime paths").as_slice(),
         [
-            "/executions/execution%2Fone/generations/2/runtime-context/applications/3/versions/4",
-            "/executions/execution%2Fone/generations/2/runtime-context/elitea-client-token"
+            "/executions/execution-one/generations/2/runtime-context/applications/3/versions/4",
+            "/executions/execution-one/generations/2/runtime-context/elitea-client-token"
         ]
     );
     assert!(
@@ -4261,7 +4261,7 @@ async fn pipeline_new_turn_executes_nodes_instead_of_reusing_completed_output() 
     let mut request = pipeline_request();
     request.payload.application["version_details"]["instructions"] = json!(STATE_MODIFIER_PIPELINE);
     let private_thread = private_pipeline_session_id(&request);
-    for (execution, input) in [("execution/first", "FIRST"), ("execution/second", "SECOND")] {
+    for (execution, input) in [("execution-first", "FIRST"), ("execution-second", "SECOND")] {
         request.payload.user_input = super::request::UserInput::Text(input.to_owned());
         let invocation = assembler
             .assemble(authorized_execution(&request, execution))
@@ -4643,7 +4643,7 @@ async fn ordinary_message_after_a_printer_pause_resumes_the_paused_run() {
 
     let typed = printer_pipeline_request("done", false);
     let mut invocation = assembler
-        .assemble(authorized_execution(&typed, "execution/typed"))
+        .assemble(authorized_execution(&typed, "execution-typed"))
         .await
         .expect("ordinary message resumes the Printer pause");
     invocation
@@ -4692,7 +4692,7 @@ async fn ordinary_message_after_a_printer_pause_resumes_the_paused_run() {
     // in production) runs from the entry point and pauses at the Printer again.
     let again = printer_pipeline_request("again", false);
     let invocation = assembler
-        .assemble(authorized_execution(&again, "execution/again"))
+        .assemble(authorized_execution(&again, "execution-again"))
         .await
         .expect("fresh assembly after completion");
     let (mut run, _, _) = invocation.start().expect("fresh start");
@@ -4922,8 +4922,6 @@ fn pipeline_profile_refusal(instructions: &str) -> super::runtime::NativeAgentAs
 /// agent-settings message instead of the generic resource or input texts.
 #[test]
 fn pipeline_size_and_count_refusals_map_to_the_agent_settings_limit_without_content() {
-    use crate::protocol::InputLimitField;
-
     let small =
         "entry_point: a\nnodes:\n  - id: a\n    type: state_modifier\n    transition: END\n";
     let oversized_document = format!("{small}# {LIMIT_SENTINEL}{}\n", "p".repeat(512 * 1024 + 1));
@@ -4964,7 +4962,7 @@ fn pipeline_size_and_count_refusals_map_to_the_agent_settings_limit_without_cont
         let error = pipeline_profile_refusal(&instructions);
         assert_eq!(
             error.code(),
-            NativeAgentAssemblyErrorCode::InputLimit(InputLimitField::AgentSettings),
+            NativeAgentAssemblyErrorCode::AgentSettingsLimit,
             "{name}"
         );
         assert!(!error.retryable(), "{name}");

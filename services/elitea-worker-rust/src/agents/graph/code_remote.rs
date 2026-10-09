@@ -20,8 +20,7 @@ use std::{sync::Arc, time::Duration};
 mod attempt_remote;
 #[path = "code_compiled.rs"]
 mod compiled;
-#[path = "code_platform_drive.rs"]
-mod platform_drive;
+use elitea_agent_runtime::graph::code_platform_drive as platform_drive;
 #[path = "code_preparation.rs"]
 mod preparation;
 

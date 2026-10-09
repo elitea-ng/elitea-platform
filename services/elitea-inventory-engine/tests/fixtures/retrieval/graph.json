@@ -1,0 +1,1589 @@
+{
+  "directed": true,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "id": "27b8aacb8e95dfca",
+      "name": "UserService",
+      "type": "class",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/services/user_service.py",
+          "line_start": 10,
+          "line_end": 80,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/services/user_service.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/services/user_service.py",
+      "description": "Manages users: creation, lookup and deletion.",
+      "bases": [
+        "BaseService"
+      ],
+      "decorators": [],
+      "is_abstract": false,
+      "embedding": [
+        0.1,
+        -0.25,
+        0.5
+      ],
+      "community_id": "0"
+    },
+    {
+      "id": "d17ef01043ec3fea",
+      "name": "get_user",
+      "type": "method",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/services/user_service.py",
+          "line_start": 20,
+          "line_end": 30,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/services/user_service.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/services/user_service.py",
+      "signature": "def get_user(self, user_id: int) -> User",
+      "community_id": "0"
+    },
+    {
+      "id": "a4393f7b0af43930",
+      "name": "create_user",
+      "type": "method",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/services/user_service.py",
+          "line_start": 32,
+          "line_end": 55,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/services/user_service.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/services/user_service.py",
+      "signature": "def create_user(self, email: str, password: str) -> User",
+      "docstring": "Create a user after validating the e-mail address and hashing the password with the configured algorithm, then persist it through the repository.",
+      "community_id": "0"
+    },
+    {
+      "id": "be2ec2003a512816",
+      "name": "delete_user",
+      "type": "method",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/services/user_service.py",
+          "line_start": 57,
+          "line_end": 70,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/services/user_service.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/services/user_service.py",
+      "community_id": "0"
+    },
+    {
+      "id": "62896198691ff77e",
+      "name": "UserRepository",
+      "type": "class",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/data/user_repository.py",
+          "line_start": 5,
+          "line_end": 60,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/data/user_repository.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/data/user_repository.py",
+      "description": "Persists users in PostgreSQL.",
+      "community_id": "0"
+    },
+    {
+      "id": "76241899863f82cb",
+      "name": "find_by_id",
+      "type": "method",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/data/user_repository.py",
+          "line_start": 12,
+          "line_end": 20,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/data/user_repository.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/data/user_repository.py"
+    },
+    {
+      "id": "1b717d049f554f1f",
+      "name": "save",
+      "type": "method",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/data/user_repository.py",
+          "line_start": 22,
+          "line_end": 40,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/data/user_repository.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/data/user_repository.py"
+    },
+    {
+      "id": "5c07ceb20b01ae32",
+      "name": "User",
+      "type": "entity",
+      "layer": "data",
+      "citations": [
+        {
+          "file_path": "src/data/models.py",
+          "line_start": 1,
+          "line_end": 25,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/data/models.py",
+          "content_hash": null
+        },
+        {
+          "file_path": "src/data/schemas.py",
+          "line_start": 3,
+          "line_end": 9,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/data/schemas.py",
+          "content_hash": null
+        },
+        {
+          "file_path": "src/api/serializers.py",
+          "line_start": 40,
+          "line_end": 52,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/api/serializers.py",
+          "content_hash": null
+        },
+        {
+          "file_path": "src/data/migrations/0001_users.py",
+          "line_start": null,
+          "line_end": null,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/data/migrations/0001_users.py",
+          "content_hash": null
+        },
+        {
+          "file_path": "src/admin/views.py",
+          "line_start": 77,
+          "line_end": null,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/admin/views.py",
+          "content_hash": null
+        },
+        {
+          "file_path": "docs/users.md",
+          "line_start": 30,
+          "line_end": 35,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/users.md",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/data/models.py",
+      "fields": {
+        "id": "int",
+        "email": "str",
+        "password_hash": "str"
+      },
+      "community_id": "0"
+    },
+    {
+      "id": "fc68de831c6c5e88",
+      "name": "Account",
+      "type": "table",
+      "layer": "data",
+      "citations": [
+        {
+          "file_path": "src/data/models.py",
+          "line_start": 27,
+          "line_end": 40,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/data/models.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/data/models.py"
+    },
+    {
+      "id": "2af357c26d99b18d",
+      "name": "AuthMiddleware",
+      "type": "middleware",
+      "layer": "service",
+      "citations": [
+        {
+          "file_path": "src/api/middleware.py",
+          "line_start": 8,
+          "line_end": 44,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/api/middleware.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/api/middleware.py",
+      "description": "Checks the session token on every request."
+    },
+    {
+      "id": "761f5a2e77db9962",
+      "name": "POST /login",
+      "type": "rest_endpoint",
+      "citations": [
+        {
+          "file_path": "src/api/routes.py",
+          "line_start": 10,
+          "line_end": 25,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/api/routes.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/api/routes.py",
+      "method": "POST",
+      "path": "/login"
+    },
+    {
+      "id": "2e57c07adb2d230a",
+      "name": "GET /users",
+      "type": "rest_endpoint",
+      "citations": [
+        {
+          "file_path": "src/api/routes.py",
+          "line_start": 27,
+          "line_end": 40,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/api/routes.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/api/routes.py",
+      "method": "GET",
+      "path": "/users"
+    },
+    {
+      "id": "947b06f6f11768a9",
+      "name": "Config",
+      "type": "class",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/config.py",
+          "line_start": 1,
+          "line_end": 30,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/config.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/config.py",
+      "description": "Application settings read from the environment."
+    },
+    {
+      "id": "d0ff75f49029848e",
+      "name": "load_config",
+      "type": "function",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/config.py",
+          "line_start": 32,
+          "line_end": 50,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/config.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/config.py"
+    },
+    {
+      "id": "d2917cf289ac9ac8",
+      "name": "DATABASE_URL",
+      "type": "constant",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/config.py",
+          "line_start": 3,
+          "line_end": 3,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/config.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/config.py",
+      "value": "postgresql://localhost/app"
+    },
+    {
+      "id": "71fde4b5fe35e8c0",
+      "name": "validate_email",
+      "type": "function",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/utils/validation.py",
+          "line_start": 4,
+          "line_end": 15,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/utils/validation.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/utils/validation.py"
+    },
+    {
+      "id": "6b0c66a622a4373d",
+      "name": "hash_password",
+      "type": "function",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/utils/security.py",
+          "line_start": 6,
+          "line_end": 18,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/utils/security.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/utils/security.py",
+      "description": "Hashes a password with bcrypt.",
+      "embedding": [
+        0.3,
+        0.2,
+        -0.1
+      ]
+    },
+    {
+      "id": "ae92bc6872d0420e",
+      "name": "test_create_user",
+      "type": "test_function",
+      "layer": "testing",
+      "citations": [
+        {
+          "file_path": "tests/test_user_service.py",
+          "line_start": 10,
+          "line_end": 30,
+          "source_toolkit": "repo",
+          "doc_id": "repo:tests/test_user_service.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "tests/test_user_service.py"
+    },
+    {
+      "id": "33d969f98e3ad7b0",
+      "name": "user_service.py",
+      "type": "source_file",
+      "layer": "structure",
+      "citations": [
+        {
+          "file_path": "src/services/user_service.py",
+          "line_start": null,
+          "line_end": null,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/services/user_service.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/services/user_service.py",
+      "language": "python",
+      "line_count": 120
+    },
+    {
+      "id": "2daffafbe025b76f",
+      "name": "ChatMessageHandler",
+      "type": "class",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/chat/handler.py",
+          "line_start": 1,
+          "line_end": 90,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/chat/handler.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/chat/handler.py",
+      "description": "Routes incoming chat messages to the right conversation.",
+      "community_id": "1"
+    },
+    {
+      "id": "fdac787982052c96",
+      "name": "send_message",
+      "type": "method",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/chat/handler.py",
+          "line_start": 40,
+          "line_end": 60,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/chat/handler.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/chat/handler.py",
+      "community_id": "1"
+    },
+    {
+      "id": "5a090dd67b28c75f",
+      "name": "NotificationQueue",
+      "type": "class",
+      "layer": "code",
+      "citations": [
+        {
+          "file_path": "src/chat/notifications.py",
+          "line_start": 1,
+          "line_end": 40,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/chat/notifications.py",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/chat/notifications.py",
+      "community_id": "1"
+    },
+    {
+      "id": "860740df8c134db4",
+      "name": "Gizmo",
+      "type": "widget",
+      "citations": [
+        {
+          "file_path": "src/ui/gizmo.ts",
+          "line_start": 1,
+          "line_end": 10,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/ui/gizmo.ts",
+          "content_hash": null
+        }
+      ],
+      "file_path": "src/ui/gizmo.ts",
+      "score": 0.75,
+      "weight": 1e-07,
+      "enabled": true
+    },
+    {
+      "id": "1f2313ad2f75e1c8",
+      "name": "LegacyHelper",
+      "type": "function",
+      "layer": "code",
+      "file_path": "src/legacy.py",
+      "citation": {
+        "file_path": "src/legacy.py",
+        "line_start": 5,
+        "line_end": 9,
+        "source_toolkit": "repo",
+        "doc_id": null,
+        "content_hash": null
+      }
+    },
+    {
+      "id": "b580396487bcf214",
+      "name": "Getting Started",
+      "type": "resource",
+      "layer": "documentation",
+      "citations": [
+        {
+          "file_path": "docs/getting-started.md",
+          "line_start": 1,
+          "line_end": 120,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/getting-started.md",
+          "content_hash": null
+        }
+      ],
+      "file_path": "docs/getting-started.md"
+    },
+    {
+      "id": "f6b07b7e50c499c9",
+      "name": "Installation",
+      "type": "section",
+      "layer": "documentation",
+      "citations": [
+        {
+          "file_path": "docs/getting-started.md",
+          "line_start": 10,
+          "line_end": 40,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/getting-started.md",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "98a3c6cb56b55718",
+      "name": "Config",
+      "type": "section",
+      "layer": "documentation",
+      "citations": [
+        {
+          "file_path": "docs/configuration.md",
+          "line_start": 1,
+          "line_end": 80,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/configuration.md",
+          "content_hash": null
+        }
+      ],
+      "description": "How to configure the service: environment variables and files."
+    },
+    {
+      "id": "595e336aff19c7b4",
+      "name": "User Management",
+      "type": "documentation",
+      "layer": "documentation",
+      "citations": [
+        {
+          "file_path": "docs/users.md",
+          "line_start": 1,
+          "line_end": 200,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/users.md",
+          "content_hash": null
+        }
+      ],
+      "description": "Creating, updating and deleting users from the admin console."
+    },
+    {
+      "id": "b26053b4559ef2d7",
+      "name": "Authentication",
+      "type": "concept",
+      "layer": "domain",
+      "citations": [
+        {
+          "file_path": "docs/security.md",
+          "line_start": 1,
+          "line_end": 50,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/security.md",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "4a61b1668832f3e8",
+      "name": "Login Flow",
+      "type": "process",
+      "layer": "domain",
+      "citations": [
+        {
+          "file_path": "docs/security.md",
+          "line_start": 52,
+          "line_end": 90,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/security.md",
+          "content_hash": null
+        }
+      ],
+      "description": "A user submits credentials; the service checks them and issues a session token."
+    },
+    {
+      "id": "2f879919ee53b314",
+      "name": "Password Policy",
+      "type": "requirement",
+      "layer": "domain",
+      "citations": [
+        {
+          "file_path": "docs/security.md",
+          "line_start": 92,
+          "line_end": 110,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/security.md",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "b551b51563eb6cb1",
+      "name": "Chat",
+      "type": "feature",
+      "layer": "product",
+      "citations": [
+        {
+          "file_path": "docs/chat.md",
+          "line_start": 1,
+          "line_end": 60,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/chat.md",
+          "content_hash": null
+        }
+      ],
+      "community_id": "1"
+    },
+    {
+      "id": "1d9799c6a8e75af4",
+      "name": "Notifications",
+      "type": "feature",
+      "layer": "product",
+      "citations": [
+        {
+          "file_path": "docs/chat.md",
+          "line_start": 62,
+          "line_end": 90,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/chat.md",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "e47dbbdab0b95e79",
+      "name": "Caf\u00e9 \u00dcberblick",
+      "type": "resource",
+      "layer": "documentation",
+      "citations": [
+        {
+          "file_path": "docs/de/\u00fcberblick.md",
+          "line_start": 1,
+          "line_end": 10,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/de/\u00fcberblick.md",
+          "content_hash": null
+        }
+      ],
+      "description": "Ein \u00dcberblick \u2014 na\u00efve fa\u00e7ade."
+    },
+    {
+      "id": "2be20c38aec1dfa1",
+      "name": "Single Sign-On",
+      "type": "feature",
+      "layer": "product",
+      "citations": [
+        {
+          "file_path": "docs/security.md",
+          "line_start": 120,
+          "line_end": 140,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/security.md",
+          "content_hash": null
+        }
+      ],
+      "properties": {
+        "description": "Users sign in once through the corporate identity provider.",
+        "confidence": 0.9,
+        "aliases": [
+          "SSO",
+          "single sign on"
+        ]
+      },
+      "embedding": [
+        1e-05,
+        0.0,
+        1.0
+      ]
+    },
+    {
+      "id": "8a6a311ff069e87a",
+      "name": "Rate Limiting",
+      "type": "concept",
+      "layer": "domain",
+      "citations": [
+        {
+          "file_path": "docs/security.md",
+          "line_start": 150,
+          "line_end": 170,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/security.md",
+          "content_hash": null
+        }
+      ],
+      "properties": {
+        "description": "Requests per client are limited to protect the service from abuse; Requests per client are limited to protect the service from abuse; Requests per client are limited to protect the service from abuse; ",
+        "limit": 100,
+        "window": "1m"
+      }
+    },
+    {
+      "id": "3375e961838aa578",
+      "name": "Session Token",
+      "type": "entity",
+      "layer": "data",
+      "citations": [
+        {
+          "file_path": "docs/security.md",
+          "line_start": 60,
+          "line_end": 70,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/security.md",
+          "content_hash": null
+        }
+      ],
+      "properties": {
+        "description": "An opaque token identifying a signed-in user."
+      }
+    },
+    {
+      "id": "729da7773458c3ac",
+      "name": "Admin Console",
+      "type": "platform",
+      "layer": "product",
+      "citations": [
+        {
+          "file_path": "docs/users.md",
+          "line_start": 5,
+          "line_end": 20,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/users.md",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "58f2a3045b978fb8",
+      "name": "Passwords are hashed with bcrypt",
+      "type": "fact",
+      "layer": "knowledge",
+      "citations": [
+        {
+          "file_path": "src/utils/security.py",
+          "line_start": 6,
+          "line_end": 18,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/utils/security.py",
+          "content_hash": null
+        }
+      ],
+      "fact_type": "behavior",
+      "subject": "hash_password",
+      "confidence": 0.95
+    },
+    {
+      "id": "9a0c20f89cb9189f",
+      "name": "Emails are validated before saving",
+      "type": "fact",
+      "layer": "knowledge",
+      "citations": [
+        {
+          "file_path": "src/utils/validation.py",
+          "line_start": 4,
+          "line_end": 15,
+          "source_toolkit": "repo",
+          "doc_id": "repo:src/utils/validation.py",
+          "content_hash": null
+        }
+      ],
+      "subject": "validate_email"
+    },
+    {
+      "id": "a31042df82bbfa4e",
+      "name": "Use PostgreSQL for persistence",
+      "type": "fact",
+      "layer": "knowledge",
+      "citations": [
+        {
+          "file_path": "docs/architecture.md",
+          "line_start": 10,
+          "line_end": 12,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/architecture.md",
+          "content_hash": null
+        }
+      ],
+      "rationale": "Relational data and transactions."
+    },
+    {
+      "id": "62666b25eb94df85",
+      "name": "Login is retried three times",
+      "type": "fact",
+      "layer": "knowledge",
+      "citations": [
+        {
+          "file_path": "docs/security.md",
+          "line_start": 95,
+          "line_end": 96,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/security.md",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "9c13efda5e96e028",
+      "name": "Release 2026-01-15",
+      "type": "fact",
+      "layer": "knowledge",
+      "citations": [
+        {
+          "file_path": "docs/changelog.md",
+          "line_start": 1,
+          "line_end": 2,
+          "source_toolkit": "wiki",
+          "doc_id": "wiki:docs/changelog.md",
+          "content_hash": null
+        }
+      ]
+    },
+    {
+      "id": "85807aa1ec8749f0",
+      "name": "chat.max_length",
+      "type": "configuration",
+      "layer": "configuration",
+      "citations": [
+        {
+          "file_path": "config/chat.yaml",
+          "line_start": 3,
+          "line_end": 3,
+          "source_toolkit": "repo",
+          "doc_id": "repo:config/chat.yaml",
+          "content_hash": null
+        }
+      ],
+      "file_path": "config/chat.yaml",
+      "default": 4000
+    }
+  ],
+  "links": [
+    {
+      "relation_type": "contains",
+      "source_toolkit": "repo",
+      "discovered_in_file": "src/services/user_service.py",
+      "source": "27b8aacb8e95dfca",
+      "target": "d17ef01043ec3fea"
+    },
+    {
+      "relation_type": "contains",
+      "source_toolkit": "repo",
+      "source": "27b8aacb8e95dfca",
+      "target": "a4393f7b0af43930"
+    },
+    {
+      "relation_type": "contains",
+      "source_toolkit": "repo",
+      "source": "27b8aacb8e95dfca",
+      "target": "be2ec2003a512816"
+    },
+    {
+      "relation_type": "uses",
+      "source_toolkit": "repo",
+      "source": "27b8aacb8e95dfca",
+      "target": "62896198691ff77e"
+    },
+    {
+      "relation_type": "uses",
+      "source_toolkit": "repo",
+      "source": "27b8aacb8e95dfca",
+      "target": "71fde4b5fe35e8c0"
+    },
+    {
+      "relation_type": "uses",
+      "source_toolkit": "repo",
+      "source": "27b8aacb8e95dfca",
+      "target": "6b0c66a622a4373d"
+    },
+    {
+      "relation_type": "uses",
+      "source": "27b8aacb8e95dfca",
+      "target": "947b06f6f11768a9"
+    },
+    {
+      "relation_type": "calls",
+      "source_toolkit": "repo",
+      "source": "d17ef01043ec3fea",
+      "target": "76241899863f82cb"
+    },
+    {
+      "relation_type": "calls",
+      "source_toolkit": "repo",
+      "source": "a4393f7b0af43930",
+      "target": "6b0c66a622a4373d"
+    },
+    {
+      "relation_type": "calls",
+      "source_toolkit": "repo",
+      "source": "a4393f7b0af43930",
+      "target": "1b717d049f554f1f"
+    },
+    {
+      "relation_type": "returns",
+      "source": "a4393f7b0af43930",
+      "target": "5c07ceb20b01ae32"
+    },
+    {
+      "relation_type": "contains",
+      "source_toolkit": "repo",
+      "source": "62896198691ff77e",
+      "target": "76241899863f82cb"
+    },
+    {
+      "relation_type": "contains",
+      "source_toolkit": "repo",
+      "source": "62896198691ff77e",
+      "target": "1b717d049f554f1f"
+    },
+    {
+      "relation_type": "uses",
+      "source_toolkit": "repo",
+      "source": "62896198691ff77e",
+      "target": "5c07ceb20b01ae32"
+    },
+    {
+      "relation_type": "uses",
+      "source": "62896198691ff77e",
+      "target": "d2917cf289ac9ac8"
+    },
+    {
+      "relation_type": "writes",
+      "source": "1b717d049f554f1f",
+      "target": "5c07ceb20b01ae32"
+    },
+    {
+      "relation_type": "called_by",
+      "source": "1b717d049f554f1f",
+      "target": "a4393f7b0af43930"
+    },
+    {
+      "relation_type": "references",
+      "source": "fc68de831c6c5e88",
+      "target": "5c07ceb20b01ae32"
+    },
+    {
+      "relation_type": "depends_on",
+      "source_toolkit": "repo",
+      "source": "2af357c26d99b18d",
+      "target": "27b8aacb8e95dfca"
+    },
+    {
+      "relation_type": "validates",
+      "source": "2af357c26d99b18d",
+      "confidence": 0.8,
+      "target": "3375e961838aa578"
+    },
+    {
+      "relation_type": "uses",
+      "source_toolkit": "repo",
+      "source": "761f5a2e77db9962",
+      "target": "2af357c26d99b18d"
+    },
+    {
+      "relation_type": "implements",
+      "source": "761f5a2e77db9962",
+      "confidence": 0.7,
+      "target": "4a61b1668832f3e8"
+    },
+    {
+      "relation_type": "calls",
+      "source_toolkit": "repo",
+      "source": "2e57c07adb2d230a",
+      "target": "27b8aacb8e95dfca"
+    },
+    {
+      "relation_type": "contains",
+      "source": "947b06f6f11768a9",
+      "target": "d2917cf289ac9ac8"
+    },
+    {
+      "relation_type": "returns",
+      "source": "d0ff75f49029848e",
+      "target": "947b06f6f11768a9"
+    },
+    {
+      "relation_type": "tests",
+      "source_toolkit": "repo",
+      "source": "ae92bc6872d0420e",
+      "target": "27b8aacb8e95dfca"
+    },
+    {
+      "relation_type": "tests",
+      "source": "ae92bc6872d0420e",
+      "target": "a4393f7b0af43930"
+    },
+    {
+      "relation_type": "defines",
+      "source": "33d969f98e3ad7b0",
+      "target": "27b8aacb8e95dfca"
+    },
+    {
+      "relation_type": "contains",
+      "source": "2daffafbe025b76f",
+      "target": "fdac787982052c96"
+    },
+    {
+      "relation_type": "reads",
+      "source": "2daffafbe025b76f",
+      "target": "85807aa1ec8749f0"
+    },
+    {
+      "relation_type": "uses",
+      "source": "fdac787982052c96",
+      "target": "5a090dd67b28c75f"
+    },
+    {
+      "relation_type": "contains",
+      "source_toolkit": "wiki",
+      "source": "b580396487bcf214",
+      "target": "f6b07b7e50c499c9"
+    },
+    {
+      "relation_type": "references",
+      "source": "b580396487bcf214",
+      "target": "98a3c6cb56b55718"
+    },
+    {
+      "relation_type": "documents",
+      "source_toolkit": "wiki",
+      "source": "98a3c6cb56b55718",
+      "target": "947b06f6f11768a9"
+    },
+    {
+      "relation_type": "describes",
+      "source_toolkit": "wiki",
+      "source": "595e336aff19c7b4",
+      "target": "27b8aacb8e95dfca"
+    },
+    {
+      "relation_type": "describes",
+      "source_toolkit": "wiki",
+      "source": "595e336aff19c7b4",
+      "target": "729da7773458c3ac"
+    },
+    {
+      "relation_type": "part_of",
+      "source_toolkit": "wiki",
+      "source": "4a61b1668832f3e8",
+      "target": "b26053b4559ef2d7"
+    },
+    {
+      "relation_type": "produces",
+      "source": "4a61b1668832f3e8",
+      "target": "3375e961838aa578"
+    },
+    {
+      "relation_type": "enforced_by",
+      "source": "2f879919ee53b314",
+      "target": "6b0c66a622a4373d"
+    },
+    {
+      "relation_type": "implemented_by",
+      "source": "b551b51563eb6cb1",
+      "target": "2daffafbe025b76f"
+    },
+    {
+      "relation_type": "relates_to",
+      "source": "b551b51563eb6cb1",
+      "target": "1d9799c6a8e75af4"
+    },
+    {
+      "relation_type": "implemented_by",
+      "source": "1d9799c6a8e75af4",
+      "target": "5a090dd67b28c75f"
+    },
+    {
+      "relation_type": "relates_to",
+      "source": "2be20c38aec1dfa1",
+      "target": "27b8aacb8e95dfca"
+    },
+    {
+      "relation_type": "part_of",
+      "source": "2be20c38aec1dfa1",
+      "target": "b26053b4559ef2d7"
+    },
+    {
+      "relation_type": "applies_to",
+      "source": "8a6a311ff069e87a",
+      "target": "2af357c26d99b18d"
+    },
+    {
+      "relation_type": "uses",
+      "source": "729da7773458c3ac",
+      "target": "27b8aacb8e95dfca"
+    },
+    {
+      "relation_type": "describes",
+      "source": "58f2a3045b978fb8",
+      "target": "6b0c66a622a4373d"
+    },
+    {
+      "relation_type": "describes",
+      "source": "9a0c20f89cb9189f",
+      "target": "71fde4b5fe35e8c0"
+    },
+    {
+      "relation_type": "describes",
+      "source": "a31042df82bbfa4e",
+      "target": "62896198691ff77e"
+    },
+    {
+      "relation_type": "describes",
+      "source": "62666b25eb94df85",
+      "target": "4a61b1668832f3e8"
+    }
+  ],
+  "_indices": {
+    "entity_index": {
+      "userservice": [
+        "27b8aacb8e95dfca"
+      ],
+      "get_user": [
+        "d17ef01043ec3fea"
+      ],
+      "create_user": [
+        "a4393f7b0af43930"
+      ],
+      "delete_user": [
+        "be2ec2003a512816"
+      ],
+      "userrepository": [
+        "62896198691ff77e"
+      ],
+      "find_by_id": [
+        "76241899863f82cb"
+      ],
+      "save": [
+        "1b717d049f554f1f"
+      ],
+      "user": [
+        "5c07ceb20b01ae32"
+      ],
+      "account": [
+        "fc68de831c6c5e88"
+      ],
+      "authmiddleware": [
+        "2af357c26d99b18d"
+      ],
+      "post /login": [
+        "761f5a2e77db9962"
+      ],
+      "get /users": [
+        "2e57c07adb2d230a"
+      ],
+      "config": [
+        "947b06f6f11768a9",
+        "98a3c6cb56b55718"
+      ],
+      "load_config": [
+        "d0ff75f49029848e"
+      ],
+      "database_url": [
+        "d2917cf289ac9ac8"
+      ],
+      "validate_email": [
+        "71fde4b5fe35e8c0"
+      ],
+      "hash_password": [
+        "6b0c66a622a4373d"
+      ],
+      "test_create_user": [
+        "ae92bc6872d0420e"
+      ],
+      "user_service.py": [
+        "33d969f98e3ad7b0"
+      ],
+      "chatmessagehandler": [
+        "2daffafbe025b76f"
+      ],
+      "send_message": [
+        "fdac787982052c96"
+      ],
+      "notificationqueue": [
+        "5a090dd67b28c75f"
+      ],
+      "gizmo": [
+        "860740df8c134db4"
+      ],
+      "legacyhelper": [
+        "1f2313ad2f75e1c8"
+      ],
+      "getting started": [
+        "b580396487bcf214"
+      ],
+      "installation": [
+        "f6b07b7e50c499c9"
+      ],
+      "user management": [
+        "595e336aff19c7b4"
+      ],
+      "authentication": [
+        "b26053b4559ef2d7"
+      ],
+      "login flow": [
+        "4a61b1668832f3e8"
+      ],
+      "password policy": [
+        "2f879919ee53b314"
+      ],
+      "chat": [
+        "b551b51563eb6cb1"
+      ],
+      "notifications": [
+        "1d9799c6a8e75af4"
+      ],
+      "caf\u00e9 \u00fcberblick": [
+        "e47dbbdab0b95e79"
+      ],
+      "single sign-on": [
+        "2be20c38aec1dfa1"
+      ],
+      "rate limiting": [
+        "8a6a311ff069e87a"
+      ],
+      "session token": [
+        "3375e961838aa578"
+      ],
+      "admin console": [
+        "729da7773458c3ac"
+      ],
+      "passwords are hashed with bcrypt": [
+        "58f2a3045b978fb8"
+      ],
+      "emails are validated before saving": [
+        "9a0c20f89cb9189f"
+      ],
+      "use postgresql for persistence": [
+        "a31042df82bbfa4e"
+      ],
+      "login is retried three times": [
+        "62666b25eb94df85"
+      ],
+      "release 2026-01-15": [
+        "9c13efda5e96e028"
+      ],
+      "chat.max_length": [
+        "85807aa1ec8749f0"
+      ]
+    },
+    "type_index": {
+      "class": [
+        "62896198691ff77e",
+        "5a090dd67b28c75f",
+        "27b8aacb8e95dfca",
+        "947b06f6f11768a9",
+        "2daffafbe025b76f"
+      ],
+      "method": [
+        "d17ef01043ec3fea",
+        "be2ec2003a512816",
+        "fdac787982052c96",
+        "a4393f7b0af43930",
+        "76241899863f82cb",
+        "1b717d049f554f1f"
+      ],
+      "entity": [
+        "3375e961838aa578",
+        "5c07ceb20b01ae32"
+      ],
+      "table": [
+        "fc68de831c6c5e88"
+      ],
+      "middleware": [
+        "2af357c26d99b18d"
+      ],
+      "rest_endpoint": [
+        "761f5a2e77db9962",
+        "2e57c07adb2d230a"
+      ],
+      "function": [
+        "d0ff75f49029848e",
+        "71fde4b5fe35e8c0",
+        "1f2313ad2f75e1c8",
+        "6b0c66a622a4373d"
+      ],
+      "constant": [
+        "d2917cf289ac9ac8"
+      ],
+      "test_function": [
+        "ae92bc6872d0420e"
+      ],
+      "source_file": [
+        "33d969f98e3ad7b0"
+      ],
+      "widget": [
+        "860740df8c134db4"
+      ],
+      "resource": [
+        "b580396487bcf214",
+        "e47dbbdab0b95e79"
+      ],
+      "section": [
+        "f6b07b7e50c499c9",
+        "98a3c6cb56b55718"
+      ],
+      "documentation": [
+        "595e336aff19c7b4"
+      ],
+      "concept": [
+        "b26053b4559ef2d7",
+        "8a6a311ff069e87a"
+      ],
+      "process": [
+        "4a61b1668832f3e8"
+      ],
+      "requirement": [
+        "2f879919ee53b314"
+      ],
+      "feature": [
+        "b551b51563eb6cb1",
+        "2be20c38aec1dfa1",
+        "1d9799c6a8e75af4"
+      ],
+      "platform": [
+        "729da7773458c3ac"
+      ],
+      "fact": [
+        "62666b25eb94df85",
+        "58f2a3045b978fb8",
+        "a31042df82bbfa4e",
+        "9c13efda5e96e028",
+        "9a0c20f89cb9189f"
+      ],
+      "configuration": [
+        "85807aa1ec8749f0"
+      ]
+    },
+    "file_index": {
+      "src/services/user_service.py": [
+        "d17ef01043ec3fea",
+        "be2ec2003a512816",
+        "27b8aacb8e95dfca",
+        "a4393f7b0af43930",
+        "33d969f98e3ad7b0"
+      ],
+      "src/data/user_repository.py": [
+        "62896198691ff77e",
+        "76241899863f82cb",
+        "1b717d049f554f1f"
+      ],
+      "src/data/models.py": [
+        "fc68de831c6c5e88",
+        "5c07ceb20b01ae32"
+      ],
+      "src/data/schemas.py": [
+        "5c07ceb20b01ae32"
+      ],
+      "src/api/serializers.py": [
+        "5c07ceb20b01ae32"
+      ],
+      "src/data/migrations/0001_users.py": [
+        "5c07ceb20b01ae32"
+      ],
+      "src/admin/views.py": [
+        "5c07ceb20b01ae32"
+      ],
+      "docs/users.md": [
+        "729da7773458c3ac",
+        "5c07ceb20b01ae32",
+        "595e336aff19c7b4"
+      ],
+      "src/api/middleware.py": [
+        "2af357c26d99b18d"
+      ],
+      "src/api/routes.py": [
+        "761f5a2e77db9962",
+        "2e57c07adb2d230a"
+      ],
+      "src/config.py": [
+        "947b06f6f11768a9",
+        "d0ff75f49029848e",
+        "d2917cf289ac9ac8"
+      ],
+      "src/utils/validation.py": [
+        "71fde4b5fe35e8c0",
+        "9a0c20f89cb9189f"
+      ],
+      "src/utils/security.py": [
+        "58f2a3045b978fb8",
+        "6b0c66a622a4373d"
+      ],
+      "tests/test_user_service.py": [
+        "ae92bc6872d0420e"
+      ],
+      "src/chat/handler.py": [
+        "fdac787982052c96",
+        "2daffafbe025b76f"
+      ],
+      "src/chat/notifications.py": [
+        "5a090dd67b28c75f"
+      ],
+      "src/ui/gizmo.ts": [
+        "860740df8c134db4"
+      ],
+      "src/legacy.py": [
+        "1f2313ad2f75e1c8"
+      ],
+      "docs/getting-started.md": [
+        "b580396487bcf214",
+        "f6b07b7e50c499c9"
+      ],
+      "docs/configuration.md": [
+        "98a3c6cb56b55718"
+      ],
+      "docs/security.md": [
+        "8a6a311ff069e87a",
+        "62666b25eb94df85",
+        "2be20c38aec1dfa1",
+        "3375e961838aa578",
+        "b26053b4559ef2d7",
+        "4a61b1668832f3e8",
+        "2f879919ee53b314"
+      ],
+      "docs/chat.md": [
+        "b551b51563eb6cb1",
+        "1d9799c6a8e75af4"
+      ],
+      "docs/de/\u00fcberblick.md": [
+        "e47dbbdab0b95e79"
+      ],
+      "docs/architecture.md": [
+        "a31042df82bbfa4e"
+      ],
+      "docs/changelog.md": [
+        "9c13efda5e96e028"
+      ],
+      "config/chat.yaml": [
+        "85807aa1ec8749f0"
+      ]
+    },
+    "source_doc_index": {
+      "repo:src/services/user_service.py": [
+        "d17ef01043ec3fea",
+        "be2ec2003a512816",
+        "27b8aacb8e95dfca",
+        "a4393f7b0af43930",
+        "33d969f98e3ad7b0"
+      ],
+      "repo:src/data/user_repository.py": [
+        "62896198691ff77e",
+        "76241899863f82cb",
+        "1b717d049f554f1f"
+      ],
+      "repo:src/data/models.py": [
+        "fc68de831c6c5e88",
+        "5c07ceb20b01ae32"
+      ],
+      "repo:src/data/schemas.py": [
+        "5c07ceb20b01ae32"
+      ],
+      "repo:src/api/serializers.py": [
+        "5c07ceb20b01ae32"
+      ],
+      "repo:src/data/migrations/0001_users.py": [
+        "5c07ceb20b01ae32"
+      ],
+      "repo:src/admin/views.py": [
+        "5c07ceb20b01ae32"
+      ],
+      "wiki:docs/users.md": [
+        "729da7773458c3ac",
+        "5c07ceb20b01ae32",
+        "595e336aff19c7b4"
+      ],
+      "repo:src/api/middleware.py": [
+        "2af357c26d99b18d"
+      ],
+      "repo:src/api/routes.py": [
+        "761f5a2e77db9962",
+        "2e57c07adb2d230a"
+      ],
+      "repo:src/config.py": [
+        "947b06f6f11768a9",
+        "d0ff75f49029848e",
+        "d2917cf289ac9ac8"
+      ],
+      "repo:src/utils/validation.py": [
+        "71fde4b5fe35e8c0",
+        "9a0c20f89cb9189f"
+      ],
+      "repo:src/utils/security.py": [
+        "58f2a3045b978fb8",
+        "6b0c66a622a4373d"
+      ],
+      "repo:tests/test_user_service.py": [
+        "ae92bc6872d0420e"
+      ],
+      "repo:src/chat/handler.py": [
+        "fdac787982052c96",
+        "2daffafbe025b76f"
+      ],
+      "repo:src/chat/notifications.py": [
+        "5a090dd67b28c75f"
+      ],
+      "repo:src/ui/gizmo.ts": [
+        "860740df8c134db4"
+      ],
+      "wiki:docs/getting-started.md": [
+        "b580396487bcf214",
+        "f6b07b7e50c499c9"
+      ],
+      "wiki:docs/configuration.md": [
+        "98a3c6cb56b55718"
+      ],
+      "wiki:docs/security.md": [
+        "8a6a311ff069e87a",
+        "62666b25eb94df85",
+        "2be20c38aec1dfa1",
+        "3375e961838aa578",
+        "b26053b4559ef2d7",
+        "4a61b1668832f3e8",
+        "2f879919ee53b314"
+      ],
+      "wiki:docs/chat.md": [
+        "b551b51563eb6cb1",
+        "1d9799c6a8e75af4"
+      ],
+      "wiki:docs/de/\u00fcberblick.md": [
+        "e47dbbdab0b95e79"
+      ],
+      "wiki:docs/architecture.md": [
+        "a31042df82bbfa4e"
+      ],
+      "wiki:docs/changelog.md": [
+        "9c13efda5e96e028"
+      ],
+      "repo:config/chat.yaml": [
+        "85807aa1ec8749f0"
+      ]
+    }
+  },
+  "_metadata": {
+    "embeddings_model": "text-embedding-3-small",
+    "embeddings_count": 3,
+    "community_data": {
+      "communities": {
+        "0": {
+          "label": "Users",
+          "size": 6,
+          "members": [
+            "27b8aacb8e95dfca",
+            "d17ef01043ec3fea",
+            "a4393f7b0af43930",
+            "be2ec2003a512816",
+            "62896198691ff77e",
+            "5c07ceb20b01ae32"
+          ],
+          "summary": "User management."
+        },
+        "1": {
+          "label": "Chat",
+          "size": 4,
+          "members": [
+            "2daffafbe025b76f",
+            "fdac787982052c96",
+            "5a090dd67b28c75f",
+            "b551b51563eb6cb1"
+          ],
+          "summary": "Chat and notifications."
+        }
+      },
+      "num_communities": 2,
+      "modularity": 0.42
+    },
+    "last_saved": "2026-10-07T12:00:00",
+    "version": "2.1"
+  }
+}

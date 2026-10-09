@@ -2186,7 +2186,7 @@ fn tool_binding_error(error: ToolBindingError) -> NativeAgentAssemblyError {
 }
 
 fn pipeline_configuration_error(error: &PipelineConfigurationError) -> NativeAgentAssemblyError {
-    NativeAgentAssemblyError::from_pipeline_configuration(
+    super::runtime::pipeline_configuration_assembly_error(
         error,
         "the stored pipeline definition could not be admitted",
     )

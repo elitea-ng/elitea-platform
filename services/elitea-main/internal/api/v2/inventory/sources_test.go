@@ -572,6 +572,55 @@ func TestAToolThatNamesNoSourceMintsNothing(t *testing.T) {
 	}
 }
 
+// TestInvestigateGetsTheCallbackBlockAndNothingElse pins the grant-only
+// rewrite: the engine answers investigate with the toolkit's model, so the
+// body carries a minted bearer and the gateway, with the caller's own
+// llm_settings replaced — and no source is expanded, no vault opened.
+func TestInvestigateGetsTheCallbackBlockAndNothingElse(t *testing.T) {
+	settings := &countingSettings{}
+	minter := &recordingMinter{}
+	bodies, cfg := provider(t, http.StatusOK)
+	built, err := inventory.NewRoute(cfg, authConfig(),
+		permissions(inventory.ReadPermission, inventory.InvokePermission),
+		sources(t, settings, minter, config()),
+		slog.New(slog.NewTextHandler(&strings.Builder{}, nil)))
+	if err != nil {
+		t.Fatalf("compose the Inventory route: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPost,
+		"/api/v2/inventory/tools/42/inventory_search/investigate/invoke",
+		strings.NewReader(`{"parameters":{"question":"who refunds?","llm_model":"gpt-x",`+
+			`"llm_settings":{"api_key":"sk-attacker"}}}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Auth-Type", "user")
+	request.Header.Set("X-Auth-ID", "11")
+	response := httptest.NewRecorder()
+	built.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", response.Code, response.Body.String())
+	}
+	if len(*bodies) != 1 {
+		t.Fatalf("want one forwarded body, got %v", *bodies)
+	}
+	forwarded := (*bodies)[0]
+	// The model stays where the caller set it (the engine reads llm_model
+	// from the merged parameters); the gateway and bearer are the facade's.
+	for _, want := range []string{"bearer-for-token-a", "/llm/v1", `"llm_model":"gpt-x"`, "who refunds?"} {
+		if !strings.Contains(forwarded, want) {
+			t.Errorf("the forwarded body lacks %q: %s", want, forwarded)
+		}
+	}
+	if strings.Contains(forwarded, "sk-attacker") {
+		t.Errorf("the caller's llm_settings crossed the hop: %s", forwarded)
+	}
+	if minted, _ := minter.snapshot(); len(minted) != 1 {
+		t.Errorf("want one grant minted, got %v", minted)
+	}
+	if _, decrypts := settings.counts(); decrypts != 0 {
+		t.Errorf("investigate opened the vault %d time(s)", decrypts)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // the golden fixture
 // ---------------------------------------------------------------------------

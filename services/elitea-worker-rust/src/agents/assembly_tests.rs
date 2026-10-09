@@ -1017,7 +1017,7 @@ fn a_pipeline_profile_admits_yaml_up_to_the_compiler_bound() {
         OrdinaryNoToolProfile::validate_pipeline_shell(&pipeline, false)
             .expect_err("a pipeline above the compiler bound is refused")
             .code(),
-        NativeAgentAssemblyErrorCode::InputLimit(crate::protocol::InputLimitField::AgentSettings)
+        NativeAgentAssemblyErrorCode::AgentSettingsLimit
     );
 }
 
@@ -1600,6 +1600,6 @@ fn large_instructions_survive_agent_assembly_and_variable_rendering() {
     // readable terminal message, not a generic malformed profile.
     assert_eq!(
         OrdinaryNoToolProfile::validate(&past).unwrap_err().code(),
-        NativeAgentAssemblyErrorCode::InputLimit(crate::protocol::InputLimitField::AgentSettings)
+        NativeAgentAssemblyErrorCode::AgentSettingsLimit
     );
 }

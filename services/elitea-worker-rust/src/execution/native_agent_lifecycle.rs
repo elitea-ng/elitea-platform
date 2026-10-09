@@ -1456,8 +1456,10 @@ pub(super) fn assembly_failure(error: &NativeAgentAssemblyError) -> RuntimeFailu
         NativeAgentAssemblyErrorCode::AuthorizationFailed => {
             RuntimeFailureKind::AuthorizationFailed
         }
-        NativeAgentAssemblyErrorCode::InputLimit(field) => {
-            RuntimeFailureKind::ExecutionInputFieldLimit(field)
+        NativeAgentAssemblyErrorCode::AgentSettingsLimit => {
+            RuntimeFailureKind::ExecutionInputFieldLimit(
+                crate::protocol::InputLimitField::AgentSettings,
+            )
         }
         NativeAgentAssemblyErrorCode::InvalidConfiguration
         | NativeAgentAssemblyErrorCode::InvalidResult => RuntimeFailureKind::Internal,
@@ -1602,11 +1604,13 @@ mod taxonomy_tests {
         let Err(configuration) = PipelineDefinition::from_yaml(&nodes) else {
             panic!("129 nodes were admitted");
         };
-        let error =
-            NativeAgentAssemblyError::from_pipeline_configuration(&configuration, "fixture");
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &configuration,
+            "fixture",
+        );
         assert_eq!(
             error.code(),
-            NativeAgentAssemblyErrorCode::InputLimit(InputLimitField::AgentSettings)
+            NativeAgentAssemblyErrorCode::AgentSettingsLimit
         );
         assert!(!error.retryable());
         let kind = assembly_failure(&error);
@@ -1623,8 +1627,10 @@ mod taxonomy_tests {
         ) else {
             panic!("a float id was admitted");
         };
-        let error =
-            NativeAgentAssemblyError::from_pipeline_configuration(&configuration, "fixture");
+        let error = crate::agents::runtime::pipeline_configuration_assembly_error(
+            &configuration,
+            "fixture",
+        );
         assert_eq!(assembly_failure(&error), RuntimeFailureKind::InvalidInput);
         assert_eq!(
             error.cause().map(NativeAgentAssemblyCause::code),

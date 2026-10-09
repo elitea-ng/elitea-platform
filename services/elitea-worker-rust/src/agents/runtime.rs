@@ -39,7 +39,6 @@ use super::graph::static_pause::PipelineTextContinuation;
 use super::pipeline::PipelineExecutionProfile;
 use super::request::AgentExecutionRequest;
 use super::session::{AuthorizedNativeCommandBinding, OrdinaryNativeAgentPlan};
-use crate::protocol::InputLimitField;
 use crate::protocol::control::{ClaimBoundRuntimeContextAuthority, ClaimBoundSessionAuthority};
 use crate::state::StateWriterLease;
 use crate::toolkits::{
@@ -49,198 +48,43 @@ use crate::toolkits::{
 use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::{ClaimScopedEliteaContext, RuntimeContextError};
 
-/// Stable native assembly and result-selection failures.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NativeAgentAssemblyErrorCode {
-    InvalidConfiguration,
-    InvalidInput,
-    UnsupportedCapability,
-    ResourceExhausted,
-    AuthorizationFailed,
-    DependencyUnavailable,
-    InvalidResult,
-    /// A saved section exceeds a platform bound that has a registered readable
-    /// terminal message (`InputLimitField::safe_message`). Not retryable.
-    InputLimit(InputLimitField),
-}
+pub(crate) use elitea_agent_runtime::assembly_error::{
+    NativeAgentAssemblyCause, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
+};
 
-impl NativeAgentAssemblyErrorCode {
-    #[must_use]
-    pub(crate) const fn as_str(self) -> &'static str {
-        match self {
-            Self::InvalidConfiguration => "native_agent.invalid_configuration",
-            Self::InvalidInput => "native_agent.invalid_input",
-            Self::UnsupportedCapability => "native_agent.unsupported_capability",
-            Self::ResourceExhausted => "native_agent.resource_exhausted",
-            Self::AuthorizationFailed => "native_agent.authorization_failed",
-            Self::DependencyUnavailable => "native_agent.dependency_unavailable",
-            Self::InvalidResult => "native_agent.invalid_result",
-            Self::InputLimit(_) => "native_agent.input_limit",
-        }
-    }
-}
-
-/// Data-free reason behind an assembly failure that shares a coarse wire code.
+/// Classify a stored-pipeline admission failure.
 ///
-/// The wire code of an id-shape refusal stays `InvalidInput` because no
-/// registered terminal message fits it. This keeps the Worker's own typed code
-/// and the limit or field it names (both `'static`, never user content) for
-/// the structured log at the lifecycle boundary.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct NativeAgentAssemblyCause {
-    code: &'static str,
-    detail: Option<&'static str>,
-}
-
-impl NativeAgentAssemblyCause {
-    #[must_use]
-    pub(crate) const fn code(&self) -> &'static str {
-        self.code
-    }
-
-    #[must_use]
-    pub(crate) const fn detail(&self) -> Option<&'static str> {
-        self.detail
-    }
-}
-
-/// Failure before or after one native ADK stream.
-///
-/// The message and code remain data-free. The ONE exception is a delegated
-/// authorization requirement (#982): when a remote MCP server answers the
-/// assembly dial with a `401` challenge, the sanitized
-/// [`DelegatedAuthorizationRequirement`] the toolkit built — toolkit name,
-/// endpoint and the resource-metadata URL, never a token or a response body —
-/// travels with the error so the lifecycle can tell the person WHICH of their
-/// connections is asking to be authorized. Discarding it left every challenge
-/// indistinguishable from any other runtime failure.
-pub(crate) struct NativeAgentAssemblyError {
-    code: NativeAgentAssemblyErrorCode,
+/// Bound refusals use the registered agent-settings message; a value that
+/// cannot be a graph identifier stays `InvalidInput` and keeps its typed code
+/// in [`NativeAgentAssemblyError::cause`]. A free function because the error
+/// type is owned by `elitea_agent_runtime` and the pipeline error by the worker.
+pub(crate) fn pipeline_configuration_assembly_error(
+    error: &PipelineConfigurationError,
     message: &'static str,
-    authorization: Option<Box<DelegatedAuthorizationRequirement>>,
-    cause: Option<NativeAgentAssemblyCause>,
-}
-
-impl NativeAgentAssemblyError {
-    pub(crate) const fn new(code: NativeAgentAssemblyErrorCode, message: &'static str) -> Self {
-        Self {
-            code,
-            message,
-            authorization: None,
-            cause: None,
+) -> NativeAgentAssemblyError {
+    let code = match error {
+        PipelineConfigurationError::ResourceExhausted => {
+            NativeAgentAssemblyErrorCode::ResourceExhausted
         }
-    }
-
-    /// Attach the Worker's typed, data-free reason (see [`NativeAgentAssemblyCause`]).
-    #[must_use]
-    pub(crate) const fn with_cause(
-        mut self,
-        code: &'static str,
-        detail: Option<&'static str>,
-    ) -> Self {
-        self.cause = Some(NativeAgentAssemblyCause { code, detail });
-        self
-    }
-
-    #[must_use]
-    pub(crate) const fn cause(&self) -> Option<&NativeAgentAssemblyCause> {
-        self.cause.as_ref()
-    }
-
-    /// The saved agent instructions or settings exceed a platform bound.
-    pub(crate) const fn agent_settings_limit(
-        message: &'static str,
-        cause_code: &'static str,
-        detail: &'static str,
-    ) -> Self {
-        Self::new(
-            NativeAgentAssemblyErrorCode::InputLimit(InputLimitField::AgentSettings),
-            message,
-        )
-        .with_cause(cause_code, Some(detail))
-    }
-
-    /// Classify a stored-pipeline admission failure.
-    ///
-    /// Bound refusals use the registered agent-settings message; a value that
-    /// cannot be a graph identifier stays `InvalidInput` and keeps its typed
-    /// code in [`Self::cause`].
-    pub(crate) fn from_pipeline_configuration(
-        error: &PipelineConfigurationError,
-        message: &'static str,
-    ) -> Self {
-        let code = match error {
-            PipelineConfigurationError::ResourceExhausted => {
-                NativeAgentAssemblyErrorCode::ResourceExhausted
-            }
-            PipelineConfigurationError::LimitExceeded(_) => {
-                NativeAgentAssemblyErrorCode::InputLimit(InputLimitField::AgentSettings)
-            }
-            PipelineConfigurationError::Unsupported(_) => {
-                NativeAgentAssemblyErrorCode::UnsupportedCapability
-            }
-            PipelineConfigurationError::MalformedYaml { .. }
-            | PipelineConfigurationError::Invalid(_)
-            | PipelineConfigurationError::InvalidIdentifier(_) => {
-                NativeAgentAssemblyErrorCode::InvalidInput
-            }
-            PipelineConfigurationError::Graph(_) => {
-                NativeAgentAssemblyErrorCode::InvalidConfiguration
-            }
-        };
-        let assembled = Self::new(code, message);
-        match error.cause_detail() {
-            Some(detail) => assembled.with_cause(error.code(), Some(detail)),
-            None => assembled,
+        PipelineConfigurationError::LimitExceeded(_) => {
+            NativeAgentAssemblyErrorCode::AgentSettingsLimit
         }
-    }
-
-    /// Attach the sanitized delegated-authorization requirement, when the
-    /// failure is one.
-    #[must_use]
-    pub(crate) fn with_authorization(
-        mut self,
-        authorization: Option<DelegatedAuthorizationRequirement>,
-    ) -> Self {
-        self.authorization = authorization.map(Box::new);
-        self
-    }
-
-    #[must_use]
-    pub(crate) fn authorization(&self) -> Option<&DelegatedAuthorizationRequirement> {
-        self.authorization.as_deref()
-    }
-
-    #[must_use]
-    pub(crate) const fn code(&self) -> NativeAgentAssemblyErrorCode {
-        self.code
-    }
-
-    #[must_use]
-    pub(crate) const fn retryable(&self) -> bool {
-        matches!(
-            self.code,
-            NativeAgentAssemblyErrorCode::DependencyUnavailable
-        )
+        PipelineConfigurationError::Unsupported(_) => {
+            NativeAgentAssemblyErrorCode::UnsupportedCapability
+        }
+        PipelineConfigurationError::MalformedYaml { .. }
+        | PipelineConfigurationError::Invalid(_)
+        | PipelineConfigurationError::InvalidIdentifier(_) => {
+            NativeAgentAssemblyErrorCode::InvalidInput
+        }
+        PipelineConfigurationError::Graph(_) => NativeAgentAssemblyErrorCode::InvalidConfiguration,
+    };
+    let assembled = NativeAgentAssemblyError::new(code, message);
+    match error.cause_detail() {
+        Some(detail) => assembled.with_cause(error.code(), Some(detail)),
+        None => assembled,
     }
 }
-
-impl fmt::Debug for NativeAgentAssemblyError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("NativeAgentAssemblyError")
-            .field("code", &self.code)
-            .finish_non_exhaustive()
-    }
-}
-
-impl fmt::Display for NativeAgentAssemblyError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.message)
-    }
-}
-
-impl std::error::Error for NativeAgentAssemblyError {}
 
 impl From<RuntimeContextError> for NativeAgentAssemblyError {
     fn from(error: RuntimeContextError) -> Self {
