@@ -52,6 +52,7 @@ def cmd_material(args):
 def cmd_up(args):
     stack = Stack(args.stack_dir)
     print(stack.restore_dump())
+    print('preparation network:', stack.ensure_preparation_network())
     stack.up()
     state = stack.state()
     state.setdefault('baseline_at', iso())
@@ -64,9 +65,19 @@ def cmd_seed(args):
     client = _client(stack)
     token_uuid = client.mint_token(f'crash-seed-{int(time.time())}')
     try:
-        project_id = args.project or client.author()['personal_project_id']
-        fixtures = seed_mod.seed(client, int(project_id), stack.base_url, stack.dir / 'fixtures.json',
-                                 time.strftime('%Y%m%d%H%M%S'))
+        existing = read_json(stack.dir / 'fixtures.json')
+        features = [name for name, on in stack.cfg.get('features', {}).items() if on]
+        if existing and not args.all:
+            # Keep the seeded base fixtures (their ids are cited as evidence); add only missing feature fixtures.
+            missing = [f for f in features if not any(p.get('feature') == f for p in existing['pipelines'].values())]
+            extra = seed_mod.seed_features(client, existing['project_id'], missing, time.strftime('%Y%m%d%H%M%S'))
+            existing['pipelines'].update(extra)
+            write_json(stack.dir / 'fixtures.json', existing)
+            fixtures = existing
+        else:
+            project_id = args.project or client.author()['personal_project_id']
+            fixtures = seed_mod.seed(client, int(project_id), stack.base_url, stack.dir / 'fixtures.json',
+                                     time.strftime('%Y%m%d%H%M%S'), features)
     finally:
         client.token = None
         client.revoke_token(token_uuid)
@@ -105,8 +116,10 @@ def cmd_run(args):
             print(f"{iso()} {scenario['id']} r{index} {result['verdict']} observed={result.get('observed')} "
                   f"exec={rec.get('execution_id')} {line['why']}", flush=True)
             if scenario['id'].startswith('BASE-') and result['verdict'] == 'PASS':
-                oracle[scenario['fixture']] = {'jobs': len(rec['final']['agentstate']['sandbox'] or []),
-                                               'execution_id': rec['execution_id']}
+                jobs = rec['final']['agentstate']['sandbox'] or []
+                oracle[scenario['fixture']] = {
+                    'jobs': len(jobs), 'execution_id': rec['execution_id'],
+                    'preparations': len({j['job_key'] for j in jobs if j.get('audience') == 'dns:elitea-sandbox-preparation'})}
                 write_json(stack.dir / 'oracle.json', oracle)
             client = _client(stack)  # a Main restart ends nothing, but a fresh session keeps runs independent
     hits = scan_tree(run_dir)
@@ -155,6 +168,7 @@ def main():
     sub.add_parser('up').set_defaults(fn=cmd_up)
     p = sub.add_parser('seed')
     p.add_argument('--project', type=int, default=None)
+    p.add_argument('--all', action='store_true', help='re-seed every fixture instead of adding missing ones')
     p.set_defaults(fn=cmd_seed)
     sub.add_parser('preflight').set_defaults(fn=cmd_preflight)
     p = sub.add_parser('run')

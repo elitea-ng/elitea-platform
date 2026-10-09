@@ -45,6 +45,11 @@ def apply(stack, ctx, step):
         time.sleep(step['after_s'])
     if action == 'wait':
         time.sleep(step['seconds'])
+    elif action == 'user_stop':
+        # The user's Stop through the public API (DELETE .../task/...), as the chat UI sends it. 204 accepted,
+        # 409 when the answer is no longer running.
+        record['status'] = ctx.client.stop(ctx.project_id, ctx.response_message_id)
+        record['command'] = ['DELETE', '/api/v2/elitea_core/task/prompt_lib/<project>/<response_message_id>']
     elif action == 'wait_until':
         status, evidence, t_held = triggers.wait_for(ctx, step['predicate'], step.get('params', {}),
                                                      step.get('timeout_s', 180))

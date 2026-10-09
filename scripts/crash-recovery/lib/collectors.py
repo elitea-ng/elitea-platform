@@ -64,10 +64,13 @@ class Collector:
         }
 
     # ---- Docker --------------------------------------------------------------------------------------------
-    def code_containers(self):
-        """Every sandbox container on the daemon (any project): id, job label, state, start and OOM flags."""
-        out = run(['docker', 'ps', '-a', '--no-trunc', '--filter', f'label={CODE_JOB_LABEL}',
-                   '--format', '{{.ID}}']).stdout.decode().split()
+    def code_containers(self, labels):
+        """Sandbox containers of THIS stack only: those whose job label is one of `labels` (runtime_label from
+        sandbox.sql). The daemon is shared with other stacks; never act on, or count, anything else."""
+        out = []
+        for label in sorted(labels):
+            out += run(['docker', 'ps', '-a', '--no-trunc', '--filter', f'label={CODE_JOB_LABEL}={label}',
+                        '--format', '{{.ID}}']).stdout.decode().split()
         rows = []
         for cid in out:
             data = json.loads(run(['docker', 'inspect', cid], check=False).stdout or b'[{}]')
@@ -198,9 +201,12 @@ class EventStream:
             action = (ev.get('Action') or ev.get('status') or '').split(':')[0]
             if not job or action not in ('create', 'start', 'die', 'oom', 'kill', 'destroy'):
                 continue
-            entry = jobs.setdefault(job, {'containers': set(), 'role': attrs.get('io.elitea.code.workspace.role')})
+            entry = jobs.setdefault(job, {'containers': set(), 'role': attrs.get('io.elitea.code.workspace.role'),
+                                          'start_times': []})
             entry[action] = entry.get(action, 0) + 1
             entry['containers'].add((ev.get('Actor') or {}).get('ID') or ev.get('id'))
+            if action == 'start' and ev.get('timeNano'):
+                entry['start_times'].append(int(ev['timeNano']) // 1_000_000)
         for entry in jobs.values():
             entry['containers'] = sorted(c for c in entry['containers'] if c)
         return jobs

@@ -42,6 +42,8 @@ def code_runtime_running(ctx, params):
     sleep_s = params.get('sleep_s', 50)
     min_age, remaining = params.get('min_age_s', 3), params.get('remaining_s', 20)
     for job in _jobs(ctx):
+        if job.get('audience') == 'dns:elitea-sandbox-preparation':
+            continue
         if job.get('phase') != 'dispatched' or job.get('has_result') or not job.get('runtime_id'):
             continue
         age = _job_age_s(job)
@@ -68,6 +70,54 @@ def preparer_running(ctx, params):
     if not job.get('runtime_id') or not ctx.collector.container_running(job['runtime_id']):
         return False, {'reason': 'preparer container not running'}
     return True, {'job_key': job['job_key'], 'runtime_id': job['runtime_id'], 'job_age_s': _job_age_s(job)}
+
+
+PREPARATION_AUDIENCE = 'dns:elitea-sandbox-preparation'
+
+
+def _split(jobs):
+    prep = [j for j in jobs if j.get('audience') == PREPARATION_AUDIENCE]
+    return prep, [j for j in jobs if j.get('audience') != PREPARATION_AUDIENCE]
+
+
+def preparation_resolving(ctx, params):
+    """The preparer is downloading and resolving: its job is dispatched with a running container and no
+    bundle recorded yet, and no execution job exists (sandbox_jobs.preparation_bundle_json, migration 0009)."""
+    if not _live_execution(ctx):
+        return False, {'reason': 'execution not live'}
+    prep, other = _split(_jobs(ctx))
+    for job in prep:
+        if (job.get('phase') == 'dispatched' and not job.get('has_preparation_bundle') and job.get('runtime_id')
+                and ctx.collector.container_running(job['runtime_id'])):
+            age = _job_age_s(job)
+            if age is not None and age >= params.get('min_age_s', 1):
+                return True, {'job_key': job['job_key'], 'runtime_id': job['runtime_id'], 'job_age_s': round(age, 3),
+                              'execution_jobs': len(other)}
+    return False, {'reason': 'no preparation resolving', 'preparation_jobs': len(prep)}
+
+
+def hydration_running(ctx, params):
+    """The prepared bundle is committed and the execution container is being hydrated: the preparation job is
+    completed and the execution job is reserved with a bound runtime but not yet dispatched."""
+    if not _live_execution(ctx):
+        return False, {'reason': 'execution not live'}
+    prep, other = _split(_jobs(ctx))
+    if not prep or not all(j.get('phase') == 'completed' for j in prep):
+        return False, {'reason': 'preparation not committed'}
+    for job in other:
+        if job.get('phase') == 'reserved' and job.get('runtime_id') and not job.get('dispatched_at'):
+            return True, {'job_key': job['job_key'], 'runtime_id': job['runtime_id'],
+                          'preparation_job_keys': [j['job_key'] for j in prep]}
+    return False, {'reason': 'no hydration in progress'}
+
+
+def prepared_execution_running(ctx, params):
+    """The prepared job executes: preparation completed, and the execution job runs inside the window."""
+    prep, _ = _split(_jobs(ctx))
+    if not prep or not all(j.get('phase') == 'completed' for j in prep):
+        return False, {'reason': 'preparation not committed'}
+    held, evidence = code_runtime_running(ctx, params)
+    return held, dict(evidence, preparation_job_keys=[j['job_key'] for j in prep])
 
 
 def streaming(ctx, params):
@@ -126,6 +176,7 @@ def claim_attempt_at_least(ctx, params):
 
 
 PREDICATES = {f.__name__: f for f in (admitted, code_runtime_running, preparer_running, streaming,
+                                      preparation_resolving, hydration_running, prepared_execution_running,
                                       model_request_pending, queued, snapshot_publishing, claim_attempt_at_least)}
 
 

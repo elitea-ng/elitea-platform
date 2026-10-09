@@ -36,5 +36,37 @@
     "CR-WK-P03",
     "CR-MK-P03",
     "CR-WK-P03-stock"
+  ],
+  "T0b": [
+    "BASE-python-prepared",
+    "CR-WK-P09",
+    "CR-WK-P09-hyd",
+    "CR-WK-P10-prep",
+    "CR-SK-P09",
+    "CR-SK-P09-hyd",
+    "CR-SK-P10-prep",
+    "CR-MK-P09",
+    "CR-MK-P09-hyd",
+    "CR-MK-P10-prep",
+    "CR-WPK-P09",
+    "BASE-rust-compiled",
+    "CR-MK-P11"
+  ],
+  "T0b-preparation": [
+    "BASE-python-prepared",
+    "CR-WK-P09",
+    "CR-WK-P09-hyd",
+    "CR-WK-P10-prep",
+    "CR-SK-P09",
+    "CR-SK-P09-hyd",
+    "CR-SK-P10-prep",
+    "CR-MK-P09",
+    "CR-MK-P09-hyd",
+    "CR-MK-P10-prep",
+    "CR-WPK-P09"
+  ],
+  "T0b-compiled": [
+    "BASE-rust-compiled",
+    "CR-MK-P11"
   ]
 }

@@ -22,14 +22,53 @@ PIPELINE_VARIANTS = {
 }
 
 
-def render(template, sleep_ms):
+# Features of the stack (stack.json "features") gate the fixtures that need them.
+FEATURE_PIPELINES = {
+    'preparation': {'python-prepared-sleep-50': ('python-prepared-sleep.yaml', {'sleep_s': 50})},
+    # Rendered per run with a fresh marker (see rust-compiled.yaml); seed records only the template.
+    'compiled': {'rust-compiled': ('rust-compiled.yaml', {})},
+}
+PER_RUN = {'rust-compiled'}
+
+
+def render(template, sleep_ms=None, **params):
     text = (HERE / 'pipelines' / template).read_text()
     lines = [l for l in text.splitlines() if not l.startswith('#')]
-    return '\n'.join(lines).replace('{{sleep_ms}}', str(int(sleep_ms))) + '\n'
+    text = '\n'.join(lines) + '\n'
+    if sleep_ms is not None:
+        params['sleep_ms'] = int(sleep_ms)
+    for key, value in params.items():
+        text = text.replace('{{' + key + '}}', str(value))
+    if '{{' in text:
+        raise ValueError(f'{template}: unfilled placeholder')
+    return text
 
 
-def seed(client, project_id, base_url, out_path, suffix):
+def create_per_run(client, fixtures, name, marker):
+    """Create a fresh pipeline for one run (a fixture whose source must differ per run)."""
+    spec = fixtures['pipelines'][name]
+    app_id, version_id = client.create_pipeline(fixtures['project_id'], f"{spec['name']}-{marker[:12]}",
+                                                render(spec['template'], marker=marker))
+    return dict(spec, app_id=app_id, version_id=version_id, name=f"{spec['name']}-{marker[:12]}")
+
+
+def seed_features(client, project_id, features, suffix):
+    out = {}
+    for feature in features:
+        for name, (template, params) in FEATURE_PIPELINES[feature].items():
+            entry = {'agent_type': 'pipeline', 'prompt': 'crash-recovery code fixture', 'feature': feature,
+                     'answer_contains': ['SENTINEL9999', 'CRASHRESULT'], 'name': f'crash-{name}-{suffix}'}
+            if name in PER_RUN:
+                out[name] = dict(entry, template=template, per_run=True)
+                continue
+            app_id, version_id = client.create_pipeline(project_id, entry['name'], render(template, **params))
+            out[name] = dict(entry, app_id=app_id, version_id=version_id, **params)
+    return out
+
+
+def seed(client, project_id, base_url, out_path, suffix, features=()):
     fixtures = {'project_id': project_id, 'pipelines': {}, 'agents': {}}
+    fixtures['pipelines'].update(seed_features(client, project_id, features, suffix))
     for name, (template, sleep_ms) in PIPELINE_VARIANTS.items():
         app_id, version_id = client.create_pipeline(project_id, f'crash-{name}-{suffix}', render(template, sleep_ms))
         fixtures['pipelines'][name] = {'app_id': app_id, 'version_id': version_id, 'sleep_ms': sleep_ms,

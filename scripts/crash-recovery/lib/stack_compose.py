@@ -26,12 +26,11 @@ PORT_KEYS = {
     'mock': 'STANDALONE_MOCK_PORT', 'qtest': 'STANDALONE_QTEST_PORT', 'ado': 'STANDALONE_ADO_PORT',
     'otel_grpc': 'STANDALONE_OTEL_GRPC_PORT', 'otel_http': 'STANDALONE_OTEL_HTTP_PORT', 'oidc': 'E2E_OIDC_PORT',
 }
-COMPOSE_FILES = (
-    'deploy/docker-compose.standalone-full.yml',
-    'deploy/docker-compose.standalone-rust-agent.yml',
-    'deploy/docker-compose.sandbox.yml',
-    'deploy/docker-compose.crash-rehearsal.yml',
-)
+BASE_FILES = ('deploy/docker-compose.standalone-full.yml', 'deploy/docker-compose.standalone-rust-agent.yml')
+# Opt-in features (stack.json "features") add their overlays at fixed positions (see each overlay's header).
+PREPARATION_NETWORK = 'elitea-python-preparation-resolver'
+PREPARATION_AUDIENCE = 'dns:elitea-sandbox-preparation'
+CONTENT_ORIGIN = 'https://elitea-main:9445'
 # The services the fault catalog targets (DESIGN §1.1).
 TARGETS = {
     'main': 'elitea-main', 'worker': 'elitea-worker', 'supervisor': 'elitea-sandbox', 'nats': 'nats',
@@ -51,6 +50,7 @@ CONFIG_TEMPLATE = {
                 'deno_policy_revision': 'crash-deno-v1', 'rust_policy_revision': 'crash-rust-v1'},
     'docker_socket': '/var/run/docker.sock',
     'docker_gid': '0',
+    'features': {'preparation': False, 'compiled': False},
     'oidc_subject': 'admin@centry.user',
 }
 
@@ -125,17 +125,31 @@ class Stack:
             'ELITEA_CRASH_MATERIAL_DIR': str(self.material),
             'ELITEA_CRASH_SPOOL_NAME': state['spool_name'],
             'ELITEA_CRASH_CODE_OWNER_CONFIG': self.owner_config(),
+            'ELITEA_SANDBOX_PREPARATION_MATERIAL': str(self.material / 'sandbox-preparation'),
         })
+        if state.get('compiled_profiles_sha256'):
+            env['ELITEA_RUST_COMPILED_PROFILES_SHA256'] = state['compiled_profiles_sha256']
         env.update(self.cfg.get('mock_env', {}))
         env.update(extra or {})
         return env
 
+    def feature(self, name):
+        return bool(self.cfg.get('features', {}).get(name))
+
     def overlay_files(self):
-        return [REPO / f for f in COMPOSE_FILES[2:]] + [self.dir / 'images.yml', self.dir / 'ports.yml']
+        files = ['deploy/docker-compose.sandbox.yml']
+        if self.feature('preparation'):
+            files.append('deploy/docker-compose.sandbox-preparation.yml')
+        files.append('deploy/docker-compose.crash-rehearsal.yml')
+        if self.feature('preparation'):
+            files.append('deploy/docker-compose.crash-preparation.yml')
+        if self.feature('compiled'):
+            files.append('deploy/docker-compose.crash-compiled.yml')
+        return [REPO / f for f in files] + [self.dir / 'images.yml', self.dir / 'ports.yml']
 
     def compose_args(self):
         args = ['docker', 'compose', '-p', self.project]
-        for f in COMPOSE_FILES[:2]:
+        for f in BASE_FILES:
             args += ['-f', str(REPO / f)]
         for f in self.overlay_files():
             args += ['-f', str(f)]
@@ -154,7 +168,8 @@ class Stack:
         self.material.mkdir(parents=True, exist_ok=True)
         os.chmod(self.material, 0o700)
         issued = self.dir / 'sandbox-certs'
-        run(['bash', 'deploy/scripts/gen-sandbox-certs.sh', str(certs), str(issued)], cwd=REPO, timeout=120)
+        # --native issues the preparation server and every content-client leaf (deno, preparation, rust).
+        run(['bash', 'deploy/scripts/gen-sandbox-certs.sh', str(certs), str(issued), '--native'], cwd=REPO, timeout=180)
         sandbox = self.cfg['sandbox']
         digests = {k: image_id(sandbox[f'{k}_image']) for k in ('deno', 'rust')}
         profiles = {
@@ -162,6 +177,17 @@ class Stack:
             'rust': {'port': 9447, 'languages': ['rust']},
         }
         db_url = 'postgresql://elitea:elitea@postgres:5432/agentstate?sslmode=verify-full'
+        compiled_pin = compiled_path = None
+        if self.feature('compiled'):
+            from . import compiled_manifest
+            raw = compiled_manifest.build(sandbox['rust_image'], sandbox['rust_policy_revision'])
+            compiled_path = self.material / 'rust-compiled-profiles.json'
+            compiled_pin = compiled_manifest.write(compiled_path, raw)
+            # The stock installer reads it from deploy/certs/runtime (no nested bind, see crash-compiled overlay).
+            compiled_manifest.write(certs / 'rust-compiled-profiles.json', raw)
+            state = self.state()
+            state['compiled_profiles_sha256'] = compiled_pin
+            self.save_state(state)
         for name, profile in profiles.items():
             out = self.material / f'sandbox-{name}'
             out.mkdir(exist_ok=True)
@@ -186,7 +212,16 @@ class Stack:
                 'cpu_limit': sandbox['cpu_limit'], 'timeout_seconds': sandbox['timeout_seconds'],
                 'code_owner_requester': MAIN_OWNER_IDENTITY,
             }
+            # Hydration (Deno) and compiled-executable transfer (Rust) move content through Main's :9445 listener.
+            if (name == 'deno' and self.feature('preparation')) or (name == 'rust' and self.feature('compiled')):
+                config['dependency_content'] = self._content_client(certs, issued, out, base, name)
+            if name == 'rust' and self.feature('compiled'):
+                config['compiled_snapshot'] = {'profiles_file': f'{base}/rust-compiled-profiles.json',
+                                               'profiles_sha256': compiled_pin, 'dependency_bundle_sha256': ''}
+                _copy_private(compiled_path, out / 'rust-compiled-profiles.json')
             _write_private(out / 'config.json', json.dumps(config, indent=2) + '\n')
+        if self.feature('preparation'):
+            self._preparation_profile(certs, issued, digests['deno'], db_url)
         self._issue_owner_certificate(certs)
         pg = self.material / 'postgres'
         pg.mkdir(exist_ok=True)
@@ -199,11 +234,58 @@ class Stack:
              'audience': f'dns:elitea-sandbox-{name}', 'image_digest': digests[name],
              'policy_revision': sandbox[f'{name}_policy_revision'], 'timeout_seconds': sandbox['timeout_seconds']}
             for name in ('deno', 'rust') for lang in profiles[name]['languages']]
+        for entry in worker['sandbox_runtimes']:
+            if entry['language'] == 'python' and self.feature('preparation'):
+                entry['preparation'] = {'target': 'elitea-sandbox-preparation:9448', 'audience': PREPARATION_AUDIENCE,
+                                        'image_digest': digests['deno'],
+                                        'policy_revision': sandbox.get('preparation_policy_revision', 'crash-preparation-v1'),
+                                        'timeout_seconds': sandbox.get('preparation_timeout_seconds', 120)}
+            if entry['language'] == 'rust' and self.feature('compiled'):
+                entry['compiled_snapshot'] = {'profiles_file': '/run/elitea-runtime/rust-compiled-profiles.json',
+                                              'profiles_sha256': compiled_pin, 'dependency_bundle_sha256': ''}
         path = self.material / 'worker-runtime.json'
         path.write_text(json.dumps(worker, indent=2) + '\n')
         os.chmod(path, 0o644)
         self._write_overrides()
         return {'deno_image_digest': digests['deno'], 'rust_image_digest': digests['rust']}
+
+    def _content_client(self, certs, issued, out, base, name):
+        """Dependency-content client (dns:elitea-sandbox-<name>, clientAuth) towards Main's content listener."""
+        _copy_private(certs / 'runtime-ca.crt', out / 'content-ca.pem')
+        _copy_private(issued / f'elitea-sandbox-{name}-content-client.crt', out / 'content-client.pem')
+        _copy_private(issued / f'elitea-sandbox-{name}-content-client.key', out / 'content-client.key')
+        return {'origin': CONTENT_ORIGIN, 'ca_path': f'{base}/content-ca.pem',
+                'certificate_path': f'{base}/content-client.pem', 'private_key_path': f'{base}/content-client.key',
+                'staging_root': f'/run/elitea-sandbox-content/{name}', 'capacity': 1, 'timeout_seconds': 30}
+
+    def _preparation_profile(self, certs, issued, image_digest, db_url):
+        """Python dependency preparation on the existing Deno runner image (purpose: preparation, port 9448)."""
+        sandbox = self.cfg['sandbox']
+        out = self.material / 'sandbox-preparation'
+        out.mkdir(exist_ok=True)
+        os.chmod(out, 0o700)
+        base = '/run/elitea-sandbox/preparation'
+        _copy_private(certs / 'runtime-ca.crt', out / 'client-ca.pem')
+        _copy_private(certs / 'runtime-ca.crt', out / 'database-ca.pem')
+        _copy_private(certs / 'command-signing-keyring.json', out / 'command-signing-keyring.json')
+        _copy_private(issued / 'elitea-sandbox-preparation.crt', out / 'server.pem')
+        _copy_private(issued / 'elitea-sandbox-preparation.key', out / 'server.key')
+        _write_private(out / 'database-url', db_url)
+        config = {
+            'revision': 1, 'purpose': 'preparation', 'backend': {'kind': 'docker'},
+            'preparation_network': PREPARATION_NETWORK, 'listen_address': '0.0.0.0:9448',
+            'owner': f'{self.project}-sandbox-preparation', 'audience': PREPARATION_AUDIENCE,
+            'ca_path': f'{base}/client-ca.pem', 'certificate_path': f'{base}/server.pem',
+            'private_key_path': f'{base}/server.key', 'verification_keyring_path': f'{base}/command-signing-keyring.json',
+            'database_url_path': f'{base}/database-url', 'database_ca_path': f'{base}/database-ca.pem',
+            'database_connections': 2, 'image_digest': image_digest,
+            'policy_revision': sandbox.get('preparation_policy_revision', 'crash-preparation-v1'),
+            'languages': ['python'], 'concurrency': 1,
+            'memory_bytes': sandbox.get('preparation_memory_bytes', 1073741824), 'cpu_limit': 1.0,
+            'timeout_seconds': sandbox.get('preparation_timeout_seconds', 120),
+            'dependency_content': self._content_client(certs, issued, out, base, 'preparation'),
+        }
+        _write_private(out / 'config.json', json.dumps(config, indent=2) + '\n')
 
     def _issue_owner_certificate(self, certs):
         """Main's original-Code owner client identity (dns:elitea-main, clientAuth), issued by the runtime CA.
@@ -282,8 +364,27 @@ class Stack:
              "END IF; END $$"])
         return 'restored'
 
+    def ensure_preparation_network(self):
+        """The preparer-only resolver bridge (non-internal: preparers reach the package registries). Docker cannot
+        restrict its egress to hostnames; the preparer's Deno --allow-net is the only destination limit."""
+        if not self.feature('preparation'):
+            return None
+        if run(['docker', 'network', 'inspect', PREPARATION_NETWORK], check=False).returncode == 0:
+            return 'exists'
+        run(['docker', 'network', 'create', '--label', f'io.elitea.crash.stack={self.project}', PREPARATION_NETWORK])
+        return 'created'
+
+    def preparation_network_members(self):
+        """Container ids attached to the resolver bridge (the harness checks they are this stack's preparers)."""
+        out = run(['docker', 'network', 'inspect', PREPARATION_NETWORK, '--format', '{{json .Containers}}'],
+                  check=False)
+        if out.returncode != 0:
+            return None
+        return sorted((json.loads(out.stdout) or {}).keys())
+
     def up(self):
         refuse_if_kind_running()
+        self.ensure_preparation_network()
         run(['bash', 'deploy/scripts/standalone-stack.sh', 'up'], cwd=REPO, env=self.env(), timeout=1800)
 
     def down(self, volumes=False):

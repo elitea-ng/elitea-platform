@@ -1,0 +1,47 @@
+{
+  "id": "CR-WPK-P09",
+  "cell": "Worker (pod replacement) x P09, pending preparation Stop (chat 850)",
+  "matrix_cell": "Worker (pod replacement or >1 replica) x P09",
+  "now": "R/F2\u00b7U (PR #1084 chat 850, not on main)",
+  "target": "R",
+  "fixture": "python-prepared-sleep-50",
+  "trigger": {
+    "kind": "obs",
+    "until": "preparation_resolving",
+    "timeout_s": 180,
+    "params": {
+      "min_age_s": 1
+    }
+  },
+  "faults": [
+    {
+      "action": "user_stop"
+    },
+    {
+      "action": "kill9",
+      "target": "worker"
+    },
+    {
+      "action": "replace_worker",
+      "target": "worker"
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      0,
+      1
+    ],
+    "settlement": "CANCELLED",
+    "error_codes": [],
+    "budget_s": 420,
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    }
+  },
+  "notes": "The user stops while preparation is pending; the Worker is lost and replaced on a fresh spool. Target: one CANCELLED settlement, no user Code.",
+  "gap": null,
+  "repeat": 3,
+  "browser": false,
+  "tier": "T0b"
+}

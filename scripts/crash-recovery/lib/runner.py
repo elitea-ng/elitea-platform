@@ -6,6 +6,7 @@ import pathlib
 import re
 import subprocess
 import time
+import uuid
 
 from . import faults_compose as faults
 from . import triggers
@@ -25,9 +26,12 @@ class Inconclusive(HarnessError):
 
 
 class Ctx:
-    def __init__(self, collector, exec_id):
+    def __init__(self, collector, exec_id, client=None, project_id=None, response_message_id=None):
         self.collector = collector
         self.exec_id = exec_id
+        self.client = client
+        self.project_id = project_id
+        self.response_message_id = response_message_id
 
 
 def preflight(stack, col):
@@ -159,6 +163,10 @@ def run_scenario(stack, client, scenario, fixtures, out_dir, *, browser=False):
         events.start()
         fixture = _fixture(fixtures, scenario['fixture'])
         project_id = fixtures['project_id']
+        if fixture.get('per_run'):
+            from fixtures import seed as seed_mod
+            fixture = seed_mod.create_per_run(client, fixtures, scenario['fixture'], uuid.uuid4().hex)
+            rec['fixture'] = {'app_id': fixture['app_id'], 'version_id': fixture['version_id']}
         author = client.author()
         for step in scenario.get('pre_faults', []):
             rec['pre_faults'].append(faults.apply(stack, None, step))
@@ -179,14 +187,15 @@ def run_scenario(stack, client, scenario, fixtures, out_dir, *, browser=False):
             rec['admission'] = {'via': 'api', 'question_id': qid, 'status': status, 'created': resp.get('created')}
             exec_id, response_message_id = resp['execution_id'], resp['response_message_id']
         rec.update({'execution_id': exec_id, 'response_message_id': response_message_id})
-        ctx = Ctx(col, exec_id)
+        ctx = Ctx(col, exec_id, client, project_id, response_message_id)
         row, _ = poll(lambda: (col.sql('product', 'execution', exec_id=exec_id) or [None])[-1], timeout_s=30)
         if not row:
             raise Inconclusive('admitted execution row not visible')
         chat_schema = f"p_{row['projection_project_id']}"
         rec['chat_schema'] = chat_schema
         trig = scenario['trigger']
-        status, evidence, t_held = triggers.wait_for(ctx, trig['until'], trig.get('params', {}), trig['timeout_s'])
+        status, evidence, t_held = triggers.wait_for(ctx, trig['until'], trig.get('params', {}), trig['timeout_s'],
+                                                     trig.get('interval_s', 0.25))
         rec['trigger'] = {'predicate': trig['until'], 'status': status, 'evidence': evidence, 't_held': iso(t_held)}
         if status != 'held':
             raise Inconclusive(f"trigger {trig['until']} {status}")
@@ -230,6 +239,13 @@ def run_scenario(stack, client, scenario, fixtures, out_dir, *, browser=False):
         time.sleep(scenario['expect'].get('cleanup_grace_s', CLEANUP_GRACE_S))
         jobs = col.agentstate(exec_id, last_claim, t_takeover)
         runtimes = {j['runtime_id']: col.container_exists(j['runtime_id']) for j in jobs['sandbox'] if j.get('runtime_id')}
+        labelled = col.code_containers({j['runtime_label'] for j in jobs['sandbox'] if j.get('runtime_label')})
+        runtimes.update({c['id']: True for c in labelled})
+        if stack.feature('preparation'):
+            members = stack.preparation_network_members() or []
+            ours = {c['id'] for c in labelled}
+            rec['resolver_network'] = {'members': len(members),
+                                       'foreign_members': len([m for m in members if m not in ours])}
         rec['after_grace'] = {'agentstate': jobs, 'runtime_present': runtimes,
                               'grace_s': scenario['expect'].get('cleanup_grace_s', CLEANUP_GRACE_S)}
         if br:

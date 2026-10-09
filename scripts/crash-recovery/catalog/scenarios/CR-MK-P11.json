@@ -1,0 +1,44 @@
+{
+  "id": "CR-MK-P11",
+  "cell": "Main x P11, compiled snapshot publishing (chat 852)",
+  "matrix_cell": "Main x P11",
+  "now": "R\u00b7P*",
+  "target": "R",
+  "fixture": "rust-compiled",
+  "trigger": {
+    "kind": "obs",
+    "until": "snapshot_publishing",
+    "timeout_s": 360,
+    "interval_s": 0.1
+  },
+  "faults": [
+    {
+      "action": "kill9",
+      "target": "main"
+    },
+    {
+      "action": "start",
+      "target": "main",
+      "after_s": 2,
+      "healthy": true
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      0,
+      1
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "budget_s": 600,
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    }
+  },
+  "notes": "Main SIGKILL while the compiled snapshot is Publishing; the same snapshot must become Ready and one execution follows.",
+  "gap": null,
+  "repeat": 3,
+  "browser": false,
+  "tier": "T0b"
+}

@@ -3,6 +3,7 @@ its evidence; the observed class follows the R/I/C/F/L rules and is compared wit
 from .common import parse_iso, seconds_between
 
 RANK = {'L': 0, 'F': 1, 'C': 2, 'I': 3, 'R': 4}
+PREPARATION_AUDIENCE = 'dns:elitea-sandbox-preparation'
 HOLD, VIOLATED, NA = 'hold', 'violated', 'n/a'
 
 
@@ -34,10 +35,13 @@ def i1_one_execution(run):
 def i2_no_code_rerun(run, scenario):
     pre_jobs = {j['job_key']: j for j in run.get('pre_fault', {}).get('agentstate', {}).get('sandbox') or []}
     final_jobs = run['final']['agentstate']['sandbox'] or []
-    starts = run.get('events') or {}
-    ours = {j['runtime_id'] for j in final_jobs if j.get('runtime_id')}
-    our_labels = {label for label, e in starts.items() if set(e.get('containers', [])) & ours}
-    multi_start = {label: e.get('start', 0) for label, e in starts.items() if label in our_labels and e.get('start', 0) > 1}
+    # The daemon is shared by every local stack: only this run's runtime labels count (sandbox.sql).
+    our_labels = {j['runtime_label'] for j in final_jobs if j.get('runtime_label')}
+    if not our_labels:  # evidence collected before sandbox.sql reported runtime_label: match by runtime id
+        ours = {j['runtime_id'] for j in final_jobs if j.get('runtime_id')}
+        our_labels = {label for label, e in (run.get('events') or {}).items() if set(e.get('containers', [])) & ours}
+    starts = {label: e for label, e in (run.get('events') or {}).items() if label in our_labels}
+    multi_start = {label: e.get('start', 0) for label, e in starts.items() if e.get('start', 0) > 1}
     unmatched = [j['activation_id'] for j in final_jobs if not j.get('job_matched')]
     changed_runtime = [k for k, j in pre_jobs.items() if j.get('runtime_id') and any(
         f['job_key'] == k and f.get('runtime_id') != j['runtime_id'] for f in final_jobs)]
@@ -50,12 +54,40 @@ def i2_no_code_rerun(run, scenario):
             'code_runtime_running',):
         sentinel = probe['started_at_ms'] < t_fault_ms
     facts = {'jobs': len(final_jobs), 'oracle_jobs': oracle_jobs, 'extra_jobs': extra_jobs,
-             'runtime_starts_over_one': multi_start, 'unmatched_dispatches': unmatched,
+             'runtime_starts_over_one': multi_start, 'labelled_jobs_started': len(starts),
+             'unmatched_dispatches': unmatched,
              'runtime_changed_for_pre_fault_job': changed_runtime, 'started_before_fault': sentinel,
              'nonce_sha256': probe.get('nonce_sha256')}
     bad = bool(multi_start) or bool(changed_runtime) or (extra_jobs is not None and extra_jobs > 0) or sentinel is False
     if not final_jobs and not starts:
         return _inv(NA, **facts)
+    return _inv(VIOLATED if bad else HOLD, **facts)
+
+
+def i2p_preparation(run, scenario):
+    """One dependency preparation per job, and no re-download once the prepared artifact is committed: a
+    preparation job that was completed (or had its bundle recorded) before the fault starts no preparer again."""
+    final = [j for j in run['final']['agentstate']['sandbox'] or [] if j.get('audience') == PREPARATION_AUDIENCE]
+    oracle = scenario.get('_oracle', {}).get('preparations')
+    if not final and not oracle:
+        return _inv(NA)
+    pre = [j for j in run.get('pre_fault', {}).get('agentstate', {}).get('sandbox') or []
+           if j.get('audience') == PREPARATION_AUDIENCE]
+    committed = {j['job_key'] for j in pre if j.get('phase') == 'completed' or j.get('has_preparation_bundle')}
+    events = run.get('events') or {}
+    t_fault_ms = run.get('t_fault_ms')
+    starts, after_commit = {}, {}
+    for job in final:
+        entry = events.get(job.get('runtime_label')) or {}
+        starts[job['job_key'][:12]] = entry.get('start', 0)
+        if job['job_key'] in committed and t_fault_ms:
+            after_commit[job['job_key'][:12]] = sum(1 for t in entry.get('start_times', []) if t > t_fault_ms)
+    jobs = len({j['job_key'] for j in final})
+    facts = {'preparation_jobs': jobs, 'preparation_dispatch_rows': len(final), 'oracle': oracle,
+             'committed_before_fault': len(committed), 'preparer_starts': starts,
+             'preparer_starts_after_commit': after_commit,
+             'phases': sorted({j.get('phase') for j in final})}
+    bad = (jobs > (oracle or 1) or any(n > 1 for n in starts.values()) or any(after_commit.values()))
     return _inv(VIOLATED if bad else HOLD, **facts)
 
 
@@ -200,6 +232,8 @@ def observed_class(run, scenario, inv):
         return 'L', 'user Code ran again'
     if inv['I3']['status'] == VIOLATED:
         return 'L', 'an effect repeated'
+    if inv.get('I2P', {}).get('status') == VIOLATED:
+        return 'L', 'dependency preparation repeated'
     if inv['I6']['status'] == VIOLATED:
         return 'L', 'orphan runtime or live sandbox row after the grace period'
     disposition = settlement['disposition']
@@ -228,7 +262,11 @@ def evaluate(scenario, run):
         'I1': i1_one_execution(run), 'I2': i2_no_code_rerun(run, scenario), 'I3': i3_effects(run, scenario),
         'I4': i4_frozen_identity(run), 'I5': i5_claims_and_fencing(run, scenario), 'I6': i6_no_orphan(run),
         'I7': i7_nats_drained(run), 'I8': i8_typed_failure(run, scenario),
+        'I2P': i2p_preparation(run, scenario),
     }
+    if run.get('resolver_network') is not None:
+        foreign = run['resolver_network']['foreign_members']
+        inv['NET'] = _inv(VIOLATED if foreign else HOLD, **run['resolver_network'])
     observed, why = observed_class(run, scenario, inv)
     target = scenario['target']
     structural = [k for k in ('I4', 'I5', 'I7') if inv[k]['status'] == VIOLATED]

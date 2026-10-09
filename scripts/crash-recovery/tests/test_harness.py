@@ -12,7 +12,7 @@ import unittest
 SUITE = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SUITE))
 
-from lib import catalog, report, verdict  # noqa: E402
+from lib import catalog, compiled_manifest, report, verdict  # noqa: E402
 from lib.api import _FormParser  # noqa: E402
 from lib.common import parse_iso, seconds_between  # noqa: E402
 from lib.redact import scan_bytes, scan_tree, scrub_text  # noqa: E402
@@ -82,6 +82,7 @@ def _run(**overrides):
               {'claim_id': 'c2', 'generation': 1, 'claim_attempt': 2, 'lease_epoch': 2, 'recovery_mode': 'NODE_RECOVERY',
                'claimed_at': '2026-10-09T10:01:10+00:00', 'released_at': '2026-10-09T10:02:00+00:00'}]
     job = {'job_key': 'k1', 'activation_id': 'a1', 'job_matched': True, 'runtime_id': 'r1', 'phase': 'completed',
+           'runtime_label': 'label1',
            'job_request_digest': 'd1', 'code_recovery_cleanup_failure': None}
     product = {
         'execution': [{'execution_id': exec_id, 'generation': 1, 'command_id': 'cmd', 'request_digest': 'rd',
@@ -132,6 +133,11 @@ class VerdictTest(unittest.TestCase):
         run = _run()
         run['final']['product']['settlements'] = []
         self.assertEqual(verdict.evaluate(SCENARIO, run)['observed'], 'L')
+
+    def test_other_stacks_containers_are_ignored(self):
+        # Another stack on the shared daemon restarting its own job must not count against this run.
+        run = _run(events={'label1': {'containers': ['r1'], 'start': 1}, 'foreign': {'containers': ['x'], 'start': 3}})
+        self.assertEqual(verdict.evaluate(SCENARIO, run)['invariants']['I2']['status'], 'hold')
 
     def test_code_rerun_is_l(self):
         run = _run(events={'label1': {'containers': ['r1'], 'start': 2}})
@@ -187,6 +193,20 @@ class VerdictTest(unittest.TestCase):
         run['after_grace']['runtime_present'] = {'r1': True}
         self.assertEqual(verdict.evaluate(SCENARIO, run)['observed'], 'L')
 
+    def test_committed_preparation_is_not_downloaded_again(self):
+        run = _run()
+        prep = {'job_key': 'p1', 'activation_id': 'pa', 'job_matched': True, 'runtime_id': 'pr', 'phase': 'completed',
+                'runtime_label': 'plabel', 'audience': verdict.PREPARATION_AUDIENCE, 'has_preparation_bundle': True}
+        run['pre_fault']['agentstate']['sandbox'].append(dict(prep))
+        run['final']['agentstate']['sandbox'].append(dict(prep))
+        run['events']['plabel'] = {'containers': ['pr'], 'start': 1, 'start_times': [1791540000000]}
+        scenario = dict(SCENARIO, _oracle={'jobs': 2, 'preparations': 1})
+        self.assertEqual(verdict.evaluate(scenario, run)['invariants']['I2P']['status'], 'hold')
+        run['events']['plabel'] = {'containers': ['pr', 'pr2'], 'start': 2,
+                                   'start_times': [1791540000000, 1791540030000]}
+        result = verdict.evaluate(scenario, run)
+        self.assertEqual((result['invariants']['I2P']['status'], result['observed']), ('violated', 'L'))
+
     def test_inconclusive_is_never_credited(self):
         result = verdict.evaluate(SCENARIO, {'inconclusive': 'trigger code_runtime_running timeout'})
         self.assertEqual(result['verdict'], 'INCONCLUSIVE')
@@ -214,6 +234,55 @@ class ReportTest(unittest.TestCase):
             row = report.build([root])['scenarios'][0]
             self.assertEqual((row['final'], row['counted_repeats']), ('PASS', 2))
             self.assertIsNone(row['matrix_proposal'], 'two counted repeats of three do not move a cell')
+
+
+class CompiledManifestTest(unittest.TestCase):
+    ROOT = pathlib.Path(__file__).resolve().parents[3]
+
+    def _load(self, relative, name):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(name, self.ROOT / relative)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_flags_hash_matches_shipped_producer(self):
+        producer = self._load('scripts/runtime/rust_compiled_release_manifest.py', 'rcrm')
+        self.assertEqual(compiled_manifest.flags_hash(), producer.flags(None))
+
+    def test_vendor_hash_sorts_by_path_and_is_compact_utf8(self):
+        a = {'path': 'b/x.rs', 'bytes': 3, 'sha256': 'a' * 64, 'mode': 0o644}
+        b = {'path': 'a.toml', 'bytes': 1, 'sha256': 'b' * 64, 'mode': 0o444}
+        c = {'path': 'é.rs', 'bytes': 2, 'sha256': 'c' * 64, 'mode': 0o644}
+        raw = ('[{"path":"a.toml","bytes":1,"sha256":"%s","mode":292},{"path":"b/x.rs","bytes":3,"sha256":"%s",'
+               '"mode":420},{"path":"é.rs","bytes":2,"sha256":"%s","mode":420}]' % ('b' * 64, 'a' * 64, 'c' * 64)).encode()
+        expected = compiled_manifest.domain_hash(b'elitea.rust.vendor-tree.v1\0', raw)
+        self.assertEqual(compiled_manifest.vendor_hash([a, b, c]), expected)
+        self.assertEqual(compiled_manifest.vendor_hash([c, a, b]), expected)
+
+    def test_toolchain_hash_known_bytes(self):
+        import hashlib
+        raw = b'[[1,2],[3]]'
+        want = hashlib.sha256(b'elitea.rust.toolchain.v1\0' + len(raw).to_bytes(8, 'big') + raw).hexdigest()
+        self.assertEqual(compiled_manifest.toolchain_hash(b'\x01\x02', b'\x03'), want)
+
+    def test_manifest_bytes_canonical_and_passes_deploy_checker(self):
+        measured = {name: format(i + 1, 'x') * 64 for i, name in enumerate(compiled_manifest.MEASURED_FIELDS)}
+        image = 'sha256:' + 'd' * 64
+        raw = compiled_manifest.manifest_bytes(measured, image, 'linux/arm64/gnu', 'aarch64-unknown-linux-gnu', 'p-v1')
+        value = json.loads(raw)
+        binding = value['profiles'][0]['binding']
+        self.assertEqual(list(binding), list(compiled_manifest.FIELDS))
+        self.assertEqual(len(binding), 19)
+        self.assertEqual(value['profiles'][0]['dependency_bundle_sha256'], '')
+        self.assertEqual(raw, json.dumps(value, separators=(',', ':'), ensure_ascii=False).encode())
+        self.assertFalse(raw.endswith(b'\n'))
+        checker = self._load('deploy/scripts/check-compiled-sandbox-material.py', 'cdsm')
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp).resolve() / 'profiles.json'
+            digest = compiled_manifest.write(path, raw)
+            self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+            self.assertEqual(len(checker.profiles(str(path), digest)), 1)
 
 
 if __name__ == '__main__':

@@ -7,7 +7,7 @@ from .common import SUITE, HarnessError
 CATALOG = SUITE / 'catalog'
 REQUIRED = ('id', 'cell', 'now', 'target', 'tier', 'fixture', 'trigger', 'faults', 'expect')
 CLASSES = {'R', 'I', 'C', 'F', 'L'}
-ACTIONS = {'kill9', 'stop', 'start', 'pause', 'unpause', 'replace_worker', 'wait', 'wait_until'}
+ACTIONS = {'kill9', 'stop', 'start', 'pause', 'unpause', 'replace_worker', 'wait', 'wait_until', 'user_stop'}
 
 
 def validate(s):
