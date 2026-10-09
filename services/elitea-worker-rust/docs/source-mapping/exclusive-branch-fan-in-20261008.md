@@ -153,6 +153,12 @@ real backend with no response mocks, NATS, PG18, and the offline mock LLM gatewa
 **Images.** All images were built from this branch. Only the Worker differs from `origin/main` `7ac0eaf9`.
 - `ghcr.io/elitea-ng/elitea-worker-rust:fanin-20261008`: `sha256:0e24c948c44b…`, rebuilt from a clean tree at
   `ec9214cb`; this is the running container's image.
+- **Binary identity.** Worker image builds share the BuildKit `/cargo-target` cache mount across worktrees, so an
+  image can ship another worktree's binary. Checked with `docker create` + `docker cp` of
+  `/usr/local/bin/elitea-worker-rust` (SHA-256 `e1b3d3a91ea17a3c…`) and `strings`: it contains
+  `elitea_worker_rust::agents::graph::compiler::exclusive_transitions` (9 matches; the release profile keeps
+  symbols with `strip = "none"`). Only this branch defines that function. The browser results are also behavioural
+  proof: on `main` the loop-to-entry child runs nothing, so the parent could not answer `LEFT via ONCE`.
 - `ghcr.io/elitea-ng/elitea-main:fanin-20261008`: `sha256:1151aa62b349…`.
 - `ghcr.io/elitea-ng/elitea-web:fanin-20261008`: `sha256:8746736ed35f…`.
 
