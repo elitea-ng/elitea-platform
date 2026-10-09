@@ -1,0 +1,59 @@
+{
+  "id": "CR-NK-P01q",
+  "cell": "NATS x P01, command queued (chat 856)",
+  "matrix_cell": "NATS x P01",
+  "now": "I\u00b7P",
+  "target": "I",
+  "fixture": "code-nonce-sleep-50",
+  "pre_faults": [
+    {
+      "action": "stop",
+      "target": "worker",
+      "grace_s": 30
+    }
+  ],
+  "trigger": {
+    "kind": "obs",
+    "until": "queued",
+    "timeout_s": 60
+  },
+  "faults": [
+    {
+      "action": "kill9",
+      "target": "nats"
+    },
+    {
+      "action": "start",
+      "target": "nats",
+      "after_s": 2,
+      "healthy": false
+    },
+    {
+      "action": "wait",
+      "seconds": 5
+    },
+    {
+      "action": "start",
+      "target": "worker",
+      "after_s": 0,
+      "healthy": false
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      0
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    },
+    "budget_s": 300
+  },
+  "notes": "Worker stopped before admission; the published command waits in the WorkQueue stream across a broker SIGKILL.",
+  "gap": null,
+  "repeat": 3,
+  "browser": false,
+  "tier": "T0"
+}

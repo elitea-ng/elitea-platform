@@ -1,0 +1,191 @@
+# Crash-recovery rehearsal overlay. Local only; CI never loads it.
+#
+# Apply last, after standalone-full, standalone-rust-agent and sandbox:
+#   STANDALONE_PROJECT=elitea-crash STANDALONE_HOST=crash.localhost STANDALONE_WORKER=rust \
+#   STANDALONE_OVERLAY="<abs>/deploy/docker-compose.sandbox.yml <abs>/deploy/docker-compose.crash-rehearsal.yml" \
+#   bash deploy/scripts/standalone-stack.sh up
+# `scripts/crash-recovery/crashctl.py up` sets these variables and prepares the material.
+#
+# What it changes, and why (scripts/crash-recovery/README.md has the run book):
+# - Networks. NATS sits only on `crash_bus` with its four clients (nats-health,
+#   nats-bootstrap, elitea-main, elitea-worker). The Supervisor's TLS names
+#   (elitea-sandbox-deno, elitea-sandbox-rust) resolve only on `crash_sandbox`,
+#   which the Worker and Main (original-Code owner calls) join. `docker network disconnect <project>_crash_bus <worker>`
+#   is then an exact Worker<->NATS partition, and `..._crash_sandbox` an exact
+#   Worker<->Supervisor partition, with no extra image.
+# - Durable NATS store on a named volume, so a kill keeps the store and a wipe
+#   is an explicit, destructive `docker volume rm`.
+# - Worker spool on a volume whose NAME comes from ELITEA_CRASH_SPOOL_NAME. A new
+#   name plus a re-created Worker emulates a pod replacement (fresh empty spool, D2).
+# - Supervisor material and the PostgreSQL server key are copied from a private
+#   host directory into volumes with the owner and mode each reader requires
+#   (the runtime-material pattern). PostgreSQL gains TLS because the Supervisor
+#   ledger connection is verify-full. Plaintext clients are unaffected.
+# - A `crash_reader` login role (no password, local socket only, read-only by
+#   default) for the invariant collector. The harness never writes product rows.
+# - Original-Code owner recovery on Main (ELITEA_RUNTIME_CODE_OWNER_RECOVERY_*). A Worker with
+#   `agent_node_recovery` refuses Code without it (authorization_denied before any dispatch). Only the
+#   owner consumer is enabled; workspace, platform and debug consumers stay off (docker-compose.code-consumers.yml
+#   enables all four and needs their extra material).
+# - restart: "no" on the fault targets. The harness restarts what it kills, after a
+#   measured delay; an automatic restart would blur the fault timing.
+# - Services no crash scenario uses are disabled, and memory is bounded so one
+#   runaway cannot stall the shared Docker VM.
+
+services:
+  qtest-mock: {profiles: ["crash-disabled"]}
+  ado-mock: {profiles: ["crash-disabled"]}
+  elitea-scheduler: {profiles: ["crash-disabled"]}
+
+  crash-material:
+    image: docker.io/library/debian:trixie-slim
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        for profile in deno rust; do
+          rm -rf /dst/$$profile/* && cp -p /src/sandbox-$$profile/* /dst/$$profile/
+          chown -R 10001:10001 /dst/$$profile && chmod 700 /dst/$$profile
+          chmod 600 /dst/$$profile/*
+        done
+        rm -rf /dst/pg/* && cp /src/postgres/server.crt /src/postgres/server.key /dst/pg/
+        chown -R 999:999 /dst/pg && chmod 700 /dst/pg && chmod 600 /dst/pg/server.key && chmod 644 /dst/pg/server.crt
+    volumes:
+      - type: bind
+        source: ${ELITEA_CRASH_MATERIAL_DIR:?Set the private crash material directory}
+        target: /src
+        read_only: true
+        bind:
+          create_host_path: false
+      - crash_sandbox_deno:/dst/deno
+      - crash_sandbox_rust:/dst/rust
+      - crash_pg_tls:/dst/pg
+    restart: "no"
+
+  crash-reader-init:
+    image: postgres:18
+    entrypoint: ["/bin/sh", "-ec"]
+    environment:
+      PGPASSWORD: elitea
+    command:
+      - |
+        for db in elitea agentstate; do
+          psql -v ON_ERROR_STOP=1 -h postgres -U elitea -d $$db <<'SQL'
+        DO $$do$$ BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'crash_reader') THEN
+            CREATE ROLE crash_reader LOGIN;
+          END IF;
+        END $$do$$;
+        ALTER ROLE crash_reader SET default_transaction_read_only = on;
+        SQL
+          psql -v ON_ERROR_STOP=1 -h postgres -U elitea -d $$db -At -c "SELECT format('GRANT USAGE ON SCHEMA %I TO crash_reader; GRANT SELECT ON ALL TABLES IN SCHEMA %I TO crash_reader;', nspname, nspname) FROM pg_namespace WHERE nspname = 'elitea_runtime' OR nspname ~ '^p_[0-9]+$$'" \
+            | psql -v ON_ERROR_STOP=1 -h postgres -U elitea -d $$db
+          psql -v ON_ERROR_STOP=1 -h postgres -U elitea -d $$db -c "GRANT CONNECT ON DATABASE $$db TO crash_reader"
+        done
+    depends_on:
+      elitea-migrate:
+        condition: service_completed_successfully
+      elitea-agentstate-migrate:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # The owner client files are placed in deploy/certs/runtime/ (gitignored) by `crashctl material`; the
+  # stock installer copies them into Main's volume when this flag is set (install-material.sh:49-55,124-126).
+  runtime-material:
+    environment:
+      ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"
+
+  postgres:
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/crash-pg-tls/server.crt
+      - -c
+      - ssl_key_file=/run/crash-pg-tls/server.key
+    volumes:
+      - crash_pg_tls:/run/crash-pg-tls:ro
+    depends_on:
+      crash-material:
+        condition: service_completed_successfully
+    mem_limit: 2g
+
+  nats:
+    volumes:
+      - crash_nats_data:/data
+    networks: !override
+      crash_bus: {}
+    restart: "no"
+    mem_limit: 512m
+
+  nats-health:
+    networks: [default, crash_bus]
+
+  nats-bootstrap:
+    networks: [default, crash_bus]
+
+  elitea-main:
+    networks: [default, crash_bus, crash_sandbox]
+    environment:
+      ELITEA_RUNTIME_CODE_OWNER_RECOVERY_ENABLED: "true"
+      ELITEA_RUNTIME_CODE_OWNER_RECOVERY_CONFIG: ${ELITEA_CRASH_CODE_OWNER_CONFIG:?Set by crashctl from the material step}
+    restart: "no"
+    mem_limit: 1g
+
+  elitea-worker:
+    networks: [default, crash_bus, crash_sandbox]
+    environment:
+      ELITEA_RUST_LOG: ${ELITEA_CRASH_RUST_LOG:-info}
+      ELITEA_RUST_FAILURE_DIAGNOSTICS: ${ELITEA_CRASH_FAILURE_DIAGNOSTICS:-on}
+    volumes:
+      - crash_worker_spool:/var/lib/elitea-worker/output-spool
+    restart: "no"
+    mem_limit: 1g
+
+  worker-spool-init:
+    volumes: !override
+      - crash_worker_spool:/spool
+
+  elitea-sandbox:
+    networks: !override
+      default: {}
+      crash_sandbox:
+        aliases: [elitea-sandbox-deno, elitea-sandbox-rust]
+    volumes: !override
+      - crash_sandbox_deno:/run/elitea-sandbox/deno:ro
+      - crash_sandbox_rust:/run/elitea-sandbox/rust:ro
+      - type: bind
+        source: ${ELITEA_SANDBOX_DOCKER_SOCKET:?Set the Docker socket path}
+        target: /var/run/docker.sock
+        bind:
+          create_host_path: false
+    depends_on:
+      crash-material:
+        condition: service_completed_successfully
+    restart: "no"
+
+  elitea-llm-gateway: {mem_limit: 512m}
+  elitea-web: {mem_limit: 256m}
+  rustfs: {mem_limit: 512m}
+  elitea-deepwiki: {mem_limit: 512m}
+  elitea-inventory: {mem_limit: 512m}
+  llm-mock:
+    environment:
+      MOCK_LLM_SLOW_CHUNKS: ${MOCK_LLM_SLOW_CHUNKS:-240}
+      MOCK_LLM_SLOW_CHUNK_DELAY_MS: ${MOCK_LLM_SLOW_CHUNK_DELAY_MS:-250}
+      MOCK_LLM_SLOW_FIRST_CHUNK_DELAY_MS: ${MOCK_LLM_SLOW_FIRST_CHUNK_DELAY_MS:-0}
+      MOCK_LLM_TOOL_DELAY_MS: ${MOCK_LLM_TOOL_DELAY_MS:-0}
+
+networks:
+  crash_bus: {}
+  crash_sandbox: {}
+
+volumes:
+  crash_nats_data: {}
+  crash_sandbox_deno: {}
+  crash_sandbox_rust: {}
+  crash_pg_tls: {}
+  crash_worker_spool:
+    name: ${ELITEA_CRASH_SPOOL_NAME:-elitea-crash-worker-spool-0}

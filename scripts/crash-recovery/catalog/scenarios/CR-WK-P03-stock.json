@@ -1,0 +1,48 @@
+{
+  "id": "CR-WK-P03-stock",
+  "cell": "Worker (container restart) x P03, stock Helm flags (D1)",
+  "matrix_cell": null,
+  "now": "F (stock, D1)",
+  "target": "F",
+  "fixture": "model-slow",
+  "stack_setup": {
+    "worker_config": "stock"
+  },
+  "trigger": {
+    "kind": "obs",
+    "until": "streaming",
+    "timeout_s": 120,
+    "params": {
+      "min_events": 10
+    }
+  },
+  "faults": [
+    {
+      "action": "kill9",
+      "target": "worker"
+    },
+    {
+      "action": "start",
+      "target": "worker",
+      "after_s": 2,
+      "healthy": false
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      1
+    ],
+    "settlement": "FAILED",
+    "error_codes": [],
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    },
+    "budget_s": 420
+  },
+  "repeat": 1,
+  "notes": "agent_model_checkpoint_recovery off, as stock Helm. Measures the F side of D1 instead of assuming it.",
+  "gap": null,
+  "browser": false,
+  "tier": "T0"
+}

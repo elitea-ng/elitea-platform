@@ -1,0 +1,31 @@
+{
+  "id": "BASE-code-150",
+  "cell": "baseline (no fault): Code fixture, 150 s node",
+  "now": "-",
+  "target": "R",
+  "matrix_cell": null,
+  "fixture": "code-nonce-sleep-150",
+  "trigger": {
+    "kind": "obs",
+    "until": "admitted",
+    "timeout_s": 30
+  },
+  "faults": [],
+  "expect": {
+    "takeovers": [
+      0
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    },
+    "budget_s": 360
+  },
+  "repeat": 1,
+  "notes": "Control run for the combination fixture.",
+  "gap": null,
+  "browser": false,
+  "tier": "T0"
+}

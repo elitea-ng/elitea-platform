@@ -1,0 +1,63 @@
+{
+  "id": "CX-01",
+  "cell": "Worker (pod replacement) then Supervisor x P10 (chat 851)",
+  "matrix_cell": "Worker (pod replacement or >1 replica) x P10",
+  "now": "R\u00b7P (PR #1084 chat 851, not on main)",
+  "target": "R",
+  "fixture": "code-nonce-sleep-150",
+  "trigger": {
+    "kind": "obs",
+    "until": "code_runtime_running",
+    "timeout_s": 120,
+    "params": {
+      "sleep_s": 150,
+      "min_age_s": 3,
+      "remaining_s": 120
+    }
+  },
+  "faults": [
+    {
+      "action": "kill9",
+      "target": "worker"
+    },
+    {
+      "action": "replace_worker",
+      "target": "worker"
+    },
+    {
+      "action": "wait_until",
+      "predicate": "claim_attempt_at_least",
+      "params": {
+        "attempt": 2
+      },
+      "timeout_s": 150
+    },
+    {
+      "action": "kill9",
+      "target": "supervisor"
+    },
+    {
+      "action": "start",
+      "target": "supervisor",
+      "after_s": 2,
+      "healthy": false
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      1
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    },
+    "budget_s": 480
+  },
+  "browser": true,
+  "notes": "Automates chat 851 with a positive tail: the Code job is still running when claim 2 is granted, then the Supervisor process is lost.",
+  "gap": null,
+  "repeat": 3,
+  "tier": "T0"
+}

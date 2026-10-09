@@ -1,0 +1,40 @@
+{
+  "T0": [
+    "BASE-code-50",
+    "BASE-code-150",
+    "BASE-model-slow",
+    "CR-WK-P10",
+    "CR-WPK-P10",
+    "CX-01",
+    "CR-MK-P10",
+    "CR-SK-P10",
+    "CX-03b",
+    "CR-NK-P10",
+    "CR-NK-P01q",
+    "CR-WK-P02",
+    "CR-WK-P03",
+    "CR-MK-P03",
+    "CR-WK-P03-stock"
+  ],
+  "T0-base": [
+    "BASE-code-50",
+    "BASE-code-150",
+    "BASE-model-slow"
+  ],
+  "T0-code": [
+    "CR-WK-P10",
+    "CR-WPK-P10",
+    "CX-01",
+    "CR-MK-P10",
+    "CR-SK-P10",
+    "CX-03b",
+    "CR-NK-P10",
+    "CR-NK-P01q"
+  ],
+  "T0-model": [
+    "CR-WK-P02",
+    "CR-WK-P03",
+    "CR-MK-P03",
+    "CR-WK-P03-stock"
+  ]
+}

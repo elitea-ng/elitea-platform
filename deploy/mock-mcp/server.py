@@ -18,12 +18,22 @@ plain HTTP POST, at ONE path:
                server-initiated messages to push
   DELETE /mcp  405, likewise tolerated (`common/reqwest/streamable_http_client.rs:163`)
   GET  /healthz  for the compose healthcheck
+  GET    /__journal  the dispatched JSON-RPC methods, newest last (below)
+  DELETE /__journal  empty it
 
 Every served JSON-RPC method is logged to stderr, so `podman logs
 elitea-standalone-mcp-mock-1` tells "the worker connected and discovered the
 catalogue" from "the worker never dialled" — two states that look identical
 from an agent transcript when the model does not call the tool. A TLS
 handshake this server rejects is logged too; see `LoggingTLSServer`.
+
+THE JOURNAL. Every dispatched JSON-RPC method, notifications included, is also
+recorded in a bounded in-memory journal, so a crash test can count MCP tool
+effects per scenario: a `tools/call` entry carries the tool name and the first
+MAX_MARKER_CHARS of its `text` argument, which is how one scenario's calls are
+told from another's. `/__journal` has the shape of the mock LLM's journal
+(`{"object": "list", "data": [...], "count": N}`) and answers on the same TLS
+listener. `/mcp` and `/mcp-auth` are untouched.
 
 Responses are `application/json`, never SSE. That is a shape the client
 explicitly accepts (`StreamableHttpPostResponse::Json`, same file :302-310) and
@@ -49,11 +59,19 @@ import json
 import os
 import ssl
 import sys
+import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(os.environ.get("MOCK_MCP_PORT", "8443"))
 CERT_FILE = os.environ.get("MOCK_MCP_CERT", "/opt/mock-mcp/tls/server-chain.crt")
 KEY_FILE = os.environ.get("MOCK_MCP_KEY", "/opt/mock-mcp/tls/server.key")
+# Bounded so a long soak run cannot grow the process without a limit; the
+# oldest entries are the ones dropped, as in the mock LLM's journal.
+MAX_JOURNAL_ENTRIES = int(os.environ.get("MOCK_MCP_JOURNAL_LIMIT", "500"))
+# How much of a `tools/call` text argument the journal keeps.
+MAX_MARKER_CHARS = 64
+JOURNAL_PATH = "/__journal"
 SERVER_NAME = "elitea-mock-mcp"
 SERVER_VERSION = "1.0.0"
 
@@ -132,6 +150,39 @@ REVERSE_TOOL = {
 TOOLS = [ECHO_TOOL, REVERSE_TOOL]
 
 
+_JOURNAL: list[dict] = []
+_JOURNAL_LOCK = threading.Lock()
+
+
+def _record(method, params: dict) -> None:
+    """Journal one dispatched JSON-RPC method.
+
+    Recorded for every method the server sees, answered or not, so "the worker
+    never dialled" and "the worker dialled and called nothing" stay distinct.
+    """
+    tool = marker = None
+    if method == "tools/call":
+        name = params.get("name")
+        tool = name if isinstance(name, str) else None
+        arguments = params.get("arguments")
+        text = arguments.get("text") if isinstance(arguments, dict) else None
+        marker = text[:MAX_MARKER_CHARS] if isinstance(text, str) else None
+    with _JOURNAL_LOCK:
+        _JOURNAL.append({"method": method, "tool": tool, "marker": marker, "at": time.time()})
+        if len(_JOURNAL) > MAX_JOURNAL_ENTRIES:
+            del _JOURNAL[:-MAX_JOURNAL_ENTRIES]
+
+
+def _journal_entries() -> list[dict]:
+    with _JOURNAL_LOCK:
+        return list(_JOURNAL)
+
+
+def _clear_journal() -> None:
+    with _JOURNAL_LOCK:
+        _JOURNAL.clear()
+
+
 def _result(request_id, result: dict) -> dict:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
@@ -185,6 +236,7 @@ def _dispatch(message: dict):
     params = message.get("params")
     params = params if isinstance(params, dict) else {}
     sys.stderr.write("mock-mcp jsonrpc %s\n" % method)
+    _record(method, params)
 
     if request_id is None:
         return None
@@ -262,7 +314,14 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
         self.log_message("%s", "401 authorization required on " + AUTH_PATH)
 
+    def _send_journal(self) -> None:
+        entries = _journal_entries()
+        self._send_json(200, {"object": "list", "data": entries, "count": len(entries)})
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib name
+        if self.path.split("?", 1)[0] == JOURNAL_PATH:
+            self._send_journal()
+            return
         if self.path.split("?", 1)[0] == AUTH_PATH:
             self._send_auth_challenge()
             return
@@ -277,6 +336,10 @@ class Handler(BaseHTTPRequestHandler):
         self._send_empty(404)
 
     def do_DELETE(self) -> None:  # noqa: N802 - stdlib name
+        if self.path.split("?", 1)[0] == JOURNAL_PATH:
+            _clear_journal()
+            self._send_journal()
+            return
         # Session teardown. Answering 405 is explicitly tolerated by the client.
         self._send_empty(405)
 

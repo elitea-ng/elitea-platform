@@ -1,0 +1,46 @@
+{
+  "id": "CR-WK-P02",
+  "cell": "Worker (container restart) x P02",
+  "matrix_cell": "Worker (container restart) x P02",
+  "now": "R/F1\u00b7P*",
+  "target": "R",
+  "fixture": "model-slow",
+  "trigger": {
+    "kind": "obs",
+    "until": "model_request_pending",
+    "timeout_s": 90,
+    "params": {
+      "min_age_s": 2,
+      "max_age_s": 12
+    }
+  },
+  "faults": [
+    {
+      "action": "kill9",
+      "target": "worker"
+    },
+    {
+      "action": "start",
+      "target": "worker",
+      "after_s": 2,
+      "healthy": false
+    }
+  ],
+  "expect": {
+    "takeovers": [
+      1
+    ],
+    "settlement": "SUCCEEDED",
+    "error_codes": [],
+    "effects": {
+      "tool_items": 0,
+      "mcp_tools_call": 0
+    },
+    "budget_s": 360
+  },
+  "notes": "The model request reached the provider; MOCK_LLM_SLOW_FIRST_CHUNK_DELAY_MS holds the first byte.",
+  "gap": null,
+  "repeat": 3,
+  "browser": false,
+  "tier": "T0"
+}
