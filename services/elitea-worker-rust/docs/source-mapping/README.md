@@ -433,3 +433,4 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Container build local crate freshness](container-build-local-crate-freshness-20261008.md) records why Rust image builds recompile local crates under a locked shared target cache, the two-worktree build proof and the gate test.
 - [Point 5 V2 contracts and designs](graph-point5-v2-contracts-20261008.md) links the fan-out V2 runtime design, the per-interrupt decision contract and schemas, the Map V1 rewrite, and the HTTP and database action designs.
 - [Pipeline terminal result](pipeline-terminal-result-20261008.md) records the runtime last-writer trace that selects a pipeline answer, its rendering, bounds, tests and browser evidence.
+- [Governance body bounds](governance-body-bounds-20261008.md) records the 256 KiB governance body limit, 413 refusal, strict decode, and 8 KiB routing CEL cap.
