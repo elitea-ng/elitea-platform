@@ -25,8 +25,8 @@
 //! host's data directory plus content-addressed copies of the files
 //! (`objects/<sha256>`, shared between checkpoints), walking the folder with
 //! `.gitignore` rules honoured. Bounded: [`MAX_COPY_FILES`],
-//! [`MAX_COPY_BYTES`]; files over [`MAX_COPY_FILE_BYTES`] are recorded as
-//! skipped and left alone by a restore.
+//! [`MAX_COPY_BYTES`]; files over [`MAX_COPY_FILE_BYTES`], and files that
+//! could not be read, are recorded as skipped and left alone by a restore.
 //! Deletions follow the checkpoint's ignore rules as in git.
 //!
 //! Restores write through a [`Workspace`] without `path_deny` (it is the
@@ -914,17 +914,15 @@ impl CopyCheckpoints {
         };
         let mut total = 0u64;
         for path in files {
-            let read = match self
+            // Too large, unreadable, or gone since the walk: not stored,
+            // and left alone by a restore (never deleted as if the turn had
+            // created it).
+            let Ok(read) = self
                 .restorer
                 .read(&path, self.limits.max_file_bytes.min(MAX_COPY_FILE_BYTES))
-            {
-                Ok(read) => read,
-                Err(error) if error.code() == ErrorCode::TooLarge => {
-                    manifest.skipped.insert(path.display_string());
-                    continue;
-                }
-                // Vanished or unreadable since the walk: not part of it.
-                Err(_) => continue,
+            else {
+                manifest.skipped.insert(path.display_string());
+                continue;
             };
             total += read.stamp.len;
             if total > MAX_COPY_BYTES {
@@ -1484,6 +1482,37 @@ mod tests {
             assert!(one.deleted.is_empty(), "{kind}: {one:?}");
             assert_eq!(read(root, ".env").as_deref(), Some("SECRET=1\n"), "{kind}");
         }
+    }
+
+    /// A file a copy checkpoint could not read is recorded as skipped, so a
+    /// restore leaves it alone instead of deleting it as new.
+    #[test]
+    fn copy_checkpoints_keep_files_they_could_not_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("dir");
+        let root = dir.path();
+        std::fs::write(root.join("a.txt"), "a\n").expect("a");
+        std::fs::write(root.join("locked.txt"), "private\n").expect("locked");
+        std::fs::set_permissions(
+            root.join("locked.txt"),
+            std::fs::Permissions::from_mode(0o000),
+        )
+        .expect("chmod");
+        let workspace = Workspace::open(root, &[]).expect("workspace");
+        let data = tempfile::tempdir().expect("data");
+        let checkpoints = Checkpoints::open(&workspace, "s", data.path()).expect("open");
+        assert_eq!(checkpoints.kind(), "copy");
+        checkpoints.create("turn").expect("create");
+        std::fs::write(root.join("a.txt"), "changed\n").expect("edit");
+        let report = checkpoints.restore(1).expect("restore");
+        std::fs::set_permissions(
+            root.join("locked.txt"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .expect("chmod back");
+        assert!(report.deleted.is_empty(), "{report:?}");
+        assert_eq!(read(root, "locked.txt").as_deref(), Some("private\n"));
+        assert_eq!(read(root, "a.txt").as_deref(), Some("a\n"));
     }
 
     fn walk_count(base: &Path, name: &str) -> usize {
