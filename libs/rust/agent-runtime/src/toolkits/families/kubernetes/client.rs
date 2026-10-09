@@ -489,19 +489,20 @@ fn apply_headers(
 }
 
 fn forbidden_header(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "authorization"
-            | "host"
-            | "content-length"
-            | "transfer-encoding"
-            | "connection"
-            | "proxy-authorization"
-            | "proxy-connection"
-            | "te"
-            | "trailer"
-            | "upgrade"
-    )
+    crate::toolkits::is_reserved_platform_header(name)
+        || matches!(
+            name.to_ascii_lowercase().as_str(),
+            "authorization"
+                | "host"
+                | "content-length"
+                | "transfer-encoding"
+                | "connection"
+                | "proxy-authorization"
+                | "proxy-connection"
+                | "te"
+                | "trailer"
+                | "upgrade"
+        )
 }
 
 fn header_size(headers: &reqwest::header::HeaderMap) -> usize {

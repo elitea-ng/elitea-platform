@@ -30,9 +30,11 @@ type PrincipalValidator interface {
 	ValidatePrincipal(ctx context.Context, principal auth.User) (auth.User, error)
 }
 
-// ForwardedIdentityPeerVerifier proves that an X-Auth-* request arrived over
-// the isolated, header-stripping ingress boundary. Reloading an active user is
-// not proof that the caller was entitled to assert that user ID.
+// ForwardedIdentityPeerVerifier proves that EdgeAuth produced the X-Auth-*
+// projection on this request: browserauth.TrustedProxyResolver requires
+// EdgeAuth's signature over the identity, method and request URI as well as a
+// configured proxy peer. Reloading an active user is not proof that the
+// caller was entitled to assert that user ID.
 type ForwardedIdentityPeerVerifier interface {
 	VerifyForwardedIdentityPeer(*http.Request) error
 }

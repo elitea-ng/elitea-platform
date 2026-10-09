@@ -60,7 +60,7 @@ RENDER=(
   -f "$CHART/values-standalone.yaml"
   --set worker.enabled=true
   --set-string llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://ci-render-only.example.invalid/llm/v1
-  --set-string llmGateway.egressPosture=public-unrestricted
+  --set-string llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true
 )
 
 # Unrolled on purpose, not a loop. The assertion floor counts accepting SITES

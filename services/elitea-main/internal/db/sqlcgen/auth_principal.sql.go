@@ -13,24 +13,42 @@ const getActivePATPrincipalByID = `-- name: GetActivePATPrincipalByID :one
 SELECT
     token.id AS token_id,
     owner.id AS user_id,
-    COALESCE(owner.email, '')::text AS email
+    COALESCE(owner.email, '')::text AS email,
+    binding.project_id,
+    (bound_project.suspended IS FALSE
+        AND bound_project.create_success IS TRUE)::boolean AS bound_project_active
 FROM public.auth_core__token AS token
 JOIN public.auth_core__user AS owner ON owner.id = token.user_id
+LEFT JOIN elitea_identity.token_project_binding AS binding
+       ON binding.token_id = token.id
+LEFT JOIN centry.project AS bound_project
+       ON bound_project.id = binding.project_id
 WHERE token.id = $1::integer
   AND owner.suspended = false
   AND (token.expires IS NULL OR token.expires > (clock_timestamp() AT TIME ZONE 'UTC'))
 `
 
 type GetActivePATPrincipalByIDRow struct {
-	TokenID int32  `db:"token_id" json:"token_id"`
-	UserID  int32  `db:"user_id" json:"user_id"`
-	Email   string `db:"email" json:"email"`
+	TokenID            int32  `db:"token_id" json:"token_id"`
+	UserID             int32  `db:"user_id" json:"user_id"`
+	Email              string `db:"email" json:"email"`
+	ProjectID          *int32 `db:"project_id" json:"project_id"`
+	BoundProjectActive bool   `db:"bound_project_active" json:"bound_project_active"`
 }
 
+// The project binding is reloaded with the principal, exactly as
+// GetActivePATPrincipalByUUID reads it, so a token re-validated by row ID keeps
+// the binding its bearer form carries.
 func (q *Queries) GetActivePATPrincipalByID(ctx context.Context, tokenID int32) (GetActivePATPrincipalByIDRow, error) {
 	row := q.db.QueryRow(ctx, getActivePATPrincipalByID, tokenID)
 	var i GetActivePATPrincipalByIDRow
-	err := row.Scan(&i.TokenID, &i.UserID, &i.Email)
+	err := row.Scan(
+		&i.TokenID,
+		&i.UserID,
+		&i.Email,
+		&i.ProjectID,
+		&i.BoundProjectActive,
+	)
 	return i, err
 }
 

@@ -83,6 +83,12 @@ func (v *PrincipalValidator) ValidatePrincipal(ctx context.Context, principal au
 		// "-". Resolve mutable identity attributes from PostgreSQL instead of
 		// trusting that transport field or a stale session/cache value.
 		principal.Email = row.Email
+		// The binding is storage-only (auth.User.TokenProjectID), so the row
+		// replaces whatever the incoming principal carried. A token that
+		// arrives as a forwarded projection is thereby bound exactly as the
+		// same token presented as a bearer.
+		principal.TokenProjectID = tokenProjectID(row.ProjectID)
+		principal.TokenProjectActive = tokenProjectActive(row.ProjectID, row.BoundProjectActive)
 		return principal, nil
 	}
 

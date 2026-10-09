@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -34,6 +35,10 @@ type TrustedProxyConfig struct {
 	TrustedProxyCIDRs []string
 	PublicOrigin      string
 	Development       bool
+	// IdentityProjectionSecret keys the signature EdgeAuth puts on the
+	// X-Auth-* projection (IdentitySignatureHeader). It is mandatory: without
+	// it the only proof left would be the socket peer's address.
+	IdentityProjectionSecret []byte
 }
 
 // ForwardedRequest is the normalized source used by EdgeAuth policy. The
@@ -56,9 +61,11 @@ type ForwardedRequest struct {
 // Request.RemoteAddr must still contain the raw socket peer; generic RealIP
 // middleware must not run before this resolver.
 type TrustedProxyResolver struct {
-	trusted      []netip.Prefix
-	publicScheme string
-	publicHost   string
+	trusted       []netip.Prefix
+	publicScheme  string
+	publicHost    string
+	projectionKey []byte
+	now           func() time.Time
 }
 
 func NewTrustedProxyResolver(config TrustedProxyConfig) (*TrustedProxyResolver, error) {
@@ -71,6 +78,11 @@ func NewTrustedProxyResolver(config TrustedProxyConfig) (*TrustedProxyResolver, 
 		(origin.EscapedPath() != "" && origin.EscapedPath() != "/") ||
 		(origin.Scheme != "https" && (!config.Development || origin.Scheme != "http")) ||
 		!httpguts.ValidHostHeader(origin.Host) {
+		return nil, ErrInvalidForwardedRequest
+	}
+
+	projectionKey, err := deriveIdentityProjectionKey(config.IdentityProjectionSecret)
+	if err != nil {
 		return nil, ErrInvalidForwardedRequest
 	}
 
@@ -87,9 +99,11 @@ func NewTrustedProxyResolver(config TrustedProxyConfig) (*TrustedProxyResolver, 
 	}
 
 	return &TrustedProxyResolver{
-		trusted:      trusted,
-		publicScheme: origin.Scheme,
-		publicHost:   origin.Host,
+		trusted:       trusted,
+		publicScheme:  origin.Scheme,
+		publicHost:    origin.Host,
+		projectionKey: projectionKey,
+		now:           time.Now,
 	}, nil
 }
 
@@ -189,16 +203,21 @@ func attemptClientKey(address netip.Addr) string {
 	return prefix.String()
 }
 
-// VerifyForwardedIdentityPeer proves only that the immediate socket peer is a
-// configured, header-stripping proxy. EdgeAuth has already produced the
-// identity projection; ordinary product requests do not need to replay its
-// X-Forwarded-* source contract before Auth can consume that projection.
+// VerifyForwardedIdentityPeer proves that EdgeAuth produced the X-Auth-*
+// projection on this request: the projection carries an unexpired
+// IdentitySignatureHeader over exactly these identity values, this method and
+// this request URI. The socket peer must also be a configured proxy, but that
+// is a second fence and never the proof — an address inside
+// trusted_proxy_cidrs says nothing about who chose the headers.
 func (r *TrustedProxyResolver) VerifyForwardedIdentityPeer(request *http.Request) error {
 	if r == nil || request == nil {
 		return ErrInvalidForwardedRequest
 	}
 	peer, err := remoteAddress(request.RemoteAddr)
 	if err != nil || !r.isTrusted(peer) {
+		return ErrInvalidForwardedRequest
+	}
+	if !r.verifyIdentityProjection(request) {
 		return ErrInvalidForwardedRequest
 	}
 	return nil
