@@ -119,17 +119,52 @@ No row moves to L.
 
 ## Real-browser evidence
 
-**Status: the final proof on a stack built from merged `main` is pending.** The evidence below comes from a
-pre-rebase rehearsal (branch base `85cabcc8`). It counts for Main and the edge configuration. It does **not** count
-as proof of the Rust worker binary:
+### Final proof on the PR head (2026-10-09)
 
-- That base does not contain #1160 (the cargo-target cache fix).
-- The worker image's binary was not extracted and checked for a branch-unique string (delivery gate §3b).
+**Images.**
+- Built from `ab9e33272` (rebased on `main` `0def77b2`, which contains #1160):
+  - `elitea-main:sec-edge-ab9e33272cc3` (target `e2e`);
+  - `elitea-worker-rust:sec-edge-ab9e33272cc3`;
+  - `elitea-web:sec-edge-ab9e33272cc3`;
+  - `elitea-llm-gateway:sec-edge-ab9e33272cc3`.
+- Mocks are the merged-`main` images `elitea-mock-llm` and `elitea-mock-mcp` `:main-0def77b22-verify`.
 
-So the worker-toolkit leg and the post-tool observation below must be repeated on the new stack. The rebased branch
-contains #1160.
+**Binary check (§3b).** Each binary was extracted with `docker create` + `docker cp` and compared with the merged-`main`
+images (`:main-0def77b22-verify`) as controls:
 
-### Pre-rebase rehearsal (2026-10-08)
+| Binary | Branch-unique string | This branch | Control |
+|---|---|---|---|
+| `/elitea-main` | HKDF label `elitea-main edge identity projection v1` | 1 | 0 |
+| `/usr/local/bin/elitea-worker-rust` | reserved name `x-auth-session-endpoint` | 1 | 0 |
+
+**Stack.**
+- Own isolated compose project `elitea-sec-edge` (ports 18240–18248). The shared rehearsal stack was not touched.
+- Brought up with `standalone-stack.sh up`, then `seed`, `seed-runtime`, `seed-llm` and `seed-index`.
+- Torn down after recording.
+
+**Live-stack check** (`check --allow-skips`): 32 passed, 0 failed, 1 named skip (the SDK client check does not apply
+to the native worker).
+- An unsigned projection gets 401 at `https://elitea-platform-edge` and at `http://elitea-main:8080`.
+- A real PAT still answers as its own user at both.
+- The browser-edge header-strip probes pass.
+
+**Browser (built-in browser, no response mocks), user `e2e-chat@autotest.local` (id 7), Private project:**
+
+1. Normal sign-in through the stack's OIDC provider.
+2. The Artifacts page created the bucket `elitea-artifacts`.
+3. Chat 2 had the `standalone-artifact-index` toolkit attached. The Rust worker ran:
+   - `create_file`: "File created successfully at /elitea-artifacts/edge-check.txt (23 bytes)";
+   - `list_files`: returned `edge-check.txt`, 23 bytes.
+
+   Both turns completed. The post-tool failure seen in the pre-rebase rehearsal did not occur with the verified
+   binary.
+4. A same-origin GET to `/api/v2/social/author` carried `X-Auth-Type: user`, `X-Auth-ID: 1`, `X-Auth-User-ID: 1` and a
+   fake `X-Auth-Signature`:
+   - without the cookie: 401;
+   - with the session cookie: 200, `id` = 7.
+5. After a reload, the session and both turns persist.
+
+### Pre-rebase rehearsal (2026-10-08), superseded for the worker leg
 
 **Stack.**
 - Local compose rehearsal, project `elitea-sec-edge`, `deploy/docker-compose.standalone-full.yml` plus
@@ -189,8 +224,6 @@ check does not apply to the native worker). The new in-network probes:
 - Toolkit configurations that already contain one of the reserved names now fail to materialize.
 - Traefik rewrites `;` in query strings for the upstream request. Such a URI does not verify, and the request falls
   back to its own credential.
-- The post-tool turn failure observed on the rehearsal stack (see browser evidence) needs a comparison run on
-  `origin/main` images.
 - Not tested against a real Kubernetes CNI. `probeFrom` exists for CNIs that apply NetworkPolicies to kubelet probes.
 - CI workflows are unchanged. The bundled profiles declare `noExternalIngress: true`, so CI's existing render
   commands pass.
