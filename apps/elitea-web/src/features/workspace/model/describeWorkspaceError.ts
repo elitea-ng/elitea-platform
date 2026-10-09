@@ -20,6 +20,8 @@ export function describeWorkspaceError(error: unknown): string {
       return t('workspace.error.localWorkDisabled', 'Local work is turned off by your organisation’s policy.');
     case 'not_signed_in':
       return t('workspace.error.notSignedIn', 'Sign in again to run agents on this computer.');
+    case 'no_checkpoint':
+      return t('workspace.error.noCheckpoint', 'This turn cannot be undone: the folder was too large to checkpoint.');
     case 'turn_expired':
       return t('workspace.error.turnExpired', 'This turn is too old to review or undo: only the most recent turns of a folder are kept.');
     default:

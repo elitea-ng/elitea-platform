@@ -521,6 +521,13 @@ impl LocalSession {
         self.turn.lock().ok().and_then(|turn| turn.checkpoint)
     }
 
+    /// Why the current turn changed files without a checkpoint (the folder
+    /// was too large to copy), if it did: such a turn cannot be undone.
+    #[must_use]
+    pub fn turn_checkpoint_skipped(&self) -> Option<String> {
+        self.turn.lock().ok().and_then(|turn| turn.skipped.clone())
+    }
+
     #[must_use]
     pub fn checkpoints(&self) -> &Checkpoints {
         &self.checkpoints

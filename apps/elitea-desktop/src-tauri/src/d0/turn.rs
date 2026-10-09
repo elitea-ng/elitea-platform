@@ -175,13 +175,49 @@ impl Drop for WorkspaceClaim {
 
 const TURN_RUNNING: &str = "A turn is already running in this workspace.";
 
+/// What `checkpoint_restore` can put back for a turn.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+enum TurnCheckpoint {
+    /// The turn changed nothing (or has not ended yet).
+    #[default]
+    None,
+    /// Taken before the turn's first change.
+    Taken(u64),
+    /// The turn changed files, but the folder was too large to checkpoint.
+    Skipped(String),
+}
+
+impl TurnCheckpoint {
+    fn of(session: &LocalSession) -> Self {
+        match (session.turn_checkpoint(), session.turn_checkpoint_skipped()) {
+            (Some(seq), _) => Self::Taken(seq),
+            (None, Some(reason)) => Self::Skipped(reason),
+            (None, None) => Self::None,
+        }
+    }
+
+    /// The checkpoint to restore; `None` for a turn that changed nothing.
+    fn restorable(&self) -> Result<Option<u64>, TurnError> {
+        match self {
+            Self::None => Ok(None),
+            Self::Taken(seq) => Ok(Some(*seq)),
+            Self::Skipped(reason) => Err(TurnError::new(
+                "no_checkpoint",
+                format!(
+                    "This turn ran without a checkpoint ({reason}), so its changes cannot be undone here."
+                ),
+            )),
+        }
+    }
+}
+
 /// A turn, kept after it ends for `turn_changes` and `checkpoint_restore`.
 struct TurnEntry {
     workspace_id: String,
     workspace: Arc<WorkspaceSession>,
     recorder: Arc<Recorder>,
     stop: LocalStop,
-    checkpoint: Mutex<Option<u64>>,
+    checkpoint: Mutex<TurnCheckpoint>,
 }
 
 /// How many turns of one workspace stay reviewable (`turn_changes`) and
@@ -401,7 +437,7 @@ impl AgentHost {
                     workspace: prepared.workspace.clone(),
                     recorder: Arc::new(Recorder::default()),
                     stop,
-                    checkpoint: Mutex::new(None),
+                    checkpoint: Mutex::new(TurnCheckpoint::None),
                 });
                 if let Ok(mut turns) = self.turns.lock() {
                     turns.insert(turn_id.clone(), entry.clone());
@@ -539,7 +575,7 @@ impl AgentHost {
         *entry
             .checkpoint
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = session.turn_checkpoint();
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = TurnCheckpoint::of(&session);
         workspace.prompt.bind(None);
         self.broker.forget_turn(events.turn_id());
         let conversation_id = request.conversation_id.clone();
@@ -853,7 +889,8 @@ impl AgentHost {
     ///
     /// # Errors
     ///
-    /// An unknown or running turn, or a failed restore.
+    /// An unknown or running turn, a turn that changed files without a
+    /// checkpoint (`no_checkpoint`), or a failed restore.
     pub fn restore(&self, turn_id: &str, path: Option<&str>) -> Result<Vec<String>, TurnError> {
         let entry = self.entry(turn_id)?;
         // The same per-workspace claim a turn takes: no turn starts while
@@ -863,11 +900,12 @@ impl AgentHost {
             &entry.workspace_id,
             "Wait for the running turn to end before undoing.",
         )?;
-        let Some(seq) = *entry
+        let checkpoint = entry
             .checkpoint
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-        else {
+            .restorable()?;
+        let Some(seq) = checkpoint else {
             return Ok(Vec::new());
         };
         let session = &entry.workspace.session;
@@ -1060,6 +1098,21 @@ mod tests {
         assert!(conversation_key(&json!(".")).is_err());
         assert!(conversation_key(&json!("..")).is_err());
         assert!(conversation_key(&json!({})).is_err());
+    }
+
+    #[test]
+    fn a_turn_without_its_checkpoint_refuses_the_undo() {
+        assert_eq!(TurnCheckpoint::None.restorable(), Ok(None));
+        assert_eq!(TurnCheckpoint::Taken(3).restorable(), Ok(Some(3)));
+        let error = TurnCheckpoint::Skipped("too many files".into())
+            .restorable()
+            .unwrap_err();
+        assert_eq!(error.code, "no_checkpoint");
+        assert!(
+            error.message.contains("too many files"),
+            "{}",
+            error.message
+        );
     }
 
     #[test]

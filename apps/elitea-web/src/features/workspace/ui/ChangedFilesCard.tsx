@@ -30,7 +30,7 @@ import { describeWorkspaceError } from '../model/describeWorkspaceError';
 import { parseUnifiedDiff } from '../model/unifiedDiff';
 
 /** The host's codes a person can act on get their own words; anything else the generic `fallback`. */
-const ACTIONABLE = new Set(['workspace_busy', 'turn_expired']);
+const ACTIONABLE = new Set(['workspace_busy', 'turn_expired', 'no_checkpoint']);
 
 function failureText(error: unknown, fallback: string): string {
   return ACTIONABLE.has(toWorkspaceIpcError(error).code) ? describeWorkspaceError(error) : fallback;

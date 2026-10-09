@@ -87,4 +87,13 @@ describe('ChangedFilesCard', () => {
     await waitFor(() => expect(ipc.calls.restores).toEqual([{ turnId: 't1', path: 'src/b.ts' }]));
     expect(await screen.findByText('Restored 1 files.')).toBeInTheDocument();
   });
+
+  it('says why a turn that ran without a checkpoint cannot be undone', async () => {
+    const { ipc, user } = setup();
+    ipc.failNext('restore', 'no_checkpoint', 'This turn ran without a checkpoint (too many files).');
+    await screen.findAllByTestId('changed-file');
+
+    await user.click(screen.getByRole('button', { name: 'Revert src/b.ts' }));
+    expect(await screen.findByText('This turn cannot be undone: the folder was too large to checkpoint.')).toBeInTheDocument();
+  });
 });

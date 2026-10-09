@@ -107,7 +107,9 @@ but `checkpoint_restore` undoes it with the rest of the turn.
 turn's checkpoint (taken before its first change); with `path` only that
 file. It answers the files written back or deleted, and `[]` for a turn
 that changed nothing. It rejects (`workspace_busy`) while a turn runs in
-the workspace.
+the workspace, and with `no_checkpoint` for a turn that changed files
+without a checkpoint (a folder too large to checkpoint: the turn ran, but
+cannot be undone here).
 
 The host keeps the last 20 turns of each workspace for `turn_changes` and
 `checkpoint_restore`; an older turn rejects with `turn_expired`, an id it
