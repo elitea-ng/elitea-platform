@@ -15,6 +15,12 @@ two findings of the post-merge browser pass on merged `main` `0def77b22` (stack 
    under Tools failed with "The execution input is invalid.". Only the Worker log named the cause
    (`native_agent.invalid_input`, "a pipeline direct tool node references a tool outside its frozen scope").
 
+3. **YAML expansion refusal is generic** (added from the post-merge pass on `1ab920dde`, pipeline 164). A stored
+   pipeline whose YAML holds a six-level alias chain (`&a [l×8]` … `&f`, about 262k expanded nodes, used as a state
+   value) was refused fast (2.9 ms, `stage="profile_validation"`), but as `native_agent.invalid_input`, so the user saw
+   "The execution input is invalid.". The readable `graph.pipeline.yaml_expansion_exceeded` limit from #1174 never
+   surfaced.
+
 ## Root causes
 
 - **Web.** The graph admission gate (`GraphAdmissionGate` → `useGraphAdmission` → `judgeLivePipelineGraph`) is mounted
@@ -32,6 +38,12 @@ two findings of the post-merge browser pass on merged `main` `0def77b22` (stack 
   comment states that detailed causes stay with the owning service. A Worker refusal therefore cannot name a node id or
   a toolkit without breaking that contract. Main owns both the stored YAML and the frozen tool list
   (`version_details.tools[].toolkit_name`, which Main writes at start in `agentexecution/tools.go`), so Main names them.
+
+- **YAML expansion.** `bounded_yaml::from_str` (`libs/rust/agent-runtime`) meters node expansion while deserializing.
+  `serde_yaml_ng` has its own alias-repetition guard, which fires on this chain before the meter crosses
+  `PIPELINE_YAML_BUDGET.nodes` (131,072). That parser error was classified as `Malformed`, so it became
+  `MalformedYaml` → `InvalidInput`, not `LimitExceeded(YamlExpansion)` → `AgentSettingsLimit`. The profile stage was
+  not collapsing a typed error: it never received one.
 
 ## Business behaviour
 
@@ -59,6 +71,11 @@ unattached toolkit fails at run time with a toolkit lookup error. Neither behavi
   available on this deployment. Open the pipeline to see which node, then remove or replace it." (public code
   `PIPELINE_NODE_TYPE_NOT_AVAILABLE`), not "Configuration type is not supported.". An unknown type keeps the generic
   message.
+- **YAML expansion.** A pipeline whose aliases expand past the budget ends with the registered agent-settings
+  input-limit message ("The request cannot start because the agent instructions or settings exceed a platform input
+  limit. …"), the same text as the other pipeline bounds (#1158). The Worker log carries `cause_code="graph.pipeline.yaml_expansion_exceeded"` and
+  `cause_detail="yaml_expansion"`. The refusal is still fail-closed and fast, at the same stage. Main still stores
+  such a document; it never expands aliases.
 - **Kept.** The frozen-scope refusal itself is a security boundary and is unchanged in the Worker. Main's check is an
   earlier, readable copy of it. It never admits anything the Worker refuses, and never refuses a toolkit the version
   attaches, including one that freezing dropped because a guardrail blocks it or its schema is unavailable (see
@@ -85,6 +102,7 @@ There is no runtime registry or configuration read. No deployment sets any of th
 | Main | Registered Worker text for a gated node type, exact match only | `internal/transport/runtimegrpc/output/server.go:1068`, `:1099` |
 | Worker | `PipelineConfigurationError::NodeTypeNotAvailable(PipelineGatedNodeType)` for gated `split_out`/`aggregate`; typed cause `graph.pipeline.node_type_not_available` + static detail | `src/agents/graph/compiler.rs:2380`, `:2486-2491`, `:2970`, `:3010`, `:3030`, `:3041`; `src/agents/runtime.rs:73` |
 | Worker | `RuntimeFailureKind::PipelineNodeTypeNotAvailable` → `UNSUPPORTED_CAPABILITY` + registered message | `src/execution/native_agent_lifecycle.rs:1453`; `src/protocol/output.rs:55`, `:741`, `:924`; `src/execution/toolkit_delivery_processor.rs` (`runtime_failure_code`) |
+| Agent runtime | `serde_yaml_ng`'s alias-repetition guard ("repetition limit exceeded", pinned by test) is reported as `BudgetExceeded(Nodes)`, not `Malformed`. This affects every `bounded_yaml::from_str` caller, and all of them stay fail-closed: the pipeline compiler gets `YamlExpansion`, OpenAPI specs get `resource_exhausted` (was `invalid_specification`), and shaping nodes get `ResourceExhausted` | `libs/rust/agent-runtime/src/bounded_yaml.rs:80` (`from_str`), `:93` (`PARSER_REPETITION_GUARD`), `:101` (`parser_expansion_guard`) |
 | Web | The create page judges the document Save would store with the editor's own admission, disables Save, and renders an inline outlined alert with the editor gate's title and body | `src/pages/pipelines/CreatePipeline.tsx:230`, `:293`, `:364`, `:379`; `src/pages/pipelines/ui/CreatePipelineAdmissionAlert.tsx` |
 | Web | `useLivePipelineGraphAdmission(yamlCode?)` judges a caller-held document (no new barrel export; the slice stays at 20 symbols) | `src/features/pipelines/lib/livePipelineGraphAdmission.ts:123` |
 | Web | The `node.type` issue names a gated type as a deployment limit | `src/features/pipelines/lib/flow-editor/constants/runtimeContract.constants.ts:104`; `src/features/pipelines/lib/graphAdmission.nodes.ts:49` |
@@ -140,6 +158,22 @@ New tests, and what they proved red first (each was run against the original cod
   - `a_gated_node_type_ends_as_the_registered_deployment_message` (compiler → assembly → `assembly_failure` → policy;
     the message carries no node data, and `custom` stays generic);
   - the new row in `tests/agent_output_contract.rs`.
+- **YAML expansion.**
+  - `bounded_yaml_tests.rs`:
+    - `parser_alias_repetition_guard_is_reported_as_the_node_budget` (red without the classification: `Malformed`);
+    - `the_classified_parser_guard_text_is_pinned` (fails if a dependency bump changes the text);
+    - `a_genuinely_malformed_document_stays_malformed`.
+  - `pipeline_tests.rs` `an_alias_expansion_bomb_is_refused_at_start_admission_with_the_named_limit`. It drives the
+    real start path (`admit_pipeline_with_policy`: `start_admission` → `profile_validation`) and asserts:
+    - `AgentSettingsLimit` with cause `graph.pipeline.yaml_expansion_exceeded`/`yaml_expansion`;
+    - not retryable;
+    - the public agent-settings message;
+    - a refusal under 2 s (it measured about 60 ms in the debug test build).
+
+    It fails without the classification with `left: InvalidInput, right: AgentSettingsLimit`, which is exactly the
+    reported symptom.
+  - After the change: agent-runtime 496 passed, 0 failed; Worker 1,633 passed, 0 failed, 10 ignored; clippy
+    (`-D warnings --all-features`) and fmt are clean in both crates.
 - **Web**:
   - `CreatePipeline.test.tsx`: "blocks Save with an inline reason…" and "shows the server's readable refusal…",
     both failing against the original page;
@@ -200,6 +234,7 @@ and then fails.
 | Main × admission (save, create and update) | **F**: typed 400 naming node and type; nothing stored | `pipelinelimits/limits.go:93,171`; existing callers (`repos/applications.go`, `applications/handler.go`, `eliteacore/handler.go`, `mcp/internal_applications_version.go`) | PostgreSQL handler tests; browser cases A, A2, E |
 | Main × admission (start) | **F**: typed 422 naming node and type, or node and toolkit with the fix (was a generic F from the Worker); nothing admitted | `limits.go:105,197`; `http_action_snapshot.go:36`; `start.go:423`; `route.go:597` | start and route tests; browser cases B, C |
 | Worker × admission (compile) | **F**: registered, data-free deployment message (was a generic F); unchanged **R** for admitted pipelines | `compiler.rs:2486`; `runtime.rs:73`; `native_agent_lifecycle.rs:1453`; `output.rs:741` | `a_gated_node_type_ends_as_the_registered_deployment_message`; Main `TestNodeTypeNotAvailableFailureAdmitsOnlyRegisteredMessage` (not reachable in the browser: Main refuses first on a matching build) |
+| Worker × admission (compile), YAML expansion | **F**: registered agent-settings limit message with the typed `yaml_expansion` cause (was the generic F); still refused at `profile_validation` before any model or tool call | `bounded_yaml.rs:80,101`; `compiler.rs` `from_yaml` (existing `YamlExpansion` mapping) | `an_alias_expansion_bomb_is_refused_at_start_admission_with_the_named_limit`; browser case F |
 | Web/browser × create | No durable state; a refused create stores nothing; reload shows a clean draft | `CreatePipeline.tsx:230,364` | Web tests; browser case A with reload |
 | Sandbox supervisor, NATS, PostgreSQL, LLM gateway | Not touched: no Code node, bus, schema or model path changed | — | — |
 
@@ -334,6 +369,23 @@ rows; the ids coincide with the first run because the restore was fresh.
 | B (162 `r2-stored-split-out`; version 187 overwritten by SQL with the `split_out` graph) | The editor shows the gate; chat 868: 422, `Node "split" uses the "split_out" node type, which is not available on this deployment. …` |
 | D (162 version 187 restored by SQL to the valid Printer graph created through the API) | Chat 868 answers `r2 fixed: rebased ok`; after reload the answer is present and the refused start left no message. |
 
+### Case F: YAML alias expansion (Worker `elitea-worker-rust:admission-fix-r3`)
+
+- Image: `sha256:4e432ab5cd06…d070`, built from `c2bccd07e`. Its binary contains `parser_expansion_guard`, and
+  #1174's "the YAML document exceeds its expansion budget".
+- Main and Web: the r2 images; nothing changed in them.
+- Setup: fresh restore, browser host `admission.localhost:18420`.
+
+Steps and results:
+- Pipeline 160 `r3-alias-expansion` was created through Main's API from the signed-in page: a 494-byte YAML with a
+  six-level alias chain as the `big` state value and a single Printer node. Main stored it (201).
+- Run from its chat (867), the chat shows "The request cannot start because the agent instructions or settings exceed
+  a platform input limit. Reduce the saved content or ask an administrator to inspect the support reference. This is
+  not a model token limit.". The same text is there after reload, and "The execution input is invalid." is not shown.
+- Worker log: `event="pipeline_yaml_budget_exceeded" limit="nodes"`, then `event="agent_native_assembly_failed"
+  stage="profile_validation" error_code="native_agent.input_limit" cause_code="graph.pipeline.yaml_expansion_exceeded"
+  cause_detail="yaml_expansion"`.
+
 The stack and the throwaway test PostgreSQL were torn down after the evidence was recorded.
 
 ## Open limits and follow-ups
@@ -354,5 +406,8 @@ The stack and the throwaway test PostgreSQL were torn down after the evidence wa
    do (numeric-ids follow-up 8).
 6. **Web mirror coverage.** The editor's admission does not check Printer field names (case D's first attempt).
    That is pre-existing.
-7. **Main has no `custom`/legacy alias handling.** It mirrors the Worker exactly. The three rehearsal flags must flip
+7. **YAML expansion in Main.** Main stores an alias-bomb document. `yaml.v3` keeps aliases unexpanded in
+   `yaml.Node`, so its save and start checks neither expand nor refuse it; the Worker refuses it at start, readably.
+   Refusing at save would need a Go expansion meter equivalent to `bounded_yaml`.
+8. **Main has no `custom`/legacy alias handling.** It mirrors the Worker exactly. The three rehearsal flags must flip
    together; nothing enforces that across services at run time.
