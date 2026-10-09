@@ -39,8 +39,10 @@ apps/elitea-desktop/src-tauri (Rust host) <--IPC--> the bundled webview
 ## Registering the client
 
 The deployment must list this client in its `native_clients` configuration:
-client id, display name and the loopback redirect (`http://127.0.0.1` with any
-port). The default client id is `desktop`. To use another one, in order of
+client id, display name and the loopback redirect URI
+`http://127.0.0.1/callback`, registered without a port (any port is accepted
+at sign-in, RFC 8252 §7.3). The path must match exactly: `http://127.0.0.1/`
+is refused with "the app's return address is not registered". The default client id is `desktop`. To use another one, in order of
 precedence: the `ELITEA_DESKTOP_CLIENT_ID` environment variable at run time,
 `client_id` in `settings.json` in the app config directory, or
 `ELITEA_DESKTOP_CLIENT_ID` at build time.
