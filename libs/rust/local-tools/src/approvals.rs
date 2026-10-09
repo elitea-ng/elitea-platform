@@ -38,7 +38,7 @@ use globset::{GlobBuilder, GlobMatcher};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::command::{CommandPattern, CommandShape, analyse};
+use crate::command::{CommandPattern, CommandShape, analyse, search_path};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::policy::{LocalWorkPolicy, SandboxMode};
 use crate::workspace::{CASE_INSENSITIVE_FS, Intent, Workspace, nfc};
@@ -456,16 +456,17 @@ impl RulesEngine {
         if let Some(argv) = segments.iter().find(|argv| {
             self.command_deny
                 .iter()
-                .any(|pattern| pattern.matches(argv))
+                .any(|pattern| pattern.matches_name(argv))
         }) {
             return deny(format!("`{}` is denied by policy", argv.join(" ")));
         }
+        let (cwd, search) = self.resolution(call);
         if !self.command_allow.is_empty()
             && let Some(argv) = segments.iter().find(|argv| {
                 !self
                     .command_allow
                     .iter()
-                    .any(|pattern| pattern.matches(argv))
+                    .any(|pattern| pattern.matches_in(argv, &cwd, &search))
             })
         {
             return deny(format!(
@@ -476,8 +477,24 @@ impl RulesEngine {
         None
     }
 
+    /// Where a command's program is resolved from: its working directory
+    /// (the call's first path) and the absolute `PATH` entries.
+    fn resolution(&self, call: &ToolCall) -> (PathBuf, Vec<PathBuf>) {
+        let root = self.policy_paths.root();
+        let cwd = call
+            .paths
+            .first()
+            .and_then(|path| self.policy_paths.resolve(path, Intent::Read).ok())
+            .map_or_else(
+                || root.to_path_buf(),
+                |path| self.policy_paths.absolute(&path),
+            );
+        (cwd, search_path())
+    }
+
     fn workspace_rules(&self, call: &ToolCall, shape: Option<&CommandShape>) -> Option<Decision> {
         let segments = shape.map(CommandShape::segments).unwrap_or_default();
+        let (cwd, search) = self.resolution(call);
         let mut best: Option<&CompiledRule> = None;
         for compiled in &self.rules {
             let rule = &compiled.rule;
@@ -488,9 +505,11 @@ impl RulesEngine {
             if let Some(pattern) = &compiled.command {
                 // Deny: any segment. Allow/ask: the command itself.
                 let hit = if deny {
-                    segments.iter().any(|argv| pattern.matches(argv))
+                    segments.iter().any(|argv| pattern.matches_name(argv))
                 } else {
-                    segments.first().is_some_and(|argv| pattern.matches(argv))
+                    segments
+                        .first()
+                        .is_some_and(|argv| pattern.matches_in(argv, &cwd, &search))
                 };
                 if !hit {
                     continue;
@@ -533,13 +552,14 @@ impl RulesEngine {
             Some(CommandShape::Compound { .. }) => return false,
             None => None,
         };
+        let (cwd, search) = self.resolution(call);
         self.choices.list().iter().any(|choice| {
             choice.tool == call.tool
                 && call.sandbox_mode() <= choice.sandbox.unwrap_or(SandboxMode::WorkspaceWrite)
                 && (!call.network || choice.network)
                 && match (&choice.command, argv) {
                     (Some(prefix), Some(argv)) => CommandPattern::from_tokens(prefix.clone())
-                        .is_some_and(|pattern| pattern.matches(argv)),
+                        .is_some_and(|pattern| pattern.matches_in(argv, &cwd, &search)),
                     (None, None) => true,
                     _ => false,
                 }
@@ -558,15 +578,26 @@ impl RulesEngine {
         let command = match call.command.as_deref().map(analyse) {
             None => None,
             Some(CommandShape::Simple(argv)) => {
-                let tokens = match prefix.and_then(CommandPattern::parse) {
-                    Some(pattern) if pattern.matches(&argv) => pattern.tokens().to_vec(),
+                let (cwd, search) = self.resolution(call);
+                let pattern = match prefix.and_then(CommandPattern::parse) {
+                    Some(pattern) if pattern.matches_in(&argv, &cwd, &search) => pattern,
                     Some(_) => {
                         return Err(ToolError::invalid(
                             "the remembered prefix does not match the command",
                         ));
                     }
-                    None => argv,
+                    None => CommandPattern::from_tokens(argv)
+                        .ok_or_else(|| ToolError::invalid("an empty command"))?,
                 };
+                // The program the person approved, not its name: a later
+                // `./cargo` is a different program.
+                let mut tokens = pattern.tokens().to_vec();
+                if let Some(first) = tokens.first_mut()
+                    && let Some(program) =
+                        crate::command::resolve_program(&argv_program(call), &cwd, &search)
+                {
+                    *first = program.display().to_string();
+                }
                 Some(tokens)
             }
             Some(CommandShape::Compound { .. }) => {
@@ -582,6 +613,14 @@ impl RulesEngine {
             sandbox: call.sandbox,
             network: call.network,
         })
+    }
+}
+
+/// The program of a simple command call (its first word).
+fn argv_program(call: &ToolCall) -> String {
+    match call.command.as_deref().map(analyse) {
+        Some(CommandShape::Simple(argv)) => argv.into_iter().next().unwrap_or_default(),
+        _ => String::new(),
     }
 }
 
@@ -1005,6 +1044,92 @@ mod tests {
         assert_eq!(
             verdict(&engine, &file(ToolKind::WriteFile, "b")).0,
             Verdict::Ask
+        );
+    }
+
+    /// M2: a program named by path is not the program a rule names by base
+    /// name: `./cargo` (a script in the repository) is not `cargo`.
+    #[test]
+    fn programs_given_by_path_match_only_what_they_resolve_to() {
+        let allow_list = LocalWorkPolicy {
+            command_allow: vec!["cargo".to_owned(), "ls".to_owned()],
+            ..policy()
+        };
+        let (dir, engine) = engine_with(
+            allow_list,
+            vec![WorkspaceRule {
+                tools: vec![ToolKind::RunCommand],
+                command: Some("ls".to_owned()),
+                path: None,
+                verdict: Verdict::Allow,
+            }],
+        );
+        std::fs::write(dir.path().join("cargo"), "#!/bin/sh\n").expect("fake cargo");
+        std::fs::write(dir.path().join("ls"), "#!/bin/sh\n").expect("fake ls");
+        let in_root = |command: &str| ToolCall {
+            paths: vec![".".to_owned()],
+            ..shell(command)
+        };
+        assert_eq!(
+            verdict(&engine, &in_root("./cargo test")),
+            (Verdict::Deny, Source::Policy),
+            "a repository script is outside command_allow"
+        );
+        assert_eq!(
+            verdict(&engine, &in_root("/tmp/elsewhere/cargo test")),
+            (Verdict::Deny, Source::Policy)
+        );
+        assert_eq!(
+            verdict(&engine, &in_root("./ls")),
+            (Verdict::Deny, Source::Policy),
+            "nor does a workspace allow for ls cover ./ls"
+        );
+        assert_eq!(
+            verdict(&engine, &in_root("ls -la")),
+            (Verdict::Allow, Source::Workspace)
+        );
+        if let Some(ls) = ["/bin/ls", "/usr/bin/ls"]
+            .iter()
+            .find(|path| std::path::Path::new(path).is_file())
+        {
+            assert_eq!(
+                verdict(&engine, &in_root(&format!("{ls} -la"))).0,
+                Verdict::Allow,
+                "the absolute path PATH resolves ls to is ls"
+            );
+        }
+        // Deny rules stay broad: any spelling of rm is rm.
+        for command in ["/bin/rm x", "./rm x", "../bin/rm x"] {
+            assert_eq!(
+                verdict(&engine, &in_root(command)).0,
+                Verdict::Deny,
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn remembered_choices_store_the_resolved_program() {
+        let (dir, engine) = engine_with(policy(), Vec::new());
+        std::fs::write(dir.path().join("ls"), "#!/bin/sh\n").expect("fake ls");
+        let in_root = |command: &str| ToolCall {
+            paths: vec![".".to_owned()],
+            ..shell(command)
+        };
+        engine
+            .remember(&in_root("ls -la"), Some("ls"))
+            .expect("remember");
+        let stored = engine.choices.list();
+        let program = stored[0].command.as_ref().expect("argv")[0].clone();
+        assert!(program.starts_with('/'), "stored as a path: {program}");
+        assert_eq!(
+            verdict(&engine, &in_root("ls -l")),
+            (Verdict::Allow, Source::Remembered)
+        );
+        assert_eq!(
+            verdict(&engine, &in_root("./ls -l")).0,
+            Verdict::Ask,
+            "a different program with the same name"
         );
     }
 

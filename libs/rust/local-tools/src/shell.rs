@@ -165,6 +165,14 @@ fn environment(config: &ShellConfig) -> Vec<(String, String)> {
         })
         .filter_map(|name| std::env::var(&name).ok().map(|value| (name, value)))
         .collect();
+    // PATH without relative or empty entries: a bare name never runs a
+    // program from the workspace (the approval rules resolve it the same
+    // way).
+    if let Some(entry) = out.iter_mut().find(|(name, _)| name == "PATH")
+        && let Ok(joined) = std::env::join_paths(crate::command::search_path())
+    {
+        entry.1 = joined.to_string_lossy().into_owned();
+    }
     out.extend(
         [
             ("TMPDIR", config.temp_dir.display().to_string()),

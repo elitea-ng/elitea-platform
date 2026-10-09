@@ -10,6 +10,8 @@
 //! checked against every segment the analysis can find in it, including
 //! the inner command of `sh -c '…'`, `env …`, `sudo …` and `xargs …`.
 
+use std::path::{Path, PathBuf};
+
 /// Interpreters whose `-c` argument is itself a command.
 const SHELLS: &[&str] = &[
     "sh",
@@ -252,10 +254,62 @@ fn unwrap_argv(argv: Vec<String>, depth: usize) -> Vec<Vec<String>> {
     out
 }
 
-/// A command rule: an argv prefix. Tokens compare exactly, `*` matches any
-/// one token, and a first token without `/` matches the program's base
-/// name (`rm` matches `/bin/rm`). `cargo test` matches
-/// `cargo test --all`; `git push` does not match `git status`.
+/// The directories a bare program name is looked up in: the absolute
+/// entries of `PATH` only (an empty or relative entry would find a program
+/// in whatever directory the command runs in, the workspace). Commands run
+/// with this `PATH` too.
+#[must_use]
+pub fn search_path() -> Vec<PathBuf> {
+    std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path)
+                .filter(|dir| dir.is_absolute())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The file `program` runs from `cwd` with `search` as `PATH`, canonical;
+/// `None` when it names nothing executable.
+#[must_use]
+pub fn resolve_program(program: &str, cwd: &Path, search: &[PathBuf]) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let executable = |path: &Path| {
+        path.metadata()
+            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    };
+    let candidate = if program.contains('/') {
+        let path = Path::new(program);
+        let path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            cwd.join(path)
+        };
+        path.metadata()
+            .is_ok_and(|meta| meta.is_file())
+            .then_some(path)?
+    } else {
+        search
+            .iter()
+            .map(|dir| dir.join(program))
+            .find(|path| executable(path))?
+    };
+    std::fs::canonicalize(candidate).ok()
+}
+
+/// A command rule: an argv prefix. Tokens after the first compare exactly
+/// (`*` matches any one token). `cargo test` matches `cargo test --all`;
+/// `git push` does not match `git status`.
+///
+/// The program (the first token) is matched two ways:
+///
+/// * [`Self::matches`], for what **allows** (`command_allow`, allow and ask
+///   rules, remembered choices): a name without `/` matches the same bare
+///   name, and a path matches the same path; with [`Self::matches_in`],
+///   also any spelling that resolves to the same file. `cargo` never
+///   matches `./cargo`, a script the repository may hold.
+/// * [`Self::matches_name`], for what **denies**: any path whose base name
+///   is the pattern's (`rm` denies `/bin/rm` and `./rm`).
 ///
 /// Prefix matching is what makes "always allow `cargo test`" useful; it is
 /// also why a deny rule should name the program (`rm`), not one spelling of
@@ -282,21 +336,61 @@ impl CommandPattern {
         &self.0
     }
 
-    /// Whether `argv` starts with this pattern.
+    fn rest_matches(&self, argv: &[String]) -> bool {
+        argv.len() >= self.0.len()
+            && self
+                .0
+                .iter()
+                .zip(argv)
+                .skip(1)
+                .all(|(want, have)| want == "*" || want == have)
+    }
+
+    /// Whether `argv` starts with this pattern, the program spelled the
+    /// same way (see the type documentation).
     #[must_use]
     pub fn matches(&self, argv: &[String]) -> bool {
-        if argv.len() < self.0.len() {
+        self.rest_matches(argv) && (self.0[0] == "*" || self.0[0] == argv[0])
+    }
+
+    /// [`Self::matches`], or the program resolves (from `cwd`, through
+    /// `search`) to the same file as the pattern's.
+    #[must_use]
+    pub fn matches_in(&self, argv: &[String], cwd: &Path, search: &[PathBuf]) -> bool {
+        if !self.rest_matches(argv) {
             return false;
         }
-        self.0
-            .iter()
-            .zip(argv)
-            .enumerate()
-            .all(|(index, (want, have))| {
-                want == "*"
-                    || want == have
-                    || (index == 0 && !want.contains('/') && basename(have) == want)
-            })
+        if self.0[0] == "*" || self.0[0] == argv[0] {
+            return true;
+        }
+        match (
+            resolve_program(&self.0[0], cwd, search),
+            resolve_program(&argv[0], cwd, search),
+        ) {
+            (Some(want), Some(have)) => want == have,
+            _ => false,
+        }
+    }
+
+    /// Whether `argv` starts with this pattern, a program pattern without
+    /// `/` matching any path with that base name: for deny rules.
+    #[must_use]
+    pub fn matches_name(&self, argv: &[String]) -> bool {
+        self.rest_matches(argv)
+            && (self.0[0] == "*"
+                || self.0[0] == argv[0]
+                || (!self.0[0].contains('/') && basename(&argv[0]) == self.0[0]))
+    }
+
+    /// This pattern with its program replaced by the file it resolves to,
+    /// when it resolves: what a remembered choice stores.
+    #[must_use]
+    pub fn resolved(&self, cwd: &Path, search: &[PathBuf]) -> Self {
+        let mut tokens = self.0.clone();
+        if let Some(path) = resolve_program(&tokens[0], cwd, search) {
+            tokens[0] = path.display().to_string();
+        }
+        Self(tokens)
     }
 }
 
@@ -391,7 +485,9 @@ mod tests {
     fn patterns_are_argv_prefixes_with_basename_and_wildcards() {
         let cargo_test = CommandPattern::parse("cargo test").expect("pattern");
         assert!(cargo_test.matches(&argv(&["cargo", "test", "--all"])));
-        assert!(cargo_test.matches(&argv(&["/usr/local/bin/cargo", "test"])));
+        assert!(cargo_test.matches_name(&argv(&["/usr/local/bin/cargo", "test"])));
+        assert!(!cargo_test.matches(&argv(&["/usr/local/bin/cargo", "test"])));
+        assert!(!cargo_test.matches(&argv(&["./cargo", "test"])));
         assert!(!cargo_test.matches(&argv(&["cargo", "build"])));
         assert!(!cargo_test.matches(&argv(&["cargo"])));
         let any_push = CommandPattern::parse("git * --force").expect("pattern");
@@ -401,6 +497,7 @@ mod tests {
             !absolute.matches(&argv(&["rm"])),
             "a path pattern matches only that path"
         );
+        assert!(!absolute.matches_name(&argv(&["rm"])));
         assert!(CommandPattern::parse("  ").is_none());
     }
 }
