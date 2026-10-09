@@ -46,6 +46,7 @@ authorization, failure behavior, and recovery boundary.
 
 Detailed ledgers:
 
+- [LLM gateway master key and routing CEL cap 2026-10-09](gateway-master-key-routing-cap-20261009.md) makes the gateway refuse to start without `SECRETS_MASTER_KEY` (elitea-main's rule and opt-out), requires the chart's gateway Secret reference with a render test (`task helm:gateway-master-key`), gives the load-time routing compiler its own 8 KiB CEL cap with limit and limit+1 tests, and notes F15 (rehearsal migration numbering, ops only).
 - [Helm master-key render test 2026-10-09](helm-master-key-render-test-20261009.md) makes `render-main-master-key.sh` declare the network-policy decision #1176 requires, so its 9 checks reach the master-key logic again; registers it as `task helm:main-master-key`, with mutation proof.
 - [Dependency advisories 2026-10-08](dependency-advisories-20261008.md) raises the Go standard-library floor to go1.25.13/go1.26.6, updates h2 and chacha20, and proves the MySQL TLS guard that keeps the rsa (RUSTSEC-2023-0071) path unreachable.
 - [Go 1.26 toolchain for the go.work modules](go-1-26-toolchain-20261009.md) moves every go.work module, its builder images and CI to Go 1.26 with a go1.26.9 floor, takes x/net v0.60.0 and x/crypto v0.57.0, drops `x/crypto/ssh` from the advisory guard, and records govulncheck before and after.

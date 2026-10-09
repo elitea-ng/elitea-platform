@@ -61,6 +61,19 @@ func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
 
+	// The vault master key gate, before anything opens the database: the same
+	// rule elitea-main enforces (master_key_gate.go). A malformed key always
+	// stops the process; an ABSENT key stops it too, unless the development
+	// opt-out is set, and then the posture is logged loudly because an operator
+	// cannot otherwise tell it apart from a key that failed to arrive.
+	if masterKeyWarning, err := requireVaultMasterKey(os.Getenv); err != nil {
+		slog.Error("FATAL: refusing to start", "err", err)
+		os.Exit(1)
+	} else if masterKeyWarning != "" {
+		logger.Warn(masterKeyWarning,
+			"variable", account.MasterKeyEnvVar, "opt_out", account.AllowUnwrappedEnvVar)
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -152,9 +165,8 @@ func main() {
 	if pool != nil {
 		vault, verr := account.NewFernetVault(account.NewPoolQuerier(pool))
 		if verr != nil {
-			// A malformed SECRETS_MASTER_KEY is a startup misconfiguration:
-			// refusing to start beats silently failing every wrapped-key
-			// decrypt at runtime.
+			// requireVaultMasterKey already refused a malformed key; this
+			// stays fatal so the vault never runs on a key the gate did not see.
 			slog.Error("FATAL: Fernet vault init failed", "err", verr)
 			os.Exit(1)
 		}
