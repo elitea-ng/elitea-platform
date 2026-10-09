@@ -246,6 +246,13 @@ class Stack:
         path = self.material / 'worker-runtime.json'
         path.write_text(json.dumps(worker, indent=2) + '\n')
         os.chmod(path, 0o644)
+        # Stock-Helm equivalent (D1): both recovery flags off, as deploy/helm/elitea/values.yaml defaults them.
+        stock = {k: v for k, v in worker.items() if k not in ('agent_model_checkpoint_recovery', 'agent_node_recovery')}
+        for entry in stock['sandbox_runtimes']:
+            entry.pop('preparation', None)
+        stock_path = self.material / 'worker-runtime.stock.json'
+        stock_path.write_text(json.dumps(stock, indent=2) + '\n')
+        os.chmod(stock_path, 0o644)
         self._write_overrides()
         return {'deno_image_digest': digests['deno'], 'rust_image_digest': digests['rust']}
 
@@ -403,6 +410,15 @@ class Stack:
         if len(ids) != 1:
             raise HarnessError(f'expected one {service} container, found {len(ids)}')
         return ids[0]
+
+    def recreate_worker(self, config_name='worker-runtime.json'):
+        """Recreate the Worker with another rendered config (scenario stack_setup); returns its flags."""
+        path = self.material / config_name
+        self.compose('up', '-d', '--no-deps', '--force-recreate', 'elitea-worker', timeout=180,
+                     extra_env={'ELITEA_SANDBOX_WORKER_CONFIG': str(path)})
+        config = json.loads(path.read_text())
+        return {'config': config_name, 'agent_model_checkpoint_recovery': bool(config.get('agent_model_checkpoint_recovery')),
+                'agent_node_recovery': bool(config.get('agent_node_recovery'))}
 
     def rotate_spool(self):
         """Point the Worker at a new, empty spool volume (D2 pod-replacement emulation). Old spools are kept."""

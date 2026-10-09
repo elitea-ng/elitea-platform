@@ -17,7 +17,8 @@ from .verdict import evaluate
 SETTLE_POLL_S = 2
 REPEAT_READ_GAP_S = 5
 CLEANUP_GRACE_S = 60
-MIN_FREE_GIB = 30
+# Delivery gate §3b floor. CRASH_MIN_FREE_GIB may lower it for scenario runs only (no build, no new stack).
+MIN_FREE_GIB = float(os.environ.get('CRASH_MIN_FREE_GIB', '30'))
 RESULT_RE = re.compile(r'CRASHRESULT (\{.*?\}) SENTINEL9999')
 
 
@@ -157,7 +158,11 @@ def run_scenario(stack, client, scenario, fixtures, out_dir, *, browser=False):
     rec = {'scenario': scenario['id'], 't_start': iso(), 'pre_faults': [], 'faults': []}
     events = EventStream(out_dir / 'docker-events.jsonl')
     br = None
+    setup = scenario.get('stack_setup', {})
     try:
+        if setup.get('worker_config') == 'stock':
+            rec['stack_setup'] = stack.recreate_worker('worker-runtime.stock.json')
+            time.sleep(15)  # NATS pull subscription and runtime session readiness after a re-create
         rec['preflight'] = preflight(stack, col)
         col.reset_journals()
         events.start()
@@ -260,6 +265,12 @@ def run_scenario(stack, client, scenario, fixtures, out_dir, *, browser=False):
         if br:
             br.abort(str(err))
     finally:
+        if setup.get('worker_config'):
+            try:
+                rec['stack_restored'] = stack.recreate_worker('worker-runtime.json')
+                time.sleep(15)
+            except HarnessError as err:
+                rec['restore_error'] = str(err)
         events.stop()
         rec['events'] = events.summary()
         try:

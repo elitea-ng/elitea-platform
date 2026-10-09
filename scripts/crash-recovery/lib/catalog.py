@@ -21,6 +21,8 @@ def validate(s):
     for step in s.get('pre_faults', []) + s['faults']:
         if step['action'] not in ACTIONS:
             raise HarnessError(f"{s['id']}: unknown action {step['action']}")
+    if set(s.get('stack_setup', {})) - {'worker_config'} or s.get('stack_setup', {}).get('worker_config') not in (None, 'stock'):
+        raise HarnessError(f"{s['id']}: unsupported stack_setup")
     if s['trigger'].get('kind', 'obs') != 'obs':
         raise HarnessError(f"{s['id']}: crashpoint triggers wait for WP-2/WP-3")
     return s
