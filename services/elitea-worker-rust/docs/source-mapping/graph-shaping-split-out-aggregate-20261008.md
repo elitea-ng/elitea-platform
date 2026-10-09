@@ -236,6 +236,33 @@ the seeded test user `e2e-chat@autotest.local`. The YAML was entered in the edit
 - **Environment:** several localhost stacks in one browser profile overwrite each other's session cookie. Use a
   dedicated `*.localhost` host per stack.
 
+### 7a. Retest after the main merges (2026-10-09)
+
+Until #1160, Worker image builds shared one `/cargo-target` cache across worktrees and could ship another checkout's
+binary. Every Worker image used for evidence was therefore checked by copying its binary out of a container
+(`docker create` + `docker cp`) and searching it with `grep -a`. A #1157 binary must contain
+`elitea.graph.split_out.config.v1` and must not contain the #1161 trace key `__elitea_pipeline_result_trace_v1`.
+
+| Image | #1157 string | Trace key | Result |
+|---|---|---|---|
+| `p5a-shaping-rehearsal-5adfbd226f8b` (earlier evidence) | 1 | 0 | this branch |
+| `p5a-shaping-default-d3a67246a23b` (earlier refusal evidence) | 1 | 0 | this branch, feature off |
+| `retest-shaping-e7949ae93227` (`d1944f7ffeea`) | 1 | 0 | this branch |
+
+The retest images were built from `e7949ae9` (after the #1163/#1165 and #1160 merges) with the committed Containerfile:
+the cache mount is locked, every file under `/src` is touched before `cargo build`, and
+`WORKER_REHEARSAL_FEATURES=graph-extensions-rehearsal` is set. Web is `elitea-web:retest-shaping-e7949ae93227`
+(`1c6d70fb08c6`, `VITE_GRAPH_EXTENSIONS_REHEARSAL=true`). Main is `elitea-main:retest-result-9edd36278187`: this
+branch does not change Main, so the #1161 Main image was reused. Its only Main change reserves an internal state key
+for saved Code inputs, which shaping does not use.
+
+| Check | Observation, same after reload | Execution |
+|---|---|---|
+| Node menu | The rehearsal menu lists 12 types, including SplitOut and Aggregate | — |
+| Regroup in persistent chat 4 | `[{"id":"P","items":[4]},{"id":"Q","items":[6]}]` gives `orders_out = [{"id": "P", "items": [40]}, {"id": "Q", "items": [60]}]` | `9d96262c…` |
+| Limit `output_items: 2` | `[{"id":"X","items":[1,2,3]}]` shows "The runtime operation failed." The Worker logs `error_code="limit_exceeded" config_field="limits.output_items" item=0 position=2`, and no log line in that window holds an item value | `7aae64a5…` |
+| Empty input | `[]` gives `orders_out = []` | `3ed290c8…` |
+
 ## 8. Security
 
 | Threat | Mechanism | Proof |
