@@ -48,12 +48,12 @@ target "elitea-deepwiki-migrate" {
   cache-from = ["type=gha,scope=elitea-deepwiki-engine-native-linux-amd64"]
 }
 // The Inventory provider service runs the Go sub-application host image; its
-// engine sidecar is the elitea-inventory image (a Python service, Debian base).
+// engine sidecar is the Rust-native elitea-inventory-engine image (ADR-0027).
 target "elitea-inventory" {
   cache-from = ["type=gha,scope=elitea-subapp-host-linux-amd64"]
 }
 target "elitea-inventory-engine" {
-  cache-from = ["type=gha,scope=elitea-inventory-linux-amd64"]
+  cache-from = ["type=gha,scope=elitea-inventory-engine-linux-amd64"]
 }
 target "elitea-web" {
   cache-from = ["type=gha,scope=elitea-web-linux-amd64"]
