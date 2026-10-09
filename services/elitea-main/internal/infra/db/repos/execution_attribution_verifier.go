@@ -71,7 +71,12 @@ func NewExecutionAttributionVerifier(pool *pgxpool.Pool) *ExecutionAttributionVe
 //   - is live: not settled, or settled less than attributionSlackSQL ago.
 //
 // Any generation qualifies: a retry runs under the same id and actor.
-func (v *ExecutionAttributionVerifier) VerifyExecution(ctx context.Context, projectID, userID, executionID string) (bool, error) {
+//
+// A desktop local turn must also be called with the credential family that
+// started it (tokenID: the native device session's anchor token, stable
+// across access-token rotation, or the PAT; nativeClientID). A runtime
+// execution is not: its worker calls with the actor's token, whichever it is.
+func (v *ExecutionAttributionVerifier) VerifyExecution(ctx context.Context, projectID, userID, tokenID, nativeClientID, executionID string) (bool, error) {
 	if v == nil || v.pool == nil {
 		return false, nil
 	}
@@ -79,7 +84,7 @@ func (v *ExecutionAttributionVerifier) VerifyExecution(ctx context.Context, proj
 	if err != nil || project < 1 || userID == "" || executionID == "" {
 		return false, nil
 	}
-	localAllowed := v.localWorkAllowed(ctx)
+	localAllowed := tokenID != "" && v.localWorkAllowed(ctx)
 	var ok bool
 	if err := v.pool.QueryRow(ctx, `
 SELECT EXISTS (
@@ -99,11 +104,13 @@ SELECT EXISTS (
       AND l.execution_id = $1
       AND l.project_id = $2
       AND l.actor_id = $3
+      AND l.token_id = $5
+      AND l.native_client_id = $6
       AND (
           (l.committed_at IS NULL AND l.expires_at > now())
           OR l.committed_at > now() - `+attributionSlackSQL+`
       )
-)`, executionID, project, userID, localAllowed).Scan(&ok); err != nil {
+)`, executionID, project, userID, localAllowed, tokenID, nativeClientID).Scan(&ok); err != nil {
 		return false, fmt.Errorf("verify execution attribution: %w", err)
 	}
 	return ok, nil

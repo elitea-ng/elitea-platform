@@ -100,9 +100,11 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) VALUE
 	}
 	const questionID = "6f1c2d3e-4a5b-4c6d-8e7f-901234567890"
 	start := localturn.StartRequest{
-		ProjectID: 1, ActorUserID: user, TokenID: "77", ConversationUUID: fixture.conversationUUID,
+		ProjectID: 1, ActorUserID: user, TokenID: "77", NativeClientID: "ai.elitea.desktop",
+		ConversationUUID: fixture.conversationUUID,
 		QuestionID: questionID, UserInput: "Fix the failing test", AuditRoute: "/start",
 	}
+	desktop := localturn.Credential{TokenID: "77", NativeClientID: "ai.elitea.desktop"}
 
 	// local_work.allowed false (the default) refuses the start.
 	if _, err := service.Start(ctx, start); !errors.Is(err, localturn.ErrLocalWorkDisabled) {
@@ -125,33 +127,49 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) VALUE
 
 	// The /llm edge keeps the id for the caller only.
 	verifier := NewExecutionAttributionVerifier(pool).WithLocalWorkPolicy(policy)
+	verifyWith := func(project, userID, tokenID, clientID string, want bool) {
+		t.Helper()
+		got, err := verifier.VerifyExecution(ctx, project, userID, tokenID, clientID, started.ExecutionID)
+		if err != nil || got != want {
+			t.Fatalf("VerifyExecution(%s, %s, %s, %q) = %v, %v; want %v", project, userID, tokenID, clientID, got, err, want)
+		}
+	}
 	assertVerified := func(project, userID string, want bool) {
 		t.Helper()
-		got, err := verifier.VerifyExecution(ctx, project, userID, started.ExecutionID)
-		if err != nil || got != want {
-			t.Fatalf("VerifyExecution(%s, %s) = %v, %v; want %v", project, userID, got, err, want)
-		}
+		verifyWith(project, userID, "77", "ai.elitea.desktop", want)
 	}
 	assertVerified("1", strconv.FormatInt(user, 10), true)
 	assertVerified("1", strconv.FormatInt(stranger, 10), false)
+	// Only the credential family that started the turn: not another device
+	// of the same user, not one of their PATs, not a principal without one.
+	verifyWith("1", strconv.FormatInt(user, 10), "78", "ai.elitea.desktop", false)
+	verifyWith("1", strconv.FormatInt(user, 10), "77", "", false)
+	verifyWith("1", strconv.FormatInt(user, 10), "", "", false)
 
 	// Turning local work off stops a turn already started: /llm no longer
 	// attributes it, and the commit is refused until the policy is back.
 	policy.allowed = false
 	assertVerified("1", strconv.FormatInt(user, 10), false)
 	if _, err := service.Commit(ctx, localturn.CommitRequest{
-		ProjectID: 1, ActorUserID: user, ExecutionID: started.ExecutionID,
+		ProjectID: 1, ActorUserID: user, Credential: desktop, ExecutionID: started.ExecutionID,
 		UserMessage: "Fix the failing test", AssistantMessage: "x",
 	}); !errors.Is(err, localturn.ErrLocalWorkDisabled) {
 		t.Fatalf("commit with local work off = %v, want ErrLocalWorkDisabled", err)
 	}
 	// A verifier built without a policy never attributes a local turn.
-	if got, err := NewExecutionAttributionVerifier(pool).VerifyExecution(ctx, "1", strconv.FormatInt(user, 10), started.ExecutionID); err != nil || got {
+	if got, err := NewExecutionAttributionVerifier(pool).VerifyExecution(ctx, "1", strconv.FormatInt(user, 10), "77", "ai.elitea.desktop", started.ExecutionID); err != nil || got {
 		t.Fatalf("policy-less verifier = %v, %v; want false", got, err)
 	}
 	policy.allowed = true
 	assertVerified("1", strconv.FormatInt(user, 10), true)
 
+	// The same question from another device of the user is a conflict, not a
+	// replay of this device's turn.
+	otherDevice := start
+	otherDevice.TokenID = "78"
+	if _, err := service.Start(ctx, otherDevice); !errors.Is(err, localturn.ErrConflict) {
+		t.Fatalf("a start from another device = %v, want ErrConflict", err)
+	}
 	// A retried start replays the same execution, with a fresh recall.
 	replayed, err := service.Start(ctx, start)
 	if err != nil || replayed.Created || replayed.ExecutionID != started.ExecutionID ||
@@ -171,7 +189,7 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) VALUE
 
 	exitCode := 1
 	commit := localturn.CommitRequest{
-		ProjectID: 1, ActorUserID: user, ExecutionID: started.ExecutionID,
+		ProjectID: 1, ActorUserID: user, Credential: desktop, ExecutionID: started.ExecutionID,
 		UserMessage:      "Fix the failing test",
 		AssistantMessage: "Fixed: the assertion compared the wrong field.",
 		ToolCalls: json.RawMessage(`{"run-1": {"run_id": "run-1", "tool_name": "shell",
@@ -195,6 +213,17 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id) VALUE
 	stolen.ActorUserID = stranger
 	if _, err := service.Commit(ctx, stolen); !errors.Is(err, localturn.ErrNotFound) {
 		t.Fatalf("a stranger's commit = %v, want ErrNotFound", err)
+	}
+	// Only the credential family that started it: the same user's other
+	// device or PAT is refused like a stranger.
+	for _, other := range []localturn.Credential{
+		{TokenID: "78", NativeClientID: "ai.elitea.desktop"}, {TokenID: "77"}, {TokenID: "99"},
+	} {
+		foreign := commit
+		foreign.Credential = other
+		if _, err := service.Commit(ctx, foreign); !errors.Is(err, localturn.ErrNotFound) {
+			t.Fatalf("a commit with credential %+v = %v, want ErrNotFound", other, err)
+		}
 	}
 
 	committed, err := service.Commit(ctx, commit)
@@ -320,12 +349,12 @@ SET started_at = now() - interval '25 hours', expires_at = now() - interval '1 h
 WHERE execution_id = $1`, started.ExecutionID); err != nil {
 		t.Fatal(err)
 	}
-	live, err := NewExecutionAttributionVerifier(pool).WithLocalWorkPolicy(&localTurnPolicy{allowed: true}).VerifyExecution(ctx, "1", "4511", started.ExecutionID)
+	live, err := NewExecutionAttributionVerifier(pool).WithLocalWorkPolicy(&localTurnPolicy{allowed: true}).VerifyExecution(ctx, "1", "4511", "78", "", started.ExecutionID)
 	if err != nil || live {
 		t.Fatalf("an expired local turn verified as live (%v, %v)", live, err)
 	}
 	if _, err := service.Commit(ctx, localturn.CommitRequest{
-		ProjectID: 1, ActorUserID: user, ExecutionID: started.ExecutionID,
+		ProjectID: 1, ActorUserID: user, Credential: localturn.Credential{TokenID: "78"}, ExecutionID: started.ExecutionID,
 		UserMessage: "hello", AssistantMessage: "hi",
 	}); !errors.Is(err, localturn.ErrExpired) {
 		t.Fatalf("commit after the deadline = %v, want ErrExpired", err)
@@ -405,7 +434,7 @@ UPDATE p_1.personal_memory_entries SET created_at = now() - make_interval(mins =
 		t.Fatal(err)
 	}
 	if _, err := service.Commit(ctx, localturn.CommitRequest{
-		ProjectID: 1, ActorUserID: user, ExecutionID: first.ExecutionID,
+		ProjectID: 1, ActorUserID: user, Credential: localturn.Credential{TokenID: "79"}, ExecutionID: first.ExecutionID,
 		UserMessage: input, AssistantMessage: "Booked.",
 	}); err != nil {
 		t.Fatalf("commit turn N: %v", err)
@@ -482,7 +511,7 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entit
 	start(modelTurn, "33333333-3333-4333-8333-333333333333", 0)
 
 	binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, agentTurn)
-	if err != nil || binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 6}) {
+	if err != nil || binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 6, Credential: localturn.Credential{TokenID: "77"}}) {
 		t.Fatalf("agent turn binding = %+v, %v", binding, err)
 	}
 	// The version is PINNED at start: switching the participant to another
@@ -493,19 +522,19 @@ WHERE conversation_id = $1 AND participant_id = $2`, conversationID, participant
 		t.Fatal(err)
 	}
 	if binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, agentTurn); err != nil ||
-		binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 6}) {
+		binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 6, Credential: localturn.Credential{TokenID: "77"}}) {
 		t.Fatalf("binding after a mid-turn version switch = %+v, %v; want the pinned version 6", binding, err)
 	}
 	// A turn started after the switch runs the new version.
 	switched := strings.Repeat("4", 32)
 	start(switched, "44444444-4444-4444-8444-444444444444", participants["agent"])
 	if binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, switched); err != nil ||
-		binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 9}) {
+		binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 9, Credential: localturn.Credential{TokenID: "77"}}) {
 		t.Fatalf("binding of a turn started after the switch = %+v, %v", binding, err)
 	}
 	for name, id := range map[string]string{"catalogue agent": foreignTurn, "model": modelTurn} {
 		binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, id)
-		if err != nil || binding != (localturn.StoredBinding{}) {
+		if err != nil || binding != (localturn.StoredBinding{Credential: localturn.Credential{TokenID: "77"}}) {
 			t.Fatalf("%s turn binding = %+v, %v; want no agent", name, binding, err)
 		}
 	}

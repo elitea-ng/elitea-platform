@@ -139,24 +139,30 @@ func replayLocalTurnStart(
 	ctx context.Context, tx pgx.Tx, record localturn.StartRecord, actor string, targetID int64,
 ) (localturn.StartedTurn, error) {
 	var (
-		turn         localturn.StartedTurn
-		conversation string
-		committed    bool
-		expired      bool
+		turn           localturn.StartedTurn
+		conversation   string
+		committed      bool
+		expired        bool
+		tokenID        string
+		nativeClientID string
 	)
 	err := tx.QueryRow(ctx, `
 SELECT execution_id, response_message_id::text, target_participant_id, expires_at,
-       conversation_uuid::text, committed_at IS NOT NULL, expires_at <= clock_timestamp()
+       conversation_uuid::text, committed_at IS NOT NULL, expires_at <= clock_timestamp(),
+       token_id, native_client_id
 FROM elitea_runtime.local_turn_executions
 WHERE project_id = $1 AND actor_id = $2 AND question_id = $3::uuid
 FOR UPDATE`, record.ProjectID, actor, record.QuestionID).
 		Scan(&turn.ExecutionID, &turn.ResponseMessageID, &turn.ParticipantID, &turn.ExpiresAt,
-			&conversation, &committed, &expired)
+			&conversation, &committed, &expired, &tokenID, &nativeClientID)
 	if err != nil {
 		return localturn.StartedTurn{}, fmt.Errorf("local turn: read replayed start: %w", err)
 	}
 	switch {
-	case conversation != record.ConversationUUID || turn.ParticipantID != targetID:
+	// Another device or token of the same user retrying this question is a
+	// conflict, not a replay: the turn stays bound to the family that started it.
+	case conversation != record.ConversationUUID || turn.ParticipantID != targetID ||
+		tokenID != record.TokenID || nativeClientID != record.NativeClientID:
 		return localturn.StartedTurn{}, localturn.ErrConflict
 	case committed:
 		return localturn.StartedTurn{}, localturn.ErrAlreadyCommitted
@@ -206,21 +212,28 @@ func (r *LocalTurnsRepo) CommitLocalTurn(ctx context.Context, record localturn.C
 		storedDigest []byte
 		expired      bool
 		startedAt    time.Time
+		credential   localturn.Credential
 	)
 	err = tx.QueryRow(ctx, `
 SELECT conversation_uuid::text, question_id::text, response_message_id::text,
        target_participant_id, memories_used, committed_at, commit_digest,
-       expires_at <= clock_timestamp(), started_at
+       expires_at <= clock_timestamp(), started_at, token_id, native_client_id
 FROM elitea_runtime.local_turn_executions
 WHERE execution_id = $1 AND project_id = $2 AND actor_id = $3
 FOR UPDATE`, record.ExecutionID, record.ProjectID, strconv.FormatInt(record.ActorUserID, 10)).
 		Scan(&turn.ConversationUUID, &questionID, &turn.ResponseMessageID, &participant,
-			&turn.MemoriesUsed, &committedAt, &storedDigest, &expired, &startedAt)
+			&turn.MemoriesUsed, &committedAt, &storedDigest, &expired, &startedAt,
+			&credential.TokenID, &credential.NativeClientID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return localturn.CommittedTurn{}, localturn.ErrNotFound
 	}
 	if err != nil {
 		return localturn.CommittedTurn{}, fmt.Errorf("local turn: lock execution: %w", err)
+	}
+	// Only the credential family that started the turn commits it, a replay
+	// included; another one learns no more than another caller would.
+	if credential != record.Credential {
+		return localturn.CommittedTurn{}, localturn.ErrNotFound
 	}
 	turn.QuestionMessageID = questionID
 	if committedAt != nil {
@@ -387,11 +400,13 @@ func (r *LocalTurnsRepo) ReadLocalTurnBinding(
 		applicationID, versionID *int64
 	)
 	err := r.pool.QueryRow(ctx, `
-SELECT application_id, version_id, committed_at IS NOT NULL, expires_at <= clock_timestamp()
+SELECT application_id, version_id, committed_at IS NOT NULL, expires_at <= clock_timestamp(),
+       token_id, native_client_id
 FROM elitea_runtime.local_turn_executions
 WHERE execution_id = $1 AND project_id = $2 AND actor_id = $3`,
 		executionID, projectID, strconv.FormatInt(actorUserID, 10)).
-		Scan(&applicationID, &versionID, &binding.Committed, &binding.Expired)
+		Scan(&applicationID, &versionID, &binding.Committed, &binding.Expired,
+			&binding.Credential.TokenID, &binding.Credential.NativeClientID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return localturn.StoredBinding{}, localturn.ErrNotFound
 	}

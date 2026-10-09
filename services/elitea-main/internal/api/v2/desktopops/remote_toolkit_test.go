@@ -40,13 +40,15 @@ func remoteBody(extra string) string {
 }
 
 type fakeTurns struct {
-	turn  localturn.LiveTurn
-	err   error
-	calls int
+	turn       localturn.LiveTurn
+	err        error
+	calls      int
+	credential localturn.Credential
 }
 
-func (f *fakeTurns) Live(_ context.Context, _, _ int64, executionID string) (localturn.LiveTurn, error) {
+func (f *fakeTurns) Live(_ context.Context, _, _ int64, credential localturn.Credential, executionID string) (localturn.LiveTurn, error) {
 	f.calls++
+	f.credential = credential
 	if f.err != nil {
 		return localturn.LiveTurn{}, f.err
 	}
@@ -131,6 +133,11 @@ func TestRemoteToolkitRunsTheCallersToolThroughTheSharedUseCase(t *testing.T) {
 		!got.EnforceSensitiveGate ||
 		got.LLMModel != "version-model" || string(got.LLMSettings) != `{"temperature":0.2}` {
 		t.Fatalf("run request = %+v", got)
+	}
+	// The turn is read for the caller's credential family (a native session's
+	// anchor token and client), which must be the one that started it.
+	if turns.credential != (localturn.Credential{TokenID: "70", NativeClientID: "ai.elitea.desktop"}) {
+		t.Fatalf("turn read with credential %+v", turns.credential)
 	}
 	// The authorization is asked of the TURN's agent, for the version and
 	// reference the call names.

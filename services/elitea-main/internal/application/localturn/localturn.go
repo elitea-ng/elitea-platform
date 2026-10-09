@@ -203,10 +203,22 @@ type LocalWorkReport struct {
 	Paths       []string        `json:"paths_touched"`
 }
 
+// Credential names the credential family a caller authenticated with: the
+// auth_core__token id (a native device session's anchor, which stays the same
+// while its access tokens rotate, or a personal access token) and the native
+// client id ("" for a PAT). A started turn is bound to the family that started
+// it: commit, a remote toolkit call and /llm attribution all require the same
+// one, so another device or token of the same user cannot act in the turn.
+type Credential struct {
+	TokenID        string
+	NativeClientID string
+}
+
 // CommitRequest is one commit call.
 type CommitRequest struct {
 	ProjectID        int64
 	ActorUserID      int64
+	Credential       Credential
 	ExecutionID      string
 	UserMessage      string
 	AssistantMessage string
@@ -226,6 +238,7 @@ type CommitRequest struct {
 type CommitRecord struct {
 	ProjectID        int64
 	ActorUserID      int64
+	Credential       Credential
 	ExecutionID      string
 	UserMessage      string
 	AssistantMessage string
@@ -395,7 +408,7 @@ func (s *Service) Commit(ctx context.Context, request CommitRequest) (CommittedT
 		return CommittedTurn{}, ErrInvalid
 	}
 	turn, err := s.store.CommitLocalTurn(ctx, CommitRecord{
-		ProjectID: request.ProjectID, ActorUserID: request.ActorUserID,
+		ProjectID: request.ProjectID, ActorUserID: request.ActorUserID, Credential: request.Credential,
 		ExecutionID: request.ExecutionID, UserMessage: request.UserMessage,
 		AssistantMessage: request.AssistantMessage,
 		QuestionMeta:     questionMeta, ResponseMeta: responseMeta,
@@ -460,6 +473,7 @@ func validStart(request StartRequest) bool {
 func validCommit(request CommitRequest) bool {
 	if request.ProjectID <= 0 || request.ProjectID > 2147483647 ||
 		request.ActorUserID <= 0 || request.ActorUserID > 2147483647 ||
+		request.Credential.TokenID == "" ||
 		!ValidExecutionID(request.ExecutionID) ||
 		!validText(request.UserMessage, MaxUserMessageBytes, false) ||
 		!validText(request.AssistantMessage, MaxAssistantMessageBytes, true) ||
