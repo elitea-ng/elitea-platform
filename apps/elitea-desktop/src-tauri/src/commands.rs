@@ -14,6 +14,7 @@ use tauri::{AppHandle, State, WebviewWindow};
 
 use crate::auth::{AccessToken, AuthService, DeploymentInfo, HostState, RefreshResult};
 use crate::error::HostError;
+use crate::local_commands::LocalState;
 
 pub struct AppState {
     pub auth: Arc<AuthService>,
@@ -29,9 +30,15 @@ pub fn host_state(state: State<'_, AppState>) -> Result<HostState, HostError> {
 pub async fn host_connect(
     app: AppHandle,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
     url: String,
 ) -> Result<DeploymentInfo, HostError> {
+    let before = state.auth.state().ok().and_then(|current| current.origin);
     let info = state.auth.connect(&url).await?;
+    // Another deployment ended the session (connect signed out of the old one).
+    if before.as_deref() != Some(info.origin.as_str()) {
+        local.agents.forget_identity();
+    }
     // From here the webview may reach this deployment through the HTTP plugin, and no other.
     crate::http_scope::grant(&app, &info.origin).map_err(HostError::Internal)?;
     Ok(info)
@@ -39,8 +46,14 @@ pub async fn host_connect(
 
 /// Step two: sign in through the system browser. Resolves when the flow ends.
 #[tauri::command]
-pub async fn host_sign_in(state: State<'_, AppState>) -> Result<HostState, HostError> {
-    state.auth.sign_in().await
+pub async fn host_sign_in(
+    state: State<'_, AppState>,
+    local: State<'_, LocalState>,
+) -> Result<HostState, HostError> {
+    let signed_in = state.auth.sign_in().await?;
+    // A new session (perhaps another account): nothing of the last one goes on.
+    local.agents.forget_identity();
+    Ok(signed_in)
 }
 
 /// Abandon the sign-in waiting for the browser; `host_sign_in` then rejects.
@@ -70,7 +83,10 @@ pub async fn host_refresh(state: State<'_, AppState>) -> Result<RefreshResult, H
 pub async fn host_sign_out(
     window: WebviewWindow,
     state: State<'_, AppState>,
+    local: State<'_, LocalState>,
 ) -> Result<bool, HostError> {
+    // First: no running turn sends another request with this session.
+    local.agents.forget_identity();
     let result = state.auth.sign_out().await;
     clear_webview_data(&window);
     result
@@ -79,7 +95,12 @@ pub async fn host_sign_out(
 /// Forget the session and local data without contacting the server
 /// (`device_revoked`, or a refresh token the server no longer honours).
 #[tauri::command]
-pub async fn host_wipe(window: WebviewWindow, state: State<'_, AppState>) -> Result<(), HostError> {
+pub async fn host_wipe(
+    window: WebviewWindow,
+    state: State<'_, AppState>,
+    local: State<'_, LocalState>,
+) -> Result<(), HostError> {
+    local.agents.forget_identity();
     let result = state.auth.wipe().await;
     clear_webview_data(&window);
     result

@@ -218,9 +218,12 @@ async fn full_sign_in_uses_pkce_state_and_the_loopback_redirect_and_stores_the_r
     });
     h.service.connect(&server.origin).await.unwrap();
 
+    let before = h.service.session_epoch();
     let state = h.service.sign_in().await.unwrap();
 
     assert!(state.signed_in);
+    // A new session is a new identity for work pinned to the old one.
+    assert!(h.service.session_epoch() > before);
     assert_eq!(state.policy.unwrap()["idle_lock_seconds"], 300);
     // The refresh token is in the keychain item, and the webview is handed only the access token.
     let stored = h.keychain.raw().unwrap();
@@ -457,14 +460,23 @@ async fn a_deployment_that_is_down_keeps_the_session() {
 #[tokio::test]
 async fn sign_out_revokes_on_the_server_then_forgets_everything() {
     let (h, server) = signed_in(Arc::default()).await;
+    let epoch = h.service.session_epoch();
+    h.service.refresh().await.unwrap();
+    assert_eq!(
+        h.service.session_epoch(),
+        epoch,
+        "a refresh is the same session"
+    );
     h.service.sign_out().await.unwrap();
+    assert!(h.service.session_epoch() > epoch);
     assert!(h.keychain.raw().is_none());
     let revoke = server
         .seen()
         .into_iter()
         .find(|r| r.path == "/api/v2/auth/native/revoke")
         .expect("revoked");
-    assert_eq!(revoke.form()["token"], "refresh-1");
+    // The refresh above rotated the token: the live one is revoked.
+    assert_eq!(revoke.form()["token"], "refresh-2");
     assert!(!h.service.state().unwrap().signed_in);
 }
 

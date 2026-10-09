@@ -109,6 +109,10 @@ pub struct AuthService {
     sign_in_deadline: Duration,
     /// Ends the sign-in that is waiting for the browser (`cancel_sign_in`).
     sign_in_cancel: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+    /// Grows whenever the session ends or a new one is signed in (never on
+    /// a refresh): with the origin, it names whose session a token is of,
+    /// so work started under one session is never finished under another.
+    epoch: std::sync::atomic::AtomicU64,
 }
 
 pub struct AuthConfig {
@@ -137,7 +141,18 @@ impl AuthService {
             refresh_gate: Mutex::new(()),
             sign_in_deadline: SIGN_IN_DEADLINE,
             sign_in_cancel: std::sync::Mutex::new(None),
+            epoch: std::sync::atomic::AtomicU64::new(0),
         }
+    }
+
+    /// Which sign-in session this is: changes on every sign-out, wipe,
+    /// ended session and new sign-in, never on a token refresh.
+    pub fn session_epoch(&self) -> u64 {
+        self.epoch.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn next_epoch(&self) {
+        self.epoch.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 
     #[cfg(test)]
@@ -275,6 +290,8 @@ impl AuthService {
                         None,
                     )
                     .await;
+                // A new session, whoever it is for.
+                self.next_epoch();
                 drop(gate);
                 if let Err(error) = adopted {
                     // The keychain refused the new session, so nothing here can
@@ -567,6 +584,7 @@ impl AuthService {
 
     /// [`Self::wipe`] for a caller that already holds `refresh_gate`.
     async fn wipe_locked(&self) -> Result<(), HostError> {
+        self.next_epoch();
         *self.cached.lock().await = None;
         *self.unsaved.lock().await = None;
         self.store.clear()?;

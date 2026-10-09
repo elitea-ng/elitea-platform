@@ -85,8 +85,17 @@ Refusal codes (the rejection's `code` and the `error` event's): `local_work_disa
 `model_unresolved`, `agent_not_in_conversation`, `agent_version_mismatch`,
 `workspace_unknown`, `workspace_unbound` (no project bound yet),
 `workspace_project_mismatch`, `workspace_busy`,
-`invalid_request`, and the platform's own codes (`local_turn_conflict`,
+`invalid_request`, `not_signed_in`, and the platform's own codes (`local_turn_conflict`,
 `not_found`, …).
+
+A turn is held to the session it started under (the connected origin and
+the sign-in; a token refresh keeps it): once the person signs out, signs
+in again or connects to another deployment, every further request of the
+turn is refused locally with `identity_changed`, so it is never committed
+under another identity. `host_sign_out`, `host_wipe`, `host_sign_in` and a
+`host_connect` to another deployment also cancel every running turn (it
+ends `cancelled` → `done`, `committed: false`) and forget every workspace
+session and kept turn: an earlier turn then answers `turn_unknown`.
 
 `plan_mode: true` offers read-only local tools only and no remote toolkits.
 

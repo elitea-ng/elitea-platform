@@ -98,6 +98,19 @@ impl Credentials for AuthCredentials {
         self.current().await
     }
 
+    /// The connected origin and the sign-in session (`session_epoch`).
+    fn identity(&self) -> Option<String> {
+        let state = self.0.state().ok()?;
+        if !state.signed_in {
+            return None;
+        }
+        Some(format!(
+            "{}#{}",
+            state.origin?.trim_end_matches('/'),
+            self.0.session_epoch()
+        ))
+    }
+
     async fn refreshed(&self) -> Result<Bearer, ApiError> {
         match self.0.refresh().await {
             Ok(RefreshResult::Refreshed) => self.current().await,

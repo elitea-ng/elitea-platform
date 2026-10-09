@@ -45,6 +45,70 @@ pub trait Credentials: Send + Sync {
     async fn bearer(&self) -> Result<Bearer, ApiError>;
     /// A fresh token after the platform answered 401.
     async fn refreshed(&self) -> Result<Bearer, ApiError>;
+    /// Whose session the tokens are of right now (the deployment and the
+    /// sign-in), `None` when signed out. A sign-out, a new sign-in or
+    /// another deployment changes it; a token refresh does not.
+    fn identity(&self) -> Option<String>;
+}
+
+fn identity_changed() -> ApiError {
+    ApiError::local(
+        "identity_changed",
+        "You signed out or signed in again since this turn started, so it was stopped.",
+    )
+}
+
+/// Credentials held to the identity a turn started under: once the person
+/// signs out, signs in again or connects to another deployment, every
+/// request of the turn is refused (`identity_changed`) rather than sent
+/// with the new session's token.
+pub struct PinnedCredentials {
+    inner: std::sync::Arc<dyn Credentials>,
+    identity: String,
+}
+
+impl PinnedCredentials {
+    /// Pin to the identity signed in now.
+    ///
+    /// # Errors
+    ///
+    /// `not_signed_in` when no one is.
+    pub fn current(inner: std::sync::Arc<dyn Credentials>) -> Result<Self, ApiError> {
+        let identity = inner
+            .identity()
+            .ok_or_else(|| ApiError::local("not_signed_in", "Sign in to the deployment first."))?;
+        Ok(Self { inner, identity })
+    }
+
+    fn check(&self) -> Result<(), ApiError> {
+        if self.inner.identity().as_deref() == Some(self.identity.as_str()) {
+            Ok(())
+        } else {
+            Err(identity_changed())
+        }
+    }
+}
+
+#[async_trait]
+impl Credentials for PinnedCredentials {
+    async fn bearer(&self) -> Result<Bearer, ApiError> {
+        self.check()?;
+        let bearer = self.inner.bearer().await?;
+        // Checked again: the session may have changed while the token was read.
+        self.check()?;
+        Ok(bearer)
+    }
+
+    async fn refreshed(&self) -> Result<Bearer, ApiError> {
+        self.check()?;
+        let bearer = self.inner.refreshed().await?;
+        self.check()?;
+        Ok(bearer)
+    }
+
+    fn identity(&self) -> Option<String> {
+        self.inner.identity()
+    }
 }
 
 /// A refused or failed platform call.
@@ -165,9 +229,24 @@ impl PlatformApi {
         })
     }
 
+    /// The same client with other credentials (one turn's pinned ones).
+    #[must_use]
+    pub fn with_credentials(&self, credentials: std::sync::Arc<dyn Credentials>) -> Self {
+        Self {
+            http: self.http.clone(),
+            credentials,
+            client_version: self.client_version.clone(),
+        }
+    }
+
     #[must_use]
     pub fn http(&self) -> &reqwest::Client {
         &self.http
+    }
+
+    #[must_use]
+    pub fn credentials(&self) -> &std::sync::Arc<dyn Credentials> {
+        &self.credentials
     }
 
     /// One request; a 401 is retried once with a refreshed token.

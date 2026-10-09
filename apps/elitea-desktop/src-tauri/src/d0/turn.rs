@@ -45,7 +45,7 @@ use elitea_local_tools::session::{LocalSession, SessionConfig, TOOLS};
 use futures::StreamExt as _;
 use serde_json::{Map, Value, json};
 
-use super::api::{ApiError, Credentials, LocalTurnStarted, PlatformApi};
+use super::api::{ApiError, Credentials, LocalTurnStarted, PinnedCredentials, PlatformApi};
 use super::approvals::{ApprovalBroker, TurnBinding, UiDecision, UiPrompt};
 use super::definition::{self, Admitted};
 use super::events::{EventEmitter, Phase, TurnEvents};
@@ -568,10 +568,15 @@ impl AgentHost {
         if request.prompt.trim().is_empty() {
             return Err(TurnError::new("invalid_request", "The message is empty."));
         }
-        let workspace = self.bound_workspace(request)?;
+        // Checked first, so a refusal costs no request; again under the claim.
+        self.bound_workspace(request)?;
         let policy = self.policy()?;
-        let resolved = self
-            .api
+        // Every request of the turn, from here to its commit, goes out under
+        // the session signed in now, or not at all (`identity_changed`).
+        let credentials: Arc<dyn Credentials> =
+            Arc::new(PinnedCredentials::current(self.deps.credentials.clone())?);
+        let api = Arc::new(self.api.with_credentials(credentials));
+        let resolved = api
             .resolved_version(
                 request.project_id,
                 request.application_id,
@@ -587,8 +592,7 @@ impl AgentHost {
         let local_names: Vec<&str> = TOOLS.iter().map(|tool| tool.name).collect();
         let admitted = definition::admit(&resolved, &local_names)
             .map_err(|refusal| TurnError::new(refusal.code, refusal.message))?;
-        let participant_id = self
-            .api
+        let participant_id = api
             .answering_participant(
                 request.project_id,
                 &conversation,
@@ -610,8 +614,7 @@ impl AgentHost {
         )?;
         events.status(Phase::Starting, None);
         let question_id = uuid::Uuid::new_v4().to_string();
-        let started = self
-            .api
+        let started = api
             .start_turn(
                 request.project_id,
                 &conversation,
@@ -631,6 +634,7 @@ impl AgentHost {
             started,
             policy,
             claim,
+            api,
         })
     }
 
@@ -648,6 +652,7 @@ impl AgentHost {
             started,
             policy,
             claim,
+            api,
         } = prepared;
         let recorder = entry.recorder.clone();
         workspace.prompt.bind(Some(TurnBinding {
@@ -661,7 +666,7 @@ impl AgentHost {
 
         let sink = Arc::new(TurnSink::default());
         let run = self.run_agent(
-            &request, &events, &workspace, &admitted, &started, &recorder, &sink,
+            &request, &events, &workspace, &admitted, &started, &recorder, &sink, &api,
         );
         let outcome = tokio::select! {
             result = run => Some(result),
@@ -732,8 +737,7 @@ impl AgentHost {
             "hitl_exchanges": recorder.hitl_exchanges(),
             "local_work": recorder.work_report(sandbox_mode.as_str()),
         });
-        let committed = self
-            .api
+        let committed = api
             .commit_turn(request.project_id, &started.execution_id, &body)
             .await;
         // Free before `done`: the UI may send the next turn as soon as it sees it.
@@ -785,12 +789,13 @@ impl AgentHost {
         started: &LocalTurnStarted,
         recorder: &Arc<Recorder>,
         sink: &Arc<TurnSink>,
+        api: &Arc<PlatformApi>,
     ) -> Result<String, TurnError> {
         let failed = |code: &str, message: &str| TurnError::new(code, message);
         // ModelTransport: /llm with the native token and the execution id.
         let transport = GatewayTransport {
-            http: self.api.http().clone(),
-            credentials: self.deps.credentials.clone(),
+            http: api.http().clone(),
+            credentials: api.credentials().clone(),
             project_id: request.project_id,
             execution_id: started.execution_id.clone(),
             events: events.clone(),
@@ -825,7 +830,7 @@ impl AgentHost {
         // ToolProvider: local tools, then the remote toolkits (none in plan
         // mode: a remote tool may write, and plan mode is read-only).
         let remote = Arc::new(RemoteContext {
-            api: self.api.clone(),
+            api: api.clone(),
             project_id: request.project_id,
             execution_id: started.execution_id.clone(),
             application_id: request.application_id,
@@ -973,6 +978,31 @@ impl AgentHost {
         Ok(TurnStatus { state, done })
     }
 
+    /// The person signed out, signed in again or connected to another
+    /// deployment: every running turn is cancelled (it commits nothing) and
+    /// the host forgets every workspace session and every kept turn, so
+    /// nothing of one session is reviewed, undone or finished under the next.
+    pub fn forget_identity(&self) {
+        let mut turns = self
+            .turns
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (turn_id, entry) in &turns.entries {
+            let mut state = entry.state();
+            if *state == RunState::Running {
+                *state = RunState::Cancelling;
+                entry.stop.stop();
+                self.broker.forget_turn(turn_id);
+            }
+        }
+        *turns = TurnTable::default();
+        drop(turns);
+        self.sessions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
     /// `workspace_remove`: forget the workspace, its host data and
     /// everything this host keeps for it (its session, its turns).
     ///
@@ -1067,6 +1097,8 @@ struct Prepared {
     started: LocalTurnStarted,
     policy: LocalWorkPolicy,
     claim: WorkspaceClaim,
+    /// The platform client of this turn, on its pinned credentials.
+    api: Arc<PlatformApi>,
 }
 
 fn model_failure(text: &str) -> TurnError {

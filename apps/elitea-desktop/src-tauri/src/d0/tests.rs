@@ -23,19 +23,40 @@ const EXECUTION: &str = "0123456789abcdef0123456789abcdef";
 const TOOLKIT_REF: &str = "tkr1_0123456789abcdef0123456789abcdef";
 const INTERRUPT: &str = "hitl_fedcba9876543210fedcba9876543210";
 
-struct StaticCredentials(String);
+/// The signed-in session; a test may sign out or switch it mid-way.
+struct StaticCredentials {
+    origin: String,
+    identity: std::sync::Mutex<Option<String>>,
+}
+
+impl StaticCredentials {
+    fn new(origin: String) -> Self {
+        Self {
+            identity: std::sync::Mutex::new(Some(format!("{origin}#1"))),
+            origin,
+        }
+    }
+
+    fn switch_to(&self, identity: Option<&str>) {
+        *self.identity.lock().unwrap() = identity.map(str::to_owned);
+    }
+}
 
 #[async_trait]
 impl Credentials for StaticCredentials {
     async fn bearer(&self) -> Result<Bearer, ApiError> {
         Ok(Bearer {
-            origin: self.0.clone(),
+            origin: self.origin.clone(),
             token: "elnat_test_token".into(),
         })
     }
 
     async fn refreshed(&self) -> Result<Bearer, ApiError> {
         self.bearer().await
+    }
+
+    fn identity(&self) -> Option<String> {
+        self.identity.lock().unwrap().clone()
     }
 }
 
@@ -201,6 +222,7 @@ fn platform(details: Value, withheld: &'static [&'static str]) -> impl Fn(&Req) 
 
 struct Harness {
     server: MockServer,
+    credentials: Arc<StaticCredentials>,
     host: Arc<AgentHost>,
     emitter: Arc<VecEmitter>,
     workspace_id: String,
@@ -219,9 +241,10 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
     workspaces.bind_project(&workspace_id, 1).unwrap();
     let emitter = Arc::new(VecEmitter::default());
     let policy = Arc::new(Policy(std::sync::Mutex::new(policy)));
+    let credentials = Arc::new(StaticCredentials::new(server.origin.clone()));
     let host = Arc::new(
         AgentHost::new(HostDeps {
-            credentials: Arc::new(StaticCredentials(server.origin.clone())),
+            credentials: credentials.clone(),
             client_version: "0.1.0".into(),
             policy: policy.clone(),
             workspaces,
@@ -255,6 +278,7 @@ async fn harness(server: MockServer, policy: Option<Value>, decision: UiDecision
     });
     Harness {
         server,
+        credentials,
         host,
         emitter,
         workspace_id,
@@ -812,7 +836,11 @@ async fn a_remote_retry_reuses_its_idempotency_key() {
     })
     .await;
     let api = Arc::new(
-        PlatformApi::new(Arc::new(StaticCredentials(server.origin.clone())), "0.1.0").unwrap(),
+        PlatformApi::new(
+            Arc::new(StaticCredentials::new(server.origin.clone())),
+            "0.1.0",
+        )
+        .unwrap(),
     );
     let context = RemoteContext {
         api,
@@ -1030,4 +1058,88 @@ async fn a_turn_past_its_run_is_not_cancellable() {
     let status = h.host.status(&started.turn_id).unwrap();
     assert_eq!(status.state, "done");
     assert_eq!(status.done.as_ref(), Some(&done.payload));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_never_finishes_under_another_session() {
+    for signed_out in [false, true] {
+        let slow = Arc::new(AtomicBool::new(true));
+        let h = harness(
+            stalling_platform(slow.clone()).await,
+            allowed(),
+            UiDecision::AllowOnce,
+        )
+        .await;
+        let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Another account signs in (or no one is signed in) while it runs.
+        h.credentials
+            .switch_to((!signed_out).then_some("https://other.example#2"));
+        slow.store(false, Ordering::SeqCst);
+        until_done_of(&h.emitter, &started.turn_id).await;
+        let events = h.emitter.all();
+        assert!(
+            events
+                .iter()
+                .any(|e| e.kind == "error" && e.payload["code"] == "identity_changed"),
+            "{:?}",
+            h.emitter.kinds()
+        );
+        assert_eq!(events.last().unwrap().payload["committed"], false);
+        assert!(
+            seen(
+                &h.server,
+                &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}")
+            )
+            .is_empty(),
+            "nothing is committed under another session"
+        );
+        // And a new turn is refused before any request while signed out.
+        if signed_out {
+            let before = h.server.seen().len();
+            let error = h.host.start(request(&h.workspace_id)).await.unwrap_err();
+            assert_eq!(error.code, "not_signed_in");
+            assert_eq!(h.server.seen().len(), before);
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signing_out_cancels_running_turns_and_forgets_kept_ones() {
+    let slow = Arc::new(AtomicBool::new(false));
+    let h = harness(
+        stalling_platform(slow.clone()).await,
+        allowed(),
+        UiDecision::AllowOnce,
+    )
+    .await;
+    let finished = h.host.start(request(&h.workspace_id)).await.unwrap();
+    until_done_of(&h.emitter, &finished.turn_id).await;
+    slow.store(true, Ordering::SeqCst);
+    let running = h.host.start(request(&h.workspace_id)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    h.host.forget_identity();
+    slow.store(false, Ordering::SeqCst);
+    until_done_of(&h.emitter, &running.turn_id).await;
+    let done = h
+        .emitter
+        .all()
+        .into_iter()
+        .rfind(|e| e.kind == "done" && e.turn_id == running.turn_id)
+        .unwrap();
+    assert_eq!(done.payload["committed"], false);
+    assert_eq!(
+        seen(
+            &h.server,
+            &format!("/local_turn_commit/prompt_lib/1/{EXECUTION}")
+        )
+        .len(),
+        1,
+        "only the turn that finished before the sign-out was committed"
+    );
+    // Neither turn is kept: no review or undo of the last session's work.
+    for turn in [&finished.turn_id, &running.turn_id] {
+        assert_eq!(h.host.changes(turn).unwrap_err().code, "turn_unknown");
+    }
 }
