@@ -475,22 +475,30 @@ fn identifier_normalization_is_idempotent_and_legacy_labels_keep_their_rewrite()
     );
 }
 
+const LOG_CHILD_ENV: &str = "ELITEA_IDENTIFIER_LOG_CHILD";
+
+/// Numeric normalization logs counts only, never identifier or template text.
+/// A child process owns a global subscriber, so parallel tests cannot
+/// change callsite interest while the logs are captured.
 #[test]
 fn numeric_normalization_is_logged_as_counts_only() {
-    use crate::agents::assembly_tests::CapturedOutput;
-
-    let capture = CapturedOutput::default();
-    let subscriber = tracing_subscriber::fmt()
-        .without_time()
-        .with_ansi(false)
-        .with_target(false)
-        .with_writer(capture.clone())
-        .finish();
-    let yaml = "entry_point: 7777\nnodes:\n  - id: 7777\n    type: state_modifier\n    template: 'private-template-text'\n    transition: END\n";
-    tracing::subscriber::with_default(subscriber, || {
-        PipelineDefinition::from_yaml(yaml).expect("numeric pipeline");
-    });
-    let logged = capture.text();
+    let output = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args([
+            "--exact",
+            "agents::graph::compiler_identifier_tests::numeric_normalization_log_child",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(LOG_CHILD_ENV, "1")
+        .output()
+        .expect("log child process");
+    let logged = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{logged}\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(logged.contains("CHILD-RAN"), "{logged}");
     assert!(
         logged.contains("pipeline_legacy_identifier_normalized"),
         "{logged}"
@@ -498,4 +506,20 @@ fn numeric_normalization_is_logged_as_counts_only() {
     assert!(logged.contains("numeric_identifier_count=2"), "{logged}");
     assert!(!logged.contains("7777"), "an identifier leaked: {logged}");
     assert!(!logged.contains("private-template-text"), "{logged}");
+}
+
+#[test]
+fn numeric_normalization_log_child() {
+    if std::env::var(LOG_CHILD_ENV).is_err() {
+        return;
+    }
+    tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_target(false)
+        .with_writer(std::io::stdout)
+        .init();
+    let yaml = "entry_point: 7777\nnodes:\n  - id: 7777\n    type: state_modifier\n    template: 'private-template-text'\n    transition: END\n";
+    PipelineDefinition::from_yaml(yaml).expect("numeric pipeline");
+    println!("CHILD-RAN");
 }
