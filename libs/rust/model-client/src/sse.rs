@@ -1,4 +1,5 @@
-//! A bounded Server-Sent Events decoder for chat-completion streams.
+//! A bounded Server-Sent Events decoder for chat-completion streams: the
+//! shared `/llm` splitter (`elitea_llm_wire::sse`) in its lenient dialect.
 //!
 //! The gateway is trusted to be the platform's, but what it relays comes
 //! from a model provider; a stream that never ends a line, or one event
@@ -14,29 +15,12 @@
 //! event without its blank line is still delivered at the end of the
 //! stream, because some servers close right after `data: [DONE]`.
 
-/// The decoder's caps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SseLimits {
-    /// One line, terminator excluded.
-    pub max_line_bytes: usize,
-    /// One event's joined data.
-    pub max_event_bytes: usize,
-    /// The whole stream.
-    pub max_stream_bytes: usize,
-    /// Events in the stream. A 64k-token answer is about 64k events.
-    pub max_events: usize,
-}
+use elitea_llm_wire::sse::{SseDialect, SseOptions, SseSplitter};
 
-impl Default for SseLimits {
-    fn default() -> Self {
-        Self {
-            max_line_bytes: 1024 * 1024,
-            max_event_bytes: 1024 * 1024,
-            max_stream_bytes: 64 * 1024 * 1024,
-            max_events: 200_000,
-        }
-    }
-}
+/// The decoder's caps (`max_line_bytes`, `max_event_bytes`,
+/// `max_stream_bytes`, `max_events`); the default is line and event 1 MiB,
+/// stream 64 MiB, 200 000 events.
+pub use elitea_llm_wire::sse::SseLimits;
 
 /// One event.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,35 +52,38 @@ impl std::fmt::Display for SseError {
     }
 }
 
-/// The incremental decoder.
-#[derive(Debug, Default)]
-pub struct SseDecoder {
-    limits: SseLimits,
-    pending: Vec<u8>,
-    /// Bytes of `pending` already searched for a newline, so a long line
-    /// fed in small chunks is scanned once, not once per chunk.
-    scanned: usize,
-    event: String,
-    data: Vec<u8>,
-    has_data: bool,
-    total: usize,
-    events: usize,
-    /// The last line ended in `\r` at the end of a chunk: a `\n` that
-    /// starts the next chunk is the second half of that `\r\n`.
-    skip_lf: bool,
-    /// The start of the stream was checked for a byte order mark.
-    bom_checked: bool,
+impl From<elitea_llm_wire::sse::SseError> for SseError {
+    fn from(error: elitea_llm_wire::sse::SseError) -> Self {
+        use elitea_llm_wire::sse::SseError as Wire;
+        match error {
+            Wire::LineTooLong => Self::LineTooLong,
+            Wire::EventTooLarge => Self::EventTooLarge,
+            Wire::StreamTooLarge => Self::StreamTooLarge,
+            Wire::TooManyEvents => Self::TooManyEvents,
+            // The lenient dialect, without refusing named events, reports
+            // neither of the strict dialect's grammar errors; were one to
+            // appear, it is still a stream this decoder cannot read as text.
+            Wire::NotUtf8 | Wire::Malformed | Wire::UnexpectedEventType => Self::NotUtf8,
+        }
+    }
 }
 
-/// The UTF-8 byte order mark.
-const BOM: &[u8] = b"\xEF\xBB\xBF";
+/// The incremental decoder: `elitea_llm_wire`'s splitter in its lenient
+/// dialect, with events as text.
+#[derive(Debug, Default)]
+pub struct SseDecoder {
+    splitter: SseSplitter,
+}
 
 impl SseDecoder {
     #[must_use]
     pub fn new(limits: SseLimits) -> Self {
         Self {
-            limits,
-            ..Self::default()
+            splitter: SseSplitter::new(SseOptions {
+                limits,
+                dialect: SseDialect::Lenient,
+                reject_event_types: false,
+            }),
         }
     }
 
@@ -106,54 +93,8 @@ impl SseDecoder {
     ///
     /// The first cap the input crosses, or data that is not UTF-8.
     pub fn push(&mut self, chunk: &[u8], out: &mut Vec<SseEvent>) -> Result<(), SseError> {
-        self.total = self.total.saturating_add(chunk.len());
-        if self.total > self.limits.max_stream_bytes {
-            return Err(SseError::StreamTooLarge);
-        }
-        let mut chunk = chunk;
-        if self.skip_lf && !chunk.is_empty() {
-            self.skip_lf = false;
-            chunk = chunk.strip_prefix(b"\n").unwrap_or(chunk);
-        }
-        self.pending.extend_from_slice(chunk);
-        if !self.bom_checked {
-            if self.pending.len() < BOM.len() && BOM.starts_with(&self.pending) {
-                // Not enough bytes to tell yet.
-                return Ok(());
-            }
-            self.bom_checked = true;
-            if self.pending.starts_with(BOM) {
-                self.pending.drain(..BOM.len());
-            }
-        }
-        let mut start = 0;
-        let mut from = self.scanned;
-        while let Some(offset) = self.pending[from..]
-            .iter()
-            .position(|b| *b == b'\n' || *b == b'\r')
-        {
-            let end = from + offset;
-            let line = self.pending[start..end].to_vec();
-            start = end + 1;
-            if self.pending[end] == b'\r' {
-                match self.pending.get(start) {
-                    Some(b'\n') => start += 1,
-                    Some(_) => {}
-                    None => self.skip_lf = true,
-                }
-            }
-            from = start;
-            if line.len() > self.limits.max_line_bytes {
-                return Err(SseError::LineTooLong);
-            }
-            self.line(&line, out)?;
-        }
-        self.pending.drain(..start);
-        self.scanned = self.pending.len();
-        if self.pending.len() > self.limits.max_line_bytes {
-            return Err(SseError::LineTooLong);
-        }
-        Ok(())
+        self.splitter.push(chunk)?;
+        self.drain(out)
     }
 
     /// End of stream: deliver a last event that lacked its blank line.
@@ -162,63 +103,19 @@ impl SseDecoder {
     ///
     /// As [`SseDecoder::push`].
     pub fn finish(&mut self, out: &mut Vec<SseEvent>) -> Result<(), SseError> {
-        self.bom_checked = true;
-        if !self.pending.is_empty() {
-            let line = std::mem::take(&mut self.pending);
-            self.scanned = 0;
-            self.line(&line, out)?;
-        }
-        self.dispatch(out)
+        self.splitter.finish();
+        self.drain(out)
     }
 
-    fn line(&mut self, line: &[u8], out: &mut Vec<SseEvent>) -> Result<(), SseError> {
-        if line.is_empty() {
-            return self.dispatch(out);
+    fn drain(&mut self, out: &mut Vec<SseEvent>) -> Result<(), SseError> {
+        while let Some(event) = self.splitter.next_event()? {
+            // The lenient dialect delivers only UTF-8 names and data.
+            let text = |bytes: Vec<u8>| String::from_utf8(bytes).map_err(|_| SseError::NotUtf8);
+            out.push(SseEvent {
+                event: text(event.event_type.unwrap_or_default())?,
+                data: text(event.data)?,
+            });
         }
-        if line[0] == b':' {
-            return Ok(());
-        }
-        let (field, value) = match line.iter().position(|b| *b == b':') {
-            Some(colon) => {
-                let value = &line[colon + 1..];
-                (&line[..colon], value.strip_prefix(b" ").unwrap_or(value))
-            }
-            None => (line, &[][..]),
-        };
-        match field {
-            b"data" => {
-                if self.has_data {
-                    self.data.push(b'\n');
-                }
-                self.data.extend_from_slice(value);
-                self.has_data = true;
-                if self.data.len() > self.limits.max_event_bytes {
-                    return Err(SseError::EventTooLarge);
-                }
-            }
-            b"event" => {
-                std::str::from_utf8(value)
-                    .map_err(|_| SseError::NotUtf8)?
-                    .clone_into(&mut self.event);
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn dispatch(&mut self, out: &mut Vec<SseEvent>) -> Result<(), SseError> {
-        let event = std::mem::take(&mut self.event);
-        if !self.has_data {
-            return Ok(());
-        }
-        self.has_data = false;
-        let data =
-            String::from_utf8(std::mem::take(&mut self.data)).map_err(|_| SseError::NotUtf8)?;
-        self.events += 1;
-        if self.events > self.limits.max_events {
-            return Err(SseError::TooManyEvents);
-        }
-        out.push(SseEvent { event, data });
         Ok(())
     }
 }

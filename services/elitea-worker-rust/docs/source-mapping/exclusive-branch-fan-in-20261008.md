@@ -53,8 +53,8 @@ its single target queues exactly the node the direct edge queued (`get_next_node
 internally (`parallel_compiler.rs:218`, `map_compiler.rs`). Their own inner graphs (`START → node → END`) do not
 pass through this function.
 
-**ADK.** ADK is not patched. `adk-graph` is not vendored (`vendor/README.md` lists only `adk-agent`, `adk-runner`
-and `adk-sandbox`).
+**ADK.** ADK is not patched. `adk-graph` is not vendored (`libs/rust/vendor/` holds only `adk-agent`, `adk-runner`,
+`adk-sandbox` and `leiden-rs`).
 
 ## Tests
 

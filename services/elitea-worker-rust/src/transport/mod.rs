@@ -14,6 +14,7 @@ mod openai_compatible_facade_tests;
 pub mod output_grpc;
 mod output_session;
 pub(crate) mod platform_client;
+pub(crate) mod platform_writer;
 pub(crate) mod runtime_context;
 #[cfg(test)]
 mod runtime_context_tests;

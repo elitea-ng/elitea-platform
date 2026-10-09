@@ -42,7 +42,7 @@ pub const RESOLUTION: &str = include_str!("resolution.txt");
 /// `langchain.agents.middleware.todo.WRITE_TODOS_SYSTEM_PROMPT`.
 pub const TODO_SYSTEM: &str = include_str!("todo_system.txt");
 /// `langchain.agents.middleware.summarization.DEFAULT_SUMMARY_PROMPT`.
-pub const SUMMARY: &str = include_str!("summary_prompt.txt");
+pub const SUMMARY: &str = elitea_conversation::DEFAULT_SUMMARY_PROMPT;
 /// `deepagents.middleware.summarization.DEEPAGENTS_DEFAULT_SUMMARY_PROMPT`.
 pub const SUMMARY_DEEPAGENTS: &str = include_str!("summary_prompt_deepagents.txt");
 /// The tool definitions.

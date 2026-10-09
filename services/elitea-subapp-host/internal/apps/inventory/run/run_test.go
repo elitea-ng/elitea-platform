@@ -57,6 +57,32 @@ type harness struct {
 	runner   *run.Runner
 	uploads  *fakeArtifacts
 	lastArgs map[string]any
+	// identity is the verified caller the gate hands the runner.
+	identity spi.Identity
+}
+
+// TestTheVerifiedCallerReachesTheEngine pins ADR-0028 D3: the engine filters
+// by document ACL, so it must learn who is calling — and only from the
+// identity the gate verified, never from the body the caller writes.
+func TestTheVerifiedCallerReachesTheEngine(t *testing.T) {
+	h := newHarness(t, map[string]run.Tool{"search_graph": answer(map[string]any{"success": true, "result": "ok"})})
+	h.identity = spi.Identity{ProjectID: "7", UserID: "42"}
+	request := map[string]any{"project_id": 7, "parameters": map[string]any{
+		"application_id": 70, "query": "x", "caller_user_id": "1"}}
+	if _, err := h.invoke("inventory", "inventory", "search_graph", request); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.lastArgs["caller_user_id"]; got != "42" {
+		t.Errorf("caller_user_id = %v, want the verified 42", got)
+	}
+
+	h.identity = spi.Identity{}
+	if _, err := h.invoke("inventory", "inventory", "search_graph", request); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := h.lastArgs["caller_user_id"]; present {
+		t.Errorf("an unsigned hop named a caller: %v", h.lastArgs)
+	}
 }
 
 func newHarness(t *testing.T, tools map[string]run.Tool) *harness {
@@ -99,7 +125,9 @@ func (h *harness) invoke(family, toolkit, tool string, request map[string]any) (
 	defer manager.Stop()
 	ctx := context.Background()
 	invocation, err := manager.Submit(ctx, toolkit, tool, func(ctx context.Context, tc *spi.Context) (map[string]any, error) {
-		return h.runner.Invoke(ctx, spi.Invoke{Family: resolved, Toolkit: toolkit, Tool: tool, Request: request}, tc)
+		return h.runner.Invoke(ctx, spi.Invoke{
+			Family: resolved, Toolkit: toolkit, Tool: tool, Request: request, Identity: h.identity,
+		}, tc)
 	})
 	if err != nil {
 		h.t.Fatal(err)
