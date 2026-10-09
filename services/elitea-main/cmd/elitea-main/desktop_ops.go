@@ -7,6 +7,7 @@ import (
 
 	apimw "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/middleware"
 	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
+	toolkitrun "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/toolkitrun"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/legacyrbac"
 )
 
@@ -25,4 +26,21 @@ func composeResolvedVersion(
 		return nil, nil
 	}
 	return desktopopsapi.NewResolvedVersionRoute(resolved, groupAuth, legacyrbac.NewPostgresResolver(pool))
+}
+
+// composeRemoteToolkit builds executeRemoteToolkitTool (ADR-0029 decision 5b)
+// over the SAME toolkit.call_tool.v1 use case test_tool holds. toolRuns is nil
+// where no toolkit worker is composed, and the route then answers 501. The
+// worker implementation only words the refusal of a tool the worker cannot run
+// remotely (the Rust worker admits read-only tools only).
+func composeRemoteToolkit(
+	pool *pgxpool.Pool,
+	toolRuns toolkitrun.UseCase,
+	workerImplementation string,
+	groupAuth apimw.AuthConfig,
+) (http.Handler, error) {
+	if pool == nil || groupAuth.PrincipalValidator == nil {
+		return nil, nil
+	}
+	return desktopopsapi.NewRemoteToolkitRoute(toolRuns, workerImplementation, groupAuth, legacyrbac.NewPostgresResolver(pool))
 }

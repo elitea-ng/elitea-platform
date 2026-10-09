@@ -642,7 +642,12 @@ func TestEmbeddedHistoriesHaveExpectedHeads(t *testing.T) {
 	// local turn (ADR-0029 decision 5c, client contract 1.5): the id the /llm
 	// edge keeps, its project/actor/conversation binding, its 24 h deadline
 	// and its one commit. No permission (`models.chat.messages.create`).
-	require.EqualValues(t, 155, Head(shared))
+	//
+	// 156: shared/0156_remote_toolkit_execute_permission.sql, the default-mode
+	// grant of `models.applications.tool.execute` to admin, editor and viewer
+	// (ADR-0029 decision 5b, the desktop's remote toolkit call), with its
+	// per-project override block.
+	require.EqualValues(t, 156, Head(shared))
 
 	tenant, err := LoadManifest(platformmigrations.Files, ScopeTenant)
 	require.NoError(t, err)

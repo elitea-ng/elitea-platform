@@ -3708,6 +3708,80 @@ components:
         toolkit_id: { type: integer, format: int64 }
         project_id: { type: integer, format: int64 }
         ref: { type: string, pattern: '^tkr1_[0-9a-f]{32}$' }
+    RemoteToolkitCallRequest:
+      type: object
+      description: >-
+        One remote tool call. Settings and credentials are never accepted.
+        NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:85
+        (`remoteToolkitBody`).
+      required: [tool_name]
+      properties:
+        tool_name: { type: string, minLength: 1 }
+        arguments:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): the tool's own arguments, validated by the tool
+            (internal/api/v2/desktopops/remote_toolkit.go:85).
+        request_id:
+          type: string
+          maxLength: 128
+          description: Makes a retry replay the same run, like Idempotency-Key.
+        mcp_authorization_reference:
+          type: string
+          description: The reference an MCP authorisation answered, for the retry after it.
+        llm_model:
+          type: string
+          description: The model a toolkit that calls one should use.
+        llm_settings:
+          type: object
+          additionalProperties: true
+          x-elitea-passthrough: >-
+            NOTE(W2): model settings for a toolkit that calls a model, the
+            test_tool shape (internal/api/v2/toolkitrun/response.go:69).
+    RemoteToolkitCallResult:
+      type: object
+      description: >-
+        A remote tool call's answer. `error` is a machine code on a refusal.
+        NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:180
+        (`writeOutcome`) and :263 (`writeRunError`).
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        status:
+          type: string
+          description: '`ok` or `tool_error` on a 200.'
+        task_id: { type: string }
+        toolkit_id: { type: integer, format: int64 }
+        toolkit_type: { type: string }
+        tool_name: { type: string }
+        result:
+          nullable: true
+          x-elitea-passthrough: >-
+            NOTE(W2): what the tool returned, any JSON value
+            (internal/api/v2/desktopops/remote_toolkit.go:196).
+        truncated:
+          type: boolean
+          description: The result was too large to return; it is omitted, never cut.
+        error: { type: string }
+        message: { type: string }
+        reason:
+          type: string
+          description: >-
+            On a 422: `unsupported_toolkit`, `unknown_tool` or
+            `worker_refused`.
+        authorization_required:
+          $ref: '#/components/schemas/ClientFrameMcpAuthorizationRequest'
+        authorization_retry:
+          type: object
+          properties:
+            tool_name: { type: string }
+            tool_params:
+              type: object
+              additionalProperties: true
+              x-elitea-passthrough: >-
+                NOTE(W2): the arguments to send again after authorising
+                (internal/api/v2/desktopops/remote_toolkit.go:212).
     DesktopOperationError:
       type: object
       description: >-
@@ -17062,6 +17136,149 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DesktopOperationError'
+
+  /elitea_core/remote_toolkit_call/prompt_lib/{project_id}/{toolkit_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: toolkit_id
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+        description: The saved toolkit (a `remote_toolkit` tool's `toolkit_ref.toolkit_id`), or a project MCP server toolkit.
+    post:
+      operationId: executeRemoteToolkitTool
+      summary: Run one tool of one saved toolkit on a cloud worker
+      description: |
+        Client contract 1.6 (ADR-0029 decisions 3 and 5b). Runs ONE tool of
+        ONE saved toolkit in the caller's project on a cloud worker, through
+        the same `toolkit.call_tool.v1` path test_tool uses, and answers what
+        the tool returned. Write operations are allowed. The toolkit's
+        settings and credentials are resolved server-side from the saved row
+        under the caller's grants; the request never carries settings, and no
+        credential is ever returned. MCP OAuth references resolve
+        server-side; a tool that needs the user to authorise answers 409
+        `mcp_authorization_required` with the request in the fields a chat
+        stream's `mcp_authorization_required` frame carries.
+
+        WHO. Only a native access token or a personal access token; a browser
+        session answers 403 `remote_toolkit_requires_token`. The caller needs
+        `models.applications.tool.execute` in the project (admin, editor and
+        viewer hold it).
+
+        BOUNDS. The body is at most 1 MiB and `arguments` one JSON object
+        within the input-entry bound. The call waits at most 60 seconds;
+        past that it answers 504 with the still-running `task_id`.
+        `Idempotency-Key` (or `request_id`) makes a retry replay the same run.
+
+        A TOOL THE WORKER CANNOT RUN answers 422 `remote_tool_unsupported`
+        with a reason, never a hang: a toolkit type or tool this deployment's
+        worker does not support is refused before anything runs, and a tool
+        the worker refuses (the Rust worker runs only read-only, non-sensitive
+        tools in this path) answers `reason: worker_refused`. A deployment
+        with no toolkit worker answers 501 `remote_toolkit_unavailable`.
+      tags: [toolkits, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string }
+          description: Replays the same run for a retried request.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RemoteToolkitCallRequest'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: >-
+            The run reached the tool: `ok` true with `result` (or `truncated`),
+            or `ok` false with `status: tool_error` and the tool's `error`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteToolkitCallResult'
+        '400':
+          description: >-
+            A malformed body, a missing `tool_name` or non-object `arguments`
+            (`invalid_remote_toolkit_call`), or an `X-Client-Version` that does
+            not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/DesktopOperationError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No `models.applications.tool.execute` in the project, or a session caller (`remote_toolkit_requires_token`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '404':
+          description: The toolkit is not visible in this project (`toolkit_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '409':
+          description: >-
+            The tool needs the user to authorise (`mcp_authorization_required`,
+            with `authorization_required`), or the Idempotency-Key belongs to
+            another input (`idempotency_conflict`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteToolkitCallResult'
+        '413':
+          description: The body is larger than 1 MiB.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '415':
+          description: Content-Type is not application/json.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '422':
+          description: The worker cannot run this toolkit or tool (`remote_tool_unsupported`, with `reason`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteToolkitCallResult'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: This deployment runs no toolkit worker (`remote_toolkit_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '502':
+          description: The worker failed the run (`remote_toolkit_failed`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteToolkitCallResult'
+        '503':
+          description: The toolkit's settings could not be resolved right now (`remote_toolkit_unavailable_now`); retry.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '504':
+          description: The bounded wait passed (`remote_toolkit_timeout`); the run continues under `task_id`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RemoteToolkitCallResult'
 
   /elitea_core/task/prompt_lib/{project_id}/{response_message_id}:
     parameters:
