@@ -197,6 +197,10 @@ func newFormGraph(
 	proxyResolver, err := browserapi.NewTrustedProxyResolver(browserapi.TrustedProxyConfig{
 		TrustedProxyCIDRs: append([]string(nil), config.TrustedProxyCIDRs...),
 		PublicOrigin:      config.PublicOrigin,
+		// Every replica reads the same document, so every replica verifies
+		// what any replica's EdgeAuth signed. The resolver derives its own
+		// key from this one (HKDF with a distinct label) and keeps no alias.
+		IdentityProjectionSecret: material.attemptKey,
 	})
 	if err != nil {
 		return nil, composeError("trusted proxy resolver", err)

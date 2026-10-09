@@ -176,6 +176,7 @@ spec:
               - X-Auth-ID
               - X-Auth-User-ID
               - X-Auth-Reference
+              - X-Auth-Signature
               - X-Auth-Avatar
               - X-Auth-Avatar-State
               - X-Auth-Session-Id

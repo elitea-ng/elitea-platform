@@ -32,7 +32,7 @@ worker:
 YAML
 args=(-f deploy/helm/elitea/values-standalone.yaml -f "$work/profiles.yaml"
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
-  --set llmGateway.egressPosture=public-unrestricted)
+  --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
 helm template test deploy/helm/elitea "${args[@]}" \
   --show-only templates/worker/configmap-runtime.yaml > "$work/config.yaml"
 python3 - "$work/config.yaml" "$work/profiles.yaml" <<'PY'

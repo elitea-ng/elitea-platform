@@ -24,7 +24,7 @@ RUNTIME_VALUES="$CHART/values-standalone.yaml"
 # The gateway refuses to render without its two postures; supply them so the
 # failure under test is always THIS guard and never that one.
 GATEWAY=(--set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
-         --set llmGateway.egressPosture=public-unrestricted)
+         --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
 
 failures=0
 note() { printf '  %s\n' "$1"; }

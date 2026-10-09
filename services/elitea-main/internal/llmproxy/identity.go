@@ -267,7 +267,7 @@ func verifiedExecutionID(ctx context.Context, verifier ExecutionVerifier, id ide
 // Stripped headers:
 //   - X-Elitea-* (signed identity injected below; strip first to avoid leaking
 //     any client-spoofed value)
-//   - X-Auth-Type / X-Auth-Id / X-Auth-Reference (Traefik edge-auth headers)
+//   - X-Auth-* (the edge-auth identity projection, including its signature)
 //   - Authorization, X-Api-Key (bearer / API-key credentials)
 //   - Cookie (session cookies; must not reach the downstream gateway)
 //   - X-Project-Id / OpenAI-Organization (the edge project selector; the edge
@@ -292,11 +292,14 @@ func stripIdentityHeaders(h http.Header) {
 		h.Del(name)
 	}
 
-	// Traefik edge-auth headers that the auth middleware reads; remove so the
-	// gateway never sees inbound authentication context.
-	h.Del("X-Auth-Type")
-	h.Del("X-Auth-Id")
-	h.Del("X-Auth-Reference")
+	// The whole edge-auth projection family (type, ids, reference, signature,
+	// avatar) — the gateway and providers never see inbound authentication
+	// context, and a name added to the projection later is covered too.
+	for name := range h {
+		if len(name) >= len("x-auth-") && strings.EqualFold(name[:len("x-auth-")], "x-auth-") {
+			delete(h, name)
+		}
+	}
 
 	// Standard HTTP authentication material.
 	h.Del("Authorization")

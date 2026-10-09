@@ -502,6 +502,8 @@ fn request_builder_preserves_body_headers_query_and_fixed_credential() {
         "Content-Length",
         "Transfer-Encoding",
         "Proxy-Authorization",
+        "X-Auth-Id",
+        "X-Elitea-Project-Id",
     ] {
         let headers = json!({forbidden:"override"})
             .as_object()
