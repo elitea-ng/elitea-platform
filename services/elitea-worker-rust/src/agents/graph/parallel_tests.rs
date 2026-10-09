@@ -15,13 +15,14 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, Semaphore, mpsc};
 
+use super::fanout_control::FanoutCancellation;
 use super::parallel::{
     AdkParallelBranchRuntime, DurableParallelNode, PARALLEL_INTERRUPT_SCHEMA,
     PARALLEL_RESUME_STATE_KEY, ParallelActivation, ParallelBlocked, ParallelBranchExecution,
     ParallelBranchGraphFactory, ParallelBranchPause, ParallelBranchTerminal,
     ParallelCheckpointAppender, ParallelChildCheckpoint, ParallelChildCheckpointerFactory,
-    ParallelDecision, ParallelNodeOutcome, ParallelOccurrenceCheckpointer, ParallelPauseCard,
-    PreparedParallelActivation, PreparedParallelBranch, projected_input_digest,
+    ParallelChildOrigin, ParallelDecision, ParallelNodeOutcome, ParallelOccurrenceCheckpointer,
+    ParallelPauseCard, PreparedParallelActivation, PreparedParallelBranch, projected_input_digest,
 };
 use super::{ParallelBranchDefinition, ParallelNodeDefinition};
 
@@ -160,24 +161,72 @@ struct MemoryChildCheckpoints {
     stores: Mutex<HashMap<String, Arc<MemoryCheckpointer>>>,
     issued_threads: Mutex<Vec<String>>,
     parent: Arc<AtomicParentCheckpoints>,
+    /// Branch ID whose child writer reports `checkpoint.writer_not_current` on save.
+    lease_lost_branch: Option<&'static str>,
+}
+
+const LEASE_LOST: &str =
+    "checkpoint.writer_not_current: the PostgreSQL checkpoint writer is no longer current";
+
+/// A child store whose writer fence has been lost: reads work, every save is refused.
+struct LeaseLostStore(Arc<MemoryCheckpointer>);
+
+#[async_trait]
+impl Checkpointer for LeaseLostStore {
+    async fn save(&self, _checkpoint: &Checkpoint) -> Result<String, GraphError> {
+        Err(GraphError::CheckpointError(LEASE_LOST.to_owned()))
+    }
+    async fn load(&self, thread: &str) -> Result<Option<Checkpoint>, GraphError> {
+        self.0.load(thread).await
+    }
+    async fn load_by_id(&self, id: &str) -> Result<Option<Checkpoint>, GraphError> {
+        self.0.load_by_id(id).await
+    }
+    async fn list(&self, thread: &str) -> Result<Vec<Checkpoint>, GraphError> {
+        self.0.list(thread).await
+    }
+    async fn delete(&self, thread: &str) -> Result<(), GraphError> {
+        self.0.delete(thread).await
+    }
 }
 
 #[async_trait]
 impl ParallelChildCheckpointerFactory for MemoryChildCheckpoints {
+    fn child_origin(&self, _: &ParallelActivation) -> Result<ParallelChildOrigin, GraphError> {
+        Ok(ParallelChildOrigin {
+            execution_id: "test-execution".to_owned(),
+            generation: 1,
+        })
+    }
+
+    fn branch_thread_id(
+        &self,
+        activation: &ParallelActivation,
+        branch: &ParallelBranchDefinition,
+        ordinal: usize,
+        input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
+    ) -> Result<String, GraphError> {
+        Ok(format!(
+            "test:{}:{}:{}:{}:{}:{}:{ordinal}:{input_digest:?}",
+            activation.root_thread_id,
+            activation.node_id,
+            activation.step,
+            origin.execution_id,
+            origin.generation,
+            branch.id(),
+        ))
+    }
+
     async fn for_branch(
         &self,
         activation: &ParallelActivation,
         branch: &ParallelBranchDefinition,
         ordinal: usize,
         input_digest: &[u8; 32],
+        origin: &ParallelChildOrigin,
     ) -> Result<ParallelChildCheckpoint, GraphError> {
-        let thread_id = format!(
-            "test:{}:{}:{}:{}:{ordinal}:{input_digest:?}",
-            activation.root_thread_id,
-            activation.node_id,
-            activation.step,
-            branch.id(),
-        );
+        let thread_id = self.branch_thread_id(activation, branch, ordinal, input_digest, origin)?;
         let mut stores = self.stores.lock().await;
         let store = Arc::clone(
             stores
@@ -185,7 +234,11 @@ impl ParallelChildCheckpointerFactory for MemoryChildCheckpoints {
                 .or_insert_with(|| Arc::new(MemoryCheckpointer::new())),
         );
         self.issued_threads.lock().await.push(thread_id.clone());
-        let checkpointer: Arc<dyn Checkpointer> = store;
+        let checkpointer: Arc<dyn Checkpointer> = if self.lease_lost_branch == Some(branch.id()) {
+            Arc::new(LeaseLostStore(store))
+        } else {
+            store
+        };
         Ok(ParallelChildCheckpoint {
             admitted_threads: std::collections::BTreeSet::from([thread_id.clone()]),
             thread_id,
@@ -952,7 +1005,7 @@ fn ready_branches(prepared: PreparedParallelActivation) -> Vec<PreparedParallelB
 
 fn stored_activation(checkpoint: &Checkpoint) -> ParallelActivation {
     serde_json::from_value(
-        checkpoint.metadata["elitea.graph.parallel.occurrence.v1"]["activation"].clone(),
+        checkpoint.metadata["elitea.graph.parallel.occurrence.v2"]["activation"].clone(),
     )
     .unwrap()
 }
@@ -1338,7 +1391,7 @@ async fn a_pause_receipt_cannot_attach_to_an_advanced_parent_frontier() {
     assert!(
         !latest
             .metadata
-            .contains_key("elitea.graph.parallel.occurrence.v1")
+            .contains_key("elitea.graph.parallel.occurrence.v2")
     );
     assert_eq!(runs["a"].load(Ordering::SeqCst), 1);
     assert_eq!(runs["b"].load(Ordering::SeqCst), 1);
@@ -1414,7 +1467,7 @@ async fn decisions_cannot_overwrite_competing_business_state_or_receipts() {
         )
         .unwrap()
     );
-    assert!(competing.metadata["elitea.graph.parallel.occurrence.v1"]["decisions"].is_null());
+    assert!(competing.metadata["elitea.graph.parallel.occurrence.v2"]["decisions"].is_null());
     assert_eq!(runs["a"].load(Ordering::SeqCst), 1);
     assert_eq!(runs["b"].load(Ordering::SeqCst), 1);
 }
@@ -1697,4 +1750,347 @@ async fn structural_parent_rejection_precedes_checkpoint_mint_and_child_effects(
             .unwrap()
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn a_legacy_occurrence_without_frozen_child_identity_is_refused_by_type() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let thread = "root-legacy";
+    let state = HashMap::from([("input".to_owned(), json!("original"))]);
+    let mut legacy = Checkpoint::new(thread, state.clone(), 3, vec!["gather".to_owned()]);
+    legacy.metadata.insert(
+        "elitea.graph.parallel.occurrence.v1".to_owned(),
+        json!({"activation": {}, "branches": []}),
+    );
+    checkpoints.parent.save(&legacy).await.unwrap();
+    let node = DurableParallelNode::new(
+        definition(&[("a", "a"), ("b", "b")], 2),
+        runtime(
+            Arc::clone(&checkpoints),
+            HashMap::from([
+                ("a".to_owned(), constant(json!({"output": "a"}))),
+                ("b".to_owned(), constant(json!({"output": "b"}))),
+            ]),
+        ),
+    );
+    let error = node
+        .execute(&NodeContext::new(state, ExecutionConfig::new(thread), 3))
+        .await
+        .err()
+        .expect("a legacy occurrence is refused");
+    assert!(
+        error
+            .to_string()
+            .contains("graph.parallel.unsupported_occurrence")
+    );
+    assert!(checkpoints.issued_threads.lock().await.is_empty());
+    assert_eq!(checkpoints.parent.list(thread).await.unwrap().len(), 1);
+}
+
+fn pending_behavior(
+    entered: &Arc<AtomicUsize>,
+    dropped: &Arc<AtomicUsize>,
+    announce: Option<mpsc::UnboundedSender<()>>,
+) -> Behavior {
+    let entered = Arc::clone(entered);
+    let dropped = Arc::clone(dropped);
+    Arc::new(move || {
+        let entered = Arc::clone(&entered);
+        let dropped = Arc::clone(&dropped);
+        let announce = announce.clone();
+        Box::pin(async move {
+            entered.fetch_add(1, Ordering::SeqCst);
+            let _observer = DropObserver(dropped);
+            if let Some(announce) = announce {
+                let _ = announce.send(());
+            }
+            std::future::pending::<Result<Value, GraphError>>().await
+        })
+    })
+}
+
+fn pending_runtime(behavior: &Behavior, names: &[&str]) -> Arc<AdkParallelBranchRuntime> {
+    runtime(
+        Arc::new(MemoryChildCheckpoints::default()),
+        names
+            .iter()
+            .map(|name| ((*name).to_owned(), Arc::clone(behavior)))
+            .collect(),
+    )
+}
+
+fn root_context(thread: &str) -> NodeContext {
+    NodeContext::new(State::new(), ExecutionConfig::new(thread), 0)
+}
+
+async fn failed_receipt_count(checkpoints: &MemoryChildCheckpoints) -> usize {
+    let stores = checkpoints.stores.lock().await;
+    let mut failed = 0;
+    for (thread, store) in stores.iter() {
+        for saved in store.list(thread).await.expect("list child checkpoints") {
+            let metadata = serde_json::to_string(&saved.metadata).expect("encode metadata");
+            if metadata.contains("\"status\":\"failed\"") {
+                failed += 1;
+            }
+        }
+    }
+    failed
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn latch_cancel_stops_inflight_branches_within_the_cleanup_bound_and_admits_nothing_new() {
+    let entered = Arc::new(AtomicUsize::new(0));
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let (announce, mut entries) = mpsc::unbounded_channel();
+    let behavior = pending_behavior(&entered, &dropped, Some(announce));
+    let latch = Arc::new(FanoutCancellation::new());
+    let node = DurableParallelNode::new(
+        definition(&[("a", "a"), ("b", "b"), ("later", "later")], 2),
+        pending_runtime(&behavior, &["a", "b", "later"]),
+    )
+    .with_cancellation(Arc::clone(&latch))
+    .with_cleanup_timeout(Duration::from_millis(20));
+    let run = tokio::spawn(async move { node.execute(&root_context("root-latch")).await });
+    entries.recv().await.expect("first branch entered");
+    entries.recv().await.expect("second branch entered");
+
+    let fired = std::time::Instant::now();
+    latch.cancel();
+    let error = tokio::time::timeout(Duration::from_secs(5), run)
+        .await
+        .expect("the latch must stop the node")
+        .expect("node task")
+        .err()
+        .expect("parallel cancellation error");
+    let elapsed = fired.elapsed();
+    eprintln!("latch_cancel_latency: {elapsed:?}");
+
+    assert!(error.to_string().contains("graph.parallel.cancel"));
+    assert!(elapsed <= Duration::from_millis(100), "{elapsed:?}");
+    assert_eq!(dropped.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        entered.load(Ordering::SeqCst),
+        2,
+        "a branch was admitted after cancel"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn deadline_stops_non_cooperative_branches_at_the_deadline_plus_cleanup() {
+    let entered = Arc::new(AtomicUsize::new(0));
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let behavior = pending_behavior(&entered, &dropped, None);
+    let started = std::time::Instant::now();
+    let node = DurableParallelNode::new(
+        definition(&[("a", "a"), ("b", "b"), ("later", "later")], 2),
+        pending_runtime(&behavior, &["a", "b", "later"]),
+    )
+    .with_deadline(tokio::time::Instant::now() + Duration::from_millis(50))
+    .with_cleanup_timeout(Duration::from_millis(20));
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        node.execute(&root_context("root-deadline-live")),
+    )
+    .await
+    .expect("the deadline must stop the node");
+    let elapsed = started.elapsed();
+    eprintln!("deadline_honored: {elapsed:?}");
+
+    assert!(result.is_err());
+    assert!(elapsed >= Duration::from_millis(50), "{elapsed:?}");
+    assert!(elapsed <= Duration::from_millis(170), "{elapsed:?}");
+    assert_eq!(entered.load(Ordering::SeqCst), 2);
+    assert_eq!(dropped.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lease_lost_branch_is_a_control_stop_not_a_recorded_failure() {
+    let checkpoints = Arc::new(MemoryChildCheckpoints {
+        lease_lost_branch: Some("a"),
+        ..MemoryChildCheckpoints::default()
+    });
+    let second_runs = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&second_runs);
+    let second: Behavior = Arc::new(move || {
+        let counter = Arc::clone(&counter);
+        Box::pin(async move {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Ok(json!({"value": "second"}))
+        })
+    });
+    let node = DurableParallelNode::new(
+        definition(&[("a", "first"), ("b", "second")], 1),
+        runtime(
+            Arc::clone(&checkpoints),
+            HashMap::from([
+                ("first".to_owned(), constant(json!({"value": "first"}))),
+                ("second".to_owned(), second),
+            ]),
+        ),
+    );
+    let error = node
+        .execute(&root_context("root-lease"))
+        .await
+        .err()
+        .expect("lease loss must stop the node");
+
+    assert!(
+        matches!(&error, GraphError::CheckpointError(message) if message == LEASE_LOST),
+        "{error}"
+    );
+    assert!(!error.to_string().contains("branch_failed"));
+    assert_eq!(
+        second_runs.load(Ordering::SeqCst),
+        0,
+        "admitted after lease loss"
+    );
+    assert_eq!(failed_receipt_count(&checkpoints).await, 0);
+    let parent = checkpoints
+        .parent
+        .load("root-lease")
+        .await
+        .expect("load parent")
+        .expect("frozen occurrence");
+    let occurrence = &parent.metadata["elitea.graph.parallel.occurrence.v2"];
+    assert!(occurrence["blocked"].is_null());
+    assert_eq!(occurrence["cards"], json!([]));
+}
+
+struct CancellableInvocation {
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+    content: adk_rust::Content,
+    config: adk_rust::RunConfig,
+}
+
+#[async_trait]
+#[allow(clippy::unnecessary_literal_bound)] // Fixed by the foreign trait signature.
+impl adk_rust::ReadonlyContext for CancellableInvocation {
+    fn invocation_id(&self) -> &str {
+        "inv"
+    }
+    fn agent_name(&self) -> &str {
+        "agent"
+    }
+    fn user_id(&self) -> &str {
+        "user"
+    }
+    fn app_name(&self) -> &str {
+        "app"
+    }
+    fn session_id(&self) -> &str {
+        "session"
+    }
+    fn branch(&self) -> &str {
+        ""
+    }
+    fn user_content(&self) -> &adk_rust::Content {
+        &self.content
+    }
+}
+
+#[async_trait]
+impl adk_rust::CallbackContext for CancellableInvocation {
+    fn artifacts(&self) -> Option<Arc<dyn adk_rust::Artifacts>> {
+        None
+    }
+}
+
+struct NoSession;
+
+#[allow(clippy::unnecessary_literal_bound)] // Fixed by the foreign trait signature.
+impl adk_rust::Session for NoSession {
+    fn id(&self) -> &str {
+        "session"
+    }
+    fn app_name(&self) -> &str {
+        "app"
+    }
+    fn user_id(&self) -> &str {
+        "user"
+    }
+    fn state(&self) -> &dyn adk_rust::State {
+        &NoState
+    }
+    fn conversation_history(&self) -> Vec<adk_rust::Content> {
+        Vec::new()
+    }
+}
+
+struct NoState;
+
+impl adk_rust::State for NoState {
+    fn get(&self, _key: &str) -> Option<Value> {
+        None
+    }
+    fn set(&mut self, _key: String, _value: Value) {}
+    fn all(&self) -> HashMap<String, Value> {
+        HashMap::new()
+    }
+}
+
+#[async_trait]
+impl adk_rust::InvocationContext for CancellableInvocation {
+    fn agent(&self) -> Arc<dyn adk_rust::Agent> {
+        unreachable!("the parallel runner never reads the parent agent")
+    }
+    fn memory(&self) -> Option<Arc<dyn adk_rust::Memory>> {
+        None
+    }
+    fn session(&self) -> &dyn adk_rust::Session {
+        &NoSession
+    }
+    fn run_config(&self) -> &adk_rust::RunConfig {
+        &self.config
+    }
+    fn end_invocation(&self) {}
+    fn ended(&self) -> bool {
+        false
+    }
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_branch_failing_after_cancellation_writes_no_failed_receipt() {
+    let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&cancelled);
+    let failing: Behavior = Arc::new(move || {
+        let flag = Arc::clone(&flag);
+        Box::pin(async move {
+            flag.store(true, Ordering::SeqCst);
+            Err(GraphError::NodeExecutionFailed {
+                node: "run".to_owned(),
+                message: "interrupted by cancellation".to_owned(),
+            })
+        })
+    });
+    let checkpoints = Arc::new(MemoryChildCheckpoints::default());
+    let node = DurableParallelNode::new(
+        definition(&[("a", "a"), ("b", "b")], 1),
+        runtime(
+            Arc::clone(&checkpoints),
+            HashMap::from([
+                ("a".to_owned(), failing),
+                ("b".to_owned(), constant(json!({"value": "b"}))),
+            ]),
+        ),
+    );
+    let parent: Arc<dyn adk_rust::InvocationContext> = Arc::new(CancellableInvocation {
+        cancelled,
+        content: adk_rust::Content::new("user"),
+        config: adk_rust::RunConfig::default(),
+    });
+    let config = ExecutionConfig::new("root-cancelled-failure").with_parent_context(parent);
+    let error = node
+        .execute(&NodeContext::new(State::new(), config, 0))
+        .await
+        .err()
+        .expect("cancelled parallel node");
+
+    assert!(
+        error.to_string().contains("graph.parallel.cancelled"),
+        "{error}"
+    );
+    assert_eq!(failed_receipt_count(&checkpoints).await, 0);
 }

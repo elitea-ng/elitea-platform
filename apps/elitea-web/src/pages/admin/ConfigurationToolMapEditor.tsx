@@ -25,6 +25,8 @@
  * of them WOULD be discarded, and discarding an operator's rule without saying
  * so is the failure this whole page exists to remove.
  */
+import { useState } from 'react';
+
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutlineOutlined';
 import Autocomplete from '@mui/material/Autocomplete';
 import Box from '@mui/material/Box';
@@ -94,6 +96,43 @@ export function fromConfigToolMapRows(rows: readonly ConfigToolMapRow[]): Record
     value[toolkit] = row.tools.map((tool) => tool.trim()).filter((tool) => tool !== '');
   }
   return value;
+}
+
+/**
+ * The editor's rows for a stored map value, held as STATE rather than derived.
+ *
+ * Deriving them on every render loses exactly the rows the operator is working
+ * on: a blank row has no key in the map, so "Add toolkit" produced a row that
+ * vanished on the same render; two rows that canonicalise alike are one key, so
+ * the duplicate warning could never show; and the sort in `toConfigToolMapRows`
+ * moved a half-typed toolkit above its neighbours under the cursor.
+ *
+ * So the rows are re-derived only when `value` is not the map these rows last
+ * produced — by REFERENCE, because the page hands back the very object `onChange`
+ * gave it while it sits in the draft. Any other object means someone else set
+ * the value: the first load, Discard, or the refetch after a save. Those must
+ * replace the rows, in-progress ones included, so the form shows what is stored.
+ */
+export function useConfigToolMapRows(
+  value: unknown,
+  onValueChange: (next: Record<string, string[]>) => void,
+): [readonly ConfigToolMapRow[], (next: readonly ConfigToolMapRow[]) => void] {
+  const [state, setState] = useState<{ readonly rows: readonly ConfigToolMapRow[]; readonly source: unknown }>(
+    () => ({ rows: toConfigToolMapRows(value), source: value }),
+  );
+  let current = state;
+  if (state.source !== value) {
+    // React's documented "adjust state while rendering" pattern: no effect, so
+    // no frame that renders the stale rows against the new value.
+    current = { rows: toConfigToolMapRows(value), source: value };
+    setState(current);
+  }
+  const setRows = (next: readonly ConfigToolMapRow[]): void => {
+    const nextValue = fromConfigToolMapRows(next);
+    setState({ rows: next, source: nextValue });
+    onValueChange(nextValue);
+  };
+  return [current.rows, setRows];
 }
 
 /**
