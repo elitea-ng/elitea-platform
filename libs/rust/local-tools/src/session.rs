@@ -224,7 +224,7 @@ pub const TOOLS: &[ToolSpec] = &[
                 "type": "object",
                 "properties": {
                     "staged": { "type": "boolean" },
-                    "revision": { "type": "string" },
+                    "revision": { "type": "string", "description": "A commit: HEAD, a hash, a branch or tag, with ~n/^n, or A..B / A...B of those." },
                     "paths": { "type": "array", "items": { "type": "string" } },
                     "stat": { "type": "boolean" }
                 }
@@ -240,7 +240,7 @@ pub const TOOLS: &[ToolSpec] = &[
                 "type": "object",
                 "properties": {
                     "max_count": { "type": "integer", "minimum": 1, "maximum": 200 },
-                    "revision": { "type": "string" },
+                    "revision": { "type": "string", "description": "A commit: HEAD, a hash, a branch or tag, with ~n/^n, or A..B / A...B of those." },
                     "paths": { "type": "array", "items": { "type": "string" } }
                 }
             })

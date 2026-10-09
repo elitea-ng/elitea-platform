@@ -1045,26 +1045,75 @@ fn run_bounded(
     }
 }
 
-/// A revision argument the model may pass: never an option, never a range
-/// expression with shell or pathspec meaning.
+/// A revision argument the model may pass: a commit, never an option and
+/// never a tree-ish (`HEAD:secrets` would name a path outside the
+/// `path_deny` exclusions), a reflog entry (`@{…}`) or a search.
+///
+/// Accepted: `A`, `A..B` and `A...B`, where each side is a base with any
+/// number of `~n` / `^n` suffixes, and a base is `HEAD`, a hexadecimal
+/// object id (4 to 64 digits) or a branch or tag name that
+/// `git check-ref-format --allow-onelevel` accepts.
 ///
 /// # Errors
 ///
-/// When it is empty, starts with `-`, or holds other characters.
+/// Anything else.
 pub fn check_revision(revision: &str) -> ToolResult<()> {
-    let valid = !revision.is_empty()
-        && !revision.starts_with('-')
-        && revision.len() <= 200
-        && revision
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._/~^@{}-:".contains(c));
-    if valid {
+    let invalid = || ToolError::invalid(format!("`{revision}` is not a revision"));
+    if revision.is_empty() || revision.len() > 200 {
+        return Err(invalid());
+    }
+    let sides = match revision.split_once("...") {
+        Some((from, to)) => vec![from, to],
+        None => match revision.split_once("..") {
+            Some((from, to)) => vec![from, to],
+            None => vec![revision],
+        },
+    };
+    if sides.iter().all(|side| commitish(side)) {
         Ok(())
     } else {
-        Err(ToolError::invalid(format!(
-            "`{revision}` is not a revision"
-        )))
+        Err(invalid())
     }
+}
+
+/// One side of a revision range: a base and its `~n` / `^n` suffixes.
+fn commitish(text: &str) -> bool {
+    let (base, suffixes) = text.split_at(text.find(['~', '^']).unwrap_or(text.len()));
+    let suffixes_ok = suffixes
+        .split(['~', '^'])
+        .skip(1)
+        .all(|digits| digits.len() <= 6 && digits.chars().all(|c| c.is_ascii_digit()));
+    if !suffixes_ok || base.is_empty() || base.starts_with('-') {
+        return false;
+    }
+    if base == "HEAD"
+        || ((4..=64).contains(&base.len()) && base.chars().all(|c| c.is_ascii_hexdigit()))
+    {
+        return true;
+    }
+    base.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "._/-".contains(c))
+        && valid_ref_name(base)
+}
+
+/// `git check-ref-format --allow-onelevel <name>` (reads no repository and
+/// no config).
+fn valid_ref_name(name: &str) -> bool {
+    let Ok(git) = git_binary() else {
+        return false;
+    };
+    Command::new(git)
+        .args(["check-ref-format", "--allow-onelevel", name])
+        .current_dir("/")
+        .env_clear()
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CEILING_DIRECTORIES", "/")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Cap git output for a tool result.
@@ -1355,16 +1404,41 @@ mod tests {
         for good in [
             "HEAD",
             "HEAD~2",
+            "HEAD^",
+            "HEAD^2~3",
             "main",
             "origin/main",
+            "feature/x-1",
             "v1.2.3",
             "abc123",
-            "HEAD@{1}",
             "a..b",
+            "HEAD~1..HEAD",
+            "main...feature",
         ] {
             assert!(check_revision(good).is_ok(), "{good}");
         }
-        for bad in ["", "--output=/tmp/x", "-p", "a b", "$(x)", "a;b"] {
+        for bad in [
+            "",
+            "--output=/tmp/x",
+            "-p",
+            "a b",
+            "$(x)",
+            "a;b",
+            "HEAD:secrets",
+            "HEAD:.env",
+            "main:src",
+            ":/fix",
+            "HEAD@{1}",
+            "main@{upstream}",
+            "@",
+            "a..b..c",
+            "a....b",
+            "..b",
+            "x.lock",
+            "a/.b",
+            "HEAD~x",
+            "main..-p",
+        ] {
             assert!(check_revision(bad).is_err(), "{bad}");
         }
     }
