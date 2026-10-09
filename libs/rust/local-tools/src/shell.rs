@@ -220,6 +220,20 @@ pub fn sandbox_request(
     })
 }
 
+/// The Linux helper exits 125 with an `elitea sandbox:` message when the
+/// kernel cannot give the confinement it reports: the command never ran.
+fn helper_refusal(
+    enforcement: Enforcement,
+    exit_code: Option<i32>,
+    stderr: &str,
+) -> Option<ToolError> {
+    (cfg!(target_os = "linux")
+        && enforcement == Enforcement::Partial
+        && exit_code == Some(125)
+        && stderr.starts_with("elitea sandbox:"))
+    .then(|| ToolError::new(ErrorCode::SandboxUnavailable, stderr.trim().to_owned()))
+}
+
 /// Run one command.
 ///
 /// # Errors
@@ -312,12 +326,16 @@ pub async fn run(
             },
         ),
     };
+    let exit_code = if timed_out {
+        None
+    } else {
+        status.and_then(|status| status.code())
+    };
+    if let Some(refusal) = helper_refusal(prepared.enforcement, exit_code, &err.text) {
+        return Err(refusal);
+    }
     Ok(CommandOutput {
-        exit_code: if timed_out {
-            None
-        } else {
-            status.and_then(|status| status.code())
-        },
+        exit_code,
         timed_out,
         stdout: out.text,
         stderr: err.text,

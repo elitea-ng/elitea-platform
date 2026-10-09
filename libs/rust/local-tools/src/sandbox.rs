@@ -3,7 +3,8 @@
 //! | OS | Mechanism | Reported enforcement |
 //! |---|---|---|
 //! | macOS | Seatbelt: `/usr/bin/sandbox-exec -p <profile>` with a profile generated per command ([`seatbelt`]) | `full`: writes confined, `.git` read-only, credentials and `path_deny` unreadable, network denied (loopback included) |
-//! | Linux | Landlock, applied by a re-executed helper (`sandbox::landlock`, Linux builds only) that the host binary dispatches to | `partial`: file system per the kernel's ABI; network denial covers TCP only (Landlock has no UDP or raw-socket rules); no seccomp yet |
+//! | Linux, `bwrap` installed and usable | bubblewrap ([`bubblewrap`]): a read-only bind of `/`, the writable roots bound read-write, every `.git` found bound read-only, credentials and `path_deny` masked, a private network namespace when the network is off (UDP, raw and abstract sockets included), well-known pathname sockets (`/run/user`, Docker) masked | `full` |
+//! | Linux, Landlock only | a re-executed helper (`sandbox::landlock`, Linux builds only) that the host binary dispatches to; ABI 3 (truncate) required, ABI 4 (TCP) required when the network is off, abstract-socket scoping when the kernel has it | `partial`: Landlock cannot keep `.git` read-only under a writable root, cannot deny reads under `/`, has no UDP or pathname-socket rules. **Refused** unless the host sets [`SandboxConfig::allow_partial`] |
 //! | Windows | none (the crate does not build there yet; restricted tokens are phase D3) | `none` |
 //!
 //! What every confined command gets, whatever the mode:
@@ -163,6 +164,14 @@ pub struct SandboxConfig {
     /// Run commands even when the requested confinement cannot be enforced
     /// at all. Off: such commands are refused.
     pub allow_unenforced: bool,
+    /// Linux without a usable bubblewrap: run under the Landlock helper,
+    /// whose enforcement is only partial (see the module table). Off: such
+    /// commands are refused.
+    pub allow_partial: bool,
+    /// Linux: the `bwrap` executable. `None`: `/usr/bin/bwrap`,
+    /// `/usr/local/bin/bwrap` or `/bin/bwrap`, if one works on this kernel
+    /// (unprivileged user namespaces). Never looked up on `PATH`.
+    pub bubblewrap: Option<PathBuf>,
 }
 
 /// A command ready to spawn: the program, its arguments, and what the
@@ -250,9 +259,24 @@ fn platform_prepare(
     argv: &[String],
     config: &SandboxConfig,
 ) -> ToolResult<Option<Prepared>> {
+    if let Some(bwrap) = bubblewrap::usable(config) {
+        let masks = bubblewrap::Masks::discover(request);
+        return Ok(Some(Prepared {
+            program: bwrap,
+            args: bubblewrap::args(request, &masks, argv),
+            enforcement: Enforcement::Full,
+        }));
+    }
     let Some(helper) = &config.linux_helper else {
         return Ok(None);
     };
+    if !config.allow_partial {
+        return Err(ToolError::new(
+            ErrorCode::SandboxUnavailable,
+            "only Landlock is available here, which cannot keep .git read-only, hide \
+             credentials or block UDP; install bubblewrap (bwrap) or allow partial enforcement",
+        ));
+    }
     Ok(Some(Prepared {
         program: helper.clone(),
         args: landlock::helper_args(request, argv)?,
@@ -690,6 +714,237 @@ pub mod seatbelt {
     }
 }
 
+/// Linux bubblewrap (`bwrap`): mount-namespace confinement, which unlike
+/// Landlock can keep sub-paths of a writable root read-only and hide paths.
+///
+/// The argument builder is plain data, so it is tested on every OS; only
+/// [`usable`] runs anything (Linux).
+pub mod bubblewrap {
+    use std::path::{Path, PathBuf};
+
+    use super::SandboxRequest;
+    use crate::policy::SandboxMode;
+    use crate::workspace::{deny_globset, is_protected_name, nfc};
+
+    /// Directories visited looking for `.git` entries and `path_deny`
+    /// matches; past it the walk stops (what it found is still masked).
+    const MAX_WALK_DIRS: usize = 20_000;
+
+    /// Pathname sockets a command could talk to without the network:
+    /// the session bus, agents, Docker.
+    const SOCKET_DIRS: &[&str] = &["/run/user", "/var/run/user"];
+    const SOCKET_FILES: &[&str] = &[
+        "/var/run/docker.sock",
+        "/run/docker.sock",
+        "/run/podman/podman.sock",
+    ];
+
+    /// What [`args`] masks or keeps read-only, found on disk.
+    #[derive(Clone, Debug, Default, Eq, PartialEq)]
+    pub struct Masks {
+        /// Existing `.git` entries under the git roots (read-only binds).
+        pub git: Vec<PathBuf>,
+        /// Existing directories to hide behind an empty tmpfs.
+        pub hide_dirs: Vec<PathBuf>,
+        /// Existing files to hide behind `/dev/null`.
+        pub hide_files: Vec<PathBuf>,
+    }
+
+    impl Masks {
+        /// Walk the request's roots for what it denies or protects.
+        #[must_use]
+        pub fn discover(request: &SandboxRequest) -> Self {
+            let mut masks = Self::default();
+            for path in &request.deny_paths {
+                let text = path.display().to_string();
+                if let Some(prefix) = text.strip_suffix('*') {
+                    let prefix = Path::new(prefix);
+                    let (Some(parent), Some(stem)) = (prefix.parent(), prefix.file_name()) else {
+                        continue;
+                    };
+                    let stem = stem.to_string_lossy().into_owned();
+                    for entry in std::fs::read_dir(parent).into_iter().flatten().flatten() {
+                        if entry.file_name().to_string_lossy().starts_with(&stem) {
+                            masks.hide(&entry.path());
+                        }
+                    }
+                } else {
+                    masks.hide(path);
+                }
+            }
+            let deny = request
+                .deny_root
+                .as_ref()
+                .and_then(|_| deny_globset(&request.deny_globs).ok());
+            let mut roots: Vec<&PathBuf> = request.git_roots.iter().collect();
+            if let Some(root) = &request.deny_root
+                && !roots.contains(&root)
+            {
+                roots.push(root);
+            }
+            let mut visited = 0usize;
+            for root in roots {
+                let mut pending = vec![root.clone()];
+                while let Some(dir) = pending.pop() {
+                    visited += 1;
+                    if visited > MAX_WALK_DIRS {
+                        break;
+                    }
+                    for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+                        let path = entry.path();
+                        let name = entry.file_name().to_string_lossy().into_owned();
+                        let Ok(kind) = entry.file_type() else {
+                            continue;
+                        };
+                        if request.git_roots.contains(root) && is_protected_name(&name) {
+                            masks.git.push(path);
+                            continue;
+                        }
+                        if let (Some(deny), Some(deny_root)) = (&deny, &request.deny_root)
+                            && let Ok(relative) = path.strip_prefix(deny_root)
+                            && deny.is_match(nfc(&relative.to_string_lossy()))
+                        {
+                            masks.hide(&path);
+                            continue;
+                        }
+                        if kind.is_dir() {
+                            pending.push(path);
+                        }
+                    }
+                }
+            }
+            masks.git.sort();
+            masks.git.dedup();
+            masks
+        }
+
+        fn hide(&mut self, path: &Path) {
+            match std::fs::symlink_metadata(path) {
+                Ok(meta) if meta.is_dir() => self.hide_dirs.push(path.to_path_buf()),
+                Ok(meta) if !meta.file_type().is_symlink() => {
+                    self.hide_files.push(path.to_path_buf());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn push(args: &mut Vec<String>, words: &[&str], path: &Path) {
+        args.extend(words.iter().map(|word| (*word).to_owned()));
+        let text = path.display().to_string();
+        let repeat = words.first().is_some_and(|flag| flag.ends_with("bind"));
+        args.push(text.clone());
+        if repeat {
+            args.push(text);
+        }
+    }
+
+    /// The `bwrap` arguments that run `argv` under `request`.
+    #[must_use]
+    pub fn args(request: &SandboxRequest, masks: &Masks, argv: &[String]) -> Vec<String> {
+        let mut out: Vec<String> = ["--die-with-parent", "--unshare-pid"]
+            .iter()
+            .map(|word| (*word).to_owned())
+            .collect();
+        if !request.network {
+            out.push("--unshare-net".to_owned());
+        }
+        let root = Path::new("/");
+        if request.mode == SandboxMode::FullAccess {
+            push(&mut out, &["--bind"], root);
+        } else {
+            push(&mut out, &["--ro-bind"], root);
+        }
+        out.extend(["--dev", "/dev", "--proc", "/proc"].map(str::to_owned));
+        if request.mode == SandboxMode::WorkspaceWrite {
+            for writable in &request.writable_roots {
+                push(&mut out, &["--bind"], writable);
+            }
+        }
+        for dir in masks
+            .hide_dirs
+            .iter()
+            .map(PathBuf::as_path)
+            .chain(SOCKET_DIRS.iter().map(Path::new).filter(|dir| dir.is_dir()))
+        {
+            push(&mut out, &["--tmpfs"], dir);
+        }
+        for file in masks.hide_files.iter().map(PathBuf::as_path).chain(
+            SOCKET_FILES
+                .iter()
+                .map(Path::new)
+                .filter(|file| file.exists()),
+        ) {
+            out.extend(["--ro-bind", "/dev/null"].map(str::to_owned));
+            out.push(file.display().to_string());
+        }
+        // A writable root inside a hidden directory (the session's
+        // temporary directory) is bound again over the mask.
+        if request.mode != SandboxMode::FullAccess {
+            for writable in &request.writable_roots {
+                if masks.hide_dirs.iter().any(|dir| writable.starts_with(dir)) {
+                    let flag = if request.mode == SandboxMode::WorkspaceWrite {
+                        "--bind"
+                    } else {
+                        "--ro-bind"
+                    };
+                    push(&mut out, &[flag], writable);
+                }
+            }
+        }
+        if request.mode != SandboxMode::ReadOnly {
+            for path in masks.git.iter().chain(&request.protected) {
+                push(&mut out, &["--ro-bind"], path);
+            }
+        }
+        out.push("--".to_owned());
+        out.extend(argv.iter().cloned());
+        out
+    }
+
+    /// The `bwrap` to use, if it works here (probed once: unprivileged user
+    /// namespaces can be off).
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn usable(config: &super::SandboxConfig) -> Option<PathBuf> {
+        use std::sync::OnceLock;
+        static FOUND: OnceLock<Option<PathBuf>> = OnceLock::new();
+        if let Some(explicit) = &config.bubblewrap {
+            return Some(explicit.clone());
+        }
+        FOUND
+            .get_or_init(|| {
+                ["/usr/bin/bwrap", "/usr/local/bin/bwrap", "/bin/bwrap"]
+                    .iter()
+                    .map(PathBuf::from)
+                    .filter(|path| path.is_file())
+                    .find(|path| {
+                        std::process::Command::new(path)
+                            .args([
+                                "--die-with-parent",
+                                "--unshare-pid",
+                                "--unshare-net",
+                                "--ro-bind",
+                                "/",
+                                "/",
+                                "--dev",
+                                "/dev",
+                                "--proc",
+                                "/proc",
+                                "--",
+                                "/bin/true",
+                            ])
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .status()
+                            .is_ok_and(|status| status.success())
+                    })
+            })
+            .clone()
+    }
+}
+
 /// Linux Landlock, applied in a helper process before `exec`.
 ///
 /// Landlock restricts the calling thread, so it must run in the child
@@ -706,8 +961,8 @@ pub mod landlock {
     use std::path::PathBuf;
 
     use landlock::{
-        ABI, Access, AccessFs, AccessNet, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
-        path_beneath_rules,
+        ABI, Access, AccessFs, AccessNet, CompatLevel, Compatible, Ruleset, RulesetAttr,
+        RulesetCreatedAttr, RulesetStatus, Scope, path_beneath_rules,
     };
 
     use super::SandboxRequest;
@@ -720,8 +975,16 @@ pub mod landlock {
     /// The exit status when the sandbox cannot be applied.
     pub const EXIT_UNAVAILABLE: i32 = 125;
 
-    /// The highest ABI this code asks for; older kernels get best effort.
-    const TARGET_ABI: ABI = ABI::V5;
+    /// The highest ABI this code asks for; what a kernel lacks beyond the
+    /// minimums below is best effort.
+    const TARGET_ABI: ABI = ABI::V6;
+
+    /// File-system rules need ABI 3 (truncate is controlled); without it a
+    /// read-only file could still be truncated.
+    const MIN_FS_ABI: ABI = ABI::V3;
+
+    /// Denying the network needs ABI 4 (TCP bind and connect).
+    const MIN_NET_ABI: ABI = ABI::V4;
 
     /// The helper's arguments: flag, mode, network, roots, `--`, argv.
     ///
@@ -751,12 +1014,23 @@ pub mod landlock {
         network: bool,
         roots: &[PathBuf],
     ) -> Result<RulesetStatus, landlock::RulesetError> {
+        // The minimums are hard requirements: an older kernel fails here and
+        // the command is refused, rather than run less confined than
+        // reported.
         let mut ruleset = Ruleset::default();
         if mode != SandboxMode::FullAccess {
-            ruleset = ruleset.handle_access(AccessFs::from_all(TARGET_ABI))?;
+            ruleset = ruleset
+                .set_compatibility(CompatLevel::HardRequirement)
+                .handle_access(AccessFs::from_all(MIN_FS_ABI))?
+                .set_compatibility(CompatLevel::BestEffort)
+                .handle_access(AccessFs::from_all(TARGET_ABI))?;
         }
         if !network {
-            ruleset = ruleset.handle_access(AccessNet::from_all(TARGET_ABI))?;
+            ruleset = ruleset
+                .set_compatibility(CompatLevel::HardRequirement)
+                .handle_access(AccessNet::from_all(MIN_NET_ABI))?
+                .set_compatibility(CompatLevel::BestEffort)
+                .scope(Scope::from_all(TARGET_ABI))?;
         }
         let mut created = ruleset.create()?;
         if mode != SandboxMode::FullAccess {
@@ -811,7 +1085,9 @@ pub mod landlock {
         match restrict(mode, network, &roots) {
             Ok(RulesetStatus::NotEnforced) => fail("Landlock is not available on this kernel"),
             Ok(_) => {}
-            Err(_) => fail("the Landlock ruleset could not be applied"),
+            Err(_) => fail(
+                "the Landlock ruleset could not be applied (the kernel needs Landlock ABI 3, or 4 without network)",
+            ),
         }
         let Some((program, rest)) = command.split_first() else {
             fail("no command");
@@ -950,6 +1226,110 @@ mod tests {
         );
         assert_eq!(seatbelt::escape("/a.b(c)^"), "/a[.]b[(]c[)]\\^");
         assert!(seatbelt::glob_body("[abc", false).is_none());
+    }
+
+    /// H3: on Linux the protected paths reach the sandbox: bubblewrap keeps
+    /// every `.git` read-only, hides credentials and `path_deny` files, and
+    /// unshares the network.
+    #[test]
+    fn bubblewrap_keeps_git_read_only_and_hides_what_is_denied() {
+        let dir = tempfile::tempdir().expect("dir");
+        let base = std::fs::canonicalize(dir.path()).expect("canonical");
+        let ws = base.join("ws");
+        let data = base.join("data");
+        let temp = data.join("tmp/s1");
+        std::fs::create_dir_all(ws.join(".git/hooks")).expect("git");
+        std::fs::create_dir_all(ws.join("vendor/lib/.GIT")).expect("nested git");
+        std::fs::create_dir_all(ws.join("src")).expect("src");
+        std::fs::write(ws.join("src/.env"), "x").expect("env");
+        std::fs::create_dir_all(&temp).expect("temp");
+        let request = SandboxRequest {
+            writable_roots: vec![ws.clone(), temp.clone()],
+            git_roots: vec![ws.clone()],
+            deny_paths: vec![data.clone(), base.join("missing")],
+            deny_globs: vec![".env".to_owned()],
+            deny_root: Some(ws.clone()),
+            ..SandboxRequest::new(SandboxMode::WorkspaceWrite, false)
+        };
+        let masks = super::bubblewrap::Masks::discover(&request);
+        assert_eq!(masks.git, vec![ws.join(".git"), ws.join("vendor/lib/.GIT")]);
+        assert_eq!(masks.hide_files, vec![ws.join("src/.env")]);
+        assert_eq!(masks.hide_dirs, vec![data.clone()]);
+        let args = super::bubblewrap::args(&request, &masks, &["make".to_owned()]);
+        let joined = args.join(" ");
+        let text = |path: &Path| path.display().to_string();
+        assert!(joined.starts_with("--die-with-parent --unshare-pid --unshare-net --ro-bind / /"));
+        assert!(joined.contains(&format!("--ro-bind {0} {0}", text(&ws.join(".git")))));
+        assert!(joined.contains(&format!(
+            "--ro-bind {0} {0}",
+            text(&ws.join("vendor/lib/.GIT"))
+        )));
+        assert!(joined.contains(&format!(
+            "--ro-bind /dev/null {}",
+            text(&ws.join("src/.env"))
+        )));
+        let hide = joined
+            .find(&format!("--tmpfs {}", text(&data)))
+            .expect("data hidden");
+        let rebind = joined
+            .rfind(&format!("--bind {0} {0}", text(&temp)))
+            .expect("temp");
+        assert!(
+            rebind > hide,
+            "the temporary directory is bound over the mask"
+        );
+        let git = joined
+            .find(&format!("--ro-bind {0} {0}", text(&ws.join(".git"))))
+            .expect("git");
+        let ws_bind = joined
+            .find(&format!("--bind {0} {0}", text(&ws)))
+            .expect("ws");
+        assert!(git > ws_bind, ".git is bound read-only after the workspace");
+        assert!(joined.ends_with("-- make"));
+
+        let networked = SandboxRequest {
+            network: true,
+            ..request.clone()
+        };
+        assert!(
+            !super::bubblewrap::args(&networked, &masks, &[]).contains(&"--unshare-net".to_owned())
+        );
+        let read_only = SandboxRequest {
+            mode: SandboxMode::ReadOnly,
+            ..request
+        };
+        let read_only = super::bubblewrap::args(&read_only, &masks, &[]).join(" ");
+        assert!(!read_only.contains(&format!("--bind {0} {0}", text(&ws))));
+    }
+
+    /// H3: Landlock alone is partial and is refused unless the host opts in.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn landlock_alone_is_refused_unless_partial_is_allowed() {
+        let config = SandboxConfig {
+            linux_helper: Some(PathBuf::from("/proc/self/exe")),
+            bubblewrap: None,
+            ..SandboxConfig::default()
+        };
+        if super::bubblewrap::usable(&config).is_some() {
+            return;
+        }
+        let req = request(SandboxMode::WorkspaceWrite, false);
+        let argv = vec!["true".to_owned()];
+        assert_eq!(
+            prepare(&req, &argv, &config).expect_err("partial").code(),
+            ErrorCode::SandboxUnavailable
+        );
+        let allowed = SandboxConfig {
+            allow_partial: true,
+            ..config
+        };
+        assert_eq!(
+            prepare(&req, &argv, &allowed)
+                .expect("partial allowed")
+                .enforcement,
+            Enforcement::Partial
+        );
     }
 
     #[test]

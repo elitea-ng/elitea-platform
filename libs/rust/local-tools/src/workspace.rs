@@ -78,6 +78,40 @@ const fn is_hfs_ignorable(c: char) -> bool {
 /// (path globs follow it).
 pub(crate) const CASE_INSENSITIVE_FS: bool = cfg!(any(target_os = "macos", target_os = "windows"));
 
+/// The `path_deny` patterns as one glob set over NFC `/`-joined workspace
+/// paths (see [`Workspace::open`] for the pattern rules).
+///
+/// # Errors
+///
+/// When a pattern is not a valid glob.
+pub fn deny_globset(path_deny: &[String]) -> ToolResult<GlobSet> {
+    let mut builder = GlobSetBuilder::new();
+    for pattern in path_deny {
+        let normalised = nfc(pattern);
+        let trimmed = normalised.trim().trim_start_matches("./");
+        if trimmed.is_empty() {
+            continue;
+        }
+        let anchored = if trimmed.contains('/') {
+            trimmed.trim_start_matches('/').to_owned()
+        } else {
+            format!("**/{trimmed}")
+        };
+        for candidate in [anchored.as_str(), trimmed] {
+            let glob = GlobBuilder::new(candidate)
+                .case_insensitive(CASE_INSENSITIVE_FS)
+                .build()
+                .map_err(|_| {
+                    ToolError::invalid(format!("path_deny pattern `{pattern}` is not a glob"))
+                })?;
+            builder.add(glob);
+        }
+    }
+    builder
+        .build()
+        .map_err(|_| ToolError::invalid("path_deny patterns do not compile"))
+}
+
 /// `text` in NFC: how path rules compare names, so an NFD spelling (what
 /// macOS keyboards and older HFS+ produce) matches an NFC pattern.
 pub(crate) fn nfc(text: &str) -> String {
@@ -296,31 +330,7 @@ impl Workspace {
         {
             aliases.push(spelled);
         }
-        let mut builder = GlobSetBuilder::new();
-        for pattern in path_deny {
-            let normalised = nfc(pattern);
-            let trimmed = normalised.trim().trim_start_matches("./");
-            if trimmed.is_empty() {
-                continue;
-            }
-            let anchored = if trimmed.contains('/') {
-                trimmed.trim_start_matches('/').to_owned()
-            } else {
-                format!("**/{trimmed}")
-            };
-            for candidate in [anchored.as_str(), trimmed] {
-                let glob = GlobBuilder::new(candidate)
-                    .case_insensitive(CASE_INSENSITIVE_FS)
-                    .build()
-                    .map_err(|_| {
-                        ToolError::invalid(format!("path_deny pattern `{pattern}` is not a glob"))
-                    })?;
-                builder.add(glob);
-            }
-        }
-        let deny = builder
-            .build()
-            .map_err(|_| ToolError::invalid("path_deny patterns do not compile"))?;
+        let deny = deny_globset(path_deny)?;
         Ok(Self {
             root: canonical,
             aliases,
