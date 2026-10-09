@@ -35,30 +35,28 @@ elitea-llm-wire = { path = "../../libs/rust/llm-wire" }
 # serde_json uses default features; its digests are order-explicit
 # (`canonical`), so neither this crate's `arbitrary_precision` nor a
 # `preserve_order` from elsewhere changes them.
-elitea-agent-runtime = { path = "../../libs/rust/agent-runtime" }
+# `toolkit-sql`: the worker serves the `sql` toolkit family (sqlx postgres +
+# mysql), which the desktop host never links.
+elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["toolkit-sql"] }
 futures-util = { version = "=0.3.34", optional = true, default-features = false, features = ["io"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"
 hmac = "=0.13.0"
 hyper = { version = "=1.11.1", default-features = false, features = ["client", "http1", "http2"] }
-hyper-rustls = { version = "=0.27.10", default-features = false, features = ["http1", "http2", "native-tokio", "ring"] }
 hyper-util = { version = "=0.1.21", default-features = false, features = ["client-legacy", "http1", "http2", "tokio"] }
 kube = { version = "=4.2.0", optional = true, default-features = false, features = ["client", "rustls-tls", "ring", "ws"] }
 k8s-openapi = { version = "=0.28.0", optional = true, features = ["v1_32"] }
-md-5 = "=0.11.0"
 minijinja = { version = "=2.24.0", default-features = false, features = ["builtins", "fuel", "serde"] }
 opentelemetry = { version = "=0.33.0", default-features = false, features = ["trace"] }
 opentelemetry-otlp = { version = "=0.33.0", default-features = false, features = ["http-proto", "reqwest-client", "reqwest-rustls", "trace"] }
 opentelemetry_sdk = { version = "=0.33.0", default-features = false, features = ["trace", "rt-tokio", "experimental_trace_batch_span_processor_with_async_runtime"] }
 percent-encoding = "=2.3.2"
 prost = "=0.14.4"
-regex = "=1.13.1"
 reqwest = { version = "=0.12.28", default-features = false, features = ["http2", "json", "multipart", "rustls-tls-native-roots", "stream"] }
 reqwest-mcp = { package = "reqwest", version = "=0.13.4", default-features = false, features = ["json", "rustls", "stream"] }
 ring = "=0.17.14"
 rmcp = { version = "=3.5.0", default-features = false, features = ["auth"] }
 rustls = { version = "=0.23.45", default-features = false, features = ["ring", "std"] }
-rustls-native-certs = "=0.8.4"
 rustix = { version = "=1.1.5", features = ["fs", "process"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "=1.0.151", features = ["arbitrary_precision", "raw_value"] }
@@ -68,7 +66,6 @@ subtle = "=2.6.1"
 tempfile = "=3.27.0"
 thiserror = "=2.0.21"
 tokio = { version = "=1.53.1", features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
-tokio-rustls = { version = "=0.26.6", default-features = false, features = ["ring"] }
 tokio-stream = { version = "=0.1.19", features = ["net"] }
 tonic = { version = "=0.14.6", features = ["tls-ring"] }
 tonic-prost = "=0.14.6"
@@ -85,7 +82,7 @@ protoc-bin-vendored = "=3.2.0"
 tonic-prost-build = "=0.14.6"
 
 [dev-dependencies]
-elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support"] }
+elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support", "toolkit-sql"] }
 http-body = "=1.1.0"
 tokio = { version = "=1.53.1", features = ["test-util"] }
 
@@ -107,8 +104,10 @@ codegen-units = 1
 panic = "abort"
 incremental = false
 
-# Pinned ADK 2.2.0 history-retention extensions. See vendor/README.md.
+# Pinned ADK 2.2.0 history-retention and sandbox extensions, shared with
+# every consumer of elitea-agent-runtime (ADR-0029 decision 2): the libs/rust
+# workspace applies the same patches. See ../../libs/rust/vendor/README.md.
 [patch.crates-io]
-adk-agent = { path = "vendor/adk-agent" }
-adk-runner = { path = "vendor/adk-runner" }
-adk-sandbox = { path = "vendor/adk-sandbox" }
+adk-agent = { path = "../../libs/rust/vendor/adk-agent" }
+adk-runner = { path = "../../libs/rust/vendor/adk-runner" }
+adk-sandbox = { path = "../../libs/rust/vendor/adk-sandbox" }
