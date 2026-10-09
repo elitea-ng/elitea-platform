@@ -433,6 +433,7 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Toolkit request recovery](toolkit-request-recovery.md) records browser recovery before execution ID receipt and one-call evidence.
 - [Deferred MCP elicitation](external-mcp-elicitation-deferred.md) records the later client approval option and its authority boundary.
 - [Pipeline size bounds and HTTP snapshot scope](pipeline-size-bounds-http-snapshot-20261008.md) records one 512 KiB pipeline bound across Main and Worker, the non-HTTP snapshot scope, browser evidence and follow-ups.
+- [Exclusive branches and ADK fan-in joins](exclusive-branch-fan-in-20261008.md) records why converging, looping and multi-`END` saved children lost their result, the compiler-level fix, root-graph verification, browser evidence and follow-ups.
 - [Pipeline MCP authorization continuation](pipeline-mcp-authorization-continuation-20261008.md) records Skip/Authorize on a direct pipeline MCP node from Main's HITL wire shape, the sensitive-approval-then-authorization sequence, browser evidence and follow-ups.
 - [Graph fan-out child lineage](graph-fanout-child-lineage-20261008.md) records frozen Parallel/Map child identity across executions, lease-loss control stops and event-driven cancellation (Point 5 C1).
 - [Container build local crate freshness](container-build-local-crate-freshness-20261008.md) records why Rust image builds recompile local crates under a locked shared target cache, the two-worktree build proof and the gate test.

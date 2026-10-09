@@ -42,6 +42,8 @@ mod decision;
 mod direct_tool;
 #[cfg(test)]
 mod direct_tool_tests;
+#[cfg(test)]
+mod fan_in_tests;
 pub(crate) mod fanout_control;
 use elitea_agent_runtime::graph::hitl;
 #[cfg(test)]
