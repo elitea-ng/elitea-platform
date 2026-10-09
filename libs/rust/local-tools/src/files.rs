@@ -208,7 +208,10 @@ pub(crate) fn edit(
 
 /// One file of a checked patch, ready to write.
 pub(crate) struct PlannedChange {
+    /// Where the change lands (in-workspace symlinks followed).
     pub path: WsPath,
+    /// The path as the patch names it.
+    pub typed: WsPath,
     /// `None`: delete.
     pub content: Option<String>,
 }
@@ -248,10 +251,13 @@ pub(crate) fn plan_patch(
             (Some(read), false) => text_of(read)?.to_owned(),
             (None, true) => String::new(),
         };
-        let target = now
-            .as_ref()
-            .map_or_else(|| path.clone(), |read| read.path.clone());
+        let target = match &now {
+            Some(read) => read.path.clone(),
+            None => workspace.final_target(&path)?,
+        };
+        workspace.check(&target, Intent::Write)?;
         planned.push(PlannedChange {
+            typed: path,
             path: target,
             content: patch::apply(&original, &file)?,
         });

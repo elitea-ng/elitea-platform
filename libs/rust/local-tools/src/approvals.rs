@@ -34,14 +34,14 @@ use async_trait::async_trait;
 use elitea_agent_runtime::host::{
     ApprovalChannel, ApprovalOutcome, ApprovalRequest, HostError, HostErrorCode,
 };
-use globset::{Glob, GlobMatcher};
+use globset::{GlobBuilder, GlobMatcher};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::command::{CommandPattern, CommandShape, analyse};
 use crate::error::{ErrorCode, ToolError, ToolResult};
 use crate::policy::{LocalWorkPolicy, SandboxMode};
-use crate::workspace::{Intent, Workspace};
+use crate::workspace::{CASE_INSENSITIVE_FS, Intent, Workspace, nfc};
 
 /// The payload key a local tool call travels under in an
 /// [`ApprovalRequest`]; requests without it (HITL nodes) go straight to the
@@ -328,7 +328,9 @@ impl RulesEngine {
                 };
                 let path = match &rule.path {
                     Some(glob) => Some(
-                        Glob::new(glob)
+                        GlobBuilder::new(&nfc(glob))
+                            .case_insensitive(CASE_INSENSITIVE_FS)
+                            .build()
                             .map_err(|_| {
                                 ToolError::invalid(format!(
                                     "workspace rule path `{glob}` is not a glob"
@@ -496,9 +498,9 @@ impl RulesEngine {
             }
             if let Some(glob) = &compiled.path {
                 let hit = if deny {
-                    call.paths.iter().any(|path| glob.is_match(path))
+                    call.paths.iter().any(|path| glob.is_match(nfc(path)))
                 } else {
-                    !call.paths.is_empty() && call.paths.iter().all(|path| glob.is_match(path))
+                    !call.paths.is_empty() && call.paths.iter().all(|path| glob.is_match(nfc(path)))
                 };
                 if !hit {
                     continue;

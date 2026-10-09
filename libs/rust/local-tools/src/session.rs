@@ -9,6 +9,7 @@
 //! 4. before the turn's first change, take a checkpoint;
 //! 5. run it, and return a JSON result, failures included, to the model.
 
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -514,30 +515,48 @@ impl LocalSession {
             | ToolKind::ReadDocument => self.read_only(spec, call_id, args).await,
             ToolKind::GitRead => self.git_read(tool, call_id, args).await,
             ToolKind::WriteFile => {
-                let args: files::WriteArgs = parse(args)?;
-                let path = self.workspace.resolve(&args.path, Intent::Write)?;
+                let mut args: files::WriteArgs = parse(args)?;
+                let (typed, target) = self.write_target(&args.path)?;
                 self.blocking({
-                    let path = path.clone();
-                    move |this| files::check_fresh(&this.workspace, &this.ledger, &path).map(|_| ())
+                    let target = target.clone();
+                    move |this| {
+                        files::check_fresh(&this.workspace, &this.ledger, &target).map(|_| ())
+                    }
                 })
                 .await?;
-                self.authorize_change(call_id, ToolKind::WriteFile, vec![path], "write a file")
-                    .await?;
-                self.blocking(move |this| files::write(&this.workspace, &this.ledger, &args))
-                    .await
+                self.authorize_change(
+                    call_id,
+                    ToolKind::WriteFile,
+                    &typed,
+                    &target,
+                    "write a file",
+                )
+                .await?;
+                args.path = target.display_string();
+                self.blocking(move |this| {
+                    this.unchanged_target(&target)?;
+                    files::write(&this.workspace, &this.ledger, &args)
+                })
+                .await
             }
             ToolKind::EditFile => {
-                let args: files::EditArgs = parse(args)?;
-                let path = self.workspace.resolve(&args.path, Intent::Write)?;
+                let mut args: files::EditArgs = parse(args)?;
+                let (typed, target) = self.write_target(&args.path)?;
                 self.blocking({
-                    let path = path.clone();
-                    move |this| files::check_fresh(&this.workspace, &this.ledger, &path).map(|_| ())
+                    let target = target.clone();
+                    move |this| {
+                        files::check_fresh(&this.workspace, &this.ledger, &target).map(|_| ())
+                    }
                 })
                 .await?;
-                self.authorize_change(call_id, ToolKind::EditFile, vec![path], "edit a file")
+                self.authorize_change(call_id, ToolKind::EditFile, &typed, &target, "edit a file")
                     .await?;
-                self.blocking(move |this| files::edit(&this.workspace, &this.ledger, &args))
-                    .await
+                args.path = target.display_string();
+                self.blocking(move |this| {
+                    this.unchanged_target(&target)?;
+                    files::edit(&this.workspace, &this.ledger, &args)
+                })
+                .await
             }
             ToolKind::ApplyPatch => {
                 let patch = args
@@ -548,9 +567,18 @@ impl LocalSession {
                 let planned = self
                     .blocking(move |this| files::plan_patch(&this.workspace, &this.ledger, &patch))
                     .await?;
-                let paths = planned.iter().map(|change| change.path.clone()).collect();
-                self.authorize_change(call_id, ToolKind::ApplyPatch, paths, "apply a patch")
-                    .await?;
+                let typed: Vec<WsPath> =
+                    planned.iter().map(|change| change.typed.clone()).collect();
+                let targets: Vec<WsPath> =
+                    planned.iter().map(|change| change.path.clone()).collect();
+                self.authorize_changes(
+                    call_id,
+                    ToolKind::ApplyPatch,
+                    &typed,
+                    &targets,
+                    "apply a patch",
+                )
+                .await?;
                 self.blocking(move |this| {
                     files::apply_patch(&this.workspace, &this.ledger, planned)
                 })
@@ -613,16 +641,67 @@ impl LocalSession {
         }
     }
 
+    /// The typed path of a write and where it lands (in-workspace symlinks
+    /// followed), both checked against the deny rules.
+    fn write_target(&self, argument: &str) -> ToolResult<(WsPath, WsPath)> {
+        let typed = self.workspace.resolve(argument, Intent::Write)?;
+        let target = self.workspace.final_target(&typed)?;
+        self.workspace.check(&target, Intent::Write)?;
+        Ok((typed, target))
+    }
+
+    /// The approved target is still where the write lands (a symlink was
+    /// not swapped in while the person decided).
+    fn unchanged_target(&self, target: &WsPath) -> ToolResult<()> {
+        if &self.workspace.final_target(target)? == target {
+            Ok(())
+        } else {
+            Err(ToolError::new(
+                ErrorCode::Conflict,
+                format!("`{target}` changed while the approval was pending"),
+            ))
+        }
+    }
+
     async fn authorize_change(
         self: &Arc<Self>,
         call_id: &str,
         kind: ToolKind,
-        paths: Vec<WsPath>,
+        typed: &WsPath,
+        target: &WsPath,
+        message: &str,
+    ) -> ToolResult<()> {
+        self.authorize_changes(
+            call_id,
+            kind,
+            std::slice::from_ref(typed),
+            std::slice::from_ref(target),
+            message,
+        )
+        .await
+    }
+
+    /// Ask about a change. The rules match the final targets (and the typed
+    /// paths, so a deny on either holds and an allow must cover both); the
+    /// message names every target reached through a link.
+    async fn authorize_changes(
+        self: &Arc<Self>,
+        call_id: &str,
+        kind: ToolKind,
+        typed: &[WsPath],
+        targets: &[WsPath],
         message: &str,
     ) -> ToolResult<()> {
         let mut call = ToolCall::new(kind);
-        call.paths = paths.iter().map(WsPath::display_string).collect();
-        self.authorize(call_id, call, message).await?;
+        let mut message = message.to_owned();
+        for (typed, target) in typed.iter().zip(targets) {
+            call.paths.push(target.display_string());
+            if typed != target {
+                call.paths.push(typed.display_string());
+                let _ = write!(message, " (`{typed}` is a link to `{target}`)");
+            }
+        }
+        self.authorize(call_id, call, &message).await?;
         self.blocking(Self::ensure_checkpoint).await
     }
 

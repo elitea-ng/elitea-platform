@@ -455,6 +455,30 @@ impl Workspace {
         create_dirs: bool,
         follow_final: bool,
     ) -> ToolResult<(OwnedFd, WsPath)> {
+        self.walk(path, create_dirs, follow_final, false)
+    }
+
+    /// Where a write of `path` would land: in-workspace symlinks on the way
+    /// and at the end followed, a missing tail kept as written. What the
+    /// approval rules match and the person is shown.
+    ///
+    /// # Errors
+    ///
+    /// A symlink that leads out of the workspace, or an unusable walk.
+    pub fn final_target(&self, path: &WsPath) -> ToolResult<WsPath> {
+        if path.is_root() {
+            return Ok(WsPath::root());
+        }
+        self.walk(path, false, true, true).map(|(_, target)| target)
+    }
+
+    fn walk(
+        &self,
+        path: &WsPath,
+        create_dirs: bool,
+        follow_final: bool,
+        probe: bool,
+    ) -> ToolResult<(OwnedFd, WsPath)> {
         if path.is_root() {
             return Err(ToolError::invalid("the workspace root is not a file"));
         }
@@ -490,7 +514,12 @@ impl Workspace {
                         pending.push_front(name);
                         None
                     }
-                    Err(Errno::NOENT) => {
+                    Err(Errno::NOENT) if probe && !is_symlink(&dir, &name) => {
+                        done.push(name);
+                        done.extend(pending.drain(..));
+                        return Ok((dir, WsPath(done)));
+                    }
+                    Err(Errno::NOENT) if !is_symlink(&dir, &name) => {
                         return Err(ToolError::new(
                             ErrorCode::NotFound,
                             format!("`{path}` does not exist"),
