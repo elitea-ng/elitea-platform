@@ -25,7 +25,7 @@ The current Main toolkit catalog declares `github_configuration`, `repository`, 
 | Worker acquisition | `src/transport/code_workspace_content.rs`, `src/agents/graph/code_workspace_remote.rs` | Send the original visit and exact preparation base. Accept only the bound immutable manifest. |
 | Supervisor content | Main `code_workspace_read_http.go`; Worker `workspace_content_transfer.rs` | Verify the signed role and current claim. Recheck authority after bounded object reads. |
 | Indexed hydration | `service_workspace.rs`, `client_workspace.rs`, `protocol/sandbox_workspace_authority.rs`, `docker_workspace.rs` | Import bounded batches into the original job. Do not dispatch Code. |
-| Docker mount | `vendor/adk-sandbox/src/workspace/docker_repository.rs`; `src/sandbox/runtime.rs` | Hydrate a named volume as UID10001. Mount that exact volume read-only for Code. |
+| Docker mount | `libs/rust/vendor/adk-sandbox/src/workspace/docker_repository.rs`; `src/sandbox/runtime.rs` | Hydrate a named volume as UID10001. Mount that exact volume read-only for Code. |
 | Kubernetes mount | `src/sandbox/kubernetes/workspace.rs`, `repository_content.rs`, `runtime.rs` | Hydrate the original Pod init volume. Mount it read-only for Code. |
 | Image entry | Runner `src/workspace_content.rs`, `workspace_lifecycle.rs` | Verify exact content, file modes, completion, and a kernel read-only mount. |
 | Durable cleanup | `src/sandbox/ledger_workspace.rs`, `docker_supervisor.rs` | Save provenance before container removal. Compare actual volume labels before cleanup. |

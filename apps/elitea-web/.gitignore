@@ -1,6 +1,7 @@
 # The lockfile is COMMITTED (spec D4) — do not add package-lock.json here.
 node_modules/
 dist/
+dist-desktop/
 coverage/
 coverage-shards/
 coverage-scripts/

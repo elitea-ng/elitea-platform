@@ -219,6 +219,12 @@ export function App() {
        */
       if (probeStatus === undefined) return;
 
+      // Desktop (ADR-0029): never navigate the privileged webview to a login URL.
+      // A native client has no cookie plane; its transport signs out and the
+      // shell returns to the connect screen. Statically false in every other
+      // build mode, so the branch is removed from them.
+      if (import.meta.env.MODE === 'desktop') return;
+
       const returnTo = window.location.pathname + window.location.search;
       window.location.assign(buildLoginUrl(authPlaneFromProbeStatus(probeStatus), returnTo));
     });

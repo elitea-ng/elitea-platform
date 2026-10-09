@@ -319,6 +319,16 @@ test.describe('bucket permission exceptions: edit/remove/enforcement (ELITEA-247
       const memberCtx = await browser.newContext({ storageState: STORAGE_STATE.member });
       const memberPage = await memberCtx.newPage();
       await openArtifacts(memberPage);
+      // Settle before the SECOND navigation, as ELITEA-2484 below does and
+      // for the same reason. Without it the `.goto()` fired ~80 ms after the
+      // first document started booting: WebKit cancelled that document's
+      // in-flight session probe (`/auth/info`, "due to access control
+      // checks"), the next document's `config.js` stalled and failed with
+      // "WebKit encountered an internal error", and the probe that followed
+      // went out with NO session cookie — `{"authenticated":false}`, then the
+      // OIDC authorize page. Measured on webkit in CI: 3 of 3 attempts, while
+      // the settled twin passed first time beside it.
+      await expect(memberPage.getByText(bucket, { exact: true })).toBeVisible({ timeout: 15_000 });
       await memberPage.goto(`${ARTIFACTS_URL}?bucket=${bucket}`);
       await memberPage.waitForURL('**/artifacts**', { timeout: 15_000 });
 
@@ -331,9 +341,7 @@ test.describe('bucket permission exceptions: edit/remove/enforcement (ELITEA-247
       // Re-enter (a fresh load, not history back) before Download: the preview
       // pane replaces the file table, exactly as artifacts.lifecycle.spec.ts's
       // J20d documents for this same sequence.
-      await memberPage.waitForLoadState('networkidle');
-      await memberPage.goto(`${ARTIFACTS_URL}?bucket=${bucket}`);
-      await memberPage.waitForURL('**/artifacts**', { timeout: 15_000 });
+      await reenterArtifacts(memberPage, `${ARTIFACTS_URL}?bucket=${bucket}`);
       await expect(row).toBeVisible({ timeout: 15_000 });
 
       const [download] = await Promise.all([

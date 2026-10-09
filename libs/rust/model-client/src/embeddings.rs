@@ -57,6 +57,7 @@ use super::tokens::{EMBEDDING_CTX_LENGTH, Window, embedding_split};
 use super::transport::{BodyError, Call, PostError, Transport, read_limited};
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::stream::StopSignal;
+use elitea_llm_wire::route::EMBEDDINGS_PATH;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -198,7 +199,7 @@ impl EmbeddingClient {
         model: impl Into<String>,
         options: EmbeddingOptions,
     ) -> Self {
-        let url = format!("{}/embeddings", settings.api_base);
+        let url = format!("{}{EMBEDDINGS_PATH}", settings.api_base);
         Self {
             inner: Arc::new(Inner {
                 transport,

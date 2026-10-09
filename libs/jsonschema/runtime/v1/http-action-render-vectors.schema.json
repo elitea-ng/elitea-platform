@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.runtime.http-action-render-vectors.v1",
+  "title": "HTTP action render vectors",
+  "description": "Cross-language Go/Rust fixture. Both renderers must produce exactly the expected values, or exactly the expected error code.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "vectors"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "elitea.runtime.http-action-render-vectors.v1"
+    },
+    "vectors": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "description",
+          "rule",
+          "node",
+          "inputs",
+          "expect"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 256,
+            "minLength": 1
+          },
+          "rule": {
+            "$ref": "elitea.runtime.http-action-rule.v1"
+          },
+          "node": {
+            "$ref": "elitea.pipeline.http-action-node.v2"
+          },
+          "inputs": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "object",
+                "maxProperties": 32,
+                "propertyNames": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "minLength": 1
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/jsonValue"
+                }
+              },
+              "query": {
+                "type": "object",
+                "maxProperties": 32,
+                "propertyNames": {
+                  "type": "string",
+                  "maxLength": 64,
+                  "minLength": 1
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/jsonValue"
+                }
+              },
+              "headers": {
+                "type": "object",
+                "maxProperties": 32,
+                "propertyNames": {
+                  "type": "string",
+                  "maxLength": 128,
+                  "minLength": 1
+                },
+                "additionalProperties": {
+                  "$ref": "#/$defs/jsonValue"
+                }
+              },
+              "body": {
+                "$ref": "#/$defs/jsonValue"
+              },
+              "idempotency_key": {
+                "type": "string",
+                "maxLength": 128
+              }
+            }
+          },
+          "expect": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "ok"
+                ],
+                "properties": {
+                  "ok": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "method",
+                      "path",
+                      "query",
+                      "url",
+                      "headers",
+                      "body_b64",
+                      "body_sha256",
+                      "body_utf8",
+                      "request_wire",
+                      "request_digest"
+                    ],
+                    "properties": {
+                      "method": {
+                        "enum": [
+                          "GET",
+                          "HEAD",
+                          "OPTIONS",
+                          "POST",
+                          "PUT",
+                          "PATCH",
+                          "DELETE"
+                        ]
+                      },
+                      "path": {
+                        "type": "string",
+                        "maxLength": 8192,
+                        "minLength": 1,
+                        "pattern": "^/"
+                      },
+                      "query": {
+                        "type": "string",
+                        "maxLength": 8192
+                      },
+                      "url": {
+                        "type": "string",
+                        "maxLength": 8192,
+                        "minLength": 9,
+                        "pattern": "^https://"
+                      },
+                      "headers": {
+                        "type": "array",
+                        "maxItems": 32,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "name",
+                            "value"
+                          ],
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "maxLength": 128,
+                              "minLength": 1
+                            },
+                            "value": {
+                              "type": "string",
+                              "maxLength": 8192
+                            }
+                          }
+                        }
+                      },
+                      "body_b64": {
+                        "type": "string",
+                        "maxLength": 349528,
+                        "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+                      },
+                      "body_sha256": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "minLength": 64,
+                        "maxLength": 64
+                      },
+                      "body_utf8": {
+                        "type": "string",
+                        "maxLength": 262144
+                      },
+                      "request_wire": {
+                        "type": "string",
+                        "maxLength": 393216,
+                        "minLength": 2
+                      },
+                      "request_digest": {
+                        "type": "string",
+                        "pattern": "^[a-f0-9]{64}$",
+                        "minLength": 64,
+                        "maxLength": 64
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "error"
+                ],
+                "properties": {
+                  "error": {
+                    "enum": [
+                      "invalid_input",
+                      "policy_denied"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "jsonValue": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number",
+          "minimum": -1e+300,
+          "maximum": 1e+300
+        },
+        {
+          "type": "string",
+          "maxLength": 262144
+        },
+        {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        },
+        {
+          "type": "object",
+          "maxProperties": 4096,
+          "propertyNames": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/jsonValue"
+          }
+        }
+      ]
+    }
+  }
+}

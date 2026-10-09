@@ -1096,6 +1096,16 @@ SET meta = jsonb_set(
 WHERE uuid = $1`, response); err != nil {
 		t.Fatal(err)
 	}
+	// A desktop local turn's answer (ADR-0029 decision 5c) carries markers a
+	// cloud regeneration must not keep: the answer is no longer the desktop's.
+	if _, err := tx.Exec(t.Context(), `
+UPDATE chat_message_group
+SET meta = meta || '{"executed_by": "desktop", "local_execution_id": "abc",
+    "local_work": {"commands": []}, "hitl_exchanges": [{"interrupt_id": "x"}],
+    "memories_used": 3, "is_error": false}'::jsonb
+WHERE uuid = $1`, response); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := tx.Exec(t.Context(), `
 INSERT INTO chat_message_trace_step (
     id, message_group_id, kind, run_id, is_error, has_visible_content
@@ -1167,6 +1177,18 @@ WHERE response.uuid = $1`, response).Scan(
 		invokedSkills != "[]" || items != 0 || traces != 0 {
 		t.Fatalf("streaming=%v task=%q generation=%q skills=%s items=%d traces=%d",
 			isStreaming, taskID, storedGeneration, invokedSkills, items, traces)
+	}
+	var leftover string
+	if err := tx.QueryRow(t.Context(), `
+SELECT COALESCE(string_agg(key, ','), '')
+FROM chat_message_group AS response, jsonb_object_keys(response.meta) AS key
+WHERE response.uuid = $1
+  AND key IN ('executed_by', 'local_execution_id', 'local_work', 'hitl_exchanges', 'memories_used')`,
+		response).Scan(&leftover); err != nil {
+		t.Fatal(err)
+	}
+	if leftover != "" {
+		t.Fatalf("regeneration kept desktop markers: %s", leftover)
 	}
 }
 

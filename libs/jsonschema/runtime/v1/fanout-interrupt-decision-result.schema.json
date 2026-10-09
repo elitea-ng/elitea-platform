@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-interrupt-decision-result.v1",
+  "title": "Public decision result (200)",
+  "description": "Returned when the decision was recorded or when the same request_id with the same bytes is replayed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "interrupt_key",
+    "state",
+    "revision",
+    "request_id",
+    "replay"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.fanout-interrupt-decision-result.v1"
+    },
+    "interrupt_key": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "state": {
+      "enum": [
+        "DECIDED",
+        "CONSUMED"
+      ]
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "request_id": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "replay": {
+      "type": "boolean"
+    }
+  }
+}

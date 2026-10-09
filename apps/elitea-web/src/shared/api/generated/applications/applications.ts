@@ -73,6 +73,7 @@ import type {
   ClientUpgradeRequiredResponse,
   DefaultIcon,
   DeleteApplicationVersionParams,
+  DesktopOperationError,
   DocumentLoadersResponse,
   ErrorResponse,
   EvalDataset,
@@ -105,6 +106,7 @@ import type {
   IconUploadResponse,
   ImportWizardRequest,
   ImportWizardResponse,
+  InvalidClientVersionError,
   InvalidClientVersionResponse,
   InvalidQueryParameterError,
   ListApplicationsParams,
@@ -148,6 +150,7 @@ import type {
   PublishValidationFailedResponse,
   PublishValidationResult,
   RecommendationsResponse,
+  ResolvedApplicationVersion,
   RunPipelineInboundTriggerParams,
   SaveApplicationNewVersionBody,
   SetAgentAttachmentStorageBody,
@@ -3662,6 +3665,346 @@ export function useGetEvalScorecard<
     projectId,
     runId,
     params,
+    options,
+  );
+
+  const query = useQuery(queryOptions, queryClient) as UseQueryResult<
+    TData,
+    TError
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+
+  return withQueryKey(query, queryOptions.queryKey);
+}
+
+export type resolveApplicationVersionResponse200 = {
+  data: ResolvedApplicationVersion;
+  status: 200;
+};
+
+export type resolveApplicationVersionResponse400 = {
+  data: DesktopOperationError | InvalidClientVersionError;
+  status: 400;
+};
+
+export type resolveApplicationVersionResponse401 = {
+  data: N401Response;
+  status: 401;
+};
+
+export type resolveApplicationVersionResponse403 = {
+  data: DesktopOperationError;
+  status: 403;
+};
+
+export type resolveApplicationVersionResponse404 = {
+  data: DesktopOperationError;
+  status: 404;
+};
+
+export type resolveApplicationVersionResponse422 = {
+  data: DesktopOperationError;
+  status: 422;
+};
+
+export type resolveApplicationVersionResponse426 = {
+  data: ClientUpgradeRequiredResponse;
+  status: 426;
+};
+
+export type resolveApplicationVersionResponse500 = {
+  data: N500Response;
+  status: 500;
+};
+
+export type resolveApplicationVersionResponse501 = {
+  data: DesktopOperationError;
+  status: 501;
+};
+
+export type resolveApplicationVersionResponse503 = {
+  data: DesktopOperationError;
+  status: 503;
+};
+
+export type resolveApplicationVersionResponseSuccess =
+  resolveApplicationVersionResponse200 & {
+    headers: Headers;
+  };
+export type resolveApplicationVersionResponseError = (
+  | resolveApplicationVersionResponse400
+  | resolveApplicationVersionResponse401
+  | resolveApplicationVersionResponse403
+  | resolveApplicationVersionResponse404
+  | resolveApplicationVersionResponse422
+  | resolveApplicationVersionResponse426
+  | resolveApplicationVersionResponse500
+  | resolveApplicationVersionResponse501
+  | resolveApplicationVersionResponse503
+) & {
+  headers: Headers;
+};
+
+export type resolveApplicationVersionResponse =
+  | resolveApplicationVersionResponseSuccess
+  | resolveApplicationVersionResponseError;
+
+export const getResolveApplicationVersionUrl = (
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+) => {
+  return `/elitea_core/resolved_version/prompt_lib/${projectId}/${applicationId}/${versionId}`;
+};
+
+/**
+ * Client contract 1.6 (ADR-0029 decision 5a). The version a desktop's
+ * local runtime runs: instructions, `llm_settings` (model resolved),
+ * `pipeline_settings`, variables, frozen skills, nested agent references
+ * and tools. It is the projection the worker's private runtime-context
+ * route serves, from the same freeze, with every credential removed.
+ *
+ * TOOLS. Each entry has a `kind`. `remote_toolkit`: a saved toolkit, with
+ * its `selected_tools` and a `toolkit_ref`; it carries no settings, so
+ * run its tools with executeRemoteToolkitTool. `application`: a nested
+ * agent; resolve it with this operation and its
+ * `application_id`/`application_version_id`. `platform_mcp`: an internal
+ * platform MCP server the version selects (`server_name`). No credential,
+ * vault secret, `{{secret.*}}` reference or MCP OAuth material is ever in
+ * the document; a secret reference outside the tools reads
+ * `[secret withheld]`, and `withheld_secrets` names each such string by
+ * JSON Pointer so the desktop can decide to run that agent in the cloud.
+ *
+ * Memory recall is not part of the document: startLocalTurn answers it.
+ *
+ * WHO. Any authenticated caller with `models.applications.version.details`
+ * in the project, browser sessions included (it is a read). The frozen
+ * `version_details.project_context` is included only for a caller who
+ * also holds `models.project_context.view`; otherwise it is omitted and
+ * `project_context_withheld` is true (the digest describes the document
+ * served).
+ *
+ * CACHING. `definition_sha256` (also the `ETag`) changes whenever the
+ * resolved document does. The document is resolved on every call.
+ * @summary An agent or pipeline version resolved for execution, without secrets
+ */
+export const resolveApplicationVersion = async (
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+  options?: Parameters<typeof eliteaFetch>[1],
+): Promise<resolveApplicationVersionResponse> => {
+  return eliteaFetch<resolveApplicationVersionResponse>(
+    getResolveApplicationVersionUrl(projectId, applicationId, versionId),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getResolveApplicationVersionQueryKey = (
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+) => {
+  return [
+    `/elitea_core/resolved_version/prompt_lib/${projectId}/${applicationId}/${versionId}`,
+  ] as const;
+};
+
+export const getResolveApplicationVersionQueryOptions = <
+  TData = Awaited<ReturnType<typeof resolveApplicationVersion>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resolveApplicationVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ??
+    getResolveApplicationVersionQueryKey(projectId, applicationId, versionId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof resolveApplicationVersion>>
+  > = ({ signal }) =>
+    resolveApplicationVersion(projectId, applicationId, versionId, {
+      signal,
+      ...requestOptions,
+    });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled:
+      projectId !== null &&
+      projectId !== undefined &&
+      applicationId !== null &&
+      applicationId !== undefined &&
+      versionId !== null &&
+      versionId !== undefined,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof resolveApplicationVersion>>,
+    TError,
+    TData
+  > & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ResolveApplicationVersionQueryResult = NonNullable<
+  Awaited<ReturnType<typeof resolveApplicationVersion>>
+>;
+export type ResolveApplicationVersionQueryError =
+  | DesktopOperationError
+  | InvalidClientVersionError
+  | N401Response
+  | ClientUpgradeRequiredResponse
+  | N500Response;
+
+export function useResolveApplicationVersion<
+  TData = Awaited<ReturnType<typeof resolveApplicationVersion>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+  options: {
+    query: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resolveApplicationVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        DefinedInitialDataOptions<
+          Awaited<ReturnType<typeof resolveApplicationVersion>>,
+          TError,
+          Awaited<ReturnType<typeof resolveApplicationVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): DefinedUseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useResolveApplicationVersion<
+  TData = Awaited<ReturnType<typeof resolveApplicationVersion>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resolveApplicationVersion>>,
+        TError,
+        TData
+      >
+    > &
+      Pick<
+        UndefinedInitialDataOptions<
+          Awaited<ReturnType<typeof resolveApplicationVersion>>,
+          TError,
+          Awaited<ReturnType<typeof resolveApplicationVersion>>
+        >,
+        "initialData"
+      >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+export function useResolveApplicationVersion<
+  TData = Awaited<ReturnType<typeof resolveApplicationVersion>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resolveApplicationVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+};
+/**
+ * @summary An agent or pipeline version resolved for execution, without secrets
+ */
+
+export function useResolveApplicationVersion<
+  TData = Awaited<ReturnType<typeof resolveApplicationVersion>>,
+  TError =
+    | DesktopOperationError
+    | InvalidClientVersionError
+    | N401Response
+    | ClientUpgradeRequiredResponse
+    | N500Response,
+>(
+  projectId: string,
+  applicationId: number,
+  versionId: number,
+  options?: {
+    query?: Partial<
+      UseQueryOptions<
+        Awaited<ReturnType<typeof resolveApplicationVersion>>,
+        TError,
+        TData
+      >
+    >;
+    request?: SecondParameter<typeof eliteaFetch>;
+  },
+  queryClient?: QueryClient,
+): UseQueryResult<TData, TError> & {
+  queryKey: DataTag<QueryKey, TData, TError>;
+} {
+  const queryOptions = getResolveApplicationVersionQueryOptions(
+    projectId,
+    applicationId,
+    versionId,
     options,
   );
 

@@ -45,6 +45,7 @@
 use elitea_engine_core::errors::{EngineError, ErrorType};
 use elitea_engine_core::secret::Secret;
 use elitea_engine_core::stream::StopSignal;
+use elitea_llm_wire::refusal::{Detail, MessageShapes, redact_and_cut, rejection_detail};
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Client, Response, StatusCode};
 use std::path::{Path, PathBuf};
@@ -54,12 +55,10 @@ use tracing::Instrument as _;
 /// How much of a refusal body is read to find its message.
 const MAX_ERROR_BODY_BYTES: usize = 16 * 1024;
 
-/// The project selector the worker sends (ADR-0018's primary choice).
-pub const PROJECT_HEADER: &str = "x-project-id";
-
-/// The run the gateway attributes the call's spend to; the `/llm` edge keeps
-/// it only for a live execution of the same project and user.
-pub const EXECUTION_HEADER: &str = "x-elitea-execution-id";
+/// The project selector the worker sends (ADR-0018's primary choice), and
+/// the run the gateway attributes the call's spend to (the `/llm` edge keeps
+/// it only for a live execution of the same project and user).
+pub use elitea_llm_wire::headers::{EXECUTION_HEADER, PROJECT_HEADER};
 
 /// How much of an upstream message an error repeats.
 const MAX_UPSTREAM_MESSAGE_CHARS: usize = 300;
@@ -253,17 +252,7 @@ pub use elitea_engine_core::errors::error_chain;
 
 /// Replace the key wherever it appears, then cut to length.
 pub(crate) fn sanitize(text: &str, key: &Secret) -> String {
-    let secret = key.expose();
-    let cleaned = if secret.is_empty() {
-        text.to_owned()
-    } else {
-        text.replace(secret, "<redacted>")
-    };
-    let mut cut: String = cleaned.chars().take(MAX_UPSTREAM_MESSAGE_CHARS).collect();
-    if cut.len() < cleaned.len() {
-        cut.push('…');
-    }
-    cut
+    redact_and_cut(text, key.expose(), MAX_UPSTREAM_MESSAGE_CHARS)
 }
 
 /// The SDK's `_calculate_retry_timeout`.
@@ -302,11 +291,7 @@ fn retry_after(headers: &HeaderMap) -> Option<Duration> {
 /// 429 and 5xx, as the worker's categories decide.
 #[must_use]
 pub fn retryable(status: u16) -> bool {
-    StatusCode::from_u16(status).is_ok_and(retryable_status)
-}
-
-fn retryable_status(status: StatusCode) -> bool {
-    matches!(status.as_u16(), 408 | 409 | 429) || status.is_server_error()
+    elitea_llm_wire::refusal::retryable_status(status)
 }
 
 /// Wait for `delay`, or fail with the stop line once a stop arrives.
@@ -347,73 +332,27 @@ pub(crate) enum BodyError {
     Transport(String),
 }
 
-/// The message inside an OpenAI-style refusal: `{"error": {"message"}}`,
-/// `{"error": "…"}`, `{"message": "…"}` or `{"detail": "…"}`.
 /// Which ceiling a 402 names, read as the worker reads it
 /// (`budget_refusal_scope`): only a `budget_exceeded` error is a budget
 /// refusal of this platform; its `scope` decides, and an older gateway that
 /// sends no scope is known by `code: member_budget_exceeded`. A provider's
-/// own quota refusal (no scope) is [`BudgetScope::Unscoped`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BudgetScope {
-    Member,
-    Project,
-    Unscoped,
-}
-
-/// The scope of a 402 body (see [`BudgetScope`]).
-#[must_use]
-pub fn budget_scope(body: &[u8]) -> BudgetScope {
-    let scope = || -> Option<BudgetScope> {
-        let value: serde_json::Value = serde_json::from_slice(body).ok()?;
-        let error = value.get("error")?;
-        if error.get("type")?.as_str()? != "budget_exceeded" {
-            return None;
-        }
-        match (
-            error.get("scope").and_then(serde_json::Value::as_str),
-            error.get("code").and_then(serde_json::Value::as_str),
-        ) {
-            (Some("member"), _) | (None, Some("member_budget_exceeded")) => {
-                Some(BudgetScope::Member)
-            }
-            (Some("project"), _) => Some(BudgetScope::Project),
-            _ => None,
-        }
-    };
-    scope().unwrap_or(BudgetScope::Unscoped)
-}
-
-/// The worker's code for a gateway refusal (`validate_response_head`,
+/// own quota refusal (no scope) is [`BudgetScope::Unscoped`]. The worker's
+/// code for a gateway refusal ([`refusal_code`]: `validate_response_head`,
 /// `budget_refusal_error`), so both callers name a refusal alike.
-#[must_use]
-pub fn refusal_code(status: u16, body: &[u8]) -> &'static str {
-    match status {
-        402 => match budget_scope(body) {
-            BudgetScope::Member => "model_gateway.member_budget_exhausted",
-            BudgetScope::Project => "model_gateway.project_budget_exhausted",
-            BudgetScope::Unscoped => "model_gateway.budget_exhausted",
-        },
-        401 => "model_gateway.unauthorized",
-        403 => "model_gateway.forbidden",
-        408 | 504 => "model_gateway.upstream_timeout",
-        429 => "model_gateway.rate_limited",
-        409 => "model_gateway.conflict",
-        300..=399 | 500..=599 => "model_gateway.unavailable",
-        _ => "model_gateway.rejected",
-    }
-}
+pub use elitea_llm_wire::refusal::{BudgetScope, budget_scope, refusal_code};
 
-fn upstream_message(body: &[u8]) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
-    let error = value.get("error");
-    error
-        .and_then(|e| e.get("message"))
-        .or(error.filter(|e| e.is_string()))
-        .or_else(|| value.get("message"))
-        .or_else(|| value.get("detail"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_owned)
+/// The message inside an OpenAI-style refusal (`{"error": {"message"}}`,
+/// `{"error": "…"}`, `{"message": "…"}` or `{"detail": "…"}`), with the key
+/// replaced and cut to length.
+fn upstream_message(body: &[u8], key: &Secret) -> Option<String> {
+    rejection_detail(
+        body,
+        MessageShapes::Common,
+        Detail::Redacted {
+            secret: key.expose(),
+            max_chars: MAX_UPSTREAM_MESSAGE_CHARS,
+        },
+    )
 }
 
 impl Call<'_> {
@@ -482,8 +421,8 @@ impl Call<'_> {
     }
 
     fn status_error(&self, status: StatusCode, body: &[u8], attempts: u32) -> EngineError {
-        let upstream = upstream_message(body)
-            .map(|message| format!(": {}", sanitize(&message, self.key)))
+        let upstream = upstream_message(body, self.key)
+            .map(|message| format!(": {message}"))
             .unwrap_or_default();
         let code = status.as_u16();
         let tried = if attempts > 1 {
@@ -553,10 +492,9 @@ impl Call<'_> {
 /// a timeout or a transport failure by the error.
 fn failure_code(failure: &PostError) -> (&'static str, bool) {
     if let Some(refusal) = &failure.refusal {
-        let status = StatusCode::from_u16(refusal.status).unwrap_or(StatusCode::BAD_GATEWAY);
         return (
             refusal_code(refusal.status, refusal.body.as_bytes()),
-            retryable_status(status),
+            retryable(refusal.status),
         );
     }
     if failure.error.message == EngineError::cancelled().message {
@@ -726,7 +664,7 @@ impl Transport {
                 Ok(Ok(response)) if response.status().is_success() => return Ok(response),
                 Ok(Ok(mut response)) => {
                     let status = response.status();
-                    if retryable_status(status) && can_retry {
+                    if retryable(status.as_u16()) && can_retry {
                         let delay = retry_delay(self.backoff, retry, response.headers());
                         tracing::warn!(
                             what = call.what,
@@ -852,12 +790,19 @@ mod tests {
 
     #[test]
     fn upstream_messages_take_the_common_shapes() {
+        let key = key();
         assert_eq!(
-            upstream_message(br#"{"error":{"message":"a"}}"#).as_deref(),
+            upstream_message(br#"{"error":{"message":"a"}}"#, &key).as_deref(),
             Some("a")
         );
-        assert_eq!(upstream_message(br#"{"error":"b"}"#).as_deref(), Some("b"));
-        assert_eq!(upstream_message(br#"{"detail":"c"}"#).as_deref(), Some("c"));
-        assert_eq!(upstream_message(b"<html>"), None);
+        assert_eq!(
+            upstream_message(br#"{"error":"b"}"#, &key).as_deref(),
+            Some("b")
+        );
+        assert_eq!(
+            upstream_message(br#"{"detail":"c"}"#, &key).as_deref(),
+            Some("c")
+        );
+        assert_eq!(upstream_message(b"<html>", &key), None);
     }
 }

@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -261,4 +262,30 @@ func FirstText(settings map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// CallbackOnly is the rewrite of a tool that names no reference but calls
+// the platform back: the callback block (a minted bearer, the gateway, the
+// model) and nothing else — DeepWiki's `wiki_query`, Inventory's
+// `investigate`. A refusal is ErrRejected, an outage ErrSourceUnavailable.
+func CallbackOnly(provider string, minter Minter, callbackBase string, lifetime time.Duration) Rewriter {
+	return ReferenceRewriter{
+		Provider:     provider,
+		Refused:      ErrRejected,
+		Unavailable:  ErrSourceUnavailable,
+		Minter:       minter,
+		CallbackBase: callbackBase,
+		Lifetime:     lifetime,
+	}.Rewrite
+}
+
+// ForTools is a RewriteFor that chooses rewrite for the named tools, of any
+// toolkit, and the Invocation's own Rewrite for every other tool.
+func ForTools(rewrite Rewriter, tools ...string) func(toolkitName, toolName string) Rewriter {
+	return func(_, toolName string) Rewriter {
+		if slices.Contains(tools, toolName) {
+			return rewrite
+		}
+		return nil
+	}
 }
