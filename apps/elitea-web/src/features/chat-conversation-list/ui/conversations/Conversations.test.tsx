@@ -170,3 +170,33 @@ describe('Conversations', () => {
     expect(await screen.findByText('No conversations found')).toBeInTheDocument();
   });
 });
+
+describe('Conversations — Local work filter', () => {
+  it('toggles the filter and says which listing the rail shows', async () => {
+    const onLocalWorkOnlyChange = vi.fn();
+    renderConversations({ localWorkOnly: false, onLocalWorkOnlyChange });
+    const toggle = screen.getByRole('button', { name: 'Local work' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByText('Chats')).toBeInTheDocument();
+
+    await userEvent.setup().click(toggle);
+    expect(onLocalWorkOnlyChange).toHaveBeenCalledWith(true);
+  });
+
+  it('titles the rail "Local work" while the filter is on, and turns it off again', async () => {
+    const onLocalWorkOnlyChange = vi.fn();
+    renderConversations({ localWorkOnly: true, onLocalWorkOnlyChange });
+    expect(screen.getByText('Local work')).toBeInTheDocument();
+    expect(screen.queryByText('Chats')).toBeNull();
+    const toggle = screen.getByRole('button', { name: 'Local work' });
+    expect(toggle).toHaveAttribute('aria-pressed', 'true');
+
+    await userEvent.setup().click(toggle);
+    expect(onLocalWorkOnlyChange).toHaveBeenCalledWith(false);
+  });
+
+  it('shows no toggle without a filter to drive', () => {
+    renderConversations();
+    expect(screen.queryByRole('button', { name: 'Local work' })).toBeNull();
+  });
+});

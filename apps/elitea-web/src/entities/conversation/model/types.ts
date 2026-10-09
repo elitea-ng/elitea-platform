@@ -56,6 +56,8 @@ export interface Conversation {
   readonly isPlayback?: boolean;
   /** Client-only: rename-in-progress flag, not a wire field. */
   readonly isNamingPending?: boolean;
+  /** `chat_conversations.source` from the rail's listing — `local_work` marks a desktop Local work thread. */
+  readonly source?: string;
 }
 
 /** `DefaultFolderName`/`dummyConversation`-equivalent — a not-yet-persisted conversation. */

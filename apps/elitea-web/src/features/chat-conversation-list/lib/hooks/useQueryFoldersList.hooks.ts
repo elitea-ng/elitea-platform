@@ -32,6 +32,7 @@ function toConversation(ref: FolderConversationRef, extra?: Partial<Conversation
     ...(ref.updatedAt !== undefined ? { updatedAt: ref.updatedAt } : {}),
     ...(ref.createdAt !== undefined ? { createdAt: ref.createdAt } : {}),
     ...(ref.isPlayback !== undefined ? { isPlayback: ref.isPlayback } : {}),
+    ...(ref.source !== undefined ? { source: ref.source } : {}),
     ...extra,
   };
 }
@@ -45,6 +46,8 @@ export interface UseQueryFoldersListParams {
   readonly onSelectConversation?: (conversation: Conversation) => void;
   readonly skipSetConversation?: boolean;
   readonly searchQuery?: string;
+  /** `local_work` lists only desktop Local work threads (the rail's filter); absent lists the ordinary rail, which leaves them out. */
+  readonly source?: string;
   /**
    * Baseline: `useSortQueryParamsFromUrl({defaultSortOrder: 'desc',
    * defaultSortBy: 'updated_at'})` reads the CURRENT URL's `sort_by`/
@@ -90,6 +93,7 @@ export function useQueryFoldersList(params: UseQueryFoldersListParams): UseQuery
     onSelectConversation,
     skipSetConversation,
     searchQuery,
+    source,
     sortBy = 'updated_at',
     sortOrder = 'desc',
   } = params;
@@ -109,7 +113,7 @@ export function useQueryFoldersList(params: UseQueryFoldersListParams): UseQuery
   const query = folderApi.useList(
     {
       projectId: projectId ?? '',
-      params: { sort_by: sortBy, sort_order: sortOrder, ...(searchQuery ? { query: searchQuery } : {}) },
+      params: { sort_by: sortBy, sort_order: sortOrder, ...(searchQuery ? { query: searchQuery } : {}), ...(source ? { source } : {}) },
     },
     { enabled: projectId !== undefined && hasGetPermission },
   );

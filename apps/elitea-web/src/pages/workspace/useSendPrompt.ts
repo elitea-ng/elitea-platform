@@ -61,6 +61,7 @@ export function useSendPrompt(
         applicationName: agent.name,
         versionId: version.id,
         agentType: version.agentType,
+        folderName: workspace.name,
       });
       if (startsNew) pending.current = { key, id: conversationId };
       const started = await turn.start({

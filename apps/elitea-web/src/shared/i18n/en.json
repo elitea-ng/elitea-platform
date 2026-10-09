@@ -4837,5 +4837,11 @@
   "pipelines.graphExtensions.aggregateFlatDescription": "Group list rows and calculate explicit results. Each result row holds the group fields and the operation results side by side.",
   "pipelines.graphExtensions.regroup": "Regroup",
   "pipelines.graphExtensions.regroupHelp": "Parent rebuilds each split parent row from the split_out envelopes.",
-  "pipelines.graphExtensions.splitOut.envelopeHelp": "Each output row is {parent_index, position, data}. data holds the retained fields and the item."
+  "pipelines.graphExtensions.splitOut.envelopeHelp": "Each output row is {parent_index, position, data}. data holds the retained fields and the item.",
+  "features.chatConversationList.localWork.filter": "Local work",
+  "features.chatConversationList.localWork.hide": "Back to chats",
+  "features.chatConversationList.localWork.show": "Show Local work threads from the desktop app",
+  "pages.chat.localWork.continue": "To continue it, open the thread in the Elitea desktop app on that computer. Here you can read it, export it, rename it or delete it.",
+  "pages.chat.localWork.where": "This thread works on files on your computer.",
+  "pages.chat.localWork.whereFolder": "This thread works on files on your computer, in {{folder}}."
 }

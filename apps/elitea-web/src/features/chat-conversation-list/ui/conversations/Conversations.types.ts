@@ -83,6 +83,9 @@ export interface ConversationsProps {
   readonly onReorderFolders?: ((newOrder: readonly FolderListItem[]) => Promise<void>) | undefined;
   readonly isFolderOperationInProgress?: boolean | undefined;
   readonly onSearchQueryChange?: ((query: string | undefined) => void) | undefined;
+  /** The "Local work" filter: on, the rail lists only desktop Local work threads (the listing's `source=local_work`), which it otherwise leaves out. Omit `onLocalWorkOnlyChange` to hide the toggle. */
+  readonly localWorkOnly?: boolean | undefined;
+  readonly onLocalWorkOnlyChange?: ((on: boolean) => void) | undefined;
   /** N4 signature deviation — needed for the load-more fetches, the "Move to"-menu permission checks, and threaded into `ConversationItem`/`FolderItem`. */
   readonly projectId?: string | undefined;
   /** Baseline: `const { id: userId } = useSelector(state => state.user);` (`Conversations.jsx:82`) — same explicit-prop substitution instruction as `ConversationItem.tsx`'s own `currentUserId` (this is the SAME value, threaded to both). */

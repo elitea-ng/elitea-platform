@@ -55,6 +55,13 @@ export interface ChatBoxProps {
   readonly extensions?: {
     readonly editorTest?: { readonly restoredRun?: { readonly conversationUuid: string; readonly projectId: string | number; readonly run: EditorTestRun } | undefined } | undefined;
     readonly contextIndicator?: ReactNode;
+    /**
+     * Makes the conversation READ-ONLY: this node replaces the composer, and
+     * the transcript drops regenerate and edit-and-resend (copy and delete
+     * stay). A desktop Local work thread uses it — the server refuses to
+     * continue one (`pages/chat/LocalWorkNotice.tsx`).
+     */
+    readonly readOnlyNotice?: ReactNode;
     /** Agent/pipeline editor open/close callbacks — see `ChatBox.helpers.ts`'s `buildAgentEditorProps`. Optional; falls back to the pre-existing no-ops. */
     readonly editorCallbacks?: ChatBoxEditorCallbacks;
     /** Real lists for the composer's "+" menu — see `processes/chat/model/usePlusMenuEntities.ts`, which is the only layer allowed to fetch them. */

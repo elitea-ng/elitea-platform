@@ -3,6 +3,11 @@
  * agents page's "Chat with agent" does: the conversation, then the USER and
  * APPLICATION participants (nothing server-side adds the user on the REST
  * path, and the agent resolver refuses a conversation without that mapping).
+ *
+ * The conversation is marked as Local work (`source: local_work`), with the
+ * folder's NAME (never its path) in `meta`: web Chats keeps it under its
+ * "Local work" filter and opens it read-only, because only this computer can
+ * continue it.
  */
 import { useCallback } from 'react';
 
@@ -11,6 +16,7 @@ import { useAddParticipantMutation } from '@/entities/participant';
 import type { SocialAuthorProfile } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
 import { unwrapBody } from '@/shared/api/unwrap';
+import { LOCAL_WORK_SOURCE, localWorkMeta } from '@/shared/lib/localWork';
 
 const MAX_NAME = 80;
 
@@ -23,6 +29,8 @@ export interface EnsureConversationInput {
   applicationName: string;
   versionId: number;
   agentType: string;
+  /** The workspace folder's display name, recorded on the conversation. */
+  folderName: string;
 }
 
 export function useEnsureConversation(): (input: EnsureConversationInput) => Promise<string> {
@@ -39,6 +47,8 @@ export function useEnsureConversation(): (input: EnsureConversationInput) => Pro
         projectId: input.projectId,
         name: input.prompt.trim().slice(0, MAX_NAME) || input.applicationName,
         is_private: true,
+        source: LOCAL_WORK_SOURCE,
+        meta: localWorkMeta(input.folderName),
       });
       const id = String(conversation.id);
       await addParticipants({

@@ -141,5 +141,6 @@
   "workspace.thread.newTitle": "What should we do in {{name}}?",
   "workspace.history.interrupted": "This turn did not finish: the app closed while it ran.",
   "workspace.history.loading": "Loading earlier messages",
-  "workspace.history.truncated": "Part of this turn was too long to keep on this computer."
+  "workspace.history.truncated": "Part of this turn was too long to keep on this computer.",
+  "workspace.localWork.openThread": "Open in Local work"
 }

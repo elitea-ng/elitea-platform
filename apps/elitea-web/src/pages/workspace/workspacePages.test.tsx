@@ -151,7 +151,9 @@ describe('WorkspacesPage', () => {
 });
 
 describe('WorkspaceSessionPage', () => {
+  const createdConversations: unknown[] = [];
   function serveProject(): void {
+    createdConversations.length = 0;
     server.use(
       http.get(`${BASE}/elitea_core/applications/prompt_lib/42`, () =>
         HttpResponse.json({ rows: [{ id: '5', name: 'Coder', tags: [], created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z', owner_id: '1', is_forked: false, meta: null, has_interrupt: false }], total: 1 }),
@@ -169,7 +171,10 @@ describe('WorkspaceSessionPage', () => {
       ),
       http.get(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => HttpResponse.json({ rows: [], total: 0 })),
       http.get(`${BASE}/social/author`, () => HttpResponse.json({ id: 3, name: 'Me' })),
-      http.post(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => HttpResponse.json({ id: 77, name: 'fix the build' })),
+      http.post(`${BASE}/elitea_core/conversations/prompt_lib/42`, async ({ request }) => {
+        createdConversations.push(await request.json());
+        return HttpResponse.json({ id: 77, name: 'fix the build' });
+      }),
       http.post(`${BASE}/elitea_core/participants/prompt_lib/42/77`, () => HttpResponse.json([])),
     );
   }
@@ -197,6 +202,10 @@ describe('WorkspaceSessionPage', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+    // Marked as Local work, with the folder's name (not its path): web Chats keeps it apart and read-only.
+    expect(createdConversations).toEqual([
+      expect.objectContaining({ source: 'local_work', meta: { local_work: { folder_name: FOLDER.name } }, is_private: true }),
+    ]);
     expect(ipc.calls.started[0]).toEqual({
       workspace_id: 'w1',
       project_id: 42,
