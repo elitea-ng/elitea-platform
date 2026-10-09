@@ -35,8 +35,8 @@ Main froze the scope correctly. The defect was in the Worker.
 | `services/elitea-worker-rust/src/agents/pipeline.rs:1022-1023` | The admitted claim authority is owned behind one `Arc`. It is shared and never duplicated, because the artifact family keeps it past assembly. |
 | `services/elitea-worker-rust/src/agents/pipeline.rs:453` | `bind_node_runtimes` takes `&Arc<ClaimBoundRuntimeContextAuthority>`. |
 | `services/elitea-worker-rust/src/agents/pipeline.rs:493-510` | Lends `ArtifactToolAuthority(ClaimPlatformWriter(platform, claim))` to `materialize_configured_toolsets_with_artifact_authority`, as the ordinary path does. |
-| `services/elitea-worker-rust/src/agents/pipeline.rs:2116-2118,2230-2235` | A frozen and admitted toolkit with no materialized toolset is refused as `UnsupportedCapability` (`unserved_direct_toolkit`), not as an out-of-scope input. |
-| `services/elitea-worker-rust/src/execution/native_agent_lifecycle.rs` (`assembly_failure`) | Routes the new cause code to #1180's existing `PipelineNodeTypeNotAvailable` kind and message. No new message and no Main or Web change. |
+| `services/elitea-worker-rust/src/agents/pipeline.rs:2116-2118,2230-2241` | A frozen and admitted toolkit with no materialized toolset is refused as `UnsupportedCapability` (`unserved_direct_toolkit`), not as an out-of-scope input. |
+| `services/elitea-worker-rust/src/execution/native_agent_lifecycle.rs:1446-1457` (`assembly_failure`) | Routes the new cause code to #1180's existing `PipelineNodeTypeNotAvailable` kind and message. No new message and no Main or Web change. |
 | `services/elitea-worker-rust/src/agents/pipeline_artifact_tests.rs` (new) | Assembly, run and refusal proofs on the reported YAML and the real stored toolkit row. |
 | `services/elitea-worker-rust/src/agents/graph/node_recovery_artifact_tests.rs` (new) | The real artifact `create_file` tool behind the node-recovery journal. |
 | `services/elitea-main/internal/application/toolkitcatalogue/capability.go:123-128` | Comment updated: the artifact family materialises on the root pipeline too; nested positions refuse a direct node at assembly, and an LLM node there finds the tools unavailable at run time. |
@@ -164,6 +164,27 @@ string "cannot serve in this position" once; the baseline binary contains it zer
 Runs `feab3ecd…` and `9d4be1c4…` (fix image) were made before bucket `test` existed. Each family call answered with
 readable failure text, which the `dict` output then refused with the typed message. This shows the
 "no silent coercion" path rather than the fix.
+
+### Rebased branch (`5a46ae56f` plus this change), own stack with `STANDALONE_HOST=dts.localhost` (#1185)
+
+Images were rebuilt from the rebased branch:
+- Main `elitea-main:dts-artifact-scope` (`fc8d2e355885`);
+- Web `elitea-web:dts-artifact-scope` (`8c8fa41e56ef`);
+- Worker `elitea-worker-rust:dts-artifact-scope` (`sha256:66584870d15e…`).
+
+Worker binary check (`docker create` + `docker cp`, sha256 prefix `71d6ee2dce2a1f36`) found each of these exactly once:
+- `pipeline.direct_tool.toolkit_not_served` (this branch);
+- "cannot serve in this position" (this branch);
+- `graph.pipeline.node_type_not_available` (#1180).
+
+Migrations ran to shared 158 / tenant 148. The OIDC redirect came from #1185's `STANDALONE_HOST`; no manual override
+was used.
+
+| # | Stack | Pipeline (version) | Chat | Execution | Result |
+|---|---|---|---|---|---|
+| 5 | shared `elitea-verify-0def77b2`, `main-1ab920dde-verify` images, repro only with no deploy | 165 (191), the reported pipeline, toolkit attached | 881 | `1c34be6f7965a0d8083c8b03b1ebfcf8` | "The execution input is invalid." Worker: stage `toolsets`, "outside its frozen scope". The defect reproduces on the reference stack. |
+| 6 | own, rebased images | 166 (192), `created: str`, toolkit attached through the UI (mapping 121, `selected_tools` NULL) | 877 | `fa85b118d16e8f228b9c0603418dd032` | SUCCEEDED. `create_file` wrote `dts-rebased-edge.txt` (16:49:08Z) and `list_files` returned it. The result survives a full reload. |
+| 7 | own, rebased images | 167 (193), an `agent` node calling saved pipeline 166 (mapping 122) | 878 | `801c23724bb72c05dcad63a96ad3b0f6` | Refused before any effect, with "This pipeline uses a node type that is not available on this deployment. Open the pipeline to see which node, then remove or replace it." This is #1180's registered message. Worker: `native_agent.unsupported_capability`, `cause_code="pipeline.direct_tool.toolkit_not_served"`, 0 tool calls. The message survives a reload. |
 
 Observed in passing (not changed here): after attaching a toolkit, the editor's **Chat** button raises "You have
 unsaved changes" although the attachment is already persisted.
