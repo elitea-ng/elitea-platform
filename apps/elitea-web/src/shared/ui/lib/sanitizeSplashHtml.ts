@@ -28,22 +28,20 @@
  * Ordinary body markup: paragraphs, lists, tables, emphasis, and links (with
  * `target`, which `DefaultMarkdown` also allows). What does not: `script`,
  * `style`, `iframe`, `object`, `embed`, `link`, `meta`, `base`, `noscript`,
- * `svg`, `math`, every `on*` handler and every `javascript:` URL — the last two
- * by DOMPurify's own defaults.
+ * `svg`, `math`, every form control, the `style`/`class`/`id`/`name`/`data-*`
+ * and form-submission attributes, every `on*` handler and every `javascript:`
+ * URL — the last two by DOMPurify's own defaults.
  *
- * `<style>` going is a deliberate loss against pylon, whose default splash was
- * a whole document styled by one inline block. Here the body is rendered INSIDE
+ * `<style>` (and inline `style=`) going is a deliberate loss against pylon, whose
+ * default splash was a whole document styled by one inline block. Here the body is rendered INSIDE
  * the product's own themed page, so it inherits the platform's typography and
  * colours rather than bringing its own — and an operator who could ship CSS
  * could hide the page it is rendered on.
  */
-import DOMPurify from 'dompurify';
-
-import { FORBIDDEN_MARKDOWN_HTML_TAGS } from './sanitizeMarkdownHtml';
+import { sanitizeUntrustedHtml } from './sanitizeMarkdownHtml';
 
 export function sanitizeSplashHtml(html: string): string {
-  return DOMPurify.sanitize(html, {
-    FORBID_TAGS: [...FORBIDDEN_MARKDOWN_HTML_TAGS],
-    ADD_ATTR: ['target'],
-  });
+  // Same configuration as the markdown sanitiser, minus the task-list
+  // checkbox: operator markup has no use for any form control.
+  return sanitizeUntrustedHtml(html, { taskCheckbox: false });
 }

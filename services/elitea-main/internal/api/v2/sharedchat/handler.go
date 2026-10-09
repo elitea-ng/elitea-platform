@@ -1,6 +1,7 @@
 package sharedchat
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -63,10 +64,52 @@ type Handler struct {
 	// downgrade to no password.
 	grantSecret []byte
 	now         func() time.Time
+
+	// Unlock admission (admission.go): a process-wide cap on password
+	// verifications running at once, and an attempt budget per client and link.
+	verify   func(password string, hash, salt []byte) bool
+	gate     *verifyGate
+	attempts *attemptBudget
+	clients  ClientAddressResolver
 }
 
 func NewHandler(store Store, transcript TranscriptStore, grantSecret []byte) *Handler {
-	return &Handler{store: store, transcript: transcript, grantSecret: grantSecret, now: time.Now}
+	h := &Handler{
+		store: store, transcript: transcript, grantSecret: grantSecret, now: time.Now,
+		verify:   verifyPassword,
+		gate:     newVerifyGate(currentVerifySlots()),
+		attempts: newAttemptBudget(unlockAttemptsPerWindow, unlockAttemptWindow, maxTrackedUnlockClients),
+	}
+	h.attempts.now = h.clock
+	return h
+}
+
+// WithClientAddresses sets how Unlock names the caller for its attempt
+// budget. Without one the socket peer is used; X-Forwarded-For is never read
+// by this package.
+func (h *Handler) WithClientAddresses(r ClientAddressResolver) *Handler {
+	h.clients = r
+	return h
+}
+
+// WithVerifySlots replaces the cap on concurrent password verifications.
+// Test-only; production uses the GOMAXPROCS-derived default.
+func (h *Handler) WithVerifySlots(n int) *Handler {
+	h.gate = newVerifyGate(n)
+	return h
+}
+
+// WithAttemptBudget replaces the per-client-and-link unlock budget. Test-only.
+func (h *Handler) WithAttemptBudget(attempts int, window time.Duration, maxClients int) *Handler {
+	h.attempts = newAttemptBudget(attempts, window, maxClients)
+	h.attempts.now = h.clock
+	return h
+}
+
+// WithPasswordVerifier replaces the key derivation Unlock runs. Test-only.
+func (h *Handler) WithPasswordVerifier(verify func(password string, hash, salt []byte) bool) *Handler {
+	h.verify = verify
+	return h
 }
 
 // WithClock replaces the handler's clock. Test-only; production leaves it.
@@ -318,17 +361,14 @@ type lockedResponse struct {
 //     expiry. A locked link discloses only that a lock exists, which the URL
 //     already implies.
 //
-//  6. NO RATE LIMITER EXISTS IN THIS REPOSITORY. There is no shared middleware,
-//     no token bucket and no counter to bound these two routes with, and this
-//     change does not invent one — a bespoke limiter here would be an
-//     unreviewed security control in the one place a broken one is worst. What
-//     IS bounded: the token space makes guessing infeasible without one, the
-//     unlock path's KDF costs hundreds of milliseconds per attempt by
-//     construction (token.go's pbkdf2Iterations), the response is capped at
-//     maxSharedMessages groups, and the token lookup is a single indexed
-//     equality on one central table. An edge rate limit on
-//     `/api/v2/elitea_core/shared_chat_view*` remains worth adding at the
-//     ingress, and is called out here rather than silently assumed.
+//  6. WORK BOUNDS. The unlock route is bounded in-process (admission.go): a
+//     per-client-and-link attempt budget and a cap on concurrent verifications. This
+//     read has no KDF, so its bounds are structural: the token space makes
+//     guessing infeasible, the response is capped at maxSharedMessages
+//     groups, and the token lookup is a single indexed equality on one central
+//     table. An edge rate limit on `/api/v2/elitea_core/shared_chat_view*`
+//     remains worth adding at the ingress, and is called out here rather than
+//     silently assumed.
 func (h *Handler) View(w http.ResponseWriter, r *http.Request) {
 	token := chi.URLParam(r, "token")
 	if !validToken(token) {
@@ -410,9 +450,18 @@ type unlockRequest struct {
 //  2. NEITHER IS A TIMING ORACLE. The expensive part of this handler is the
 //     KDF, so a path that skipped it would be measurably faster and would
 //     announce "no such link" (or "this link has no password") to anyone with
-//     a stopwatch. So every path derives a key: a missing link and a
-//     password-less link are both verified against a decoy salt, and the
-//     comparison itself is constant-time (token.go's verifyPassword).
+//     a stopwatch. So every path that can name a link derives a key: a
+//     missing link and a password-less link are both verified against a decoy
+//     salt, and the comparison itself is constant-time (token.go's
+//     verifyPassword). The one exception is a token whose SHAPE is wrong
+//     (validToken): the shape is public, no link can have it, and refusing it
+//     early tells a caller nothing it did not know.
+//
+//     BOUNDED WORK. The KDF is the cost of this route, and the caller has no
+//     session, so admission is checked before the store is read and before
+//     any key is derived: a per-client-and-link attempt budget and a process-wide cap
+//     on verifications in flight (admission.go). Either one answers 429 with
+//     Retry-After and a fixed message.
 //
 //  3. THE GRANT IS BOUND TO ONE TOKEN. It is an HMAC over that token's hash
 //     keyed by the deployment's session secret, so unlocking one shared
@@ -439,6 +488,33 @@ func (h *Handler) Unlock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A token of the wrong shape cannot name a link. Its shape is public, so
+	// skipping the KDF leaks nothing; the answer is the one a well-formed
+	// unknown token gets.
+	if !validToken(token) {
+		apierr.Write(w, apierr.Forbidden("incorrect password"))
+		return
+	}
+
+	// Admission: before the store and before the KDF. The client is charged
+	// first so one client cannot hold the verification slots; a request
+	// refused only for lack of a slot is given its attempt back. The budget
+	// is per client AND link, so callers that share one address (no trusted
+	// proxy CIDRs configured) keep a separate budget for each link.
+	tokenHash := hashToken(token)
+	key := clientKey(r, h.clients) + "|" + hex.EncodeToString(tokenHash[:budgetLinkKeyBytes])
+	if ok, retry := h.attempts.take(key); !ok {
+		writeTooMany(w, retry, tooManyAttemptsMessage)
+		return
+	}
+	release, ok := h.gate.tryAcquire()
+	if !ok {
+		h.attempts.refund(key)
+		writeTooMany(w, verifyBusyRetryAfter, busyMessage)
+		return
+	}
+	defer release()
+
 	// decoySalt makes the "no such link" and "no password on this link" paths
 	// cost the same as a real verification. It is a fixed value rather than a
 	// random one on purpose: it is never stored and never compared against
@@ -449,25 +525,23 @@ func (h *Handler) Unlock(w http.ResponseWriter, r *http.Request) {
 	var resolved Resolved
 	var resolvedOK bool
 
-	if validToken(token) {
-		link, err := h.store.ResolveByTokenHash(r.Context(), hashToken(token))
-		switch {
-		case err == nil:
-			resolved, resolvedOK = link, true
-			if len(link.PasswordHash) > 0 {
-				hash, salt = link.PasswordHash, link.PasswordSalt
-			}
-		case errors.Is(err, ErrNoLink):
-			// fall through to the decoy verification below
-		default:
-			apierr.Write(w, apierr.Internal("failed to unlock shared conversation"))
-			return
+	link, err := h.store.ResolveByTokenHash(r.Context(), tokenHash)
+	switch {
+	case err == nil:
+		resolved, resolvedOK = link, true
+		if len(link.PasswordHash) > 0 {
+			hash, salt = link.PasswordHash, link.PasswordSalt
 		}
+	case errors.Is(err, ErrNoLink):
+		// fall through to the decoy verification below
+	default:
+		apierr.Write(w, apierr.Internal("failed to unlock shared conversation"))
+		return
 	}
 
-	// Runs on EVERY path, including the ones that cannot succeed.
-	ok := verifyPassword(body.Password, hash, salt)
-	if !ok || !resolvedOK || len(resolved.PasswordHash) == 0 {
+	// Runs on every well-formed token, including the ones that cannot succeed.
+	verified := h.verify(body.Password, hash, salt)
+	if !verified || !resolvedOK || len(resolved.PasswordHash) == 0 {
 		apierr.Write(w, apierr.Forbidden("incorrect password"))
 		return
 	}
@@ -479,13 +553,20 @@ func (h *Handler) Unlock(w http.ResponseWriter, r *http.Request) {
 
 	http.SetCookie(w, &http.Cookie{
 		Name:     UnlockCookieName,
-		Value:    grantValue(h.grantSecret, hashToken(token)),
+		Value:    grantValue(h.grantSecret, tokenHash),
 		Path:     unlockCookiePath,
 		HttpOnly: true,
 		Secure:   r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
 		SameSite: http.SameSiteLaxMode,
 	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeTooMany answers a request refused by admission: 429, Retry-After and a
+// fixed message, never anything about the link.
+func writeTooMany(w http.ResponseWriter, retryAfter time.Duration, message string) {
+	w.Header().Set("Retry-After", retryAfterSeconds(retryAfter))
+	apierr.WriteStatus(w, http.StatusTooManyRequests, message)
 }
 
 // refuseAnonymous is the single refusal for every "this token buys nothing"

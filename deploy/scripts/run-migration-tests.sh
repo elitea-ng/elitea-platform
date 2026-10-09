@@ -36,7 +36,10 @@ API_TESTING_DIR="${API_TESTING_DIR:-/Users/Alexander_Kharkevich/projects/eliteaa
 E2E_TESTING_DIR="${E2E_TESTING_DIR:-/Users/Alexander_Kharkevich/projects/eliteaai/elitea-testing/automation}"
 
 BASE_URL="http://localhost"
-JWT_TOKEN="eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9.eyJ1dWlkIjoiYjEwMmRkMzEtYzc2OS00YzkyLThiYzItMDM4MGIwMjEwY2FhIn0.3lLNLLEssVNs7ietsT__xB_tYpE8JlHQNcMn_ZaEuQbAgU_K9CbjvHkvqbPp3cdnuvsF4n38bIAYYSx-wnLj3Q"
+# The bearer token comes from the environment and is never committed. Mint a
+# personal access token on the stack under test and export it, for example:
+#   export ELITEA_MIGRATION_TEST_TOKEN=<token>
+JWT_TOKEN="${ELITEA_MIGRATION_TEST_TOKEN:-}"
 
 SMOKE_ENDPOINTS=(
   "/healthz"
@@ -103,6 +106,11 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+if [[ -z "${JWT_TOKEN}" ]]; then
+  echo "ELITEA_MIGRATION_TEST_TOKEN is not set; export a token for the stack under test." >&2
+  exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Color helpers

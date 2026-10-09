@@ -574,12 +574,16 @@ func TestAgentCategoriesStayUnscopedDespiteHavingAProjectInThePath(t *testing.T)
 	}
 }
 
-// TestEliteaCoreLegacyUngatedRoutesStayUngated pins the boundary #302's
-// acceptance criteria draw: "do not weaken any route that legacy leaves
-// ungated". Every path here is one the machine-generated legacy catalogue lists
-// among its thirty-seven UNGUARDED handlers, or one that names no project at
-// all. If a future pass applied the gate group-wide instead of per-route, these
-// would start answering 403 with nothing to resolve against.
+// TestEliteaCoreLegacyUngatedRoutesStayUngated pins the routes that are
+// reachable to any authenticated caller because there is no project in the path
+// to authorize against, or because the resource is a global taxonomy.
+//
+// Legacy parity is NOT the reason a route may be listed. A route that names a
+// project and reads or writes that project's data takes a project gate, and
+// router_project_route_walk_test.go fails the build for one that does not.
+// The routes that used to be listed here under {projectID} —
+// platform_settings, feedbacks and pin — are gated now; their refusals are
+// pinned in router_project_access_matrix_test.go.
 func TestEliteaCoreLegacyUngatedRoutesStayUngated(t *testing.T) {
 	querier := &memberOfProject{project: "7"}
 	router := newEliteaCoreProjectScopeRouter(querier, fakePermissionResolver{})
@@ -588,10 +592,14 @@ func TestEliteaCoreLegacyUngatedRoutesStayUngated(t *testing.T) {
 		// No project in the path at all.
 		"/api/v2/elitea_core/public_applications/prompt_lib/",
 		"/api/v2/elitea_core/public_skills/prompt_lib/",
+		// The author lookup names the AUTHOR, not a project; the handler decides
+		// what the caller may learn (e-mail and counts only for the author and
+		// people who share a project with them).
 		"/api/v2/elitea_core/author/prompt_lib/3",
-		// A project in the path, and unguarded in pylon all the same.
+		// The platform's own switches, read before and after sign-in.
+		"/api/v2/elitea_core/platform_settings/prompt_lib",
+		// A project in the path, but a global taxonomy of built-in icons.
 		"/api/v2/elitea_core/default_icons/prompt_lib/8",
-		"/api/v2/elitea_core/platform_settings/prompt_lib/8",
 		// The caller's own permission self-read: gating it on the admin
 		// plugin's matrix permission would 403 every editor and viewer on the
 		// request the web app uses to decide what to render.
@@ -601,7 +609,7 @@ func TestEliteaCoreLegacyUngatedRoutesStayUngated(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			router.ServeHTTP(recorder, testAuthHeader(httptest.NewRequest(http.MethodGet, path, nil)))
 			if recorder.Code == http.StatusForbidden {
-				t.Fatalf("status = 403 on a route pylon leaves unguarded; body=%s",
+				t.Fatalf("status = 403 on a route with no project to authorize against; body=%s",
 					recorder.Body.String())
 			}
 		})
