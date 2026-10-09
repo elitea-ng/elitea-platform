@@ -13,6 +13,7 @@ import { CssBaseline, ThemeProvider, createTheme } from '@mui/material';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { createHostLogger, hostLog, installDiagnostics } from '@/shared/desktop/diagnostics';
 import { createHostBridge, tauriInvoke } from '@/shared/desktop/hostBridge';
 
 import { DesktopShell } from './DesktopShell';
@@ -28,6 +29,11 @@ registerDesktopCatalogue();
 
 const invoke = tauriInvoke();
 const bridge = invoke === undefined ? undefined : createHostBridge(invoke);
+// First, so an error anywhere after this reaches the host's log file (README, "Logs").
+if (invoke !== undefined) {
+  installDiagnostics(createHostLogger(invoke));
+  hostLog('info', `webview started (${import.meta.env.MODE})`, 'boot');
+}
 
 function renderShell(root: HTMLElement): void {
   createRoot(root).render(

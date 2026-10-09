@@ -94,6 +94,35 @@ macOS first; Linux and Windows build and degrade as noted.
   anything the OS would run rather than show (app bundles, scripts,
   installers, executables); reveal it instead.
 
+## Logs
+
+One log file per install, for support (`src-tauri/src/logging.rs`,
+`tauri-plugin-log`):
+
+| OS | File |
+| --- | --- |
+| macOS | `~/Library/Logs/ai.elitea.desktop/elitea.log` |
+| Windows | `%LOCALAPPDATA%\ai.elitea.desktop\logs\elitea.log` |
+| Linux | `~/.local/share/ai.elitea.desktop/logs/elitea.log` |
+
+The same lines go to stdout (visible when the binary is run from a
+terminal). Level: info in release builds, debug in debug builds; HTTP/TLS
+internals (`hyper`, `reqwest`, `rustls`, …) only from warn. The file is
+rotated at 5 MiB, keeping one previous file.
+
+What is in it: the host's own messages, and from the UI (through
+`plugin:log|log`, the webview's only log permission — it can write, never
+read) `console.error`/`console.warn`, uncaught errors and unhandled
+rejections, and at debug every route transition (path, router status,
+matched routes) and every failed or slow (> 2 s) request to the deployment
+(method, path, status, time). Never request bodies or headers. Every message
+is scrubbed twice — in the webview (`shared/desktop/diagnostics.ts`) and in
+the host's formatter: bearer tokens, `Authorization` values,
+`access_token`/`refresh_token`/`code`/`password`-style parameters and the
+query string of any URL are replaced with `[redacted]`.
+
+To collect: quit Elitea, zip the folder above, attach it to the report.
+
 ## Registering the client
 
 The deployment must list this client in its `native_clients` configuration:

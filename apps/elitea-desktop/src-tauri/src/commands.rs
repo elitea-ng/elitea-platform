@@ -112,6 +112,6 @@ pub async fn host_wipe(
 /// The page runs its own logout sweep first as well; this is the backstop.
 fn clear_webview_data(window: &WebviewWindow) {
     if let Err(error) = window.clear_all_browsing_data() {
-        eprintln!("elitea-desktop: could not clear the webview's data: {error}");
+        log::warn!("could not clear the webview's data: {error}");
     }
 }

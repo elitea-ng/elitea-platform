@@ -100,7 +100,8 @@ fn granted() -> Vec<String> {
 /// two window permissions `data-tauri-drag-region` needs (drag;
 /// double-click to zoom), nothing else of the window or of the
 /// Rust-driven plugins (notification, window-state): a page cannot post
-/// notifications, move the window or rewrite its saved state.
+/// notifications, move the window or rewrite its saved state. Of the log
+/// plugin it gets the one write command, never a default set.
 #[test]
 fn the_webview_gets_only_the_drag_region_window_permissions() {
     let granted = granted();
@@ -118,6 +119,12 @@ fn the_webview_gets_only_the_drag_region_window_permissions() {
             "core:window:allow-internal-toggle-maximize"
         ]
     );
+    let log: Vec<&str> = granted
+        .iter()
+        .map(String::as_str)
+        .filter(|p| p.starts_with("log:"))
+        .collect();
+    assert_eq!(log, ["log:allow-log"]);
     for p in &granted {
         assert!(
             !p.starts_with("notification:") && !p.starts_with("window-state:"),

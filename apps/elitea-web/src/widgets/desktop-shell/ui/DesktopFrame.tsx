@@ -28,6 +28,7 @@ import { eliteaItems } from '../lib/eliteaSections';
 import { useDesktopLayout } from '../model/desktopLayout.store';
 import { useAppIpc } from '../model/appIpcContext';
 import { useHostIntegration } from '../model/useHostIntegration';
+import { useRouteLogging } from '../model/useRouteLogging';
 import { useShellActions } from '../model/useShellActions';
 import { useShellLocation } from '../model/useShellLocation';
 import { CommandPalette } from './CommandPalette';
@@ -72,6 +73,7 @@ function ShellNotice(): React.JSX.Element {
 export function DesktopFrame({ children, permissions, projects, selectedProjectId, onSelectProject }: DesktopFrameProps): React.JSX.Element {
   const run = useShellActions();
   useHostIntegration(run, useAppIpc());
+  useRouteLogging();
   const location = useShellLocation();
   const sidebarOpen = useDesktopLayout((state) => state.sidebarOpen);
   const items = useMemo(() => eliteaItems(permissions, computeIsSelectedProjectPublic(selectedProjectId)), [permissions, selectedProjectId]);

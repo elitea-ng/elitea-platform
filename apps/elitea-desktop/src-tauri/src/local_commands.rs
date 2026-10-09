@@ -140,7 +140,7 @@ pub struct MainWindowEvents(pub AppHandle);
 impl EventEmitter for MainWindowEvents {
     fn emit(&self, event: AgentEvent) {
         if let Err(error) = self.0.emit_to("main", EVENT_NAME, &event) {
-            eprintln!("elitea-desktop: could not deliver an agent event: {error}");
+            log::warn!("could not deliver an agent event: {error}");
         }
         if let Some(attention) = self.0.try_state::<Arc<Attention>>() {
             attention.observe(&event);

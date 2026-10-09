@@ -14,6 +14,7 @@ mod discovery;
 mod error;
 mod http_scope;
 mod local_commands;
+mod logging;
 mod loopback;
 mod menu;
 mod pkce;
@@ -72,7 +73,8 @@ impl BrowserOpener for SystemBrowser {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
+    // Logging first, so every later plugin and the setup below can report.
+    let builder = tauri::Builder::default().plugin(logging::plugin());
     // First, so a second launch exits before it can touch the keychain: two
     // processes would race the rotating refresh token.
     #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
@@ -95,6 +97,14 @@ pub fn run() {
         .menu(menu::build)
         .on_menu_event(|app, event| menu::on_event(app, &event))
         .setup(|app| {
+            log::info!(
+                "Elitea {} starting (logs: {})",
+                env!("CARGO_PKG_VERSION"),
+                app.path()
+                    .app_log_dir()
+                    .map(|d| d.display().to_string())
+                    .unwrap_or_default()
+            );
             let config_dir = app.path().app_config_dir()?;
             let data_dir = app.path().app_data_dir()?;
             let tokens = TokenEndpoint::new(env!("CARGO_PKG_VERSION"))?;
@@ -168,6 +178,7 @@ pub fn run() {
     let app = match built {
         Ok(app) => app,
         Err(error) => {
+            log::error!("failed to start: {error}");
             eprintln!("elitea-desktop failed to start: {error}");
             std::process::exit(1);
         }

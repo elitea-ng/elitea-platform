@@ -19,6 +19,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { setNativeTransport, type NativeSignOutReason } from '@/shared/api/nativeTransport';
 import { loadDesktopBrand } from '@/shared/desktop/brandPack';
 import { desktopRuntimeConfig, readPublicProjectId } from '@/shared/desktop/deploymentConfig';
+import { hostLog, withRequestLogging } from '@/shared/desktop/diagnostics';
 import type { HostBridge, HostState } from '@/shared/desktop/hostBridge';
 import { installExternalLinks } from '@/shared/desktop/externalLinks';
 import { createHostTransport } from '@/shared/desktop/hostTransport';
@@ -36,8 +37,8 @@ export interface LaunchOptions {
  * plugin ignores `redirect: 'error'`, and a followed redirect would carry the
  * bearer token to wherever the server (or an attacker on its path) points.
  */
-const noRedirectFetch: typeof hostFetch = (input, init) =>
-  hostFetch(input, { ...init, maxRedirections: 0 });
+const noRedirectFetch: typeof hostFetch = withRequestLogging((input, init) =>
+  hostFetch(input, { ...init, maxRedirections: 0 }));
 
 export async function launchApp(options: LaunchOptions): Promise<Root> {
   const { bridge, state, container } = options;
@@ -58,12 +59,14 @@ export async function launchApp(options: LaunchOptions): Promise<Root> {
     // Branding never blocks the launch: a failure leaves the compiled default.
     loadDesktopBrand({ fetch: noRedirectFetch, origin: state.origin }).catch(() => undefined),
   ]);
+  hostLog('debug', `launch: public project "${publicProjectId}"`, 'boot');
   const config = desktopRuntimeConfig(state.origin, publicProjectId);
   (globalThis as { elitea_ui_config?: unknown }).elitea_ui_config = config;
 
   installExternalLinks(bridge, state.origin);
 
   const { App } = await import('@/app/App');
+  hostLog('debug', 'launch: app loaded, rendering', 'boot');
   const root = createRoot(container);
   root.render(
     <StrictMode>

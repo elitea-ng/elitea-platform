@@ -269,7 +269,7 @@ impl Attention {
             .body(body)
             .show()
         {
-            eprintln!("elitea-desktop: could not show a notification: {error}");
+            log::warn!("could not show a notification: {error}");
         }
     }
 

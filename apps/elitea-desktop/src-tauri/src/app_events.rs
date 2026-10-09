@@ -28,7 +28,7 @@ pub struct AppCommand {
 
 pub fn emit(app: &AppHandle, id: &'static str, args: Option<Value>) {
     if let Err(error) = app.emit_to("main", APP_COMMAND_EVENT, AppCommand { id, args }) {
-        eprintln!("elitea-desktop: could not deliver an app command: {error}");
+        log::warn!("could not deliver an app command: {error}");
     }
 }
 

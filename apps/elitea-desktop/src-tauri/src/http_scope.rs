@@ -46,7 +46,7 @@ pub fn grant_stored(app: &AppHandle, origin: Option<&str>) {
     if let Some(origin) = origin
         && let Err(error) = grant(app, origin)
     {
-        eprintln!("elitea-desktop: could not scope the HTTP plugin: {error}");
+        log::warn!("could not scope the HTTP plugin: {error}");
     }
 }
 

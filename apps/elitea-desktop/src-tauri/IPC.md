@@ -188,7 +188,9 @@ than show (an app bundle, a script — `.command`, `.sh`, `.py`, … —, an
 installer, a file with an execute bit): offer `reveal_path` instead. An OS
 failure rejects with `os_refused`. The webview's drag region works through
 `core:window:allow-start-dragging` and `core:window:allow-internal-toggle-maximize`
-(double-click to zoom), the only window permissions granted.
+(double-click to zoom), the only window permissions granted. `log:allow-log`
+(`plugin:log|log`) lets the UI append scrubbed diagnostics to the host log
+file (README, "Logs").
 
 ### `app://command`
 

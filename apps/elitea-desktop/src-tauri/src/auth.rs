@@ -358,7 +358,7 @@ impl AuthService {
         if let Some(policy) = &tokens.client_policy
             && let Err(error) = self.files.save_policy(policy)
         {
-            eprintln!("elitea-desktop: could not store the client policy: {error}");
+            log::warn!("could not store the client policy: {error}");
         }
         *self.cached.lock().await = Some(Cached {
             token: tokens.access_token,
@@ -530,7 +530,7 @@ impl AuthService {
             save_pending(self.pending_revokes.as_ref(), &list)
         });
         if let Err(error) = result {
-            eprintln!("elitea-desktop: could not keep a failed revoke for retry: {error}");
+            log::warn!("could not keep a failed revoke for retry: {error}");
         }
     }
 
@@ -564,13 +564,13 @@ impl AuthService {
         let mut waiting = match load_pending(self.pending_revokes.as_ref()) {
             Ok(list) => list,
             Err(error) => {
-                eprintln!("elitea-desktop: could not re-read the pending revokes: {error}");
+                log::warn!("could not re-read the pending revokes: {error}");
                 return 0;
             }
         };
         waiting.retain(|pending| !delivered.contains(pending));
         if let Err(error) = save_pending(self.pending_revokes.as_ref(), &waiting) {
-            eprintln!("elitea-desktop: could not update the pending revokes: {error}");
+            log::warn!("could not update the pending revokes: {error}");
         }
         waiting.len()
     }
