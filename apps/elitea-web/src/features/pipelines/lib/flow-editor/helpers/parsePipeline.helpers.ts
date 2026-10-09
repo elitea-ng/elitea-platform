@@ -25,6 +25,8 @@
  */
 import { load } from 'js-yaml';
 
+import { normalizePipelineNodeIdentifiers } from '@/shared/lib/pipelineNodeIdentifiers';
+
 import { PipelineNodeTypes, DECISION_NODE_ID_SUFFIX, ORIENTATION } from '../constants/flowEditor.constants';
 import { getInitialNodeId } from './flowEditor.helpers';
 import { parseState } from './parsePipelineState.helpers';
@@ -36,13 +38,15 @@ export { parseState } from './parsePipelineState.helpers';
 export { parseNodes } from './parsePipelineTraversal.helpers';
 
 export const parseYaml = (
-  yamlJson: YamlPipelineDocument | undefined,
+  rawYamlJson: YamlPipelineDocument | undefined,
   orientation: Orientation = ORIENTATION.vertical,
 ): {
   readonly nodes: FlowGraphNode[];
   readonly state: FlowGraphNode | null;
   readonly edges: FlowGraphEdge[];
 } => {
+  // Unquoted `id: 1` / `transition: 2` load as numbers; the graph below is keyed by string ids.
+  const yamlJson = normalizePipelineNodeIdentifiers(rawYamlJson);
   const state = parseState(yamlJson);
   const { nodes, edges } = parseNodes(yamlJson, orientation);
   const types = Object.values(PipelineNodeTypes) as readonly string[];
@@ -87,11 +91,14 @@ interface LegacyDecisionYamlNode extends YamlPipelineNode {
  * actual (if inconsistent) runtime behaviour.
  */
 export const migerateLegacyNodes = (
-  yamlJson: YamlPipelineDocument | undefined,
+  rawYamlJson: YamlPipelineDocument | undefined,
 ):
   | YamlPipelineDocument
   | undefined
   | { readonly yamlJson: YamlPipelineDocument | undefined; readonly flowNodesToRemove: readonly string[] } => {
+  // Every YAML -> flow parse passes through here, so this is where integer ids become strings
+  // (before `getInitialNodeId` below, which string-compares ids, can see them).
+  const yamlJson = normalizePipelineNodeIdentifiers(rawYamlJson);
   const legacyNodes: readonly LegacyDecisionYamlNode[] | undefined = Array.isArray(yamlJson?.nodes)
     ? (yamlJson.nodes as readonly LegacyDecisionYamlNode[])
     : undefined;

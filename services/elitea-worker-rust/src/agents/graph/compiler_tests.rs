@@ -113,10 +113,7 @@ fn whole_pipeline_yaml_is_bounded_strict_and_digest_stable() {
     let Err(error) = PipelineDefinition::from_yaml(&oversized) else {
         panic!("oversized pipeline was accepted");
     };
-    assert_eq!(
-        error.code(),
-        "graph.pipeline.configuration_resource_exhausted"
-    );
+    assert_eq!(error.code(), "graph.pipeline.yaml_bytes_exceeded");
 }
 
 #[test]
@@ -344,6 +341,107 @@ fn result_policy_prefers_terminal_data_then_ai_messages_then_declared_state() {
         select_pipeline_result(&state, &policy).as_deref(),
         Some("last declared")
     );
+}
+
+/// An untouched empty default is not an answer; a traced empty write is.
+#[test]
+fn static_fallback_skips_empty_collections_but_a_traced_empty_write_shows() {
+    let policy = PipelineResultPolicy {
+        terminal_data_keys: vec!["rows".to_owned()],
+        fallback_data_keys: vec!["summary".to_owned()],
+    };
+    let mut state = HashMap::from([
+        ("rows".to_owned(), json!([])),
+        ("summary".to_owned(), json!({})),
+        (
+            "messages".to_owned(),
+            json!([{"role": "assistant", "content": "model answer"}]),
+        ),
+    ]);
+    assert_eq!(
+        select_pipeline_result(&state, &policy).as_deref(),
+        Some("model answer")
+    );
+    state.insert("messages".to_owned(), json!([]));
+    assert_eq!(select_pipeline_result(&state, &policy), None);
+    state.insert(
+        super::pipeline_result::PIPELINE_RESULT_TRACE_STATE_KEY.to_owned(),
+        json!({"node": "join", "keys": ["rows"], "messages": false}),
+    );
+    assert_eq!(
+        select_pipeline_result(&state, &policy).as_deref(),
+        Some("```json\n[]\n```")
+    );
+}
+
+#[test]
+fn the_runtime_trace_selects_the_last_writer_before_the_static_chain() {
+    let policy = PipelineResultPolicy {
+        terminal_data_keys: vec!["terminal".to_owned()],
+        fallback_data_keys: vec!["declared".to_owned()],
+    };
+    let trace_key = super::pipeline_result::PIPELINE_RESULT_TRACE_STATE_KEY.to_owned();
+    let mut state = HashMap::from([
+        ("terminal".to_owned(), json!("static terminal")),
+        ("declared".to_owned(), json!("declared value")),
+        ("ran".to_owned(), json!(["x", "y"])),
+        (
+            "messages".to_owned(),
+            json!([{"role": "assistant", "content": "model answer"}]),
+        ),
+        (
+            trace_key.clone(),
+            json!({"node": "writer", "keys": ["ran"], "messages": false}),
+        ),
+    ]);
+    assert_eq!(
+        select_pipeline_result(&state, &policy).as_deref(),
+        Some("```json\n[\n  \"x\",\n  \"y\"\n]\n```")
+    );
+
+    // A traced message writer selects the last assistant message.
+    state.insert(
+        trace_key.clone(),
+        json!({"node": "llm", "keys": [], "messages": true}),
+    );
+    assert_eq!(
+        select_pipeline_result(&state, &policy).as_deref(),
+        Some("model answer")
+    );
+
+    // The trace is authoritative: a blank traced value never surfaces a
+    // static value that the last writer did not produce.
+    state.insert("ran".to_owned(), json!(""));
+    state.insert(
+        trace_key.clone(),
+        json!({"node": "writer", "keys": ["ran"], "messages": false}),
+    );
+    assert_eq!(select_pipeline_result(&state, &policy), None);
+    state.insert(
+        "messages".to_owned(),
+        json!([{"role": "assistant", "content": [{"type": "thinking", "thinking": "x"}]}]),
+    );
+    state.insert(
+        trace_key.clone(),
+        json!({"node": "llm", "keys": [], "messages": true}),
+    );
+    assert_eq!(select_pipeline_result(&state, &policy), None);
+    state.insert(
+        trace_key.clone(),
+        json!({"node": "writer", "keys": ["ran"], "messages": false}),
+    );
+
+    // An oversized value is truncated with a notice, never dropped.
+    state.insert("ran".to_owned(), json!("a".repeat(600 * 1024)));
+    let Some(text) = select_pipeline_result(&state, &policy) else {
+        panic!("an oversized result was dropped");
+    };
+    assert!(text.len() <= 512 * 1024);
+    assert!(text.starts_with("aaaa"));
+    assert!(text.ends_with(&format!(
+        "of {} bytes. The full value is in the run state.",
+        600 * 1024
+    )));
 }
 
 #[test]

@@ -26,6 +26,10 @@ pub enum NativeAgentAssemblyErrorCode {
     AuthorizationFailed,
     DependencyUnavailable,
     InvalidResult,
+    /// The saved agent instructions or settings exceed a platform bound that
+    /// has a registered readable terminal message (the worker's
+    /// `InputLimitField::AgentSettings`). Not retryable.
+    AgentSettingsLimit,
 }
 
 impl NativeAgentAssemblyErrorCode {
@@ -39,7 +43,32 @@ impl NativeAgentAssemblyErrorCode {
             Self::AuthorizationFailed => "native_agent.authorization_failed",
             Self::DependencyUnavailable => "native_agent.dependency_unavailable",
             Self::InvalidResult => "native_agent.invalid_result",
+            Self::AgentSettingsLimit => "native_agent.input_limit",
         }
+    }
+}
+
+/// Data-free reason behind an assembly failure that shares a coarse wire code.
+///
+/// An id-shape refusal keeps the `InvalidInput` wire code because no registered
+/// terminal message fits it. This keeps the worker's own typed code and the
+/// limit or field it names (both `'static`, never user content) for the
+/// structured log at the lifecycle boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NativeAgentAssemblyCause {
+    code: &'static str,
+    detail: Option<&'static str>,
+}
+
+impl NativeAgentAssemblyCause {
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        self.code
+    }
+
+    #[must_use]
+    pub const fn detail(&self) -> Option<&'static str> {
+        self.detail
     }
 }
 
@@ -57,6 +86,7 @@ pub struct NativeAgentAssemblyError {
     code: NativeAgentAssemblyErrorCode,
     message: &'static str,
     authorization: Option<Box<DelegatedAuthorizationRequirement>>,
+    cause: Option<NativeAgentAssemblyCause>,
 }
 
 impl NativeAgentAssemblyError {
@@ -65,7 +95,30 @@ impl NativeAgentAssemblyError {
             code,
             message,
             authorization: None,
+            cause: None,
         }
+    }
+
+    /// Attach the worker's typed, data-free reason (see [`NativeAgentAssemblyCause`]).
+    #[must_use]
+    pub const fn with_cause(mut self, code: &'static str, detail: Option<&'static str>) -> Self {
+        self.cause = Some(NativeAgentAssemblyCause { code, detail });
+        self
+    }
+
+    #[must_use]
+    pub const fn cause(&self) -> Option<&NativeAgentAssemblyCause> {
+        self.cause.as_ref()
+    }
+
+    /// The saved agent instructions or settings exceed a platform bound.
+    pub const fn agent_settings_limit(
+        message: &'static str,
+        cause_code: &'static str,
+        detail: &'static str,
+    ) -> Self {
+        Self::new(NativeAgentAssemblyErrorCode::AgentSettingsLimit, message)
+            .with_cause(cause_code, Some(detail))
     }
 
     /// Attach the sanitized delegated-authorization requirement, when the

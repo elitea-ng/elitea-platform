@@ -4115,6 +4115,10 @@ pub(crate) struct PipelineMcpAuthEventBinding {
 }
 
 impl PipelineMcpAuthEventBinding {
+    pub(crate) fn interrupt_id(&self) -> &str {
+        &self.interrupt_id
+    }
+
     pub(crate) fn checkpoint_id(&self) -> &str {
         &self.checkpoint_id
     }

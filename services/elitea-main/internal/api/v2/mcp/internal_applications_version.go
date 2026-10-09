@@ -13,6 +13,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 )
 
 type internalVersionState struct {
@@ -166,6 +168,14 @@ func (executor *postgresInternalApplicationExecutor) patchInstructions(
 	}
 	if updatedInstructions == state.instructions {
 		return internalApplicationConflict("The patch would not change the instructions.")
+	}
+
+	// The patch writes new pipeline text, so it carries the same save-time
+	// bound as the REST writes (pipelinelimits). Refused before the backup.
+	if state.agentType == "pipeline" {
+		if err := pipelinelimits.Check(updatedInstructions); err != nil {
+			return internalApplicationBadRequest(err.Error())
+		}
 	}
 
 	backup, err := cloneInternalVersion(ctx, tx, schema, projectID, state, actorID, time.Now().UTC())
