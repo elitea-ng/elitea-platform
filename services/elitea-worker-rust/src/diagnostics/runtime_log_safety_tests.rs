@@ -82,6 +82,9 @@ fn runtime_log_events_never_carry_data_values() {
         "outcome=\"completed\"",
         "outcome=\"failed\"",
         "outcome=\"succeeded\"",
+        // Only the tool wrapper's failed span carries this code, so the
+        // sanitized-error path is proven present, not just the router's.
+        "error_code=\"tool.execution.unavailable\"",
     ] {
         assert!(logged.contains(outcome), "{outcome} missing: {logged}");
     }

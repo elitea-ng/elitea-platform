@@ -147,9 +147,9 @@ impl std::error::Error for DiagnosticShutdownError {}
 /// Install the process subscriber for safe Elitea-owned spans.
 ///
 /// Only a single level is accepted and it is applied exclusively to the
-/// Elitea-owned crates in [`OWNED_TARGETS`]. Arbitrary `RUST_LOG` directives are deliberately ignored so enabling
-/// local diagnostics cannot expose dependency-owned HTTP, model, SMTP or SQL
-/// fields. Span close events supply phase duration without logging payloads.
+/// Elitea-owned crates in [`OWNED_TARGETS`]. Arbitrary `RUST_LOG` directives
+/// are deliberately ignored so enabling local diagnostics cannot expose
+/// dependency-owned HTTP, model, SMTP or SQL fields. Span close events supply phase duration without logging payloads.
 ///
 /// # Errors
 ///
@@ -368,8 +368,8 @@ fn panic_source_label(file: &str) -> Option<&str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DiagnosticInitError, install_tls_crypto_provider, log_layer, panic_source_label,
-        trace_directive, trace_export_enabled, tracing_directive,
+        DiagnosticInitError, OWNED_TARGETS, install_tls_crypto_provider, log_layer,
+        panic_source_label, trace_directive, trace_export_enabled, tracing_directive,
     };
     use tracing_subscriber::layer::SubscriberExt as _;
     use tracing_subscriber::util::SubscriberInitExt as _;
@@ -459,6 +459,44 @@ mod tests {
         tracing::warn!(target: "hyper::proto", "dependency-warn-hidden");
         tracing::error!(target: "sqlx::query", "dependency-error-hidden");
         println!("CHILD-RAN");
+    }
+
+    /// A library crate under `libs/rust` that the Worker hosts and that emits
+    /// tracing events must be an owned target, or its events vanish in deployed
+    /// Workers the way the runtime crate's did after ADR-0027.
+    #[test]
+    fn every_hosted_library_crate_that_traces_is_an_owned_target() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let read = |path: std::path::PathBuf| -> toml::Table {
+            std::fs::read_to_string(&path)
+                .expect("manifest")
+                .parse()
+                .expect("manifest TOML")
+        };
+        let manifest = read(root.join("Cargo.toml"));
+        let dependencies = manifest["dependencies"].as_table().expect("dependencies");
+        let mut hosted = 0;
+        for (name, spec) in dependencies {
+            let Some(path) = spec.get("path").and_then(toml::Value::as_str) else {
+                continue;
+            };
+            if !path.starts_with("../../libs/rust/") || path.starts_with("../../libs/rust/vendor/")
+            {
+                continue;
+            }
+            hosted += 1;
+            let library = read(root.join(path).join("Cargo.toml"));
+            let traces = library
+                .get("dependencies")
+                .and_then(toml::Value::as_table)
+                .is_some_and(|table| table.contains_key("tracing"));
+            let target = name.replace('-', "_");
+            assert!(
+                !traces || OWNED_TARGETS.contains(&target.as_str()),
+                "{name} emits tracing events but {target} is not in OWNED_TARGETS"
+            );
+        }
+        assert!(hosted >= 2, "the hosted libs/rust crates were not found");
     }
 
     #[test]
