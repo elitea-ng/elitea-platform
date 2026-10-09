@@ -70,7 +70,7 @@ func TestPythonVerifiedImportKeysMatchTheWorkerLock(t *testing.T) {
 func TestRustNativeToolTypesMatchTheMaterialiser(t *testing.T) {
 	t.Parallel()
 
-	path := repoRelative(t, "services", "elitea-worker-rust", "src", "toolkits", "materialize.rs")
+	path := repoRelative(t, "libs", "rust", "agent-runtime", "src", "toolkits", "materialize.rs")
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err,
 		"the Rust materialiser must be readable: capability.go transcribes its dispatch")
