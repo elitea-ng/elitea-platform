@@ -154,19 +154,39 @@ No touched row is L.
 
 ## Real-browser evidence
 
-**Pending.** It needs a rehearsal stack with this branch's Main and Web images. The checks are:
+Run on 2026-10-09 in the Claude desktop browser pane (Chromium), against a standalone stack of this branch. Real
+backend, no response mocks.
 
-- sign-in;
-- feedback list;
-- pin and unpin;
-- shared-chat unlock, including the 429 path;
-- markdown rendering with a task list and raw HTML;
-- no CSP violations in the console across chat, agents, pipelines, settings, docs with Mermaid, and the microphone;
-- reload.
+- **Stack:** compose project `elitea-secfix-1175`, served at `http://secfix.localhost:18140`. A separate hostname
+  keeps the session cookie apart from other local stacks.
+- **Database:** restored from the real-model product dump at `main` `0def77b22` (shared migrations 157, tenant
+  148). It holds 4 vault key rows, all wrapped. `SECRETS_MASTER_KEY` is set.
+- **Images:**
+  - Main: `elitea-main:secfix-1175`, `sha256:a26391aa7964…`, arm64.
+  - Web: `elitea-web:secfix-1175`, `d722b3542043`.
+  - Every other service: the `main-0def77b22-verify` images. The branch base is `0def77b22`, and only Main and Web
+    differ.
+- **Image integrity:** the `/elitea-main` binary extracted with `docker create` + `docker cp` contains strings that
+  exist only on this branch: `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS`, the unwrapped-key refusal text, the unlock
+  "busy" message, and `projectaccess`. The Web image contains the new `security-headers.conf` (`script-src 'self'`
+  plus the two hashes) and `assets/audioChunkProcessor.worklet-*.js`.
 
-The Web agent's local Chromium check of the built app, served with the exact headers, showed zero CSP violations
-on `/app/`, `/app/chat`, `/app/settings` and the docs Mermaid pages. That run used stubbed API responses, so it is
-not the required evidence.
+| Check | Actor | Observation |
+| --- | --- | --- |
+| Start-up | — | Main became healthy with the key set and wrapped rows. No master-key warning was logged. |
+| Sign-in | `admin@centry.user` (user 3), `rust-mcp-restricted-20260913@centry.user` (user 6) | Both signed in through the OIDC mock. |
+| Pin | user 3 | "Pin on top" on conversation 866 (project 2) from the chat list menu. The pin shows after reload, and `centry.social_pins` holds one row (conversation, 2, 866, 3). |
+| Pin/unpin refused | user 6 (no project) | POST and DELETE on `elitea_core` and `social` pin routes returned 403. The pin row did not change. |
+| Feedback and settings | user 3 / user 6 | `elitea_core` feedbacks/2 returned 200 / 403. `platform_settings/prompt_lib/2` returned 200 / 403. The project-less `platform_settings` returned 200 / 200. `social` feedbacks/2 returned 403 for user 6. For user 3 it returned 500: this database has no `p_2.social_feedbacks` table, and the social list handler, which this branch does not change, reports that as a server error. The `elitea_core` route answers 200. |
+| Author card | user 3 viewing self / user 6 viewing user 3 / user 3 viewing user 6 / unknown id | Self has `email`. The other two cards have no `email` key and zero counts. An unknown id returns 200 `{}`. |
+| Social authors | user 6 | `social/authors/1` returned 403. |
+| Shared-chat unlock | browser on link A | The UI showed "That password did not work". Attempts 1–10 returned 403. Attempt 11 returned 429 with `Retry-After: 288`. The correct password on link A also returned 429, which the UI showed as a generic error. |
+| Per-link budget | same browser, link B | The correct password unlocked link B through the UI and showed the read-only transcript. It was still unlocked after reload. |
+| Markdown | user 3, gpt-5.4-mini, conversation 867 | Model output with a GFM task list and `<span style onclick class id data-z>` rendered two disabled checkboxes. The span had no attributes left and default colour. Bold still rendered. Unchanged after reload. |
+| CSP | user 3 | Full loads of chat, agents, pipelines, settings, toolkits, MCPs, credentials, artifacts, docs with Mermaid, the shared-chat view, and the chat with model output: no CSP violation. As a positive control, an injected inline script was blocked and reported as a `script-src-elem` violation. |
+| Microphone worklet | user 3 | `audioWorklet.addModule` of the shipped same-origin asset loaded and registered `audio-chunk-processor`. A Blob-URL worklet is refused by the policy. |
+
+The Web agent's earlier local Chromium check used stubbed API responses. It is superseded by this run.
 
 ## Fixtures
 
@@ -175,6 +195,10 @@ All test fixtures are created by SQL in the tests, against isolated databases. N
 ## Follow-ups
 
 - Pin existence does not tell agent from pipeline, or toolkit from MCP.
+- The shared-chat view shows its generic error for a 429. A "too many attempts, try again later" message would be
+  clearer; it needs a new `t()` key.
+- The social feedback list answers 500 when a project's tenant schema lacks `social_feedbacks`. This predates this
+  branch; the `elitea_core` twin answers 200.
 - `api/openapi/v2.yaml` and `API_CONTRACT.md` do not yet describe the new 400/403/404 responses or the conditional
   `email`.
 - Author-card visibility for non-colleagues and the `img-src` scope are product decisions; tracked privately.
