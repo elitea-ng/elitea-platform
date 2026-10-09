@@ -36,6 +36,64 @@ apps/elitea-desktop/src-tauri (Rust host) <--IPC--> the bundled webview
   local runtime.
 - Every request carries `X-Client-Version` (the deployment's 426 gate).
 
+## Native features
+
+macOS first; Linux and Windows build and degrade as noted.
+
+- **Window chrome (macOS)**: no title bar of its own (`TitleBarStyle::Overlay`,
+  hidden title); the traffic lights sit inside the sidebar's top area
+  (`trafficLightPosition` 18, 22). The window is transparent over the
+  system sidebar material (`NSVisualEffectMaterial::Sidebar`, following the
+  window's active state): Tauri's own `effects` API, which applies it with
+  the `window-vibrancy` crate, so no direct dependency. The web shell asks
+  `app_platform` and then draws a `data-tauri-drag-region` and leaves
+  `traffic_light_inset_px` free on the left; content painted opaque simply
+  hides the material. **Trade-off**: a transparent WKWebView needs the
+  private `drawsBackground` key. Tauri 2.12.1 always enables it (the old
+  `macos-private-api` feature / `macOSPrivateApi` flag is a no-op now), so
+  nothing is configured for it, but it keeps the app off the Mac App Store
+  (Developer ID distribution is unaffected). Linux and Windows keep normal
+  decorations and an opaque window.
+- **Window state**: size, position, maximized and full screen persist
+  (`tauri-plugin-window-state`, Rust-side, no webview permission); the
+  minimum size is 900 × 600. On macOS closing the window (⌘W, the red
+  button) hides it; the dock icon brings it back and ⌘Q quits, so a
+  running turn keeps going and keeps notifying.
+- **Menu bar and shortcuts** (`src/menu.rs`): App (About, Settings… ⌘,,
+  Services, Hide, Quit), File (New Thread ⌘N, Open Folder… ⌘O, Close Window
+  ⌘W), Edit (the OS's own undo/redo/cut/copy/paste/select all, so they keep
+  working in every text field), View (Command Palette ⌘K, Toggle Sidebar
+  ⌘\\, Toggle Changes Panel ⌘⌥\\, Back ⌘[, Forward ⌘], Reload ⌘R in debug
+  builds only, Actual Size ⌘0, Zoom In ⌘=, Zoom Out ⌘-, Full Screen), Window,
+  Help (Elitea Help opens `<deployment>/docs/` when connected). On Linux and
+  Windows Settings and Quit are in File and About in Help; shortcuts use
+  Ctrl. UI actions arrive as `app://command` (IPC.md).
+- **Opening folders**: Open Folder… runs the native picker host-side;
+  a folder dropped on the window, or on the dock icon / opened with Elitea
+  from Finder (`Info.plist` declares folders as an *Alternate* document
+  type, so Elitea never becomes the default for folders), is opened through
+  the same `WorkspaceStore::add` as `workspace_open`, then the UI gets
+  `workspace_opened`. Dropped files (not folders) are handed to the UI as
+  `files_dropped` with their absolute paths; the host does nothing else
+  with them. A drop on the window is handled natively, so the webview gets
+  no HTML5 file drop events.
+- **Notifications and dock badge** (`src/attention.rs`): while the window is
+  not focused (or hidden), an `approval_request` posts "Approval needed —
+  <workspace>" naming only the tool, and a turn's `done` posts "Turn
+  finished / failed / stopped — <workspace>". Never a command line, a path,
+  file contents or a secret. The dock badge (macOS; Linux where the desktop
+  supports it; Windows has none) counts approvals still open across
+  workspaces, cleared as they are answered or their turn ends. Permission
+  is asked lazily on the first notification. Clicking a notification only
+  activates the app: `tauri-plugin-notification` has no click callback on
+  desktop, so `focus_turn` is reserved in the contract but not sent yet.
+  In a dev build macOS shows the notifications as Terminal's.
+- **Reveal / open** (`reveal_path`, `open_path`): a workspace-relative path,
+  resolved through the same confined view as the agent's tools (no `..`
+  escape, no symlink, `path_deny` refused). `open_path` also refuses
+  anything the OS would run rather than show (app bundles, scripts,
+  installers, executables); reveal it instead.
+
 ## Registering the client
 
 The deployment must list this client in its `native_clients` configuration:

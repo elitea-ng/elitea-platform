@@ -81,3 +81,84 @@ fn runtime_styles_are_not_switched_off_by_asset_hashes() {
     let style = security["csp"]["style-src"].as_str().expect("style-src");
     assert!(style.split_whitespace().any(|s| s == "'unsafe-inline'"));
 }
+
+fn granted() -> Vec<String> {
+    json("capabilities/default.json")["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            p.as_str().map_or_else(
+                || p["identifier"].as_str().unwrap().to_owned(),
+                str::to_owned,
+            )
+        })
+        .collect()
+}
+
+/// The webview may listen to host events (never emit them), and gets the
+/// two window permissions `data-tauri-drag-region` needs (drag;
+/// double-click to zoom), nothing else of the window or of the
+/// Rust-driven plugins (notification, window-state): a page cannot post
+/// notifications, move the window or rewrite its saved state.
+#[test]
+fn the_webview_gets_only_the_drag_region_window_permissions() {
+    let granted = granted();
+    let core: Vec<&str> = granted
+        .iter()
+        .map(String::as_str)
+        .filter(|p| p.starts_with("core:"))
+        .collect();
+    assert_eq!(
+        core,
+        [
+            "core:event:allow-listen",
+            "core:event:allow-unlisten",
+            "core:window:allow-start-dragging",
+            "core:window:allow-internal-toggle-maximize"
+        ]
+    );
+    for p in &granted {
+        assert!(
+            !p.starts_with("notification:") && !p.starts_with("window-state:"),
+            "{p}"
+        );
+        assert!(!p.ends_with(":default"), "{p}: no default sets");
+    }
+    let capability = json("capabilities/default.json");
+    assert_eq!(capability["windows"], serde_json::json!(["main"]));
+    assert!(capability.get("remote").is_none());
+}
+
+/// Every host command build.rs generates a permission for is granted, and
+/// nothing else is: the new native commands included.
+#[test]
+fn every_host_command_is_granted_once() {
+    let build = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/build.rs")).unwrap();
+    let start = build.find(".commands(&[").unwrap();
+    let end = start + build[start..].find("])").unwrap();
+    let commands: Vec<String> = build[start..end]
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .map(|c| format!("allow-{}", c.replace('_', "-")))
+        .collect();
+    for native in ["allow-app-platform", "allow-reveal-path", "allow-open-path"] {
+        assert!(commands.iter().any(|c| c == native), "{native}");
+    }
+    let own: Vec<String> = granted()
+        .into_iter()
+        .filter(|p| p.starts_with("allow-"))
+        .collect();
+    assert_eq!(own, commands);
+}
+
+/// macOS takes a folder dropped on the dock icon only for a declared
+/// document type; Alternate keeps Finder the default for folders.
+#[test]
+fn folders_are_an_alternate_document_type() {
+    let plist =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Info.plist")).unwrap();
+    assert!(plist.contains("<string>public.folder</string>"));
+    assert!(plist.contains("<key>LSHandlerRank</key>\n      <string>Alternate</string>"));
+}

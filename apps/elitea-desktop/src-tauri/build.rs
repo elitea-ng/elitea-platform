@@ -23,6 +23,9 @@ fn main() {
             "approval_respond",
             "turn_changes",
             "checkpoint_restore",
+            "reveal_path",
+            "open_path",
+            "app_platform",
         ]),
     ))
     .expect("tauri build configuration is valid");

@@ -7,12 +7,16 @@
 //! A failed command here rejects with [`IpcError`], `{code, message}`: the
 //! UI branches on the machine code and shows the message.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter as _, State};
+use tauri::{AppHandle, Emitter as _, Manager as _, State};
+
+use crate::attention::Attention;
+use crate::d0::mentions::Located;
 
 use crate::auth::{AuthService, RefreshResult};
 use crate::d0::api::{ApiError, Bearer, Credentials};
@@ -129,7 +133,8 @@ impl PolicySource for StoredPolicy {
     }
 }
 
-/// Events to the main window only.
+/// Events to the main window only; the host's notifications and dock
+/// badge watch the same stream (`attention.rs`).
 pub struct MainWindowEvents(pub AppHandle);
 
 impl EventEmitter for MainWindowEvents {
@@ -137,7 +142,21 @@ impl EventEmitter for MainWindowEvents {
         if let Err(error) = self.0.emit_to("main", EVENT_NAME, &event) {
             eprintln!("elitea-desktop: could not deliver an agent event: {error}");
         }
+        if let Some(attention) = self.0.try_state::<Arc<Attention>>() {
+            attention.observe(&event);
+        }
     }
+}
+
+/// The native folder dialog; `None` when the person cancelled (or the
+/// dialog handed back something that is not a local folder).
+pub async fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
+    use tauri_plugin_dialog::DialogExt as _;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    app.dialog().file().pick_folder(move |picked| {
+        let _ = sender.send(picked);
+    });
+    receiver.await.ok().flatten()?.into_path().ok()
 }
 
 /// Pick a folder with the native dialog and open it as a workspace;
@@ -147,18 +166,140 @@ pub async fn workspace_open(
     app: AppHandle,
     state: State<'_, LocalState>,
 ) -> Result<Option<Workspace>, IpcError> {
-    use tauri_plugin_dialog::DialogExt as _;
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    app.dialog().file().pick_folder(move |picked| {
-        let _ = sender.send(picked);
-    });
-    let Some(picked) = receiver.await.ok().flatten() else {
+    let Some(path) = pick_folder(&app).await else {
         return Ok(None);
     };
-    let path = picked
-        .into_path()
-        .map_err(|_| IpcError::new("storage", "the dialog did not return a local folder"))?;
     Ok(state.workspaces.add(&path).map(Some)?)
+}
+
+/// Files whose "open with the default app" would RUN something (an app
+/// bundle, a script, an installer): `open_path` refuses them, Reveal in
+/// Finder still works.
+const LAUNCHABLE_EXTENSIONS: &[&str] = &[
+    "app",
+    "command",
+    "tool",
+    "terminal",
+    "workflow",
+    "action",
+    "scpt",
+    "scptd",
+    "applescript",
+    "pkg",
+    "mpkg",
+    "dmg",
+    "prefpane",
+    "kext",
+    "webloc",
+    "inetloc",
+    "fileloc",
+    "exe",
+    "com",
+    "bat",
+    "cmd",
+    "ps1",
+    "psm1",
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "wsf",
+    "wsh",
+    "msi",
+    "msp",
+    "scr",
+    "lnk",
+    "url",
+    "pif",
+    "hta",
+    "cpl",
+    "reg",
+    "jar",
+    "desktop",
+    "appimage",
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "csh",
+    "py",
+    "pl",
+    "rb",
+];
+
+/// True for a path the OS would execute rather than show.
+#[must_use]
+pub fn is_launchable(path: &Path, is_dir: bool) -> bool {
+    let extension = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase());
+    if extension
+        .as_deref()
+        .is_some_and(|e| LAUNCHABLE_EXTENSIONS.contains(&e))
+    {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        if !is_dir
+            && std::fs::metadata(path).is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0)
+        {
+            return true;
+        }
+    }
+    let _ = is_dir;
+    false
+}
+
+async fn located(
+    state: &State<'_, LocalState>,
+    workspace_id: String,
+    path: String,
+) -> Result<Located, IpcError> {
+    let agents = state.agents.clone();
+    tokio::task::spawn_blocking(move || agents.locate(&workspace_id, &path))
+        .await
+        .map_err(|_| IpcError::new("internal", "the path lookup stopped unexpectedly"))?
+        .map_err(IpcError::from)
+}
+
+/// Reveal a workspace file or folder in Finder / the file manager.
+/// `path` is workspace-relative (`""` is the workspace itself).
+#[tauri::command(rename_all = "snake_case")]
+pub async fn reveal_path(
+    app: AppHandle,
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    path: String,
+) -> Result<(), IpcError> {
+    use tauri_plugin_opener::OpenerExt as _;
+    let found = located(&state, workspace_id, path).await?;
+    app.opener()
+        .reveal_item_in_dir(&found.absolute)
+        .map_err(|e| IpcError::new("os_refused", format!("could not reveal it: {e}")))
+}
+
+/// Open a workspace file (or folder) with its default app. Refuses
+/// (`open_refused`) anything the OS would run instead of show.
+#[tauri::command(rename_all = "snake_case")]
+pub async fn open_path(
+    app: AppHandle,
+    state: State<'_, LocalState>,
+    workspace_id: String,
+    path: String,
+) -> Result<(), IpcError> {
+    use tauri_plugin_opener::OpenerExt as _;
+    let found = located(&state, workspace_id, path).await?;
+    if is_launchable(&found.absolute, found.is_dir) {
+        return Err(IpcError::new(
+            "open_refused",
+            "This file would run a program, so it is not opened from here. Reveal it in the file manager instead.",
+        ));
+    }
+    app.opener()
+        .open_path(found.absolute.to_string_lossy(), None::<&str>)
+        .map_err(|e| IpcError::new("os_refused", format!("could not open it: {e}")))
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -248,6 +389,7 @@ pub fn agent_turn_status(
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn approval_respond(
+    app: AppHandle,
     state: State<'_, LocalState>,
     request_id: String,
     decision: String,
@@ -259,6 +401,9 @@ pub fn approval_respond(
         )
     })?;
     if state.agents.respond(&request_id, decision) {
+        if let Some(attention) = app.try_state::<Arc<Attention>>() {
+            attention.answered(&request_id);
+        }
         Ok(())
     } else {
         Err(IpcError::new(
@@ -320,5 +465,35 @@ mod tests {
         let storage: IpcError = HostError::Storage("disk full".into()).into();
         assert_eq!(storage.code, "storage");
         assert!(storage.message.contains("disk full"));
+    }
+
+    #[test]
+    fn programs_and_scripts_are_never_opened_with_the_default_app() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("README.md");
+        std::fs::write(&plain, "x").unwrap();
+        assert!(!is_launchable(&plain, false));
+        assert!(!is_launchable(dir.path(), true));
+        for name in [
+            "Tool.app",
+            "run.command",
+            "setup.EXE",
+            "x.sh",
+            "a.webloc",
+            "i.pkg",
+        ] {
+            assert!(
+                is_launchable(&dir.path().join(name), name.ends_with(".app")),
+                "{name}"
+            );
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let script = dir.path().join("build");
+            std::fs::write(&script, "#!/bin/sh").unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(is_launchable(&script, false));
+        }
     }
 }

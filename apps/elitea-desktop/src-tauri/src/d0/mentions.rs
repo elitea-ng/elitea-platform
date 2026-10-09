@@ -6,10 +6,10 @@
 //! inlines a file, the agent reads what it needs with its own (confined,
 //! approved) tools.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use elitea_local_tools::find::{FoundPath, find_paths};
-use elitea_local_tools::workspace::{EntryKind, Intent, Workspace};
+use elitea_local_tools::workspace::{EntryKind, Intent, Workspace, WsPath};
 
 use super::turn::TurnError;
 
@@ -43,8 +43,7 @@ pub fn files(
 }
 
 fn invalid(mention: &str, why: &str) -> TurnError {
-    let shown: String = mention.chars().take(200).collect();
-    TurnError::new("invalid_request", format!("`{shown}` {why}"))
+    TurnError::new("invalid_request", format!("`{}` {why}", shown(mention)))
 }
 
 /// The checked mentions, as the picker spells them (directories end with
@@ -87,6 +86,69 @@ pub fn check(workspace: &Workspace, mentions: &[String]) -> Result<Vec<String>, 
     Ok(out)
 }
 
+/// What [`locate`] found: the absolute path to hand to the OS, and whether
+/// it is a folder.
+#[derive(Debug, Eq, PartialEq)]
+pub struct Located {
+    pub absolute: PathBuf,
+    pub is_dir: bool,
+}
+
+/// `reveal_path` / `open_path`: a WORKSPACE-RELATIVE path (empty or `.` is
+/// the workspace itself) resolved through the confined workspace.
+///
+/// # Errors
+///
+/// `invalid_request` for an absolute path, an escape (`..` or an
+/// in-workspace symlink leading out), a `path_deny` match, a symlink or
+/// anything but a file or folder; `not_found` when it does not exist.
+pub fn locate(workspace: &Workspace, path: &str) -> Result<Located, TurnError> {
+    let refused = |why: &str| invalid(path, why);
+    if path.len() > MAX_MENTION_LEN {
+        return Err(refused("is not a path in this workspace."));
+    }
+    let trimmed = path.trim().trim_end_matches('/');
+    if Path::new(trimmed).is_absolute() || trimmed.starts_with('\\') {
+        return Err(refused("must be relative to the workspace."));
+    }
+    let resolved = if trimmed.is_empty() || trimmed == "." {
+        WsPath::root()
+    } else {
+        workspace
+            .resolve(trimmed, Intent::Read)
+            .map_err(|_| refused("is not a path in this workspace."))?
+    };
+    let is_dir = match workspace.stat(&resolved) {
+        Ok(Some(EntryKind::File)) => false,
+        Ok(Some(EntryKind::Dir)) => true,
+        Ok(Some(EntryKind::Symlink)) => return Err(refused("is a symbolic link.")),
+        Ok(Some(_)) => return Err(refused("is not a file or a folder.")),
+        Ok(None) => {
+            return Err(TurnError::new(
+                "not_found",
+                format!("`{}` does not exist in this workspace.", shown(path)),
+            ));
+        }
+        Err(_) => return Err(refused("is not a path in this workspace.")),
+    };
+    // Where it really is: in-workspace symlinks on the way followed (one
+    // leading out is refused), and the deny rules checked again there.
+    let target = workspace
+        .final_target(&resolved)
+        .map_err(|_| refused("is not a path in this workspace."))?;
+    workspace
+        .check(&target, Intent::Read)
+        .map_err(|_| refused("is not a path in this workspace."))?;
+    Ok(Located {
+        absolute: workspace.absolute(&target),
+        is_dir,
+    })
+}
+
+fn shown(path: &str) -> String {
+    path.chars().take(200).collect()
+}
+
 /// `prompt` with the mentions section appended (unchanged without any).
 #[must_use]
 pub fn with_mentions(prompt: &str, mentions: &[String]) -> String {
@@ -107,7 +169,7 @@ pub fn with_mentions(prompt: &str, mentions: &[String]) -> String {
 mod tests {
     use std::fs;
 
-    use super::{MAX_MENTIONS, check, open, with_mentions};
+    use super::{MAX_MENTIONS, check, locate, open, with_mentions};
 
     fn folder() -> (tempfile::TempDir, elitea_local_tools::workspace::Workspace) {
         let dir = tempfile::tempdir().unwrap();
@@ -173,5 +235,58 @@ mod tests {
             with_mentions("fix it\n", &["src/main.rs".into(), "src/".into()]),
             "fix it\n\nFiles the user referenced:\n- src/main.rs\n- src/"
         );
+    }
+
+    #[test]
+    fn located_paths_are_confined_to_the_workspace() {
+        let (dir, workspace) = folder();
+        let root = dir.path().canonicalize().unwrap();
+        let file = locate(&workspace, "src/main.rs").unwrap();
+        assert_eq!(file.absolute, root.join("src/main.rs"));
+        assert!(!file.is_dir);
+        assert!(locate(&workspace, "src/").unwrap().is_dir);
+        for itself in ["", ".", "./"] {
+            let located = locate(&workspace, itself).unwrap();
+            assert!(located.is_dir, "{itself:?}");
+            assert_eq!(located.absolute, root, "{itself:?}");
+        }
+        assert_eq!(
+            locate(&workspace, "missing.rs").unwrap_err().code,
+            "not_found"
+        );
+    }
+
+    #[test]
+    fn located_paths_refuse_escapes_denials_symlinks_and_absolute_paths() {
+        let (dir, workspace) = folder();
+        let outside = tempfile::tempdir().unwrap();
+        fs::write(outside.path().join("x.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("x.txt"), dir.path().join("out.txt"))
+            .unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("outdir")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("src"), dir.path().join("inner")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("secrets"), dir.path().join("hidden")).unwrap();
+        let absolute = dir
+            .path()
+            .join("src/main.rs")
+            .to_string_lossy()
+            .into_owned();
+        for bad in [
+            "../etc/passwd",
+            "src/../../x",
+            "/etc/passwd",
+            absolute.as_str(),
+            "secrets/key.pem",
+            "out.txt",
+            "outdir/x.txt",
+            "inner",
+            "hidden/key.pem",
+        ] {
+            assert_eq!(
+                locate(&workspace, bad).unwrap_err().code,
+                "invalid_request",
+                "{bad}"
+            );
+        }
     }
 }
