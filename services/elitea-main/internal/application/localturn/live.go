@@ -22,8 +22,8 @@ type StoredBinding struct {
 	VersionID     int64
 	// Credential is the family that started the turn.
 	Credential Credential
-	Committed     bool
-	Expired       bool
+	Committed  bool
+	Expired    bool
 }
 
 // LiveTurn is a turn that may still act: started by the caller in the
