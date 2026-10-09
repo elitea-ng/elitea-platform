@@ -86,14 +86,22 @@ fn embedded_prompts_match_the_manifest() {
         .collect();
     assert_eq!(embedded, hashes(|_| true));
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/ask/prompts");
-    let on_disk: BTreeSet<String> = std::fs::read_dir(&dir)
-        .expect("prompts dir")
-        .map(|e| e.expect("entry").file_name().into_string().expect("utf-8"))
-        .filter(|name| {
-            std::path::Path::new(name)
-                .extension()
-                .is_some_and(|e| e == "txt")
-        })
+    // LangChain's summary prompt lives with the shared conversation crate
+    // (libs/rust/conversation), which both engines' agents use.
+    let shared = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../libs/rust/conversation/src/summary_prompt.txt");
+    assert!(shared.is_file(), "{}", shared.display());
+    let on_disk: BTreeSet<String> = std::iter::once("summary_prompt.txt".to_owned())
+        .chain(
+            std::fs::read_dir(&dir)
+                .expect("prompts dir")
+                .map(|e| e.expect("entry").file_name().into_string().expect("utf-8"))
+                .filter(|name| {
+                    std::path::Path::new(name)
+                        .extension()
+                        .is_some_and(|e| e == "txt")
+                }),
+        )
         .collect();
     assert_eq!(on_disk, embedded.keys().cloned().collect());
 }

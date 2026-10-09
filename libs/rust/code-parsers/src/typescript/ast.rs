@@ -97,6 +97,6 @@ pub(super) fn stem(file_path: &str) -> String {
 /// React metadata. Case-sensitive on purpose: `X.TSX` is parsed as plain
 /// TypeScript by the Python parser too.
 #[allow(clippy::case_sensitive_file_extension_comparisons)]
-pub(super) fn is_tsx(file_path: &str) -> bool {
+pub(crate) fn is_tsx(file_path: &str) -> bool {
     file_path.ends_with(".tsx")
 }

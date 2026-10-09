@@ -12,6 +12,8 @@ description = "The Rust-native DeepWiki engine behind the sub-application host's
 elitea-engine-core = { path = "../../libs/rust/engine-core" }
 elitea-code-parsers = { path = "../../libs/rust/code-parsers" }
 elitea-model-client = { path = "../../libs/rust/model-client" }
+# The agents' conversation and its summarisation (shared with Inventory).
+elitea-conversation = { path = "../../libs/rust/conversation" }
 elitea-repo-ingest = { path = "../../libs/rust/repo-ingest" }
 elitea-engine-sidecar = { path = "../../libs/rust/engine-sidecar" }
 elitea-graph-algos = { path = "../../libs/rust/graph-algos" }

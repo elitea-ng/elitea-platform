@@ -3,17 +3,27 @@
 The Rust-native Inventory engine (ADR-0027) behind the sub-application host's
 engine sidecar socket, built on the shared engine crates in `libs/rust`.
 
-**State: P3b, ingestion of a source's files.** It serves the Inventory tool table on the same
+**State: P4, every Inventory tool served natively.** It serves the Inventory tool table on the same
 socket protocol the Python sidecar spoke, with two runners:
 
 | `ELITEA_INVENTORY_RUNNER` | What answers |
 |---|---|
 | `unavailable` (default) | every tool is refused (`FileNotFoundError`): an engine that is not wired must look broken |
 | `fixture` | the canned graph every Inventory fixture runner replays |
+| `native` | the engine itself over PostgreSQL (`ELITEA_INVENTORY_DATABASE_URL`): every tool of the `inventory` and `inventory_search` families |
 
-The knowledge graph and its PostgreSQL store (P3a) and file ingestion (P3b) are
-in, as a library: no socket tool runs them yet. Parser and LLM extraction,
-communities, embeddings, retrieval and `investigate` land in P3c–P4.
+The knowledge graph and its PostgreSQL store (P3a), file ingestion (P3b), the
+parser stage (P3c) and the model stage (P3d) are in; communities, embeddings and
+the native runner (P3e) serve `run_ingestion` on the socket; the read tools
+(`src/retrieval`, held to goldens the Python handlers produced) and
+`investigate` (`src/investigate.rs`: the toolkit's model with the graph tools
+and the source toolkits' read-only tools through elitea-main's `test_tool`
+route) complete it (P4).
+
+The model stage (`src/extract`) uses the Python engine's prompts and type tables
+as data: `assets/python_inventory.json`, generated from its source by
+`assets/generate.py`. The module docs list where it deliberately differs:
+absolute citations, kept text facts, and relations that are actually extracted.
 
 ## The graph and its store
 
@@ -31,6 +41,19 @@ normalisation inside the store.
 `graph.json` object per toolkit bucket. `elitea-inventory-engine migrate`
 applies the migrations (ledger `inventory_graph.schema_migrations`); the
 PostgreSQL tests need `INVENTORY_TEST_DSN` (see the test's header).
+
+## Enterprise content (ADR-0028)
+
+Ingestion reads through `elitea-content-source`: a source lists documents —
+each with a version, a mime type and an ACL — and the engine fetches the new
+and changed ones. Git (a checked-out tree) is the first connector. A document
+that is not text (PDF, Office, spreadsheets, e-mail, HTML) is extracted by
+`elitea-doc-extract` (xberg, the `documents` feature, on by default; about
++29 MB of binary) and cited like any file. The `documents` table keeps each
+document's version, mime type and ACL; every read tool and `investigate` see
+only what the caller may read — the user id the sub-application host
+verified (`caller_user_id`) — and a caller without one sees project-wide
+documents only.
 
 ## Ingestion (`src/ingest`)
 
@@ -64,7 +87,8 @@ on purpose:
 | `ELITEA_INVENTORY_GIT_ALLOWLIST` | unset (no host) | the git hosts a clone may reach |
 | `ELITEA_INVENTORY_MAX_CLONE_BYTES` / `_MAX_FILE_COUNT` / `_MAX_FILE_BYTES` / `_MAX_PARSED_BYTES` / `_CLONE_TIMEOUT_SECONDS` | `elitea-repo-ingest` defaults | clone limits |
 | `ELITEA_INVENTORY_SCRATCH_PATH` | `/var/scratch/inventory` | where a run clones (removed after) |
-| `ELITEA_INVENTORY_DATABASE_URL` | unset | the graph store, read by `migrate` (`postgresql://` URL form) |
+| `ELITEA_INVENTORY_DATABASE_URL` | unset | the graph store (`migrate`, and required by `native`; `postgresql://` URL form). PostgreSQL with the pgvector extension available: migration 0004 creates it, and semantic search ranks there |
+| `ELITEA_INVENTORY_CALLBACK_CA_FILE` | unset | a PEM bundle the model transport trusts besides the platform roots |
 | `OTEL_EXPORTER_OTLP_(TRACES_)ENDPOINT` | unset | span export (`elitea-engine-sidecar::telemetry`) |
 
 ## The three fixture runners

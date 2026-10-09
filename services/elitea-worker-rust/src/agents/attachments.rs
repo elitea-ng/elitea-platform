@@ -1360,7 +1360,7 @@ mod tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(
             targets[0],
-            "/executions/execution%2Fone/generations/2/runtime-context/attachments/\
+            "/executions/execution-one/generations/2/runtime-context/attachments/\
              chat-attachments/5f5a1ad4-2b30-4a54-9b7f-2d05a0d3f6c1%2Freport%20file.txt"
                 .replace(char::is_whitespace, ""),
         );

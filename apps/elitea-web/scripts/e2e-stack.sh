@@ -626,6 +626,8 @@ CROSS JOIN (VALUES
     ('models.applications.tool.delete'),
     ('models.applications.tool.details'),
     ('models.applications.tool.patch'),
+    -- ADR-0029 decision 5b: the desktop's remote toolkit call (shared 0156).
+    ('models.applications.tool.execute'),
     ('models.applications.tools.export'),
     -- #6885: the MCP OAuth and DCR proxies (`mcp_oauth_proxy`,
     -- `mcp_dcr_proxy`) are gated on the agent RUN permission, which shared
@@ -1101,6 +1103,7 @@ CROSS JOIN (VALUES
     ('models.applications.tool.details'),
     ('models.applications.tool.update'),
     ('models.applications.tool.patch'),
+    ('models.applications.tool.execute'),
     -- `.details` is the LIST permission for `GET .../index_meta/...`
     -- (`internal/api/v2/indexing/index_meta.go:18`), and it is a different
     -- string from `.edit`. Without it the indexes rail 403s and renders

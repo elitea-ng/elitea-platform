@@ -558,7 +558,7 @@ impl AuthorizedNativeCommandBinding {
             principal_ref: "user:42".to_owned(),
             resource_project_id: "17".to_owned(),
             projection_project_id: "9".to_owned(),
-            execution_id: "execution/one".to_owned(),
+            execution_id: "execution-one".to_owned(),
             generation: 3,
             client_stream_id: "conversation-1".to_owned(),
             client_message_id: "message-1".to_owned(),

@@ -164,7 +164,7 @@ async fn authorized_claim_redeems_exact_python_and_go_route() {
         *captured.lock().expect("captured request"),
         [CapturedRequest {
             method: "POST".to_owned(),
-            path: "/executions/execution%2Fone/generations/2/runtime-context/elitea-client-token"
+            path: "/executions/execution-one/generations/2/runtime-context/elitea-client-token"
                 .to_owned(),
             claim: "claim-1".to_owned(),
             fence: "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY".to_owned(),
@@ -202,7 +202,7 @@ async fn exact_child_identity_uses_the_claim_bound_platform_route_once() {
         *captured.lock().expect("captured request"),
         [CapturedRequest {
             method: "POST".to_owned(),
-            path: "/executions/execution%2Fone/generations/2/runtime-context/applications/31/versions/41"
+            path: "/executions/execution-one/generations/2/runtime-context/applications/31/versions/41"
                 .to_owned(),
             claim: "claim-1".to_owned(),
             fence: "ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY".to_owned(),
@@ -758,7 +758,7 @@ async fn artifact_operations_use_one_claim_bound_route_each() {
     let captured = captured.lock().expect("captured request");
     assert_eq!(
         captured[0].path,
-        "/executions/execution%2Fone/generations/2/runtime-context/artifacts/list"
+        "/executions/execution-one/generations/2/runtime-context/artifacts/list"
     );
     assert_eq!(captured[0].claim, "claim-1");
     assert!(captured[0].body_length > 0);

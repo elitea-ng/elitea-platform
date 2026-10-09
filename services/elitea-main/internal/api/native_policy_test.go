@@ -25,6 +25,8 @@ func TestNativePolicyDiscoveryPublishesThePublicSubset(t *testing.T) {
 	policy.AllowShareOut, policy.AllowShareIn, policy.AllowCloudSTT = false, false, true
 	policy.NotificationPreview = platformconfig.NotificationPreviewTitle
 	policy.AllowNotificationActions, policy.AllowSystemSurfaces = false, true
+	policy.LocalWork.Allowed = true
+	policy.LocalWork.CommandDeny = []string{"rm -rf *"}
 	svc := nativepolicy.NewWithLoader(func(context.Context) (platformconfig.NativeClientPolicy, error) {
 		return policy, nil
 	}, stubNativeClients{
@@ -43,6 +45,11 @@ func TestNativePolicyDiscoveryPublishesThePublicSubset(t *testing.T) {
 	if public.AllowShareOut || public.AllowShareIn || !public.AllowCloudSTT || public.NotificationPreview != "title" ||
 		public.AllowNotificationActions || !public.AllowSystemSurfaces {
 		t.Fatalf("public data controls = %+v", public)
+	}
+	// Client contract 1.5: only local_work.allowed is public; the patterns
+	// travel with a token.
+	if !public.LocalWorkAllowed {
+		t.Fatalf("public local_work_allowed = false, want true")
 	}
 	if minimums["ai.elitea.ios"] != "1.3.0" || minimums["ai.elitea.android"] != "1.1.0" || len(minimums) != 2 {
 		t.Fatalf("minimums = %v", minimums)

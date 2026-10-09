@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-host-connect"
+description = "Enables the host_connect command without any pre-configured scope."
+commands.allow = ["host_connect"]
+
+[[permission]]
+identifier = "deny-host-connect"
+description = "Denies the host_connect command without any pre-configured scope."
+commands.deny = ["host_connect"]

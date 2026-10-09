@@ -1,15 +1,34 @@
-use super::*;
+//! Instruction authority (moved to elitea-agent-runtime) composed with the
+//! worker's internal tools, Postgres sessions and durable compaction.
+
+use std::sync::Arc;
+
+use adk_rust::agent::LlmAgentBuilder;
+use adk_rust::futures::StreamExt as _;
+use adk_rust::{Content, Event};
+use async_trait::async_trait;
+use serde_json::{Value, json};
+
+use super::instruction_authority::{InstructionPlan, STATE_PREFIX, content_digest};
 use adk_rust::session::{CreateRequest, GetRequest, InMemorySessionService, SessionService};
 use adk_rust::{Llm, LlmRequest, LlmResponse, LlmResponseStream, Part};
 use std::sync::Mutex;
 
+fn skill(content: &str) -> Value {
+    json!({"id":"skill:1:version:2","name":"review","revision":content_digest(content),"scope":"project:1","instructions":content})
+}
+
 fn plan(content: &str) -> InstructionPlan {
-    let mut plan = InstructionPlan {
-        run_id: "run-1".to_owned(),
-        ..InstructionPlan::default()
-    };
-    plan.add_skills(&[json!({"id":"skill:1:version:2","name":"review","revision":content_digest(content),"scope":"project:1","instructions":content})]).unwrap();
-    plan
+    plan_for("run-1", false, content, &[])
+}
+
+fn plan_for(
+    run_id: &str,
+    resume: bool,
+    content: &str,
+    contexts: &[crate::agents::request::ProjectContextSnapshot],
+) -> InstructionPlan {
+    InstructionPlan::fixture(run_id, resume, &[skill(content)], contexts).unwrap()
 }
 
 struct RecordingModel {
@@ -187,9 +206,12 @@ async fn activation_survives_transcript_loss_and_changed_resume_snapshot() {
         })
         .await
         .unwrap();
-    let mut resumed = plan("Mutated instructions must stay inactive.");
-    resumed.resume = true;
-    resumed.run_id = "resume-2".to_owned();
+    let resumed = plan_for(
+        "resume-2",
+        true,
+        "Mutated instructions must stay inactive.",
+        &[],
+    );
     let second = Arc::new(RecordingModel {
         requests: Mutex::new(Vec::new()),
         load: false,
@@ -203,20 +225,6 @@ async fn activation_survives_transcript_loss_and_changed_resume_snapshot() {
     assert!(!text.contains("Mutated instructions"));
 }
 
-#[test]
-fn duplicate_revision_collision_scope_and_missing_state_are_checked() {
-    let mut original = plan("old");
-    let skill = json!({"id":"skill:1:version:2","name":"review","revision":content_digest("old"),"scope":"project:1","instructions":"old"});
-    original.add_skills(&[skill]).unwrap();
-    assert_eq!(original.catalog.len(), 1);
-    let collision = json!({"id":"skill:9","name":"review","revision":content_digest("new"),"scope":"project:1","instructions":"new"});
-    assert!(original.add_skills(&[collision]).is_err());
-    assert!(original.resolve_skill(&json!({"name":"unknown"})).is_err());
-    let state = original.start(None, "scope-a".to_owned()).unwrap();
-    assert!(state.validate("scope-b").is_err());
-    original.resume = true;
-    assert!(original.start(None, "scope-a".to_owned()).is_err());
-}
 #[tokio::test]
 async fn postgres_instruction_pause_survives_process_replacement() {
     let Ok(url) = std::env::var("ELITEA_TEST_DATABASE_URL") else {
@@ -317,9 +325,12 @@ async fn postgres_replacement_child() {
                 .any(|event| event.actions.tool_confirmation.is_some())
         );
     } else {
-        let mut changed = plan("Changed after pause; never use this revision.");
-        changed.run_id = "resume-2".to_owned();
-        changed.resume = true;
+        let changed = plan_for(
+            "resume-2",
+            true,
+            "Changed after pause; never use this revision.",
+            &[],
+        );
         let model = Arc::new(RecordingModel {
             requests: Mutex::new(Vec::new()),
             load: false,
@@ -341,53 +352,6 @@ async fn postgres_replacement_child() {
         assert!(!text.contains("Changed after pause"));
     }
     pool.close().await;
-}
-
-#[test]
-fn project_context_eager_and_on_demand_activation_and_fresh_turn_reset() {
-    let context = |description: &str| crate::agents::request::ProjectContextSnapshot {
-        id: "project:17".to_owned(),
-        revision: content_digest("Verbatim context.\n"),
-        scope: "project:17".to_owned(),
-        content: "Verbatim context.\n".to_owned(),
-        activation_description: description.to_owned(),
-    };
-    let mut eager = InstructionPlan {
-        run_id: "run-1".to_owned(),
-        ..Default::default()
-    };
-    eager.add_project_context(&context("")).unwrap();
-    assert_eq!(eager.active.len(), 1);
-    let state = eager.start(None, "scope".to_owned()).unwrap();
-    assert!(state.render().contains("Verbatim context.\n"));
-    let mut next = InstructionPlan {
-        run_id: "run-2".to_owned(),
-        ..Default::default()
-    };
-    next.add_project_context(&context("release requests"))
-        .unwrap();
-    let reset = next
-        .start(
-            Some(serde_json::to_value(state).unwrap()),
-            "scope".to_owned(),
-        )
-        .unwrap();
-    assert!(reset.active.is_empty());
-    assert!(!reset.render().contains("Verbatim context."));
-    assert!(reset.render().contains("release requests"));
-    let mut corrupt_context = context("");
-    corrupt_context.content.push('!');
-    assert!(next.add_project_context(&corrupt_context).is_err());
-}
-
-#[test]
-fn fresh_nested_scope_does_not_inherit_parent_activation_or_catalog() {
-    let mut parent = plan("Parent instructions.");
-    parent.active.insert("skill:1:version:2".to_owned());
-    parent.resume = true;
-    let child = InstructionPlan::nested(&serde_json::Map::new(), &parent).unwrap();
-    assert!(child.active.is_empty() && child.catalog.is_empty());
-    assert!(child.start(None, "new-child-scope".to_owned()).is_ok());
 }
 
 struct InstructionBudget;
@@ -462,10 +426,12 @@ async fn compaction_keeps_original_skill_and_project_revisions_after_source_edit
         content: text.into(),
         activation_description: String::new(),
     };
-    let mut original = plan("Original skill: preserve CEDAR-731 exactly.\n");
-    original
-        .add_project_context(&context("Original project: use teal.\n"))
-        .unwrap();
+    let original = plan_for(
+        "run-1",
+        false,
+        "Original skill: preserve CEDAR-731 exactly.\n",
+        &[context("Original project: use teal.\n")],
+    );
     run(
         &original,
         sessions.clone(),
@@ -505,18 +471,14 @@ async fn compaction_keeps_original_skill_and_project_revisions_after_source_edit
         .unwrap()
         .clone();
     let authority_before = stored.state().get(&authority_key).unwrap();
-    let before: InstructionState = serde_json::from_value(authority_before.clone()).unwrap();
     assert_eq!(
-        before.active.len(),
+        authority_before["active"].as_array().map(Vec::len).unwrap(),
         2,
         "both tools in one model response must remain active"
     );
-    let mut changed = plan("Changed skill: use AMBER-999 instead.");
-    changed
-        .add_project_context(&context("Changed project: use orange."))
-        .unwrap();
-    changed.resume = true;
-    changed.run_id = "replacement-run".into();
+    let changed_skill = "Changed skill: use AMBER-999 instead.";
+    let changed_context = [context("Changed project: use orange.")];
+    let changed = plan_for("replacement-run", true, changed_skill, &changed_context);
     let summary = Arc::new(InstructionSummary::default());
     let compactor = Arc::new(
         DurableContextCompaction::new(
@@ -565,17 +527,15 @@ async fn compaction_keeps_original_skill_and_project_revisions_after_source_edit
         let requests = model.requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
         let dispatched = serde_json::to_string(&requests[0]).unwrap();
-        for source in original.catalog.values() {
-            assert!(dispatched.contains(&source.revision));
-            assert!(dispatched.contains(&source.id));
-            assert!(
-                requests[0]
-                    .contents
+        for (id, revision, source) in original.sources_for_test() {
+            assert!(dispatched.contains(&revision));
+            assert!(dispatched.contains(&id));
+            assert!(requests[0].contents.iter().any(|content| {
+                content
+                    .parts
                     .iter()
-                    .any(|content| content.parts.iter().any(|part| part
-                        .text()
-                        .is_some_and(|text| text.contains(&source.content))))
-            );
+                    .any(|part| part.text().is_some_and(|text| text.contains(&source)))
+            }));
         }
         assert!(!dispatched.contains("AMBER-999"));
         assert!(!dispatched.contains("orange"));
@@ -587,35 +547,11 @@ async fn compaction_keeps_original_skill_and_project_revisions_after_source_edit
     assert!(checkpoint.to_string().contains("CEDAR-731"));
     assert!(!checkpoint.to_string().contains("AMBER-999"));
     // Only a fresh independent turn may adopt edited source revisions.
-    changed.resume = false;
+    let fresh_turn = plan_for("replacement-run", false, changed_skill, &changed_context);
     let scope = authority_before["scope"].as_str().unwrap().to_owned();
-    let fresh = changed.start(Some(authority_before), scope).unwrap();
-    assert!(fresh.render().contains("orange"));
-    assert!(!fresh.render().contains("use teal"));
-}
-
-#[test]
-fn activation_delta_rejects_another_run_or_catalog() {
-    let original = plan("Original instruction")
-        .start(None, "scope".into())
+    let fresh = fresh_turn
+        .render_for_test(Some(authority_before), scope)
         .unwrap();
-    for changed in [
-        InstructionState {
-            activated_run_id: "other-run".into(),
-            ..original.clone()
-        },
-        plan("Changed instruction")
-            .start(None, "scope".into())
-            .unwrap(),
-        InstructionState {
-            scope: "other-scope".into(),
-            ..original.clone()
-        },
-    ] {
-        let mut value = serde_json::to_value(changed).unwrap();
-        assert!(
-            merge_activation_delta(&mut value, Some(serde_json::to_value(&original).unwrap()))
-                .is_err()
-        );
-    }
+    assert!(fresh.contains("orange"));
+    assert!(!fresh.contains("use teal"));
 }

@@ -1,0 +1,1 @@
+{"configuration_id":7,"enabled":true,"method":"POST","name":"tracker.create_item","origin":"http://api.example.com","output_bucket":"http-results","path_template":"/v1/projects/{project}/items/{item}","query_names":["notify","page","q"],"schema_version":"elitea.runtime.http-action-rule.v1","tool":"create_item","toolkit":"tracker"}

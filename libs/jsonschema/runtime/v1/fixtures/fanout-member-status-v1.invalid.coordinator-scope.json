@@ -1,0 +1,1 @@
+{"fanout_v1":{"activation":"9f2c4e1a7b3d5f60","kind":"parallel","member":"jira_branch","node":"research","ordinal":1,"total":3},"open_interrupts":1,"parent_agent_call_id":null,"parent_agent_name":null,"parent_agent_path":[],"schema":"elitea.pipeline.fanout-member-status.v1","status":"paused"}
