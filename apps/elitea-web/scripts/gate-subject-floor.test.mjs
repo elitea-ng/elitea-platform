@@ -181,7 +181,11 @@ describe('i18n-backfill --check: an extraction that matches nothing', () => {
       script: 'i18n-backfill.mjs',
       libs: LIBS,
       dirs: ['src'],
-      files: { 'src/shared/i18n/en.json': JSON.stringify({}) },
+      files: {
+        'src/shared/i18n/en.json': JSON.stringify({}),
+        // The desktop catalogue is read beside en.json (ADR-0029); both must exist.
+        'src/entries/desktop/i18n/en.desktop.json': JSON.stringify({}),
+      },
     });
 
     const result = run(app, ['--check']);
@@ -192,7 +196,10 @@ describe('i18n-backfill --check: an extraction that matches nothing', () => {
   });
 
   it('RED — a renamed `@/shared/i18n` module empties the call-site set', () => {
-    const files = { 'src/shared/i18n/en.json': JSON.stringify({}) };
+    const files = {
+      'src/shared/i18n/en.json': JSON.stringify({}),
+      'src/entries/desktop/i18n/en.desktop.json': JSON.stringify({}),
+    };
     // Enough files to clear the file-count floor, every one of them importing
     // `t` from somewhere else — which is exactly what a module rename does.
     for (let i = 0; i < 1600; i++) {
