@@ -86,6 +86,8 @@ mod parallel_tests;
 mod pipeline_result;
 #[cfg(test)]
 mod pipeline_result_graph_tests;
+#[cfg(test)]
+mod pipeline_yaml_budget_tests;
 use elitea_agent_runtime::graph::printer;
 #[cfg(test)]
 mod printer_tests;

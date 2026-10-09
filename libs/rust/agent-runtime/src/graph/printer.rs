@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use super::PIPELINE_YAML_BUDGET;
 use super::yaml::{valid_graph_id, valid_output_key};
+use crate::bounded_yaml;
 
 const MAX_NODE_YAML_BYTES: usize = 64 * 1024;
 const MAX_MAPPING_VALUE_BYTES: usize = 8 * 1024;
@@ -71,8 +73,11 @@ impl PrinterNodeDefinition {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(PrinterConfigurationError::ResourceExhausted);
         }
-        let raw = serde_yaml_ng::from_str::<RawPrinterNodeDefinition>(yaml)
-            .map_err(|source| PrinterConfigurationError::MalformedYaml { source })?;
+        let raw = bounded_yaml::from_str_as_yaml_error::<RawPrinterNodeDefinition>(
+            yaml,
+            PIPELINE_YAML_BUDGET,
+        )
+        .map_err(|source| PrinterConfigurationError::MalformedYaml { source })?;
         Self::from_raw(raw)
     }
 

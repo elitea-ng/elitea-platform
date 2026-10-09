@@ -27,6 +27,7 @@ async fn live_four_language_state_chain() {
     .await
     .unwrap();
     let client = kube::Client::try_from(config).unwrap();
+    #[expect(clippy::disallowed_methods, reason = "repository fixture")]
     let fixture: serde_yaml_ng::Value = serde_yaml_ng::from_str(include_str!(
         "../../../../../scripts/runtime/fixtures/code-multilanguage-state.yaml"
     ))

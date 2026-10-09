@@ -40,6 +40,7 @@
 )]
 
 pub mod assembly_error;
+pub mod bounded_yaml;
 pub mod canonical;
 pub mod context_budget;
 pub mod context_management;

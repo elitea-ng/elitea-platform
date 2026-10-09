@@ -25,6 +25,7 @@ use serde_json::{Map, Value, json};
 use thiserror::Error;
 use tracing::Instrument as _;
 
+use super::compiler::PIPELINE_YAML_BUDGET;
 use super::yaml::{valid_graph_id, valid_output_key};
 use super::{PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventScope, PipelineNodeEventSender};
 use crate::agents::direct_hitl::blocked_tool_result;
@@ -32,6 +33,7 @@ use crate::agents::events::mask_sensitive_arguments;
 use crate::agents::internal_tools::{
     ASK_USER_ANSWER_ACTION, ASK_USER_GUARDRAIL_TYPE, ASK_USER_TOOL_NAME, AskUserRequest,
 };
+use crate::bounded_yaml;
 use crate::toolkits::{
     DelegatedAuthorizationRequirement, SensitiveToolPolicy, delegated_authorization_declined_result,
 };
@@ -143,8 +145,11 @@ impl LlmNodeDefinition {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(LlmConfigurationError::ResourceExhausted);
         }
-        let raw = serde_yaml_ng::from_str::<RawLlmNodeDefinition>(yaml)
-            .map_err(|source| LlmConfigurationError::MalformedYaml { source })?;
+        let raw = bounded_yaml::from_str_as_yaml_error::<RawLlmNodeDefinition>(
+            yaml,
+            PIPELINE_YAML_BUDGET,
+        )
+        .map_err(|source| LlmConfigurationError::MalformedYaml { source })?;
         Self::from_raw(raw)
     }
 

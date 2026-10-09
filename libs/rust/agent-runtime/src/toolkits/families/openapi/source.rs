@@ -4,6 +4,8 @@ use std::time::Duration;
 use reqwest::{Client, Url};
 use serde_json::{Map, Value};
 
+use super::spec::OpenApiSpecErrorCode;
+
 const MAX_SOURCE_BYTES: usize = 1024 * 1024;
 const MAX_URL_BYTES: usize = 8 * 1024;
 
@@ -35,9 +37,16 @@ pub(crate) async fn load(settings: &Map<String, Value>) -> Result<Option<Value>,
         .build()
         .map_err(|_| SourceError::Unavailable)?;
     let source = fetch(&client, url.clone()).await?;
-    let mut document = super::spec::parse_source(&source).map_err(|_| SourceError::Invalid)?;
+    let mut document = parse_fetched(&source)?;
     resolve_servers(&mut document, &url)?;
     Ok(Some(document))
+}
+
+fn parse_fetched(source: &Value) -> Result<Value, SourceError> {
+    super::spec::parse_source(source).map_err(|error| match error.code() {
+        OpenApiSpecErrorCode::ResourceExhausted => SourceError::TooLarge,
+        _ => SourceError::Invalid,
+    })
 }
 
 fn resolve_servers(document: &mut Value, source: &Url) -> Result<(), SourceError> {
@@ -247,6 +256,23 @@ mod tests {
             fetch(&client(), url).await.expect_err("body bound"),
             SourceError::TooLarge
         );
+        task.await.expect("server");
+    }
+
+    #[tokio::test]
+    async fn fetched_yaml_beyond_the_expansion_budget_is_too_large() {
+        let body = format!(
+            "openapi: 3.0.3\nx-shared: &s [{}]\nx-repeated: [{}]\n",
+            "v,".repeat(1_000),
+            "*s,".repeat(300)
+        );
+        let (url, task) = server(format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ))
+        .await;
+        let fetched = fetch(&client(), url).await.expect("document");
+        assert_eq!(parse_fetched(&fetched), Err(SourceError::TooLarge));
         task.await.expect("server");
     }
 }
