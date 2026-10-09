@@ -146,10 +146,17 @@ func (rw SourceRewriter) grantSources(ctx context.Context, envelope *Envelope, p
 	}
 	list, _ := ObjectOf(row.Settings)[rw.Expander.SourcesField].([]any)
 	sources := []int32{}
+	lookups := 0
 	for _, entry := range list {
 		id, ok := RowIDOf(entry)
 		if !ok || id == owner || slices.Contains(sources, id) {
 			continue
+		}
+		// One read per listed source (the reader has no by-ids read), so the
+		// list is bounded: a sources list past the cap is cut, not looked up
+		// without limit on the request path.
+		if lookups++; lookups > maxGrantSourceLookups {
+			break
 		}
 		source, err := toolkits.Get(ctx, project, id)
 		if err != nil {
@@ -165,6 +172,11 @@ func (rw SourceRewriter) grantSources(ctx context.Context, envelope *Envelope, p
 	}
 	return owner, sources, nil
 }
+
+// maxGrantSourceLookups bounds the source toolkits one grant considers. An
+// Inventory toolkit lists a handful of sources; the cap is far above any real
+// list and only stops an unbounded one from costing one query each.
+const maxGrantSourceLookups = 64
 
 // isToolkitAbsent is toolkitError's refusal half: a listed source that no
 // longer exists is skipped, not a failure.

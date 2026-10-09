@@ -180,7 +180,7 @@ for probe in livenessProbe readinessProbe; do
 done
 engine_runner="$(select_one Deployment elitea-inventory "$manifest" \
   '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_INVENTORY_RUNNER") | .value')"
-[ "$engine_runner" = "native" ] && note "engine runner: native" || fail "the engine's runner is '$engine_runner', expected native (the host's word 'legacy' must not reach it)"
+[ "$engine_runner" = "native" ] && note "engine runner: native" || fail "the engine's runner is '$engine_runner', expected native (the host's word 'sidecar' must not reach it)"
 engine_allow="$(select_one Deployment elitea-inventory "$manifest" \
   '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_INVENTORY_GIT_ALLOWLIST") | .value')"
 [ "$engine_allow" = "github.com" ] && note "engine git allowlist: $engine_allow" || fail "the engine's git allowlist is '$engine_allow'; unset, every clone is refused"
@@ -267,7 +267,7 @@ refuses "the retired python image repository"   --set inventory.engine.image.rep
 refuses "sidecar runner legacy"                 --set inventory.engine.runner=legacy
 refuses "native engine with no database secret" --set inventory.secrets.ELITEA_INVENTORY_DATABASE_URL=null --set postgresql.existingSecret=
 refuses "native engine with no git allowlist"   --set inventory.env.ELITEA_INVENTORY_GIT_ALLOWLIST=
-refuses "legacy runner with no engine socket"   --set inventory.env.ELITEA_INVENTORY_ENGINE_SOCKET=
+refuses "sidecar runner with no engine socket"  --set inventory.env.ELITEA_INVENTORY_ENGINE_SOCKET=
 refuses "a socket with no sidecar to answer"    --set inventory.env.ELITEA_INVENTORY_RUNNER=fixture
 
 # The reverse direction: material configured with the facade off is a mounted
@@ -311,6 +311,22 @@ else
   note "fixture sidecar renders, no migrate Job"
 fi
 
+echo "== the host's runner is sidecar by default, and the legacy alias still renders the same pod =="
+host_runner="$(select_one Deployment elitea-inventory "$manifest" \
+  '.spec.template.spec.containers[0].env[] | select(.name == "ELITEA_INVENTORY_RUNNER") | .value')"
+[ "$host_runner" = "sidecar" ] && note "host runner: sidecar" || fail "the host's runner is '$host_runner', expected sidecar"
+aliased="$(render $COMPLETE --set inventory.env.ELITEA_INVENTORY_RUNNER=legacy)" \
+  || fail "the legacy alias does not render"
+aliased_containers="$(select_one Deployment elitea-inventory "$aliased" \
+  '.spec.template.spec.containers[].name' | tr '\n' ' ')"
+aliased_engine_runner="$(select_one Deployment elitea-inventory "$aliased" \
+  '.spec.template.spec.containers[1].env[] | select(.name == "ELITEA_INVENTORY_RUNNER") | .value')"
+if [ "$aliased_containers" = "elitea-inventory engine " ] && [ "$aliased_engine_runner" = "native" ]; then
+  note "legacy alias: $aliased_containers, engine runner native"
+else
+  fail "runner=legacy renders '$aliased_containers' with engine runner '$aliased_engine_runner'"
+fi
+
 echo "== the host's own fixture runner renders ONE container and no sidecar =="
 solo="$(render $COMPLETE \
   --set inventory.env.ELITEA_INVENTORY_RUNNER=fixture \
@@ -319,7 +335,7 @@ solo="$(render $COMPLETE \
 solo_containers="$(select_one Deployment elitea-inventory "$solo" \
   '.spec.template.spec.containers[].name' | tr '\n' ' ')"
 if [ "$solo_containers" != "elitea-inventory " ]; then
-  fail "runner=fixture still renders '$solo_containers'; the sidecar belongs to runner=legacy alone"
+  fail "runner=fixture still renders '$solo_containers'; the sidecar belongs to runner=sidecar alone"
 else
   note "containers: $solo_containers"
 fi

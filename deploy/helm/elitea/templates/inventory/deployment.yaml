@@ -132,7 +132,7 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           env:
-            {{- $engineEnv := merge (dict "ELITEA_INVENTORY_RUNNER" (.Values.inventory.engine.runner | toString)) (omit $env "ELITEA_INVENTORY_IDENTITY_SECRET") }}
+            {{- $engineEnv := merge (dict "ELITEA_INVENTORY_RUNNER" (.Values.inventory.engine.runner | toString)) (omit $env "ELITEA_INVENTORY_IDENTITY_SECRET" "ELITEA_INVENTORY_RUNNER") }}
             {{- range $key, $value := $engineEnv }}
             {{- if not (hasKey $dbSecrets $key) }}
             - name: {{ $key }}

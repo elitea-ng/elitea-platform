@@ -22,6 +22,8 @@ package run
 // FixtureEntities/FixtureRelations/FixturePresets equal it; the Rust test
 // asserts its compiled-in copy (src/fixtures/graph.json) holds the same data.
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -70,7 +72,7 @@ func roundTrip(t *testing.T, value any) any {
 // runners are supposed to replay.
 func TestTheCannedGraphMatchesTheSharedFixtureFile(t *testing.T) {
 	var golden struct {
-		Entities []FixtureEntity   `json:"entities"`
+		Entities  []FixtureEntity   `json:"entities"`
 		Relations []FixtureRelation `json:"relations"`
 		Presets   map[string]string `json:"presets"`
 	}
@@ -110,6 +112,9 @@ type toolFixture struct {
 	Tool     string         `json:"tool"`
 	Params   map[string]any `json:"params"`
 	Expected map[string]any `json:"expected"`
+	// Artifacts, when a fixture carries them, pin the artifacts a tool
+	// returns by name, type and the sha256 of `data` (Python json.dumps bytes).
+	Artifacts []map[string]any `json:"artifacts"`
 }
 
 // TestEveryIngestionAndRetrievalFixtureMatchesTheGoHandler is "the parity test
@@ -163,6 +168,21 @@ func TestEveryIngestionAndRetrievalFixtureMatchesTheGoHandler(t *testing.T) {
 
 			want := roundTrip(t, fx.Expected)
 			assertJSONEqual(t, got, want, fx.Tool)
+
+			if fx.Artifacts != nil {
+				var ours []any
+				artifacts, _ := result["artifacts"].([]any)
+				for _, raw := range artifacts {
+					artifact, _ := raw.(map[string]any)
+					data, _ := artifact["data"].(string)
+					sum := sha256.Sum256([]byte(data))
+					ours = append(ours, map[string]any{
+						"name": artifact["name"], "type": artifact["type"],
+						"data_sha256": hex.EncodeToString(sum[:]),
+					})
+				}
+				assertJSONEqual(t, roundTrip(t, ours), roundTrip(t, fx.Artifacts), fx.Tool+" artifacts")
+			}
 		})
 	}
 }
@@ -221,4 +241,15 @@ func listFixtureFiles(t *testing.T, dir string) []string {
 		files = append(files, filepath.Join(dir, entry.Name()))
 	}
 	return files
+}
+
+// TestPyDumpsIsPythonsJSONDumps pins the encoder the artifacts are written
+// with: insertion-ordered keys, ", " / ": " separators, ensure_ascii, and no
+// HTML escaping (encoding/json would write < for "<").
+func TestPyDumpsIsPythonsJSONDumps(t *testing.T) {
+	got := pyDumps(pyObject{{"z", "<a&b>"}, {"a", []any{1, true, nil}}, {"u", "é😀\n\"\\"}})
+	want := "{\"z\": \"<a&b>\", \"a\": [1, true, null], \"u\": \"\\u00e9\\ud83d\\ude00\\n\\\"\\\\\"}"
+	if got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
 }

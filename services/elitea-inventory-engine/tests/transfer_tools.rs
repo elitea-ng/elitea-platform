@@ -73,9 +73,10 @@ async fn a_bucket_graph_is_imported_and_exported_through_the_socket() {
     let runner = Runner::Native(NativeRunner::new(settings).expect("runner"));
     let socket = PathBuf::from(format!("/tmp/itt-{}/e.sock", std::process::id()));
     let listener = server::bind(&socket).expect("bind");
-    tokio::spawn(server::serve(
+    tokio::spawn(server::serve_with_limit(
         listener,
         runner,
+        elitea_inventory_engine::MAX_INVOKE_BYTES,
         std::future::pending::<()>(),
     ));
 
@@ -150,4 +151,79 @@ async fn a_bucket_graph_is_imported_and_exported_through_the_socket() {
             .is_some_and(|m| m.contains("undirected")),
         "{bad}"
     );
+}
+
+/// The destructive flag is read strictly: the string "false" must not
+/// delete the toolkit's ingestion state (Python truthiness would).
+#[tokio::test]
+async fn replace_ingestion_state_false_string_keeps_the_state() {
+    let Some(pool) = common::database("transfer_tools_flag").await else {
+        return;
+    };
+    let env: HashMap<String, String> = [
+        ("ELITEA_INVENTORY_RUNNER", "native".to_owned()),
+        (
+            "ELITEA_INVENTORY_DATABASE_URL",
+            common::database_url("transfer_tools_flag"),
+        ),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_owned(), v))
+    .collect();
+    let settings = Settings::from_lookup(|name| env.get(name).cloned()).expect("settings");
+    let runner = Runner::Native(NativeRunner::new(settings).expect("runner"));
+    let socket = PathBuf::from(format!("/tmp/ittf-{}/e.sock", std::process::id()));
+    let listener = server::bind(&socket).expect("bind");
+    tokio::spawn(server::serve_with_limit(
+        listener,
+        runner,
+        elitea_inventory_engine::MAX_INVOKE_BYTES,
+        std::future::pending::<()>(),
+    ));
+    let call = |params: Value| json!({"family": "inventory", "tool": "import_graph", "project_id": 8, "application_id": 81, "params": params});
+    let text = document(3);
+    let first = invoke(
+        &socket,
+        "import_graph",
+        &call(json!({"graph_document": text})),
+    )
+    .await;
+    assert_eq!(first["result"]["success"], json!(true), "{first:.300}");
+    sqlx::query(
+        "INSERT INTO inventory_graph.documents (project_id, application_id, source_name, document_key, version)
+         VALUES (8, 81, 'repo', 'a.py', 'abc')",
+    )
+    .execute(&pool)
+    .await
+    .expect("a document version");
+    let count = || async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM inventory_graph.documents WHERE project_id = 8 AND application_id = 81",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count")
+    };
+    for off in [json!("false"), json!("0"), json!("no"), json!(0)] {
+        let refused = invoke(
+            &socket,
+            "import_graph",
+            &call(json!({"graph_document": text, "replace_ingestion_state": off})),
+        )
+        .await;
+        assert!(refused["error"].is_object(), "{off}: {refused:.300}");
+        assert_eq!(count().await, 1, "{off} must not delete the state");
+    }
+    let replaced = invoke(
+        &socket,
+        "import_graph",
+        &call(json!({"graph_document": text, "replace_ingestion_state": "True"})),
+    )
+    .await;
+    assert_eq!(
+        replaced["result"]["success"],
+        json!(true),
+        "{replaced:.300}"
+    );
+    assert_eq!(count().await, 0);
 }

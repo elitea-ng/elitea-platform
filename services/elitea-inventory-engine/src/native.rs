@@ -15,6 +15,7 @@
 
 use crate::config::Settings;
 use crate::extract::{self, Model};
+use crate::graph::Graph;
 use crate::ingest::source::Source;
 use crate::ingest::{self, ModelOptions, Outcome, RunOptions};
 use crate::store::{self, GraphKey, sources};
@@ -49,15 +50,21 @@ fn invalid(message: impl Into<String>) -> EngineError {
     EngineError::new(ErrorType::Value, message.into())
 }
 
-/// Python truthiness of a parameter.
-fn truthy(value: Option<&Value>) -> bool {
-    match value {
-        None | Some(Value::Null) => false,
-        Some(Value::Bool(flag)) => *flag,
-        Some(Value::Number(n)) => n.as_f64().is_some_and(|n| n != 0.0),
-        Some(Value::String(text)) => !text.is_empty(),
-        Some(Value::Array(items)) => !items.is_empty(),
-        Some(Value::Object(fields)) => !fields.is_empty(),
+/// The stored graph, for a write that must not create one: a graph
+/// deleted since the caller planned its work is a refusal (nothing is
+/// saved), not an empty graph to write back.
+///
+/// # Errors
+///
+/// `FileNotFound` when no graph is stored; `Runtime` on a store failure.
+pub async fn load_existing(pool: &PgPool, key: GraphKey) -> Result<Graph, EngineError> {
+    match store::load(pool, key).await {
+        Ok(Some((graph, _))) => Ok(graph),
+        Ok(None) => Err(EngineError::new(
+            ErrorType::FileNotFound,
+            "no graph is stored for this Inventory toolkit (it was removed meanwhile); nothing was changed",
+        )),
+        Err(error) => Err(EngineError::new(ErrorType::Runtime, error.to_string())),
     }
 }
 
@@ -222,7 +229,7 @@ impl NativeRunner {
         let name = text_param(params, &["artifact_name"]).unwrap_or("graph.json");
         context.thinking(format!("Importing {name}"));
         context.checkpoint()?;
-        let replace = truthy(params.get("replace_ingestion_state"));
+        let replace = crate::retrieval::flag(params.get("replace_ingestion_state"));
         let report = transfer::import_graph(&self.pool, key, text, replace)
             .await
             .map_err(|error| match error {
@@ -363,11 +370,7 @@ impl NativeRunner {
             ));
         };
         // The graph as stored now, not as planned: a run may have saved since.
-        let mut graph = store::load(&self.pool, key)
-            .await
-            .map_err(store_error)?
-            .map(|(graph, _)| graph)
-            .unwrap_or_default();
+        let mut graph = load_existing(&self.pool, key).await?;
         let entities_normalized = admin::apply_mappings(&mut graph, &mappings);
         store::save(&self.pool, key, &graph)
             .await
@@ -655,7 +658,7 @@ impl NativeRunner {
         let options = RunOptions {
             model: Some(ModelOptions::new(model)),
             embeddings,
-            full_rebuild: truthy(params.get("full_rebuild")),
+            full_rebuild: crate::retrieval::flag(params.get("full_rebuild")),
         };
         let outcome = ingest::run(
             &self.pool,

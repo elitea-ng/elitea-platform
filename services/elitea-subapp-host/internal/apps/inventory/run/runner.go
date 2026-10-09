@@ -118,6 +118,15 @@ func (r *Runner) Invoke(ctx context.Context, call spi.Invoke, tc *spi.Context) (
 		return nil, err
 	}
 	identity := ExtractIdentity(family, call.Request, params)
+	// The graph's project is the one the gate VERIFIED, never one the body
+	// names. The native engine keys every graph by (project_id,
+	// application_id) in one shared store, so a body-chosen project would
+	// address another tenant's graph; and the facade sends none at all (the
+	// project travels in the signed identity), so without this every native
+	// call failed with "the call carries no integer project_id".
+	if call.Identity.ProjectID != "" {
+		identity.ProjectID = call.Identity.ProjectID
+	}
 
 	if err := tc.Checkpoint(); err != nil {
 		return nil, err

@@ -123,20 +123,30 @@ var registry = []App{
 				return inventoryrun.NewFixtureRunner(settings, step), nil
 			},
 			// The knowledge-graph engine, reached as a sidecar over a local
-			// socket (ADR-0023 H4c stage I3): the engine's dependency closure
-			// stays in Python; composition, upload and the SPI are this
-			// host's. A host asked for the engine with no socket to reach it
-			// must not come up looking healthy — the same rule, and the same
-			// refusal, as DeepWiki's.
-			"legacy": func(settings spi.Settings, _ time.Duration) (spi.Runner, error) {
-				if settings.EngineSocket == "" {
-					return nil, fmt.Errorf("%w: %sRUNNER=legacy needs %sENGINE_SOCKET, the engine sidecar's Unix socket",
-						spi.ErrConfig, settings.Prefix, settings.Prefix)
-				}
-				return inventoryrun.NewEngineRunner(settings), nil
-			},
+			// socket (ADR-0023 H4c stage I3; the native Rust engine since
+			// ADR-0027): composition, upload and the SPI are this host's. A
+			// host asked for the engine with no socket to reach it must not
+			// come up looking healthy — the same rule, and the same refusal,
+			// as DeepWiki's.
+			//
+			// `sidecar` names what the HOST does (dial the socket); it is not
+			// the engine's own runner (`native`, which the engine container
+			// reads from the same variable name). `legacy`, this runner's
+			// name before ADR-0027, is still accepted as an alias so an
+			// existing deployment's values keep working.
+			"sidecar": inventorySidecar,
+			"legacy":  inventorySidecar,
 		},
 	},
+}
+
+// inventorySidecar is the Inventory runner that dials the engine sidecar.
+func inventorySidecar(settings spi.Settings, _ time.Duration) (spi.Runner, error) {
+	if settings.EngineSocket == "" {
+		return nil, fmt.Errorf("%w: %sRUNNER=sidecar needs %sENGINE_SOCKET, the engine sidecar's Unix socket",
+			spi.ErrConfig, settings.Prefix, settings.Prefix)
+	}
+	return inventoryrun.NewEngineRunner(settings), nil
 }
 
 // Names lists the registered keys, in table order — the text a refusal

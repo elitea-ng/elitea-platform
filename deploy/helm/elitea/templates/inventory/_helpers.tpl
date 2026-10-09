@@ -42,12 +42,13 @@ else the chart-wide tag. The engine is its own repository
 
 {{/*
 elitea-inventory.sidecar — whether the pod runs the engine sidecar: only while
-the HOST's runner (inventory.env.ELITEA_INVENTORY_RUNNER) is "legacy", the
-host's word for "dial the engine socket". The sidecar's own runner is
-inventory.engine.runner (native or fixture).
+the HOST's runner (inventory.env.ELITEA_INVENTORY_RUNNER) is "sidecar" (or its
+pre-ADR-0027 alias "legacy"), the host's word for "dial the engine socket".
+The sidecar's own runner is inventory.engine.runner (native or fixture); the
+host's value never reaches the engine container.
 */}}
 {{- define "elitea-inventory.sidecar" -}}
-{{- if eq (get (.Values.inventory.env | default dict) "ELITEA_INVENTORY_RUNNER" | toString) "legacy" -}}true{{- end -}}
+{{- if has (get (.Values.inventory.env | default dict) "ELITEA_INVENTORY_RUNNER" | toString) (list "sidecar" "legacy") -}}true{{- end -}}
 {{- end }}
 
 {{/*
@@ -75,6 +76,7 @@ for, and this is a message in the terminal that ran the command.
 {{- define "elitea-inventory.validateGuards" -}}
 {{- $env := .Values.inventory.env | default dict -}}
 {{- $runner := get $env "ELITEA_INVENTORY_RUNNER" | toString -}}
+{{- $hostSidecar := has $runner (list "sidecar" "legacy") -}}
 
 {{/*
   Guard #1: values from before the Python engine was removed (ADR-0027).
@@ -112,7 +114,7 @@ for, and this is a message in the terminal that ran the command.
   unset, every clone is refused, at the point a user asked for an ingestion.
   `*` is a legitimate posture and is accepted; it has to be written down.
 */}}
-{{- if and (eq $runner "legacy") (eq $engineRunner "native") -}}
+{{- if and $hostSidecar (eq $engineRunner "native") -}}
 {{- $dbSecrets := fromJson (include "elitea-inventory.databaseSecrets" .) -}}
 {{- if not (hasKey $dbSecrets "ELITEA_INVENTORY_DATABASE_URL") -}}
 {{- fail "inventory.engine.runner is \"native\" but no ELITEA_INVENTORY_DATABASE_URL secret reaches the engine and its migrate Job: neither inventory.secrets.ELITEA_INVENTORY_DATABASE_URL nor postgresql.existingSecret is set (a plain inventory.env value reaches the engine but not the migrate Job). The native engine keeps every graph in the inventory_graph PostgreSQL schema and has no other storage, so it refuses to start without one. Name the secret that holds the database URL, or use inventory.engine.runner fixture." -}}
@@ -126,15 +128,16 @@ for, and this is a message in the terminal that ran the command.
   Guard #2: the host's runner and the sidecar must agree that there IS a
   sidecar.
 
-  The Deployment renders the second container only for runner=legacy. A host
+  The Deployment renders the second container only for runner=sidecar (or
+  its alias legacy). A host
   configured with an engine socket and no sidecar to answer on it comes up,
   passes its TCP probe, and refuses every invocation with an unreachable
   socket — a service that looks healthy and serves nothing.
 */}}
-{{- if and (ne $runner "legacy") (get $env "ELITEA_INVENTORY_ENGINE_SOCKET") -}}
-{{- fail (printf "inventory.env.ELITEA_INVENTORY_ENGINE_SOCKET is set but inventory.env.ELITEA_INVENTORY_RUNNER is %q, so no engine sidecar is rendered and nothing will ever listen on that socket. The host would pass its TCP probe and refuse every invocation. Set the runner to \"legacy\", or clear the socket." $runner) -}}
+{{- if and (not $hostSidecar) (get $env "ELITEA_INVENTORY_ENGINE_SOCKET") -}}
+{{- fail (printf "inventory.env.ELITEA_INVENTORY_ENGINE_SOCKET is set but inventory.env.ELITEA_INVENTORY_RUNNER is %q, so no engine sidecar is rendered and nothing will ever listen on that socket. The host would pass its TCP probe and refuse every invocation. Set the runner to \"sidecar\", or clear the socket." $runner) -}}
 {{- end -}}
-{{- if and (eq $runner "legacy") (not (get $env "ELITEA_INVENTORY_ENGINE_SOCKET")) -}}
-{{- fail "inventory.env.ELITEA_INVENTORY_RUNNER is \"legacy\" but inventory.env.ELITEA_INVENTORY_ENGINE_SOCKET is empty. The host refuses that combination at boot (internal/apps/registry.go), so this install is a CrashLoopBackOff." -}}
+{{- if and $hostSidecar (not (get $env "ELITEA_INVENTORY_ENGINE_SOCKET")) -}}
+{{- fail "inventory.env.ELITEA_INVENTORY_RUNNER is \"sidecar\" but inventory.env.ELITEA_INVENTORY_ENGINE_SOCKET is empty. The host refuses that combination at boot (internal/apps/registry.go), so this install is a CrashLoopBackOff." -}}
 {{- end -}}
 {{- end }}

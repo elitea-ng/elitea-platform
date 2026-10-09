@@ -438,11 +438,7 @@ pub fn smart_plan(graph: &Graph, params: &Map<String, Value>) -> Result<SmartSte
                 format!("batch_size must be a positive integer, got {batch_size}"),
             )
         })?;
-    let dry_run = params
-        .get("dry_run")
-        .map_or_else(|| "false".to_owned(), py_str)
-        .to_lowercase()
-        == "true";
+    let dry_run = super::flag(params.get("dry_run"));
     let canonical = &tables().canonical_types;
     let types = graph_entity_types(graph);
     let candidates: IndexMap<String, usize> = types

@@ -180,6 +180,41 @@ fn parameters_are_read_as_python_read_them() {
         panic!("a plan");
     };
     assert!(!wet.dry_run);
+    // Strict booleans: only `true` / "true" switch a flag on.
+    for (value, expected) in [
+        (json!(true), true),
+        (json!("true"), true),
+        (json!("TRUE"), true),
+        (json!("false"), false),
+        (json!("0"), false),
+        (json!(1), false),
+        (json!(null), false),
+    ] {
+        let Ok(SmartStep::Map(plan_for)) = plan(json!({ "dry_run": value })) else {
+            panic!("a plan");
+        };
+        assert_eq!(plan_for.dry_run, expected, "{value}");
+    }
+}
+
+#[tokio::test]
+async fn a_graph_deleted_meanwhile_is_refused_not_recreated() {
+    let Some(pool) = common::database("smart_normalize_gone").await else {
+        return;
+    };
+    let key = GraphKey::new(9, 91).expect("key");
+    let refused = elitea_inventory_engine::native::load_existing(&pool, key).await;
+    assert!(
+        refused.is_err_and(|e| e.message.contains("nothing was changed")),
+        "a missing graph is refused"
+    );
+    assert_eq!(store::revision(&pool, key).await.expect("revision"), None);
+    store::save(&pool, key, &graph()).await.expect("save");
+    assert!(
+        elitea_inventory_engine::native::load_existing(&pool, key)
+            .await
+            .is_ok()
+    );
 }
 
 /// The mock gateway's model: the canned mapping of the golden's first case,

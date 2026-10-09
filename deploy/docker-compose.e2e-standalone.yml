@@ -433,7 +433,10 @@ services:
   # sidecar in the picture.
   #
   # The two fixture runners (this one, and the native engine's, which the
-  # standalone stack's sidecar serves) are kept in step BY HAND.
+  # standalone stack's sidecar serves) are kept in step BY HAND — and checked
+  # against the same goldens, artifacts included (conformance/provider/
+  # fixtures/inventory). The host's runner that dials a sidecar is `sidecar`
+  # (not used on this stack).
   elitea-inventory:
     image: ghcr.io/eliteaai/elitea-subapp-host:${E2E_IMAGE_TAG:-e2e}
     build:

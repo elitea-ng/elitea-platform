@@ -7,8 +7,8 @@ package main
 // /descriptor and /health answer, and every tool the descriptor advertises
 // terminates with a readable refusal rather than an empty success something
 // downstream could be built against. That is still the default after
-// ADR-0023 stage I3 gave the application a `legacy` runner, and deliberately:
-// enabling the engine is naming ELITEA_INVENTORY_RUNNER=legacy AND giving it a
+// ADR-0023 stage I3 gave the application a `sidecar` runner (`legacy` before ADR-0027), and deliberately:
+// enabling the engine is naming ELITEA_INVENTORY_RUNNER=sidecar AND giving it a
 // socket to reach, both explicit. An image built without the engine extra must
 // not look like it has one.
 

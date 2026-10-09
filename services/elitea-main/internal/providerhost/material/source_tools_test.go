@@ -12,10 +12,12 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/providerhost/material"
 )
 
@@ -234,5 +236,59 @@ func TestReadOnlyRulesMatchTheEngineAsset(t *testing.T) {
 	}
 	if !slices.Equal(asset.Patterns, material.WriteOperationPatterns) {
 		t.Errorf("write patterns drifted:\n engine %v\n go     %v", asset.Patterns, material.WriteOperationPatterns)
+	}
+}
+
+type countingToolkits struct{ gets int }
+
+func (c *countingToolkits) Get(_ context.Context, _, id int32) (repos.CurrentToolkit, error) {
+	c.gets++
+	if id == 101 {
+		sources := make([]any, 0, 200)
+		for source := 1; source <= 200; source++ {
+			sources = append(sources, float64(1000+source))
+		}
+		return repos.CurrentToolkit{ID: id, Type: "inventory", Settings: map[string]any{"sources": sources}}, nil
+	}
+	return repos.CurrentToolkit{ID: id, Type: "github"}, nil
+}
+
+type fakeMinter struct{}
+
+func (fakeMinter) Mint(context.Context, int64, int64, string, time.Duration) (material.Grant, error) {
+	return material.Grant{Bearer: "b", UUID: "u", Expires: time.Now().Add(time.Minute)}, nil
+}
+func (fakeMinter) Revoke(context.Context, int64, string) error { return nil }
+
+type recordingGrants struct{ grant repos.CallbackTokenGrant }
+
+func (r *recordingGrants) Record(_ context.Context, grant repos.CallbackTokenGrant) error {
+	r.grant = grant
+	return nil
+}
+
+// A sources list is bounded: a toolkit naming 200 sources costs at most the
+// cap of reads (plus the invoking toolkit's own), not one per entry.
+func TestAGrantReadsAtMostTheCapOfSourceToolkits(t *testing.T) {
+	toolkits := &countingToolkits{}
+	grants := &recordingGrants{}
+	rewriter := material.SourceRewriter{
+		Provider: "inventory", Minter: fakeMinter{}, CallbackBase: "http://cb", Lifetime: time.Minute,
+		OwnerField: "application_id", Grants: grants,
+		Expander: material.Expander{
+			Toolkits: toolkits, SourcesField: "sources", Allowed: []string{"github"},
+			Kinds: map[string]material.Kind{"github": {}},
+		},
+	}
+	rewrite := rewriter.GrantRewriteFor("investigate", "investigate")("", "investigate")
+	body := `{"configuration":{"application_id":101,"parameters":{}}}`
+	if _, _, err := rewrite(context.Background(), strings.NewReader(body), 42, 11); err != nil {
+		t.Fatalf("rewrite: %v", err)
+	}
+	if toolkits.gets > 65 {
+		t.Fatalf("%d toolkit reads for 200 listed sources; want at most 65", toolkits.gets)
+	}
+	if got := len(grants.grant.SourceToolkitIDs); got != 64 {
+		t.Fatalf("granted %d sources, want the first 64", got)
 	}
 }

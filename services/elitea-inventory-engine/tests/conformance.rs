@@ -5,6 +5,7 @@
 
 use elitea_inventory_engine::fixture::{self, FixtureGraph, PACKAGED_GRAPH};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 fn conformance(parts: &[&str]) -> PathBuf {
@@ -95,6 +96,24 @@ fn every_golden_answer_is_this_runners_answer() {
                     .unwrap_or_else(|e| panic!("{tool}: {e}"))
             };
             assert_eq!(got, case["expected"], "{}", path.display());
+            if let Some(expected) = case.get("artifacts") {
+                // The artifacts ride beside the result: name, type and the
+                // sha256 of `data` (Python `json.dumps` bytes) are the golden.
+                let ours: Vec<Value> = result["artifacts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|artifact| {
+                        let digest = Sha256::digest(artifact["data"].as_str().unwrap_or_default());
+                        json!({
+                            "name": artifact["name"],
+                            "type": artifact["type"],
+                            "data_sha256": format!("{digest:x}"),
+                        })
+                    })
+                    .collect();
+                assert_eq!(json!(ours), *expected, "{} artifacts", path.display());
+            }
             checked += 1;
         }
     }

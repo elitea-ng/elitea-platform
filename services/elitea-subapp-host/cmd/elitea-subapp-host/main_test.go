@@ -53,6 +53,17 @@ func TestComposeSelectsTheApplicationAndRefusesWhatItCannotServe(t *testing.T) {
 	if err != nil || app.Name != "elitea-inventory" || app.Runner.Name() != "unavailable" {
 		t.Fatalf("inventory: %v %+v", err, app)
 	}
+	// Inventory's host runner that dials the engine sidecar is `sidecar`
+	// (`legacy`, its pre-ADR-0027 name, is an alias).
+	for _, name := range []string{"sidecar", "legacy"} {
+		app, _, err = compose(lookup(map[string]string{
+			"ELITEA_SUBAPP": "inventory", "ELITEA_INVENTORY_RUNNER": name,
+			"ELITEA_INVENTORY_ENGINE_SOCKET": "/run/inventory/engine.sock",
+		}))
+		if err != nil || app.Runner.Name() != "sidecar" {
+			t.Fatalf("inventory %s: %v %+v", name, err, app)
+		}
+	}
 	// Inventory has a fixture runner of its own now. It is composed under
 	// Inventory's OWN settings prefix, which is the half that matters here: a
 	// host that read the other application's prefix would pace itself from a

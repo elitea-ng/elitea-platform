@@ -3,8 +3,8 @@
 # The Rust-native Inventory engine (ADR-0027): one static-ish binary on a
 # distroless base. No Python, no ML closure, no shell.
 #
-# Build from the repository root (the context must be the root: see the
-# migrations COPY below):
+# Build from the repository root (the context must be the root: the engine's
+# shared crates are libs/rust, copied from the root below):
 #   docker buildx bake elitea-inventory-engine
 #   podman build -f services/elitea-inventory-engine/Containerfile -t elitea-inventory-engine .
 #
@@ -66,9 +66,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # starting it: no system OpenSSL linked or shipped, CA roots present, and the
 # whole closure found inside the runtime root. A base change that drops a
 # library fails HERE, not as a sidecar that cannot start.
-COPY services/elitea-inventory-engine/scripts/verify-runtime.sh /usr/local/bin/verify-runtime
+# The script is shared (libs/rust/scripts), already in the builder with the libs.
 RUN --mount=type=bind,from=runtime-base,source=/,target=/runtime-root,readonly \
-    sh /usr/local/bin/verify-runtime /usr/local/bin/elitea-inventory-engine
+    sh /src/libs/rust/scripts/verify-runtime.sh /usr/local/bin/elitea-inventory-engine
 
 # The socket directory, built here because the runtime image has no shell.
 # A compose named volume (and Docker's fresh volume in particular) takes the

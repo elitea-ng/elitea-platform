@@ -127,7 +127,7 @@ func TestRunnersAreTheSharedOnesPlusTheApplicationsOwn(t *testing.T) {
 			t.Errorf("%s accepted an unknown runner: %v", name, err)
 		}
 		for _, offered := range app.RunnerNames() {
-			if _, err := app.Runner(offered, settings, time.Millisecond); err != nil && offered != "legacy" && offered != "native" {
+			if _, err := app.Runner(offered, settings, time.Millisecond); err != nil && offered != "legacy" && offered != "native" && offered != "sidecar" {
 				t.Errorf("%s offers %s and refuses it: %v", name, offered, err)
 			}
 		}
@@ -167,14 +167,24 @@ func TestRunnersAreTheSharedOnesPlusTheApplicationsOwn(t *testing.T) {
 	// produces. Adding the runner would have left that assertion green while it
 	// stopped meaning anything.
 	inventoryApp, _ := apps.Lookup("inventory")
-	if _, err := inventoryApp.Runner("legacy", settings, 0); !errors.Is(err, spi.ErrConfig) {
-		t.Fatalf("inventory/legacy with no socket: %v", err)
-	}
 	inventorySocket := settings
 	inventorySocket.EngineSocket = "/run/inventory/engine.sock"
-	runner, err := inventoryApp.Runner("legacy", inventorySocket, 0)
-	if err != nil || runner.Name() != "legacy" {
-		t.Fatalf("inventory/legacy: %v %v", err, runner)
+	// `sidecar` is the documented name; `legacy` is the pre-ADR-0027 alias and
+	// builds the very same runner.
+	for _, name := range []string{"sidecar", "legacy"} {
+		if _, err := inventoryApp.Runner(name, settings, 0); !errors.Is(err, spi.ErrConfig) ||
+			!strings.Contains(err.Error(), "sidecar needs") {
+			t.Fatalf("inventory/%s with no socket: %v", name, err)
+		}
+		runner, err := inventoryApp.Runner(name, inventorySocket, 0)
+		if err != nil || runner.Name() != "sidecar" {
+			t.Fatalf("inventory/%s: %v %v", name, err, runner)
+		}
+	}
+	// The engine's own runner name is not a host runner: `native` would dial
+	// nothing for Inventory.
+	if _, err := inventoryApp.Runner("native", inventorySocket, 0); !errors.Is(err, spi.ErrConfig) {
+		t.Fatalf("inventory/native should be refused on the host: %v", err)
 	}
 
 	// Inventory has a fixture runner of its own now, and it is ITS OWN — not
@@ -206,8 +216,8 @@ func TestRunnersAreTheSharedOnesPlusTheApplicationsOwn(t *testing.T) {
 		t.Errorf("echo served a fixture runner it has none of: %v", err)
 	}
 	echoApp, _ := apps.Lookup("echo")
-	if _, err := echoApp.Runner("legacy", inventorySocket, 0); !errors.Is(err, spi.ErrConfig) {
-		t.Errorf("echo served a legacy runner it has no engine for: %v", err)
+	if _, err := echoApp.Runner("sidecar", inventorySocket, 0); !errors.Is(err, spi.ErrConfig) {
+		t.Errorf("echo served a sidecar runner it has no engine for: %v", err)
 	}
 }
 

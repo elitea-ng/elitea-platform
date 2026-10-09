@@ -1480,8 +1480,10 @@ services:
       dockerfile: services/elitea-subapp-host/Containerfile
     environment:
       ELITEA_SUBAPP: inventory
-      # `legacy` reaches the engine sidecar over the socket, which is what this
-      # stack exists to exercise. The sidecar below serves the native engine's
+      # `sidecar` reaches the engine sidecar over the socket, which is what this
+      # stack exists to exercise (`legacy`, its old name, is still an alias).
+      # This is the HOST's runner; the engine container below has its own
+      # (INVENTORY_ENGINE_RUNNER) and never reads this one. The sidecar below serves the native engine's
       # fixture runner, which replays the SAME six-entity graph the Go
       # host's OWN fixture runner uses on the E2E stack
       # (conformance/provider/fixtures/inventory/spi/graph.json) — so the
@@ -1490,7 +1492,7 @@ services:
       # switches the GO HOST to its own canned graph and bypasses the sidecar
       # entirely, which is useful if you want to exercise the Go fixture
       # runner specifically, or the sidecar's socket hop is not needed.
-      ELITEA_INVENTORY_RUNNER: "${INVENTORY_RUNNER:-legacy}"
+      ELITEA_INVENTORY_RUNNER: "${INVENTORY_RUNNER:-sidecar}"
       ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
       ELITEA_INVENTORY_FIXTURE_STEP_SECONDS: "${INVENTORY_FIXTURE_STEP_SECONDS:-1}"
       ELITEA_INVENTORY_TLS_CERTFILE: /certs/inventory-server.crt

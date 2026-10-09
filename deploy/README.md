@@ -116,8 +116,8 @@ Both sub-applications run their Go host (`elitea-subapp-host`) reaching an
 engine SIDECAR over a shared Unix socket — the socket hop this stack exists
 to exercise, not just the Go half. DeepWiki's host runs `RUNNER=native`
 and its sidecar is the Rust-native engine (`elitea-deepwiki-engine-native`,
-with its migration service); Inventory's host runs `RUNNER=legacy` (which
-means "dial the sidecar socket") and its sidecar is the Rust-native
+with its migration service); Inventory's host runs `RUNNER=sidecar` (the host's
+word for "dial the sidecar socket"; `legacy` is an accepted alias) and its sidecar is the Rust-native
 `elitea-inventory-engine` (with its own `elitea-inventory-migrate` service).
 Both sidecars serve their `fixture` runner, so `up` shows a populated wiki
 and a populated Inventory graph with no repository and no model.

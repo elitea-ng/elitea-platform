@@ -95,14 +95,20 @@ impl<E> Shared<E> {
     }
 }
 
-/// The largest invoke body the sidecar reads. axum's default (2 MB) is below
-/// the host's own SPI cap (4 MiB), and Inventory's `import_graph` carries a
-/// graph document the host read from a bucket (up to 32 MiB, JSON-escaped
-/// once more in the body). The socket is the host's alone.
-pub const MAX_INVOKE_BYTES: usize = 96 << 20;
+/// The default largest invoke body the sidecar reads: axum's own 2 MB. An
+/// engine whose tools carry large documents (Inventory's `import_graph`
+/// takes a graph the host read from a bucket: up to 32 MiB, JSON-escaped once
+/// more) asks for more with [`router_with_limit`] / [`serve_with_limit`].
+pub const DEFAULT_INVOKE_BYTES: usize = 2 << 20;
 
-/// The sidecar's routes over `engine`.
+/// The sidecar's routes over `engine`, with the default body limit.
 pub fn router<E: Engine>(engine: E) -> Router {
+    router_with_limit(engine, DEFAULT_INVOKE_BYTES)
+}
+
+/// The sidecar's routes over `engine`; an invoke body above `max_invoke_bytes`
+/// is refused (413). The socket is the host's alone.
+pub fn router_with_limit<E: Engine>(engine: E, max_invoke_bytes: usize) -> Router {
     let shared = Arc::new(Shared {
         engine,
         running: Mutex::new(HashMap::new()),
@@ -112,7 +118,7 @@ pub fn router<E: Engine>(engine: E) -> Router {
         .route("/engine/invoke", post(invoke::<E>))
         .route("/engine/invocations/{invocation_id}/stop", post(stop::<E>))
         .fallback(|| async { detail(StatusCode::NOT_FOUND, "Not Found") })
-        .layer(DefaultBodyLimit::max(MAX_INVOKE_BYTES))
+        .layer(DefaultBodyLimit::max(max_invoke_bytes))
         .with_state(shared)
 }
 
@@ -175,7 +181,7 @@ fn shown(value: Option<&Value>) -> String {
 }
 
 async fn invoke<E: Engine>(State(shared): State<Arc<Shared<E>>>, body: Bytes) -> Response {
-    let Ok(Value::Object(request)) = serde_json::from_slice::<Value>(&body) else {
+    let Ok(Value::Object(mut request)) = serde_json::from_slice::<Value>(&body) else {
         return detail(
             StatusCode::UNPROCESSABLE_ENTITY,
             "the request body must be a JSON object",
@@ -194,7 +200,7 @@ async fn invoke<E: Engine>(State(shared): State<Arc<Shared<E>>>, body: Bytes) ->
             );
         }
     };
-    let Some(Value::Object(arguments)) = request.get("arguments").cloned() else {
+    let Some(Value::Object(arguments)) = request.remove("arguments") else {
         return detail(StatusCode::BAD_REQUEST, "arguments must be an object");
     };
 
@@ -294,7 +300,21 @@ pub async fn serve<E: Engine>(
     engine: E,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> io::Result<()> {
-    axum::serve(listener, router(engine))
+    serve_with_limit(listener, engine, DEFAULT_INVOKE_BYTES, shutdown).await
+}
+
+/// [`serve`] with an invoke body limit of `max_invoke_bytes`.
+///
+/// # Errors
+///
+/// The server's I/O failure.
+pub async fn serve_with_limit<E: Engine>(
+    listener: UnixListener,
+    engine: E,
+    max_invoke_bytes: usize,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> io::Result<()> {
+    axum::serve(listener, router_with_limit(engine, max_invoke_bytes))
         .with_graceful_shutdown(shutdown)
         .await
 }

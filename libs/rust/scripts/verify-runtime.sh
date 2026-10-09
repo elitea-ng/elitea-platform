@@ -2,7 +2,8 @@
 # Resolve every library the engine binary needs against the runtime image
 # mounted at /runtime-root, without starting the binary: no system OpenSSL
 # linked or shipped, CA roots present, and the whole closure found inside
-# the runtime root. Run by services/elitea-inventory-engine/Containerfile in
+# the runtime root. Shared by the Rust engine images (services/elitea-inventory-engine and
+# services/elitea-deepwiki-engine Containerfiles), run in
 # the builder stage (a script file, not a Dockerfile heredoc: podman's
 # builder on the CI runners has no heredoc support).
 set -eu

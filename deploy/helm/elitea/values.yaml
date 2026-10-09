@@ -3238,7 +3238,7 @@ inventory:
 
   # The provider pod is up to TWO containers (ADR-0023 H2): the Go
   # sub-application host, which serves the SPI, composes and uploads, and — for
-  # env.ELITEA_INVENTORY_RUNNER=legacy — the Rust-native engine sidecar
+  # env.ELITEA_INVENTORY_RUNNER=sidecar — the Rust-native engine sidecar
   # (ADR-0027), which runs the knowledge-graph engine for it over a Unix socket
   # the two share. `image` is the host; `engine.image` is the engine.
   image:
@@ -3291,15 +3291,17 @@ inventory:
 
   env:
     ELITEA_SUBAPP: inventory
-    # The HOST's runner. `legacy` reaches the engine sidecar over the socket
-    # below and renders that sidecar (the word predates the Rust engine and now
-    # just means "dial the sidecar"); `fixture` serves the host's OWN canned
+    # The HOST's runner. `sidecar` reaches the engine sidecar over the socket
+    # below and renders that sidecar (`legacy`, its name before the Rust
+    # engine, is still accepted as an alias). It is the HOST's word and is
+    # never passed to the engine container, whose own runner is
+    # inventory.engine.runner. `fixture` serves the host's OWN canned
     # knowledge graph in one container, which is what a stack that only needs
     # deterministic results wants; `unavailable` refuses every tool and says
-    # so. The guard refuses `legacy` with no socket and a socket with no
-    # `legacy`, because either is a service that looks healthy and serves
+    # so. The guard refuses `sidecar` with no socket and a socket with no
+    # `sidecar`, because either is a service that looks healthy and serves
     # nothing.
-    ELITEA_INVENTORY_RUNNER: "legacy"
+    ELITEA_INVENTORY_RUNNER: "sidecar"
     ELITEA_INVENTORY_ENGINE_SOCKET: /run/inventory/engine.sock
     ELITEA_INVENTORY_SCRATCH_PATH: /var/scratch/inventory
     # The origin elitea-main proxies to. Must agree with

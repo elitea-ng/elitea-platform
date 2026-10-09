@@ -75,7 +75,7 @@ func NewEngineRunner(settings spi.Settings) *Runner {
 		}
 	}
 	return &Runner{
-		RunnerName: "legacy",
+		RunnerName: "sidecar",
 		Tools:      tools,
 		Artifacts:  ArtifactClientFrom(settings.CallbackCA()),
 	}

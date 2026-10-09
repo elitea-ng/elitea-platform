@@ -59,3 +59,9 @@ pub fn build_runner(settings: &Settings) -> Result<Runner, ConfigError> {
             .map_err(|error| ConfigError(error.message)),
     }
 }
+
+/// The largest invoke body this engine's sidecar reads. The default (2 MB)
+/// is below the host's SPI cap (4 MiB), and `import_graph` carries a graph
+/// document the host read from a bucket (up to 32 MiB, JSON-escaped once more
+/// in the body). The socket is the host's alone.
+pub const MAX_INVOKE_BYTES: usize = 96 << 20;

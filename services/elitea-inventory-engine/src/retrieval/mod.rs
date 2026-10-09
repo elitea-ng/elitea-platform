@@ -97,6 +97,19 @@ pub fn answer(result: impl Into<String>) -> Value {
     serde_json::json!({"success": true, "result": result.into()})
 }
 
+/// A boolean tool parameter, read strictly: JSON `true`, or the string
+/// "true" in any case, is on; everything else (absent, `"false"`, `"0"`,
+/// `"no"`, numbers) is off. Python truthiness would turn the string
+/// "false" ON, which for a destructive flag deletes data.
+#[must_use]
+pub fn flag(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::Bool(on)) => *on,
+        Some(Value::String(text)) => text.trim().eq_ignore_ascii_case("true"),
+        _ => false,
+    }
+}
+
 /// Route `call` to the module that serves it.
 #[must_use]
 pub fn dispatch(call: &Call<'_>) -> Handled {

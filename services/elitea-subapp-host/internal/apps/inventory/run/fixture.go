@@ -171,32 +171,32 @@ func SourceLabelFor(params Params) string {
 
 // FixtureGraph is the graph document `run_ingestion` writes, for one source
 // label. The `_metadata` block is what the read tools would have loaded.
-func FixtureGraph(sourceLabel string) map[string]any {
+func FixtureGraph(sourceLabel string) pyObject {
 	nodes := make([]any, 0, len(FixtureEntities))
 	for _, entity := range FixtureEntities {
-		nodes = append(nodes, map[string]any{
-			"id": entity.ID, "name": entity.Name, "type": entity.Type,
-			"layer": entity.Layer, "file_path": entity.FilePath,
-			"citations": []any{map[string]any{"source_toolkit": entity.Source, "file_path": entity.FilePath}},
+		nodes = append(nodes, pyObject{
+			{"id", entity.ID}, {"name", entity.Name}, {"type", entity.Type},
+			{"layer", entity.Layer}, {"file_path", entity.FilePath},
+			{"citations", []any{pyObject{{"source_toolkit", entity.Source}, {"file_path", entity.FilePath}}}},
 		})
 	}
 	edges := make([]any, 0, len(FixtureRelations))
 	for _, relation := range FixtureRelations {
-		edges = append(edges, map[string]any{
-			"source": relation.From, "target": relation.To, "relation_type": relation.Type,
+		edges = append(edges, pyObject{
+			{"source", relation.From}, {"target", relation.To}, {"relation_type", relation.Type},
 		})
 	}
-	return map[string]any{
-		"nodes": nodes,
-		"edges": edges,
-		"_metadata": map[string]any{
-			"fixture":         true,
-			"schema_version":  1,
-			"source_toolkits": fixtureSourceNames(),
-			"ingested_source": sourceLabel,
-			"node_count":      len(FixtureEntities),
-			"edge_count":      len(FixtureRelations),
-		},
+	return pyObject{
+		{"nodes", nodes},
+		{"edges", edges},
+		{"_metadata", pyObject{
+			{"fixture", true},
+			{"schema_version", 1},
+			{"source_toolkits", fixtureSourceNames()},
+			{"ingested_source", sourceLabel},
+			{"node_count", len(FixtureEntities)},
+			{"edge_count", len(FixtureRelations)},
+		}},
 	}
 }
 
@@ -340,29 +340,25 @@ func fixtureHandlers() map[string]fixtureFunc {
 
 func fixtureRunIngestion(_, _ string, params Params) map[string]any {
 	label := SourceLabelFor(params)
-	graph, _ := json.MarshalIndent(FixtureGraph(label), "", "  ")
-	status, _ := json.MarshalIndent(map[string]any{
-		"sources": []any{map[string]any{
-			"source":         label,
-			"status":         "completed",
-			"entity_count":   len(FixtureEntities),
-			"relation_count": len(FixtureRelations),
-		}},
-	}, "", "  ")
-	checkpoint, _ := json.MarshalIndent(map[string]any{
-		"source": label, "stage": "completed", "files_processed": 12,
-	}, "", "  ")
+	graph := pyDumps(FixtureGraph(label))
+	status := pyDumps(pyObject{{"sources", []any{pyObject{
+		{"source", label},
+		{"status", "completed"},
+		{"entity_count", len(FixtureEntities)},
+		{"relation_count", len(FixtureRelations)},
+	}}}})
+	checkpoint := pyDumps(pyObject{{"source", label}, {"stage", "completed"}, {"files_processed", 12}})
 	return map[string]any{
 		"success": true,
 		"result": fmt.Sprintf(
 			"Ingestion completed for %s: %d entities, %d relations from %d files.",
 			label, len(FixtureEntities), len(FixtureRelations), 12),
 		"artifacts": []any{
-			map[string]any{"name": "graph.json", "type": "application/json", "data": string(graph)},
-			map[string]any{"name": "sources_status.json", "type": "application/json", "data": string(status)},
+			map[string]any{"name": "graph.json", "type": "application/json", "data": graph},
+			map[string]any{"name": "sources_status.json", "type": "application/json", "data": status},
 			map[string]any{
 				"name": ".ingestion-checkpoint-" + label + ".json",
-				"type": "application/json", "data": string(checkpoint),
+				"type": "application/json", "data": checkpoint,
 			},
 		},
 	}
@@ -758,12 +754,12 @@ func fixtureImportGraph(_, _ string, params Params) map[string]any {
 // fixtureExportGraph exports the canned graph, as the engine exports the
 // stored one: graph.json as an artifact, for the host to upload.
 func fixtureExportGraph(_, _ string, params Params) map[string]any {
-	graph, _ := json.MarshalIndent(FixtureGraph(SourceLabelFor(params)), "", "  ")
+	graph := pyDumps(FixtureGraph(SourceLabelFor(params)))
 	result := fixtureAnswer(params,
 		map[string]any{"artifact": "graph.json", "entities": len(FixtureEntities), "relations": len(FixtureRelations)},
 		fmt.Sprintf("Exported %d entities and %d relations to graph.json.", len(FixtureEntities), len(FixtureRelations)))
 	result["artifacts"] = []any{
-		map[string]any{"name": "graph.json", "type": "application/json", "data": string(graph)},
+		map[string]any{"name": "graph.json", "type": "application/json", "data": graph},
 	}
 	return result
 }

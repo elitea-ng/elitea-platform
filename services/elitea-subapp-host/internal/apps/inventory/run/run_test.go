@@ -103,6 +103,26 @@ func TestTheVerifiedCallerReachesTheEngine(t *testing.T) {
 	}
 }
 
+// TestTheVerifiedProjectAddressesTheGraph: the graph's project comes from the
+// signed identity. The facade sends none in the body, and a body that names
+// another project must not reach that project's graph in the shared store.
+func TestTheVerifiedProjectAddressesTheGraph(t *testing.T) {
+	h := newHarness(t, map[string]run.Tool{"search_graph": answer(map[string]any{"success": true, "result": "ok"})})
+	h.identity = spi.Identity{ProjectID: "7", UserID: "42"}
+	for _, request := range []map[string]any{
+		{"configuration": map[string]any{"application_id": 70}, "parameters": map[string]any{"query": "x"}},
+		{"configuration": map[string]any{"application_id": 70, "project_id": 8}, "project_id": 8,
+			"parameters": map[string]any{"query": "x", "project_id": 8}},
+	} {
+		if _, err := h.invoke("inventory", "inventory", "search_graph", request); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.lastArgs["project_id"]; got != "7" {
+			t.Errorf("project_id = %v, want the verified 7 (request %v)", got, request)
+		}
+	}
+}
+
 func newHarness(t *testing.T, tools map[string]run.Tool) *harness {
 	t.Helper()
 	uploads := &fakeArtifacts{fail: map[string]error{}, objects: map[string][]byte{"graphs/graph.json": []byte(seededGraph)}}
@@ -115,7 +135,7 @@ func newHarness(t *testing.T, tools map[string]run.Tool) *harness {
 			return inner(ctx, arguments, tc)
 		}
 	}
-	h.runner = &run.Runner{RunnerName: "legacy", Tools: wrapped, Artifacts: uploads.factory()}
+	h.runner = &run.Runner{RunnerName: "sidecar", Tools: wrapped, Artifacts: uploads.factory()}
 	return h
 }
 

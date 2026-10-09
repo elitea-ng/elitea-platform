@@ -158,7 +158,7 @@ owner runs them without cluster access:
   default `graphs`) and hands the text to the engine in `graph_document`;
   `replace_ingestion_state` is the CLI flag. The host refuses a document over
   32 MiB: import such a graph with the command. The sidecar reads an invoke
-  body up to `elitea_engine_sidecar::server::MAX_INVOKE_BYTES` (96 MiB).
+  body up to `elitea_inventory_engine::MAX_INVOKE_BYTES` (96 MiB; other engines keep the sidecar default of 2 MB).
 * `export_graph` — the engine returns `graph.json` as an artifact, and the
   host uploads it to the toolkit's bucket (a `knowledge_graph` object).
 

@@ -2,5 +2,8 @@
   "_comment": "export_graph, JSON output form, over the canned graph. The graph.json artifact rides beside the result.",
   "tool": "export_graph",
   "params": { "output_format": "json" },
-  "expected": { "artifact": "graph.json", "entities": 6, "relations": 5 }
+  "expected": { "artifact": "graph.json", "entities": 6, "relations": 5 },
+  "artifacts": [
+    { "name": "graph.json", "type": "application/json", "data_sha256": "1f0556509166f1f7031aa58df5b1285893898e2f09052158c8ec9a396818e2f7" }
+  ]
 }

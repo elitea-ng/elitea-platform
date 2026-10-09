@@ -169,7 +169,14 @@ async fn serve_engine() -> ExitCode {
         }
     };
     tracing::info!(socket = %settings.engine_socket.display(), runner = runner.name(), "inventory engine sidecar listening");
-    match server::serve(listener, runner, shutdown_signal()).await {
+    match server::serve_with_limit(
+        listener,
+        runner,
+        elitea_inventory_engine::MAX_INVOKE_BYTES,
+        shutdown_signal(),
+    )
+    .await
+    {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             tracing::error!(%error, "inventory engine sidecar stopped");
