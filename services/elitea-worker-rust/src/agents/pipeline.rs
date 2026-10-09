@@ -2227,11 +2227,16 @@ const fn invalid_direct_tool_scope() -> NativeAgentAssemblyError {
     )
 }
 
-const fn unserved_direct_toolkit() -> NativeAgentAssemblyError {
+/// Cause of [`unserved_direct_toolkit`]: the readable-refusal path (#1180)
+/// routes it to the registered "not available on this deployment" message.
+pub(crate) const UNSERVED_DIRECT_TOOLKIT_CODE: &str = "pipeline.direct_tool.toolkit_not_served";
+
+pub(crate) const fn unserved_direct_toolkit() -> NativeAgentAssemblyError {
     NativeAgentAssemblyError::new(
         NativeAgentAssemblyErrorCode::UnsupportedCapability,
         "a pipeline direct tool node selected a toolkit this runtime cannot serve in this position",
     )
+    .with_cause(UNSERVED_DIRECT_TOOLKIT_CODE, None)
 }
 
 const fn unsupported_direct_tool_scope() -> NativeAgentAssemblyError {

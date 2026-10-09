@@ -229,5 +229,11 @@ async fn a_saved_child_pipelines_artifact_node_is_refused_as_unsupported() {
         !error.to_string().contains("outside its frozen scope"),
         "{error}"
     );
+    assert_eq!(
+        error
+            .cause()
+            .map(elitea_agent_runtime::assembly_error::NativeAgentAssemblyCause::code),
+        Some(super::super::pipeline::UNSERVED_DIRECT_TOOLKIT_CODE)
+    );
     assert_direct_tool_node_message(&error);
 }

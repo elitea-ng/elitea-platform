@@ -1,6 +1,6 @@
 # Pipeline nodes on an attached artifact toolkit (2026-10-09)
 
-Branch `fix/pipeline-direct-tool-frozen-scope`, base `origin/main` `1ab920dde`.
+Branch `fix/pipeline-direct-tool-frozen-scope`. Investigated on `1ab920dde` and rebased onto `origin/main` `5a46ae56f`, which includes #1180, #1181, #1182, #1185 and #1186.
 
 A pipeline whose direct `toolkit` nodes use an attached `artifact` toolkit could not run from chat. The Worker
 refused assembly with `native_agent.invalid_input`, "a pipeline direct tool node references a tool outside its frozen
@@ -26,7 +26,7 @@ Main froze the scope correctly. The defect was in the Worker.
 | Direct `toolkit` node on an attached artifact toolkit | SDK `ArtifactWrapper` tools run from a LangGraph tool node | The root pipeline lends the claim-bound `ArtifactToolAuthority`. `create_file` and `list_files` run under the claim through Main's content listener. |
 | Pipeline LLM node selecting artifact tools | Available | Available at the root pipeline. Before this change they were silently absent, and the node failed `Unavailable` at run time. |
 | Output declared `dict`, tool returns text | Silently stored (LangGraph does not enforce the declared type) | **Not ported.** A typed `pipeline.result_invalid` stop: "a tool result does not match the node output mapping". No silent coercion, and the effect is not repeated. The reported YAML declares `created: {type: dict}` while `create_file` answers with text, so that YAML now stops at `mk` with this typed message. The same YAML with `created: {type: str}` completes. |
-| Artifact toolkit in a saved child pipeline or nested agent | Available | Still skipped. A direct node there is now refused as `unsupported_capability` ("a pipeline direct tool node selected a toolkit this runtime cannot serve in this position") instead of the misleading frozen-scope text. See Follow-ups. |
+| Artifact toolkit in a saved child pipeline or nested agent | Available | Still skipped. A direct node there is now refused before anything runs, through #1180's readable-refusal path: cause `pipeline.direct_tool.toolkit_not_served`, then `RuntimeFailureKind::PipelineNodeTypeNotAvailable`, then the registered data-free message "This pipeline uses a node type that is not available on this deployment. Open the pipeline to see which node, then remove or replace it." It no longer gets the misleading frozen-scope text. See Follow-ups. |
 
 ## Changed paths
 
@@ -36,10 +36,27 @@ Main froze the scope correctly. The defect was in the Worker.
 | `services/elitea-worker-rust/src/agents/pipeline.rs:453` | `bind_node_runtimes` takes `&Arc<ClaimBoundRuntimeContextAuthority>`. |
 | `services/elitea-worker-rust/src/agents/pipeline.rs:493-510` | Lends `ArtifactToolAuthority(ClaimPlatformWriter(platform, claim))` to `materialize_configured_toolsets_with_artifact_authority`, as the ordinary path does. |
 | `services/elitea-worker-rust/src/agents/pipeline.rs:2116-2118,2230-2235` | A frozen and admitted toolkit with no materialized toolset is refused as `UnsupportedCapability` (`unserved_direct_toolkit`), not as an out-of-scope input. |
+| `services/elitea-worker-rust/src/execution/native_agent_lifecycle.rs` (`assembly_failure`) | Routes the new cause code to #1180's existing `PipelineNodeTypeNotAvailable` kind and message. No new message and no Main or Web change. |
 | `services/elitea-worker-rust/src/agents/pipeline_artifact_tests.rs` (new) | Assembly, run and refusal proofs on the reported YAML and the real stored toolkit row. |
 | `services/elitea-worker-rust/src/agents/graph/node_recovery_artifact_tests.rs` (new) | The real artifact `create_file` tool behind the node-recovery journal. |
 | `services/elitea-main/internal/application/toolkitcatalogue/capability.go:123-128` | Comment updated: the artifact family materialises on the root pipeline too; nested positions refuse a direct node at assembly, and an LLM node there finds the tools unavailable at run time. |
 | `services/elitea-worker-rust/docs/source-mapping/configuration-toolsets.md` | The artifact row records the new position and the remaining gaps. |
+
+## Crate ownership (ADR-0027 layout)
+
+| Mechanism | Owner | Changed here? |
+|---|---|---|
+| `artifact` toolkit family: the tools, `ArtifactToolkitConfig`, `ArtifactToolAuthority` | `libs/rust/agent-runtime` (`src/toolkits/families/artifact/`) | No |
+| Lending the authority to the family during materialization (`materialize_configured_toolsets_with_artifact_authority`), and skipping a family whose authority is absent | `libs/rust/agent-runtime` (`src/toolkits/materialize.rs`) | No |
+| `PlatformWriter` host trait | `libs/rust/agent-runtime` (`src/host`) | No |
+| `ClaimPlatformWriter`, the Worker's implementation of the trait over the claim-bound runtime-context routes | Worker (`src/transport/platform_writer.rs`) | No |
+| Root-pipeline wiring: owning the claim behind an `Arc`, building the authority, calling the lending materializer | Worker (`src/agents/pipeline.rs`, pipeline assembly) | **Yes** |
+| Direct-node resolver refusal and its cause code (`UNSERVED_DIRECT_TOOLKIT_CODE`) | Worker (`src/agents/pipeline.rs`) | **Yes** |
+| Mapping the cause to #1180's readable refusal (`assembly_failure`) | Worker (`src/execution/native_agent_lifecycle.rs`, protocol mapping) | **Yes** |
+| Node-recovery journal for effectful direct tools | Worker graph (`src/agents/graph/direct_tool.rs`) over the `agent-runtime` node_recovery codec | No |
+
+No shared-crate code or dependency changed, so `libs/rust` behaviour is identical. Both workspaces were still tested
+in full (see below), and the Worker image was rebuilt and binary-checked.
 
 ## Tests
 
@@ -53,14 +70,20 @@ test got `InvalidInput` instead of `UnsupportedCapability`. The saved-child test
 | `pipeline_artifact_tests.rs:149` `artifact_list_node_runs_under_the_claim_and_projects_its_listing` | A `list_files` node runs to completion and makes exactly one call, on `/runtime-context/artifacts/list`. The listing reaches the browser output. |
 | `pipeline_artifact_tests.rs:186` `an_unserved_artifact_toolkit_is_refused_as_unsupported_not_out_of_scope` | Without a claim-bound platform the refusal is `UnsupportedCapability`, names the direct tool node, and never says "outside its frozen scope". |
 | `pipeline_artifact_tests.rs:208` `a_saved_child_pipelines_artifact_node_is_refused_as_unsupported` | The production-reachable unserved position (a saved child pipeline) refuses its artifact direct node as `UnsupportedCapability` at root assembly. On `main` this was `InvalidInput`, "outside its frozen scope". |
+| `native_agent_lifecycle.rs` `taxonomy_tests::an_unserved_direct_toolkit_ends_as_the_registered_deployment_message` | The unserved refusal ends as `UNSUPPORTED_CAPABILITY` with #1180's registered message, not retryable, through the real `assembly_failure` → `runtime_error_policy` chain. |
 | `node_recovery_artifact_tests.rs:141` `artifact_write_runs_once_and_its_committed_result_is_replayed` | `create_file` is `!is_read_only()` and runs behind the fenced `Started` journal. One write; a lost step checkpoint replays the committed result with no second write. |
 | `node_recovery_artifact_tests.rs:175` `a_started_artifact_write_without_a_result_is_never_written_again` | Crash between `Started` and the result: re-entry shows the reconciliation card twice, with 0 writes. |
 | `node_recovery_artifact_tests.rs:196` `a_text_write_result_is_not_coerced_into_a_dict_output` | The reported `dict` declaration produces a typed `state_projection` failure after one write. Re-entry reconciles and does not write again. |
 
-Counts (local, `cargo test --offline --locked --all-targets --all-features`):
-- Worker lib: 1744 passed, 0 failed, 71 ignored. The ignored set is the same DB-, Docker- and Kubernetes-gated tests as on `main`.
-- All Worker targets: 1839 passed, 0 failed, 71 ignored.
-- `cargo clippy --locked --all-targets --all-features -- -D warnings` and `cargo fmt --check` are clean.
+Counts (local, on the rebased branch, `--offline --locked`):
+- Worker lib: 1746 passed, 0 failed, 71 ignored. The ignored set is the same DB-, Docker- and Kubernetes-gated tests as on `main`.
+- All Worker targets (`--all-targets --all-features`): 1841 passed, 0 failed, 71 ignored.
+- Worker `cargo fmt --check` and `cargo clippy --all-targets --all-features -- -D warnings` are clean.
+- `libs/rust`, unchanged by this branch:
+  - `cargo test --workspace --all-targets --all-features`: 1007 passed, 0 failed;
+  - `elitea-agent-runtime` with `--features toolkit-sql`: 510 passed;
+  - `elitea-agent-runtime` with `--features test-preserve-order,toolkit-sql`: 510 passed;
+  - `fmt --check` and `clippy --workspace --all-targets --all-features -D warnings` are clean.
 - DB-gated real-PostgreSQL journal proofs `state::postgres_checkpointer_tests::direct_tool_journal` (`--ignored`, throwaway pgvector 0.8.1/PG18 container): 6 passed. They cover crash after `Started`, process replacement, second-claim takeover and replay. The journal is family-agnostic, and the artifact write reaches it because `create_file` is effectful.
 
 ## Performance
