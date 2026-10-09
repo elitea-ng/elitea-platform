@@ -6,11 +6,19 @@ name: Cancel runs of a merged PR
 # whole account) and the merge itself starts ~100 jobs on main, so a PR run
 # that can no longer change anything competes with the gates that can.
 #
-# On merge this workflow cancels every unfinished run on the PR's head branch,
-# in every non-completed state (queued, requested, waiting, pending,
-# in_progress). It asks politely first, so `if: always()` cleanup steps get to
-# run, then force-cancels whatever is still alive after a grace period — a run
-# stuck on an `always()` step or a wedged runner ignores a plain cancel.
+# On merge this workflow cancels every unfinished `pull_request` run that
+# belongs to THIS pull request, in every non-completed state (queued,
+# requested, waiting, pending, in_progress). It asks politely first, so
+# `if: always()` cleanup steps get to run, then force-cancels whichever of
+# those same runs is still alive after a grace period — a run stuck on an
+# `always()` step or a wedged runner ignores a plain cancel.
+#
+# A run belongs to the pull request when its event is `pull_request` AND it
+# is either linked to this PR number, or — for a fork, where GitHub links no
+# PR — its head sha is one of this PR's commits. The branch name is only the
+# listing key, never the match: a release PR whose head is `main` must not
+# cancel the push runs (ci-*, publish.yml) a merge starts on `main`, and a
+# second open PR from the same branch must keep its checks.
 #
 # pull_request_target, not pull_request: a Dependabot or fork PR gets a
 # read-only GITHUB_TOKEN under pull_request, and cancelling needs
@@ -28,6 +36,7 @@ concurrency:
 
 permissions:
   actions: write
+  pull-requests: read
 
 jobs:
   cancel:
@@ -37,84 +46,77 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Cancel, then force-cancel, every unfinished run on the head branch
+      - name: Cancel, then force-cancel, this pull request's unfinished runs
+        uses: actions/github-script@v9
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          # The head branch name alone is ambiguous: a fork's `main` is not
-          # this repository's `main`. Every run is matched on the head
-          # repository too, so a fork PR named after a trunk branch can never
-          # cancel the merge's own push runs on main.
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          SELF_RUN_ID: ${{ github.run_id }}
           GRACE_SECONDS: "60"
-        run: |
-          set -euo pipefail
+        with:
+          # Retries 5xx and secondary rate limits. A listing that failed must
+          # fail the job, never come back short and read as "nothing to cancel".
+          retries: 3
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            const headRepo = pr.head.repo.full_name;
+            const graceMs = Number(process.env.GRACE_SECONDS) * 1000;
 
-          # The runs API filters on ONE status per call, so ask once per
-          # non-completed status and merge the answers.
-          list_unfinished() {
-            for status in queued requested waiting pending in_progress; do
-              gh api --paginate \
-                -X GET "repos/${REPO}/actions/runs" \
-                -f branch="${HEAD_REF}" \
-                -f status="${status}" \
-                -f per_page=100 \
-                --jq ".workflow_runs[]
-                      | select(.id != ${SELF_RUN_ID})
-                      | select(.head_repository.full_name == \"${HEAD_REPO}\")
-                      | [.id, .status, .event, .name] | @tsv"
-            done | sort -u -k1,1n
-          }
+            // Every sha this PR ever pointed at, for fork runs that carry no
+            // PR link. The endpoint caps at 250 commits; a PR that size has
+            // its older runs long finished.
+            const shas = new Set(
+              (await github.paginate(github.rest.pulls.listCommits, {
+                owner, repo, pull_number: pr.number, per_page: 100,
+              })).map((c) => c.sha),
+            );
 
-          runs="$(list_unfinished)"
-          if [ -z "${runs}" ]; then
-            echo "PR #${PR_NUMBER} (${HEAD_REPO}:${HEAD_REF}): no unfinished runs"
-            exit 0
-          fi
+            const belongsToPr = (run) =>
+              run.head_repository?.full_name === headRepo &&
+              (run.pull_requests.some((p) => p.number === pr.number) ||
+                (run.pull_requests.length === 0 && shas.has(run.head_sha)));
 
-          echo "PR #${PR_NUMBER} (${HEAD_REPO}:${HEAD_REF}): unfinished runs"
-          printf '%s\n' "${runs}"
+            // The runs API filters on ONE status per call.
+            const runs = new Map();
+            for (const status of ['queued', 'requested', 'waiting', 'pending', 'in_progress']) {
+              const page = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
+                owner, repo, branch: pr.head.ref, event: 'pull_request', status, per_page: 100,
+              });
+              for (const run of page.filter(belongsToPr)) runs.set(run.id, run);
+            }
 
-          # A 409 means the run finished between the listing and the call,
-          # which is the outcome we wanted, so it is not an error.
-          while IFS=$'\t' read -r id status event name; do
-            if gh api -X POST "repos/${REPO}/actions/runs/${id}/cancel" --silent 2>/dev/null; then
-              echo "cancel requested: ${id} ${name} (${event}, ${status})"
-            else
-              echo "::notice::cancel of ${id} ${name} refused; it may have just finished"
-            fi
-          done <<< "${runs}"
+            const label = `PR #${pr.number} (${headRepo}:${pr.head.ref})`;
+            if (runs.size === 0) {
+              core.info(`${label}: no unfinished runs`);
+              return;
+            }
+            core.info(`${label}: ${runs.size} unfinished run(s)`);
+            for (const run of runs.values()) core.info(`  ${run.id} ${run.status} ${run.name}`);
 
-          deadline=$(( $(date +%s) + GRACE_SECONDS ))
-          remaining="${runs}"
-          while [ "$(date +%s)" -lt "${deadline}" ]; do
-            sleep 10
-            remaining="$(list_unfinished)"
-            [ -z "${remaining}" ] && break
-          done
+            // A 409 means the run already finished, which is the outcome we
+            // want. Anything else (403 missing scope, 404) is a real failure.
+            const failures = [];
+            const post = async (action, run) => {
+              try {
+                await github.request(`POST /repos/{owner}/{repo}/actions/runs/{run_id}/${action}`, {
+                  owner, repo, run_id: run.id,
+                });
+                core.info(`${action}: ${run.id} ${run.name}`);
+              } catch (err) {
+                if (err.status === 409) {
+                  core.info(`${action}: ${run.id} ${run.name} already finished`);
+                } else {
+                  failures.push(`${action} of ${run.id} ${run.name}: ${err.status} ${err.message}`);
+                }
+              }
+            };
 
-          if [ -z "${remaining}" ]; then
-            echo "every run stopped within ${GRACE_SECONDS}s of the cancel request"
-            exit 0
-          fi
+            for (const run of runs.values()) await post('cancel', run);
 
-          failed=0
-          while IFS=$'\t' read -r id status event name; do
-            if gh api -X POST "repos/${REPO}/actions/runs/${id}/force-cancel" --silent 2>/dev/null; then
-              echo "force-cancelled: ${id} ${name} (${event}, ${status})"
-            else
-              # Re-read before calling it a failure: it may have stopped on
-              # its own in the meantime.
-              state="$(gh api "repos/${REPO}/actions/runs/${id}" --jq .status)"
-              if [ "${state}" = "completed" ]; then
-                echo "already stopped: ${id} ${name}"
-              else
-                echo "::warning::could not force-cancel ${id} ${name} (still ${state})"
-                failed=1
-              fi
-            fi
-          done <<< "${remaining}"
-          exit "${failed}"
+            // Only the runs listed above are escalated: anything that appeared
+            // since is not ours to force-cancel without a polite cancel first.
+            await new Promise((resolve) => setTimeout(resolve, graceMs));
+            for (const run of runs.values()) {
+              const { data } = await github.rest.actions.getWorkflowRun({ owner, repo, run_id: run.id });
+              if (data.status !== 'completed') await post('force-cancel', run);
+            }
+
+            if (failures.length > 0) core.setFailed(failures.join('\n'));
