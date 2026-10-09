@@ -84,7 +84,10 @@ func (r *recordedAudit) Record(_ context.Context, event audit.Event) {
 // either out.
 func remoteHandler(runs RemoteToolkitUseCase, worker string) (*remoteToolkitHandler, *fakeTurns, *fakeAuthorizer, *recordedAudit) {
 	turns := &fakeTurns{turn: localturn.LiveTurn{ApplicationID: 11, VersionID: 12}}
-	authorizer := &fakeAuthorizer{grant: storage.RemoteToolGrant{ToolkitType: "github", ToolkitName: "gh"}}
+	authorizer := &fakeAuthorizer{grant: storage.RemoteToolGrant{
+		ToolkitType: "github", ToolkitName: "gh",
+		LLMModel: "version-model", LLMSettings: json.RawMessage(`{"temperature":0.2}`),
+	}}
 	recorder := &recordedAudit{}
 	h := newRemoteToolkitHandler(RemoteToolkitDependencies{
 		Runs: runs, Worker: worker, Authorizer: authorizer, Turns: turns, Audit: recorder,
@@ -124,7 +127,8 @@ func TestRemoteToolkitRunsTheCallersToolThroughTheSharedUseCase(t *testing.T) {
 	}
 	got := runs.request
 	if got.ProjectID != 3 || got.ToolkitID != 61 || got.ActorUserID != 7 || got.ToolName != "create_issue" ||
-		string(got.Arguments) != `{"title":"x"}` || got.RequestID != "r1" || got.SensitiveApproval != nil {
+		string(got.Arguments) != `{"title":"x"}` || got.RequestID != "r1" || got.SensitiveApproval != nil ||
+		got.LLMModel != "version-model" || string(got.LLMSettings) != `{"temperature":0.2}` {
 		t.Fatalf("run request = %+v", got)
 	}
 	// The authorization is asked of the TURN's agent, for the version and
@@ -186,16 +190,18 @@ func TestRemoteToolkitBoundsTheRequest(t *testing.T) {
 		body   string
 		status int
 	}{
-		"no tool name":         {remoteBody(`"arguments":{}`), http.StatusBadRequest},
-		"arguments not object": {remoteBody(`"tool_name":"t","arguments":[1]`), http.StatusBadRequest},
-		"two values":           {remoteBody(`"tool_name":"t"`) + ` {}`, http.StatusBadRequest},
-		"too large":            {remoteBody(`"tool_name":"t","arguments":{"x":"` + strings.Repeat("a", 1<<20) + `"}`), http.StatusRequestEntityTooLarge},
-		"no execution id":      {`{"application_id":11,"version_id":12,"toolkit_ref":"` + remoteRef + `","tool_name":"t"}`, http.StatusBadRequest},
-		"no version":           {`{"execution_id":"` + remoteExecution + `","application_id":11,"toolkit_ref":"` + remoteRef + `","tool_name":"t"}`, http.StatusBadRequest},
-		"no toolkit ref":       {`{"execution_id":"` + remoteExecution + `","application_id":11,"version_id":12,"tool_name":"t"}`, http.StatusBadRequest},
-		"malformed ref":        {`{"execution_id":"` + remoteExecution + `","application_id":11,"version_id":12,"toolkit_ref":"tkr1_x","tool_name":"t"}`, http.StatusBadRequest},
-		"refused confirmation": {remoteBody(`"tool_name":"t","confirmation":{"approved":false,"approved_at":"2026-10-08T10:00:00Z"}`), http.StatusBadRequest},
-		"undated confirmation": {remoteBody(`"tool_name":"t","confirmation":{"approved":true}`), http.StatusBadRequest},
+		"no tool name":          {remoteBody(`"arguments":{}`), http.StatusBadRequest},
+		"arguments not object":  {remoteBody(`"tool_name":"t","arguments":[1]`), http.StatusBadRequest},
+		"two values":            {remoteBody(`"tool_name":"t"`) + ` {}`, http.StatusBadRequest},
+		"too large":             {remoteBody(`"tool_name":"t","arguments":{"x":"` + strings.Repeat("a", 1<<20) + `"}`), http.StatusRequestEntityTooLarge},
+		"no execution id":       {`{"application_id":11,"version_id":12,"toolkit_ref":"` + remoteRef + `","tool_name":"t"}`, http.StatusBadRequest},
+		"no version":            {`{"execution_id":"` + remoteExecution + `","application_id":11,"toolkit_ref":"` + remoteRef + `","tool_name":"t"}`, http.StatusBadRequest},
+		"no toolkit ref":        {`{"execution_id":"` + remoteExecution + `","application_id":11,"version_id":12,"tool_name":"t"}`, http.StatusBadRequest},
+		"malformed ref":         {`{"execution_id":"` + remoteExecution + `","application_id":11,"version_id":12,"toolkit_ref":"tkr1_x","tool_name":"t"}`, http.StatusBadRequest},
+		"refused confirmation":  {remoteBody(`"tool_name":"t","confirmation":{"approved":false,"approved_at":"2026-10-08T10:00:00Z"}`), http.StatusBadRequest},
+		"undated confirmation":  {remoteBody(`"tool_name":"t","confirmation":{"approved":true}`), http.StatusBadRequest},
+		"caller-chosen model":   {remoteBody(`"tool_name":"t","llm_model":"expensive-model"`), http.StatusBadRequest},
+		"caller model settings": {remoteBody(`"tool_name":"t","llm_settings":{"temperature":1}`), http.StatusBadRequest},
 	} {
 		response := serveWith(t, http.MethodPost, RemoteToolkitPath, remoteURL, tc.body, desktopToken(), h.serve)
 		if response.Code != tc.status {

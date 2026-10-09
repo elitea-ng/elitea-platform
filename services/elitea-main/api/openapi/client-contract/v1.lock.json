@@ -12310,13 +12310,6 @@
                 "type": "string",
                 "pattern": "^[0-9a-f]{32}$"
               },
-              "llm_model": {
-                "type": "string"
-              },
-              "llm_settings": {
-                "type": "object",
-                "open": true
-              },
               "mcp_authorization_reference": {
                 "type": "string"
               },

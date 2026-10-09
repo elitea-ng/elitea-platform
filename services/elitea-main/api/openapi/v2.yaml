@@ -3627,7 +3627,7 @@ components:
       type: object
       description: >-
         One version resolved for a desktop's local runtime (ADR-0029 decision
-        5a). NOTE(W2): internal/infra/storage/client_application_version.go:59
+        5a). NOTE(W2): internal/infra/storage/client_application_version.go:60
         (`ClientApplicationVersion`).
       required: [schema_version, project_id, application_id, version_id, version_details, definition_sha256, withheld_secrets, project_context_withheld]
       properties:
@@ -3664,7 +3664,7 @@ components:
         NOTE(W2): the saved version after the shared admission freeze, the
         object the worker's runtime-context route serves minus credentials;
         its keys follow the version-details projection
-        (internal/infra/storage/client_application_version.go:163,
+        (internal/infra/storage/client_application_version.go:210,
         `ProjectClientApplicationVersion`).
       required: [tools]
       properties:
@@ -3679,7 +3679,7 @@ components:
       description: >-
         One tool of a resolved version. `kind` is `remote_toolkit`,
         `application` or `platform_mcp`. NOTE(W2):
-        internal/infra/storage/client_application_version.go:234
+        internal/infra/storage/client_application_version.go:283
         (`projectClientTool`).
       required: [kind, type]
       properties:
@@ -3701,7 +3701,7 @@ components:
             additionalProperties: true
             x-elitea-passthrough: >-
               NOTE(W2): one skill a nested agent carries, as the freeze recorded
-              it (internal/infra/storage/client_application_version.go:272).
+              it (internal/infra/storage/client_application_version.go:321).
         server_name:
           type: string
           description: A `platform_mcp` tool's server.
@@ -3718,7 +3718,7 @@ components:
         version in this project. `ref` is stable for that attachment, carries
         no credential and grants nothing: executeRemoteToolkitTool recomputes
         it from the version a call names and refuses a mismatch. NOTE(W2):
-        internal/infra/storage/client_application_version.go:221
+        internal/infra/storage/client_application_version.go:270
         (`ClientToolkitRef`).
       required: [toolkit_id, project_id, ref]
       properties:
@@ -3742,9 +3742,12 @@ components:
           description: When the user approved (RFC 3339); within the turn's 24 hours and not in the future.
     RemoteToolkitCallRequest:
       type: object
+      additionalProperties: false
       description: >-
-        One remote tool call, inside one live local turn. Settings and
-        credentials are never accepted. NOTE(W2):
+        One remote tool call, inside one live local turn. Settings,
+        credentials and a model are never accepted (unknown fields are
+        refused): a toolkit that calls a model uses the running version's
+        `llm_settings`, resolved against the project's model catalogue. NOTE(W2):
         internal/api/v2/desktopops/remote_toolkit.go:177
         (`remoteToolkitBody`).
       required: [execution_id, application_id, version_id, toolkit_ref, tool_name]
@@ -3783,21 +3786,12 @@ components:
         mcp_authorization_reference:
           type: string
           description: The reference an MCP authorisation answered, for the retry after it.
-        llm_model:
-          type: string
-          description: The model a toolkit that calls one should use.
-        llm_settings:
-          type: object
-          additionalProperties: true
-          x-elitea-passthrough: >-
-            NOTE(W2): model settings for a toolkit that calls a model, the
-            test_tool shape (internal/api/v2/toolkitrun/response.go:69).
     RemoteToolkitCallResult:
       type: object
       description: >-
         A remote tool call's answer. `error` is a machine code on a refusal.
-        NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:529
-        (`writeOutcome`) and :612 (`writeRunError`).
+        NOTE(W2): internal/api/v2/desktopops/remote_toolkit.go:557
+        (`writeOutcome`) and :640 (`writeRunError`).
       required: [ok]
       properties:
         ok: { type: boolean }
@@ -3812,7 +3806,7 @@ components:
           nullable: true
           x-elitea-passthrough: >-
             NOTE(W2): what the tool returned, any JSON value
-            (internal/api/v2/desktopops/remote_toolkit.go:545).
+            (internal/api/v2/desktopops/remote_toolkit.go:573).
         truncated:
           type: boolean
           description: The result was too large to return; it is omitted, never cut.
@@ -3836,7 +3830,7 @@ components:
               additionalProperties: true
               x-elitea-passthrough: >-
                 NOTE(W2): the arguments to send again after authorising
-                (internal/api/v2/desktopops/remote_toolkit.go:561).
+                (internal/api/v2/desktopops/remote_toolkit.go:589).
     DesktopOperationError:
       type: object
       description: >-

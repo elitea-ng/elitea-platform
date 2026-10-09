@@ -68,7 +68,7 @@ export const ResolvedApplicationVersion = zod
     version_details: ResolvedApplicationVersionDetails,
   })
   .describe(
-    "One version resolved for a desktop's local runtime (ADR-0029 decision 5a). NOTE(W2): internal/infra/storage/client_application_version.go:59 (`ClientApplicationVersion`).",
+    "One version resolved for a desktop's local runtime (ADR-0029 decision 5a). NOTE(W2): internal/infra/storage/client_application_version.go:60 (`ClientApplicationVersion`).",
   );
 
 export type ResolvedApplicationVersion = zod.input<

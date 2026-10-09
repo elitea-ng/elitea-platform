@@ -72,7 +72,7 @@ export const ResolvedApplicationTool = zod
     toolkit_ref: ResolvedToolkitRef.optional(),
   })
   .describe(
-    "One tool of a resolved version. `kind` is `remote_toolkit`, `application` or `platform_mcp`. NOTE(W2): internal/infra/storage/client_application_version.go:234 (`projectClientTool`).",
+    "One tool of a resolved version. `kind` is `remote_toolkit`, `application` or `platform_mcp`. NOTE(W2): internal/infra/storage/client_application_version.go:283 (`projectClientTool`).",
   );
 
 export type ResolvedApplicationTool = zod.input<typeof ResolvedApplicationTool>;
