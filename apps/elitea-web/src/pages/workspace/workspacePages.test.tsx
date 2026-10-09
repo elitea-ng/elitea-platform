@@ -19,7 +19,7 @@ import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { createFakeWorkspaceIpc, type FakeWorkspaceIpc } from '@/shared/desktop/workspaceIpc.fake';
 
 import { server } from '../../test/setup';
-import type { AgentSelection } from './useAgentSelection';
+import { useAgentSelection, type AgentSelection } from './useAgentSelection';
 import { useSendPrompt } from './useSendPrompt';
 import WorkspaceSessionPage from './WorkspaceSessionPage';
 import WorkspacesPage from './WorkspacesPage';
@@ -300,5 +300,20 @@ describe('WorkspaceSessionPage', () => {
     it('selects the conversation the turn runs in once the host started it', async () => {
       expect(await send(true)).toEqual({ sent: true, picks: ['77'] });
     });
+  });
+
+  it('starts a new conversation when the agent or the version changes', async () => {
+    serveProject();
+    const { result } = renderHook(() => useAgentSelection(42), { wrapper: ({ children }) => <AppProviders>{children}</AppProviders> });
+    act(() => result.current.selectAgent('5'));
+    await waitFor(() => expect(result.current.versionId).toBe('9'));
+
+    act(() => result.current.selectConversation('77'));
+    act(() => result.current.selectVersion('9'));
+    expect(result.current.conversationId).toBe('');
+
+    act(() => result.current.selectConversation('77'));
+    act(() => result.current.selectAgent('5'));
+    expect(result.current.conversationId).toBe('');
   });
 });

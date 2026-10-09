@@ -72,11 +72,18 @@ export function useAgentSelection(projectId: number | null): AgentSelection {
     versionId,
     conversationId,
     loading: agentsQuery.isPending && enabled,
+    // A conversation holds its agent on one version: another agent or
+    // version starts a new conversation (else the next send is refused with
+    // agent_not_in_conversation / agent_version_mismatch).
     selectAgent: (id) => {
       setAgentId(id);
       setVersionId('');
+      setConversationId('');
     },
-    selectVersion: setVersionId,
+    selectVersion: (id) => {
+      setVersionId(id);
+      setConversationId('');
+    },
     selectConversation: setConversationId,
   };
 }
