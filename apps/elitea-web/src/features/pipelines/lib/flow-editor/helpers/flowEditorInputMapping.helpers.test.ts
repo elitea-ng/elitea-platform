@@ -56,12 +56,40 @@ describe('getDefaultInputMappingOfTool', () => {
       },
     };
     const result = getDefaultInputMappingOfTool(toolkitSchemas, 'create_issue', undefined, { type: 'github' });
-    expect(result.mapping).toEqual({
-      title: { type: 'fixed', value: '', enum: undefined },
-      count: { type: 'fixed', value: 1, enum: undefined },
-      flag: { type: 'fixed', value: false, enum: undefined },
+    expect(result.mapping).toStrictEqual({
+      title: { type: 'fixed', value: '' },
+      count: { type: 'fixed', value: 1 },
+      flag: { type: 'fixed', value: false },
     });
     expect(result.defaultValues).toEqual({ title: '', count: 1, flag: false });
+  });
+
+  it('writes no undefined-valued key: an enum appears only when the schema declares one, and a stale one is dropped', () => {
+    const toolkitSchemas = {
+      artifact: {
+        properties: {
+          selected_tools: {
+            args_schemas: {
+              list_files: {
+                properties: {
+                  bucket_name: { anyOf: [{ type: 'string' }, { type: 'null' }], default: null },
+                  order: { type: 'string', enum: ['asc', 'desc'] },
+                  folder: { type: 'string' },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const existingMapping = { folder: { type: 'fixed' as const, value: 'docs', enum: ['stale'] } };
+    const result = getDefaultInputMappingOfTool(toolkitSchemas, 'list_files', existingMapping, { type: 'artifact' });
+    expect(result.mapping).toStrictEqual({
+      bucket_name: { type: 'fixed', value: null },
+      order: { type: 'fixed', value: 'asc', enum: ['asc', 'desc'] },
+      folder: { type: 'fixed', value: 'docs' },
+    });
+    expect(existingMapping.folder.enum).toEqual(['stale']);
   });
 
   it('preserves an existing mapping entry rather than resetting it', () => {

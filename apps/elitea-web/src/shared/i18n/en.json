@@ -4836,5 +4836,6 @@
   "pipelines.graphExtensions.aggregateFlatDescription": "Group list rows and calculate explicit results. Each result row holds the group fields and the operation results side by side.",
   "pipelines.graphExtensions.regroup": "Regroup",
   "pipelines.graphExtensions.regroupHelp": "Parent rebuilds each split parent row from the split_out envelopes.",
-  "pipelines.graphExtensions.splitOut.envelopeHelp": "Each output row is {parent_index, position, data}. data holds the retained fields and the item."
+  "pipelines.graphExtensions.splitOut.envelopeHelp": "Each output row is {parent_index, position, data}. data holds the retained fields and the item.",
+  "features.pipelines.editorPanel.serializationError": "This change could not be written as pipeline YAML, so the stored YAML was kept: {{reason}}"
 }

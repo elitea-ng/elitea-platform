@@ -10,6 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_BRAND_PACK, DEFAULT_COLOR_SCHEME, buildEliteaTheme } from '@/shared/brand';
 import { forceResizeObserverAbsentForTest } from '@/shared/ui/lib/field/codeMirrorTestPolyfills';
 
+import { load } from 'js-yaml';
+
+import { PIPELINE_165_YAML } from '../__tests__/pipeline165Fixture';
 import { usePipelineYamlStore } from '../model/pipelineYamlStore';
 import { dumpYaml } from '../lib/dumpYaml.helpers';
 import { EditorPanel } from './EditorPanel';
@@ -127,6 +130,51 @@ describe('EditorPanel', () => {
 
     expect(screen.queryByRole('button', { name: 'Add node' })).not.toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole('button', { name: /copy yaml code/i })).toBeInTheDocument());
+  });
+
+  /**
+   * Pipeline 165: the flow document held a member YAML cannot carry (`enum: undefined`), and the
+   * Yaml tab used to store the text "Error dumping YAML: …" as the document. Admission then read
+   * that string as a graph of 0 nodes and blocked Save. The stored text must stay, with a reason.
+   */
+  it('keeps the stored YAML and shows a readable error when the flow document cannot be serialized', async () => {
+    const document = load(PIPELINE_165_YAML) as { nodes: Record<string, unknown>[] };
+    document.nodes[1] = { ...document.nodes[1], input_mapping: { folder: { type: 'fixed', value: null, enum: undefined } } };
+    usePipelineYamlStore.setState({
+      yamlCode: PIPELINE_165_YAML,
+      yamlJsonObject: document,
+      initYamlCode: PIPELINE_165_YAML,
+      initYamlJsonObject: load(PIPELINE_165_YAML) as Record<string, unknown>,
+    });
+    const user = userEvent.setup();
+    renderEditorPanel();
+
+    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'This change could not be written as pipeline YAML, so the stored YAML was kept: Pipeline YAML serialization changed its contract: nodes[1].input_mapping.folder.enum has no YAML form',
+    );
+    expect(usePipelineYamlStore.getState().yamlCode).toBe(PIPELINE_165_YAML);
+    expect((load(usePipelineYamlStore.getState().yamlCode) as { nodes: unknown[] }).nodes).toHaveLength(2);
+    expect(screen.queryByText(/Error dumping YAML/)).not.toBeInTheDocument();
+  });
+
+  it('shows no serialization error for a document that round-trips', async () => {
+    usePipelineYamlStore.setState({
+      yamlCode: PIPELINE_165_YAML,
+      yamlJsonObject: load(PIPELINE_165_YAML) as Record<string, unknown>,
+      initYamlCode: PIPELINE_165_YAML,
+      initYamlJsonObject: load(PIPELINE_165_YAML) as Record<string, unknown>,
+    });
+    const user = userEvent.setup();
+    renderEditorPanel();
+
+    await user.click(await screen.findByRole('button', { name: 'Yaml' }));
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /copy yaml code/i })).toBeInTheDocument());
+    expect(screen.queryByText(/could not be written as pipeline YAML/)).not.toBeInTheDocument();
+    // The Yaml tab shows the canonical re-dump (pre-existing behaviour); it is the same pipeline.
+    expect(load(usePipelineYamlStore.getState().yamlCode)).toStrictEqual(load(PIPELINE_165_YAML));
   });
 
   it('calls setYamlDirty with the live dirty state', async () => {

@@ -1,7 +1,8 @@
 import { load } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
-import { dumpYaml, serializePipelineYaml } from './dumpYaml.helpers';
+import { PIPELINE_165_YAML } from '../__tests__/pipeline165Fixture';
+import { dumpYaml, serializePipelineYaml, trySerializePipelineYaml } from './dumpYaml.helpers';
 import { readPipelineStateOrder, renamePipelineStateOrder } from './pipelineYamlState.helpers';
 
 describe('dumpYaml', () => {
@@ -155,5 +156,44 @@ describe('pipeline compatibility serialization', () => {
         stateKeyOrder: ['2'],
       }),
     ).toThrow('does not match');
+  });
+});
+
+/** Pipeline 165 as the flow editor held it before the fix: the `ls` defaults each carried `enum: undefined`. */
+function pipeline165WithUndefinedEnum(): Record<string, unknown> {
+  const document = load(PIPELINE_165_YAML) as { nodes: Record<string, unknown>[] };
+  const empty = { type: 'fixed', value: null, enum: undefined };
+  document.nodes[1] = {
+    ...document.nodes[1],
+    input_mapping: { skip: empty, recursive: { type: 'fixed', value: false, enum: undefined }, include: empty, folder: empty, bucket_name: empty },
+  };
+  return document;
+}
+
+describe('pipeline 165 round-trip', () => {
+  it('keeps the stored text byte for byte when the editor holds the stored document', () => {
+    expect(serializePipelineYaml(load(PIPELINE_165_YAML), { originalYaml: PIPELINE_165_YAML })).toBe(PIPELINE_165_YAML);
+    expect(load(serializePipelineYaml(load(PIPELINE_165_YAML)))).toStrictEqual(load(PIPELINE_165_YAML));
+  });
+
+  it('keeps empty input_mapping and dict state types through a real edit', () => {
+    const edited = { ...(load(PIPELINE_165_YAML) as Record<string, unknown>), entry_point: 'ls' };
+    const text = serializePipelineYaml(edited, { originalYaml: PIPELINE_165_YAML });
+    expect(load(text)).toStrictEqual(edited);
+    expect(text).toContain('input_mapping: {}');
+    expect(readPipelineStateOrder(text)).toEqual(['input', 'messages', 'created', 'listing']);
+  });
+
+  it('names the member YAML cannot hold instead of a bare contract error', () => {
+    expect(() => serializePipelineYaml(pipeline165WithUndefinedEnum())).toThrow(
+      'Pipeline YAML serialization changed its contract: nodes[1].input_mapping.skip.enum has no YAML form',
+    );
+  });
+
+  it('reports the refusal as a value, so a caller never stores the error text as YAML', () => {
+    const result = trySerializePipelineYaml(pipeline165WithUndefinedEnum());
+    expect(result.yaml).toBeUndefined();
+    expect(result.error).toContain('nodes[1].input_mapping.skip.enum');
+    expect(trySerializePipelineYaml(load(PIPELINE_165_YAML)).error).toBeUndefined();
   });
 });

@@ -19,9 +19,9 @@ import type { TabGroupButtonItem } from '@/shared/ui/TabGroupButton';
 import { combineSx } from '@/shared/ui/lib/combineSx';
 
 import type { AiAssistantLlmSettings } from '../api/aiAssistantPredict';
-import { dumpYaml } from '../lib/dumpYaml.helpers';
 import { useIsPipelineYamlCodeDirty, isChatPath } from '../lib/hooks/useIsPipelineYamlCodeDirty';
 import { useIsSmallWindow } from '../lib/hooks/useIsSmallWindow';
+import { usePipelineYamlSerialization } from '../lib/hooks/usePipelineYamlSerialization';
 import { migerateLegacyNodes, parseYaml } from '../lib/flow-editor/helpers/parsePipeline.helpers';
 import type { RunSocketEvent } from '../lib/flow-editor/helpers/parseRunsByEvent.support';
 import type { FlowEdge, FlowNode } from '../lib/flow-editor/reactFlowTypes';
@@ -31,6 +31,7 @@ import { AddNodeMenu } from './AddNodeMenu';
 import type { PipelineNodeType } from '../lib/flow-editor/constants/flowEditor.constants';
 import type { FlowEditorHandle } from './FlowEditor';
 import type { PipelineToolEntry } from './select/pipelineToolEntry.types';
+import { PipelineYamlSerializationAlert } from './PipelineYamlSerializationAlert';
 import { YamlCodeEditor } from './YamlCodeEditor';
 import type { PipelineEditorModeValue } from './FlowWrapper';
 
@@ -227,16 +228,17 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
   const clearResetFlag = usePipelineYamlStore((state) => state.clearResetFlag);
   const setLayoutVersion = usePipelineYamlStore((state) => state.setLayoutVersion);
 
+  const { serializationError, serializeDocument } = usePipelineYamlSerialization();
+
   const setYamlJsonObject = useCallback(
     (next: YamlPipelineDocument) => {
       if (areYamlObjectsEqual(next, yamlJsonObject)) return;
+      const yamlString = serializeDocument(next);
+      if (yamlString === undefined) return;
       storeSetYamlJsonObject(next);
-      const yamlString = dumpYaml(next);
-      if (Object.keys(next).length && yamlString !== yamlCode) {
-        storeSetYamlCode(yamlString);
-      }
+      if (Object.keys(next).length && yamlString !== yamlCode) storeSetYamlCode(yamlString);
     },
-    [storeSetYamlCode, storeSetYamlJsonObject, yamlCode, yamlJsonObject],
+    [serializeDocument, storeSetYamlCode, storeSetYamlJsonObject, yamlCode, yamlJsonObject],
   );
 
   const onParseCodeToJson = useCallback(
@@ -304,13 +306,11 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
       if (newMode === PipelineEditorMode.Flow) {
         onParseCodeToJson(yamlCode);
       } else {
-        const yamlString = dumpYaml(yamlJsonObject);
-        if (Object.keys(yamlJsonObject).length && yamlString !== yamlCode) {
-          storeSetYamlCode(yamlString);
-        }
+        const yamlString = serializeDocument(yamlJsonObject);
+        if (yamlString !== undefined && Object.keys(yamlJsonObject).length && yamlString !== yamlCode) storeSetYamlCode(yamlString);
       }
     },
-    [mode, onParseCodeToJson, storeSetYamlCode, yamlCode, yamlJsonObject],
+    [mode, onParseCodeToJson, serializeDocument, storeSetYamlCode, yamlCode, yamlJsonObject],
   );
 
   const onAddNode = useCallback((type: PipelineNodeType) => {
@@ -323,9 +323,8 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
 
   useEffect(() => {
     const nodes = (yamlJsonObject as { readonly nodes?: readonly { readonly decision?: unknown }[] }).nodes;
-    if (nodes?.find((node) => node.decision)) {
-      onParseCodeToJson(dumpYaml(yamlJsonObject));
-    }
+    const yamlString = nodes?.find((node) => node.decision) ? serializeDocument(yamlJsonObject) : undefined;
+    if (yamlString !== undefined) onParseCodeToJson(yamlString);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [yamlJsonObject]);
 
@@ -363,6 +362,7 @@ export const EditorPanel = forwardRef<EditorPanelHandle, EditorPanelProps>(funct
           )}
         </Box>
       </Box>
+      <PipelineYamlSerializationAlert error={serializationError} />
       <Box sx={editorContainerSx}>
         <FlowEditorErrorBoundary display={mode}>
           <Suspense fallback={<Box sx={{ flex: 1 }}>Preparing the flow editor...</Box>}>

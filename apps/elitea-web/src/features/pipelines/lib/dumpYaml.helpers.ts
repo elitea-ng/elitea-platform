@@ -115,6 +115,37 @@ function orderYamlMappings(documents: Document[], stateOrder: readonly string[])
   }
 }
 
+function childPath(path: string, key: string, inSequence: boolean): string {
+  if (inSequence) return `${path}[${key}]`;
+  return path ? `${path}.${key}` : key;
+}
+
+function isSameValue(before: unknown, after: unknown): boolean {
+  if (Object.is(before, after)) return true;
+  return before instanceof Date && after instanceof Date && before.getTime() === after.getTime();
+}
+
+function isContainerPair(before: unknown, after: unknown): boolean {
+  if (before === null || after === null || typeof before !== 'object' || typeof after !== 'object') return false;
+  if (before instanceof Date || before instanceof Uint8Array) return false;
+  return Array.isArray(before) === Array.isArray(after);
+}
+
+/** The first path whose value YAML does not carry back (e.g. an `undefined` member), for a readable refusal. */
+function firstChangedPath(before: unknown, after: unknown, path: string): string | undefined {
+  if (isSameValue(before, after)) return undefined;
+  if (!isContainerPair(before, after)) return path || 'the document';
+  const left = before as Record<string, unknown>;
+  const right = after as Record<string, unknown>;
+  for (const key of new Set([...Object.keys(left), ...Object.keys(right)])) {
+    const next = childPath(path, key, Array.isArray(before));
+    if (Object.hasOwn(left, key) !== Object.hasOwn(right, key)) return next;
+    const found = firstChangedPath(left[key], right[key], next);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 /** Serialize an instruction edit. Keep original text when its contract is unchanged. */
 export function serializePipelineYaml(data: unknown, options: DumpYamlOptions = {}): string {
   const originalOrder = options.originalYaml === undefined ? [] : readPipelineStateOrder(options.originalYaml);
@@ -129,18 +160,33 @@ export function serializePipelineYaml(data: unknown, options: DumpYamlOptions = 
     lineWidth: -1,
     transform: (documents) => orderYamlMappings(documents, stateOrder),
   });
-  if (fingerprint !== pipelineValueFingerprint(load(result), readPipelineStateOrder(result))) {
-    throw new Error('Pipeline YAML serialization changed its contract');
+  const reloaded = load(result);
+  if (fingerprint !== pipelineValueFingerprint(reloaded, readPipelineStateOrder(result))) {
+    const path = firstChangedPath(data, reloaded, '');
+    throw new Error(
+      path === undefined
+        ? 'Pipeline YAML serialization changed its contract: the state declaration order'
+        : `Pipeline YAML serialization changed its contract: ${path} has no YAML form`,
+    );
   }
   return result;
 }
 
-/** Keep the existing non-throwing API. Use the strict serializer for editor writes. */
-export function dumpYaml(data: unknown, options: DumpYamlOptions = {}): string {
+export type PipelineYamlSerialization =
+  | { readonly yaml: string; readonly error?: undefined }
+  | { readonly yaml?: undefined; readonly error: string };
+
+/** The strict serializer as a value: a refusal is reported, never written as YAML text. Use it for editor writes. */
+export function trySerializePipelineYaml(data: unknown, options: DumpYamlOptions = {}): PipelineYamlSerialization {
   try {
-    return serializePipelineYaml(reorderNodeKeys(data), options);
+    return { yaml: serializePipelineYaml(reorderNodeKeys(data), options) };
   } catch (caught) {
-    const message = caught instanceof Error ? caught.message : String(caught);
-    return `Error dumping YAML: ${message}`;
+    return { error: caught instanceof Error ? caught.message : String(caught) };
   }
+}
+
+/** Keep the existing non-throwing API for comparisons. Its error string is not YAML: never store it as the document. */
+export function dumpYaml(data: unknown, options: DumpYamlOptions = {}): string {
+  const result = trySerializePipelineYaml(data, options);
+  return result.error === undefined ? result.yaml : `Error dumping YAML: ${result.error}`;
 }
