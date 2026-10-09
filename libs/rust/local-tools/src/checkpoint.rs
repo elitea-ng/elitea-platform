@@ -408,8 +408,23 @@ impl Checkpoints {
     /// An unknown checkpoint, git failures, or I/O.
     pub fn restore(&self, seq: u64) -> ToolResult<RestoreReport> {
         match self {
-            Self::Git(git) => git.restore(seq, None),
-            Self::Copy(copy) => copy.restore(seq, None),
+            Self::Git(git) => git.restore(seq, None, false),
+            Self::Copy(copy) => copy.restore(seq, None, false),
+        }
+    }
+
+    /// What [`Self::restore`] would do now, without doing it: the files it
+    /// would write back and those it would delete. The workspace is not
+    /// touched (a git checkpoint store may gain the objects of a snapshot
+    /// of now, as a restore would).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::restore`].
+    pub fn preview(&self, seq: u64) -> ToolResult<RestoreReport> {
+        match self {
+            Self::Git(git) => git.restore(seq, None, true),
+            Self::Copy(copy) => copy.restore(seq, None, true),
         }
     }
 
@@ -421,8 +436,8 @@ impl Checkpoints {
     /// As [`Self::restore`].
     pub fn restore_file(&self, seq: u64, path: &WsPath) -> ToolResult<RestoreReport> {
         match self {
-            Self::Git(git) => git.restore(seq, Some(path)),
-            Self::Copy(copy) => copy.restore(seq, Some(path)),
+            Self::Git(git) => git.restore(seq, Some(path), false),
+            Self::Copy(copy) => copy.restore(seq, Some(path), false),
         }
     }
 }
@@ -764,7 +779,14 @@ impl GitCheckpoints {
             .join("/")
     }
 
-    fn restore(&self, seq: u64, only: Option<&WsPath>) -> ToolResult<RestoreReport> {
+    /// What restoring checkpoint `seq` (within `only`) changes: the
+    /// checkpoint's commit, the top-relative paths to write back and those
+    /// to delete (the ones its ignore rules ignored left out).
+    fn restore_plan(
+        &self,
+        seq: u64,
+        only: Option<&WsPath>,
+    ) -> ToolResult<(String, Vec<String>, Vec<String>)> {
         let commit = self
             .repo
             .git(self.top())
@@ -822,7 +844,27 @@ impl GitCheckpoints {
         });
         delete.retain(|path| !ignores.ignores(path));
         drop(ignores);
+        Ok((commit, write_back, delete))
+    }
+
+    fn restore(&self, seq: u64, only: Option<&WsPath>, dry_run: bool) -> ToolResult<RestoreReport> {
+        let (commit, write_back, delete) = self.restore_plan(seq, only)?;
         let mut report = RestoreReport::default();
+        if dry_run {
+            for path in delete {
+                if let Some(ws_path) = self.in_workspace(&path)
+                    && self.restorer.stat(&ws_path)?.is_some()
+                {
+                    report.deleted.push(ws_path.display_string());
+                }
+            }
+            report.restored = write_back
+                .iter()
+                .filter_map(|path| self.in_workspace(path))
+                .map(|path| path.display_string())
+                .collect();
+            return Ok(report);
+        }
         for path in delete {
             if let Some(ws_path) = self.in_workspace(&path)
                 && self.restorer.remove_file(&ws_path)?
@@ -1107,7 +1149,7 @@ impl CopyCheckpoints {
         Ok(())
     }
 
-    fn restore(&self, seq: u64, only: Option<&WsPath>) -> ToolResult<RestoreReport> {
+    fn restore(&self, seq: u64, only: Option<&WsPath>, dry_run: bool) -> ToolResult<RestoreReport> {
         let _lock = self.lock()?;
         let manifest = self.read_manifest(seq)?;
         let in_scope = |path: &str| only.is_none_or(|only| only.display_string() == path);
@@ -1124,7 +1166,7 @@ impl CopyCheckpoints {
                 && !manifest.files.contains_key(&name)
                 && !manifest.skipped.contains(&name)
                 && !ignores.ignores(&name)
-                && self.restorer.remove_file(&path)?
+                && (dry_run || self.restorer.remove_file(&path)?)
             {
                 report.deleted.push(name);
             }
@@ -1135,7 +1177,9 @@ impl CopyCheckpoints {
                 continue;
             }
             let path = WsPath::from_relative(Path::new(name))?;
-            self.unlink_links_on(&path, &mut report)?;
+            if !dry_run {
+                self.unlink_links_on(&path, &mut report)?;
+            }
             let unchanged = self
                 .restorer
                 .read(&path, MAX_COPY_FILE_BYTES)
@@ -1144,6 +1188,10 @@ impl CopyCheckpoints {
                     read.mode == file.mode && hex(&read.stamp.sha256) == file.sha256
                 });
             if unchanged {
+                continue;
+            }
+            if dry_run {
+                report.restored.push(name.clone());
                 continue;
             }
             let bytes = std::fs::read(self.objects.join(&file.sha256)).map_err(|_| {
@@ -1313,6 +1361,66 @@ mod tests {
         let other = Checkpoints::open(&workspace, "s2", data.path()).expect("other");
         assert!(other.list().expect("list").is_empty());
         assert!(other.restore(1).is_err());
+    }
+
+    /// Every file under `root` (but `.git`) with its content.
+    fn snapshot(root: &Path) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).expect("read dir") {
+                let path = entry.expect("entry").path();
+                if path.file_name().is_some_and(|name| name == ".git") {
+                    continue;
+                }
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let name = path.strip_prefix(root).expect("inside");
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    out.push((name.to_string_lossy().into_owned(), text));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn a_preview_names_what_a_restore_would_change_and_changes_nothing() {
+        for in_git in [true, false] {
+            let dir = tempfile::tempdir().expect("dir");
+            let root = dir.path().join("folder");
+            std::fs::create_dir_all(&root).expect("folder");
+            if in_git {
+                git(&root, &["init", "-q"]);
+            }
+            std::fs::write(root.join("kept.txt"), "k\n").expect("kept");
+            std::fs::write(root.join("edited.txt"), "before\n").expect("edited");
+            std::fs::write(root.join("removed.txt"), "r\n").expect("removed");
+            let workspace = Workspace::open(&root, &[]).expect("workspace");
+            let data = tempfile::tempdir().expect("data");
+            let checkpoints = Checkpoints::open(&workspace, "s", data.path()).expect("open");
+            assert_eq!(checkpoints.kind(), if in_git { "git" } else { "copy" });
+            checkpoints.create("before").expect("create");
+            std::fs::write(root.join("edited.txt"), "after\n").expect("edit");
+            std::fs::remove_file(root.join("removed.txt")).expect("remove");
+            std::fs::write(root.join("created.txt"), "c\n").expect("create");
+
+            let before = snapshot(&root);
+            let mut preview = checkpoints.preview(1).expect("preview");
+            assert_eq!(snapshot(&root), before, "a preview writes nothing");
+            preview.restored.sort();
+            assert_eq!(
+                preview.restored,
+                ["edited.txt", "removed.txt"],
+                "git: {in_git}"
+            );
+            assert_eq!(preview.deleted, ["created.txt"], "git: {in_git}");
+            let mut done = checkpoints.restore(1).expect("restore");
+            done.restored.sort();
+            assert_eq!(done, preview, "the restore did what it said, git: {in_git}");
+        }
     }
 
     #[test]

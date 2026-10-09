@@ -13,11 +13,13 @@
     "windows": [],
     "withGlobalTauri": false,
     "security": {
+      "dangerousDisableAssetCspModification": ["style-src"],
       "csp": {
         "default-src": "'self'",
         "script-src": "'self'",
         "style-src": "'self' 'unsafe-inline'",
-        "img-src": "'self' data: blob: https:",
+        "img-src": "'self' data: blob:",
+        "media-src": "'self' data: blob:",
         "font-src": "'self' data: https:",
         "connect-src": "ipc: http://ipc.localhost",
         "object-src": "'none'",

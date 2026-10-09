@@ -15,6 +15,7 @@ import { SimpleSearchBar } from '@/shared/ui/SimpleSearchBar';
 import { NewFolderIcon } from '@/shared/ui/icons/new-folder-icon';
 
 import { ConversationSearchButton } from './ConversationSearchButton';
+import { LocalWorkFilterButton, type LocalWorkFilterButtonProps } from './LocalWorkFilterButton';
 import { conversationsStyles, createFolderButtonSx, menuIconStyle, newFolderIconFill } from './Conversations.styles';
 
 /**
@@ -37,6 +38,8 @@ export interface ConversationsHeaderProps {
   readonly searchQuery: string;
   readonly onSearchChange: (value: string) => void;
   readonly onSearchClear: () => void;
+  /** The "Local work" filter toggle; absent hides it. */
+  readonly localWork?: LocalWorkFilterButtonProps | undefined;
 }
 
 /** The `collapsed && !isSmallWindow` narrow-rail toolbar (`Conversations.jsx:591-643`) — extracted to its own function purely to keep `ConversationsHeader`'s own complexity under the §3.5 budget. */
@@ -102,7 +105,7 @@ function HeaderSearchBar(props: { readonly searchQuery: string; readonly onSearc
 }
 
 export function ConversationsHeader(props: ConversationsHeaderProps): ReactNode {
-  const { collapsed, isSmallWindow, hasFolderCreatePermission, onCreateFolderExpanded, onCreateFolderCollapsed, onCollapsedToggle, onSearchActivate, isSearchActive, searchQuery, onSearchChange, onSearchClear } = props;
+  const { collapsed, isSmallWindow, hasFolderCreatePermission, onCreateFolderExpanded, onCreateFolderCollapsed, onCollapsedToggle, onSearchActivate, isSearchActive, searchQuery, onSearchChange, onSearchClear, localWork } = props;
   const theme = useTheme();
   const createFolderLabel = t('features.chatConversationList.conversations.createFolder', 'Create folder');
   const showExpandedControls = !collapsed || isSmallWindow;
@@ -121,7 +124,7 @@ export function ConversationsHeader(props: ConversationsHeaderProps): ReactNode 
         }}
       >
         <Box sx={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: theme.spacing(1) }}>
-          {showExpandedControls && <Typography variant="subtitle">{t('features.chatConversationList.conversations.title', 'Chats')}</Typography>}
+          {showExpandedControls && <Typography variant="subtitle">{headerTitle(localWork)}</Typography>}
           {showExpandedControls && (
             <>
               <Tooltip
@@ -149,6 +152,7 @@ export function ConversationsHeader(props: ConversationsHeaderProps): ReactNode 
                 onExpand={onCollapsedToggle}
                 onSearchActivate={onSearchActivate}
               />
+              <LocalWorkFilterButton localWork={localWork} />
             </>
           )}
         </Box>
@@ -183,6 +187,13 @@ export function ConversationsHeader(props: ConversationsHeaderProps): ReactNode 
       )}
     </>
   );
+}
+
+/** "Local work" while the filter is on, so the rail says which listing it shows. */
+function headerTitle(localWork: LocalWorkFilterButtonProps | undefined): string {
+  return localWork?.on === true
+    ? t('features.chatConversationList.localWork.filter', 'Local work')
+    : t('features.chatConversationList.conversations.title', 'Chats');
 }
 
 const collapseIconSx = (theme: Theme) => ({ color: theme.vars.palette.icon.fill.default });

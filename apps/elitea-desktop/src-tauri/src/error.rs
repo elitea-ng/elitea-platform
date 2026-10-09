@@ -34,8 +34,8 @@ pub enum HostError {
     UpgradeRequired,
     #[error("the device session was revoked")]
     DeviceRevoked,
-    #[error("could not use the system keychain: {0}")]
-    Keychain(String),
+    #[error("could not use the stored sign-in: {0}")]
+    Credentials(String),
     #[error("could not read or write the app's settings: {0}")]
     Storage(String),
     #[error("could not open the system browser")]

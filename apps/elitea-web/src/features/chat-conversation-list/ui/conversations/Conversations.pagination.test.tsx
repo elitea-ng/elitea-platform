@@ -209,3 +209,25 @@ describe('Conversations — the rail really asks for a second page (issue 852)',
     expect(requested).toEqual([]);
   });
 });
+
+// The "Local work" filter pages the listing it shows: a next page asked for
+// without `source` would be a page of the ordinary rail.
+describe('Conversations — paging under the Local work filter', () => {
+  it.each([
+    { localWorkOnly: true, source: 'local_work' },
+    { localWorkOnly: false, source: null },
+  ])('sends source=$source when localWorkOnly=$localWorkOnly', async ({ localWorkOnly, source }) => {
+    const requested: string[] = [];
+    server.use(
+      http.get('*/elitea_core/folder/prompt_lib/:projectId', ({ request }) => {
+        requested.push(request.url);
+        return HttpResponse.json({ date_group: 'Today', total: 5, limit: 10, offset: 2, conversations: [] });
+      }),
+    );
+
+    renderConversations({ localWorkOnly, onLocalWorkOnlyChange: vi.fn() });
+
+    await waitFor(() => expect(requested).toHaveLength(1));
+    expect(new URL(requested[0] ?? '', window.location.origin).searchParams.get('source')).toBe(source);
+  });
+});

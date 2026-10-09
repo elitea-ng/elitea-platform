@@ -51,6 +51,7 @@ function toConversation(ref: FolderConversationRef): Conversation {
     ...(ref.updatedAt !== undefined ? { updatedAt: ref.updatedAt } : {}),
     ...(ref.createdAt !== undefined ? { createdAt: ref.createdAt } : {}),
     ...(ref.isPlayback !== undefined ? { isPlayback: ref.isPlayback } : {}),
+    ...(ref.source !== undefined ? { source: ref.source } : {}),
   };
 }
 

@@ -17,6 +17,15 @@ on:
   pull_request:
     paths:
       - "apps/elitea-desktop/**"
+      # The host links the shared runtime, the local tools and the /llm
+      # contract (ADR-0029 D0), and their path dependencies.
+      - "libs/rust/agent-runtime/**"
+      - "libs/rust/local-tools/**"
+      - "libs/rust/llm-wire/**"
+      - "libs/rust/content-source/**"
+      - "libs/rust/doc-extract/**"
+      - "libs/rust/vendor/adk-agent/**"
+      - "libs/rust/vendor/adk-runner/**"
       - "apps/elitea-web/src/**"
       - "apps/elitea-web/vite.config.ts"
       - "apps/elitea-web/package.json"
@@ -27,6 +36,15 @@ on:
       - main
     paths:
       - "apps/elitea-desktop/**"
+      # The host links the shared runtime, the local tools and the /llm
+      # contract (ADR-0029 D0), and their path dependencies.
+      - "libs/rust/agent-runtime/**"
+      - "libs/rust/local-tools/**"
+      - "libs/rust/llm-wire/**"
+      - "libs/rust/content-source/**"
+      - "libs/rust/doc-extract/**"
+      - "libs/rust/vendor/adk-agent/**"
+      - "libs/rust/vendor/adk-runner/**"
       - "apps/elitea-web/src/**"
       - "apps/elitea-web/vite.config.ts"
       - "apps/elitea-web/package.json"

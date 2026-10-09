@@ -274,3 +274,57 @@ func TestGroupedListingPagesAFolderAndReportsTheRemainder(t *testing.T) {
 		t.Fatalf("the folder's second page: total=%d rows=%d, want 14/4", page.Total, len(page.Conversations))
 	}
 }
+
+// LOCAL WORK THREADS stay off the ordinary rail. They are left out in the SQL,
+// so a bucket's `total` does not count rows the page will never carry; the
+// rail's "Local work" filter (`source=local_work`) lists them alone, and a
+// search finds them alongside everything else, each row naming its source.
+func TestGroupedListingKeepsLocalWorkThreadsBehindTheirFilter(t *testing.T) {
+	pool := newPinnedListingPool(t)
+	ids := seedTodayConversations(t, pool, "autotest_lw", 3)
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE p_1.chat_conversations SET source = 'local_work' WHERE id = $1`, ids[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	today := bucketNamed(t, readPagedListing(t, pool, nil, "?grouped=true").DateGroups, "Today")
+	if len(today.Conversations) != 2 || today.Total != 2 {
+		t.Fatalf("default rail: rows=%d total=%d, want the 2 ordinary chats", len(today.Conversations), today.Total)
+	}
+	for _, c := range today.Conversations {
+		if c.ID == ids[0] {
+			t.Fatalf("the local work thread %d is on the default rail", c.ID)
+		}
+	}
+
+	page := readPagedPage(t, pool, nil, "?grouped=true&date_group=Today&limit=10&offset=0")
+	if page.Total != 2 {
+		t.Errorf("the date-group page reports total=%d, want 2", page.Total)
+	}
+
+	local := bucketNamed(t, readPagedListing(t, pool, nil, "?grouped=true&source=local_work").DateGroups, "Today")
+	if len(local.Conversations) != 1 || local.Conversations[0].ID != ids[0] || local.Total != 1 {
+		t.Fatalf("source=local_work: %+v, want the local work thread alone", local)
+	}
+
+	var searched struct {
+		DateGroups []struct {
+			Conversations []struct {
+				ID     int    `json:"id"`
+				Source string `json:"source"`
+			} `json:"conversations"`
+		} `json:"date_groups"`
+	}
+	if err := json.Unmarshal(callFolders(t, pool, nil, "?grouped=true&query=autotest_lw"), &searched); err != nil {
+		t.Fatal(err)
+	}
+	sources := map[int]string{}
+	for _, group := range searched.DateGroups {
+		for _, c := range group.Conversations {
+			sources[c.ID] = c.Source
+		}
+	}
+	if len(sources) != 3 || sources[ids[0]] != "local_work" || sources[ids[1]] != "elitea" {
+		t.Fatalf("a search found %v, want all 3 with the local work thread marked", sources)
+	}
+}

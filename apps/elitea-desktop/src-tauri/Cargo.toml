@@ -27,19 +27,65 @@ base64 = "0.22"
 rand = "0.9"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync"] }
 # Same major as tauri-plugin-http, so the lockfile carries one HTTP stack.
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+tauri-plugin-dialog = "2"
+# Turn notifications when the window is not focused (src/attention.rs);
+# Rust-side only, no webview permission is granted.
+tauri-plugin-notification = "2"
+async-trait = "0.1.92"
+futures = { version = "0.3.34", default-features = false, features = ["std", "async-await"] }
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+uuid = { version = "1", features = ["v4"] }
+similar = { version = "2", default-features = false, features = ["text"] }
+shlex = "2"
+# The D0 local agent turn (ADR-0029, src/d0): the shared runtime's host
+# interface and instruction authority, the local tool family, and the /llm
+# caller contract. Deliberately NOT model-client, adk-gateway, engine-core or
+# any other crate that turns on serde_json `preserve_order` (decision 2; the
+# `serde_json_preserve_order_is_off` test asserts it).
+elitea-agent-runtime = { path = "../../../libs/rust/agent-runtime" }
+elitea-local-tools = { path = "../../../libs/rust/local-tools" }
+elitea-llm-wire = { path = "../../../libs/rust/llm-wire" }
+# Tilde, like the runtime: adk breaks its API between minors. adk-agent and
+# adk-runner are PATCHED (below); the runtime refuses to compile without it.
+adk-agent = { version = "~2.2.0", default-features = false }
+adk-core = { version = "~2.2.0", default-features = false }
+adk-runner = { version = "~2.2.0", default-features = false, features = ["context-compaction"] }
+adk-session = { version = "~2.2.0", default-features = false }
+adk-tool = { version = "~2.2.0", default-features = false }
+tauri-plugin-log = "2"
+log = "0.4"
+# The local thread history (src/history.rs). `bundled`: the SQLite the app
+# ships with, not whatever the OS has; the same libsqlite3-sys line sqlx
+# already pins in libs/rust.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"
+# Window size, position and maximized state across launches (src/window.rs).
+tauri-plugin-window-state = "2"
 
+# The app's own preferences domain (src/window.rs: the input-source
+# indicator). Already in the tree through tauri/tao; safe bindings only.
 [target.'cfg(target_os = "macos")'.dependencies]
-keyring = { version = "3.6", features = ["apple-native"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSUserDefaults"] }
 
-[target.'cfg(target_os = "windows")'.dependencies]
-keyring = { version = "3.6", features = ["windows-native"] }
+# The credentials file's owner check (geteuid) and O_NOFOLLOW, without
+# `unsafe` (src/credentials_file.rs). Already in the tree through tauri.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs", "process"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3.6", features = ["sync-secret-service"] }
+[dev-dependencies]
+tempfile = "3"
+# The opener plugin's own matcher, so the capability's URL globs are tested as the plugin reads them.
+glob = "0.3"
+
+# The runtime's patched-adk guard (libs/rust/agent-runtime/src/lib.rs) needs
+# the same patches every workspace that links it applies
+# (libs/rust/vendor/README.md).
+[patch.crates-io]
+adk-agent = { path = "../../../libs/rust/vendor/adk-agent" }
+adk-runner = { path = "../../../libs/rust/vendor/adk-runner" }
 
 [lints.rust]
 unsafe_code = "forbid"

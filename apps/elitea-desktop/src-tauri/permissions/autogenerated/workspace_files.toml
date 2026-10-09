@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-workspace-files"
+description = "Enables the workspace_files command without any pre-configured scope."
+commands.allow = ["workspace_files"]
+
+[[permission]]
+identifier = "deny-workspace-files"
+description = "Denies the workspace_files command without any pre-configured scope."
+commands.deny = ["workspace_files"]

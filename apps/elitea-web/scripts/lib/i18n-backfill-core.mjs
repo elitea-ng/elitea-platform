@@ -193,3 +193,76 @@ export function planBackfill(existingEn, allEntries) {
 
   return { toAdd, conflicts, drifted };
 }
+
+/*
+ * The desktop catalogue split (ADR-0029). The default web app ships
+ * `src/shared/i18n/en.json` in its initial chunk; strings only the desktop
+ * build renders live in `src/entries/desktop/i18n/en.desktop.json`, which only
+ * the desktop entry registers (`registerDesktopCatalogue.ts`). Which catalogue
+ * a key belongs to follows from WHERE it is called: a key every call site of
+ * which is in a desktop-only module is a desktop key.
+ */
+
+/** Modules that only the `desktop` build reaches. `desktopEntry.tsx` is the door the web build also ships (its notice is web copy). */
+const DESKTOP_ONLY_PREFIXES = [
+  'src/entries/desktop/',
+  'src/features/workspace/',
+  'src/pages/workspace/',
+  'src/shared/desktop/',
+  'src/widgets/desktop-shell/',
+];
+const DESKTOP_SHARED_EXCEPTIONS = new Set(['src/pages/workspace/desktopEntry.tsx']);
+
+export function isDesktopOnlyPath(filename) {
+  const path = filename.replaceAll('\\', '/');
+  if (DESKTOP_SHARED_EXCEPTIONS.has(path)) return false;
+  return DESKTOP_ONLY_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+function sitesByKey(allEntries) {
+  const byKey = new Map();
+  for (const entry of allEntries) {
+    const sites = byKey.get(entry.key) ?? [];
+    sites.push({ filename: entry.filename, line: entry.line });
+    byKey.set(entry.key, sites);
+  }
+  return byKey;
+}
+
+/**
+ * Where every key belongs, against where it is shipped:
+ *   - `toDesktop`: in the shared catalogue, but called only from desktop-only
+ *     modules — it costs the web app's initial chunk for nothing;
+ *   - `toShared`: in the desktop catalogue, but called from a module the web
+ *     build ships — the web app would render the fallback and warn;
+ *   - `duplicated`: in both catalogues (the desktop one would silently win).
+ * A key with no call site at all is left alone here (not this check's job).
+ */
+export function planCatalogueSplit(sharedEn, desktopEn, allEntries) {
+  const byKey = sitesByKey(allEntries);
+  const toDesktop = [];
+  const toShared = [];
+  for (const [key, sites] of byKey) {
+    const desktopOnly = sites.every((site) => isDesktopOnlyPath(site.filename));
+    if (desktopOnly && Object.hasOwn(sharedEn, key) && !Object.hasOwn(desktopEn, key)) toDesktop.push({ key, sites });
+    if (!desktopOnly && Object.hasOwn(desktopEn, key)) {
+      toShared.push({ key, sites: sites.filter((site) => !isDesktopOnlyPath(site.filename)) });
+    }
+  }
+  const duplicated = Object.keys(desktopEn).filter((key) => Object.hasOwn(sharedEn, key));
+  return { toDesktop, toShared, duplicated };
+}
+
+/** Splits `planBackfill`'s `toAdd` by catalogue: a new key called only from desktop-only modules goes to the desktop one. */
+export function routeNewKeys(toAdd, allEntries) {
+  const byKey = sitesByKey(allEntries);
+  const shared = {};
+  const desktop = {};
+  for (const [key, fallback] of Object.entries(toAdd)) {
+    const sites = byKey.get(key) ?? [];
+    const desktopOnly = sites.length > 0 && sites.every((site) => isDesktopOnlyPath(site.filename));
+    if (desktopOnly) desktop[key] = fallback;
+    else shared[key] = fallback;
+  }
+  return { shared, desktop };
+}

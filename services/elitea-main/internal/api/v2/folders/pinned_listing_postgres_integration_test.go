@@ -107,6 +107,7 @@ CREATE TABLE p_1.chat_conversations (
     author_id integer NOT NULL,
     folder_id integer,
     meta jsonb NOT NULL DEFAULT '{}'::jsonb,
+    source varchar(64) NOT NULL DEFAULT 'elitea',
     created_at timestamp NOT NULL DEFAULT now(),
     updated_at timestamp,
     -- tenant/0144: a conversation pin stamps sync_at (client contract 1.4).

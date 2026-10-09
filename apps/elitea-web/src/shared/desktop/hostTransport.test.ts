@@ -19,7 +19,7 @@ function bridge(overrides: Partial<Calls> = {}): HostBridge & { calls: Calls } {
     signOut: vi.fn<HostBridge['signOut']>().mockResolvedValue(),
     ...overrides,
   };
-  return { state: vi.fn(), connect: vi.fn(), signIn: vi.fn(), openExternal: vi.fn(), ...calls, calls };
+  return { state: vi.fn(), connect: vi.fn(), signIn: vi.fn(), cancelSignIn: vi.fn(), openExternal: vi.fn(), ...calls, calls };
 }
 
 function make(b: HostBridge, now = () => 1_000_000) {
@@ -135,6 +135,15 @@ describe('createHostTransport', () => {
     expect(b.calls.wipe).toHaveBeenCalledTimes(1);
   });
 
+  it('a refresh_failed end goes through the host sign-out (revoke), never a bare wipe', async () => {
+    const b = bridge();
+    const { transport, onSignedOut } = make(b);
+    transport.signOut('refresh_failed');
+    await vi.waitFor(() => expect(onSignedOut).toHaveBeenCalledWith('refresh_failed'));
+    expect(b.calls.signOut).toHaveBeenCalledTimes(1);
+    expect(b.calls.wipe).not.toHaveBeenCalled();
+  });
+
   it('logout revokes through the host, clears local data, then reports', async () => {
     const b = bridge();
     const order: string[] = [];
@@ -157,7 +166,7 @@ describe('createHostTransport', () => {
 
   it('logout still returns to the sign-in screen when the host call fails', async () => {
     const b = bridge();
-    b.calls.signOut.mockRejectedValue('keychain locked');
+    b.calls.signOut.mockRejectedValue('credentials file locked');
     const { transport, onSignedOut } = make(b);
     await transport.logout?.();
     expect(onSignedOut).toHaveBeenCalledWith('logout');

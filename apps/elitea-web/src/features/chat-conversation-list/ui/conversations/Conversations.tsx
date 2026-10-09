@@ -7,6 +7,7 @@ import { useTheme } from '@mui/material/styles';
 
 import { conversationApi, type Conversation } from '@/entities/conversation';
 import { folderApi } from '@/entities/folder';
+import { LOCAL_WORK_SOURCE } from '@/shared/lib/localWork';
 import { PERMISSIONS } from '@/shared/lib/permissions';
 
 import { conversationExportErrorMessage, conversationListErrorMessage } from '../../lib/errorMessage';
@@ -92,6 +93,8 @@ export function Conversations(props: ConversationsProps): ReactNode {
     toastError,
     onReorderFolders,
     onSearchQueryChange,
+    localWorkOnly = false,
+    onLocalWorkOnlyChange,
     projectId,
     currentUserId,
     personalProjectId,
@@ -115,6 +118,8 @@ export function Conversations(props: ConversationsProps): ReactNode {
   const [hoveredFolderId, setHoveredFolderId] = useState<string | null>(null);
 
   const isSearchMode = searchQuery.trim() !== '';
+  // The load-more pages must page the same listing (order, Local work filter) the first page came from.
+  const pageQuery = useMemo(() => ({ sort_by: sortBy, sort_order: sortOrder, ...(localWorkOnly ? { source: LOCAL_WORK_SOURCE } : {}) }), [sortBy, sortOrder, localWorkOnly]);
 
   const handleSearchClear = useCallback(() => {
     setSearchQuery('');
@@ -145,7 +150,7 @@ export function Conversations(props: ConversationsProps): ReactNode {
       setLoadingGroups((prev) => new Set(prev).add(groupName));
       try {
         const pinnedIds = new Set(pinnedConversations.map((c) => c.id));
-        const page = await folderApi.conversationsByDateGroup({ projectId, dateGroup: groupName, limit: 10, offset: group.offset ?? group.conversations.length, sort_by: sortBy, sort_order: sortOrder });
+        const page = await folderApi.conversationsByDateGroup({ projectId, dateGroup: groupName, limit: 10, offset: group.offset ?? group.conversations.length, ...pageQuery });
         setDateGroups((prev) => prev.map((g) => (g.name === groupName ? { ...g, ...mergeLoadMorePage(g, page, pinnedIds) } : g)));
       } catch (caught) {
         toastError(conversationListErrorMessage(caught));
@@ -157,7 +162,7 @@ export function Conversations(props: ConversationsProps): ReactNode {
         });
       }
     },
-    [dateGroups, loadingGroups, pinnedConversations, projectId, setDateGroups, sortBy, sortOrder, toastError],
+    [dateGroups, loadingGroups, pinnedConversations, projectId, setDateGroups, pageQuery, toastError],
   );
 
   const onLoadMoreInFolder = useCallback(
@@ -169,7 +174,7 @@ export function Conversations(props: ConversationsProps): ReactNode {
       setLoadingFolders((prev) => new Set(prev).add(folderId));
       try {
         const pinnedIds = new Set(pinnedConversations.map((c) => c.id));
-        const page = await folderApi.conversationsByFolder({ projectId, folderId, limit: 10, offset: folder.offset ?? folder.conversations.length, sort_by: sortBy, sort_order: sortOrder });
+        const page = await folderApi.conversationsByFolder({ projectId, folderId, limit: 10, offset: folder.offset ?? folder.conversations.length, ...pageQuery });
         setFolders((prev) => prev.map((f) => (f.id === folderId ? { ...f, ...mergeLoadMorePage(f, page, pinnedIds) } : f)));
       } catch (caught) {
         toastError(conversationListErrorMessage(caught));
@@ -181,7 +186,7 @@ export function Conversations(props: ConversationsProps): ReactNode {
         });
       }
     },
-    [folders, loadingFolders, pinnedConversations, projectId, setFolders, sortBy, sortOrder, toastError],
+    [folders, loadingFolders, pinnedConversations, projectId, setFolders, pageQuery, toastError],
   );
 
   // `exactOptionalPropertyTypes` forbids `onReorderFolders`/`toastSuccess` being
@@ -322,6 +327,7 @@ export function Conversations(props: ConversationsProps): ReactNode {
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
           onSearchClear={handleSearchClear}
+          localWork={onLocalWorkOnlyChange ? { on: localWorkOnly, onChange: onLocalWorkOnlyChange } : undefined}
         />
         <ConversationsBody
           listRef={listRef}

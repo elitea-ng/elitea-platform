@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-thread-history"
+description = "Enables the thread_history command without any pre-configured scope."
+commands.allow = ["thread_history"]
+
+[[permission]]
+identifier = "deny-thread-history"
+description = "Denies the thread_history command without any pre-configured scope."
+commands.deny = ["thread_history"]

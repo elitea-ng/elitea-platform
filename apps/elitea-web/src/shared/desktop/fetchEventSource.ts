@@ -14,12 +14,14 @@
  *    signal, and a second automatic retry here would run two streams for one
  *    principal against the server's per-principal admission cap;
  *  - a stream that ends, or a network failure, reconnects by itself after
- *    `retry` (default 3 s) with `Last-Event-ID`: `error` with `CONNECTING`;
+ *    `retry` (default 3 s, a server value floored at 1 s) with
+ *    `Last-Event-ID`: `error` with `CONNECTING`;
  *  - `open` fires when the response headers arrive.
  *
  * Differences by design: a 401 is answered by one token refresh and an
- * immediate retry (the transport owns single-flight); a second 401 signs the
- * session out and fails permanently. Redirects are not followed (the host's
+ * immediate retry (the transport owns single-flight); a second 401 fails the
+ * connection permanently WITHOUT signing out (the refresh just proved the
+ * session alive). Only a refresh that reports `ended` signs out. Redirects are not followed (the host's
  * fetch is given `maxRedirections: 0`; see `entries/desktop/launchApp.tsx`) so
  * a bearer token cannot be forwarded to a host the user did not choose, and a
  * URL off the deployment origin never gets the token at all.
@@ -33,6 +35,8 @@ const OPEN = 1;
 const CLOSED = 2;
 
 const DEFAULT_RETRY_MS = 3000;
+/** Floor for a server-sent `retry:`; `retry: 0` would otherwise reconnect in a tight loop. */
+export const MIN_RETRY_MS = 1000;
 
 type Listener = (event: MessageEvent) => void;
 
@@ -107,7 +111,7 @@ export class FetchEventSource implements EventSourceLike {
 
     if (response.status === 401) {
       void response.body?.cancel();
-      if (refreshed) return this.sessionEnded();
+      if (refreshed) return 'failed';
       const outcome = await transport.refresh(token);
       if (outcome === 'refreshed') return this.connect(true);
       // Not renewable right now: the connection drops and retries like any other.
@@ -169,7 +173,7 @@ export class FetchEventSource implements EventSourceLike {
       );
     }
     this.lastEventId = parser.lastEventId;
-    if (parser.retryMs !== null) this.retryMs = parser.retryMs;
+    if (parser.retryMs !== null) this.retryMs = Math.max(MIN_RETRY_MS, parser.retryMs);
   }
 
   private async run(): Promise<void> {

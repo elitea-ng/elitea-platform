@@ -20,8 +20,8 @@ interface Mocks {
 }
 
 /** Registers a native transport and returns its mocks (held apart so no method is read off the object). */
-function transport(options: Partial<Mocks> & { fetch: typeof fetch; onUpgradeRequired?: () => void }): Mocks {
-  const { fetch: fetchImpl, onUpgradeRequired, ...given } = options;
+function transport(options: Partial<Mocks> & { fetch: typeof fetch; onUpgradeRequired?: () => void; origin?: string }): Mocks {
+  const { fetch: fetchImpl, onUpgradeRequired, origin, ...given } = options;
   const mocks: Mocks = {
     accessToken: vi.fn<NativeTransport['accessToken']>().mockResolvedValue('tok-1'),
     refresh: vi.fn<NativeTransport['refresh']>().mockResolvedValue('refreshed'),
@@ -32,6 +32,7 @@ function transport(options: Partial<Mocks> & { fetch: typeof fetch; onUpgradeReq
     headers: { 'X-Client-Version': '1.2.3' },
     fetch: fetchImpl,
     ...(onUpgradeRequired !== undefined ? { onUpgradeRequired } : {}),
+    ...(origin !== undefined ? { origin } : {}),
     ...mocks,
   });
   return mocks;
@@ -43,6 +44,15 @@ afterEach(() => {
 });
 
 describe('native transport — request shape', () => {
+  it('resolves a page-relative base against the deployment origin, not the page (tauri://) origin', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(json(200, { ok: true }));
+    transport({ fetch: fetchMock, origin: 'https://elitea.example.com' });
+
+    await createHttpClient({ baseUrl: '/' }).get('/auth/info');
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://elitea.example.com/auth/info');
+  });
+
   it('sends the bearer token and client version, omits cookies, refuses redirects, hits the absolute URL', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(json(200, { ok: true }));
     transport({ fetch: fetchMock });
@@ -125,16 +135,25 @@ describe('native transport — 401 handling', () => {
     expect(t.signOut).not.toHaveBeenCalled();
   });
 
-  it('signs out when the replay is refused again (no second refresh)', async () => {
+  it('a replay refused again after a successful refresh is an auth error, NOT a sign-out', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockImplementation(() => Promise.resolve(json(401, {})));
     const t = transport({ fetch: fetchMock });
 
     const result = await createHttpClient({ baseUrl: BASE }).get('/x');
 
-    expect(result.ok).toBe(false);
+    expect(!result.ok && result.error.kind).toBe('auth');
     expect(t.refresh).toHaveBeenCalledTimes(1);
-    expect(t.signOut).toHaveBeenCalledWith('refresh_failed');
+    expect(t.signOut).not.toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('a replay refused with device_revoked still signs out', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(json(401, {})).mockResolvedValueOnce(json(401, { error: 'device_revoked' }));
+    const t = transport({ fetch: fetchMock });
+
+    await createHttpClient({ baseUrl: BASE }).get('/x');
+
+    expect(t.signOut).toHaveBeenCalledWith('device_revoked');
   });
 
   it('device_revoked wipes at once, without a refresh attempt', async () => {

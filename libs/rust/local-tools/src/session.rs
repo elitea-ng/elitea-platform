@@ -521,6 +521,13 @@ impl LocalSession {
         self.turn.lock().ok().and_then(|turn| turn.checkpoint)
     }
 
+    /// Why the current turn changed files without a checkpoint (the folder
+    /// was too large to copy), if it did: such a turn cannot be undone.
+    #[must_use]
+    pub fn turn_checkpoint_skipped(&self) -> Option<String> {
+        self.turn.lock().ok().and_then(|turn| turn.skipped.clone())
+    }
+
     #[must_use]
     pub fn checkpoints(&self) -> &Checkpoints {
         &self.checkpoints
@@ -538,6 +545,16 @@ impl LocalSession {
         let report = report?;
         self.ledger.clear();
         Ok(report)
+    }
+
+    /// What [`Self::restore_checkpoint`] would write back and delete now,
+    /// without changing anything.
+    ///
+    /// # Errors
+    ///
+    /// See [`Checkpoints::preview`].
+    pub fn preview_checkpoint(&self, seq: u64) -> ToolResult<RestoreReport> {
+        self.checkpoints.preview(seq)
     }
 
     /// Undo one file back to checkpoint `seq`.

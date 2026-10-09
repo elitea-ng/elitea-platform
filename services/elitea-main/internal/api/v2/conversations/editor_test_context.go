@@ -11,6 +11,16 @@ import (
 
 const EditorTestSource = "editor_test"
 
+// LocalWorkSource marks a conversation the desktop app's Local work created:
+// its turns run on the person's computer over a local folder and are only
+// committed here (ADR-0029). Like EditorTestSource it is kept apart from
+// ordinary chats: the chat listings leave it out unless `source=local_work`
+// asks for it, and the server-side send / regenerate / continue paths refuse
+// it with 409 `local_work_thread` (the web cannot reach the folder). The
+// desktop's own local turn route does not check it, so threads created
+// before the marker existed keep working.
+const LocalWorkSource = "local_work"
+
 type EditorTestContext struct {
 	Revision             int    `json:"revision"`
 	ActorID              string `json:"actor_id"`

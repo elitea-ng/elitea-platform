@@ -1,0 +1,86 @@
+/**
+ * Creates the server conversation on the first send, exactly the way the
+ * agents page's "Chat with agent" does: the conversation, then the USER and
+ * APPLICATION participants (nothing server-side adds the user on the REST
+ * path, and the agent resolver refuses a conversation without that mapping).
+ *
+ * The conversation is marked as Local work (`source: local_work`), with the
+ * folder's NAME (never its path) in `meta`: web Chats keeps it under its
+ * "Local work" filter and opens it read-only, because only this computer can
+ * continue it.
+ */
+import { useCallback } from 'react';
+
+import { conversationApi } from '@/entities/conversation';
+import { useAddParticipantMutation } from '@/entities/participant';
+import type { SocialAuthorProfile } from '@/shared/api/generated/model';
+import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
+import { unwrapBody } from '@/shared/api/unwrap';
+import { LOCAL_WORK_SOURCE, localWorkMeta } from '@/shared/lib/localWork';
+
+const MAX_NAME = 80;
+
+export interface EnsureConversationInput {
+  projectId: number;
+  /** An existing conversation to reuse; '' creates one. */
+  conversationId: string;
+  /**
+   * `conversationId` was created by an earlier attempt that may have failed
+   * before its participants were added: add them now. Safe to repeat — the
+   * server's add is get-or-create per entity, all-or-nothing per batch.
+   */
+  completeSetup?: boolean;
+  /**
+   * Called with the new conversation's id as soon as it exists, BEFORE the
+   * participants are added, so a caller can retry in it (with
+   * `completeSetup`) instead of creating another one when the add fails.
+   */
+  onCreated?: (conversationId: string) => void;
+  prompt: string;
+  applicationId: number;
+  applicationName: string;
+  versionId: number;
+  agentType: string;
+  /** The workspace folder's display name, recorded on the conversation. */
+  folderName: string;
+}
+
+export function useEnsureConversation(): (input: EnsureConversationInput) => Promise<string> {
+  const { mutateAsync: createConversation } = conversationApi.useCreate();
+  const { mutateAsync: addParticipants } = useAddParticipantMutation();
+  const author = useGetCurrentAuthor();
+  const userId = (unwrapBody(author.data) as SocialAuthorProfile | undefined)?.id;
+
+  return useCallback(
+    async (input) => {
+      if (input.conversationId !== '' && input.completeSetup !== true) return input.conversationId;
+      if (userId === undefined) throw new Error('The signed-in user is not loaded yet.');
+      let id = input.conversationId;
+      if (id === '') {
+        const conversation = await createConversation({
+          projectId: input.projectId,
+          name: input.prompt.trim().slice(0, MAX_NAME) || input.applicationName,
+          is_private: true,
+          source: LOCAL_WORK_SOURCE,
+          meta: localWorkMeta(input.folderName),
+        });
+        id = String(conversation.id);
+        input.onCreated?.(id);
+      }
+      await addParticipants({
+        projectId: input.projectId,
+        conversationId: id,
+        participants: [
+          { entity_name: 'user', entity_meta: { id: Number(userId) } },
+          {
+            entity_name: 'application',
+            entity_meta: { id: input.applicationId, name: input.applicationName, project_id: input.projectId },
+            entity_settings: { version_id: input.versionId, agent_type: input.agentType, variables: [], icon_meta: {} },
+          },
+        ],
+      });
+      return id;
+    },
+    [addParticipants, createConversation, userId],
+  );
+}

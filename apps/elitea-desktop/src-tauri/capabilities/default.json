@@ -1,19 +1,55 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "IPC for the bundled UI window only. No remote origin is listed, so remote content gets no IPC at all. The HTTP plugin's scope is NOT here: it is granted at runtime for the connected deployment's origin only (see http_scope.rs).",
+  "description": "IPC for the bundled UI window only. No remote origin is listed, so remote content gets no IPC at all. The HTTP plugin's scope is NOT here: it is granted at runtime for the connected deployment's origin only (see http_scope.rs). The opener hands only https and loopback http to the system browser (the scope is a glob: `[[]`/`[]]` are literal brackets, and any http URL with userinfo is denied so `http://localhost:x@host` cannot pass as loopback). The webview may listen to (never emit) events: `agent://event` and `app://command` arrive through `plugin:event|listen`, which the ACL refuses without `core:event:allow-listen`. The two window permissions are what `data-tauri-drag-region` needs (drag, double-click to zoom) under the macOS overlay title bar; `core:window:allow-set-theme` lets the UI make the native window (and its sidebar material) follow the app's light/dark mode; `log:allow-log` lets the UI write its errors and diagnostics to the host's log file (it cannot read it); the notification and window-state plugins are driven from Rust and get no webview permission.",
   "windows": ["main"],
   "permissions": [
     "allow-host-state",
     "allow-host-connect",
     "allow-host-sign-in",
+    "allow-host-sign-in-cancel",
     "allow-host-access-token",
     "allow-host-refresh",
     "allow-host-sign-out",
     "allow-host-wipe",
+    "allow-workspace-open",
+    "allow-workspace-list",
+    "allow-workspace-remove",
+    "allow-workspace-bind-project",
+    "allow-workspace-files",
+    "allow-agent-turn-start",
+    "allow-agent-turn-cancel",
+    "allow-agent-turn-status",
+    "allow-approval-respond",
+    "allow-turn-changes",
+    "allow-thread-history",
+    "allow-thread-history-delete",
+    "allow-checkpoint-restore",
+    "allow-checkpoint-preview",
+    "allow-reveal-path",
+    "allow-open-path",
+    "allow-app-platform",
+    "allow-app-ready",
+    "allow-doctor-run",
+    "allow-doctor-fix",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "core:window:allow-set-theme",
+    "log:allow-log",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
+      "allow": [
+        { "url": "https://*" },
+        { "url": "http://localhost:*" },
+        { "url": "http://localhost/*" },
+        { "url": "http://127.0.0.1:*" },
+        { "url": "http://127.0.0.1/*" },
+        { "url": "http://[[]::1[]]:*" },
+        { "url": "http://[[]::1[]]/*" }
+      ],
+      "deny": [{ "url": "http://*@*" }]
     }
   ]
 }

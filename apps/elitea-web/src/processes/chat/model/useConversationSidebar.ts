@@ -33,9 +33,10 @@ import {
 } from '@/features/chat-conversation-list';
 import type { SocialAuthorProfile } from '@/shared/api/generated/model';
 import { useGetCurrentAuthor } from '@/shared/api/generated/social/social';
+import { LOCAL_WORK_SOURCE } from '@/shared/lib/localWork';
 import { useSelectedProject } from '@/widgets/app-shell';
 
-import { chatBasename, draftFolderId } from './conversationSidebar.helpers';
+import { chatBasename, desktopLocalThreadFor, draftFolderId } from './conversationSidebar.helpers';
 import { useDuplicateConversation } from './useDuplicateConversation';
 
 /** What the component needs beyond the `Conversations` prop bundle itself. */
@@ -93,6 +94,7 @@ export function useConversationSidebar(): UseConversationSidebarResult {
   activeFolderRef.current = activeFolder;
   const [collapsed, setCollapsed] = useState(false);
   const [searchQuery, setSearchQuery] = useState<string | undefined>(undefined);
+  const [localWorkOnly, setLocalWorkOnly] = useState(false); // the rail's "Local work" filter
   const [errorMessage, setErrorMessage] = useState<string | undefined>(undefined);
 
   const toastError = useCallback((message: string) => setErrorMessage(message), []);
@@ -120,7 +122,10 @@ export function useConversationSidebar(): UseConversationSidebarResult {
       // a playback is open must LEAVE playback, and the flag's default is
       // stripped from the emitted URL by `__root`'s `stripSearchParams`, so
       // stating it costs nothing in the address bar.
-      void navigate({ to: '/chat/$conversationId', params: { conversationId: conversation.id }, search: { playback: '0' } });
+      const toChat = () => void navigate({ to: '/chat/$conversationId', params: { conversationId: conversation.id }, search: { playback: '0' } });
+      if (conversation.source !== LOCAL_WORK_SOURCE) return toChat();
+      // The desktop opens a Local work thread in its folder (see `desktopLocalThreadFor`).
+      void desktopLocalThreadFor(conversation).then((workspaceId) => (workspaceId === null ? toChat() : void navigate({ to: '/workspaces/$workspaceId', params: { workspaceId }, search: { conversation: conversation.id } })));
     },
     [navigate],
   );
@@ -134,6 +139,7 @@ export function useConversationSidebar(): UseConversationSidebarResult {
     setPinnedConversations,
     onSelectConversation: restoreSelectedConversation,
     ...(searchQuery !== undefined ? { searchQuery } : {}),
+    ...(localWorkOnly ? { source: LOCAL_WORK_SOURCE } : {}),
   });
 
   const { onCreateFolder, onCancelCreateFolder } = useCreateFolder({
@@ -380,6 +386,8 @@ export function useConversationSidebar(): UseConversationSidebarResult {
     toastError,
     onReorderFolders,
     onSearchQueryChange: setSearchQuery,
+    localWorkOnly,
+    onLocalWorkOnlyChange: setLocalWorkOnly,
     isLoadConversations: foldersList.isLoadFolders,
     isFolderOperationInProgress: isFolderUpdate || foldersList.isLoadFolders || foldersList.isLoadMoreFolders,
     basename: chatBasename(),

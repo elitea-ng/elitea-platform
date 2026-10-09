@@ -19,7 +19,7 @@ import type { ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createMemoryHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { http, HttpResponse } from 'msw';
 
@@ -27,9 +27,12 @@ import type { Conversation } from '@/entities/conversation';
 import { configureGeneratedClient, resetGeneratedClient } from '@/shared/api/generated/mutator';
 import { resetConfigForTests } from '@/shared/config/get-config';
 import { server } from '@/test/setup';
+import { recordThread } from '@/features/workspace';
+import { PERMISSIONS } from '@/shared/lib/permissions';
 import { useSelectedProjectStore } from '@/widgets/app-shell';
 
 import { useConversationSidebar } from './useConversationSidebar';
+
 
 const globals = globalThis as unknown as Record<string, unknown>;
 
@@ -840,5 +843,125 @@ describe('useConversationSidebar — pin wrapper', () => {
 
     act(() => result.current.conversationsProps.setDateGroups([{ name: 'Today', conversations: [conversation] }]));
     expect(() => act(() => result.current.conversationsProps.onPinConversation(conversation, true))).not.toThrow();
+  });
+});
+
+/**
+ * The rail's "Local work" filter. Off, the listing is requested without a
+ * `source` (the server then leaves desktop Local work threads out); on, it is
+ * requested with `source=local_work`, which lists them alone.
+ */
+describe('useConversationSidebar — Local work filter', () => {
+  it('asks the listing for Local work threads only while the filter is on', async () => {
+    seedProjectSeven();
+    const sources: (string | null)[] = [];
+    server.use(
+      http.get('/api/v2/auth/permissions/prompt_lib/7', () => HttpResponse.json([{ name: PERMISSIONS.chat.folders.get, enabled: true }])),
+      http.get('/api/v2/elitea_core/folder/prompt_lib/7', ({ request }) => {
+        const source = new URL(request.url).searchParams.get('source');
+        sources.push(source);
+        const rows = source === 'local_work' ? [{ id: 'lw1', name: 'A thread', source: 'local_work', author_id: 1 }] : [{ id: 'c1', name: 'A chat', source: 'elitea', author_id: 1 }];
+        return HttpResponse.json({ pinned: { conversations: [] }, date_groups: [{ name: 'Today', conversations: rows, total: 1, offset: 1 }], folders: [], total_folders: 0 });
+      }),
+    );
+    const { Wrapper } = makeRoutedWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+
+    await waitFor(() => expect(result.current.conversationsProps.dateGroups[0]?.conversations[0]?.id).toBe('c1'));
+    expect(sources).toEqual([null]);
+    expect(result.current.conversationsProps.localWorkOnly).toBe(false);
+
+    act(() => result.current.conversationsProps.onLocalWorkOnlyChange?.(true));
+
+    await waitFor(() => expect(result.current.conversationsProps.dateGroups[0]?.conversations[0]).toMatchObject({ id: 'lw1', source: 'local_work' }));
+    expect(sources).toEqual([null, 'local_work']);
+    expect(result.current.conversationsProps.localWorkOnly).toBe(true);
+  });
+});
+
+/**
+ * A click on a Local work row. The web build opens the read-only chat page;
+ * the desktop build opens the thread in the folder on this computer that ran
+ * it, and falls back to the chat page (where the notice explains) when no
+ * folder here did.
+ */
+describe('useConversationSidebar — opening a Local work thread', () => {
+  function makeDesktopWrapper() {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    let render: () => ReactNode = () => null;
+    const rootRoute = createRootRoute({ component: () => render() });
+    const router = createRouter({
+      routeTree: rootRoute.addChildren([
+        createRoute({ getParentRoute: () => rootRoute, path: '/chat', component: () => null }),
+        createRoute({ getParentRoute: () => rootRoute, path: '/chat/$conversationId', component: () => null }),
+        createRoute({ getParentRoute: () => rootRoute, path: '/workspaces/$workspaceId', component: () => null }),
+      ]),
+      history: createMemoryHistory({ initialEntries: ['/chat'] }),
+    });
+    function Wrapper({ children }: { readonly children: ReactNode }): ReactNode {
+      render = () => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+      return <RouterProvider router={router as never} />;
+    }
+    return { Wrapper, router };
+  }
+  const thread: Conversation = { id: 'lw1', name: 'A thread', isPrivate: true, source: 'local_work' };
+  /** The desktop host, at its invoke seam: one folder, `w1`, and the commands the lookup sends. */
+  const asked: string[] = [];
+  const tauri = globalThis as { __TAURI_INTERNALS__?: unknown };
+
+  beforeEach(() => {
+    tauri.__TAURI_INTERNALS__ = {
+      invoke: (command: string) => {
+        asked.push(command);
+        return Promise.resolve(command === 'workspace_list' ? [{ id: 'w1', path: '/code/app', name: 'app', project_id: 7, is_git: true }] : { turns: [] });
+      },
+      transformCallback: () => 1,
+    };
+  });
+  afterEach(() => {
+    delete tauri.__TAURI_INTERNALS__;
+    asked.length = 0;
+    localStorage.clear();
+  });
+
+  it('opens the thread in its folder in the desktop build', async () => {
+    vi.stubEnv('MODE', 'desktop');
+    seedProjectSeven();
+    recordThread('w1', { id: 'lw1', title: 'A thread', updatedAt: 1 });
+    const { Wrapper, router } = makeDesktopWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onSelectConversation(thread));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/w1'));
+    expect(router.state.location.search).toMatchObject({ conversation: 'lw1' });
+    expect(asked).toContain('workspace_list');
+  });
+
+  it('opens the read-only chat page when no folder on this computer ran it', async () => {
+    vi.stubEnv('MODE', 'desktop');
+    seedProjectSeven();
+    const { Wrapper, router } = makeDesktopWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onSelectConversation(thread));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat/lw1'));
+    expect(asked).toEqual(['workspace_list', 'thread_history']);
+  });
+
+  it('never looks for a folder in the web build', async () => {
+    seedProjectSeven();
+    recordThread('w1', { id: 'lw1', title: 'A thread', updatedAt: 1 });
+    const { Wrapper, router } = makeDesktopWrapper();
+    const { result } = renderHook(() => useConversationSidebar(), { wrapper: Wrapper });
+    await waitFor(() => expect(result.current).not.toBeNull());
+
+    act(() => result.current.conversationsProps.onSelectConversation(thread));
+
+    await waitFor(() => expect(router.state.location.pathname).toBe('/chat/lw1'));
+    expect(asked).toEqual([]);
   });
 });

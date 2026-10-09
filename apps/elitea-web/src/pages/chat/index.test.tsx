@@ -836,3 +836,61 @@ describe('ChatPage add participant', () => {
     await waitFor(() => expect(screen.queryByTestId('participant-item-42')).toBeNull(), { timeout: 5000 });
   });
 });
+
+/**
+ * A desktop Local work thread (source `local_work`) is read-only on the web:
+ * the server refuses to continue it, so the notice replaces the composer and
+ * the transcript offers no regenerate / edit-and-resend. An ordinary
+ * conversation with the same messages keeps all three — the control case
+ * that keeps the absence assertions from passing vacuously.
+ */
+describe('ChatPage Local work thread', () => {
+  const rows = [
+    { id: '41', uid: '00000000-0000-4000-8000-000000000041', role: 'user', content: 'question', metadata: {}, created_at: '2026-08-27T18:00:00Z' },
+    { id: '42', uid: '00000000-0000-4000-8000-000000000042', role: 'assistant', content: 'the answer', metadata: {}, created_at: '2026-08-27T18:00:01Z' },
+  ];
+  beforeEach(() => {
+    // jsdom has no layout; the transcript scrolls its end into view on mount.
+    Element.prototype.scrollIntoView = vi.fn();
+  });
+  function serve(extra: Record<string, unknown>): void {
+    server.use(
+      http.get(`${BASE}/elitea_core/message_traces/prompt_lib/${PROJECT}/${CONVERSATION}`, () => HttpResponse.json({ items: [], total: 0 })),
+      http.get(`${BASE}/elitea_core/context_analytics/prompt_lib/${PROJECT}/${CONVERSATION}`, () =>
+        HttpResponse.json({ current_tokens: 0, max_tokens: 0, message_groups_in_context: 0 }),
+      ),
+      http.get(`${BASE}/elitea_core/conversation/prompt_lib/${PROJECT}/${CONVERSATION}`, () =>
+        HttpResponse.json({ id: CONVERSATION, uuid: 'conversation-uuid-5', name: 'A thread', participants: [], ...extra }),
+      ),
+      http.get(`${BASE}/elitea_core/messages/prompt_lib/${PROJECT}/${CONVERSATION}`, () =>
+        HttpResponse.json({ items: rows, total: 2, page: 0, page_size: 50, total_pages: 1 }),
+      ),
+    );
+  }
+
+  it('keeps the composer and the answer actions on an ordinary conversation', async () => {
+    serve({ source: 'elitea' });
+    renderAt(`/chat/${CONVERSATION}`);
+    expect(await screen.findByText('the answer', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getByTestId('chat-message-input')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Regenerate', hidden: true })).toBeInTheDocument();
+    expect(screen.queryByTestId('local-work-notice')).toBeNull();
+  });
+
+  it('replaces the composer with the notice, naming the folder', async () => {
+    serve({ source: 'local_work', meta: { local_work: { folder_name: 'gateway' } } });
+    renderAt(`/chat/${CONVERSATION}`);
+    expect(await screen.findByText('the answer', {}, { timeout: 5000 })).toBeInTheDocument();
+    const notice = await screen.findByTestId('local-work-notice');
+    expect(within(notice).getByText('This thread works on files on your computer, in gateway.')).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-message-input')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Regenerate', hidden: true })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Edit the message and regenerate answer', hidden: true })).toBeNull();
+  });
+
+  it('says it generically when the folder was not recorded', async () => {
+    serve({ source: 'local_work' });
+    renderAt(`/chat/${CONVERSATION}`);
+    expect(await screen.findByText('This thread works on files on your computer.', {}, { timeout: 5000 })).toBeInTheDocument();
+  });
+});
