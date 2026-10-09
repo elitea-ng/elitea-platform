@@ -82,6 +82,10 @@ type ConfirmationClaim struct {
 	CallDigest     string
 	InterruptID    string
 	IdempotencyKey string
+	// Fresh reports whether the approval is recent enough to be consumed. A
+	// repeat of the request that consumed it is accepted either way: a client
+	// polling a long run with the same Idempotency-Key repeats its body.
+	Fresh bool
 }
 
 // ConfirmationOutcome answers a claim: Accepted, or the interrupt id the
@@ -98,8 +102,8 @@ type ConfirmationLedger interface {
 	// confirmation must carry.
 	NextConfirmationInterruptID(ctx context.Context, executionID, callDigest string) (string, error)
 	// ConsumeConfirmation consumes the claim's interrupt id for the call when
-	// it is the call's next one, or accepts a repeat of the request that
-	// consumed it (same call, same Idempotency-Key). Otherwise it answers the
-	// next interrupt id, unaccepted.
+	// it is the call's next one and the approval is fresh, or accepts a repeat
+	// of the request that consumed it (same call, same Idempotency-Key).
+	// Otherwise it answers the next interrupt id, unaccepted.
 	ConsumeConfirmation(ctx context.Context, claim ConfirmationClaim) (ConfirmationOutcome, error)
 }
