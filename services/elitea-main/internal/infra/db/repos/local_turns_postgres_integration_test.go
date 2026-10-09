@@ -485,6 +485,24 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entit
 	if err != nil || binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 6}) {
 		t.Fatalf("agent turn binding = %+v, %v", binding, err)
 	}
+	// The version is PINNED at start: switching the participant to another
+	// version mid-turn does not change what the running turn is bound to.
+	if _, err := pool.Exec(ctx, `
+UPDATE p_1.chat_participant_mapping SET entity_settings = '{"version_id": 9}'::jsonb
+WHERE conversation_id = $1 AND participant_id = $2`, conversationID, participants["agent"]); err != nil {
+		t.Fatal(err)
+	}
+	if binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, agentTurn); err != nil ||
+		binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 6}) {
+		t.Fatalf("binding after a mid-turn version switch = %+v, %v; want the pinned version 6", binding, err)
+	}
+	// A turn started after the switch runs the new version.
+	switched := strings.Repeat("4", 32)
+	start(switched, "44444444-4444-4444-8444-444444444444", participants["agent"])
+	if binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, switched); err != nil ||
+		binding != (localturn.StoredBinding{ApplicationID: 5, VersionID: 9}) {
+		t.Fatalf("binding of a turn started after the switch = %+v, %v", binding, err)
+	}
 	for name, id := range map[string]string{"catalogue agent": foreignTurn, "model": modelTurn} {
 		binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, id)
 		if err != nil || binding != (localturn.StoredBinding{}) {
@@ -497,7 +515,7 @@ INSERT INTO p_1.chat_participant_mapping (conversation_id, participant_id, entit
 	if _, err := repo.ReadLocalTurnBinding(ctx, 2, user, agentTurn); err == nil {
 		t.Fatal("the turn read from another project must not be found")
 	}
-	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.local_turn_executions SET committed_at = now() WHERE execution_id = $1`, agentTurn); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE elitea_runtime.local_turn_executions SET committed_at = now(), commit_digest = sha256(''::bytea) WHERE execution_id = $1`, agentTurn); err != nil {
 		t.Fatal(err)
 	}
 	if binding, err := repo.ReadLocalTurnBinding(ctx, 1, user, agentTurn); err != nil || !binding.Committed {

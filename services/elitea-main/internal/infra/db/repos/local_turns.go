@@ -104,19 +104,24 @@ func (r *LocalTurnsRepo) StartLocalTurn(ctx context.Context, record localturn.St
 	if err != nil {
 		return localturn.StartedTurn{}, err
 	}
+	applicationID, versionID, err := readLocalTurnAgent(ctx, tx, schema, target.conversationID, target.targetID, record.ProjectID)
+	if err != nil {
+		return localturn.StartedTurn{}, err
+	}
 	actor := strconv.FormatInt(record.ActorUserID, 10)
 	turn := localturn.StartedTurn{Created: true}
 	err = tx.QueryRow(ctx, `
 INSERT INTO elitea_runtime.local_turn_executions (
     execution_id, project_id, actor_id, token_id, native_client_id, conversation_uuid,
-    question_id, response_message_id, target_participant_id, memories_used, expires_at
+    question_id, response_message_id, target_participant_id, memories_used, expires_at,
+    application_id, version_id
 ) VALUES ($1, $2, $3, $4, $5, $6::uuid, $7::uuid, $8::uuid, $9, $10,
-          clock_timestamp() + make_interval(secs => $11))
+          clock_timestamp() + make_interval(secs => $11), $12, $13)
 ON CONFLICT (project_id, actor_id, question_id) DO NOTHING
 RETURNING execution_id, response_message_id::text, target_participant_id, expires_at`,
 		record.ExecutionID, record.ProjectID, actor, record.TokenID, record.NativeClientID,
 		record.ConversationUUID, record.QuestionID, record.ResponseMessageID, target.targetID,
-		record.MemoriesUsed, record.TTL.Seconds(),
+		record.MemoriesUsed, record.TTL.Seconds(), applicationID, versionID,
 	).Scan(&turn.ExecutionID, &turn.ResponseMessageID, &turn.ParticipantID, &turn.ExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		turn, err = replayLocalTurnStart(ctx, tx, record, actor, target.targetID)
@@ -325,64 +330,75 @@ func localTurnWriteError(step string, err error) error {
 	return fmt.Errorf("local turn: %s: %w", step, err)
 }
 
-var _ localturn.BindingStore = (*LocalTurnsRepo)(nil)
-
-// ReadLocalTurnBinding answers a started turn's state and the agent version
-// its answering participant is mapped to (the version a cloud turn of that
-// participant would run: ResolveCurrentApplicationTurn reads the same
-// entity_meta.id and mapping entity_settings.version_id). A model (dummy)
-// participant, or an agent of another project (a public catalogue agent),
-// answers 0/0: the remote toolkit call serves only this project's agents.
-func (r *LocalTurnsRepo) ReadLocalTurnBinding(
-	ctx context.Context, projectID, actorUserID int64, executionID string,
-) (localturn.StoredBinding, error) {
-	schema, err := tenantSchema(strconv.FormatInt(projectID, 10))
-	if err != nil {
-		return localturn.StoredBinding{}, localturn.ErrInvalid
-	}
-	var (
-		binding      localturn.StoredBinding
-		conversation string
-		participant  int64
-	)
-	err = r.pool.QueryRow(ctx, `
-SELECT conversation_uuid::text, target_participant_id,
-       committed_at IS NOT NULL, expires_at <= clock_timestamp()
-FROM elitea_runtime.local_turn_executions
-WHERE execution_id = $1 AND project_id = $2 AND actor_id = $3`,
-		executionID, projectID, strconv.FormatInt(actorUserID, 10)).
-		Scan(&conversation, &participant, &binding.Committed, &binding.Expired)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return localturn.StoredBinding{}, localturn.ErrNotFound
-	}
-	if err != nil {
-		return localturn.StoredBinding{}, fmt.Errorf("local turn: read binding: %w", err)
-	}
+// readLocalTurnAgent answers the agent version the answering participant is
+// mapped to (the version a cloud turn of that participant would run:
+// ResolveCurrentApplicationTurn reads the same entity_meta.id and mapping
+// entity_settings.version_id), or nil/nil for the model (dummy) participant and
+// for an agent of another project (a public catalogue agent): the remote
+// toolkit call serves only this project's agents. Start pins the answer on the
+// execution row, so the turn keeps the version it started with.
+func readLocalTurnAgent(
+	ctx context.Context, tx pgx.Tx, schema string, conversationID, participantID, projectID int64,
+) (*int64, *int64, error) {
 	var applicationID, versionID, applicationProject *int64
-	err = r.pool.QueryRow(ctx, fmt.Sprintf(`
+	err := tx.QueryRow(ctx, fmt.Sprintf(`
 SELECT CASE WHEN participant.entity_meta ->> 'id' ~ '^[1-9][0-9]{0,9}$'
             THEN (participant.entity_meta ->> 'id')::bigint END,
        CASE WHEN participant.entity_meta ->> 'project_id' ~ '^[1-9][0-9]{0,9}$'
             THEN (participant.entity_meta ->> 'project_id')::bigint END,
        CASE WHEN mapping.entity_settings ->> 'version_id' ~ '^[1-9][0-9]{0,9}$'
             THEN (mapping.entity_settings ->> 'version_id')::bigint END
-FROM %[1]s.chat_conversations AS conversation
-JOIN %[1]s.chat_participant_mapping AS mapping
-  ON mapping.conversation_id = conversation.id AND mapping.participant_id = $2
+FROM %[1]s.chat_participant_mapping AS mapping
 JOIN %[1]s.chat_participants AS participant
   ON participant.id = mapping.participant_id AND participant.entity_name = 'application'
-WHERE conversation.uuid = $1::uuid
-LIMIT 1`, schema), conversation, participant).Scan(&applicationID, &applicationProject, &versionID)
+WHERE mapping.conversation_id = $1 AND mapping.participant_id = $2
+LIMIT 1`, schema), conversationID, participantID).Scan(&applicationID, &applicationProject, &versionID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return binding, nil // the model participant: no agent version
+		return nil, nil, nil // the model participant: no agent version
 	}
 	if err != nil {
-		return localturn.StoredBinding{}, fmt.Errorf("local turn: read participant binding: %w", err)
+		return nil, nil, fmt.Errorf("local turn: read participant agent: %w", err)
 	}
 	// The project must be stated and equal, as the cloud admission requires
 	// (agent_start.go compares entity_meta.project_id): an id alone could name
 	// a catalogue agent that shares its number with one of this project's.
-	if applicationID != nil && versionID != nil && applicationProject != nil && *applicationProject == projectID {
+	// Both ids fit the INTEGER columns: the patterns admit at most 10 digits,
+	// and an id above MaxInt32 is no agent.
+	if applicationID == nil || versionID == nil || applicationProject == nil || *applicationProject != projectID ||
+		*applicationID > 2147483647 || *versionID > 2147483647 {
+		return nil, nil, nil
+	}
+	return applicationID, versionID, nil
+}
+
+var _ localturn.BindingStore = (*LocalTurnsRepo)(nil)
+
+// ReadLocalTurnBinding answers a started turn's state and the agent version it
+// PINNED at start (readLocalTurnAgent). A model turn, or one whose
+// participant was an agent of another project, answers 0/0.
+func (r *LocalTurnsRepo) ReadLocalTurnBinding(
+	ctx context.Context, projectID, actorUserID int64, executionID string,
+) (localturn.StoredBinding, error) {
+	if _, err := tenantSchema(strconv.FormatInt(projectID, 10)); err != nil {
+		return localturn.StoredBinding{}, localturn.ErrInvalid
+	}
+	var (
+		binding                  localturn.StoredBinding
+		applicationID, versionID *int64
+	)
+	err := r.pool.QueryRow(ctx, `
+SELECT application_id, version_id, committed_at IS NOT NULL, expires_at <= clock_timestamp()
+FROM elitea_runtime.local_turn_executions
+WHERE execution_id = $1 AND project_id = $2 AND actor_id = $3`,
+		executionID, projectID, strconv.FormatInt(actorUserID, 10)).
+		Scan(&applicationID, &versionID, &binding.Committed, &binding.Expired)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return localturn.StoredBinding{}, localturn.ErrNotFound
+	}
+	if err != nil {
+		return localturn.StoredBinding{}, fmt.Errorf("local turn: read binding: %w", err)
+	}
+	if applicationID != nil && versionID != nil {
 		binding.ApplicationID, binding.VersionID = *applicationID, *versionID
 	}
 	return binding, nil
