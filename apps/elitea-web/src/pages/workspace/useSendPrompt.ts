@@ -16,10 +16,20 @@ export interface SendPrompt {
   send: (prompt: string, planMode: boolean, mentions: string[]) => Promise<boolean>;
 }
 
-/** A conversation created for a send the host then refused, and the agent version it was created for. */
+/**
+ * A conversation created for a send that did not start (the participants add
+ * failed, or the host refused the start), and the agent version it was
+ * created for. `ready`: its participants were added.
+ */
 interface PendingConversation {
   key: string;
   id: string;
+  ready: boolean;
+}
+
+/** The pending conversation a "new conversation" send for `key` continues in, if any. */
+function reusable(pending: PendingConversation | null, startsNew: boolean, key: string): PendingConversation | null {
+  return startsNew && pending?.key === key ? pending : null;
 }
 
 function notifyStarted(onStarted: ((conversationId: string, prompt: string) => void) | undefined, conversationId: string, prompt: string): void {
@@ -52,10 +62,15 @@ export function useSendPrompt(
     setSendError(null);
     const key = `${String(projectId)}:${agent.id}:${String(version.id)}`;
     const startsNew = selection.conversationId === '';
+    const reuse = reusable(pending.current, startsNew, key);
     try {
       const conversationId = await ensureConversation({
         projectId,
-        conversationId: startsNew && pending.current?.key === key ? pending.current.id : selection.conversationId,
+        conversationId: reuse === null ? selection.conversationId : reuse.id,
+        completeSetup: reuse === null ? false : !reuse.ready,
+        onCreated: (id) => {
+          if (startsNew) pending.current = { key, id, ready: false };
+        },
         prompt,
         applicationId: Number(agent.id),
         applicationName: agent.name,
@@ -63,7 +78,7 @@ export function useSendPrompt(
         agentType: version.agentType,
         folderName: workspace.name,
       });
-      if (startsNew) pending.current = { key, id: conversationId };
+      if (startsNew) pending.current = { key, id: conversationId, ready: true };
       const started = await turn.start({
         workspace_id: workspace.id,
         project_id: projectId,

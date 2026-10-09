@@ -24,6 +24,18 @@ export interface EnsureConversationInput {
   projectId: number;
   /** An existing conversation to reuse; '' creates one. */
   conversationId: string;
+  /**
+   * `conversationId` was created by an earlier attempt that may have failed
+   * before its participants were added: add them now. Safe to repeat — the
+   * server's add is get-or-create per entity, all-or-nothing per batch.
+   */
+  completeSetup?: boolean;
+  /**
+   * Called with the new conversation's id as soon as it exists, BEFORE the
+   * participants are added, so a caller can retry in it (with
+   * `completeSetup`) instead of creating another one when the add fails.
+   */
+  onCreated?: (conversationId: string) => void;
   prompt: string;
   applicationId: number;
   applicationName: string;
@@ -41,16 +53,20 @@ export function useEnsureConversation(): (input: EnsureConversationInput) => Pro
 
   return useCallback(
     async (input) => {
-      if (input.conversationId !== '') return input.conversationId;
+      if (input.conversationId !== '' && input.completeSetup !== true) return input.conversationId;
       if (userId === undefined) throw new Error('The signed-in user is not loaded yet.');
-      const conversation = await createConversation({
-        projectId: input.projectId,
-        name: input.prompt.trim().slice(0, MAX_NAME) || input.applicationName,
-        is_private: true,
-        source: LOCAL_WORK_SOURCE,
-        meta: localWorkMeta(input.folderName),
-      });
-      const id = String(conversation.id);
+      let id = input.conversationId;
+      if (id === '') {
+        const conversation = await createConversation({
+          projectId: input.projectId,
+          name: input.prompt.trim().slice(0, MAX_NAME) || input.applicationName,
+          is_private: true,
+          source: LOCAL_WORK_SOURCE,
+          meta: localWorkMeta(input.folderName),
+        });
+        id = String(conversation.id);
+        input.onCreated?.(id);
+      }
       await addParticipants({
         projectId: input.projectId,
         conversationId: id,

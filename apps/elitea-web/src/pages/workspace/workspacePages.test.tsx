@@ -395,6 +395,40 @@ describe('WorkspaceSessionPage', () => {
     expect(created).toBe(1);
   });
 
+  it('retries a failed participants add in the conversation it already created, adding them again', async () => {
+    serveProject();
+    let created = 0;
+    let adds = 0;
+    server.use(
+      http.post(`${BASE}/elitea_core/conversations/prompt_lib/42`, () => {
+        created += 1;
+        return HttpResponse.json({ id: 77, name: 'fix the build' });
+      }),
+      http.post(`${BASE}/elitea_core/participants/prompt_lib/42/77`, () => {
+        adds += 1;
+        return adds === 1 ? HttpResponse.json({ error: 'unavailable' }, { status: 503 }) : HttpResponse.json([]);
+      }),
+    );
+    const ipc = createFakeWorkspaceIpc({ workspaces: [{ ...FOLDER, project_id: 42 }] });
+    const user = userEvent.setup();
+    mount(ipc, '/workspaces/w1');
+
+    await user.click(await screen.findByRole('combobox', { name: 'Agent' }));
+    await user.click(await screen.findByRole('option', { name: 'Coder' }));
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Version' })).toHaveTextContent('base'));
+    await user.type(screen.getByTestId('chat-message-input'), 'fix the build');
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(adds).toBe(1));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toBeEnabled());
+    expect(ipc.calls.started).toHaveLength(0);
+
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(ipc.calls.started).toHaveLength(1));
+    expect(ipc.calls.started[0]?.conversation_id).toBe('77');
+    expect(created).toBe(1);
+    expect(adds).toBe(2);
+  });
+
   it('starts afresh in another folder: the first folder\'s running turn does not follow', async () => {
     serveProject();
     const other: Workspace = { id: 'w2', path: '/Users/me/code/lib', name: 'lib', project_id: 42, is_git: false };
