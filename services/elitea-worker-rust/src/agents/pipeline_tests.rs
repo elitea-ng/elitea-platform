@@ -4136,10 +4136,12 @@ async fn mcp_node_discovers_and_executes_one_read_without_a_model_turn() {
         .into_iter()
         .map(|event| current(&event)["content"].clone())
         .collect::<Vec<_>>();
+    // A dict result is shown as fenced pretty JSON, not compact text.
     assert!(
         browser_content
             .iter()
-            .any(|content| content == "{\"release\":\"1.2\",\"risk\":\"low\"}"),
+            .any(|content| content
+                == "```json\n{\n  \"release\": \"1.2\",\n  \"risk\": \"low\"\n}\n```"),
         "unexpected MCP completion: {browser_content:?}"
     );
     let checkpoint = checkpointer

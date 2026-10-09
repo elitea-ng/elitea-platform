@@ -123,6 +123,63 @@ async fn before_continuation_executes_the_node_once() {
 }
 
 #[tokio::test]
+async fn static_pause_and_resume_keep_the_result_trace_of_the_turn() {
+    let definition = PipelineDefinition::from_yaml(
+        r#"
+interrupt_before: [tidy]
+state:
+  records: {type: list, value: []}
+  scratch: {type: str, value: temp}
+  zz_note: {type: str, value: "stale note"}
+entry_point: shape
+nodes:
+  - id: shape
+    type: state_modifier
+    template: '[{"id":"A"}]'
+    output: [records]
+    transition: tidy
+  - id: tidy
+    type: state_modifier
+    template: ""
+    variables_to_clean: [scratch]
+    transition: END
+"#,
+    )
+    .unwrap();
+    let trace_key = super::pipeline_result::PIPELINE_RESULT_TRACE_STATE_KEY;
+    let (checkpointer, sessions) = fixture().await;
+    let paused = run(&definition, checkpointer.clone(), sessions.clone(), None).await;
+    assert_eq!(
+        GraphInterruptPayload::from_event(&paused[0]).unwrap().kind,
+        "before"
+    );
+    let trace = json!({"node": "shape", "keys": ["records"], "messages": false});
+    assert_eq!(
+        checkpointer.load(THREAD).await.unwrap().unwrap().state[trace_key],
+        trace
+    );
+    let resume = continuation(&definition, checkpointer.as_ref(), sessions.as_ref()).await;
+    let finished = run(&definition, checkpointer.clone(), sessions, Some(resume)).await;
+    let final_checkpoint = checkpointer.load(THREAD).await.unwrap().unwrap();
+    assert!(final_checkpoint.pending_nodes.is_empty());
+    assert_eq!(final_checkpoint.state["scratch"], json!(""));
+    assert_eq!(final_checkpoint.state[trace_key], trace);
+    let text = finished
+        .iter()
+        .filter_map(Event::content)
+        .flat_map(|content| content.parts.iter())
+        .filter_map(|part| match part {
+            adk_rust::Part::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .next_back();
+    assert_eq!(
+        text,
+        Some("```json\n[\n  {\n    \"id\": \"A\"\n  }\n]\n```")
+    );
+}
+
+#[tokio::test]
 async fn malformed_static_pause_is_not_classified_as_a_completed_run() {
     let definition =
         PipelineDefinition::from_yaml(&format!("interrupt_before: [tick]\n{SINGLE}")).unwrap();

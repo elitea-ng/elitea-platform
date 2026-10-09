@@ -43,6 +43,10 @@ use super::llm::{
     PipelineLlmAgentFactory,
 };
 use super::node_events::{PIPELINE_NODE_EVENT_SCOPE_STATE_KEY, PipelineNodeEventSender};
+use super::pipeline_result::{
+    PIPELINE_RESULT_TRACE_STATE_KEY, RenderedResult, ResultTrace, ResultTraceNode,
+    ResultTraceOutputs, render_state_value, render_traced_keys,
+};
 use super::printer::{
     PrinterInputMapping, PrinterNode, PrinterNodeDefinition, PrinterPauseCatalog, PrinterResetNode,
 };
@@ -69,7 +73,6 @@ const MAX_PIPELINE_NODES: usize = 128;
 const MAX_PIPELINE_STATE_KEYS: usize = 256;
 const MAX_STATIC_INTERRUPTS: usize = 128;
 const PIPELINE_RECURSION_LIMIT: usize = 100;
-const MAX_PIPELINE_RESULT_BYTES: usize = 512 * 1024;
 const SUBGRAPH_RESULT_NODE: &str = "__elitea_subgraph_result_v1";
 const SUBGRAPH_ENTRY_NODE: &str = "__elitea_subgraph_entry_v1";
 const PIPELINE_DIGEST_DOMAIN: &[u8] = b"elitea.graph.pipeline.config.v1\0";
@@ -115,6 +118,7 @@ const INTERNAL_RESULT_KEYS: &[&str] = &[
     LLM_TOOL_RESUME_STATE_KEY,
     super::static_pause::STATIC_AFTER_CHECKPOINTS_STATE_KEY,
     super::static_pause::STATIC_TEXT_RESUME_STATE_KEY,
+    PIPELINE_RESULT_TRACE_STATE_KEY,
 ];
 
 #[derive(Clone, Deserialize)]
@@ -403,7 +407,17 @@ impl PipelineNodeRuntimes {
     }
 }
 
-enum PipelineGraphBuilder {
+/// The single registration point of every bound pipeline node.
+///
+/// `result_trace` maps each top-level node ID to its declared result outputs.
+/// It is built once from the definition. A node found there is wrapped with
+/// [`ResultTraceNode`]; runtime-owned helper nodes are bound unchanged.
+struct PipelineGraphBuilder {
+    target: PipelineGraphTarget,
+    result_trace: BTreeMap<String, ResultTraceOutputs>,
+}
+
+enum PipelineGraphTarget {
     Agent(Box<GraphAgentBuilder>),
     Subgraph {
         graph: StateGraph,
@@ -412,42 +426,78 @@ enum PipelineGraphBuilder {
 }
 
 impl PipelineGraphBuilder {
-    fn node<N>(self, node: N) -> Self
+    fn node<N>(mut self, node: N) -> Self
     where
         N: Node + 'static,
     {
-        match self {
-            Self::Agent(builder) => Self::Agent(Box::new((*builder).node(node))),
-            Self::Subgraph { graph, terminal } => Self::Subgraph {
+        match self.result_trace.remove(node.name()) {
+            Some(outputs) => self.bind(ResultTraceNode::new(node, outputs)),
+            None => self.bind(node),
+        }
+    }
+
+    fn bind<N>(self, node: N) -> Self
+    where
+        N: Node + 'static,
+    {
+        let target = match self.target {
+            PipelineGraphTarget::Agent(builder) => {
+                PipelineGraphTarget::Agent(Box::new((*builder).node(node)))
+            }
+            PipelineGraphTarget::Subgraph { graph, terminal } => PipelineGraphTarget::Subgraph {
                 graph: graph.add_node(TerminalRedirectNode::new(node, terminal)),
                 terminal,
             },
+        };
+        Self {
+            target,
+            result_trace: self.result_trace,
         }
     }
 
     fn edge(self, source: &str, target: &str) -> Self {
-        match self {
-            Self::Agent(builder) => Self::Agent(Box::new((*builder).edge(source, target))),
-            Self::Subgraph { graph, terminal } => Self::Subgraph {
+        let target = match self.target {
+            PipelineGraphTarget::Agent(builder) => {
+                PipelineGraphTarget::Agent(Box::new((*builder).edge(source, target)))
+            }
+            PipelineGraphTarget::Subgraph { graph, terminal } => PipelineGraphTarget::Subgraph {
                 graph: graph.add_edge(source, terminal_target(target, terminal)),
                 terminal,
             },
+        };
+        Self {
+            target,
+            result_trace: self.result_trace,
+        }
+    }
+
+    /// Every traced node must have been bound under its own ID; an unclaimed
+    /// entry would silently drop that node's result.
+    fn ensure_result_trace_bound(&self) -> Result<(), PipelineConfigurationError> {
+        if self.result_trace.is_empty() {
+            Ok(())
+        } else {
+            Err(PipelineConfigurationError::Invalid(
+                "a pipeline node was not bound to its result trace",
+            ))
         }
     }
 
     fn into_agent(self) -> Result<GraphAgentBuilder, PipelineConfigurationError> {
-        match self {
-            Self::Agent(builder) => Ok(*builder),
-            Self::Subgraph { .. } => Err(PipelineConfigurationError::Invalid(
+        self.ensure_result_trace_bound()?;
+        match self.target {
+            PipelineGraphTarget::Agent(builder) => Ok(*builder),
+            PipelineGraphTarget::Subgraph { .. } => Err(PipelineConfigurationError::Invalid(
                 "an internal pipeline graph builder changed kind",
             )),
         }
     }
 
     fn into_subgraph(self) -> Result<StateGraph, PipelineConfigurationError> {
-        match self {
-            Self::Subgraph { graph, .. } => Ok(graph),
-            Self::Agent(_) => Err(PipelineConfigurationError::Invalid(
+        self.ensure_result_trace_bound()?;
+        match self.target {
+            PipelineGraphTarget::Subgraph { graph, .. } => Ok(graph),
+            PipelineGraphTarget::Agent(_) => Err(PipelineConfigurationError::Invalid(
                 "an internal pipeline graph builder changed kind",
             )),
         }
@@ -1099,25 +1149,28 @@ impl PipelineDefinition {
                 })
             });
         let node_checkpointer = Arc::clone(&checkpointer);
-        let mut builder = PipelineGraphBuilder::Agent(Box::new(
-            GraphAgent::builder(agent_name)
-                .description("Elitea stored pipeline")
-                .state_schema(state_schema.clone())
-                .edge(START, &self.entry_point)
-                .checkpointer_arc(checkpointer)
-                .recursion_limit(PIPELINE_RECURSION_LIMIT)
-                .max_concurrency(1)
-                .output_mapper(move |state| {
-                    let mut event = pipeline_completion_event_from_state(state, &result_policy);
-                    if reuses_result {
-                        event.provider_metadata.insert(
-                            super::agent::PIPELINE_REUSED_RESULT_METADATA_KEY.to_owned(),
-                            "v1".to_owned(),
-                        );
-                    }
-                    vec![event]
-                }),
-        ));
+        let mut builder = PipelineGraphBuilder {
+            result_trace: self.result_trace_outputs(),
+            target: PipelineGraphTarget::Agent(Box::new(
+                GraphAgent::builder(agent_name)
+                    .description("Elitea stored pipeline")
+                    .state_schema(state_schema.clone())
+                    .edge(START, &self.entry_point)
+                    .checkpointer_arc(checkpointer)
+                    .recursion_limit(PIPELINE_RECURSION_LIMIT)
+                    .max_concurrency(1)
+                    .output_mapper(move |state| {
+                        let mut event = pipeline_completion_event_from_state(state, &result_policy);
+                        if reuses_result {
+                            event.provider_metadata.insert(
+                                super::agent::PIPELINE_REUSED_RESULT_METADATA_KEY.to_owned(),
+                                "v1".to_owned(),
+                            );
+                        }
+                        vec![event]
+                    }),
+            )),
+        };
         for node in self.nodes.iter().filter(|node| {
             !self.parallel_owned_nodes.contains(node.id())
                 && !self.map_owned_nodes.contains(node.id())
@@ -1187,9 +1240,12 @@ impl PipelineDefinition {
             .add_node(PipelineSubgraphEntryNode)
             .add_edge(START, SUBGRAPH_ENTRY_NODE)
             .add_edge(SUBGRAPH_ENTRY_NODE, &self.entry_point);
-        let mut builder = PipelineGraphBuilder::Subgraph {
-            graph,
-            terminal: SUBGRAPH_RESULT_NODE,
+        let mut builder = PipelineGraphBuilder {
+            target: PipelineGraphTarget::Subgraph {
+                graph,
+                terminal: SUBGRAPH_RESULT_NODE,
+            },
+            result_trace: self.result_trace_outputs(),
         };
         for node in self.nodes.iter().filter(|node| {
             !self.parallel_owned_nodes.contains(node.id())
@@ -1257,6 +1313,7 @@ impl PipelineDefinition {
             super::static_pause::STATIC_AFTER_CHECKPOINTS_STATE_KEY.to_owned(),
             super::static_pause::STATIC_TEXT_RESUME_STATE_KEY.to_owned(),
             PIPELINE_NODE_EVENT_SCOPE_STATE_KEY.to_owned(),
+            PIPELINE_RESULT_TRACE_STATE_KEY.to_owned(),
         ]);
         if self.has_parallel_nodes() {
             channels.insert(super::parallel::PARALLEL_RESUME_STATE_KEY.to_owned());
@@ -1538,6 +1595,24 @@ impl PipelineDefinition {
         serde_json::Value::Object(types)
     }
 
+    /// Declared result outputs of every top-level node, by node ID.
+    ///
+    /// Parallel- and Map-owned children run inside their parent node, so
+    /// only the parent's own output is traced.
+    fn result_trace_outputs(&self) -> BTreeMap<String, ResultTraceOutputs> {
+        self.nodes
+            .iter()
+            .filter(|node| {
+                !self.parallel_owned_nodes.contains(node.id())
+                    && !self.map_owned_nodes.contains(node.id())
+            })
+            .filter_map(|node| {
+                ResultTraceOutputs::from_declared(node.output_keys())
+                    .map(|outputs| (node.id().to_owned(), outputs))
+            })
+            .collect()
+    }
+
     /// Collect result candidates separately from graph control flow.
     ///
     /// `END` is only the ADK graph sink. The candidate belongs to the
@@ -1741,25 +1816,49 @@ fn pipeline_completion_event_from_state(state: &State, policy: &PipelineResultPo
     pipeline_completed_event()
 }
 
+/// Select the chat text of a finished pipeline turn.
+///
+/// The runtime trace names the node that wrote last. Its declared outputs
+/// win, then its assistant message; a blank traced answer selects nothing.
+/// Only without a trace does the static chain apply: terminal outputs, the
+/// last assistant message, declared state.
+/// The text is bounded; an oversized value is truncated, never dropped.
 pub(super) fn select_pipeline_result(
     state: &State,
     policy: &PipelineResultPolicy,
 ) -> Option<String> {
+    // A trace proves which node wrote last; when it renders blank, no static
+    // value may stand in for that node's answer.
+    if let Some(trace) = ResultTrace::from_state(state) {
+        return render_traced_keys(state, trace.keys())
+            .or_else(|| {
+                (trace.messages() && trace.keys().is_empty())
+                    .then(|| select_last_assistant_message(state.get("messages")))
+                    .flatten()
+            })
+            .map(RenderedResult::into_bounded_text);
+    }
     select_last_state_value(state, &policy.terminal_data_keys)
         .or_else(|| select_last_assistant_message(state.get("messages")))
         .or_else(|| select_last_state_value(state, &policy.fallback_data_keys))
-        .filter(|content| content.len() <= MAX_PIPELINE_RESULT_BYTES)
+        .map(RenderedResult::into_bounded_text)
 }
 
-fn select_last_state_value(state: &State, keys: &[String]) -> Option<String> {
+/// The static fallback has no proof that a node ran, so an empty collection
+/// is an untouched default rather than an answer.
+fn select_last_state_value(state: &State, keys: &[String]) -> Option<RenderedResult> {
     keys.iter()
         .rev()
         .filter_map(|key| state.get(key))
-        .filter_map(normalize_pipeline_value)
-        .find(|content| !content.trim().is_empty())
+        .filter(|value| {
+            !value.as_array().is_some_and(Vec::is_empty)
+                && !value.as_object().is_some_and(serde_json::Map::is_empty)
+        })
+        .filter_map(render_state_value)
+        .find(|content| !content.is_blank())
 }
 
-fn select_last_assistant_message(messages: Option<&serde_json::Value>) -> Option<String> {
+fn select_last_assistant_message(messages: Option<&serde_json::Value>) -> Option<RenderedResult> {
     messages?
         .as_array()?
         .iter()
@@ -1771,11 +1870,13 @@ fn select_last_assistant_message(messages: Option<&serde_json::Value>) -> Option
             )
         })
         .filter_map(|message| message.get("content"))
-        .filter_map(normalize_pipeline_value)
+        .filter_map(assistant_message_text)
         .find(|content| !content.trim().is_empty())
+        .map(RenderedResult::Text)
 }
 
-fn normalize_pipeline_value(value: &serde_json::Value) -> Option<String> {
+/// Text of one assistant message content value: text blocks are joined.
+fn assistant_message_text(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::Null => None,
         serde_json::Value::String(value) => Some(value.clone()),
@@ -1856,7 +1957,7 @@ fn runtime_channel_default(channel: &str) -> serde_json::Value {
     }
 }
 
-fn internal_result_key(key: &str) -> bool {
+pub(super) fn internal_result_key(key: &str) -> bool {
     INTERNAL_RESULT_KEYS.contains(&key)
 }
 
@@ -2220,6 +2321,7 @@ pub(super) fn reserved_user_state_key(key: &str) -> bool {
         || key == super::parallel::PARALLEL_RESUME_STATE_KEY
         || key == super::application::PARALLEL_AGENT_INPUTS_STATE_KEY
         || key == PIPELINE_NODE_EVENT_SCOPE_STATE_KEY
+        || key == PIPELINE_RESULT_TRACE_STATE_KEY
         || matches!(
             key,
             APPLICATION_TASK_STATE_KEY
@@ -2356,5 +2458,30 @@ impl PipelineConfigurationError {
             Self::Unsupported(_) => "graph.pipeline.unsupported_capability",
             Self::Graph(_) => "graph.pipeline.compile_failed",
         }
+    }
+}
+
+#[cfg(test)]
+mod result_trace_binding_tests {
+    use super::{PipelineGraphBuilder, PipelineGraphTarget, ResultTraceOutputs, StateGraph};
+    use adk_rust::graph::StateSchema;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn an_unclaimed_result_trace_entry_refuses_the_graph() {
+        let builder = PipelineGraphBuilder {
+            target: PipelineGraphTarget::Subgraph {
+                graph: StateGraph::new(StateSchema::new()),
+                terminal: super::SUBGRAPH_RESULT_NODE,
+            },
+            result_trace: BTreeMap::from([(
+                "renamed".to_owned(),
+                ResultTraceOutputs::new(vec!["answer".to_owned()], false),
+            )]),
+        };
+        let Err(error) = builder.into_subgraph() else {
+            panic!("an unclaimed trace entry must refuse the graph");
+        };
+        assert_eq!(error.code(), "graph.pipeline.invalid_configuration");
     }
 }

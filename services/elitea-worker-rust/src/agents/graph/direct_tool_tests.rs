@@ -725,7 +725,11 @@ nodes:
                 .join("")
         });
     }
-    assert_eq!(final_text.as_deref(), Some("{\"id\":9}"));
+    // A dict result is shown as fenced pretty JSON, not compact text.
+    assert_eq!(
+        final_text.as_deref(),
+        Some("```json\n{\n  \"id\": 9\n}\n```")
+    );
     assert_eq!(capture.lock().expect("capture lock").calls, 1);
     let checkpoint = checkpointer
         .load("toolkit-pipeline-thread")
