@@ -454,3 +454,4 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Bounded YAML expansion, OpenAPI reference budget and path segments](untrusted-input-bounds-20261008.md) records the parse-time YAML budget, the OpenAPI `$ref` and response-walk budget, per-segment path validation, measurements and recovery rows.
 - [Access hardening](access-hardening-20261008.md) records project-scoped reads and pins, unlock admission, the mandatory vault master key and the Web CSP and sanitiser, with tests and follow-ups.
 - [Edge identity propagation](edge-identity-propagation-20261008.md) records the signed edge identity projection, edge strip and NetworkPolicy hardening, its tests and recovery rows.
+- [Post-merge verification of main 1ab920dde](post-merge-verification-1ab920dde-20261009.md) records the local suites and the real-model browser pass for the second 2026-10-09 batch (#1174–#1178), the two regressions found and the follow-ups.
