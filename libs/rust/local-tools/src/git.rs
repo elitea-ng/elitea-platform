@@ -668,13 +668,47 @@ impl Repo {
             .map_err(|_| unsafe_repo(format!(".git/{name} is not UTF-8")))
     }
 
+    /// The files git reads as the global config.
+    fn global_config_files(&self) -> Vec<PathBuf> {
+        if let Some(path) = &self.global_config {
+            return vec![path.clone()];
+        }
+        let home = std::env::var_os("HOME").filter(|home| !home.is_empty());
+        let xdg = std::env::var_os("XDG_CONFIG_HOME")
+            .filter(|xdg| !xdg.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home.as_ref().map(|home| Path::new(home).join(".config")));
+        home.map(|home| Path::new(&home).join(".gitconfig"))
+            .into_iter()
+            .chain(xdg.map(|xdg| xdg.join("git/config")))
+            .collect()
+    }
+
     /// Drivers with commands in the person's global config:
     /// `(kind, name)` for `filter`, `diff` and `merge`.
-    fn configured_drivers(&self) -> BTreeSet<(String, String)> {
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::UnsafeRepository`] when a global config exists but
+    /// cannot be listed: the drivers are unknown, so nothing is assumed
+    /// safe.
+    fn configured_drivers(&self) -> ToolResult<BTreeSet<(String, String)>> {
+        let absent = self.global_config_files().iter().all(|path| {
+            std::fs::symlink_metadata(path)
+                .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound)
+        });
+        if absent {
+            return Ok(BTreeSet::new());
+        }
         let listing = self
             .git(&self.top)
             .run(&["config", "--global", "--includes", "--list", "-z"])
-            .unwrap_or_default();
+            .map_err(|error| {
+                unsafe_repo(format!(
+                    "cannot list the filter, diff and merge drivers in your global git config ({}), so no git call that reads the work tree is safe",
+                    error.message()
+                ))
+            })?;
         let mut out = BTreeSet::new();
         for item in listing.split(|byte| *byte == 0) {
             let item = String::from_utf8_lossy(item);
@@ -683,7 +717,7 @@ impl Repo {
                 out.insert(driver);
             }
         }
-        out
+        Ok(out)
     }
 
     /// Layer 1 for attributes: no path in the work tree (nor in `extra`,
@@ -694,7 +728,7 @@ impl Repo {
     ///
     /// [`ErrorCode::UnsafeRepository`] naming the path and the driver.
     pub fn check_attributes(&self, extra: &[String]) -> ToolResult<()> {
-        let drivers = self.configured_drivers();
+        let drivers = self.configured_drivers()?;
         if drivers.is_empty() {
             return Ok(());
         }
@@ -1397,6 +1431,29 @@ mod tests {
             "status would have run the clean filter"
         );
         assert!(!marker.exists());
+    }
+
+    /// A global config that exists but cannot be listed leaves the
+    /// drivers unknown: refused, not assumed empty. A missing one is fine.
+    #[test]
+    fn unreadable_global_config_fails_closed() {
+        let (_dir, base, repo) = repo();
+        std::fs::write(repo.top().join("a.txt"), "x").expect("file");
+        let missing = repo
+            .clone()
+            .with_global_config(base.join("no-such-gitconfig"));
+        assert!(missing.check_attributes(&[]).is_ok(), "no global config");
+        let broken = base.join("gitconfig");
+        std::fs::write(&broken, "[filter \"x\"\n\tclean = cat\n").expect("global");
+        let repo = repo.with_global_config(broken);
+        let error = repo.check_attributes(&[]).expect_err("fails closed");
+        assert_eq!(error.code(), ErrorCode::UnsafeRepository);
+        assert!(
+            error.message().contains("global git config"),
+            "{}",
+            error.message()
+        );
+        assert!(repo.git(repo.top()).worktree().run(&["status"]).is_err());
     }
 
     #[test]
