@@ -616,6 +616,8 @@ async fn a_cancelled_turn_commits_nothing() {
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     let started = h.host.start(request(&h.workspace_id)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(h.host.status(&started.turn_id).unwrap().state, "running");
+    assert_eq!(h.host.status("unknown").unwrap_err().code, "turn_unknown");
     h.host.cancel(&started.turn_id).unwrap();
     // A second cancel of a cancelled turn is still a cancel.
     h.host.cancel(&started.turn_id).unwrap();
@@ -1017,8 +1019,15 @@ async fn a_turn_past_its_run_is_not_cancellable() {
     );
     let refused = h.host.cancel(&started.turn_id).unwrap_err();
     assert_eq!(refused.code, "turn_not_cancellable");
+    let status = h.host.status(&started.turn_id).unwrap();
+    assert_eq!((status.state, status.done), ("committing", None));
     hold.store(false, Ordering::SeqCst);
     let events = until_done(&h.emitter).await;
     // The refusal was the truth: the turn was committed.
-    assert_eq!(events.last().unwrap().payload["committed"], true);
+    let done = events.last().unwrap();
+    assert_eq!(done.payload["committed"], true);
+    // A UI that missed `done` gets the same payload from the status.
+    let status = h.host.status(&started.turn_id).unwrap();
+    assert_eq!(status.state, "done");
+    assert_eq!(status.done.as_ref(), Some(&done.payload));
 }

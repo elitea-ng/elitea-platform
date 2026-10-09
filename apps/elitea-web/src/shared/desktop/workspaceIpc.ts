@@ -66,6 +66,20 @@ interface EventBase {
   seq: number;
 }
 
+/** The `done` event's payload. */
+export interface TurnDonePayload {
+  committed: boolean;
+  conversation_id: string;
+  message_ids: string[];
+  changed_files: number;
+}
+
+/** `agent_turn_status`: where a turn is; `done` is the `done` event's payload once it was sent. */
+export interface TurnStatus {
+  state: 'running' | 'committing' | 'done';
+  done: TurnDonePayload | null;
+}
+
 export type AgentEvent =
   | (EventBase & { kind: 'status'; payload: { phase: TurnPhase; message?: string } })
   | (EventBase & { kind: 'text_delta'; payload: { text: string } })
@@ -73,10 +87,7 @@ export type AgentEvent =
   | (EventBase & { kind: 'tool_result'; payload: { call_id: string; ok: boolean; summary: string; truncated: boolean } })
   | (EventBase & { kind: 'approval_request'; payload: ApprovalRequestPayload })
   | (EventBase & { kind: 'error'; payload: { code: string; message: string } })
-  | (EventBase & {
-      kind: 'done';
-      payload: { committed: boolean; conversation_id: string; message_ids: string[]; changed_files: number };
-    });
+  | (EventBase & { kind: 'done'; payload: TurnDonePayload });
 
 export type AgentEventHandler = (event: AgentEvent) => void;
 
@@ -113,6 +124,8 @@ export interface WorkspaceIpc {
   bindProject(id: string, projectId: number): Promise<void>;
   startTurn(request: TurnStartRequest): Promise<TurnStarted>;
   cancelTurn(turnId: string): Promise<void>;
+  /** Where a turn is, for a UI that may have missed its `done` event (events are not replayed). */
+  turnStatus(turnId: string): Promise<TurnStatus>;
   respondApproval(requestId: string, decision: ApprovalDecision): Promise<void>;
   turnChanges(turnId: string): Promise<TurnChanges>;
   /** Restore the whole turn, or one file when `path` is given. */
@@ -145,6 +158,7 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
     bindProject: (id, projectId) => invoke<void>('workspace_bind_project', { id, project_id: projectId }),
     startTurn: (request) => invoke<TurnStarted>('agent_turn_start', { ...request }),
     cancelTurn: (turnId) => invoke<void>('agent_turn_cancel', { turn_id: turnId }),
+    turnStatus: (turnId) => invoke<TurnStatus>('agent_turn_status', { turn_id: turnId }),
     respondApproval: (requestId, decision) => invoke<void>('approval_respond', { request_id: requestId, decision }),
     turnChanges: (turnId) => invoke<TurnChanges>('turn_changes', { turn_id: turnId }),
     restore: (turnId, path) =>

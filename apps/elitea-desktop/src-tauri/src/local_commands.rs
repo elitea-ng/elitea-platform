@@ -19,7 +19,7 @@ use crate::d0::api::{ApiError, Bearer, Credentials};
 use crate::d0::approvals::UiDecision;
 use crate::d0::events::{AgentEvent, EVENT_NAME, EventEmitter};
 use crate::d0::recorder::FileChange;
-use crate::d0::turn::{AgentHost, PolicySource, TurnError, TurnRequest, TurnStarted};
+use crate::d0::turn::{AgentHost, PolicySource, TurnError, TurnRequest, TurnStarted, TurnStatus};
 use crate::error::HostError;
 use crate::settings::SettingsFiles;
 use crate::workspaces::{Workspace, WorkspaceStore};
@@ -198,6 +198,16 @@ pub async fn agent_turn_start(
 #[tauri::command(rename_all = "snake_case")]
 pub fn agent_turn_cancel(state: State<'_, LocalState>, turn_id: String) -> Result<(), IpcError> {
     Ok(state.agents.cancel(&turn_id)?)
+}
+
+/// Where a turn is (`running`, `committing`, `done` with the `done`
+/// payload): the UI re-syncs with it when it may have missed an event.
+#[tauri::command(rename_all = "snake_case")]
+pub fn agent_turn_status(
+    state: State<'_, LocalState>,
+    turn_id: String,
+) -> Result<TurnStatus, IpcError> {
+    Ok(state.agents.status(&turn_id)?)
 }
 
 #[tauri::command(rename_all = "snake_case")]

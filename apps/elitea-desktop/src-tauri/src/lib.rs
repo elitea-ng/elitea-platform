@@ -141,6 +141,7 @@ pub fn run() {
             local_commands::workspace_bind_project,
             local_commands::agent_turn_start,
             local_commands::agent_turn_cancel,
+            local_commands::agent_turn_status,
             local_commands::approval_respond,
             local_commands::turn_changes,
             local_commands::checkpoint_restore,

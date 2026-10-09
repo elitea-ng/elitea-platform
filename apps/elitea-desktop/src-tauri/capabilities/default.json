@@ -18,6 +18,7 @@
     "allow-workspace-bind-project",
     "allow-agent-turn-start",
     "allow-agent-turn-cancel",
+    "allow-agent-turn-status",
     "allow-approval-respond",
     "allow-turn-changes",
     "allow-checkpoint-restore",

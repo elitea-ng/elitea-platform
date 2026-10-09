@@ -10,12 +10,13 @@ import type {
   TurnChanges,
   TurnStartRequest,
   TurnStarted,
+  TurnStatus,
   Workspace,
   WorkspaceIpc,
 } from './workspaceIpc';
 import { WorkspaceIpcError } from './workspaceIpc';
 
-type FailableCommand = 'remove' | 'bindProject' | 'startTurn' | 'cancelTurn' | 'respondApproval' | 'turnChanges' | 'restore';
+type FailableCommand = 'remove' | 'bindProject' | 'startTurn' | 'cancelTurn' | 'turnStatus' | 'respondApproval' | 'turnChanges' | 'restore';
 
 export interface FakeWorkspaceIpc extends WorkspaceIpc {
   /** Deliver an event to every subscriber. */
@@ -27,6 +28,8 @@ export interface FakeWorkspaceIpc extends WorkspaceIpc {
     restores: { turnId: string; path?: string }[];
   };
   setChanges(turnId: string, changes: TurnChanges): void;
+  /** What `agent_turn_status` answers for `turnId` (default: running). */
+  setTurnStatus(turnId: string, status: TurnStatus): void;
   /** Make the next call of `command` reject the way the host does: `{code, message}` as a `WorkspaceIpcError`. */
   failNext(command: FailableCommand, code: string, message: string): void;
   subscriberCount(): number;
@@ -42,6 +45,7 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
   let workspaces = [...(options.workspaces ?? [])];
   const handlers = new Set<AgentEventHandler>();
   const changes = new Map<string, TurnChanges>();
+  const statuses = new Map<string, TurnStatus>();
   const calls: FakeWorkspaceIpc['calls'] = { started: [], cancelled: [], approvals: [], restores: [] };
   let turnCounter = 0;
   const failures = new Map<FailableCommand, WorkspaceIpcError>();
@@ -87,6 +91,11 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
       if (failed !== undefined) return failed;
       return Promise.resolve();
     },
+    turnStatus(turnId) {
+      const failed = failure('turnStatus');
+      if (failed !== undefined) return failed;
+      return Promise.resolve(statuses.get(turnId) ?? { state: 'running', done: null });
+    },
     respondApproval(requestId, decision) {
       calls.approvals.push({ requestId, decision });
       const failed = failure('respondApproval');
@@ -117,6 +126,9 @@ export function createFakeWorkspaceIpc(options: FakeOptions = {}): FakeWorkspace
     },
     setChanges(turnId, value) {
       changes.set(turnId, value);
+    },
+    setTurnStatus(turnId, status) {
+      statuses.set(turnId, status);
     },
     failNext(command, code, message) {
       failures.set(command, new WorkspaceIpcError(code, message));

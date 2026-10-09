@@ -118,6 +118,16 @@ pub struct TurnStarted {
     pub execution_id: String,
 }
 
+/// `agent_turn_status`'s answer.
+#[derive(Clone, Debug, serde::Serialize, PartialEq, Eq)]
+pub struct TurnStatus {
+    /// `running` (the agent runs, or is being stopped), `committing` (the
+    /// run ended, the turn is being saved) or `done` (`done` was sent).
+    pub state: &'static str,
+    /// The `done` event's payload, when `state` is `done`.
+    pub done: Option<Value>,
+}
+
 /// What the host is built from.
 pub struct HostDeps {
     pub credentials: Arc<dyn Credentials>,
@@ -232,9 +242,20 @@ struct TurnEntry {
     stop: LocalStop,
     checkpoint: Mutex<TurnCheckpoint>,
     state: Mutex<RunState>,
+    /// The `done` event's payload, once sent (`agent_turn_status`).
+    done: Mutex<Option<Value>>,
 }
 
 impl TurnEntry {
+    /// Record the turn's end, then send its `done` event (always the last).
+    fn finish(&self, events: &TurnEvents, payload: Value) {
+        *self
+            .done
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(payload.clone());
+        events.send("done", payload);
+    }
+
     fn state(&self) -> std::sync::MutexGuard<'_, RunState> {
         self.state
             .lock()
@@ -521,6 +542,7 @@ impl AgentHost {
                     stop,
                     checkpoint: Mutex::new(TurnCheckpoint::None),
                     state: Mutex::new(RunState::Running),
+                    done: Mutex::new(None),
                 });
                 if let Ok(mut turns) = self.turns.lock() {
                     turns.insert(turn_id.clone(), entry.clone());
@@ -668,8 +690,8 @@ impl AgentHost {
             let _ = sink.finish(RunOutcome::Stopped).await;
             drop(claim);
             events.status(Phase::Cancelled, None);
-            events.send(
-                "done",
+            entry.finish(
+                &events,
                 json!({
                     "committed": false,
                     "conversation_id": conversation_id,
@@ -724,8 +746,8 @@ impl AgentHost {
                 } else {
                     events.status(Phase::Done, None);
                 }
-                events.send(
-                    "done",
+                entry.finish(
+                    &events,
                     json!({
                         "committed": true,
                         "conversation_id": conversation_id,
@@ -740,8 +762,8 @@ impl AgentHost {
                     &format!("The turn could not be saved: {}", error.message),
                 );
                 events.status(Phase::Error, Some(&error.message));
-                events.send(
-                    "done",
+                entry.finish(
+                    &events,
                     json!({
                         "committed": false,
                         "conversation_id": conversation_id,
@@ -928,6 +950,27 @@ impl AgentHost {
                 "The agent has already finished this turn; it can no longer be stopped.",
             )),
         }
+    }
+
+    /// `agent_turn_status`: where a turn is, for a UI that may have missed
+    /// its `done` event (the event channel does not replay).
+    ///
+    /// # Errors
+    ///
+    /// `turn_unknown` / `turn_expired` for a turn the host does not keep.
+    pub fn status(&self, turn_id: &str) -> Result<TurnStatus, TurnError> {
+        let entry = self.entry(turn_id)?;
+        let done = entry
+            .done
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let state = match (&done, *entry.state()) {
+            (Some(_), _) => "done",
+            (None, RunState::Running | RunState::Cancelling) => "running",
+            (None, RunState::Finishing) => "committing",
+        };
+        Ok(TurnStatus { state, done })
     }
 
     /// `workspace_remove`: forget the workspace, its host data and

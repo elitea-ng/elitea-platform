@@ -18,6 +18,7 @@ fn main() {
             "workspace_bind_project",
             "agent_turn_start",
             "agent_turn_cancel",
+            "agent_turn_status",
             "approval_respond",
             "turn_changes",
             "checkpoint_restore",

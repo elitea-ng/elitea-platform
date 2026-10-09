@@ -24,6 +24,7 @@ describe('createWorkspaceIpc', () => {
       plan_mode: true,
     });
     await ipc.cancelTurn('t1');
+    await ipc.turnStatus('t1');
     await ipc.respondApproval('r1', 'allow_always');
     await ipc.turnChanges('t1');
     await ipc.restore('t1');
@@ -36,6 +37,7 @@ describe('createWorkspaceIpc', () => {
       ['workspace_bind_project', { id: 'w1', project_id: 7 }],
       ['agent_turn_start', { workspace_id: 'w1', project_id: 7, conversation_id: 'c1', application_id: 3, version_id: 9, prompt: 'hi', plan_mode: true }],
       ['agent_turn_cancel', { turn_id: 't1' }],
+      ['agent_turn_status', { turn_id: 't1' }],
       ['approval_respond', { request_id: 'r1', decision: 'allow_always' }],
       ['turn_changes', { turn_id: 't1' }],
       ['checkpoint_restore', { turn_id: 't1' }],

@@ -124,6 +124,55 @@ describe('useWorkspaceTurn', () => {
     expect(result.current.startError).toBe('The agent already finished this turn, so it cannot be stopped.');
   });
 
+  it('re-syncs with the host when the window comes back, and takes a missed done from it', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    await act(() => result.current.start(REQUEST));
+
+    // Still running: a focus changes nothing.
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(result.current.busy).toBe(true));
+
+    // The host sent done while the event was lost.
+    ipc.setTurnStatus('turn-1', { state: 'done', done: { committed: true, conversation_id: 'c1', message_ids: ['q', 'r'], changed_files: 2 } });
+    act(() => {
+      window.dispatchEvent(new Event('focus'));
+    });
+    await waitFor(() => expect(result.current.busy).toBe(false));
+    expect(result.current.view.done).toEqual({ committed: true, conversationId: 'c1', messageIds: ['q', 'r'], changedFiles: 2 });
+
+    // The real event arriving late changes nothing.
+    act(() => ipc.emit(ev(9, { kind: 'done', payload: { committed: true, conversation_id: 'c1', message_ids: ['q', 'r'], changed_files: 2 } })));
+    expect(result.current.busy).toBe(false);
+  });
+
+  it('a cancel answered turn_unknown ends the turn in the UI instead of wedging it', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    await act(() => result.current.start(REQUEST));
+    ipc.failNext('cancelTurn', 'turn_unknown', 'That turn is not known to this app.');
+    ipc.failNext('turnStatus', 'turn_unknown', 'That turn is not known to this app.');
+    await act(() => result.current.cancel());
+    expect(result.current.busy).toBe(false);
+    expect(result.current.view.done?.committed).toBe(false);
+  });
+
+  it('a cancel refused as past running re-syncs and shows the committed turn', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    await act(() => result.current.start(REQUEST));
+    ipc.setTurnStatus('turn-1', { state: 'done', done: { committed: true, conversation_id: 'c1', message_ids: [], changed_files: 0 } });
+    ipc.failNext('cancelTurn', 'turn_not_cancellable', 'finished');
+    await act(() => result.current.cancel());
+    expect(result.current.busy).toBe(false);
+    expect(result.current.view.done?.committed).toBe(true);
+  });
+
   it('surfaces a failed start instead of staying busy', async () => {
     const ipc = createFakeWorkspaceIpc();
     ipc.startTurn = () => Promise.reject(new Error('no agent runtime'));

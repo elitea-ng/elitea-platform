@@ -65,6 +65,7 @@ inside the folder.
 | --- | --- | --- |
 | `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode}` | `{turn_id, execution_id}` |
 | `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
+| `agent_turn_status` | `{turn_id}` | `{state: "running" \| "committing" \| "done", done: DonePayload \| null}` — `done` is the `done` event's payload once it was sent. Rejects `turn_unknown` / `turn_expired` for a turn the host does not keep (an app restart forgets every turn). |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[]}` |
 | `checkpoint_restore` | `{turn_id, path?: string}` | `{restored: string[]}` |
@@ -146,6 +147,9 @@ the start is still committed, as a failed answer (`is_error`), and its
 `error` event comes before `status` `committing`. `done` is always the last
 event of a started turn, and the host holds the workspace (`workspace_busy`)
 until it is sent, so the UI is busy until `done`, not until `error`.
+Events are not replayed: a UI that may have missed one (the window was
+hidden, a cancel was answered `turn_unknown` or `turn_not_cancellable`)
+asks `agent_turn_status` and takes its `done` payload as the event.
 
 `message_ids` are the question's and the answer's message UUIDs, in that
 order, when committed. `approval_request.can_remember` is true when
