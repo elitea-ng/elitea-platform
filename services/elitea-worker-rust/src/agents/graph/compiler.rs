@@ -9,15 +9,16 @@
 #[path = "node_recovery_definition.rs"]
 mod recovery_definition;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::Arc;
 
 use super::code::CodeNodeDefinition;
 use super::code_runtime::{CodeNode, CodeSandboxRuntime};
 use adk_rust::graph::{
-    Channel, Checkpoint, Checkpointer, CompiledGraph, END, GraphAgent, GraphAgentBuilder,
-    GraphError, Node, NodeContext, NodeOutput, Reducer, START, State, StateGraph, StateSchema,
+    Channel, Checkpoint, Checkpointer, CompiledGraph, END, Edge, EdgeTarget, GraphAgent,
+    GraphAgentBuilder, GraphError, Node, NodeContext, NodeOutput, Reducer, START, State,
+    StateGraph, StateSchema,
 };
 use adk_rust::{Event, InvocationContext, Part};
 use async_trait::async_trait;
@@ -568,6 +569,52 @@ fn bind_transition(
         Some(target) => builder.edge(node_id, target),
         None => builder,
     }
+}
+
+/// Keep transitions that meet at one node exclusive.
+///
+/// A stored pipeline runs one node at a time and a node has at most one
+/// transition, so of several transitions into one node only the one on the
+/// taken branch arrives. `StateGraph::compile` turns a node reached by two or
+/// more direct edges into a wait-for-all join that would wait for the branches
+/// not taken and end the run without it. Each such transition becomes a
+/// single-route conditional edge, which ADK never joins. Parallel and Map nodes
+/// join their own branches inside one node and are unaffected.
+fn exclusive_transitions(mut graph: StateGraph) -> StateGraph {
+    let mut arrivals = HashMap::<String, usize>::new();
+    for edge in &graph.edges {
+        match edge {
+            Edge::Direct {
+                target: EdgeTarget::Node(target),
+                ..
+            } => *arrivals.entry(target.clone()).or_default() += 1,
+            Edge::Entry { targets } => {
+                for target in targets {
+                    *arrivals.entry(target.clone()).or_default() += 1;
+                }
+            }
+            Edge::Direct { .. } | Edge::Conditional { .. } => {}
+        }
+    }
+    for edge in &mut graph.edges {
+        if let Edge::Direct {
+            source,
+            target: EdgeTarget::Node(target),
+        } = edge
+            && arrivals
+                .get(target.as_str())
+                .is_some_and(|count| *count > 1)
+        {
+            let target = std::mem::take(target);
+            let route = target.clone();
+            *edge = Edge::Conditional {
+                source: std::mem::take(source),
+                router: Arc::new(move |_: &State| route.clone()),
+                targets: HashMap::from([(target.clone(), EdgeTarget::Node(target))]),
+            };
+        }
+    }
+    graph
 }
 
 #[derive(Clone)]
@@ -1336,14 +1383,13 @@ impl PipelineDefinition {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let mut graph = builder
-            .into_subgraph()?
-            .add_edge(SUBGRAPH_RESULT_NODE, END)
-            .compile()
-            .map_err(PipelineConfigurationError::Graph)?
-            .with_checkpointer_arc(checkpointer)
-            .with_recursion_limit(PIPELINE_RECURSION_LIMIT)
-            .with_max_concurrency(1);
+        let mut graph =
+            exclusive_transitions(builder.into_subgraph()?.add_edge(SUBGRAPH_RESULT_NODE, END))
+                .compile()
+                .map_err(PipelineConfigurationError::Graph)?
+                .with_checkpointer_arc(checkpointer)
+                .with_recursion_limit(PIPELINE_RECURSION_LIMIT)
+                .with_max_concurrency(1);
         let before_interrupts: Vec<&str> =
             self.interrupt_before.iter().map(String::as_str).collect();
         if !before_interrupts.is_empty() {
@@ -1440,10 +1486,12 @@ impl PipelineDefinition {
                 };
                 let transition = node.transition().map(ToOwned::to_owned);
                 let node_id = node.id().to_owned();
-                let mut next = builder.node(
-                    DirectToolNode::new(node.clone(), self.state.clone(), resolver)
-                        .with_events(runtimes.events.clone()),
-                );
+                let mut direct = DirectToolNode::new(node.clone(), self.state.clone(), resolver)
+                    .with_events(runtimes.events.clone());
+                if let Some(authority) = runtimes.node_recovery.clone() {
+                    direct = direct.with_node_recovery(authority);
+                }
+                let mut next = builder.node(direct);
                 if let Some(transition) = transition {
                     let target = if transition == "END" {
                         END
@@ -2062,6 +2110,11 @@ pub(super) fn select_pipeline_result(
     state: &State,
     policy: &PipelineResultPolicy,
 ) -> Option<String> {
+    // A blocked or skipped tool stops the pipeline: its message is the answer, not
+    // whatever a trace or the defaults of outputs that no node wrote would render.
+    if let Some(blocked) = select_last_state_value(state, &["_pipeline_blocked".to_owned()]) {
+        return Some(blocked.into_bounded_text());
+    }
     // A trace proves which node wrote last; when it renders blank, no static
     // value may stand in for that node's answer.
     if let Some(trace) = ResultTrace::from_state(state) {

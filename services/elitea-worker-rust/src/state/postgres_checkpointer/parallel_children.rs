@@ -102,9 +102,10 @@ impl PostgresCheckpointer {
         let ordinal = branch_ordinal(ordinal)?;
         let thread_id = child_thread_id(self, activation, branch, ordinal, input_digest, origin)?;
         let authority = self.scope.authority.for_thread(thread_id.clone())?;
-        let child = PostgresCheckpointer::activate(
+        let child = PostgresCheckpointer::activate_under_root(
             self.pool.clone(),
             authority,
+            &self.run_root_thread_id,
             self.limits,
             Arc::clone(&self.state_writer_lease),
         )

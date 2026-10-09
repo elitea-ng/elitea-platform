@@ -91,9 +91,10 @@ impl PostgresCheckpointer {
             .collect::<Result<Vec<_>, _>>()?;
         let mut threads = BTreeMap::new();
         for (thread_id, authority) in authorities {
-            let child = Self::activate(
+            let child = Self::activate_under_root(
                 self.pool.clone(),
                 authority,
+                &self.run_root_thread_id,
                 self.limits,
                 Arc::clone(&self.state_writer_lease),
             )
@@ -148,7 +149,10 @@ fn admitted_application_paths(paths: &[String]) -> Result<BTreeSet<&str>, Postgr
 }
 
 impl ApplicationCheckpointers {
-    fn for_thread(&self, thread_id: &str) -> Result<&PostgresCheckpointer, GraphError> {
+    pub(in crate::state) fn for_thread(
+        &self,
+        thread_id: &str,
+    ) -> Result<&PostgresCheckpointer, GraphError> {
         self.threads.get(thread_id).ok_or_else(|| {
             PostgresCheckpointError::InvalidScope(
                 "the requested thread is not an admitted application checkpoint",

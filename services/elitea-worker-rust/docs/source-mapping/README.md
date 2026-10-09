@@ -49,6 +49,7 @@ Detailed ledgers:
 - [Dependency advisories 2026-10-08](dependency-advisories-20261008.md) raises the Go standard-library floor to go1.25.13/go1.26.6, updates h2 and chacha20, and proves the MySQL TLS guard that keeps the rsa (RUSTSEC-2023-0071) path unreachable.
 
 - [Recovery guarantees inventory](recovery-guarantees-inventory-20261008.md) records the platform recovery matrix baseline, evidence ruling and ranked gap backlog.
+- [Effectful direct tool nodes](direct-tool-effects-20261008.md) runs effectful toolkit/MCP direct nodes behind the fenced node-recovery journal: never dispatched twice, block/skip stop the pipeline.
 
 - [Sandbox phase deadlines](sandbox-phase-deadlines-20261002.md) separates durable readiness and execution clocks and records rolling compatibility and Docker/Kubernetes browser acceptance.
 
@@ -432,6 +433,8 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Toolkit request recovery](toolkit-request-recovery.md) records browser recovery before execution ID receipt and one-call evidence.
 - [Deferred MCP elicitation](external-mcp-elicitation-deferred.md) records the later client approval option and its authority boundary.
 - [Pipeline size bounds and HTTP snapshot scope](pipeline-size-bounds-http-snapshot-20261008.md) records one 512 KiB pipeline bound across Main and Worker, the non-HTTP snapshot scope, browser evidence and follow-ups.
+- [Exclusive branches and ADK fan-in joins](exclusive-branch-fan-in-20261008.md) records why converging, looping and multi-`END` saved children lost their result, the compiler-level fix, root-graph verification, browser evidence and follow-ups.
+- [Pipeline MCP authorization continuation](pipeline-mcp-authorization-continuation-20261008.md) records Skip/Authorize on a direct pipeline MCP node from Main's HITL wire shape, the sensitive-approval-then-authorization sequence, browser evidence and follow-ups.
 - [Graph fan-out child lineage](graph-fanout-child-lineage-20261008.md) records frozen Parallel/Map child identity across executions, lease-loss control stops and event-driven cancellation (Point 5 C1).
 - [Container build local crate freshness](container-build-local-crate-freshness-20261008.md) records why Rust image builds recompile local crates under a locked shared target cache, the two-worktree build proof and the gate test.
 - [Point 5 V2 contracts and designs](graph-point5-v2-contracts-20261008.md) links the fan-out V2 runtime design, the per-interrupt decision contract and schemas, the Map V1 rewrite, and the HTTP and database action designs.

@@ -8,6 +8,8 @@ use tokio::sync::Mutex;
 
 #[path = "node_recovery_code_owner_tests.rs"]
 mod code_owner_tests;
+#[path = "node_recovery_direct_tool_tests.rs"]
+pub(in crate::agents::graph) mod direct_tool_tests;
 
 struct Lease(AtomicBool);
 impl StateWriterLease for Lease {

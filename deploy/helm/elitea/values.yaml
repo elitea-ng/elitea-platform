@@ -3630,6 +3630,10 @@ worker:
     spoolSizeLimit: 2Gi
     # Rust-only. Enable checkpoint recovery after verifying the deployment contract.
     agentModelCheckpointRecovery: false
+    # Rust-only. Durable node attempt journal: an interrupted effectful node stops
+    # for recovery instead of repeating its effect. Effectful pipeline direct tool
+    # nodes require it; Code nodes use it when present.
+    agentNodeRecovery: false
     # Rust-only deployment-selected Code backends. These are never YAML node inputs.
     # Entries use SandboxRuntimeConfig fields: language, target, audience,
     # image_digest, policy_revision, and timeout_seconds.

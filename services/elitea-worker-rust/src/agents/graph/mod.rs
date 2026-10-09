@@ -48,6 +48,8 @@ mod decision;
 mod direct_tool;
 #[cfg(test)]
 mod direct_tool_tests;
+#[cfg(test)]
+mod fan_in_tests;
 pub(crate) mod fanout_control;
 use elitea_agent_runtime::graph::hitl;
 #[cfg(test)]
@@ -72,6 +74,11 @@ pub(crate) use map_authority::MapCheckpointAuthority;
 pub(crate) use map_reduce::{
     FrozenMapItem, MapActivation, MapChildCheckpoint, MapChildCheckpointerFactory,
     MapExecutionIdentity, MapWorkerKind,
+};
+#[cfg(test)]
+pub(crate) use node_recovery_runtime::tests::direct_tool_tests::{
+    Gate, journaled_node, node_activation, pause_data, recovery_card, state as direct_tool_state,
+    with_decision,
 };
 mod parallel;
 #[cfg(test)]
