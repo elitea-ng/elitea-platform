@@ -744,6 +744,49 @@ async fn a_failed_revoke_is_kept_in_the_keychain_and_retried_at_the_next_launch(
     assert_eq!(tokens, ["refresh-1"; 3]);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_launch_retry_does_not_hold_the_pending_list_across_the_network() {
+    // A slow revocation endpoint: the retry is on the network for a while.
+    let server = deployment(Box::new(|req, _| {
+        if req.path == "/api/v2/auth/native/revoke" {
+            std::thread::sleep(Duration::from_millis(800));
+            return Some(Res::json(200, &json!({})));
+        }
+        None
+    }))
+    .await;
+    let h = harness(|_, _| None);
+    let old = PendingRevoke {
+        origin: server.origin.clone(),
+        client_id: "client".into(),
+        refresh_token: "old".into(),
+        revocation_endpoint: String::new(),
+    };
+    save_pending(h.pending.as_ref(), std::slice::from_ref(&old)).unwrap();
+    let new = PendingRevoke {
+        refresh_token: "new".into(),
+        ..old.clone()
+    };
+
+    // A sign-out failing meanwhile (it holds refresh_gate while it waits
+    // here) must not wait for the retry's revokes.
+    let (waiting, remembered) = tokio::join!(h.service.retry_pending_revokes(), async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        tokio::time::timeout(
+            Duration::from_millis(400),
+            h.service.remember_pending(new.clone()),
+        )
+        .await
+    });
+    assert!(
+        remembered.is_ok(),
+        "remember_pending waited for the retry's network calls"
+    );
+    // The delivered revoke is gone; the one added meanwhile is kept.
+    assert_eq!(waiting, 1);
+    assert_eq!(load_pending(h.pending.as_ref()).unwrap(), [new]);
+}
+
 #[tokio::test]
 async fn sign_out_falls_back_to_the_stored_revocation_endpoint_when_discovery_fails() {
     let (h, server) = signed_in(Arc::default()).await;

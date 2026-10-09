@@ -519,17 +519,39 @@ impl AuthService {
 
     /// Retry the revokes earlier sign-outs could not deliver; called once at
     /// launch. Returns how many are still waiting.
+    ///
+    /// `pending_gate` is never held across the network: a sign-out holds
+    /// `refresh_gate` while it waits for `remember_pending`, so a gate held
+    /// across up to [`crate::store::MAX_PENDING_REVOKES`] revokes would stall every
+    /// refresh behind them. The list is read under the gate, the revokes go
+    /// out without it, and the delivered ones are taken out of whatever the
+    /// list holds by then (a sign-out may have added one meanwhile).
     pub async fn retry_pending_revokes(&self) -> usize {
-        let _gate = self.pending_gate.lock().await;
-        let Ok(list) = load_pending(self.pending_revokes.as_ref()) else {
-            return 0;
+        let snapshot = {
+            let _gate = self.pending_gate.lock().await;
+            let Ok(list) = load_pending(self.pending_revokes.as_ref()) else {
+                return 0;
+            };
+            list
         };
-        let mut waiting = Vec::new();
-        for pending in list {
-            if !self.revoke(&pending).await {
-                waiting.push(pending);
+        if snapshot.is_empty() {
+            return 0;
+        }
+        let mut delivered = Vec::new();
+        for pending in snapshot {
+            if self.revoke(&pending).await {
+                delivered.push(pending);
             }
         }
+        let _gate = self.pending_gate.lock().await;
+        let mut waiting = match load_pending(self.pending_revokes.as_ref()) {
+            Ok(list) => list,
+            Err(error) => {
+                eprintln!("elitea-desktop: could not re-read the pending revokes: {error}");
+                return 0;
+            }
+        };
+        waiting.retain(|pending| !delivered.contains(pending));
         if let Err(error) = save_pending(self.pending_revokes.as_ref(), &waiting) {
             eprintln!("elitea-desktop: could not update the pending revokes: {error}");
         }
