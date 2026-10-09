@@ -7,7 +7,7 @@
  * than touching the module singleton — that is the reason the factory is
  * exported (same rationale as `createNavBlockerStore`).
  */
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 
 import { writePersistedProject } from '@/shared/lib/selectedProjectPersistence';
@@ -73,6 +73,45 @@ describe('createSessionStore', () => {
 
     expect(store.getState().user).toBeUndefined();
     expect(store.getState().probeStatus).toBe(401);
+  });
+
+  /*
+   * Desktop (ADR-0029): a native client holds a bearer token, never the
+   * browser-session cookie /auth/info reads. Asking it answered "not signed
+   * in" (and, page-relative, it went to tauri://localhost/auth/info, which the
+   * host's fetch refuses) — the index route then showed Loading forever.
+   */
+  describe('in the desktop build', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('resolves the user from /social/author and never asks /auth/info', async () => {
+      vi.stubEnv('MODE', 'desktop');
+      let infoAsked = false;
+      server.use(
+        http.get(INFO, () => {
+          infoAsked = true;
+          return HttpResponse.json({ authenticated: false });
+        }),
+        author('proj-7'),
+      );
+      const store = createSessionStore({ apiBaseUrl: API_BASE });
+      await store.getState().fetchSession();
+
+      expect(infoAsked).toBe(false);
+      expect(store.getState().user).toMatchObject({ id: 'u-42', personal_project_id: 'proj-7' });
+      expect(store.getState()).toMatchObject({ loaded: true, probeStatus: 200 });
+    });
+
+    it('settles with no user (and no status) when /social/author cannot name one', async () => {
+      vi.stubEnv('MODE', 'desktop');
+      server.use(http.get(AUTHOR, () => new HttpResponse(null, { status: 401 })));
+      const store = createSessionStore({ apiBaseUrl: API_BASE });
+      await store.getState().fetchSession();
+
+      expect(store.getState()).toMatchObject({ user: undefined, loaded: true, probeStatus: undefined });
+    });
   });
 
   it('starts with no user and loaded=false before any probe', () => {

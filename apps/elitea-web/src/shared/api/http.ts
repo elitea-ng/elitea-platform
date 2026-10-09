@@ -191,7 +191,7 @@ function prepare(
   bearer: string | undefined,
   native: NativeTransport | undefined,
 ): PreparedRequest {
-  const base = new URL(cfg.baseUrl, window.location.origin);
+  const base = new URL(cfg.baseUrl, native?.origin ?? window.location.origin); // a native page origin (tauri://) is not the deployment
   const url = buildUrl(options.originRoot === true ? siblingRoot(base) : base.toString(), path, options.query);
   const headers = new Headers(options.headers);
   const body = serializeBody(method, options.body, url);
