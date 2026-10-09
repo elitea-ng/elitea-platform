@@ -92,6 +92,7 @@ fn temp_dir() -> PathBuf {
 struct Harness {
     service: AuthService,
     keychain: Arc<MemoryStore>,
+    pending: Arc<MemoryStore>,
     browser: Arc<FakeBrowser>,
     dir: PathBuf,
 }
@@ -106,6 +107,7 @@ fn harness(
     respond: impl Fn(&HashMap<String, String>, &str) -> Option<String> + Send + Sync + 'static,
 ) -> Harness {
     let keychain = Arc::new(MemoryStore::default());
+    let pending = Arc::new(MemoryStore::default());
     let browser = Arc::new(FakeBrowser {
         respond: Box::new(respond),
         opened: std::sync::Mutex::default(),
@@ -113,6 +115,7 @@ fn harness(
     let dir = temp_dir();
     let service = AuthService::new(AuthConfig {
         store: keychain.clone(),
+        pending_revokes: pending.clone(),
         files: SettingsFiles::new(dir.clone()),
         tokens: TokenEndpoint::new("0.1.0").unwrap(),
         opener: browser.clone(),
@@ -123,6 +126,7 @@ fn harness(
     Harness {
         service,
         keychain,
+        pending,
         browser,
         dir,
     }
@@ -251,6 +255,7 @@ async fn a_callback_with_the_wrong_state_is_ignored_and_stores_nothing() {
         harness(move |_, _| Some(format!("code=the-code&state=attacker-chosen&iss={issuer}")));
     h.service = AuthService::new(AuthConfig {
         store: h.keychain.clone(),
+        pending_revokes: h.pending.clone(),
         files: SettingsFiles::new(h.dir.clone()),
         tokens: TokenEndpoint::new("0.1.0").unwrap(),
         opener: h.browser.clone(),
@@ -320,6 +325,7 @@ async fn closing_the_browser_without_finishing_times_out() {
     let mut h = harness(|_, _| None);
     h.service = AuthService::new(AuthConfig {
         store: h.keychain.clone(),
+        pending_revokes: h.pending.clone(),
         files: SettingsFiles::new(h.dir.clone()),
         tokens: TokenEndpoint::new("0.1.0").unwrap(),
         opener: h.browser.clone(),
@@ -557,6 +563,7 @@ fn seed(h: &Harness, origin: &str, refresh: &str) {
             client_id: "desktop".into(),
             device_id: "dev-1".into(),
             refresh_token: refresh.into(),
+            revocation_endpoint: String::new(),
         },
     )
     .unwrap();
@@ -685,4 +692,67 @@ async fn a_keychain_failure_after_the_code_exchange_revokes_the_new_session() {
         .expect("the orphaned session is revoked");
     assert_eq!(revoke.form()["token"], "refresh-1");
     assert!(!h.service.state().unwrap().signed_in);
+}
+
+#[tokio::test]
+async fn a_failed_revoke_is_kept_in_the_keychain_and_retried_at_the_next_launch() {
+    let revoke_ok = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let challenge = Arc::new(std::sync::Mutex::new(String::new()));
+    let inner = pkce_checking_deployment(challenge.clone(), Arc::default());
+    let flag = revoke_ok.clone();
+    let server = deployment(Box::new(move |req, form| {
+        if req.path == "/api/v2/auth/native/revoke" && !flag.load(Ordering::SeqCst) {
+            return Some(Res::json(503, &json!({"error": "unavailable"})));
+        }
+        inner(req, form)
+    }))
+    .await;
+    let issuer = server.origin.clone();
+    let h = harness(move |q, url| {
+        *challenge.lock().unwrap() = q["code_challenge"].clone();
+        approve_with(issuer.clone())(q, url)
+    });
+    h.service.connect(&server.origin).await.unwrap();
+    h.service.sign_in().await.unwrap();
+
+    assert!(!h.service.sign_out().await.unwrap(), "the revoke failed");
+    // Signed out locally all the same; the token waits in its own keychain item.
+    assert!(h.keychain.raw().is_none());
+    assert!(!h.service.state().unwrap().signed_in);
+    assert!(h.pending.raw().unwrap().contains("refresh-1"));
+    assert!(!std::fs::read_dir(&h.dir).unwrap().any(|f| {
+        std::fs::read_to_string(f.unwrap().path()).is_ok_and(|t| t.contains("refresh-1"))
+    }), "no refresh token in a plain file");
+
+    // Still down at the next launch: kept.
+    assert_eq!(h.service.retry_pending_revokes().await, 1);
+    revoke_ok.store(true, Ordering::SeqCst);
+    assert_eq!(h.service.retry_pending_revokes().await, 0);
+    assert_eq!(h.pending.raw(), None);
+    let tokens: Vec<String> = server
+        .seen()
+        .iter()
+        .filter(|r| r.path == "/api/v2/auth/native/revoke")
+        .map(|r| r.form()["token"].clone())
+        .collect();
+    assert_eq!(tokens, ["refresh-1"; 3]);
+}
+
+#[tokio::test]
+async fn sign_out_falls_back_to_the_stored_revocation_endpoint_when_discovery_fails() {
+    let (h, server) = signed_in(Arc::default()).await;
+    // Discovery now fails (the origin moved away), the stored endpoint still answers.
+    let mut session = load_session(h.keychain.as_ref()).unwrap().unwrap();
+    assert!(session.revocation_endpoint.ends_with("/api/v2/auth/native/revoke"));
+    session.origin = "http://127.0.0.1:9".into();
+    save_session(h.keychain.as_ref(), &session).unwrap();
+
+    assert!(h.service.sign_out().await.unwrap());
+    assert!(
+        server
+            .seen()
+            .iter()
+            .any(|r| r.path == "/api/v2/auth/native/revoke")
+    );
+    assert_eq!(h.pending.raw(), None);
 }

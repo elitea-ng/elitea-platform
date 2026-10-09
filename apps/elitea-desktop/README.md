@@ -26,7 +26,11 @@ apps/elitea-desktop/src-tauri (Rust host) <--IPC--> the bundled webview
   `ai.elitea.desktop`). The webview is handed a 15-minute access token over IPC
   and holds it in memory; it never reaches web storage. Refresh rotates the
   token; a lost response is retried with the old token (the server re-delivers
-  within its grace window). `device_revoked` wipes local state.
+  within its grace window). `device_revoked` wipes local state. Sign-out
+  revokes the device session server-side (falling back to the revocation
+  endpoint stored with the token when discovery is unreachable); a revoke that
+  does not get through is kept in a second keychain item (`pending-revoke`)
+  and retried at the next launch, while the local session is forgotten at once.
 - **Client policy**: stored verbatim (`client-policy.json` in the app config
   directory) from every token response. Enforcing `local_work` comes with the
   local runtime.

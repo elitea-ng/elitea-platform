@@ -20,7 +20,7 @@ message written for a person.
 | `host_sign_in` | — | `HostState` |
 | `host_access_token` | — | `{token, expiresIn}` or `null` |
 | `host_refresh` | — | `"refreshed" \| "ended" \| "unavailable" \| "upgrade_required"` |
-| `host_sign_out` | — | `null` |
+| `host_sign_out` | — | `boolean`: `true` when the server confirmed the revoke; `false` means it is kept (keychain) and retried at the next launch |
 | `host_wipe` | — | `null` |
 
 ## Workspaces (`src/local_commands.rs`, `src/workspaces.rs`)

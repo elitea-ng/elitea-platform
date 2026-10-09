@@ -21,7 +21,10 @@ use crate::error::HostError;
 use crate::loopback::LoopbackListener;
 use crate::pkce;
 use crate::settings::{Settings, SettingsFiles, resolve_client_id};
-use crate::store::{SecretStore, StoredSession, load_session, save_session};
+use crate::store::{
+    PendingRevoke, SecretStore, StoredSession, load_pending, load_session, save_pending,
+    save_session,
+};
 use crate::tokens::{CodeExchange, TokenEndpoint, TokenOutcome, TokenSet};
 
 /// How long the person has to finish signing in in the browser.
@@ -85,6 +88,9 @@ struct Cached {
 
 pub struct AuthService {
     store: Arc<dyn SecretStore>,
+    /// Sign-outs whose server revoke failed, retried at launch (own keychain item).
+    pending_revokes: Arc<dyn SecretStore>,
+    pending_gate: Mutex<()>,
     files: SettingsFiles,
     tokens: TokenEndpoint,
     opener: Arc<dyn BrowserOpener>,
@@ -105,6 +111,7 @@ pub struct AuthService {
 
 pub struct AuthConfig {
     pub store: Arc<dyn SecretStore>,
+    pub pending_revokes: Arc<dyn SecretStore>,
     pub files: SettingsFiles,
     pub tokens: TokenEndpoint,
     pub opener: Arc<dyn BrowserOpener>,
@@ -116,6 +123,8 @@ impl AuthService {
     pub fn new(config: AuthConfig) -> Self {
         Self {
             store: config.store,
+            pending_revokes: config.pending_revokes,
+            pending_gate: Mutex::new(()),
             files: config.files,
             tokens: config.tokens,
             opener: config.opener,
@@ -244,7 +253,15 @@ impl AuthService {
             TokenOutcome::Ok(tokens) => {
                 let refresh_token = tokens.refresh_token.clone();
                 let gate = self.refresh_gate.lock().await;
-                let adopted = self.adopt(&origin_text, &client_id, tokens, None).await;
+                let adopted = self
+                    .adopt(
+                        &origin_text,
+                        &client_id,
+                        &auth.revocation_endpoint,
+                        tokens,
+                        None,
+                    )
+                    .await;
                 drop(gate);
                 if let Err(error) = adopted {
                     // The keychain refused the new session, so nothing here can
@@ -267,6 +284,7 @@ impl AuthService {
         &self,
         origin: &str,
         client_id: &str,
+        revocation_endpoint: &str,
         tokens: TokenSet,
         previous: Option<&StoredSession>,
     ) -> Result<(), HostError> {
@@ -280,6 +298,7 @@ impl AuthService {
             client_id: client_id.to_owned(),
             device_id,
             refresh_token: tokens.refresh_token.clone(),
+            revocation_endpoint: revocation_endpoint.to_owned(),
         };
         if let Err(error) = save_session(self.store.as_ref(), &session) {
             if previous.is_none() {
@@ -373,8 +392,14 @@ impl AuthService {
         }
         match outcome {
             TokenOutcome::Ok(tokens) => {
-                self.adopt(&session.origin, &session.client_id, tokens, Some(&session))
-                    .await?;
+                self.adopt(
+                    &session.origin,
+                    &session.client_id,
+                    &auth.revocation_endpoint,
+                    tokens,
+                    Some(&session),
+                )
+                .await?;
                 Ok(RefreshResult::Refreshed)
             }
             // The session is gone for good: forget it.
@@ -414,25 +439,75 @@ impl AuthService {
 
     // ---- sign out ------------------------------------------------------
 
-    /// Revoke the device session on the server (best effort), then forget it.
-    pub async fn sign_out(&self) -> Result<(), HostError> {
+    /// Revoke the device session on the server, then forget it. A revoke that
+    /// does not get through (offline, deployment down) is remembered in its
+    /// own keychain item and retried at the next launch
+    /// ([`Self::retry_pending_revokes`]); the local session is forgotten
+    /// either way. Returns whether the server confirmed the revoke.
+    pub async fn sign_out(&self) -> Result<bool, HostError> {
         // Held across the revoke too: a refresh finishing meanwhile would
         // otherwise rotate the token being revoked and store the new one.
         let _gate = self.refresh_gate.lock().await;
-        if let Some(session) = self.current_session().await?
-            && let Ok(origin) = Url::parse(&session.origin)
-            && let Ok(document) = discovery::fetch_discovery(self.tokens.http(), &origin).await
-            && let Ok(auth) = document.native_auth()
-        {
-            self.tokens
-                .revoke(
-                    &auth.revocation_endpoint,
-                    &session.refresh_token,
-                    &session.client_id,
-                )
-                .await;
+        let mut revoked = true;
+        if let Some(session) = self.current_session().await? {
+            let pending = PendingRevoke::from(&session);
+            revoked = self.revoke(&pending).await;
+            if !revoked {
+                self.remember_pending(pending).await;
+            }
         }
-        self.wipe_locked().await
+        self.wipe_locked().await?;
+        Ok(revoked)
+    }
+
+    /// Revoke at the endpoint fresh discovery names, else at the one stored
+    /// with the token (discovery validated it when the token was issued).
+    async fn revoke(&self, pending: &PendingRevoke) -> bool {
+        let fresh = match Url::parse(&pending.origin) {
+            Ok(origin) => discovery::fetch_discovery(self.tokens.http(), &origin)
+                .await
+                .ok()
+                .and_then(|d| d.native_auth().ok().map(|a| a.revocation_endpoint.clone())),
+            Err(_) => None,
+        };
+        let Some(endpoint) = fresh.or_else(|| {
+            (!pending.revocation_endpoint.is_empty()).then(|| pending.revocation_endpoint.clone())
+        }) else {
+            return false;
+        };
+        self.tokens
+            .revoke(&endpoint, &pending.refresh_token, &pending.client_id)
+            .await
+    }
+
+    async fn remember_pending(&self, pending: PendingRevoke) {
+        let _gate = self.pending_gate.lock().await;
+        let result = load_pending(self.pending_revokes.as_ref()).and_then(|mut list| {
+            list.push(pending);
+            save_pending(self.pending_revokes.as_ref(), &list)
+        });
+        if let Err(error) = result {
+            eprintln!("elitea-desktop: could not keep a failed revoke for retry: {error}");
+        }
+    }
+
+    /// Retry the revokes earlier sign-outs could not deliver; called once at
+    /// launch. Returns how many are still waiting.
+    pub async fn retry_pending_revokes(&self) -> usize {
+        let _gate = self.pending_gate.lock().await;
+        let Ok(list) = load_pending(self.pending_revokes.as_ref()) else {
+            return 0;
+        };
+        let mut waiting = Vec::new();
+        for pending in list {
+            if !self.revoke(&pending).await {
+                waiting.push(pending);
+            }
+        }
+        if let Err(error) = save_pending(self.pending_revokes.as_ref(), &waiting) {
+            eprintln!("elitea-desktop: could not update the pending revokes: {error}");
+        }
+        waiting.len()
     }
 
     /// Forget the session and everything derived from it, without a server call.

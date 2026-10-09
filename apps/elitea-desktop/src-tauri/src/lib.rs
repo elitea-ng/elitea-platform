@@ -42,6 +42,8 @@ use crate::workspaces::WorkspaceStore;
 /// Keychain item identity. The service matches the bundle identifier.
 const KEYCHAIN_SERVICE: &str = "ai.elitea.desktop";
 const KEYCHAIN_ACCOUNT: &str = "device-session";
+/// Sign-outs whose server revoke did not get through, retried at launch.
+const KEYCHAIN_PENDING_REVOKE_ACCOUNT: &str = "pending-revoke";
 
 /// Baked in at build time when a deployment's own build registers a different
 /// client id (`ELITEA_DESKTOP_CLIENT_ID=... tauri build`); see the README.
@@ -83,6 +85,10 @@ pub fn run() {
             let tokens = TokenEndpoint::new(env!("CARGO_PKG_VERSION"))?;
             let auth = AuthService::new(AuthConfig {
                 store: Arc::new(KeyringStore::new(KEYCHAIN_SERVICE, KEYCHAIN_ACCOUNT)?),
+                pending_revokes: Arc::new(KeyringStore::new(
+                    KEYCHAIN_SERVICE,
+                    KEYCHAIN_PENDING_REVOKE_ACCOUNT,
+                )?),
                 files: SettingsFiles::new(config_dir.clone()),
                 tokens,
                 opener: Arc::new(SystemBrowser(app.handle().clone())),
@@ -90,6 +96,12 @@ pub fn run() {
                 runtime_client_id: std::env::var("ELITEA_DESKTOP_CLIENT_ID").ok(),
             });
             let auth = Arc::new(auth);
+            {
+                let auth = auth.clone();
+                tauri::async_runtime::spawn(async move {
+                    auth.retry_pending_revokes().await;
+                });
+            }
             let stored_origin = auth.state().ok().and_then(|s| s.origin);
             http_scope::grant_stored(app.handle(), stored_origin.as_deref());
             // Local work (ADR-0029 D0): workspaces and the local agent turn.

@@ -20,6 +20,10 @@ pub struct StoredSession {
     pub client_id: String,
     pub device_id: String,
     pub refresh_token: String,
+    /// The revocation endpoint discovery named when this token was issued:
+    /// the sign-out fallback when discovery cannot be fetched at that moment.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub revocation_endpoint: String,
 }
 
 impl fmt::Debug for StoredSession {
@@ -29,8 +33,65 @@ impl fmt::Debug for StoredSession {
             .field("client_id", &self.client_id)
             .field("device_id", &self.device_id)
             .field("refresh_token", &"<redacted>")
+            .field("revocation_endpoint", &self.revocation_endpoint)
             .finish()
     }
+}
+
+/// A signed-out session whose server-side revoke did not get through. Kept in
+/// its OWN keychain item (the refresh token is a secret, so never a file)
+/// and retried at the next launch.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PendingRevoke {
+    pub origin: String,
+    pub client_id: String,
+    pub refresh_token: String,
+    #[serde(default)]
+    pub revocation_endpoint: String,
+}
+
+impl fmt::Debug for PendingRevoke {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PendingRevoke")
+            .field("origin", &self.origin)
+            .field("client_id", &self.client_id)
+            .field("refresh_token", &"<redacted>")
+            .field("revocation_endpoint", &self.revocation_endpoint)
+            .finish()
+    }
+}
+
+impl From<&StoredSession> for PendingRevoke {
+    fn from(session: &StoredSession) -> Self {
+        Self {
+            origin: session.origin.clone(),
+            client_id: session.client_id.clone(),
+            refresh_token: session.refresh_token.clone(),
+            revocation_endpoint: session.revocation_endpoint.clone(),
+        }
+    }
+}
+
+/// At most this many revokes wait; the oldest is dropped beyond it.
+pub const MAX_PENDING_REVOKES: usize = 8;
+
+/// The waiting revokes. A value that does not parse reads as none.
+pub fn load_pending(store: &dyn SecretStore) -> Result<Vec<PendingRevoke>, HostError> {
+    Ok(store
+        .load()?
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default())
+}
+
+/// Replace the waiting revokes; an empty list removes the keychain item.
+pub fn save_pending(store: &dyn SecretStore, pending: &[PendingRevoke]) -> Result<(), HostError> {
+    if pending.is_empty() {
+        return store.clear();
+    }
+    let start = pending.len().saturating_sub(MAX_PENDING_REVOKES);
+    let raw = serde_json::to_string(&pending[start..])
+        .map_err(|e| HostError::Internal(e.to_string()))?;
+    store.save(&raw)
 }
 
 /// A single secret slot.
@@ -140,6 +201,7 @@ mod tests {
             client_id: "desktop".into(),
             device_id: "dev-1".into(),
             refresh_token: "r-secret-token-value".into(),
+            revocation_endpoint: String::new(),
         }
     }
 
@@ -167,5 +229,35 @@ mod tests {
         let printed = format!("{:?}", session());
         assert!(!printed.contains("r-secret-token-value"));
         assert!(printed.contains("<redacted>"));
+        let pending = format!("{:?}", PendingRevoke::from(&session()));
+        assert!(!pending.contains("r-secret-token-value"));
+    }
+
+    #[test]
+    fn a_session_stored_before_the_endpoint_field_still_loads() {
+        let store = MemoryStore::default();
+        store
+            .save(r#"{"origin":"https://a","client_id":"desktop","device_id":"d","refresh_token":"r"}"#)
+            .unwrap();
+        let loaded = load_session(&store).unwrap().unwrap();
+        assert_eq!(loaded.revocation_endpoint, "");
+    }
+
+    #[test]
+    fn pending_revokes_are_bounded_and_an_empty_list_clears_the_item() {
+        let store = MemoryStore::default();
+        assert!(load_pending(&store).unwrap().is_empty());
+        let many: Vec<PendingRevoke> = (0..MAX_PENDING_REVOKES + 3)
+            .map(|n| PendingRevoke {
+                refresh_token: format!("r{n}"),
+                ..PendingRevoke::from(&session())
+            })
+            .collect();
+        save_pending(&store, &many).unwrap();
+        let kept = load_pending(&store).unwrap();
+        assert_eq!(kept.len(), MAX_PENDING_REVOKES);
+        assert_eq!(kept[0].refresh_token, "r3", "the oldest are dropped");
+        save_pending(&store, &[]).unwrap();
+        assert_eq!(store.raw(), None);
     }
 }
