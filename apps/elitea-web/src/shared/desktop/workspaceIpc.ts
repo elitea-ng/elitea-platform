@@ -180,7 +180,7 @@ export function createWorkspaceIpc(hostInvoke: HostInvoke, listen: ListenFn): Wo
   };
 }
 
-interface TauriEventInternals {
+export interface TauriEventInternals {
   invoke: HostInvoke;
   transformCallback(callback: (envelope: TauriEnvelope) => void, once?: boolean): number;
 }
@@ -189,7 +189,7 @@ interface TauriEventInternals {
  * `listen` over `window.__TAURI_INTERNALS__` — what `@tauri-apps/api/event`
  * does, without the package (same reasoning as `hostBridge.ts`).
  */
-function tauriListen(internals: TauriEventInternals): ListenFn {
+export function tauriListen(internals: TauriEventInternals): ListenFn {
   return async (channel, handler) => {
     const callbackId = internals.transformCallback((envelope) => handler(envelope.payload));
     const eventId = await internals.invoke<number>('plugin:event|listen', {
