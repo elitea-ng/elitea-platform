@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "elitea.pipeline.fanout-interrupt-resolved.v1",
+  "title": "agent_hitl_resolved frame metadata",
+  "description": "Main-emitted durable frame (response_metadata.interrupt_resolved_v1). Other tabs, replay and reload drop the card. Carries no decision value.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "interrupt_key",
+    "interrupt_id",
+    "state",
+    "action",
+    "revision"
+  ],
+  "properties": {
+    "schema": {
+      "const": "elitea.pipeline.fanout-interrupt-resolved.v1"
+    },
+    "interrupt_key": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "not": {
+        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    },
+    "interrupt_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[\\x21-\\x7e][\\x20-\\x7e]{0,511}$"
+    },
+    "state": {
+      "enum": [
+        "DECIDED",
+        "CANCELLED",
+        "SUPERSEDED"
+      ]
+    },
+    "action": {
+      "oneOf": [
+        {
+          "enum": [
+            "approve",
+            "reject",
+            "edit",
+            "block_with_comment",
+            "answer",
+            "authorize",
+            "skip",
+            "continue"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {
+        "state": {
+          "const": "DECIDED"
+        },
+        "action": {
+          "enum": [
+            "approve",
+            "reject",
+            "edit",
+            "block_with_comment",
+            "answer",
+            "authorize",
+            "skip",
+            "continue"
+          ]
+        }
+      }
+    },
+    {
+      "properties": {
+        "state": {
+          "enum": [
+            "CANCELLED",
+            "SUPERSEDED"
+          ]
+        },
+        "action": {
+          "type": "null"
+        }
+      }
+    }
+  ]
+}
