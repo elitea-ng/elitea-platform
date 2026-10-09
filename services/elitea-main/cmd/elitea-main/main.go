@@ -35,6 +35,7 @@ import (
 	configurationapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/configurations"
 	v2convs "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/conversations"
 	v2deepwiki "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/deepwiki"
+	desktopopsapi "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/desktopops"
 	v2evaluation "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/evaluation"
 	v2events "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/events"
 	v2folders "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/folders"
@@ -1650,6 +1651,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	// as "configured" downstream, and both consumers decide on `!= nil`.
 	var toolkitToolRun toolkitrun.UseCase
 	var toolkitDiscovery discovery.UseCase
+	// The desktop's resolved definition (ADR-0029 decision 5a), assigned only
+	// under the same guard so an absent agent plane leaves a NIL interface.
+	var clientApplicationVersions desktopopsapi.ResolvedVersionUseCase
 	var mcpToolkitRun v2mcp.ToolkitRunUseCase
 	// The unattended pipeline entry points (issues 192, 193).
 	//
@@ -1805,6 +1809,9 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		// Index ingestion can remain disabled for that deployment.
 		toolkitDiscovery = publicRoutes.ToolkitDiscovery
 		toolkitToolRun = publicRoutes.ToolkitCallTool
+		if publicRoutes.ClientApplicationVersions != nil {
+			clientApplicationVersions = publicRoutes.ClientApplicationVersions
+		}
 		mcpToolkitRun = publicRoutes.ToolkitCallTool
 		if publicRoutes.IndexStart != nil {
 			if publicRoutes.ToolkitCallTool != nil {
@@ -2314,6 +2321,10 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("compose local turn routes: %w", err)
 	}
+	currentResolvedVersion, err := composeResolvedVersion(pool, clientApplicationVersions, apiGroupAuth)
+	if err != nil {
+		return fmt.Errorf("compose resolved version route: %w", err)
+	}
 
 	r := api.NewRouter(api.RouterConfig{
 		AdminUI:                      adminUICfg,
@@ -2391,6 +2402,7 @@ func run(ctx context.Context, logger *slog.Logger) (runErr error) {
 		SCIMClientAddresses:        scimClientAddresses,
 		CurrentAgentCancel:         currentAgentCancel,
 		CurrentLocalTurns:          currentLocalTurns,
+		CurrentResolvedVersion:     currentResolvedVersion,
 		CurrentNodeRecovery:        currentNodeRecovery,
 		CurrentApplicationTask:     currentApplicationTask,
 		CurrentIndexCancel:         currentIndexCancel,

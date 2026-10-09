@@ -5,7 +5,7 @@ info:
   # The client contract (ADR-0025 decision 6): the major/minor version of the
   # `client`-tagged subset. internal/api/clientcontract pins it to the lock
   # file of the same major and to what discovery serves.
-  x-elitea-client-contract: "1.5"
+  x-elitea-client-contract: "1.6"
   description: |
     External REST API for the Elitea Platform (elitea-main Go service).
     Wire-compatible drop-in replacement for pylon_main (Python/Flask).
@@ -3618,6 +3618,102 @@ components:
         `local_turn_unavailable`, `unsupported_media_type`,
         `request_too_large`, `local_turn_failed`. NOTE(W2):
         internal/api/v2/localturns/route.go:241 (`writeUseCaseError`).
+      required: [error]
+      properties:
+        error: { type: string }
+        message: { type: string }
+
+    ResolvedApplicationVersion:
+      type: object
+      description: >-
+        One version resolved for a desktop's local runtime (ADR-0029 decision
+        5a). NOTE(W2): internal/infra/storage/client_application_version.go:59
+        (`ClientApplicationVersion`).
+      required: [schema_version, project_id, application_id, version_id, version_details, definition_sha256]
+      properties:
+        schema_version:
+          type: string
+          description: '`elitea.client.resolved-application-version.v1`.'
+        project_id: { type: integer, format: int64 }
+        application_id: { type: integer, format: int64 }
+        version_id: { type: integer, format: int64 }
+        definition_sha256:
+          type: string
+          description: SHA-256 (hex) of `version_details` and the three ids; also the ETag.
+        version_details:
+          $ref: '#/components/schemas/ResolvedApplicationVersionDetails'
+    ResolvedApplicationVersionDetails:
+      type: object
+      additionalProperties: true
+      x-elitea-passthrough: >-
+        NOTE(W2): the saved version after the shared admission freeze, the
+        object the worker's runtime-context route serves minus credentials;
+        its keys follow the version-details projection
+        (internal/infra/storage/client_application_version.go:160,
+        `ProjectClientApplicationVersion`).
+      required: [tools]
+      properties:
+        instructions: { type: string }
+        agent_type: { type: string }
+        tools:
+          type: array
+          items:
+            $ref: '#/components/schemas/ResolvedApplicationTool'
+    ResolvedApplicationTool:
+      type: object
+      description: >-
+        One tool of a resolved version. `kind` is `remote_toolkit`,
+        `application` or `platform_mcp`. NOTE(W2):
+        internal/infra/storage/client_application_version.go:210
+        (`projectClientTool`).
+      required: [kind, type]
+      properties:
+        kind: { type: string }
+        type: { type: string }
+        id: { type: integer, format: int64, nullable: true }
+        name: { type: string, nullable: true }
+        toolkit_name: { type: string, nullable: true }
+        description: { type: string, nullable: true }
+        agent_type:
+          type: string
+          description: An `application` tool's agent type.
+        application_id: { type: integer, format: int64 }
+        application_version_id: { type: integer, format: int64 }
+        nested_skill_registry:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            x-elitea-passthrough: >-
+              NOTE(W2): one skill a nested agent carries, as the freeze recorded
+              it (internal/infra/storage/client_application_version.go:248).
+        server_name:
+          type: string
+          description: A `platform_mcp` tool's server.
+        selected_tools:
+          type: array
+          items: { type: string }
+          description: A `remote_toolkit`'s tools the version selects; empty means all.
+        toolkit_ref:
+          $ref: '#/components/schemas/ResolvedToolkitRef'
+    ResolvedToolkitRef:
+      type: object
+      description: >-
+        The opaque reference of one saved toolkit. `ref` is stable for the
+        toolkit and carries no credential. NOTE(W2):
+        internal/infra/storage/client_application_version.go:199
+        (`ClientToolkitRef`).
+      required: [toolkit_id, project_id, ref]
+      properties:
+        toolkit_id: { type: integer, format: int64 }
+        project_id: { type: integer, format: int64 }
+        ref: { type: string, pattern: '^tkr1_[0-9a-f]{32}$' }
+    DesktopOperationError:
+      type: object
+      description: >-
+        A refused desktop operation (resolveApplicationVersion,
+        executeRemoteToolkitTool). `error` is a machine code. NOTE(W2):
+        internal/api/v2/desktopops/resolved_version.go:86 (`serve`).
       required: [error]
       properties:
         error: { type: string }
@@ -16861,6 +16957,111 @@ paths:
               schema:
                 $ref: '#/components/schemas/LocalTurnError'
         '500': { $ref: '#/components/responses/500' }
+
+  /elitea_core/resolved_version/prompt_lib/{project_id}/{application_id}/{version_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: application_id
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+        description: The agent or pipeline id.
+      - name: version_id
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+        description: The version id, which must belong to `application_id`.
+    get:
+      operationId: resolveApplicationVersion
+      summary: An agent or pipeline version resolved for execution, without secrets
+      description: |
+        Client contract 1.6 (ADR-0029 decision 5a). The version a desktop's
+        local runtime runs: instructions, `llm_settings` (model resolved),
+        `pipeline_settings`, variables, frozen skills, nested agent references
+        and tools. It is the projection the worker's private runtime-context
+        route serves, from the same freeze, with every credential removed.
+
+        TOOLS. Each entry has a `kind`. `remote_toolkit`: a saved toolkit, with
+        its `selected_tools` and a `toolkit_ref`; it carries no settings, so
+        run its tools with executeRemoteToolkitTool. `application`: a nested
+        agent; resolve it with this operation and its
+        `application_id`/`application_version_id`. `platform_mcp`: an internal
+        platform MCP server the version selects (`server_name`). No credential,
+        vault secret, `{{secret.*}}` reference or MCP OAuth material is ever in
+        the document; a secret reference outside the tools reads
+        `[secret withheld]`.
+
+        Memory recall is not part of the document: startLocalTurn answers it.
+
+        WHO. Any authenticated caller with `models.applications.version.details`
+        in the project, browser sessions included (it is a read).
+
+        CACHING. `definition_sha256` (also the `ETag`) changes whenever the
+        resolved document does. The document is resolved on every call.
+      tags: [applications, client]
+      parameters:
+        - $ref: '#/components/parameters/XClientVersion'
+      responses:
+        '426': { $ref: '#/components/responses/ClientUpgradeRequired' }
+        '200':
+          description: The resolved version.
+          headers:
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResolvedApplicationVersion'
+        '400':
+          description: >-
+            An id that is not a positive integer
+            (`invalid_resolved_version_request`), or an `X-Client-Version` that
+            does not parse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/DesktopOperationError'
+                  - $ref: '#/components/schemas/InvalidClientVersionError'
+        '401': { $ref: '#/components/responses/401' }
+        '403':
+          description: No `models.applications.version.details` in the project.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '404':
+          description: No such version of this application in the project (`application_version_not_found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '422':
+          description: >-
+            The version cannot be resolved for execution
+            (`application_version_unresolvable`): a cloud run of it would be
+            refused too, for example a toolkit credential the caller cannot see
+            or a model missing from the project's catalogue.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '500': { $ref: '#/components/responses/500' }
+        '501':
+          description: This deployment runs no cloud agents (`resolved_version_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
+        '503':
+          description: A dependency could not be read (`resolved_version_unavailable`); retry.
+          headers:
+            Retry-After:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DesktopOperationError'
 
   /elitea_core/task/prompt_lib/{project_id}/{response_message_id}:
     parameters:

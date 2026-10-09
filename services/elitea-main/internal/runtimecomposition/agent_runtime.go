@@ -8,6 +8,7 @@ import (
 	agentexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/agentexecution"
 	configurationapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/configurations"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/mcpregistry"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/platformconfig"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -145,4 +146,24 @@ func (runtime *CurrentConfigurationsRuntime) NewToolkitSettingsValidator(
 	}
 	settings, _, _, err := newCurrentToolkitSettingsGraph(pool, runtime)
 	return settings, err
+}
+
+// NewClientApplicationVersionService composes the desktop's resolved
+// definition (ADR-0029 decision 5a) from the SAME freezer and the same
+// tenant-schema reader the interactive start path and the worker's nested
+// child route are built from, so the three cannot disagree on what a version
+// resolves to. It has no materializer: nothing here can redeem a secret.
+func NewClientApplicationVersionService(
+	pool *pgxpool.Pool,
+	configurations *CurrentConfigurationsRuntime,
+) (*storage.ClientApplicationVersionService, error) {
+	freezer, err := newCurrentAgentVersionFreezer(pool, configurations)
+	if err != nil {
+		return nil, err
+	}
+	versions, err := repos.NewCurrentNestedApplicationVersionRepository(pool)
+	if err != nil {
+		return nil, err
+	}
+	return storage.NewClientApplicationVersionService(versions, freezer)
 }
