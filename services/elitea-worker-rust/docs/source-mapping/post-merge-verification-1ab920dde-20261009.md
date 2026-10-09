@@ -76,31 +76,44 @@ Built-in Chromium browser, no response mocks, user `admin@centry.user` (id 3) an
 | #1175 authorization | Restricted user 6 against project 2 | `elitea_core` and `social` feedback, project settings, pin `POST` and `DELETE`, conversation read, and social authors: all 403. User 6 viewing user 3's author card: no `email`. As admin: own card has `email`, another user's card does not, an unknown id returns `{}`. |
 | #1174 | Pipeline 154 (YAML anchor as the node id), and pipeline 164, created in the UI, whose state value is a six-level alias chain (~262k nodes, above `PIPELINE_YAML_BUDGET.nodes` 131,072) | 154 answers `anchor-id-ok`. 164 is refused in 2.9 ms at profile validation, so the runtime is bounded and fails closed. The user sees only the generic "The execution input is invalid." (follow-up 2). Main stored the 480-byte document without expanding it. |
 
-## Regressions found
+## Re-run of the first batch's checks on `1ab920dde`
 
-1. **Browser sessions are refused about 30–40 s after sign-in.**
-   - Main logs `session_unknown` while the session row is valid and not revoked.
-   - Isolation: swapping only the Main image back to `0def77b22`, with Web and the edge configuration unchanged, removes
-     the symptom across idle time and navigation. A session created by the older Main stays valid after switching
-     back to the new Main.
-   - The cause is in Main between `0def77b22` and `1ab920dde`. A fix is in progress in a dedicated session.
-   - Until it lands, this head is not suitable for interactive use.
+| PR | Check | Result |
+|---|---|---|
+| #1162 / #1161 | Pipeline 160, real gpt-5.4-mini, input `right` | `RIGHT BRANCH JOINED` (message 4460) |
+| #1159 | Pipeline 162: sensitive `reverse` → Approve → `echo`, effects counted from the mock MCP's `tools/call` log | 0 effects while paused (3 → 3), +2 after Approve (→ 5), answer `{"output":"verify-main-downstream"}` (4463). A reload added none. |
+| #1169 | Pipeline 163 → "Authorization required" → **Skip Auth** | "Pipeline stopped — authorization for verifyauthmcp (tool: echo, node: auth) was skipped." (4466). The protected tool never ran. |
+| #1149 | Webhook to `https://100.64.1.10/…` | Refused inline; only the host is echoed |
+
+## Findings
+
+1. **Withdrawn: "browser sessions refused 30–40 s after sign-in".**
+   - The first version of this document reported a Main regression. It was a test-environment artifact. Several
+     standalone stacks were browsed at `localhost:<port>` from one shared browser profile. Cookies are scoped by host
+     and not by port, so each stack's sign-in replaced the other's session cookie, and the other stack then logged
+     `session_unknown`.
+   - The image-swap isolation was confounded by sign-ins on the other stacks during the same window.
+   - In a fresh browser, the `0def77b22` and `1ab920dde` Main images behave identically. A single stack on
+     `1ab920dde` stays signed in through idle time, navigation and reload.
+   - #1185 adds an opt-in `STANDALONE_HOST` (`<name>.localhost`) so concurrent local stacks no longer share a cookie
+     jar.
+   - `1ab920dde` is fine for interactive use.
 2. **Pipeline editor round-trip.** Pipeline 165 (two direct `toolkit` nodes, `dict` outputs, `input_mapping: {}`)
    opens with "Pipeline YAML serialization changed its contract".
    - The editor then holds an empty graph, which blocks saving and attaching tools. The stored document is valid.
    - The check at `apps/elitea-web/src/features/pipelines/lib/dumpYaml.helpers.ts:133` predates this batch.
-   - This also blocked a browser rerun of #1176's Worker-side artifact path on this stack. That path was proven on
+   - This also blocked a browser re-run of #1176's Worker-side artifact path on this stack. That path was proven on
      #1176's own verified-image stack.
 
 ## Follow-ups
 
-1. Session regression (above): find the root cause in Main, fix it, prove it in a browser.
-2. The readable `yaml_expansion` limit from #1174 should reach the user from the start path, not only from the
-   compiler stage.
+1. Concurrent local stacks need distinct hosts (#1185, `STANDALONE_HOST=<name>.localhost`).
+2. The readable `yaml_expansion` limit from #1174 should reach the user from the start path. #1180 fixes this: the
+   parser's own alias-repetition guard is now classified as the expansion budget, and the user sees the input-limit
+   message.
 3. `deploy/helm/tests/render-main-master-key.sh` fails all 4 renders on the network-policy guard at
    `deploy/helm/elitea/templates/guards.yaml:30`. The script predates the guard's required decision, and no workflow
    runs it.
-4. `golang.org/x/net` v0.58.0 → v0.60.0 across the go.work modules (5 HTTP/2 advisories).
+4. `golang.org/x/net` v0.58.0 → v0.60.0 across the go.work modules (5 HTTP/2 advisories). #1179, the Go 1.26
+   move, covers it.
 5. The editor YAML round-trip (above).
-6. Re-run in a browser on the next head: the first batch's checks (fan-in, sensitive approval with effect counts, MCP
-   Skip, webhook refusals). They were not repeated here because of regression 1.
