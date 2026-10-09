@@ -113,10 +113,7 @@ fn whole_pipeline_yaml_is_bounded_strict_and_digest_stable() {
     let Err(error) = PipelineDefinition::from_yaml(&oversized) else {
         panic!("oversized pipeline was accepted");
     };
-    assert_eq!(
-        error.code(),
-        "graph.pipeline.configuration_resource_exhausted"
-    );
+    assert_eq!(error.code(), "graph.pipeline.yaml_bytes_exceeded");
 }
 
 #[test]

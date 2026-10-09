@@ -1,3 +1,5 @@
+import { normalizePipelineNodeIdentifiers } from '@/shared/lib/pipelineNodeIdentifiers';
+
 import { graphParallelIssues } from './graphParallelAdmission.helpers';
 /**
  * Pipeline **graph admission** — the editor's transcription of the Rust
@@ -250,8 +252,8 @@ export const GRAPH_ADMISSION_RULES: readonly GraphAdmissionRule[] = [
 ];
 
 /** Every reason the Rust pipeline compiler would refuse `document`. Empty means "admissible". */
-export function collectGraphAdmissionIssues(document: YamlPipelineDocument | undefined): readonly GraphAdmissionIssue[] {
-  const graph = readAdmissionGraph(document);
+export function collectGraphAdmissionIssues(rawDocument: YamlPipelineDocument | undefined): readonly GraphAdmissionIssue[] {
+  const graph = readAdmissionGraph(normalizePipelineNodeIdentifiers(rawDocument));
   return [...GRAPH_ADMISSION_RULES.flatMap((rule) => rule.check(graph)), ...graphShapingIssues(graph.document), ...graphMapIssues(graph.document), ...graphParallelIssues(graph.document)];
 }
 

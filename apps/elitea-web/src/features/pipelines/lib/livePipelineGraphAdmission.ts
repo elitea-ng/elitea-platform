@@ -40,6 +40,8 @@ import { useMemo } from 'react';
 
 import { load } from 'js-yaml';
 
+import { normalizePipelineNodeIdentifiers } from '@/shared/lib/pipelineNodeIdentifiers';
+
 import type { YamlPipelineDocument } from './flow-editor/helpers/pipelineFlow.types';
 import { collectGraphAdmissionIssues } from './graphAdmission.helpers';
 import type { GraphAdmissionIssue } from './graphAdmission.types';
@@ -99,6 +101,8 @@ export function judgeLivePipelineGraph(yamlCode: string): LivePipelineGraphAdmis
   // document is not a mapping the compiler could read either.
   if (document === null || typeof document !== 'object' || Array.isArray(document)) return UNPARSEABLE;
   if (Object.keys(document).length === 0) return UNSEEDED;
+  // The runtime reads an unquoted integer id (`id: 1`) as the string "1"; judge the document as it will run.
+  document = normalizePipelineNodeIdentifiers(document);
 
   const issues = collectGraphAdmissionIssues(document);
   return { document, parseFailed: false, issues, hasGraph: true, isAdmissible: issues.length === 0 };

@@ -30,6 +30,7 @@ use super::events::{
     AgentEventProjectionError, AgentEventProjector, CompletedAgentBrowserOutput,
     ProjectedAgentEventBatch,
 };
+use super::graph::compiler::PipelineConfigurationError;
 use super::graph::resume::{
     PipelineContinuationDecision, PipelineMcpAuthorizationContinuation, PipelineResumeError,
     PipelineResumeErrorCode,
@@ -48,8 +49,42 @@ use crate::transport::platform_client::PlatformClient;
 use crate::transport::runtime_context::{ClaimScopedEliteaContext, RuntimeContextError};
 
 pub(crate) use elitea_agent_runtime::assembly_error::{
-    NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
+    NativeAgentAssemblyCause, NativeAgentAssemblyError, NativeAgentAssemblyErrorCode,
 };
+
+/// Classify a stored-pipeline admission failure.
+///
+/// Bound refusals use the registered agent-settings message; a value that
+/// cannot be a graph identifier stays `InvalidInput` and keeps its typed code
+/// in [`NativeAgentAssemblyError::cause`]. A free function because the error
+/// type is owned by `elitea_agent_runtime` and the pipeline error by the worker.
+pub(crate) fn pipeline_configuration_assembly_error(
+    error: &PipelineConfigurationError,
+    message: &'static str,
+) -> NativeAgentAssemblyError {
+    let code = match error {
+        PipelineConfigurationError::ResourceExhausted => {
+            NativeAgentAssemblyErrorCode::ResourceExhausted
+        }
+        PipelineConfigurationError::LimitExceeded(_) => {
+            NativeAgentAssemblyErrorCode::AgentSettingsLimit
+        }
+        PipelineConfigurationError::Unsupported(_) => {
+            NativeAgentAssemblyErrorCode::UnsupportedCapability
+        }
+        PipelineConfigurationError::MalformedYaml { .. }
+        | PipelineConfigurationError::Invalid(_)
+        | PipelineConfigurationError::InvalidIdentifier(_) => {
+            NativeAgentAssemblyErrorCode::InvalidInput
+        }
+        PipelineConfigurationError::Graph(_) => NativeAgentAssemblyErrorCode::InvalidConfiguration,
+    };
+    let assembled = NativeAgentAssemblyError::new(code, message);
+    match error.cause_detail() {
+        Some(detail) => assembled.with_cause(error.code(), Some(detail)),
+        None => assembled,
+    }
+}
 
 impl From<RuntimeContextError> for NativeAgentAssemblyError {
     fn from(error: RuntimeContextError) -> Self {
