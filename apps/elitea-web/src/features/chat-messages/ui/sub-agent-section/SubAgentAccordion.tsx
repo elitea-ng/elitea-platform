@@ -16,11 +16,11 @@ import type { Theme } from '@mui/material/styles';
 import { useTheme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
-import { convertJsonToString } from '@/shared/lib/json';
 import { BasicAccordion } from '@/shared/ui/BasicAccordion';
 import type { ToolActionDraft } from '@/entities/message/lib/toolActions';
 
 import type { PartitionedBlock, SubAgentGroupable } from '../../lib/subAgentGrouping';
+import { subAgentActionOutputText } from '../../lib/subAgentActionOutput';
 import { ActionView, type ActionViewProps } from '../ActionView';
 
 import type { SubAgentTool } from './subAgentIcon.helpers';
@@ -112,7 +112,9 @@ export function SubAgentAccordion({
                           // eslint-disable-next-line elitea/ad-hoc-radius — inline code border radius
                           borderRadius: 0.5,
                           cursor: 'pointer',
-                          overflow: 'hidden',
+                          // A saved child's result can be large: the preview scrolls instead of growing the card.
+                          maxHeight: '20rem',
+                          overflow: 'auto',
                           textOverflow: 'ellipsis',
                         }}
                       >
@@ -126,7 +128,7 @@ export function SubAgentAccordion({
                         >
                           {(action.name as string) || action.type || 'Action'}
                         </Typography>
-                        {convertJsonToString(action.toolOutputs ?? '')}
+                        {subAgentActionOutputText(action.toolOutputs)}
                       </Box>
                       );
                     })}

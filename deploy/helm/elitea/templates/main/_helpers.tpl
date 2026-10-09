@@ -1270,8 +1270,10 @@ ConfigMap.
 
 The development opt-out is main.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=true.
 It does not remove the reference, only makes it optional, so an install that
-has the Secret still wraps its keys. The gateway's own `optional` is NOT
-inherited: the gateway tolerates a missing key, elitea-main does not.
+has the Secret still wraps its keys. The gateway's `optional` is NOT inherited:
+each service has its own opt-out (the gateway's is
+llmGateway.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS, see
+elitea-llm-gateway.masterKeyRef).
 */}}
 {{- define "elitea-main.masterKeyRef" -}}
 {{- $env := .Values.main.env | default dict -}}

@@ -18,6 +18,19 @@ import (
 // must not be rejected here for a rounding difference.
 const weightSumEpsilon = 1e-6
 
+// maxRoutingCELBytes caps a routing-rule predicate before it reaches the CEL
+// parser. It MUST match elitea-main's constant of the same name
+// (internal/api/gateway/routing_cel.go), which refuses a longer rule at
+// authoring. This copy is the gateway's own bound: a row can reach
+// gateway.governance_config from a restore or a hand-written UPDATE without
+// passing elitea-main, and every replica compiles every rule on every policy
+// load. Without it cel-go's own guard (100,000 code points) is the only bound.
+const maxRoutingCELBytes = 8 << 10
+
+// ErrRoutingCELTooLong reports a predicate longer than maxRoutingCELBytes. The
+// error never carries the expression itself.
+var ErrRoutingCELTooLong = errors.New("CEL expression is too long")
+
 // CELVariables is the governance CEL variable set, declared identically here
 // and in elitea-main (internal/api/gateway/routing_cel.go). The two compilers
 // MUST agree: a rule that type-checks on the authoring side has to type-check
@@ -89,10 +102,14 @@ func governanceCELEnv() (*cel.Env, error) {
 }
 
 // CompileCEL type-checks expr against the governance variable set and requires
-// a boolean result, mirroring elitea-main's CompileRoutingCEL.
+// a boolean result, mirroring elitea-main's CompileRoutingCEL. An expression
+// longer than maxRoutingCELBytes is refused before the parser sees it.
 func CompileCEL(expr string) (cel.Program, error) {
 	if strings.TrimSpace(expr) == "" {
 		return nil, errors.New("CEL expression must not be empty")
+	}
+	if len(expr) > maxRoutingCELBytes {
+		return nil, fmt.Errorf("%w: %d bytes, limit %d", ErrRoutingCELTooLong, len(expr), maxRoutingCELBytes)
 	}
 	env, err := governanceCELEnv()
 	if err != nil {

@@ -45,7 +45,11 @@ export type FlowEdge = Edge<FlowEdgeData>;
 
 export type SetFlowNodes = (updater: FlowNode[] | ((prev: FlowNode[]) => FlowNode[])) => void;
 export type SetFlowEdges = (updater: FlowEdge[] | ((prev: FlowEdge[]) => FlowEdge[])) => void;
-export type SetYamlJsonObject = (next: YamlPipelineDocument, options?: PipelineYamlEditOptions) => void;
+/**
+ * Write the flow document. Returns `false` when the write was refused and nothing was stored; any other result
+ * (`true`, or nothing for the many setters that never report) means the write went through.
+ */
+export type SetYamlJsonObject = (next: YamlPipelineDocument, options?: PipelineYamlEditOptions) => boolean | void;
 
 export interface YamlPipelineDocumentRef {
   current: YamlPipelineDocument;
