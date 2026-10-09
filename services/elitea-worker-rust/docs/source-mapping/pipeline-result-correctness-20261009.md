@@ -118,6 +118,14 @@ Suite runs:
 | Secrets | No | No secret; error bodies stay generic (`{"error":"internal server error"}`, or the fixed 400 text, which echoes no input). |
 | Supply chain | No dependency change | `npm audit --omit=dev`: 2 low (pre-existing katex/mermaid); `govulncheck` on the changed Main packages: none; `cargo deny --offline --all-features check advisories`: RUSTSEC-2023-0071 (`rsa`, pre-existing, no fix) from the local advisory DB snapshot. No new findings. |
 
+**Reviews.** `code-review` (high) on the full diff: 6 findings; 4 fixed in this PR (refused delete keeps the canvas,
+capped preview, 400 for unstorable text, version-only save reads inside the transaction), 2 skipped with reasons
+(the `{"response"[, "values"]}` unwrap is the application-tool contract; the older error-path test keeps its own
+harness). `security-review` on the branch: no finding at or above the confidence bar; categories checked as in the
+table above (SQL is parameterized and tenant-schema-qualified, the version write stays scoped by
+`application_id AND id`, route permission unchanged, the 22021 refusal text is fixed, the preview is a React text node,
+the card result is the text the parent already receives on the same stream).
+
 ## 8. Recovery guarantees
 
 | Component × phase | Class | Enforcing code | Proof |
