@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { AgentEvent } from '@/shared/desktop/workspaceIpc';
 
-import { activeView, earlierViews, initialTurnsState, replayView, turnReducer, type TurnAction, type TurnsState } from './turnReducer';
+import { activeView, earlierViews, initialTurnsState, MAX_UNCLAIMED_TURNS, replayView, turnReducer, type TurnAction, type TurnsState } from './turnReducer';
 
 const T = 'turn-1';
 const run = (events: AgentEvent[], from: TurnsState = turnReducer(initialTurnsState, { type: 'begin', turnId: T })): TurnsState =>
@@ -115,6 +115,38 @@ describe('turnReducer', () => {
       error: { code: 'x', message: 'bad' },
       done: { committed: true, conversationId: 'c9', messageIds: ['m1'], changedFiles: 2 },
     });
+  });
+
+  it('stores a long answer as one merged run, so appends do not grow the event list', () => {
+    const deltas = Array.from({ length: 5_000 }, (_, i) => text(i + 1, 'x'));
+    let state = run(deltas);
+    const record = state.turns[T];
+    expect(record?.events).toHaveLength(1);
+    expect(record?.events[0]).toMatchObject({ seq: 1, last: 5_000 });
+    expect(activeView(state).items).toEqual([{ type: 'text', key: 't1', text: 'x'.repeat(5_000) }]);
+    // A redelivery inside the run is a duplicate; a tool row after it starts a new item.
+    state = run([text(2_500, 'x'), call(5_001, 'c1'), text(5_002, 'y')], state);
+    expect(state.turns[T]?.events).toHaveLength(3);
+    expect(activeView(state).items.map((i) => i.type)).toEqual(['text', 'tool', 'text']);
+  });
+
+  it('merges a late delta that closes a gap into the runs around it', () => {
+    const state = run([text(1, 'a'), text(3, 'c'), text(2, 'b'), text(4, 'd')]);
+    expect(state.turns[T]?.events).toHaveLength(1);
+    expect(activeView(state).items).toEqual([{ type: 'text', key: 't1', text: 'abcd' }]);
+  });
+
+  it('keeps only the few most recently heard turns it did not begin', () => {
+    const other = (n: number): AgentEvent => ({ turn_id: `other-${String(n)}`, seq: 1, kind: 'text_delta', payload: { text: 'x' } });
+    const state = run([...Array.from({ length: 10 }, (_, n) => other(n)), text(1, 'mine')]);
+    const kept = Object.keys(state.turns);
+    expect(kept).toContain(T);
+    expect(kept.filter((id) => id !== T)).toHaveLength(MAX_UNCLAIMED_TURNS);
+    expect(kept).toContain('other-9');
+    expect(kept).not.toContain('other-0');
+    // A turn whose start has not returned yet is the newest heard: still there to begin.
+    const early = run([text(1, 'early'), ...Array.from({ length: 3 }, (_, n) => other(n))], initialTurnsState);
+    expect(activeView(turnReducer(early, { type: 'begin', turnId: T })).items).toEqual([{ type: 'text', key: 't1', text: 'early' }]);
   });
 
   it('reset forgets everything', () => {
