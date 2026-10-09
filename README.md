@@ -28,7 +28,7 @@ elitea-platform/
 
 ## Prerequisites
 
-- [Go 1.25+](https://go.dev/dl/)
+- [Go 1.26.9+](https://go.dev/dl/)
 - [Podman](https://podman.io/docs/installation) with podman-compose
 - [Task](https://taskfile.dev/installation/) (task runner)
 - [Node.js 24+](https://nodejs.org/) (for UI development)

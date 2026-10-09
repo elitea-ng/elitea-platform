@@ -174,7 +174,8 @@ group "inventory" {
   targets = ["elitea-inventory", "elitea-inventory-engine"]
 }
 
-# Standalone module pinned to Go 1.26.4 (bifrost/core). The Containerfile pins
+# Standalone module that needs Go 1.26.4 or above (bifrost/core); its go.mod
+# asks for the go1.26.9 security floor. The Containerfile pins
 # golang:1.26 internally, so the correct toolchain is used regardless of the
 # build runner. Context is the repository ROOT: the module replaces
 # libs/go/egresslib, which lives outside the service directory. go.work is not
