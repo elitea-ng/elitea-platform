@@ -9,10 +9,9 @@
 #     images, so it is not in the Debian package database and trivy never reads
 #     its version. 3.12.14 is four CPython patch releases past 3.12.10, and that
 #     difference is invisible to the count above in both directions.
-#   * It also gives the three Python images one base. services/elitea-deepwiki
-#     and services/elitea-inventory are already on python:3.12.14-slim, so one
-#     Debian release, one stamp suite and one upgrade posture now cover all
-#     three.
+#   * It also gave the Python images one base (the Python DeepWiki and Inventory
+#     services, both since replaced by Rust engines, were on python:3.12.14-slim
+#     too), so one Debian release and one upgrade posture covered all of them.
 #
 # The runtime probes are what say the move is safe rather than only smaller:
 # `require_indexing_runtime_capabilities()` runs in the build below and drives

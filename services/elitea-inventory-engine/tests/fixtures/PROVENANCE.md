@@ -1,0 +1,38 @@
+# Provenance of the frozen goldens
+
+Every file below was produced by the real Python Inventory engine
+(`services/elitea-inventory`) at commit `a1d38fb4d` (origin/main immediately
+before the Python service was removed). The Python service and the generator
+scripts were then deleted; the JSON is now frozen reference data that the Rust
+engine's tests compare against. Do not edit it by hand.
+
+| Golden file(s) | Generator (path inside `services/elitea-inventory-engine/` at `a1d38fb4d`) |
+|---|---|
+| `assets/python_inventory.json` | `assets/generate.py` (prompts, taxonomies, type tables) |
+| `assets/python_retrieval.json` | `assets/generate_retrieval.py` (retrieval-tool tables) |
+| `assets/source_tools.json` | `assets/source_tools.py` (still present; reads `python_inventory.json` and elitea-main's toolkit schema snapshot, not Python source) |
+| `tests/fixtures/communities/{two_clusters,centrality}.expected.json` | `tests/fixtures/communities/generate.py` (real igraph + networkx over `two_clusters.json` / `centrality.json`) |
+| `tests/fixtures/graph_store/graph.golden.json` | `tests/fixtures/graph_store/generate.py` (replays `ops.json` through the Python `KnowledgeGraph`) |
+| `tests/fixtures/ingest/entity_ids.json` | `tests/fixtures/ingest/generate.py` (Python `_generate_entity_id`) |
+| `tests/fixtures/retrieval/{graph,goldens}.json` | `tests/fixtures/retrieval/generate.py` |
+| `tests/fixtures/retrieval_more/{graph,bare,goldens}.json` | `tests/fixtures/retrieval_more/generate.py` |
+| `tests/fixtures/smart_normalize/{graph,goldens}.json` | `tests/fixtures/smart_normalize/generate.py` |
+| `tests/fixtures/code_like/goldens.json` | `tests/fixtures/code_like/generate.py` |
+
+## Regenerating (only if ever needed)
+
+```sh
+git worktree add ../inventory-a1d38fb4d a1d38fb4d
+cd ../inventory-a1d38fb4d
+python3 services/elitea-inventory-engine/<generator>   # path from the table
+```
+
+(`git show a1d38fb4d:services/elitea-inventory-engine/<generator>` prints a
+generator without a worktree, but it locates the Python source relative to its
+own path, so run it inside the worktree.)
+
+The generators need the Python service's dependencies (`services/elitea-inventory`
+requirements at that commit, including igraph/networkx for the communities
+goldens). Copy the regenerated JSON back over the frozen files and review the
+diff: a changed golden means the Rust port must change or the difference must be
+documented as a deliberate deviation.

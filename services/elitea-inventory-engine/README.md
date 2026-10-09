@@ -21,8 +21,8 @@ and the source toolkits' read-only tools through elitea-main's `test_tool`
 route) complete it (P4).
 
 The model stage (`src/extract`) uses the Python engine's prompts and type tables
-as data: `assets/python_inventory.json`, generated from its source by
-`assets/generate.py`. The module docs list where it deliberately differs:
+as data: `assets/python_inventory.json`, frozen from its source (see
+`tests/fixtures/PROVENANCE.md`). The module docs list where it deliberately differs:
 absolute citations, kept text facts, and relations that are actually extracted.
 
 ## The graph and its store
@@ -31,8 +31,8 @@ absolute citations, kept text facts, and relations that are actually extracted.
 (citations only), property filtering, one edge per ordered pair, and the
 `graph.json` node-link document both ways. `tests/graph_store.rs` replays
 `tests/fixtures/graph_store/ops.json` and compares with
-`graph.golden.json`, which the Python graph itself wrote (`generate.py`
-regenerates it). The module docs list the Python behaviours deliberately not
+`graph.golden.json`, which the Python graph itself wrote (frozen;
+see `PROVENANCE.md`). The module docs list the Python behaviours deliberately not
 carried over: stale indices, edge provenance lost on save, type
 normalisation inside the store.
 
@@ -73,7 +73,7 @@ on purpose:
 - **Changed and deleted files really lose their old entities.** Python's
   removal step read a citation key the graph no longer had.
 - **Entity ids match Python's.** They are held to ids computed by Python's own
-  `_generate_entity_id` (`tests/fixtures/ingest/generate.py`).
+  `_generate_entity_id` (frozen in `tests/fixtures/ingest/entity_ids.json`).
 
 ## Maintenance writes
 
@@ -87,14 +87,14 @@ saved in one transaction (its revision bumps, so cached views reload). It
 differs from Python where Python damaged graphs: a batch the model cannot
 answer refuses the run with nothing written (Python mapped the batch to
 `fact` and saved), and a mapping applies only to a type the batch asked
-about. `tests/fixtures/smart_normalize/generate.py` records the Python
+about. `tests/fixtures/smart_normalize/goldens.json` records the Python
 handler's prompts and saved graph.
 
 A code file without a parser (`.sh`, `.rb`, `.lua`, C, …) gets its file
 node and the model stage with the code fact prompt, as Python's `run()` did.
 Python's `TextParser` "hybrid fallback" is not ported: only the never-served
 `delta_update` reached it, and it raised on the first reference it found
-(`tests/fixtures/code_like/generate.py` records both).
+(`tests/fixtures/code_like/goldens.json` records both).
 
 ## Operator runbook: moving Python graphs in, and out (issue #1129)
 
@@ -170,7 +170,7 @@ the Go host admits only the descriptor's tools.
 ## The three fixture runners
 
 The Go host's (`internal/apps/inventory/run/fixture.go`), the Python engine's
-(`elitea_inventory.fixture_graph`) and this one all answer from
+(retired Python engine's `elitea_inventory.fixture_graph`, deleted) and this one all answer from
 `conformance/provider/fixtures/inventory/spi/graph.json` and are held to the
 goldens beside it:
 

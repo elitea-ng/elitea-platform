@@ -138,28 +138,6 @@ updates:
       - dependency-name: opentelemetry-otlp
       - dependency-name: opentelemetry_sdk
 
-  # The Inventory package carries a byte-frozen copy of its analysis engine
-  # (COPY_MANIFEST.json), resolved against a pinned closure in the `engine`
-  # extra. A bump anywhere inside that closure makes the extra
-  # ResolutionImpossible and the engine image unbuildable — and no CI job
-  # builds that image. Eight such bumps (#677, #678, #679, #757–#761) did
-  # exactly that to the Python DeepWiki engine (since deleted), and #740/#741
-  # to Inventory's. The pins
-  # move together with a re-copy of the engine, never one at a time; the SPI
-  # shell's own dependencies are ranges and need no bumping. Security alerts
-  # still show in the repository's Dependabot tab.
-  - package-ecosystem: pip
-    directories:
-      - /services/elitea-inventory
-    schedule:
-      interval: weekly
-      day: saturday
-      time: "03:00"
-      timezone: "Europe/Warsaw"
-    open-pull-requests-limit: 0
-    ignore:
-      - dependency-name: "*"
-
   - package-ecosystem: pip
     directories:
       - /libs/proto
