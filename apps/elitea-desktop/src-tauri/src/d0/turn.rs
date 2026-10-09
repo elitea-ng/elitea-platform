@@ -211,6 +211,19 @@ impl TurnCheckpoint {
     }
 }
 
+/// Where a started turn is, for `agent_turn_cancel`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunState {
+    /// The agent runs: a cancel stops it and nothing is committed.
+    Running,
+    /// Cancelled while running: whatever the run ends with, nothing is
+    /// committed.
+    Cancelling,
+    /// The agent's run ended; the turn is being committed (or was): a
+    /// cancel can no longer change anything.
+    Finishing,
+}
+
 /// A turn, kept after it ends for `turn_changes` and `checkpoint_restore`.
 struct TurnEntry {
     workspace_id: String,
@@ -218,6 +231,15 @@ struct TurnEntry {
     recorder: Arc<Recorder>,
     stop: LocalStop,
     checkpoint: Mutex<TurnCheckpoint>,
+    state: Mutex<RunState>,
+}
+
+impl TurnEntry {
+    fn state(&self) -> std::sync::MutexGuard<'_, RunState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// How many turns of one workspace stay reviewable (`turn_changes`) and
@@ -498,6 +520,7 @@ impl AgentHost {
                     recorder: Arc::new(Recorder::default()),
                     stop,
                     checkpoint: Mutex::new(TurnCheckpoint::None),
+                    state: Mutex::new(RunState::Running),
                 });
                 if let Ok(mut turns) = self.turns.lock() {
                     turns.insert(turn_id.clone(), entry.clone());
@@ -621,6 +644,18 @@ impl AgentHost {
         let outcome = tokio::select! {
             result = run => Some(result),
             _ = guard.ended() => None,
+        };
+        // Decided under the state's lock, against a cancel arriving now: a
+        // cancel that was answered "cancelled" commits nothing, and once
+        // the turn moves on to its commit a cancel is refused.
+        let outcome = {
+            let mut state = entry.state();
+            if *state == RunState::Cancelling {
+                None
+            } else {
+                *state = RunState::Finishing;
+                outcome
+            }
         };
         *entry
             .checkpoint
@@ -870,18 +905,29 @@ impl AgentHost {
             .unwrap_or_else(|_| sink.last_text()))
     }
 
-    /// `agent_turn_cancel`. False when the turn is unknown.
-    pub fn cancel(&self, turn_id: &str) -> bool {
-        let entry = self
-            .turns
-            .lock()
-            .ok()
-            .and_then(|turns| turns.get(turn_id).ok());
-        entry.is_some_and(|entry| {
-            entry.stop.stop();
-            self.broker.forget_turn(turn_id);
-            true
-        })
+    /// `agent_turn_cancel`: stop a running turn; it then commits nothing.
+    ///
+    /// # Errors
+    ///
+    /// `turn_unknown` / `turn_expired`, or `turn_not_cancellable` once the
+    /// agent's run has ended (the turn is being committed, or it ended):
+    /// a cancel then would change nothing, so it is not claimed.
+    pub fn cancel(&self, turn_id: &str) -> Result<(), TurnError> {
+        let entry = self.entry(turn_id)?;
+        let mut state = entry.state();
+        match *state {
+            RunState::Running => {
+                *state = RunState::Cancelling;
+                entry.stop.stop();
+                self.broker.forget_turn(turn_id);
+                Ok(())
+            }
+            RunState::Cancelling => Ok(()),
+            RunState::Finishing => Err(TurnError::new(
+                "turn_not_cancellable",
+                "The agent has already finished this turn; it can no longer be stopped.",
+            )),
+        }
     }
 
     /// `workspace_remove`: forget the workspace, its host data and

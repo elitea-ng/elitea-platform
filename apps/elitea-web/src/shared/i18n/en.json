@@ -4902,5 +4902,6 @@
   "workspace.error.notSignedIn": "Sign in again to run agents on this computer.",
   "workspace.error.turnExpired": "This turn is too old to review or undo: only the most recent turns of a folder are kept.",
   "workspace.error.versionMismatch": "The selected conversation runs another version of this agent. Start a new conversation, or pick that version.",
-  "workspace.error.noCheckpoint": "This turn cannot be undone: the folder was too large to checkpoint."
+  "workspace.error.noCheckpoint": "This turn cannot be undone: the folder was too large to checkpoint.",
+  "workspace.error.notCancellable": "The agent already finished this turn, so it cannot be stopped."
 }

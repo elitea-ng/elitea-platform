@@ -616,7 +616,9 @@ async fn a_cancelled_turn_commits_nothing() {
     let h = harness(server, allowed(), UiDecision::AllowOnce).await;
     let started = h.host.start(request(&h.workspace_id)).await.unwrap();
     tokio::time::sleep(Duration::from_millis(100)).await;
-    assert!(h.host.cancel(&started.turn_id));
+    h.host.cancel(&started.turn_id).unwrap();
+    // A second cancel of a cancelled turn is still a cancel.
+    h.host.cancel(&started.turn_id).unwrap();
     let events = until_done(&h.emitter).await;
     let kinds: Vec<_> = events.iter().map(|e| e.kind).collect();
     assert_eq!(kinds[kinds.len() - 2], "status");
@@ -629,7 +631,9 @@ async fn a_cancelled_turn_commits_nothing() {
         )
         .is_empty()
     );
-    assert!(!h.host.cancel("unknown"));
+    assert_eq!(h.host.cancel("unknown").unwrap_err().code, "turn_unknown");
+    // A cancelled turn stays cancelled: cancelling it again says so.
+    h.host.cancel(&started.turn_id).unwrap();
     // The workspace is free again.
     let again = h.host.start(request(&h.workspace_id)).await;
     assert!(again.is_ok(), "{again:?}");
@@ -665,7 +669,7 @@ async fn a_policy_change_does_not_let_an_undo_or_a_turn_past_a_running_turn() {
     let third = h.host.start(request(&h.workspace_id)).await.unwrap_err();
     assert_eq!(third.code, "workspace_busy");
 
-    assert!(h.host.cancel(&second.turn_id));
+    h.host.cancel(&second.turn_id).unwrap();
     slow.store(false, Ordering::SeqCst);
     until_done_of(&h.emitter, &second.turn_id).await;
     assert_eq!(h.host.restore(&first.turn_id, None).unwrap(), ["notes.txt"]);
@@ -701,7 +705,7 @@ async fn only_the_last_turns_of_a_workspace_are_kept() {
         h.host.restore(&ids[0], None).unwrap_err().code,
         "turn_expired"
     );
-    assert!(!h.host.cancel(&ids[0]));
+    assert_eq!(h.host.cancel(&ids[0]).unwrap_err().code, "turn_expired");
     for kept in &ids[1..] {
         assert!(h.host.changes(kept).is_ok());
     }
@@ -722,7 +726,7 @@ async fn a_workspace_with_a_running_turn_cannot_be_removed() {
     let refused = h.host.remove_workspace(&h.workspace_id).unwrap_err();
     assert_eq!(refused.code, "workspace_busy");
 
-    assert!(h.host.cancel(&running.turn_id));
+    h.host.cancel(&running.turn_id).unwrap();
     slow.store(false, Ordering::SeqCst);
     until_done_of(&h.emitter, &running.turn_id).await;
     h.host.remove_workspace(&h.workspace_id).unwrap();
@@ -895,7 +899,7 @@ async fn a_running_turn_keeps_its_workspace_on_its_project() {
     let refused = h.host.bind_project(&h.workspace_id, 2).unwrap_err();
     assert_eq!(refused.code, "workspace_busy");
 
-    h.host.cancel(&running.turn_id);
+    h.host.cancel(&running.turn_id).unwrap();
     slow.store(false, Ordering::SeqCst);
     until_done_of(&h.emitter, &running.turn_id).await;
     assert_eq!(
@@ -973,4 +977,48 @@ async fn a_workspace_removed_or_rebound_while_a_turn_prepares_is_not_used() {
             "no execution was opened for a workspace that changed"
         );
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_turn_past_its_run_is_not_cancellable() {
+    // The commit is held: the run has ended, the turn is being saved.
+    let hold = Arc::new(AtomicBool::new(true));
+    let entered = Arc::new(AtomicBool::new(false));
+    let server = serve({
+        let inner = platform(agent_details(), &[]);
+        let (hold, entered) = (hold.clone(), entered.clone());
+        move |req: &Req| {
+            if req.path.contains("/local_turn_commit/") {
+                entered.store(true, Ordering::SeqCst);
+                tokio::task::block_in_place(|| {
+                    for _ in 0..250 {
+                        if !hold.load(Ordering::SeqCst) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                });
+            }
+            inner(req)
+        }
+    })
+    .await;
+    let h = harness(server, allowed(), UiDecision::AllowOnce).await;
+    let started = h.host.start(request(&h.workspace_id)).await.unwrap();
+    for _ in 0..500 {
+        if entered.load(Ordering::SeqCst) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        entered.load(Ordering::SeqCst),
+        "the turn reached its commit"
+    );
+    let refused = h.host.cancel(&started.turn_id).unwrap_err();
+    assert_eq!(refused.code, "turn_not_cancellable");
+    hold.store(false, Ordering::SeqCst);
+    let events = until_done(&h.emitter).await;
+    // The refusal was the truth: the turn was committed.
+    assert_eq!(events.last().unwrap().payload["committed"], true);
 }

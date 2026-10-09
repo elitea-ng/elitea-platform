@@ -114,6 +114,16 @@ describe('useWorkspaceTurn', () => {
     expect(ipc.calls.cancelled).toEqual(['turn-1']);
   });
 
+  it('says so when the turn is past cancelling, instead of pretending it stopped', async () => {
+    const ipc = createFakeWorkspaceIpc();
+    const { result } = renderHook(() => useWorkspaceTurn(ipc));
+    await waitFor(() => expect(ipc.subscriberCount()).toBe(1));
+    await act(() => result.current.start(REQUEST));
+    ipc.failNext('cancelTurn', 'turn_not_cancellable', 'The agent has already finished this turn.');
+    await act(() => result.current.cancel());
+    expect(result.current.startError).toBe('The agent already finished this turn, so it cannot be stopped.');
+  });
+
   it('surfaces a failed start instead of staying busy', async () => {
     const ipc = createFakeWorkspaceIpc();
     ipc.startTurn = () => Promise.reject(new Error('no agent runtime'));

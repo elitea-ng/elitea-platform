@@ -197,14 +197,7 @@ pub async fn agent_turn_start(
 
 #[tauri::command(rename_all = "snake_case")]
 pub fn agent_turn_cancel(state: State<'_, LocalState>, turn_id: String) -> Result<(), IpcError> {
-    if state.agents.cancel(&turn_id) {
-        Ok(())
-    } else {
-        Err(IpcError::new(
-            "turn_unknown",
-            "That turn is not known to this app.",
-        ))
-    }
+    Ok(state.agents.cancel(&turn_id)?)
 }
 
 #[tauri::command(rename_all = "snake_case")]

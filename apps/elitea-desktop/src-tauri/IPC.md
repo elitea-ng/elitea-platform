@@ -64,7 +64,7 @@ inside the folder.
 | Command | Arguments | Result |
 | --- | --- | --- |
 | `agent_turn_start` | `{workspace_id, project_id, conversation_id, application_id, version_id, prompt, plan_mode}` | `{turn_id, execution_id}` |
-| `agent_turn_cancel` | `{turn_id}` | `null` (rejects `turn_unknown` for an unknown turn) |
+| `agent_turn_cancel` | `{turn_id}` | `null` when the turn was running (or was already cancelled): it stops and commits nothing. Rejects `turn_not_cancellable` once the agent's run has ended (the turn is being committed, or it ended): nothing was stopped. `turn_unknown` / `turn_expired` for a turn the host does not keep. |
 | `approval_respond` | `{request_id, decision: "allow_once" \| "allow_always" \| "deny"}` | `null` (rejects `approval_closed` when the question is no longer open, `invalid_request` for another decision) |
 | `turn_changes` | `{turn_id}` | `{files: FileChange[]}` |
 | `checkpoint_restore` | `{turn_id, path?: string}` | `{restored: string[]}` |
