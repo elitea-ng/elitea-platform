@@ -436,5 +436,6 @@ It runs locked quality, release, and PostgreSQL-backed test commands.
 - [Point 5 V2 contracts and designs](graph-point5-v2-contracts-20261008.md) links the fan-out V2 runtime design, the per-interrupt decision contract and schemas, the Map V1 rewrite, and the HTTP and database action designs.
 - [Governance body bounds](governance-body-bounds-20261008.md) records the 256 KiB governance body limit, 413 refusal, strict decode, and 8 KiB routing CEL cap.
 - [Go module advisories](go-module-advisories-20261008.md) records the cel-go and klauspost/compress fixes, the deferred x/crypto fix (Go 1.26), and the guard against linking x/crypto/ssh and openpgp.
+- [Admin Guardrails tool-map rows](admin-guardrails-tool-map-rows-20261009.md) records the Web fix that keeps added Guardrails toolkit rows, its page-level tests and browser evidence.
 - [Per-interrupt decision ledger (Track M2)](execution-interrupts-ledger-20261008.md) records the execution interrupt ledger, its public decision API behind a default-off flag, the real-PostgreSQL race and authorization proofs, the reviews, and the deployed rehearsal evidence.
 - [Conversation pin concurrency](conversation-pin-concurrency-20261009.md) records the Pin/Unpin/Delete lock-order fix for the intermittent 40P01 pin 500, the forced and stress PostgreSQL tests, browser evidence and recovery rows.
