@@ -110,7 +110,7 @@ export function DesktopFrame({ children, permissions, projects, selectedProjectI
               <TitleBarSpacer leading={!sidebarOpen} logo={false}>
                 <ShowSidebarButton />
                 <Button size="small" startIcon={<ArrowBackIcon />} onClick={() => run({ type: 'folders' })}>
-                  {t('desktop.shell.backToFolders', 'Folders')}
+                  {t('desktop.shell.backToLocalWork', 'Local work')}
                 </Button>
               </TitleBarSpacer>
             </Box>

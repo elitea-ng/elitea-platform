@@ -1,29 +1,48 @@
 /**
- * The sidebar's row primitives: one dense, native-feeling list row (icon,
- * label, optional trailing slot), and a section caption. Selection and hover
- * use the same drawer-menu tokens as the web sidebar, so a brand pack
- * re-themes both alike.
+ * The sidebar's row primitives: one dense, single-line, native-feeling list
+ * row (icon, label, optional quiet trailing text, optional trailing actions),
+ * and a section caption. Selection and hover use the same drawer-menu tokens
+ * as the web sidebar, so a brand pack re-themes both alike.
  */
 import type { ReactNode } from 'react';
 
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import Box from '@mui/material/Box';
 import ButtonBase from '@mui/material/ButtonBase';
 import type { Theme } from '@mui/material/styles';
 import Typography from '@mui/material/Typography';
 
+/**
+ * The indent (spacing units) that puts a child row's label under its
+ * parent's: the parent's icon (1rem) plus the icon-label gap (one unit).
+ */
+export const CHILD_INDENT = 3;
+
 export interface ShellRowProps {
   label: string;
   icon?: ReactNode;
   selected?: boolean;
-  /** Extra left indent, in spacing units (threads sit under their folder). */
+  /** Extra left indent, in spacing units (threads sit under their folder: {@link CHILD_INDENT}). */
   indent?: number;
   onClick: () => void;
   /** Shown at the right edge; `trailingOnHover` hides it until the row is hovered or focused. */
   trailing?: ReactNode;
   trailingOnHover?: boolean;
-  caption?: string | undefined;
+  /** Quiet text after the label, on the same line (a folder's project); gives way to `trailing` on hover. */
+  meta?: string;
+  /** A secondary row (an empty state, "Show all"): the label in the muted colour. */
+  muted?: boolean;
+  /** The native tooltip: the full text a truncated row cannot show. */
+  title?: string;
   testId?: string;
   ariaExpanded?: boolean;
+}
+
+const ONE_LINE = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } as const;
+
+/** `text.secondary` is this palette's strong label colour; `text.metrics` the quiet one. */
+function labelColor(theme: Theme, selected: boolean, muted: boolean): string {
+  return muted && !selected ? theme.vars.palette.text.metrics : theme.vars.palette.text.secondary;
 }
 
 export function ShellRow({
@@ -34,10 +53,13 @@ export function ShellRow({
   onClick,
   trailing,
   trailingOnHover = false,
-  caption,
+  meta,
+  muted = false,
+  title,
   testId,
   ariaExpanded,
 }: ShellRowProps): React.JSX.Element {
+  const swaps = trailing !== undefined && trailingOnHover;
   return (
     <Box
       data-testid={testId}
@@ -48,12 +70,22 @@ export function ShellRow({
         borderRadius: theme.vars.shape.radiusSm,
         background: selected ? theme.vars.palette.background.button.drawerMenu.selected : undefined,
         '&:hover': { background: selected ? undefined : theme.vars.palette.background.button.drawerMenu.hover },
-        '& .shell-row-trailing': { visibility: trailingOnHover ? 'hidden' : 'visible' },
+        // The actions overlay the row's right edge on hover, where the meta text was.
+        '& .shell-row-trailing': swaps ? { position: 'absolute', right: 0, top: 0, bottom: 0, visibility: 'hidden' } : {},
         '&:hover .shell-row-trailing, &:focus-within .shell-row-trailing': { visibility: 'visible' },
+        ...(swaps
+          ? {
+              '&:hover .shell-row-meta, &:focus-within .shell-row-meta': { display: 'none' },
+              // Room for the actions, so the label truncates before them.
+              '&:hover .shell-row-main, &:focus-within .shell-row-main': { paddingRight: '3.75rem' },
+            }
+          : {}),
       })}
     >
       <ButtonBase
+        className="shell-row-main"
         onClick={onClick}
+        title={title}
         aria-current={selected ? 'page' : undefined}
         aria-expanded={ariaExpanded}
         sx={(theme: Theme) => ({
@@ -61,7 +93,7 @@ export function ShellRow({
           minWidth: 0,
           justifyContent: 'flex-start',
           gap: 1,
-          paddingY: 0.5,
+          paddingY: 0.25,
           paddingLeft: 1 + indent,
           paddingRight: 1,
           minHeight: '1.75rem',
@@ -82,36 +114,23 @@ export function ShellRow({
             {icon}
           </Box>
         )}
-        <Box sx={{ minWidth: 0, flex: 1 }}>
+        <Typography
+          variant="labelSmall"
+          component="span"
+          sx={(theme: Theme) => ({ ...ONE_LINE, flex: 1, minWidth: 0, color: labelColor(theme, selected, muted) })}
+        >
+          {label}
+        </Typography>
+        {meta !== undefined && meta !== '' && (
           <Typography
-            variant="labelSmall"
+            className="shell-row-meta"
+            variant="bodySmall"
             component="span"
-            sx={(theme: Theme) => ({
-              display: 'block',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              color: selected ? theme.vars.palette.text.primary : theme.vars.palette.text.secondary,
-            })}
+            sx={(theme: Theme) => ({ ...ONE_LINE, flexShrink: 1, maxWidth: '45%', color: theme.vars.palette.text.metrics })}
           >
-            {label}
+            {meta}
           </Typography>
-          {caption !== undefined && (
-            <Typography
-              variant="bodySmall"
-              component="span"
-              sx={(theme: Theme) => ({
-                display: 'block',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                color: theme.vars.palette.text.metrics,
-              })}
-            >
-              {caption}
-            </Typography>
-          )}
-        </Box>
+        )}
       </ButtonBase>
       {trailing !== undefined && (
         <Box className="shell-row-trailing" sx={{ display: 'flex', alignItems: 'center', paddingRight: 0.5 }}>
@@ -122,16 +141,51 @@ export function ShellRow({
   );
 }
 
-export function SectionCaption({ children, action }: { children: string; action?: ReactNode }): React.JSX.Element {
+/**
+ * A section header: the name, in sentence case, and an optional action at the
+ * right. With `onToggle` the name is a disclosure button (chevron after it).
+ */
+export function SectionCaption({
+  children,
+  action,
+  expanded,
+  onToggle,
+}: {
+  children: string;
+  action?: ReactNode;
+  expanded?: boolean;
+  onToggle?: () => void;
+}): React.JSX.Element {
+  const name = (
+    <Typography
+      variant="labelSmall"
+      component="span"
+      sx={(theme: Theme) => ({ fontWeight: 600, color: theme.vars.palette.text.metrics })}
+    >
+      {children}
+    </Typography>
+  );
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', paddingX: 1, paddingTop: 1.5, paddingBottom: 0.5 }}>
-      <Typography
-        variant="labelSmall"
-        component="h2"
-        sx={(theme: Theme) => ({ flex: 1, margin: 0, color: theme.vars.palette.text.metrics, textTransform: 'uppercase', letterSpacing: '0.04em' })}
-      >
-        {children}
-      </Typography>
+    <Box sx={{ display: 'flex', alignItems: 'center', minHeight: '1.75rem', paddingLeft: 1, paddingRight: 0.5, paddingTop: 1.5, paddingBottom: 0.25 }}>
+      <Box component="h2" sx={{ flex: 1, margin: 0, display: 'flex', minWidth: 0 }}>
+        {onToggle === undefined ? (
+          name
+        ) : (
+          <ButtonBase
+            onClick={onToggle}
+            aria-expanded={expanded}
+            sx={(theme: Theme) => ({
+              gap: 0.25,
+              borderRadius: theme.vars.shape.radiusSm,
+              color: theme.vars.palette.text.metrics,
+              '& svg': { width: '0.875rem', height: '0.875rem', transition: 'transform 120ms', transform: expanded === false ? 'rotate(-90deg)' : 'none' },
+            })}
+          >
+            {name}
+            <ExpandMoreIcon aria-hidden />
+          </ButtonBase>
+        )}
+      </Box>
       {action}
     </Box>
   );

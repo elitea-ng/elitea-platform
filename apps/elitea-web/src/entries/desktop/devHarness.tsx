@@ -1,7 +1,9 @@
 /**
  * DEV ONLY — the desktop shell without a host or a deployment, for looking at
  * it in a browser (`npx vite --mode desktop`, then `/?harness`; add
- * `&chrome=mac` for the macOS title-bar overlay, `&mode=light|dark`).
+ * `&chrome=mac` for the macOS title-bar overlay, `&mode=light|dark`, and
+ * `&vibrancy` for the transparent sidebar over a stand-in wallpaper — the
+ * worst case for the tint, as no real material softens it).
  *
  * The workspace and native-shell IPC are the in-memory fakes the tests use;
  * the few API calls the workspace screens make are answered from canned data.
@@ -98,7 +100,18 @@ export function mountDesktopHarness(container: HTMLElement): void {
       { path: 'src/main.rs', kind: 'file' },
     ],
   });
-  const appIpc = createFakeAppIpc(params.get('chrome') === 'mac' ? { ...MACOS_PLATFORM, vibrancy: false } : BROWSER_PLATFORM);
+  const vibrancy = params.has('vibrancy');
+  if (vibrancy) {
+    // A busy stand-in wallpaper behind the transparent page (NativeLook clears html/body).
+    const wallpaper = document.createElement('style');
+    // oxlint-disable-next-line elitea/no-raw-color -- dev-only: a wallpaper is not a brand colour.
+    wallpaper.textContent = 'html[data-harness-wallpaper] { background: linear-gradient(135deg, #ff5f6d 0%, #ffc371 35%, #2b5876 70%, #ffffff 100%) fixed; }';
+    document.head.append(wallpaper);
+    document.documentElement.dataset['harnessWallpaper'] = '';
+  }
+  const appIpc = createFakeAppIpc(
+    params.get('chrome') === 'mac' || vibrancy ? { ...MACOS_PLATFORM, vibrancy } : BROWSER_PLATFORM,
+  );
   const permissions = new Set(Object.values(PERMISSION_GROUPS).flat());
 
   const rootRoute = createRootRoute({

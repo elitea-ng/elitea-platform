@@ -108,8 +108,45 @@ describe('DesktopFrame sidebar', () => {
     expect(await screen.findByTestId('catalog')).toBeInTheDocument();
     await user.click(within(sidebar).getByRole('button', { name: 'Settings' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
-    await user.click(screen.getByRole('button', { name: 'Folders' }));
+    await user.click(screen.getByRole('button', { name: 'Local work' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces'));
+  });
+});
+
+describe('DesktopFrame sidebar layout', () => {
+  it('heads the folders "Local work" and keeps each folder on one line, its project as quiet text and in the tooltip', async () => {
+    mount();
+    const sidebar = await screen.findByTestId('desktop-sidebar');
+    expect(within(sidebar).getByRole('navigation', { name: 'Local work' })).toBeInTheDocument();
+    expect(within(sidebar).getByRole('heading', { name: 'Local work' })).toBeInTheDocument();
+    const [app] = await screen.findAllByTestId('shell-folder');
+    const row = within(app as HTMLElement).getAllByRole('button')[0] as HTMLElement;
+    expect(row).toHaveAttribute('title', '/Users/me/code/app\nProject: Marketing');
+    expect(within(row).getByText('Marketing')).toHaveClass('shell-row-meta');
+    // The empty-state row shows only when there is no folder.
+    expect(within(sidebar).queryByRole('button', { name: 'Open a folder to work in' })).toBeNull();
+  });
+
+  it('offers "Open a folder" as the empty state', async () => {
+    const user = userEvent.setup();
+    const picked: Workspace = { id: 'w3', path: '/tmp/new', name: 'new', project_id: null, is_git: false };
+    const { router } = mount({ workspaces: [], nextOpen: picked });
+    await user.click(await screen.findByRole('button', { name: 'Open a folder to work in' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/workspaces/w3'));
+  });
+
+  it('collapses the Elitea section to the page on screen, and remembers it', async () => {
+    const user = userEvent.setup();
+    mount({ path: '/elitea-catalog' });
+    const sidebar = await screen.findByTestId('desktop-sidebar');
+    const toggle = within(sidebar).getByRole('button', { name: 'Elitea' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    const before = within(sidebar).getAllByTestId(/^shell-elitea-/).length;
+    expect(before).toBeGreaterThan(1);
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(within(sidebar).getAllByTestId(/^shell-elitea-/).map((row) => row.dataset['testid'])).toEqual(['shell-elitea-catalog']);
+    expect(localStorage.getItem('el.desktop.eliteaOpen')).toBe('false');
   });
 });
 

@@ -43,7 +43,7 @@ export function filterEntries(entries: readonly PaletteEntry[], query: string): 
 function paletteEntries(workspaces: readonly Workspace[], eliteaItems: readonly EliteaItem[], hasSession: boolean): PaletteEntry[] {
   const mod = modKey();
   const actions = t('desktop.palette.actions', 'Actions');
-  const folders = t('desktop.palette.folders', 'Folders');
+  const folders = t('desktop.palette.localWork', 'Local work');
   const threads = t('desktop.palette.threads', 'Threads');
   const elitea = t('desktop.palette.elitea', 'Elitea');
   const entries: PaletteEntry[] = [

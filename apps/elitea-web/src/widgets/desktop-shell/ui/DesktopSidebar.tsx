@@ -1,8 +1,8 @@
 /**
  * The desktop's left sidebar, workspace-first: search (the command palette),
- * FOLDERS — each opened workspace, expandable to the threads run in it —
- * "Open folder", then a compact "Elitea" list that opens the web features in
- * the main area, and Settings at the bottom.
+ * "Local work" — each opened folder, expandable to the threads run in it
+ * (`LocalWorkSection.tsx`) — then a compact, collapsible "Elitea" list that
+ * opens the web features in the main area, and Settings at the bottom.
  *
  * Each folder carries its project binding (its menu re-binds it), so there is
  * no global project switcher over the folders; the project the Elitea pages
@@ -10,23 +10,16 @@
  */
 import { useMemo, useState } from 'react';
 
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
-import AddOutlinedIcon from '@mui/icons-material/AddOutlined';
 import AppsOutlinedIcon from '@mui/icons-material/AppsOutlined';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import BuildOutlinedIcon from '@mui/icons-material/BuildOutlined';
 import ChatBubbleOutlineOutlinedIcon from '@mui/icons-material/ChatBubbleOutlineOutlined';
-import CheckOutlinedIcon from '@mui/icons-material/CheckOutlined';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
-import CreateNewFolderOutlinedIcon from '@mui/icons-material/CreateNewFolderOutlined';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import HelpOutlineOutlinedIcon from '@mui/icons-material/HelpOutlineOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
-import MoreHorizIcon from '@mui/icons-material/MoreHoriz';
 import SearchIcon from '@mui/icons-material/Search';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
@@ -34,9 +27,7 @@ import StorefrontOutlinedIcon from '@mui/icons-material/StorefrontOutlined';
 import ViewSidebarOutlinedIcon from '@mui/icons-material/ViewSidebarOutlined';
 import Box from '@mui/material/Box';
 import ButtonBase from '@mui/material/ButtonBase';
-import Divider from '@mui/material/Divider';
 import IconButton from '@mui/material/IconButton';
-import ListSubheader from '@mui/material/ListSubheader';
 import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import type { Theme } from '@mui/material/styles';
@@ -44,8 +35,6 @@ import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 
 import type { Project } from '@/entities/project';
-import { readThreads, threadsQueryKey, useWorkspaceIpc, type WorkspaceThread } from '@/features/workspace';
-import type { Workspace } from '@/shared/desktop/workspaceIpc';
 import { t } from '@/shared/i18n';
 import { computeIsSelectedProjectPublic } from '@/widgets/sidebar';
 
@@ -53,8 +42,9 @@ import { eliteaItems, selectedEliteaItem, type EliteaItemValue } from '../lib/el
 import type { ShellAction } from '../lib/shellActions';
 import { SIDEBAR_TINT_OPACITY } from '../lib/sidebarTint';
 import { useDesktopLayout } from '../model/desktopLayout.store';
-import { WORKSPACE_LIST_KEY } from '../model/useShellActions';
+import { useEliteaSectionOpen } from '../model/useEliteaSectionOpen';
 import type { ShellLocation } from '../model/useShellLocation';
+import { LocalWorkSection } from './LocalWorkSection';
 import { ShellRow, SectionCaption } from './rows';
 import { modKey } from './shortcutLabel';
 import { TitleBarSpacer } from './TitleBarSpacer';
@@ -80,179 +70,6 @@ export interface DesktopSidebarProps {
   projects: readonly Project[];
   selectedProjectId: string | undefined;
   onSelectProject: (projectId: string, projectName: string) => void;
-}
-
-const THREADS_SHOWN = 8;
-
-function FolderThreads({
-  workspace,
-  location,
-  run,
-}: {
-  workspace: Workspace;
-  location: ShellLocation;
-  run: (action: ShellAction) => void;
-}): React.JSX.Element {
-  const threads = useQuery({ queryKey: threadsQueryKey(workspace.id), queryFn: () => readThreads(workspace.id) });
-  const [all, setAll] = useState(false);
-  const list: WorkspaceThread[] = threads.data ?? [];
-  const shown = all ? list : list.slice(0, THREADS_SHOWN);
-  const here = location.workspaceId === workspace.id;
-  return (
-    <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }} aria-label={t('desktop.shell.threadsOf', 'Threads in {{name}}', { name: workspace.name })}>
-      {shown.map((thread) => (
-        <li key={thread.id}>
-          <ShellRow
-            testId="shell-thread"
-            indent={2.5}
-            label={thread.title === '' ? t('desktop.shell.untitledThread', 'Untitled thread') : thread.title}
-            selected={here && location.conversationId === thread.id}
-            onClick={() => run({ type: 'open_workspace', workspaceId: workspace.id, conversationId: thread.id })}
-          />
-        </li>
-      ))}
-      {list.length > THREADS_SHOWN && (
-        <li>
-          <ShellRow
-            indent={2.5}
-            label={all ? t('desktop.shell.showFewer', 'Show fewer') : t('desktop.shell.showAll', 'Show all ({{n}})', { n: list.length })}
-            onClick={() => setAll((value) => !value)}
-          />
-        </li>
-      )}
-      {list.length === 0 && (
-        <li>
-          <ShellRow
-            indent={2.5}
-            label={t('desktop.shell.newThread', 'New thread')}
-            selected={here && location.conversationId === ''}
-            onClick={() => run({ type: 'open_workspace', workspaceId: workspace.id })}
-          />
-        </li>
-      )}
-    </Box>
-  );
-}
-
-function FolderMenu({
-  workspace,
-  projects,
-  run,
-}: {
-  workspace: Workspace;
-  projects: readonly Project[];
-  run: (action: ShellAction) => void;
-}): React.JSX.Element {
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const ipc = useWorkspaceIpc();
-  const queryClient = useQueryClient();
-  const refresh = (): Promise<void> => queryClient.invalidateQueries({ queryKey: WORKSPACE_LIST_KEY });
-  const bind = useMutation({ mutationFn: (projectId: number) => ipc?.bindProject(workspace.id, projectId) ?? Promise.resolve(), onSettled: refresh });
-  const remove = useMutation({ mutationFn: () => ipc?.remove(workspace.id) ?? Promise.resolve(), onSettled: refresh });
-  const close = (): void => setAnchor(null);
-  return (
-    <>
-      <Tooltip title={t('desktop.shell.newThreadIn', 'New thread in {{name}}', { name: workspace.name })}>
-        <IconButton
-          size="small"
-          aria-label={t('desktop.shell.newThreadIn', 'New thread in {{name}}', { name: workspace.name })}
-          onClick={() => run({ type: 'open_workspace', workspaceId: workspace.id })}
-        >
-          <AddOutlinedIcon fontSize="inherit" />
-        </IconButton>
-      </Tooltip>
-      <IconButton
-        size="small"
-        aria-label={t('desktop.shell.folderMenu', 'More for {{name}}', { name: workspace.name })}
-        aria-haspopup="menu"
-        onClick={(event) => setAnchor(event.currentTarget)}
-      >
-        <MoreHorizIcon fontSize="inherit" />
-      </IconButton>
-      <Menu anchorEl={anchor} open={anchor !== null} onClose={close} slotProps={{ list: { dense: true } }}>
-        <ListSubheader>{t('desktop.shell.bindProject', 'Project for this folder')}</ListSubheader>
-        {projects
-          .filter((project) => !project.suspended)
-          .map((project) => (
-            <MenuItem
-              key={project.id}
-              selected={workspace.project_id === project.id}
-              onClick={() => {
-                close();
-                if (workspace.project_id !== project.id) bind.mutate(project.id);
-              }}
-            >
-              <Box component="span" sx={{ width: '1.25rem', display: 'inline-flex' }}>
-                {workspace.project_id === project.id && <CheckOutlinedIcon fontSize="inherit" />}
-              </Box>
-              {project.name}
-            </MenuItem>
-          ))}
-        <Divider />
-        <MenuItem
-          onClick={() => {
-            close();
-            remove.mutate();
-          }}
-        >
-          {t('desktop.shell.removeFolder', 'Remove from sidebar')}
-        </MenuItem>
-      </Menu>
-    </>
-  );
-}
-
-function Folders({ location, run, projects }: Pick<DesktopSidebarProps, 'location' | 'run' | 'projects'>): React.JSX.Element {
-  const ipc = useWorkspaceIpc();
-  const list = useQuery({ queryKey: WORKSPACE_LIST_KEY, queryFn: () => ipc?.list() ?? Promise.resolve([]), enabled: ipc !== undefined });
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set());
-  const workspaces = list.data ?? [];
-  const projectName = (id: number | null): string | undefined =>
-    id === null ? t('desktop.shell.noProject', 'No project') : projects.find((p) => p.id === id)?.name;
-
-  return (
-    <Box component="nav" aria-label={t('desktop.shell.folders', 'Folders')}>
-      <SectionCaption
-        action={
-          <Tooltip title={`${t('desktop.shell.openFolder', 'Open folder')} (${modKey()}O)`}>
-            <IconButton size="small" aria-label={t('desktop.shell.openFolder', 'Open folder')} onClick={() => run({ type: 'open_folder' })}>
-              <CreateNewFolderOutlinedIcon fontSize="inherit" />
-            </IconButton>
-          </Tooltip>
-        }
-      >
-        {t('desktop.shell.folders', 'Folders')}
-      </SectionCaption>
-      <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }}>
-        {workspaces.map((workspace) => {
-          const open = !collapsed.has(workspace.id);
-          const toggle = (): void =>
-            setCollapsed((current) => {
-              const next = new Set(current);
-              if (next.has(workspace.id)) next.delete(workspace.id);
-              else next.add(workspace.id);
-              return next;
-            });
-          return (
-            <li key={workspace.id} data-testid="shell-folder">
-              <ShellRow
-                label={workspace.name}
-                caption={projectName(workspace.project_id)}
-                icon={open ? <ExpandMoreIcon /> : <ChevronRightIcon />}
-                ariaExpanded={open}
-                selected={location.workspaceId === workspace.id && !open}
-                onClick={toggle}
-                trailingOnHover
-                trailing={<FolderMenu workspace={workspace} projects={projects} run={run} />}
-              />
-              {open && <FolderThreads workspace={workspace} location={location} run={run} />}
-            </li>
-          );
-        })}
-      </Box>
-      <ShellRow icon={<AddOutlinedIcon />} label={t('desktop.shell.openFolder', 'Open folder')} onClick={() => run({ type: 'open_folder' })} />
-    </Box>
-  );
 }
 
 function ProjectCaption({
@@ -303,6 +120,7 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
   );
   const selected = selectedEliteaItem(location.pathname, items);
   const vibrancy = useDesktopLayout((state) => state.platform.vibrancy);
+  const [eliteaOpen, toggleElitea] = useEliteaSectionOpen();
 
   return (
     <Box
@@ -365,15 +183,17 @@ export function DesktopSidebar(props: DesktopSidebarProps): React.JSX.Element {
         </ButtonBase>
       </Box>
       <Box sx={{ flex: 1, minHeight: 0, overflowY: 'auto', paddingX: 1 }}>
-        <Folders location={location} run={run} projects={props.projects} />
+        <LocalWorkSection location={location} run={run} projects={props.projects} />
         <Box component="nav" aria-label={t('desktop.shell.elitea', 'Elitea')}>
           <SectionCaption
+            expanded={eliteaOpen}
+            onToggle={toggleElitea}
             action={<ProjectCaption projects={props.projects} selectedProjectId={selectedProjectId} onSelectProject={props.onSelectProject} />}
           >
             {t('desktop.shell.elitea', 'Elitea')}
           </SectionCaption>
           <Box component="ul" sx={{ margin: 0, padding: 0, listStyle: 'none' }}>
-            {items.map((item) => (
+            {(eliteaOpen ? items : items.filter((item) => item.value === selected)).map((item) => (
               <li key={item.value}>
                 <ShellRow
                   testId={`shell-elitea-${item.value}`}
