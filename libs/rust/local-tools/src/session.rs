@@ -247,6 +247,21 @@ pub const TOOLS: &[ToolSpec] = &[
         },
     },
     ToolSpec {
+        name: "git_commit",
+        kind: ToolKind::GitCommit,
+        description: "Commit to git through the host (hooks and signing off, your global git identity). With paths, commits exactly those files as they are now; without, commits what is staged. Always confirmed by the person.",
+        parameters: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "message": { "type": "string" },
+                    "paths": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["message"]
+            })
+        },
+    },
+    ToolSpec {
         name: "git_branches",
         kind: ToolKind::GitRead,
         description: "List local branches, marking the current one.",
@@ -266,6 +281,16 @@ struct CommandArgs {
     #[serde(default)]
     network: bool,
 }
+
+#[derive(Deserialize)]
+struct CommitArgs {
+    message: String,
+    #[serde(default)]
+    paths: Vec<String>,
+}
+
+/// The longest commit message `git_commit` takes.
+const MAX_COMMIT_MESSAGE: usize = 16 * 1024;
 
 #[derive(Default, Deserialize)]
 struct GitArgs {
@@ -359,7 +384,8 @@ impl LocalSession {
             &config.session_id,
             &config.data_dir,
             &shell.sandbox,
-        )?;
+        )?
+        .with_git_global_config(shell.git_global_config.clone());
         Ok(Arc::new(Self {
             workspace,
             ledger: ReadLedger::new(),
@@ -466,7 +492,7 @@ impl LocalSession {
         TOOLS
             .iter()
             .filter(|tool| tool.kind != ToolKind::RunCommand || policy.shell)
-            .filter(|tool| tool.kind != ToolKind::GitRead || git)
+            .filter(|tool| !matches!(tool.kind, ToolKind::GitRead | ToolKind::GitCommit) || git)
             .filter(|tool| !plan || tool.kind.is_read_only())
             .collect()
     }
@@ -514,6 +540,7 @@ impl LocalSession {
             | ToolKind::SearchFiles
             | ToolKind::ReadDocument => self.read_only(spec, call_id, args).await,
             ToolKind::GitRead => self.git_read(tool, call_id, args).await,
+            ToolKind::GitCommit => self.git_commit(call_id, args).await,
             ToolKind::WriteFile => {
                 let mut args: files::WriteArgs = parse(args)?;
                 let (typed, target) = self.write_target(&args.path)?;
@@ -773,6 +800,92 @@ impl LocalSession {
         let output = shell::run(&self.workspace, &self.shell, &spec).await?;
         serde_json::to_value(output)
             .map_err(|_| ToolError::new(ErrorCode::Io, "cannot encode the result"))
+    }
+
+    /// `git_commit`: through the hardened host git (the repository is
+    /// checked, hooks and signing are off, the process is sandboxed and
+    /// may write only the git directory's data), always asked.
+    async fn git_commit(self: &Arc<Self>, call_id: &str, args: Value) -> ToolResult<Value> {
+        let args: CommitArgs = parse(args)?;
+        let message = args.message.trim().to_owned();
+        if message.is_empty() || message.len() > MAX_COMMIT_MESSAGE || message.contains('\0') {
+            return Err(ToolError::invalid(
+                "a commit message is 1 to 16384 characters, without NUL",
+            ));
+        }
+        let paths = args
+            .paths
+            .iter()
+            .map(|path| self.workspace.resolve(path, Intent::Read))
+            .collect::<ToolResult<Vec<_>>>()?;
+        let mut call = ToolCall::new(ToolKind::GitCommit);
+        call.paths = if paths.is_empty() {
+            vec![".".to_owned()]
+        } else {
+            paths.iter().map(WsPath::display_string).collect()
+        };
+        let subject = message.lines().next().unwrap_or_default().to_owned();
+        let prompt = if paths.is_empty() {
+            format!("commit what is staged: {subject}")
+        } else {
+            format!("commit {}: {subject}", call.paths.join(", "))
+        };
+        self.authorize(call_id, call, &prompt).await?;
+        let absolute: Vec<String> = paths
+            .iter()
+            .map(|path| self.workspace.absolute(path).display().to_string())
+            .collect();
+        self.blocking(move |this| {
+            let repo = match (this.checkpoints.repo(), this.checkpoints.git_refusal()) {
+                (Some(repo), _) => repo,
+                (None, Some(refusal)) => return Err(refusal.clone()),
+                (None, None) => {
+                    return Err(ToolError::new(ErrorCode::Git, "the folder is not in git"));
+                }
+            };
+            let (name, email) = repo.global_identity()?;
+            let (writes, protected) = repo.commit_access();
+            let root = this.workspace.root();
+            let mut words: Vec<&str> = Vec::new();
+            if !absolute.is_empty() {
+                words.extend(["add", "--"]);
+                words.extend(absolute.iter().map(String::as_str));
+                repo.git(root)
+                    .writes(&writes)
+                    .protect(&protected)
+                    .worktree()
+                    .run(&words)?;
+            }
+            let (name, email) = (
+                std::ffi::OsString::from(name),
+                std::ffi::OsString::from(email),
+            );
+            let mut commit = vec![
+                "commit",
+                "--no-verify",
+                "--no-gpg-sign",
+                "--no-edit",
+                "--cleanup=strip",
+                "--file=-",
+            ];
+            if !absolute.is_empty() {
+                commit.push("--");
+                commit.extend(absolute.iter().map(String::as_str));
+            }
+            repo.git(root)
+                .env("GIT_AUTHOR_NAME", &name)
+                .env("GIT_AUTHOR_EMAIL", &email)
+                .env("GIT_COMMITTER_NAME", &name)
+                .env("GIT_COMMITTER_EMAIL", &email)
+                .stdin(message.as_bytes())
+                .writes(&writes)
+                .protect(&protected)
+                .worktree()
+                .run(&commit)?;
+            let id = repo.git(root).text(&["rev-parse", "HEAD"])?;
+            Ok(json!({ "commit": id, "subject": subject }))
+        })
+        .await
     }
 
     async fn git_read(

@@ -20,7 +20,8 @@
 //! 5. **Default**: read-only tools are allowed; everything else is asked.
 //!
 //! A compound command (see [`crate::command`]) is never allowed by layers 3
-//! or 4: an allow there becomes an ask.
+//! or 4: an allow there becomes an ask. A `git_commit` is never remembered
+//! (layer 4 does not apply to it).
 //!
 //! [`RuleApprovals`] exposes the engine as the runtime's
 //! [`ApprovalChannel`]: rule verdicts are answered inline, asks go on to the
@@ -64,6 +65,9 @@ pub enum ToolKind {
     EditFile,
     ApplyPatch,
     RunCommand,
+    /// A commit through the host's hardened git: always asked unless a
+    /// workspace rule allows it; never remembered.
+    GitCommit,
 }
 
 impl ToolKind {
@@ -391,7 +395,7 @@ impl RulesEngine {
             return decision;
         }
         let simple = shape.as_ref().is_none_or(CommandShape::is_simple);
-        if simple && self.remembered(call, shape.as_ref()) {
+        if simple && call.tool != ToolKind::GitCommit && self.remembered(call, shape.as_ref()) {
             return Decision::new(
                 Verdict::Allow,
                 Source::Remembered,
@@ -575,6 +579,12 @@ impl RulesEngine {
     ///
     /// When the choice is not rememberable or cannot be stored.
     pub fn remember(&self, call: &ToolCall, prefix: Option<&str>) -> ToolResult<()> {
+        if call.tool == ToolKind::GitCommit {
+            return Err(ToolError::new(
+                ErrorCode::Denied,
+                "commits are asked every time",
+            ));
+        }
         let command = match call.command.as_deref().map(analyse) {
             None => None,
             Some(CommandShape::Simple(argv)) => {
@@ -678,10 +688,11 @@ impl ApprovalChannel for RuleApprovals {
             Verdict::Allow => Ok(decided("approve", &decision)),
             Verdict::Deny => Ok(decided("reject", &decision)),
             Verdict::Ask => {
-                let rememberable = call
-                    .command
-                    .as_deref()
-                    .is_none_or(|command| analyse(command).is_simple());
+                let rememberable = call.tool != ToolKind::GitCommit
+                    && call
+                        .command
+                        .as_deref()
+                        .is_none_or(|command| analyse(command).is_simple());
                 request.available_actions = if rememberable {
                     vec![
                         "approve".to_owned(),

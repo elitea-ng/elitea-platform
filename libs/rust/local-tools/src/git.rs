@@ -545,6 +545,47 @@ impl Repo {
         Ok(())
     }
 
+    /// The person's identity from their global git config (never the
+    /// repository's): `(name, email)`.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::Git`] when `user.name` or `user.email` is not set
+    /// globally.
+    pub fn global_identity(&self) -> ToolResult<(String, String)> {
+        let get = |key: &str| {
+            self.git(&self.top)
+                .text(&["config", "--global", "--includes", "--get", key])
+                .ok()
+                .filter(|value| !value.is_empty())
+        };
+        match (get("user.name"), get("user.email")) {
+            (Some(name), Some(email)) => Ok((name, email)),
+            _ => Err(ToolError::new(
+                ErrorCode::Git,
+                "set user.name and user.email in your global git config to commit",
+            )),
+        }
+    }
+
+    /// What a commit may write: the git directory, except what runs code
+    /// or redirects git (hooks, config, info, modules, commondir).
+    #[must_use]
+    pub(crate) fn commit_access(&self) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        let protected = [
+            "hooks",
+            "config",
+            "config.worktree",
+            "info",
+            "modules",
+            "commondir",
+        ]
+        .iter()
+        .map(|name| self.git_dir.join(name))
+        .collect();
+        (vec![self.git_dir.clone()], protected)
+    }
+
     /// A git call in this repository, from `cwd` (inside the work tree).
     pub(crate) fn git<'a>(&'a self, cwd: &'a Path) -> Git<'a> {
         Git {
@@ -553,6 +594,7 @@ impl Repo {
             env: Vec::new(),
             stdin: None,
             writable: Vec::new(),
+            protected: Vec::new(),
             timeout: READ_TIMEOUT,
             literal: true,
             worktree: false,
@@ -585,12 +627,19 @@ pub(crate) struct Git<'a> {
     env: Vec<(&'a str, &'a OsStr)>,
     stdin: Option<&'a [u8]>,
     writable: Vec<PathBuf>,
+    protected: Vec<PathBuf>,
     timeout: Duration,
     literal: bool,
     worktree: bool,
 }
 
 impl<'a> Git<'a> {
+    /// Keep `paths` read-only inside the writable ones.
+    pub(crate) fn protect(mut self, paths: &[PathBuf]) -> Self {
+        self.protected.extend(paths.iter().cloned());
+        self
+    }
+
     pub(crate) fn env(mut self, name: &'a str, value: &'a OsStr) -> Self {
         self.env.push((name, value));
         self
@@ -648,6 +697,7 @@ impl<'a> Git<'a> {
         words.extend(args.iter().map(|arg| (*arg).to_owned()));
         let request = SandboxRequest {
             writable_roots: self.writable.clone(),
+            protected: self.protected.clone(),
             deny_paths: std::env::var_os("HOME")
                 .filter(|home| !home.is_empty())
                 .map(|home| credential_paths(Path::new(&home)))

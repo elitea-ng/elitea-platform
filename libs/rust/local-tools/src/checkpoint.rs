@@ -225,6 +225,16 @@ impl Checkpoints {
         }))
     }
 
+    /// Read `path` as the global git config (hosts that keep it elsewhere,
+    /// tests).
+    #[must_use]
+    pub fn with_git_global_config(mut self, path: Option<PathBuf>) -> Self {
+        if let (Self::Git(git), Some(path)) = (&mut self, path) {
+            git.repo = git.repo.clone().with_global_config(path);
+        }
+        self
+    }
+
     /// Use `limits` instead of the defaults.
     #[must_use]
     pub fn with_limits(mut self, limits: CheckpointLimits) -> Self {

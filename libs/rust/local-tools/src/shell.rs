@@ -62,6 +62,9 @@ pub struct ShellConfig {
     pub allow_listen: bool,
     /// Let commands reach the keychain's services (off by default).
     pub allow_keychain: bool,
+    /// The global git config the host's git reads (`None`: the person's,
+    /// from `HOME`); for hosts that keep it elsewhere and for tests.
+    pub git_global_config: Option<PathBuf>,
 }
 
 impl ShellConfig {
@@ -79,6 +82,7 @@ impl ShellConfig {
             protect_credentials: true,
             allow_listen: false,
             allow_keychain: false,
+            git_global_config: None,
         }
     }
 }
