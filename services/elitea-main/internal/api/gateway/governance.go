@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"math"
 	"net/http"
 	"strings"
@@ -20,6 +21,13 @@ import (
 // target weights sum to 1.0. Weights are authored as decimals (0.7 + 0.3), so a
 // small tolerance absorbs base-2 rounding without admitting a real mis-sum.
 const weightSumEpsilon = 1e-6
+
+// maxGovernanceRequestBytes bounds every governance request body before it is
+// decoded. A row is one authored definition — a routing rule, a budget, an
+// egress allowlist of hostnames (≤ 253 bytes each) — so 256 KiB holds about a
+// thousand allowlist entries and is far above any realistic form submission,
+// while keeping the decode allocation small on an admin path.
+const maxGovernanceRequestBytes = 256 << 10
 
 // governanceQuerier is the minimal subset of *pgxpool.Pool the governance CRUD
 // needs. Narrowing it to an interface lets tests substitute a fake without a
@@ -201,8 +209,7 @@ type ValidateCELRequest struct {
 // without persisting anything — backs the type:action "Validate CEL" control.
 func (h *GovernanceHandler) ValidateCEL(w http.ResponseWriter, r *http.Request) {
 	var req ValidateCELRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeGovernanceJSON(w, r, &req) {
 		return
 	}
 	if err := CompileRoutingCEL(req.CEL); err != nil {
@@ -212,12 +219,36 @@ func (h *GovernanceHandler) ValidateCEL(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"valid": true})
 }
 
+// decodeGovernanceJSON decodes a body of at most maxGovernanceRequestBytes into
+// dst. The body must be exactly one JSON value with no unknown top-level field:
+// a misspelt key or a second value would otherwise be dropped silently. An
+// oversized body is a 413 and any other refusal a 400; either way it writes the
+// response and returns false before any database work starts.
+func decodeGovernanceJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxGovernanceRequestBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	err := decoder.Decode(dst)
+	if err == nil {
+		var trailing json.RawMessage
+		if err = decoder.Decode(&trailing); errors.Is(err, io.EOF) {
+			return true
+		}
+	}
+	var maxBytesError *http.MaxBytesError
+	if errors.As(err, &maxBytesError) {
+		writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+		return false
+	}
+	writeError(w, http.StatusBadRequest, "invalid request body")
+	return false
+}
+
 // decodeGovernanceBody decodes a request body into a GovernanceRow, writing a
-// 400 and returning ok=false on malformed input.
+// 413 or 400 and returning ok=false on oversized or malformed input.
 func decodeGovernanceBody(w http.ResponseWriter, r *http.Request) (GovernanceRow, bool) {
 	var body GovernanceRow
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeGovernanceJSON(w, r, &body) {
 		return GovernanceRow{}, false
 	}
 	if body.Section == "" {
