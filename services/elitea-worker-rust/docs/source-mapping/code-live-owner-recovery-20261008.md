@@ -85,6 +85,54 @@ The separate live canvas image later passes build and strict scan. Its deployed 
 Stored cleanup flags remain false. Independent removal checks supply physical cleanup proof.
 Product and execution-store observations are sequential, not atomic. This case supplies no performance benchmark.
 
+## Deployed crash matrix on the merged branch (2026-10-09)
+
+The branch head is `22f33b8f8`: `main` merged in, plus the PERF-1084 changes. These runs used a standalone compose stack,
+`elitea-code1084`, at `http://code1084.localhost:18300`.
+
+**Stack.**
+- Images: Main `644541553d39`, Worker `f6f064aabe94`, Supervisor `9ae7d121a4e4`, Web `23587013fbad`.
+- Binary checks: the Worker contains `code_timing.rs` and `pipeline.code_cancelled`, which `main-c0f2e5f9b-verify` does
+  not. Main contains `resumeCurrentAgentStaticTools`. The Supervisor contains `service_job_owners.rs`. #1160 is an
+  ancestor of the head.
+- Database: real-model product DB, shared migrations at 158, tenants at 148.
+- Code runtimes: Deno (Python, JavaScript, TypeScript) and pure Rust. `agent_node_recovery: true`.
+
+**Fixture.** Pipeline 166, created in the UI. It has one JavaScript `code` node that records its start time, waits 25 s,
+and returns `SLOW_DONE started=<time>`.
+
+**Fault injection.** Each fault is `docker kill` (SIGKILL), sent about 9 s after Send while the runtime is running,
+followed by `docker start` 6–8 s later.
+
+**Invariants.** All of them are scoped to this stack's own `elitea_runtime.sandbox_jobs` rows. Runtime containers carry
+no stack label on the shared Docker daemon, so other stacks' `elitea-code-*` runtimes are excluded.
+- **One sandbox job per run.** The ledger row count grows by exactly 1.
+- **The original result.** The stored start time is earlier than the kill time.
+- **One settlement** in `elitea_runtime.execution_settlements`.
+
+| Fault | Execution | Kill → restart | Settlement | Answer (stored) | Class |
+|---|---|---|---|---|---|
+| none, baseline | `f8e02bcf…` | — | SUCCEEDED, attempt 1 | `started=17:54:02.579Z` | — |
+| Worker | `c4e66b17…` | 17:55:30 → 17:55:36 | SUCCEEDED at 17:56:27, attempt 2 / epoch 2 | `started=17:55:21.739Z` | R |
+| Stop | `077441c2…` | Stop clicked at about 8 s | CANCELLED at 17:57:49; runtime removed | "Execution was cancelled." | — |
+| Supervisor | `37697d0e…` | 18:09:28 → 18:09:34 | SUCCEEDED at 18:10:25, attempt 1; sandbox lease epoch 2 | `started=18:09:20.809Z` | R |
+| Main | `f1e0e427…` | 18:11:17 → 18:11:24 | SUCCEEDED at 18:12:19, attempt 2 / epoch 2 | `started=18:11:09.325Z` | R |
+| Main + Worker + Supervisor | `9452c832…` | 18:12:59 → 18:13:07 | SUCCEEDED at 18:13:57, attempt 2 / epoch 2; sandbox lease epoch 2 | `started=18:12:50.830Z` | R |
+
+**Reproduction.** An independent investigation reproduced the Worker case: one job (`f947b03f…`), one runtime created
+at 18:05:27 and destroyed at 18:05:57, original result recovered.
+
+**Canvas correction `ac6e0adea`.** After the Stop, the editor shows "Run is stopped" and clears the active node. This
+closes the deployed-browser item listed for it.
+
+**Observations, not defects of this branch.**
+- After a Worker takeover, the live test chat showed only the node chip until reload; the stored answer is complete.
+  Recorded as a Web live-delivery follow-up.
+- The Worker log filter (`diagnostics.rs`) drops `elitea_agent_runtime` events, so recovery detail from shared crates is
+  not logged. This is pre-existing and tracked separately.
+- Runtimes have no per-deployment label. A future orphan sweeper (G-SUP-03) must scope by owner before it removes
+  anything.
+
 ## Performance (PERF-1084)
 
 Source: the PR #1084 performance review (findings F1, F2, F3, F4, F8, F9). Costs are estimates from code paths except where a test measures them. No durability rule changes: NATS `sync_interval`, the end-of-transaction fence re-check, the stored result copies and unsettled ledger rows are untouched, and nothing answers from memory before commit.
