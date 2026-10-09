@@ -1,6 +1,6 @@
 # Conversation pin concurrency
 
-Branch `fix/conversation-pin-deadlock`. It was first based on `origin/main` at `7ac0eaf9` and then rebased onto
+PR elitea-ng/elitea-platform#1168, branch `fix/conversation-pin-deadlock`. It was first based on `origin/main` at `7ac0eaf9` and then rebased onto
 `b4ffbe33f`. Evidence was collected on 2026-10-08 and 2026-10-09, and the PR was opened on 2026-10-09.
 
 **Scope after the rebase.** While this branch was being prepared, #1163 (`f084c75b4`) landed on `main` with the Pin
