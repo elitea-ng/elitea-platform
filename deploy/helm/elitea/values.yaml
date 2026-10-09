@@ -485,11 +485,68 @@ platform:
   aiProjectId: ""
 
 
+# Ingress NetworkPolicies for the pods this chart renders (default-deny). They
+# need a CNI that enforces NetworkPolicy (Calico, Cilium, etc.); on one that does
+# not, the objects are inert.
+#
+#   elitea-main     HTTP 8080 admits the platform edge, the provider pods that
+#                   call back directly, main.ingressFrom / extraIngressFrom and
+#                   probeFrom. The runtime listeners admit the worker pods only.
+#   platform edge   443 from the worker, elitea-main and (callbackViaPlatformEdge)
+#                   DeepWiki; egress to elitea-main's HTTP port and cluster DNS.
+#   worker          no inbound connections. Worker egress is NOT restricted (the
+#                   worker reaches NATS, PostgreSQL, elitea-main, the sandbox
+#                   supervisors and, through toolkits, external hosts); egress
+#                   controls are separate work.
+#   sandbox         the supervisor profile ports admit the worker and elitea-main.
+#
+# Not covered here: the web, scheduler, LLM gateway (its own opt-in egress policy
+# is llmGateway.networkPolicy), OTel collector, PgBouncer and provider pods
+# accept inbound traffic as before.
+networkPolicies:
+  enabled: true
+  # Set true ONLY when `enabled` is false because your own NetworkPolicy already
+  # limits who may reach elitea-main, the worker, the platform edge and the
+  # sandbox supervisor. templates/guards.yaml refuses `enabled: false` without
+  # it: the chart cannot see your policy, so this is a statement, not a probe.
+  externallyManaged: false
+  # Optional NetworkPolicyPeer entries admitted on the probe ports of
+  # elitea-main (8080), the platform edge (443) and the sandbox supervisor, for a
+  # CNI that applies policy to kubelet probes. Kubelet probes are not subject to
+  # policy on the CNIs this chart is tested with, so this is normally empty
+  # (the same assumption as the NATS chart's networkPolicy).
+  probeFrom: []
+  main:
+    # NetworkPolicyPeer entries for whatever delivers external traffic to
+    # elitea-main:8080: the Gateway API gateway's pods or the ingress controller.
+    # The chart cannot know their labels or namespace, so main.ingress.enabled=true
+    # REQUIRES at least one entry here, e.g.
+    #   - namespaceSelector:
+    #       matchLabels:
+    #         kubernetes.io/metadata.name: gateway-system
+    #     podSelector:
+    #       matchLabels: {app.kubernetes.io/name: my-gateway}
+    ingressFrom: []
+    # Every install states who may reach elitea-main:8080 from outside the
+    # chart: either list the peers in ingressFrom / extraIngressFrom (this
+    # includes a Gateway API HTTPRoute applied outside the chart, such as
+    # deploy/gateway-api/httproute.yaml, and an ingress controller), or set
+    # this to true. Set it true ONLY when nothing outside the chart's own pods
+    # must reach elitea-main:8080, for example access by kubectl port-forward
+    # only. The chart refuses to render with neither, and refuses true together
+    # with main.ingress.enabled.
+    noExternalIngress: false
+    # More peers on 8080 (a monitoring scraper, a debug pod, or an ipBlock for
+    # clients that reach a NodePort / LoadBalancer Service directly). Not
+    # required by any guard.
+    extraIngressFrom: []
+
 main:
   # The API. Everything else is optional next to it.
   enabled: true
-  # PROTOTYPE VALUES ONLY. This chart does not yet define NetworkPolicy,
-  # split database principals, or production secret delivery. An opt-in
+  # PROTOTYPE VALUES ONLY. This chart does not yet define split database
+  # principals or production secret delivery. Ingress NetworkPolicies for the
+  # workloads below are on by default (see networkPolicies). An opt-in
   # Ingress/HTTPRoute exists (ingress.enabled) but ships with no TLS secret
   # or hostname configured — see ingress.tls / ingress.hosts below.
   #
@@ -586,6 +643,14 @@ main:
     # disallow) or by fronting elitea-main with a Gateway. Do not assume the
     # plain-Ingress path is covered by this chart.
     #
+    # The chart therefore REFUSES to render a plain Ingress while Form sign-in
+    # (main.fileConfig.authConfig.enabled) is on, unless the operator states
+    # via identityHeadersStrippedByController below that the controller removes
+    # the X-Auth-* and X-Elitea-* identity names listed here (including
+    # X-Auth-Signature) from inbound requests. On the Gateway API path the list
+    # must name at least X-Auth-Type, X-Auth-ID, X-Auth-User-ID and
+    # X-Auth-Signature (case-insensitive).
+    #
     # X-Elitea-Llm-Hop IS DELIBERATELY ABSENT, and a gate fails if it appears.
     # It is the LLM gateway's hop marker (#164): the gateway stamps it on every
     # outbound provider request and refuses a request that arrives already
@@ -594,11 +659,13 @@ main:
     # marker is not identity — it grants nothing, and recognising it only
     # refuses the caller's own request. Both traefik edges carry the same
     # exception, and edge_identity_strip_test.go holds them together.
+    identityHeadersStrippedByController: false
     stripIdentityHeaders:
       - X-Auth-Type
       - X-Auth-Id
       - X-Auth-User-Id
       - X-Auth-Reference
+      - X-Auth-Signature
       - X-Auth-Avatar
       - X-Auth-Avatar-State
       - X-Auth-Session-Id

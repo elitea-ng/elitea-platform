@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/projectaccess"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/pkg/apierr"
 )
 
@@ -131,18 +132,8 @@ func requireProjectAccess(pool projectAccessQuerier) func(http.Handler) http.Han
 			// this middleware answers 503 on EVERY project-scoped route.
 			// Before this change only the RBAC resolver failed.
 			var allowed, projectExists bool
-			err = pool.QueryRow(r.Context(), `
-				SELECT EXISTS (
-					SELECT 1 FROM auth_core__project_user_role
-					WHERE project_id = $1 AND user_id = $2
-					UNION ALL
-					SELECT 1
-					FROM auth_core__user_role ur
-					JOIN auth_core__role role ON role.id = ur.role_id
-					WHERE ur.user_id = $2 AND role.name = 'super_admin'
-						AND role.mode = 'administration'
-				),
-				EXISTS (SELECT 1 FROM centry.project WHERE id = $1)`,
+			err = pool.QueryRow(r.Context(),
+				"SELECT "+projectaccess.Membership(1, 2)+", "+projectaccess.ProjectExists(1),
 				projectID, userID).Scan(&allowed, &projectExists)
 			if err != nil {
 				apierr.WriteStatus(w, http.StatusServiceUnavailable, "project authorization unavailable")

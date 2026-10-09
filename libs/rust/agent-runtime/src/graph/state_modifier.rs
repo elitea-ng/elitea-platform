@@ -14,7 +14,9 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use super::PIPELINE_YAML_BUDGET;
 use super::yaml::{valid_graph_id, valid_output_key};
+use crate::bounded_yaml;
 
 const MAX_NODE_YAML_BYTES: usize = 64 * 1024;
 const MAX_TEMPLATE_BYTES: usize = 64 * 1024;
@@ -60,8 +62,11 @@ impl StateModifierNodeDefinition {
         if yaml.is_empty() || yaml.len() > MAX_NODE_YAML_BYTES {
             return Err(StateModifierConfigurationError::ResourceExhausted);
         }
-        let raw = serde_yaml_ng::from_str::<RawStateModifierNodeDefinition>(yaml)
-            .map_err(|source| StateModifierConfigurationError::MalformedYaml { source })?;
+        let raw = bounded_yaml::from_str_as_yaml_error::<RawStateModifierNodeDefinition>(
+            yaml,
+            PIPELINE_YAML_BUDGET,
+        )
+        .map_err(|source| StateModifierConfigurationError::MalformedYaml { source })?;
         Self::from_raw(raw)
     }
 

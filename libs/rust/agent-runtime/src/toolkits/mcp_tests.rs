@@ -1573,3 +1573,44 @@ async fn the_session_client_keeps_the_bearer_on_origin_and_refuses_cross_origin_
         "the other origin got no request"
     );
 }
+
+#[test]
+fn platform_reserved_header_names_are_refused_in_direct_mcp_headers() {
+    let endpoint = "https://mcp.example.invalid/v1/mcp";
+    let tokens = Map::from_iter([(endpoint.to_owned(), json!({"access_token": "oauth-token"}))]);
+    for name in [
+        "X-Auth-Type",
+        "x-auth-id",
+        "X-AUTH-USER-ID",
+        "X-Auth-Signature",
+        "X-Elitea-Project-Id",
+    ] {
+        let version = frozen("mcp", &direct_settings_with_headers(json!({name: "value"})));
+        let snapshot = FrozenToolSnapshot::from_version_details(&version)
+            .expect("MCP snapshot")
+            .apply_policy(policy(&[]).as_ref());
+        let reference = snapshot
+            .iter()
+            .find(|reference| reference.tool_type() == "mcp")
+            .expect("MCP reference");
+        let refused = RemoteMcpConfig::parse_for_test(reference, &tokens)
+            .and_then(|config| config.request_headers_for_test());
+        assert_eq!(
+            refused.err().map(|error| error.code()),
+            Some(McpMaterializationErrorCode::UnsupportedAuthority),
+            "{name} must be refused"
+        );
+    }
+    for name in [
+        "X-Authorization-Hint",
+        "x-authz",
+        "X-Custom",
+        "X-Auth-Token",
+        "X-Auth-Key",
+    ] {
+        let headers = direct_config(json!({name: "value"}), &tokens)
+            .request_headers_for_test()
+            .expect("headers");
+        assert_eq!(headers[name.to_ascii_lowercase()], "value");
+    }
+}

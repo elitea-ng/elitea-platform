@@ -5,7 +5,7 @@ use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use serde_json::{Map, Value};
 use zeroize::Zeroizing;
 
-use crate::toolkits::DelegatedAuthorizationRequirement;
+use crate::toolkits::{DelegatedAuthorizationRequirement, is_reserved_platform_header};
 
 use super::spec::{OpenApiOperation, parse_operations};
 
@@ -454,30 +454,32 @@ fn canonical_url(url: &Url) -> String {
     canonical.to_string().trim_end_matches('/').to_owned()
 }
 
-fn restricted_header(name: &HeaderName) -> bool {
-    matches!(
-        name.as_str(),
-        "authorization"
-            | "proxy-authorization"
-            | "host"
-            | "content-length"
-            | "transfer-encoding"
-            | "connection"
-            | "cookie"
-            | "set-cookie"
-    )
+pub(super) fn restricted_header(name: &HeaderName) -> bool {
+    is_reserved_platform_header(name.as_str())
+        || matches!(
+            name.as_str(),
+            "authorization"
+                | "proxy-authorization"
+                | "host"
+                | "content-length"
+                | "transfer-encoding"
+                | "connection"
+                | "cookie"
+                | "set-cookie"
+        )
 }
 
 fn restricted_configured_header(name: &HeaderName) -> bool {
-    matches!(
-        name.as_str(),
-        "proxy-authorization"
-            | "host"
-            | "content-length"
-            | "transfer-encoding"
-            | "connection"
-            | "set-cookie"
-    )
+    is_reserved_platform_header(name.as_str())
+        || matches!(
+            name.as_str(),
+            "proxy-authorization"
+                | "host"
+                | "content-length"
+                | "transfer-encoding"
+                | "connection"
+                | "set-cookie"
+        )
 }
 
 const fn invalid_configuration() -> OpenApiConfigError {

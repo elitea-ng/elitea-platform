@@ -1,8 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 
+use percent_encoding::percent_decode_str;
 use reqwest::{Method, Url};
 use serde_json::{Map, Value, json};
+
+use crate::bounded_yaml::{self, BoundedYamlError, YamlBudget};
 
 const MAX_SPEC_BYTES: usize = 1024 * 1024;
 const MAX_SPEC_NODES: usize = 131_072;
@@ -17,6 +20,20 @@ const MAX_PARAMETER_NAME_BYTES: usize = 1_024;
 const MAX_PARAMETER_SCHEMA_BYTES: usize = 64 * 1024;
 const MAX_URL_BYTES: usize = 8 * 1024;
 const MAX_RESPONSE_COLLECTION_DEPTH: usize = 4;
+const MAX_RESPONSE_COLLECTION_PATHS: usize = 64;
+const MAX_REF_CHAIN: usize = 32;
+/// Values one `$ref` resolution may produce. A parameter schema above it would also exceed
+/// `MAX_PARAMETER_SCHEMA_BYTES`, since every value encodes to at least one byte.
+pub(crate) const MAX_SCHEMA_EXPANSION_NODES: usize = 65_536;
+/// Values all `$ref` resolutions of one specification may produce together.
+pub(crate) const MAX_SPEC_EXPANSION_NODES: usize = 16 * MAX_SCHEMA_EXPANSION_NODES;
+/// YAML text is bounded before the tree is built. `validate_tree` counts values only, while
+/// the YAML budget also counts mapping keys, so the node bound is doubled.
+const SPEC_YAML_BUDGET: YamlBudget = YamlBudget {
+    nodes: 2 * MAX_SPEC_NODES,
+    scalar_bytes: MAX_SPEC_BYTES,
+    depth: MAX_SPEC_DEPTH,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum OpenApiSpecErrorCode {
@@ -231,11 +248,12 @@ pub(crate) fn parse_operations(
     let mut seen_names = HashSet::new();
     let mut generated_names = HashSet::new();
     collect_existing_operation_names(paths, &mut generated_names)?;
+    let mut expansion = ExpansionBudget::new();
     let mut operations = Vec::new();
     for (path, path_item) in paths {
         validate_path(path)?;
         let path_item = path_item.as_object().ok_or_else(invalid_specification)?;
-        let shared_parameters = raw_parameters(root, path_item.get("parameters"))?;
+        let shared_parameters = raw_parameters(root, path_item.get("parameters"), &mut expansion)?;
         for (method_name, raw_operation) in path_item {
             let Some(method) = openapi_method(method_name) else {
                 continue;
@@ -258,11 +276,13 @@ pub(crate) fn parse_operations(
                 root,
                 shared_parameters.clone(),
                 raw_operation.get("parameters"),
+                &mut expansion,
             )?;
             let body = parse_request_body(root, raw_operation.get("requestBody"))?;
             let description = operation_description(&method, path, raw_operation)?;
             let schema = operation_schema(&parameters, body.as_ref())?;
-            let response_collection_paths = response_collection_paths(root, raw_operation)?;
+            let response_collection_paths =
+                response_collection_paths(root, raw_operation, &mut expansion)?;
             operations.push(OpenApiOperation {
                 name: name.into(),
                 method,
@@ -298,9 +318,13 @@ pub(super) fn parse_source(source: &Value) -> Result<Value, OpenApiSpecError> {
             if trimmed.starts_with("https://") || trimmed.starts_with("http://") {
                 return Err(unsupported_source());
             }
-            serde_json::from_str(trimmed)
-                .or_else(|_| serde_yaml_ng::from_str(trimmed))
-                .map_err(|_| invalid_specification())
+            if let Ok(document) = serde_json::from_str(trimmed) {
+                return Ok(document);
+            }
+            bounded_yaml::from_str(trimmed, SPEC_YAML_BUDGET).map_err(|error| match error {
+                BoundedYamlError::BudgetExceeded(_) => resource_exhausted(),
+                BoundedYamlError::Malformed(_) => invalid_specification(),
+            })
         }
         _ => Err(invalid_specification()),
     }
@@ -551,7 +575,12 @@ fn validate_path(value: &str) -> Result<(), OpenApiSpecError> {
     if !value.starts_with('/')
         || value.len() > MAX_PATH_BYTES
         || value.contains(['\\', '#', '?'])
-        || value.split('/').any(|segment| segment == "..")
+        || value.split('/').any(|segment| {
+            matches!(
+                percent_decode_str(segment).decode_utf8_lossy().as_ref(),
+                "." | ".."
+            )
+        })
         || value.chars().any(char::is_control)
     {
         return Err(invalid_specification());
@@ -574,6 +603,7 @@ struct RawParameter {
 fn raw_parameters(
     root: &Map<String, Value>,
     value: Option<&Value>,
+    expansion: &mut ExpansionBudget,
 ) -> Result<Vec<RawParameter>, OpenApiSpecError> {
     let Some(value) = value else {
         return Ok(Vec::new());
@@ -584,13 +614,14 @@ fn raw_parameters(
     }
     parameters
         .iter()
-        .map(|parameter| parse_parameter(root, parameter))
+        .map(|parameter| parse_parameter(root, parameter, expansion))
         .collect()
 }
 
 fn parse_parameter(
     root: &Map<String, Value>,
     value: &Value,
+    expansion: &mut ExpansionBudget,
 ) -> Result<RawParameter, OpenApiSpecError> {
     let resolved = resolve_object(root, value)?;
     let name = resolved
@@ -641,7 +672,7 @@ fn parse_parameter(
     })?;
     let schema = resolved
         .get("schema")
-        .map(|schema| resolve_schema(root, schema, 0, &mut BTreeSet::new()))
+        .map(|schema| expansion.resolve(root, schema))
         .transpose()?
         .unwrap_or_else(|| json!({"type":"string"}));
     if serde_json::to_vec(&schema)
@@ -671,10 +702,14 @@ fn merge_parameters(
     root: &Map<String, Value>,
     shared: Vec<RawParameter>,
     operation: Option<&Value>,
+    expansion: &mut ExpansionBudget,
 ) -> Result<Vec<OpenApiParameter>, OpenApiSpecError> {
     let mut merged = Vec::new();
     let mut positions = BTreeMap::new();
-    for parameter in shared.into_iter().chain(raw_parameters(root, operation)?) {
+    for parameter in shared
+        .into_iter()
+        .chain(raw_parameters(root, operation, expansion)?)
+    {
         let key = (parameter.location, parameter.name.clone());
         if let Some(index) = positions.get(&key).copied() {
             merged[index] = parameter;
@@ -803,6 +838,7 @@ fn operation_schema(
 fn response_collection_paths(
     root: &Map<String, Value>,
     operation: &Map<String, Value>,
+    expansion: &mut ExpansionBudget,
 ) -> Result<Vec<Vec<String>>, OpenApiSpecError> {
     let Some(responses) = operation.get("responses") else {
         return Ok(Vec::new());
@@ -843,9 +879,17 @@ fn response_collection_paths(
             schemas.push(schema);
         }
         for schema in schemas {
-            let resolved = resolve_schema(root, schema, 0, &mut BTreeSet::new())?;
             let mut paths = Vec::new();
-            collect_response_collection_paths(&resolved, &mut Vec::new(), 0, &mut paths);
+            expansion.spend(|budget| {
+                collect_response_collection_paths(
+                    root,
+                    schema,
+                    &mut Vec::new(),
+                    0,
+                    &mut paths,
+                    budget,
+                )
+            })?;
             paths.dedup();
             if !paths.is_empty() {
                 return Ok(paths);
@@ -855,26 +899,32 @@ fn response_collection_paths(
     Ok(Vec::new())
 }
 
+/// Walk at most `MAX_RESPONSE_COLLECTION_DEPTH` levels of a response schema, following `$ref`
+/// in place instead of expanding the schema. Every visited schema costs one unit of `budget`.
+/// The paths are ranking hints, so at most `MAX_RESPONSE_COLLECTION_PATHS` are kept.
 fn collect_response_collection_paths(
+    root: &Map<String, Value>,
     schema: &Value,
     path: &mut Vec<String>,
     depth: usize,
     paths: &mut Vec<Vec<String>>,
-) {
+    budget: &mut usize,
+) -> Result<(), OpenApiSpecError> {
     if depth > MAX_RESPONSE_COLLECTION_DEPTH {
-        return;
+        return Ok(());
     }
-    let Some(schema) = schema.as_object() else {
-        return;
+    *budget = budget.checked_sub(1).ok_or_else(resource_exhausted)?;
+    let Some(schema) = follow_schema_refs(root, schema)?.as_object() else {
+        return Ok(());
     };
     let schema_type = schema.get("type").and_then(Value::as_str);
     if schema_type == Some("array")
         || (schema.contains_key("items") && schema_type != Some("object"))
     {
-        if !paths.contains(path) {
+        if paths.len() < MAX_RESPONSE_COLLECTION_PATHS && !paths.contains(path) {
             paths.push(path.clone());
         }
-        return;
+        return Ok(());
     }
     if schema_type == Some("object")
         && matches!(
@@ -882,25 +932,40 @@ fn collect_response_collection_paths(
             Some(Value::Object(_) | Value::Bool(true))
         )
     {
-        if !paths.contains(path) {
+        if paths.len() < MAX_RESPONSE_COLLECTION_PATHS && !paths.contains(path) {
             paths.push(path.clone());
         }
-        return;
+        return Ok(());
     }
     if let Some(properties) = schema.get("properties").and_then(Value::as_object) {
         for (name, child) in properties {
             path.push(name.clone());
-            collect_response_collection_paths(child, path, depth + 1, paths);
+            collect_response_collection_paths(root, child, path, depth + 1, paths, budget)?;
             path.pop();
         }
     }
     for composition in ["allOf", "oneOf", "anyOf"] {
         if let Some(branches) = schema.get(composition).and_then(Value::as_array) {
             for branch in branches {
-                collect_response_collection_paths(branch, path, depth + 1, paths);
+                collect_response_collection_paths(root, branch, path, depth + 1, paths, budget)?;
             }
         }
     }
+    Ok(())
+}
+
+/// Follow a chain of `$ref` objects to the schema it names.
+fn follow_schema_refs<'a>(
+    root: &'a Map<String, Value>,
+    mut schema: &'a Value,
+) -> Result<&'a Value, OpenApiSpecError> {
+    for _ in 0..=MAX_REF_CHAIN {
+        let Some(reference) = schema.as_object().and_then(|object| object.get("$ref")) else {
+            return Ok(schema);
+        };
+        schema = resolve_local_ref(root, reference.as_str().ok_or_else(invalid_specification)?)?;
+    }
+    Err(resource_exhausted())
 }
 
 fn parse_request_body(
@@ -965,14 +1030,54 @@ fn resolve_object<'a>(
     Ok(object)
 }
 
+/// Values that `$ref` resolution and response walks may still produce or visit for one
+/// specification.
+struct ExpansionBudget {
+    remaining: usize,
+}
+
+impl ExpansionBudget {
+    const fn new() -> Self {
+        Self {
+            remaining: MAX_SPEC_EXPANSION_NODES,
+        }
+    }
+
+    /// Resolve `schema`, producing at most `MAX_SCHEMA_EXPANSION_NODES` values.
+    fn resolve(
+        &mut self,
+        root: &Map<String, Value>,
+        schema: &Value,
+    ) -> Result<Value, OpenApiSpecError> {
+        self.spend(|budget| resolve_schema(root, schema, 0, &mut BTreeSet::new(), budget))
+    }
+
+    /// Run `work` with an allowance of at most `MAX_SCHEMA_EXPANSION_NODES` and charge what it
+    /// used to the specification.
+    fn spend<T>(
+        &mut self,
+        work: impl FnOnce(&mut usize) -> Result<T, OpenApiSpecError>,
+    ) -> Result<T, OpenApiSpecError> {
+        let allowance = self.remaining.min(MAX_SCHEMA_EXPANSION_NODES);
+        let mut left = allowance;
+        let result = work(&mut left)?;
+        self.remaining -= allowance - left;
+        Ok(result)
+    }
+}
+
 fn resolve_schema(
     root: &Map<String, Value>,
     value: &Value,
     depth: usize,
     visited: &mut BTreeSet<String>,
+    budget: &mut usize,
 ) -> Result<Value, OpenApiSpecError> {
-    if depth > 32 {
+    if depth > MAX_REF_CHAIN {
         return Err(resource_exhausted());
+    }
+    if !matches!(value, Value::Object(object) if object.contains_key("$ref")) {
+        *budget = budget.checked_sub(1).ok_or_else(resource_exhausted)?;
     }
     match value {
         Value::Object(object) => {
@@ -982,7 +1087,7 @@ fn resolve_schema(
                     return Err(invalid_specification());
                 }
                 let resolved = resolve_local_ref(root, reference)?;
-                let result = resolve_schema(root, resolved, depth + 1, visited);
+                let result = resolve_schema(root, resolved, depth + 1, visited, budget);
                 visited.remove(reference);
                 return result;
             }
@@ -990,14 +1095,14 @@ fn resolve_schema(
             for (key, child) in object {
                 resolved.insert(
                     key.clone(),
-                    resolve_schema(root, child, depth + 1, visited)?,
+                    resolve_schema(root, child, depth + 1, visited, budget)?,
                 );
             }
             Ok(Value::Object(resolved))
         }
         Value::Array(values) => values
             .iter()
-            .map(|value| resolve_schema(root, value, depth + 1, visited))
+            .map(|value| resolve_schema(root, value, depth + 1, visited, budget))
             .collect::<Result<Vec<_>, _>>()
             .map(Value::Array),
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => Ok(value.clone()),

@@ -1,0 +1,87 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	v2secrets "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/api/v2/secrets"
+)
+
+// requireVaultMasterKey decides whether elitea-main may start with the master
+// key it was given. It reads the environment through the injected getenv and
+// has no side effects, so the policy is testable without executing start-up.
+//
+// elitea-main always composes the secrets handler, which is the one writer of
+// project vault keys, and that handler takes its key from SECRETS_MASTER_KEY
+// alone (ELITEA_VAULT_MASTER_KEY_FILE only configures READERS, so it is not an
+// equivalent source). The rules:
+//
+//   - a valid key: start, nothing to report;
+//   - a malformed key: refuse, whatever the opt-out says — a typo must never
+//     downgrade wrapped storage to plaintext (#412);
+//   - no key: refuse, unless v2secrets.AllowUnwrappedEnvVar is "true". That
+//     opt-out is for a developer machine and returns a warning the caller logs.
+//
+// No error here carries the key value: MasterKeyFromEnv reports only the
+// variable name, a decode position and a length.
+func requireVaultMasterKey(getenv func(string) string) (warning string, err error) {
+	key, err := v2secrets.MasterKeyFromEnv(getenv)
+	if err != nil {
+		return "", err
+	}
+	optOut := false
+	switch getenv(v2secrets.AllowUnwrappedEnvVar) {
+	case "", "false":
+	case "true":
+		optOut = true
+	default:
+		return "", fmt.Errorf("%s must be true or false", v2secrets.AllowUnwrappedEnvVar)
+	}
+	if key != nil {
+		return "", nil
+	}
+	if !optOut {
+		return "", fmt.Errorf("%s is required: elitea-main stores every project vault key wrapped with it "+
+			"and refuses to store them in the clear. Supply a base64url-encoded 32-byte Fernet key "+
+			"(the same value the LLM gateway uses). For a throwaway local stack only, set %s=true "+
+			"to store the keys unwrapped",
+			v2secrets.MasterKeyEnvVar, v2secrets.AllowUnwrappedEnvVar)
+	}
+	return fmt.Sprintf("%s=true and no %s: every project vault key is stored UNWRAPPED, "+
+		"so anyone who can read the database can open every project secret. Development use only",
+		v2secrets.AllowUnwrappedEnvVar, v2secrets.MasterKeyEnvVar), nil
+}
+
+// rowQuerier is the one pool method refuseUnwrappedVaultKeys needs.
+type rowQuerier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// refuseUnwrappedVaultKeys runs at start-up when SECRETS_MASTER_KEY is set. A
+// project key stored in the clear (the 32 raw or 44 encoded bytes a keyless
+// deployment wrote) cannot be opened once a master key is set, so starting
+// would turn every secret read into a failure. Refusing here names the one-time
+// rewrap instead. A wrapped key is a Fernet token, far longer than 44 bytes.
+// A database without the table (nothing stored yet) passes.
+func refuseUnwrappedVaultKeys(ctx context.Context, pool rowQuerier) error {
+	var unwrapped int64
+	err := pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM centry.secrets_key WHERE length(data) IN (32, 44)`).Scan(&unwrapped)
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && (pgErr.Code == "42P01" || pgErr.Code == "3F000") {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("check stored project vault keys: %w", err)
+	}
+	if unwrapped > 0 {
+		return fmt.Errorf("%s is set but %d project vault key(s) are stored unwrapped and cannot be opened with it; "+
+			"run deploy/scripts/rewrap-centry-vault.py --to-key <key> --apply against this database first "+
+			"(on a copy, then for real), then start elitea-main", v2secrets.MasterKeyEnvVar, unwrapped)
+	}
+	return nil
+}

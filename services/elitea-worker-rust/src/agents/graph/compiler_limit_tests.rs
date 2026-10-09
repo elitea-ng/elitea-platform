@@ -1,3 +1,8 @@
+#![allow(
+    clippy::disallowed_methods,
+    reason = "inline test fixtures, not stored or fetched documents"
+)]
+
 //! Named, data-free causes for the pipeline size and count bounds.
 //!
 //! Each bound is proven at the limit and at limit + 1, and every refusal is

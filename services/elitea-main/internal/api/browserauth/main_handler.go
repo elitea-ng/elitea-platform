@@ -179,7 +179,7 @@ func (h *MainHandler) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 
 	switch decision.Kind {
 	case forwardapp.DecisionAllow:
-		if !writeMainIdentity(writer, decision) {
+		if !writeMainIdentity(writer, h.sources, decision) {
 			writeProblem(writer, http.StatusServiceUnavailable)
 		}
 	case forwardapp.DecisionDeny:
@@ -206,7 +206,7 @@ func (h *MainHandler) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	}
 }
 
-func writeMainIdentity(writer http.ResponseWriter, decision forwardapp.Decision) bool {
+func writeMainIdentity(writer http.ResponseWriter, signer *TrustedProxyResolver, decision forwardapp.Decision) bool {
 	avatarState, avatar, ok := mainAvatarProjection(decision)
 	if !ok {
 		return false
@@ -232,6 +232,9 @@ func writeMainIdentity(writer http.ResponseWriter, decision forwardapp.Decision)
 		writer.Header().Set("X-Auth-ID", "-")
 		writer.Header().Set("X-Auth-User-ID", "-")
 	default:
+		return false
+	}
+	if !signProjection(writer.Header(), signer, decision) {
 		return false
 	}
 	writer.Header().Set("X-Auth-Reference", "-")

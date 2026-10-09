@@ -4,7 +4,7 @@ cd "$(dirname "$0")/../../.."
 chart=deploy/helm/elitea
 base=(-f "$chart/values-standalone.yaml"
   --set llmGateway.env.GATEWAY_SELF_LLM_ORIGINS=https://elitea.invalid/llm/v1
-  --set llmGateway.egressPosture=public-unrestricted)
+  --set llmGateway.egressPosture=public-unrestricted --set networkPolicies.main.noExternalIngress=true)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 image=registry/runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa

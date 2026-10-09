@@ -9,8 +9,10 @@ use adk_rust::graph::State;
 use ring::digest;
 use serde::{Deserialize, Serialize};
 
+use super::compiler::PIPELINE_YAML_BUDGET;
 use super::compiler::reserved_user_state_key;
 use super::yaml::{valid_graph_id, valid_output_key};
+use crate::bounded_yaml;
 
 const MAX_NODE_BYTES: usize = 512 * 1024;
 const MAX_SOURCE_BYTES: usize = 256 * 1024;
@@ -233,7 +235,7 @@ impl CodeNodeDefinition {
         if yaml.is_empty() || yaml.len() > MAX_NODE_BYTES {
             return Err("the Code node exceeds its configuration size limit");
         }
-        let mut node: Self = serde_yaml_ng::from_str(yaml).map_err(
+        let mut node: Self = bounded_yaml::from_str_as_yaml_error(yaml, PIPELINE_YAML_BUDGET).map_err(
             |_| "the Code node has malformed fields or an unsupported language or source mapping",
         )?;
         if node.node_type != "code" || !valid_graph_id(&node.id) {
