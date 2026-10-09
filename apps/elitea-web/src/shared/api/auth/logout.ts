@@ -9,6 +9,7 @@
  * proven by the write-enumeration test in logout.test.ts, not a key list.
  */
 import { clearNamespace } from '../../lib/storage';
+import { getNativeTransport } from '../nativeTransport';
 
 import { FORM_LOGIN_PATH, LOGOUT_PATH, TARGET_TO_PARAM } from './constants';
 
@@ -109,6 +110,14 @@ export function performLogout(deps: LogoutDeps = {}): void {
   // lines would write its keys after `clearNamespace()` has passed them.
   loggingOut = true;
   clearNamespace();
+  // The desktop app has no server-side logout page to visit: its session is a
+  // refresh token in the OS keychain. The host revokes it, wipes, and the app
+  // reloads onto the connect screen.
+  const native = getNativeTransport();
+  if (native?.logout !== undefined) {
+    void native.logout();
+    return;
+  }
   const origin = deps.origin ?? window.location.origin;
   const redirect =
     deps.redirect ??
