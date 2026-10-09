@@ -1,0 +1,19 @@
+[package]
+name = "elitea-llm-wire"
+description = "The platform gateway's /llm caller contract, transport-agnostic: routes, headers, refusal codes, a bounded SSE splitter, OpenAI chunk and tool-call primitives."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+# Default features ONLY, deliberately. The agent worker builds serde_json
+# with `arbitrary_precision` and without `preserve_order`, and its canonical
+# hashes depend on that; the engines enable `preserve_order`. Cargo unifies
+# features per build, so a feature named here would change the worker's
+# hashes. Nothing in this crate depends on map order or on number
+# representation.
+serde_json = "1.0.151"
+
+[lints]
+workspace = true

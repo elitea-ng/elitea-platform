@@ -30,7 +30,7 @@ mod runner_history;
 pub(crate) mod runtime;
 pub(crate) mod sensitive_tools;
 pub(crate) mod session;
-pub(crate) mod tool_namespacing;
+pub(crate) use elitea_agent_runtime::tool_namespacing;
 pub(crate) mod variables;
 
 #[cfg(test)]

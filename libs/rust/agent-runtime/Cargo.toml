@@ -1,0 +1,48 @@
+[package]
+name = "elitea-agent-runtime"
+description = "The pure agent runtime shared by the cloud worker and the desktop host (ADR-0029): graph nodes, tool naming, canonical digests, and the host interface the hosts implement."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# Test fixtures the worker's own tests still build against (they compose the
+# moved nodes with worker-only modules). Never enabled by a production build.
+test-support = []
+# Builds this crate with the serde_json features every other crate in this
+# workspace turns on (`preserve_order`, `float_roundtrip`: engine-core,
+# engine-sidecar, model-client, adk-gateway, repo-ingest, code-parsers,
+# content-source, conversation). Cargo unifies features per build, so a
+# binary that links one of them gets them whether or not this crate asks. The
+# digest tests run under it to prove every digest here is order-explicit
+# (ADR-0029 decision 2).
+test-preserve-order = ["serde_json/preserve_order", "serde_json/float_roundtrip"]
+
+[dependencies]
+# Tilde, not caret: adk breaks its API between minors, and the worker pins
+# =2.2.0 with patches of its own (services/elitea-worker-rust/vendor). Only
+# unpatched crates are named here: adk-core, adk-graph and adk-session.
+adk-core = { version = "~2.2.0", default-features = false }
+adk-graph = { version = "~2.2.0", default-features = false }
+adk-session = { version = "~2.2.0", default-features = false }
+async-trait = "0.1.92"
+base64 = "0.23.1"
+minijinja = { version = "2.24.0", default-features = false, features = ["builtins", "fuel", "serde"] }
+regex = "1.13.1"
+ring = "0.17.14"
+serde = { version = "1.0.228", features = ["derive"] }
+# Default features only. The worker builds serde_json with
+# `arbitrary_precision` and without `preserve_order`; nothing in this crate
+# may depend on either (see `canonical`).
+serde_json = "1.0.151"
+serde_yaml_ng = "0.10.0"
+thiserror = "2.0.21"
+tokio = { version = "1.53.1", features = ["macros", "sync", "time"] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["macros", "rt", "rt-multi-thread", "test-util"] }
+
+[lints]
+workspace = true

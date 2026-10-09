@@ -17,9 +17,12 @@ import {
   trackedStorageWrites,
 } from '../../lib/storage';
 
+import { setNativeTransport } from '../nativeTransport';
+
 import { performLogout } from './logout';
 
 afterEach(() => {
+  setNativeTransport(undefined);
   disableStorageWriteTracking();
   window.localStorage.clear();
   window.sessionStorage.clear();
@@ -127,5 +130,25 @@ describe('performLogout', () => {
   it('defaults the redirect to a window.location.href assignment', () => {
     // jsdom does not implement navigation; the assignment itself must not throw.
     expect(() => performLogout({ origin: 'http://localhost:3000' })).not.toThrow();
+  });
+});
+
+describe('performLogout under a native transport', () => {
+  it('signs out through the host instead of navigating to a URL the app cannot serve', () => {
+    createStorage('local').set('project.id', '42');
+    const logout = vi.fn<() => Promise<void>>().mockResolvedValue();
+    setNativeTransport({
+      accessToken: () => Promise.resolve('t'),
+      refresh: () => Promise.resolve('refreshed'),
+      signOut: vi.fn(),
+      logout,
+    });
+    const redirect = vi.fn();
+
+    performLogout({ redirect, origin: 'tauri://localhost' });
+
+    expect(logout).toHaveBeenCalledTimes(1);
+    expect(redirect).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem('el.project.id')).toBeNull();
   });
 });

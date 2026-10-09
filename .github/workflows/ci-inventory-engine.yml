@@ -8,7 +8,7 @@ name: CI — Inventory native engine
 #   * fmt, Clippy (all + pedantic, deny), rustdoc with warnings denied;
 #   * the crate's tests: the graph against the Python engine's own
 #     (tests/fixtures/graph_store, written by the Python KnowledgeGraph) and
-#     through a REAL PostgreSQL (the `postgres` service; the store's
+#     through a REAL PostgreSQL with pgvector (the `postgres` service; the store's
 #     migrations, save/load, tenancy). INVENTORY_REQUIRE_POSTGRES=1 turns
 #     their "no database → skip" into a failure;
 #   * the fixture runner against every Inventory golden
@@ -66,7 +66,7 @@ jobs:
         working-directory: services/elitea-inventory-engine
     services:
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:0.8.5-pg16-trixie
         env:
           POSTGRES_USER: inventory
           POSTGRES_PASSWORD: inventory

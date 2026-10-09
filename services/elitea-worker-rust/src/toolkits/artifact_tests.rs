@@ -232,7 +232,7 @@ async fn a_read_within_the_cap_returns_the_files_text() {
     assert_eq!(answer, json!("TOKEN-VALUE"));
     assert_eq!(
         rpc.paths.lock().expect("fixture paths").as_slice(),
-        ["/executions/execution%2Fone/generations/2/runtime-context/artifacts/read"]
+        ["/executions/execution-one/generations/2/runtime-context/artifacts/read"]
     );
 }
 

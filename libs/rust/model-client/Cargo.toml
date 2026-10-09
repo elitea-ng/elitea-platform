@@ -8,6 +8,9 @@ publish.workspace = true
 
 [dependencies]
 elitea-engine-core = { path = "../engine-core" }
+# The /llm caller contract the agent worker shares: routes, headers,
+# refusal codes, the SSE splitter, usage and tool-call assembly.
+elitea-llm-wire = { path = "../llm-wire" }
 # rustls with the platform verifier and HTTP/2; no native-tls, no cookies,
 # no decompression. `Response::chunk` reads SSE, so `stream` is not needed.
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "http2"] }

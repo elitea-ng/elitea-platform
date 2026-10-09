@@ -31,6 +31,16 @@ async-trait = "=0.1.92"
 base64 = "=0.23.1"
 bytes = "=1.12.1"
 chrono = { version = "=0.4.45", default-features = false, features = ["clock", "serde"] }
+# The /llm caller contract shared with the engines' model client (routes,
+# headers, refusal codes, the SSE splitter, chunk and tool-call readers).
+# It enables no serde_json feature: the worker's own `arbitrary_precision`
+# without `preserve_order` (its canonical hashes) stays what Cargo unifies.
+elitea-llm-wire = { path = "../../libs/rust/llm-wire" }
+# The pure agent runtime shared with the desktop host (ADR-0029). Its own
+# serde_json uses default features; its digests are order-explicit
+# (`canonical`), so neither this crate's `arbitrary_precision` nor a
+# `preserve_order` from elsewhere changes them.
+elitea-agent-runtime = { path = "../../libs/rust/agent-runtime" }
 futures-util = { version = "=0.3.34", optional = true, default-features = false, features = ["io"] }
 http = "=1.5.0"
 http-body-util = "=0.1.5"
@@ -85,6 +95,7 @@ harness = false
 required-features = ["graph-shaping-bench"]
 
 [dev-dependencies]
+elitea-agent-runtime = { path = "../../libs/rust/agent-runtime", features = ["test-support"] }
 http-body = "=1.1.0"
 tokio = { version = "=1.53.1", features = ["test-util"] }
 

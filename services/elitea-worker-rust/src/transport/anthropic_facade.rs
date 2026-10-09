@@ -40,18 +40,19 @@ use tracing::Instrument as _;
 use zeroize::Zeroizing;
 
 use super::openai_compatible_facade::{
-    BoundedSseEvent, MAX_EXECUTION_ID_BYTES, ModelFacadeError, ModelFacadeInvocation,
-    ModelGatewayClient, ModelReasoningEffort, SseParser, bounded_header_text, budget_refusal,
-    is_generic_rejection, model_error, next_response_chunk, rejection_with_detail,
-    valid_tool_call_id, valid_tool_name, validate_invocation, validate_llm_request,
-    validate_response_head,
+    ModelFacadeError, ModelFacadeInvocation, ModelGatewayClient, ModelReasoningEffort,
+    budget_refusal, gateway_sse_splitter, is_generic_rejection, model_error, next_response_chunk,
+    rejection_with_detail, sse_error, valid_execution_id, valid_tool_call_id, valid_tool_name,
+    validate_invocation, validate_llm_request, validate_response_head,
 };
 use super::runtime_context::ClaimScopedEliteaContext;
 use crate::agents::context_budget::RequestContextBudget;
 use crate::agents::runtime::{NativeAgentAssemblyError, NativeAgentAssemblyErrorCode};
 use crate::agents::session::{BoundOrdinaryAgentModel, DurableModelCompletion};
+use elitea_llm_wire::headers::{BEARER_PREFIX, EXECUTION_HEADER, PROJECT_HEADER};
+use elitea_llm_wire::sse::SseEvent;
 
-const ANTHROPIC_ROUTE: &str = "/llm/v1/messages";
+const ANTHROPIC_ROUTE: &str = elitea_llm_wire::route::MESSAGES_ROUTE;
 const MAX_COMPLETION_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ANTHROPIC_TOOLS: usize = 100;
 const MAX_TOOL_CALLS_PER_TURN: usize = 16;
@@ -61,7 +62,7 @@ const ANTHROPIC_BETA: HeaderName = HeaderName::from_static("anthropic-beta");
 const X_API_KEY: HeaderName = HeaderName::from_static("x-api-key");
 // Billing/execution scope comes from the redeemed claim. The frozen model
 // owner may be the public project and must not be sent as this selector.
-const PROJECT_SELECTOR: HeaderName = HeaderName::from_static("x-project-id");
+const PROJECT_SELECTOR: HeaderName = HeaderName::from_static(PROJECT_HEADER);
 // Tags this call with the execution it was made from so the gateway's
 // request log can attribute cost per execution (issue 875). Must match the
 // Python worker's `_EXECUTION_ID_HEADER` in
@@ -71,7 +72,7 @@ const PROJECT_SELECTOR: HeaderName = HeaderName::from_static("x-project-id");
 // `openai_compatible_facade::EXECUTION_ID_HEADER` (canonical form
 // `X-Elitea-Execution-Id` — HTTP header lookup is case-insensitive, so the
 // lowercase static name here is equivalent).
-const EXECUTION_ID_HEADER: HeaderName = HeaderName::from_static("x-elitea-execution-id");
+const EXECUTION_ID_HEADER: HeaderName = HeaderName::from_static(EXECUTION_HEADER);
 
 impl ModelGatewayClient {
     /// Consume one claim credential into the native Anthropic dialect while
@@ -94,7 +95,7 @@ impl ModelGatewayClient {
         if model_owner_project_id == 0
             || billing_project_id == 0
             || token.is_empty()
-            || !bounded_header_text(&execution_id, MAX_EXECUTION_ID_BYTES)
+            || !valid_execution_id(&execution_id)
         {
             return Err(ModelFacadeError::InvalidInvocation);
         }
@@ -826,8 +827,8 @@ fn build_anthropic_request(
         EXECUTION_ID_HEADER,
         HeaderValue::from_str(execution_id).map_err(|_| invalid_anthropic_request())?,
     );
-    let mut bearer = Zeroizing::new(String::with_capacity(7 + token.len()));
-    bearer.push_str("Bearer ");
+    let mut bearer = Zeroizing::new(String::with_capacity(BEARER_PREFIX.len() + token.len()));
+    bearer.push_str(BEARER_PREFIX);
     bearer.push_str(token);
     let mut authorization =
         HeaderValue::from_str(bearer.as_str()).map_err(|_| invalid_anthropic_request())?;
@@ -1192,10 +1193,11 @@ fn anthropic_response_stream(
 ) -> LlmResponseStream {
     let expected_model = expected_model.to_owned();
     Box::pin(try_stream! {
-        let mut parser = SseParser::new(
+        let mut parser = gateway_sse_splitter(
             limits.max_event_bytes,
             limits.max_stream_bytes,
             limits.max_events,
+            false,
         );
         let mut state = AnthropicStreamState::new(&expected_model, allowed_tools);
         let mut accumulated = String::new();
@@ -1204,11 +1206,11 @@ fn anthropic_response_stream(
             let chunk = next_response_chunk(&mut response, limits.idle_timeout).await?;
             let input_finished = chunk.is_none();
             if let Some(chunk) = chunk {
-                parser.push(&chunk)?;
+                parser.push(&chunk).map_err(sse_error)?;
             } else {
-                parser.finish_input();
+                parser.finish();
             }
-            while let Some(event) = parser.next_event()? {
+            while let Some(event) = parser.next_event().map_err(sse_error)? {
                 let event = parse_anthropic_event(event)?;
                 if let Some(response) = state.apply(event)? {
                     record_anthropic_response(&response, &mut accumulated, &mut semantic_bytes)?;
@@ -1227,7 +1229,7 @@ fn anthropic_response_stream(
     })
 }
 
-fn parse_anthropic_event(event: BoundedSseEvent) -> Result<MessageStreamEvent, AdkError> {
+fn parse_anthropic_event(event: SseEvent) -> Result<MessageStreamEvent, AdkError> {
     let event_name = event.event_type.ok_or_else(invalid_anthropic_stream)?;
     let event_name = std::str::from_utf8(&event_name).map_err(|_| invalid_anthropic_stream())?;
     let mut value: serde_json::Value =

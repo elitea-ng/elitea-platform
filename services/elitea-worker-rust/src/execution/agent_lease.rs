@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use elitea_agent_runtime::host::{ExecutionEnd, ExecutionGuard};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
@@ -354,6 +355,34 @@ impl ClaimLeaseStateProbe {
 impl StateWriterLease for ClaimLeaseStateProbe {
     fn ensure_current(&self) -> Result<(), StateWriterLeaseLost> {
         self.ensure_live_margin().map_err(|_| StateWriterLeaseLost)
+    }
+}
+
+/// Durable Stop is a cooperative stop; every other lease state is lost
+/// authority, which fails closed.
+const fn execution_end(error: &ClaimLeaseError) -> ExecutionEnd {
+    match error {
+        ClaimLeaseError::Cancelled(_) => ExecutionEnd::Stopped,
+        _ => ExecutionEnd::Lost,
+    }
+}
+
+/// The cloud host's [`ExecutionGuard`] (ADR-0029): the claim lease is the
+/// execution's lease, fence and stop signal in one.
+#[async_trait::async_trait]
+impl ExecutionGuard for ClaimLeaseStateProbe {
+    fn ensure_current(&self) -> Result<(), ExecutionEnd> {
+        self.ensure_live_margin()
+            .map_err(|error| execution_end(&error))
+    }
+
+    async fn ended(&mut self) -> ExecutionEnd {
+        loop {
+            // `Ok` is a renewal (still running); keep waiting for an end.
+            if let Err(error) = self.wait_for_change().await {
+                return execution_end(&error);
+            }
+        }
     }
 }
 

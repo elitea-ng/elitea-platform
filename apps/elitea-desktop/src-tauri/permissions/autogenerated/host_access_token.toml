@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-host-access-token"
+description = "Enables the host_access_token command without any pre-configured scope."
+commands.allow = ["host_access_token"]
+
+[[permission]]
+identifier = "deny-host-access-token"
+description = "Denies the host_access_token command without any pre-configured scope."
+commands.deny = ["host_access_token"]

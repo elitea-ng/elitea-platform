@@ -1,0 +1,209 @@
+{
+ "detected": {
+  "algorithm": "leiden",
+  "resolution": 1.0,
+  "modularity": 0.3738662131519275,
+  "num_communities": 2,
+  "communities": {
+   "community_0": {
+    "members": [
+     "a_cls",
+     "a_iface",
+     "a_login",
+     "a_logout",
+     "a_verify",
+     "a_refresh",
+     "a_secret"
+    ],
+    "centroids": [
+     {
+      "id": "a_cls",
+      "score": 1.0,
+      "name": "AuthService",
+      "type": "class"
+     },
+     {
+      "id": "a_verify",
+      "score": 0.4244,
+      "name": "verify_token",
+      "type": "function"
+     },
+     {
+      "id": "a_iface",
+      "score": 0.3336,
+      "name": "TokenStore",
+      "type": "interface"
+     }
+    ],
+    "stats": {
+     "size": 7,
+     "density": 0.3333,
+     "cohesion": 1.0,
+     "internal_edges": 14
+    },
+    "label": "AuthService & related (class)",
+    "summary": null,
+    "dominant_types": [
+     "class",
+     "interface",
+     "function"
+    ],
+    "dominant_layers": [
+     "code"
+    ],
+    "micro_clusters": null
+   },
+   "community_1": {
+    "members": [
+     "b_readme",
+     "b_feat",
+     "b_req",
+     "b_sessions",
+     "b_tokens",
+     "b_fact"
+    ],
+    "centroids": [
+     {
+      "id": "b_feat",
+      "score": 1.0,
+      "name": "Single sign-on",
+      "type": "feature"
+     },
+     {
+      "id": "b_readme",
+      "score": 0.8954,
+      "name": "README.md",
+      "type": "document_file"
+     }
+    ],
+    "stats": {
+     "size": 6,
+     "density": 0.3,
+     "cohesion": 0.9167,
+     "internal_edges": 9
+    },
+    "label": "Documentation: Single sign-on, README.md",
+    "summary": null,
+    "dominant_types": [
+     "feature",
+     "requirement",
+     "document_file"
+    ],
+    "dominant_layers": [
+     "documentation",
+     "product"
+    ],
+    "micro_clusters": null
+   }
+  }
+ },
+ "networkx_modularity": 0.3738662131519275,
+ "label_prompts": {
+  "community_0": "Given this code community, generate a short, descriptive label (3-7 words) that captures its primary capability or responsibility.\n\n## Key Entities (Centroids)\n- AuthService (class): class AuthService(Service) — Coordinates sign-in and sign-out for every user session, issuing and verifying the bearer tokens the API gateway checks...\n- verify_token (function) — Check a token.\n- TokenStore (interface) — Where tokens live.\n\n## Key Relationships\n- AuthService --[contains]--> login\n- AuthService --[contains]--> logout\n- AuthService --[contains]--> verify_token\n- AuthService --[implements]--> TokenStore\n- AuthService --[uses]--> SECRET_KEY\n- AuthService --[exports]--> refresh\n- logout --[frobnicates]--> AuthService\n- README.md --[documents]--> AuthService\n- verify_token --[calls]--> login\n- verify_token --[depends_on]--> TokenStore\n\n## Other Architectural Members\n- login (function)\n- logout (function)\n\nCurrent heuristic label: \"AuthService & related (class)\"\n\nReply with ONLY the label — no quotes, no explanation, no punctuation. Examples of good labels:\n- Authentication & Session Management\n- REST API Request Handling\n- Database Connection Pooling\n- UI Component Rendering Pipeline\n- Test Infrastructure & Fixtures\n",
+  "community_1": "Given this code community, generate a short, descriptive label (3-7 words) that captures its primary capability or responsibility.\n\n## Key Entities (Centroids)\n- Single sign-on (feature)\n- README.md (document_file) — Project overview.\n\n## Key Relationships\n- Single sign-on --[mentions]--> Sessions\n- Single sign-on --[references]--> README.md\n- Sessions expire --[part_of]--> Single sign-on\n- README.md --[documents]--> Sessions\n- README.md --[documents]--> Tokens\n- README.md --[documents]--> AuthService\n\n## Other Architectural Members\n- Sessions expire (requirement)\n\nCurrent heuristic label: \"Documentation: Single sign-on, README.md\"\n\nReply with ONLY the label — no quotes, no explanation, no punctuation. Examples of good labels:\n- Authentication & Session Management\n- REST API Request Handling\n- Database Connection Pooling\n- UI Component Rendering Pipeline\n- Test Infrastructure & Fixtures\n"
+ },
+ "summary_prompts": {
+  "community_0": "Summarize this code community labeled 'Authentication & Token Handling' in 5-8 sentences (~200 tokens max).\n\n## Key Entities (Centroids)\n- AuthService (class): class AuthService(Service) — Coordinates sign-in and sign-out for every user session, issuing and verifying the bearer tokens the API gateway checks on each request, and rotating...\n- verify_token (function) — Check a token.\n- TokenStore (interface) — Where tokens live.\n\n## Key Relationships\n- AuthService --[contains]--> login\n- AuthService --[contains]--> logout\n- AuthService --[contains]--> verify_token\n- AuthService --[implements]--> TokenStore\n- AuthService --[uses]--> SECRET_KEY\n- AuthService --[exports]--> refresh\n- logout --[frobnicates]--> AuthService\n- README.md --[documents]--> AuthService\n- verify_token --[calls]--> login\n- verify_token --[depends_on]--> TokenStore\n- login --[calls]--> verify_token\n- logout --[calls]--> verify_token\n- TokenStore --[defines]--> refresh\n- login --[uses]--> TokenStore\n\n## Other Members\n- login (function)\n- logout (function)\n- (2 implementation-level members omitted)\n\nDescribe the community's purpose, main responsibilities, and how the centroids relate to each other.",
+  "community_1": "Summarize this code community labeled 'Documentation: Single sign-on, README.md' in 5-8 sentences (~200 tokens max).\n\n## Key Entities (Centroids)\n- Single sign-on (feature)\n- README.md (document_file) — Project overview.\n\n## Key Relationships\n- Single sign-on --[mentions]--> Sessions\n- Single sign-on --[references]--> README.md\n- Sessions expire --[part_of]--> Single sign-on\n- README.md --[documents]--> Sessions\n- README.md --[documents]--> Tokens\n- README.md --[documents]--> AuthService\n\n## Other Members\n- Sessions expire (requirement)\n- (3 implementation-level members omitted)\n\nDescribe the community's purpose, main responsibilities, and how the centroids relate to each other."
+ },
+ "labelled": {
+  "algorithm": "leiden",
+  "resolution": 1.0,
+  "modularity": 0.3738662131519275,
+  "num_communities": 2,
+  "communities": {
+   "community_0": {
+    "members": [
+     "a_cls",
+     "a_iface",
+     "a_login",
+     "a_logout",
+     "a_verify",
+     "a_refresh",
+     "a_secret"
+    ],
+    "centroids": [
+     {
+      "id": "a_cls",
+      "score": 1.0,
+      "name": "AuthService",
+      "type": "class"
+     },
+     {
+      "id": "a_verify",
+      "score": 0.4244,
+      "name": "verify_token",
+      "type": "function"
+     },
+     {
+      "id": "a_iface",
+      "score": 0.3336,
+      "name": "TokenStore",
+      "type": "interface"
+     }
+    ],
+    "stats": {
+     "size": 7,
+     "density": 0.3333,
+     "cohesion": 1.0,
+     "internal_edges": 14
+    },
+    "label": "Authentication & Token Handling",
+    "summary": "Summary of Authentication & Token Handling.",
+    "dominant_types": [
+     "class",
+     "interface",
+     "function"
+    ],
+    "dominant_layers": [
+     "code"
+    ],
+    "micro_clusters": null
+   },
+   "community_1": {
+    "members": [
+     "b_readme",
+     "b_feat",
+     "b_req",
+     "b_sessions",
+     "b_tokens",
+     "b_fact"
+    ],
+    "centroids": [
+     {
+      "id": "b_feat",
+      "score": 1.0,
+      "name": "Single sign-on",
+      "type": "feature"
+     },
+     {
+      "id": "b_readme",
+      "score": 0.8954,
+      "name": "README.md",
+      "type": "document_file"
+     }
+    ],
+    "stats": {
+     "size": 6,
+     "density": 0.3,
+     "cohesion": 0.9167,
+     "internal_edges": 9
+    },
+    "label": "Documentation: Single sign-on, README.md",
+    "summary": "Summary of Documentation: Single sign-on, README.md.",
+    "dominant_types": [
+     "feature",
+     "requirement",
+     "document_file"
+    ],
+    "dominant_layers": [
+     "documentation",
+     "product"
+    ],
+    "micro_clusters": null
+   }
+  }
+ },
+ "labels": 1,
+ "summaries": 2
+}

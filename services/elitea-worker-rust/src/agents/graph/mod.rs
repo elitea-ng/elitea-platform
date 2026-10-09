@@ -3,18 +3,23 @@
 //! ADK-Rust owns graph execution. This module owns the stricter YAML contract,
 //! tenant-safe integrations and durability that are not part of the upstream
 //! `Checkpoint` model.
+//!
+//! The modules without cloud coupling live in `elitea-agent-runtime`
+//! (`libs/rust/agent-runtime`, ADR-0029) and are re-exported here at their old
+//! paths, so `super::printer::…` and `crate::agents::graph::yaml::…` resolve
+//! unchanged.
 
 mod agent;
 mod application;
-mod application_activation;
+use elitea_agent_runtime::graph::application_activation;
 #[cfg(test)]
 mod application_tests;
 mod code;
 pub(crate) mod code_debug;
-pub(crate) mod http_action;
 pub(crate) use code_debug::{
     CodeDebugAdmission, CodeDebugArtifactReference, CodeDebugArtifactSink, CodeDebugFailure,
 };
+pub(crate) use elitea_agent_runtime::graph::http_action;
 mod code_remote;
 mod code_result;
 mod code_runtime;
@@ -39,7 +44,7 @@ mod decision;
 mod direct_tool;
 #[cfg(test)]
 mod direct_tool_tests;
-mod hitl;
+use elitea_agent_runtime::graph::hitl;
 #[cfg(test)]
 mod hitl_tests;
 mod llm;
@@ -52,7 +57,7 @@ mod map_reduce_tests;
 pub(crate) mod map_turn;
 mod map_yaml;
 mod node_events;
-pub(crate) mod node_recovery;
+pub(crate) use elitea_agent_runtime::graph::node_recovery;
 #[cfg(test)]
 mod node_recovery_compiler_tests;
 pub(crate) mod node_recovery_owner;
@@ -66,11 +71,11 @@ pub(crate) use map_reduce::{
 mod parallel;
 #[cfg(test)]
 mod parallel_tests;
-mod printer;
+use elitea_agent_runtime::graph::printer;
 #[cfg(test)]
 mod printer_tests;
 pub(crate) mod resume;
-mod router;
+use elitea_agent_runtime::graph::router;
 #[cfg(test)]
 mod routing_tests;
 #[cfg(feature = "graph-shaping-bench")]
@@ -85,15 +90,13 @@ mod shaping_property_tests;
 mod split_out;
 #[cfg(test)]
 mod split_out_tests;
-mod state_modifier;
-#[cfg(test)]
-mod state_modifier_tests;
+use elitea_agent_runtime::graph::state_modifier;
 pub(crate) mod static_pause;
 #[cfg(test)]
 mod static_pause_tests;
 pub(crate) mod static_tool_pause;
-pub(crate) mod turn_checkpointer;
-pub(crate) mod yaml;
+pub(crate) use elitea_agent_runtime::graph::turn_checkpointer;
+pub(crate) use elitea_agent_runtime::graph::yaml;
 
 pub(crate) use agent::{
     EliteaGraphAgent, PIPELINE_COMPLETED_CONTENT, PIPELINE_COMPLETED_METADATA_KEY,

@@ -7,6 +7,10 @@ on:
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"
+      # elitea-llm-wire (the /llm caller contract) and elitea-agent-runtime
+      # (the runtime shared with the desktop host, ADR-0029), path dependencies;
+      # they inherit package fields and lints from the libs/rust workspace.
+      - "libs/rust/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The SDK schema gate reads both (src/toolkits/sdk_conformance.rs).
@@ -28,6 +32,10 @@ on:
       - "services/elitea-code-runner/**"
       - "services/elitea-main/migrations/agentstate/**"
       - "libs/proto/**"
+      # elitea-llm-wire (the /llm caller contract) and elitea-agent-runtime
+      # (the runtime shared with the desktop host, ADR-0029), path dependencies;
+      # they inherit package fields and lints from the libs/rust workspace.
+      - "libs/rust/**"
       # The /llm caller contract both Rust callers assert (worker, engine model client).
       - "conformance/llm-caller/**"
       # The SDK schema gate reads both (src/toolkits/sdk_conformance.rs).

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -280,4 +281,44 @@ WHERE entity='conversation' AND project_id=1 AND entity_id=$1`, conversation).Sc
 	}
 	assertHTTPPinned(t, server, "7", conversation)
 	assertHTTPPinned(t, server, "8", conversation)
+}
+
+// Concurrent first pins of one conversation must all succeed. The conversation
+// row is read under a lock the pin later upgrades by stamping sync_at; a
+// shared lock held by two pins that then both want to update the row is a
+// deadlock, which surfaced as HTTP 500 under CI load. Repeating over fresh
+// conversations makes the race window likely instead of rare.
+func TestPublicPinRoutesConcurrentFirstPinsDoNotDeadlock(t *testing.T) {
+	pool := newPinnedListingPool(t)
+	server := newPinRouteServer(t, pool)
+	for round := 0; round < 25; round++ {
+		conversation := seedPinnedListingConversation(t, pool, fmt.Sprintf("deadlock round %d", round), true)
+		var wg sync.WaitGroup
+		start := make(chan struct{})
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				route := fmt.Sprintf("/api/v2/social/pin/prompt_lib/1/conversation/%d", conversation)
+				request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+route, nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				request.Header.Set("X-Test-Actor", "7")
+				response, err := server.Client().Do(request)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				_ = response.Body.Close()
+				if response.StatusCode != http.StatusOK {
+					t.Errorf("round %d: concurrent first pin returned HTTP %d", round, response.StatusCode)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+	}
 }

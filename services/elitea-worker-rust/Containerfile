@@ -84,6 +84,11 @@ awk '$2 == "=>" && $3 !~ /^\/runtime-root\// { exit 1 }' /tmp/runtime-libraries
 VERIFY
 
 COPY libs/proto ./libs/proto
+# The /llm caller contract crate (elitea-llm-wire) and the shared agent
+# runtime (elitea-agent-runtime, ADR-0029) are path dependencies under
+# ../../libs/rust. The whole libs/rust workspace comes with them: the crates
+# inherit their package fields and lints from libs/rust/Cargo.toml.
+COPY libs/rust ./libs/rust
 COPY services/elitea-worker-rust ./services/elitea-worker-rust
 
 WORKDIR /src/services/elitea-worker-rust

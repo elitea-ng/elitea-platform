@@ -117,6 +117,18 @@ jobs:
           cargo doc --locked --workspace --no-deps --all-features
           cargo test --locked --workspace --all-targets --all-features
 
+      # The workspace run above links serde_json `preserve_order` (other
+      # members enable it), which is how a desktop binary would link the
+      # agent runtime. Built alone, the runtime has it off, which is how the
+      # worker links it. Its digest tests pin the same values both ways
+      # (ADR-0029 decision 2); the explicit feature run asserts the feature
+      # really reaches serde_json.
+      - name: Agent runtime — digests with and without preserve_order
+        working-directory: libs/rust
+        run: |
+          cargo test --locked -p elitea-agent-runtime --all-targets
+          cargo test --locked -p elitea-agent-runtime --all-targets --features test-preserve-order
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
