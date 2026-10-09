@@ -55,7 +55,7 @@ func nativeClientPolicySection() map[string]any {
 		"icon":                "phonelink_lock",
 		"always_visible":      true,
 		"required_permission": "configuration.native_clients",
-		"fields": []map[string]any{
+		"fields": append([]map[string]any{
 			{
 				"key":         platformconfig.KeyNativeRequireDeviceLock,
 				"type":        "boolean",
@@ -178,6 +178,113 @@ func nativeClientPolicySection() map[string]any {
 				"section": section,
 				"default": defaults.AllowSystemSurfaces,
 			},
+		}, localWorkFields(section, defaults.LocalWork)...),
+	}
+}
+
+// localWorkFields are the `local_work` group (ADR-0029 decision 6, client
+// contract 1.5). The desktop enforces every field. The server refuses a local
+// turn start while Allow Local Work is off. The other fields show only when
+// it is on.
+func localWorkFields(section string, defaults platformconfig.LocalWorkPolicy) []map[string]any {
+	visible := map[string]any{"field": platformconfig.KeyNativeLocalWorkAllowed, "value": true}
+	patternList := func(key, title, description string) map[string]any {
+		return map[string]any{
+			"key":          key,
+			"type":         "array",
+			"items":        map[string]any{"type": "string"},
+			"title":        title,
+			"description":  description,
+			"section":      section,
+			"default":      []any{},
+			"maxItems":     platformconfig.MaxLocalWorkPatterns,
+			"visible_when": visible,
+		}
+	}
+	return []map[string]any{
+		{
+			"key":   platformconfig.KeyNativeLocalWorkAllowed,
+			"type":  "boolean",
+			"title": "Allow Local Work",
+			"description": "Whether the desktop app may run agents on the user's machine, against local folders. " +
+				"When off, the server refuses every local turn.",
+			"section": section,
+			"default": defaults.Allowed,
+		},
+		{
+			"key":          platformconfig.KeyNativeLocalWorkShell,
+			"type":         "boolean",
+			"title":        "Allow Shell Commands",
+			"description":  "Whether local turns may run shell commands in the workspace.",
+			"section":      section,
+			"default":      defaults.Shell,
+			"visible_when": visible,
+		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkMaxSandboxMode,
+			"type":  "string",
+			"title": "Widest Sandbox Mode",
+			"description": "The least confined sandbox a local command may use: `read-only`, `workspace-write` " +
+				"(writes inside the workspace only) or `full-access`. A user can always choose a narrower one.",
+			"section":      section,
+			"default":      defaults.MaxSandboxMode,
+			"enum":         platformconfig.SandboxModeValues(),
+			"visible_when": visible,
+		},
+		{
+			"key":          platformconfig.KeyNativeLocalWorkNetwork,
+			"type":         "boolean",
+			"title":        "Allow Network in the Sandbox",
+			"description":  "Whether sandboxed local commands may reach the network.",
+			"section":      section,
+			"default":      defaults.Network,
+			"visible_when": visible,
+		},
+		patternList(platformconfig.KeyNativeLocalWorkCommandAllow, "Allowed Commands",
+			fmt.Sprintf("Command patterns that run without asking the user. At most %d patterns of %d bytes.",
+				platformconfig.MaxLocalWorkPatterns, platformconfig.MaxLocalWorkPatternBytes)),
+		patternList(platformconfig.KeyNativeLocalWorkCommandDeny, "Denied Commands",
+			fmt.Sprintf("Command patterns that never run. A deny wins over an allow. At most %d patterns of %d bytes.",
+				platformconfig.MaxLocalWorkPatterns, platformconfig.MaxLocalWorkPatternBytes)),
+		patternList(platformconfig.KeyNativeLocalWorkPathDeny, "Denied Paths",
+			fmt.Sprintf("Path patterns local tools must not read or write, for example **/.env. At most %d "+
+				"patterns of %d bytes.", platformconfig.MaxLocalWorkPatterns, platformconfig.MaxLocalWorkPatternBytes)),
+		{
+			"key":          platformconfig.KeyNativeLocalWorkLocalMCP,
+			"type":         "boolean",
+			"title":        "Allow Local MCP Servers",
+			"description":  "Whether users may add MCP servers that run on their own machine.",
+			"section":      section,
+			"default":      defaults.LocalMCP,
+			"visible_when": visible,
+		},
+		{
+			"key":          platformconfig.KeyNativeLocalWorkLocalIndex,
+			"type":         "boolean",
+			"title":        "Allow Local Index",
+			"description":  "Whether the app may index a workspace folder on the device. Embeddings spend the user's budget.",
+			"section":      section,
+			"default":      defaults.LocalIndex,
+			"visible_when": visible,
+		},
+		{
+			"key":          platformconfig.KeyNativeLocalWorkCloudSync,
+			"type":         "boolean",
+			"title":        "Allow Cloud Sync of Folders",
+			"description":  "Whether a workspace folder may be synced to an artifact bucket, which sends its files to this deployment.",
+			"section":      section,
+			"default":      defaults.CloudSync,
+			"visible_when": visible,
+		},
+		{
+			"key":   platformconfig.KeyNativeLocalWorkMemoryWrite,
+			"type":  "boolean",
+			"title": "Allow Local Turns to Save Memories",
+			"description": "Whether a local turn may save to the user's cloud memory, which can carry workspace " +
+				"content off the device. Recall is always allowed.",
+			"section":      section,
+			"default":      defaults.MemoryWrite,
+			"visible_when": visible,
 		},
 	}
 }
@@ -211,6 +318,37 @@ func validateNativeClientPolicyValues(values map[string]any) string {
 		if !platformconfig.ValidNotificationPreview(preview) {
 			return fmt.Sprintf("%q must be one of: %s", platformconfig.KeyNativeNotificationPreview,
 				strings.Join(platformconfig.NotificationPreviewValues(), ", "))
+		}
+	}
+	if raw, present := values[platformconfig.KeyNativeLocalWorkMaxSandboxMode]; present {
+		mode, _ := raw.(string)
+		if !platformconfig.ValidSandboxMode(mode) {
+			return fmt.Sprintf("%q must be one of: %s", platformconfig.KeyNativeLocalWorkMaxSandboxMode,
+				strings.Join(platformconfig.SandboxModeValues(), ", "))
+		}
+	}
+	for _, key := range []string{
+		platformconfig.KeyNativeLocalWorkCommandAllow,
+		platformconfig.KeyNativeLocalWorkCommandDeny,
+		platformconfig.KeyNativeLocalWorkPathDeny,
+	} {
+		raw, present := values[key]
+		if !present {
+			continue
+		}
+		patterns, ok := raw.([]any)
+		if !ok {
+			return fmt.Sprintf("%q must be an array of patterns", key)
+		}
+		if len(patterns) > platformconfig.MaxLocalWorkPatterns {
+			return fmt.Sprintf("%q has too many patterns (limit %d)", key, platformconfig.MaxLocalWorkPatterns)
+		}
+		for index, entry := range patterns {
+			pattern, _ := entry.(string)
+			if !platformconfig.ValidLocalWorkPattern(pattern) {
+				return fmt.Sprintf("%q[%d] must be a non-blank pattern of at most %d bytes without control "+
+					"characters", key, index, platformconfig.MaxLocalWorkPatternBytes)
+			}
 		}
 	}
 	if raw, present := values[platformconfig.KeyNativeMinClientVersion]; present {
