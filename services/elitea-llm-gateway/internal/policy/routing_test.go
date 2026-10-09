@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -262,5 +263,62 @@ func TestCompileCELRejectsNonBool(t *testing.T) {
 	}
 	if _, err := CompileCEL(`provider == "openai"`); err != nil {
 		t.Errorf("a valid predicate failed to compile: %v", err)
+	}
+}
+
+// celOfLength returns a valid boolean routing predicate exactly n bytes long.
+func celOfLength(t *testing.T, n int) string {
+	t.Helper()
+	const prefix, suffix = `provider == "`, `"`
+	pad := n - len(prefix) - len(suffix)
+	if pad < 0 {
+		t.Fatalf("cannot build a %d-byte predicate", n)
+	}
+	return prefix + strings.Repeat("a", pad) + suffix
+}
+
+func TestCompileCELLengthBound(t *testing.T) {
+	t.Parallel()
+
+	atLimit := celOfLength(t, maxRoutingCELBytes)
+	if len(atLimit) != maxRoutingCELBytes {
+		t.Fatalf("fixture is %d bytes, want %d", len(atLimit), maxRoutingCELBytes)
+	}
+	if _, err := CompileCEL(atLimit); err != nil {
+		t.Fatalf("an expression at the limit was refused: %v", err)
+	}
+	overLimit := celOfLength(t, maxRoutingCELBytes+1)
+	_, err := CompileCEL(overLimit)
+	if !errors.Is(err, ErrRoutingCELTooLong) {
+		t.Fatalf("err = %v, want ErrRoutingCELTooLong", err)
+	}
+	if strings.Contains(err.Error(), overLimit) {
+		t.Error("the refusal echoes the expression back")
+	}
+}
+
+// TestHandWrittenOverlongRuleIsRejectedAtLoad is the load-side half of the
+// authoring cap: a row that never passed elitea-main (a restore, a manual
+// UPDATE) is still bounded here. The rule at the limit loads beside it.
+func TestHandWrittenOverlongRuleIsRejectedAtLoad(t *testing.T) {
+	t.Parallel()
+
+	snap := Compile([]Row{
+		routingRow("at-limit", celOfLength(t, maxRoutingCELBytes), 1, target("openai", "a", 1.0)),
+		routingRow("over-limit", celOfLength(t, maxRoutingCELBytes+1), 2, target("openai", "b", 1.0)),
+	}, testNow)
+
+	if len(snap.routing) != 1 || snap.routing[0].Name != "at-limit" {
+		t.Fatalf("loaded rules = %+v, want only at-limit; rejections: %+v", snap.routing, snap.Rejected)
+	}
+	if len(snap.Rejected) != 1 {
+		t.Fatalf("want the over-limit rule rejected, got %+v", snap.Rejected)
+	}
+	reason := snap.Rejected[0].Reason
+	if !strings.Contains(reason, "over-limit") || !strings.Contains(reason, ErrRoutingCELTooLong.Error()) {
+		t.Errorf("the rejection does not name the rule and the cap: %q", reason)
+	}
+	if strings.Contains(reason, strings.Repeat("a", 64)) {
+		t.Error("the rejection echoes the expression back")
 	}
 }
