@@ -19,7 +19,7 @@ Both are built in, but neither is reserved — you can read or write them like a
 Beyond those two, a pipeline has a fixed set of reserved keys the runtime manages itself — things like `session_id`, `thread_id`, `output`, `result`, `hitl_decisions`, `hitl_interrupt`, `parallel_tasks`, and a family of internal resume markers. You can read them from a node, but avoid naming a custom state the same as one of these — the runtime will overwrite it with its own value.
 
 <Accordion title="Reserved state keys (do not reuse as custom state names)">
-`__elitea_hitl_resume_v1`, `__elitea_tool_resume_v1`, `__elitea_llm_tool_resume_v1`, `__elitea_pipeline_node_event_scope_v1`, `__elitea_application_task_v1`, `__elitea_application_messages_v1`, `__elitea_application_result_v1`, `__elitea_subgraph_result_v1`, `output`, `result`, `router_output`, `elitea_response`, `printer_output`, `state_types`, `context_info`, `hitl_decisions`, `hitl_interrupt`, `parallel_tasks`, `_pipeline_blocked`, `session_id`, `thread_id`, `execution_finished`, `chat_history`
+`__elitea_hitl_resume_v1`, `__elitea_tool_resume_v1`, `__elitea_llm_tool_resume_v1`, `__elitea_pipeline_node_event_scope_v1`, `__elitea_pipeline_result_trace_v1`, `__elitea_application_task_v1`, `__elitea_application_messages_v1`, `__elitea_application_result_v1`, `__elitea_subgraph_result_v1`, `output`, `result`, `router_output`, `elitea_response`, `printer_output`, `state_types`, `context_info`, `hitl_decisions`, `hitl_interrupt`, `parallel_tasks`, `_pipeline_blocked`, `session_id`, `thread_id`, `execution_finished`, `chat_history`
 </Accordion>
 
 Add a custom state from the flow editor's States panel (next to the **+** button for adding nodes), or define it directly in YAML mode.

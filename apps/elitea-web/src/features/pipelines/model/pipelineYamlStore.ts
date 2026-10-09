@@ -59,7 +59,10 @@
  */
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 
+import { normalizePipelineNodeIdentifiers } from '@/shared/lib/pipelineNodeIdentifiers';
+
 import {
+  isIdentifierRespellingRedump,
   parsePipelineYamlDocument,
   pipelineYamlDocumentsEqual,
   preparePipelineYamlEdit,
@@ -130,12 +133,19 @@ export function createPipelineYamlStore(): PipelineYamlStore {
     initStateKeyOrder: [],
     resetFlag: false,
     layoutVersion: undefined,
-    setYamlCode: (code) => set({ yamlCode: code }),
-    setYamlJsonObject: (yamlJsonObject) =>
+    setYamlCode: (code) => {
+      // A pure re-spelling of integer ids (`id: 1` -> `id: '1'`) is not an edit; keep the author's text.
+      if (isIdentifierRespellingRedump(get(), code)) return;
+      set({ yamlCode: code });
+    },
+    setYamlJsonObject: (rawYamlJsonObject) => {
+      // Integer node ids (`id: 1`) are held as their decimal strings; the YAML text is not touched.
+      const yamlJsonObject = normalizePipelineNodeIdentifiers(rawYamlJsonObject);
       set({
         yamlJsonObject: { ...yamlJsonObject },
         stateKeyOrder: reconcilePipelineStateOrder(yamlJsonObject, get().stateKeyOrder),
-      }),
+      });
+    },
     parsePipelineYamlCode: (code) => {
       const parsed = parsePipelineYamlDocument(code);
       const changed = !pipelineYamlDocumentsEqual(get(), parsed);
@@ -155,7 +165,8 @@ export function createPipelineYamlStore(): PipelineYamlStore {
         return;
       if (!pipelineYamlDocumentsEqual(get(), prepared) || prepared.yamlCode !== get().yamlCode) set(prepared);
     },
-    initPipelineYaml: ({ yamlCode, yamlJsonObject }) => {
+    initPipelineYaml: ({ yamlCode, yamlJsonObject: rawYamlJsonObject }) => {
+      const yamlJsonObject = normalizePipelineNodeIdentifiers(rawYamlJsonObject);
       const stateKeyOrder = initialStateKeyOrder(yamlCode);
       set({
         yamlCode,

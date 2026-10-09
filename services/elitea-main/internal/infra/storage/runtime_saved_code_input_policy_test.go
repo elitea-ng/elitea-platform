@@ -58,6 +58,7 @@ func TestSavedCodeInputPolicyRequiresExactTypedOwningDeclarations(t *testing.T) 
 		strings.Replace(base, "state: {count: int}", "state: {count: int, messages: dict}", 1),
 		strings.Replace(base, "state: {count: int}", "state: {count: int, result: int}", 1),
 		strings.Replace(base, "state: {count: int}", "state: {count: int, __elitea_pipeline_terminal_json_producers_v1: dict}", 1),
+		strings.Replace(base, "state: {count: int}", "state: {count: int, __elitea_pipeline_result_trace_v1: dict}", 1),
 	} {
 		if _, err := OriginalSavedCodeInputPolicy(instructions, CodeDebugSHA256([]byte(instructions)), "run"); err == nil {
 			t.Fatal("malformed saved approval surface accepted")

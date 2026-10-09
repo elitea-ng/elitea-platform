@@ -35,6 +35,7 @@ import (
 	toolkitexecutionapp "github.com/EliteaAI/elitea-platform/services/elitea-main/internal/application/toolkitexecution"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/auth"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/ownership"
+	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/domain/pipelinelimits"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/repos"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/db/tenantschema"
 	"github.com/EliteaAI/elitea-platform/services/elitea-main/internal/infra/storage"
@@ -3266,6 +3267,28 @@ func storedAgentType(raw string) (string, bool) {
 	}
 }
 
+// pipelineLimitRefusal applies the shared save-time pipeline bounds to every
+// pipeline version an import or fork body carries. It runs before the
+// application row is written, so a refused entry leaves nothing behind. Entries
+// that are not JSON objects are skipped here and reported by the loop that
+// handles them.
+func pipelineLimitRefusal(versions []any) error {
+	for _, raw := range versions {
+		version, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if agentType, _ := version["agent_type"].(string); agentType != "pipeline" {
+			continue
+		}
+		instructions, _ := version["instructions"].(string)
+		if err := pipelinelimits.Check(instructions); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
@@ -3485,6 +3508,12 @@ func (h *Handler) ExportImportPost(w http.ResponseWriter, r *http.Request) {
 				importedAgents = append(importedAgents, importedAgentInfo{appID: -1})
 				continue
 			}
+		}
+
+		if err := pipelineLimitRefusal(versions); err != nil {
+			errorAgents = append(errorAgents, map[string]any{"index": ae.entityIdx, "name": name, "msg": "Import function has been failed: " + err.Error()})
+			importedAgents = append(importedAgents, importedAgentInfo{appID: -1})
+			continue
 		}
 
 		if destinationOwnerErr != nil {
@@ -4313,6 +4342,15 @@ func (h *Handler) Fork(w http.ResponseWriter, r *http.Request) {
 		}
 		name, _ := app["name"].(string)
 		desc, _ := app["description"].(string)
+
+		forkVersions, _ := app["versions"].([]any)
+		if err := pipelineLimitRefusal(forkVersions); err != nil {
+			errorAgents = append(errorAgents, map[string]any{
+				"index": entityIdx, "name": name,
+				"msg": "Fork function has been failed: " + err.Error(),
+			})
+			continue
+		}
 
 		if destinationOwnerErr != nil {
 			errorAgents = append(errorAgents, map[string]any{

@@ -3885,6 +3885,232 @@ components:
         message: { type: string }
         retryable: { type: boolean }
 
+    # Wave 1 per-interrupt HITL API (libs/proto/contracts/fanout-interrupt-decisions-v1.md section 6;
+    # JSON schemas libs/jsonschema/runtime/v1/fanout-interrupt-*.schema.json).
+    # OpenAPI 3.0 cannot express the schemas' per-action `if/then` rules
+    # (value empty for approve/reject/authorize/skip, non-empty for the rest,
+    # credential_ref only with authorize); the server enforces them.
+    ExecutionInterruptDecisionRequest:
+      type: object
+      additionalProperties: false
+      required: [request_id, expected_revision, action, value]
+      properties:
+        request_id:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: Idempotency key; the same id with the same bytes replays the recorded decision.
+        expected_revision:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The `revision` of the card the caller is answering.
+        action:
+          type: string
+          enum: [approve, reject, edit, block_with_comment, answer, authorize, skip, continue]
+          # A plain string in Go: the generated `Continue` enum constant would
+          # collide with StaticPipelineLeafDecisionAction's and rename it. The
+          # hand-written route validates the action (domain.ParseDecisionRequest).
+          x-go-type: string
+        value:
+          type: string
+          maxLength: 8192
+          pattern: '^[^\x00-\x08\x0b\x0c\x0e-\x1f\x7f]*$'
+          description: >-
+            Empty for approve, reject, authorize and skip; non-empty for edit,
+            block_with_comment, answer and continue.
+        credential_ref:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{16,128}$'
+          description: Token-store reference; required with `authorize`, forbidden otherwise. Never a secret.
+
+    ExecutionInterruptDecisionResult:
+      type: object
+      additionalProperties: false
+      required: [schema, interrupt_key, state, revision, request_id, replay]
+      properties:
+        schema:
+          type: string
+          enum: [elitea.pipeline.fanout-interrupt-decision-result.v1]
+        interrupt_key:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        state:
+          type: string
+          enum: [DECIDED, CONSUMED]
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+        request_id:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        replay:
+          type: boolean
+          description: True when the same request_id with the same bytes was already recorded.
+
+    ExecutionInterruptList:
+      type: object
+      additionalProperties: false
+      required: [schema, response_message_id, decision_revision, interrupts]
+      properties:
+        schema:
+          type: string
+          enum: [elitea.pipeline.fanout-interrupt-list.v1]
+        response_message_id:
+          type: string
+          format: uuid
+        decision_revision:
+          type: integer
+          format: int64
+          minimum: 0
+        interrupts:
+          type: array
+          maxItems: 16
+          items:
+            type: object
+            additionalProperties: false
+            required: [card, state, revision]
+            properties:
+              card:
+                $ref: '#/components/schemas/ExecutionInterruptCard'
+              state:
+                type: string
+                enum: [PENDING, DECIDED]
+              revision:
+                type: integer
+                format: int64
+                minimum: 1
+
+    ExecutionInterruptCard:
+      type: object
+      additionalProperties: false
+      description: >-
+        One per-interrupt card, served exactly as stored. Mirrors
+        elitea.pipeline.fanout-interrupt-card.v1
+        (libs/jsonschema/runtime/v1/fanout-interrupt-card.schema.json), which
+        also owns the cross-field rules this schema cannot express: the
+        hierarchy is null/null/[] or name/call_id/one or more tiers, a card
+        with fanout_v1 has a tier whose sibling_ordinal equals its ordinal,
+        and available_actions and display.guardrail_type match kind.
+      required: [schema, interrupt_key, interrupt_id, kind, available_actions, payload_sha256, display,
+                 parent_agent_name, parent_agent_call_id, parent_agent_path, fanout_v1]
+      properties:
+        schema:
+          type: string
+          enum: [elitea.pipeline.fanout-interrupt-card.v1]
+        interrupt_key:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          minLength: 64
+          maxLength: 64
+        interrupt_id:
+          type: string
+          description: Printable ASCII, 1 to 512 characters.
+          minLength: 1
+          maxLength: 512
+        kind:
+          type: string
+          x-go-type: string
+          enum: [tool_guard, hitl_node, ask_user, delegated_auth]
+        available_actions:
+          type: array
+          minItems: 1
+          maxItems: 4
+          uniqueItems: true
+          items:
+            type: string
+            x-go-type: string
+            enum: [approve, reject, edit, block_with_comment, answer, authorize, skip, continue]
+        payload_sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          minLength: 64
+          maxLength: 64
+        display:
+          $ref: '#/components/schemas/ExecutionInterruptCardDisplay'
+        parent_agent_name:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 2048
+        parent_agent_call_id:
+          type: string
+          nullable: true
+          minLength: 1
+          maxLength: 512
+        parent_agent_path:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            additionalProperties: false
+            required: [name, call_id]
+            properties:
+              name: {type: string, minLength: 1, maxLength: 2048}
+              call_id: {type: string, minLength: 1, maxLength: 512}
+              sibling_ordinal: {type: integer, minimum: 1, maximum: 64}
+        fanout_v1:
+          type: object
+          nullable: true
+          additionalProperties: false
+          description: Fan-out member metadata (fanout-member.v1); null for a coordinator card.
+          required: [kind, node, activation, member, ordinal, total]
+          properties:
+            kind:
+              type: string
+              x-go-type: string
+              enum: [parallel, map]
+            node: {type: string, pattern: '^[A-Za-z0-9_.:-]{1,128}$', minLength: 1, maxLength: 128}
+            activation: {type: string, pattern: '^[0-9a-f]{16}$', minLength: 16, maxLength: 16}
+            member: {type: string, pattern: '^[A-Za-z0-9_.:-]{1,128}$', minLength: 1, maxLength: 128}
+            ordinal: {type: integer, minimum: 1, maximum: 64}
+            total: {type: integer, minimum: 1, maximum: 64}
+
+    ExecutionInterruptCardDisplay:
+      type: object
+      additionalProperties: false
+      maxProperties: 13
+      description: >-
+        Only fields today's card shows. Headers, tokens, resource metadata and
+        checkpoint ids are never in a card.
+      required: [message, guardrail_type]
+      properties:
+        message: {type: string, minLength: 1, maxLength: 8192}
+        guardrail_type:
+          type: string
+          x-go-type: string
+          enum: [sensitive_tool, pipeline_hitl, pipeline_static, clarifying_question, mcp_auth]
+        node_name: {type: string, minLength: 1, maxLength: 128}
+        tool_name: {type: string, minLength: 1, maxLength: 512}
+        toolkit_name: {type: string, minLength: 1, maxLength: 512}
+        toolkit_type: {type: string, minLength: 1, maxLength: 128}
+        action_label: {type: string, minLength: 1, maxLength: 512}
+        tool_call_id: {type: string, minLength: 1, maxLength: 512}
+        tool_args_json: {type: string, minLength: 1, maxLength: 16384}
+        policy_message: {type: string, minLength: 1, maxLength: 2048}
+        interaction_type: {type: string, minLength: 1, maxLength: 64}
+        edit_state_key: {type: string, minLength: 1, maxLength: 128}
+        server_url: {type: string, pattern: '^https://', minLength: 9, maxLength: 2048}
+
+    ExecutionInterruptError:
+      type: object
+      additionalProperties: false
+      required: [error, message, retryable]
+      properties:
+        error:
+          type: string
+          enum:
+            - agent_interrupt_already_resolved
+            - agent_interrupt_invalid_decision
+            - agent_interrupt_not_found
+        message:
+          type: string
+          minLength: 1
+          maxLength: 512
+        retryable:
+          type: boolean
+          description: Always false; none of these errors is retryable.
+
     Notification:
       type: object
       description: >
@@ -17500,6 +17726,118 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /elitea_core/task/prompt_lib/{project_id}/{response_message_id}/interrupts:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: response_message_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The running answer whose open interrupts are listed (its `uid`).
+    get:
+      operationId: listExecutionInterrupts
+      summary: List the open human-in-the-loop interrupts of a running answer
+      description: |
+        Wave 1 per-interrupt HITL API. Registered only when
+        `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true` (it requires
+        agent execution dispatch); otherwise the path answers 404.
+
+        Lists the PENDING and DECIDED (not yet consumed) interrupt cards of
+        one response, at most 16. `decision_revision` is the response-level
+        counter that advances with every recorded decision.
+
+        Permission `models.applications.task.get`. Ownership and project
+        membership are rechecked inside the read transaction, so a stale
+        permission snapshot cannot disclose another user's cards; a response
+        that is not the caller's, or does not exist, answers 404.
+      tags: [chat]
+      responses:
+        '200':
+          description: The open interrupts.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionInterruptList'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: >-
+            `agent_interrupt_not_found`: the response does not exist or is not
+            the caller's.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionInterruptError'
+
+  /elitea_core/task/prompt_lib/{project_id}/{response_message_id}/interrupts/{interrupt_key}/decision:
+    parameters:
+      - $ref: '#/components/parameters/ProjectId'
+      - name: response_message_id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: The running answer that raised the interrupt (its `uid`).
+      - name: interrupt_key
+        in: path
+        required: true
+        schema: { type: string, pattern: '^[0-9a-f]{64}$' }
+        description: The opaque `card.interrupt_key` from the list.
+    post:
+      operationId: decideExecutionInterrupt
+      summary: Record the decision for one interrupt
+      description: |
+        Wave 1 per-interrupt HITL API. Registered only when
+        `ELITEA_RUNTIME_EXECUTION_INTERRUPTS_API_ENABLED=true` (it requires
+        agent execution dispatch); otherwise the path answers 404.
+
+        Records one decision for one interrupt, idempotent on `request_id`:
+        the same id with the same bytes answers 200 with `replay: true`. Any
+        other conflict, including a stale `expected_revision` or an interrupt
+        that was already answered, is 409 `agent_interrupt_already_resolved`.
+        A decision whose action or value does not fit the card answers 400
+        `agent_interrupt_invalid_decision`. The canonical body is at most
+        8192 bytes and carries no secrets; delegated auth passes a
+        token-store reference in `credential_ref`.
+
+        Permission `models.chat.messages.create`. Ownership and project
+        membership are rechecked inside the write transaction.
+      tags: [chat]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExecutionInterruptDecisionRequest'
+      responses:
+        '200':
+          description: The decision was recorded, or the same request was replayed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionInterruptDecisionResult'
+        '400':
+          description: '`agent_interrupt_invalid_decision`: the body or the action/value pair is not valid for this interrupt.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionInterruptError'
+        '401': { $ref: '#/components/responses/401' }
+        '403': { $ref: '#/components/responses/403' }
+        '404':
+          description: '`agent_interrupt_not_found`: no such interrupt for this caller.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionInterruptError'
+        '409':
+          description: >-
+            `agent_interrupt_already_resolved`: the interrupt was already
+            answered, or `expected_revision` is stale.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExecutionInterruptError'
+
   /elitea_core/regenerate/prompt_lib/{project_id}/{message_id}:
     parameters:
       - $ref: '#/components/parameters/ProjectId'
