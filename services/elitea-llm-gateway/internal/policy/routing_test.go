@@ -2,7 +2,10 @@ package policy
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -320,5 +323,32 @@ func TestHandWrittenOverlongRuleIsRejectedAtLoad(t *testing.T) {
 	}
 	if strings.Contains(reason, strings.Repeat("a", 64)) {
 		t.Error("the rejection echoes the expression back")
+	}
+}
+
+// TestRoutingCELCapMatchesMain keeps the two copies of the cap equal. A rule
+// elitea-main accepts at authoring must not be rejected here at load, and the
+// gateway must not admit more than elitea-main does. The modules cannot share
+// the constant (elitea-main's is internal), so the test compares the sources.
+func TestRoutingCELCapMatchesMain(t *testing.T) {
+	t.Parallel()
+
+	decl := regexp.MustCompile(`(?m)^const maxRoutingCELBytes = (.+)$`)
+	read := func(path string) string {
+		t.Helper()
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		m := decl.FindSubmatch(src)
+		if m == nil {
+			t.Fatalf("%s declares no maxRoutingCELBytes", path)
+		}
+		return strings.TrimSpace(string(m[1]))
+	}
+	gateway := read("routing.go")
+	main := read(filepath.Join("..", "..", "..", "elitea-main", "internal", "api", "gateway", "routing_cel.go"))
+	if gateway != main {
+		t.Fatalf("maxRoutingCELBytes is %q here and %q in elitea-main; they must match", gateway, main)
 	}
 }

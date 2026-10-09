@@ -157,7 +157,14 @@ keys. An `optional` field on the entry is ignored: the opt-out alone decides.
 {{- fail "llmGateway.env.SECRETS_MASTER_KEY is refused: the vault master key must not be rendered as a plain value. Reference a Secret instead: llmGateway.secrets.SECRETS_MASTER_KEY.secretName / .key." -}}
 {{- end -}}
 {{- $ref := get (.Values.llmGateway.secrets | default dict) "SECRETS_MASTER_KEY" -}}
-{{- $optOut := eq (toString (get $env "ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS")) "true" -}}
+{{- $optOutValue := toString (get $env "ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS" | default "") -}}
+{{- if not (has $optOutValue (list "" "false" "true")) -}}
+{{- fail (printf "llmGateway.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS must be \"true\" or \"false\", and it is %q; the gateway refuses to start on any other value." $optOutValue) -}}
+{{- end -}}
+{{- $optOut := eq $optOutValue "true" -}}
+{{- if and $ref (not (kindIs "map" $ref)) -}}
+{{- fail "llmGateway.secrets.SECRETS_MASTER_KEY must be a map with secretName and key, naming the Secret that holds the vault master key." -}}
+{{- end -}}
 {{- if $ref -}}
 {{- if or (not $ref.secretName) (not $ref.key) -}}
 {{- fail "llmGateway.secrets.SECRETS_MASTER_KEY needs both secretName and key." -}}

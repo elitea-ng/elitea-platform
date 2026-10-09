@@ -123,6 +123,15 @@ else
   fail "the development opt-out was refused: $(cat "$WORK/err.txt")"
 fi
 
+# An explicit "false" is the default posture, not an error.
+if render "$WORK/optout-false.yaml" --set-string llmGateway.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=false; then
+  [ "$(masterKeyEnv .valueFrom.secretKeyRef.optional "$WORK/optout-false.yaml")" = "false" ] \
+    && pass "an explicit opt-out of \"false\" keeps the reference required" \
+    || fail "an explicit opt-out of \"false\" made the reference optional"
+else
+  fail "an explicit opt-out of \"false\" was refused: $(cat "$WORK/err.txt")"
+fi
+
 # 5. Refusals.
 refuses "a plaintext SECRETS_MASTER_KEY in llmGateway.env" 'llmGateway\.env\.SECRETS_MASTER_KEY is refused' \
   --set-string llmGateway.env.SECRETS_MASTER_KEY=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
@@ -132,6 +141,10 @@ refuses "a master key reference with no key" 'needs both secretName and key' \
   --set llmGateway.secrets.SECRETS_MASTER_KEY.key=
 refuses "no master key source at all" 'elitea-llm-gateway has no SECRETS_MASTER_KEY source' \
   --set llmGateway.secrets.SECRETS_MASTER_KEY=null
+refuses "a master key entry that is not a map" 'must be a map with secretName and key' \
+  --set-string llmGateway.secrets.SECRETS_MASTER_KEY=elitea-llm-gateway-secrets
+refuses "an opt-out value the gateway would refuse" 'must be "true" or "false"' \
+  --set-string llmGateway.env.ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS=True
 
 # 6. With no key source the opt-out is the one way through.
 if render "$WORK/nokey-optout.yaml" --set llmGateway.secrets.SECRETS_MASTER_KEY=null \

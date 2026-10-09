@@ -124,7 +124,9 @@ func TestGatewayRefusesToStartWithoutAMasterKey(t *testing.T) {
 	}
 
 	t.Run("absent key refuses", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		// The refusal comes before any dependency is opened, so a gateway
+		// still running after 15 s did not refuse.
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		cmd, out := command(ctx, "", "")
 		err := cmd.Run()

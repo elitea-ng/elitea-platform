@@ -38,11 +38,12 @@ Deliberately not ported:
 | `services/elitea-llm-gateway/cmd/elitea-llm-gateway/master_key_gate.go:26` | `requireVaultMasterKey`: valid key → start; malformed → refuse even with the opt-out; absent → refuse unless the opt-out is `true`; any other opt-out value → refuse. |
 | `services/elitea-llm-gateway/cmd/elitea-llm-gateway/main.go:69` | The gate runs before the database pool opens; `FATAL: refusing to start` + exit 1, or a loud warning under the opt-out. |
 | `services/elitea-llm-gateway/internal/policy/routing.go:28,111` | `maxRoutingCELBytes = 8 << 10` and `ErrRoutingCELTooLong`, checked in `CompileCEL` before the parser. Load path: `compile.go:174` → `parseRoutingRule` → `CompileCEL`; an over-cap row is recorded in `Snapshot.Rejected` and the other rules load. |
-| `deploy/helm/elitea/templates/llmGateway/_helpers.tpl:154` | `elitea-llm-gateway.masterKeyRef`: refuses `llmGateway.env.SECRETS_MASTER_KEY`, refuses a reference without `secretName`/`key`, refuses no reference without the opt-out; emits `optional` = opt-out. |
+| `deploy/helm/elitea/templates/llmGateway/_helpers.tpl:154` | `elitea-llm-gateway.masterKeyRef` refuses five things: `llmGateway.env.SECRETS_MASTER_KEY`; an opt-out value the binary would refuse (anything but `true`/`false`); an entry that is not a map; a reference without `secretName`/`key`; no reference without the opt-out. It emits `optional` = opt-out. |
 | `deploy/helm/elitea/templates/llmGateway/deployment.yaml:41-51` | The checked reference replaces the entry, or the entry is dropped (no source + opt-out). |
 | `deploy/helm/elitea/values.yaml:2741` | The `optional: true` decision is reversed and the comment rewritten. |
 | `deploy/helm/elitea/templates/main/_helpers.tpl` | Comment only: each service has its own opt-out. |
-| `deploy/helm/tests/render-gateway-master-key.sh` | New render test, 13 checks. |
+| `deploy/helm/tests/render-gateway-master-key.sh` | New render test, 16 checks. |
+| `services/elitea-llm-gateway/scripts/env-drift-allowlist.txt` | The opt-out variable is allowlisted with its justification: it is absent from values on purpose. |
 | `Taskfile.yml:258,269` | `helm:gateway-master-key`, run by `helm:lint` next to `helm:main-master-key`. `.github/workflows` is unchanged. |
 | `deploy/docker-compose.standalone-full.yml:496,521` | The gateway gets `ELITEA_DEV_ALLOW_UNWRAPPED_SECRETS: "${…-true}"`, as elitea-main already has (`:891`). A supplied key is still used. |
 | `deploy/README.md`, `services/elitea-llm-gateway/DECISIONS.md` | The master-key section and the open decision now describe the gateway too. |
@@ -62,8 +63,9 @@ helm v4.1.0 and yq on macOS arm64.
 | `master_key_gate_test.go:100` `TestGatewayRefusesToStartWithoutAMasterKey` | Re-executes the test binary as the real `main()` with no database pool. No key → non-zero exit, output names `FATAL: refusing to start`, `SECRETS_MASTER_KEY` and the opt-out. Negative controls in the SAME environment: a valid key, and the opt-out, both keep serving; the opt-out logs `UNWRAPPED`. |
 | `main_test.go:53` `TestMainWiring` | `requireVaultMasterKey(` is a call expression in package main. |
 | `routing_test.go:280` `TestCompileCELLengthBound` | Exactly 8192 bytes compiles; 8193 → `errors.Is(err, ErrRoutingCELTooLong)`; the error does not echo the expression. |
+| `routing_test.go` `TestRoutingCELCapMatchesMain` | Reads both sources and fails if this `maxRoutingCELBytes` and elitea-main's differ. |
 | `routing_test.go:303` `TestHandWrittenOverlongRuleIsRejectedAtLoad` | Through `Compile`: the 8192-byte rule loads and the 8193-byte rule is rejected, named, with the cap in the reason and no expression echo. |
-| `render-gateway-master-key.sh` (13 checks) | Default reference `optional: false`, rendered once, never a plain value. A stale `optional: true` is ignored. Operator-named Secret honoured. Opt-out → `optional: true` and the variable reaches the container. Refusals: plaintext key, empty `secretName`, empty `key`, no source. No source + opt-out → renders without a reference. |
+| `render-gateway-master-key.sh` (16 checks) | The default reference is `optional: false`, rendered once and never as a plain value. A stale `optional: true` is ignored, and an operator-named Secret is honoured. The opt-out gives `optional: true` and the variable reaches the container; an explicit `false` keeps it required. Refused: a plaintext key, an empty `secretName`, an empty `key`, a non-map entry, an opt-out of `True`, and no source. No source plus the opt-out renders without a reference. |
 
 `metrics_test.go` and `budget_startup_gate_test.go` start the real process; they
 now pass a generated test key (`testMasterKey`, `master_key_gate_test.go:23`),
@@ -72,9 +74,12 @@ so they still fail only on what they test.
 | Run | Result |
 | --- | --- |
 | `go test ./cmd/... ./internal/account/ ./internal/policy/` | ok (3 packages) |
+| `go test -race ./...` (gateway module, after review fixes) | 19 packages ok, 0 FAIL |
+| `golangci-lint run ./...` (v2.14.0, CI uses `latest`) | 0 issues |
+| `scripts/env-drift-check.sh` | 0 fail. The gateway has 1 warn (`GATEWAY_HTTP_ADDR`, which predates this change). elitea-main's warns predate it too. |
 | `go test ./...` (gateway module) | 19 packages ok, 1 without tests, 0 FAIL. In the three touched packages: 342 tests and subtests passed, 2 skipped (`TestPostgresBudgetProbe*`, which need a PostgreSQL URL and do not touch this change) |
 | `go vet` on the touched packages, `gofmt -l` | clean |
-| `render-gateway-master-key.sh` | 13/13 ok |
+| `render-gateway-master-key.sh` | 16/16 ok |
 | All 21 `deploy/helm/tests/render-*.sh` + `render-compiled-snapshots.py` | 22/22 pass |
 | `helm lint` on `deploy/helm/{elitea,nats,nats-bootstrap}` | 3/3 pass |
 | `docker compose -f deploy/docker-compose.standalone-full.yml config` | valid; the opt-out resolves to `true` for both services |
@@ -146,6 +151,21 @@ would start unchanged on all three.
 
 None. The Go tests use injected env maps and a generated 32-byte test key. The
 render test uses `helm template` with `--set` overrides of the in-repo chart.
+
+## Review
+
+`code-review` (high) on the full diff reported 7 findings.
+
+Fixed:
+- `-race` and golangci-lint not yet run.
+- The env-drift warning for the opt-out.
+- The chart not validating the opt-out value.
+- A non-map entry giving an opaque error.
+- The CEL cap duplicated with no parity check.
+- A 60 s wait when the gate regresses (now 15 s).
+
+Kept as a follow-up: rules per row and targets per rule are still unbounded at
+load (below).
 
 ## Notes
 
